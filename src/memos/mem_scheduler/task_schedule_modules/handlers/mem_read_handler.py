@@ -196,22 +196,23 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                         enhanced_mem_ids,
                     )
 
-                    if getattr(mem_reader, "memory_version_switch", "off") != "on":
-                        # add raw file nodes and edges
-                        if mem_reader.save_rawfile:
-                            raw_file_mem_group = [
-                                memory
-                                for memory in flattened_memories
-                                if memory.metadata.memory_type == "RawFileMemory"
-                            ]
-                            text_mem.add_rawfile_nodes_n_edges(
-                                raw_file_mem_group,
-                                enhanced_mem_ids,
-                                user_id=user_id,
-                                user_name=user_name,
-                            )
-                            logger.info("Added %s Rawfile memories.", len(raw_file_mem_group))
+                    # add raw file nodes and edges
+                    if mem_reader.save_rawfile:
+                        raw_file_mem_group = [
+                            memory
+                            for memory in flattened_memories
+                            if memory.metadata.memory_type == "RawFileMemory"
+                        ]
+                        text_mem.add_rawfile_nodes_n_edges(
+                            raw_file_mem_group,
+                            enhanced_mem_ids,
+                            user_id=user_id,
+                            user_name=user_name,
+                        )
+                        logger.info("Added %s Rawfile memories.", len(raw_file_mem_group))
 
+                    # fallback to simple deduplication logic when mem version switch is off
+                    if getattr(mem_reader, "memory_version_switch", "off") != "on":
                         # Mark merged_from memories as archived when provided in memory metadata
                         summary_memories = [
                             memory
@@ -230,7 +231,9 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                                     for old_id in old_ids:
                                         try:
                                             mem_reader.graph_db.update_node(
-                                                str(old_id), {"status": "archived"}, user_name=user_name
+                                                str(old_id),
+                                                {"status": "archived"},
+                                                user_name=user_name,
                                             )
                                             logger.info(
                                                 "[Scheduler] Archived merged_from memory: %s",
