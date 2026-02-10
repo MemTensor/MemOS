@@ -356,11 +356,14 @@ class SearchHandler(BaseHandler):
                     if not isinstance(mem, dict):
                         continue
                     meta = mem.get("metadata", {})
-                    score = meta.get("relativity", 0.0) if isinstance(meta, dict) else 0.0
+                    if key == "text_mem":
+                        score = meta.get("relativity", 1.0) if isinstance(meta, dict) else 1.0
+                    else:
+                        score = meta.get("score", 1.0) if isinstance(meta, dict) else 1.0
                     try:
-                        score_val = float(score) if score is not None else 0.0
+                        score_val = float(score) if score is not None else 1.0
                     except (TypeError, ValueError):
-                        score_val = 0.0
+                        score_val = 1.0
                     if score_val >= relativity:
                         filtered.append(mem)
 

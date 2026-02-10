@@ -307,8 +307,8 @@ class Searcher:
         query = parsed_goal.rephrased_query or query
         # if goal has extra memories, embed them too
         if parsed_goal.memories:
-            query_embedding = self.embedder.embed(list({query, *parsed_goal.memories}))
-
+            embed_texts = list(dict.fromkeys([query, *parsed_goal.memories]))
+            query_embedding = self.embedder.embed(embed_texts)
         return parsed_goal, query_embedding, context, query
 
     @timed
@@ -539,7 +539,6 @@ class Searcher:
 
         sorted_ids = sorted(id_to_score.keys(), key=lambda x: id_to_score[x], reverse=True)
         sorted_ids = sorted_ids[:top_k]
-        # sorted_ids = sorted_ids[:6]
         node_dicts = (
             self.graph_store.get_nodes(sorted_ids, include_embedding=True, user_name=user_name)
             or []
