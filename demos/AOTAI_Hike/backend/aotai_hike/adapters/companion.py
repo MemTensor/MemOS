@@ -182,30 +182,29 @@ class MemoryCompanionBrain(CompanionBrain):
             )
             if not text:
                 continue
-            out.append(
-                Message(
-                    message_id=f"m-{world_state.session_id}-{now_ms}-{sp.role_id}",
-                    role_id=sp.role_id,
-                    role_name=sp.name,
-                    kind="speech",
-                    content=text,
-                    emote=self._rng.choice(self._EMOTES),
-                    action_tag=None,
-                    timestamp_ms=now_ms,
-                )
+            speech_msg = Message(
+                message_id=f"m-{world_state.session_id}-{now_ms}-{sp.role_id}",
+                role_id=sp.role_id,
+                role_name=sp.name,
+                kind="speech",
+                content=text,
+                emote=self._rng.choice(self._EMOTES),
+                action_tag=None,
+                timestamp_ms=now_ms,
             )
-            out.append(
-                Message(
-                    message_id=f"a-{world_state.session_id}-{now_ms}-{sp.role_id}",
-                    role_id=sp.role_id,
-                    role_name=sp.name,
-                    kind="action",
-                    content=f"{sp.name}：{self._rng.choice(['调整背包', '观察地形', '喝水', '擦汗'])}",
-                    emote=None,
-                    action_tag=self._rng.choice(self._ACTION_TAGS),
-                    timestamp_ms=now_ms,
-                )
+            action_msg = Message(
+                message_id=f"a-{world_state.session_id}-{now_ms}-{sp.role_id}",
+                role_id=sp.role_id,
+                role_name=sp.name,
+                kind="action",
+                content=f"{sp.name}：{self._rng.choice(['调整背包', '观察地形', '喝水', '擦汗'])}",
+                emote=None,
+                action_tag=self._rng.choice(self._ACTION_TAGS),
+                timestamp_ms=now_ms,
             )
+            out.append(speech_msg)
+            out.append(action_msg)
+
             current_history = list(current_history)
             current_history.append(
                 {
@@ -216,6 +215,35 @@ class MemoryCompanionBrain(CompanionBrain):
                     "chat_time": self._format_time_ms(),
                 }
             )
+
+        if out:
+            round_mem = self._format_round_memory(world_state, out, user_action=user_action)
+            chat_time = self._format_time_ms()
+            for role in world_state.roles or []:
+                cube_id = MemoryNamespace.role_cube_id(user_id=role.role_id, role_id=role.role_id)
+                self._memory.add_memory(
+                    user_id=role.role_id,
+                    cube_id=cube_id,
+                    session_id=world_state.session_id,
+                    async_mode="async",
+                    mode=self._config.mode,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": round_mem,
+                            "chat_time": chat_time,
+                            "role_id": role.role_id,
+                            "role_name": role.name,
+                        }
+                    ],
+                    info={
+                        "event": "npc_round",
+                        "user_action": self._format_user_action_cn(user_action),
+                        "weather": world_state.weather,
+                        "time_of_day": world_state.time_of_day,
+                        "scene_id": world_state.current_node_id,
+                    },
+                )
 
         require_p = 0.22
         requires_player_say = bool(active_role) and (self._rng.random() < require_p)
@@ -269,38 +297,36 @@ class MemoryCompanionBrain(CompanionBrain):
 
         if len(response) > self._config.max_response_chars:
             response = response[: self._config.max_response_chars].rstrip() + "…"
-
-        chat_time = self._format_time_ms()
-        self._memory.add_memory(
-            user_id=role.role_id,
-            cube_id=cube_id,
-            session_id=world_state.session_id,
-            async_mode="async",
-            mode=self._config.mode,
-            messages=[
-                {
-                    "role": "user",
-                    "content": user_action_cn,
-                    "chat_time": chat_time,
-                    "role_id": role.role_id,
-                    "role_name": role.name,
-                },
-                {
-                    "role": "assistant",
-                    "content": response,
-                    "chat_time": chat_time,
-                    "role_id": role.role_id,
-                    "role_name": role.name,
-                },
-            ],
-            info={
-                "weather": world_state.weather,
-                "time_of_day": world_state.time_of_day,
-                "scene_id": world_state.current_node_id,
-                "event": "npc_chat",
-            },
-        )
         return response
+
+    def _format_round_memory(
+        self, world_state: WorldState, messages: list[Message], *, user_action: str
+    ) -> str:
+        """将本轮所有 NPC 的对话与动作压缩成一条中文记忆。"""
+        if not messages:
+            return "本轮无NPC发言。"
+
+        try:
+            node = AoTaiGraph.get_node(world_state.current_node_id)
+            location_name = node.name if node else world_state.current_node_id
+        except Exception:
+            location_name = world_state.current_node_id
+
+        header = (
+            f"本轮事件：位置 {location_name}，天气 {world_state.weather}，时间段 {world_state.time_of_day}。"
+            f" 玩家动作：{self._format_user_action_cn(user_action)}。"
+        )
+
+        lines: list[str] = []
+        for m in messages:
+            speaker = m.role_name or m.role_id or "队员"
+            if m.kind == "speech":
+                lines.append(f"{speaker}说：{m.content}")
+            elif m.kind == "action":
+                lines.append(f"{speaker}动作：{m.content}")
+
+        body = " ".join(lines) if lines else "本轮暂无有效对话或动作。"
+        return f"{header} {body}"
 
     def _build_system_prompt(
         self,
@@ -331,7 +357,7 @@ class MemoryCompanionBrain(CompanionBrain):
         for r in all_roles:
             attrs = r.attrs
             npc_info_lines.append(
-                f"```|<{r.name}&未知>|\n"
+                f"```|<{r.name}>|\n"
                 f"# {r.name}设定：{r.persona}\n"
                 f"当前状态：体力{attrs.stamina}/100，情绪{attrs.mood}/100，经验{attrs.experience}/100，风险偏好{attrs.risk_tolerance}/100，物资{attrs.supplies}/100\n"
                 f"```"
@@ -354,9 +380,9 @@ class MemoryCompanionBrain(CompanionBrain):
                 prefix = "|<旁白>|"
             elif role_tag == "user":
                 # 当前玩家扮演的角色
-                prefix = "|<你&未知>|"
+                prefix = "|<你>|"
             else:
-                prefix = f"|<{speaker_name}&未知>|" if speaker_name else "|<队友&未知>|"
+                prefix = f"|<{speaker_name}>|" if speaker_name else "|<队友>|"
             dialogue_lines.append(f"{prefix}{content}")
         dialogue_block = "\n".join(dialogue_lines) if dialogue_lines else "（暂无关键对话）"
 
