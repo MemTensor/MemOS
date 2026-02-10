@@ -538,8 +538,8 @@ class Searcher:
             return []
 
         sorted_ids = sorted(id_to_score.keys(), key=lambda x: id_to_score[x], reverse=True)
-        # sorted_ids = sorted_ids[:top_k]
-        sorted_ids = sorted_ids[:6]
+        sorted_ids = sorted_ids[:top_k]
+        # sorted_ids = sorted_ids[:6]
         node_dicts = (
             self.graph_store.get_nodes(sorted_ids, include_embedding=True, user_name=user_name)
             or []
