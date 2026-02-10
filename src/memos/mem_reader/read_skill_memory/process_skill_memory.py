@@ -52,6 +52,9 @@ def _generate_content_by_llm(llm: BaseLLM, prompt_template: str, **kwargs) -> An
     try:
         prompt = prompt_template.format(**kwargs)
         response = llm.generate([{"role": "user", "content": prompt}])
+        if not response:
+            logger.warning("[PROCESS_SKILLS] LLM returned empty or invalid response")
+            return {} if "json" in prompt_template.lower() else ""
         if "json" in prompt_template.lower():
             response = response.replace("```json", "").replace("```", "").strip()
             return json.loads(response)
@@ -436,6 +439,9 @@ def _extract_skill_memory_by_llm(
             skills_llm = os.getenv("SKILLS_LLM", None)
             llm_kwargs = {"model_name_or_path": skills_llm} if skills_llm else {}
             response_text = llm.generate(prompt, **llm_kwargs)
+            if not response_text:
+                logger.warning("[PROCESS_SKILLS] LLM returned empty or invalid response")
+                continue
             # Clean up response (remove Markdown code blocks if present)
             logger.info(f"[Skill Memory]: response_text {response_text}")
             response_text = response_text.strip()
@@ -561,6 +567,9 @@ def _extract_skill_memory_by_llm_md(
             skills_llm = os.getenv("SKILLS_LLM", None)
             llm_kwargs = {"model_name_or_path": skills_llm} if skills_llm else {}
             response_text = llm.generate(prompt, **llm_kwargs)
+            if not response_text:
+                logger.warning("[PROCESS_SKILLS] LLM returned empty or invalid response")
+                continue
             # Clean up response (remove Markdown code blocks if present)
             logger.info(f"[Skill Memory]: response_text {response_text}")
             response_text = response_text.strip()
