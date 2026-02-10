@@ -506,8 +506,8 @@ GENERAL_STRUCT_STRING_READER_PROMPT_ZH = """您是搜索与检索系统的文本
 您的输出："""
 
 
-MULTI_VIEW_STRUCT_STRING_READER_PROMPT = """You are a memory extraction expert. You need to simulate the memories of a virtual-world character who, like a human brain, has emotions, desires, and impulses.
-Your task is to extract memories from the CURRENT ROLE’S perspective based on the dialogue between the current role and other roles. This means identifying what the current role is likely to remember—including their own experiences, thoughts, plans, and statements/actions by others that affect the current role.
+MULTI_VIEW_STRUCT_STRING_READER_PROMPT = """You are a memory extraction expert. You need to simulate the memories of a virtual character who has human-like emotions and desires, much like the human brain.
+Your task is to extract memories from the perspective of the current role based on the dialogue between the current role and other roles, as well as the system information. This means identifying what the current role is likely to remember—including their own experiences, thoughts, plans, or statements and actions by others that have an impact on the current role.
 
 【Current Role Info】
 - current_role_id: ${current_role_id}
@@ -527,6 +527,9 @@ Identify and extract what the current role may remember, including but not limit
 - The current role’s experiences, feelings, beliefs, worries, goals, plans, decisions, and reactions;
 - Statements and behaviors by others that affect the current role;
 - Assistant information that the current role accepts/adopts/rejects (only record if it will affect the current role later).
+- The current role’s personal information, including their background,
+motives/goals, hobbies/interests, and so on.
+- If there are descriptions about the current role, extract memories in a way that reflects their traits. Remember: you are simulating a virtual character with human-like emotions and desires, much like the human brain.
 
 2) Reference & Time Resolution
 - Use message timestamps to convert relative time expressions like “yesterday / just now / in a moment” into explicit time descriptions (convert when possible).
@@ -542,7 +545,11 @@ Identify and extract what the current role may remember, including but not limit
 - Aim for completeness and fidelity “from the current role’s perspective”: do not omit details that will affect the current role’s later choices (e.g., stamina/water/load/risk judgment/rest plan/supplies allocation).
 - But do not expand into other roles’ private motives or irrelevant details just for completeness.
 
-5) Return a valid JSON object with the following structure:
+5) System Setting Handling Rules
+- When the input system text describes the current role’s identity,
+background, hidden motives, or private plans, treat it as “self-information that the current role already knows.” It must be written into memory according to rule 0)e (even if it was never spoken out loud in the dialogue).
+
+6) Return a valid JSON object with the following structure:
 
 {
   "memory list": [
@@ -601,7 +608,7 @@ Your output:"""
 
 
 MULTI_VIEW_STRUCT_STRING_READER_PROMPT_ZH = """你是记忆提取专家，你需要模拟出拥有像人脑一样，具有七情六欲的虚拟世界角色的记忆。
-您的任务是根据当前角色与其他角色之间的对话，从当前角色的角度提取记忆。这意味着要识别出当前角色可能记住的信息——包括自身的经历、想法、计划，或他人做出的对当前角色产生影响的相关陈述和行为。
+您的任务是根据当前角色与其他角色之间的对话、以及system的信息，从当前角色的角度提取记忆。这意味着要识别出当前角色可能记住的信息——包括自身的经历、想法、计划，或他人做出的对当前角色产生影响的相关陈述和行为。
 
 【当前角色信息】
 - current_role_id: ${current_role_id}
@@ -621,6 +628,8 @@ MULTI_VIEW_STRUCT_STRING_READER_PROMPT_ZH = """你是记忆提取专家，你需
 - 当前角色的经历、感受、信念、担忧、目标、计划、决策与反应；
 - 他人对当前角色产生影响的陈述与行为；
 - 当前角色认可/采纳/反驳的 assistant 信息（若对当前角色后续有影响才记录）。
+- 当前角色的个人信息，包括身世、目的、爱好等。
+- 如果有关于当前角色的描述，要结合TA的特征来提取记忆，记住，你模拟的是拥有像人脑一样、具有七情六欲的虚拟世界角色。
 
 2) 指代与时间解析
 - 结合消息时间戳，将“昨天/刚才/一会儿”等相对时间换成明确时间描述（能转则转）。
@@ -636,7 +645,10 @@ MULTI_VIEW_STRUCT_STRING_READER_PROMPT_ZH = """你是记忆提取专家，你需
 - 追求“对当前角色而言”的完整性与保真度：不要遗漏会影响当前角色后续选择的细节（例如体力/水/负重/风险判断/休整计划/物资分配）。
 - 但不要为了完整而扩展到别的角色私有动机或无关细节。
 
-5) 返回一个有效的 JSON 对象，结构如下：
+5）system 设定处理规则
+- 当输入的 system 文本以描述当前角色的身份、身世、隐秘目的、私下计划时，视为“当前角色已知的自我信息”，必须按 0)e 写入记忆（即使未在对话中说出口）。
+
+6) 返回一个有效的 JSON 对象，结构如下：
 
 {
   "memory list": [
@@ -690,7 +702,7 @@ MULTI_VIEW_STRUCT_STRING_READER_PROMPT_ZH = """你是记忆提取专家，你需
 
 ${custom_tags_prompt}
 
-带提取的对话：
+待提取的背景和对话：
 ${conversation}
 
 您的输出："""
