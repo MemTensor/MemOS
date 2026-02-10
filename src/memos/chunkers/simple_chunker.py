@@ -20,12 +20,15 @@ class SimpleTextSplitter:
         Returns:
             List of text chunks
         """
-        if not text or len(text) <= chunk_size:
-            return [text] if text.strip() else []
+        protected_text, url_map = self.protect_urls(text)
+
+        if not protected_text or len(protected_text) <= chunk_size:
+            chunks = [protected_text] if protected_text.strip() else []
+            return [self.restore_urls(chunk, url_map) for chunk in chunks]
 
         chunks = []
         start = 0
-        text_len = len(text)
+        text_len = len(protected_text)
 
         while start < text_len:
             # Calculate end position
@@ -35,16 +38,16 @@ class SimpleTextSplitter:
             if end < text_len:
                 # Try to break at newline, sentence end, or space
                 for separator in ["\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", " "]:
-                    last_sep = text.rfind(separator, start, end)
+                    last_sep = protected_text.rfind(separator, start, end)
                     if last_sep != -1:
                         end = last_sep + len(separator)
                         break
 
-            chunk = text[start:end].strip()
+            chunk = protected_text[start:end].strip()
             if chunk:
                 chunks.append(chunk)
 
             # Move start position with overlap
             start = max(start + 1, end - chunk_overlap)
 
-        return chunks
+        return [self.restore_urls(chunk, url_map) for chunk in chunks]
