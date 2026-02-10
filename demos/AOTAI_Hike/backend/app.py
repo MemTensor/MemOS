@@ -12,14 +12,30 @@ from loguru import logger
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT / "frontend"
+LOG_DIR = ROOT / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "aotai_hike.log"
 
 app = FastAPI(title="AoTai Pixel Hike Demo", version="0.1.0")
 app.include_router(router)
 app.mount("/demo/ao-tai", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="ao-tai-demo")
 
+# Configure logging: both stdout and file
 logger.remove()
+# Console output
 logger.add(
     sys.stdout,
     level="INFO",
     format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+    colorize=True,
+)
+# File output with rotation
+logger.add(
+    LOG_FILE,
+    level="INFO",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} | {message}",
+    rotation="100 MB",  # Rotate when file reaches 100MB
+    retention="7 days",  # Keep logs for 7 days
+    compression="zip",  # Compress old logs
+    encoding="utf-8",
 )

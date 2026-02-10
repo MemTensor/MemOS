@@ -33,6 +33,10 @@ if TYPE_CHECKING:
     from aotai_hike.adapters.memory import MemoryAdapter
 
 
+def _is_junction(node_id: str) -> bool:
+    return len(AoTaiGraph.outgoing(node_id)) > 1
+
+
 @dataclass
 class GameConfig:
     memory_top_k: int = 5
@@ -186,6 +190,7 @@ class GameService:
                 and user_action_desc.startswith("MOVE_FORWARD")
                 and world_state.phase != Phase.NIGHT_WAIT_PLAYER
                 and world_state.phase != Phase.NIGHT_VOTE_READY
+                and world_state.phase != Phase.JUNCTION_DECISION
             ):
                 comp = self._companion.generate(
                     world_state=world_state,

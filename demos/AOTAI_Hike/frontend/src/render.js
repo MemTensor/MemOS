@@ -148,7 +148,18 @@ export function renderBranchChoices() {
   for (const it of items) {
     const btn = document.createElement("button");
     btn.textContent = it.text;
-    btn.onclick = () => window.__aoTaiActions.apiAct("MOVE_FORWARD", { next_node_id: it.id });
+
+    btn.onclick = async () => {
+
+    branchEl.style.display = "none";
+    branchEl.innerHTML = "";
+
+    worldState.available_next_node_ids = [];
+    worldState.phase = "free";
+
+    await window.__aoTaiActions.apiAct("MOVE_FORWARD", { next_node_id: it.id });
+  };
+
     box.appendChild(btn);
   }
 

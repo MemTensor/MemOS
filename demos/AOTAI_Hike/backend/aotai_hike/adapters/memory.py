@@ -107,7 +107,7 @@ class MemOSMemoryClient:
                     if text:
                         snippets.append(text)
         except Exception:
-            self._log.exception("Failed to parse search response")
+            logger.exception("Failed to parse search response")
         return MemorySearchResult(snippets=snippets)
 
     def chat_complete(
