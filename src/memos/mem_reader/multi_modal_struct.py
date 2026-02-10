@@ -1007,11 +1007,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if custom_tags
             else ""
         )
-        prompt = self.history_manager.format_async_update_prompt(
-            item,
-            conversation=kwargs.get("chat_history") or mem_str,
-            custom_tags_prompt=custom_tags_prompt,
-        )
+        prompt = self.history_manager.format_async_update_prompt(item, custom_tags_prompt)
         response_text = self.llm.generate([{"role": "user", "content": prompt}])
         response_json = parse_json_result(response_text)
         user_name = kwargs.get("user_name")
