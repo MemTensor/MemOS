@@ -126,6 +126,7 @@ class PolarDBGraphDB(BaseGraphDB):
         import psycopg2
         import psycopg2.pool
 
+        print(f"DEBUG: PolarDBGraph init. Host={config.host}, DB={config.db_name}")
         self.config = config
 
         # Handle both dict and object config
@@ -540,9 +541,9 @@ class PolarDBGraphDB(BaseGraphDB):
         query = f"""
             SELECT COUNT(*)
             FROM "{self.db_name}_graph"."Memory"
-            WHERE ag_catalog.agtype_access_operator(properties, '"memory_type"'::agtype) = %s::agtype
+            WHERE ag_catalog.agtype_access_operator(properties::text::agtype, '"memory_type"'::agtype) = %s::agtype
         """
-        query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
+        query += "\nAND ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = %s::agtype"
         params = [self.format_param_value(memory_type), self.format_param_value(user_name)]
 
         # Get a connection from the pool
@@ -566,9 +567,9 @@ class PolarDBGraphDB(BaseGraphDB):
         query = f"""
             SELECT id
             FROM "{self.db_name}_graph"."Memory"
-            WHERE ag_catalog.agtype_access_operator(properties, '"memory_type"'::agtype) = %s::agtype
+            WHERE ag_catalog.agtype_access_operator(properties::text::agtype, '"memory_type"'::agtype) = %s::agtype
         """
-        query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
+        query += "\nAND ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = %s::agtype"
         query += "\nLIMIT 1"
         params = [self.format_param_value(scope), self.format_param_value(user_name)]
 
@@ -604,9 +605,9 @@ class PolarDBGraphDB(BaseGraphDB):
         # First find IDs to delete, then delete them
         select_query = f"""
             SELECT id FROM "{self.db_name}_graph"."Memory"
-            WHERE ag_catalog.agtype_access_operator(properties, '"memory_type"'::agtype) = %s::agtype
-            AND ag_catalog.agtype_access_operator(properties, '"user_name"'::agtype) = %s::agtype
-            ORDER BY ag_catalog.agtype_access_operator(properties, '"updated_at"'::agtype) DESC
+            WHERE ag_catalog.agtype_access_operator(properties::text::agtype, '"memory_type"'::agtype) = %s::agtype
+            AND ag_catalog.agtype_access_operator(properties::text::agtype, '"user_name"'::agtype) = %s::agtype
+            ORDER BY ag_catalog.agtype_access_operator(properties::text::agtype, '"updated_at"'::agtype) DESC
             OFFSET %s
         """
         select_params = [
@@ -688,7 +689,7 @@ class PolarDBGraphDB(BaseGraphDB):
             query = f"""
                 UPDATE "{self.db_name}_graph"."Memory"
                 SET properties = %s, embedding = %s
-                WHERE ag_catalog.agtype_access_operator(properties, '"id"'::agtype) = %s::agtype
+                WHERE ag_catalog.agtype_access_operator(properties::text::agtype, '"id"'::agtype) = %s::agtype
             """
             params = [
                 json.dumps(properties),
@@ -699,13 +700,13 @@ class PolarDBGraphDB(BaseGraphDB):
             query = f"""
                 UPDATE "{self.db_name}_graph"."Memory"
                 SET properties = %s
-                WHERE ag_catalog.agtype_access_operator(properties, '"id"'::agtype) = %s::agtype
+                WHERE ag_catalog.agtype_access_operator(properties::text::agtype, '"id"'::agtype) = %s::agtype
             """
             params = [json.dumps(properties), self.format_param_value(id)]
 
         # Only add user filter when user_name is provided
         if user_name is not None:
-            query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
+            query += "\nAND ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = %s::agtype"
             params.append(self.format_param_value(user_name))
 
         # Get a connection from the pool
@@ -730,13 +731,13 @@ class PolarDBGraphDB(BaseGraphDB):
         """
         query = f"""
             DELETE FROM "{self.db_name}_graph"."Memory"
-            WHERE ag_catalog.agtype_access_operator(properties, '"id"'::agtype) = %s::agtype
+            WHERE ag_catalog.agtype_access_operator(properties::text::agtype, '"id"'::agtype) = %s::agtype
         """
         params = [self.format_param_value(id)]
 
         # Only add user filter when user_name is provided
         if user_name is not None:
-            query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
+            query += "\nAND ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = %s::agtype"
             params.append(self.format_param_value(user_name))
 
         # Get a connection from the pool
@@ -1050,13 +1051,13 @@ class PolarDBGraphDB(BaseGraphDB):
         query = f"""
             SELECT {select_fields}
             FROM "{self.db_name}_graph"."Memory"
-            WHERE ag_catalog.agtype_access_operator(properties, '"id"'::agtype) = %s::agtype
+            WHERE ag_catalog.agtype_access_operator(properties::text::agtype, '"id"'::agtype) = %s::agtype
         """
         params = [self.format_param_value(id)]
 
         # Only add user filter when user_name is provided
         if user_name is not None:
-            query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
+            query += "\nAND ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = %s::agtype"
             params.append(self.format_param_value(user_name))
 
         logger.info(f"polardb [get_node] query: {query},params: {params}")
@@ -1142,12 +1143,12 @@ class PolarDBGraphDB(BaseGraphDB):
         query = f"""
             SELECT id, properties, embedding
             FROM "{self.db_name}_graph"."Memory"
-            WHERE ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = ANY(ARRAY[{placeholders}]::agtype[])
+            WHERE ag_catalog.agtype_access_operator(properties::text::agtype, '\"id\"'::agtype) = ANY(ARRAY[{placeholders}]::agtype[])
         """
 
         # Only add user_name filter if provided
         if user_name is not None:
-            query += " AND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
+            query += " AND ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = %s::agtype"
             params.append(self.format_param_value(user_name))
 
         logger.info(f"get_nodes query:{query},params:{params}")
@@ -1706,15 +1707,15 @@ class PolarDBGraphDB(BaseGraphDB):
 
         if scope:
             where_clauses.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"memory_type\"'::agtype) = '\"{scope}\"'::agtype"
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"memory_type\"'::agtype) = '\"{scope}\"'::agtype"
             )
         if status:
             where_clauses.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"{status}\"'::agtype"
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"status\"'::agtype) = '\"{status}\"'::agtype"
             )
         else:
             where_clauses.append(
-                "ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"activated\"'::agtype"
+                "ag_catalog.agtype_access_operator(properties::text::agtype, '\"status\"'::agtype) = '\"activated\"'::agtype"
             )
 
         # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
@@ -1736,11 +1737,11 @@ class PolarDBGraphDB(BaseGraphDB):
             for key, value in search_filter.items():
                 if isinstance(value, str):
                     where_clauses.append(
-                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{value}\"'::agtype"
+                        f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = '\"{value}\"'::agtype"
                     )
                 else:
                     where_clauses.append(
-                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {value}::agtype"
+                        f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = {value}::agtype"
                     )
 
         # Build filter conditions using common method
@@ -1753,7 +1754,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         query = f"""
             SELECT
-                ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
+                ag_catalog.agtype_access_operator(properties::text::agtype, '"id"'::agtype) AS old_id,
                 agtype_object_field_text(properties, 'memory') as memory_text
             FROM "{self.db_name}_graph"."Memory"
             {where_clause}
@@ -1801,15 +1802,15 @@ class PolarDBGraphDB(BaseGraphDB):
 
         if scope:
             where_clauses.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"memory_type\"'::agtype) = '\"{scope}\"'::agtype"
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"memory_type\"'::agtype) = '\"{scope}\"'::agtype"
             )
         if status:
             where_clauses.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"{status}\"'::agtype"
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"status\"'::agtype) = '\"{status}\"'::agtype"
             )
         else:
             where_clauses.append(
-                "ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"activated\"'::agtype"
+                "ag_catalog.agtype_access_operator(properties::text::agtype, '\"status\"'::agtype) = '\"activated\"'::agtype"
             )
 
         # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
@@ -1831,11 +1832,11 @@ class PolarDBGraphDB(BaseGraphDB):
             for key, value in search_filter.items():
                 if isinstance(value, str):
                     where_clauses.append(
-                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{value}\"'::agtype"
+                        f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = '\"{value}\"'::agtype"
                     )
                 else:
                     where_clauses.append(
-                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {value}::agtype"
+                        f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = {value}::agtype"
                     )
 
         # Build filter conditions using common method
@@ -1852,7 +1853,7 @@ class PolarDBGraphDB(BaseGraphDB):
         # Build fulltext search query
         query = f"""
             SELECT
-                ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
+                ag_catalog.agtype_access_operator(properties::text::agtype, '"id"'::agtype) AS old_id,
                 agtype_object_field_text(properties, 'memory') as memory_text
             FROM "{self.db_name}_graph"."Memory"
             {where_clause}
@@ -1928,15 +1929,15 @@ class PolarDBGraphDB(BaseGraphDB):
 
         if scope:
             where_clauses.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"memory_type\"'::agtype) = '\"{scope}\"'::agtype"
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"memory_type\"'::agtype) = '\"{scope}\"'::agtype"
             )
         if status:
             where_clauses.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"{status}\"'::agtype"
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"status\"'::agtype) = '\"{status}\"'::agtype"
             )
         else:
             where_clauses.append(
-                "ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"activated\"'::agtype"
+                "ag_catalog.agtype_access_operator(properties::text::agtype, '\"status\"'::agtype) = '\"activated\"'::agtype"
             )
 
         # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
@@ -1959,11 +1960,11 @@ class PolarDBGraphDB(BaseGraphDB):
             for key, value in search_filter.items():
                 if isinstance(value, str):
                     where_clauses.append(
-                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{value}\"'::agtype"
+                        f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = '\"{value}\"'::agtype"
                     )
                 else:
                     where_clauses.append(
-                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {value}::agtype"
+                        f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = {value}::agtype"
                     )
 
         # Build filter conditions using common method
@@ -1984,7 +1985,7 @@ class PolarDBGraphDB(BaseGraphDB):
         # Build fulltext search query
         query = f"""
             SELECT
-                ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
+                ag_catalog.agtype_access_operator(properties::text::agtype, '"id"'::agtype) AS old_id,
                 agtype_object_field_text(properties, 'memory') as memory_text,
                 ts_rank({tsvector_field}, to_tsquery('{tsquery_config}', %s)) as rank
             FROM "{self.db_name}_graph"."Memory"
@@ -2046,15 +2047,15 @@ class PolarDBGraphDB(BaseGraphDB):
         where_clauses = []
         if scope:
             where_clauses.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"memory_type\"'::agtype) = '\"{scope}\"'::agtype"
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"memory_type\"'::agtype) = '\"{scope}\"'::agtype"
             )
         if status:
             where_clauses.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"{status}\"'::agtype"
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"status\"'::agtype) = '\"{status}\"'::agtype"
             )
         else:
             where_clauses.append(
-                "ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"activated\"'::agtype"
+                "ag_catalog.agtype_access_operator(properties::text::agtype, '\"status\"'::agtype) = '\"activated\"'::agtype"
             )
         where_clauses.append("embedding is not null")
         # Add user_name filter like nebular.py
@@ -2063,9 +2064,9 @@ class PolarDBGraphDB(BaseGraphDB):
         # user_name = self._get_config_value("user_name")
         # if not self.config.use_multi_db and user_name:
         #     if kwargs.get("cube_name"):
-        #         where_clauses.append(f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{kwargs['cube_name']}\"'::agtype")
+        #         where_clauses.append(f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = '\"{kwargs['cube_name']}\"'::agtype")
         #     else:
-        #         where_clauses.append(f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype")
+        #         where_clauses.append(f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype")
         """
         # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
         user_name_conditions = self._build_user_name_and_kb_ids_conditions_sql(
@@ -2086,11 +2087,11 @@ class PolarDBGraphDB(BaseGraphDB):
             for key, value in search_filter.items():
                 if isinstance(value, str):
                     where_clauses.append(
-                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{value}\"'::agtype"
+                        f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = '\"{value}\"'::agtype"
                     )
                 else:
                     where_clauses.append(
-                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {value}::agtype"
+                        f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = {value}::agtype"
                     )
 
         # Build filter conditions using common method
@@ -2106,7 +2107,7 @@ class PolarDBGraphDB(BaseGraphDB):
                         SELECT id,
                                properties,
                                timeline,
-                               ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
+                               ag_catalog.agtype_access_operator(properties::text::agtype, '"id"'::agtype) AS old_id,
                                (1 - (embedding <=> %s::vector(1024))) AS scope
                         FROM "{self.db_name}_graph"."Memory"
                         {where_clause}
@@ -2415,7 +2416,7 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name = user_name if user_name else self._get_config_value("user_name")
 
         # Build user clause
-        user_clause = f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype"
+        user_clause = f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype"
         if where_clause:
             where_clause = where_clause.strip()
             if where_clause.upper().startswith("WHERE"):
@@ -2437,7 +2438,7 @@ class PolarDBGraphDB(BaseGraphDB):
         if "user_name = %s" in where_clause:
             where_clause = where_clause.replace(
                 "user_name = %s",
-                f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype",
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype",
             )
 
         # Build return fields and group by fields
@@ -2447,10 +2448,10 @@ class PolarDBGraphDB(BaseGraphDB):
         for field in group_fields:
             alias = field.replace(".", "_")
             return_fields.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype)::text AS {alias}"
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{field}\"'::agtype)::text AS {alias}"
             )
             group_by_fields.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype)::text"
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{field}\"'::agtype)::text"
             )
 
         # Full SQL query construction
@@ -2604,11 +2605,11 @@ class PolarDBGraphDB(BaseGraphDB):
             where_conditions = []
             if user_name:
                 where_conditions.append(
-                    f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype"
+                    f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype"
                 )
             if user_id:
                 where_conditions.append(
-                    f"ag_catalog.agtype_access_operator(properties, '\"user_id\"'::agtype) = '\"{user_id}\"'::agtype"
+                    f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_id\"'::agtype) = '\"{user_id}\"'::agtype"
                 )
 
             # Add memory_type filter condition
@@ -2673,7 +2674,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     SELECT id, properties, embedding
                     FROM "{self.db_name}_graph"."Memory"
                     {where_clause}
-                    ORDER BY ag_catalog.agtype_access_operator(properties, '"created_at"'::agtype) DESC NULLS LAST,
+                    ORDER BY ag_catalog.agtype_access_operator(properties::text::agtype, '"created_at"'::agtype) DESC NULLS LAST,
                              id DESC
                     {pagination_clause}
                 """
@@ -2682,7 +2683,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     SELECT id, properties
                     FROM "{self.db_name}_graph"."Memory"
                     {where_clause}
-                    ORDER BY ag_catalog.agtype_access_operator(properties, '"created_at"'::agtype) DESC NULLS LAST,
+                    ORDER BY ag_catalog.agtype_access_operator(properties::text::agtype, '"created_at"'::agtype) DESC NULLS LAST,
                              id DESC
                     {pagination_clause}
                 """
@@ -3891,30 +3892,30 @@ class PolarDBGraphDB(BaseGraphDB):
             exclude_conditions = []
             for exclude_id in exclude_ids:
                 exclude_conditions.append(
-                    "ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) != %s::agtype"
+                    "ag_catalog.agtype_access_operator(properties::text::agtype, '\"id\"'::agtype) != %s::agtype"
                 )
                 params.append(self.format_param_value(exclude_id))
             where_clauses.append(f"({' AND '.join(exclude_conditions)})")
 
         # Status filter - keep only 'activated'
         where_clauses.append(
-            "ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"activated\"'::agtype"
+            "ag_catalog.agtype_access_operator(properties::text::agtype, '\"status\"'::agtype) = '\"activated\"'::agtype"
         )
 
         # Type filter - exclude 'reasoning' type
         where_clauses.append(
-            "ag_catalog.agtype_access_operator(properties, '\"node_type\"'::agtype) != '\"reasoning\"'::agtype"
+            "ag_catalog.agtype_access_operator(properties::text::agtype, '\"node_type\"'::agtype) != '\"reasoning\"'::agtype"
         )
 
         # User filter
         where_clauses.append(
-            "ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
+            "ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = %s::agtype"
         )
         params.append(self.format_param_value(user_name))
 
         # Testing showed no data; annotate.
         where_clauses.append(
-            "ag_catalog.agtype_access_operator(properties, '\"memory_type\"'::agtype) != '\"WorkingMemory\"'::agtype"
+            "ag_catalog.agtype_access_operator(properties::text::agtype, '\"memory_type\"'::agtype) != '\"WorkingMemory\"'::agtype"
         )
 
         where_clause = " AND ".join(where_clauses)
@@ -4376,7 +4377,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         if user_name:
             user_name_conditions.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{effective_user_name}\"'::agtype"
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = '\"{effective_user_name}\"'::agtype"
             )
 
         # Add knowledgebase_ids conditions (checking user_name field in the data)
@@ -4384,7 +4385,7 @@ class PolarDBGraphDB(BaseGraphDB):
             for kb_id in knowledgebase_ids:
                 if isinstance(kb_id, str):
                     user_name_conditions.append(
-                        f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{kb_id}\"'::agtype"
+                        f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = '\"{kb_id}\"'::agtype"
                     )
 
         return user_name_conditions
@@ -4832,17 +4833,17 @@ class PolarDBGraphDB(BaseGraphDB):
                                         escaped_value = escape_sql_string(op_value)
                                         if is_datetime:
                                             condition_parts.append(
-                                                f"TRIM(BOTH '\"' FROM ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype)::text)::timestamp {sql_op} '{escaped_value}'::timestamp"
+                                                f"TRIM(BOTH '\"' FROM ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype)::text)::timestamp {sql_op} '{escaped_value}'::timestamp"
                                             )
                                         else:
                                             condition_parts.append(
-                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) {sql_op} '\"{escaped_value}\"'::agtype"
+                                                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) {sql_op} '\"{escaped_value}\"'::agtype"
                                             )
                                     else:
                                         # For non-string values (numbers, booleans, etc.), convert to JSON string and then to agtype
                                         value_json = json.dumps(op_value)
                                         condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) {sql_op} ag_catalog.agtype_in('{value_json}')"
+                                            f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) {sql_op} ag_catalog.agtype_in('{value_json}')"
                                         )
                             elif op == "=":
                                 # Handle equality operator
@@ -4896,11 +4897,11 @@ class PolarDBGraphDB(BaseGraphDB):
                                         # For scalar fields, use =
                                         if key in ("tags", "sources"):
                                             condition_parts.append(
-                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '[\"{escaped_value}\"]'::agtype"
+                                                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = '[\"{escaped_value}\"]'::agtype"
                                             )
                                         else:
                                             condition_parts.append(
-                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{escaped_value}\"'::agtype"
+                                                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = '\"{escaped_value}\"'::agtype"
                                             )
                                     elif isinstance(op_value, list):
                                         # For array fields, format list as JSON array string
@@ -4910,24 +4911,24 @@ class PolarDBGraphDB(BaseGraphDB):
                                             ]
                                             json_array = json.dumps(escaped_items)
                                             condition_parts.append(
-                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '{json_array}'::agtype"
+                                                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = '{json_array}'::agtype"
                                             )
                                         else:
                                             # For non-string list values, convert to JSON string and then to agtype
                                             value_json = json.dumps(op_value)
                                             condition_parts.append(
-                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = ag_catalog.agtype_in('{value_json}')"
+                                                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = ag_catalog.agtype_in('{value_json}')"
                                             )
                                     else:
                                         if key in ("tags", "sources"):
                                             condition_parts.append(
-                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '[{op_value}]'::agtype"
+                                                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = '[{op_value}]'::agtype"
                                             )
                                         else:
                                             # For non-string values (numbers, booleans, etc.), convert to JSON string and then to agtype
                                             value_json = json.dumps(op_value)
                                             condition_parts.append(
-                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = ag_catalog.agtype_in('{value_json}')"
+                                                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = ag_catalog.agtype_in('{value_json}')"
                                             )
                             elif op == "contains":
                                 # Handle contains operator
@@ -4948,7 +4949,7 @@ class PolarDBGraphDB(BaseGraphDB):
                                     escaped_value = escape_sql_string(str(op_value))
                                     # For array fields, use @> with array format
                                     condition_parts.append(
-                                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> '[\"{escaped_value}\"]'::agtype"
+                                        f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) @> '[\"{escaped_value}\"]'::agtype"
                                     )
                             elif op == "in":
                                 # Handle in operator (for checking if field value is in a list)
@@ -5029,18 +5030,18 @@ class PolarDBGraphDB(BaseGraphDB):
                                             # For array fields, use @> operator (contains)
                                             escaped_value = escape_sql_string(str(item))
                                             condition_parts.append(
-                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> '[\"{escaped_value}\"]'::agtype"
+                                                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) @> '[\"{escaped_value}\"]'::agtype"
                                             )
                                         else:
                                             # For scalar fields, use equality
                                             if isinstance(item, str):
                                                 escaped_value = escape_sql_string(item)
                                                 condition_parts.append(
-                                                    f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{escaped_value}\"'::agtype"
+                                                    f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = '\"{escaped_value}\"'::agtype"
                                                 )
                                             else:
                                                 condition_parts.append(
-                                                    f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {item}::agtype"
+                                                    f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = {item}::agtype"
                                                 )
                                     else:
                                         # Multiple values, use OR conditions
@@ -5050,18 +5051,18 @@ class PolarDBGraphDB(BaseGraphDB):
                                                 # For array fields, use @> operator (contains) to check if array contains the value
                                                 escaped_value = escape_sql_string(str(item))
                                                 or_conditions.append(
-                                                    f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> '[\"{escaped_value}\"]'::agtype"
+                                                    f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) @> '[\"{escaped_value}\"]'::agtype"
                                                 )
                                             else:
                                                 # For scalar fields, use equality
                                                 if isinstance(item, str):
                                                     escaped_value = escape_sql_string(item)
                                                     or_conditions.append(
-                                                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{escaped_value}\"'::agtype"
+                                                        f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = '\"{escaped_value}\"'::agtype"
                                                     )
                                                 else:
                                                     or_conditions.append(
-                                                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {item}::agtype"
+                                                        f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = {item}::agtype"
                                                     )
                                         if or_conditions:
                                             condition_parts.append(
@@ -5096,11 +5097,11 @@ class PolarDBGraphDB(BaseGraphDB):
                                             .replace("_", "\\_")
                                         )
                                         condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype)::text LIKE '%{escaped_value}%'"
+                                            f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype)::text LIKE '%{escaped_value}%'"
                                         )
                                     else:
                                         condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype)::text LIKE '%{op_value}%'"
+                                            f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype)::text LIKE '%{op_value}%'"
                                         )
                     # Check if key starts with "info." prefix (for simple equality)
                     elif key.startswith("info."):
@@ -5122,13 +5123,13 @@ class PolarDBGraphDB(BaseGraphDB):
                         if isinstance(value, str):
                             escaped_value = escape_sql_string(value)
                             condition_parts.append(
-                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{escaped_value}\"'::agtype"
+                                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = '\"{escaped_value}\"'::agtype"
                             )
                         else:
                             # For non-string values (numbers, booleans, etc.), convert to JSON string and then to agtype
                             value_json = json.dumps(value)
                             condition_parts.append(
-                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = ag_catalog.agtype_in('{value_json}')"
+                                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"{key}\"'::agtype) = ag_catalog.agtype_in('{value_json}')"
                             )
                 return " AND ".join(condition_parts)
 
@@ -5296,7 +5297,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     id_conditions = []
                     for node_id in memory_ids:
                         id_conditions.append(
-                            f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{node_id}\"'::agtype"
+                            f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"id\"'::agtype) = '\"{node_id}\"'::agtype"
                         )
                     where_conditions.append(f"({' OR '.join(id_conditions)})")
 
@@ -5398,7 +5399,7 @@ class PolarDBGraphDB(BaseGraphDB):
             # Escape special characters
             escaped_mid = escape_memory_id(mid)
             id_conditions.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{escaped_mid}\"'::agtype"
+                f"ag_catalog.agtype_access_operator(properties::text::agtype, '\"id\"'::agtype) = '\"{escaped_mid}\"'::agtype"
             )
 
         where_clause = f"({' OR '.join(id_conditions)})"
@@ -5406,8 +5407,8 @@ class PolarDBGraphDB(BaseGraphDB):
         # Query to get memory_id and user_name pairs
         query = f"""
             SELECT
-                ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype)::text AS memory_id,
-                ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype)::text AS user_name
+                ag_catalog.agtype_access_operator(properties::text::agtype, '\"id\"'::agtype)::text AS memory_id,
+                ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype)::text AS user_name
             FROM "{self.db_name}_graph"."Memory"
             WHERE {where_clause}
         """
@@ -5488,7 +5489,7 @@ class PolarDBGraphDB(BaseGraphDB):
         query = f"""
             SELECT COUNT(*)
             FROM "{self.db_name}_graph"."Memory"
-            WHERE ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{escaped_un}\"'::agtype
+            WHERE ag_catalog.agtype_access_operator(properties::text::agtype, '\"user_name\"'::agtype) = '\"{escaped_un}\"'::agtype
         """
         logger.info(f"[exist_user_name] query: {query}")
         result_dict = {}
