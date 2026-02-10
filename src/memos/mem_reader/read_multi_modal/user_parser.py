@@ -1,6 +1,6 @@
 """Parser for user messages."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
@@ -14,6 +14,10 @@ from memos.types.openai_chat_completion_types import ChatCompletionUserMessagePa
 
 from .base import BaseMessageParser, _add_lang_to_source, _derive_key, _extract_text_from_content
 from .utils import detect_lang
+
+
+if TYPE_CHECKING:
+    from memos.types.general_types import UserContext
 
 
 logger = get_logger(__name__)
@@ -64,6 +68,10 @@ class UserParser(BaseMessageParser):
                     part_type = part.get("type", "")
                     if part_type == "text":
                         text_contents.append(part.get("text", ""))
+                    if part_type == "file":
+                        file_info = part.get("file", {})
+                        file_data = file_info.get("file_data", "")
+                        text_contents.append(file_data)
 
             # Detect overall language from all text content
             overall_lang = "en"
@@ -183,6 +191,11 @@ class UserParser(BaseMessageParser):
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
 
+        # Extract manager_user_id and project_id from user_context
+        user_context: UserContext | None = kwargs.get("user_context")
+        manager_user_id = user_context.manager_user_id if user_context else None
+        project_id = user_context.project_id if user_context else None
+
         # Create memory item (equivalent to _make_memory_item)
         memory_item = TextualMemoryItem(
             memory=line,
@@ -200,6 +213,8 @@ class UserParser(BaseMessageParser):
                 confidence=0.99,
                 type="fact",
                 info=info_,
+                manager_user_id=manager_user_id,
+                project_id=project_id,
             ),
         )
 
