@@ -331,14 +331,13 @@ class MemoryHistoryManager:
         return
 
     def format_async_update_prompt(
-        self, item: TextualMemoryItem, conversation: str | None = None, custom_tags_prompt: str = ""
+        self, item: TextualMemoryItem, custom_tags_prompt: str = ""
     ) -> str:
         """
         Format the prompt for asynchronous memory update.
 
         Args:
             item: The TextualMemoryItem containing history candidates.
-            conversation: The current conversation content. If None, uses item.memory.
             custom_tags_prompt: Optional custom prompt for tags.
 
         Returns:
@@ -351,8 +350,20 @@ class MemoryHistoryManager:
         conflict_candidates = []
         unrelated_candidates = []
 
+        def _fmt_time(ts: str | None) -> str | None:
+            if not ts or not isinstance(ts, str):
+                return None
+            try:
+                t = datetime.fromisoformat(ts.replace("Z", ""))
+                return t.strftime("%Y/%m/%d %H:%M:%S")
+            except Exception:
+                return ts
+
         for h in item.metadata.history or []:
-            candidate_str = f"[ID:{h.archived_memory_id}] {h.memory}"
+            created = getattr(h, "created_at", None)
+            tstr = _fmt_time(created)
+            time_suffix = f"[Time: {tstr}] " if tstr else ""
+            candidate_str = f"[ID:{h.archived_memory_id}]{time_suffix}{h.memory}"
 
             if h.update_type == "duplicate":
                 duplicate_candidates.append(candidate_str)
@@ -363,7 +374,7 @@ class MemoryHistoryManager:
                 unrelated_candidates.append(candidate_str)
 
         sources = item.metadata.sources if item.metadata else None
-        lang = _determine_lang(sources, conversation or item.memory)
+        lang = _determine_lang(sources, item.memory)
         empty_label = "None"
 
         def format_list(candidates):
@@ -372,12 +383,16 @@ class MemoryHistoryManager:
         prompt_template = ASYNC_MEMORY_UPDATE_PROMPT_DICT.get(
             lang, ASYNC_MEMORY_UPDATE_PROMPT_DICT["en"]
         )
+        conversation_time_raw = getattr(item.metadata, "created_at", None)
+        conversation_time = _fmt_time(conversation_time_raw) or conversation_time_raw
+
         return (
             prompt_template.replace("${duplicate_candidates}", format_list(duplicate_candidates))
             .replace("${conflict_candidates}", format_list(conflict_candidates))
             .replace("${unrelated_candidates}", format_list(unrelated_candidates))
             .replace("${custom_tags_prompt}", custom_tags_prompt)
-            .replace("${conversation}", conversation or item.memory)
+            .replace("${conversation_time}", conversation_time)
+            .replace("${conversation}", item.memory)
         )
 
     def apply_llm_memory_updates(
