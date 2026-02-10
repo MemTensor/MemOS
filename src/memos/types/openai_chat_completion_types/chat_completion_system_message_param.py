@@ -34,3 +34,9 @@ class ChatCompletionSystemMessageParam(TypedDict, total=False):
 
     message_id: str | None
     """Optional unique identifier for the message"""
+
+    role_id: str | None
+    """Optional role ID for multi-perspective / multi-character conversations."""
+
+    role_name: str | None
+    """Optional role name for multi-perspective / multi-character conversations."""

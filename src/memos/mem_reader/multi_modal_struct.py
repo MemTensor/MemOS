@@ -23,6 +23,56 @@ from memos.utils import timed
 logger = log.get_logger(__name__)
 
 
+def format_role_prefix(role: str | None, role_name: str | None, role_id: str | None) -> str:
+    """
+    Prefer role_name; fall back to role.
+    Render: role_id: leader or  user role_id: xxx
+    """
+    who = role_name or role or "unknown"
+    extras = []
+    if role_id:
+        extras.append(f"role_id: {role_id}")
+    return f"{who}（{', '.join(extras)}）" if extras else who
+
+
+def format_line(source: object | dict) -> str:
+    if isinstance(source, dict):
+        role = source.get("role")
+        role_id = source.get("role_id")
+        role_name = source.get("role_name")
+        ts = source.get("chat_time")
+        content = source.get("content") or ""
+    else:
+        role = getattr(source, "role", None)
+        role_id = getattr(source, "role_id", None)
+        role_name = getattr(source, "role_name", None)
+        ts = getattr(source, "chat_time", None)
+        content = getattr(source, "content", "") or ""
+
+    prefix = format_role_prefix(role, role_name, role_id)
+
+    if ts:
+        return f"{prefix}: [{ts}]: {content}"
+    return f"{prefix}: {content}"
+
+
+def build_multiview_conversation(sources: list[object | dict]) -> str:
+    def get_ts(s):
+        if isinstance(s, dict):
+            return s.get("timestamp") or s.get("time") or s.get("created_at") or ""
+        return (
+            getattr(s, "timestamp", None)
+            or getattr(s, "time", None)
+            or getattr(s, "created_at", None)
+            or ""
+        )
+
+    sources_sorted = sorted(sources, key=get_ts)
+
+    lines = [format_line(s) for s in sources_sorted]
+    return "\n".join(lines)
+
+
 class MultiModalStructMemReader(SimpleStructMemReader):
     """Multimodal implementation of MemReader that inherits from
     SimpleStructMemReader."""
@@ -358,6 +408,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         custom_tags: list[str] | None = None,
         sources: list | None = None,
         prompt_type: str = "chat",
+        current_role_name: str | None = None,
+        current_role_id: str | None = None,
     ) -> dict:
         """
         Override parent method to improve language detection by using actual text content
@@ -399,6 +451,15 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             template = PROMPT_DICT["general_string"][lang]
             examples = ""
             prompt = template.replace("{chunk_text}", mem_str)
+        elif prompt_type == "multi_view":
+            # Multi-view: single-role internal memory extraction with rich role header
+            template = PROMPT_DICT["multi_view"][lang]
+            examples = ""
+            prompt = template.replace("${conversation}", mem_str)
+            # Fill in current role metadata placeholders if present
+            prompt = prompt.replace("${current_role_name}", current_role_name or "").replace(
+                "${current_role_id}", current_role_id or ""
+            )
         else:
             template = PROMPT_DICT["chat"][lang]
             examples = PROMPT_DICT["chat"][f"{lang}_example"]
@@ -410,7 +471,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             else ""
         )
 
-        # Replace custom_tags_prompt placeholder (different for doc vs chat)
+        # Replace custom_tags_prompt placeholder (different for doc vs chat/multi_view)
         if prompt_type in ["doc", "general_string"]:
             prompt = prompt.replace("{custom_tags_prompt}", custom_tags_prompt)
         else:
@@ -420,6 +481,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             prompt = prompt.replace(examples, "")
         messages = [{"role": "user", "content": prompt}]
         try:
+            print(f"messages: {messages}")
             response_text = self.llm.generate(messages)
             response_json = parse_json_result(response_text)
         except Exception as e:
@@ -441,20 +503,46 @@ class MultiModalStructMemReader(SimpleStructMemReader):
     def _determine_prompt_type(self, sources: list) -> str:
         """
         Determine prompt type based on sources.
+
+        - If sources come from chat roles (user/assistant/system/tool):
+          - And contain multi-view fields (e.g., role_id / role_name on one or more sources),
+            use the multi-view prompt.
+          - Otherwise, use the standard chat prompt.
+        - If sources do not look like chat, fall back to general_string.
         """
         if not sources:
             return "chat"
-        prompt_type = "general_string"
+
+        has_chat_role = False
+        has_multi_view = False
+
         for source in sources:
-            source_role = None
+            # Support both SourceMessage objects and plain dicts
             if hasattr(source, "role"):
-                source_role = source.role
+                source_role = getattr(source, "role", None)
+                role_id = getattr(source, "role_id", None)
+                role_name = getattr(source, "role_name", None)
             elif isinstance(source, dict):
                 source_role = source.get("role")
-            if source_role in {"user", "assistant", "system", "tool"}:
-                prompt_type = "chat"
+                role_id = source.get("role_id")
+                role_name = source.get("role_name")
+            else:
+                source_role = None
+                role_id = None
+                role_name = None
 
-        return prompt_type
+            if source_role in {"user", "assistant", "system", "tool"}:
+                has_chat_role = True
+
+            # multi-view
+            if role_id or role_name:
+                has_multi_view = True
+
+        if has_chat_role and has_multi_view:
+            return "multi_view"
+        if has_chat_role:
+            return "chat"
+        return "general_string"
 
     def _get_maybe_merged_memory(
         self,
@@ -647,10 +735,18 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if not isinstance(sources, list):
                 sources = [sources]
 
-            # Extract file_ids from fast item metadata for propagation
+            # Extract file_ids and role info from fast item metadata for propagation
             metadata = getattr(fast_item, "metadata", None)
             file_ids = getattr(metadata, "file_ids", None) if metadata is not None else None
             file_ids = [fid for fid in file_ids if fid] if isinstance(file_ids, list) else []
+
+            # Current role metadata (for multi-view prompt header)
+            meta_info = getattr(metadata, "info", None) or {}
+            current_role_id = None
+            current_role_name = None
+            if isinstance(meta_info, dict):
+                current_role_id = meta_info.get("role_id")
+                current_role_name = meta_info.get("role_name")
 
             # Build per-item info copy and kwargs for _make_memory_item
             info_per_item = info.copy()
@@ -663,9 +759,21 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # Determine prompt type based on sources
             prompt_type = self._determine_prompt_type(sources)
 
+            # If multi-view, augment the conversation string with role metadata
+            mem_str_for_llm = mem_str
+            if prompt_type == "multi_view":
+                mem_str_for_llm = build_multiview_conversation(sources)
+
             # ========== Stage 1: Normal extraction (without reference) ==========
             try:
-                resp = self._get_llm_response(mem_str, custom_tags, sources, prompt_type)
+                resp = self._get_llm_response(
+                    mem_str_for_llm,
+                    custom_tags,
+                    sources,
+                    prompt_type,
+                    current_role_name=current_role_name,
+                    current_role_id=current_role_id,
+                )
             except Exception as e:
                 logger.error(f"[MultiModalFine] Error calling LLM: {e}")
                 return fine_items

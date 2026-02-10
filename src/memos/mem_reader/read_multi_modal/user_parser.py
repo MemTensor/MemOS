@@ -194,6 +194,13 @@ class UserParser(BaseMessageParser):
 
         # Extract info fields
         info_ = info.copy()
+        # Attach multi-view role info (if present on the message) into info_
+        role_id = message.get("role_id")
+        role_name = message.get("role_name")
+        if role_id is not None:
+            info_["role_id"] = role_id
+        if role_name is not None:
+            info_["role_name"] = role_name
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
 

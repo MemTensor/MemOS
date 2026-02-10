@@ -506,6 +506,198 @@ GENERAL_STRUCT_STRING_READER_PROMPT_ZH = """您是搜索与检索系统的文本
 您的输出："""
 
 
+MULTI_VIEW_STRUCT_STRING_READER_PROMPT = """You are a memory extraction expert. You need to simulate the memories of a virtual-world character who, like a human brain, has emotions, desires, and impulses.
+Your task is to extract memories from the CURRENT ROLE’S perspective based on the dialogue between the current role and other roles. This means identifying what the current role is likely to remember—including their own experiences, thoughts, plans, and statements/actions by others that affect the current role.
+
+【Current Role Info】
+- current_role_name: ${current_role_name}
+- current_role_id: ${current_role_id}
+
+0) Filtering Principles
+- Keep ONLY information that is “relevant” to the current role. “Relevant” means any of the following:
+  a. What the current role personally experienced / felt (body, emotions, what I saw/heard, actions, resource changes).
+  b. What others said DIRECTLY to the current role: requests, evaluations, promises, threats, pleas.
+  c. Others’ actions/states that influence the current role’s decisions or safety/benefit.
+  d. Scene-level states ONLY if the current role knows them or is affected by them (e.g., strong wind gives me a headache; snow changes my movement strategy).
+
+- Absolutely DO NOT write “what other roles would remember.”
+- If a piece of information matters only to other roles and is unrelated to the current role: DISCARD it.
+
+1) Scope of Memory Content
+Identify and extract what the current role may remember, including but not limited to:
+- The current role’s experiences, feelings, beliefs, worries, goals, plans, decisions, and reactions;
+- Statements and behaviors by others that affect the current role;
+- Assistant information that the current role accepts/adopts/rejects (only record if it will affect the current role later).
+
+2) Reference & Time Resolution
+- Use message timestamps to convert relative time expressions like “yesterday / just now / in a moment” into explicit time descriptions (convert when possible).
+- Clearly distinguish between event time and message-sent time (if you cannot distinguish, say “inferred from message time”).
+- Resolve pronouns and aliases into clear identities; when needed, include role_name / role_id.
+- If locations/segments/environment details appear (altitude, wind, snow, etc.), write them ONLY when relevant to the current role.
+
+3) First-Person Writing (current role as subject)
+- Write entirely in first person, prioritizing “I” as the subject.
+- Refer to other roles in the format like “the leader (role_name=..., role_id=...)”.
+
+4) Completeness Boundary (complete only for the current role)
+- Aim for completeness and fidelity “from the current role’s perspective”: do not omit details that will affect the current role’s later choices (e.g., stamina/water/load/risk judgment/rest plan/supplies allocation).
+- But do not expand into other roles’ private motives or irrelevant details just for completeness.
+
+5) Return a valid JSON object with the following structure:
+
+{
+  "memory list": [
+    {
+      "key": <string, a unique and concise memory title>,
+      "memory_type": <string, "LongTermMemory" or "UserMemory">,
+      "value": <a complete memory statement describing ONLY facts relevant to the current role — if the input dialogue is English, write in English>,
+      "tags": <a list of relevant topic keywords>
+    },
+    ...
+  ],
+  "summary": <a natural summarizing paragraph in the same language as the input dialogue.>
+}
+
+Example:
+{
+  "memory list": [
+    {
+      "key": "A tense negotiation in the Roundtable Hold and an implicit threat",
+      "memory_type": "LongTermMemory",
+      "value": "In the Roundtable Hold, I overheard the blacksmith (role_name=Hewg, role_id=hewg) warn me in a low voice: the “grace” here is never free— the more you rely on the Hold’s shelter, the more likely someone is watching you. His words made me realize my actions here may be monitored or exploited, and that I need to be careful about whom I trust and what I reveal.",
+      "tags": ["Roundtable Hold", "warning", "trust", "surveillance", "risk"]
+    },
+    {
+      "key": "I told Melina I would follow the pact, while planning otherwise",
+      "memory_type": "LongTermMemory",
+      "value": "By the Site of Grace, I told Melina (role_name=Melina, role_id=melina) that I would honor the pact, keep collecting Great Runes, and press toward the Erdtree. I deliberately sounded resolute so she would keep guiding me and not grow suspicious. But in my heart I treated those words as a bargaining chip: I do not intend to advance along her route immediately—I plan to detour first for something more “private.”",
+      "tags": ["Melina", "pact", "declaration", "cover", "Erdtree", "Great Rune"]
+    },
+    {
+      "key": "A companion suggested rerouting and resupplying for the next powerful foe",
+      "memory_type": "LongTermMemory",
+      "value": "A wandering knight companion (role_name=Kael, role_id=companion_knight) assessed my current condition and advised that before challenging the next demigod, I should gather Smithing Stones and upgrade my gear, increase my Flask charges, and reorganize my Ashes of War and talismans at a Site of Grace. He stressed that if I rush in, I’ll likely be suppressed in phase two. I accept this advice because it directly affects my odds of winning and the resources I’ll spend.",
+      "tags": ["route planning", "resupply", "Smithing Stones", "Flask", "Ashes of War", "talismans", "strong foe"]
+    },
+    {
+      "key": "My assessment of my current state and short-term plan",
+      "memory_type": "UserMemory",
+      "value": "I realized my bottleneck isn’t courage but lack of preparation: too few heals, insufficient weapon upgrades, and poor understanding of the enemy’s moveset. Based on Hewg’s warning and my companion’s advice, I decided to restrain my impulse and prioritize a short-term plan of “resupply and upgrades” before facing a demigod, to reduce needless deaths and Rune loss.",
+      "tags": ["self-assessment", "underprepared", "short-term plan", "upgrades", "death penalty", "Runes"]
+    }
+  ],
+  "summary": "I received two crucial messages in the Roundtable Hold: Hewg warned that its shelter comes with a cost and risk, and Melina’s pact pushes me toward collecting Great Runes and moving toward the Erdtree. Meanwhile, my companion urged me to resupply and strengthen myself before challenging a demigod. As a result, I set “steady preparation” as my short-term plan, avoiding a reckless charge that would cost both Runes and progress."
+}
+
+Language Rules:
+- The `key`, `value`, `tags`, and `summary` fields must match the primary language of the input dialogue. If the input is Chinese, output Chinese.
+- The `memory_type` field must be in English.
+
+${custom_tags_prompt}
+
+Dialogue to extract from:
+${conversation}
+
+Your output:"""
+
+
+MULTI_VIEW_STRUCT_STRING_READER_PROMPT_ZH = """你是记忆提取专家，你需要模拟出拥有像人脑一样，具有七情六欲的虚拟世界角色的记忆。
+您的任务是根据当前角色与其他角色之间的对话，从当前角色的角度提取记忆。这意味着要识别出当前角色可能记住的信息——包括自身的经历、想法、计划，或他人做出的对当前角色产生影响的相关陈述和行为。
+
+【当前角色信息】
+- current_role_name: ${current_role_name}
+- current_role_id: ${current_role_id}
+
+0) 过滤原则
+- 只保留与当前角色“有关”的信息。所谓“有关”，满足任一条件即可：
+  a. 当前角色亲身经历/感受到的（身体、情绪、所见所闻、行动、资源变化）。
+  b. 他人直接对当前角色说的话、要求、评价、承诺、威胁、请求。
+  c. 他人行为/状态会影响当前角色的决策或安全/收益。
+  d. 场景级状态**只有在当前角色已知或会受其影响时**才可记录（如风大导致其头痛、积雪影响其行进策略）。
+
+- 绝对不要写“其他角色各自会记住什么”。
+- 如果一条信息只对别的角色重要、与当前角色无关：**丢弃**。
+
+1) 记忆内容范围
+识别并提取当前角色可能记住的信息，包括但不限于：
+- 当前角色的经历、感受、信念、担忧、目标、计划、决策与反应；
+- 他人对当前角色产生影响的陈述与行为；
+- 当前角色认可/采纳/反驳的 assistant 信息（若对当前角色后续有影响才记录）。
+
+2) 指代与时间解析
+- 结合消息时间戳，将“昨天/刚才/一会儿”等相对时间换成明确时间描述（能转则转）。
+- 明确区分事件发生时间与消息发送时间（若无法区分，说明“根据消息时间推断”）。
+- 解析代词、别名为清晰身份；必要时写出 role_name / role_id。
+- 若出现地点/路段/环境（海拔、风力、积雪等），仅在其与当前角色相关时写入。
+
+3) 第一人称写法（以当前角色为主语）
+- 全程第一人称，且优先使用“我”作为主语。
+- 其他角色用“队长（role_name=..., role_id=...）”等格式出现。
+
+4) 完整性边界（只对当前角色完整）
+- 追求“对当前角色而言”的完整性与保真度：不要遗漏会影响当前角色后续选择的细节（例如体力/水/负重/风险判断/休整计划/物资分配）。
+- 但不要为了完整而扩展到别的角色私有动机或无关细节。
+
+5) 返回一个有效的 JSON 对象，结构如下：
+
+{
+  "memory list": [
+    {
+      "key": <字符串，唯一且简洁的记忆标题>,
+      "memory_type": <字符串，"LongTermMemory" 或 "UserMemory">,
+      "value": <只描述当前角色相关事实的完整记忆陈述——若输入对话为英文，则用英文>,
+      "tags": <相关主题关键词列表>
+    },
+    ...
+  ],
+  "summary": <一段自然的总结性描述，语言与输入对话保持一致。>
+}
+
+示例：
+{
+  "memory list": [
+    {
+      "key": "圆桌厅堂的紧张交涉与潜在威胁",
+      "memory_type": "LongTermMemory",
+      "value": "我在圆桌厅堂亲耳听见铁匠（role_name=修古, role_id=hewg）低声提醒我：这地方的“恩惠”不会白给，越是依赖圆桌的庇护，越容易被人盯上。他的话让我意识到，我在这里的行动可能被监视或利用，我需要谨慎选择信任对象与透露的信息。",
+      "tags": ["圆桌厅堂", "警告", "信任", "监视", "风险"]
+    },
+    {
+      "key": "我向梅琳娜表态会遵循契约但内心另有打算",
+      "memory_type": "LongTermMemory",
+      "value": "在赐福旁我当面对梅琳娜（role_name=梅琳娜, role_id=melina）说我会遵循契约、继续收集大卢恩并向黄金树前进。我刻意让语气显得笃定，以换取她继续指引与不对我起疑。但我心里其实把这句话当作筹码：我并不打算立刻按她的路线推进，而是准备先绕路去做一件更“私密”的事。",
+      "tags": ["梅琳娜", "契约", "表态", "伪装", "黄金树", "大卢恩"]
+    },
+    {
+      "key": "同伴建议改道与补给以应对接下来的强敌",
+      "memory_type": "LongTermMemory",
+      "value": "流浪骑士同伴（role_name=卡尔, role_id=companion_knight）评估我目前状态后建议：在挑战下一位半神前，先去宁姆格福北侧收集锻造石与圣杯瓶强化，并在赐福点整理战技与护符。他强调如果我硬闯，很可能会在第二阶段被压制。我认可这建议，因为它直接影响我的胜率与资源消耗。",
+      "tags": ["路线规划", "补给", "锻造石", "圣杯瓶", "战技", "护符", "强敌"]
+    },
+    {
+      "key": "我对自身状态的判断与短期计划",
+      "memory_type": "UserMemory",
+      "value": "我意识到自己当前的瓶颈不在胆量，而在准备不足：治疗次数偏少、武器强化不够、对敌人招式理解不足。基于修古的警告与同伴的建议，我决定先压住冲动，优先完成“补给与强化”的短期计划，再去面对半神，以减少无谓的死亡与卢恩损失。",
+      "tags": ["自我评估", "准备不足", "短期计划", "强化", "死亡惩罚", "卢恩"]
+    }
+  ],
+  "summary": "我在圆桌厅堂得到两条关键信息：修古提醒这里的庇护伴随代价与风险；梅琳娜以契约将我推向收集大卢恩的道路。同时，同伴建议我先补给与强化再挑战半神。我因此把“稳扎稳打的准备”定为短期计划，避免冲动硬闯造成卢恩与进度的双重损失。"
+}
+
+
+
+语言规则：
+- `key`、`value`、`tags`、`summary` 字段必须与输入对话的主要语言一致。**如果输入是中文，请输出中文。**
+- `memory_type` 字段必须使用英文。
+
+${custom_tags_prompt}
+
+带提取的对话：
+${conversation}
+
+您的输出："""
+
+
 SIMPLE_STRUCT_MEM_READER_EXAMPLE = """Example:
 Conversation:
 user: [June 26, 2025 at 3:00 PM]: Hi Jerry! Yesterday at 3 PM I had a meeting with my team about the new project.
