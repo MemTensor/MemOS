@@ -98,6 +98,15 @@ class ChatRequest(BaseRequest):
     add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
     manager_user_id: str | None = Field(None, description="Manager User ID")
     project_id: str | None = Field(None, description="Project ID")
+    relativity: float = Field(
+        0.0,
+        ge=0,
+        description=(
+            "Relevance threshold for recalled memories. "
+            "Only memories with metadata.relativity >= relativity will be returned. "
+            "Use 0 to disable threshold filtering. Default: 0.3."
+        ),
+    )
 
     # ==== Filter conditions ====
     filter: dict[str, Any] | None = Field(
@@ -775,6 +784,15 @@ class APIChatCompleteRequest(BaseRequest):
     add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
     manager_user_id: str | None = Field(None, description="Manager User ID")
     project_id: str | None = Field(None, description="Project ID")
+    relativity: float = Field(
+        0.0,
+        ge=0,
+        description=(
+            "Relevance threshold for recalled memories. "
+            "Only memories with metadata.relativity >= relativity will be returned. "
+            "Use 0 to disable threshold filtering. Default: 0.3."
+        ),
+    )
 
     # ==== Filter conditions ====
     filter: dict[str, Any] | None = Field(
