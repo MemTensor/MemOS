@@ -215,8 +215,10 @@ class MemoryCompanionBrain(CompanionBrain):
         user_action: str,
         world_memories: list[str],
     ) -> str:
+        user_action_cn = self._format_user_action_cn(user_action)
+
         cube_id = MemoryNamespace.role_cube_id(user_id=role.role_id, role_id=role.role_id)
-        search_query = f"{role.persona} {user_action} 天气:{world_state.weather} 时间:{world_state.time_of_day}"
+        search_query = f"{role.persona} {user_action_cn} 天气:{world_state.weather} 时间:{world_state.time_of_day}"
         memories = self._memory.search_memory(
             user_id=role.role_id,
             cube_id=cube_id,
@@ -232,13 +234,12 @@ class MemoryCompanionBrain(CompanionBrain):
             memories=combined_memories,
         )
 
-        history = (world_state.chat_history or [])[-self._config.history_max_items :]
         response = self._memory.chat_complete(
             user_id=role.role_id,
             cube_id=cube_id,
-            query=user_action,
+            query=user_action_cn,
             system_prompt=system_prompt,
-            history=history if history else None,
+            history=None,
             session_id=world_state.session_id,
             top_k=1,
             mode=self._config.mode,
@@ -261,7 +262,7 @@ class MemoryCompanionBrain(CompanionBrain):
             messages=[
                 {
                     "role": "user",
-                    "content": user_action,
+                    "content": user_action_cn,
                     "chat_time": chat_time,
                     "role_id": role.role_id,
                     "role_name": role.name,
@@ -417,6 +418,47 @@ class MemoryCompanionBrain(CompanionBrain):
             "6. 结合当前天气、时间、位置和角色状态，让事件合理发生，例如在恶劣天气或体力不足时暴露队伍分歧或私心。\n"
             "7. 回复用简短自然的口吻，不要罗列条目。"
         )
+
+    @staticmethod
+    def _format_user_action_cn(user_action: str) -> str:
+        ua = str(user_action or "").strip()
+        if not ua:
+            return "无动作"
+
+        if ua.startswith("SAY:"):
+            text = ua.split(":", 1)[1] if ":" in ua else ""
+            text = text.strip()
+            return f"玩家发言：{text}" if text else "玩家发言"
+
+        if ua.startswith("MOVE_FORWARD:"):
+            if ":arrive:" in ua:
+                return "队伍前进并抵达新的路段节点"
+            if ":retreat_rain" in ua:
+                return "下撤途中遇雨，队伍被迫返回岔路"
+            if ":start" in ua:
+                return "队伍从当前节点出发，开始新的前进路段"
+            if ":step" in ua:
+                return "队伍在路线上继续前进"
+            if ":end" in ua:
+                return "已到达终点或无可前进路线"
+            return "队伍前进"
+
+        if ua == "REST":
+            return "队伍选择原地休息调整状态"
+        if ua == "CAMP":
+            return "队长决定扎营过夜，恢复体力但消耗物资"
+        if ua == "OBSERVE":
+            return "队伍停下观察周围环境与路况"
+
+        if ua.startswith("DECIDE:"):
+            kind = ua.split(":", 1)[1] if ":" in ua else ""
+            if kind == "night_vote":
+                return "进行夜间票选决定队长"
+            if kind == "camp_meeting":
+                return "讨论并决定下一步路线"
+            return f"做出决策：{kind or '未知'}"
+
+        return ua
 
     @staticmethod
     def _format_time_ms() -> str:

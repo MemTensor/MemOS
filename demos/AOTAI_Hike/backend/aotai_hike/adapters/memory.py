@@ -240,6 +240,15 @@ class MemOSMemoryAdapter(MemoryAdapter):
         else:
             cube_id = MemoryNamespace.world_cube_id(user_id=effective_user_id)
 
+        logger.info(
+            "[MemOS][add_event] user_id={} effective_user_id={} role_id={} role_name={} cube_id={}",
+            user_id,
+            effective_user_id,
+            role_id,
+            role_name,
+            cube_id,
+        )
+
         msg: dict[str, Any] = {"role": "user", "content": content}
         # Attach multi-view fields so mem_reader can detect per-role memories when needed
         if role_id is not None:
@@ -260,6 +269,14 @@ class MemOSMemoryAdapter(MemoryAdapter):
         self, *, user_id: str, session_id: str, query: str, top_k: int = 5
     ) -> MemorySearchResult:
         cube_id = MemoryNamespace.world_cube_id(user_id=user_id)
+        logger.info(
+            "[MemOS][search] user_id={} cube_id={} session_id={} top_k={} query={}",
+            user_id,
+            cube_id,
+            session_id,
+            top_k,
+            query,
+        )
         return self._client.search_memory(
             user_id=user_id,
             cube_id=cube_id,

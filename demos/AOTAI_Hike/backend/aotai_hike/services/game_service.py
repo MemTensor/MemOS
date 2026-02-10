@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import random
 import time
 import uuid
@@ -174,7 +173,13 @@ class GameService:
         mem_event = self._format_memory_event(
             world_state, req, node_after, user_action_desc, messages
         )
-        logger.info("[mem:event] {}", mem_event)
+        logger.info(
+            "[mem:event] user_id={} role_id={} role_name={} {}",
+            world_state.user_id,
+            active.role_id if active else None,
+            active.name if active else None,
+            mem_event,
+        )
         self._memory.add_event(
             user_id=world_state.user_id,
             session_id=world_state.session_id,
@@ -184,7 +189,13 @@ class GameService:
         )
 
         query = self._build_memory_query(world_state, req, node_after, user_action_desc)
-        logger.info("[mem:search] query={}", query)
+        logger.info(
+            "[mem:search] user_id={} role_id={} role_name={} query={}",
+            world_state.user_id,
+            active.role_id if active else None,
+            active.name if active else None,
+            query,
+        )
         mem_res = self._memory.search(
             user_id=world_state.user_id,
             session_id=world_state.session_id,
@@ -1120,24 +1131,57 @@ class GameService:
         user_action_desc: str,
         messages: list[Message],
     ) -> str:
-        payload = {
-            "tag": "ao-tai-demo",
-            "session_id": world_state.session_id,
-            "node": {"id": node.node_id, "name": node.name, "scene_id": node.scene_id},
-            "timeline": {
-                "day": world_state.day,
-                "time_of_day": world_state.time_of_day,
-                "weather": world_state.weather,
-            },
-            "action": {"type": str(req.action), "desc": user_action_desc, "payload": req.payload},
-            "recent_events": world_state.recent_events[-5:],
-            "messages": [
-                {"kind": m.kind, "role_name": m.role_name, "content": m.content[:200]}
-                for m in messages
-                if m.kind != "system"
-            ],
+        time_map = {
+            "morning": "早晨",
+            "noon": "中午",
+            "afternoon": "下午",
+            "evening": "傍晚",
+            "night": "夜晚",
         }
-        return json.dumps(payload, ensure_ascii=False)
+        weather_map = {
+            "sunny": "晴",
+            "cloudy": "多云",
+            "windy": "有风",
+            "rainy": "雨",
+            "snowy": "雪",
+            "foggy": "雾",
+        }
+
+        action_name = getattr(req.action, "name", str(req.action))
+        action_cn_map = {
+            "SAY": "发言",
+            "MOVE_FORWARD": "前进",
+            "REST": "休息",
+            "CAMP": "扎营",
+            "OBSERVE": "观察",
+            "DECIDE": "决策",
+        }
+        action_cn = action_cn_map.get(action_name, action_name)
+
+        day = world_state.day
+        tod_cn = time_map.get(world_state.time_of_day, str(world_state.time_of_day))
+        weather_cn = weather_map.get(world_state.weather, str(world_state.weather))
+        node_name = getattr(node, "name", "")
+
+        recent_events = world_state.recent_events[-3:] if world_state.recent_events else []
+        recent_events_txt = "；".join(recent_events)
+
+        dialogue_msgs = [m for m in messages if m.kind != "system"]
+        dialogue_parts: list[str] = []
+        for m in dialogue_msgs[:3]:
+            speaker = m.role_name or m.role_id or "队员"
+            dialogue_parts.append(f"{speaker}：{m.content[:40]}")
+        dialogue_txt = "；".join(dialogue_parts)
+
+        pieces: list[str] = []
+        pieces.append(f"第{day}天，{tod_cn}，天气{weather_cn}，位置：{node_name}。")
+        pieces.append(f"动作：{action_cn}")
+        if recent_events_txt:
+            pieces.append(f"最近事件：{recent_events_txt}。")
+        if dialogue_txt:
+            pieces.append(f"关键对话：{dialogue_txt}。")
+
+        return " ".join(pieces)
 
     def _build_memory_query(
         self, world_state: WorldState, req: ActRequest, node, user_action_desc: str
