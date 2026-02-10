@@ -20,11 +20,7 @@ from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
-from memos.reranker.http_bge import HTTPBGEReranker
 
-# ====== 全局配置 ======
-BGE_RERANKER_URL = "http://106.75.235.231:8082/v1/rerank"  # HTTP BGE rerank 服务地址
-MMR_OUTPUT_MULTIPLIER = 3  # MMR 阶段每个 bucket 目标返回数量倍数(相对原 top_k)
 
 logger = get_logger(__name__)
 
@@ -47,7 +43,6 @@ class SearchHandler(BaseHandler):
         self._validate_dependencies(
             "naive_mem_cube", "mem_scheduler", "searcher", "deepsearch_agent"
         )
-        self.http_bge_reranker = HTTPBGEReranker(reranker_url=BGE_RERANKER_URL)
 
     def handle_search_memories(self, search_req: APISearchRequest) -> SearchResponse:
         """
@@ -78,16 +73,13 @@ class SearchHandler(BaseHandler):
             search_req_local.relativity = 0
         self.logger.info(f"[SearchHandler] Relativity filter: {search_req_local.relativity}")
         results = self._apply_relativity_threshold(results, search_req_local.relativity)
-        forced_text_memories = self._collect_forced_text_memories(results)
 
         if search_req_local.dedup == "sim":
             results = self._dedup_text_memories(results, search_req.top_k)
             self._strip_embeddings(results)
         elif search_req_local.dedup == "mmr":
             pref_top_k = getattr(search_req_local, "pref_top_k", 6)
-            mmr_text_top_k = max(int(search_req.top_k) * MMR_OUTPUT_MULTIPLIER, int(search_req.top_k))
-            results = self._mmr_dedup_text_memories(results, mmr_text_top_k, pref_top_k)
-            results = self._http_bge_rerank_text_memories(query=search_req.query, results=results)
+            results = self._mmr_dedup_text_memories(results, search_req.top_k, pref_top_k)
             self._strip_embeddings(results)
 
         text_mem = results["text_mem"]
@@ -98,9 +90,6 @@ class SearchHandler(BaseHandler):
             top_k=search_req_local.top_k,
             file_mem_proportion=0.5,
         )
-        results["text_mem"] = self._inject_forced_text_memories(
-            results.get("text_mem", []), forced_text_memories
-        )
 
         self.logger.info(
             f"[SearchHandler] Final search results: count={len(results)} results={results}"
@@ -110,231 +99,6 @@ class SearchHandler(BaseHandler):
             message="Search completed successfully",
             data=results,
         )
-
-    @staticmethod
-    def _safe_float(value: Any, default: float = 0.0) -> float:
-        try:
-            if value is None:
-                return default
-            return float(value)
-        except (TypeError, ValueError):
-            return default
-
-    def _http_bge_rerank_text_memories(self, query: str, results: dict[str, Any]) -> dict[str, Any]:
-        buckets = results.get("text_mem", [])
-        if not isinstance(buckets, list) or not buckets:
-            return results
-
-        memories_list: list[dict[str, Any]] = []
-        memid2mem: dict[str, dict[str, Any]] = {}
-        for bucket in buckets:
-            if not isinstance(bucket, dict):
-                continue
-            for mem in bucket.get("memories", []):
-                if not isinstance(mem, dict):
-                    continue
-                mem_id = mem.get("id")
-                if mem_id is None:
-                    continue
-                mem_id_str = str(mem_id)
-                memories_list.append(mem)
-                memid2mem[mem_id_str] = mem
-
-        if not memories_list:
-            return results
-
-        rerank_k = len(memories_list)
-        ranked = self.http_bge_reranker.rerank(
-            query=query,
-            graph_results=memories_list,
-            top_k=rerank_k,
-        )
-        score_by_id: dict[str, float] = {}
-        for item, score in ranked:
-            item_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
-            if item_id is None:
-                continue
-            score_by_id[str(item_id)] = score
-
-        for mem_id_str, score in score_by_id.items():
-            mem = memid2mem.get(mem_id_str)
-            if not isinstance(mem, dict):
-                continue
-            meta = mem.get("metadata")
-            if not isinstance(meta, dict):
-                meta = {}
-                mem["metadata"] = meta
-            meta["relativity"] = float(score)
-
-        return results
-
-    def _select_best_memory(self, memories: list[Any], predicate) -> dict[str, Any] | None:
-        best = None
-        best_score = None
-        for mem in memories:
-            if not isinstance(mem, dict):
-                continue
-            if not predicate(mem):
-                continue
-            meta = mem.get("metadata", {})
-            score = meta.get("relativity", 0.0) if isinstance(meta, dict) else 0.0
-            score_val = self._safe_float(score, default=0.0)
-            if best is None or best_score is None or score_val > best_score:
-                best = mem
-                best_score = score_val
-        return best
-
-    def _select_best_keyword_memory(self, memories: list[Any]) -> dict[str, Any] | None:
-        best = None
-        best_keyword_score = None
-        best_relativity = None
-        for mem in memories:
-            if not isinstance(mem, dict):
-                continue
-            meta = mem.get("metadata", {})
-            if not isinstance(meta, dict) or "keyword_score" not in meta:
-                continue
-            keyword_score_val = self._safe_float(meta.get("keyword_score"), default=0.0)
-            relativity_val = self._safe_float(meta.get("relativity"), default=0.0)
-            if best is None or best_keyword_score is None:
-                best = mem
-                best_keyword_score = keyword_score_val
-                best_relativity = relativity_val
-                continue
-            if keyword_score_val > best_keyword_score:
-                best = mem
-                best_keyword_score = keyword_score_val
-                best_relativity = relativity_val
-                continue
-            if keyword_score_val == best_keyword_score and best_relativity is not None:
-                if relativity_val > best_relativity:
-                    best = mem
-                    best_keyword_score = keyword_score_val
-                    best_relativity = relativity_val
-        return best
-
-    def _collect_forced_text_memories(self, results: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        forced: dict[str, dict[str, Any]] = {}
-        buckets = results.get("text_mem", [])
-        if not isinstance(buckets, list):
-            return forced
-
-        longterm_types = {"LongTermMemory", "UserMemory", "RawFileMemory"}
-        for bucket in buckets:
-            if not isinstance(bucket, dict):
-                continue
-            cube_id = bucket.get("cube_id")
-            memories = bucket.get("memories", [])
-            if not isinstance(cube_id, str) or not cube_id:
-                continue
-            if not isinstance(memories, list) or not memories:
-                continue
-
-            keyword_best = self._select_best_keyword_memory(memories)
-            longterm_best = self._select_best_memory(
-                memories,
-                lambda m: isinstance(m.get("metadata"), dict)
-                and m.get("metadata", {}).get("memory_type") in longterm_types
-                and "keyword_score" not in m.get("metadata", {}),
-            )
-
-            payload: dict[str, Any] = {}
-            if keyword_best is not None:
-                payload["keyword"] = copy.deepcopy(keyword_best)
-            if longterm_best is not None:
-                payload["longterm_user"] = copy.deepcopy(longterm_best)
-            if payload:
-                forced[cube_id] = payload
-
-        return forced
-
-    @staticmethod
-    def _normalize_text_memory_item(mem: dict[str, Any]) -> dict[str, Any]:
-        meta = mem.get("metadata")
-        if not isinstance(meta, dict):
-            meta = {}
-            mem["metadata"] = meta
-
-        sources = meta.get("sources", [])
-        memory_type = meta.get("memory_type")
-        if (
-            memory_type != "RawFileMemory"
-            and isinstance(sources, list)
-            and sources
-            and isinstance(sources[0], dict)
-            and sources[0].get("type") == "file"
-        ):
-            content = sources[0].get("content")
-            if isinstance(content, str) and content:
-                mem["memory"] = content
-
-        meta["sources"] = []
-        if "embedding" in meta:
-            meta["embedding"] = []
-
-        return mem
-
-    def _inject_forced_text_memories(
-        self,
-        text_mem: list[Any],
-        forced_by_cube: dict[str, dict[str, Any]],
-    ) -> list[Any]:
-        if not forced_by_cube or not isinstance(text_mem, list):
-            return text_mem
-
-        for group in text_mem:
-            if not isinstance(group, dict):
-                continue
-            cube_id = group.get("cube_id")
-            if not isinstance(cube_id, str) or cube_id not in forced_by_cube:
-                continue
-            memories = group.get("memories")
-            if not isinstance(memories, list):
-                continue
-
-            original_len = len(memories)
-            existing_ids = {
-                str(mem.get("id"))
-                for mem in memories
-                if isinstance(mem, dict) and mem.get("id") is not None
-            }
-
-            forced_items: list[dict[str, Any]] = []
-            for key in ("keyword", "longterm_user"):
-                candidate = forced_by_cube[cube_id].get(key)
-                if isinstance(candidate, dict):
-                    forced_items.append(self._normalize_text_memory_item(copy.deepcopy(candidate)))
-
-            new_items: list[dict[str, Any]] = []
-            new_ids: set[str] = set()
-            for item in forced_items:
-                item_id = item.get("id")
-                if item_id is None:
-                    continue
-                item_id_str = str(item_id)
-                if item_id_str in existing_ids or item_id_str in new_ids:
-                    continue
-                new_items.append(item)
-                new_ids.add(item_id_str)
-
-            if not new_items:
-                continue
-
-            merged = new_items + [
-                mem
-                for mem in memories
-                if not (isinstance(mem, dict) and str(mem.get("id")) in new_ids)
-            ]
-
-            target_len = original_len if original_len >= len(new_items) else len(new_items)
-            if len(merged) > target_len:
-                merged = merged[:target_len]
-
-            group["memories"] = merged
-            if "total_nodes" in group:
-                group["total_nodes"] = len(merged)
-
-        return text_mem
 
     @staticmethod
     def _apply_relativity_threshold(results: dict[str, Any], relativity: float) -> dict[str, Any]:
