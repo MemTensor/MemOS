@@ -1,3 +1,4 @@
+import copy
 import traceback
 
 from concurrent.futures import as_completed
@@ -379,6 +380,20 @@ class Searcher:
                     user_name,
                 )
             )
+            tasks.append(
+                executor.submit(
+                    self._retrieve_from_keyword,
+                    query,
+                    parsed_goal,
+                    query_embedding,
+                    top_k,
+                    memory_type,
+                    search_filter,
+                    search_priority,
+                    user_name,
+                    id_filter,
+                )
+            )
             if search_tool_memory:
                 tasks.append(
                     executor.submit(
@@ -451,6 +466,103 @@ class Searcher:
             query=query,
             query_embedding=query_embedding[0],
             graph_results=items,
+            top_k=top_k,
+            parsed_goal=parsed_goal,
+            search_filter=search_filter,
+        )
+
+    @timed
+    def _retrieve_from_keyword(
+        self,
+        query,
+        parsed_goal,
+        query_embedding,
+        top_k,
+        memory_type,
+        search_filter: dict | None = None,
+        search_priority: dict | None = None,
+        user_name: str | None = None,
+        id_filter: dict | None = None,
+    ) -> list[tuple[TextualMemoryItem, float]]:
+        """Keyword/fulltext path that directly calls graph DB fulltext search."""
+
+        if memory_type not in ["All", "LongTermMemory", "UserMemory"]:
+            return []
+        if not query_embedding:
+            return []
+
+        query_words: list[str] = []
+        if self.tokenizer:
+            query_words = self.tokenizer.tokenize_mixed(query)
+        else:
+            query_words = query.strip().split()
+        # Use unique tokens; avoid passing the raw query into `to_tsquery(...)` because it may contain
+        # spaces/operators that cause tsquery parsing errors.
+        query_words = list(dict.fromkeys(query_words))
+        if len(query_words) > 64:
+            query_words = query_words[:64]
+        if not query_words:
+            return []
+        tsquery_terms = [
+            "'" + w.replace("'", "''") + "'" for w in query_words if w and w.strip()
+        ]
+        if not tsquery_terms:
+            return []
+
+        scopes = (
+            [memory_type]
+            if memory_type != "All"
+            else ["LongTermMemory", "UserMemory"]
+        )
+
+        id_to_score: dict[str, float] = {}
+        for scope in scopes:
+            hits = self.graph_store.search_by_fulltext(
+                query_words=tsquery_terms,
+                top_k=top_k * 2,
+                status="activated",
+                scope=scope,
+                search_filter=None,
+                filter=search_filter,
+                user_name=user_name,
+                tsquery_config="jiebaqry",
+            )
+            for h in hits or []:
+                hid = str(h.get("id") or "").strip().strip("'\"")
+                if not hid:
+                    continue
+                score = h.get("score", 0.0)
+                if hid not in id_to_score or score > id_to_score[hid]:
+                    id_to_score[hid] = score
+        if not id_to_score:
+            return []
+
+        sorted_ids = sorted(id_to_score.keys(), key=lambda x: id_to_score[x], reverse=True)
+        # sorted_ids = sorted_ids[:top_k]
+        sorted_ids = sorted_ids[:6]
+        node_dicts = (
+            self.graph_store.get_nodes(sorted_ids, include_embedding=True, user_name=user_name)
+            or []
+        )
+        id_to_node = {n.get("id"): n for n in node_dicts}
+        ordered_nodes = []
+
+        for rid in sorted_ids:
+            if rid in id_to_node:
+                node = copy.deepcopy(id_to_node[rid])
+                meta = node.setdefault("metadata", {})
+                meta_target = meta
+                if isinstance(meta, dict) and isinstance(meta.get("metadata"), dict):
+                    meta_target = meta["metadata"]
+                if isinstance(meta_target, dict):
+                    meta_target["keyword_score"] = id_to_score[rid]
+                ordered_nodes.append(node)
+
+        results = [TextualMemoryItem.from_dict(n) for n in ordered_nodes]
+        return self.reranker.rerank(
+            query=query,
+            query_embedding=query_embedding[0],
+            graph_results=results,
             top_k=top_k,
             parsed_goal=parsed_goal,
             search_filter=search_filter,
