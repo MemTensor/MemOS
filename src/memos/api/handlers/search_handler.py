@@ -20,7 +20,11 @@ from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
+from memos.reranker.http_bge import HTTPBGEReranker
 
+# ====== 全局配置 ======
+BGE_RERANKER_URL = "http://106.75.235.231:8082/v1/rerank"  # HTTP BGE rerank 服务地址
+MMR_OUTPUT_MULTIPLIER = 3  # MMR 阶段每个 bucket 目标返回数量倍数(相对原 top_k)
 
 logger = get_logger(__name__)
 
@@ -43,6 +47,7 @@ class SearchHandler(BaseHandler):
         self._validate_dependencies(
             "naive_mem_cube", "mem_scheduler", "searcher", "deepsearch_agent"
         )
+        self.http_bge_reranker = HTTPBGEReranker(reranker_url=BGE_RERANKER_URL)
 
     def handle_search_memories(self, search_req: APISearchRequest) -> SearchResponse:
         """
@@ -80,9 +85,9 @@ class SearchHandler(BaseHandler):
             self._strip_embeddings(results)
         elif search_req_local.dedup == "mmr":
             pref_top_k = getattr(search_req_local, "pref_top_k", 6)
-            results = self._mmr_dedup_text_memories(
-                results, search_req.top_k, pref_top_k, forced_by_cube=forced_text_memories
-            )
+            mmr_text_top_k = max(int(search_req.top_k) * MMR_OUTPUT_MULTIPLIER, int(search_req.top_k))
+            results = self._mmr_dedup_text_memories(results, mmr_text_top_k, pref_top_k)
+            results = self._http_bge_rerank_text_memories(query=search_req.query, results=results)
             self._strip_embeddings(results)
 
         text_mem = results["text_mem"]
@@ -114,6 +119,54 @@ class SearchHandler(BaseHandler):
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    def _http_bge_rerank_text_memories(self, query: str, results: dict[str, Any]) -> dict[str, Any]:
+        buckets = results.get("text_mem", [])
+        if not isinstance(buckets, list) or not buckets:
+            return results
+
+        memories_list: list[dict[str, Any]] = []
+        memid2mem: dict[str, dict[str, Any]] = {}
+        for bucket in buckets:
+            if not isinstance(bucket, dict):
+                continue
+            for mem in bucket.get("memories", []):
+                if not isinstance(mem, dict):
+                    continue
+                mem_id = mem.get("id")
+                if mem_id is None:
+                    continue
+                mem_id_str = str(mem_id)
+                memories_list.append(mem)
+                memid2mem[mem_id_str] = mem
+
+        if not memories_list:
+            return results
+
+        rerank_k = len(memories_list)
+        ranked = self.http_bge_reranker.rerank(
+            query=query,
+            graph_results=memories_list,
+            top_k=rerank_k,
+        )
+        score_by_id: dict[str, float] = {}
+        for item, score in ranked:
+            item_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
+            if item_id is None:
+                continue
+            score_by_id[str(item_id)] = score
+
+        for mem_id_str, score in score_by_id.items():
+            mem = memid2mem.get(mem_id_str)
+            if not isinstance(mem, dict):
+                continue
+            meta = mem.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
+                mem["metadata"] = meta
+            meta["relativity"] = float(score)
+
+        return results
 
     def _select_best_memory(self, memories: list[Any], predicate) -> dict[str, Any] | None:
         best = None
@@ -368,11 +421,7 @@ class SearchHandler(BaseHandler):
         return results
 
     def _mmr_dedup_text_memories(
-        self,
-        results: dict[str, Any],
-        text_top_k: int,
-        pref_top_k: int = 6,
-        forced_by_cube: dict[str, dict[str, Any]] | None = None,
+        self, results: dict[str, Any], text_top_k: int, pref_top_k: int = 6
     ) -> dict[str, Any]:
         """
         MMR-based deduplication with progressive penalty for high similarity.
@@ -443,47 +492,6 @@ class SearchHandler(BaseHandler):
         text_selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(text_buckets))}
         pref_selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(pref_buckets))}
         selected_texts: set[str] = set()  # Track exact text content to avoid duplicates
-        text_top_k_by_bucket: dict[int, int] = {i: text_top_k for i in range(len(text_buckets))}
-
-        if forced_by_cube and isinstance(text_buckets, list):
-            text_key_to_flat_index: dict[tuple[int, str], int] = {}
-            for flat_index, (mem_type, bucket_idx, mem, _) in enumerate(flat):
-                if mem_type != "text":
-                    continue
-                if not isinstance(mem, dict):
-                    continue
-                mem_id = mem.get("id")
-                if mem_id is None:
-                    continue
-                text_key_to_flat_index[(bucket_idx, str(mem_id))] = flat_index
-
-            for bucket_idx, bucket in enumerate(text_buckets):
-                if not isinstance(bucket, dict):
-                    continue
-                cube_id = bucket.get("cube_id")
-                if not isinstance(cube_id, str) or cube_id not in forced_by_cube:
-                    continue
-                payload = forced_by_cube.get(cube_id) or {}
-                for key in ("keyword", "longterm_user"):
-                    candidate = payload.get(key)
-                    if not isinstance(candidate, dict):
-                        continue
-                    candidate_id = candidate.get("id")
-                    if candidate_id is None:
-                        continue
-                    forced_index = text_key_to_flat_index.get((bucket_idx, str(candidate_id)))
-                    if forced_index is None or forced_index in selected_global:
-                        continue
-                    mem_text = flat[forced_index][2].get("memory", "").strip()
-                    if mem_text in selected_texts:
-                        continue
-                    selected_global.append(forced_index)
-                    text_selected_by_bucket[bucket_idx].append(forced_index)
-                    selected_texts.add(mem_text)
-
-            for bucket_idx in range(len(text_buckets)):
-                if len(text_selected_by_bucket[bucket_idx]) > text_top_k_by_bucket[bucket_idx]:
-                    text_top_k_by_bucket[bucket_idx] = len(text_selected_by_bucket[bucket_idx])
 
         # Phase 1: Prefill top N by relevance
         # Use the smaller of text_top_k and pref_top_k for prefill count
@@ -506,10 +514,7 @@ class SearchHandler(BaseHandler):
                 continue
 
             # Check bucket capacity with correct top_k for each type
-            if (
-                mem_type == "text"
-                and len(text_selected_by_bucket[bucket_idx]) < text_top_k_by_bucket[bucket_idx]
-            ):
+            if mem_type == "text" and len(text_selected_by_bucket[bucket_idx]) < text_top_k:
                 selected_global.append(idx)
                 text_selected_by_bucket[bucket_idx].append(idx)
                 selected_texts.add(mem_text)
@@ -533,8 +538,7 @@ class SearchHandler(BaseHandler):
 
                 # Check bucket capacity with correct top_k for each type
                 if (
-                    mem_type == "text"
-                    and len(text_selected_by_bucket[bucket_idx]) >= text_top_k_by_bucket[bucket_idx]
+                    mem_type == "text" and len(text_selected_by_bucket[bucket_idx]) >= text_top_k
                 ) or (
                     mem_type == "preference"
                     and len(pref_selected_by_bucket[bucket_idx]) >= pref_top_k
@@ -592,8 +596,7 @@ class SearchHandler(BaseHandler):
 
             # Early termination: all buckets are full
             text_all_full = all(
-                len(text_selected_by_bucket[b_idx])
-                >= min(text_top_k_by_bucket[b_idx], len(bucket_indices))
+                len(text_selected_by_bucket[b_idx]) >= min(text_top_k, len(bucket_indices))
                 for b_idx, bucket_indices in text_indices_by_bucket.items()
             )
             pref_all_full = all(
