@@ -503,17 +503,11 @@ class Searcher:
             query_words = query_words[:64]
         if not query_words:
             return []
-        tsquery_terms = [
-            "'" + w.replace("'", "''") + "'" for w in query_words if w and w.strip()
-        ]
+        tsquery_terms = ["'" + w.replace("'", "''") + "'" for w in query_words if w and w.strip()]
         if not tsquery_terms:
             return []
 
-        scopes = (
-            [memory_type]
-            if memory_type != "All"
-            else ["LongTermMemory", "UserMemory"]
-        )
+        scopes = [memory_type] if memory_type != "All" else ["LongTermMemory", "UserMemory"]
 
         id_to_score: dict[str, float] = {}
         for scope in scopes:
