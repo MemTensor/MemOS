@@ -510,7 +510,6 @@ MULTI_VIEW_STRUCT_STRING_READER_PROMPT = """You are a memory extraction expert. 
 Your task is to extract memories from the CURRENT ROLE’S perspective based on the dialogue between the current role and other roles. This means identifying what the current role is likely to remember—including their own experiences, thoughts, plans, and statements/actions by others that affect the current role.
 
 【Current Role Info】
-- current_role_name: ${current_role_name}
 - current_role_id: ${current_role_id}
 
 0) Filtering Principles
@@ -605,7 +604,6 @@ MULTI_VIEW_STRUCT_STRING_READER_PROMPT_ZH = """你是记忆提取专家，你需
 您的任务是根据当前角色与其他角色之间的对话，从当前角色的角度提取记忆。这意味着要识别出当前角色可能记住的信息——包括自身的经历、想法、计划，或他人做出的对当前角色产生影响的相关陈述和行为。
 
 【当前角色信息】
-- current_role_name: ${current_role_name}
 - current_role_id: ${current_role_id}
 
 0) 过滤原则

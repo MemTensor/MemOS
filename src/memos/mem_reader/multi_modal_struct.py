@@ -408,7 +408,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         custom_tags: list[str] | None = None,
         sources: list | None = None,
         prompt_type: str = "chat",
-        current_role_name: str | None = None,
         current_role_id: str | None = None,
     ) -> dict:
         """
@@ -457,9 +456,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             examples = ""
             prompt = template.replace("${conversation}", mem_str)
             # Fill in current role metadata placeholders if present
-            prompt = prompt.replace("${current_role_name}", current_role_name or "").replace(
-                "${current_role_id}", current_role_id or ""
-            )
+            prompt = prompt.replace("${current_role_id}", current_role_id or "")
         else:
             template = PROMPT_DICT["chat"][lang]
             examples = PROMPT_DICT["chat"][f"{lang}_example"]
@@ -743,10 +740,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # Current role metadata (for multi-view prompt header)
             meta_info = getattr(metadata, "info", None) or {}
             current_role_id = None
-            current_role_name = None
             if isinstance(meta_info, dict):
-                current_role_id = meta_info.get("role_id")
-                current_role_name = meta_info.get("role_name")
+                current_role_id = metadata.user_id
 
             # Build per-item info copy and kwargs for _make_memory_item
             info_per_item = info.copy()
@@ -771,7 +766,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     custom_tags,
                     sources,
                     prompt_type,
-                    current_role_name=current_role_name,
                     current_role_id=current_role_id,
                 )
             except Exception as e:
