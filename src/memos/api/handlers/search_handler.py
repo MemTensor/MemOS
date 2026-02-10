@@ -129,6 +129,35 @@ class SearchHandler(BaseHandler):
                 best_score = score_val
         return best
 
+    def _select_best_keyword_memory(self, memories: list[Any]) -> dict[str, Any] | None:
+        best = None
+        best_keyword_score = None
+        best_relativity = None
+        for mem in memories:
+            if not isinstance(mem, dict):
+                continue
+            meta = mem.get("metadata", {})
+            if not isinstance(meta, dict) or "keyword_score" not in meta:
+                continue
+            keyword_score_val = self._safe_float(meta.get("keyword_score"), default=0.0)
+            relativity_val = self._safe_float(meta.get("relativity"), default=0.0)
+            if best is None or best_keyword_score is None:
+                best = mem
+                best_keyword_score = keyword_score_val
+                best_relativity = relativity_val
+                continue
+            if keyword_score_val > best_keyword_score:
+                best = mem
+                best_keyword_score = keyword_score_val
+                best_relativity = relativity_val
+                continue
+            if keyword_score_val == best_keyword_score and best_relativity is not None:
+                if relativity_val > best_relativity:
+                    best = mem
+                    best_keyword_score = keyword_score_val
+                    best_relativity = relativity_val
+        return best
+
     def _collect_forced_text_memories(self, results: dict[str, Any]) -> dict[str, dict[str, Any]]:
         forced: dict[str, dict[str, Any]] = {}
         buckets = results.get("text_mem", [])
@@ -146,11 +175,7 @@ class SearchHandler(BaseHandler):
             if not isinstance(memories, list) or not memories:
                 continue
 
-            keyword_best = self._select_best_memory(
-                memories,
-                lambda m: isinstance(m.get("metadata"), dict)
-                and "keyword_score" in m.get("metadata", {}),
-            )
+            keyword_best = self._select_best_keyword_memory(memories)
             longterm_best = self._select_best_memory(
                 memories,
                 lambda m: isinstance(m.get("metadata"), dict)
