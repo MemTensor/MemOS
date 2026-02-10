@@ -215,10 +215,10 @@ class MemoryCompanionBrain(CompanionBrain):
         user_action: str,
         world_memories: list[str],
     ) -> str:
-        cube_id = MemoryNamespace.role_cube_id(user_id=world_state.user_id, role_id=role.role_id)
+        cube_id = MemoryNamespace.role_cube_id(user_id=role.role_id, role_id=role.role_id)
         search_query = f"{role.persona} {user_action} 天气:{world_state.weather} 时间:{world_state.time_of_day}"
         memories = self._memory.search_memory(
-            user_id=world_state.user_id,
+            user_id=role.role_id,
             cube_id=cube_id,
             query=search_query,
             top_k=self._config.memory_top_k,
@@ -234,7 +234,7 @@ class MemoryCompanionBrain(CompanionBrain):
 
         history = (world_state.chat_history or [])[-self._config.history_max_items :]
         response = self._memory.chat_complete(
-            user_id=world_state.user_id,
+            user_id=role.role_id,
             cube_id=cube_id,
             query=user_action,
             system_prompt=system_prompt,
@@ -253,18 +253,28 @@ class MemoryCompanionBrain(CompanionBrain):
 
         chat_time = self._format_time_ms()
         self._memory.add_memory(
-            user_id=world_state.user_id,
+            user_id=role.role_id,
             cube_id=cube_id,
             session_id=world_state.session_id,
             async_mode="async",
             mode=self._config.mode,
             messages=[
-                {"role": "user", "content": user_action, "chat_time": chat_time},
-                {"role": "assistant", "content": response, "chat_time": chat_time},
+                {
+                    "role": "user",
+                    "content": user_action,
+                    "chat_time": chat_time,
+                    "role_id": role.role_id,
+                    "role_name": role.name,
+                },
+                {
+                    "role": "assistant",
+                    "content": response,
+                    "chat_time": chat_time,
+                    "role_id": role.role_id,
+                    "role_name": role.name,
+                },
             ],
             info={
-                "role_id": role.role_id,
-                "role_name": role.name,
                 "weather": world_state.weather,
                 "time_of_day": world_state.time_of_day,
                 "scene_id": world_state.current_node_id,

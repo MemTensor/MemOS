@@ -175,7 +175,15 @@ class MemOSMemoryClient:
 
 
 class MemoryAdapter:
-    def add_event(self, *, user_id: str, session_id: str, content: str) -> None:
+    def add_event(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        content: str,
+        role_id: str | None = None,
+        role_name: str | None = None,
+    ) -> None:
         raise NotImplementedError
 
     def search(
@@ -188,7 +196,16 @@ class InMemoryMemoryAdapter(MemoryAdapter):
     def __init__(self):
         self._items: list[tuple[str, str, str]] = []
 
-    def add_event(self, *, user_id: str, session_id: str, content: str) -> None:
+    def add_event(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        content: str,
+        role_id: str | None = None,
+        role_name: str | None = None,
+    ) -> None:
+        # For in-memory adapter we ignore role info, but keep API compatible
         self._items.append((user_id, session_id, content))
 
     def search(
@@ -207,13 +224,33 @@ class MemOSMemoryAdapter(MemoryAdapter):
     def __init__(self, client: MemOSMemoryClient):
         self._client = client
 
-    def add_event(self, *, user_id: str, session_id: str, content: str) -> None:
-        cube_id = MemoryNamespace.world_cube_id(user_id=user_id)
+    def add_event(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        content: str,
+        role_id: str | None = None,
+        role_name: str | None = None,
+    ) -> None:
+        effective_user_id = role_id or user_id
+
+        if role_id:
+            cube_id = MemoryNamespace.role_cube_id(user_id=effective_user_id, role_id=role_id)
+        else:
+            cube_id = MemoryNamespace.world_cube_id(user_id=effective_user_id)
+
+        msg: dict[str, Any] = {"role": "user", "content": content}
+        # Attach multi-view fields so mem_reader can detect per-role memories when needed
+        if role_id is not None:
+            msg["role_id"] = role_id
+        if role_name is not None:
+            msg["role_name"] = role_name
         self._client.add_memory(
-            user_id=user_id,
+            user_id=effective_user_id,
             cube_id=cube_id,
             session_id=session_id,
-            messages=[{"role": "user", "content": content}],
+            messages=[msg],
             async_mode="async",
             mode="fine",
             source="aotai_hike_world",

@@ -179,6 +179,8 @@ class GameService:
             user_id=world_state.user_id,
             session_id=world_state.session_id,
             content=mem_event,
+            role_id=active.role_id if active else None,
+            role_name=active.name if active else None,
         )
 
         query = self._build_memory_query(world_state, req, node_after, user_action_desc)

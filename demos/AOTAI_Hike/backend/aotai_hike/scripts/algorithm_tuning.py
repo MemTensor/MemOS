@@ -239,7 +239,12 @@ def seed_memories(
         session_id=session_id,
         async_mode="sync",
         mode="fine",
-        messages=[{"role": "user", "content": "队伍即将进入多云、有风的上坡路段。"}],
+        messages=[
+            {
+                "role": "user",
+                "content": "队伍即将进入多云、有风的上坡路段。",
+            }
+        ],
         source="aotai_hike_seed",
     )
     client.add_memory(
@@ -248,7 +253,14 @@ def seed_memories(
         session_id=session_id,
         async_mode="sync",
         mode="fine",
-        messages=[{"role": "user", "content": "太白喜欢记录温度、风速，并提醒大家补水。"}],
+        messages=[
+            {
+                "role": "user",
+                "content": "太白喜欢记录温度、风速，并提醒大家补水。",
+                "role_id": "r_tb",
+                "role_name": "太白",
+            }
+        ],
         source="aotai_hike_seed",
     )
 
