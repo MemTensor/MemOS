@@ -4,7 +4,7 @@ import random
 import time
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from aotai_hike.adapters.memory import MemoryNamespace, MemOSMemoryClient
 from aotai_hike.schemas import Message, Role, WorldState
@@ -168,6 +168,9 @@ class MemoryCompanionBrain(CompanionBrain):
         follow_p = 0.45
         speakers = [first] + [r for r in rest if self._rng.random() < follow_p]
 
+        base_history = list(world_state.chat_history or [])
+        current_history: list[dict[str, Any]] = list(base_history)
+
         out: list[Message] = []
         for sp in speakers:
             text = self._generate_role_reply(
@@ -175,6 +178,7 @@ class MemoryCompanionBrain(CompanionBrain):
                 role=sp,
                 user_action=user_action,
                 world_memories=memory_snippets,
+                history=current_history,
             )
             if not text:
                 continue
@@ -202,6 +206,16 @@ class MemoryCompanionBrain(CompanionBrain):
                     timestamp_ms=now_ms,
                 )
             )
+            current_history = list(current_history)
+            current_history.append(
+                {
+                    "role": "assistant",
+                    "content": text,
+                    "speaker_name": sp.name,
+                    "kind": "speech",
+                    "chat_time": self._format_time_ms(),
+                }
+            )
 
         require_p = 0.22
         requires_player_say = bool(active_role) and (self._rng.random() < require_p)
@@ -214,6 +228,7 @@ class MemoryCompanionBrain(CompanionBrain):
         role: Role,
         user_action: str,
         world_memories: list[str],
+        history: list[dict[str, Any]] | None = None,
     ) -> str:
         user_action_cn = self._format_user_action_cn(user_action)
 
@@ -228,10 +243,13 @@ class MemoryCompanionBrain(CompanionBrain):
         ).snippets
         combined_memories = [*world_memories, *memories]
 
+        if history is None:
+            history = list(world_state.chat_history or [])
         system_prompt = self._build_system_prompt(
             world_state=world_state,
             role=role,
             memories=combined_memories,
+            history=history,
         )
 
         response = self._memory.chat_complete(
@@ -285,7 +303,12 @@ class MemoryCompanionBrain(CompanionBrain):
         return response
 
     def _build_system_prompt(
-        self, *, world_state: WorldState, role: Role, memories: list[str]
+        self,
+        *,
+        world_state: WorldState,
+        role: Role,
+        memories: list[str],
+        history: list[dict[str, Any]] | None = None,
     ) -> str:
         # Get current node name + altitude + terrain hint
         try:
@@ -319,7 +342,7 @@ class MemoryCompanionBrain(CompanionBrain):
         mem_lines = "\n".join(f"- {m}" for m in memories[:12]) if memories else "（无）"
 
         # Build recent dialogue section (who said what).
-        recent_history = (world_state.chat_history or [])[-8:]
+        recent_history = (history or [])[-8:]
         dialogue_lines: list[str] = []
         for h in recent_history:
             content = str(h.get("content") or "").strip()

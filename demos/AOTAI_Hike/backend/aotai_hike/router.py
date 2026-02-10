@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 
 from aotai_hike.adapters.background import BackgroundRequest, StaticBackgroundProvider
 from aotai_hike.adapters.companion import MemoryCompanionBrain
-from aotai_hike.adapters.memory import MemOSMemoryAdapter, MemOSMemoryClient
+from aotai_hike.adapters.memory import MemoryNamespace, MemOSMemoryAdapter, MemOSMemoryClient
 from aotai_hike.schemas import (
     ActRequest,
     ActResponse,
@@ -114,7 +114,31 @@ def get_session(session_id: str):
 @router.post("/roles/upsert", response_model=RoleUpsertResponse)
 def roles_upsert(req: RoleUpsertRequest):
     ws = _get_ws(req.session_id)
+    existing_ids = {r.role_id for r in ws.roles}
+    is_new_role = req.role.role_id not in existing_ids
+
     resp = _game.upsert_role(ws, req)
+
+    if is_new_role:
+        role = req.role
+        cube_id = MemoryNamespace.role_cube_id(user_id=role.role_id, role_id=role.role_id)
+        intro = f"角色名：{role.name}。人设：{role.persona or '暂无设定'}。"
+        _memory_client.add_memory(
+            user_id=role.role_id,
+            cube_id=cube_id,
+            session_id=req.session_id,
+            messages=[
+                {
+                    "role": "user",
+                    "content": intro,
+                    "role_id": role.role_id,
+                    "role_name": role.name,
+                }
+            ],
+            async_mode="async",
+            mode="fine",
+            source="aotai_hike_role_init",
+        )
     _sessions.save(ws)
     return resp
 
@@ -134,6 +158,7 @@ def roles_quickstart(req: RolesQuickstartRequest):
     # If not overwriting, only add defaults that don't already exist by name.
     existing_names = {r.name for r in ws.roles}
 
+    new_roles: list[Role] = []
     for tmpl in _DEFAULT_ROLES:
         if not req.overwrite and tmpl["name"] in existing_names:
             continue
@@ -145,6 +170,27 @@ def roles_quickstart(req: RolesQuickstartRequest):
             attrs=RoleAttrs(**(tmpl.get("attrs") or {})),
         )
         _game.upsert_role(ws, RoleUpsertRequest(session_id=req.session_id, role=role))
+        new_roles.append(role)
+
+    for role in new_roles:
+        cube_id = MemoryNamespace.role_cube_id(user_id=role.role_id, role_id=role.role_id)
+        intro = f"角色名：{role.name}。人设：{role.persona or '暂无设定'}。"
+        _memory_client.add_memory(
+            user_id=role.role_id,
+            cube_id=cube_id,
+            session_id=req.session_id,
+            messages=[
+                {
+                    "role": "user",
+                    "content": intro,
+                    "role_id": role.role_id,
+                    "role_name": role.name,
+                }
+            ],
+            async_mode="async",
+            mode="fine",
+            source="aotai_hike_role_init",
+        )
 
     _sessions.save(ws)
     return RoleUpsertResponse(roles=ws.roles, active_role_id=ws.active_role_id)
