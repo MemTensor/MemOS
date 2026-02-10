@@ -10,6 +10,9 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 
+logger.add("demos/AOTAI_Hike/logs/aotai_hike.log", encoding="utf-8", enqueue=True, backtrace=True)
+
+
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT / "frontend"
 LOG_DIR = ROOT / "logs"
