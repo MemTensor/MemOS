@@ -49,6 +49,8 @@ class ToolParser(BaseMessageParser):
         tool_call_id = message.get("tool_call_id", "")
         chat_time = message.get("chat_time")
         message_id = message.get("message_id")
+        role_id = message.get("role_id")
+        role_name = message.get("role_name")
 
         sources = []
 
@@ -79,6 +81,8 @@ class ToolParser(BaseMessageParser):
                             message_id=message_id,
                             content=text_content,
                             tool_call_id=tool_call_id,
+                            role_id=role_id,
+                            role_name=role_name,
                         )
                         source.lang = overall_lang
                         sources.append(source)
@@ -95,6 +99,8 @@ class ToolParser(BaseMessageParser):
                             file_id=file_info.get("file_id", ""),
                             tool_call_id=tool_call_id,
                             file_info=file_info,
+                            role_id=role_id,
+                            role_name=role_name,
                         )
                         source.lang = overall_lang
                         sources.append(source)
@@ -108,6 +114,8 @@ class ToolParser(BaseMessageParser):
                             content=file_info.get("url", ""),
                             detail=file_info.get("detail", "auto"),
                             tool_call_id=tool_call_id,
+                            role_id=role_id,
+                            role_name=role_name,
                         )
                         source.lang = overall_lang
                         sources.append(source)
@@ -121,6 +129,8 @@ class ToolParser(BaseMessageParser):
                             content=file_info.get("data", ""),
                             format=file_info.get("format", "wav"),
                             tool_call_id=tool_call_id,
+                            role_id=role_id,
+                            role_name=role_name,
                         )
                         source.lang = overall_lang
                         sources.append(source)
@@ -137,6 +147,8 @@ class ToolParser(BaseMessageParser):
                     message_id=message_id,
                     content=raw_content,
                     tool_call_id=tool_call_id,
+                    role_id=role_id,
+                    role_name=role_name,
                 )
                 sources.append(_add_lang_to_source(source, raw_content))
 

@@ -291,6 +291,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             role = item.get("role", "")
             content = item.get("content", "")
             chat_time = item.get("chat_time", None)
+            message_id = item.get("message_id", None)
+            role_id = item.get("role_id", None)
+            role_name = item.get("role_name", None)
             parts = []
             if role and str(role).lower() != "mix":
                 parts.append(f"{role}: ")
@@ -309,15 +312,20 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 cur_text = "".join(buf)
 
             buf.append(line)
-            sources.append(
-                {
-                    "type": "chat",
-                    "index": idx,
-                    "role": role,
-                    "chat_time": chat_time,
-                    "content": content,
-                }
-            )
+            source_dict = {
+                "type": "chat",
+                "index": idx,
+                "role": role,
+                "chat_time": chat_time,
+                "content": content,
+            }
+            if message_id is not None:
+                source_dict["message_id"] = message_id
+            if role_id is not None:
+                source_dict["role_id"] = role_id
+            if role_name is not None:
+                source_dict["role_name"] = role_name
+            sources.append(source_dict)
             cur_text = "".join(buf)
 
         if buf:

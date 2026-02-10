@@ -64,6 +64,8 @@ class SystemParser(BaseMessageParser):
             message_id=message.get("message_id", None),
             content=content_wo_tool_schema,
             tool_schema=tool_schema_content,
+            role_id=message.get("role_id", None),
+            role_name=message.get("role_name", None),
         )
         return _add_lang_to_source(source, content_wo_tool_schema)
 

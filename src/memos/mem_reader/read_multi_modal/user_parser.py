@@ -53,6 +53,8 @@ class UserParser(BaseMessageParser):
         raw_content = message.get("content", "")
         chat_time = message.get("chat_time")
         message_id = message.get("message_id")
+        role_id = message.get("role_id")
+        role_name = message.get("role_name")
 
         sources = []
 
@@ -82,6 +84,8 @@ class UserParser(BaseMessageParser):
                             chat_time=chat_time,
                             message_id=message_id,
                             content=part.get("text", ""),
+                            role_id=role_id,
+                            role_name=role_name,
                         )
                         source.lang = overall_lang
                         sources.append(source)
@@ -95,6 +99,8 @@ class UserParser(BaseMessageParser):
                             doc_path=file_info.get("filename") or file_info.get("file_id", ""),
                             content=file_info.get("file_data", ""),
                             file_info=file_info,
+                            role_id=role_id,
+                            role_name=role_name,
                         )
                         source.lang = overall_lang
                         sources.append(source)
@@ -106,6 +112,8 @@ class UserParser(BaseMessageParser):
                             chat_time=chat_time,
                             message_id=message_id,
                             image_path=image_info.get("url"),
+                            role_id=role_id,
+                            role_name=role_name,
                         )
                         source.lang = overall_lang
                         sources.append(source)
@@ -117,6 +125,8 @@ class UserParser(BaseMessageParser):
                             chat_time=chat_time,
                             message_id=message_id,
                             content=f"[{part_type}]",
+                            role_id=role_id,
+                            role_name=role_name,
                         )
                         source.lang = overall_lang
                         sources.append(source)
@@ -130,11 +140,15 @@ class UserParser(BaseMessageParser):
                     chat_time=chat_time,
                     message_id=message_id,
                     content=content,
+                    role_id=role_id,
+                    role_name=role_name,
                 )
                 sources.append(_add_lang_to_source(source, content))
 
         if not sources:
-            return _add_lang_to_source(SourceMessage(type="chat", role=role), None)
+            return _add_lang_to_source(
+                SourceMessage(type="chat", role=role, role_id=role_id, role_name=role_name), None
+            )
         if len(sources) > 1:
             return sources
         return sources[0]

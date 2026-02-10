@@ -673,8 +673,60 @@ MULTIMODAL_MESSAGE_CASES = [
     ),
 ]
 
+
 # ============================================================================
-# 12. Raw Input Cases (from Legacy)
+# 12. AoTai Hike Multi-Perspective Samples
+# ============================================================================
+
+GAME_MULTI_VIEW_CASES = [
+    TestCase(
+        name="game_multi_perspective",
+        description="鳌太线游戏多角色视角对话示例（使用 role_id / role_name）",
+        scene_data=[
+            [
+                {
+                    "role": "system",
+                    "content": "你正在鳌太线高海拔徒步线路上带队前进，队伍中每个角色都有独立视角和状态。",
+                    "chat_time": "2025-02-10T08:00:00Z",
+                    "message_id": "aotai_sys_1",
+                },
+                {
+                    "role": "user",
+                    "content": "今天风很大，我有点头疼，但大部队状态还可以，可以继续前进。",
+                    "chat_time": "2025-02-10T08:05:00Z",
+                    "message_id": "aotai_u_leader_1",
+                    "role_id": "leader",
+                    "role_name": "队长阿青",
+                },
+                {
+                    "role": "user",
+                    "content": "我水快喝完了，背包也有点压肩，建议午间在下一个平台休息一下补给。",
+                    "chat_time": "2025-02-10T08:06:00Z",
+                    "message_id": "aotai_u_support_1",
+                    "role_id": "support",
+                    "role_name": "后援小李",
+                },
+                {
+                    "role": "user",
+                    "content": "我体力还不错，可以帮忙多背一点公用物资，不过前面路段看起来有积雪，需要放慢节奏。",
+                    "chat_time": "2025-02-10T08:07:00Z",
+                    "message_id": "aotai_u_scout_1",
+                    "role_id": "scout",
+                    "role_name": "前锋阿泽",
+                },
+                {
+                    "role": "assistant",
+                    "content": "系统记录：队长关注整体节奏，后援关注物资与休息点，前锋关注路况与安全风险——形成对当前路段的多视角记忆。",
+                    "chat_time": "2025-02-10T08:08:00Z",
+                    "message_id": "aotai_assistant_1",
+                },
+            ]
+        ],
+    ),
+]
+
+# ============================================================================
+# 13. Raw Input Cases (from Legacy)
 # ============================================================================
 
 RAW_INPUT_CASES = [

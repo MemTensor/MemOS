@@ -56,6 +56,8 @@ class MessageDict(TypedDict, total=False):
     chat_time: str | None  # Optional timestamp for the message, format is not
     # restricted, it can be any vague or precise time string.
     message_id: str | None  # Optional unique identifier for the message
+    role_id: str | None  # Optional role ID for multi-perspective support
+    role_name: str | None  # Optional role name for multi-perspective support
 
 
 RawMessageDict: TypeAlias = ChatCompletionContentPartTextParam | File
