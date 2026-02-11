@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
 if TYPE_CHECKING:
-    from aotai_hike.schemas import Role, WorldState
+    from aotai_hike.schemas import Role, WorldState, WorldStats
 
 
 def _node_exists(node_id: str) -> bool:
@@ -63,6 +63,67 @@ class ShareImageGenerator:
     def __init__(self):
         """Initialize the generator."""
         self._font_cache: dict[str, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
+
+    @staticmethod
+    def _short_text(s: str, limit: int = 10) -> str:
+        s = (s or "").strip()
+        if len(s) <= limit:
+            return s
+        return s[:limit] + "…"
+
+    @staticmethod
+    def _pick_epithet_and_lore(
+        stats: WorldStats, outcome: GameOutcome, world_state: WorldState
+    ) -> tuple[str, str]:
+        """Rule-based epithet + lore."""
+
+        d = float(getattr(stats, "total_distance_km", 0.0) or 0.0)
+        decisions = int(getattr(stats, "decision_times", 0) or 0)
+        leader = int(getattr(stats, "leader_times", 0) or 0)
+        bad_weather = int(getattr(stats, "bad_weather_steps", 0) or 0)
+        weather = str(world_state.weather)
+
+        # Failure path first
+        if outcome.is_finished and not outcome.is_success:
+            if bad_weather > 0:
+                return (
+                    "风雪中的撤退者",
+                    "风雪压倒了脚步，但能安全撤回，已是不易。",
+                )
+            return (
+                "遗憾的行者",
+                "这次没能抵达终点，但山依旧在，故事仍在继续。",
+            )
+
+        # Base by distance
+        if d >= 40:
+            epithet = "雪线下的老练者"
+            lore = "漫长的山脊之行，脚步早已记住了每一处起伏。"
+        elif d >= 20:
+            epithet = "雪线下的坚行者"
+            lore = "一步一喘息，却一步也不肯退回头。"
+        else:
+            epithet = "雪线下的初行者"
+            lore = "第一次踏上这条路，山风也会记住你的名字。"
+
+        # Strategy / leadership
+        if decisions >= 8 and leader >= 2:
+            epithet = "雪线下的领路者"
+            lore = "无数次抉择之后，你学会用灯光与路线安抚同伴。"
+        elif decisions >= 5:
+            epithet = "岔路口的抉择者"
+            lore = "每一次岔路，都在悄悄改写这支队伍的命运。"
+
+        # Harsh weather
+        if bad_weather >= 5:
+            if weather in {"snowy", "foggy"}:
+                epithet = "风雪中的夜行人"
+                lore = "在风雪与雾气里摸索前行，唯有营灯与彼此作伴。"
+            elif weather in {"rainy", "windy"}:
+                epithet = "风雨中的固执者"
+                lore = "雨和风一次次劝退你，你却一次次系紧背带。"
+
+        return epithet, lore
 
     def _get_font(self, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         """Get or create a font of the specified size that supports Chinese characters."""
@@ -139,7 +200,7 @@ class ShareImageGenerator:
         # === Dark panel with subtle vignette & texture =======================
         overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
 
-        # Panel margins留出一圈金色框与背景
+        # Panel margins
         panel_margin_x = 72
         panel_margin_top = 96
         panel_margin_bottom = 132
@@ -150,8 +211,7 @@ class ShareImageGenerator:
             self.HEIGHT - panel_margin_bottom,
         )
 
-        # 深色半透明底板 + 轻微竖向渐变
-        base_panel_color_top = (18, 24, 40, 220)  # 顶部略亮一点
+        base_panel_color_top = (18, 24, 40, 220)
         base_panel_color_bottom = (10, 12, 22, 235)
         panel = Image.new("RGBA", img.size, (0, 0, 0, 0))
         panel_draw = ImageDraw.Draw(panel)
@@ -175,7 +235,6 @@ class ShareImageGenerator:
             y = top + int(height_panel * t)
             panel_draw.line([(panel_rect[0], y), (panel_rect[2], y)], fill=(r, g, b, alpha))
 
-        # 内部金色描边
         border_color = (220, 180, 90, 120)
         for i in range(2):
             inset = i
@@ -203,7 +262,6 @@ class ShareImageGenerator:
         vignette = vignette.filter(ImageFilter.GaussianBlur(60))
         panel.putalpha(vignette)
 
-        # 合成到底板上
         overlay = Image.alpha_composite(overlay, panel)
         img = Image.alpha_composite(img, overlay)
 
@@ -213,6 +271,9 @@ class ShareImageGenerator:
         y_offset = panel_rect[1] + 36
         line_height = 34
         section_spacing = 22
+
+        # Precompute epithet
+        epithet, lore = self._pick_epithet_and_lore(world_state.stats, outcome, world_state)
 
         title_font = self._get_font(50)
         title_text = "鳌太线徒步记录"
@@ -265,6 +326,30 @@ class ShareImageGenerator:
                 font=status_font,
             )
             y_offset += 50
+
+        # Epithet + lore block
+        epithet_font = self._get_font(32)
+        lore_font = self._get_font(22)
+
+        draw.text(
+            (self.WIDTH // 2, y_offset + 10),
+            epithet,
+            fill=(236, 228, 196),
+            anchor="mt",
+            font=epithet_font,
+            stroke_width=2,
+            stroke_fill=(20, 18, 12),
+        )
+        y_offset += 52
+
+        draw.text(
+            (self.WIDTH // 2, y_offset),
+            lore,
+            fill=(210, 208, 222),
+            anchor="mt",
+            font=lore_font,
+        )
+        y_offset += 46
 
         stats_font = self._get_font(28)
         left_x = panel_rect[0] + 36
@@ -394,6 +479,26 @@ class ShareImageGenerator:
             )
             y_offset += line_height - 6
 
+        memory_font = self._get_font(24)
+        highlights = list(getattr(world_state.stats, "memory_highlights", []) or [])
+        if highlights:
+            y_offset += section_spacing
+            draw.text(
+                (left_x, y_offset),
+                "关键记忆：",
+                fill=self.ACCENT_COLOR,
+                font=memory_font,
+            )
+            y_offset += line_height
+            for h in highlights:
+                draw.text(
+                    (left_x + 8, y_offset),
+                    f"· {self._short_text(h, 24)}",
+                    fill=(210, 220, 235),
+                    font=memory_font,
+                )
+                y_offset += line_height - 4
+
         # Footer
         footer_font = self._get_font(28)
         footer_text = "Generated by MemOS AoTai Hike Demo"
@@ -410,8 +515,97 @@ class ShareImageGenerator:
         img.save(img_bytes, format="PNG")
         img_bytes.seek(0)
 
-        # Structured JSON data
+        # Structured JSON data (v2-style,兼容保留原信息)
         json_data = {
+            "summary": {
+                "title": "鳌太线徒步记录",
+                "status": "finished"
+                if outcome.is_finished and outcome.is_success
+                else ("failed" if outcome.is_finished else "running"),
+                "result_text": (
+                    "穿越成功"
+                    if outcome.is_finished and outcome.is_success
+                    else ("挑战失败" if outcome.is_finished else "进行中...")
+                ),
+                "fail_reason": outcome.failure_reason or "",
+                "epithet": epithet,
+                "lore": lore,
+            },
+            "party": [
+                {
+                    "role_id": r.role_id,
+                    "name": r.name,
+                    "persona": r.persona,
+                    "persona_short": self._short_text(r.persona, 10),
+                    "role_tag": ("队长" if r.role_id == world_state.leader_role_id else ""),
+                    "is_player": (r.role_id == world_state.active_role_id),
+                    "attrs": {
+                        "stamina": r.attrs.stamina,
+                        "mood": r.attrs.mood,
+                        "experience": r.attrs.experience,
+                        "risk_tolerance": r.attrs.risk_tolerance,
+                        "supplies": r.attrs.supplies,
+                    },
+                }
+                for r in outcome.roles
+            ],
+            "team_stats": [
+                {
+                    "label": "体力均值",
+                    "value": round(
+                        sum(r.attrs.stamina for r in outcome.roles) / max(1, len(outcome.roles)), 1
+                    ),
+                    "max": 100,
+                },
+                {
+                    "label": "士气均值",
+                    "value": round(
+                        sum(r.attrs.mood for r in outcome.roles) / max(1, len(outcome.roles)), 1
+                    ),
+                    "max": 100,
+                },
+                {
+                    "label": "风险均值",
+                    "value": round(
+                        sum(r.attrs.risk_tolerance for r in outcome.roles)
+                        / max(1, len(outcome.roles)),
+                        1,
+                    ),
+                    "max": 100,
+                },
+            ],
+            "map": {
+                "distance_km": outcome.total_distance_km,
+                "current_node": outcome.current_node_name,
+                "key_nodes": [
+                    AoTaiGraph.get_node(nid).name
+                    for nid in outcome.visited_nodes
+                    if _node_exists(nid)
+                    and AoTaiGraph.get_node(nid).kind
+                    in {"camp", "junction", "exit", "peak", "lake"}
+                ],
+            },
+            "env": {
+                "weather_main": world_state.weather,
+                "road_tags": list(
+                    {
+                        AoTaiGraph.get_node(nid).name
+                        for nid in outcome.visited_nodes
+                        if _node_exists(nid)
+                    }
+                ),
+            },
+            "memory": {
+                "tags": [],
+                "highlight": list(getattr(world_state.stats, "memory_highlights", []) or []),
+                "count_new": len(getattr(world_state.stats, "memory_highlights", []) or []),
+                "count_forgot": 0,
+            },
+            "actions": {
+                "download_enabled": True,
+                "close_enabled": True,
+            },
+            "watermark": "Generated by MemOS AoTai Hike Demo",
             "outcome": {
                 "is_success": outcome.is_success,
                 "outcome_type": outcome.outcome_type,
@@ -424,21 +618,6 @@ class ShareImageGenerator:
                 "node_id": outcome.current_node_id,
                 "node_name": outcome.current_node_name,
             },
-            "roles": [
-                {
-                    "role_id": r.role_id,
-                    "name": r.name,
-                    "persona": r.persona,
-                    "attrs": {
-                        "stamina": r.attrs.stamina,
-                        "mood": r.attrs.mood,
-                        "experience": r.attrs.experience,
-                        "risk_tolerance": r.attrs.risk_tolerance,
-                        "supplies": r.attrs.supplies,
-                    },
-                }
-                for r in outcome.roles
-            ],
             "route": {
                 "visited_node_ids": outcome.visited_nodes,
                 "visited_node_names": [

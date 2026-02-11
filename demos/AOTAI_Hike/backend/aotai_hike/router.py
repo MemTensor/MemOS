@@ -266,9 +266,33 @@ def get_current_share_image(session_id: str):
     This endpoint can be called at any time to generate an up-to-date share image.
     Returns PNG image that can be displayed in a modal/popup.
     """
+    ws = _get_ws(session_id)
+    # 补充 memory_highlights
+    active_role_id = ws.active_role_id or (ws.roles[0].role_id if ws.roles else None)
+    highlights: list[str] = []
+    if active_role_id:
+        try:
+            cube_id = MemoryNamespace.role_cube_id(user_id=active_role_id, role_id=active_role_id)
+            res = _memory_client.search_memories(
+                user_id=active_role_id,
+                cube_id=cube_id,
+                query="关键记忆",
+                top_k=2,
+            )
+            for item in (res.get("items") or [])[:2]:
+                txt = str(item.get("memory") or "").strip()
+                if not txt:
+                    continue
+                if len(txt) > 24:
+                    txt = txt[:24] + "…"
+                highlights.append(txt)
+        except Exception:
+            highlights = []
+
+    ws.stats.memory_highlights = highlights
+
     from aotai_hike.utils.share_image import generate_current_share_image
 
-    ws = _get_ws(session_id)
     image_bytes, json_data = generate_current_share_image(ws)
     return Response(content=image_bytes, media_type="image/png")
 

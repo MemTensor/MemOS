@@ -163,6 +163,7 @@ class GameService:
             return ActResponse(world_state=world_state, messages=messages, background=bg)
 
         if req.action == ActionType.DECIDE:
+            world_state.stats.decision_times = int(world_state.stats.decision_times or 0) + 1
             user_action_desc = self._apply_decision(world_state, req, now_ms, messages)
         else:
             user_action_desc = self._apply_action(world_state, req, now_ms, messages, active)
@@ -448,6 +449,10 @@ class GameService:
             (r.name for r in world_state.roles if r.role_id == world_state.leader_role_id),
             world_state.leader_role_id,
         )
+
+        world_state.stats.vote_times = int(world_state.stats.vote_times or 0) + 1
+        if world_state.active_role_id and world_state.leader_role_id == world_state.active_role_id:
+            world_state.stats.leader_times = int(world_state.stats.leader_times or 0) + 1
 
         if world_state.leader_role_id != old:
             self._push_event(world_state, f"票选团长：{old_name} → {new_name}")
@@ -972,6 +977,14 @@ class GameService:
             self._tweak_party(
                 world_state, stamina_delta=-3, mood_delta=-1, exp_delta=0, supplies_delta=-5
             )
+            if str(world_state.weather) in ("rainy", "snowy", "windy", "foggy"):
+                world_state.stats.bad_weather_steps = (
+                    int(world_state.stats.bad_weather_steps or 0) + 1
+                )
+            if str(world_state.weather) in ("rainy", "snowy", "windy", "foggy"):
+                world_state.stats.bad_weather_steps = (
+                    int(world_state.stats.bad_weather_steps or 0) + 1
+                )
 
             if world_state.in_transit_progress_km + 1e-6 >= world_state.in_transit_total_km:
                 # Arrive in the same action

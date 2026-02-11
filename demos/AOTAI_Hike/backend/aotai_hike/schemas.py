@@ -76,6 +76,17 @@ class Role(BaseModel):
     attrs: RoleAttrs = Field(default_factory=RoleAttrs)
 
 
+class WorldStats(BaseModel):
+    """Aggregated stats for share-card / summary."""
+
+    total_distance_km: float = 0.0
+    decision_times: int = 0
+    leader_times: int = 0
+    vote_times: int = 0
+    bad_weather_steps: int = 0
+    memory_highlights: list[str] = Field(default_factory=list)
+
+
 class WorldState(BaseModel):
     session_id: str
     user_id: str
@@ -89,6 +100,9 @@ class WorldState(BaseModel):
     lock_strength: LockStrength = LockStrength.SOFT
     consensus_next_node_id: str | None = None
     camp_meeting: CampMeetingState = Field(default_factory=CampMeetingState)
+
+    # Aggregated stats for summary/share-card
+    stats: WorldStats = Field(default_factory=WorldStats)
 
     # Map state (graph-based)
     current_node_id: str = "start"
