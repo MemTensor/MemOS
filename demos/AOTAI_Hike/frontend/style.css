@@ -391,7 +391,8 @@ textarea:focus {
 /* Share image: fill the modal content area, act as background layer */
 #share-image-container {
   position: absolute;
-  inset: 26px 26px 34px;
+  /* 让分享图整体离外框再远一点，避免文字被装饰遮挡 */
+  inset: 44px 52px 82px;
   margin: 0;
   overflow: hidden;
   /* keep background clean; the card itself should carry the UI */
@@ -425,6 +426,10 @@ textarea:focus {
   background-size: 100% 100%;
   /* 这里假定有 assets/share_frame.png，可按需要调整路径 */
   background-image: url("./assets/share_frame.png");
+  /* 轻微外发光 + 漂浮感 */
+  box-shadow:
+    0 0 28px rgba(0, 0, 0, 0.85),
+    0 0 32px rgba(120, 180, 255, 0.22);
 }
 
 /* 质感层：雪点 / 噪点 / 微光粒子 */

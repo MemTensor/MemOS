@@ -313,6 +313,7 @@ function initShareButton() {
 
   if (shareDownloadBtn) {
     shareDownloadBtn.onclick = () => {
+      // allow async download (canvas 合成多图层再导出)
       downloadShareImage();
     };
   }
@@ -395,16 +396,104 @@ function hideShareModal() {
   }
 }
 
-function downloadShareImage() {
+async function downloadShareImage() {
   if (!currentShareImageBlob) return;
 
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(currentShareImageBlob);
-  link.download = `aotai_hike_${Date.now()}.png`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(link.href);
+  // 1) 先把后端返回的“分享图”加载为 Image
+  const baseUrl = URL.createObjectURL(currentShareImageBlob);
+  const baseImg = new Image();
+  baseImg.src = baseUrl;
+
+  // 为了避免跨域问题，保持和当前页面同源（assets 也是本地静态资源）
+  await new Promise((resolve, reject) => {
+    baseImg.onload = () => resolve();
+    baseImg.onerror = (e) => reject(e);
+  });
+
+  const width = baseImg.naturalWidth || baseImg.width;
+  const height = baseImg.naturalHeight || baseImg.height;
+
+  // 2) 创建离屏 canvas，把所有需要的图层按顺序画进去
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    // fallback：直接下载原始分享图
+    const link = document.createElement("a");
+    link.href = baseUrl;
+    link.download = `aotai_hike_${Date.now()}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(baseUrl);
+    return;
+  }
+
+  // 像素风：禁用平滑缩放
+  ctx.imageSmoothingEnabled = false;
+
+  // 底层：原始分享图
+  // 为了和前端 modal 中的布局一致，这里按与 CSS 相同的“内缩”绘制：
+  // CSS 中：
+  //   #share-image-container { inset: 44px 52px 82px; }
+  //   #share-card-frame      { inset: 12px; }
+  // 也就是分享图相对于外框再往里缩一圈。
+  const insetTop = 44;
+  const insetRight = 52;
+  const insetBottom = 82;
+  const insetLeft = 52;
+  const innerWidth = Math.max(1, width - insetLeft - insetRight);
+  const innerHeight = Math.max(1, height - insetTop - insetBottom);
+
+  ctx.drawImage(baseImg, insetLeft, insetTop, innerWidth, innerHeight);
+
+  // 尝试叠加 PNG 外框与噪点图；若加载失败则忽略。
+  // 注意顺序：先画外框，再在最上层叠加噪点，以匹配前端 DOM 的层级。
+  const extraLayers = [
+    "./assets/share_frame.png",
+    "./assets/share_noise.png",
+  ];
+
+  for (const src of extraLayers) {
+    try {
+      const img = new Image();
+      img.src = src;
+      // 为避免某些浏览器默认平滑，显式关闭
+      await new Promise((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => resolve(); // 静默失败：没有这张图就跳过
+      });
+      if (img.width && img.height) {
+        if (src.includes("share_noise")) {
+          // 与 CSS 中的 soft-light 类似的叠加效果
+          const prevOp = ctx.globalCompositeOperation;
+          ctx.globalCompositeOperation = "soft-light";
+          ctx.drawImage(img, 0, 0, width, height);
+          ctx.globalCompositeOperation = prevOp;
+        } else {
+          ctx.drawImage(img, 0, 0, width, height);
+        }
+      }
+    } catch {
+      // ignore single-layer failure
+    }
+  }
+
+  URL.revokeObjectURL(baseUrl);
+
+  // 3) 导出最终合成图并触发下载
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `aotai_hike_${Date.now()}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, "image/png");
 }
 
 export function checkAndShowShareButton(ws) {

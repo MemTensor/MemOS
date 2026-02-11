@@ -6,14 +6,13 @@ Generates pixel-style images showing character config, route, journey, distance,
 from __future__ import annotations
 
 import io
-import json
 
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aotai_hike.world.map_data import AoTaiGraph
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
 if TYPE_CHECKING:
@@ -134,43 +133,99 @@ class ShareImageGenerator:
         if img is None:
             img = Image.new("RGB", (self.WIDTH, self.HEIGHT), self.BG_COLOR)
 
-        # Convert to RGBA and add a semi-transparent panel behind text
+        # Convert to RGBA and add a dark, textured panel behind text
         img = img.convert("RGBA")
+
+        # === Dark panel with subtle vignette & texture =======================
         overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        # Slightly more transparent paper-like panel
-        panel_color = (240, 240, 230, 190)  # light beige with alpha
-        # Leave margins so background is still visible
-        panel_margin_x = 40
-        panel_margin_top = 50
-        panel_margin_bottom = 50
+
+        # Panel margins留出一圈金色框与背景
+        panel_margin_x = 72
+        panel_margin_top = 96
+        panel_margin_bottom = 132
         panel_rect = (
             panel_margin_x,
             panel_margin_top,
             self.WIDTH - panel_margin_x,
             self.HEIGHT - panel_margin_bottom,
         )
-        overlay_draw = ImageDraw.Draw(overlay)
-        overlay_draw.rectangle(panel_rect, fill=panel_color)
+
+        # 深色半透明底板 + 轻微竖向渐变
+        base_panel_color_top = (18, 24, 40, 220)  # 顶部略亮一点
+        base_panel_color_bottom = (10, 12, 22, 235)
+        panel = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        panel_draw = ImageDraw.Draw(panel)
+        panel_draw.rectangle(panel_rect, fill=base_panel_color_bottom)
+
+        grad_steps = 32
+        top, bottom = panel_rect[1], panel_rect[3]
+        height_panel = bottom - top
+        for i in range(grad_steps):
+            t = i / max(1, grad_steps - 1)
+            alpha = int(220 + (235 - 220) * t)
+            r = int(
+                base_panel_color_top[0] + (base_panel_color_bottom[0] - base_panel_color_top[0]) * t
+            )
+            g = int(
+                base_panel_color_top[1] + (base_panel_color_bottom[1] - base_panel_color_top[1]) * t
+            )
+            b = int(
+                base_panel_color_top[2] + (base_panel_color_bottom[2] - base_panel_color_top[2]) * t
+            )
+            y = top + int(height_panel * t)
+            panel_draw.line([(panel_rect[0], y), (panel_rect[2], y)], fill=(r, g, b, alpha))
+
+        # 内部金色描边
+        border_color = (220, 180, 90, 120)
+        for i in range(2):
+            inset = i
+            panel_draw.rectangle(
+                (
+                    panel_rect[0] + inset,
+                    panel_rect[1] + inset,
+                    panel_rect[2] - inset,
+                    panel_rect[3] - inset,
+                ),
+                outline=border_color,
+            )
+
+        vignette = Image.new("L", img.size, 0)
+        v_draw = ImageDraw.Draw(vignette)
+        v_draw.ellipse(
+            (
+                panel_rect[0] - 80,
+                panel_rect[1] - 60,
+                panel_rect[2] + 80,
+                panel_rect[3] + 120,
+            ),
+            fill=255,
+        )
+        vignette = vignette.filter(ImageFilter.GaussianBlur(60))
+        panel.putalpha(vignette)
+
+        # 合成到底板上
+        overlay = Image.alpha_composite(overlay, panel)
         img = Image.alpha_composite(img, overlay)
 
         draw = ImageDraw.Draw(img)
 
-        # Vertical layout metrics (slightly larger fonts vs. original)
-        y_offset = 110
+        # Vertical layout metrics tuned for the new panel
+        y_offset = panel_rect[1] + 36
         line_height = 34
-        section_spacing = 24
+        section_spacing = 22
 
-        # Title
-        title_font = self._get_font(40)
+        title_font = self._get_font(42)
         title_text = "鳌太线徒步记录"
         draw.text(
             (self.WIDTH // 2, y_offset),
             title_text,
-            fill=self.TEXT_COLOR,
+            fill=(234, 242, 255),
             anchor="mt",
             font=title_font,
+            stroke_width=2,
+            stroke_fill=(20, 24, 40),
         )
-        y_offset += 60
+        y_offset += 68
 
         # Outcome banner (only show if game is finished)
         if outcome.is_finished:
@@ -211,31 +266,62 @@ class ShareImageGenerator:
             )
             y_offset += 50
 
-        # Stats section
         stats_font = self._get_font(22)
+        left_x = panel_rect[0] + 36
+
         stats = [
-            f"总距离: {outcome.total_distance_km:.1f} km",
-            f"用时: {outcome.days_spent} 天",
-            f"当前位置: {outcome.current_node_name}",
+            f"总距离：{outcome.total_distance_km:.1f} km",
+            f"用时：{outcome.days_spent} 天",
+            f"当前位置：{outcome.current_node_name}",
         ]
         for stat in stats:
-            draw.text((60, y_offset), stat, fill=self.TEXT_COLOR, font=stats_font)
+            draw.text(
+                (left_x, y_offset),
+                stat,
+                fill=(225, 235, 248),
+                font=stats_font,
+                stroke_width=1,
+                stroke_fill=(10, 12, 20),
+            )
             y_offset += line_height
         y_offset += section_spacing
 
+        # Separator line
+        sep_y = y_offset - int(section_spacing * 0.4)
+        draw.line(
+            (panel_rect[0] + 20, sep_y, panel_rect[2] - 20, sep_y),
+            fill=(210, 170, 90, 180),
+            width=1,
+        )
+
         # Roles section
         role_font = self._get_font(20)
-        draw.text((60, y_offset), "队伍成员:", fill=self.ACCENT_COLOR, font=role_font)
+        draw.text(
+            (left_x, y_offset),
+            "队伍成员：",
+            fill=self.ACCENT_COLOR,
+            font=role_font,
+        )
         y_offset += line_height + 5
         for role in outcome.roles:
-            role_text = f"  • {role.name}: 体力{role.attrs.stamina}/100 情绪{role.attrs.mood}/100"
-            draw.text((60, y_offset), role_text, fill=self.TEXT_COLOR, font=role_font)
+            role_text = f"· {role.name}：体力 {role.attrs.stamina}/100，情绪 {role.attrs.mood}/100"
+            draw.text(
+                (left_x + 8, y_offset),
+                role_text,
+                fill=(225, 235, 248),
+                font=role_font,
+            )
             y_offset += line_height - 5
         y_offset += section_spacing
 
         # Route section
         route_font = self._get_font(20)
-        draw.text((60, y_offset), "路线节点:", fill=self.ACCENT_COLOR, font=route_font)
+        draw.text(
+            (left_x, y_offset),
+            "路线节点：",
+            fill=self.ACCENT_COLOR,
+            font=route_font,
+        )
         y_offset += line_height + 5
 
         # Show visited nodes (limit to fit on image)
@@ -268,22 +354,45 @@ class ShareImageGenerator:
             lines.append(current_line)
 
         for line in lines[:5]:  # Limit to 5 lines
-            draw.text((60, y_offset), line, fill=self.TEXT_COLOR, font=route_font)
+            draw.text(
+                (left_x + 8, y_offset),
+                line,
+                fill=(215, 225, 240),
+                font=route_font,
+            )
             y_offset += line_height - 5
         y_offset += section_spacing
 
-        # Journey summary (structured data preview)
+        # Journey summary as human-readable sentences (no raw JSON)
         summary_font = self._get_font(18)
-        draw.text((60, y_offset), "旅程摘要:", fill=self.ACCENT_COLOR, font=summary_font)
-        y_offset += line_height + 5
+        draw.text(
+            (left_x, y_offset),
+            "旅程摘要：",
+            fill=self.ACCENT_COLOR,
+            font=summary_font,
+        )
+        y_offset += line_height + 2
 
-        summary_preview = json.dumps(outcome.journey_summary, ensure_ascii=False, indent=2)
-        summary_lines = summary_preview.split("\n")[:8]  # Limit preview
+        total_nodes = outcome.journey_summary.get("total_nodes_visited", 0)
+        key_events = outcome.journey_summary.get("key_events") or []
+        final_weather = outcome.journey_summary.get("final_weather", "")
+        final_time = outcome.journey_summary.get("final_time", "")
+
+        summary_lines = []
+        summary_lines.append(f"共到达 {total_nodes} 个节点，记录 {len(key_events)} 次关键事件。")
+        if final_weather or final_time:
+            summary_lines.append(
+                f"最终天气：{final_weather or '未知'}，最终时间：{final_time or '未知'}。"
+            )
+
         for line in summary_lines:
-            draw.text((60, y_offset), line[:80], fill=(100, 100, 100), font=summary_font)
-            y_offset += line_height - 8
-        if len(summary_preview.split("\n")) > 8:
-            draw.text((60, y_offset), "...", fill=(100, 100, 100), font=summary_font)
+            draw.text(
+                (left_x + 8, y_offset),
+                line,
+                fill=(200, 210, 230),
+                font=summary_font,
+            )
+            y_offset += line_height - 6
 
         # Footer
         footer_font = self._get_font(14)
