@@ -236,13 +236,7 @@ class PreUpdateRetriever:
                     sim_threshold,
                 )
             )
-
-            # Task B: Keyword Search
-            futures.append(
-                executor.submit(
-                    self.keyword_search, switched_query, user_name, top_k, common_filter
-                )
-            )
+            # TODO: recovering keyword search or other versions of search for multiple pathways
 
             # 3. Collect Results
             retrieved_ids = set()  # for deduplicating ids
