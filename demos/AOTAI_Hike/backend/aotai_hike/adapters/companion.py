@@ -401,7 +401,7 @@ class MemoryCompanionBrain(CompanionBrain):
     def _format_round_memory(
         self, world_state: WorldState, messages: list[Message], *, user_action: str
     ) -> str:
-        """将本轮所有 NPC 的对话与动作压缩成一条中文记忆。"""
+        """Compress all NPC dialogues and actions in this round into a single Chinese memory entry."""
         if not messages:
             return "本轮无NPC发言。"
 
@@ -601,7 +601,7 @@ class MemoryCompanionBrain(CompanionBrain):
             if isinstance(data.get("reason"), str):
                 reason = data.get("reason") or ""
 
-        # 校验 vote_id 是否在候选列表中
+        # Validate that vote_id is in the candidates list
         if vote_id not in candidates_ids:
             vote_id = None
 
