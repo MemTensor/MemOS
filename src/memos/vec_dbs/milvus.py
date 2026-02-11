@@ -287,16 +287,33 @@ class MilvusVecDB(BaseVecDB):
     def _build_expression(self, condition: Any) -> str:
         """Build expression from condition dict or value."""
         if isinstance(condition, dict):
+            conditions = []
+
             # Handle logical operators
             if "and" in condition:
-                return self._handle_logical_and(condition["and"])
-            elif "or" in condition:
-                return self._handle_logical_or(condition["or"])
-            elif "not" in condition:
-                return self._handle_logical_not(condition["not"])
-            else:
-                # Handle field conditions
-                return self._handle_field_conditions(condition)
+                and_expr = self._handle_logical_and(condition["and"])
+                if and_expr:
+                    conditions.append(and_expr)
+            if "or" in condition:
+                or_expr = self._handle_logical_or(condition["or"])
+                if or_expr:
+                    conditions.append(or_expr)
+            if "not" in condition:
+                not_expr = self._handle_logical_not(condition["not"])
+                if not_expr:
+                    conditions.append(not_expr)
+
+            # Handle field conditions (keys that are not logical operators)
+            field_dict = {k: v for k, v in condition.items() if k not in ["and", "or", "not"]}
+            if field_dict:
+                field_expr = self._handle_field_conditions(field_dict)
+                if field_expr:
+                    conditions.append(field_expr)
+
+            # Combine all conditions with AND
+            if not conditions:
+                return ""
+            return " and ".join(conditions)
         else:
             # Simple value comparison
             return f"{condition}"
