@@ -28,6 +28,16 @@ class CompanionBrain:
     ) -> CompanionOutput:
         raise NotImplementedError
 
+    def leader_vote(
+        self,
+        *,
+        world_state: WorldState,
+        voter: Role,
+        candidates: list[Role],
+        player_vote_id: str | None = None,
+    ) -> tuple[str | None, str]:
+        raise NotImplementedError
+
 
 class MockCompanionBrain(CompanionBrain):
     _EMOTES: ClassVar[tuple[str, ...]] = ("calm", "tired", "happy", "panic", "focused", "grumpy")
@@ -249,6 +259,95 @@ class MemoryCompanionBrain(CompanionBrain):
         requires_player_say = bool(active_role) and (self._rng.random() < require_p)
         return CompanionOutput(messages=out, requires_player_say=requires_player_say)
 
+    def leader_vote(
+        self,
+        *,
+        world_state: WorldState,
+        voter: Role,
+        candidates: list[Role],
+        player_vote_id: str | None = None,
+    ) -> tuple[str | None, str]:
+        if (
+            player_vote_id
+            and world_state.active_role_id
+            and voter.role_id == world_state.active_role_id
+        ):
+            return player_vote_id, "玩家在界面中明确选择。"
+
+        cube_id = MemoryNamespace.role_cube_id(user_id=voter.role_id, role_id=voter.role_id)
+
+        search_query = (
+            f"{voter.persona} 选择今晚队长。"
+            f" 天气:{world_state.weather} 时间:{world_state.time_of_day}"
+        )
+        memories = self._memory.search_memory(
+            user_id=voter.role_id,
+            cube_id=cube_id,
+            query=search_query,
+            top_k=self._config.memory_top_k,
+            session_id=world_state.session_id,
+        ).snippets
+
+        cand_lines = []
+        cand_ids: list[str] = []
+        for r in candidates:
+            cand_ids.append(r.role_id)
+            cand_lines.append(f"- {r.name} (id={r.role_id})：{r.persona}")
+        candidates_block = "\n".join(cand_lines)
+
+        history = list(world_state.chat_history or [])[-8:]
+        dialogue_lines: list[str] = []
+        for h in history:
+            content = str(h.get("content") or "").strip()
+            if not content:
+                continue
+            speaker_name = str(h.get("speaker_name") or "").strip()
+            role_tag = str(h.get("role") or "").strip() or "assistant"
+            if role_tag == "system":
+                prefix = "[旁白]"
+            elif role_tag == "user":
+                prefix = "[你]"
+            else:
+                prefix = f"[{speaker_name}]" if speaker_name else "[队友]"
+            dialogue_lines.append(f"{prefix}{content}")
+        dialogue_block = "\n".join(dialogue_lines) if dialogue_lines else "（暂无近期对话）"
+
+        memories_block = "\n".join(f"- {m}" for m in memories[:8]) if memories else "（暂无）"
+
+        system_prompt = (
+            "你正在参与鳌太线徒步剧情游戏，现在是夜晚，需要在队伍中选出一位今晚的队长。\n"
+            "你将扮演当前说话的队员，根据每个人的性格、人设、最近状态和对话，做出理性但有主观色彩的选择。\n\n"
+            "【候选人列表】\n"
+            f"{candidates_block}\n\n"
+            "【你的记忆片段】\n"
+            f"{memories_block}\n\n"
+            "【最近对话】\n"
+            f"{dialogue_block}\n\n"
+            "【输出要求】\n"
+            "1. 只能从候选人列表中的 id 里选择一位作为队长。\n"
+            "2. 请输出一个 JSON 对象，格式严格为：\n"
+            '{"vote_role_id": "<候选人id>", "reason": "<不超过40字的中文理由>"}\n'
+            "3. 不要输出任何多余文字，不要加注释，不要加前后缀。\n"
+        )
+
+        vote_query = f"你是队员「{voter.name}」，请在候选人中选出今晚的队长，并给出一句理由。"
+
+        raw = self._memory.chat_complete(
+            user_id=voter.role_id,
+            cube_id=cube_id,
+            query=vote_query,
+            system_prompt=system_prompt,
+            history=None,
+            session_id=world_state.session_id,
+            top_k=1,
+            mode=self._config.mode,
+            add_message_on_answer=False,
+        )
+        raw = (raw or "").strip()
+
+        vote_id, reason = self._parse_leader_vote_response(raw, candidates_ids=cand_ids)
+        return vote_id, reason
+
     def _generate_role_reply(
         self,
         *,
@@ -379,7 +478,6 @@ class MemoryCompanionBrain(CompanionBrain):
             if role_tag == "system":
                 prefix = "|<旁白>|"
             elif role_tag == "user":
-                # 当前玩家扮演的角色
                 prefix = "|<你>|"
             else:
                 prefix = f"|<{speaker_name}>|" if speaker_name else "|<队友>|"
@@ -467,6 +565,50 @@ class MemoryCompanionBrain(CompanionBrain):
             "6. 结合当前天气、时间、位置和角色状态，让事件合理发生，例如在恶劣天气或体力不足时暴露队伍分歧或私心。\n"
             "7. 回复用简短自然的口吻，不要罗列条目。"
         )
+
+    @staticmethod
+    def _parse_leader_vote_response(
+        text: str, *, candidates_ids: list[str]
+    ) -> tuple[str | None, str]:
+        if not text:
+            return None, ""
+
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.strip("`")
+            lines = cleaned.splitlines()
+            if lines and lines[0].lstrip().startswith("json"):
+                lines = lines[1:]
+            cleaned = "\n".join(lines).strip()
+
+        import json
+
+        try:
+            data = json.loads(cleaned)
+            if isinstance(data, list) and data:
+                data = data[0]
+        except Exception:
+            data = None
+
+        vote_id: str | None = None
+        reason: str = ""
+
+        if isinstance(data, dict):
+            if isinstance(data.get("vote_role_id"), str):
+                vote_id = data.get("vote_role_id") or None
+            elif isinstance(data.get("leader_role_id"), str):
+                vote_id = data.get("leader_role_id") or None
+            if isinstance(data.get("reason"), str):
+                reason = data.get("reason") or ""
+
+        # 校验 vote_id 是否在候选列表中
+        if vote_id not in candidates_ids:
+            vote_id = None
+
+        if not reason:
+            reason = cleaned if len(cleaned) <= 80 else cleaned[:80] + "…"
+
+        return vote_id, reason
 
     @staticmethod
     def _format_user_action_cn(user_action: str) -> str:

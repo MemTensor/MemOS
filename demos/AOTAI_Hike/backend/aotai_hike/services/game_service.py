@@ -367,7 +367,7 @@ class GameService:
         self._rng.shuffle(vote_order)
         tally: dict[str, int] = dict.fromkeys(candidates, 0)
 
-        def _pick_vote(voter_id: str) -> str:
+        def _fallback_pick_vote(voter_id: str) -> str:
             # Player selection is only the player's vote, not a forced result.
             if player_vote_id and voter_id == world_state.active_role_id:
                 return player_vote_id
@@ -376,7 +376,7 @@ class GameService:
                 return old
             return self._rng.choice(candidates)
 
-        def _pick_reason(voter_id: str, choice_id: str) -> str:
+        def _fallback_pick_reason(voter_id: str, choice_id: str) -> str:
             pool = [
                 "路况判断更稳。",
                 "更能照顾大家节奏。",
@@ -404,10 +404,30 @@ class GameService:
             voter = next((r for r in world_state.roles if r.role_id == voter_id), None)
             if not voter:
                 continue
-            choice = _pick_vote(voter_id)
+
+            choice: str | None = None
+            reason: str = ""
+            try:
+                leader_vote_fn = getattr(self._companion, "leader_vote", None)
+                if callable(leader_vote_fn):
+                    choice, reason = leader_vote_fn(
+                        world_state=world_state,
+                        voter=voter,
+                        candidates=world_state.roles,
+                        player_vote_id=player_vote_id,
+                    )
+            except Exception:
+                logger.exception(
+                    "leader_vote via companion failed; falling back to heuristic vote."
+                )
+                choice, reason = None, ""
+
+            if not choice or choice not in candidates:
+                choice = _fallback_pick_vote(voter_id)
+                reason = _fallback_pick_reason(voter_id, choice)
+
             tally[choice] = int(tally.get(choice, 0)) + 1
             choice_name = next((r.name for r in world_state.roles if r.role_id == choice), choice)
-            reason = _pick_reason(voter_id, choice)
             messages.append(
                 Message(
                     message_id=f"v-{world_state.session_id}-{now_ms}-{voter_id}",

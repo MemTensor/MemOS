@@ -154,7 +154,11 @@ class MemOSMemoryClient:
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self._base_url}{path}"
-        logger.info("[MemOS] POST {} payload={}", url, json.dumps(payload, ensure_ascii=False))
+        pretty = json.dumps(payload, ensure_ascii=False, indent=2)
+        logger.info("[MemOS] POST {} payload:\n{}", url, pretty)
+        system_prompt = payload.get("system_prompt")
+        if isinstance(system_prompt, str):
+            logger.info("[MemOS] system_prompt:\n{}", system_prompt)
         resp = requests.post(
             url,
             headers={"Content-Type": "application/json"},
@@ -166,9 +170,8 @@ class MemOSMemoryClient:
             resp.raise_for_status()
         try:
             post_results = resp.json()
-            logger.info(
-                "[MemOS] POST {} response={}", url, json.dumps(post_results, ensure_ascii=False)
-            )
+            pretty_resp = json.dumps(post_results, ensure_ascii=False, indent=2)
+            logger.info("[MemOS] POST {} response:\n{}", url, pretty_resp)
             return post_results
         except Exception:
             logger.error("Invalid MemOS response: {}", resp.text)
