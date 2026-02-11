@@ -329,6 +329,115 @@ textarea:focus {
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
   padding: 14px 14px 16px;
 }
+
+/* Share modal backdrop override */
+#share-modal.modal-backdrop {
+  /* Much lighter mask, closer to the reference UI */
+  background: rgba(0, 0, 0, 0.10);
+  backdrop-filter: blur(1.5px);
+}
+
+/* Share image modal: use canvas as background layer, fill the frame */
+#share-modal .modal {
+  position: relative;
+  /* Match the exported card aspect and avoid big top/bottom gaps */
+  height: calc(100vh - 32px);
+  aspect-ratio: 3 / 4;
+  width: auto;
+  max-width: calc(100vw - 32px);
+
+  padding: 0;
+  overflow: hidden;
+
+  /* Simpler frame (one frame only) */
+  border: 2px solid rgba(124, 242, 255, 0.55);
+  box-shadow: 0 16px 60px rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+/* A subtle inner vignette for readability (no extra “boxes”) */
+#share-modal .modal::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background:
+    radial-gradient(120% 90% at 50% 30%, rgba(0,0,0,0.00), rgba(0,0,0,0.22) 70%, rgba(0,0,0,0.35));
+}
+
+/* Share image: fill the modal content area, act as background layer */
+#share-image-container {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  overflow: hidden;
+  /* keep background clean; the card itself should carry the UI */
+  background: transparent;
+  z-index: 0;
+}
+
+#share-image-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Keep full card visible (no ugly crop) */
+  object-fit: contain;
+  object-position: center;
+  border: none;
+  image-rendering: auto;
+}
+
+/* Overlay title and buttons on top of the canvas */
+#share-modal .modal-title {
+  position: absolute;
+  top: 10px;
+  left: 14px;
+  right: 14px;
+  z-index: 2;
+  margin: 0;
+  text-align: left;
+  color: rgba(124, 242, 255, 0.95);
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.75);
+}
+
+#share-modal .row {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  right: 14px;
+  z-index: 2;
+  margin: 0;
+  justify-content: center;
+  gap: 12px;
+}
+
+/* Share modal buttons: gold primary + muted secondary */
+#share-modal .row button {
+  padding: 10px 16px;
+  min-width: 140px;
+  border-radius: 2px;
+  border-color: rgba(58, 74, 102, 0.85);
+  background: rgba(20, 26, 44, 0.88);
+  box-shadow: 0 0 0 2px rgba(0,0,0,0.20);
+}
+#share-modal .row button.primary {
+  border-color: rgba(255, 210, 124, 0.85);
+  background: rgba(255, 210, 124, 0.14);
+  box-shadow: 0 0 0 2px rgba(0,0,0,0.22), 0 0 18px rgba(255, 210, 124, 0.10);
+}
+#share-modal .row button:hover {
+  border-color: rgba(124, 242, 255, 0.85);
+}
+#share-modal .row button.primary:hover {
+  border-color: rgba(255, 210, 124, 0.95);
+}
+
+/* Ensure image stays below vignette, title/buttons above */
+#share-modal #share-image-container { z-index: 0; }
+#share-modal .modal-title, #share-modal .row { z-index: 2; }
 .modal-title {
   color: var(--accent);
   font-size: 13px;

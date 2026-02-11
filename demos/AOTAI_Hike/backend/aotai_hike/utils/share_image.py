@@ -9,6 +9,7 @@ import io
 import json
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aotai_hike.world.map_data import AoTaiGraph
@@ -113,11 +114,45 @@ class ShareImageGenerator:
         Returns:
             tuple[bytes, dict]: (image_bytes, structured_json_data)
         """
-        # Create base image
-        img = Image.new("RGB", (self.WIDTH, self.HEIGHT), self.BG_COLOR)
+        # Create base image: try to use share_background.png, fallback to solid color
+        img = None
+        try:
+            # Backend dir: demos/AOTAI_Hike/backend/aotai_hike/utils/share_image.py
+            # Frontend assets: demos/AOTAI_Hike/frontend/assets/share_background.png
+            root = Path(__file__).resolve().parents[3]
+            bg_path = root / "frontend" / "assets" / "share_background.png"
+            if bg_path.is_file():
+                bg = Image.open(bg_path).convert("RGB")
+                bg = bg.resize((self.WIDTH, self.HEIGHT), Image.LANCZOS)
+                img = bg
+        except Exception:
+            img = None
+
+        if img is None:
+            img = Image.new("RGB", (self.WIDTH, self.HEIGHT), self.BG_COLOR)
+
+        # Convert to RGBA and add a semi-transparent panel behind text
+        img = img.convert("RGBA")
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        # Slightly more transparent paper-like panel
+        panel_color = (240, 240, 230, 190)  # light beige with alpha
+        # Leave margins so background is still visible
+        panel_margin_x = 40
+        panel_margin_top = 60
+        panel_margin_bottom = 60
+        panel_rect = (
+            panel_margin_x,
+            panel_margin_top,
+            self.WIDTH - panel_margin_x,
+            self.HEIGHT - panel_margin_bottom,
+        )
+        overlay_draw = ImageDraw.Draw(overlay)
+        overlay_draw.rectangle(panel_rect, fill=panel_color)
+        img = Image.alpha_composite(img, overlay)
+
         draw = ImageDraw.Draw(img)
 
-        y_offset = 40
+        y_offset = 120
         line_height = 30
         section_spacing = 20
 
