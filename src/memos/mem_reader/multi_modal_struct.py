@@ -501,6 +501,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         """
         Determine prompt type based on sources.
 
+        - If source has type="file", use "doc" prompt.
         - If sources come from chat roles (user/assistant/system/tool):
           - And contain multi-view fields (e.g., role_id / role_name on one or more sources),
             use the multi-view prompt.
@@ -519,10 +520,19 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 source_role = getattr(source, "role", None)
                 role_id = getattr(source, "role_id", None)
                 role_name = getattr(source, "role_name", None)
+                # Check for file type
+                if hasattr(source, "type"):
+                    source_type = source.type
+                    if source_type == "file":
+                        return "doc"
             elif isinstance(source, dict):
                 source_role = source.get("role")
                 role_id = source.get("role_id")
                 role_name = source.get("role_name")
+                # Check for file type
+                source_type = source.get("type")
+                if source_type == "file":
+                    return "doc"
             else:
                 source_role = None
                 role_id = None
