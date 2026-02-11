@@ -111,13 +111,7 @@ class VLLMLLM(BaseLLM):
                 "temperature": kwargs.get("temperature", self.config.temperature),
                 "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
                 "top_p": kwargs.get("top_p", self.config.top_p),
-                "extra_body": {
-                    "chat_template_kwargs": {
-                        "enable_thinking": kwargs.get(
-                            "enable_thinking", self.config.enable_thinking
-                        )
-                    }
-                },
+                "extra_body": kwargs.get("extra_body", self.config.extra_body),
             }
             if kwargs.get("tools"):
                 completion_kwargs["tools"] = kwargs.get("tools")
@@ -175,13 +169,7 @@ class VLLMLLM(BaseLLM):
                 "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
                 "top_p": kwargs.get("top_p", self.config.top_p),
                 "stream": True,
-                "extra_body": {
-                    "chat_template_kwargs": {
-                        "enable_thinking": kwargs.get(
-                            "enable_thinking", self.config.enable_thinking
-                        )
-                    }
-                },
+                "extra_body": kwargs.get("extra_body", self.config.extra_body),
             }
 
             stream = self.client.chat.completions.create(**completion_kwargs)
