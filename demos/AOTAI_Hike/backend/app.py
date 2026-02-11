@@ -6,6 +6,7 @@ from pathlib import Path
 
 from aotai_hike.router import router
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
@@ -20,6 +21,16 @@ LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / "aotai_hike.log"
 
 app = FastAPI(title="AoTai Pixel Hike Demo", version="0.1.0")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify actual origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(router)
 app.mount("/demo/ao-tai", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="ao-tai-demo")
 

@@ -175,7 +175,16 @@ class ActRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class ShareImageData(BaseModel):
+    """Share image data when game ends."""
+
+    image_base64: str | None = None
+    json_data: dict[str, Any] | None = None
+    is_game_finished: bool = False
+
+
 class ActResponse(BaseModel):
     world_state: WorldState
     messages: list[Message]
     background: BackgroundAsset
+    share_image: ShareImageData | None = None

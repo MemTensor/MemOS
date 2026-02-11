@@ -1,5 +1,6 @@
 import { $ } from "./dom.js";
 import { avatarUrl } from "./utils.js";
+import { checkAndShowShareButton } from "./render.js";
 
 let phasePanel = null;
 let hintEl = null;
@@ -207,6 +208,8 @@ export function applyPhaseUI(ws) {
     updateCampButtonState(ws); // Disable CAMP button when game over
     phasePanel.style.display = "none";
     hideNightVoteModal();
+    // 显示分享按钮
+    checkAndShowShareButton(ws);
     return;
   }
 

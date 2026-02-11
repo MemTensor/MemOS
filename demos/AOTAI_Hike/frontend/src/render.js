@@ -1,5 +1,5 @@
 import { branchEl, chatEl, partyEl, rolesEl, statusEl } from "./dom.js";
-import { edgeByToId, mapNodes, nodeById, worldState } from "./state.js";
+import { edgeByToId, mapNodes, nodeById, worldState, sessionId } from "./state.js";
 import { avatarUrl, pct, statClass } from "./utils.js";
 
 export function logMsg(msg) {
@@ -286,4 +286,135 @@ function attachRoleTooltip(card, persona) {
     _roleTooltipPinned = false;
     tip.style.display = "none";
   });
+}
+
+// Share button and modal functionality
+let shareButton = null;
+let shareModal = null;
+let shareImagePreview = null;
+let shareDownloadBtn = null;
+let currentShareImageBlob = null;
+
+function initShareButton() {
+  if (shareButton) return;
+
+  shareButton = document.getElementById("share-button");
+  if (!shareButton) return;
+
+  shareButton.onclick = async () => {
+    await showShareModal();
+  };
+
+  // Initialize share modal elements
+  shareModal = document.getElementById("share-modal");
+  shareImagePreview = document.getElementById("share-image-preview");
+  shareDownloadBtn = document.getElementById("share-download-btn");
+  const shareCloseBtn = document.getElementById("share-close-btn");
+
+  if (shareDownloadBtn) {
+    shareDownloadBtn.onclick = () => {
+      downloadShareImage();
+    };
+  }
+
+  if (shareCloseBtn) {
+    shareCloseBtn.onclick = () => {
+      hideShareModal();
+    };
+  }
+
+  // Show button when session is available
+  if (worldState?.session_id) {
+    shareButton.style.display = "block";
+  }
+}
+
+async function showShareModal() {
+  initShareButton();
+  if (!shareModal || !shareImagePreview) return;
+
+  const currentSessionId = sessionId || worldState?.session_id;
+  if (!currentSessionId) {
+    alert("游戏会话不可用");
+    return;
+  }
+
+  // Show loading state
+  shareImagePreview.src = "";
+  shareImagePreview.style.display = "none";
+  const loadingText = shareModal.querySelector(".loading-text");
+  if (!loadingText) {
+    const loading = document.createElement("div");
+    loading.className = "loading-text";
+    loading.textContent = "正在生成分享图片...";
+    loading.style.textAlign = "center";
+    loading.style.padding = "20px";
+    shareImagePreview.parentElement.insertBefore(loading, shareImagePreview);
+  } else {
+    loadingText.style.display = "block";
+  }
+
+  shareModal.style.display = "flex";
+
+  try {
+    // Fetch latest share image from API
+    const API_BASE = "/api/demo/ao-tai";
+    const response = await fetch(`${API_BASE}/session/${currentSessionId}/share_image/current`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch share image: ${response.statusText}`);
+    }
+
+    const blob = await response.blob();
+    currentShareImageBlob = blob;
+    const imageUrl = URL.createObjectURL(blob);
+
+    shareImagePreview.src = imageUrl;
+    shareImagePreview.style.display = "block";
+
+    const loadingText = shareModal.querySelector(".loading-text");
+    if (loadingText) {
+      loadingText.style.display = "none";
+    }
+  } catch (error) {
+    console.error("Failed to load share image:", error);
+    const loadingText = shareModal.querySelector(".loading-text");
+    if (loadingText) {
+      loadingText.textContent = `加载失败: ${error.message}`;
+      loadingText.style.color = "var(--danger)";
+    }
+  }
+}
+
+function hideShareModal() {
+  if (shareModal) {
+    shareModal.style.display = "none";
+  }
+  // Clean up blob URL
+  if (shareImagePreview?.src && shareImagePreview.src.startsWith("blob:")) {
+    URL.revokeObjectURL(shareImagePreview.src);
+  }
+}
+
+function downloadShareImage() {
+  if (!currentShareImageBlob) return;
+
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(currentShareImageBlob);
+  link.download = `aotai_hike_${Date.now()}.png`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(link.href);
+}
+
+export function checkAndShowShareButton(ws) {
+  initShareButton();
+  if (!shareButton) return;
+
+  // Show button whenever session is available
+  if (ws?.session_id) {
+    shareButton.style.display = "block";
+  } else {
+    shareButton.style.display = "none";
+  }
 }

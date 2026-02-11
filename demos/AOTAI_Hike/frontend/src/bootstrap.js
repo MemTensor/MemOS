@@ -2,7 +2,7 @@ import { $ } from "./dom.js";
 import { apiAct, apiGetMap, apiNewSession, apiSetActiveRole, apiUpsertRole } from "./actions.js";
 import { initMinimapCanvas } from "./minimap.js";
 import { initPhaser } from "./phaser_view.js";
-import { logMsg } from "./render.js";
+import { logMsg, checkAndShowShareButton } from "./render.js";
 import { worldState } from "./state.js";
 import { makeRole } from "./utils.js";
 
@@ -12,6 +12,9 @@ export async function bootstrap() {
   window.__aoTaiMinimap = initMinimapCanvas();
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
   initPhaser();
+
+  // Initialize share button
+  checkAndShowShareButton(worldState);
 
   // Initial role setup modal (must create at least one role; modal is removed after creation)
   const setupEl = $("#role-setup");

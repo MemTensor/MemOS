@@ -1,5 +1,5 @@
 import { sessionId, setMapData, setSessionId, setWorldState, worldState } from "./state.js";
-import { logMsg, renderBranchChoices, renderPartyStatus, renderRoles, setStatus } from "./render.js";
+import { logMsg, renderBranchChoices, renderPartyStatus, renderRoles, setStatus, checkAndShowShareButton } from "./render.js";
 import { applyPhaseUI, isNightVoteModalBlocking } from "./phase_ui.js";
 
 export const API_BASE = "/api/demo/ao-tai";
@@ -85,6 +85,7 @@ export async function apiNewSession() {
   if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
   applyPhaseUI(worldState);
+  checkAndShowShareButton(data.world_state);
   _scheduleAutoContinue();
 }
 
@@ -135,6 +136,7 @@ export async function apiAct(action, payload = {}) {
   }
   const data = await api("/act", { session_id: sessionId, action, payload });
   setWorldState(data.world_state);
+
   for (const m of data.messages || []) logMsg(m);
   setStatus();
   renderRoles();
@@ -143,6 +145,10 @@ export async function apiAct(action, payload = {}) {
   if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
   applyPhaseUI(worldState);
+
+  // 检查并显示分享按钮（随时可见）
+  checkAndShowShareButton(data.world_state);
+
   _scheduleAutoContinue();
   return data;
 }
