@@ -223,7 +223,11 @@ class SearchHandler(BaseHandler):
         # Flatten preference memories
         for bucket_idx, bucket in enumerate(pref_buckets):
             for mem in bucket.get("memories", []):
-                score = mem.get("metadata", {}).get("relativity", 0.0)
+                meta = mem.get("metadata", {})
+                if isinstance(meta, dict):
+                    score = meta.get("score", meta.get("relativity", 0.0))
+                else:
+                    score = 0.0
                 flat.append(
                     ("preference", bucket_idx, mem, float(score) if score is not None else 0.0)
                 )
