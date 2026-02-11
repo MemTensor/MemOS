@@ -612,6 +612,11 @@ class MemoryHistoryManager:
             mem_data.get("tags", []),
             mem_data.get("key", ""),
         )
+        new_value_item = TextualMemoryItem(
+            memory=new_value, metadata=TreeNodeTextualMemoryMetadata()
+        )
+        _detach_related_content(new_value_item)
+        new_value = new_value_item.memory
 
         # Fetch candidate nodes in batch and then select the primary
         # We update the primary and then merge the secondaries to the primary
@@ -696,8 +701,12 @@ class MemoryHistoryManager:
                 f"Expected v{expected_version}, but found v{current_version} in DB. "
                 "Triggering merge logic."
             )
+            latest_item = TextualMemoryItem(
+                memory=current_item.memory, metadata=TreeNodeTextualMemoryMetadata()
+            )
+            _detach_related_content(latest_item)
             merged_content = self._merge_conflicting_memory(
-                latest_memory=current_item.memory,
+                latest_memory=latest_item.memory,
                 proposed_update=new_value,
             )
             return merged_content
@@ -794,6 +803,11 @@ class MemoryHistoryManager:
     def _create_new_memory(self, mem_data: dict[str, Any]) -> TextualMemoryItem:
         """Create New Node."""
         new_value = mem_data.get("value", "")
+        new_value_item = TextualMemoryItem(
+            memory=new_value, metadata=TreeNodeTextualMemoryMetadata()
+        )
+        _detach_related_content(new_value_item)
+        new_value = new_value_item.memory
         tags = mem_data.get("tags", [])
         key = mem_data.get("key", "")
         memory_type = mem_data.get("memory_type", "LongTermMemory")
@@ -828,6 +842,9 @@ class MemoryHistoryManager:
             source_item = source_items[i]
             source_history = source_item.history.copy()
             value = data.get("value", "")
+            value_item = TextualMemoryItem(memory=value, metadata=TreeNodeTextualMemoryMetadata())
+            _detach_related_content(value_item)
+            value = value_item.memory
             tags = data.get("tags", [])
             keys = data.get("keys", [])
             memory_type = data.get("memory_type", "LongTermMemory")
