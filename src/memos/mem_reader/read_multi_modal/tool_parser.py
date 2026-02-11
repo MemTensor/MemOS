@@ -2,7 +2,7 @@
 
 import json
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
@@ -16,6 +16,10 @@ from memos.types.openai_chat_completion_types import ChatCompletionToolMessagePa
 
 from .base import BaseMessageParser, _add_lang_to_source
 from .utils import detect_lang
+
+
+if TYPE_CHECKING:
+    from memos.types.general_types import UserContext
 
 
 logger = get_logger(__name__)
@@ -191,6 +195,11 @@ class ToolParser(BaseMessageParser):
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
 
+        # Extract manager_user_id and project_id from user_context
+        user_context: UserContext | None = kwargs.get("user_context")
+        manager_user_id = user_context.manager_user_id if user_context else None
+        project_id = user_context.project_id if user_context else None
+
         content_chunks = self._split_text(line)
         memory_items = []
         for _chunk_idx, chunk_text in enumerate(content_chunks):
@@ -207,6 +216,8 @@ class ToolParser(BaseMessageParser):
                     tags=["mode:fast"],
                     sources=sources,
                     info=info_,
+                    manager_user_id=manager_user_id,
+                    project_id=project_id,
                 ),
             )
             memory_items.append(memory_item)

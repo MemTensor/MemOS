@@ -64,6 +64,17 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 
 <br>
 
+## 🦞 Enhanced OpenClaw with MemOS Plugin
+![](https://cdn.memtensor.com.cn/img/1770612303123_mnaisk_compressed.png)
+
+- [**72% lower token usage**](https://x.com/MemOS_dev/status/2020854044583924111) – intelligent memory retrieval instead of loading full chat history
+- [**Multi-agent memory sharing**](https://x.com/MemOS_dev/status/2020538135487062094) – multi-instance agents share memory via same user_id. Automatic context handoff.  
+
+🦞 Your lobster now has a working memory system.
+
+Get your API key: [MemOS Dashboard](https://memos-dashboard.openmem.net/cn/login/)  
+Try it: Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)
+
 ## 📌 MemOS: Memory Operating System for AI Agents
 
 **MemOS** is a Memory Operating System for LLMs and AI agents that unifies **store / retrieve / manage** for long-term memory, enabling **context-aware and personalized** interactions with **KB**, **multi-modal**, **tool memory**, and **enterprise-grade** optimizations built in.
@@ -269,6 +280,9 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 - **Awesome-AI-Memory**   
  This is a curated repository dedicated to resources on memory and memory systems for large language models. It systematically collects relevant research papers, frameworks, tools, and practical insights. The repository aims to organize and present the rapidly evolving research landscape of LLM memory, bridging multiple research directions including natural language processing, information retrieval, agentic systems, and cognitive science.  
 - **Get started** 👉 [IAAR-Shanghai/Awesome-AI-Memory](https://github.com/IAAR-Shanghai/Awesome-AI-Memory)
+- **MemOS Cloud OpenClaw Plugin**
+  Official OpenClaw lifecycle plugin for MemOS Cloud. It automatically recalls context from MemOS before the agent starts and saves the conversation back to MemOS after the agent finishes.
+- **Get started** 👉 [MemTensor/MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)
 
 <br>
 
