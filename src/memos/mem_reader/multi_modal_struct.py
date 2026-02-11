@@ -1,6 +1,7 @@
 import concurrent.futures
 import json
 import re
+import time
 import traceback
 
 from typing import TYPE_CHECKING, Any
@@ -975,13 +976,29 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 continue
             try:
                 # recall related memories
+                retrieve_start = time.perf_counter()
                 related = self.pre_update_retriever.retrieve(
                     item=item,
                     user_name=user_name,
                 )
+                retrieve_ms = (time.perf_counter() - retrieve_start) * 1000
+                logger.info(
+                    "[MultiModalStruct] pre_update_retriever.retrieve latency_ms=%.2f item_id=%s",
+                    retrieve_ms,
+                    getattr(item, "id", None),
+                )
                 # NLI check & attaching contents
+                nli_start = time.perf_counter()
                 conflicting_or_duplicate_ids = self.history_manager.resolve_history_via_nli(
                     item, related
+                )
+                nli_ms = (time.perf_counter() - nli_start) * 1000
+                logger.info(
+                    "[MultiModalStruct] history_manager.resolve_history_via_nli latency_ms=%.2f item_id=%s related_count=%s result_count=%s",
+                    nli_ms,
+                    getattr(item, "id", None),
+                    len(related),
+                    len(conflicting_or_duplicate_ids),
                 )
                 # mark delete(temporarily)
                 self.history_manager.mark_memory_status(
