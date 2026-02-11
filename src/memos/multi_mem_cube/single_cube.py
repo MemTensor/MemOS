@@ -468,13 +468,13 @@ class SingleCubeView(MemCubeView):
             search_req=search_req,
             user_context=user_context,
             mode=SearchMode.FAST,
-            include_embedding=(search_req.dedup == "mmr"),
+            include_embedding=(search_req.dedup in ("mmr", "sim")),
         )
 
         return self._postformat_memories(
             search_results,
             user_context.mem_cube_id,
-            include_embedding=search_req.dedup == "sim",
+            include_embedding=(search_req.dedup in ("mmr", "sim")),
             neighbor_discovery=search_req.neighbor_discovery,
         )
 

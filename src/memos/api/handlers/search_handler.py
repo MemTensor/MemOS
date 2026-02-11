@@ -120,11 +120,14 @@ class SearchHandler(BaseHandler):
                     if not isinstance(mem, dict):
                         continue
                     meta = mem.get("metadata", {})
-                    score = meta.get("relativity", 0.0) if isinstance(meta, dict) else 0.0
+                    if key == "text_mem":
+                        score = meta.get("relativity", 1.0) if isinstance(meta, dict) else 1.0
+                    else:
+                        score = meta.get("score", 1.0) if isinstance(meta, dict) else 1.0
                     try:
-                        score_val = float(score) if score is not None else 0.0
+                        score_val = float(score) if score is not None else 1.0
                     except (TypeError, ValueError):
-                        score_val = 0.0
+                        score_val = 1.0
                     if score_val >= relativity:
                         filtered.append(mem)
 
@@ -220,7 +223,11 @@ class SearchHandler(BaseHandler):
         # Flatten preference memories
         for bucket_idx, bucket in enumerate(pref_buckets):
             for mem in bucket.get("memories", []):
-                score = mem.get("metadata", {}).get("relativity", 0.0)
+                meta = mem.get("metadata", {})
+                if isinstance(meta, dict):
+                    score = meta.get("score", meta.get("relativity", 0.0))
+                else:
+                    score = 0.0
                 flat.append(
                     ("preference", bucket_idx, mem, float(score) if score is not None else 0.0)
                 )

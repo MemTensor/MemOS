@@ -105,6 +105,7 @@ def build_chat_llm_config() -> list[dict[str, Any]]:
                 }
             ),
             "support_models": cfg.get("support_models", None),
+            "extra_body": cfg.get("extra_body", None),
         }
         for cfg in configs
     ]
