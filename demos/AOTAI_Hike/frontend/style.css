@@ -334,11 +334,10 @@ textarea:focus {
   padding: 14px 14px 16px;
 }
 
-/* Share modal backdrop override */
+/* Share modal backdrop override：暗色聚焦感 */
 #share-modal.modal-backdrop {
-  /* Much lighter mask, closer to the reference UI */
-  background: rgba(0, 0, 0, 0.10);
-  backdrop-filter: blur(1.5px);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
 }
 
 /* Share image modal: keep EXACTLY the same aspect ratio as the generated share image.
@@ -362,6 +361,22 @@ textarea:focus {
   background: rgba(0, 0, 0, 0.12);
 }
 
+/* 4 层结构中的“卡片底板” */
+#share-card-base {
+  position: absolute;
+  inset: 0;
+  margin: 18px 18px 22px;
+  border-radius: 8px;
+  background:
+    radial-gradient(135% 140% at 50% 0%, rgba(80, 110, 160, 0.55), rgba(12, 16, 32, 0.95)),
+    linear-gradient(180deg, rgba(160, 190, 230, 0.16), rgba(10, 12, 22, 0.9));
+  box-shadow:
+    0 0 0 1px rgba(180, 210, 255, 0.08),
+    0 12px 30px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
 /* A subtle inner vignette for readability (no extra “boxes”) */
 #share-modal .modal::before {
   content: "";
@@ -376,10 +391,7 @@ textarea:focus {
 /* Share image: fill the modal content area, act as background layer */
 #share-image-container {
   position: absolute;
-  top: -3px;
-  bottom: -3px;
-  left: 0;
-  right: 0;
+  inset: 26px 26px 34px;
   margin: 0;
   overflow: hidden;
   /* keep background clean; the card itself should carry the UI */
@@ -397,57 +409,102 @@ textarea:focus {
   object-position: center;
   border: none;
   /* 像素风：禁用平滑插值，尽量保持块状像素感 */
-  /* image-rendering: pixelated;
-  image-rendering: crisp-edges; */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* PNG 外框层：占满卡片区域，使用带金属边/角标的 PNG */
+#share-card-frame {
+  position: absolute;
+  inset: 12px;
+  pointer-events: none;
+  z-index: 1;
+  background-position: center;
+  background-repeat: no-repeat;
+  /* 将遮罩整体“压缩”到 3:4 容器里，而不是按原图比例留边 */
+  background-size: 100% 100%;
+  /* 这里假定有 assets/share_frame.png，可按需要调整路径 */
+  background-image: url("./assets/share_frame.png");
+}
+
+/* 质感层：雪点 / 噪点 / 微光粒子 */
+#share-card-noise {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  mix-blend-mode: soft-light;
+  opacity: 0.7;
+  background-image:
+    radial-gradient(circle at 10% 20%, rgba(255, 255, 255, 0.25) 0, transparent 40%),
+    radial-gradient(circle at 80% 0%, rgba(255, 255, 255, 0.18) 0, transparent 45%),
+    url("./assets/share_noise.png"); /* 任选噪点纹理 PNG；没有时仅用前两层渐变 */
+  background-size: 140px 140px, 220px 220px, cover;
 }
 
 /* Overlay title and buttons on top of the canvas */
 #share-modal .modal-title {
   position: absolute;
-  top: 10px;
-  left: 14px;
-  right: 14px;
-  z-index: 2;
+  top: 18px;
+  left: 20px;
+  right: 20px;
+  z-index: 3;
   margin: 0;
   text-align: left;
-  color: rgba(124, 242, 255, 0.95);
-  /* 稍微放大一点，接近参考图的标题占比 */
+  color: rgba(236, 243, 255, 0.98);
   font-size: 14px;
   letter-spacing: 0.5px;
-  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.75);
+  text-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.85),
+    0 0 10px rgba(100, 200, 255, 0.4);
+  font-family: "STSong", "Songti SC", "Noto Serif SC", "PingFang SC",
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 #share-modal .row {
   position: absolute;
-  bottom: 14px;
-  left: 14px;
-  right: 14px;
-  z-index: 2;
+  bottom: 18px;
+  left: 20px;
+  right: 20px;
+  z-index: 3;
   margin: 0;
   justify-content: center;
-  gap: 12px;
+  gap: 14px;
 }
 
 /* Share modal buttons: gold primary + muted secondary */
 #share-modal .row button {
-  padding: 10px 16px;
-  min-width: 140px;
-  border-radius: 2px;
-  border-color: rgba(58, 74, 102, 0.85);
-  background: rgba(20, 26, 44, 0.88);
-  box-shadow: 0 0 0 2px rgba(0,0,0,0.20);
-  font-size: 12px; /* 比全局略大一点，避免显得太小 */
+  padding: 10px 18px;
+  min-width: 150px;
+  border-radius: 3px;
+  border-color: rgba(58, 74, 102, 0.9);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(40, 48, 72, 0.98));
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.8),
+    0 6px 14px rgba(0, 0, 0, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.7);
+  font-size: 12px;
+  font-family: "PingFang SC", "Noto Sans SC", system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 #share-modal .row button.primary {
-  border-color: rgba(255, 210, 124, 0.85);
-  background: rgba(255, 210, 124, 0.14);
-  box-shadow: 0 0 0 2px rgba(0,0,0,0.22), 0 0 18px rgba(255, 210, 124, 0.10);
+  border-color: rgba(255, 210, 124, 0.9);
+  background:
+    radial-gradient(120% 180% at 50% 0%, rgba(255, 255, 255, 0.35), transparent 55%),
+    linear-gradient(180deg, rgba(255, 233, 180, 0.9), rgba(170, 110, 40, 0.95));
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.85),
+    0 8px 18px rgba(0, 0, 0, 0.75),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 -2px 4px rgba(139, 84, 16, 0.95);
 }
 #share-modal .row button:hover {
-  border-color: rgba(124, 242, 255, 0.85);
+  border-color: rgba(124, 242, 255, 0.9);
 }
 #share-modal .row button.primary:hover {
-  border-color: rgba(255, 210, 124, 0.95);
+  border-color: rgba(255, 230, 170, 0.98);
 }
 
 /* Ensure image stays below vignette, title/buttons above */
