@@ -445,13 +445,13 @@ class MemoryHistoryManager:
 
         # 2. Handle Memory List (Update or New)
         processed_updates, created_items = self._process_memory_updates(
-            memory_list, expected_versions, user_name
+            memory_list, expected_versions, user_name, source_item
         )
         updated_items.extend(processed_updates)
         new_items.extend(created_items)
 
         # 3. Handle Restored Memories (Extract from conflict)
-        new_items.extend(self._handle_restored_memories(restored_memories))
+        new_items.extend(self._handle_restored_memories(restored_memories, source_item))
 
         return updated_items, new_items
 
@@ -556,7 +556,11 @@ class MemoryHistoryManager:
             self.mark_memory_status(unrelated_ids, "activated", user_name)
 
     def _process_memory_updates(
-        self, memory_list: list[dict[str, Any]], expected_versions: dict[str, int], user_name: str
+        self,
+        memory_list: list[dict[str, Any]],
+        expected_versions: dict[str, int],
+        user_name: str,
+        source_item: TextualMemoryItem,
     ) -> tuple[list[TextualMemoryItem], list[TextualMemoryItem]]:
         """Process Memory List (Update or New)."""
         updated_items: list[TextualMemoryItem] = []
@@ -575,7 +579,7 @@ class MemoryHistoryManager:
                 if item:
                     updated_items.append(item)
             else:
-                item = self._create_new_memory(mem_data)
+                item = self._create_new_memory(mem_data, source_item)
                 new_items.append(item)
         return updated_items, new_items
 
@@ -643,11 +647,16 @@ class MemoryHistoryManager:
             key=key,
         )
 
-        # create archived node for storing older versions of the memory
+        # create archived node for storing older versions of the memory, preserving the embedding
+        emb = TextualMemoryItem(
+            **self.graph_db.get_node(primary_id, include_embedding=True)
+        ).metadata.embedding
+        arch_meta = archived_item.metadata.model_dump(exclude_none=True)
+        arch_meta["embedding"] = emb
         self.graph_db.add_node(
             id=archived_item.id,
             memory=archived_item.memory,
-            metadata=archived_item.metadata.model_dump(exclude_none=True),
+            metadata=arch_meta,
             user_name=user_name,
         )
 
@@ -668,10 +677,10 @@ class MemoryHistoryManager:
             id=primary_id,
             fields={
                 "memory": current_item.memory,
-                **fields,
                 "history": merged_history_dump,
                 "version": new_primary_version,
                 "embedding": embedding,
+                **fields,
             },
             user_name=user_name,
         )
@@ -800,7 +809,9 @@ class MemoryHistoryManager:
             # Let's concatenate as a safe fallback.
             return f"{latest_memory}\n\n[System Merge Fallback] New Info: {proposed_update}"
 
-    def _create_new_memory(self, mem_data: dict[str, Any]) -> TextualMemoryItem:
+    def _create_new_memory(
+        self, mem_data: dict[str, Any], fast_item: TextualMemoryItem
+    ) -> TextualMemoryItem:
         """Create New Node."""
         new_value = mem_data.get("value", "")
         new_value_item = TextualMemoryItem(
@@ -811,26 +822,30 @@ class MemoryHistoryManager:
         tags = mem_data.get("tags", [])
         key = mem_data.get("key", "")
         memory_type = mem_data.get("memory_type", "LongTermMemory")
+        metadata_updates = {
+            "is_fast": False,
+            "version": 1,
+            "memory_type": memory_type,
+            "status": "activated",
+            "tags": tags,
+            "key": key,
+            "created_at": datetime.now().isoformat(),
+            "history": [],
+            "embedding": self._compute_embedding(new_value),
+        }
+        metadata = fast_item.metadata.model_copy(deep=True)
+        for field_name, value in metadata_updates.items():
+            setattr(metadata, field_name, value)
 
         new_item = TextualMemoryItem(
             id=str(uuid.uuid4()),
             memory=new_value,
-            metadata=TreeNodeTextualMemoryMetadata(
-                is_fast=False,
-                version=1,
-                memory_type=memory_type,
-                status="activated",
-                tags=tags,
-                key=key,
-                created_at=datetime.now().isoformat(),
-                history=[],
-                embedding=self._compute_embedding(new_value),
-            ),
+            metadata=metadata,
         )
         return new_item
 
     def _handle_restored_memories(
-        self, restored_memories: list[dict[str, Any]]
+        self, restored_memories: list[dict[str, Any]], fast_item: TextualMemoryItem
     ) -> list[TextualMemoryItem]:
         """Handle Restored Memories (Extract from conflict)."""
         source_ids = [r.get("source_candidate_id") for r in restored_memories]
@@ -840,6 +855,7 @@ class MemoryHistoryManager:
         created_items = []
         for i, data in enumerate(restored_memories):
             source_item = source_items[i]
+            # deal with history
             source_history = source_item.history.copy()
             value = data.get("value", "")
             value_item = TextualMemoryItem(memory=value, metadata=TreeNodeTextualMemoryMetadata())
@@ -859,21 +875,27 @@ class MemoryHistoryManager:
             )
             source_history.append(new_history_item)  # Re-use the history of the old node
             # Create new node
+            metadata_updates = {
+                "memory_type": memory_type,
+                "status": "activated",
+                "is_fast": False,
+                "version": version + 1,
+                "tags": tags,
+                "key": keys,
+                "created_at": datetime.now().isoformat(),
+                "history": source_history,
+                "embedding": self._compute_embedding(value),
+            }
+            metadata = fast_item.metadata.model_copy(deep=True)
+            for field_name, value in metadata_updates.items():
+                setattr(metadata, field_name, value)
+
             new_item = TextualMemoryItem(
                 id=str(uuid.uuid4()),
                 memory=value,
-                metadata=TreeNodeTextualMemoryMetadata(
-                    memory_type=memory_type,
-                    status="activated",
-                    is_fast=False,
-                    version=version + 1,
-                    key=keys,
-                    tags=tags,
-                    created_at=datetime.now().isoformat(),
-                    history=source_history,
-                    embedding=self._compute_embedding(value),
-                ),
+                metadata=metadata,
             )
+
             created_items.append(new_item)
 
         return created_items
