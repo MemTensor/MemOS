@@ -210,8 +210,14 @@ class PreUpdateRetriever:
         # 2. Recall
         futures = []
         common_filter = {
-            "status": {"in": ["activated", "resolving"]},
-            "memory_type": {"in": ["LongTermMemory", "UserMemory", "WorkingMemory"]},
+            "or": [
+                {"status": "activated", "memory_type": "LongTermMemory"},
+                {"status": "activated", "memory_type": "UserMemory"},
+                {"status": "activated", "memory_type": "WorkingMemory"},
+                {"status": "resolving", "memory_type": "LongTermMemory"},
+                {"status": "resolving", "memory_type": "UserMemory"},
+                {"status": "resolving", "memory_type": "WorkingMemory"},
+            ]
         }
 
         with ContextThreadPoolExecutor(max_workers=3, thread_name_prefix="fast_recall") as executor:
