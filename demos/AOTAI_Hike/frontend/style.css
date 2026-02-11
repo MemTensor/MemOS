@@ -8,6 +8,8 @@
   --danger: #ff7c7c;
   --ok: #a1ffb9;
   --warn: #ffd27c;
+  /* Share card aspect ratio = WIDTH / HEIGHT. Your current share image is portrait, so default to 3:4. */
+  --share-ar: 0.75; /* 3 / 4 */
 }
 
 html,
@@ -337,19 +339,22 @@ textarea:focus {
   backdrop-filter: blur(1.5px);
 }
 
-/* Share image modal: use canvas as background layer, fill the frame */
+/* Share image modal: keep EXACTLY the same aspect ratio as the generated share image.
+   `--share-ar` is WIDTH / HEIGHT. Example: 16:9 => 1.7778, 3:4 => 0.75 */
 #share-modal .modal {
   position: relative;
-  /* Match the exported card aspect and avoid big top/bottom gaps */
-  height: calc(100vh - 32px);
-  aspect-ratio: 3 / 4;
-  width: auto;
-  max-width: calc(100vw - 32px);
+
+  /* Compute the biggest box that fits within the viewport while preserving aspect ratio */
+  width: min(calc(100vw - 32px), calc((100vh - 32px) * var(--share-ar)));
+  height: min(calc(100vh - 32px), calc((100vw - 32px) / var(--share-ar)));
+
+  /* Override generic modal limits */
+  max-width: none;
+  max-height: none;
 
   padding: 0;
   overflow: hidden;
 
-  /* Simpler frame (one frame only) */
   border: 2px solid rgba(124, 242, 255, 0.55);
   box-shadow: 0 16px 60px rgba(0, 0, 0, 0.55);
   background: rgba(0, 0, 0, 0.12);
@@ -369,7 +374,7 @@ textarea:focus {
 /* Share image: fill the modal content area, act as background layer */
 #share-image-container {
   position: absolute;
-  inset: 0;
+  inset: -1px;
   margin: 0;
   overflow: hidden;
   /* keep background clean; the card itself should carry the UI */
