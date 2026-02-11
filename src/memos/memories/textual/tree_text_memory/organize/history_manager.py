@@ -574,7 +574,7 @@ class MemoryHistoryManager:
 
             if target_ids:
                 item = self._update_existing_memory(
-                    mem_data, target_ids, source_ids, expected_versions, user_name
+                    mem_data, target_ids, source_ids, expected_versions, user_name, source_item
                 )
                 if item:
                     updated_items.append(item)
@@ -590,6 +590,7 @@ class MemoryHistoryManager:
         source_ids: list[str],
         expected_versions: dict[str, int],
         user_name: str,
+        fast_item: TextualMemoryItem,
     ) -> TextualMemoryItem | None:
         """
         Update existing memory nodes using the LLM result.
@@ -672,15 +673,17 @@ class MemoryHistoryManager:
             current_item.metadata.version = new_primary_version
         merged_history_dump = [h.model_dump(exclude_none=True) for h in merged_history]
         embedding = self._compute_embedding(current_item.memory)
+        sources = [s.model_dump(exclude_none=True) for s in (fast_item.metadata.sources or [])]
         # update old memory node with new content and updated history
         self.graph_db.update_node(
             id=primary_id,
             fields={
+                **fields,
                 "memory": current_item.memory,
                 "history": merged_history_dump,
                 "version": new_primary_version,
                 "embedding": embedding,
-                **fields,
+                "sources": sources,
             },
             user_name=user_name,
         )
