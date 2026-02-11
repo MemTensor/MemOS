@@ -684,6 +684,7 @@ class MemoryHistoryManager:
                 "version": new_primary_version,
                 "embedding": embedding,
                 "sources": sources,
+                "session_id": fast_item.metadata.session_id,
             },
             user_name=user_name,
         )
