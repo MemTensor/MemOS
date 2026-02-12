@@ -202,6 +202,20 @@ def handle_get_memory(memory_id: str, naive_mem_cube: NaiveMemCube) -> GetMemory
     # Get the data from whichever memory source succeeded
     data = (memory or pref).model_dump() if (memory or pref) else None
 
+    if data is not None:
+        # For each returned item, tackle with metadata.info project_id /
+        # operation / manager_user_id
+        metadata = data.get("metadata", None)
+        if metadata is not None and isinstance(metadata, dict):
+            info = metadata.get("info", None)
+            if info is not None and isinstance(info, dict):
+                for key in ("project_id", "operation", "manager_user_id"):
+                    if key not in info:
+                        continue
+                    value = info.pop(key)
+                    if key not in metadata:
+                        metadata[key] = value
+
     return GetMemoryResponse(
         message="Memory retrieved successfully"
         if data
@@ -240,6 +254,25 @@ def handle_get_memory_by_ids(
                     memories.extend(result)
             except Exception:
                 continue
+
+    # For each returned item, tackle with metadata.info project_id /
+    # operation / manager_user_id
+    for item in memories:
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        info = metadata.get("info")
+        if not isinstance(info, dict):
+            continue
+
+        for key in ("project_id", "operation", "manager_user_id"):
+            if key not in info:
+                continue
+            value = info.pop(key)
+            if key not in metadata:
+                metadata[key] = value
 
     return GetMemoryResponse(
         message="Memories retrieved successfully", code=200, data={"memories": memories}
@@ -344,6 +377,25 @@ def handle_get_memories(
             filter_params, page=get_mem_req.page, page_size=get_mem_req.page_size
         )
         format_preferences = [format_memory_item(item, save_sources=False) for item in preferences]
+
+        # For each returned item, tackle with metadata.info project_id /
+        # operation / manager_user_id
+        for item in format_preferences:
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            info = metadata.get("info")
+            if not isinstance(info, dict):
+                continue
+
+            for key in ("project_id", "operation", "manager_user_id"):
+                if key not in info:
+                    continue
+                value = info.pop(key)
+                if key not in metadata:
+                    metadata[key] = value
 
     results = post_process_pref_mem(
         results, format_preferences, get_mem_req.mem_cube_id, get_mem_req.include_preference
