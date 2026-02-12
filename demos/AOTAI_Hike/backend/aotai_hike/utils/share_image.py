@@ -515,7 +515,7 @@ class ShareImageGenerator:
         img.save(img_bytes, format="PNG")
         img_bytes.seek(0)
 
-        # Structured JSON data (v2-style,兼容保留原信息)
+        # Structured JSON data (v2-style, compatible with original info)
         json_data = {
             "summary": {
                 "title": "鳌太线徒步记录",

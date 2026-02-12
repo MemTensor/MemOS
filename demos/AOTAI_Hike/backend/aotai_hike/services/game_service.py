@@ -496,7 +496,7 @@ class GameService:
             role = next((r for r in world_state.roles if r.role_id == rid), None)
             if not role:
                 continue
-            # Very light mock proposal: pick one option (or "原地" if none)
+            # Very light mock proposal: pick one option (or "stay" if none)
             if opts:
                 pick = self._rng.choice(opts)
                 dest = AoTaiGraph.get_node(pick).name
