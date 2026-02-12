@@ -267,25 +267,25 @@ def get_current_share_image(session_id: str):
     Returns PNG image that can be displayed in a modal/popup.
     """
     ws = _get_ws(session_id)
-    # 补充 memory_highlights
     active_role_id = ws.active_role_id or (ws.roles[0].role_id if ws.roles else None)
     highlights: list[str] = []
     if active_role_id:
         try:
             cube_id = MemoryNamespace.role_cube_id(user_id=active_role_id, role_id=active_role_id)
-            res = _memory_client.search_memories(
+            res = _memory_client.search_memory(
                 user_id=active_role_id,
                 cube_id=cube_id,
                 query="关键记忆",
                 top_k=2,
+                session_id=ws.session_id,
             )
-            for item in (res.get("items") or [])[:2]:
-                txt = str(item.get("memory") or "").strip()
-                if not txt:
+            for txt in res.snippets[:2]:
+                s = str(txt or "").strip()
+                if not s:
                     continue
-                if len(txt) > 24:
-                    txt = txt[:24] + "…"
-                highlights.append(txt)
+                if len(s) > 24:
+                    s = s[:24] + "…"
+                highlights.append(s)
         except Exception:
             highlights = []
 
