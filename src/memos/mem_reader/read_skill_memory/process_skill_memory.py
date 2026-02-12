@@ -36,6 +36,7 @@ from memos.templates.skill_mem_prompt import (
     TOOL_GENERATION_PROMPT,
 )
 from memos.types import MessageList
+from memos.utils import timed
 
 
 load_dotenv()
@@ -64,6 +65,7 @@ def _generate_content_by_llm(llm: BaseLLM, prompt_template: str, **kwargs) -> An
         return {} if "json" in prompt_template.lower() else ""
 
 
+@timed
 def _batch_extract_skills(
     task_chunks: dict[str, MessageList],
     related_memories_map: dict[str, list[TextualMemoryItem]],
@@ -97,6 +99,7 @@ def _batch_extract_skills(
     return results
 
 
+@timed
 def _batch_generate_skill_details(
     raw_skills_data: list[tuple[dict[str, Any], str, MessageList]],
     related_skill_memories_map: dict[str, list[TextualMemoryItem]],
@@ -756,6 +759,7 @@ def _delete_skills(
             logger.warning(f"Error deleting local file: {e}")
 
 
+@timed
 def _write_skills_to_file(
     skill_memory: dict[str, Any], info: dict[str, Any], skills_dir_config: dict[str, Any]
 ) -> str:
@@ -1000,6 +1004,7 @@ def _get_skill_file_storage_location() -> str:
         return "LOCAL"
 
 
+@timed
 def process_skill_memory_fine(
     fast_memory_items: list[TextualMemoryItem],
     info: dict[str, Any],
@@ -1064,6 +1069,7 @@ def process_skill_memory_fine(
                 )
                 related_skill_memories_by_task[task_name] = []
 
+    @timed
     def _simple_extract():
         # simple extract skill memory, only one stage
         memories = []
@@ -1096,6 +1102,7 @@ def process_skill_memory_fine(
                     )
         return memories
 
+    @timed
     def _full_extract():
         # full extract skill memory, include two stage
         raw_extraction_results = _batch_extract_skills(

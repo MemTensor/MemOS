@@ -651,6 +651,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         return None
 
+    @timed
     def _process_string_fine(
         self,
         fast_memory_items: list[TextualMemoryItem],
@@ -904,6 +905,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             logger.error(f"[MultiModalFine] Error calling LLM for tool trajectory: {e}")
             return []
 
+    @timed
     def _process_tool_trajectory_fine(
         self, fast_memory_items: list[TextualMemoryItem], info: dict[str, Any], **kwargs
     ) -> list[TextualMemoryItem]:
