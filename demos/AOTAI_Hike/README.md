@@ -1,29 +1,97 @@
-## AOTAI_Hike Demo（Phaser 像素场景 + DOM 像素聊天 UI + Python 内核）
+# 鳌太线徒步模拟器（AoTai Hike）Demo
 
-### 目录
-- **frontend/**: 纯静态前端（Phaser 走 CDN，不需要打包）
-- **backend/**: FastAPI 后端（session/角色/act/map 等接口），并预留记忆/生成接口扩展点
+> A pixel-art interactive narrative game demo based on the MemOS multi-view memory system
 
-### 一键启动（开发）
-在本目录下执行：
+<div align="center">
+  <img src="./banner.png" alt="AoTai Hike × MemOS - Poly-View Memory" width="100%">
+</div>
 
+## 📖 Overview
+
+**鳌太线徒步模拟器（AoTai Hike）** is a Web game demo showcasing MemOS's multi-view memory capabilities. Players can create multiple roles, lead a team across the dangerous AoTai route, and experience memory-based intelligent NPC dialogues and dynamic storytelling.
+
+### Key Highlights
+
+- 🎮 **Multi-role roleplay**: Create and switch between multiple roles, each with an independent memory space
+- 🧠 **Multi-view memory**: Fully integrated MemOS multi-view memory system
+- 💬 **Intelligent NPC dialogue**: Generate personality-consistent dialogue based on role memory
+- 🗺️ **Fixed route exploration**: Follow the real AoTai route and experience the full journey
+- 🎨 **Pixel-art UI**: Use Phaser 3 to render pixel-art maps and role animations
+
+**📚 For detailed documentation, see: [INTRODUCTION_ZH.md](./INTRODUCTION_ZH.md) | [INTRODUCTION_EN.md](./INTRODUCTION_EN.md)**
+
+## 🚀 Quick Start
+
+### Requirements
+
+- Python 3.8+
+- MemOS service (local or remote)
+
+### Installation Steps
+
+1. **Install backend dependencies**
 ```bash
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+2. **Configure MemOS service address (optional)**
+```bash
+export MEMOS_API_BASE_URL=http://localhost:8002
+```
+
+3. **Start the service**
+```bash
 uvicorn app:app --host 0.0.0.0 --port 8010 --reload
 ```
 
-打开：`http://localhost:8010/demo/ao-tai/`
+4. **Access the game**
+Open your browser and visit: `http://localhost:8010/demo/ao-tai/`
 
-### API
-- `GET /api/demo/ao-tai/map`
-- `POST /api/demo/ao-tai/session/new`
-- `POST /api/demo/ao-tai/roles/upsert`
-- `PUT /api/demo/ao-tai/session/active_role`
-- `POST /api/demo/ao-tai/act`
+## 📡 Core API
 
-### 扩展点（先占位，方便后续接 MemOS/LLM/背景生成）
-- `aotai_hike/adapters/memory.py`：MemoryAdapter（当前为 InMemory）
-- `aotai_hike/adapters/companion.py`：CompanionBrain（当前为 mock）
-- `aotai_hike/adapters/background.py`：BackgroundProvider（当前为静态 SVG）
+- `GET /api/demo/ao-tai/map` - Get map information
+- `POST /api/demo/ao-tai/session/new` - Create a new session
+- `POST /api/demo/ao-tai/roles/upsert` - Create/Update a role
+- `POST /api/demo/ao-tai/roles/quickstart` - Quick-create default roles
+- `PUT /api/demo/ao-tai/session/active_role` - Switch active role
+- `POST /api/demo/ao-tai/act` - Perform an action (core endpoint)
+
+For detailed API documentation, see [INTRODUCTION_EN.md](./INTRODUCTION_EN.md#-api-documentation)
+
+## 🏗️ Project Structure
+
+```
+demos/AOTAI_Hike/
+├── backend/              # FastAPI backend
+│   ├── aotai_hike/      # Game core code
+│   │   ├── router.py    # API routes
+│   │   ├── services/    # Game services
+│   │   ├── adapters/    # Adapters (memory/dialogue/background)
+│   │   └── world/       # Map data
+│   └── app.py           # Application entry
+├── frontend/            # Frontend (Phaser 3 + DOM UI)
+│   ├── src/            # Source code
+│   └── assets/          # Asset files
+└── README.md           # This file
+```
+
+## 🔧 Extensible Interfaces
+
+The game is designed to be "lightweight but extensible"; all intelligence-related features are isolated via adapters:
+
+- `adapters/memory.py` - **MemoryAdapter**: Interface with MemOS memory system
+- `adapters/companion.py` - **CompanionBrain**: NPC dialogue generation (based on MemOS chat_complete)
+- `adapters/background.py` - **BackgroundProvider**: Background asset provider
+
+## 📚 Related Documents
+
+- [INTRODUCTION_ZH.md](./INTRODUCTION_ZH.md) - **Complete project introduction (中文)**
+- [INTRODUCTION_EN.md](./INTRODUCTION_EN.md) - **Complete project introduction (English)**
+- [backend/MEMORY_INTEGRATION.md](./backend/MEMORY_INTEGRATION.md) - Memory system interaction guide
+- [PRD.md](./PRD.md) - Product requirements document
+
+---
+
+**Enjoy your AoTai hike!** 🏔️
