@@ -206,7 +206,13 @@ def rerank_knowledge_mem(
     )
     # replace memory value with source.content for LongTermMemory, WorkingMemory or UserMemory
     for item in reranked_knowledge_mem:
-        item["memory"] = item["metadata"]["sources"][0]["content"]
+        source_content = item["metadata"]["sources"][0]["content"]
+        if (
+            "File URL:" not in source_content
+            and "File ID:" not in source_content
+            and "Filename:" not in source_content
+        ):
+            item["memory"] = source_content
         item["metadata"]["sources"] = []
 
     for item in conversation_mem:
