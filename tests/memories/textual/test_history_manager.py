@@ -227,6 +227,8 @@ def test_apply_llm_memory_updates_update_existing(history_manager, mock_graph_db
             "created_at": "2023-01-01",
             "tags": ["old"],
             "status": "resolving",
+            "embedding": [],
+            "memory_type": "LongTermMemory",
         },
     }
     mock_graph_db.get_node.return_value = existing_node
@@ -324,7 +326,7 @@ def test_apply_llm_memory_updates_restored(history_manager, mock_graph_db):
     assert len(new_items) == 1
     assert new_items[0] == restored_item
     history_manager._handle_restored_memories.assert_called_once_with(
-        llm_response["restored_memories"]
+        llm_response["restored_memories"], source_item
     )
     mock_graph_db.add_node.assert_not_called()
 
@@ -376,14 +378,18 @@ def test_apply_llm_memory_updates_conflict_and_merge(history_manager, mock_graph
     # Setup existing node (primary)
     primary_id = uuid.uuid4().hex
     secondary_id = uuid.uuid4().hex
-    existing_node = {"id": primary_id, "memory": "Old Content", "metadata": {"version": 1}}
+    existing_node = {
+        "id": primary_id,
+        "memory": "Old Content",
+        "metadata": {"version": 1, "embedding": [], "memory_type": "LongTermMemory"},
+    }
     mock_graph_db.get_node.return_value = existing_node
     mock_graph_db.get_nodes.return_value = [
         existing_node,
         {
             "id": secondary_id,
             "memory": "Secondary",
-            "metadata": {"version": 1},
+            "metadata": {"version": 1, "embedding": [], "memory_type": "LongTermMemory"},
         },
     ]
 
@@ -565,10 +571,14 @@ def test_update_existing_memory_cas_merge_with_llm(mock_graph_db):
     mock_graph_db.get_node.return_value = {
         "id": existing_id,
         "memory": "Old Content",
-        "metadata": {"version": 2},
+        "metadata": {"version": 2, "embedding": [], "memory_type": "LongTermMemory"},
     }
     mock_graph_db.get_nodes.return_value = [
-        {"id": existing_id, "memory": "Old Content", "metadata": {"version": 2}}
+        {
+            "id": existing_id,
+            "memory": "Old Content",
+            "metadata": {"version": 2, "embedding": [], "memory_type": "LongTermMemory"},
+        }
     ]
 
     mem_data = {
@@ -579,12 +589,20 @@ def test_update_existing_memory_cas_merge_with_llm(mock_graph_db):
         "conflicted_candidate_ids": [],
     }
 
-    updated = manager._update_existing_memory(
-        mem_data, [existing_id], [existing_id], {existing_id: 1}, user_name="u1"
+    updated, new_item = manager._update_existing_memory(
+        mem_data,
+        [existing_id],
+        [existing_id],
+        {existing_id: 1},
+        user_name="u1",
+        fast_item=TextualMemoryItem(
+            memory="New user input", metadata=TreeNodeTextualMemoryMetadata()
+        ),
     )
 
     assert updated.memory == "Merged Content"
     assert updated.metadata.version == 3
+    assert new_item is None
     mock_graph_db.update_node.assert_called_once()
 
 
@@ -592,11 +610,16 @@ def test_update_existing_memory_marks_working_binding_deleted(history_manager, m
     history_manager.mark_memory_status = MagicMock()
     primary_id = uuid.uuid4().hex
     working_binding = uuid.uuid4().hex
+    mock_graph_db.get_node.return_value = {
+        "id": primary_id,
+        "memory": "Old Content",
+        "metadata": {"version": 1, "working_binding": working_binding, "embedding": []},
+    }
     mock_graph_db.get_nodes.return_value = [
         {
             "id": primary_id,
             "memory": "Old Content",
-            "metadata": {"version": 1, "working_binding": working_binding},
+            "metadata": {"version": 1, "working_binding": working_binding, "embedding": []},
         }
     ]
     mem_data = {
@@ -607,11 +630,19 @@ def test_update_existing_memory_marks_working_binding_deleted(history_manager, m
         "conflicted_candidate_ids": [],
     }
 
-    updated = history_manager._update_existing_memory(
-        mem_data, [primary_id], [primary_id], {primary_id: 1}, user_name="u1"
+    updated, new_item = history_manager._update_existing_memory(
+        mem_data,
+        [primary_id],
+        [primary_id],
+        {primary_id: 1},
+        user_name="u1",
+        fast_item=TextualMemoryItem(
+            memory="New user input", metadata=TreeNodeTextualMemoryMetadata()
+        ),
     )
 
     assert updated is not None
+    assert new_item is None
     history_manager.mark_memory_status.assert_called_once_with(
         [str(working_binding)], "deleted", user_name="u1"
     )
@@ -622,11 +653,16 @@ def test_update_existing_memory_no_mark_when_working_binding_matches(
 ):
     history_manager.mark_memory_status = MagicMock()
     primary_id = uuid.uuid4().hex
+    mock_graph_db.get_node.return_value = {
+        "id": primary_id,
+        "memory": "Old Content",
+        "metadata": {"version": 1, "working_binding": primary_id, "embedding": []},
+    }
     mock_graph_db.get_nodes.return_value = [
         {
             "id": primary_id,
             "memory": "Old Content",
-            "metadata": {"version": 1, "working_binding": primary_id},
+            "metadata": {"version": 1, "working_binding": primary_id, "embedding": []},
         }
     ]
     mem_data = {
@@ -637,11 +673,19 @@ def test_update_existing_memory_no_mark_when_working_binding_matches(
         "conflicted_candidate_ids": [],
     }
 
-    updated = history_manager._update_existing_memory(
-        mem_data, [primary_id], [primary_id], {primary_id: 1}, user_name="u1"
+    updated, new_item = history_manager._update_existing_memory(
+        mem_data,
+        [primary_id],
+        [primary_id],
+        {primary_id: 1},
+        user_name="u1",
+        fast_item=TextualMemoryItem(
+            memory="New user input", metadata=TreeNodeTextualMemoryMetadata()
+        ),
     )
 
     assert updated is not None
+    assert new_item is None
     history_manager.mark_memory_status.assert_not_called()
 
 
@@ -650,9 +694,20 @@ def test_update_existing_memory_node_missing(history_manager, mock_graph_db):
     mock_graph_db.get_nodes.return_value = []
     mem_data = {"value": "v", "tags": [], "key": "k"}
 
-    updated = history_manager._update_existing_memory(mem_data, ["missing"], [], {}, user_name="u1")
+    updated, new_item = history_manager._update_existing_memory(
+        mem_data,
+        ["missing"],
+        [],
+        {},
+        user_name="u1",
+        fast_item=TextualMemoryItem(
+            memory="New user input", metadata=TreeNodeTextualMemoryMetadata()
+        ),
+    )
 
     assert updated is None
+    assert new_item is not None
+    assert new_item.memory == "v"
     mock_graph_db.update_node.assert_not_called()
 
 
