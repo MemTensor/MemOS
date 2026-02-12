@@ -363,6 +363,16 @@ class MilvusVecDB(BaseVecDB):
 
     def _build_field_expression(self, field: str, value: Any) -> str:
         """Build expression for a single field."""
+        # Convert date-time format from 'YYYY-MM-DD HH:MM:SS' to 'YYYY-MM-DDTHH:MM:SS' for comparison
+        if (field == "created_at" or field == "updated_at") and isinstance(value, str):
+            # Replace space with 'T' to match ISO 8601 format
+            value = value.replace(" ", "T")
+        elif (field == "created_at" or field == "updated_at") and isinstance(value, dict):
+            # Handle dict case (e.g., {"gte": "2026-02-09 15:43:12"})
+            for op, operand in value.items():
+                if isinstance(operand, str):
+                    value[op] = operand.replace(" ", "T")
+
         # Handle comparison operators
         if isinstance(value, dict):
             if len(value) == 1:
@@ -434,6 +444,11 @@ class MilvusVecDB(BaseVecDB):
     def _handle_comparison_operator(self, field: str, operator: str, value: Any) -> str:
         """Handle comparison operators (gte, lte, gt, lt, ne)."""
         milvus_op = {"gte": ">=", "lte": "<=", "gt": ">", "lt": "<", "ne": "!="}.get(operator, "==")
+
+        # Convert date-time format from 'YYYY-MM-DD HH:MM:SS' to 'YYYY-MM-DDTHH:MM:SS' for comparison
+        if (field == "created_at" or field == "updated_at") and isinstance(value, str):
+            # Replace space with 'T' to match ISO 8601 format
+            value = value.replace(" ", "T")
 
         formatted_value = self._format_value(value)
         return f"payload['{field}'] {milvus_op} {formatted_value}"
@@ -520,7 +535,9 @@ class MilvusVecDB(BaseVecDB):
         Returns:
             List of items including vectors and payload that match the filter
         """
+        logger.info(f"filter for milvus: {filter}")
         expr = self._dict_to_expr(filter) if filter else ""
+        logger.info(f"filter expr for milvus: {expr}")
         all_items = []
 
         # Use query_iterator for efficient pagination
