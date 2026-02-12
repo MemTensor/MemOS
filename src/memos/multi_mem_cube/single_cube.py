@@ -443,7 +443,28 @@ class SingleCubeView(MemCubeView):
                 },
                 search_filter=search_req.filter,
             )
-            return self._postformat_memories(results, user_context.mem_cube_id)
+            formatted_results = self._postformat_memories(results, user_context.mem_cube_id)
+
+            # For each returned item, tackle with metadata.info project_id /
+            # operation / manager_user_id
+            for item in formatted_results:
+                if not isinstance(item, dict):
+                    continue
+                metadata = item.get("metadata")
+                if not isinstance(metadata, dict):
+                    continue
+                info = metadata.get("info")
+                if not isinstance(info, dict):
+                    continue
+
+                for key in ("project_id", "operation", "manager_user_id"):
+                    if key not in info:
+                        continue
+                    value = info.pop(key)
+                    if key not in metadata:
+                        metadata[key] = value
+
+            return formatted_results
         except Exception as e:
             self.logger.error("Error in _search_pref: %s; traceback: %s", e, traceback.format_exc())
             return []
