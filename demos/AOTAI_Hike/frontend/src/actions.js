@@ -104,6 +104,21 @@ export async function apiUpsertRole(role) {
   _scheduleAutoContinue();
 }
 
+export async function apiRolesQuickstart(overwrite = false) {
+  const data = await api("/roles/quickstart", { session_id: sessionId, overwrite });
+  worldState.roles = data.roles;
+  worldState.active_role_id = data.active_role_id;
+  renderRoles();
+  renderPartyStatus();
+  renderBranchChoices();
+  setStatus();
+  if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
+  // ensure Phaser shows the party immediately after creation/update
+  if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
+  applyPhaseUI(worldState);
+  _scheduleAutoContinue();
+}
+
 export async function apiSetActiveRole(roleId) {
   const ws = await api("/session/active_role", { session_id: sessionId, active_role_id: roleId }, "PUT");
   setWorldState(ws);

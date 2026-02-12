@@ -67,7 +67,64 @@ class GameService:
                 found = True
                 break
         if not found:
-            world_state.roles.append(role)
+            # Check if this is a default role by name (from _DEFAULT_ROLES)
+            # Default roles are: 阿鳌, 太白, 小山
+            # For default roles, ALWAYS preserve the attrs as-is, never modify them
+            is_default_role = role.name in ("阿鳌", "太白", "小山")
+
+            if is_default_role:
+                # Default roles from _DEFAULT_ROLES - preserve attrs exactly as passed
+                # Do not modify or randomize them under any circumstances
+                logger.info(
+                    f"Adding default role {role.name} with attrs: stamina={role.attrs.stamina}, mood={role.attrs.mood}, experience={role.attrs.experience}, risk_tolerance={role.attrs.risk_tolerance}, supplies={role.attrs.supplies}"
+                )
+                world_state.roles.append(role)
+            else:
+                # For new user-created roles (not from default templates), initialize attrs with random values if not provided
+                from aotai_hike.schemas import RoleAttrs
+
+                default_attrs = RoleAttrs()
+
+                # Only randomize if:
+                # 1. attrs is None, OR
+                # 2. All values match defaults (user didn't provide custom attrs)
+                if role.attrs is None:
+                    # Generate random attributes within reasonable ranges
+                    stamina = self._rng.randint(50, 90)
+                    mood = self._rng.randint(40, 80)
+                    experience = self._rng.randint(5, 40)
+                    risk_tolerance = self._rng.randint(20, 70)
+                    supplies = self._rng.randint(60, 90)
+                    role.attrs = RoleAttrs(
+                        stamina=stamina,
+                        mood=mood,
+                        experience=experience,
+                        risk_tolerance=risk_tolerance,
+                        supplies=supplies,
+                    )
+                elif (
+                    role.attrs.stamina == default_attrs.stamina
+                    and role.attrs.mood == default_attrs.mood
+                    and role.attrs.experience == default_attrs.experience
+                    and role.attrs.risk_tolerance == default_attrs.risk_tolerance
+                    and role.attrs.supplies == default_attrs.supplies
+                ):
+                    # All values match defaults (stamina=70, mood=60, experience=10, risk_tolerance=50, supplies=80)
+                    # User likely didn't provide custom attrs - randomize them
+                    stamina = self._rng.randint(50, 90)
+                    mood = self._rng.randint(40, 80)
+                    experience = self._rng.randint(5, 40)
+                    risk_tolerance = self._rng.randint(20, 70)
+                    supplies = self._rng.randint(60, 90)
+                    role.attrs = RoleAttrs(
+                        stamina=stamina,
+                        mood=mood,
+                        experience=experience,
+                        risk_tolerance=risk_tolerance,
+                        supplies=supplies,
+                    )
+                # If attrs has custom values, keep them as-is
+                world_state.roles.append(role)
         if world_state.active_role_id is None:
             world_state.active_role_id = role.role_id
         # Leader is assigned at runtime (random default on first act), not during role creation.
@@ -1148,7 +1205,9 @@ class GameService:
             r.attrs.stamina = max(0, min(100, r.attrs.stamina + stamina_delta))
             r.attrs.mood = max(0, min(100, r.attrs.mood + mood_delta))
             r.attrs.experience = max(0, min(100, r.attrs.experience + exp_delta))
-            r.attrs.supplies = max(0, min(100, r.attrs.supplies + supplies_delta))
+            # Ensure supplies are consumed correctly - update the value directly
+            if supplies_delta != 0:
+                r.attrs.supplies = max(0, min(100, r.attrs.supplies + supplies_delta))
 
     def _maybe_change_weather(self, world_state: WorldState) -> None:
         if self._rng.random() < 0.7:

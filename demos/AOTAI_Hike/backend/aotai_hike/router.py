@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
+from loguru import logger
 
 from aotai_hike.adapters.background import BackgroundRequest, StaticBackgroundProvider
 from aotai_hike.adapters.companion import MemoryCompanionBrain
@@ -50,23 +51,23 @@ _DEFAULT_ROLES: list[dict] = [
         "avatar_key": "green",
         "persona": "阿鳌：持灯的领路者，熟知鳌太古道与太白山脉。谨慎、稳重，誓要带队抵达太白之巅。",
         "attrs": {
-            "stamina": 75,
-            "mood": 58,
-            "experience": 35,
-            "risk_tolerance": 35,
-            "supplies": 80,
+            "stamina": 85,  # High stamina - experienced leader
+            "mood": 65,  # Moderate mood - steady and reliable
+            "experience": 45,  # High experience - knows the route well
+            "risk_tolerance": 30,  # Low risk tolerance - cautious leader
+            "supplies": 85,  # Well-prepared with supplies
         },
     },
     {
         "name": "太白",
         "avatar_key": "blue",
-        "persona": "太白：表面是器材与数据的虔信者，经验丰厚、言辞克制。暗闻2800下撤口藏有金矿，欲借“体力不支”脱队潜行。",
+        "persona": '太白：表面是器材与数据的虔信者，经验丰厚、言辞克制。暗闻2800下撤口藏有金矿，欲借"体力不支"脱队潜行。',
         "attrs": {
-            "stamina": 68,
-            "mood": 62,
-            "experience": 42,
-            "risk_tolerance": 45,
-            "supplies": 80,
+            "stamina": 60,  # Lower stamina - may feign exhaustion
+            "mood": 70,  # Higher mood - confident and composed
+            "experience": 50,  # Very high experience - veteran hiker
+            "risk_tolerance": 55,  # Moderate risk tolerance - calculated risks
+            "supplies": 75,  # Moderate supplies
         },
     },
     {
@@ -74,11 +75,11 @@ _DEFAULT_ROLES: list[dict] = [
         "avatar_key": "red",
         "persona": "小山：笑容背后的新人徒步者，乐观只是外壳。多年前真主在2800下撤口埋下金矿，此行只为取回；若同伴相助便分金，不助则将其永远留在此地。",
         "attrs": {
-            "stamina": 70,
-            "mood": 72,
-            "experience": 12,
-            "risk_tolerance": 65,
-            "supplies": 80,
+            "stamina": 75,  # Good stamina - young and energetic
+            "mood": 80,  # Very high mood - optimistic facade
+            "experience": 15,  # Low experience - newcomer
+            "risk_tolerance": 75,  # High risk tolerance - willing to take chances
+            "supplies": 70,  # Lower supplies - less prepared
         },
     },
 ]
@@ -166,15 +167,43 @@ def roles_quickstart(req: RolesQuickstartRequest):
     for tmpl in _DEFAULT_ROLES:
         if not req.overwrite and tmpl["name"] in existing_names:
             continue
+        # Get attrs from template - _DEFAULT_ROLES should always have "attrs" key with a dict
+        # For default roles, attrs MUST exist, so use direct access instead of .get()
+        logger.info(
+            f"[roles_quickstart] Processing template for role: {tmpl.get('name')}, template keys: {list(tmpl.keys())}"
+        )
+        if "attrs" not in tmpl or not isinstance(tmpl["attrs"], dict):
+            logger.error(
+                f"Missing or invalid attrs for default role: {tmpl.get('name')}, tmpl={tmpl}"
+            )
+            raise ValueError(f"Default role {tmpl.get('name')} is missing 'attrs' key")
+        attrs_dict = tmpl["attrs"]
+        logger.info(f"[roles_quickstart] attrs_dict for {tmpl['name']}: {attrs_dict}")
+        # Create RoleAttrs directly from template dict - this preserves all custom values from _DEFAULT_ROLES
+        # The attrs_dict should contain all 5 fields: stamina, mood, experience, risk_tolerance, supplies
+        # Use **attrs_dict to unpack all values directly from the template
+        role_attrs = RoleAttrs(**attrs_dict)
+        # Debug: verify attrs were set correctly
+        logger.info(
+            f"[roles_quickstart] RoleAttrs created for {tmpl['name']}: stamina={role_attrs.stamina}, mood={role_attrs.mood}, experience={role_attrs.experience}, risk_tolerance={role_attrs.risk_tolerance}, supplies={role_attrs.supplies}"
+        )
         role = Role(
             role_id=f"r_{uuid.uuid4().hex[:8]}",
             name=tmpl["name"],
             avatar_key=tmpl.get("avatar_key") or "default",
             persona=tmpl.get("persona") or "",
-            attrs=RoleAttrs(**(tmpl.get("attrs") or {})),
+            attrs=role_attrs,
         )
+        # Verify role.attrs after creation
+        logger.info(
+            f"[roles_quickstart] Role {role.name} created with attrs: stamina={role.attrs.stamina}, mood={role.attrs.mood}, experience={role.attrs.experience}, risk_tolerance={role.attrs.risk_tolerance}, supplies={role.attrs.supplies}"
+        )
+        # Pass the role to upsert_role - it should preserve custom attrs since they don't match defaults
         _game.upsert_role(ws, RoleUpsertRequest(session_id=req.session_id, role=role))
-        new_roles.append(role)
+        # Get the role from world_state after upsert to ensure we have the final version
+        # (in case upsert_role modified it, though it shouldn't for default roles)
+        updated_role = next((r for r in ws.roles if r.role_id == role.role_id), role)
+        new_roles.append(updated_role)
 
     for role in new_roles:
         cube_id = MemoryNamespace.role_cube_id(user_id=role.role_id, role_id=role.role_id)

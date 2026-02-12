@@ -1,5 +1,5 @@
 import { $ } from "./dom.js";
-import { apiAct, apiGetMap, apiNewSession, apiSetActiveRole, apiUpsertRole } from "./actions.js";
+import { apiAct, apiGetMap, apiNewSession, apiSetActiveRole, apiUpsertRole, apiRolesQuickstart } from "./actions.js";
 import { initMinimapCanvas } from "./minimap.js";
 import { initPhaser } from "./phaser_view.js";
 import { logMsg, checkAndShowShareButton } from "./render.js";
@@ -115,24 +115,8 @@ export async function bootstrap() {
 
   $("#setup-quickstart")?.addEventListener("click", async () => {
     showSetupErr("");
-    const defaults = [
-      {
-        name: "阿鳌",
-        persona:
-          "阿鳌：持灯的领路者，熟知鳌太古道与太白山脉。谨慎、稳重，誓要带队抵达太白之巅。",
-      },
-      {
-        name: "太白",
-        persona:
-          "太白：表面是器材与数据的虔信者，经验丰厚、言辞克制。暗闻2800下撤口藏有金矿，欲借“体力不支”脱队潜行。",
-      },
-      {
-        name: "小山",
-        persona:
-          "小山：笑容背后的新人徒步者，乐观只是外壳。多年前真主在2800下撤口埋下金矿，此行只为取回；若同伴相助便分金，不助则设法让其滞留山顶。",
-      },
-    ];
-    for (const r of defaults) await apiUpsertRole(makeRole(r.name, r.persona));
+    // Use backend's roles/quickstart endpoint to create default roles with correct attributes
+    await apiRolesQuickstart(false);
     logMsg({ kind: "system", content: "已创建 3 个默认角色。", timestamp_ms: Date.now() });
     const roles = worldState?.roles || [];
     const pick = roles[0];
