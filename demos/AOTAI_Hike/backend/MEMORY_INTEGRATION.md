@@ -97,3 +97,17 @@ GameService.act
         ├─ chat_complete (LLM)
         └─ add_memory (role add)
 ```
+
+## 多视角记忆集成
+
+本游戏完整集成了 MemOS 的多视角记忆系统，实现了每个角色拥有独立记忆空间、从角色视角提取记忆的功能。
+
+**详细文档**：
+- [多视角记忆集成 PR 文档](../PR_MULTI_VIEW_MEMORY_INTEGRATION.md) - 完整的技术实现说明
+- [PR 摘要](../PR_SUMMARY.md) - 快速概览
+
+**核心特性**：
+- ✅ 自动多视角模式检测（通过 `role_id` 和 `role_name` 字段）
+- ✅ 角色记忆隔离（每个角色独立的记忆空间）
+- ✅ 第一人称视角记忆提取
+- ✅ 基于记忆的智能 NPC 对话生成
