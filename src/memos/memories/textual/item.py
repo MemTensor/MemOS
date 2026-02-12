@@ -42,6 +42,8 @@ class SourceMessage(BaseModel):
     content: str | None = None
     doc_path: str | None = None
     file_info: dict | None = None
+    role_id: str | None = None  # Optional role ID for multi-perspective support
+    role_name: str | None = None  # Optional role name for multi-perspective support
     model_config = ConfigDict(extra="allow")
 
 

@@ -69,6 +69,8 @@ class AssistantParser(BaseMessageParser):
         audio = message.get("audio")
         chat_time = message.get("chat_time")
         message_id = message.get("message_id")
+        role_id = message.get("role_id")
+        role_name = message.get("role_name")
 
         sources = []
 
@@ -100,6 +102,8 @@ class AssistantParser(BaseMessageParser):
                             chat_time=chat_time,
                             message_id=message_id,
                             content=text_content,
+                            role_id=role_id,
+                            role_name=role_name,
                         )
                         source.lang = overall_lang
                         sources.append(source)
@@ -111,6 +115,8 @@ class AssistantParser(BaseMessageParser):
                             chat_time=chat_time,
                             message_id=message_id,
                             content=refusal_content,
+                            role_id=role_id,
+                            role_name=role_name,
                         )
                         source.lang = overall_lang
                         sources.append(source)
@@ -126,6 +132,8 @@ class AssistantParser(BaseMessageParser):
                             chat_time=chat_time,
                             message_id=message_id,
                             content=f"[{part_type}]",
+                            role_id=role_id,
+                            role_name=role_name,
                         )
                         source.lang = overall_lang
                         sources.append(source)
@@ -139,6 +147,8 @@ class AssistantParser(BaseMessageParser):
                     chat_time=chat_time,
                     message_id=message_id,
                     content=content,
+                    role_id=role_id,
+                    role_name=role_name,
                 )
                 sources.append(_add_lang_to_source(source, content))
 
@@ -150,6 +160,8 @@ class AssistantParser(BaseMessageParser):
                 chat_time=chat_time,
                 message_id=message_id,
                 content=refusal,
+                role_id=role_id,
+                role_name=role_name,
             )
             # Use overall_lang if we have sources from multimodal content, otherwise detect
             if sources and hasattr(sources[0], "lang"):
@@ -171,6 +183,8 @@ class AssistantParser(BaseMessageParser):
                 chat_time=chat_time,
                 message_id=message_id,
                 content=f"[tool_calls]: {tool_calls_str}",
+                role_id=role_id,
+                role_name=role_name,
             )
             # Use overall_lang if we have sources from multimodal content, otherwise default
             if sources and hasattr(sources[0], "lang"):
@@ -188,6 +202,8 @@ class AssistantParser(BaseMessageParser):
                 chat_time=chat_time,
                 message_id=message_id,
                 content=f"[audio]: {audio_id}",
+                role_id=role_id,
+                role_name=role_name,
             )
             # Use overall_lang if we have sources from multimodal content, otherwise default
             if sources and hasattr(sources[0], "lang"):
@@ -197,7 +213,9 @@ class AssistantParser(BaseMessageParser):
             sources.append(source)
 
         if not sources:
-            return _add_lang_to_source(SourceMessage(type="chat", role=role), None)
+            return _add_lang_to_source(
+                SourceMessage(type="chat", role=role, role_id=role_id, role_name=role_name), None
+            )
         if len(sources) > 1:
             return sources
         return sources[0]
@@ -282,6 +300,13 @@ class AssistantParser(BaseMessageParser):
 
         # Extract info fields
         info_ = info.copy()
+        # Attach multi-view role info (if present on the message) into info_
+        role_id = message.get("role_id")
+        role_name = message.get("role_name")
+        if role_id is not None:
+            info_["role_id"] = role_id
+        if role_name is not None:
+            info_["role_name"] = role_name
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
 

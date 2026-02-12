@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 22 22" shape-rendering="crispEdges">
+  <style>
+    .blink { animation: blink 2.4s infinite steps(1); }
+    @keyframes blink { 0%, 94%, 100% { opacity: 1; } 95%, 97% { opacity: 0; } }
+    .bob { animation: bob 0.95s infinite steps(2); }
+    @keyframes bob { 0%, 100% { transform: translate(0px,0px); } 50% { transform: translate(0px,1px); } }
+  </style>
+  <g class="bob">
+    <rect width="22" height="22" fill="#0b1630"/>
+    <rect x="4" y="5" width="14" height="14" fill="#223044"/>
+    <rect x="6" y="7" width="10" height="10" fill="#ffd27c"/>
+    <rect x="6" y="6" width="10" height="2" fill="#ff7c7c"/>
+    <rect x="7" y="9" width="3" height="3" fill="#0b1630"/>
+    <rect x="12" y="9" width="3" height="3" fill="#0b1630"/>
+    <rect class="blink" x="7" y="10" width="3" height="1" fill="#ff7c7c"/>
+    <rect class="blink" x="12" y="10" width="3" height="1" fill="#ff7c7c"/>
+    <rect x="9" y="13" width="4" height="1" fill="#2b3c66"/>
+    <rect x="5" y="16" width="12" height="2" fill="#3a4a66"/>
+  </g>
+</svg>

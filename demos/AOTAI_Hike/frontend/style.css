@@ -1,0 +1,788 @@
+:root {
+  --bg: #0c1020;
+  --panel: rgba(10, 16, 28, 0.92);
+  --border: #3a4a66;
+  --text: #e8f0ff;
+  --muted: #a7b5d4;
+  --accent: #7cf2ff;
+  --danger: #ff7c7c;
+  --ok: #a1ffb9;
+  --warn: #ffd27c;
+  /* Share card aspect ratio = WIDTH / HEIGHT.
+     Backend generator now outputs a strict 3:4 portrait card
+     (e.g. 1024x1365), so keep this in sync. */
+  --share-ar: 0.75; /* 3 / 4 */
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Press Start 2P", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 12px;
+}
+
+#stage {
+  position: relative;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+
+#left {
+  min-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: calc(100vh - 24px);
+}
+
+#minimap-root {
+  width: 100%;
+  height: 170px;
+  min-height: 140px;
+  max-height: 220px;
+  border: 2px solid rgba(58, 74, 102, 0.8);
+  background: rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+  position: relative;
+}
+
+#minimap-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: auto;
+}
+
+#game-root {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 520px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  border: 2px solid rgba(58, 74, 102, 0.8);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+canvas {
+  display: block;
+  image-rendering: pixelated;
+}
+
+/* legacy: minimap overlay canvas (no longer used by default) */
+#minimap-overlay {
+  display: none;
+}
+
+
+#titlebar {
+  pointer-events: auto;
+  padding: 6px 12px 4px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
+}
+
+.share-btn {
+  font-size: 10px;
+  padding: 6px 12px;
+  margin-left: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.title {
+  color: var(--accent);
+  font-size: 13px;
+}
+.sub {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+#status {
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+/* NEW: party status strip */
+.party-strip {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding-bottom: 3px;
+}
+.party-strip::-webkit-scrollbar {
+  height: 8px;
+}
+.party-strip::-webkit-scrollbar-thumb {
+  background: rgba(124, 242, 255, 0.25);
+  border: 2px solid rgba(58, 74, 102, 0.8);
+}
+
+.party-card {
+  flex: 0 0 auto;
+  width: 200px;
+  border: 2px solid var(--border);
+  background: rgba(10, 16, 28, 0.72);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+  padding: 8px;
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  overflow: visible;
+}
+.party-card.active {
+  border-color: var(--accent);
+}
+.party-card:hover {
+  border-color: var(--accent);
+}
+
+.role-tooltip-float {
+  position: fixed;
+  padding: 8px;
+  border: 2px solid rgba(124, 242, 255, 0.35);
+  background: rgba(6, 16, 34, 0.95);
+  color: var(--text);
+  font-size: 9px;
+  line-height: 1.5;
+  max-height: 160px;
+  max-width: 260px;
+  overflow: auto;
+  z-index: 999;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+}
+
+.party-head {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+.party-ava {
+  width: 36px;
+  height: 36px;
+  image-rendering: pixelated;
+  border: 2px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.2);
+}
+.party-name {
+  font-size: 10px;
+  color: var(--text);
+  line-height: 1.3;
+}
+.party-sub {
+  margin-top: 3px;
+  font-size: 9px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.stat {
+  margin-top: 5px;
+}
+.stat-row {
+  display: grid;
+  grid-template-columns: 62px 1fr 28px;
+  gap: 8px;
+  align-items: center;
+  margin-top: 5px;
+}
+.stat-label {
+  font-size: 8px;
+  color: var(--muted);
+}
+.stat-val {
+  font-size: 8px;
+  color: var(--text);
+  text-align: right;
+}
+.stat-bar {
+  height: 8px;
+  border: 2px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.25);
+  position: relative;
+  overflow: hidden;
+}
+.stat-bar > div {
+  height: 100%;
+  width: 50%;
+  background: rgba(124, 242, 255, 0.65);
+}
+.stat-bar.ok > div {
+  background: rgba(161, 255, 185, 0.75);
+}
+.stat-bar.warn > div {
+  background: rgba(255, 210, 124, 0.75);
+}
+.stat-bar.danger > div {
+  background: rgba(255, 124, 124, 0.75);
+}
+
+#panels {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 2px solid var(--border);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
+  padding: 8px;
+  min-height: 0;
+  max-height: 42vh;
+  overflow: hidden;
+}
+
+#party-panel {
+  overflow: visible;
+}
+
+.panel-title {
+  font-size: 11px;
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-top: 5px;
+  align-items: center;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: rgba(20, 26, 44, 0.95);
+  border: 2px solid var(--border);
+  padding: 8px 10px;
+  cursor: pointer;
+}
+button:hover {
+  border-color: var(--accent);
+}
+
+input {
+  font: inherit;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.35);
+  border: 2px solid var(--border);
+  padding: 8px 10px;
+  width: 100%;
+  box-sizing: border-box;
+}
+input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Attention input (night vote pre-say) */
+input.input-attn {
+  border-color: #ffd27c;
+  box-shadow: 0 0 0 2px rgba(255, 210, 124, 0.25);
+  background: rgba(255, 210, 124, 0.08);
+}
+
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.35);
+  border: 2px solid var(--border);
+  padding: 8px 10px;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Initial role setup modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(6px);
+}
+.modal {
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: rgba(10, 16, 28, 0.96);
+  border: 2px solid rgba(124, 242, 255, 0.35);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  padding: 14px 14px 16px;
+}
+
+/* Share modal backdrop override：暗色聚焦感 */
+#share-modal.modal-backdrop {
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+}
+
+/* Share image modal: keep EXACTLY the same aspect ratio as the generated share image.
+   `--share-ar` is WIDTH / HEIGHT. Example: 16:9 => 1.7778, 3:4 => 0.75 */
+#share-modal .modal {
+  position: relative;
+
+  /* 高度优先：让卡片几乎占满视口高度，再按比例推算宽度 */
+  height: calc(100vh - 32px);
+  width: min(calc((100vh - 32px) * var(--share-ar)), calc(100vw - 32px));
+
+  /* Override generic modal limits */
+  max-width: none;
+  max-height: none;
+
+  padding: 0;
+  overflow: hidden;
+
+  border: 2px solid rgba(124, 242, 255, 0.55);
+  box-shadow: 0 16px 60px rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+/* 4 层结构中的“卡片底板” */
+#share-card-base {
+  position: absolute;
+  inset: 0;
+  margin: 18px 18px 22px;
+  border-radius: 8px;
+  background:
+    radial-gradient(135% 140% at 50% 0%, rgba(80, 110, 160, 0.55), rgba(12, 16, 32, 0.95)),
+    linear-gradient(180deg, rgba(160, 190, 230, 0.16), rgba(10, 12, 22, 0.9));
+  box-shadow:
+    0 0 0 1px rgba(180, 210, 255, 0.08),
+    0 12px 30px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+/* A subtle inner vignette for readability (no extra “boxes”) */
+#share-modal .modal::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background:
+    radial-gradient(120% 90% at 50% 30%, rgba(0,0,0,0.00), rgba(0,0,0,0.22) 70%, rgba(0,0,0,0.35));
+}
+
+/* Share image: fill the modal content area, act as background layer */
+#share-image-container {
+  position: absolute;
+  /* 让分享图整体离外框再远一点，避免文字被装饰遮挡 */
+  inset: 44px 52px 82px;
+  margin: 0;
+  overflow: hidden;
+  /* keep background clean; the card itself should carry the UI */
+  background: transparent;
+  z-index: 0;
+}
+
+#share-image-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Fill the frame completely; card is already 3:4 so this won't
+     crop in normal cases, but can eat 1px 误差 instead of留白 */
+  object-fit: cover;
+  object-position: center;
+  border: none;
+  /* 像素风：禁用平滑插值，尽量保持块状像素感 */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* PNG 外框层：占满卡片区域，使用带金属边/角标的 PNG */
+#share-card-frame {
+  position: absolute;
+  inset: 12px;
+  pointer-events: none;
+  z-index: 1;
+  background-position: center;
+  background-repeat: no-repeat;
+  /* 将遮罩整体“压缩”到 3:4 容器里，而不是按原图比例留边 */
+  background-size: 100% 100%;
+  /* 这里假定有 assets/share_frame.png，可按需要调整路径 */
+  background-image: url("./assets/share_frame.png");
+  /* 轻微外发光 + 漂浮感 */
+  box-shadow:
+    0 0 28px rgba(0, 0, 0, 0.85),
+    0 0 32px rgba(120, 180, 255, 0.22);
+}
+
+/* 质感层：雪点 / 噪点 / 微光粒子 */
+#share-card-noise {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  mix-blend-mode: soft-light;
+  opacity: 0.7;
+  background-image:
+    radial-gradient(circle at 10% 20%, rgba(255, 255, 255, 0.25) 0, transparent 40%),
+    radial-gradient(circle at 80% 0%, rgba(255, 255, 255, 0.18) 0, transparent 45%),
+    url("./assets/share_noise.png"); /* 任选噪点纹理 PNG；没有时仅用前两层渐变 */
+  background-size: 140px 140px, 220px 220px, cover;
+}
+
+/* Overlay title and buttons on top of the canvas */
+#share-modal .modal-title {
+  position: absolute;
+  top: 18px;
+  left: 20px;
+  right: 20px;
+  z-index: 3;
+  margin: 0;
+  text-align: left;
+  color: rgba(236, 243, 255, 0.98);
+  font-size: 14px;
+  letter-spacing: 0.5px;
+  text-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.85),
+    0 0 10px rgba(100, 200, 255, 0.4);
+  font-family: "STSong", "Songti SC", "Noto Serif SC", "PingFang SC",
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#share-modal .row {
+  position: absolute;
+  bottom: 18px;
+  left: 20px;
+  right: 20px;
+  z-index: 3;
+  margin: 0;
+  justify-content: center;
+  gap: 14px;
+}
+
+/* Share modal buttons: gold primary + muted secondary */
+#share-modal .row button {
+  padding: 10px 18px;
+  min-width: 150px;
+  border-radius: 3px;
+  border-color: rgba(58, 74, 102, 0.9);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(40, 48, 72, 0.98));
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.8),
+    0 6px 14px rgba(0, 0, 0, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.7);
+  font-size: 12px;
+  font-family: "PingFang SC", "Noto Sans SC", system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+#share-modal .row button.primary {
+  border-color: rgba(255, 210, 124, 0.9);
+  background:
+    radial-gradient(120% 180% at 50% 0%, rgba(255, 255, 255, 0.35), transparent 55%),
+    linear-gradient(180deg, rgba(255, 233, 180, 0.9), rgba(170, 110, 40, 0.95));
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.85),
+    0 8px 18px rgba(0, 0, 0, 0.75),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 -2px 4px rgba(139, 84, 16, 0.95);
+}
+#share-modal .row button:hover {
+  border-color: rgba(124, 242, 255, 0.9);
+}
+#share-modal .row button.primary:hover {
+  border-color: rgba(255, 230, 170, 0.98);
+}
+
+/* Ensure image stays below vignette, title/buttons above */
+#share-modal #share-image-container { z-index: 0; }
+#share-modal .modal-title, #share-modal .row { z-index: 2; }
+.modal-title {
+  color: var(--accent);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.modal-sub {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+.modal-form .field {
+  margin-bottom: 10px;
+}
+.field-label {
+  color: var(--muted);
+  font-size: 10px;
+  margin-bottom: 6px;
+}
+.setup-list-title {
+  color: var(--accent);
+  font-size: 11px;
+  margin-top: 10px;
+  margin-bottom: 8px;
+}
+.setup-list {
+  display: grid;
+  gap: 8px;
+}
+.setup-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  padding: 10px;
+  border: 2px solid rgba(58, 74, 102, 0.8);
+  background: rgba(0, 0, 0, 0.22);
+}
+.setup-item .name {
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.setup-item .persona {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Night vote modal */
+.vote-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.vote-card {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 10px;
+  align-items: center;
+  border: 2px solid rgba(58, 74, 102, 0.8);
+  background: rgba(0, 0, 0, 0.22);
+  padding: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.vote-card:hover {
+  border-color: rgba(124, 242, 255, 0.65);
+  transform: translateY(-1px);
+}
+.vote-card.disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+.vote-ava {
+  width: 48px;
+  height: 48px;
+  border: 2px solid rgba(58, 74, 102, 0.8);
+  background: rgba(0, 0, 0, 0.35);
+}
+.vote-name {
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.vote-sub {
+  color: var(--muted);
+  font-size: 10px;
+}
+.vote-log {
+  border: 2px solid rgba(58, 74, 102, 0.8);
+  background: rgba(0, 0, 0, 0.2);
+  padding: 10px;
+  max-height: 220px;
+  overflow: auto;
+  line-height: 1.6;
+}
+.setup-actions {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+button.primary {
+  border-color: rgba(124, 242, 255, 0.75);
+}
+.setup-error {
+  margin-top: 10px;
+  border: 2px solid rgba(255, 124, 124, 0.55);
+  background: rgba(255, 124, 124, 0.08);
+  color: rgba(255, 220, 220, 0.95);
+  padding: 8px 10px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.hint {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+#roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.role-pill {
+  padding: 6px 8px;
+  border: 2px solid var(--border);
+  background: rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  user-select: none;
+}
+.role-pill.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#chat {
+  height: 34vh;
+  min-height: 140px;
+  max-height: 260px;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.25);
+  border: 2px solid rgba(255, 255, 255, 0.08);
+  padding: 8px;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* actions + chat merged */
+.chat-wrap {
+  margin-bottom: 10px;
+}
+
+/* Make the merged interact panel allocate remaining height to chat and keep scrolling inside #chat */
+#interact-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: none; /* allow chat to use available space; right column already scrolls */
+}
+#actions-panel {
+  flex: 0 0 auto;
+}
+.chat-wrap {
+  flex: 1 1 auto;
+  min-height: 180px;
+  overflow: hidden; /* keep scroll inside #chat */
+}
+#chat {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+}
+
+.msg {
+  margin-bottom: 8px;
+}
+.msg .meta {
+  color: var(--muted);
+}
+.msg.system .meta {
+  color: var(--warn);
+}
+.msg.action .meta {
+  color: var(--ok);
+}
+.msg .content {
+  margin-top: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 1200px) {
+  #main {
+    grid-template-columns: 1fr;
+  }
+  #game-root {
+    height: 60vh;
+    min-height: 520px;
+  }
+  #right {
+    max-height: none;
+  }
+  #game-root {
+    height: 35%;
+  }
+  .party-card {
+    width: 220px;
+  }
+}
+
+
+/* Branch choice UI */
+.branch-choices {
+  margin-top: 8px;
+  padding: 8px;
+  border: 2px dashed rgba(124, 242, 255, 0.35);
+  background: rgba(0, 0, 0, 0.18);
+}
+.branch-choices .label {
+  font-size: 9px;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.branch-choices .choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.branch-choices button {
+  padding: 6px 8px;
+}
+
+
+/* Layout: top bar + two columns */
+#topbar {
+  flex: 0 0 auto;
+}
+#main {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 520px;
+  gap: 10px;
+  padding: 8px 12px 12px;
+  align-items: start;
+}
+/* #left is defined earlier (flex column) */
+#right {
+  min-width: 420px;
+  height: calc(100vh - 24px);
+  overflow: visible;
+  padding-right: 2px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#right-top {
+  margin-bottom: 10px;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+#panels {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}

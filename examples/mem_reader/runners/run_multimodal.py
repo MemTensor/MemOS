@@ -7,6 +7,7 @@ import traceback
 
 from examples.mem_reader.builders import build_multimodal_reader
 from examples.mem_reader.samples import (
+    GAME_MULTI_VIEW_CASES,
     MULTIMODAL_MESSAGE_CASES,
     RAW_INPUT_CASES,
     STRING_MESSAGE_CASES,
@@ -19,6 +20,7 @@ EXAMPLE_MAP = {
     "string_message": STRING_MESSAGE_CASES,
     "multimodal": MULTIMODAL_MESSAGE_CASES,
     "raw_input": RAW_INPUT_CASES,
+    "game_multi_view": GAME_MULTI_VIEW_CASES,
 }
 
 
@@ -28,7 +30,7 @@ def run_multimodal_reader():
     parser.add_argument(
         "--example",
         type=str,
-        default="all",
+        default="game_multi_view",
         choices=[*list(EXAMPLE_MAP.keys()), "all"],
         help="Example to run",
     )

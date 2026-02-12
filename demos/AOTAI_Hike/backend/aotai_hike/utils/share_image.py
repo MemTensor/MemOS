@@ -1,0 +1,776 @@
+"""
+Independent module for generating share images when the game ends (success or failure).
+Generates pixel-style images showing character config, route, journey, distance, outcome, and current location.
+"""
+
+from __future__ import annotations
+
+import io
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from aotai_hike.world.map_data import AoTaiGraph
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+
+if TYPE_CHECKING:
+    from aotai_hike.schemas import Role, WorldState, WorldStats
+
+
+def _node_exists(node_id: str) -> bool:
+    """Check if a node exists in the graph."""
+    try:
+        AoTaiGraph.get_node(node_id)
+        return True
+    except Exception:
+        return False
+
+
+@dataclass
+class GameOutcome:
+    """Game outcome information."""
+
+    is_success: bool
+    outcome_type: str  # "cross_success" or "retreat_success" or "failure" or "in_progress"
+    total_distance_km: float
+    current_node_id: str
+    current_node_name: str
+    days_spent: int
+    roles: list[Role]
+    visited_nodes: list[str]
+    journey_summary: dict[str, Any]
+    is_finished: bool = False  # Whether the game has ended
+    failure_reason: str | None = None  # Detailed failure reason if game failed
+
+
+class ShareImageGenerator:
+    """Generate pixel-style share images for game completion."""
+
+    # Pixel art style constants
+    # Keep share card at strict 3:4 (WIDTH : HEIGHT) to match frontend modal
+    # and the 3:4 background asset in `frontend/assets/share_background.png`.
+    WIDTH = 1024
+    HEIGHT = 1365
+    PIXEL_SIZE = 4  # Scale factor for pixel art effect
+    BG_COLOR = (240, 240, 230)
+    TEXT_COLOR = (40, 40, 40)
+    ACCENT_COLOR = (100, 150, 200)
+    SUCCESS_COLOR = (80, 180, 100)
+    FAILURE_COLOR = (200, 100, 100)
+
+    def __init__(self):
+        """Initialize the generator."""
+        self._font_cache: dict[str, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
+
+    @staticmethod
+    def _short_text(s: str, limit: int = 10) -> str:
+        s = (s or "").strip()
+        if len(s) <= limit:
+            return s
+        return s[:limit] + "…"
+
+    @staticmethod
+    def _pick_epithet_and_lore(
+        stats: WorldStats, outcome: GameOutcome, world_state: WorldState
+    ) -> tuple[str, str]:
+        """Rule-based epithet + lore."""
+
+        d = float(getattr(stats, "total_distance_km", 0.0) or 0.0)
+        decisions = int(getattr(stats, "decision_times", 0) or 0)
+        leader = int(getattr(stats, "leader_times", 0) or 0)
+        bad_weather = int(getattr(stats, "bad_weather_steps", 0) or 0)
+        weather = str(world_state.weather)
+
+        # Failure path first
+        if outcome.is_finished and not outcome.is_success:
+            if bad_weather > 0:
+                return (
+                    "风雪中的撤退者",
+                    "风雪压倒了脚步，但能安全撤回，已是不易。",
+                )
+            return (
+                "遗憾的行者",
+                "这次没能抵达终点，但山依旧在，故事仍在继续。",
+            )
+
+        # Base by distance
+        if d >= 40:
+            epithet = "雪线下的老练者"
+            lore = "漫长的山脊之行，脚步早已记住了每一处起伏。"
+        elif d >= 20:
+            epithet = "雪线下的坚行者"
+            lore = "一步一喘息，却一步也不肯退回头。"
+        else:
+            epithet = "雪线下的初行者"
+            lore = "第一次踏上这条路，山风也会记住你的名字。"
+
+        # Strategy / leadership
+        if decisions >= 8 and leader >= 2:
+            epithet = "雪线下的领路者"
+            lore = "无数次抉择之后，你学会用灯光与路线安抚同伴。"
+        elif decisions >= 5:
+            epithet = "岔路口的抉择者"
+            lore = "每一次岔路，都在悄悄改写这支队伍的命运。"
+
+        # Harsh weather
+        if bad_weather >= 5:
+            if weather in {"snowy", "foggy"}:
+                epithet = "风雪中的夜行人"
+                lore = "在风雪与雾气里摸索前行，唯有营灯与彼此作伴。"
+            elif weather in {"rainy", "windy"}:
+                epithet = "风雨中的固执者"
+                lore = "雨和风一次次劝退你，你却一次次系紧背带。"
+
+        return epithet, lore
+
+    def _get_font(self, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+        """Get or create a font of the specified size that supports Chinese characters."""
+        if size not in self._font_cache:
+            # Try common Chinese fonts on different platforms
+            font_paths = [
+                # macOS
+                "/System/Library/Fonts/PingFang.ttc",
+                "/System/Library/Fonts/STHeiti Light.ttc",
+                "/System/Library/Fonts/STHeiti Medium.ttc",
+                "/System/Library/Fonts/Supplemental/Songti.ttc",
+                # Linux
+                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+                "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+                "/usr/share/fonts/truetype/arphic/uming.ttc",
+                # Windows (common paths)
+                "C:/Windows/Fonts/msyh.ttc",  # Microsoft YaHei
+                "C:/Windows/Fonts/simhei.ttf",  # SimHei
+                "C:/Windows/Fonts/simsun.ttc",  # SimSun
+            ]
+
+            font_loaded = False
+            for font_path in font_paths:
+                try:
+                    # For .ttc files, we need to specify index (0 for first font)
+                    if font_path.endswith(".ttc"):
+                        self._font_cache[size] = ImageFont.truetype(font_path, size, index=0)
+                    else:
+                        self._font_cache[size] = ImageFont.truetype(font_path, size)
+                    font_loaded = True
+                    break
+                except Exception:
+                    continue
+
+            if not font_loaded:
+                # Last resort: try to use default font (may not support Chinese)
+                try:
+                    self._font_cache[size] = ImageFont.load_default()
+                except Exception:
+                    # If all else fails, create a basic font
+                    self._font_cache[size] = ImageFont.load_default()
+        return self._font_cache[size]
+
+    def generate(
+        self, world_state: WorldState, outcome: GameOutcome
+    ) -> tuple[bytes, dict[str, Any]]:
+        """
+        Generate a share image and return both the image bytes and structured JSON data.
+
+        Returns:
+            tuple[bytes, dict]: (image_bytes, structured_json_data)
+        """
+        # Create base image: try to use share_background.png, fallback to solid color
+        img = None
+        try:
+            # Backend dir: demos/AOTAI_Hike/backend/aotai_hike/utils/share_image.py
+            # Frontend assets: demos/AOTAI_Hike/frontend/assets/share_background.png
+            root = Path(__file__).resolve().parents[3]
+            bg_path = root / "frontend" / "assets" / "share_background.png"
+            if bg_path.is_file():
+                bg = Image.open(bg_path).convert("RGB")
+                # Use NEAREST to keep a clear pixel-art look (avoid smoothing)
+                bg = bg.resize((self.WIDTH, self.HEIGHT), Image.NEAREST)
+                img = bg
+        except Exception:
+            img = None
+
+        if img is None:
+            img = Image.new("RGB", (self.WIDTH, self.HEIGHT), self.BG_COLOR)
+
+        # Convert to RGBA and add a dark, textured panel behind text
+        img = img.convert("RGBA")
+
+        # === Dark panel with subtle vignette & texture =======================
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+
+        # Panel margins
+        panel_margin_x = 72
+        panel_margin_top = 96
+        panel_margin_bottom = 132
+        panel_rect = (
+            panel_margin_x,
+            panel_margin_top,
+            self.WIDTH - panel_margin_x,
+            self.HEIGHT - panel_margin_bottom,
+        )
+
+        base_panel_color_top = (18, 24, 40, 220)
+        base_panel_color_bottom = (10, 12, 22, 235)
+        panel = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        panel_draw = ImageDraw.Draw(panel)
+        panel_draw.rectangle(panel_rect, fill=base_panel_color_bottom)
+
+        grad_steps = 32
+        top, bottom = panel_rect[1], panel_rect[3]
+        height_panel = bottom - top
+        for i in range(grad_steps):
+            t = i / max(1, grad_steps - 1)
+            alpha = int(220 + (235 - 220) * t)
+            r = int(
+                base_panel_color_top[0] + (base_panel_color_bottom[0] - base_panel_color_top[0]) * t
+            )
+            g = int(
+                base_panel_color_top[1] + (base_panel_color_bottom[1] - base_panel_color_top[1]) * t
+            )
+            b = int(
+                base_panel_color_top[2] + (base_panel_color_bottom[2] - base_panel_color_top[2]) * t
+            )
+            y = top + int(height_panel * t)
+            panel_draw.line([(panel_rect[0], y), (panel_rect[2], y)], fill=(r, g, b, alpha))
+
+        border_color = (220, 180, 90, 120)
+        for i in range(2):
+            inset = i
+            panel_draw.rectangle(
+                (
+                    panel_rect[0] + inset,
+                    panel_rect[1] + inset,
+                    panel_rect[2] - inset,
+                    panel_rect[3] - inset,
+                ),
+                outline=border_color,
+            )
+
+        vignette = Image.new("L", img.size, 0)
+        v_draw = ImageDraw.Draw(vignette)
+        v_draw.ellipse(
+            (
+                panel_rect[0] - 80,
+                panel_rect[1] - 60,
+                panel_rect[2] + 80,
+                panel_rect[3] + 120,
+            ),
+            fill=255,
+        )
+        vignette = vignette.filter(ImageFilter.GaussianBlur(60))
+        panel.putalpha(vignette)
+
+        overlay = Image.alpha_composite(overlay, panel)
+        img = Image.alpha_composite(img, overlay)
+
+        draw = ImageDraw.Draw(img)
+
+        # Vertical layout metrics tuned for the new panel
+        y_offset = panel_rect[1] + 36
+        line_height = 34
+        section_spacing = 22
+
+        # Precompute epithet
+        epithet, lore = self._pick_epithet_and_lore(world_state.stats, outcome, world_state)
+
+        title_font = self._get_font(50)
+        title_text = "鳌太线徒步记录"
+        draw.text(
+            (self.WIDTH // 2, y_offset),
+            title_text,
+            fill=(234, 242, 255),
+            anchor="mt",
+            font=title_font,
+            stroke_width=2,
+            stroke_fill=(20, 24, 40),
+        )
+        y_offset += 68
+
+        # Outcome banner (only show if game is finished)
+        if outcome.is_finished:
+            if outcome.is_success:
+                if outcome.outcome_type == "cross_success":
+                    outcome_text = f"✓ 穿越成功 - 成功到达{outcome.current_node_name}"
+                    outcome_color = self.SUCCESS_COLOR
+                else:  # retreat_success
+                    outcome_text = f"✓ 下撤成功 - 成功下撤至{outcome.current_node_name}"
+                    outcome_color = self.SUCCESS_COLOR
+            else:
+                # Show detailed failure reason
+                if outcome.failure_reason:
+                    outcome_text = f"✗ {outcome.failure_reason}"
+                else:
+                    outcome_text = "✗ 挑战失败"
+                outcome_color = self.FAILURE_COLOR
+
+            outcome_font = self._get_font(32)
+            draw.text(
+                (self.WIDTH // 2, y_offset),
+                outcome_text,
+                fill=outcome_color,
+                anchor="mt",
+                font=outcome_font,
+            )
+            y_offset += 50
+        else:
+            # Game in progress - show status
+            status_font = self._get_font(32)
+            status_text = "进行中..."
+            draw.text(
+                (self.WIDTH // 2, y_offset),
+                status_text,
+                fill=self.ACCENT_COLOR,
+                anchor="mt",
+                font=status_font,
+            )
+            y_offset += 50
+
+        # Epithet + lore block
+        epithet_font = self._get_font(32)
+        lore_font = self._get_font(22)
+
+        draw.text(
+            (self.WIDTH // 2, y_offset + 10),
+            epithet,
+            fill=(236, 228, 196),
+            anchor="mt",
+            font=epithet_font,
+            stroke_width=2,
+            stroke_fill=(20, 18, 12),
+        )
+        y_offset += 52
+
+        draw.text(
+            (self.WIDTH // 2, y_offset),
+            lore,
+            fill=(210, 208, 222),
+            anchor="mt",
+            font=lore_font,
+        )
+        y_offset += 46
+
+        stats_font = self._get_font(28)
+        left_x = panel_rect[0] + 36
+
+        stats = [
+            f"总距离：{outcome.total_distance_km:.1f} km",
+            f"用时：{outcome.days_spent} 天",
+            f"当前位置：{outcome.current_node_name}",
+        ]
+        for stat in stats:
+            draw.text(
+                (left_x, y_offset),
+                stat,
+                fill=(225, 235, 248),
+                font=stats_font,
+                stroke_width=1,
+                stroke_fill=(10, 12, 20),
+            )
+            y_offset += line_height
+        y_offset += section_spacing
+
+        # Separator line
+        sep_y = y_offset - int(section_spacing * 0.4)
+        draw.line(
+            (panel_rect[0] + 20, sep_y, panel_rect[2] - 20, sep_y),
+            fill=(210, 170, 90, 180),
+            width=1,
+        )
+
+        # Roles section
+        role_font = self._get_font(28)
+        draw.text(
+            (left_x, y_offset),
+            "队伍成员：",
+            fill=self.ACCENT_COLOR,
+            font=role_font,
+        )
+        y_offset += line_height + 5
+        for role in outcome.roles:
+            role_text = f"· {role.name}：体力 {role.attrs.stamina}/100，情绪 {role.attrs.mood}/100"
+            draw.text(
+                (left_x + 8, y_offset),
+                role_text,
+                fill=(225, 235, 248),
+                font=role_font,
+            )
+            y_offset += line_height - 5
+        y_offset += section_spacing
+
+        # Route section
+        route_font = self._get_font(28)
+        draw.text(
+            (left_x, y_offset),
+            "路线节点：",
+            fill=self.ACCENT_COLOR,
+            font=route_font,
+        )
+        y_offset += line_height + 5
+
+        # Show visited nodes (limit to fit on image)
+        visited_display = outcome.visited_nodes[:15]  # Limit display
+        node_names = []
+        for nid in visited_display:
+            try:
+                node_names.append(AoTaiGraph.get_node(nid).name)
+            except Exception:
+                continue
+        route_text = " → ".join(node_names)
+        if len(outcome.visited_nodes) > 15:
+            route_text += " ..."
+
+        # Wrap long route text
+        max_width = self.WIDTH - 120
+        words = route_text.split(" → ")
+        lines = []
+        current_line = ""
+        for word in words:
+            test_line = current_line + (" → " if current_line else "") + word
+            bbox = draw.textbbox((0, 0), test_line, font=route_font)
+            if bbox[2] - bbox[0] <= max_width:
+                current_line = test_line
+            else:
+                if current_line:
+                    lines.append(current_line)
+                current_line = word
+        if current_line:
+            lines.append(current_line)
+
+        for line in lines[:5]:  # Limit to 5 lines
+            draw.text(
+                (left_x + 8, y_offset),
+                line,
+                fill=(215, 225, 240),
+                font=route_font,
+            )
+            y_offset += line_height - 5
+        y_offset += section_spacing
+
+        # Journey summary as human-readable sentences (no raw JSON)
+        summary_font = self._get_font(28)
+        draw.text(
+            (left_x, y_offset),
+            "旅程摘要：",
+            fill=self.ACCENT_COLOR,
+            font=summary_font,
+        )
+        y_offset += line_height + 2
+
+        total_nodes = outcome.journey_summary.get("total_nodes_visited", 0)
+        key_events = outcome.journey_summary.get("key_events") or []
+        final_weather = outcome.journey_summary.get("final_weather", "")
+        final_time = outcome.journey_summary.get("final_time", "")
+
+        summary_lines = []
+        summary_lines.append(f"共到达 {total_nodes} 个节点，记录 {len(key_events)} 次关键事件。")
+        if final_weather or final_time:
+            summary_lines.append(
+                f"最终天气：{final_weather or '未知'}，最终时间：{final_time or '未知'}。"
+            )
+
+        for line in summary_lines:
+            draw.text(
+                (left_x + 8, y_offset),
+                line,
+                fill=(200, 210, 230),
+                font=summary_font,
+            )
+            y_offset += line_height - 6
+
+        memory_font = self._get_font(24)
+        highlights = list(getattr(world_state.stats, "memory_highlights", []) or [])
+        if highlights:
+            y_offset += section_spacing
+            draw.text(
+                (left_x, y_offset),
+                "关键记忆：",
+                fill=self.ACCENT_COLOR,
+                font=memory_font,
+            )
+            y_offset += line_height
+            for h in highlights:
+                draw.text(
+                    (left_x + 8, y_offset),
+                    f"· {self._short_text(h, 24)}",
+                    fill=(210, 220, 235),
+                    font=memory_font,
+                )
+                y_offset += line_height - 4
+
+        # Footer
+        footer_font = self._get_font(28)
+        footer_text = "Generated by MemOS AoTai Hike Demo"
+        draw.text(
+            (self.WIDTH // 2, self.HEIGHT - 30),
+            footer_text,
+            fill=(150, 150, 150),
+            anchor="mt",
+            font=footer_font,
+        )
+
+        # Convert to bytes
+        img_bytes = io.BytesIO()
+        img.save(img_bytes, format="PNG")
+        img_bytes.seek(0)
+
+        # Structured JSON data (v2-style, compatible with original info)
+        json_data = {
+            "summary": {
+                "title": "鳌太线徒步记录",
+                "status": "finished"
+                if outcome.is_finished and outcome.is_success
+                else ("failed" if outcome.is_finished else "running"),
+                "result_text": (
+                    "穿越成功"
+                    if outcome.is_finished and outcome.is_success
+                    else ("挑战失败" if outcome.is_finished else "进行中...")
+                ),
+                "fail_reason": outcome.failure_reason or "",
+                "epithet": epithet,
+                "lore": lore,
+            },
+            "party": [
+                {
+                    "role_id": r.role_id,
+                    "name": r.name,
+                    "persona": r.persona,
+                    "persona_short": self._short_text(r.persona, 10),
+                    "role_tag": ("队长" if r.role_id == world_state.leader_role_id else ""),
+                    "is_player": (r.role_id == world_state.active_role_id),
+                    "attrs": {
+                        "stamina": r.attrs.stamina,
+                        "mood": r.attrs.mood,
+                        "experience": r.attrs.experience,
+                        "risk_tolerance": r.attrs.risk_tolerance,
+                        "supplies": r.attrs.supplies,
+                    },
+                }
+                for r in outcome.roles
+            ],
+            "team_stats": [
+                {
+                    "label": "体力均值",
+                    "value": round(
+                        sum(r.attrs.stamina for r in outcome.roles) / max(1, len(outcome.roles)), 1
+                    ),
+                    "max": 100,
+                },
+                {
+                    "label": "士气均值",
+                    "value": round(
+                        sum(r.attrs.mood for r in outcome.roles) / max(1, len(outcome.roles)), 1
+                    ),
+                    "max": 100,
+                },
+                {
+                    "label": "风险均值",
+                    "value": round(
+                        sum(r.attrs.risk_tolerance for r in outcome.roles)
+                        / max(1, len(outcome.roles)),
+                        1,
+                    ),
+                    "max": 100,
+                },
+            ],
+            "map": {
+                "distance_km": outcome.total_distance_km,
+                "current_node": outcome.current_node_name,
+                "key_nodes": [
+                    AoTaiGraph.get_node(nid).name
+                    for nid in outcome.visited_nodes
+                    if _node_exists(nid)
+                    and AoTaiGraph.get_node(nid).kind
+                    in {"camp", "junction", "exit", "peak", "lake"}
+                ],
+            },
+            "env": {
+                "weather_main": world_state.weather,
+                "road_tags": list(
+                    {
+                        AoTaiGraph.get_node(nid).name
+                        for nid in outcome.visited_nodes
+                        if _node_exists(nid)
+                    }
+                ),
+            },
+            "memory": {
+                "tags": [],
+                "highlight": list(getattr(world_state.stats, "memory_highlights", []) or []),
+                "count_new": len(getattr(world_state.stats, "memory_highlights", []) or []),
+                "count_forgot": 0,
+            },
+            "actions": {
+                "download_enabled": True,
+                "close_enabled": True,
+            },
+            "watermark": "Generated by MemOS AoTai Hike Demo",
+            "outcome": {
+                "is_success": outcome.is_success,
+                "outcome_type": outcome.outcome_type,
+                "total_distance_km": outcome.total_distance_km,
+                "days_spent": outcome.days_spent,
+                "is_finished": outcome.is_finished,
+                "failure_reason": outcome.failure_reason,
+            },
+            "current_location": {
+                "node_id": outcome.current_node_id,
+                "node_name": outcome.current_node_name,
+            },
+            "route": {
+                "visited_node_ids": outcome.visited_nodes,
+                "visited_node_names": [
+                    AoTaiGraph.get_node(nid).name
+                    for nid in outcome.visited_nodes
+                    if _node_exists(nid)
+                ],
+            },
+            "journey_summary": outcome.journey_summary,
+        }
+
+        return img_bytes.getvalue(), json_data
+
+
+def calculate_current_state(world_state: WorldState) -> GameOutcome:
+    """
+    Calculate current game state for sharing (works for both finished and in-progress games).
+
+    Args:
+        world_state: Current world state
+
+    Returns:
+        GameOutcome with current state information
+    """
+    current_node_id = world_state.current_node_id
+
+    # Check if reached end nodes
+    is_end = current_node_id in ("end_exit", "bailout_2800", "bailout_ridge")
+
+    # Check for failure conditions
+    all_stamina_zero = (
+        all(role.attrs.stamina <= 0 for role in world_state.roles) if world_state.roles else False
+    )
+
+    # Determine outcome
+    if is_end:
+        is_finished = True
+        if current_node_id == "end_exit":
+            outcome_type = "cross_success"
+            is_success = True
+            failure_reason = None
+        elif current_node_id in ("bailout_2800", "bailout_ridge"):
+            outcome_type = "retreat_success"
+            is_success = True
+            failure_reason = None
+        else:
+            outcome_type = "failure"
+            is_success = False
+            failure_reason = "挑战失败"
+    elif all_stamina_zero:
+        is_finished = True
+        outcome_type = "failure"
+        is_success = False
+        failure_reason = "所有人体力耗尽失败"
+    else:
+        is_finished = False
+        outcome_type = "in_progress"
+        is_success = False
+        failure_reason = None
+
+    # Calculate total distance
+    total_distance = 0.0
+    visited = world_state.visited_node_ids
+    for i in range(len(visited) - 1):
+        from_id = visited[i]
+        to_id = visited[i + 1]
+        edges = AoTaiGraph.outgoing(from_id)
+        for edge in edges:
+            if edge.to_node_id == to_id:
+                total_distance += getattr(edge, "distance_km", 1.0)
+                break
+
+    # Add current transit progress if in transit
+    if world_state.in_transit_progress_km:
+        total_distance += world_state.in_transit_progress_km
+
+    # Get current node name
+    try:
+        current_node = AoTaiGraph.get_node(current_node_id)
+        current_node_name = current_node.name
+    except Exception:
+        current_node_name = current_node_id
+
+    # Build journey summary
+    journey_summary = {
+        "total_nodes_visited": len(visited),
+        "key_events": world_state.recent_events[-10:],  # Last 10 events
+        "final_weather": world_state.weather,
+        "final_time": world_state.time_of_day,
+        "leader_history": [],  # Could be expanded to track leader changes
+    }
+
+    return GameOutcome(
+        is_success=is_success,
+        outcome_type=outcome_type,
+        total_distance_km=total_distance,
+        current_node_id=current_node_id,
+        current_node_name=current_node_name,
+        days_spent=world_state.day,
+        roles=world_state.roles,
+        visited_nodes=visited,
+        journey_summary=journey_summary,
+        is_finished=is_finished,
+        failure_reason=failure_reason,
+    )
+
+
+def calculate_outcome(world_state: WorldState) -> GameOutcome | None:
+    """
+    Calculate game outcome based on current world state.
+    Returns None if game is not finished yet.
+
+    Args:
+        world_state: Current world state
+
+    Returns:
+        GameOutcome if game is finished, None otherwise
+    """
+    outcome = calculate_current_state(world_state)
+    if not outcome.is_finished:
+        return None
+    return outcome
+
+
+def generate_share_image(world_state: WorldState) -> tuple[bytes, dict[str, Any]] | None:
+    """
+    Main entry point: generate share image if game is finished.
+
+    Args:
+        world_state: Current world state
+
+    Returns:
+        tuple[bytes, dict] if game finished: (image_bytes, json_data)
+        None if game not finished
+    """
+    outcome = calculate_outcome(world_state)
+    if outcome is None:
+        return None
+
+    generator = ShareImageGenerator()
+    return generator.generate(world_state, outcome)
+
+
+def generate_current_share_image(world_state: WorldState) -> tuple[bytes, dict[str, Any]]:
+    """
+    Generate share image for current game state (works for both finished and in-progress games).
+
+    Args:
+        world_state: Current world state
+
+    Returns:
+        tuple[bytes, dict]: (image_bytes, json_data)
+    """
+    outcome = calculate_current_state(world_state)
+    generator = ShareImageGenerator()
+    return generator.generate(world_state, outcome)

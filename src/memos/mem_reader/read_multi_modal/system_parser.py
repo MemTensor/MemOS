@@ -68,6 +68,8 @@ class SystemParser(BaseMessageParser):
             message_id=message.get("message_id", None),
             content=content_wo_tool_schema,
             tool_schema=tool_schema_content,
+            role_id=message.get("role_id", None),
+            role_name=message.get("role_name", None),
         )
         return _add_lang_to_source(source, content_wo_tool_schema)
 
@@ -243,6 +245,13 @@ class SystemParser(BaseMessageParser):
 
         # Extract info fields
         info_ = info.copy()
+        # Attach multi-view role info (if present on the message) into info_
+        role_id = message.get("role_id", None)
+        role_name = message.get("role_name", None)
+        if role_id is not None:
+            info_["role_id"] = role_id
+        if role_name is not None:
+            info_["role_name"] = role_name
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
 
