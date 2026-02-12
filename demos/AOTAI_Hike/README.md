@@ -3,7 +3,8 @@
 > A pixel-art interactive narrative game demo based on the MemOS multi-view memory system
 
 <div align="center">
-  <img src="./banner.png" alt="AoTai Hike × MemOS - Poly-View Memory" width="100%">
+  <img src="./banner.png" alt="AoTai Hike × MemOS - Multi-View Memory"
+width="100%">
 </div>
 
 ## 📖 Overview
