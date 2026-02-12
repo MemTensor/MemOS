@@ -116,6 +116,7 @@ class VLLMLLMConfig(BaseLLMConfig):
         default=False,
         description="Enable reasoning outputs from vLLM",
     )
+    extra_body: Any = Field(default=None, description="Extra options for API")
 
 
 class LLMConfigFactory(BaseConfig):
