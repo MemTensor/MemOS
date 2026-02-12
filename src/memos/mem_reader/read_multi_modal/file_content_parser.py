@@ -5,7 +5,7 @@ import os
 import re
 import tempfile
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tqdm import tqdm
 
@@ -32,6 +32,10 @@ from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
 )
 from memos.types.openai_chat_completion_types import File
+
+
+if TYPE_CHECKING:
+    from memos.types.general_types import UserContext
 
 
 logger = get_logger(__name__)
@@ -465,6 +469,11 @@ class FileContentParser(BaseMessageParser):
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
 
+        # Extract manager_user_id and project_id from user_context
+        user_context: UserContext | None = kwargs.get("user_context")
+        manager_user_id = user_context.manager_user_id if user_context else None
+        project_id = user_context.project_id if user_context else None
+
         # For file content parts, default to LongTermMemory
         # (since we don't have role information at this level)
         memory_type = "LongTermMemory"
@@ -509,6 +518,8 @@ class FileContentParser(BaseMessageParser):
                     type="fact",
                     info=info_,
                     file_ids=file_ids,
+                    manager_user_id=manager_user_id,
+                    project_id=project_id,
                 ),
             )
             memory_items.append(memory_item)
@@ -541,6 +552,8 @@ class FileContentParser(BaseMessageParser):
                     type="fact",
                     info=info_,
                     file_ids=file_ids,
+                    manager_user_id=manager_user_id,
+                    project_id=project_id,
                 ),
             )
             memory_items.append(memory_item)
@@ -658,6 +671,12 @@ class FileContentParser(BaseMessageParser):
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
+
+        # Extract manager_user_id and project_id from user_context
+        user_context: UserContext | None = kwargs.get("user_context")
+        manager_user_id = user_context.manager_user_id if user_context else None
+        project_id = user_context.project_id if user_context else None
+
         if file_id:
             info_["file_id"] = file_id
         file_ids = [file_id] if file_id else []
@@ -716,6 +735,8 @@ class FileContentParser(BaseMessageParser):
                     type="fact",
                     info=info_,
                     file_ids=file_ids,
+                    manager_user_id=manager_user_id,
+                    project_id=project_id,
                 ),
             )
 
@@ -724,7 +745,7 @@ class FileContentParser(BaseMessageParser):
             chunk_idx: int, chunk_text: str, reason: str = "raw"
         ) -> TextualMemoryItem:
             """Create fallback memory item with raw chunk text."""
-            return _make_memory_item(
+            raw_chunk_mem = _make_memory_item(
                 value=chunk_text,
                 tags=[
                     "mode:fine",
@@ -735,6 +756,11 @@ class FileContentParser(BaseMessageParser):
                 chunk_idx=chunk_idx,
                 chunk_content=chunk_text,
             )
+            tags_list = self.tokenizer.tokenize_mixed(raw_chunk_mem.metadata.key)
+            tags_list = [tag for tag in tags_list if len(tag) > 1]
+            tags_list = sorted(tags_list, key=len, reverse=True)
+            raw_chunk_mem.metadata.tags.extend(tags_list[:5])
+            return raw_chunk_mem
 
         # Handle empty chunks case
         if not valid_chunks:
@@ -781,10 +807,36 @@ class FileContentParser(BaseMessageParser):
             logger.warning(f"[FileContentParser] Fallback to raw for chunk {chunk_idx}")
             return _make_fallback(chunk_idx, chunk_text)
 
+        def _relate_chunks(items: list[TextualMemoryItem]) -> None:
+            """
+            Relate chunks to each other.
+            """
+            if len(items) <= 1:
+                return []
+
+            def get_chunk_idx(item: TextualMemoryItem) -> int:
+                """Extract chunk_idx from item's source metadata."""
+                if item.metadata.sources and len(item.metadata.sources) > 0:
+                    source = item.metadata.sources[0]
+                    if source.file_info and isinstance(source.file_info, dict):
+                        chunk_idx = source.file_info.get("chunk_index")
+                        if chunk_idx is not None:
+                            return chunk_idx
+                return float("inf")
+
+            sorted_items = sorted(items, key=get_chunk_idx)
+
+            # Relate adjacent items
+            for i in range(len(sorted_items) - 1):
+                sorted_items[i].metadata.following_id = sorted_items[i + 1].id
+                sorted_items[i + 1].metadata.preceding_id = sorted_items[i].id
+            return sorted_items
+
         # Process chunks concurrently with progress bar
         memory_items = []
         chunk_map = dict(valid_chunks)
         total_chunks = len(valid_chunks)
+        fallback_count = 0
 
         logger.info(f"[FileContentParser] Processing {total_chunks} chunks with LLM...")
 
@@ -802,20 +854,53 @@ class FileContentParser(BaseMessageParser):
                 chunk_idx = futures[future]
                 try:
                     node = future.result()
-                    if node:
-                        memory_items.append(node)
+                    memory_items.append(node)
+
+                    # Check if this node is a fallback by checking tags
+                    is_fallback = any(tag.startswith("fallback:") for tag in node.metadata.tags)
+                    if is_fallback:
+                        fallback_count += 1
+
+                    # save raw file
+                    node_id = node.id
+                    if node.memory != node.metadata.sources[0].content:
+                        chunk_node = _make_memory_item(
+                            value=node.metadata.sources[0].content,
+                            mem_type="RawFileMemory",
+                            tags=[
+                                "mode:fine",
+                                "multimodal:file",
+                                f"chunk:{chunk_idx + 1}/{total_chunks}",
+                            ],
+                            chunk_idx=chunk_idx,
+                            chunk_content="",
+                        )
+                        chunk_node.metadata.summary_ids = [node_id]
+                        memory_items.append(chunk_node)
+
                 except Exception as e:
                     tqdm.write(f"[ERROR] Chunk {chunk_idx} failed: {e}")
                     logger.error(f"[FileContentParser] Future failed for chunk {chunk_idx}: {e}")
                     # Create fallback for failed future
                     if chunk_idx in chunk_map:
+                        fallback_count += 1
                         memory_items.append(
                             _make_fallback(chunk_idx, chunk_map[chunk_idx], "error")
                         )
 
+        fallback_percentage = (fallback_count / total_chunks * 100) if total_chunks > 0 else 0.0
         logger.info(
-            f"[FileContentParser] Completed processing {len(memory_items)}/{total_chunks} chunks"
+            f"[FileContentParser] Completed processing {len(memory_items)}/{total_chunks} chunks, "
+            f"fallback count: {fallback_count}/{total_chunks} ({fallback_percentage:.1f}%)"
         )
+        rawfile_items = [
+            memory for memory in memory_items if memory.metadata.memory_type == "RawFileMemory"
+        ]
+        mem_items = [
+            memory for memory in memory_items if memory.metadata.memory_type != "RawFileMemory"
+        ]
+        related_rawfile_items = _relate_chunks(rawfile_items)
+        memory_items = mem_items + related_rawfile_items
 
         return memory_items or [
             _make_memory_item(

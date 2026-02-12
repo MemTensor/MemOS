@@ -24,7 +24,9 @@ from memos.mem_scheduler.schemas.task_schemas import (
     MEM_READ_TASK_LABEL,
     PREF_ADD_TASK_LABEL,
 )
+from memos.memories.textual.item import TextualMemoryItem
 from memos.multi_mem_cube.views import MemCubeView
+from memos.search import search_text_memories
 from memos.templates.mem_reader_prompts import PROMPT_MAPPING
 from memos.types.general_types import (
     FINE_STRATEGY,
@@ -44,7 +46,6 @@ if TYPE_CHECKING:
     from memos.mem_cube.navie import NaiveMemCube
     from memos.mem_reader.simple_struct import SimpleStructMemReader
     from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
-    from memos.memories.textual.item import TextualMemoryItem
 
 
 @dataclass
@@ -72,6 +73,8 @@ class SingleCubeView(MemCubeView):
             user_id=add_req.user_id,
             mem_cube_id=self.cube_id,
             session_id=add_req.session_id or "default_session",
+            manager_user_id=add_req.manager_user_id,
+            project_id=add_req.project_id,
         )
 
         target_session_id = add_req.session_id or "default_session"
@@ -266,11 +269,12 @@ class SingleCubeView(MemCubeView):
             search_filter=search_filter,
             info=info,
         )
-        formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
-            for data in enhanced_memories
-        ]
-        return formatted_memories
+        return self._postformat_memories(
+            enhanced_memories,
+            user_context.mem_cube_id,
+            include_embedding=search_req.dedup == "sim",
+            neighbor_discovery=search_req.neighbor_discovery,
+        )
 
     def _agentic_search(
         self, search_req: APISearchRequest, user_context: UserContext, max_thinking_depth: int
@@ -278,11 +282,12 @@ class SingleCubeView(MemCubeView):
         deepsearch_results = self.deepsearch_agent.run(
             search_req.query, user_id=user_context.mem_cube_id
         )
-        formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
-            for data in deepsearch_results
-        ]
-        return formatted_memories
+        return self._postformat_memories(
+            deepsearch_results,
+            user_context.mem_cube_id,
+            include_embedding=search_req.dedup == "sim",
+            neighbor_discovery=search_req.neighbor_discovery,
+        )
 
     def _fine_search(
         self,
@@ -323,6 +328,7 @@ class SingleCubeView(MemCubeView):
             user_name=user_context.mem_cube_id,
             top_k=search_req.top_k,
             mode=SearchMode.FINE,
+            memory_type=search_req.search_memory_type,
             manual_close_internet=not search_req.internet_search,
             moscube=search_req.moscube,
             search_filter=search_filter,
@@ -362,7 +368,7 @@ class SingleCubeView(MemCubeView):
                     user_name=user_context.mem_cube_id,
                     top_k=retrieval_size,
                     mode=SearchMode.FAST,
-                    memory_type="All",
+                    memory_type=search_req.search_memory_type,
                     search_priority=search_priority,
                     search_filter=search_filter,
                     info=info,
@@ -390,10 +396,12 @@ class SingleCubeView(MemCubeView):
         deduped_memories = (
             enhanced_memories if search_req.dedup == "no" else _dedup_by_content(enhanced_memories)
         )
-        formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
-            for data in deduped_memories
-        ]
+        formatted_memories = self._postformat_memories(
+            deduped_memories,
+            user_context.mem_cube_id,
+            include_embedding=search_req.dedup == "sim",
+            neighbor_discovery=search_req.neighbor_discovery,
+        )
 
         logger.info(f"Found {len(formatted_memories)} memories for user {search_req.user_id}")
 
@@ -435,7 +443,7 @@ class SingleCubeView(MemCubeView):
                 },
                 search_filter=search_req.filter,
             )
-            return [format_memory_item(data) for data in results]
+            return self._postformat_memories(results, user_context.mem_cube_id)
         except Exception as e:
             self.logger.error("Error in _search_pref: %s; traceback: %s", e, traceback.format_exc())
             return []
@@ -455,39 +463,73 @@ class SingleCubeView(MemCubeView):
         Returns:
             List of search results
         """
-        target_session_id = search_req.session_id or "default_session"
-        search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
-        search_filter = search_req.filter or None
-        plugin = bool(search_req.source is not None and search_req.source == "plugin")
-
-        search_results = self.naive_mem_cube.text_mem.search(
-            query=search_req.query,
-            user_name=user_context.mem_cube_id,
-            top_k=search_req.top_k,
+        search_results = search_text_memories(
+            text_mem=self.naive_mem_cube.text_mem,
+            search_req=search_req,
+            user_context=user_context,
             mode=SearchMode.FAST,
-            manual_close_internet=not search_req.internet_search,
-            memory_type=search_req.search_memory_type,
-            search_filter=search_filter,
-            search_priority=search_priority,
-            info={
-                "user_id": search_req.user_id,
-                "session_id": target_session_id,
-                "chat_history": search_req.chat_history,
-            },
-            plugin=plugin,
-            search_tool_memory=search_req.search_tool_memory,
-            tool_mem_top_k=search_req.tool_mem_top_k,
-            include_skill_memory=search_req.include_skill_memory,
-            skill_mem_top_k=search_req.skill_mem_top_k,
-            dedup=search_req.dedup,
+            include_embedding=(search_req.dedup == "mmr"),
         )
 
-        formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
-            for data in search_results
-        ]
+        return self._postformat_memories(
+            search_results,
+            user_context.mem_cube_id,
+            include_embedding=search_req.dedup == "sim",
+            neighbor_discovery=search_req.neighbor_discovery,
+        )
 
-        return formatted_memories
+    def _postformat_memories(
+        self,
+        search_results: list,
+        user_name: str,
+        include_embedding: bool = False,
+        neighbor_discovery: bool = False,
+    ) -> list:
+        """
+        Postprocess search results.
+        """
+
+        def extract_edge_info(edges_info: list[dict], neighbor_relativity: float):
+            edge_mems = []
+            for edge in edges_info:
+                chunk_target_id = edge.get("to")
+                edge_type = edge.get("type")
+                item_neighbor = self.searcher.graph_store.get_node(chunk_target_id)
+                if item_neighbor:
+                    item_neighbor_mem = TextualMemoryItem(**item_neighbor)
+                    item_neighbor_mem.metadata.relativity = neighbor_relativity
+                    edge_mems.append(item_neighbor_mem)
+                    item_neighbor_id = item_neighbor.get("id", "None")
+                    self.logger.info(
+                        f"Add neighbor chunk: {item_neighbor_id}, edge_type: {edge_type} for {item.id}"
+                    )
+            return edge_mems
+
+        final_items = []
+        if neighbor_discovery:
+            for item in search_results:
+                if item.metadata.memory_type == "RawFileMemory":
+                    neighbor_relativity = item.metadata.relativity * 0.8
+                    preceding_info = self.searcher.graph_store.get_edges(
+                        item.id, type="PRECEDING", direction="OUTGOING", user_name=user_name
+                    )
+                    final_items.extend(extract_edge_info(preceding_info, neighbor_relativity))
+
+                    final_items.append(item)
+
+                    following_info = self.searcher.graph_store.get_edges(
+                        item.id, type="FOLLOWING", direction="OUTGOING", user_name=user_name
+                    )
+                    final_items.extend(extract_edge_info(following_info, neighbor_relativity))
+
+                else:
+                    final_items.append(item)
+        else:
+            final_items = search_results
+
+        return [
+            format_memory_item(data, include_embedding=include_embedding) for data in final_items
+        ]
 
     def _mix_search(
         self,
@@ -554,6 +596,7 @@ class SingleCubeView(MemCubeView):
                     user_name=self.cube_id,
                     info=add_req.info,
                     chat_history=add_req.chat_history,
+                    user_context=user_context,
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item_read])
                 self.logger.info(
@@ -624,6 +667,7 @@ class SingleCubeView(MemCubeView):
                     info=add_req.info,
                     user_name=self.cube_id,
                     task_id=add_req.task_id,
+                    user_context=user_context,
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item_pref])
                 self.logger.info(f"[SingleCubeView] cube={self.cube_id} Submitted PREF_ADD async")
@@ -643,6 +687,7 @@ class SingleCubeView(MemCubeView):
                     "session_id": target_session_id,
                     "mem_cube_id": user_context.mem_cube_id,
                 },
+                user_context=user_context,
             )
             pref_ids_local: list[str] = self.naive_mem_cube.pref_mem.add(pref_memories_local)
             self.logger.info(
@@ -809,6 +854,7 @@ class SingleCubeView(MemCubeView):
             mode=extract_mode,
             user_name=user_context.mem_cube_id,
             chat_history=add_req.chat_history,
+            user_context=user_context,
         )
         self.logger.info(
             f"Time for get_memory in extract mode {extract_mode}: {time.time() - init_time}"
@@ -824,16 +870,34 @@ class SingleCubeView(MemCubeView):
         self.logger.info(f"Memory extraction completed for user {add_req.user_id}")
 
         # Add memories to text_mem
+        mem_group = [
+            memory for memory in flattened_local if memory.metadata.memory_type != "RawFileMemory"
+        ]
         mem_ids_local: list[str] = self.naive_mem_cube.text_mem.add(
-            flattened_local,
+            mem_group,
             user_name=user_context.mem_cube_id,
         )
+
         self.logger.info(
             f"Added {len(mem_ids_local)} memories for user {add_req.user_id} "
             f"in session {add_req.session_id}: {mem_ids_local}"
         )
 
-        # Schedule async/sync tasks
+        # Add raw file nodes and edges
+        if self.mem_reader.save_rawfile and extract_mode == "fine":
+            raw_file_mem_group = [
+                memory
+                for memory in flattened_local
+                if memory.metadata.memory_type == "RawFileMemory"
+            ]
+            self.naive_mem_cube.text_mem.add_rawfile_nodes_n_edges(
+                raw_file_mem_group,
+                mem_ids_local,
+                user_id=add_req.user_id,
+                user_name=user_context.mem_cube_id,
+            )
+
+        # Schedule async/sync tasks: async process raw chunk memory | sync only send messages
         self._schedule_memory_tasks(
             add_req=add_req,
             user_context=user_context,

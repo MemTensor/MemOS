@@ -10,7 +10,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal, NewType, TypeAlias
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
 
 from memos.memories.activation.item import ActivationMemoryItem
@@ -151,3 +151,7 @@ class UserContext(BaseModel):
     mem_cube_id: str | None = None
     session_id: str | None = None
     operation: list[PermissionDict] | None = None
+    manager_user_id: str | None = None
+    project_id: str | None = None
+
+    model_config = ConfigDict(extra="allow")

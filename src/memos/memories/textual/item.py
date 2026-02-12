@@ -47,6 +47,43 @@ class SourceMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class ArchivedTextualMemory(BaseModel):
+    """
+    This is a light-weighted class for storing archived versions of memories.
+
+    When an existing memory item needs to be updated due to conflict/duplicate with new memory contents,
+    its previous contents will be preserved, in 2 places:
+    1. ArchivedTextualMemory, which only contains minimal information, like memory content and create time,
+    stored in the 'history' field of the original node.
+    2. A new memory node, storing full original information including sources and embedding,
+    and referenced by 'archived_memory_id'.
+    """
+
+    version: int = Field(
+        default=1,
+        description="The version of the archived memory content. Will be compared to the version of the active memory item(in Metadata)",
+    )
+    is_fast: bool = Field(
+        default=False,
+        description="Whether this archived memory was created in fast mode, thus raw.",
+    )
+    memory: str | None = Field(
+        default_factory=lambda: "", description="The content of the archived version of the memory."
+    )
+    update_type: Literal["conflict", "duplicate", "extract", "unrelated"] = Field(
+        default="unrelated",
+        description="The type of the memory (e.g., `conflict`, `duplicate`, `extract`, `unrelated`).",
+    )
+    archived_memory_id: str | None = Field(
+        default=None,
+        description="Link to a memory node with status='archived', storing full original information, including sources and embedding.",
+    )
+    created_at: str | None = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="The time the memory was created.",
+    )
+
+
 class TextualMemoryMetadata(BaseModel):
     """Metadata for a memory item.
 
@@ -62,9 +99,29 @@ class TextualMemoryMetadata(BaseModel):
         default=None,
         description="The ID of the session during which the memory was created. Useful for tracking context in conversations.",
     )
-    status: Literal["activated", "archived", "deleted"] | None = Field(
+    status: Literal["activated", "resolving", "archived", "deleted"] | None = Field(
         default="activated",
-        description="The status of the memory, e.g., 'activated', 'archived', 'deleted'.",
+        description="The status of the memory, e.g., 'activated', 'resolving'(updating with conflicting/duplicating new memories), 'archived', 'deleted'.",
+    )
+    is_fast: bool | None = Field(
+        default=None,
+        description="Whether or not the memory was created in fast mode, carrying raw memory contents that haven't been edited by llms yet.",
+    )
+    evolve_to: list[str] | None = Field(
+        default_factory=list,
+        description="Only valid if a node was once a (raw)fast node. Recording which new memory nodes it 'evolves' to after llm extraction.",
+    )
+    version: int | None = Field(
+        default=None,
+        description="The version of the memory. Will be incremented when the memory is updated.",
+    )
+    history: list[ArchivedTextualMemory] | None = Field(
+        default_factory=list,
+        description="Storing the archived versions of the memory. Only preserving core information of each version.",
+    )
+    working_binding: str | None = Field(
+        default=None,
+        description="The working memory id binding of the (fast) memory.",
     )
     type: str | None = Field(default=None)
     key: str | None = Field(default=None, description="Memory key or title.")
@@ -114,6 +171,7 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
         "OuterMemory",
         "ToolSchemaMemory",
         "ToolTrajectoryMemory",
+        "RawFileMemory",
         "SkillMemory",
     ] = Field(default="WorkingMemory", description="Memory lifecycle type.")
     sources: list[SourceMessage] | None = Field(
