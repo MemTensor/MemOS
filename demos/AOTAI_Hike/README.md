@@ -90,8 +90,6 @@ The game is designed to be "lightweight but extensible"; all intelligence-relate
 - [INTRODUCTION_ZH.md](./INTRODUCTION_ZH.md) - **Complete project introduction (中文)**
 - [INTRODUCTION_EN.md](./INTRODUCTION_EN.md) - **Complete project introduction (English)**
 - [backend/MEMORY_INTEGRATION.md](./backend/MEMORY_INTEGRATION.md) - Memory system interaction guide
-- [PRD.md](./PRD.md) - Product requirements document
-
 ---
 
 **Enjoy your AoTai hike!** 🏔️
