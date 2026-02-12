@@ -455,6 +455,30 @@ class MemoryHistoryManager:
 
         return updated_items, new_items
 
+    def build_fallback_new_items(
+        self, item: TextualMemoryItem, user_name: str | None = None
+    ) -> list[TextualMemoryItem]:
+        latest_item = item.model_copy(deep=True)
+        _detach_related_content(latest_item)
+
+        history = latest_item.metadata.history or []
+        archived_ids = [h.archived_memory_id for h in history if h.archived_memory_id]
+        if archived_ids:
+            self.mark_memory_status(archived_ids, "activated", user_name or "")
+
+        latest_item.id = str(uuid.uuid4())
+        latest_item.metadata.is_fast = False
+        latest_item.metadata.status = "activated"
+        latest_item.metadata.history = []
+        latest_item.metadata.working_binding = None
+        if hasattr(latest_item.metadata, "background"):
+            latest_item.metadata.background = ""
+
+        if hasattr(latest_item.metadata, "tags") and latest_item.metadata.tags:
+            latest_item.metadata.tags = [t for t in latest_item.metadata.tags if t != "mode:fast"]
+
+        return [latest_item]
+
     def mark_memory_status(
         self,
         memory_ids: list[str],
@@ -573,11 +597,13 @@ class MemoryHistoryManager:
             target_ids = source_ids + conflict_ids
 
             if target_ids:
-                item = self._update_existing_memory(
+                updated_item, new_item = self._update_existing_memory(
                     mem_data, target_ids, source_ids, expected_versions, user_name, source_item
                 )
-                if item:
-                    updated_items.append(item)
+                if updated_item:
+                    updated_items.append(updated_item)
+                if new_item:
+                    new_items.append(new_item)
             else:
                 item = self._create_new_memory(mem_data, source_item)
                 new_items.append(item)
@@ -591,7 +617,7 @@ class MemoryHistoryManager:
         expected_versions: dict[str, int],
         user_name: str,
         fast_item: TextualMemoryItem,
-    ) -> TextualMemoryItem | None:
+    ) -> tuple[TextualMemoryItem | None, TextualMemoryItem | None]:
         """
         Update existing memory nodes using the LLM result.
 
@@ -604,8 +630,7 @@ class MemoryHistoryManager:
         The method also applies CAS validation via expected_versions, archives the previous
         version of the primary node, and persists the updated node back to the graph DB.
 
-        Returns the updated primary TextualMemoryItem, or None when the primary node
-        cannot be found.
+        Returns the updated primary TextualMemoryItem and optional new item when fallback is used.
         """
         original_primary_id, primary_id, secondary_ids = (
             target_ids[0],
@@ -632,7 +657,9 @@ class MemoryHistoryManager:
             logger.warning(
                 f"[MemoryHistoryManager] Target node {primary_id} not found for update. Skipping."
             )
-            return None
+            # Fallback to create new item when the source_id is hallucinated by llm
+            new_item = self._create_new_memory(mem_data, fast_item)
+            return None, new_item
         current_item = TextualMemoryItem(**node_data)
 
         # For concurrency control, need to make sure the primary item has not been modified by others in the meantime
@@ -697,7 +724,7 @@ class MemoryHistoryManager:
                     f"[MemoryHistoryManager] Failed to mark WorkingMemory {working_binding} as deleted: {e}"
                 )
 
-        return current_item
+        return current_item, None
 
     def _apply_cas_merge(
         self,
@@ -825,12 +852,15 @@ class MemoryHistoryManager:
         new_value = new_value_item.memory
         tags = mem_data.get("tags", [])
         key = mem_data.get("key", "")
+        background = mem_data.get("summary", "")
         memory_type = mem_data.get("memory_type", "LongTermMemory")
         metadata_updates = {
             "is_fast": False,
             "version": 1,
             "memory_type": memory_type,
             "status": "activated",
+            "background": background,
+            "working_binding": None,
             "tags": tags,
             "key": key,
             "created_at": datetime.now().isoformat(),

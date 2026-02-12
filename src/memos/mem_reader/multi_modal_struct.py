@@ -1025,13 +1025,21 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             else ""
         )
         prompt = self.history_manager.format_async_update_prompt(item, custom_tags_prompt)
-        response_text = self.llm.generate([{"role": "user", "content": prompt}])
-        response_json = parse_json_result(response_text)
         user_name = kwargs.get("user_name")
-        _, new_items = self.history_manager.apply_llm_memory_updates(
-            response_json, item, user_name=user_name
-        )
-        return new_items
+        try:
+            response_text = self.llm.generate([{"role": "user", "content": prompt}])
+            if not response_text:
+                raise ValueError("Empty LLM response")
+            response_json = parse_json_result(response_text)
+            if not response_json:
+                raise ValueError("Empty LLM JSON response")
+            _, new_items = self.history_manager.apply_llm_memory_updates(
+                response_json, item, user_name=user_name
+            )
+            return new_items
+        except Exception as e:
+            logger.warning(f"[MultiModalStruct] Async update fallback due to LLM failure: {e}")
+            return self.history_manager.build_fallback_new_items(item, user_name=user_name)
 
     @timed
     def _process_multi_modal_data(
