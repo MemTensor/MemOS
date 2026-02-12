@@ -110,6 +110,22 @@ def _rebuild_fast_node_history(
     item.metadata.history = list(new_history.values())
 
 
+def _sanitize_metadata_dict(data: dict[str, Any] | None) -> dict[str, Any]:
+    if not data:
+        return {}
+    sanitized = data.copy()
+    for key in ("id", "memory", "graph_id"):
+        sanitized.pop(key, None)
+    return sanitized
+
+
+def _sanitize_metadata_model(
+    metadata: TreeNodeTextualMemoryMetadata,
+) -> TreeNodeTextualMemoryMetadata:
+    data = _sanitize_metadata_dict(metadata.model_dump(exclude_none=True))
+    return metadata.__class__(**data)
+
+
 def _determine_lang(sources: list | None, fallback_text: str) -> str:
     lang = None
     if sources:
@@ -477,6 +493,8 @@ class MemoryHistoryManager:
         if hasattr(latest_item.metadata, "tags") and latest_item.metadata.tags:
             latest_item.metadata.tags = [t for t in latest_item.metadata.tags if t != "mode:fast"]
 
+        latest_item.metadata = _sanitize_metadata_model(latest_item.metadata)
+
         return [latest_item]
 
     def mark_memory_status(
@@ -679,7 +697,7 @@ class MemoryHistoryManager:
         emb = TextualMemoryItem(
             **self.graph_db.get_node(primary_id, include_embedding=True)
         ).metadata.embedding
-        arch_meta = archived_item.metadata.model_dump(exclude_none=True)
+        arch_meta = _sanitize_metadata_dict(archived_item.metadata.model_dump(exclude_none=True))
         arch_meta["embedding"] = emb
         self.graph_db.add_node(
             id=archived_item.id,
@@ -688,7 +706,7 @@ class MemoryHistoryManager:
             user_name=user_name,
         )
 
-        fields = current_item.metadata.model_dump(exclude_none=True)
+        fields = _sanitize_metadata_dict(current_item.metadata.model_dump(exclude_none=True))
         merged_history = list(current_item.metadata.history or [])
         new_primary_version = current_item.metadata.version or 1
         # Multiple related ids indicates existing duplicates/conflicts to be merged
@@ -870,6 +888,7 @@ class MemoryHistoryManager:
         metadata = fast_item.metadata.model_copy(deep=True)
         for field_name, value in metadata_updates.items():
             setattr(metadata, field_name, value)
+        metadata = _sanitize_metadata_model(metadata)
 
         new_item = TextualMemoryItem(
             id=str(uuid.uuid4()),
@@ -923,6 +942,7 @@ class MemoryHistoryManager:
             metadata = fast_item.metadata.model_copy(deep=True)
             for field_name, value in metadata_updates.items():
                 setattr(metadata, field_name, value)
+            metadata = _sanitize_metadata_model(metadata)
 
             new_item = TextualMemoryItem(
                 id=str(uuid.uuid4()),
