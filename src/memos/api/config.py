@@ -335,7 +335,6 @@ class APIConfig:
                 # validation requirements during tests/import.
                 "api_base": os.getenv("MEMRADER_API_BASE", "https://api.openai.com/v1"),
                 "remove_think_prefix": True,
-                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
             },
         }
 
@@ -531,7 +530,6 @@ class APIConfig:
                                 "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
                                 "api_base": os.getenv("MEMRADER_API_BASE"),
                                 "remove_think_prefix": True,
-                                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
                             },
                         },
                         "embedder": APIConfig.get_embedder_config(),

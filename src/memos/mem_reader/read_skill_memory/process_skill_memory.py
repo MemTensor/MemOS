@@ -36,6 +36,7 @@ from memos.templates.skill_mem_prompt import (
     TOOL_GENERATION_PROMPT,
 )
 from memos.types import MessageList
+from memos.utils import timed
 
 
 load_dotenv()
@@ -52,6 +53,9 @@ def _generate_content_by_llm(llm: BaseLLM, prompt_template: str, **kwargs) -> An
     try:
         prompt = prompt_template.format(**kwargs)
         response = llm.generate([{"role": "user", "content": prompt}])
+        if not response:
+            logger.warning("[PROCESS_SKILLS] LLM returned empty or invalid response")
+            return {} if "json" in prompt_template.lower() else ""
         if "json" in prompt_template.lower():
             response = response.replace("```json", "").replace("```", "").strip()
             return json.loads(response)
@@ -61,6 +65,7 @@ def _generate_content_by_llm(llm: BaseLLM, prompt_template: str, **kwargs) -> An
         return {} if "json" in prompt_template.lower() else ""
 
 
+@timed
 def _batch_extract_skills(
     task_chunks: dict[str, MessageList],
     related_memories_map: dict[str, list[TextualMemoryItem]],
@@ -94,6 +99,7 @@ def _batch_extract_skills(
     return results
 
 
+@timed
 def _batch_generate_skill_details(
     raw_skills_data: list[tuple[dict[str, Any], str, MessageList]],
     related_skill_memories_map: dict[str, list[TextualMemoryItem]],
@@ -436,6 +442,9 @@ def _extract_skill_memory_by_llm(
             skills_llm = os.getenv("SKILLS_LLM", None)
             llm_kwargs = {"model_name_or_path": skills_llm} if skills_llm else {}
             response_text = llm.generate(prompt, **llm_kwargs)
+            if not response_text:
+                logger.warning("[PROCESS_SKILLS] LLM returned empty or invalid response")
+                continue
             # Clean up response (remove Markdown code blocks if present)
             logger.info(f"[Skill Memory]: response_text {response_text}")
             response_text = response_text.strip()
@@ -561,6 +570,9 @@ def _extract_skill_memory_by_llm_md(
             skills_llm = os.getenv("SKILLS_LLM", None)
             llm_kwargs = {"model_name_or_path": skills_llm} if skills_llm else {}
             response_text = llm.generate(prompt, **llm_kwargs)
+            if not response_text:
+                logger.warning("[PROCESS_SKILLS] LLM returned empty or invalid response")
+                continue
             # Clean up response (remove Markdown code blocks if present)
             logger.info(f"[Skill Memory]: response_text {response_text}")
             response_text = response_text.strip()
@@ -641,26 +653,22 @@ def _rewrite_query(task_type: str, messages: MessageList, llm: BaseLLM, rewrite_
     )
     prompt = [{"role": "user", "content": prompt_content}]
 
-    # Call LLM to rewrite the query with retry logic
-    for attempt in range(3):
-        try:
-            response_text = llm.generate(prompt)
-            # Clean up response (remove any markdown formatting if present)
-            response_text = response_text.strip()
-            logger.info(f"[PROCESS_SKILLS] Rewritten query for task '{task_type}': {response_text}")
-            return response_text
-        except Exception as e:
+    # Call LLM to rewrite the query
+    try:
+        response_text = llm.generate(prompt)
+        # Clean up response (remove any markdown formatting if present)
+        if response_text and isinstance(response_text, str):
+            return response_text.strip()
+        else:
             logger.warning(
-                f"[PROCESS_SKILLS] LLM query rewrite failed (attempt {attempt + 1}): {e}"
+                "[PROCESS_SKILLS] LLM returned empty or invalid response, returning first message content"
             )
-            if attempt == 2:
-                logger.warning(
-                    "[PROCESS_SKILLS] LLM query rewrite failed after 3 retries, returning first message content"
-                )
-                return messages[0]["content"] if messages else ""
-
-    # Fallback (should not reach here due to return in exception handling)
-    return messages[0]["content"] if messages else ""
+            return messages[0]["content"] if messages else ""
+    except Exception as e:
+        logger.warning(
+            f"[PROCESS_SKILLS] LLM query rewrite failed: {e}, returning first message content"
+        )
+        return messages[0]["content"] if messages else ""
 
 
 @require_python_package(
@@ -751,6 +759,7 @@ def _delete_skills(
             logger.warning(f"Error deleting local file: {e}")
 
 
+@timed
 def _write_skills_to_file(
     skill_memory: dict[str, Any], info: dict[str, Any], skills_dir_config: dict[str, Any]
 ) -> str:
@@ -995,6 +1004,7 @@ def _get_skill_file_storage_location() -> str:
         return "LOCAL"
 
 
+@timed
 def process_skill_memory_fine(
     fast_memory_items: list[TextualMemoryItem],
     info: dict[str, Any],
@@ -1059,6 +1069,7 @@ def process_skill_memory_fine(
                 )
                 related_skill_memories_by_task[task_name] = []
 
+    @timed
     def _simple_extract():
         # simple extract skill memory, only one stage
         memories = []
@@ -1091,6 +1102,7 @@ def process_skill_memory_fine(
                     )
         return memories
 
+    @timed
     def _full_extract():
         # full extract skill memory, include two stage
         raw_extraction_results = _batch_extract_skills(
