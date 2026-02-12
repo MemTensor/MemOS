@@ -345,6 +345,25 @@ def handle_get_memories(
         )
         format_preferences = [format_memory_item(item, save_sources=False) for item in preferences]
 
+        # For each returned item, tackle with metadata.info project_id /
+        # operation / manager_user_id
+        for item in format_preferences:
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            info = metadata.get("info")
+            if not isinstance(info, dict):
+                continue
+
+            for key in ("project_id", "operation", "manager_user_id"):
+                if key not in info:
+                    continue
+                value = info.pop(key)
+                if key not in metadata:
+                    metadata[key] = value
+
     results = post_process_pref_mem(
         results, format_preferences, get_mem_req.mem_cube_id, get_mem_req.include_preference
     )
