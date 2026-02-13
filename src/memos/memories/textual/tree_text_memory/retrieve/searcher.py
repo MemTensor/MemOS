@@ -511,16 +511,22 @@ class Searcher:
 
         id_to_score: dict[str, float] = {}
         for scope in scopes:
-            hits = self.graph_store.search_by_fulltext(
-                query_words=tsquery_terms,
-                top_k=top_k * 2,
-                status="activated",
-                scope=scope,
-                search_filter=None,
-                filter=search_filter,
-                user_name=user_name,
-                tsquery_config="jiebaqry",
-            )
+            try:
+                hits = self.graph_store.search_by_fulltext(
+                    query_words=tsquery_terms,
+                    top_k=top_k * 2,
+                    status="activated",
+                    scope=scope,
+                    search_filter=None,
+                    filter=search_filter,
+                    user_name=user_name,
+                    tsquery_config="jiebaqry",
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[PATH-KEYWORD] search_by_fulltext failed, scope={scope}, user_name={user_name}"
+                )
+                hits = []
             for h in hits or []:
                 hid = str(h.get("id") or "").strip().strip("'\"")
                 if not hid:

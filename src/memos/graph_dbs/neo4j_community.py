@@ -382,6 +382,26 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         return filtered_results
 
+    def search_by_fulltext(
+        self,
+        query_words: list[str],
+        top_k: int = 10,
+        scope: str | None = None,
+        status: str | None = None,
+        threshold: float | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        tsquery_config: str | None = None,
+        **kwargs,
+    ) -> list[dict]:
+        """
+        TODO: 实现 Neo4j Community 的关键词检索, 以兼容 TreeTextMemory 的 keyword/fulltext 召回路径.
+        目前先返回空列表, 避免切换到 Neo4j 后因缺失方法导致运行时报错.
+        """
+        return []
+
     def _normalize_date_string(self, date_str: str) -> str:
         """
         Normalize date string to ISO 8601 format for Neo4j datetime() function.
@@ -1102,7 +1122,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Merge embeddings into parsed nodes
         for parsed_node in parsed_nodes:
             node_id = parsed_node["id"]
-            parsed_node["metadata"]["embedding"] = vec_items_map.get(node_id, None)
+            parsed_node["metadata"]["embedding"] = vec_items_map.get(node_id)
 
         return parsed_nodes
 
