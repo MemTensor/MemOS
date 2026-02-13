@@ -1122,7 +1122,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Merge embeddings into parsed nodes
         for parsed_node in parsed_nodes:
             node_id = parsed_node["id"]
-            parsed_node["metadata"]["embedding"] = vec_items_map.get(node_id)
+            parsed_node["metadata"]["embedding"] = vec_items_map.get(node_id, None)
 
         return parsed_nodes
 
