@@ -1690,6 +1690,36 @@ class PolarDBGraphDB(BaseGraphDB):
         """Get the ordered context chain starting from a node."""
         raise NotImplementedError
 
+    def _extract_fields_from_properties(
+        self, properties: Any, return_fields: list[str]
+    ) -> dict[str, Any]:
+        """Extract requested fields from a PolarDB properties agtype/JSON value.
+
+        Args:
+            properties: The raw properties value from a PolarDB row (agtype or JSON string).
+            return_fields: List of field names to extract.
+
+        Returns:
+            dict with field_name -> value for each requested field found in properties.
+        """
+        result = {}
+        return_fields = self._validate_return_fields(return_fields)
+        if not properties or not return_fields:
+            return result
+        try:
+            if isinstance(properties, str):
+                props = json.loads(properties)
+            elif isinstance(properties, dict):
+                props = properties
+            else:
+                props = json.loads(str(properties))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return result
+        for field in return_fields:
+            if field != "id" and field in props:
+                result[field] = props[field]
+        return result
+
     @timed
     def search_by_keywords_like(
         self,
@@ -1700,6 +1730,7 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name: str | None = None,
         filter: dict | None = None,
         knowledgebase_ids: list[str] | None = None,
+        return_fields: list[str] | None = None,
         **kwargs,
     ) -> list[dict]:
         where_clauses = []
@@ -1751,10 +1782,14 @@ class PolarDBGraphDB(BaseGraphDB):
         where_clauses.append("""(properties -> '"memory"')::text LIKE %s""")
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
-        query = f"""
-            SELECT
+        select_clause = """SELECT
                 ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
-                agtype_object_field_text(properties, 'memory') as memory_text
+                agtype_object_field_text(properties, 'memory') as memory_text"""
+        if return_fields:
+            select_clause += ", properties"
+
+        query = f"""
+            {select_clause}
             FROM "{self.db_name}_graph"."Memory"
             {where_clause}
             """
@@ -1775,7 +1810,11 @@ class PolarDBGraphDB(BaseGraphDB):
                     id_val = str(oldid)
                     if id_val.startswith('"') and id_val.endswith('"'):
                         id_val = id_val[1:-1]
-                    output.append({"id": id_val})
+                    item = {"id": id_val}
+                    if return_fields:
+                        properties = row[2]  # properties column
+                        item.update(self._extract_fields_from_properties(properties, return_fields))
+                    output.append(item)
                 logger.info(
                     f"[search_by_keywords_LIKE end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
                 )
@@ -1795,6 +1834,7 @@ class PolarDBGraphDB(BaseGraphDB):
         knowledgebase_ids: list[str] | None = None,
         tsvector_field: str = "properties_tsvector_zh",
         tsquery_config: str = "jiebaqry",
+        return_fields: list[str] | None = None,
         **kwargs,
     ) -> list[dict]:
         where_clauses = []
@@ -1850,10 +1890,14 @@ class PolarDBGraphDB(BaseGraphDB):
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
         # Build fulltext search query
-        query = f"""
-            SELECT
+        select_clause = """SELECT
                 ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
-                agtype_object_field_text(properties, 'memory') as memory_text
+                agtype_object_field_text(properties, 'memory') as memory_text"""
+        if return_fields:
+            select_clause += ", properties"
+
+        query = f"""
+            {select_clause}
             FROM "{self.db_name}_graph"."Memory"
             {where_clause}
         """
@@ -1874,7 +1918,11 @@ class PolarDBGraphDB(BaseGraphDB):
                     id_val = str(oldid)
                     if id_val.startswith('"') and id_val.endswith('"'):
                         id_val = id_val[1:-1]
-                    output.append({"id": id_val})
+                    item = {"id": id_val}
+                    if return_fields:
+                        properties = row[2]  # properties column
+                        item.update(self._extract_fields_from_properties(properties, return_fields))
+                    output.append(item)
 
                 logger.info(
                     f"[search_by_keywords_TFIDF end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
@@ -1897,6 +1945,7 @@ class PolarDBGraphDB(BaseGraphDB):
         knowledgebase_ids: list[str] | None = None,
         tsvector_field: str = "properties_tsvector_zh",
         tsquery_config: str = "jiebacfg",
+        return_fields: list[str] | None = None,
         **kwargs,
     ) -> list[dict]:
         """
@@ -1914,10 +1963,12 @@ class PolarDBGraphDB(BaseGraphDB):
             filter: filter conditions with 'and' or 'or' logic for search results.
             tsvector_field: full-text index field name, defaults to properties_tsvector_zh_1
             tsquery_config: full-text search configuration, defaults to jiebaqry (Chinese word segmentation)
+            return_fields: additional node fields to include in results
             **kwargs: other parameters (e.g. cube_name)
 
         Returns:
-            list[dict]: result list containing id and score
+            list[dict]: result list containing id and score.
+                If return_fields is specified, each dict also includes the requested fields.
         """
         logger.info(
             f"[search_by_fulltext] query_words: {query_words},top_k:{top_k},scope:{scope},status:{status},threshold:{threshold},search_filter:{search_filter},user_name:{user_name},knowledgebase_ids:{knowledgebase_ids},filter:{filter}"
@@ -1982,11 +2033,15 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.info(f"[search_by_fulltext] where_clause: {where_clause}")
 
         # Build fulltext search query
-        query = f"""
-            SELECT
+        select_clause = f"""SELECT
                 ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
                 agtype_object_field_text(properties, 'memory') as memory_text,
-                ts_rank({tsvector_field}, to_tsquery('{tsquery_config}', %s)) as rank
+                ts_rank({tsvector_field}, to_tsquery('{tsquery_config}', %s)) as rank"""
+        if return_fields:
+            select_clause += ", properties"
+
+        query = f"""
+            {select_clause}
             FROM "{self.db_name}_graph"."Memory"
             {where_clause}
             ORDER BY rank DESC
@@ -2013,7 +2068,15 @@ class PolarDBGraphDB(BaseGraphDB):
 
                     # Apply threshold filter if specified
                     if threshold is None or score_val >= threshold:
-                        output.append({"id": id_val, "score": score_val})
+                        item = {"id": id_val, "score": score_val}
+                        if return_fields:
+                            properties = row[
+                                3
+                            ]  # properties column (after old_id, memory_text, rank)
+                            item.update(
+                                self._extract_fields_from_properties(properties, return_fields)
+                            )
+                        output.append(item)
                 elapsed_time = time.time() - start_time
                 logger.info(
                     f" polardb [search_by_fulltext] query completed time in {elapsed_time:.2f}s"
@@ -2034,10 +2097,17 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name: str | None = None,
         filter: dict | None = None,
         knowledgebase_ids: list[str] | None = None,
+        return_fields: list[str] | None = None,
         **kwargs,
     ) -> list[dict]:
         """
         Retrieve node IDs based on vector similarity using PostgreSQL vector operations.
+
+        Args:
+            return_fields (list[str], optional): Additional node fields to include in results
+                (e.g., ["memory", "status", "tags"]). When provided, each result dict will
+                contain these fields in addition to 'id' and 'score'.
+                Defaults to None (only 'id' and 'score' are returned).
         """
         # Build WHERE clause dynamically like nebular.py
         logger.info(
@@ -2178,7 +2248,13 @@ class PolarDBGraphDB(BaseGraphDB):
                     score_val = float(score)
                     score_val = (score_val + 1) / 2  # align to neo4j, Normalized Cosine Score
                     if threshold is None or score_val >= threshold:
-                        output.append({"id": id_val, "score": score_val})
+                        item = {"id": id_val, "score": score_val}
+                        if return_fields:
+                            properties = row[1]  # properties column
+                            item.update(
+                                self._extract_fields_from_properties(properties, return_fields)
+                            )
+                        output.append(item)
                 return output[:top_k]
         finally:
             self._return_connection(conn)
