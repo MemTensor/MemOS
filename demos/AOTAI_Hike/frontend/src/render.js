@@ -15,7 +15,8 @@ export function logMsg(msg) {
       const contentEl = last.querySelector(".content");
       if (contentEl) {
         const raw = String(msg.content || "");
-        const action = raw.includes("：") ? raw.split("：").slice(1).join("：") : raw;
+        const sep = raw.includes("：") ? "：" : ": ";
+        const action = raw.includes(sep) ? raw.split(sep).slice(1).join(sep) : raw;
         contentEl.textContent = `${contentEl.textContent}(${action})`;
         if (stickToBottom) {
           const scrollToBottom = () => {
@@ -334,6 +335,14 @@ function initShareButton() {
 async function showShareModal() {
   initShareButton();
   if (!shareModal || !shareImagePreview) return;
+
+  // Refresh share modal text to current language
+  const shareModalTitleEl = document.getElementById("i18n-share-modal-title");
+  if (shareModalTitleEl) shareModalTitleEl.textContent = t("shareModalTitle");
+  const shareDownloadBtn = document.getElementById("share-download-btn");
+  if (shareDownloadBtn) shareDownloadBtn.textContent = t("shareDownload");
+  const shareCloseBtn = document.getElementById("share-close-btn");
+  if (shareCloseBtn) shareCloseBtn.textContent = t("shareClose");
 
   const currentSessionId = sessionId || worldState?.session_id;
   if (!currentSessionId) {

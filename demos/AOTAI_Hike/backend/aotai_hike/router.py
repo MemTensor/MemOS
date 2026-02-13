@@ -32,7 +32,11 @@ from aotai_hike.schemas import (
 from aotai_hike.services.game_service import GameService
 from aotai_hike.stores.session_store import InMemorySessionStore
 from aotai_hike.utils.share_image import generate_share_image
-from aotai_hike.world.map_data import get_graph
+from aotai_hike.world.map_data import (
+    AOTAI_EDGE_LABELS_EN,
+    AOTAI_NODE_NAMES_EN,
+    get_graph,
+)
 
 
 router = APIRouter(prefix="/api/demo/ao-tai", tags=["AoTai Demo"])
@@ -49,10 +53,11 @@ _game = GameService(
 # Default 3 roles per theme (server-owned config). One map = one set of default personas.
 # Each set has zh and en versions (name + persona).
 
-# 鳌太线 (AoTai): 阿鳌 / 太白 / 小山 — zh & en persona
+# 鳌太线 (AoTai): 阿鳌/太白/小山 — zh & en name + persona
 _AOTAI_ROLES: list[dict] = [
     {
         "name": "阿鳌",
+        "name_en": "Ao",
         "avatar_key": "green",
         "persona_zh": "阿鳌：持灯的领路者，熟知鳌太古道与太白山脉。谨慎、稳重，誓要带队抵达太白之巅。",
         "persona_en": "Ao: The guide with the lamp. Knows the AoTai trail and Taibai range. Cautious and steady, determined to lead the team to the summit.",
@@ -66,6 +71,7 @@ _AOTAI_ROLES: list[dict] = [
     },
     {
         "name": "太白",
+        "name_en": "Taibai",
         "avatar_key": "blue",
         "persona_zh": '太白：表面是器材与数据的虔信者，经验丰厚、言辞克制。暗闻2800下撤口藏有金矿，欲借"体力不支"脱队潜行。',
         "persona_en": "Taibai: On the surface a believer in gear and data, experienced and reserved. Secretly heard of a stash at the evacuation point and plans to slip away by feigning exhaustion.",
@@ -79,6 +85,7 @@ _AOTAI_ROLES: list[dict] = [
     },
     {
         "name": "小山",
+        "name_en": "Xiaoshan",
         "avatar_key": "red",
         "persona_zh": "小山：笑容背后的新人徒步者，乐观只是外壳。多年前真主在2800下撤口埋下金矿，此行只为取回；若同伴相助便分金，不助则将其永远留在此地。",
         "persona_en": "Xiaoshan: A newcomer behind the smile; optimism is just a shell. Years ago something was left at the evacuation point; this trek is to retrieve it. Help and share; refuse and be left behind forever.",
@@ -155,7 +162,7 @@ def _get_default_roles(theme: str | None, lang: str | None) -> list[dict]:
     use_zh = lang != "en"
     return [
         {
-            "name": r["name"],
+            "name": r["name_en"] if lang == "en" else r["name"],
             "avatar_key": r["avatar_key"],
             "persona": r["persona_zh"] if use_zh else r["persona_en"],
             "attrs": r["attrs"],
@@ -172,9 +179,22 @@ def _get_ws(session_id: str) -> WorldState:
 
 
 @router.get("/map", response_model=MapResponse)
-def get_map(theme: str | None = None):
+def get_map(theme: str | None = None, lang: str | None = None):
     graph = get_graph(theme)
-    return MapResponse(start_node_id=graph.start_node_id, nodes=graph.nodes(), edges=graph.edges())
+    nodes = list(graph.nodes())
+    edges = list(graph.edges())
+    # When theme is aotai and lang is en, return English node names and edge labels
+    if theme == "aotai" and lang == "en":
+        nodes = [
+            n.model_copy(update={"name": AOTAI_NODE_NAMES_EN.get(n.node_id, n.name)}) for n in nodes
+        ]
+        edges = [
+            e.model_copy(
+                update={"label": AOTAI_EDGE_LABELS_EN.get((e.from_node_id, e.to_node_id), e.label)}
+            )
+            for e in edges
+        ]
+    return MapResponse(start_node_id=graph.start_node_id, nodes=nodes, edges=edges)
 
 
 @router.get("/background/{scene_id}", response_model=BackgroundAsset)

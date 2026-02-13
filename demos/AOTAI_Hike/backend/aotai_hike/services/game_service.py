@@ -33,6 +33,17 @@ from aotai_hike.theme import (
     event_observe_label,
     event_observe_phrases,
     event_rest_phrases,
+    mem_memory_action_map,
+    mem_memory_event_action_label,
+    mem_memory_event_day_line,
+    mem_memory_event_dialogue_label,
+    mem_memory_event_recent_label,
+    mem_memory_query_action_label,
+    mem_memory_query_events_label,
+    mem_memory_query_persona_label,
+    mem_memory_time_map,
+    mem_memory_weather_map,
+    mem_teammate_label,
     prompt_memory_tag_by_theme,
     sys_advance_km_arrived,
     sys_advance_km_en_route,
@@ -71,7 +82,7 @@ from aotai_hike.theme import (
     sys_vote_result_keep,
     sys_you_choose_rest,
 )
-from aotai_hike.world.map_data import get_graph
+from aotai_hike.world.map_data import get_graph, get_node_display_name
 from loguru import logger
 
 
@@ -405,15 +416,13 @@ class GameService:
                 (r.name for r in world_state.roles if r.role_id == world_state.leader_role_id),
                 "未知",
             )
-            node_name = (
-                get_graph(getattr(world_state, "theme", "aotai"))
-                .get_node(world_state.current_node_id)
-                .name
-            )
+            theme = getattr(world_state, "theme", "aotai")
+            lang = _lang(world_state)
+            node_name = get_node_display_name(theme, lang, world_state.current_node_id)
             plan_name = (
-                get_graph(getattr(world_state, "theme", "aotai")).get_node(next_id).name
+                get_node_display_name(theme, lang, next_id)
                 if next_id
-                else "（未选择）"
+                else ("(not selected)" if lang == "en" else "（未选择）")
             )
             ev = f"营地共识：在 {node_name}，共识路线=去 {plan_name}，锁强度={world_state.lock_strength}，次日团长={who}"
             self._push_event(world_state, ev)
@@ -627,7 +636,11 @@ class GameService:
             # Very light mock proposal: pick one option (or "stay" if none)
             if opts:
                 pick = self._rng.choice(opts)
-                dest = get_graph(getattr(world_state, "theme", "aotai")).get_node(pick).name
+                dest = get_node_display_name(
+                    getattr(world_state, "theme", "aotai"),
+                    _lang(world_state),
+                    pick,
+                )
                 text = sys_camp_proposal_dest(_lang(world_state), dest)
             else:
                 text = sys_camp_proposal_rest(_lang(world_state))
@@ -690,7 +703,11 @@ class GameService:
                 continue
             if opts:
                 pick = self._rng.choice(opts)
-                dest = get_graph(getattr(world_state, "theme", "aotai")).get_node(pick).name
+                dest = get_node_display_name(
+                    getattr(world_state, "theme", "aotai"),
+                    _lang(world_state),
+                    pick,
+                )
                 text = sys_camp_proposal_dest(_lang(world_state), dest)
             else:
                 text = sys_camp_proposal_rest(_lang(world_state))
@@ -838,9 +855,6 @@ class GameService:
         if req.action == ActionType.CONTINUE:
             req.action = ActionType.MOVE_FORWARD
 
-        node = get_graph(getattr(world_state, "theme", "aotai")).get_node(
-            world_state.current_node_id
-        )
         # UI-only; we keep it empty in the auto-run flow unless we explicitly need a user choice.
         world_state.available_next_node_ids = []
 
@@ -850,7 +864,11 @@ class GameService:
                 kind="system",
                 content=sys_location_weather_time(
                     _lang(world_state),
-                    node.name,
+                    get_node_display_name(
+                        getattr(world_state, "theme", "aotai"),
+                        _lang(world_state),
+                        world_state.current_node_id,
+                    ),
                     world_state.weather,
                     world_state.day,
                     world_state.time_of_day,
@@ -973,8 +991,10 @@ class GameService:
 
                     ev = self._rng.choice(event_arrived_phrases(_lang(world_state)))
                     self._push_event(world_state, ev)
-                    node_name = (
-                        get_graph(getattr(world_state, "theme", "aotai")).get_node(next_id).name
+                    node_name = get_node_display_name(
+                        getattr(world_state, "theme", "aotai"),
+                        _lang(world_state),
+                        next_id,
                     )
                     messages.append(
                         Message(
@@ -1068,9 +1088,11 @@ class GameService:
                             content=sys_at_junction_leader_chose(
                                 _lang(world_state),
                                 leader_name,
-                                get_graph(getattr(world_state, "theme", "aotai"))
-                                .get_node(next_edge.to_node_id)
-                                .name,
+                                get_node_display_name(
+                                    getattr(world_state, "theme", "aotai"),
+                                    _lang(world_state),
+                                    next_edge.to_node_id,
+                                ),
                             ),
                             timestamp_ms=now_ms,
                         )
@@ -1153,7 +1175,9 @@ class GameService:
 
                 ev = self._rng.choice(event_arrived_phrases_start(_lang(world_state)))
                 self._push_event(world_state, ev)
-                node_name = get_graph(getattr(world_state, "theme", "aotai")).get_node(next_id).name
+                node_name = get_node_display_name(
+                    getattr(world_state, "theme", "aotai"), _lang(world_state), next_id
+                )
                 messages.append(
                     Message(
                         message_id=f"sys-{uuid.uuid4().hex[:8]}",
@@ -1167,10 +1191,10 @@ class GameService:
                 return f"MOVE_FORWARD:arrive:{next_id}"
 
             left = max(0.0, world_state.in_transit_total_km - world_state.in_transit_progress_km)
-            to_name = (
-                get_graph(getattr(world_state, "theme", "aotai"))
-                .get_node(next_edge.to_node_id)
-                .name
+            to_name = get_node_display_name(
+                getattr(world_state, "theme", "aotai"),
+                _lang(world_state),
+                next_edge.to_node_id,
             )
             messages.append(
                 Message(
@@ -1322,66 +1346,55 @@ class GameService:
         user_action_desc: str,
         messages: list[Message],
     ) -> str:
-        time_map = {
-            "morning": "早晨",
-            "noon": "中午",
-            "afternoon": "下午",
-            "evening": "傍晚",
-            "night": "夜晚",
-        }
-        weather_map = {
-            "sunny": "晴",
-            "cloudy": "多云",
-            "windy": "有风",
-            "rainy": "雨",
-            "snowy": "雪",
-            "foggy": "雾",
-        }
+        lang = _lang(world_state)
+        time_map = mem_memory_time_map(lang)
+        weather_map = mem_memory_weather_map(lang)
+        action_map = mem_memory_action_map(lang)
 
         action_name = getattr(req.action, "name", str(req.action))
-        action_cn_map = {
-            "SAY": "发言",
-            "MOVE_FORWARD": "前进",
-            "REST": "休息",
-            "CAMP": "扎营",
-            "OBSERVE": "观察",
-            "DECIDE": "决策",
-        }
-        action_cn = action_cn_map.get(action_name, action_name)
+        action_str = action_map.get(action_name, action_name)
 
         day = world_state.day
-        tod_cn = time_map.get(world_state.time_of_day, str(world_state.time_of_day))
-        weather_cn = weather_map.get(world_state.weather, str(world_state.weather))
+        tod = time_map.get(world_state.time_of_day, str(world_state.time_of_day))
+        weather = weather_map.get(world_state.weather, str(world_state.weather))
         node_name = getattr(node, "name", "")
 
+        pieces: list[str] = []
+        pieces.append(mem_memory_event_day_line(lang, day, tod, weather, node_name))
+        pieces.append(mem_memory_event_action_label(lang) + action_str)
+
         recent_events = world_state.recent_events[-3:] if world_state.recent_events else []
-        recent_events_txt = "；".join(recent_events)
+        if recent_events:
+            sep = "; " if lang == "en" else "；"
+            pieces.append(mem_memory_event_recent_label(lang) + sep.join(recent_events) + ".")
 
         dialogue_msgs = [m for m in messages if m.kind != "system"]
         dialogue_parts: list[str] = []
+        teammate = mem_teammate_label(lang)
         for m in dialogue_msgs[:3]:
-            speaker = m.role_name or m.role_id or "队员"
-            dialogue_parts.append(f"{speaker}：{m.content[:40]}")
-        dialogue_txt = "；".join(dialogue_parts)
-
-        pieces: list[str] = []
-        pieces.append(f"第{day}天，{tod_cn}，天气{weather_cn}，位置：{node_name}。")
-        pieces.append(f"动作：{action_cn}")
-        if recent_events_txt:
-            pieces.append(f"最近事件：{recent_events_txt}。")
-        if dialogue_txt:
-            pieces.append(f"关键对话：{dialogue_txt}。")
+            speaker = m.role_name or m.role_id or teammate
+            dialogue_parts.append(
+                f"{speaker}: {m.content[:40]}" if lang == "en" else f"{speaker}：{m.content[:40]}"
+            )
+        if dialogue_parts:
+            sep = "; " if lang == "en" else "；"
+            pieces.append(mem_memory_event_dialogue_label(lang) + sep.join(dialogue_parts) + ".")
 
         return " ".join(pieces)
 
     def _build_memory_query(
         self, world_state: WorldState, req: ActRequest, node, user_action_desc: str
     ) -> str:
+        lang = _lang(world_state)
         active = self._get_active_role(world_state)
         persona = (active.persona if active else "")[:80]
-        ev = "；".join(world_state.recent_events[-3:])
+        sep = "; " if lang == "en" else "；"
+        ev = sep.join(world_state.recent_events[-3:])
         tag = prompt_memory_tag_by_theme(_theme(world_state))
-        return f"{tag} {node.name} {world_state.weather} {world_state.time_of_day} 动作:{req.action} {user_action_desc} 事件:{ev} 人设:{persona}"
+        action_label = mem_memory_query_action_label(lang)
+        events_label = mem_memory_query_events_label(lang)
+        persona_label = mem_memory_query_persona_label(lang)
+        return f"{tag} {node.name} {world_state.weather} {world_state.time_of_day} {action_label}{req.action} {user_action_desc} {events_label}{ev} {persona_label}{persona}"
 
     def _append_chat_history(self, world_state: WorldState, messages: list[Message]) -> None:
         if not messages:

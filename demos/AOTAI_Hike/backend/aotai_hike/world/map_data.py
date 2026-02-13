@@ -116,6 +116,33 @@ NODES: dict[str, AoTaiNode] = {
     ),
 }
 
+# English names for AoTai nodes (when lang=en, theme=aotai)
+AOTAI_NODE_NAMES_EN: dict[str, str] = {
+    "start": "Trailhead",
+    "slope_forest": "Forest Slope",
+    "camp_2800": "2800 Camp",
+    "stone_sea": "Stone Sea Edge",
+    "ridge_wind": "Ridge Wind",
+    "da_ye_hai": "Da Ye Hai",
+    "ba_xian_tai": "Ba Xian Tai (Summit)",
+    "end_exit": "Exit Finish",
+    "bailout_2800": "2800 Evac",
+    "bailout_ridge": "Ridge Evac",
+}
+
+# English labels for AoTai edges (from_node_id, to_node_id) -> label
+AOTAI_EDGE_LABELS_EN: dict[tuple[str, str], str] = {
+    ("start", "slope_forest"): "Into forest",
+    ("slope_forest", "camp_2800"): "To 2800",
+    ("camp_2800", "stone_sea"): "Main route",
+    ("stone_sea", "ridge_wind"): "To ridge",
+    ("ridge_wind", "da_ye_hai"): "To Da Ye Hai",
+    ("da_ye_hai", "ba_xian_tai"): "Summit push",
+    ("ba_xian_tai", "end_exit"): "Descent",
+    ("camp_2800", "bailout_2800"): "Evac",
+    ("ridge_wind", "bailout_ridge"): "Emergency evac",
+}
+
 
 EDGES: list[AoTaiEdge] = [
     # Mainline distances are demo values (km) and can be tuned.
@@ -216,3 +243,16 @@ def get_graph(theme: str | None) -> type[AoTaiGraph]:
     from aotai_hike.world.kilimanjaro_map_data import KilimanjaroGraph
 
     return KilimanjaroGraph if theme == "kili" else AoTaiGraph
+
+
+def get_node_display_name(theme: str | None, lang: str | None, node_id: str) -> str:
+    """Return the node name for display in messages (localized when theme=aotai and lang=en)."""
+    graph = get_graph(theme)
+    try:
+        node = graph.get_node(node_id)
+        default_name = node.name
+    except Exception:
+        default_name = node_id
+    if theme == "aotai" and lang == "en":
+        return AOTAI_NODE_NAMES_EN.get(node_id, default_name)
+    return default_name

@@ -11,13 +11,39 @@ from aotai_hike.schemas import Message, Role, WorldState
 from aotai_hike.theme import (
     _lang,
     _theme,
+    companion_action_labels,
+    companion_action_message_content,
+    format_user_action_for_memory,
+    mem_leader_vote_player_chose,
+    mem_leader_vote_search_prefix,
+    mem_player_action_label,
+    mem_round_event_header,
+    mem_round_no_dialogue,
+    mem_round_no_npc,
+    mem_search_weather_time,
+    mem_speaker_action,
+    mem_speaker_said,
+    prompt_bailout_suffix,
+    prompt_dialogue_prefix_narrator,
+    prompt_dialogue_prefix_teammate,
+    prompt_dialogue_prefix_you,
+    prompt_leader_line,
+    prompt_location_line,
     prompt_night_vote_intro,
     prompt_night_vote_output_requirement,
     prompt_night_vote_query,
+    prompt_no_key_dialogue,
+    prompt_no_recent_dialogue,
+    prompt_none,
+    prompt_player_role_line,
+    prompt_role_focus_line,
+    prompt_route_line,
     prompt_section_candidates,
     prompt_section_dialogue,
     prompt_section_memories,
     prompt_story_context_line,
+    prompt_terrain_hint_none,
+    prompt_unknown_altitude,
 )
 from aotai_hike.world.map_data import get_graph
 
@@ -86,10 +112,11 @@ class MockCompanionBrain(CompanionBrain):
         self._rng.shuffle(rest)
         follow_p = 0.45
         speakers = [first] + [r for r in rest if self._rng.random() < follow_p]
+        lang = _lang(world_state)
         mem_hint = ""
         if memory_snippets:
             hint = memory_snippets[-1]
-            mem_hint = f"（想起：{hint[:24]}…）"
+            mem_hint = f"（想起：{hint[:24]}…）" if lang != "en" else f"(Recall: {hint[:24]}…)"
 
         templates = [
             "这段路感觉{adj}，我们保持节奏。",
@@ -100,8 +127,19 @@ class MockCompanionBrain(CompanionBrain):
         ]
         adjs = ["稳", "吃力", "顺", "危险", "安静", "诡异"]
         suggestions = ["休息", "补水", "检查路线", "扎营", "等等队友"]
+        if lang == "en":
+            templates = [
+                "This stretch feels {adj}; let's keep the pace.",
+                "I'm a bit {adj}, but I can manage. {mem}",
+                "The wind is strong; stay close. {mem}",
+                "The terrain ahead looks different; slow down. {mem}",
+                "Want to {suggestion}?",
+            ]
+            adjs = ["steady", "rough", "smooth", "risky", "quiet", "eerie"]
+            suggestions = ["rest", "rehydrate", "check the route", "camp", "wait for others"]
 
         out: list[Message] = []
+        action_labels = companion_action_labels(lang)
         for sp in speakers:
             t = self._rng.choice(templates)
             text = (
@@ -127,7 +165,9 @@ class MockCompanionBrain(CompanionBrain):
                     role_id=sp.role_id,
                     role_name=sp.name,
                     kind="action",
-                    content=f"{sp.name}：{self._rng.choice(['调整背包', '观察地形', '喝水', '擦汗'])}",
+                    content=companion_action_message_content(
+                        lang, sp.name, self._rng.choice(action_labels)
+                    ),
                     emote=None,
                     action_tag=self._rng.choice(self._ACTION_TAGS),
                     timestamp_ms=now_ms,
@@ -213,12 +253,15 @@ class MemoryCompanionBrain(CompanionBrain):
                 action_tag=None,
                 timestamp_ms=now_ms,
             )
+            action_labels = companion_action_labels(_lang(world_state))
             action_msg = Message(
                 message_id=f"a-{world_state.session_id}-{now_ms}-{sp.role_id}",
                 role_id=sp.role_id,
                 role_name=sp.name,
                 kind="action",
-                content=f"{sp.name}：{self._rng.choice(['调整背包', '观察地形', '喝水', '擦汗'])}",
+                content=companion_action_message_content(
+                    _lang(world_state), sp.name, self._rng.choice(action_labels)
+                ),
                 emote=None,
                 action_tag=self._rng.choice(self._ACTION_TAGS),
                 timestamp_ms=now_ms,
@@ -259,7 +302,9 @@ class MemoryCompanionBrain(CompanionBrain):
                     ],
                     info={
                         "event": "npc_round",
-                        "user_action": self._format_user_action_cn(user_action),
+                        "user_action": format_user_action_for_memory(
+                            _lang(world_state), user_action
+                        ),
                         "weather": world_state.weather,
                         "time_of_day": world_state.time_of_day,
                         "scene_id": world_state.current_node_id,
@@ -278,18 +323,19 @@ class MemoryCompanionBrain(CompanionBrain):
         candidates: list[Role],
         player_vote_id: str | None = None,
     ) -> tuple[str | None, str]:
+        lang = _lang(world_state)
         if (
             player_vote_id
             and world_state.active_role_id
             and voter.role_id == world_state.active_role_id
         ):
-            return player_vote_id, "玩家在界面中明确选择。"
+            return player_vote_id, mem_leader_vote_player_chose(lang)
 
         cube_id = MemoryNamespace.role_cube_id(user_id=voter.role_id, role_id=voter.role_id)
 
         search_query = (
-            f"{voter.persona} 选择今晚队长。"
-            f" 天气:{world_state.weather} 时间:{world_state.time_of_day}"
+            f"{voter.persona} {mem_leader_vote_search_prefix(lang)}"
+            f"{mem_search_weather_time(lang, world_state.weather, world_state.time_of_day)}"
         )
         memories = self._memory.search_memory(
             user_id=voter.role_id,
@@ -306,6 +352,7 @@ class MemoryCompanionBrain(CompanionBrain):
             cand_lines.append(f"- {r.name} (id={r.role_id})：{r.persona}")
         candidates_block = "\n".join(cand_lines)
 
+        lang = _lang(world_state)
         history = list(world_state.chat_history or [])[-8:]
         dialogue_lines: list[str] = []
         for h in history:
@@ -315,17 +362,21 @@ class MemoryCompanionBrain(CompanionBrain):
             speaker_name = str(h.get("speaker_name") or "").strip()
             role_tag = str(h.get("role") or "").strip() or "assistant"
             if role_tag == "system":
-                prefix = "[旁白]"
+                prefix = prompt_dialogue_prefix_narrator(lang)
             elif role_tag == "user":
-                prefix = "[你]"
+                prefix = prompt_dialogue_prefix_you(lang)
             else:
-                prefix = f"[{speaker_name}]" if speaker_name else "[队友]"
+                prefix = (
+                    f"[{speaker_name}]" if speaker_name else prompt_dialogue_prefix_teammate(lang)
+                )
             dialogue_lines.append(f"{prefix}{content}")
-        dialogue_block = "\n".join(dialogue_lines) if dialogue_lines else "（暂无近期对话）"
+        dialogue_block = (
+            "\n".join(dialogue_lines) if dialogue_lines else prompt_no_recent_dialogue(lang)
+        )
 
-        memories_block = "\n".join(f"- {m}" for m in memories[:8]) if memories else "（暂无）"
-
-        lang = _lang(world_state)
+        memories_block = (
+            "\n".join(f"- {m}" for m in memories[:8]) if memories else prompt_none(lang)
+        )
         system_prompt = (
             prompt_night_vote_intro(lang) + f"{prompt_section_candidates(lang)}\n"
             f"{candidates_block}\n\n"
@@ -363,10 +414,11 @@ class MemoryCompanionBrain(CompanionBrain):
         world_memories: list[str],
         history: list[dict[str, Any]] | None = None,
     ) -> str:
-        user_action_cn = self._format_user_action_cn(user_action)
+        lang = _lang(world_state)
+        user_action_str = format_user_action_for_memory(lang, user_action)
 
         cube_id = MemoryNamespace.role_cube_id(user_id=role.role_id, role_id=role.role_id)
-        search_query = f"{role.persona} {user_action_cn} 天气:{world_state.weather} 时间:{world_state.time_of_day}"
+        search_query = f"{role.persona} {user_action_str}{mem_search_weather_time(lang, world_state.weather, world_state.time_of_day)}"
         memories = self._memory.search_memory(
             user_id=role.role_id,
             cube_id=cube_id,
@@ -388,7 +440,7 @@ class MemoryCompanionBrain(CompanionBrain):
         response = self._memory.chat_complete(
             user_id=role.role_id,
             cube_id=cube_id,
-            query=user_action_cn,
+            query=user_action_str,
             system_prompt=system_prompt,
             history=None,
             session_id=world_state.session_id,
@@ -407,9 +459,10 @@ class MemoryCompanionBrain(CompanionBrain):
     def _format_round_memory(
         self, world_state: WorldState, messages: list[Message], *, user_action: str
     ) -> str:
-        """Compress all NPC dialogues and actions in this round into a single Chinese memory entry."""
+        """Compress all NPC dialogues and actions in this round into a single memory entry (lang-aware)."""
+        lang = _lang(world_state)
         if not messages:
-            return "本轮无NPC发言。"
+            return mem_round_no_npc(lang)
 
         try:
             node = get_graph(_theme(world_state)).get_node(world_state.current_node_id)
@@ -418,19 +471,24 @@ class MemoryCompanionBrain(CompanionBrain):
             location_name = world_state.current_node_id
 
         header = (
-            f"本轮事件：位置 {location_name}，天气 {world_state.weather}，时间段 {world_state.time_of_day}。"
-            f" 玩家动作：{self._format_user_action_cn(user_action)}。"
+            mem_round_event_header(
+                lang, location_name, world_state.weather, world_state.time_of_day
+            )
+            + mem_player_action_label(lang)
+            + format_user_action_for_memory(lang, user_action)
+            + "."
         )
 
         lines: list[str] = []
+        teammate = "teammate" if lang == "en" else "队员"
         for m in messages:
-            speaker = m.role_name or m.role_id or "队员"
+            speaker = m.role_name or m.role_id or teammate
             if m.kind == "speech":
-                lines.append(f"{speaker}说：{m.content}")
+                lines.append(f"{speaker}{mem_speaker_said(lang)}{m.content}")
             elif m.kind == "action":
-                lines.append(f"{speaker}动作：{m.content}")
+                lines.append(f"{speaker}{mem_speaker_action(lang)}{m.content}")
 
-        body = " ".join(lines) if lines else "本轮暂无有效对话或动作。"
+        body = " ".join(lines) if lines else mem_round_no_dialogue(lang)
         return f"{header} {body}"
 
     def _build_system_prompt(
@@ -441,19 +499,20 @@ class MemoryCompanionBrain(CompanionBrain):
         memories: list[str],
         history: list[dict[str, Any]] | None = None,
     ) -> str:
+        lang = _lang(world_state)
         # Get current node name + altitude + terrain hint
         try:
             node = get_graph(_theme(world_state)).get_node(world_state.current_node_id)
             location_name = node.name if node else world_state.current_node_id
             altitude = (
-                f"{getattr(node, 'altitude_m', '未知')}m"
+                f"{node.altitude_m}m"
                 if node and getattr(node, "altitude_m", None) is not None
-                else "未知海拔"
+                else prompt_unknown_altitude(lang)
             )
             terrain_hint = getattr(node, "hint", "") or ""
         except Exception:
             location_name = world_state.current_node_id
-            altitude = "未知海拔"
+            altitude = prompt_unknown_altitude(lang)
             terrain_hint = ""
 
         # Build NPC info section (current role + other roles)
@@ -461,20 +520,27 @@ class MemoryCompanionBrain(CompanionBrain):
         npc_info_lines = []
         for r in all_roles:
             attrs = r.attrs
-            npc_info_lines.append(
-                f"```|<{r.name}>|\n"
-                f"# {r.name}设定：{r.persona}\n"
-                f"当前状态：体力{attrs.stamina}/100，情绪{attrs.mood}/100，经验{attrs.experience}/100，风险偏好{attrs.risk_tolerance}/100，物资{attrs.supplies}/100\n"
-                f"```"
-            )
+            if lang == "en":
+                npc_info_lines.append(
+                    f"```|<{r.name}>|\n"
+                    f"# {r.name} persona: {r.persona}\n"
+                    f"State: stamina{attrs.stamina}/100, mood{attrs.mood}/100, exp{attrs.experience}/100, risk{attrs.risk_tolerance}/100, supplies{attrs.supplies}/100\n"
+                    f"```"
+                )
+            else:
+                npc_info_lines.append(
+                    f"```|<{r.name}>|\n"
+                    f"# {r.name}设定：{r.persona}\n"
+                    f"当前状态：体力{attrs.stamina}/100，情绪{attrs.mood}/100，经验{attrs.experience}/100，风险偏好{attrs.risk_tolerance}/100，物资{attrs.supplies}/100\n"
+                    f"```"
+                )
         npc_info_section = "\n".join(npc_info_lines)
-
         # Build memories section
-        mem_lines = "\n".join(f"- {m}" for m in memories[:12]) if memories else "（无）"
+        mem_lines = "\n".join(f"- {m}" for m in memories[:12]) if memories else prompt_none(lang)
 
         # Build recent dialogue section (who said what).
         recent_history = (history or [])[-8:]
-        dialogue_lines: list[str] = []
+        dialogue_lines_b: list[str] = []
         for h in recent_history:
             content = str(h.get("content") or "").strip()
             if not content:
@@ -482,21 +548,27 @@ class MemoryCompanionBrain(CompanionBrain):
             role_tag = str(h.get("role") or "").strip() or "assistant"
             speaker_name = str(h.get("speaker_name") or "").strip()
             if role_tag == "system":
-                prefix = "|<旁白>|"
+                prefix = "|<" + prompt_dialogue_prefix_narrator(lang).strip("[]") + ">|"
             elif role_tag == "user":
-                prefix = "|<你>|"
+                prefix = "|<" + prompt_dialogue_prefix_you(lang).strip("[]") + ">|"
             else:
-                prefix = f"|<{speaker_name}>|" if speaker_name else "|<队友>|"
-            dialogue_lines.append(f"{prefix}{content}")
-        dialogue_block = "\n".join(dialogue_lines) if dialogue_lines else "（暂无关键对话）"
+                prefix = (
+                    f"|<{speaker_name}>|"
+                    if speaker_name
+                    else "|<" + prompt_dialogue_prefix_teammate(lang).strip("[]") + ">|"
+                )
+            dialogue_lines_b.append(f"{prefix}{content}")
+        dialogue_block = (
+            "\n".join(dialogue_lines_b) if dialogue_lines_b else prompt_no_key_dialogue(lang)
+        )
 
         # Get active role name
         active_role = next((r for r in all_roles if r.role_id == world_state.active_role_id), None)
-        active_name = active_role.name if active_role else "玩家"
+        active_name = active_role.name if active_role else ("Player" if lang == "en" else "玩家")
 
         # Build story background
         leader_role = next((r for r in all_roles if r.role_id == world_state.leader_role_id), None)
-        leader_name = leader_role.name if leader_role else "未知"
+        leader_name = leader_role.name if leader_role else ("Unknown" if lang == "en" else "未知")
 
         # Build simple textual map overview and mark current node.
         route_nodes = [
@@ -527,14 +599,51 @@ class MemoryCompanionBrain(CompanionBrain):
 
         def _format_route_node(nid: str) -> str:
             label = _label_node(nid)
-            # Check if this node has a bailout exit
             if nid in bailout_map:
                 bailout_id = bailout_map[nid]
                 bailout_label = _label_node(bailout_id)
-                return f"{label}(可下撤至{bailout_label})"
+                return f"{label}{prompt_bailout_suffix(lang, bailout_label)}"
             return label
 
         mainline_str = " → ".join(_format_route_node(nid) for nid in route_nodes)
+        terrain_str = terrain_hint or prompt_terrain_hint_none(lang)
+
+        if lang == "en":
+            return (
+                "# Task\n"
+                "You are the narrative engine of an interactive story. Based on the script, character settings and context, respond to user input. Keep logic and character consistency.\n"
+                "1. Flow: your output -> other characters -> ... -> your output -> user input.\n"
+                "2. Each output should acknowledge the user, advance the plot, and set up the next step.\n"
+                "3. Keep reply under 120 words.\n"
+                "<Format>\n"
+                "(expression) dialogue\n"
+                "</Format>\n\n"
+                "<Your character info>\n"
+                f"{npc_info_section}\n"
+                "</Your character info>\n\n"
+                "<Story context>\n"
+                f"{prompt_story_context_line(lang, world_state.day, world_state.time_of_day, world_state.weather)}"
+                f"{prompt_location_line(lang, location_name, altitude, terrain_str)}"
+                f"{prompt_leader_line(lang, leader_name)}"
+                f"{prompt_player_role_line(lang, active_name)}"
+                f"{prompt_role_focus_line(lang, role.name)}"
+                f"{prompt_route_line(lang, mainline_str)}"
+                "</Story context>\n\n"
+                "<Dialogue record>\n"
+                f"{dialogue_block}\n"
+                "</Dialogue record>\n\n"
+                "<Relevant memories>\n"
+                f"{mem_lines}\n"
+                "</Relevant memories>\n\n"
+                "# Output rules\n"
+                "1. Keep plot logic and character consistency.\n"
+                "2. Speak according to character persona and growth.\n"
+                '3. Address the user as "you"; do not speak for the user.\n'
+                f"4. Current speaker is {role.name}; respond as {role.name}.\n"
+                "5. Create tension and choices around characters' goals; reveal gradually.\n"
+                "6. Weave in weather, time, location and state naturally.\n"
+                "7. Keep tone natural and concise.\n"
+            )
 
         return (
             "# 任务描述\n"
@@ -549,12 +658,12 @@ class MemoryCompanionBrain(CompanionBrain):
             f"{npc_info_section}\n"
             "</你的信息介绍>\n\n"
             "<故事背景>\n"
-            f"{prompt_story_context_line(_lang(world_state), world_state.day, world_state.time_of_day, world_state.weather)}"
-            f"你们现在位于：{location_name}（{altitude}），地形提示：{terrain_hint or '无特别提示'}。\n"
-            f"当前队长是：{leader_name}。\n"
-            f"玩家当前扮演的角色是：{active_name}。\n"
-            f"剧情围绕{role.name}展开，{role.name}需要根据当前情况做出反应和发言。\n"
-            f"整条路线示意：{mainline_str}。\n"
+            f"{prompt_story_context_line(lang, world_state.day, world_state.time_of_day, world_state.weather)}"
+            f"{prompt_location_line(lang, location_name, altitude, terrain_str)}"
+            f"{prompt_leader_line(lang, leader_name)}"
+            f"{prompt_player_role_line(lang, active_name)}"
+            f"{prompt_role_focus_line(lang, role.name)}"
+            f"{prompt_route_line(lang, mainline_str)}"
             "</故事背景>\n\n"
             "<对话记录>\n"
             f"{dialogue_block}\n"
@@ -615,47 +724,6 @@ class MemoryCompanionBrain(CompanionBrain):
             reason = cleaned if len(cleaned) <= 80 else cleaned[:80] + "…"
 
         return vote_id, reason
-
-    @staticmethod
-    def _format_user_action_cn(user_action: str) -> str:
-        ua = str(user_action or "").strip()
-        if not ua:
-            return "无动作"
-
-        if ua.startswith("SAY:"):
-            text = ua.split(":", 1)[1] if ":" in ua else ""
-            text = text.strip()
-            return f"玩家发言：{text}" if text else "玩家发言"
-
-        if ua.startswith("MOVE_FORWARD:"):
-            if ":arrive:" in ua:
-                return "队伍前进并抵达新的路段节点"
-            if ":retreat_rain" in ua:
-                return "下撤途中遇雨，队伍被迫返回岔路"
-            if ":start" in ua:
-                return "队伍从当前节点出发，开始新的前进路段"
-            if ":step" in ua:
-                return "队伍在路线上继续前进"
-            if ":end" in ua:
-                return "已到达终点或无可前进路线"
-            return "队伍前进"
-
-        if ua == "REST":
-            return "队伍选择原地休息调整状态"
-        if ua == "CAMP":
-            return "队长决定扎营过夜，恢复体力但消耗物资"
-        if ua == "OBSERVE":
-            return "队伍停下观察周围环境与路况"
-
-        if ua.startswith("DECIDE:"):
-            kind = ua.split(":", 1)[1] if ":" in ua else ""
-            if kind == "night_vote":
-                return "进行夜间票选决定队长"
-            if kind == "camp_meeting":
-                return "讨论并决定下一步路线"
-            return f"做出决策：{kind or '未知'}"
-
-        return ua
 
     @staticmethod
     def _format_time_ms() -> str:

@@ -496,3 +496,339 @@ def event_observe_label(lang: Lang, obs: str) -> str:
     if lang == "en":
         return f"Observe: {obs}"
     return f"观察：{obs}"
+
+
+# ----- Companion action labels (chat action messages: 调整背包, 观察地形, etc.) -----
+
+
+def companion_action_labels(lang: Lang) -> tuple[str, ...]:
+    """Labels for NPC action messages (e.g. after speech). Shown in chat as (label)."""
+    if lang == "en":
+        return ("Adjust pack", "Observe terrain", "Drink water", "Wipe sweat")
+    return ("调整背包", "观察地形", "喝水", "擦汗")
+
+
+def companion_action_message_content(lang: Lang, role_name: str, action_label: str) -> str:
+    """Format 'Name: action' for action message content (frontend may append (action) to previous msg)."""
+    if lang == "en":
+        return f"{role_name}: {action_label}"
+    return f"{role_name}：{action_label}"
+
+
+# ----- Memory / MemOS payload (add_memory, search, chat_complete) -----
+
+
+def mem_round_no_npc(lang: Lang) -> str:
+    if lang == "en":
+        return "No NPC speech this round."
+    return "本轮无NPC发言。"
+
+
+def mem_round_event_header(lang: Lang, location_name: str, weather: str, time_of_day: str) -> str:
+    if lang == "en":
+        return f"Round event: location {location_name}, weather {weather}, time {time_of_day}."
+    return f"本轮事件：位置 {location_name}，天气 {weather}，时间段 {time_of_day}。"
+
+
+def mem_player_action_label(lang: Lang) -> str:
+    if lang == "en":
+        return " Player action: "
+    return " 玩家动作："
+
+
+def mem_speaker_said(lang: Lang) -> str:
+    if lang == "en":
+        return " said: "
+    return "说："
+
+
+def mem_speaker_action(lang: Lang) -> str:
+    if lang == "en":
+        return " action: "
+    return "动作："
+
+
+def mem_round_no_dialogue(lang: Lang) -> str:
+    if lang == "en":
+        return "No dialogue or actions this round."
+    return "本轮暂无有效对话或动作。"
+
+
+def mem_leader_vote_player_chose(lang: Lang) -> str:
+    if lang == "en":
+        return "Player chose in UI."
+    return "玩家在界面中明确选择。"
+
+
+def mem_leader_vote_search_prefix(lang: Lang) -> str:
+    if lang == "en":
+        return "Choose tonight's leader."
+    return "选择今晚队长。"
+
+
+def mem_search_weather_time(lang: Lang, weather: str, time_of_day: str) -> str:
+    if lang == "en":
+        return f" weather:{weather} time:{time_of_day}"
+    return f" 天气:{weather} 时间:{time_of_day}"
+
+
+def format_user_action_for_memory(lang: Lang, user_action: str) -> str:
+    """Format user_action string for MemOS add/search/chat (lang-aware)."""
+    ua = str(user_action or "").strip()
+    if not ua:
+        if lang == "en":
+            return "No action"
+        return "无动作"
+
+    if ua.startswith("SAY:"):
+        text = ua.split(":", 1)[1] if ":" in ua else ""
+        text = text.strip()
+        if lang == "en":
+            return f"Player said: {text}" if text else "Player said"
+        return f"玩家发言：{text}" if text else "玩家发言"
+
+    if ua.startswith("MOVE_FORWARD:"):
+        if lang == "en":
+            if ":arrive:" in ua:
+                return "Party advanced and arrived at a new node"
+            if ":retreat_rain" in ua:
+                return "Retreat in rain failed; party returned to junction"
+            if ":start" in ua:
+                return "Party departed from current node, started new segment"
+            if ":step" in ua:
+                return "Party continued along the route"
+            if ":end" in ua:
+                return "Reached the end or no route forward"
+            return "Party moved forward"
+        if ":arrive:" in ua:
+            return "队伍前进并抵达新的路段节点"
+        if ":retreat_rain" in ua:
+            return "下撤途中遇雨，队伍被迫返回岔路"
+        if ":start" in ua:
+            return "队伍从当前节点出发，开始新的前进路段"
+        if ":step" in ua:
+            return "队伍在路线上继续前进"
+        if ":end" in ua:
+            return "已到达终点或无可前进路线"
+        return "队伍前进"
+
+    if ua == "REST":
+        return "Party chose to rest and recover" if lang == "en" else "队伍选择原地休息调整状态"
+    if ua == "CAMP":
+        return (
+            "Leader decided to camp overnight, restore stamina but use supplies"
+            if lang == "en"
+            else "队长决定扎营过夜，恢复体力但消耗物资"
+        )
+    if ua == "OBSERVE":
+        return (
+            "Party stopped to observe surroundings and conditions"
+            if lang == "en"
+            else "队伍停下观察周围环境与路况"
+        )
+
+    if ua.startswith("DECIDE:"):
+        kind = ua.split(":", 1)[1] if ":" in ua else ""
+        if lang == "en":
+            if kind == "night_vote":
+                return "Night vote to choose leader"
+            if kind == "camp_meeting":
+                return "Camp meeting to decide next route"
+            return f"Decision: {kind or 'unknown'}"
+        if kind == "night_vote":
+            return "进行夜间票选决定队长"
+        if kind == "camp_meeting":
+            return "讨论并决定下一步路线"
+        return f"做出决策：{kind or '未知'}"
+
+    return ua
+
+
+def mem_memory_time_map(lang: Lang) -> dict[str, str]:
+    if lang == "en":
+        return {
+            "morning": "morning",
+            "noon": "noon",
+            "afternoon": "afternoon",
+            "evening": "evening",
+            "night": "night",
+        }
+    return {
+        "morning": "早晨",
+        "noon": "中午",
+        "afternoon": "下午",
+        "evening": "傍晚",
+        "night": "夜晚",
+    }
+
+
+def mem_memory_weather_map(lang: Lang) -> dict[str, str]:
+    if lang == "en":
+        return {
+            "sunny": "sunny",
+            "cloudy": "cloudy",
+            "windy": "windy",
+            "rainy": "rainy",
+            "snowy": "snowy",
+            "foggy": "foggy",
+        }
+    return {
+        "sunny": "晴",
+        "cloudy": "多云",
+        "windy": "有风",
+        "rainy": "雨",
+        "snowy": "雪",
+        "foggy": "雾",
+    }
+
+
+def mem_memory_action_map(lang: Lang) -> dict[str, str]:
+    if lang == "en":
+        return {
+            "SAY": "say",
+            "MOVE_FORWARD": "forward",
+            "REST": "rest",
+            "CAMP": "camp",
+            "OBSERVE": "observe",
+            "DECIDE": "decide",
+        }
+    return {
+        "SAY": "发言",
+        "MOVE_FORWARD": "前进",
+        "REST": "休息",
+        "CAMP": "扎营",
+        "OBSERVE": "观察",
+        "DECIDE": "决策",
+    }
+
+
+def mem_memory_event_day_line(lang: Lang, day: int, tod: str, weather: str, node_name: str) -> str:
+    if lang == "en":
+        return f"Day {day}, {tod}, weather {weather}, location: {node_name}."
+    return f"第{day}天，{tod}，天气{weather}，位置：{node_name}。"
+
+
+def mem_memory_event_action_label(lang: Lang) -> str:
+    if lang == "en":
+        return "Action: "
+    return "动作："
+
+
+def mem_memory_event_recent_label(lang: Lang) -> str:
+    if lang == "en":
+        return "Recent events: "
+    return "最近事件："
+
+
+def mem_memory_event_dialogue_label(lang: Lang) -> str:
+    if lang == "en":
+        return "Key dialogue: "
+    return "关键对话："
+
+
+def mem_memory_query_action_label(lang: Lang) -> str:
+    if lang == "en":
+        return "action:"
+    return "动作:"
+
+
+def mem_memory_query_events_label(lang: Lang) -> str:
+    if lang == "en":
+        return "events:"
+    return "事件:"
+
+
+def mem_memory_query_persona_label(lang: Lang) -> str:
+    if lang == "en":
+        return "persona:"
+    return "人设:"
+
+
+def mem_teammate_label(lang: Lang) -> str:
+    if lang == "en":
+        return "teammate"
+    return "队员"
+
+
+def prompt_dialogue_prefix_narrator(lang: Lang) -> str:
+    if lang == "en":
+        return "[Narrator]"
+    return "[旁白]"
+
+
+def prompt_dialogue_prefix_you(lang: Lang) -> str:
+    if lang == "en":
+        return "[You]"
+    return "[你]"
+
+
+def prompt_dialogue_prefix_teammate(lang: Lang) -> str:
+    if lang == "en":
+        return "[Teammate]"
+    return "[队友]"
+
+
+def prompt_no_recent_dialogue(lang: Lang) -> str:
+    if lang == "en":
+        return "No recent dialogue."
+    return "（暂无近期对话）"
+
+
+def prompt_none(lang: Lang) -> str:
+    if lang == "en":
+        return "None"
+    return "（暂无）"
+
+
+def prompt_no_key_dialogue(lang: Lang) -> str:
+    if lang == "en":
+        return "No key dialogue."
+    return "（暂无关键对话）"
+
+
+def prompt_unknown_altitude(lang: Lang) -> str:
+    if lang == "en":
+        return "unknown altitude"
+    return "未知海拔"
+
+
+def prompt_terrain_hint_none(lang: Lang) -> str:
+    if lang == "en":
+        return "No special hint."
+    return "无特别提示"
+
+
+def prompt_location_line(lang: Lang, location_name: str, altitude: str, terrain_hint: str) -> str:
+    if lang == "en":
+        return f"You are at: {location_name} ({altitude}), terrain hint: {terrain_hint}.\n"
+    return f"你们现在位于：{location_name}（{altitude}），地形提示：{terrain_hint}。\n"
+
+
+def prompt_leader_line(lang: Lang, leader_name: str) -> str:
+    if lang == "en":
+        return f"Current leader: {leader_name}.\n"
+    return f"当前队长是：{leader_name}。\n"
+
+
+def prompt_player_role_line(lang: Lang, active_name: str) -> str:
+    if lang == "en":
+        return f"The player is currently playing: {active_name}.\n"
+    return f"玩家当前扮演的角色是：{active_name}。\n"
+
+
+def prompt_role_focus_line(lang: Lang, role_name: str) -> str:
+    if lang == "en":
+        return f"The story focuses on {role_name}; {role_name} should react and speak.\n"
+    return f"剧情围绕{role_name}展开，{role_name}需要根据当前情况做出反应和发言。\n"
+
+
+def prompt_route_line(lang: Lang, mainline_str: str) -> str:
+    if lang == "en":
+        return f"Route: {mainline_str}.\n"
+    return f"整条路线示意：{mainline_str}。\n"
+
+
+def prompt_bailout_suffix(lang: Lang, bailout_label: str) -> str:
+    if lang == "en":
+        return f"(evac to {bailout_label})"
+    return f"(可下撤至{bailout_label})"

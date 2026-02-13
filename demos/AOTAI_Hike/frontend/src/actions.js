@@ -63,8 +63,11 @@ async function api(path, body, method = "POST") {
   return resp.json();
 }
 
-export async function apiGetMap(theme) {
-  const q = theme != null ? `?theme=${encodeURIComponent(theme)}` : "";
+export async function apiGetMap(theme, lang) {
+  const params = new URLSearchParams();
+  if (theme != null) params.set("theme", theme);
+  if (lang != null) params.set("lang", lang);
+  const q = params.toString() ? `?${params.toString()}` : "";
   const resp = await fetch(`${API_BASE}/map${q}`);
   const data = await resp.json();
   setMapData(data);

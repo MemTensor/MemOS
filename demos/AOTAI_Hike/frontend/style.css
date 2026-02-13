@@ -539,6 +539,16 @@ textarea:focus {
   padding: 8px 0;
   border-bottom: 1px solid rgba(124, 242, 255, 0.25);
 }
+.setup-option-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.setup-option-row .setup-theme-label {
+  margin-bottom: 0;
+  min-width: 4em;
+}
 .setup-theme-label {
   display: block;
   color: var(--muted);

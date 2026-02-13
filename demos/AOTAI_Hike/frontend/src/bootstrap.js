@@ -1,6 +1,6 @@
 import { $ } from "./dom.js";
 import { apiAct, apiGetMap, apiNewSession, apiSetActiveRole, apiSetSessionLang, apiSetSessionTheme, apiUpsertRole, apiRolesQuickstart } from "./actions.js";
-import { setLang, getLang, t } from "./i18n.js";
+import { setLang, getLang, t, getPageTitle, getTitle, getSubtitle } from "./i18n.js";
 import { initMinimapCanvas } from "./minimap.js";
 import { initPhaser } from "./phaser_view.js";
 import { applyPhaseUI } from "./phase_ui.js";
@@ -9,14 +9,18 @@ import { worldState } from "./state.js";
 import { makeRole } from "./utils.js";
 
 function refreshStaticUI() {
-  document.title = t("pageTitle");
-  document.documentElement.lang = getLang() === "zh" ? "zh-CN" : "en";
+  const theme = worldState?.theme ?? "aotai";
+  const lang = getLang();
+  document.title = getPageTitle(theme, lang);
+  document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
   const set = (id, key, attr = "textContent") => {
     const el = document.getElementById(id);
     if (el) el[attr] = t(key);
   };
-  set("i18n-title", "title");
-  set("i18n-subtitle", "subtitle");
+  const titleEl = document.getElementById("i18n-title");
+  if (titleEl) titleEl.textContent = getTitle(theme, lang);
+  const subEl = document.getElementById("i18n-subtitle");
+  if (subEl) subEl.textContent = getSubtitle(theme, lang);
   set("i18n-party-panel-title", "partyPanelTitle");
   set("i18n-interact-panel-title", "interactPanelTitle");
   set("i18n-btn-forward", "moveForward");
@@ -26,6 +30,8 @@ function refreshStaticUI() {
   set("btn-say", "send");
   set("i18n-hint-switch", "hintSwitchRole");
   set("i18n-setup-title", "setupTitle");
+  set("i18n-setup-lang-label", "setupLangLabel");
+  set("i18n-setup-map-label", "setupMapLabel");
   set("i18n-setup-sub", "setupSub");
   set("i18n-setup-name-label", "setupNameLabel");
   set("i18n-setup-persona-label", "setupPersonaLabel");
@@ -50,18 +56,33 @@ function refreshStaticUI() {
   $("#night-vote-close") && ($("#night-vote-close").textContent = t("nightVoteContinue"));
   $("#share-download-btn") && ($("#share-download-btn").textContent = t("shareDownload"));
   $("#share-close-btn") && ($("#share-close-btn").textContent = t("shareClose"));
+  const shareModalTitleEl = document.getElementById("i18n-share-modal-title");
+  if (shareModalTitleEl) shareModalTitleEl.textContent = t("shareModalTitle");
+  const minimapCanvas = document.getElementById("minimap-canvas");
+  if (minimapCanvas) minimapCanvas.setAttribute("aria-label", t("minimapAriaLabel"));
   const themeLabel = $("#i18n-setup-theme-label");
   if (themeLabel) themeLabel.textContent = t("setupThemeLabel");
-  const themeZh = $("#setup-theme-zh");
-  const themeEn = $("#setup-theme-en");
+  const setupLangZh = $("#setup-lang-zh");
+  const setupLangEn = $("#setup-lang-en");
+  const setupMapAotai = $("#setup-map-aotai");
+  const setupMapKili = $("#setup-map-kili");
   const currentTheme = worldState?.theme ?? "aotai";
-  if (themeZh) {
-    themeZh.textContent = t("setupThemeAotai");
-    themeZh.classList.toggle("primary", currentTheme === "aotai");
+  const currentLang = getLang();
+  if (setupLangZh) {
+    setupLangZh.textContent = t("setupLangZh");
+    setupLangZh.classList.toggle("primary", currentLang === "zh");
   }
-  if (themeEn) {
-    themeEn.textContent = t("setupThemeKilimanjaro");
-    themeEn.classList.toggle("primary", currentTheme === "kili");
+  if (setupLangEn) {
+    setupLangEn.textContent = t("setupLangEn");
+    setupLangEn.classList.toggle("primary", currentLang === "en");
+  }
+  if (setupMapAotai) {
+    setupMapAotai.textContent = t("setupMapAotai");
+    setupMapAotai.classList.toggle("primary", currentTheme === "aotai");
+  }
+  if (setupMapKili) {
+    setupMapKili.textContent = t("setupMapKilimanjaro");
+    setupMapKili.classList.toggle("primary", currentTheme === "kili");
   }
 }
 
@@ -81,7 +102,7 @@ export async function refreshAllUIText() {
 
 export async function bootstrap() {
   await apiNewSession("aotai", getLang());
-  await apiGetMap(worldState?.theme ?? "aotai");
+  await apiGetMap(worldState?.theme ?? "aotai", getLang());
   window.__aoTaiMinimap = initMinimapCanvas();
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
   initPhaser();
@@ -231,19 +252,28 @@ export async function bootstrap() {
     await apiAct("SAY", { text });
   };
 
-  // Theme choice in setup modal: syncs session lang so "Quick create 3 roles" uses the right theme
-  $("#setup-theme-zh")?.addEventListener("click", async () => {
+  // Language choice in setup modal (independent of map; refetch map so labels match lang)
+  $("#setup-lang-zh")?.addEventListener("click", async () => {
     setLang("zh");
-    await apiSetSessionTheme("aotai").catch((e) => console.warn("Failed to set session theme", e));
     await apiSetSessionLang("zh").catch((e) => console.warn("Failed to set session lang", e));
-    await apiGetMap("aotai").catch((e) => console.warn("Failed to refresh map", e));
+    await apiGetMap(worldState?.theme ?? "aotai", getLang()).catch((e) => console.warn("Failed to refresh map", e));
     await refreshAllUIText();
   });
-  $("#setup-theme-en")?.addEventListener("click", async () => {
+  $("#setup-lang-en")?.addEventListener("click", async () => {
     setLang("en");
-    await apiSetSessionTheme("kili").catch((e) => console.warn("Failed to set session theme", e));
     await apiSetSessionLang("en").catch((e) => console.warn("Failed to set session lang", e));
-    await apiGetMap("kili").catch((e) => console.warn("Failed to refresh map", e));
+    await apiGetMap(worldState?.theme ?? "aotai", getLang()).catch((e) => console.warn("Failed to refresh map", e));
+    await refreshAllUIText();
+  });
+  // Map choice in setup modal (independent of language)
+  $("#setup-map-aotai")?.addEventListener("click", async () => {
+    await apiSetSessionTheme("aotai").catch((e) => console.warn("Failed to set session theme", e));
+    await apiGetMap("aotai", getLang()).catch((e) => console.warn("Failed to refresh map", e));
+    await refreshAllUIText();
+  });
+  $("#setup-map-kili")?.addEventListener("click", async () => {
+    await apiSetSessionTheme("kili").catch((e) => console.warn("Failed to set session theme", e));
+    await apiGetMap("kili", getLang()).catch((e) => console.warn("Failed to refresh map", e));
     await refreshAllUIText();
   });
 

@@ -64,8 +64,14 @@ const messages = {
     // Role setup modal
     setupTitle: "创建队伍角色",
     setupThemeLabel: "路线主题（决定剧情与默认角色设定）：",
-    setupThemeAotai: "鳌太线（中文）",
-    setupThemeKilimanjaro: "乞力马扎罗（English）",
+    setupLangLabel: "语言：",
+    setupMapLabel: "地图：",
+    setupLangZh: "中文",
+    setupLangEn: "English",
+    setupMapAotai: "鳌太线",
+    setupMapKilimanjaro: "乞力马扎罗",
+    setupThemeAotai: "鳌太线",
+    setupThemeKilimanjaro: "乞力马扎罗",
     setupSub: "先创建 1 个或多个角色（名字 + 角色介绍），创建完成后该弹窗会消失。也可以一键快速创建。",
     setupNameLabel: "名字",
     setupNamePlaceholder: "例如：阿鳌",
@@ -113,6 +119,9 @@ const messages = {
 
     // Phaser fallback
     roleLabel: "角色",
+
+    // Minimap
+    minimapAriaLabel: "小地图",
   },
 
   en: {
@@ -164,8 +173,14 @@ const messages = {
 
     setupTitle: "Create party roles",
     setupThemeLabel: "Trek theme (sets story & default roles):",
-    setupThemeAotai: "AoTai Trail (中文)",
-    setupThemeKilimanjaro: "Conquer Kilimanjaro (English)",
+    setupLangLabel: "Language:",
+    setupMapLabel: "Map:",
+    setupLangZh: "中文",
+    setupLangEn: "English",
+    setupMapAotai: "AoTai Trail",
+    setupMapKilimanjaro: "Kilimanjaro",
+    setupThemeAotai: "AoTai Trail",
+    setupThemeKilimanjaro: "Kilimanjaro",
     setupSub: "Create one or more roles (name + intro). This popup closes when done. Or quick-create.",
     setupNameLabel: "Name",
     setupNamePlaceholder: "e.g. Ao",
@@ -208,6 +223,8 @@ const messages = {
     msgStartupFailed: "Startup failed: ",
 
     roleLabel: "Role",
+
+    minimapAriaLabel: "Minimap",
   },
 };
 
@@ -244,3 +261,32 @@ export function tFormat(key, vars = {}) {
   });
   return s;
 }
+
+/** Title / page title / subtitle by theme (aotai|kili) and lang (zh|en). */
+export function getPageTitle(theme, lang) {
+  const key = theme === "kili" ? "pageTitleKili" : "pageTitleAotai";
+  const m = messages[lang] || messages.zh;
+  return (m && m[key]) || (theme === "kili" ? "Conquer Kilimanjaro · Pixel Trail Simulator (Demo)" : "鳌太线·像素徒步模拟器（Demo）");
+}
+
+export function getTitle(theme, lang) {
+  const key = theme === "kili" ? "titleKili" : "titleAotai";
+  const m = messages[lang] || messages.zh;
+  return (m && m[key]) || (theme === "kili" ? "Conquer Kilimanjaro · Pixel Trail Simulator" : "鳌太线·像素徒步模拟器");
+}
+
+export function getSubtitle(theme, lang) {
+  const key = "subtitle";
+  const m = messages[lang] || messages.zh;
+  return (m && m[key]) || "单人多角色 · 其他角色由生成接口驱动（当前为 mock）";
+}
+
+// Title variants by theme (used by getPageTitle / getTitle)
+messages.zh.pageTitleAotai = "鳌太线·像素徒步模拟器（Demo）";
+messages.zh.titleAotai = "鳌太线·像素徒步模拟器";
+messages.zh.pageTitleKili = "决胜乞力马扎罗·像素徒步模拟器（Demo）";
+messages.zh.titleKili = "决胜乞力马扎罗·像素徒步模拟器";
+messages.en.pageTitleAotai = "AoTai Trail · Pixel Hiking Simulator (Demo)";
+messages.en.titleAotai = "AoTai Trail · Pixel Hiking Simulator";
+messages.en.pageTitleKili = "Conquer Kilimanjaro · Pixel Trail Simulator (Demo)";
+messages.en.titleKili = "Conquer Kilimanjaro · Pixel Trail Simulator";
