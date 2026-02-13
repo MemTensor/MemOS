@@ -1,5 +1,5 @@
 import { $ } from "./dom.js";
-import { apiAct, apiGetMap, apiNewSession, apiSetActiveRole, apiUpsertRole, apiRolesQuickstart } from "./actions.js";
+import { apiAct, apiGetMap, apiNewSession, apiSetActiveRole, apiSetSessionLang, apiSetSessionTheme, apiUpsertRole, apiRolesQuickstart } from "./actions.js";
 import { setLang, getLang, t } from "./i18n.js";
 import { initMinimapCanvas } from "./minimap.js";
 import { initPhaser } from "./phaser_view.js";
@@ -50,21 +50,38 @@ function refreshStaticUI() {
   $("#night-vote-close") && ($("#night-vote-close").textContent = t("nightVoteContinue"));
   $("#share-download-btn") && ($("#share-download-btn").textContent = t("shareDownload"));
   $("#share-close-btn") && ($("#share-close-btn").textContent = t("shareClose"));
+  const themeLabel = $("#i18n-setup-theme-label");
+  if (themeLabel) themeLabel.textContent = t("setupThemeLabel");
+  const themeZh = $("#setup-theme-zh");
+  const themeEn = $("#setup-theme-en");
+  const currentTheme = worldState?.theme ?? "aotai";
+  if (themeZh) {
+    themeZh.textContent = t("setupThemeAotai");
+    themeZh.classList.toggle("primary", currentTheme === "aotai");
+  }
+  if (themeEn) {
+    themeEn.textContent = t("setupThemeKilimanjaro");
+    themeEn.classList.toggle("primary", currentTheme === "kili");
+  }
 }
 
-export function refreshAllUIText() {
+export async function refreshAllUIText() {
   refreshStaticUI();
+  // Do NOT re-fetch map here: map is tied to theme, not lang. Switching lang must not change map.
   setStatus();
   renderPartyStatus();
   applyPhaseUI(worldState);
+  if (window.__aoTaiMinimap && typeof window.__aoTaiMinimap.setState === "function") {
+    window.__aoTaiMinimap.setState(worldState);
+  }
   if (window.__aoTaiMapView && typeof window.__aoTaiMapView.setState === "function") {
     window.__aoTaiMapView.setState(worldState);
   }
 }
 
 export async function bootstrap() {
-  await apiGetMap();
-  await apiNewSession();
+  await apiNewSession("aotai", getLang());
+  await apiGetMap(worldState?.theme ?? "aotai");
   window.__aoTaiMinimap = initMinimapCanvas();
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
   initPhaser();
@@ -72,9 +89,11 @@ export async function bootstrap() {
   // Language switcher (left of share button)
   const langBtn = $("#lang-button");
   if (langBtn) {
-    langBtn.onclick = () => {
-      setLang(getLang() === "zh" ? "en" : "zh");
-      refreshAllUIText();
+    langBtn.onclick = async () => {
+      const newLang = getLang() === "zh" ? "en" : "zh";
+      setLang(newLang);
+      await apiSetSessionLang(newLang).catch((e) => console.warn("Failed to set session lang", e));
+      await refreshAllUIText();
     };
   }
   refreshStaticUI();
@@ -211,6 +230,22 @@ export async function bootstrap() {
     $("#say-input").value = "";
     await apiAct("SAY", { text });
   };
+
+  // Theme choice in setup modal: syncs session lang so "Quick create 3 roles" uses the right theme
+  $("#setup-theme-zh")?.addEventListener("click", async () => {
+    setLang("zh");
+    await apiSetSessionTheme("aotai").catch((e) => console.warn("Failed to set session theme", e));
+    await apiSetSessionLang("zh").catch((e) => console.warn("Failed to set session lang", e));
+    await apiGetMap("aotai").catch((e) => console.warn("Failed to refresh map", e));
+    await refreshAllUIText();
+  });
+  $("#setup-theme-en")?.addEventListener("click", async () => {
+    setLang("en");
+    await apiSetSessionTheme("kili").catch((e) => console.warn("Failed to set session theme", e));
+    await apiSetSessionLang("en").catch((e) => console.warn("Failed to set session lang", e));
+    await apiGetMap("kili").catch((e) => console.warn("Failed to refresh map", e));
+    await refreshAllUIText();
+  });
 
   // Show role setup modal on first open
   openSetupIfNeeded();

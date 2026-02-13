@@ -11,7 +11,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from aotai_hike.world.map_data import AoTaiGraph
+from aotai_hike.theme import (
+    _lang,
+    _theme,
+    share_outcome_fail,
+    share_outcome_success_cross,
+    share_outcome_success_retreat,
+    share_result_finished_fail,
+    share_result_finished_success,
+    share_result_running,
+    share_role_leader,
+    share_stat_days,
+    share_stat_distance,
+    share_stat_location,
+    share_status_running,
+    share_team_stat_mood,
+    share_team_stat_risk,
+    share_team_stat_stamina,
+    share_title,
+)
+from aotai_hike.world.map_data import get_graph
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
@@ -19,10 +38,10 @@ if TYPE_CHECKING:
     from aotai_hike.schemas import Role, WorldState, WorldStats
 
 
-def _node_exists(node_id: str) -> bool:
+def _node_exists(node_id: str, theme: str | None = None) -> bool:
     """Check if a node exists in the graph."""
     try:
-        AoTaiGraph.get_node(node_id)
+        get_graph(theme).get_node(node_id)
         return True
     except Exception:
         return False
@@ -275,8 +294,10 @@ class ShareImageGenerator:
         # Precompute epithet
         epithet, lore = self._pick_epithet_and_lore(world_state.stats, outcome, world_state)
 
+        lang = _lang(world_state)
+        graph = get_graph(_theme(world_state))
         title_font = self._get_font(50)
-        title_text = "鳌太线徒步记录"
+        title_text = share_title(lang)
         draw.text(
             (self.WIDTH // 2, y_offset),
             title_text,
@@ -292,17 +313,13 @@ class ShareImageGenerator:
         if outcome.is_finished:
             if outcome.is_success:
                 if outcome.outcome_type == "cross_success":
-                    outcome_text = f"✓ 穿越成功 - 成功到达{outcome.current_node_name}"
+                    outcome_text = share_outcome_success_cross(lang, outcome.current_node_name)
                     outcome_color = self.SUCCESS_COLOR
                 else:  # retreat_success
-                    outcome_text = f"✓ 下撤成功 - 成功下撤至{outcome.current_node_name}"
+                    outcome_text = share_outcome_success_retreat(lang, outcome.current_node_name)
                     outcome_color = self.SUCCESS_COLOR
             else:
-                # Show detailed failure reason
-                if outcome.failure_reason:
-                    outcome_text = f"✗ {outcome.failure_reason}"
-                else:
-                    outcome_text = "✗ 挑战失败"
+                outcome_text = share_outcome_fail(lang, outcome.failure_reason)
                 outcome_color = self.FAILURE_COLOR
 
             outcome_font = self._get_font(32)
@@ -317,7 +334,7 @@ class ShareImageGenerator:
         else:
             # Game in progress - show status
             status_font = self._get_font(32)
-            status_text = "进行中..."
+            status_text = share_status_running(lang)
             draw.text(
                 (self.WIDTH // 2, y_offset),
                 status_text,
@@ -355,9 +372,9 @@ class ShareImageGenerator:
         left_x = panel_rect[0] + 36
 
         stats = [
-            f"总距离：{outcome.total_distance_km:.1f} km",
-            f"用时：{outcome.days_spent} 天",
-            f"当前位置：{outcome.current_node_name}",
+            f"{share_stat_distance(lang)}：{outcome.total_distance_km:.1f} km",
+            f"{share_stat_days(lang)}：{outcome.days_spent} " + ("days" if lang == "en" else "天"),
+            f"{share_stat_location(lang)}：{outcome.current_node_name}",
         ]
         for stat in stats:
             draw.text(
@@ -414,7 +431,7 @@ class ShareImageGenerator:
         node_names = []
         for nid in visited_display:
             try:
-                node_names.append(AoTaiGraph.get_node(nid).name)
+                node_names.append(graph.get_node(nid).name)
             except Exception:
                 continue
         route_text = " → ".join(node_names)
@@ -516,17 +533,22 @@ class ShareImageGenerator:
         img_bytes.seek(0)
 
         # Structured JSON data (v2-style, compatible with original info)
+        result_text = (
+            share_result_finished_success(lang)
+            if outcome.is_finished and outcome.is_success
+            else (
+                share_result_finished_fail(lang)
+                if outcome.is_finished
+                else share_result_running(lang)
+            )
+        )
         json_data = {
             "summary": {
-                "title": "鳌太线徒步记录",
+                "title": share_title(lang),
                 "status": "finished"
                 if outcome.is_finished and outcome.is_success
                 else ("failed" if outcome.is_finished else "running"),
-                "result_text": (
-                    "穿越成功"
-                    if outcome.is_finished and outcome.is_success
-                    else ("挑战失败" if outcome.is_finished else "进行中...")
-                ),
+                "result_text": result_text,
                 "fail_reason": outcome.failure_reason or "",
                 "epithet": epithet,
                 "lore": lore,
@@ -537,7 +559,9 @@ class ShareImageGenerator:
                     "name": r.name,
                     "persona": r.persona,
                     "persona_short": self._short_text(r.persona, 10),
-                    "role_tag": ("队长" if r.role_id == world_state.leader_role_id else ""),
+                    "role_tag": (
+                        share_role_leader(lang) if r.role_id == world_state.leader_role_id else ""
+                    ),
                     "is_player": (r.role_id == world_state.active_role_id),
                     "attrs": {
                         "stamina": r.attrs.stamina,
@@ -551,21 +575,21 @@ class ShareImageGenerator:
             ],
             "team_stats": [
                 {
-                    "label": "体力均值",
+                    "label": share_team_stat_stamina(lang),
                     "value": round(
                         sum(r.attrs.stamina for r in outcome.roles) / max(1, len(outcome.roles)), 1
                     ),
                     "max": 100,
                 },
                 {
-                    "label": "士气均值",
+                    "label": share_team_stat_mood(lang),
                     "value": round(
                         sum(r.attrs.mood for r in outcome.roles) / max(1, len(outcome.roles)), 1
                     ),
                     "max": 100,
                 },
                 {
-                    "label": "风险均值",
+                    "label": share_team_stat_risk(lang),
                     "value": round(
                         sum(r.attrs.risk_tolerance for r in outcome.roles)
                         / max(1, len(outcome.roles)),
@@ -578,20 +602,19 @@ class ShareImageGenerator:
                 "distance_km": outcome.total_distance_km,
                 "current_node": outcome.current_node_name,
                 "key_nodes": [
-                    AoTaiGraph.get_node(nid).name
+                    graph.get_node(nid).name
                     for nid in outcome.visited_nodes
-                    if _node_exists(nid)
-                    and AoTaiGraph.get_node(nid).kind
-                    in {"camp", "junction", "exit", "peak", "lake"}
+                    if _node_exists(nid, _theme(world_state))
+                    and graph.get_node(nid).kind in {"camp", "junction", "exit", "peak", "lake"}
                 ],
             },
             "env": {
                 "weather_main": world_state.weather,
                 "road_tags": list(
                     {
-                        AoTaiGraph.get_node(nid).name
+                        graph.get_node(nid).name
                         for nid in outcome.visited_nodes
-                        if _node_exists(nid)
+                        if _node_exists(nid, _theme(world_state))
                     }
                 ),
             },
@@ -621,9 +644,9 @@ class ShareImageGenerator:
             "route": {
                 "visited_node_ids": outcome.visited_nodes,
                 "visited_node_names": [
-                    AoTaiGraph.get_node(nid).name
+                    graph.get_node(nid).name
                     for nid in outcome.visited_nodes
-                    if _node_exists(nid)
+                    if _node_exists(nid, _theme(world_state))
                 ],
             },
             "journey_summary": outcome.journey_summary,
@@ -642,6 +665,7 @@ def calculate_current_state(world_state: WorldState) -> GameOutcome:
     Returns:
         GameOutcome with current state information
     """
+    graph = get_graph(_theme(world_state))
     current_node_id = world_state.current_node_id
 
     # Check if reached end nodes
@@ -684,7 +708,7 @@ def calculate_current_state(world_state: WorldState) -> GameOutcome:
     for i in range(len(visited) - 1):
         from_id = visited[i]
         to_id = visited[i + 1]
-        edges = AoTaiGraph.outgoing(from_id)
+        edges = graph.outgoing(from_id)
         for edge in edges:
             if edge.to_node_id == to_id:
                 total_distance += getattr(edge, "distance_km", 1.0)
@@ -696,7 +720,7 @@ def calculate_current_state(world_state: WorldState) -> GameOutcome:
 
     # Get current node name
     try:
-        current_node = AoTaiGraph.get_node(current_node_id)
+        current_node = graph.get_node(current_node_id)
         current_node_name = current_node.name
     except Exception:
         current_node_name = current_node_id

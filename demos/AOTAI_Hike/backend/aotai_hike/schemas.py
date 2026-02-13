@@ -90,6 +90,8 @@ class WorldStats(BaseModel):
 class WorldState(BaseModel):
     session_id: str
     user_id: str
+    lang: Literal["zh", "en"] = "zh"
+    theme: Literal["aotai", "kili"] = "aotai"
 
     active_role_id: str | None = None
     roles: list[Role] = Field(default_factory=list)
@@ -153,6 +155,8 @@ class MapResponse(BaseModel):
 class SessionNewRequest(BaseModel):
     user_id: str = "demo_user"
     seed: int | None = None
+    lang: Literal["zh", "en"] | None = None
+    theme: Literal["aotai", "kili"] | None = None
 
 
 class SessionNewResponse(BaseModel):
@@ -181,6 +185,16 @@ class RolesQuickstartRequest(BaseModel):
 class SetActiveRoleRequest(BaseModel):
     session_id: str
     active_role_id: str
+
+
+class SetSessionLangRequest(BaseModel):
+    session_id: str
+    lang: Literal["zh", "en"]
+
+
+class SetSessionThemeRequest(BaseModel):
+    session_id: str
+    theme: Literal["aotai", "kili"]
 
 
 class ActRequest(BaseModel):

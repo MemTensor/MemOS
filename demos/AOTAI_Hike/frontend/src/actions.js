@@ -1,4 +1,4 @@
-import { t } from "./i18n.js";
+import { getLang, t } from "./i18n.js";
 import { sessionId, setMapData, setSessionId, setWorldState, worldState } from "./state.js";
 import { logMsg, renderBranchChoices, renderPartyStatus, renderRoles, setStatus, checkAndShowShareButton } from "./render.js";
 import { applyPhaseUI, isNightVoteModalBlocking } from "./phase_ui.js";
@@ -63,8 +63,9 @@ async function api(path, body, method = "POST") {
   return resp.json();
 }
 
-export async function apiGetMap() {
-  const resp = await fetch(`${API_BASE}/map`);
+export async function apiGetMap(theme) {
+  const q = theme != null ? `?theme=${encodeURIComponent(theme)}` : "";
+  const resp = await fetch(`${API_BASE}/map${q}`);
   const data = await resp.json();
   setMapData(data);
 }
@@ -75,8 +76,12 @@ function _makeUserId() {
   return `demo_user_${ts}_${rand}`;
 }
 
-export async function apiNewSession() {
-  const data = await api("/session/new", { user_id: _makeUserId() });
+export async function apiNewSession(theme, lang) {
+  const data = await api("/session/new", {
+    user_id: _makeUserId(),
+    theme: theme != null ? theme : "aotai",
+    lang: lang != null ? lang : getLang(),
+  });
   setSessionId(data.session_id);
   setWorldState(data.world_state);
   logMsg({ kind: "system", content: t("msgNewSession"), timestamp_ms: Date.now() });
@@ -169,6 +174,18 @@ export async function apiAct(action, payload = {}) {
   return data;
 }
 
+export async function apiSetSessionLang(lang) {
+  if (!sessionId) return;
+  const ws = await api("/session/lang", { session_id: sessionId, lang }, "PUT");
+  setWorldState(ws);
+}
+
+export async function apiSetSessionTheme(theme) {
+  if (!sessionId) return;
+  const ws = await api("/session/theme", { session_id: sessionId, theme }, "PUT");
+  setWorldState(ws);
+}
+
 export function installActionsToWindow() {
   window.__aoTaiActions = {
     apiGetMap,
@@ -176,6 +193,8 @@ export function installActionsToWindow() {
     apiUpsertRole,
     apiSetActiveRole,
     apiAct,
+    apiSetSessionLang,
+    apiSetSessionTheme,
     scheduleAutoContinue,
   };
 }

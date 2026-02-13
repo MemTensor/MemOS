@@ -388,9 +388,9 @@ export function initPhaser() {
       if (explicit && SPRITE_META[String(explicit)]) return String(explicit);
 
       const name = String(role?.name || "").trim();
-      if (name === "阿鳌") return "ao";
-      if (name === "太白") return "taibai";
-      if (name === "小山") return "xiaoshan";
+      if (name === "阿鳌" || name === "Leo" || name === "利奥") return "ao";
+      if (name === "太白" || name === "Sam" || name === "山姆") return "taibai";
+      if (name === "小山" || name === "Jade" || name === "杰德") return "xiaoshan";
 
       const rid = String(role?.role_id || name || "role");
       const h = hash32(rid);
@@ -515,9 +515,9 @@ export function initPhaser() {
       const usedKeys = new Set();
       const namePresetKey = (r) => {
         const n = String(r?.name || "").trim();
-        if (n === "阿鳌") return "ao";
-        if (n === "太白") return "taibai";
-        if (n === "小山") return "xiaoshan";
+        if (n === "阿鳌" || n === "Leo" || n === "利奥") return "ao";
+        if (n === "太白" || n === "Sam" || n === "山姆") return "taibai";
+        if (n === "小山" || n === "Jade" || n === "杰德") return "xiaoshan";
         return null;
       };
 

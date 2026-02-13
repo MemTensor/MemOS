@@ -8,7 +8,18 @@ from typing import Any, ClassVar
 
 from aotai_hike.adapters.memory import MemoryNamespace, MemOSMemoryClient
 from aotai_hike.schemas import Message, Role, WorldState
-from aotai_hike.world.map_data import AoTaiGraph
+from aotai_hike.theme import (
+    _lang,
+    _theme,
+    prompt_night_vote_intro,
+    prompt_night_vote_output_requirement,
+    prompt_night_vote_query,
+    prompt_section_candidates,
+    prompt_section_dialogue,
+    prompt_section_memories,
+    prompt_story_context_line,
+)
+from aotai_hike.world.map_data import get_graph
 
 
 @dataclass
@@ -314,23 +325,18 @@ class MemoryCompanionBrain(CompanionBrain):
 
         memories_block = "\n".join(f"- {m}" for m in memories[:8]) if memories else "（暂无）"
 
+        lang = _lang(world_state)
         system_prompt = (
-            "你正在参与鳌太线徒步剧情游戏，现在是夜晚，需要在队伍中选出一位今晚的队长。\n"
-            "你将扮演当前说话的队员，根据每个人的性格、人设、最近状态和对话，做出理性但有主观色彩的选择。\n\n"
-            "【候选人列表】\n"
+            prompt_night_vote_intro(lang) + f"{prompt_section_candidates(lang)}\n"
             f"{candidates_block}\n\n"
-            "【你的记忆片段】\n"
+            f"{prompt_section_memories(lang)}\n"
             f"{memories_block}\n\n"
-            "【最近对话】\n"
+            f"{prompt_section_dialogue(lang)}\n"
             f"{dialogue_block}\n\n"
-            "【输出要求】\n"
-            "1. 只能从候选人列表中的 id 里选择一位作为队长。\n"
-            "2. 请输出一个 JSON 对象，格式严格为：\n"
-            '{"vote_role_id": "<候选人id>", "reason": "<不超过40字的中文理由>"}\n'
-            "3. 不要输出任何多余文字，不要加注释，不要加前后缀。\n"
+            f"{prompt_night_vote_output_requirement(lang)}"
         )
 
-        vote_query = f"你是队员「{voter.name}」，请在候选人中选出今晚的队长，并给出一句理由。"
+        vote_query = prompt_night_vote_query(lang, voter.name)
 
         raw = self._memory.chat_complete(
             user_id=voter.role_id,
@@ -406,7 +412,7 @@ class MemoryCompanionBrain(CompanionBrain):
             return "本轮无NPC发言。"
 
         try:
-            node = AoTaiGraph.get_node(world_state.current_node_id)
+            node = get_graph(_theme(world_state)).get_node(world_state.current_node_id)
             location_name = node.name if node else world_state.current_node_id
         except Exception:
             location_name = world_state.current_node_id
@@ -437,7 +443,7 @@ class MemoryCompanionBrain(CompanionBrain):
     ) -> str:
         # Get current node name + altitude + terrain hint
         try:
-            node = AoTaiGraph.get_node(world_state.current_node_id)
+            node = get_graph(_theme(world_state)).get_node(world_state.current_node_id)
             location_name = node.name if node else world_state.current_node_id
             altitude = (
                 f"{getattr(node, 'altitude_m', '未知')}m"
@@ -511,7 +517,7 @@ class MemoryCompanionBrain(CompanionBrain):
 
         def _label_node(nid: str) -> str:
             try:
-                n = AoTaiGraph.get_node(nid)
+                n = get_graph(_theme(world_state)).get_node(nid)
                 base = n.name
             except Exception:
                 base = nid
@@ -543,7 +549,7 @@ class MemoryCompanionBrain(CompanionBrain):
             f"{npc_info_section}\n"
             "</你的信息介绍>\n\n"
             "<故事背景>\n"
-            f"你们是一支徒步队伍，正在穿越危险的鳌太线。今天是第{world_state.day}天，当前时间是{world_state.time_of_day}，天气：{world_state.weather}。\n"
+            f"{prompt_story_context_line(_lang(world_state), world_state.day, world_state.time_of_day, world_state.weather)}"
             f"你们现在位于：{location_name}（{altitude}），地形提示：{terrain_hint or '无特别提示'}。\n"
             f"当前队长是：{leader_name}。\n"
             f"玩家当前扮演的角色是：{active_name}。\n"

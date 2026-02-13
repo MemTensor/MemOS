@@ -534,6 +534,39 @@ textarea:focus {
   line-height: 1.5;
   margin-bottom: 12px;
 }
+.setup-theme-row {
+  margin-bottom: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(124, 242, 255, 0.25);
+}
+.setup-theme-label {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-bottom: 8px;
+}
+.setup-theme-btns {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.setup-theme-btn {
+  font-size: 10px;
+  padding: 6px 12px;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.setup-theme-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.setup-theme-btn.primary {
+  background: rgba(124, 242, 255, 0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .modal-form .field {
   margin-bottom: 10px;
 }

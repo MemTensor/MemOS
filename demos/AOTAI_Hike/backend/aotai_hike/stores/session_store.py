@@ -21,10 +21,14 @@ class InMemorySessionStore:
         self._lock = threading.Lock()
         self._sessions: dict[str, SessionRecord] = {}
 
-    def new_session(self, *, user_id: str) -> WorldState:
+    def new_session(
+        self, *, user_id: str, lang: str | None = None, theme: str | None = None
+    ) -> WorldState:
         now_ms = int(time.time() * 1000)
         session_id = f"ao-tai-{uuid.uuid4().hex[:10]}"
-        ws = WorldState(session_id=session_id, user_id=user_id)
+        ws_lang = "en" if lang == "en" else "zh"
+        ws_theme = "kili" if theme == "kili" else "aotai"
+        ws = WorldState(session_id=session_id, user_id=user_id, lang=ws_lang, theme=ws_theme)
         with self._lock:
             self._sessions[session_id] = SessionRecord(ws, now_ms, now_ms)
         return ws

@@ -63,6 +63,9 @@ const messages = {
 
     // Role setup modal
     setupTitle: "创建队伍角色",
+    setupThemeLabel: "路线主题（决定剧情与默认角色设定）：",
+    setupThemeAotai: "鳌太线（中文）",
+    setupThemeKilimanjaro: "乞力马扎罗（English）",
     setupSub: "先创建 1 个或多个角色（名字 + 角色介绍），创建完成后该弹窗会消失。也可以一键快速创建。",
     setupNameLabel: "名字",
     setupNamePlaceholder: "例如：阿鳌",
@@ -113,8 +116,8 @@ const messages = {
   },
 
   en: {
-    pageTitle: "AoTai Hike · Pixel Trail Simulator (Demo)",
-    title: "AoTai Hike · Pixel Trail Simulator",
+    pageTitle: "Conquer Kilimanjaro · Pixel Trail Simulator (Demo)",
+    title: "Conquer Kilimanjaro · Pixel Trail Simulator",
     subtitle: "Single-player multi-role · Other roles driven by API (mock)",
 
     share: "Share",
@@ -160,6 +163,9 @@ const messages = {
     unknown: "Unknown",
 
     setupTitle: "Create party roles",
+    setupThemeLabel: "Trek theme (sets story & default roles):",
+    setupThemeAotai: "AoTai Trail (中文)",
+    setupThemeKilimanjaro: "Conquer Kilimanjaro (English)",
     setupSub: "Create one or more roles (name + intro). This popup closes when done. Or quick-create.",
     setupNameLabel: "Name",
     setupNamePlaceholder: "e.g. Ao",
