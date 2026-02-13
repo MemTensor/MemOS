@@ -3,11 +3,14 @@ Default configuration utilities for MemOS.
 Provides simplified configuration generation for users.
 """
 
+import logging
 from typing import Literal
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
+
+logger = logging.getLogger(__name__)
 
 
 def get_default_config(
@@ -116,20 +119,9 @@ def get_default_config(
             },
         }
 
-    # Add activation memory if enabled
-    if config_dict.get("enable_activation_memory", False):
-        config_dict["act_mem"] = {
-            "backend": "kv_cache",
-            "config": {
-                "memory_filename": kwargs.get(
-                    "activation_memory_filename", "activation_memory.pickle"
-                ),
-                "extractor_llm": {
-                    "backend": "openai",
-                    "config": openai_config,
-                },
-            },
-        }
+    # Note: act_mem configuration belongs in MemCube config (get_default_cube_config),
+    # not in MOSConfig which doesn't have an act_mem field (extra="forbid").
+    # The enable_activation_memory flag above is sufficient for MOSConfig.
 
     return MOSConfig(**config_dict)
 
@@ -237,21 +229,33 @@ def get_default_cube_config(
             },
         }
 
-    # Configure activation memory if enabled
+    # Configure activation memory if enabled.
+    # KV cache activation memory requires a local HuggingFace/vLLM model (it
+    # extracts internal attention KV tensors via build_kv_cache), so it cannot
+    # work with remote API backends like OpenAI.
+    # Only create act_mem when activation_memory_backend is explicitly provided.
     act_mem_config = {}
     if kwargs.get("enable_activation_memory", False):
-        act_mem_config = {
-            "backend": "kv_cache",
-            "config": {
-                "memory_filename": kwargs.get(
-                    "activation_memory_filename", "activation_memory.pickle"
-                ),
-                "extractor_llm": {
-                    "backend": "openai",
-                    "config": openai_config,
+        extractor_backend = kwargs.get("activation_memory_backend")
+        if extractor_backend in ("huggingface", "huggingface_singleton", "vllm"):
+            act_mem_config = {
+                "backend": "kv_cache",
+                "config": {
+                    "memory_filename": kwargs.get(
+                        "activation_memory_filename", "activation_memory.pickle"
+                    ),
+                    "extractor_llm": {
+                        "backend": extractor_backend,
+                        "config": kwargs.get("activation_memory_llm_config", {}),
+                    },
                 },
-            },
-        }
+            }
+        else:
+            logger.info(
+                "Activation memory (kv_cache) requires a local model backend "
+                "(huggingface/vllm) via activation_memory_backend kwarg. "
+                "Skipping act_mem in MemCube config."
+            )
 
     # Create MemCube configuration
     cube_config_dict = {
