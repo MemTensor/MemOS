@@ -38,10 +38,14 @@ def theme_trek_name_full(lang: Lang) -> str:
     return "鳌太线"
 
 
-def share_title(lang: Lang) -> str:
-    """Share image main title."""
+def share_title(theme: str | None, lang: Lang) -> str:
+    """Share image main title; depends on current map (theme), not just language."""
+    if theme == "kili":
+        if lang == "en":
+            return "Kilimanjaro Trek Record"
+        return "乞力马扎罗徒步记录"
     if lang == "en":
-        return "Kilimanjaro Trek Record"
+        return "AoTai Hike Record"
     return "鳌太线徒步记录"
 
 

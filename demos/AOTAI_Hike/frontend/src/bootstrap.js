@@ -84,6 +84,9 @@ function refreshStaticUI() {
     setupMapKili.textContent = t("setupMapKilimanjaro");
     setupMapKili.classList.toggle("primary", currentTheme === "kili");
   }
+  if (typeof window.__aoTaiRefreshSetupList === "function") {
+    window.__aoTaiRefreshSetupList();
+  }
 }
 
 export async function refreshAllUIText() {
@@ -166,6 +169,7 @@ export async function bootstrap() {
       setupListEl.appendChild(item);
     });
   };
+  window.__aoTaiRefreshSetupList = renderPending;
 
   const hideAndRemoveSetup = () => {
     if (!setupEl) return;

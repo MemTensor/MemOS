@@ -315,7 +315,7 @@ class ShareImageGenerator:
         theme = _theme(world_state)
         graph = get_graph(theme)
         title_font = self._get_font(50)
-        title_text = share_title(lang)
+        title_text = share_title(theme, lang)
         draw.text(
             (self.WIDTH // 2, y_offset),
             title_text,
@@ -559,7 +559,7 @@ class ShareImageGenerator:
         )
         json_data = {
             "summary": {
-                "title": share_title(lang),
+                "title": share_title(theme, lang),
                 "status": "finished"
                 if outcome.is_finished and outcome.is_success
                 else ("failed" if outcome.is_finished else "running"),
