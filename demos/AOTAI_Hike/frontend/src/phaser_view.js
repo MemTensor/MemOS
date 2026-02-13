@@ -1,3 +1,4 @@
+import { t as i18nT } from "./i18n.js";
 import { clamp } from "./utils.js";
 import { mapEdges, mapNodes, mapStartNodeId, nodeById, worldState } from "./state.js";
 
@@ -852,7 +853,7 @@ export function initPhaser() {
 
     _upsertNameLabel(roleId, name, spr, isActive, isLeader) {
       const rid = String(roleId);
-      const labelText = String(name || "").trim() || "角色";
+      const labelText = String(name || "").trim() || i18nT("roleLabel");
       const color = isActive
         ? (isLeader ? "#ffe6a8" : "#e8f0ff")
         : (isLeader ? "#ffd27c" : "#cfe8ff");

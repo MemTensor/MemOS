@@ -1,10 +1,66 @@
 import { $ } from "./dom.js";
 import { apiAct, apiGetMap, apiNewSession, apiSetActiveRole, apiUpsertRole, apiRolesQuickstart } from "./actions.js";
+import { setLang, getLang, t } from "./i18n.js";
 import { initMinimapCanvas } from "./minimap.js";
 import { initPhaser } from "./phaser_view.js";
-import { logMsg, checkAndShowShareButton } from "./render.js";
+import { applyPhaseUI } from "./phase_ui.js";
+import { logMsg, checkAndShowShareButton, setStatus, renderPartyStatus } from "./render.js";
 import { worldState } from "./state.js";
 import { makeRole } from "./utils.js";
+
+function refreshStaticUI() {
+  document.title = t("pageTitle");
+  document.documentElement.lang = getLang() === "zh" ? "zh-CN" : "en";
+  const set = (id, key, attr = "textContent") => {
+    const el = document.getElementById(id);
+    if (el) el[attr] = t(key);
+  };
+  set("i18n-title", "title");
+  set("i18n-subtitle", "subtitle");
+  set("i18n-party-panel-title", "partyPanelTitle");
+  set("i18n-interact-panel-title", "interactPanelTitle");
+  set("i18n-btn-forward", "moveForward");
+  set("i18n-btn-rest", "rest");
+  set("i18n-btn-camp", "camp");
+  set("i18n-btn-observe", "observe");
+  set("btn-say", "send");
+  set("i18n-hint-switch", "hintSwitchRole");
+  set("i18n-setup-title", "setupTitle");
+  set("i18n-setup-sub", "setupSub");
+  set("i18n-setup-name-label", "setupNameLabel");
+  set("i18n-setup-persona-label", "setupPersonaLabel");
+  set("i18n-setup-pending-title", "setupPendingTitle");
+  set("i18n-night-vote-title", "nightVoteTitle");
+  set("i18n-share-modal-title", "shareModalTitle");
+  const shareBtn = $("#share-button");
+  if (shareBtn) {
+    shareBtn.textContent = t("share");
+    shareBtn.title = t("shareTitle");
+  }
+  const langBtn = $("#lang-button");
+  if (langBtn) {
+    langBtn.textContent = getLang() === "zh" ? t("langEn") : t("langZh");
+  }
+  $("#setup-role-name") && ($("#setup-role-name").placeholder = t("setupNamePlaceholder"));
+  $("#setup-role-persona") && ($("#setup-role-persona").placeholder = t("setupPersonaPlaceholder"));
+  $("#setup-add-role") && ($("#setup-add-role").textContent = t("setupAddRole"));
+  $("#setup-quickstart") && ($("#setup-quickstart").textContent = t("setupQuickstart"));
+  $("#setup-create") && ($("#setup-create").textContent = t("setupCreate"));
+  $("#night-vote-sub") && ($("#night-vote-sub").textContent = t("nightVoteSub"));
+  $("#night-vote-close") && ($("#night-vote-close").textContent = t("nightVoteContinue"));
+  $("#share-download-btn") && ($("#share-download-btn").textContent = t("shareDownload"));
+  $("#share-close-btn") && ($("#share-close-btn").textContent = t("shareClose"));
+}
+
+export function refreshAllUIText() {
+  refreshStaticUI();
+  setStatus();
+  renderPartyStatus();
+  applyPhaseUI(worldState);
+  if (window.__aoTaiMapView && typeof window.__aoTaiMapView.setState === "function") {
+    window.__aoTaiMapView.setState(worldState);
+  }
+}
 
 export async function bootstrap() {
   await apiGetMap();
@@ -13,8 +69,20 @@ export async function bootstrap() {
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
   initPhaser();
 
+  // Language switcher (left of share button)
+  const langBtn = $("#lang-button");
+  if (langBtn) {
+    langBtn.onclick = () => {
+      setLang(getLang() === "zh" ? "en" : "zh");
+      refreshAllUIText();
+    };
+  }
+  refreshStaticUI();
+
   // Initialize share button
   checkAndShowShareButton(worldState);
+
+  window.addEventListener("aotai:langchange", () => refreshAllUIText());
 
   // Initial role setup modal (must create at least one role; modal is removed after creation)
   const setupEl = $("#role-setup");
@@ -36,8 +104,7 @@ export async function bootstrap() {
     if (pending.length === 0) {
       const empty = document.createElement("div");
       empty.className = "hint";
-      empty.textContent =
-        "还没有待创建的角色。可以先填写名字/介绍加入列表，或点击“快速创建 3 角色”。";
+      empty.textContent = t("setupEmptyList");
       setupListEl.appendChild(empty);
       return;
     }
@@ -49,7 +116,7 @@ export async function bootstrap() {
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")}</div>`;
       const btn = document.createElement("button");
-      btn.textContent = "移除";
+      btn.textContent = t("setupRemove");
       btn.onclick = () => {
         pending.splice(idx, 1);
         renderPending();
@@ -84,7 +151,7 @@ export async function bootstrap() {
     const name = (setupNameEl?.value || "").trim();
     const persona = (setupPersonaEl?.value || "").trim();
     if (!name) {
-      showSetupErr("请先填写名字。");
+      showSetupErr(t("setupErrName"));
       return;
     }
     showSetupErr("");
@@ -99,13 +166,13 @@ export async function bootstrap() {
 
   $("#setup-create")?.addEventListener("click", async () => {
     if (pending.length === 0) {
-      showSetupErr("请至少加入 1 个角色，或点击“快速创建 3 角色”。");
+      showSetupErr(t("setupErrMinOne"));
       return;
     }
     showSetupErr("");
     for (const r of pending) {
       await apiUpsertRole(makeRole(r.name, r.persona));
-      logMsg({ kind: "system", content: `新增角色：${r.name}`, timestamp_ms: Date.now() });
+      logMsg({ kind: "system", content: t("msgRoleAdded") + r.name, timestamp_ms: Date.now() });
     }
     const roles = worldState?.roles || [];
     const pick = roles[0];
@@ -117,7 +184,7 @@ export async function bootstrap() {
     showSetupErr("");
     // Use backend's roles/quickstart endpoint to create default roles with correct attributes
     await apiRolesQuickstart(false);
-    logMsg({ kind: "system", content: "已创建 3 个默认角色。", timestamp_ms: Date.now() });
+    logMsg({ kind: "system", content: t("msgQuickstartDone"), timestamp_ms: Date.now() });
     const roles = worldState?.roles || [];
     const pick = roles[0];
     if (pick?.role_id) await apiSetActiveRole(pick.role_id);
@@ -151,7 +218,7 @@ export async function bootstrap() {
   // First hint
   logMsg({
     kind: "system",
-    content: "先创建角色（弹窗里可快速创建），然后用动作按钮开始徒步。",
+    content: t("msgFirstHint"),
     timestamp_ms: Date.now(),
   });
 }

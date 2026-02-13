@@ -1,3 +1,4 @@
+import { t } from "./i18n.js";
 import { sessionId, setMapData, setSessionId, setWorldState, worldState } from "./state.js";
 import { logMsg, renderBranchChoices, renderPartyStatus, renderRoles, setStatus, checkAndShowShareButton } from "./render.js";
 import { applyPhaseUI, isNightVoteModalBlocking } from "./phase_ui.js";
@@ -78,7 +79,7 @@ export async function apiNewSession() {
   const data = await api("/session/new", { user_id: _makeUserId() });
   setSessionId(data.session_id);
   setWorldState(data.world_state);
-  logMsg({ kind: "system", content: "已创建新 Session。", timestamp_ms: Date.now() });
+  logMsg({ kind: "system", content: t("msgNewSession"), timestamp_ms: Date.now() });
   setStatus();
   renderPartyStatus();
   renderBranchChoices();
@@ -132,7 +133,7 @@ export async function apiSetActiveRole(roleId) {
   const active = (worldState.roles || []).find((r) => r.role_id === roleId);
   logMsg({
     kind: "system",
-    content: `切换当前角色为：${active?.name || roleId}`,
+    content: t("msgSwitchRole") + (active?.name || roleId),
     timestamp_ms: Date.now(),
   });
   applyPhaseUI(worldState);
@@ -145,7 +146,7 @@ export async function apiAct(action, payload = {}) {
   if (action === "MOVE_FORWARD") {
     logMsg({
       kind: "system",
-      content: "正在与队友对话…",
+      content: t("msgTalking"),
       timestamp_ms: Date.now(),
     });
   }

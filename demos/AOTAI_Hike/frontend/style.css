@@ -90,10 +90,18 @@ canvas {
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
 }
 
+.lang-btn {
+  font-size: 10px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
 .share-btn {
   font-size: 10px;
   padding: 6px 12px;
-  margin-left: 10px;
+  margin-left: 0;
   flex-shrink: 0;
   white-space: nowrap;
 }

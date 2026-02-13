@@ -1,4 +1,5 @@
 import { $ } from "./dom.js";
+import { t, tFormat } from "./i18n.js";
 import { avatarUrl } from "./utils.js";
 import { checkAndShowShareButton } from "./render.js";
 
@@ -58,7 +59,7 @@ function updateCampButtonState(ws) {
   campBtn.style.display = isCampDecisionPhase && isLeader ? "block" : "none";
   if (isCampDecisionPhase && isLeader) {
     campBtn.disabled = false;
-    campBtn.title = "扎营（恢复体力，消耗较多物资）";
+    campBtn.title = t("campButtonTitle");
   }
 }
 
@@ -102,7 +103,7 @@ function renderNightVoteSelect(ws) {
   nightVoteLog.style.display = "none";
   nightVoteActions.style.display = "none";
   if (nightVoteSub) {
-    nightVoteSub.textContent = "请选择一位队长。选择后将展示全员投票与理由。";
+    nightVoteSub.textContent = t("nightVoteSub");
   }
 
   nightVoteRoles.innerHTML = "";
@@ -115,7 +116,7 @@ function renderNightVoteSelect(ws) {
     img.src = avatarUrl(r);
     img.alt = `${r.name} avatar`;
     const meta = document.createElement("div");
-    meta.innerHTML = `<div class="vote-name">${r.name}</div><div class="vote-sub">选择为队长</div>`;
+    meta.innerHTML = `<div class="vote-name">${r.name}</div><div class="vote-sub">${t("nightVoteSelectAsLeader")}</div>`;
     card.appendChild(img);
     card.appendChild(meta);
     card.onclick = async () => {
@@ -145,7 +146,7 @@ function renderNightVoteResult(messages) {
       lines.push(m.content);
     }
   });
-  nightVoteLog.innerHTML = lines.length ? lines.map((l) => `<div>${l}</div>`).join("") : "投票完成。";
+  nightVoteLog.innerHTML = lines.length ? lines.map((l) => `<div>${l}</div>`).join("") : t("nightVoteDone");
   nightVoteLog.style.display = "block";
   nightVoteActions.style.display = "block";
 }
@@ -173,10 +174,10 @@ export function applyPhaseUI(ws) {
     sayInput.disabled = !enableSay;
     sayInput.classList.toggle("input-attn", phase === "night_wait_player" && !isGameOver);
     sayInput.placeholder = isGameOver
-      ? "游戏已结束"
+      ? t("sayPlaceholderGameOver")
       : enableSay
-        ? "当前角色说点什么…"
-        : "队伍行动中…（需要你发言时会提示）";
+        ? t("sayPlaceholder")
+        : t("sayPlaceholderDisabled");
   }
   if (sayBtn) sayBtn.disabled = !enableSay;
 
@@ -220,7 +221,7 @@ export function applyPhaseUI(ws) {
     // Block all action buttons; allow user to SAY.
     setActionButtonsEnabled(false);
     updateCampButtonState(ws); // Hide CAMP button
-    hintEl.textContent = "队伍等待你发言：请在输入框里发一句话（发言后才能继续）。";
+    hintEl.textContent = t("phaseWaitSay");
     phasePanel.querySelectorAll("div,select,button").forEach((n) => {
       if (n !== hintEl) n.remove?.();
     });
@@ -240,7 +241,7 @@ export function applyPhaseUI(ws) {
         forwardBtn.disabled = false;
       }
     }
-    hintEl.textContent = "作为队长，你可以选择扎营恢复体力（消耗较多物资），或继续前进。";
+    hintEl.textContent = t("phaseCampDecision");
     phasePanel.querySelectorAll("div,select,button").forEach((n) => {
       if (n !== hintEl) n.remove?.();
     });
@@ -250,7 +251,7 @@ export function applyPhaseUI(ws) {
   if (phase === "night_wait_player") {
     setActionButtonsEnabled(false);
     updateCampButtonState(ws); // Disable CAMP button
-    hintEl.textContent = "夜晚到来：请先发言（发送一句话）后才能开始票选队长。";
+    hintEl.textContent = t("phaseNightWaitSay");
     phasePanel.querySelectorAll("div,select,button").forEach((n) => {
       if (n !== hintEl) n.remove?.();
     });
@@ -261,7 +262,7 @@ export function applyPhaseUI(ws) {
   if (phase === "night_vote_ready") {
     setActionButtonsEnabled(false);
     updateCampButtonState(ws); // Disable CAMP button
-    hintEl.textContent = "夜晚票选：请在弹窗中选择队长。";
+    hintEl.textContent = t("phaseNightVote");
     phasePanel.querySelectorAll("div,select,button").forEach((n) => {
       if (n !== hintEl) n.remove?.();
     });
@@ -275,5 +276,5 @@ export function applyPhaseUI(ws) {
   // Unknown phase: be safe and block actions.
   setActionButtonsEnabled(false);
   updateCampButtonState(ws); // Disable CAMP button
-  hintEl.textContent = `当前阶段：${phase}（动作暂不可用）`;
+  hintEl.textContent = tFormat("phaseUnknown", { phase });
 }
