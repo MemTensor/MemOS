@@ -1014,6 +1014,7 @@ class APIConfig:
                                 "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
                                 "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
                                 "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                                "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
                             },
                             "include_embedding": bool(
                                 os.getenv("INCLUDE_EMBEDDING", "false") == "true"
@@ -1096,6 +1097,7 @@ class APIConfig:
                                 "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
                                 "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
                                 "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                                "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
                             },
                             "mode": os.getenv("ASYNC_MODE", "sync"),
                             "include_embedding": bool(
