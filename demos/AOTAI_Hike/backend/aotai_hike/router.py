@@ -24,65 +24,151 @@ from aotai_hike.schemas import (
     SessionNewRequest,
     SessionNewResponse,
     SetActiveRoleRequest,
+    SetSessionLangRequest,
+    SetSessionThemeRequest,
     ShareImageData,
     WorldState,
 )
 from aotai_hike.services.game_service import GameService
 from aotai_hike.stores.session_store import InMemorySessionStore
 from aotai_hike.utils.share_image import generate_share_image
-from aotai_hike.world.map_data import AoTaiGraph
+from aotai_hike.world.map_data import (
+    AOTAI_EDGE_LABELS_EN,
+    AOTAI_NODE_NAMES_EN,
+    get_graph,
+)
 
 
 router = APIRouter(prefix="/api/demo/ao-tai", tags=["AoTai Demo"])
 
 _sessions = InMemorySessionStore()
 _background = StaticBackgroundProvider()
-_memory_client = MemOSMemoryClient(base_url=os.getenv("MEMOS_API_BASE_URL", "http://0.0.0.0:8002"))
+_memory_client = MemOSMemoryClient(base_url=os.getenv("MEMOS_API_BASE_URL", "http://0.0.0.0:8001"))
 _game = GameService(
     memory=MemOSMemoryAdapter(_memory_client),
     companion=MemoryCompanionBrain(memory=_memory_client),
     background=_background,
 )
 
-# Default 3 roles (server-owned config; frontend should not hardcode)
-_DEFAULT_ROLES: list[dict] = [
+# Default 3 roles per theme (server-owned config). One map = one set of default personas.
+# Each set has zh and en versions (name + persona).
+
+# 鳌太线 (AoTai): 阿鳌/太白/小山 — zh & en name + persona
+_AOTAI_ROLES: list[dict] = [
     {
         "name": "阿鳌",
+        "name_en": "Ao",
         "avatar_key": "green",
-        "persona": "阿鳌：持灯的领路者，熟知鳌太古道与太白山脉。谨慎、稳重，誓要带队抵达太白之巅。",
+        "persona_zh": "阿鳌：持灯的领路者，熟知鳌太古道与太白山脉。谨慎、稳重，誓要带队抵达太白之巅。",
+        "persona_en": "Ao: The guide with the lamp. Knows the AoTai trail and Taibai range. Cautious and steady, determined to lead the team to the summit.",
         "attrs": {
-            "stamina": 85,  # High stamina - experienced leader
-            "mood": 65,  # Moderate mood - steady and reliable
-            "experience": 45,  # High experience - knows the route well
-            "risk_tolerance": 30,  # Low risk tolerance - cautious leader
-            "supplies": 85,  # Well-prepared with supplies
+            "stamina": 85,
+            "mood": 65,
+            "experience": 45,
+            "risk_tolerance": 30,
+            "supplies": 85,
         },
     },
     {
         "name": "太白",
+        "name_en": "Taibai",
         "avatar_key": "blue",
-        "persona": '太白：表面是器材与数据的虔信者，经验丰厚、言辞克制。暗闻2800下撤口藏有金矿，欲借"体力不支"脱队潜行。',
+        "persona_zh": '太白：表面是器材与数据的虔信者，经验丰厚、言辞克制。暗闻2800下撤口藏有金矿，欲借"体力不支"脱队潜行。',
+        "persona_en": "Taibai: On the surface a believer in gear and data, experienced and reserved. Secretly heard of a stash at the evacuation point and plans to slip away by feigning exhaustion.",
         "attrs": {
-            "stamina": 60,  # Lower stamina - may feign exhaustion
-            "mood": 70,  # Higher mood - confident and composed
-            "experience": 50,  # Very high experience - veteran hiker
-            "risk_tolerance": 55,  # Moderate risk tolerance - calculated risks
-            "supplies": 75,  # Moderate supplies
+            "stamina": 60,
+            "mood": 70,
+            "experience": 50,
+            "risk_tolerance": 55,
+            "supplies": 75,
         },
     },
     {
         "name": "小山",
+        "name_en": "Xiaoshan",
         "avatar_key": "red",
-        "persona": "小山：笑容背后的新人徒步者，乐观只是外壳。多年前真主在2800下撤口埋下金矿，此行只为取回；若同伴相助便分金，不助则将其永远留在此地。",
+        "persona_zh": "小山：笑容背后的新人徒步者，乐观只是外壳。多年前真主在2800下撤口埋下金矿，此行只为取回；若同伴相助便分金，不助则将其永远留在此地。",
+        "persona_en": "Xiaoshan: A newcomer behind the smile; optimism is just a shell. Years ago something was left at the evacuation point; this trek is to retrieve it. Help and share; refuse and be left behind forever.",
         "attrs": {
-            "stamina": 75,  # Good stamina - young and energetic
-            "mood": 80,  # Very high mood - optimistic facade
-            "experience": 15,  # Low experience - newcomer
-            "risk_tolerance": 75,  # High risk tolerance - willing to take chances
-            "supplies": 70,  # Lower supplies - less prepared
+            "stamina": 75,
+            "mood": 80,
+            "experience": 15,
+            "risk_tolerance": 75,
+            "supplies": 70,
         },
     },
 ]
+
+# 乞力马扎罗 (Kilimanjaro): 利奥/Leo, 山姆/Sam, 杰德/Jade — zh & en name + persona
+_KILI_ROLES: list[dict] = [
+    {
+        "name_zh": "利奥",
+        "name_en": "Leo",
+        "avatar_key": "green",
+        "persona_zh": "利奥：持灯的领队，熟悉乞力马扎罗路线与高山环境。谨慎稳重，立志带队登顶。",
+        "persona_en": "Leo: The guide with the lamp. Knows the Kilimanjaro routes and the mountain. Cautious and steady, determined to lead the team to the summit.",
+        "attrs": {
+            "stamina": 85,
+            "mood": 65,
+            "experience": 45,
+            "risk_tolerance": 30,
+            "supplies": 85,
+        },
+    },
+    {
+        "name_zh": "山姆",
+        "name_en": "Sam",
+        "avatar_key": "blue",
+        "persona_zh": "山姆：表面信奉装备与数据，经验丰富、言辞克制。暗中听说某下撤点有藏物，欲借「体力不支」脱队独行。",
+        "persona_en": "Sam: On the surface a believer in gear and data, experienced and reserved. Secretly heard of a stash at the evacuation point and plans to slip away by feigning exhaustion.",
+        "attrs": {
+            "stamina": 60,
+            "mood": 70,
+            "experience": 50,
+            "risk_tolerance": 55,
+            "supplies": 75,
+        },
+    },
+    {
+        "name_zh": "杰德",
+        "name_en": "Jade",
+        "avatar_key": "red",
+        "persona_zh": "杰德：笑容背后的新人，乐观只是外壳。多年前在某下撤点留下东西，此行要取回；相助则分享，不助则永留此地。",
+        "persona_en": "Jade: A newcomer behind the smile; optimism is just a shell. Years ago something was left at the evacuation point; this trek is to retrieve it. Help and share; refuse and be left behind forever.",
+        "attrs": {
+            "stamina": 75,
+            "mood": 80,
+            "experience": 15,
+            "risk_tolerance": 75,
+            "supplies": 70,
+        },
+    },
+]
+
+
+def _get_default_roles(theme: str | None, lang: str | None) -> list[dict]:
+    """One map = one set of default roles. theme=kili -> Kilimanjaro set; theme=aotai -> AoTai set. Persona by lang."""
+    if theme == "kili":
+        use_zh = lang == "zh"
+        return [
+            {
+                "name": r["name_zh"] if use_zh else r["name_en"],
+                "avatar_key": r["avatar_key"],
+                "persona": r["persona_zh"] if use_zh else r["persona_en"],
+                "attrs": r["attrs"],
+            }
+            for r in _KILI_ROLES
+        ]
+    use_zh = lang != "en"
+    return [
+        {
+            "name": r["name_en"] if lang == "en" else r["name"],
+            "avatar_key": r["avatar_key"],
+            "persona": r["persona_zh"] if use_zh else r["persona_en"],
+            "attrs": r["attrs"],
+        }
+        for r in _AOTAI_ROLES
+    ]
 
 
 def _get_ws(session_id: str) -> WorldState:
@@ -93,10 +179,22 @@ def _get_ws(session_id: str) -> WorldState:
 
 
 @router.get("/map", response_model=MapResponse)
-def get_map():
-    return MapResponse(
-        start_node_id=AoTaiGraph.start_node_id, nodes=AoTaiGraph.nodes(), edges=AoTaiGraph.edges()
-    )
+def get_map(theme: str | None = None, lang: str | None = None):
+    graph = get_graph(theme)
+    nodes = list(graph.nodes())
+    edges = list(graph.edges())
+    # When theme is aotai and lang is en, return English node names and edge labels
+    if theme == "aotai" and lang == "en":
+        nodes = [
+            n.model_copy(update={"name": AOTAI_NODE_NAMES_EN.get(n.node_id, n.name)}) for n in nodes
+        ]
+        edges = [
+            e.model_copy(
+                update={"label": AOTAI_EDGE_LABELS_EN.get((e.from_node_id, e.to_node_id), e.label)}
+            )
+            for e in edges
+        ]
+    return MapResponse(start_node_id=graph.start_node_id, nodes=nodes, edges=edges)
 
 
 @router.get("/background/{scene_id}", response_model=BackgroundAsset)
@@ -106,7 +204,7 @@ def get_background(scene_id: str):
 
 @router.post("/session/new", response_model=SessionNewResponse)
 def session_new(req: SessionNewRequest):
-    ws = _sessions.new_session(user_id=req.user_id)
+    ws = _sessions.new_session(user_id=req.user_id, lang=req.lang, theme=req.theme)
     _sessions.save(ws)
     return SessionNewResponse(session_id=ws.session_id, world_state=ws)
 
@@ -114,6 +212,22 @@ def session_new(req: SessionNewRequest):
 @router.get("/session/{session_id}", response_model=WorldState)
 def get_session(session_id: str):
     return _get_ws(session_id)
+
+
+@router.put("/session/lang", response_model=WorldState)
+def set_session_lang(req: SetSessionLangRequest):
+    ws = _get_ws(req.session_id)
+    ws.lang = req.lang
+    _sessions.save(ws)
+    return ws
+
+
+@router.put("/session/theme", response_model=WorldState)
+def set_session_theme(req: SetSessionThemeRequest):
+    ws = _get_ws(req.session_id)
+    ws.theme = req.theme
+    _sessions.save(ws)
+    return ws
 
 
 @router.post("/roles/upsert", response_model=RoleUpsertResponse)
@@ -127,7 +241,11 @@ def roles_upsert(req: RoleUpsertRequest):
     if is_new_role:
         role = req.role
         cube_id = MemoryNamespace.role_cube_id(user_id=role.role_id, role_id=role.role_id)
-        intro = f"角色名：{role.name}。人设：{role.persona or '暂无设定'}。"
+        intro = (
+            f"Role: {role.name}. Persona: {role.persona or 'No setting'}."
+            if ws.lang == "en"
+            else f"角色名：{role.name}。人设：{role.persona or '暂无设定'}。"
+        )
         _memory_client.add_memory(
             user_id=role.role_id,
             cube_id=cube_id,
@@ -162,9 +280,10 @@ def roles_quickstart(req: RolesQuickstartRequest):
 
     # If not overwriting, only add defaults that don't already exist by name.
     existing_names = {r.name for r in ws.roles}
+    default_roles = _get_default_roles(ws.theme, ws.lang)
 
     new_roles: list[Role] = []
-    for tmpl in _DEFAULT_ROLES:
+    for tmpl in default_roles:
         if not req.overwrite and tmpl["name"] in existing_names:
             continue
         # Get attrs from template - _DEFAULT_ROLES should always have "attrs" key with a dict
@@ -207,7 +326,11 @@ def roles_quickstart(req: RolesQuickstartRequest):
 
     for role in new_roles:
         cube_id = MemoryNamespace.role_cube_id(user_id=role.role_id, role_id=role.role_id)
-        intro = f"角色名：{role.name}。人设：{role.persona or '暂无设定'}。"
+        intro = (
+            f"Role: {role.name}. Persona: {role.persona or 'No setting'}."
+            if ws.lang == "en"
+            else f"角色名：{role.name}。人设：{role.persona or '暂无设定'}。"
+        )
         _memory_client.add_memory(
             user_id=role.role_id,
             cube_id=cube_id,
@@ -347,8 +470,9 @@ def get_test_share_image():
     """
     from aotai_hike.schemas import Role, RoleAttrs
     from aotai_hike.utils.share_image import GameOutcome, ShareImageGenerator
-    from aotai_hike.world.map_data import AoTaiGraph
+    from aotai_hike.world.map_data import get_graph
 
+    graph = get_graph("zh")  # Test uses AoTai map
     # Create mock world state with finished game
     roles = [
         Role(
@@ -408,14 +532,14 @@ def get_test_share_image():
     for i in range(len(visited_nodes) - 1):
         from_id = visited_nodes[i]
         to_id = visited_nodes[i + 1]
-        edges = AoTaiGraph.outgoing(from_id)
+        edges = graph.outgoing(from_id)
         for edge in edges:
             if edge.to_node_id == to_id:
                 total_distance += getattr(edge, "distance_km", 1.0)
                 break
 
     try:
-        current_node = AoTaiGraph.get_node("end_exit")
+        current_node = graph.get_node("end_exit")
         current_node_name = current_node.name
     except Exception:
         current_node_name = "end_exit"

@@ -1,3 +1,4 @@
+import { t as i18nT } from "./i18n.js";
 import { clamp } from "./utils.js";
 import { mapEdges, mapNodes, mapStartNodeId, nodeById, worldState } from "./state.js";
 
@@ -79,7 +80,8 @@ export function initPhaser() {
   // - Add/remove layers by editing this list (order = render order, bottom -> top).
   // - For each sceneId, assets should exist at:
   //   `./assets/scenes/scene_${sceneId}/scene_0_${layer}.png`
-  const SCENE_IDS = ["base"];
+  // - base = 鳌太, kilimanjaro = 乞力马扎罗; select by theme in setState
+  const SCENE_IDS = ["base", "kilimanjaro"];
   const SCENE_LAYERS = ["base", "props"];
   const sceneKey = (sceneId, layer) => `scene:${sceneId}:${layer}`;
   const sceneFile = (sceneId, layer) => `scenes/scene_${sceneId}/scene_0_${layer}.png`;
@@ -138,6 +140,7 @@ export function initPhaser() {
       this._ws = null;
       this._walkKey = "";
       this._sceneKey = "";
+      this._theme = null; // current theme for scene choice (aotai -> base, kili -> kilimanjaro)
 
       this.mainCam = null;
 
@@ -296,12 +299,17 @@ export function initPhaser() {
         say: (roleId, text) => this._say(roleId, text),
       };
 
-      // initial paint
+      // initial paint: pick scene from theme (kili -> kilimanjaro, else base)
+      const initialTheme = worldState?.theme || "aotai";
+      const initialSceneId = initialTheme === "kili" ? "kilimanjaro" : "base";
+      this._theme = initialTheme;
+      this._swapScene(initialSceneId);
       this.setState({
         current_node_id: mapStartNodeId || "start",
         visited_node_ids: [mapStartNodeId || "start"],
         weather: "cloudy",
         time_of_day: "morning",
+        theme: initialTheme,
       });
     }
 
@@ -387,9 +395,9 @@ export function initPhaser() {
       if (explicit && SPRITE_META[String(explicit)]) return String(explicit);
 
       const name = String(role?.name || "").trim();
-      if (name === "阿鳌") return "ao";
-      if (name === "太白") return "taibai";
-      if (name === "小山") return "xiaoshan";
+      if (name === "阿鳌" || name === "Leo" || name === "利奥") return "ao";
+      if (name === "太白" || name === "Sam" || name === "山姆") return "taibai";
+      if (name === "小山" || name === "Jade" || name === "杰德") return "xiaoshan";
 
       const rid = String(role?.role_id || name || "role");
       const h = hash32(rid);
@@ -514,9 +522,9 @@ export function initPhaser() {
       const usedKeys = new Set();
       const namePresetKey = (r) => {
         const n = String(r?.name || "").trim();
-        if (n === "阿鳌") return "ao";
-        if (n === "太白") return "taibai";
-        if (n === "小山") return "xiaoshan";
+        if (n === "阿鳌" || n === "Leo" || n === "利奥") return "ao";
+        if (n === "太白" || n === "Sam" || n === "山姆") return "taibai";
+        if (n === "小山" || n === "Jade" || n === "杰德") return "xiaoshan";
         return null;
       };
 
@@ -852,7 +860,7 @@ export function initPhaser() {
 
     _upsertNameLabel(roleId, name, spr, isActive, isLeader) {
       const rid = String(roleId);
-      const labelText = String(name || "").trim() || "角色";
+      const labelText = String(name || "").trim() || i18nT("roleLabel");
       const color = isActive
         ? (isLeader ? "#ffe6a8" : "#e8f0ff")
         : (isLeader ? "#ffd27c" : "#cfe8ff");
@@ -991,20 +999,24 @@ export function initPhaser() {
       this._windActive = String(weather) === "windy";
       this._fogActive = String(weather) === "foggy";
 
+      // theme change: kili -> scene_kilimanjaro, else -> scene_base
+      const theme = String(ws?.theme || worldState?.theme || "aotai");
+      const themeChanged = theme !== this._theme;
+      if (themeChanged) this._theme = theme;
+
       // render roles on big map
       try {
         this._syncRolesOnMap(ws);
       } catch {}
 
-      // 2) update main world: re-render ONLY when location/segment changes (not every km/time tick)
+      // 2) update main world: re-render when location/segment or theme changes
       const segFrom = ws?.in_transit_from_node_id || nodeId;
       const segTo = ws?.in_transit_to_node_id || nodeId;
       const sceneKey = `${nodeId}|${segFrom}|${segTo}`;
       const sceneChanged = sceneKey !== this._sceneKey;
       this._sceneKey = sceneKey;
-      if (nodeChanged || sceneChanged) {
-        // Only swap/re-layout when scene id changes (avoid refresh when scene stays the same).
-        const nextSceneId = "base";
+      if (nodeChanged || sceneChanged || themeChanged) {
+        const nextSceneId = theme === "kili" ? "kilimanjaro" : "base";
         if (nextSceneId !== this._sceneId) this._swapScene(nextSceneId);
       }
 

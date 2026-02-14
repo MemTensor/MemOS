@@ -1,4 +1,5 @@
 import { branchEl, chatEl, partyEl, rolesEl, statusEl } from "./dom.js";
+import { t } from "./i18n.js";
 import { edgeByToId, mapNodes, nodeById, worldState, sessionId } from "./state.js";
 import { avatarUrl, pct, statClass } from "./utils.js";
 
@@ -14,7 +15,8 @@ export function logMsg(msg) {
       const contentEl = last.querySelector(".content");
       if (contentEl) {
         const raw = String(msg.content || "");
-        const action = raw.includes("：") ? raw.split("：").slice(1).join("：") : raw;
+        const sep = raw.includes("：") ? "：" : ": ";
+        const action = raw.includes(sep) ? raw.split(sep).slice(1).join(sep) : raw;
         contentEl.textContent = `${contentEl.textContent}(${action})`;
         if (stickToBottom) {
           const scrollToBottom = () => {
@@ -39,7 +41,7 @@ export function logMsg(msg) {
   div.dataset.roleName = msg.role_name || "";
   const meta = document.createElement("div");
   meta.className = "meta";
-  const who = msg.kind === "system" ? "系统" : msg.role_name || "未知";
+  const who = msg.kind === "system" ? t("system") : msg.role_name || t("unknown");
   meta.textContent = `[${who}]`;
   const content = document.createElement("div");
   content.className = "content";
@@ -87,11 +89,11 @@ export function setStatus() {
     const toN = nodeById(worldState.in_transit_to_node_id);
     const prog = Math.floor(worldState.in_transit_progress_km || 0);
     const tot = Math.floor(worldState.in_transit_total_km || 0);
-    locStr = `路上→${toN?.name || worldState.in_transit_to_node_id} (${prog}/${tot}km)`;
+    locStr = `${t("statusEnRoute")}${toN?.name || worldState.in_transit_to_node_id} (${prog}/${tot}km)`;
   }
-  statusEl.textContent = `Session: ${worldState.session_id} | 位置: ${locStr} | Day ${
+  statusEl.textContent = `Session: ${worldState.session_id} | ${t("statusLocation")}: ${locStr} | ${t("statusDay")} ${
     worldState.day
-  }/${worldState.time_of_day} | 天气: ${worldState.weather} | 当前角色: ${active?.name || "-"}`;
+  }/${worldState.time_of_day} | ${t("statusWeather")}: ${worldState.weather} | ${t("statusCurrentRole")}: ${active?.name || "-"}`;
 }
 
 export function renderRoles() {
@@ -130,7 +132,7 @@ export function renderBranchChoices() {
   for (const id of nextIds) {
     const n = nodeById(id);
     const e = edgeByToId(fromId, id);
-    const label = e && e.label ? e.label : "下一步";
+    const label = e && e.label ? e.label : t("nextStep");
     const name = n ? n.name : id;
     items.push({ id: id, text: label + "：" + name });
   }
@@ -140,7 +142,7 @@ export function renderBranchChoices() {
 
   const label = document.createElement("div");
   label.className = "label";
-  label.textContent = "分岔口：请选择下一步";
+  label.textContent = t("junctionChoose");
 
   const box = document.createElement("div");
   box.className = "choices";
@@ -176,7 +178,7 @@ export function renderPartyStatus() {
     const empty = document.createElement("div");
     empty.className = "party-card";
     empty.style.width = "520px";
-    empty.innerHTML = `<div class="party-name">队伍状态</div><div class="party-sub">还没有队员。请先在启动弹窗里创建角色。</div>`;
+    empty.innerHTML = `<div class="party-name">${t("partyStatus")}</div><div class="party-sub">${t("partyEmpty")}</div>`;
     partyEl.appendChild(empty);
     return;
   }
@@ -205,7 +207,7 @@ export function renderPartyStatus() {
 
     const meta = document.createElement("div");
     meta.innerHTML = `<div class="party-name">${r.name}</div>
-      <div class="party-sub">当前扮演：${r.role_id === worldState.active_role_id ? "是" : "否"}</div>`;
+      <div class="party-sub">${t("currentPlay")}：${r.role_id === worldState.active_role_id ? t("yes") : t("no")}</div>`;
 
     head.appendChild(img);
     head.appendChild(meta);
@@ -214,27 +216,27 @@ export function renderPartyStatus() {
     stat.className = "stat";
     stat.innerHTML = `
       <div class="stat-row">
-        <div class="stat-label">体力</div>
+        <div class="stat-label">${t("stamina")}</div>
         <div class="stat-bar ${statClass(stamina)}"><div style="width:${stamina}%"></div></div>
         <div class="stat-val">${stamina}</div>
       </div>
       <div class="stat-row">
-        <div class="stat-label">心情</div>
+        <div class="stat-label">${t("mood")}</div>
         <div class="stat-bar ${statClass(mood)}"><div style="width:${mood}%"></div></div>
         <div class="stat-val">${mood}</div>
       </div>
       <div class="stat-row">
-        <div class="stat-label">经验</div>
+        <div class="stat-label">${t("experience")}</div>
         <div class="stat-bar ok"><div style="width:${exp}%"></div></div>
         <div class="stat-val">${exp}</div>
       </div>
       <div class="stat-row">
-        <div class="stat-label">冒险</div>
+        <div class="stat-label">${t("risk")}</div>
         <div class="stat-bar warn"><div style="width:${risk}%"></div></div>
         <div class="stat-val">${risk}</div>
       </div>
       <div class="stat-row">
-        <div class="stat-label">物资</div>
+        <div class="stat-label">${t("supplies")}</div>
         <div class="stat-bar ${statClass(supplies)}"><div style="width:${supplies}%"></div></div>
         <div class="stat-val">${supplies}</div>
       </div>
@@ -334,9 +336,17 @@ async function showShareModal() {
   initShareButton();
   if (!shareModal || !shareImagePreview) return;
 
+  // Refresh share modal text to current language
+  const shareModalTitleEl = document.getElementById("i18n-share-modal-title");
+  if (shareModalTitleEl) shareModalTitleEl.textContent = t("shareModalTitle");
+  const shareDownloadBtn = document.getElementById("share-download-btn");
+  if (shareDownloadBtn) shareDownloadBtn.textContent = t("shareDownload");
+  const shareCloseBtn = document.getElementById("share-close-btn");
+  if (shareCloseBtn) shareCloseBtn.textContent = t("shareClose");
+
   const currentSessionId = sessionId || worldState?.session_id;
   if (!currentSessionId) {
-    alert("游戏会话不可用");
+    alert(t("shareNoSession"));
     return;
   }
 
@@ -347,7 +357,7 @@ async function showShareModal() {
   if (!loadingText) {
     const loading = document.createElement("div");
     loading.className = "loading-text";
-    loading.textContent = "正在生成分享图片...";
+    loading.textContent = t("shareGenerating");
     loading.style.textAlign = "center";
     loading.style.padding = "20px";
     shareImagePreview.parentElement.insertBefore(loading, shareImagePreview);
@@ -380,7 +390,7 @@ async function showShareModal() {
     console.error("Failed to load share image:", error);
     const loadingText = shareModal.querySelector(".loading-text");
     if (loadingText) {
-      loadingText.textContent = `加载失败: ${error.message}`;
+      loadingText.textContent = `${t("shareLoadFailed")}: ${error.message}`;
       loadingText.style.color = "var(--danger)";
     }
   }

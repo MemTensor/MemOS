@@ -90,10 +90,18 @@ canvas {
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
 }
 
+.lang-btn {
+  font-size: 10px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
 .share-btn {
   font-size: 10px;
   padding: 6px 12px;
-  margin-left: 10px;
+  margin-left: 0;
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -525,6 +533,49 @@ textarea:focus {
   font-size: 10px;
   line-height: 1.5;
   margin-bottom: 12px;
+}
+.setup-theme-row {
+  margin-bottom: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(124, 242, 255, 0.25);
+}
+.setup-option-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.setup-option-row .setup-theme-label {
+  margin-bottom: 0;
+  min-width: 4em;
+}
+.setup-theme-label {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-bottom: 8px;
+}
+.setup-theme-btns {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.setup-theme-btn {
+  font-size: 10px;
+  padding: 6px 12px;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.setup-theme-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.setup-theme-btn.primary {
+  background: rgba(124, 242, 255, 0.15);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .modal-form .field {
   margin-bottom: 10px;

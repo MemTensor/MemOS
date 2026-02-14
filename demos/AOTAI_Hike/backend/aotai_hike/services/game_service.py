@@ -23,7 +23,66 @@ from aotai_hike.schemas import (
     SetActiveRoleRequest,
     WorldState,
 )
-from aotai_hike.world.map_data import AoTaiGraph
+from aotai_hike.theme import (
+    _lang,
+    _theme,
+    event_arrived_phrases,
+    event_arrived_phrases_start,
+    event_camp_label,
+    event_camp_phrases,
+    event_observe_label,
+    event_observe_phrases,
+    event_rest_phrases,
+    mem_memory_action_map,
+    mem_memory_event_action_label,
+    mem_memory_event_day_line,
+    mem_memory_event_dialogue_label,
+    mem_memory_event_recent_label,
+    mem_memory_query_action_label,
+    mem_memory_query_events_label,
+    mem_memory_query_persona_label,
+    mem_memory_time_map,
+    mem_memory_weather_map,
+    mem_teammate_label,
+    prompt_memory_tag_by_theme,
+    sys_advance_km_arrived,
+    sys_advance_km_en_route,
+    sys_at_junction_choose_leader,
+    sys_at_junction_leader_chose,
+    sys_camp_meeting,
+    sys_camp_meeting_result_vote,
+    sys_camp_or_forward,
+    sys_camp_proposal_dest,
+    sys_camp_proposal_rest,
+    sys_decide_camp,
+    sys_depart_for_advance,
+    sys_end_no_route,
+    sys_location_weather_time,
+    sys_need_say_first,
+    sys_night_camp_meeting,
+    sys_night_fall_say_first,
+    sys_night_vote_ready,
+    sys_only_leader_camp,
+    sys_rainy_no_retreat_back,
+    sys_rainy_no_retreat_main,
+    sys_received_say_choose_leader,
+    sys_received_say_leader_camp_or_forward,
+    sys_received_say_party_forward,
+    sys_retreat_rain,
+    sys_silence,
+    sys_start_leader_vote,
+    sys_teammate_look_at_you,
+    sys_today_leader,
+    sys_unimplemented_action,
+    sys_unknown_decision,
+    sys_vote_action,
+    sys_vote_action_short,
+    sys_vote_failed_empty,
+    sys_vote_result_change,
+    sys_vote_result_keep,
+    sys_you_choose_rest,
+)
+from aotai_hike.world.map_data import get_graph, get_node_display_name
 from loguru import logger
 
 
@@ -32,8 +91,8 @@ if TYPE_CHECKING:
     from aotai_hike.adapters.memory import MemoryAdapter
 
 
-def _is_junction(node_id: str) -> bool:
-    return len(AoTaiGraph.outgoing(node_id)) > 1
+def _is_junction(node_id: str, theme: str | None = None) -> bool:
+    return len(get_graph(theme).outgoing(node_id)) > 1
 
 
 @dataclass
@@ -67,10 +126,10 @@ class GameService:
                 found = True
                 break
         if not found:
-            # Check if this is a default role by name (from _DEFAULT_ROLES)
-            # Default roles are: 阿鳌, 太白, 小山
+            # Check if this is a default role by name (AoTai: 阿鳌/太白/小山; Kilimanjaro: 利奥/山姆/杰德 or Leo/Sam/Jade)
             # For default roles, ALWAYS preserve the attrs as-is, never modify them
-            is_default_role = role.name in ("阿鳌", "太白", "小山")
+            _default_names = ("阿鳌", "太白", "小山", "利奥", "山姆", "杰德", "Leo", "Sam", "Jade")
+            is_default_role = role.name in _default_names
 
             if is_default_role:
                 # Default roles from _DEFAULT_ROLES - preserve attrs exactly as passed
@@ -154,7 +213,10 @@ class GameService:
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content=f"今日团长：{leader.name if leader else world_state.leader_role_id}",
+                    content=sys_today_leader(
+                        _lang(world_state),
+                        leader.name if leader else world_state.leader_role_id,
+                    ),
                     timestamp_ms=now_ms,
                 )
             )
@@ -165,11 +227,13 @@ class GameService:
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content="夜幕降临：请你先发言（发送一句话）后，才能开始票选团长。",
+                    content=sys_night_fall_say_first(_lang(world_state)),
                     timestamp_ms=now_ms,
                 )
             )
-            node_after = AoTaiGraph.get_node(world_state.current_node_id)
+            node_after = get_graph(getattr(world_state, "theme", "aotai")).get_node(
+                world_state.current_node_id
+            )
             bg = self._safe_get_background(node_after.scene_id)
             self._append_chat_history(world_state, messages)
             return ActResponse(world_state=world_state, messages=messages, background=bg)
@@ -179,11 +243,13 @@ class GameService:
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content="夜晚票选准备就绪：请选择一位队长继续。",
+                    content=sys_night_vote_ready(_lang(world_state)),
                     timestamp_ms=now_ms,
                 )
             )
-            node_after = AoTaiGraph.get_node(world_state.current_node_id)
+            node_after = get_graph(getattr(world_state, "theme", "aotai")).get_node(
+                world_state.current_node_id
+            )
             bg = self._safe_get_background(node_after.scene_id)
             self._append_chat_history(world_state, messages)
             return ActResponse(world_state=world_state, messages=messages, background=bg)
@@ -193,11 +259,13 @@ class GameService:
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content="需要你先用“发言”回应队伍（发送一句话）后才能继续。",
+                    content=sys_need_say_first(_lang(world_state)),
                     timestamp_ms=now_ms,
                 )
             )
-            node_after = AoTaiGraph.get_node(world_state.current_node_id)
+            node_after = get_graph(getattr(world_state, "theme", "aotai")).get_node(
+                world_state.current_node_id
+            )
             bg = self._safe_get_background(node_after.scene_id)
             self._append_chat_history(world_state, messages)
             return ActResponse(world_state=world_state, messages=messages, background=bg)
@@ -210,11 +278,13 @@ class GameService:
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content="请选择：扎营恢复体力，或继续前进。",
+                    content=sys_camp_or_forward(_lang(world_state)),
                     timestamp_ms=now_ms,
                 )
             )
-            node_after = AoTaiGraph.get_node(world_state.current_node_id)
+            node_after = get_graph(getattr(world_state, "theme", "aotai")).get_node(
+                world_state.current_node_id
+            )
             bg = self._safe_get_background(node_after.scene_id)
             self._append_chat_history(world_state, messages)
             return ActResponse(world_state=world_state, messages=messages, background=bg)
@@ -225,7 +295,9 @@ class GameService:
         else:
             user_action_desc = self._apply_action(world_state, req, now_ms, messages, active)
 
-        node_after = AoTaiGraph.get_node(world_state.current_node_id)
+        node_after = get_graph(getattr(world_state, "theme", "aotai")).get_node(
+            world_state.current_node_id
+        )
         bg = self._safe_get_background(node_after.scene_id)
 
         mem_event = self._format_memory_event(
@@ -297,7 +369,7 @@ class GameService:
                         Message(
                             message_id=f"sys-{uuid.uuid4().hex[:8]}",
                             kind="system",
-                            content="队友看向你：轮到你发言了（发一句话后才能继续）。",
+                            content=sys_teammate_look_at_you(_lang(world_state)),
                             timestamp_ms=now_ms,
                         )
                     )
@@ -344,8 +416,14 @@ class GameService:
                 (r.name for r in world_state.roles if r.role_id == world_state.leader_role_id),
                 "未知",
             )
-            node_name = AoTaiGraph.get_node(world_state.current_node_id).name
-            plan_name = AoTaiGraph.get_node(next_id).name if next_id else "（未选择）"
+            theme = getattr(world_state, "theme", "aotai")
+            lang = _lang(world_state)
+            node_name = get_node_display_name(theme, lang, world_state.current_node_id)
+            plan_name = (
+                get_node_display_name(theme, lang, next_id)
+                if next_id
+                else ("(not selected)" if lang == "en" else "（未选择）")
+            )
             ev = f"营地共识：在 {node_name}，共识路线=去 {plan_name}，锁强度={world_state.lock_strength}，次日团长={who}"
             self._push_event(world_state, ev)
             messages.append(
@@ -387,7 +465,7 @@ class GameService:
             Message(
                 message_id=f"sys-{uuid.uuid4().hex[:8]}",
                 kind="system",
-                content=f"未知决策类型：{kind}",
+                content=sys_unknown_decision(_lang(world_state), kind),
                 timestamp_ms=now_ms,
             )
         )
@@ -411,7 +489,7 @@ class GameService:
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content="票选失败：队伍为空。",
+                    content=sys_vote_failed_empty(_lang(world_state)),
                     timestamp_ms=now_ms,
                 )
             )
@@ -453,7 +531,7 @@ class GameService:
             Message(
                 message_id=f"sys-{uuid.uuid4().hex[:8]}",
                 kind="system",
-                content="开始票选团长：每人投一票。",
+                content=sys_start_leader_vote(_lang(world_state)),
                 timestamp_ms=now_ms,
             )
         )
@@ -492,7 +570,7 @@ class GameService:
                     role_id=voter_id,
                     role_name=voter.name,
                     kind="action",
-                    content=f"{voter.name} 投票：{choice_name}（理由：{reason}）",
+                    content=sys_vote_action(_lang(world_state), voter.name, choice_name, reason),
                     timestamp_ms=now_ms,
                 )
             )
@@ -517,7 +595,7 @@ class GameService:
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content=f"票选结果：更换团长 {old_name} → {new_name}",
+                    content=sys_vote_result_change(_lang(world_state), old_name, new_name),
                     timestamp_ms=now_ms,
                 )
             )
@@ -526,7 +604,7 @@ class GameService:
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content=f"票选结果：团长继续由 {new_name} 担任。",
+                    content=sys_vote_result_keep(_lang(world_state), new_name),
                     timestamp_ms=now_ms,
                 )
             )
@@ -535,7 +613,9 @@ class GameService:
         self, world_state: WorldState, now_ms: int, messages: list[Message]
     ) -> None:
         # Prepare meeting options: from current node, use outgoing edges as "tomorrow proposals".
-        outgoing = AoTaiGraph.outgoing(world_state.current_node_id)
+        outgoing = get_graph(getattr(world_state, "theme", "aotai")).outgoing(
+            world_state.current_node_id
+        )
         opts = [e.to_node_id for e in outgoing]
         order = [r.role_id for r in world_state.roles]
         self._rng.shuffle(order)
@@ -556,10 +636,14 @@ class GameService:
             # Very light mock proposal: pick one option (or "stay" if none)
             if opts:
                 pick = self._rng.choice(opts)
-                dest = AoTaiGraph.get_node(pick).name
-                text = f"明天我建议：去 {dest}。"
+                dest = get_node_display_name(
+                    getattr(world_state, "theme", "aotai"),
+                    _lang(world_state),
+                    pick,
+                )
+                text = sys_camp_proposal_dest(_lang(world_state), dest)
             else:
-                text = "明天我建议：先原地休整再决定。"
+                text = sys_camp_proposal_rest(_lang(world_state))
             messages.append(
                 Message(
                     message_id=f"m-{world_state.session_id}-{now_ms}-{rid}",
@@ -574,7 +658,7 @@ class GameService:
             Message(
                 message_id=f"sys-{uuid.uuid4().hex[:8]}",
                 kind="system",
-                content="营地会议：请选择“共识路线/锁强度/明日团长”，提交后进入第二天早晨。",
+                content=sys_camp_meeting(_lang(world_state)),
                 timestamp_ms=now_ms,
             )
         )
@@ -601,12 +685,14 @@ class GameService:
             Message(
                 message_id=f"sys-{uuid.uuid4().hex[:8]}",
                 kind="system",
-                content="夜晚到来：营地会议开始（自动）。",
+                content=sys_night_camp_meeting(_lang(world_state)),
                 timestamp_ms=now_ms,
             )
         )
 
-        outgoing = AoTaiGraph.outgoing(world_state.current_node_id)
+        outgoing = get_graph(getattr(world_state, "theme", "aotai")).outgoing(
+            world_state.current_node_id
+        )
         opts = [e.to_node_id for e in outgoing]
 
         order = [r.role_id for r in world_state.roles]
@@ -617,10 +703,14 @@ class GameService:
                 continue
             if opts:
                 pick = self._rng.choice(opts)
-                dest = AoTaiGraph.get_node(pick).name
-                text = f"明天我建议：去 {dest}。"
+                dest = get_node_display_name(
+                    getattr(world_state, "theme", "aotai"),
+                    _lang(world_state),
+                    pick,
+                )
+                text = sys_camp_proposal_dest(_lang(world_state), dest)
             else:
-                text = "明天我建议：先原地休整再决定。"
+                text = sys_camp_proposal_rest(_lang(world_state))
             messages.append(
                 Message(
                     message_id=f"m-{world_state.session_id}-{now_ms}-{rid}",
@@ -661,7 +751,7 @@ class GameService:
                     role_id=voter_id,
                     role_name=voter.name,
                     kind="action",
-                    content=f"{voter.name} 投票：{choice_name}",
+                    content=sys_vote_action_short(_lang(world_state), voter.name, choice_name),
                     timestamp_ms=now_ms,
                 )
             )
@@ -679,23 +769,16 @@ class GameService:
 
         if world_state.leader_role_id != old:
             self._push_event(world_state, f"营地会议：更换团长 {old_name} → {new_name}（票选）")
-            messages.append(
-                Message(
-                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
-                    kind="system",
-                    content=f"营地会议结果（票选）：更换团长 {old_name} → {new_name}",
-                    timestamp_ms=now_ms,
-                )
+        messages.append(
+            Message(
+                message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                kind="system",
+                content=sys_camp_meeting_result_vote(
+                    _lang(world_state), old_name, new_name, world_state.leader_role_id != old
+                ),
+                timestamp_ms=now_ms,
             )
-        else:
-            messages.append(
-                Message(
-                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
-                    kind="system",
-                    content=f"营地会议结果（票选）：团长继续由 {new_name} 担任。",
-                    timestamp_ms=now_ms,
-                )
-            )
+        )
 
         # Overnight settlement then advance to next morning.
         self._tweak_party(world_state, stamina_delta=8, mood_delta=3, exp_delta=0)
@@ -772,7 +855,6 @@ class GameService:
         if req.action == ActionType.CONTINUE:
             req.action = ActionType.MOVE_FORWARD
 
-        node = AoTaiGraph.get_node(world_state.current_node_id)
         # UI-only; we keep it empty in the auto-run flow unless we explicitly need a user choice.
         world_state.available_next_node_ids = []
 
@@ -780,13 +862,23 @@ class GameService:
             Message(
                 message_id=f"sys-{uuid.uuid4().hex[:8]}",
                 kind="system",
-                content=f"位置：{node.name} · 天气：{world_state.weather} · 时间：Day{world_state.day}/{world_state.time_of_day}",
+                content=sys_location_weather_time(
+                    _lang(world_state),
+                    get_node_display_name(
+                        getattr(world_state, "theme", "aotai"),
+                        _lang(world_state),
+                        world_state.current_node_id,
+                    ),
+                    world_state.weather,
+                    world_state.day,
+                    world_state.time_of_day,
+                ),
                 timestamp_ms=now_ms,
             )
         )
 
         if req.action == ActionType.SAY:
-            text = str(req.payload.get("text") or "").strip() or "（沉默）"
+            text = str(req.payload.get("text") or "").strip() or sys_silence(_lang(world_state))
             if active is not None:
                 messages.append(
                     Message(
@@ -805,7 +897,7 @@ class GameService:
                     Message(
                         message_id=f"sys-{uuid.uuid4().hex[:8]}",
                         kind="system",
-                        content="收到你的发言：现在请选择一位队长开始票选。",
+                        content=sys_received_say_choose_leader(_lang(world_state)),
                         timestamp_ms=now_ms,
                     )
                 )
@@ -819,7 +911,7 @@ class GameService:
                         Message(
                             message_id=f"sys-{uuid.uuid4().hex[:8]}",
                             kind="system",
-                            content="收到你的回应。作为队长，你可以选择扎营恢复体力，或继续前进。",
+                            content=sys_received_say_leader_camp_or_forward(_lang(world_state)),
                             timestamp_ms=now_ms,
                         )
                     )
@@ -829,7 +921,7 @@ class GameService:
                         Message(
                             message_id=f"sys-{uuid.uuid4().hex[:8]}",
                             kind="system",
-                            content="收到你的回应，队伍继续前进。",
+                            content=sys_received_say_party_forward(_lang(world_state)),
                             timestamp_ms=now_ms,
                         )
                     )
@@ -853,7 +945,9 @@ class GameService:
                 try:
                     edge_kind = None
                     if world_state.in_transit_from_node_id and world_state.in_transit_to_node_id:
-                        for e in AoTaiGraph.outgoing(world_state.in_transit_from_node_id):
+                        for e in get_graph(getattr(world_state, "theme", "aotai")).outgoing(
+                            world_state.in_transit_from_node_id
+                        ):
                             if e.to_node_id == world_state.in_transit_to_node_id:
                                 edge_kind = getattr(e, "kind", None)
                                 break
@@ -862,7 +956,7 @@ class GameService:
                             Message(
                                 message_id=f"sys-{uuid.uuid4().hex[:8]}",
                                 kind="system",
-                                content="下撤途中遇雨，撤退失败，返回岔路继续前进。",
+                                content=sys_retreat_rain(_lang(world_state)),
                                 timestamp_ms=now_ms,
                             )
                         )
@@ -870,9 +964,9 @@ class GameService:
                         world_state.in_transit_to_node_id = None
                         world_state.in_transit_progress_km = 0.0
                         world_state.in_transit_total_km = 0.0
-                        world_state.available_next_node_ids = AoTaiGraph.next_node_ids(
-                            world_state.current_node_id
-                        )
+                        world_state.available_next_node_ids = get_graph(
+                            getattr(world_state, "theme", "aotai")
+                        ).next_node_ids(world_state.current_node_id)
                         return "MOVE_FORWARD:retreat_rain"
                 except Exception:
                     pass
@@ -891,17 +985,24 @@ class GameService:
                     world_state.in_transit_progress_km = 0.0
                     world_state.in_transit_total_km = 0.0
 
-                    world_state.available_next_node_ids = AoTaiGraph.next_node_ids(next_id)
+                    world_state.available_next_node_ids = get_graph(
+                        getattr(world_state, "theme", "aotai")
+                    ).next_node_ids(next_id)
 
-                    ev = self._rng.choice(
-                        ["你终于看见前方地标。", "脚步放轻，稳稳抵达。", "风声渐远，你到达了节点。"]
-                    )
+                    ev = self._rng.choice(event_arrived_phrases(_lang(world_state)))
                     self._push_event(world_state, ev)
+                    node_name = get_node_display_name(
+                        getattr(world_state, "theme", "aotai"),
+                        _lang(world_state),
+                        next_id,
+                    )
                     messages.append(
                         Message(
                             message_id=f"sys-{uuid.uuid4().hex[:8]}",
                             kind="system",
-                            content=f"前进 {step_km:.0f}km，已抵达：{AoTaiGraph.get_node(next_id).name}。{ev}",
+                            content=sys_advance_km_arrived(
+                                _lang(world_state), step_km, node_name, ev
+                            ),
                             timestamp_ms=now_ms,
                         )
                     )
@@ -916,9 +1017,12 @@ class GameService:
                         Message(
                             message_id=f"sys-{uuid.uuid4().hex[:8]}",
                             kind="system",
-                            content=(
-                                f"前进 {step_km:.0f}km，路上…（{world_state.in_transit_progress_km:.0f}/"
-                                f"{world_state.in_transit_total_km:.0f}km，剩余 {left:.0f}km）"
+                            content=sys_advance_km_en_route(
+                                _lang(world_state),
+                                step_km,
+                                world_state.in_transit_progress_km,
+                                world_state.in_transit_total_km,
+                                left,
                             ),
                             timestamp_ms=now_ms,
                         )
@@ -927,13 +1031,15 @@ class GameService:
                     return "MOVE_FORWARD:step"
 
             # Not in transit: choose next edge from current node.
-            outgoing = AoTaiGraph.outgoing(world_state.current_node_id)
+            outgoing = get_graph(getattr(world_state, "theme", "aotai")).outgoing(
+                world_state.current_node_id
+            )
             if not outgoing:
                 messages.append(
                     Message(
                         message_id=f"sys-{uuid.uuid4().hex[:8]}",
                         kind="system",
-                        content="已到达终点/无可用前进路线。",
+                        content=sys_end_no_route(_lang(world_state)),
                         timestamp_ms=now_ms,
                     )
                 )
@@ -958,7 +1064,7 @@ class GameService:
                             Message(
                                 message_id=f"sys-{uuid.uuid4().hex[:8]}",
                                 kind="system",
-                                content="到达岔路：请团长选择路线。",
+                                content=sys_at_junction_choose_leader(_lang(world_state)),
                                 timestamp_ms=now_ms,
                             )
                         )
@@ -979,7 +1085,15 @@ class GameService:
                         Message(
                             message_id=f"sys-{uuid.uuid4().hex[:8]}",
                             kind="system",
-                            content=f"到达岔路：{leader_name}做出选择 → {AoTaiGraph.get_node(next_edge.to_node_id).name}。",
+                            content=sys_at_junction_leader_chose(
+                                _lang(world_state),
+                                leader_name,
+                                get_node_display_name(
+                                    getattr(world_state, "theme", "aotai"),
+                                    _lang(world_state),
+                                    next_edge.to_node_id,
+                                ),
+                            ),
                             timestamp_ms=now_ms,
                         )
                     )
@@ -998,7 +1112,7 @@ class GameService:
                             Message(
                                 message_id=f"sys-{uuid.uuid4().hex[:8]}",
                                 kind="system",
-                                content="雨天不适合下撤，改走主线路线。",
+                                content=sys_rainy_no_retreat_main(_lang(world_state)),
                                 timestamp_ms=now_ms,
                             )
                         )
@@ -1007,7 +1121,7 @@ class GameService:
                             Message(
                                 message_id=f"sys-{uuid.uuid4().hex[:8]}",
                                 kind="system",
-                                content="雨天无法下撤，只能回撤上一步。",
+                                content=sys_rainy_no_retreat_back(_lang(world_state)),
                                 timestamp_ms=now_ms,
                             )
                         )
@@ -1055,15 +1169,20 @@ class GameService:
                 world_state.in_transit_progress_km = 0.0
                 world_state.in_transit_total_km = 0.0
 
-                world_state.available_next_node_ids = AoTaiGraph.next_node_ids(next_id)
+                world_state.available_next_node_ids = get_graph(
+                    getattr(world_state, "theme", "aotai")
+                ).next_node_ids(next_id)
 
-                ev = self._rng.choice(["你来到新的地标。", "脚下坡度变化明显。", "视野忽然开阔。"])
+                ev = self._rng.choice(event_arrived_phrases_start(_lang(world_state)))
                 self._push_event(world_state, ev)
+                node_name = get_node_display_name(
+                    getattr(world_state, "theme", "aotai"), _lang(world_state), next_id
+                )
                 messages.append(
                     Message(
                         message_id=f"sys-{uuid.uuid4().hex[:8]}",
                         kind="system",
-                        content=f"前进 {step_km:.0f}km，已抵达：{AoTaiGraph.get_node(next_id).name}。{ev}",
+                        content=sys_advance_km_arrived(_lang(world_state), step_km, node_name, ev),
                         timestamp_ms=now_ms,
                     )
                 )
@@ -1072,13 +1191,22 @@ class GameService:
                 return f"MOVE_FORWARD:arrive:{next_id}"
 
             left = max(0.0, world_state.in_transit_total_km - world_state.in_transit_progress_km)
+            to_name = get_node_display_name(
+                getattr(world_state, "theme", "aotai"),
+                _lang(world_state),
+                next_edge.to_node_id,
+            )
             messages.append(
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content=(
-                        f"出发去 {AoTaiGraph.get_node(next_edge.to_node_id).name}，前进 {step_km:.0f}km…（"
-                        f"{world_state.in_transit_progress_km:.0f}/{world_state.in_transit_total_km:.0f}km，剩余 {left:.0f}km）"
+                    content=sys_depart_for_advance(
+                        _lang(world_state),
+                        to_name,
+                        step_km,
+                        world_state.in_transit_progress_km,
+                        world_state.in_transit_total_km,
+                        left,
                     ),
                     timestamp_ms=now_ms,
                 )
@@ -1088,13 +1216,13 @@ class GameService:
         if req.action == ActionType.REST:
             self._advance_time(world_state)
             self._tweak_party(world_state, stamina_delta=10, mood_delta=4, exp_delta=0)
-            ev = self._rng.choice(["补水休整。", "调整背负。", "放慢呼吸。", "晒晒太阳。"])
+            ev = self._rng.choice(event_rest_phrases(_lang(world_state)))
             self._push_event(world_state, ev)
             messages.append(
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content=f"你选择休息。{ev}",
+                    content=sys_you_choose_rest(_lang(world_state), ev),
                     timestamp_ms=now_ms,
                 )
             )
@@ -1107,18 +1235,20 @@ class GameService:
                     Message(
                         message_id=f"sys-{uuid.uuid4().hex[:8]}",
                         kind="system",
-                        content="只有队长可以决定扎营。",
+                        content=sys_only_leader_camp(_lang(world_state)),
                         timestamp_ms=now_ms,
                     )
                 )
-                node_after = AoTaiGraph.get_node(world_state.current_node_id)
+                node_after = get_graph(getattr(world_state, "theme", "aotai")).get_node(
+                    world_state.current_node_id
+                )
                 bg = self._safe_get_background(node_after.scene_id)
                 self._append_chat_history(world_state, messages)
                 return ActResponse(world_state=world_state, messages=messages, background=bg)
 
             world_state.time_of_day = "night"
-            ev = self._rng.choice(["升起炉火。", "搭好帐篷。", "分配守夜。", "检查余粮。"])
-            self._push_event(world_state, f"扎营：{ev}")
+            ev = self._rng.choice(event_camp_phrases(_lang(world_state)))
+            self._push_event(world_state, event_camp_label(_lang(world_state), ev))
             # Camping: restore stamina and mood, but consume more supplies
             self._tweak_party(
                 world_state, stamina_delta=18, mood_delta=6, exp_delta=0, supplies_delta=-25
@@ -1127,7 +1257,7 @@ class GameService:
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content=f"{active.name}决定扎营。{ev} 体力恢复，但消耗了较多物资。",
+                    content=sys_decide_camp(_lang(world_state), active.name, ev),
                     timestamp_ms=now_ms,
                 )
             )
@@ -1143,15 +1273,8 @@ class GameService:
         if req.action == ActionType.OBSERVE:
             self._advance_time(world_state)
             self._tweak_party(world_state, stamina_delta=-3, mood_delta=2, exp_delta=1)
-            obs = self._rng.choice(
-                [
-                    "你观察到远处云层翻涌。",
-                    "你发现脚印与折断的灌木。",
-                    "你记录了一个更稳的落脚点。",
-                    "你听见风里隐约的回声。",
-                ]
-            )
-            self._push_event(world_state, f"观察：{obs}")
+            obs = self._rng.choice(event_observe_phrases(_lang(world_state)))
+            self._push_event(world_state, event_observe_label(_lang(world_state), obs))
             messages.append(
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
@@ -1166,7 +1289,7 @@ class GameService:
             Message(
                 message_id=f"sys-{uuid.uuid4().hex[:8]}",
                 kind="system",
-                content=f"未实现动作：{req.action}",
+                content=sys_unimplemented_action(_lang(world_state), str(req.action)),
                 timestamp_ms=now_ms,
             )
         )
@@ -1223,65 +1346,55 @@ class GameService:
         user_action_desc: str,
         messages: list[Message],
     ) -> str:
-        time_map = {
-            "morning": "早晨",
-            "noon": "中午",
-            "afternoon": "下午",
-            "evening": "傍晚",
-            "night": "夜晚",
-        }
-        weather_map = {
-            "sunny": "晴",
-            "cloudy": "多云",
-            "windy": "有风",
-            "rainy": "雨",
-            "snowy": "雪",
-            "foggy": "雾",
-        }
+        lang = _lang(world_state)
+        time_map = mem_memory_time_map(lang)
+        weather_map = mem_memory_weather_map(lang)
+        action_map = mem_memory_action_map(lang)
 
         action_name = getattr(req.action, "name", str(req.action))
-        action_cn_map = {
-            "SAY": "发言",
-            "MOVE_FORWARD": "前进",
-            "REST": "休息",
-            "CAMP": "扎营",
-            "OBSERVE": "观察",
-            "DECIDE": "决策",
-        }
-        action_cn = action_cn_map.get(action_name, action_name)
+        action_str = action_map.get(action_name, action_name)
 
         day = world_state.day
-        tod_cn = time_map.get(world_state.time_of_day, str(world_state.time_of_day))
-        weather_cn = weather_map.get(world_state.weather, str(world_state.weather))
+        tod = time_map.get(world_state.time_of_day, str(world_state.time_of_day))
+        weather = weather_map.get(world_state.weather, str(world_state.weather))
         node_name = getattr(node, "name", "")
 
+        pieces: list[str] = []
+        pieces.append(mem_memory_event_day_line(lang, day, tod, weather, node_name))
+        pieces.append(mem_memory_event_action_label(lang) + action_str)
+
         recent_events = world_state.recent_events[-3:] if world_state.recent_events else []
-        recent_events_txt = "；".join(recent_events)
+        if recent_events:
+            sep = "; " if lang == "en" else "；"
+            pieces.append(mem_memory_event_recent_label(lang) + sep.join(recent_events) + ".")
 
         dialogue_msgs = [m for m in messages if m.kind != "system"]
         dialogue_parts: list[str] = []
+        teammate = mem_teammate_label(lang)
         for m in dialogue_msgs[:3]:
-            speaker = m.role_name or m.role_id or "队员"
-            dialogue_parts.append(f"{speaker}：{m.content[:40]}")
-        dialogue_txt = "；".join(dialogue_parts)
-
-        pieces: list[str] = []
-        pieces.append(f"第{day}天，{tod_cn}，天气{weather_cn}，位置：{node_name}。")
-        pieces.append(f"动作：{action_cn}")
-        if recent_events_txt:
-            pieces.append(f"最近事件：{recent_events_txt}。")
-        if dialogue_txt:
-            pieces.append(f"关键对话：{dialogue_txt}。")
+            speaker = m.role_name or m.role_id or teammate
+            dialogue_parts.append(
+                f"{speaker}: {m.content[:40]}" if lang == "en" else f"{speaker}：{m.content[:40]}"
+            )
+        if dialogue_parts:
+            sep = "; " if lang == "en" else "；"
+            pieces.append(mem_memory_event_dialogue_label(lang) + sep.join(dialogue_parts) + ".")
 
         return " ".join(pieces)
 
     def _build_memory_query(
         self, world_state: WorldState, req: ActRequest, node, user_action_desc: str
     ) -> str:
+        lang = _lang(world_state)
         active = self._get_active_role(world_state)
         persona = (active.persona if active else "")[:80]
-        ev = "；".join(world_state.recent_events[-3:])
-        return f"鳌太线 {node.name} {world_state.weather} {world_state.time_of_day} 动作:{req.action} {user_action_desc} 事件:{ev} 人设:{persona}"
+        sep = "; " if lang == "en" else "；"
+        ev = sep.join(world_state.recent_events[-3:])
+        tag = prompt_memory_tag_by_theme(_theme(world_state))
+        action_label = mem_memory_query_action_label(lang)
+        events_label = mem_memory_query_events_label(lang)
+        persona_label = mem_memory_query_persona_label(lang)
+        return f"{tag} {node.name} {world_state.weather} {world_state.time_of_day} {action_label}{req.action} {user_action_desc} {events_label}{ev} {persona_label}{persona}"
 
     def _append_chat_history(self, world_state: WorldState, messages: list[Message]) -> None:
         if not messages:
