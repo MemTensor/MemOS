@@ -80,7 +80,8 @@ export function initPhaser() {
   // - Add/remove layers by editing this list (order = render order, bottom -> top).
   // - For each sceneId, assets should exist at:
   //   `./assets/scenes/scene_${sceneId}/scene_0_${layer}.png`
-  const SCENE_IDS = ["base"];
+  // - base = 鳌太, kilimanjaro = 乞力马扎罗; select by theme in setState
+  const SCENE_IDS = ["base", "kilimanjaro"];
   const SCENE_LAYERS = ["base", "props"];
   const sceneKey = (sceneId, layer) => `scene:${sceneId}:${layer}`;
   const sceneFile = (sceneId, layer) => `scenes/scene_${sceneId}/scene_0_${layer}.png`;
@@ -139,6 +140,7 @@ export function initPhaser() {
       this._ws = null;
       this._walkKey = "";
       this._sceneKey = "";
+      this._theme = null; // current theme for scene choice (aotai -> base, kili -> kilimanjaro)
 
       this.mainCam = null;
 
@@ -297,12 +299,17 @@ export function initPhaser() {
         say: (roleId, text) => this._say(roleId, text),
       };
 
-      // initial paint
+      // initial paint: pick scene from theme (kili -> kilimanjaro, else base)
+      const initialTheme = worldState?.theme || "aotai";
+      const initialSceneId = initialTheme === "kili" ? "kilimanjaro" : "base";
+      this._theme = initialTheme;
+      this._swapScene(initialSceneId);
       this.setState({
         current_node_id: mapStartNodeId || "start",
         visited_node_ids: [mapStartNodeId || "start"],
         weather: "cloudy",
         time_of_day: "morning",
+        theme: initialTheme,
       });
     }
 
@@ -992,20 +999,24 @@ export function initPhaser() {
       this._windActive = String(weather) === "windy";
       this._fogActive = String(weather) === "foggy";
 
+      // theme change: kili -> scene_kilimanjaro, else -> scene_base
+      const theme = String(ws?.theme || worldState?.theme || "aotai");
+      const themeChanged = theme !== this._theme;
+      if (themeChanged) this._theme = theme;
+
       // render roles on big map
       try {
         this._syncRolesOnMap(ws);
       } catch {}
 
-      // 2) update main world: re-render ONLY when location/segment changes (not every km/time tick)
+      // 2) update main world: re-render when location/segment or theme changes
       const segFrom = ws?.in_transit_from_node_id || nodeId;
       const segTo = ws?.in_transit_to_node_id || nodeId;
       const sceneKey = `${nodeId}|${segFrom}|${segTo}`;
       const sceneChanged = sceneKey !== this._sceneKey;
       this._sceneKey = sceneKey;
-      if (nodeChanged || sceneChanged) {
-        // Only swap/re-layout when scene id changes (avoid refresh when scene stays the same).
-        const nextSceneId = "base";
+      if (nodeChanged || sceneChanged || themeChanged) {
+        const nextSceneId = theme === "kili" ? "kilimanjaro" : "base";
         if (nextSceneId !== this._sceneId) this._swapScene(nextSceneId);
       }
 
