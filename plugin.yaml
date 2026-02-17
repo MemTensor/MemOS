@@ -4,7 +4,7 @@
 
 name: memos
 display_name: MemOS
-version: "0.1.0"
+manifest_version: "1.0"
 description: >
   AI memory operating system for LLM and Agent systems. Enables persistent
   memory, cross-task skill reuse, and memory evolution — giving agents
@@ -45,7 +45,7 @@ runtime:
   language: python
   min_python: "3.9"
 
-discovery:
+protocols:
   protocol: api
-  transport:
+transport:
     - http
