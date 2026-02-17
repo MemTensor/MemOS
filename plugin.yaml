@@ -1,0 +1,51 @@
+# plugin.yaml — MemOS Agent Plugin Manifest
+# This file makes MemOS discoverable as an agent plugin.
+# Learn more: https://list.agenium.net/plugins
+
+name: memos
+display_name: MemOS
+version: "0.1.0"
+description: >
+  AI memory operating system for LLM and Agent systems. Enables persistent
+  memory, cross-task skill reuse, and memory evolution — giving agents
+  long-term memory that improves over time.
+
+author:
+  name: MemTensor
+  url: https://github.com/MemTensor
+
+repository: https://github.com/MemTensor/MemOS
+license: Apache-2.0
+
+categories:
+  - agent-infrastructure
+  - memory-systems
+  - developer-tools
+
+tags:
+  - memory
+  - persistent-memory
+  - skill-reuse
+  - llm-memory
+  - agent-memory
+  - knowledge-graph
+  - rag
+
+capabilities:
+  - persistent-memory
+  - skill-memory
+  - cross-task-reuse
+  - memory-evolution
+  - knowledge-management
+
+install:
+  pip: memos-ai
+
+runtime:
+  language: python
+  min_python: "3.9"
+
+discovery:
+  protocol: api
+  transport:
+    - http
