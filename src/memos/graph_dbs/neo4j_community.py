@@ -811,6 +811,14 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                             if condition_str:
                                 where_clauses.append(f"({condition_str})")
                                 filter_params.update(filter_params_inner)
+                else:
+                    # Simple dict syntax: {"user_id": "...", "session_id": "..."}
+                    condition_str, filter_params_inner = build_filter_condition(
+                        filter, param_counter
+                    )
+                    if condition_str:
+                        where_clauses.append(f"({condition_str})")
+                        filter_params.update(filter_params_inner)
 
         where_str = " AND ".join(where_clauses) if where_clauses else ""
         if where_str:
@@ -841,7 +849,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
     def delete_node_by_prams(
         self,
-        writable_cube_ids: list[str],
+        writable_cube_ids: list[str] | None = None,
         memory_ids: list[str] | None = None,
         file_ids: list[str] | None = None,
         filter: dict | None = None,
@@ -850,7 +858,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         Delete nodes by memory_ids, file_ids, or filter.
 
         Args:
-            writable_cube_ids (list[str]): List of cube IDs (user_name) to filter nodes. Required parameter.
+            writable_cube_ids (list[str], optional): List of cube IDs (user_name) to scope deletion.
             memory_ids (list[str], optional): List of memory node IDs to delete.
             file_ids (list[str], optional): List of file node IDs to delete.
             filter (dict, optional): Filter dictionary to query matching nodes for deletion.
@@ -865,9 +873,9 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
         )
 
-        # Validate writable_cube_ids
-        if not writable_cube_ids or len(writable_cube_ids) == 0:
-            raise ValueError("writable_cube_ids is required and cannot be empty")
+        # file_ids deletion must be scoped by writable_cube_ids.
+        if file_ids and (not writable_cube_ids or len(writable_cube_ids) == 0):
+            raise ValueError("writable_cube_ids is required when deleting by file_ids")
 
         # Build WHERE conditions separately for memory_ids and file_ids
         where_clauses = []
@@ -875,10 +883,11 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         # Build user_name condition from writable_cube_ids (OR relationship - match any cube_id)
         user_name_conditions = []
-        for idx, cube_id in enumerate(writable_cube_ids):
-            param_name = f"cube_id_{idx}"
-            user_name_conditions.append(f"n.user_name = ${param_name}")
-            params[param_name] = cube_id
+        if writable_cube_ids:
+            for idx, cube_id in enumerate(writable_cube_ids):
+                param_name = f"cube_id_{idx}"
+                user_name_conditions.append(f"n.user_name = ${param_name}")
+                params[param_name] = cube_id
 
         # Handle memory_ids: query n.id
         if memory_ids and len(memory_ids) > 0:
@@ -925,9 +934,12 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # First, combine memory_ids, file_ids, and filter conditions with OR (any condition can match)
         data_conditions = " OR ".join([f"({clause})" for clause in where_clauses])
 
-        # Then, combine with user_name condition using AND (must match user_name AND one of the data conditions)
-        user_name_where = " OR ".join(user_name_conditions)
-        ids_where = f"({user_name_where}) AND ({data_conditions})"
+        # Then, combine with user_name condition using AND when scope is provided.
+        if user_name_conditions:
+            user_name_where = " OR ".join(user_name_conditions)
+            ids_where = f"({user_name_where}) AND ({data_conditions})"
+        else:
+            ids_where = data_conditions
 
         logger.info(
             f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
