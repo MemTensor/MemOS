@@ -94,6 +94,14 @@ def test_delete_memories_filter_or_with_distribution():
             ]
         },
     )
+    naive_mem_cube.pref_mem.delete_by_filter.assert_called_once_with(
+        filter={
+            "or": [
+                {"memory_type": "WorkingMemory", "user_id": "u_1"},
+                {"memory_type": "UserMemory", "user_id": "u_1"},
+            ]
+        }
+    )
 
 
 def test_delete_memories_reject_multiple_modes():
@@ -106,3 +114,29 @@ def test_delete_memories_reject_multiple_modes():
     assert "Exactly one delete mode must be provided" in resp.message
     naive_mem_cube.text_mem.delete_by_filter.assert_not_called()
     naive_mem_cube.text_mem.delete_by_memory_ids.assert_not_called()
+
+
+def test_delete_memories_reject_empty_filter():
+    naive_mem_cube = _build_naive_mem_cube()
+    req = DeleteMemoryRequest(filter={})
+
+    resp = handle_delete_memories(req, naive_mem_cube)
+
+    assert resp.data["status"] == "failure"
+    assert "filter cannot be empty" in resp.message
+    naive_mem_cube.text_mem.delete_by_filter.assert_not_called()
+    naive_mem_cube.pref_mem.delete_by_filter.assert_not_called()
+
+
+def test_delete_memories_with_pref_mem_disabled():
+    naive_mem_cube = _build_naive_mem_cube()
+    naive_mem_cube.pref_mem = None
+    req = DeleteMemoryRequest(user_id="u_1")
+
+    resp = handle_delete_memories(req, naive_mem_cube)
+
+    assert resp.data["status"] == "success"
+    naive_mem_cube.text_mem.delete_by_filter.assert_called_once_with(
+        writable_cube_ids=None,
+        filter={"and": [{"user_id": "u_1"}]},
+    )

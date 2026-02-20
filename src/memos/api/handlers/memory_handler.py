@@ -434,6 +434,9 @@ def _merge_delete_filter(
     if base_filter is None:
         return {"and": [constraints.copy()]}
 
+    if not base_filter:
+        return {"and": [constraints.copy()]}
+
     if "and" in base_filter:
         and_conditions = base_filter.get("and")
         if not isinstance(and_conditions, list):
@@ -477,7 +480,15 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
         delete_mem_req.session_id,
     )
     quick_constraints = _build_quick_delete_constraints(delete_mem_req)
-    has_filter_mode = delete_mem_req.filter is not None or bool(quick_constraints)
+    has_non_empty_filter = bool(delete_mem_req.filter)
+    has_filter_mode = has_non_empty_filter or bool(quick_constraints)
+
+    # Reject empty filter dict when no quick constraints are provided.
+    if delete_mem_req.filter is not None and not has_non_empty_filter and not quick_constraints:
+        return DeleteMemoryResponse(
+            message="filter cannot be empty. Provide a non-empty filter or user_id/session_id.",
+            data={"status": "failure"},
+        )
 
     # Validate that only one mode is provided: memory_ids, file_ids, or filter-mode.
     provided_params = [
