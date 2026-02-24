@@ -928,6 +928,26 @@ class Neo4jGraphDB(BaseGraphDB):
 
         return records
 
+    def search_by_fulltext(
+        self,
+        query_words: list[str],
+        top_k: int = 10,
+        scope: str | None = None,
+        status: str | None = None,
+        threshold: float | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        tsquery_config: str | None = None,
+        **kwargs,
+    ) -> list[dict]:
+        """
+        TODO: 实现 Neo4j 的关键词检索, 以兼容 TreeTextMemory 的 keyword/fulltext 召回路径.
+        目前先返回空列表, 避免切换到 Neo4j 后因缺失方法导致运行时报错.
+        """
+        return []
+
     def get_by_metadata(
         self,
         filters: list[dict[str, Any]],
