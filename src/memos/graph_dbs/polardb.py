@@ -841,7 +841,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         start_time = time.time()
         if not source_id or not target_id:
-            logger.warning(f"Edge '{source_id}' and '{target_id}' are both None")
+            logger.info(f"Edge '{source_id}' and '{target_id}' are both None")
             raise ValueError("[add_edge] source_id and target_id must be provided")
 
         source_exists = self.get_node(source_id) is not None
@@ -851,7 +851,11 @@ class PolarDBGraphDB(BaseGraphDB):
             logger.warning(
                 "[add_edge] Source %s or target %s does not exist.", source_exists, target_exists
             )
-            logger.warning("[add_edge] source_id and target_id must be existed, skip add edge")
+            logger.info(
+                "[add_edge_error] Source %s or target %s does not exist.",
+                source_exists,
+                target_exists,
+            )
             return
 
         properties = {}
