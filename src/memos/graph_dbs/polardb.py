@@ -851,7 +851,8 @@ class PolarDBGraphDB(BaseGraphDB):
             logger.warning(
                 "[add_edge] Source %s or target %s does not exist.", source_exists, target_exists
             )
-            raise ValueError("[add_edge] source_id and target_id must be provided")
+            logger.warning("[add_edge] source_id and target_id must be existed, skip add edge")
+            return
 
         properties = {}
         if user_name is not None:
