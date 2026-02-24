@@ -10,6 +10,7 @@ from memos.configs.mem_reader import MultiModalStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.mem_reader.read_multi_modal import MultiModalParser, detect_lang
 from memos.mem_reader.read_multi_modal.base import _derive_key
+from memos.mem_reader.read_pref_memory.process_preference_memory import process_preference_fine
 from memos.mem_reader.read_skill_memory.process_skill_memory import process_skill_memory_fine
 from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
 from memos.mem_reader.utils import parse_json_result
@@ -992,7 +993,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # Part A: call llm in parallel using thread pool
             fine_memory_items = []
 
-            with ContextThreadPoolExecutor(max_workers=3) as executor:
+            with ContextThreadPoolExecutor(max_workers=4) as executor:
                 future_string = executor.submit(
                     self._process_string_fine, fast_memory_items, info, custom_tags, **kwargs
                 )
@@ -1011,15 +1012,25 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     skills_dir_config=self.skills_dir_config,
                     **kwargs,
                 )
+                future_pref = executor.submit(
+                    process_preference_fine,
+                    fast_memory_items,
+                    info,
+                    self.llm,
+                    self.embedder,
+                    **kwargs,
+                )
 
                 # Collect results
                 fine_memory_items_string_parser = future_string.result()
                 fine_memory_items_tool_trajectory_parser = future_tool.result()
                 fine_memory_items_skill_memory_parser = future_skill.result()
+                fine_memory_items_pref_parser = future_pref.result()
 
             fine_memory_items.extend(fine_memory_items_string_parser)
             fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
             fine_memory_items.extend(fine_memory_items_skill_memory_parser)
+            fine_memory_items.extend(fine_memory_items_pref_parser)
 
             # Part B: get fine multimodal items
             for fast_item in fast_memory_items:
@@ -1059,7 +1070,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         fine_memory_items = []
         # Part A: call llm in parallel using thread pool
-        with ContextThreadPoolExecutor(max_workers=2) as executor:
+        with ContextThreadPoolExecutor(max_workers=4) as executor:
             future_string = executor.submit(
                 self._process_string_fine, raw_nodes, info, custom_tags, **kwargs
             )
@@ -1078,14 +1089,21 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 skills_dir_config=self.skills_dir_config,
                 **kwargs,
             )
+            # Add preference memory extraction
+            future_pref = executor.submit(
+                process_preference_fine, raw_nodes, info, self.llm, self.embedder, **kwargs
+            )
 
             # Collect results
             fine_memory_items_string_parser = future_string.result()
             fine_memory_items_tool_trajectory_parser = future_tool.result()
             fine_memory_items_skill_memory_parser = future_skill.result()
+            fine_memory_items_pref_parser = future_pref.result()
+
         fine_memory_items.extend(fine_memory_items_string_parser)
         fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
         fine_memory_items.extend(fine_memory_items_skill_memory_parser)
+        fine_memory_items.extend(fine_memory_items_pref_parser)
 
         # Part B: get fine multimodal items
         for raw_node in raw_nodes:

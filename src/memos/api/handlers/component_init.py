@@ -19,11 +19,7 @@ from memos.api.handlers.config_builders import (
     build_llm_config,
     build_mem_reader_config,
     build_nli_client_config,
-    build_pref_adder_config,
-    build_pref_extractor_config,
-    build_pref_retriever_config,
     build_reranker_config,
-    build_vec_db_config,
 )
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.embedders.factory import EmbedderFactory
@@ -36,12 +32,6 @@ from memos.mem_os.product_server import MOSServer
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.orm_modules.base_model import BaseDBManager
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.memories.textual.prefer_text_memory.factory import (
-    AdderFactory,
-    ExtractorFactory,
-    RetrieverFactory,
-)
-from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.history_manager import MemoryHistoryManager
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
@@ -56,7 +46,6 @@ from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory
     InternetRetrieverFactory,
 )
 from memos.reranker.factory import RerankerFactory
-from memos.vec_dbs.factory import VecDBFactory
 
 
 if TYPE_CHECKING:
@@ -125,7 +114,7 @@ def init_server() -> dict[str, Any]:
     required by the MemOS server, including:
     - Database connections (graph DB, vector DB)
     - Language models and embedders
-    - Memory systems (text, preference)
+    - Memory systems (text)
     - Scheduler and related modules
 
     Returns:
@@ -169,20 +158,11 @@ def init_server() -> dict[str, Any]:
     reranker_config = build_reranker_config()
     feedback_reranker_config = build_feedback_reranker_config()
     internet_retriever_config = build_internet_retriever_config()
-    vector_db_config = build_vec_db_config()
-    pref_extractor_config = build_pref_extractor_config()
-    pref_adder_config = build_pref_adder_config()
-    pref_retriever_config = build_pref_retriever_config()
 
     logger.debug("Component configurations built successfully")
 
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
-    vector_db = (
-        VecDBFactory.from_config(vector_db_config)
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
-        else None
-    )
     llm = LLMFactory.from_config(llm_config)
     chat_llms = (
         _init_chat_llms(chat_llm_config)
@@ -231,61 +211,6 @@ def init_server() -> dict[str, Any]:
 
     logger.debug("Text memory initialized")
 
-    # Initialize preference memory components
-    pref_extractor = (
-        ExtractorFactory.from_config(
-            config_factory=pref_extractor_config,
-            llm_provider=llm,
-            embedder=embedder,
-            vector_db=vector_db,
-        )
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
-        else None
-    )
-
-    pref_adder = (
-        AdderFactory.from_config(
-            config_factory=pref_adder_config,
-            llm_provider=llm,
-            embedder=embedder,
-            vector_db=vector_db,
-            text_mem=text_mem,
-        )
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
-        else None
-    )
-
-    pref_retriever = (
-        RetrieverFactory.from_config(
-            config_factory=pref_retriever_config,
-            llm_provider=llm,
-            embedder=embedder,
-            reranker=feedback_reranker,
-            vector_db=vector_db,
-        )
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
-        else None
-    )
-
-    logger.debug("Preference memory components initialized")
-
-    # Initialize preference memory
-    pref_mem = (
-        SimplePreferenceTextMemory(
-            extractor_llm=llm,
-            vector_db=vector_db,
-            embedder=embedder,
-            reranker=feedback_reranker,
-            extractor=pref_extractor,
-            adder=pref_adder,
-            retriever=pref_retriever,
-        )
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
-        else None
-    )
-
-    logger.debug("Preference memory initialized")
-
     # Initialize MOS Server
     mos_server = MOSServer(
         mem_reader=mem_reader,
@@ -298,7 +223,6 @@ def init_server() -> dict[str, Any]:
     # Create MemCube with pre-initialized memory instances
     naive_mem_cube = NaiveMemCube(
         text_mem=text_mem,
-        pref_mem=pref_mem,
         act_mem=None,
         para_mem=None,
     )
@@ -325,7 +249,6 @@ def init_server() -> dict[str, Any]:
         mem_reader=mem_reader,
         searcher=searcher,
         reranker=feedback_reranker,
-        pref_mem=pref_mem,
     )
 
     # Initialize Scheduler
@@ -384,12 +307,7 @@ def init_server() -> dict[str, Any]:
         "naive_mem_cube": naive_mem_cube,
         "searcher": searcher,
         "api_module": api_module,
-        "vector_db": vector_db,
-        "pref_extractor": pref_extractor,
-        "pref_adder": pref_adder,
-        "pref_retriever": pref_retriever,
         "text_mem": text_mem,
-        "pref_mem": pref_mem,
         "online_bot": online_bot,
         "feedback_server": feedback_server,
         "redis_client": redis_client,

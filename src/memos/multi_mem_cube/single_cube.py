@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 import traceback
 
@@ -11,10 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 from memos.api.handlers.formatters_handler import (
     format_memory_item,
-    post_process_pref_mem,
     post_process_textual_mem,
 )
-from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_reader.utils import parse_keep_filter_response
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
@@ -22,7 +19,6 @@ from memos.mem_scheduler.schemas.task_schemas import (
     ADD_TASK_LABEL,
     MEM_FEEDBACK_TASK_LABEL,
     MEM_READ_TASK_LABEL,
-    PREF_ADD_TASK_LABEL,
 )
 from memos.memories.textual.item import TextualMemoryItem
 from memos.multi_mem_cube.views import MemCubeView
@@ -62,8 +58,8 @@ class SingleCubeView(MemCubeView):
     @timed
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         """
-        This is basically your current handle_add_memories logic,
-        but scoped to a single cube_id.
+        Unified memory addition handling (text + preference memories).
+        Now text_mem handles both types through integrated extraction.
         """
         sync_mode = add_req.async_mode or self._get_sync_mode()
         self.logger.info(
@@ -77,39 +73,19 @@ class SingleCubeView(MemCubeView):
             project_id=add_req.project_id,
         )
 
-        target_session_id = add_req.session_id or "default_session"
-        sync_mode = add_req.async_mode or self._get_sync_mode()
+        # Call _process_text_mem which now handles both text and preference memories
+        all_memories = self._process_text_mem(add_req, user_context, sync_mode)
 
-        self.logger.info(
-            f"[SingleCubeView] cube={self.cube_id} "
-            f"Processing add with mode={sync_mode}, session={target_session_id}"
-        )
-
-        with ContextThreadPoolExecutor(max_workers=2) as executor:
-            text_future = executor.submit(self._process_text_mem, add_req, user_context, sync_mode)
-            pref_future = executor.submit(self._process_pref_mem, add_req, user_context, sync_mode)
-
-            text_results = text_future.result()
-            pref_results = pref_future.result()
-
-        self.logger.info(
-            f"[SingleCubeView] cube={self.cube_id} text_results={len(text_results)}, "
-            f"pref_results={len(pref_results)}"
-        )
-
-        for item in text_results:
-            item["cube_id"] = self.cube_id
-        for item in pref_results:
-            item["cube_id"] = self.cube_id
-
-        all_memories = text_results + pref_results
-
-        # TODO: search existing memories and compare
+        self.logger.info(f"[SingleCubeView] cube={self.cube_id} total_results={len(all_memories)}")
 
         return all_memories
 
     @timed
     def search_memories(self, search_req: APISearchRequest) -> dict[str, Any]:
+        """
+        Unified memory search handling (text + preference memories).
+        Preference memories are now searched through the same _search_text flow.
+        """
         # Create UserContext object
         user_context = UserContext(
             user_id=search_req.user_id,
@@ -131,26 +107,14 @@ class SingleCubeView(MemCubeView):
         # Determine search mode
         search_mode = self._get_search_mode(search_req.mode)
 
-        # Execute search in parallel for text and preference memories
-        with ContextThreadPoolExecutor(max_workers=2) as executor:
-            text_future = executor.submit(self._search_text, search_req, user_context, search_mode)
-            pref_future = executor.submit(self._search_pref, search_req, user_context)
+        # Unified search through _search_text (includes all memory types)
+        all_formatted_memories = self._search_text(search_req, user_context, search_mode)
 
-            text_formatted_memories = text_future.result()
-            pref_formatted_memories = pref_future.result()
-
-        # Build result
+        # Build result with unified processing (handles text, tool, skill, and preference)
         memories_result = post_process_textual_mem(
             memories_result,
-            text_formatted_memories,
+            all_formatted_memories,
             self.cube_id,
-        )
-
-        memories_result = post_process_pref_mem(
-            memories_result,
-            pref_formatted_memories,
-            self.cube_id,
-            search_req.include_preference,
         )
 
         self.logger.info(f"Search memories result: {memories_result}")
@@ -407,68 +371,6 @@ class SingleCubeView(MemCubeView):
 
         return formatted_memories
 
-    @timed
-    def _search_pref(
-        self,
-        search_req: APISearchRequest,
-        user_context: UserContext,
-    ) -> list[dict[str, Any]]:
-        """
-        Search preference memories.
-
-        Args:
-            search_req: Search request
-            user_context: User context
-
-        Returns:
-            List of formatted preference memory items
-            TODO: ADD CUBE ID IN PREFERENCE MEMORY
-        """
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
-            return []
-        if not search_req.include_preference:
-            return []
-
-        logger.info(f"search_req.filter for preference memory: {search_req.filter}")
-        logger.info(f"type of pref_mem: {type(self.naive_mem_cube.pref_mem)}")
-        try:
-            results = self.naive_mem_cube.pref_mem.search(
-                query=search_req.query,
-                top_k=search_req.pref_top_k,
-                info={
-                    "user_id": search_req.user_id,
-                    "mem_cube_id": user_context.mem_cube_id,
-                    "session_id": search_req.session_id,
-                    "chat_history": search_req.chat_history,
-                },
-                search_filter=search_req.filter,
-            )
-            formatted_results = self._postformat_memories(results, user_context.mem_cube_id)
-
-            # For each returned item, tackle with metadata.info project_id /
-            # operation / manager_user_id
-            for item in formatted_results:
-                if not isinstance(item, dict):
-                    continue
-                metadata = item.get("metadata")
-                if not isinstance(metadata, dict):
-                    continue
-                info = metadata.get("info")
-                if not isinstance(info, dict):
-                    continue
-
-                for key in ("project_id", "operation", "manager_user_id"):
-                    if key not in info:
-                        continue
-                    value = info.pop(key)
-                    if key not in metadata:
-                        metadata[key] = value
-
-            return formatted_results
-        except Exception as e:
-            self.logger.error("Error in _search_pref: %s; traceback: %s", e, traceback.format_exc())
-            return []
-
     def _fast_search(
         self,
         search_req: APISearchRequest,
@@ -642,88 +544,7 @@ class SingleCubeView(MemCubeView):
             )
             self.mem_scheduler.submit_messages(messages=[message_item_add])
 
-    @timed
-    def _process_pref_mem(
-        self,
-        add_req: APIADDRequest,
-        user_context: UserContext,
-        sync_mode: str,
-    ) -> list[dict[str, Any]]:
-        """
-        Process and add preference memories.
-
-        Extracts preferences from messages and adds them to the preference memory system.
-        Handles both sync and async modes.
-
-        Args:
-            add_req: Add memory request
-            user_context: User context with IDs
-
-        Returns:
-            List of formatted preference responses
-        """
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
-            return []
-
-        if add_req.messages is None or isinstance(add_req.messages, str):
-            return []
-
-        for message in add_req.messages:
-            if isinstance(message, dict) and message.get("role", None) is None:
-                return []
-
-        target_session_id = add_req.session_id or "default_session"
-
-        if sync_mode == "async":
-            try:
-                messages_list = [add_req.messages]
-                message_item_pref = ScheduleMessageItem(
-                    user_id=add_req.user_id,
-                    session_id=target_session_id,
-                    mem_cube_id=user_context.mem_cube_id,
-                    mem_cube=self.naive_mem_cube,
-                    label=PREF_ADD_TASK_LABEL,
-                    content=json.dumps(messages_list),
-                    timestamp=datetime.utcnow(),
-                    info=add_req.info,
-                    user_name=self.cube_id,
-                    task_id=add_req.task_id,
-                    user_context=user_context,
-                )
-                self.mem_scheduler.submit_messages(messages=[message_item_pref])
-                self.logger.info(f"[SingleCubeView] cube={self.cube_id} Submitted PREF_ADD async")
-            except Exception as e:
-                self.logger.error(
-                    f"[SingleCubeView] cube={self.cube_id} Failed to submit PREF_ADD: {e}",
-                    exc_info=True,
-                )
-            return []
-        else:
-            pref_memories_local = self.naive_mem_cube.pref_mem.get_memory(
-                [add_req.messages],
-                type="chat",
-                info={
-                    **(add_req.info or {}),
-                    "user_id": add_req.user_id,
-                    "session_id": target_session_id,
-                    "mem_cube_id": user_context.mem_cube_id,
-                },
-                user_context=user_context,
-            )
-            pref_ids_local: list[str] = self.naive_mem_cube.pref_mem.add(pref_memories_local)
-            self.logger.info(
-                f"[SingleCubeView] cube={self.cube_id} "
-                f"added {len(pref_ids_local)} preferences for user {add_req.user_id}: {pref_ids_local}"
-            )
-
-            return [
-                {
-                    "memory": memory.metadata.preference,
-                    "memory_id": memory_id,
-                    "memory_type": memory.metadata.preference_type,
-                }
-                for memory_id, memory in zip(pref_ids_local, pref_memories_local, strict=False)
-            ]
+    # _process_pref_mem method removed - preferences now handled by text_mem in unified flow
 
     def add_before_search(
         self,
@@ -831,7 +652,7 @@ class SingleCubeView(MemCubeView):
         sync_mode: str,
     ) -> list[dict[str, Any]]:
         """
-        Process and add text memories.
+        Process and add text memories (including preference memories).
 
         Extracts memories from messages and adds them to the text memory system.
         Handles both sync and async modes.
@@ -956,13 +777,15 @@ class SingleCubeView(MemCubeView):
                             "[SingleCubeView] merged_from provided but graph_db is unavailable; skip archiving."
                         )
 
+        # Format results uniformly
         text_memories = [
             {
                 "memory": memory.memory,
                 "memory_id": memory_id,
                 "memory_type": memory.metadata.memory_type,
+                "cube_id": self.cube_id,
             }
-            for memory_id, memory in zip(mem_ids_local, flattened_local, strict=False)
+            for memory_id, memory in zip(mem_ids_local, mem_group, strict=False)
         ]
 
         return text_memories
