@@ -2293,7 +2293,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 results = cursor.fetchall()
                 ids = [str(item[0]).strip('"') for item in results]
         except Exception as e:
-            logger.error(f"Failed to get metadata: {e}, query is {cypher_query}")
+            logger.warning(f"Failed to get metadata: {e}, query is {cypher_query}")
         finally:
             self._return_connection(conn)
 
