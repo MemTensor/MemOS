@@ -70,6 +70,9 @@ class MultiModalStructMemReaderConfig(BaseMemReaderConfig):
         description="Turn on memory version or off",
     )
 
+    # Allow passing additional fields without raising validation errors
+    model_config = ConfigDict(extra="allow", strict=True)
+
 
 class StrategyStructMemReaderConfig(BaseMemReaderConfig):
     """StrategyStruct MemReader configuration class."""

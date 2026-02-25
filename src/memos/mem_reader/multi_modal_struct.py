@@ -1029,7 +1029,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         prompt = self.history_manager.format_async_update_prompt(item, custom_tags_prompt)
         user_name = kwargs.get("user_name")
         try:
-            response_text = self.llm.generate([{"role": "user", "content": prompt}])
+            response_text = self.qwen_llm.generate([{"role": "user", "content": prompt}])
             if not response_text:
                 raise ValueError("Empty LLM response")
             response_json = parse_json_result(response_text)
