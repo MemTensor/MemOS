@@ -5,7 +5,6 @@ import os
 import uuid
 
 from concurrent.futures import as_completed
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from memos.context.context import ContextThreadPoolExecutor
@@ -83,7 +82,12 @@ def _extract_implicit_preference(qa_pair_str: str, llm) -> list[dict[str, Any]] 
 
 
 def _create_preference_memory_item(
-    preference_data: dict[str, Any], preference_type: str, info: dict[str, Any], embedder, **kwargs
+    preference_data: dict[str, Any],
+    preference_type: str,
+    fast_item: TextualMemoryItem | None,
+    info: dict[str, Any],
+    embedder,
+    **kwargs,
 ) -> TextualMemoryItem:
     """
     Create a preference memory item with proper metadata.
@@ -91,6 +95,7 @@ def _create_preference_memory_item(
     Args:
         preference_data: Dictionary containing preference, context_summary, reasoning, topic
         preference_type: "explicit_preference" or "implicit_preference"
+        fast_item: Original fast memory item (for extracting sources and other metadata)
         info: Dictionary containing user_id, session_id, etc.
         embedder: Embedder instance
         kwargs: Additional parameters including user_context
@@ -114,8 +119,8 @@ def _create_preference_memory_item(
     context_summary = preference_data.get("context_summary", "")
     embedding = embedder.embed([context_summary])[0] if embedder and context_summary else None
 
-    # Build basic info for this preference
-    created_at = datetime.now().isoformat()
+    # Extract sources from fast_item
+    sources = getattr(fast_item.metadata, "sources", []) if fast_item else []
 
     # Create metadata
     metadata = TreeNodeTextualMemoryMetadata(
@@ -126,10 +131,8 @@ def _create_preference_memory_item(
         status="activated",
         tags=[],
         type="chat",
-        created_at=created_at,
-        updated_at=created_at,
         info=info_,
-        sources=[],
+        sources=sources,
         usage=[],
         background="",
         # Preference-specific fields
@@ -147,7 +150,12 @@ def _create_preference_memory_item(
 
 
 def _process_single_chunk_explicit(
-    original_text: str, info: dict[str, Any], llm, embedder, **kwargs
+    original_text: str,
+    fast_item: TextualMemoryItem | None,
+    info: dict[str, Any],
+    llm,
+    embedder,
+    **kwargs,
 ) -> list[TextualMemoryItem]:
     """Process a single chunk for explicit preferences."""
     if not original_text.strip():
@@ -162,6 +170,7 @@ def _process_single_chunk_explicit(
         memory = _create_preference_memory_item(
             preference_data=pref,
             preference_type="explicit_preference",
+            fast_item=fast_item,
             info=info,
             embedder=embedder,
             **kwargs,
@@ -172,7 +181,12 @@ def _process_single_chunk_explicit(
 
 
 def _process_single_chunk_implicit(
-    original_text: str, info: dict[str, Any], llm, embedder, **kwargs
+    original_text: str,
+    fast_item: TextualMemoryItem | None,
+    info: dict[str, Any],
+    llm,
+    embedder,
+    **kwargs,
 ) -> list[TextualMemoryItem]:
     """Process a single chunk for implicit preferences."""
     if not original_text.strip():
@@ -187,6 +201,7 @@ def _process_single_chunk_implicit(
         memory = _create_preference_memory_item(
             preference_data=pref,
             preference_type="implicit_preference",
+            fast_item=fast_item,
             info=info,
             embedder=embedder,
             **kwargs,
@@ -230,7 +245,7 @@ def process_preference_fine(
             mem_str = fast_item.memory or ""
             if not mem_str.strip():
                 continue
-            chunks.append(mem_str)
+            chunks.append((mem_str, fast_item))
 
         if not chunks:
             return []
@@ -241,16 +256,16 @@ def process_preference_fine(
             futures = {}
 
             # Submit explicit extraction tasks
-            for chunk in chunks:
+            for chunk, fast_item in chunks:
                 future = executor.submit(
-                    _process_single_chunk_explicit, chunk, info, llm, embedder, **kwargs
+                    _process_single_chunk_explicit, chunk, fast_item, info, llm, embedder, **kwargs
                 )
                 futures[future] = ("explicit_preference", chunk)
 
             # Submit implicit extraction tasks
-            for chunk in chunks:
+            for chunk, fast_item in chunks:
                 future = executor.submit(
-                    _process_single_chunk_implicit, chunk, info, llm, embedder, **kwargs
+                    _process_single_chunk_implicit, chunk, fast_item, info, llm, embedder, **kwargs
                 )
                 futures[future] = ("implicit_preference", chunk)
 
