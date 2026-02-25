@@ -99,12 +99,12 @@ class ChatRequest(BaseRequest):
     manager_user_id: str | None = Field(None, description="Manager User ID")
     project_id: str | None = Field(None, description="Project ID")
     relativity: float = Field(
-        0.0,
+        0.45,
         ge=0,
         description=(
             "Relevance threshold for recalled memories. "
             "Only memories with metadata.relativity >= relativity will be returned. "
-            "Use 0 to disable threshold filtering. Default: 0.3."
+            "Use 0 to disable threshold filtering. Default: 0.45."
         ),
     )
 
@@ -339,12 +339,12 @@ class APISearchRequest(BaseRequest):
     )
 
     relativity: float = Field(
-        0.0,
+        0.45,
         ge=0,
         description=(
             "Relevance threshold for recalled memories. "
             "Only memories with metadata.relativity >= relativity will be returned. "
-            "Use 0 to disable threshold filtering. Default: 0.3."
+            "Use 0 to disable threshold filtering. Default: 0.45."
         ),
     )
 
@@ -785,12 +785,12 @@ class APIChatCompleteRequest(BaseRequest):
     manager_user_id: str | None = Field(None, description="Manager User ID")
     project_id: str | None = Field(None, description="Project ID")
     relativity: float = Field(
-        0.0,
+        0.45,
         ge=0,
         description=(
             "Relevance threshold for recalled memories. "
             "Only memories with metadata.relativity >= relativity will be returned. "
-            "Use 0 to disable threshold filtering. Default: 0.3."
+            "Use 0 to disable threshold filtering. Default: 0.45."
         ),
     )
 
