@@ -76,13 +76,11 @@ class AddMessageHandler(BaseSchedulerHandler):
                 # existing ones it writes their IDs into metadata.info["merged_from"].
                 # This avoids an extra graph DB query and the self-match / cross-user
                 # matching bugs that came with the old get_by_metadata approach.
-                merged_from = (getattr(mem_item.metadata, "info", None) or {}).get(
-                    "merged_from"
-                )
+                merged_from = (getattr(mem_item.metadata, "info", None) or {}).get("merged_from")
                 if merged_from:
                     merged_ids = (
                         merged_from
-                        if isinstance(merged_from, (list, tuple, set))
+                        if isinstance(merged_from, list | tuple | set)
                         else [merged_from]
                     )
                     original_item_id = merged_ids[0]
