@@ -37,7 +37,12 @@ ASYNC_MEMORY_UPDATE_PROMPT_ZH = """您是记忆库维护专家。
    - 状态变化/否定表达必须被视为冲突更新（如“不再/不喜欢/取消/改为/不打算/否认”）。
    - 候选记忆可能包含 [Time: ...] 表示该记忆的事件时间，请结合“对话时间”判断是否同一时段。
 
-3. **处理逻辑（更新与新增）**：
+3. 不要遗漏用户可能记住的任何信息。
+   - 包括所有关键经历、想法、情绪反应和计划——即使看似微小。
+   - 优先考虑完整性和保真度，而非简洁性。
+   - 不要泛化或跳过对用户具有个人意义的细节。
+
+4. **处理逻辑（更新与新增）**：
    请遍历对话中每一个值得记忆的信息点，并按以下逻辑处理：
 
    a) **更新现有记忆节点 (Update via Duplicate/Related)**：
@@ -212,7 +217,12 @@ Please execute the following:
    - State changes/negations must be treated as conflict updates (e.g., "no longer/doesn't like/canceled/changed to/doesn't plan/denies").
    - Candidates may include [Time: ...] to indicate event time; use the conversation time to judge whether they are the same period.
 
-3. **Processing Logic (Update and Create)**:
+3. Do not omit any information the user might want to remember.
+   - Include all key experiences, thoughts, emotional reactions, and plans — even if they seem minor.
+   - Prioritize completeness and fidelity over brevity.
+   - Do not generalize or skip details that are personally meaningful to the user.
+
+4. **Processing Logic (Update and Create)**:
    Traverse each piece of information in the conversation that is worth remembering and apply:
 
    a) **Update existing memory node (Update via Duplicate/Related)**:
