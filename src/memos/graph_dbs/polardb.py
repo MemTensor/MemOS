@@ -2578,6 +2578,7 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.info(
             f"[export_graph] include_embedding: {include_embedding}, user_name: {user_name}, user_id: {user_id}, page: {page}, page_size: {page_size}, filter: {filter}, memory_type: {memory_type}, status: {status}"
         )
+        start_time = time.time()
         user_id = user_id if user_id else self._get_config_value("user_id")
 
         # Initialize total counts
@@ -2651,26 +2652,14 @@ class PolarDBGraphDB(BaseGraphDB):
             if where_conditions:
                 where_clause = f"WHERE {' AND '.join(where_conditions)}"
 
-            # Get total count of nodes before pagination
-            count_node_query = f"""
-                SELECT COUNT(*)
-                FROM "{self.db_name}_graph"."Memory"
-                {where_clause}
-            """
-            logger.info(f"[export_graph nodes count] Query: {count_node_query}")
-            with conn.cursor() as cursor:
-                cursor.execute(count_node_query)
-                total_nodes = cursor.fetchone()[0]
-
-            # Export nodes
-            # Build pagination clause if needed
             pagination_clause = ""
             if use_pagination:
                 pagination_clause = f"LIMIT {page_size} OFFSET {offset}"
 
             if include_embedding:
                 node_query = f"""
-                    SELECT id, properties, embedding
+                    SELECT id, properties, embedding,
+                           COUNT(*) OVER () AS total_nodes
                     FROM "{self.db_name}_graph"."Memory"
                     {where_clause}
                     ORDER BY ag_catalog.agtype_access_operator(properties, '"created_at"'::agtype) DESC NULLS LAST,
@@ -2679,7 +2668,8 @@ class PolarDBGraphDB(BaseGraphDB):
                 """
             else:
                 node_query = f"""
-                    SELECT id, properties
+                    SELECT id, properties,
+                           COUNT(*) OVER () AS total_nodes
                     FROM "{self.db_name}_graph"."Memory"
                     {where_clause}
                     ORDER BY ag_catalog.agtype_access_operator(properties, '"created_at"'::agtype) DESC NULLS LAST,
@@ -2690,15 +2680,16 @@ class PolarDBGraphDB(BaseGraphDB):
             with conn.cursor() as cursor:
                 cursor.execute(node_query)
                 node_results = cursor.fetchall()
+                total_nodes = int(node_results[0][-1]) if node_results else 0
                 nodes = []
 
                 for row in node_results:
                     if include_embedding:
-                        """row is (id, properties, embedding)"""
-                        _, properties_json, embedding_json = row
+                        """row is (id, properties, embedding, total_nodes)"""
+                        _, properties_json, embedding_json, _ = row
                     else:
-                        """row is (id, properties)"""
-                        _, properties_json = row
+                        """row is (id, properties, total_nodes)"""
+                        _, properties_json, _ = row
                         embedding_json = None
 
                     # Parse properties from JSONB if it's a string
@@ -2724,6 +2715,8 @@ class PolarDBGraphDB(BaseGraphDB):
         finally:
             self._return_connection(conn)
         edges = []
+        elapsed_time = time.time() - start_time
+        logger.info(f"[export_graph] query completed successfully in {elapsed_time:.2f}s")
         return {
             "nodes": nodes,
             "edges": edges,
