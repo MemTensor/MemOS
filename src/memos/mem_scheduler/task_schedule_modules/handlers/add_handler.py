@@ -76,23 +76,37 @@ class AddMessageHandler(BaseSchedulerHandler):
                 original_item_id = None
 
                 if key and hasattr(mem_cube.text_mem, "graph_store"):
-                    candidates = mem_cube.text_mem.graph_store.get_by_metadata(
-                        [
-                            {"field": "key", "op": "=", "value": key},
-                            {
-                                "field": "memory_type",
-                                "op": "=",
-                                "value": mem_item.metadata.memory_type,
-                            },
-                        ]
-                    )
+                    try:
+                        candidates = mem_cube.text_mem.graph_store.get_by_metadata(
+                            [
+                                {"field": "key", "op": "=", "value": key},
+                                {
+                                    "field": "memory_type",
+                                    "op": "=",
+                                    "value": mem_item.metadata.memory_type,
+                                },
+                            ],
+                            user_name=msg.mem_cube_id,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "get_by_metadata failed for memory_id=%s key=%s: %s",
+                            memory_id,
+                            key,
+                            e,
+                        )
+                        candidates = []
+                    # Exclude the current item itself — it was already persisted
+                    # upstream by text_mem.add(), so it will always appear in the
+                    # candidates and would cause every ADD to be mis-labelled as UPDATE.
+                    candidates = [c for c in candidates if c != mem_item.id]
                     if candidates:
                         exists = True
                         original_item_id = candidates[0]
                         original_mem_item = mem_cube.text_mem.get(
                             memory_id=original_item_id, user_name=msg.mem_cube_id
                         )
-                        original_content = original_mem_item.memory
+                        original_content = original_mem_item.memory if original_mem_item else None
 
                 if exists:
                     prepared_update_items_with_original.append(
