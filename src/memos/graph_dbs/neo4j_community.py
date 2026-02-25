@@ -397,8 +397,8 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         **kwargs,
     ) -> list[dict]:
         """
-        TODO: 实现 Neo4j Community 的关键词检索, 以兼容 TreeTextMemory 的 keyword/fulltext 召回路径.
-        目前先返回空列表, 避免切换到 Neo4j 后因缺失方法导致运行时报错.
+        TODO: Implement fulltext search for Neo4j to be compatible with TreeTextMemory's keyword/fulltext recall path.
+        Currently, return an empty list to avoid runtime errors due to missing methods when switching to Neo4j.
         """
         return []
 
