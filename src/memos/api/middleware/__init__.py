@@ -1,13 +1,14 @@
 """Krolik middleware extensions for MemOS."""
 
-from .auth import verify_api_key, require_scope, require_admin, require_read, require_write
+from .auth import require_admin, require_read, require_scope, require_write, verify_api_key
 from .rate_limit import RateLimitMiddleware
 
+
 __all__ = [
-    "verify_api_key",
-    "require_scope",
+    "RateLimitMiddleware",
     "require_admin",
     "require_read",
+    "require_scope",
     "require_write",
-    "RateLimitMiddleware",
+    "verify_api_key",
 ]

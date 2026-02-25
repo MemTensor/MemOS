@@ -246,6 +246,39 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         return child_nodes
 
+    def _fetch_return_fields(
+        self,
+        ids: list[str],
+        score_map: dict[str, float],
+        return_fields: list[str],
+    ) -> list[dict]:
+        """Fetch additional fields from Neo4j for given node IDs."""
+        validated_fields = self._validate_return_fields(return_fields)
+        extra_fields = ", ".join(
+            f"n.{field} AS {field}" for field in validated_fields if field != "id"
+        )
+        return_clause = "RETURN n.id AS id"
+        if extra_fields:
+            return_clause = f"RETURN n.id AS id, {extra_fields}"
+
+        query = f"""
+            MATCH (n:Memory)
+            WHERE n.id IN $ids
+            {return_clause}
+        """
+        with self.driver.session(database=self.db_name) as session:
+            neo4j_results = session.run(query, {"ids": ids})
+            results = []
+            for record in neo4j_results:
+                node_id = record["id"]
+                item = {"id": node_id, "score": score_map.get(node_id)}
+                record_keys = record.keys()
+                for field in return_fields:
+                    if field != "id" and field in record_keys:
+                        item[field] = record[field]
+                results.append(item)
+        return results
+
     # Search / recall operations
     def search_by_embedding(
         self,
@@ -258,6 +291,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         user_name: str | None = None,
         filter: dict | None = None,
         knowledgebase_ids: list[str] | None = None,
+        return_fields: list[str] | None = None,
         **kwargs,
     ) -> list[dict]:
         """
@@ -273,9 +307,14 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             filter (dict, optional): Filter conditions with 'and' or 'or' logic for search results.
                 Example: {"and": [{"id": "xxx"}, {"A": "yyy"}]} or {"or": [{"id": "xxx"}, {"A": "yyy"}]}
             knowledgebase_ids (list[str], optional): List of knowledgebase IDs to filter by.
+            return_fields (list[str], optional): Additional node fields to include in results
+                (e.g., ["memory", "status", "tags"]). When provided, each result dict will
+                contain these fields in addition to 'id' and 'score'.
+                Defaults to None (only 'id' and 'score' are returned).
 
         Returns:
             list[dict]: A list of dicts with 'id' and 'score', ordered by similarity.
+                If return_fields is specified, each dict also includes the requested fields.
 
         Notes:
             - This method uses an external vector database (not Neo4j) to perform the search.
@@ -320,7 +359,14 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         # If no filter or knowledgebase_ids provided, return vector search results directly
         if not filter and not knowledgebase_ids:
-            return [{"id": r.id, "score": r.score} for r in vec_results]
+            if not return_fields:
+                return [{"id": r.id, "score": r.score} for r in vec_results]
+            # Need to fetch additional fields from Neo4j
+            vec_ids = [r.id for r in vec_results]
+            if not vec_ids:
+                return []
+            score_map = {r.id: r.score for r in vec_results}
+            return self._fetch_return_fields(vec_ids, score_map, return_fields)
 
         # Extract IDs from vector search results
         vec_ids = [r.id for r in vec_results]
@@ -363,22 +409,49 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         if filter_params:
             params.update(filter_params)
 
+        # Build RETURN clause with optional extra fields
+        return_clause = "RETURN n.id AS id"
+        if return_fields:
+            validated_fields = self._validate_return_fields(return_fields)
+            extra_fields = ", ".join(
+                f"n.{field} AS {field}" for field in validated_fields if field != "id"
+            )
+            if extra_fields:
+                return_clause = f"RETURN n.id AS id, {extra_fields}"
+
         # Query Neo4j to filter results
         query = f"""
             MATCH (n:Memory)
             {where_clause}
-            RETURN n.id AS id
+            {return_clause}
         """
         logger.info(f"[search_by_embedding] query: {query}, params: {params}")
 
         with self.driver.session(database=self.db_name) as session:
             neo4j_results = session.run(query, params)
-            filtered_ids = {record["id"] for record in neo4j_results}
+            if return_fields:
+                # Build a map of id -> extra fields from Neo4j results
+                neo4j_data = {}
+                for record in neo4j_results:
+                    node_id = record["id"]
+                    record_keys = record.keys()
+                    neo4j_data[node_id] = {
+                        field: record[field]
+                        for field in return_fields
+                        if field != "id" and field in record_keys
+                    }
+                filtered_ids = set(neo4j_data.keys())
+            else:
+                filtered_ids = {record["id"] for record in neo4j_results}
 
         # Filter vector results by Neo4j filtered IDs and return with scores
-        filtered_results = [
-            {"id": r.id, "score": r.score} for r in vec_results if r.id in filtered_ids
-        ]
+        filtered_results = []
+        for r in vec_results:
+            if r.id in filtered_ids:
+                item = {"id": r.id, "score": r.score}
+                if return_fields and r.id in neo4j_data:
+                    item.update(neo4j_data[r.id])
+                filtered_results.append(item)
 
         return filtered_results
 
@@ -1122,7 +1195,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Merge embeddings into parsed nodes
         for parsed_node in parsed_nodes:
             node_id = parsed_node["id"]
-            parsed_node["metadata"]["embedding"] = vec_items_map.get(node_id, None)
+            parsed_node["metadata"]["embedding"] = vec_items_map.get(node_id)
 
         return parsed_nodes
 

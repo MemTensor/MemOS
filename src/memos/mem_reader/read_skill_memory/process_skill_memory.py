@@ -1019,7 +1019,9 @@ def process_skill_memory_fine(
     **kwargs,
 ) -> list[TextualMemoryItem]:
     skills_repo_backend = _get_skill_file_storage_location()
-    oss_client, missing_keys, flag = _skill_init(skills_repo_backend, oss_config, skills_dir_config)
+    oss_client, _missing_keys, flag = _skill_init(
+        skills_repo_backend, oss_config, skills_dir_config
+    )
     if not flag:
         return []
 
