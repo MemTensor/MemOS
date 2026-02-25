@@ -99,7 +99,7 @@ class ChatRequest(BaseRequest):
     manager_user_id: str | None = Field(None, description="Manager User ID")
     project_id: str | None = Field(None, description="Project ID")
     relativity: float = Field(
-        0.0,
+        0.5,
         ge=0,
         description=(
             "Relevance threshold for recalled memories. "
@@ -339,7 +339,7 @@ class APISearchRequest(BaseRequest):
     )
 
     relativity: float = Field(
-        0.0,
+        0.5,
         ge=0,
         description=(
             "Relevance threshold for recalled memories. "
@@ -785,7 +785,7 @@ class APIChatCompleteRequest(BaseRequest):
     manager_user_id: str | None = Field(None, description="Manager User ID")
     project_id: str | None = Field(None, description="Project ID")
     relativity: float = Field(
-        0.0,
+        0.5,
         ge=0,
         description=(
             "Relevance threshold for recalled memories. "
