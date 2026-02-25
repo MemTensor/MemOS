@@ -290,7 +290,9 @@ class MemoryHistoryManager:
 
         return duplicate_memory_ids + conflict_memory_ids
 
-    def wait_and_update_fast_history(self, item: TextualMemoryItem, timeout_sec: int = 30) -> None:
+    def wait_and_update_fast_history(
+        self, item: TextualMemoryItem, user_name: str, timeout_sec: int = 30
+    ) -> None:
         """
         Scan the item's history. If any history item is marked as `is_fast`,
         wait for it to be resolved (i.e., status becomes 'deleted' in the DB).
@@ -299,6 +301,7 @@ class MemoryHistoryManager:
 
         Args:
             item: The memory item containing the history to check.
+            user_name: Required for db query.
             timeout_sec: Maximum time to wait for resolution in seconds.
         """
         start_time = time.time()
@@ -467,7 +470,7 @@ class MemoryHistoryManager:
         new_items.extend(created_items)
 
         # 3. Handle Restored Memories (Extract from conflict)
-        new_items.extend(self._handle_restored_memories(restored_memories, source_item))
+        new_items.extend(self._handle_restored_memories(restored_memories, source_item, user_name))
 
         return updated_items, new_items
 
@@ -528,7 +531,7 @@ class MemoryHistoryManager:
         return
 
     def _check_and_fetch_replacements(
-        self, item: TextualMemoryItem, pending_indices: list[int]
+        self, item: TextualMemoryItem, pending_indices: list[int], user_name: str
     ) -> tuple[dict[int, list[ArchivedTextualMemory]], list[str]]:
         """
         Check DB status for pending items. If 'deleted', fetch evolved nodes.
@@ -539,7 +542,7 @@ class MemoryHistoryManager:
         pending_ids = [item.metadata.history[i].archived_memory_id for i in pending_indices]
 
         # Batch fetch pending nodes to check status
-        nodes_data = self.graph_db.get_nodes(ids=pending_ids) or []
+        nodes_data = self.graph_db.get_nodes(ids=pending_ids, user_name=user_name) or []
         nodes_map = {n["id"]: n for n in nodes_data if n and "id" in n}
 
         replacements = {}
@@ -558,19 +561,19 @@ class MemoryHistoryManager:
             if status == "deleted":
                 evolve_to_ids = metadata.get("evolve_to", [])
 
-                new_items = self._fetch_evolved_nodes(evolve_to_ids, h_item.update_type)
+                new_items = self._fetch_evolved_nodes(evolve_to_ids, h_item.update_type, user_name)
                 replacements[i] = new_items
 
         return replacements
 
     def _fetch_evolved_nodes(
-        self, evolve_to_ids: list[str], update_type: str
+        self, evolve_to_ids: list[str], update_type: str, user_name: str
     ) -> list[ArchivedTextualMemory]:
         """Fetch the actual nodes that the fast node evolved into and convert to archive format."""
         if not evolve_to_ids:
             return []
 
-        evolved_nodes = self.graph_db.get_nodes(ids=evolve_to_ids) or []
+        evolved_nodes = self.graph_db.get_nodes(ids=evolve_to_ids, user_name=user_name) or []
         results = []
 
         for enode in evolved_nodes:
@@ -668,7 +671,7 @@ class MemoryHistoryManager:
 
         # Fetch candidate nodes in batch and then select the primary
         # We update the primary and then merge the secondaries to the primary
-        nodes_data = self.graph_db.get_nodes(target_ids) or []
+        nodes_data = self.graph_db.get_nodes(target_ids, user_name=user_name) or []
         nodes_map = {n["id"]: n for n in nodes_data if n and "id" in n}
         node_data = nodes_map.get(primary_id)
         if not node_data:
@@ -898,11 +901,11 @@ class MemoryHistoryManager:
         return new_item
 
     def _handle_restored_memories(
-        self, restored_memories: list[dict[str, Any]], fast_item: TextualMemoryItem
+        self, restored_memories: list[dict[str, Any]], fast_item: TextualMemoryItem, user_name: str
     ) -> list[TextualMemoryItem]:
         """Handle Restored Memories (Extract from conflict)."""
         source_ids = [r.get("source_candidate_id") for r in restored_memories]
-        source_items = self.graph_db.get_nodes(source_ids)
+        source_items = self.graph_db.get_nodes(source_ids, user_name=user_name)
         source_items = [TextualMemoryItem(**i) for i in source_items]
 
         created_items = []

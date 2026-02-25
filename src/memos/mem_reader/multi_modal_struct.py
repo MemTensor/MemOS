@@ -1019,7 +1019,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         3. Call LLM and parse JSON response
         4. Apply LLM updates to memory graph and return new items
         """
-        self.history_manager.wait_and_update_fast_history(item, timeout_sec=30)
+        user_name = kwargs.get("user_name")
+        self.history_manager.wait_and_update_fast_history(item, user_name, timeout_sec=30)
         lang = detect_lang(kwargs.get("chat_history") or mem_str)
         custom_tags_prompt = (
             PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
@@ -1027,7 +1028,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             else ""
         )
         prompt = self.history_manager.format_async_update_prompt(item, custom_tags_prompt)
-        user_name = kwargs.get("user_name")
         try:
             response_text = self.qwen_llm.generate([{"role": "user", "content": prompt}])
             if not response_text:
