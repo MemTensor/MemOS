@@ -282,8 +282,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     try:
                         # Try to get pool stats if available
                         pool_info = f"Pool config: minconn={self.connection_pool.minconn}, maxconn={self.connection_pool.maxconn}"
-                        logger.warning(
-                            f"[_get_connection] Connection pool exhausted (attempt {attempt + 1}/{max_retries}). {pool_info}"
+                        logger.info(
+                            f" polardb get_connection Connection pool exhausted (attempt {attempt + 1}/{max_retries}). {pool_info}"
                         )
                     except Exception:
                         logger.warning(
@@ -2859,7 +2859,7 @@ class PolarDBGraphDB(BaseGraphDB):
                                 node_ids.add(node_id)
 
             except Exception as e:
-                logger.error(f"Failed to get memories: {e}", exc_info=True)
+                logger.warning(f"Failed to get memories: {e}", exc_info=True)
             finally:
                 self._return_connection(conn)
 
