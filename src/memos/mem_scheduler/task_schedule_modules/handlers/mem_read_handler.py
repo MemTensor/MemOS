@@ -259,13 +259,19 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                             source_doc_id = (
                                 file_ids[0] if isinstance(file_ids, list) and file_ids else None
                             )
+                            # Use merged_from to determine ADD vs UPDATE.
+                            # The upstream mem_reader sets this during fine extraction when
+                            # the new memory was merged with an existing one.
+                            item_merged_from = (getattr(item.metadata, "info", None) or {}).get(
+                                "merged_from"
+                            )
                             kb_log_content.append(
                                 {
                                     "log_source": "KNOWLEDGE_BASE_LOG",
                                     "trigger_source": info.get("trigger_source", "Messages")
                                     if info
                                     else "Messages",
-                                    "operation": "ADD",
+                                    "operation": "UPDATE" if item_merged_from else "ADD",
                                     "memory_id": item.id,
                                     "content": item.memory,
                                     "original_content": None,
@@ -302,29 +308,39 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                     else:
                         add_content_legacy: list[dict] = []
                         add_meta_legacy: list[dict] = []
+                        update_content_legacy: list[dict] = []
+                        update_meta_legacy: list[dict] = []
                         for item_id, item in zip(
                             enhanced_mem_ids, flattened_memories, strict=False
                         ):
                             key = getattr(item.metadata, "key", None) or transform_name_to_key(
                                 name=item.memory
                             )
-                            add_content_legacy.append(
-                                {"content": f"{key}: {item.memory}", "ref_id": item_id}
+                            item_merged_from = (getattr(item.metadata, "info", None) or {}).get(
+                                "merged_from"
                             )
-                            add_meta_legacy.append(
-                                {
-                                    "ref_id": item_id,
-                                    "id": item_id,
-                                    "key": item.metadata.key,
-                                    "memory": item.memory,
-                                    "memory_type": item.metadata.memory_type,
-                                    "status": item.metadata.status,
-                                    "confidence": item.metadata.confidence,
-                                    "tags": item.metadata.tags,
-                                    "updated_at": getattr(item.metadata, "updated_at", None)
-                                    or getattr(item.metadata, "update_at", None),
-                                }
-                            )
+                            meta_entry = {
+                                "ref_id": item_id,
+                                "id": item_id,
+                                "key": item.metadata.key,
+                                "memory": item.memory,
+                                "memory_type": item.metadata.memory_type,
+                                "status": item.metadata.status,
+                                "confidence": item.metadata.confidence,
+                                "tags": item.metadata.tags,
+                                "updated_at": getattr(item.metadata, "updated_at", None)
+                                or getattr(item.metadata, "update_at", None),
+                            }
+                            if item_merged_from:
+                                update_content_legacy.append(
+                                    {"content": f"{key}: {item.memory}", "ref_id": item_id}
+                                )
+                                update_meta_legacy.append(meta_entry)
+                            else:
+                                add_content_legacy.append(
+                                    {"content": f"{key}: {item.memory}", "ref_id": item_id}
+                                )
+                                add_meta_legacy.append(meta_entry)
                         if add_content_legacy:
                             event = self.scheduler_context.services.create_event_log(
                                 label="addMemory",
@@ -336,6 +352,23 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                                 memcube_log_content=add_content_legacy,
                                 metadata=add_meta_legacy,
                                 memory_len=len(add_content_legacy),
+                                memcube_name=self.scheduler_context.services.map_memcube_name(
+                                    mem_cube_id
+                                ),
+                            )
+                            event.task_id = task_id
+                            self.scheduler_context.services.submit_web_logs([event])
+                        if update_content_legacy:
+                            event = self.scheduler_context.services.create_event_log(
+                                label="updateMemory",
+                                from_memory_type=USER_INPUT_TYPE,
+                                to_memory_type=LONG_TERM_MEMORY_TYPE,
+                                user_id=user_id,
+                                mem_cube_id=mem_cube_id,
+                                mem_cube=self.scheduler_context.get_mem_cube(),
+                                memcube_log_content=update_content_legacy,
+                                metadata=update_meta_legacy,
+                                memory_len=len(update_content_legacy),
                                 memcube_name=self.scheduler_context.services.map_memcube_name(
                                     mem_cube_id
                                 ),
