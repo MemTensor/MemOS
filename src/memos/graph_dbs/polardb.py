@@ -2047,21 +2047,22 @@ class PolarDBGraphDB(BaseGraphDB):
 
     @timed
     def search_by_embedding(
-            self,
-            vector: list[float],
-            user_name: str,
-            top_k: int = 5,
-            scope: str | None = None,
-            status: str | None = None,
-            threshold: float | None = None,
-            search_filter: dict | None = None,
-            filter: dict | None = None,
-            knowledgebase_ids: list[str] | None = None,
-            return_fields: list[str] | None = None,
-            **kwargs,
+        self,
+        vector: list[float],
+        user_name: str,
+        top_k: int = 5,
+        scope: str | None = None,
+        status: str | None = None,
+        threshold: float | None = None,
+        search_filter: dict | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        return_fields: list[str] | None = None,
+        **kwargs,
     ) -> list[dict]:
-        logger.info(f"search_by_embedding user_name:{user_name},filter: {filter}, knowledgebase_ids: {knowledgebase_ids},scope:{scope},status:{status},search_filter:{search_filter},filter:{filter},knowledgebase_ids:{knowledgebase_ids},return_fields:{return_fields}"
-                    )
+        logger.info(
+            f"search_by_embedding user_name:{user_name},filter: {filter}, knowledgebase_ids: {knowledgebase_ids},scope:{scope},status:{status},search_filter:{search_filter},filter:{filter},knowledgebase_ids:{knowledgebase_ids},return_fields:{return_fields}"
+        )
         start_time = time.time()
         where_clauses = []
         if scope:
