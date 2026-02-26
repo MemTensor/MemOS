@@ -2144,15 +2144,10 @@ class PolarDBGraphDB(BaseGraphDB):
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                try:
-                    # If params is empty, execute query directly without parameters
-                    if params:
-                        cursor.execute(query, params)
-                    else:
-                        cursor.execute(query)
-                except Exception as e:
-                    logger.error(f"[search_by_embedding] Error executing query: {e}")
-                    raise
+                if params:
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute(query)
                 results = cursor.fetchall()
                 output = []
                 for row in results:
