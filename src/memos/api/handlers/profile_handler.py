@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import uuid
+
 from typing import Any
 
 from fastapi import HTTPException
@@ -25,6 +26,7 @@ from memos.api.profile_models import (
     EditProfileResponse,
 )
 from memos.log import get_logger
+
 
 logger = get_logger(__name__)
 
@@ -238,9 +240,7 @@ class ProfileHandler:
                 if not updated:
                     instance_data[field_name] = field_value
 
-            logger.info(
-                "Updated %d field(s) for instance %s", len(req.metadata), instance_id
-            )
+            logger.info("Updated %d field(s) for instance %s", len(req.metadata), instance_id)
 
         return EditProfileResponse(
             code=200,
@@ -263,10 +263,10 @@ class ProfileHandler:
         if instance_data is None:
             return
 
-        for category_name, category_fields in instance_data.items():
+        for _category_name, category_fields in instance_data.items():
             if not isinstance(category_fields, dict):
                 continue
-            for field_name, field_value in category_fields.items():
+            for _field_name, field_value in category_fields.items():
                 if not isinstance(field_value, dict):
                     continue
                 # Ensure algorithm_updatable has a default
@@ -317,9 +317,7 @@ class ProfileHandler:
                         "metadata": {
                             "profile_field": f"{category_name}.{field_name}",
                             "profile_category": category_name,
-                            "algorithm_updatable": field_value.get(
-                                "algorithm_updatable", True
-                            ),
+                            "algorithm_updatable": field_value.get("algorithm_updatable", True),
                             "template_id": binding,
                             "profile_instance_id": instance_id,
                         },

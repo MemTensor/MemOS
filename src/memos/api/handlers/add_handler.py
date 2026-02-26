@@ -87,7 +87,7 @@ class AddHandler(BaseHandler):
                     task_id=add_req.task_id,
                     history=feedback_history,
                     feedback_content=feedback_content,
-                    writable_cube_ids=add_req.writable_cube_ids,
+                    writable_cube_ids=self._resolve_cube_ids(add_req),
                     async_mode=add_req.async_mode,
                     info=add_req.info,
                 )

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from memos.api.product_models import BaseResponse
 
+
 DEFAULT_PROFILE_CONFIG_ID = "default_config"
 
 
@@ -136,9 +137,7 @@ class EditProfileRequest(BaseModel):
     }
     """
 
-    id: str = Field(
-        ..., description="User ID or Agent ID whose profile to edit"
-    )
+    id: str = Field(..., description="User ID or Agent ID whose profile to edit")
     profile_config_id: str = Field(
         DEFAULT_PROFILE_CONFIG_ID,
         description="Profile template ID. Defaults to default_config.",

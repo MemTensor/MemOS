@@ -755,9 +755,9 @@ class APIADDRequest(BaseRequest):
             )
             self.user_id = self.user_id[0]
 
-        # Accept writable_cube_ids dict and normalize to list of cube IDs.
-        if isinstance(self.writable_cube_ids, dict):
-            self.writable_cube_ids = list(self.writable_cube_ids.keys())
+        # writable_cube_ids dict is preserved as-is so downstream code can read
+        # cube-level metadata (cube_type, user_or_agent_id, etc.).
+        # Cube ID extraction (keys) is done lazily in _resolve_cube_ids.
 
         if self.allow_memory_view is not None:
             normalized_views: list[str] = []
