@@ -53,14 +53,9 @@ class MessageDict(TypedDict, total=False):
 
     role: MessageRole
     content: str
-    chat_time: str | None  # Optional timestamp; any vague or precise time string.
-    message_id: str | None  # Unique message ID. Used for cascade-deletion of profile
-    # memory fields via source_message_ids. Corresponds to messages[].id in the
-    # cloud-service (product) API.
-    role_id: str | None  # Speaker identity in multi-user / multi-agent (group-chat)
-    # scenarios. Must match an entry in the request-level user_id list.
-    role_name: str | None  # Display name of the speaker. Optional; when provided,
-    # must be accompanied by role_id.
+    chat_time: str | None  # Optional timestamp for the message, format is not
+    # restricted, it can be any vague or precise time string.
+    message_id: str | None  # Optional unique identifier for the message
 
 
 RawMessageDict: TypeAlias = ChatCompletionContentPartTextParam | File

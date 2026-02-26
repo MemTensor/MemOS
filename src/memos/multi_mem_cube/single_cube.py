@@ -85,35 +85,12 @@ class SingleCubeView(MemCubeView):
             f"Processing add with mode={sync_mode}, session={target_session_id}"
         )
 
-        allowed_views = set(add_req.allow_memory_view or [])
-        allow_all_views = add_req.allow_memory_view is None
-        allow_text_mem = allow_all_views or "detail_factual" in allowed_views
-        allow_pref_mem = allow_all_views or "preference" in allowed_views
+        with ContextThreadPoolExecutor(max_workers=2) as executor:
+            text_future = executor.submit(self._process_text_mem, add_req, user_context, sync_mode)
+            pref_future = executor.submit(self._process_pref_mem, add_req, user_context, sync_mode)
 
-        if not allow_text_mem and not allow_pref_mem:
-            self.logger.info(
-                "[SingleCubeView] cube=%s Skip add: allow_memory_view excludes "
-                "both detail_factual and preference.",
-                self.cube_id,
-            )
-            return []
-
-        if allow_text_mem and allow_pref_mem:
-            with ContextThreadPoolExecutor(max_workers=2) as executor:
-                text_future = executor.submit(
-                    self._process_text_mem, add_req, user_context, sync_mode
-                )
-                pref_future = executor.submit(
-                    self._process_pref_mem, add_req, user_context, sync_mode
-                )
-                text_results = text_future.result()
-                pref_results = pref_future.result()
-        elif allow_text_mem:
-            text_results = self._process_text_mem(add_req, user_context, sync_mode)
-            pref_results = []
-        else:
-            text_results = []
-            pref_results = self._process_pref_mem(add_req, user_context, sync_mode)
+            text_results = text_future.result()
+            pref_results = pref_future.result()
 
         self.logger.info(
             f"[SingleCubeView] cube={self.cube_id} text_results={len(text_results)}, "
