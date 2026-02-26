@@ -12,22 +12,6 @@ from memos.types import MessageList, MessagesType, PermissionDict, SearchMode
 logger = get_logger(__name__)
 T = TypeVar("T")
 
-VALID_MEMORY_VIEWS: set[str] = {
-    "detail_factual",
-    "preference",
-    "skill",
-    "profile",
-    "event",
-    "tool_memory",
-}
-DEFAULT_SEARCH_MEMORY_VIEWS: list[str] = [
-    "detail_factual",
-    "preference",
-    "skill",
-    "profile",
-    "event",
-]
-
 
 class BaseRequest(BaseModel):
     """Base model for all requests."""
@@ -415,16 +399,6 @@ class APISearchRequest(BaseRequest):
         description="Number of skill memories to retrieve (top-K). Default: 3.",
     )
 
-    include_memory_view: list[str] | None = Field(
-        None,
-        description=(
-            "Controls which memory views to search. "
-            "Values: 'detail_factual', 'preference', 'skill', 'profile', 'event', 'tool_memory'. "
-            "When provided, overrides individual bool flags (include_preference, etc). "
-            "Default (None): ['detail_factual', 'preference', 'skill', 'profile', 'event']."
-        ),
-    )
-
     # ==== Filter conditions ====
     # TODO: maybe add detailed description later
     filter: dict[str, Any] | None = Field(
@@ -514,8 +488,6 @@ class APISearchRequest(BaseRequest):
             - moscube is ignored with warning
             - operation ignored
         """
-        fields_set = self.model_fields_set
-
         # Convert mem_cube_id to readable_cube_ids (new field takes priority)
         if self.mem_cube_id is not None:
             if not self.readable_cube_ids:
@@ -540,49 +512,6 @@ class APISearchRequest(BaseRequest):
                 "This field is deprecated and ignored."
             )
 
-        # include_memory_view takes highest priority. Legacy bool fields are ignored.
-        if self.include_memory_view is not None:
-            normalized_views: list[str] = []
-            seen: set[str] = set()
-            for view in self.include_memory_view:
-                if view not in VALID_MEMORY_VIEWS:
-                    logger.warning(
-                        "Unknown memory view '%s' in include_memory_view; it will be ignored.",
-                        view,
-                    )
-                    continue
-                if view not in seen:
-                    normalized_views.append(view)
-                    seen.add(view)
-
-            self.include_memory_view = normalized_views
-            self.include_preference = "preference" in normalized_views
-            self.include_skill_memory = "skill" in normalized_views
-            self.search_tool_memory = "tool_memory" in normalized_views
-            return self
-
-        # Compatibility strategy:
-        # 1) legacy bool fields explicitly provided -> derive include_memory_view from defaults
-        # 2) none provided -> use new default include_memory_view
-        legacy_fields = {"include_preference", "include_skill_memory", "search_tool_memory"}
-        legacy_given = any(field in fields_set for field in legacy_fields)
-
-        views = list(DEFAULT_SEARCH_MEMORY_VIEWS)
-        if legacy_given:
-            if not self.include_preference and "preference" in views:
-                views.remove("preference")
-            if not self.include_skill_memory and "skill" in views:
-                views.remove("skill")
-            if self.search_tool_memory and "tool_memory" not in views:
-                views.append("tool_memory")
-
-            self.include_memory_view = views
-            return self
-
-        self.include_memory_view = list(DEFAULT_SEARCH_MEMORY_VIEWS)
-        self.include_preference = "preference" in self.include_memory_view
-        self.include_skill_memory = "skill" in self.include_memory_view
-        self.search_tool_memory = "tool_memory" in self.include_memory_view
         return self
 
 
@@ -600,12 +529,8 @@ class APIADDRequest(BaseRequest):
     project_id: str | None = Field(None, description="Project ID")
 
     # ==== Multi-cube writing ====
-    writable_cube_ids: list[str] | dict[str, Any] | None = Field(
-        None,
-        description=(
-            "Writable cube IDs. Supports legacy list[str] and dict format "
-            "{cube_id: {cube_type, user_or_agent_id, ...}}."
-        ),
+    writable_cube_ids: list[str] | None = Field(
+        None, description="List of cube IDs user can write for multi-cube add"
     )
 
     # ==== Async control ====
@@ -683,16 +608,6 @@ class APIADDRequest(BaseRequest):
         description=("Whether this request represents user feedback. Default: False."),
     )
 
-    # ==== Memory view control ====
-    allow_memory_view: list[str] | None = Field(
-        None,
-        description=(
-            "Controls which memory views are allowed for this add request. "
-            "Example: ['detail_factual', 'preference', 'skill', 'profile', 'event', 'tool_memory']. "
-            "Default (None) means all views are allowed."
-        ),
-    )
-
     # ==== Backward compatibility fields (will delete later) ====
     mem_cube_id: str | None = Field(
         None,
@@ -740,25 +655,6 @@ class APIADDRequest(BaseRequest):
                 "Fast add pipeline is only available in sync mode."
             )
             self.mode = None
-
-        # writable_cube_ids dict is preserved as-is so downstream code can read
-        # cube-level metadata (cube_type, user_or_agent_id, etc.).
-        # Cube ID extraction (keys) is done lazily in _resolve_cube_ids.
-
-        if self.allow_memory_view is not None:
-            normalized_views: list[str] = []
-            seen: set[str] = set()
-            for view in self.allow_memory_view:
-                if view not in VALID_MEMORY_VIEWS:
-                    logger.warning(
-                        "Unknown memory view '%s' in allow_memory_view; it will be ignored.",
-                        view,
-                    )
-                    continue
-                if view not in seen:
-                    normalized_views.append(view)
-                    seen.add(view)
-            self.allow_memory_view = normalized_views
 
         # Convert mem_cube_id to writable_cube_ids (new field takes priority)
         if self.mem_cube_id:
@@ -1025,24 +921,10 @@ class SearchMemoryData(BaseModel):
     tool_memory_detail_list: list[MessageDetail] | None = Field(
         None,
         alias="tool_memory_detail_list",
-        description="List of tool_memory details (usually None)",
+        description="List of tool_memor details (usually None)",
     )
     preference_note: str = Field(
         None, alias="preference_note", description="String of preference_note"
-    )
-    profile_detail_list: list[dict[str, Any]] | None = Field(
-        None,
-        alias="profile_detail_list",
-        description=(
-            "Attribute-tree fields that matched the query (mixed-rank results). "
-            "Each item: {type, content, score, metadata{profile_field, profile_category, "
-            "algorithm_updatable, template_id, profile_instance_id}}."
-        ),
-    )
-    event_detail_list: list[dict[str, Any]] | None = Field(
-        None,
-        alias="event_detail_list",
-        description="Event memory items that matched the query (reserved, empty in mock phase).",
     )
 
 

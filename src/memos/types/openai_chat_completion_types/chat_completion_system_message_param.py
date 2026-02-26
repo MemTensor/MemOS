@@ -33,11 +33,4 @@ class ChatCompletionSystemMessageParam(TypedDict, total=False):
     restricted, it can be any vague or precise time string."""
 
     message_id: str | None
-    """Optional unique identifier for the message. Corresponds to messages[].id in the
-    cloud-service API; used for cascade-deletion of profile memory fields."""
-
-    role_id: str | None
-    """Speaker's user_id or agent_id in multi-user / multi-agent (group-chat) scenarios."""
-
-    role_name: str | None
-    """Display name of the speaker. Optional; when provided must be accompanied by role_id."""
+    """Optional unique identifier for the message"""

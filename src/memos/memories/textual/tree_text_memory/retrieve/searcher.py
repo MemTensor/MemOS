@@ -524,7 +524,7 @@ class Searcher:
                     user_name=user_name,
                     tsquery_config="jiebaqry",
                 )
-            except Exception:
+            except Exception as e:
                 logger.warning(
                     f"[PATH-KEYWORD] search_by_fulltext failed, scope={scope}, user_name={user_name}"
                 )
