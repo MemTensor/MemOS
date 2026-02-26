@@ -176,6 +176,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.llm = LLMFactory.from_config(config.llm)
         self.embedder = EmbedderFactory.from_config(config.embedder)
         self.chunker = ChunkerFactory.from_config(config.chunker)
+        self.save_rawfile = self.chunker.config.save_rawfile
         self.memory_max_length = 8000
         # Use token-based windowing; default to ~5000 tokens if not configured
         self.chat_window_max_tokens = getattr(self.config, "chat_window_max_tokens", 1024)

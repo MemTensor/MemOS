@@ -163,14 +163,14 @@ class PreUpdateRetriever:
 
             results = []
 
-            # 2. Try seach_by_keywords_tfidf (PolarDB specific)
-            if hasattr(self.graph_db, "seach_by_keywords_tfidf"):
+            # 2. Try search_by_keywords_tfidf (PolarDB specific)
+            if hasattr(self.graph_db, "search_by_keywords_tfidf"):
                 try:
-                    results = self.graph_db.seach_by_keywords_tfidf(
+                    results = self.graph_db.search_by_keywords_tfidf(
                         query_words=keywords, user_name=user_name, filter=search_filter
                     )
                 except Exception as e:
-                    logger.warning(f"[PreUpdateRetriever] seach_by_keywords_tfidf failed: {e}")
+                    logger.warning(f"[PreUpdateRetriever] search_by_keywords_tfidf failed: {e}")
 
             # 3. Fallback to search_by_fulltext
             if not results and hasattr(self.graph_db, "search_by_fulltext"):

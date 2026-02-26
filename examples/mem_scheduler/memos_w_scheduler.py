@@ -84,7 +84,9 @@ def init_task():
     return conversations, questions
 
 
-working_memories = []
+default_mem_update_handler = mem_scheduler.handlers.get(MEM_UPDATE_TASK_LABEL)
+if default_mem_update_handler is None:
+    logger.warning("Default MEM_UPDATE handler not found; custom handler will be a no-op.")
 
 
 # Define custom query handler function
@@ -100,24 +102,11 @@ def custom_query_handler(messages: list[ScheduleMessageItem]):
 
 # Define custom memory update handler function
 def custom_mem_update_handler(messages: list[ScheduleMessageItem]):
-    global working_memories
-    search_args = {}
-    top_k = 2
-    for msg in messages:
-        # Search for memories relevant to the current content in text memory (return top_k=2)
-        results = mem_scheduler.retriever.search(
-            query=msg.content,
-            user_id=msg.user_id,
-            mem_cube_id=msg.mem_cube_id,
-            mem_cube=mem_scheduler.current_mem_cube,
-            top_k=top_k,
-            method=mem_scheduler.search_method,
-            search_args=search_args,
-        )
-        working_memories.extend(results)
-        working_memories = working_memories[-5:]
-        for mem in results:
-            print(f"\n[scheduler] Retrieved memory: {mem.memory}")
+    if default_mem_update_handler is None:
+        logger.error("Default MEM_UPDATE handler missing; cannot process messages.")
+        return
+    # Delegate to the built-in handler to keep behavior aligned with scheduler refactor.
+    default_mem_update_handler(messages)
 
 
 async def run_with_scheduler():

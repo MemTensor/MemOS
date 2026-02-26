@@ -1,4 +1,7 @@
+import copy
 import traceback
+
+from concurrent.futures import as_completed
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
@@ -64,6 +67,7 @@ class Searcher:
         self.internet_retriever = internet_retriever
         self.vec_cot = search_strategy.get("cot", False) if search_strategy else False
         self.use_fast_graph = search_strategy.get("fast_graph", False) if search_strategy else False
+        self.use_fulltext = search_strategy.get("fulltext", False) if search_strategy else False
         self.manual_close_internet = manual_close_internet
         self.tokenizer = tokenizer
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
@@ -88,7 +92,7 @@ class Searcher:
         logger.info(
             f"[RECALL] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
         )
-        parsed_goal, query_embedding, context, query = self._parse_task(
+        parsed_goal, query_embedding, _context, query = self._parse_task(
             query,
             info,
             mode,
@@ -304,8 +308,8 @@ class Searcher:
         query = parsed_goal.rephrased_query or query
         # if goal has extra memories, embed them too
         if parsed_goal.memories:
-            query_embedding = self.embedder.embed(list({query, *parsed_goal.memories}))
-
+            embed_texts = list(dict.fromkeys([query, *parsed_goal.memories]))
+            query_embedding = self.embedder.embed(embed_texts)
         return parsed_goal, query_embedding, context, query
 
     @timed
@@ -377,6 +381,21 @@ class Searcher:
                     user_name,
                 )
             )
+            if self.use_fulltext:
+                tasks.append(
+                    executor.submit(
+                        self._retrieve_from_keyword,
+                        query,
+                        parsed_goal,
+                        query_embedding,
+                        top_k,
+                        memory_type,
+                        search_filter,
+                        search_priority,
+                        user_name,
+                        id_filter,
+                    )
+                )
             if search_tool_memory:
                 tasks.append(
                     executor.submit(
@@ -454,6 +473,102 @@ class Searcher:
             search_filter=search_filter,
         )
 
+    @timed
+    def _retrieve_from_keyword(
+        self,
+        query,
+        parsed_goal,
+        query_embedding,
+        top_k,
+        memory_type,
+        search_filter: dict | None = None,
+        search_priority: dict | None = None,
+        user_name: str | None = None,
+        id_filter: dict | None = None,
+    ) -> list[tuple[TextualMemoryItem, float]]:
+        """Keyword/fulltext path that directly calls graph DB fulltext search."""
+
+        if memory_type not in ["All", "LongTermMemory", "UserMemory"]:
+            return []
+        if not query_embedding:
+            return []
+
+        query_words: list[str] = []
+        if self.tokenizer:
+            query_words = self.tokenizer.tokenize_mixed(query)
+        else:
+            query_words = query.strip().split()
+        # Use unique tokens; avoid passing the raw query into `to_tsquery(...)` because it may contain
+        # spaces/operators that cause tsquery parsing errors.
+        query_words = list(dict.fromkeys(query_words))
+        if len(query_words) > 64:
+            query_words = query_words[:64]
+        if not query_words:
+            return []
+        tsquery_terms = ["'" + w.replace("'", "''") + "'" for w in query_words if w and w.strip()]
+        if not tsquery_terms:
+            return []
+
+        scopes = [memory_type] if memory_type != "All" else ["LongTermMemory", "UserMemory"]
+
+        id_to_score: dict[str, float] = {}
+        for scope in scopes:
+            try:
+                hits = self.graph_store.search_by_fulltext(
+                    query_words=tsquery_terms,
+                    top_k=top_k * 2,
+                    status="activated",
+                    scope=scope,
+                    search_filter=None,
+                    filter=search_filter,
+                    user_name=user_name,
+                    tsquery_config="jiebaqry",
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[PATH-KEYWORD] search_by_fulltext failed, scope={scope}, user_name={user_name}"
+                )
+                hits = []
+            for h in hits or []:
+                hid = str(h.get("id") or "").strip().strip("'\"")
+                if not hid:
+                    continue
+                score = h.get("score", 0.0)
+                if hid not in id_to_score or score > id_to_score[hid]:
+                    id_to_score[hid] = score
+        if not id_to_score:
+            return []
+
+        sorted_ids = sorted(id_to_score.keys(), key=lambda x: id_to_score[x], reverse=True)
+        sorted_ids = sorted_ids[:top_k]
+        node_dicts = (
+            self.graph_store.get_nodes(sorted_ids, include_embedding=True, user_name=user_name)
+            or []
+        )
+        id_to_node = {n.get("id"): n for n in node_dicts}
+        ordered_nodes = []
+
+        for rid in sorted_ids:
+            if rid in id_to_node:
+                node = copy.deepcopy(id_to_node[rid])
+                meta = node.setdefault("metadata", {})
+                meta_target = meta
+                if isinstance(meta, dict) and isinstance(meta.get("metadata"), dict):
+                    meta_target = meta["metadata"]
+                if isinstance(meta_target, dict):
+                    meta_target["keyword_score"] = id_to_score[rid]
+                ordered_nodes.append(node)
+
+        results = [TextualMemoryItem.from_dict(n) for n in ordered_nodes]
+        return self.reranker.rerank(
+            query=query,
+            query_embedding=query_embedding[0],
+            graph_results=results,
+            top_k=top_k,
+            parsed_goal=parsed_goal,
+            search_filter=search_filter,
+        )
+
     # --- Path B
     @timed
     def _retrieve_from_long_term_and_user(
@@ -483,8 +598,8 @@ class Searcher:
         else:
             cot_embeddings = query_embedding
 
-        with ContextThreadPoolExecutor(max_workers=2) as executor:
-            if memory_type in ["All", "LongTermMemory"]:
+        with ContextThreadPoolExecutor(max_workers=3) as executor:
+            if memory_type in ["All", "AllSummaryMemory", "LongTermMemory"]:
                 tasks.append(
                     executor.submit(
                         self.graph_retriever.retrieve,
@@ -500,7 +615,7 @@ class Searcher:
                         use_fast_graph=self.use_fast_graph,
                     )
                 )
-            if memory_type in ["All", "UserMemory"]:
+            if memory_type in ["All", "AllSummaryMemory", "UserMemory"]:
                 tasks.append(
                     executor.submit(
                         self.graph_retriever.retrieve,
@@ -516,10 +631,28 @@ class Searcher:
                         use_fast_graph=self.use_fast_graph,
                     )
                 )
+            if memory_type in ["RawFileMemory"]:
+                tasks.append(
+                    executor.submit(
+                        self.graph_retriever.retrieve,
+                        query=query,
+                        parsed_goal=parsed_goal,
+                        query_embedding=cot_embeddings,
+                        top_k=top_k * 2,
+                        memory_scope="RawFileMemory",
+                        search_filter=search_filter,
+                        search_priority=search_priority,
+                        user_name=user_name,
+                        id_filter=id_filter,
+                        use_fast_graph=self.use_fast_graph,
+                    )
+                )
 
             # Collect results from all tasks
             for task in tasks:
                 results.extend(task.result())
+            results = self._deduplicate_rawfile_results(results, user_name=user_name)
+            results = self._filter_intermediate_content(results)
 
         return self.reranker.rerank(
             query=query,
@@ -872,7 +1005,7 @@ class Searcher:
             (item, score)
             for item, score in results
             if item.metadata.memory_type
-            in ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
+            in ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory", "RawFileMemory"]
         ]
 
         sorted_results = sorted(results, key=lambda pair: pair[1], reverse=True)[:top_k]
@@ -890,6 +1023,66 @@ class Searcher:
                 )
             )
         return final_items
+
+    @timed
+    def _deduplicate_rawfile_results(self, results, user_name: str | None = None):
+        """
+        Deduplicate rawfile related memories by edge
+        """
+        if not results:
+            return results
+
+        summary_ids_to_remove = set()
+        rawfile_items = [item for item in results if item.metadata.memory_type == "RawFileMemory"]
+        if not rawfile_items:
+            return results
+
+        with ContextThreadPoolExecutor(max_workers=min(len(rawfile_items), 10)) as executor:
+            futures = [
+                executor.submit(
+                    self.graph_store.get_edges,
+                    rawfile_item.id,
+                    type="SUMMARY",
+                    direction="OUTGOING",
+                    user_name=user_name,
+                )
+                for rawfile_item in rawfile_items
+            ]
+            for future in as_completed(futures):
+                try:
+                    edges = future.result()
+                    for edge in edges:
+                        summary_target_id = edge.get("to")
+                        if summary_target_id:
+                            summary_ids_to_remove.add(summary_target_id)
+                            logger.debug(
+                                f"[DEDUP] Marking summary node {summary_target_id} for removal (pointed by RawFileMemory)"
+                            )
+                except Exception as e:
+                    logger.warning(f"[DEDUP] Failed to get summary target ids: {e}")
+
+        filtered_results = []
+        for item in results:
+            if item.id in summary_ids_to_remove:
+                logger.debug(
+                    f"[DEDUP] Removing summary node {item.id} because it is pointed by RawFileMemory"
+                )
+                continue
+            filtered_results.append(item)
+
+        return filtered_results
+
+    def _filter_intermediate_content(self, results):
+        """Filter intermediate content"""
+        filtered_results = []
+        for item in results:
+            if (
+                "File URL:" not in item.memory
+                and "File ID:" not in item.memory
+                and "Filename:" not in item.memory
+            ):
+                filtered_results.append(item)
+        return filtered_results
 
     @timed
     def _update_usage_history(self, items, info, user_name: str | None = None):
