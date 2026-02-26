@@ -1,8 +1,8 @@
+import re
+
 from memos.configs.chunker import MarkdownChunkerConfig
 from memos.dependency import require_python_package
 from memos.log import get_logger
-
-import re
 
 from .base import BaseChunker, Chunk
 
@@ -24,7 +24,7 @@ class MarkdownChunker(BaseChunker):
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
         recursive: bool = False,
-        auto_fix_headers: bool = True,  
+        auto_fix_headers: bool = True,
     ):
         from langchain_text_splitters import (
             MarkdownHeaderTextSplitter,
@@ -54,9 +54,9 @@ class MarkdownChunker(BaseChunker):
         protected_text, url_map = self.protect_urls(text)
         # Auto-detect and fix malformed header hierarchy if enabled
         if self.auto_fix_headers and self._detect_malformed_headers(protected_text):
-            logger.info("detected malformed header hierarchy, attempting to fix...")
+            logger.info("[Chunker:] detected malformed header hierarchy, attempting to fix...")
             protected_text = self._fix_header_hierarchy(protected_text)
-            logger.info("Header hierarchy fix completed")
+            logger.info("[Chunker:] Header hierarchy fix completed")
 
         md_header_splits = self.chunker.split_text(protected_text)
         chunks = []
@@ -74,28 +74,28 @@ class MarkdownChunker(BaseChunker):
         logger.info(f"Generated chunks: {chunks[:5]}")
         logger.debug(f"Generated {len(chunks)} chunks from input text")
         return chunks
-    
+
     def _detect_malformed_headers(self, text: str) -> bool:
         """Detect if markdown has improper header hierarchy usage."""
-        # Extract all valid markdown header lines 
+        # Extract all valid markdown header lines
         header_levels = []
-        pattern = re.compile(r'^#{1,6}\s+.+')  
-        for line in text.split('\n'):
+        pattern = re.compile(r"^#{1,6}\s+.+")
+        for line in text.split("\n"):
             stripped_line = line.strip()
             if pattern.match(stripped_line):
-                hash_match = re.match(r'^(#+)', stripped_line)
+                hash_match = re.match(r"^(#+)", stripped_line)
                 if hash_match:
                     level = len(hash_match.group(1))
                     header_levels.append(level)
-        
+
         total_headers = len(header_levels)
         if total_headers == 0:
             logger.debug("No valid headers detected, skipping check")
             return False
-        
+
         # Calculate level-1 header ratio
         level1_count = sum(1 for level in header_levels if level == 1)
-        
+
         # Determine if malformed: >90% are level-1 when total > 5
         # OR all headers are level-1 when total ≤ 5
         if total_headers > 5:
@@ -112,19 +112,19 @@ class MarkdownChunker(BaseChunker):
             )
             return True
         return False
-    
+
     def _fix_header_hierarchy(self, text: str) -> str:
         """
         Fix markdown header hierarchy by adjusting levels.
-        
+
         Strategy:
         1. Keep the first header unchanged as level-1 parent
         2. Increment all subsequent headers by 1 level (max level 6)
         """
-        header_pattern = re.compile(r'^(#{1,6})\s+(.+)$')
-        lines = text.split('\n')
+        header_pattern = re.compile(r"^(#{1,6})\s+(.+)$")
+        lines = text.split("\n")
         fixed_lines = []
-        first_valid_header = False  
+        first_valid_header = False
 
         for line in lines:
             stripped_line = line.strip()
@@ -138,17 +138,22 @@ class MarkdownChunker(BaseChunker):
                     # First valid header: keep original level unchanged
                     fixed_line = f"{current_hashes} {title_content}"
                     first_valid_header = True
-                    logger.debug(f"Keep first header at level {current_level}: {title_content[:50]}...")
+                    logger.debug(
+                        f"Keep first header at level {current_level}: {title_content[:50]}..."
+                    )
                 else:
                     # Subsequent headers: increment by 1, cap at level 6
                     new_level = min(current_level + 1, 6)
-                    new_hashes = '#' * new_level
+                    new_hashes = "#" * new_level
                     fixed_line = f"{new_hashes} {title_content}"
-                    logger.debug(f"Adjust header level: {current_level} -> {new_level}: {title_content[:50]}...")
+                    logger.debug(
+                        f"Adjust header level: {current_level} -> {new_level}: {title_content[:50]}..."
+                    )
                 fixed_lines.append(fixed_line)
-            else:           
+            else:
                 fixed_lines.append(line)
 
         # Join with newlines to preserve original formatting
-        fixed_text = '\n'.join(fixed_lines)
+        fixed_text = "\n".join(fixed_lines)
+        logger.info(f"[Chunker:] Header hierarchy fix completed: {fixed_text[:50]}...")
         return fixed_text

@@ -708,7 +708,9 @@ class FileContentParser(BaseMessageParser):
         headers = {}
         if is_markdown:
             headers = self._extract_markdown_headers(parsed_text)
-            logger.info(f"[FileContentParser] Extracted {len(headers)} headers from markdown")
+            logger.info(
+                f"[Chunker: FileContentParser] Extracted {len(headers)} headers from markdown"
+            )
 
         # Extract and process images from parsed_text
         if is_markdown and parsed_text and self.image_parser:
@@ -993,7 +995,7 @@ class FileContentParser(BaseMessageParser):
             # Update character position for next line (+1 for newline character)
             char_position += len(line) + 1
 
-        logger.info(f"[FileContentParser] Extracted {len(headers)} headers from markdown")
+        logger.info(f"[Chunker: FileContentParser] Extracted {len(headers)} headers from markdown")
         return headers
 
     def _get_header_context(
