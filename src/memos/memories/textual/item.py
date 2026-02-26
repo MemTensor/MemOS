@@ -169,6 +169,7 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
         "OuterMemory",
         "ToolSchemaMemory",
         "ToolTrajectoryMemory",
+        "RawFileMemory",
         "SkillMemory",
     ] = Field(default="WorkingMemory", description="Memory lifecycle type.")
     sources: list[SourceMessage] | None = Field(

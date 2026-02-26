@@ -48,11 +48,23 @@ def test_searcher_fast_path(mock_searcher):
     mock_searcher.embedder.embed.return_value = [[0.1] * 5, [0.2] * 5]
 
     # working path mock
-    mock_searcher.graph_retriever.retrieve.side_effect = [
-        [make_item("wm1", 0.9)[0]],  # working memory
-        [make_item("lt1", 0.8)[0]],  # long-term
-        [make_item("um1", 0.7)[0]],  # user
-    ]
+    # For "All", _retrieve_from_working_memory calls once (WorkingMemory),
+    # and _retrieve_from_long_term_and_user calls 3 times (LongTermMemory, UserMemory, RawFileMemory)
+    # Use a function to handle concurrent calls with different memory_scope
+    def retrieve_side_effect(*args, **kwargs):
+        memory_scope = kwargs.get("memory_scope", "")
+        if memory_scope == "WorkingMemory":
+            return [make_item("wm1", 0.9)[0]]
+        elif memory_scope == "LongTermMemory":
+            return [make_item("lt1", 0.8)[0]]
+        elif memory_scope == "UserMemory":
+            return [make_item("um1", 0.7)[0]]
+        elif memory_scope == "RawFileMemory":
+            return [make_item("rm1", 0.6)[0]]
+        else:
+            return []
+
+    mock_searcher.graph_retriever.retrieve.side_effect = retrieve_side_effect
     mock_searcher.reranker.rerank.return_value = [
         make_item("wm1", 0.9),
         make_item("lt1", 0.8),

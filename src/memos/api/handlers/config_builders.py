@@ -41,9 +41,11 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
         "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
         "nebular": APIConfig.get_nebular_config(user_id=user_id),
         "polardb": APIConfig.get_polardb_config(user_id=user_id),
+        "postgres": APIConfig.get_postgres_config(user_id=user_id),
     }
 
-    graph_db_backend = os.getenv("NEO4J_BACKEND", "nebular").lower()
+    # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
+    graph_db_backend = os.getenv("GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "nebular")).lower()
     return GraphDBConfigFactory.model_validate(
         {
             "backend": graph_db_backend,
@@ -103,6 +105,7 @@ def build_chat_llm_config() -> list[dict[str, Any]]:
                 }
             ),
             "support_models": cfg.get("support_models", None),
+            "extra_body": cfg.get("extra_body", None),
         }
         for cfg in configs
     ]

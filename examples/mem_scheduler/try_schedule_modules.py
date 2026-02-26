@@ -167,7 +167,8 @@ if __name__ == "__main__":
             label=MEM_UPDATE_TASK_LABEL,
             content=query,
         )
-        # Run one session turn manually to get search candidates
-        mem_scheduler._memory_update_consumer(
-            messages=[message],
-        )
+        # Run one session turn manually via registered handler (public surface)
+        handler = mem_scheduler.handlers.get(MEM_UPDATE_TASK_LABEL)
+        if handler is None:
+            raise RuntimeError("MEM_UPDATE handler not registered on mem_scheduler.")
+        handler([message])
