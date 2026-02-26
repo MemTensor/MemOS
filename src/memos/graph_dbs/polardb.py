@@ -2060,7 +2060,7 @@ class PolarDBGraphDB(BaseGraphDB):
             return_fields: list[str] | None = None,
             **kwargs,
     ) -> list[dict]:
-        logger.info(f"search_by_embedding user_name:{user_name},filter: {filter}, knowledgebase_ids: {knowledgebase_ids},scope:{scope},status:{status},search_filter:{search_filter},filter:{filter},knowledgebase_ids:{knowledgebase_ids}"
+        logger.info(f"search_by_embedding user_name:{user_name},filter: {filter}, knowledgebase_ids: {knowledgebase_ids},scope:{scope},status:{status},search_filter:{search_filter},filter:{filter},knowledgebase_ids:{knowledgebase_ids},return_fields:{return_fields}"
                     )
         start_time = time.time()
         where_clauses = []
