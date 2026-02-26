@@ -2047,24 +2047,21 @@ class PolarDBGraphDB(BaseGraphDB):
 
     @timed
     def search_by_embedding(
-        self,
-        vector: list[float],
-        user_name: str,
-        top_k: int = 5,
-        scope: str | None = None,
-        status: str | None = None,
-        threshold: float | None = None,
-        search_filter: dict | None = None,
-        filter: dict | None = None,
-        knowledgebase_ids: list[str] | None = None,
-        **kwargs,
+            self,
+            vector: list[float],
+            user_name: str,
+            top_k: int = 5,
+            scope: str | None = None,
+            status: str | None = None,
+            threshold: float | None = None,
+            search_filter: dict | None = None,
+            filter: dict | None = None,
+            knowledgebase_ids: list[str] | None = None,
+            return_fields: list[str] | None = None,
+            **kwargs,
     ) -> list[dict]:
-        """
-        Retrieve node IDs based on vector similarity using PostgreSQL vector operations.
-        """
-        logger.info(
-            f"search_by_embedding user_name:{user_name},filter: {filter}, knowledgebase_ids: {knowledgebase_ids},scope:{scope},status:{status},search_filter:{search_filter},filter:{filter},knowledgebase_ids:{knowledgebase_ids}"
-        )
+        logger.info(f"search_by_embedding user_name:{user_name},filter: {filter}, knowledgebase_ids: {knowledgebase_ids},scope:{scope},status:{status},search_filter:{search_filter},filter:{filter},knowledgebase_ids:{knowledgebase_ids}"
+                    )
         start_time = time.time()
         where_clauses = []
         if scope:
@@ -2140,16 +2137,21 @@ class PolarDBGraphDB(BaseGraphDB):
             else:
                 pass
 
-        logger.info(f" search_by_embedding query: {query}, params: {params}")
+        logger.info(f"[search_by_embedding] query: {query}, params: {params}")
 
         conn = None
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                if params:
-                    cursor.execute(query, params)
-                else:
-                    cursor.execute(query)
+                try:
+                    # If params is empty, execute query directly without parameters
+                    if params:
+                        cursor.execute(query, params)
+                    else:
+                        cursor.execute(query)
+                except Exception as e:
+                    logger.error(f"[search_by_embedding] Error executing query: {e}")
+                    raise
                 results = cursor.fetchall()
                 output = []
                 for row in results:
@@ -2164,15 +2166,18 @@ class PolarDBGraphDB(BaseGraphDB):
                     score_val = float(score)
                     score_val = (score_val + 1) / 2  # align to neo4j, Normalized Cosine Score
                     if threshold is None or score_val >= threshold:
-                        output.append({"id": id_val, "score": score_val})
+                        item = {"id": id_val, "score": score_val}
+                        if return_fields:
+                            properties = row[1]  # properties column
+                            item.update(
+                                self._extract_fields_from_properties(properties, return_fields)
+                            )
+                        output.append(item)
                 elapsed_time = time.time() - start_time
                 logger.info(
                     f" polardb search_by_embedding query embedding completed time in {elapsed_time:.2f}s"
                 )
                 return output[:top_k]
-        except Exception as e:
-            logger.error(f"[search_by_embedding] Error executing query: {e}")
-            raise
         finally:
             self._return_connection(conn)
 
