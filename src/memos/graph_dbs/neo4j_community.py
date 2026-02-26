@@ -455,6 +455,26 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         return filtered_results
 
+    def search_by_fulltext(
+        self,
+        query_words: list[str],
+        top_k: int = 10,
+        scope: str | None = None,
+        status: str | None = None,
+        threshold: float | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        tsquery_config: str | None = None,
+        **kwargs,
+    ) -> list[dict]:
+        """
+        TODO: Implement fulltext search for Neo4j to be compatible with TreeTextMemory's keyword/fulltext recall path.
+        Currently, return an empty list to avoid runtime errors due to missing methods when switching to Neo4j.
+        """
+        return []
+
     def _normalize_date_string(self, date_str: str) -> str:
         """
         Normalize date string to ISO 8601 format for Neo4j datetime() function.
