@@ -590,7 +590,7 @@ class APIADDRequest(BaseRequest):
     """Request model for creating memories."""
 
     # ==== Basic identifiers ====
-    user_id: str | list[str] = Field(None, description="User ID or user ID list")
+    user_id: str = Field(None, description="User ID")
     session_id: str | None = Field(
         None,
         description="Session ID. If not provided, a default session will be used.",
@@ -740,20 +740,6 @@ class APIADDRequest(BaseRequest):
                 "Fast add pipeline is only available in sync mode."
             )
             self.mode = None
-
-        # user_id is a backward-compatible field (str only in practice).
-        # list[str] is accepted at the interface level but normalized to the first
-        # element here.  Multi-user / multi-agent routing is handled entirely by
-        # writable_cube_ids (dict with cube_type & user_or_agent_id);  profile
-        # target users are derived from that dict, NOT from user_id.
-        if isinstance(self.user_id, list):
-            if not self.user_id:
-                raise ValueError("APIADDRequest.user_id list cannot be empty.")
-            logger.info(
-                "APIADDRequest received user_id as list; normalizing to first element '%s'.",
-                self.user_id[0],
-            )
-            self.user_id = self.user_id[0]
 
         # writable_cube_ids dict is preserved as-is so downstream code can read
         # cube-level metadata (cube_type, user_or_agent_id, etc.).
