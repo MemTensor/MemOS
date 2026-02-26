@@ -46,7 +46,12 @@ DOC_PROMPT_DICT = {
 class FileContentParser(BaseMessageParser):
     """Parser for file content parts."""
 
-    def _get_doc_llm_response(self, chunk_text: str, custom_tags: list[str] | None = None) -> dict:
+    def _get_doc_llm_response(
+        self,
+        chunk_text: str,
+        custom_tags: list[str] | None = None,
+        message_text_context: str | None = None,
+    ) -> dict:
         """
         Call LLM to extract memory from document chunk.
         Uses doc prompts from DOC_PROMPT_DICT.
@@ -54,6 +59,8 @@ class FileContentParser(BaseMessageParser):
         Args:
             chunk_text: Text chunk to extract memory from
             custom_tags: Optional list of custom tags for LLM extraction
+            message_text_context: Optional text from the same message that
+                provides user intent / context for understanding this document
 
         Returns:
             Parsed JSON response from LLM or empty dict if failed
@@ -72,6 +79,10 @@ class FileContentParser(BaseMessageParser):
             else ""
         )
         prompt = prompt.replace("{custom_tags_prompt}", custom_tags_prompt)
+
+        # Inject sibling text context into prompt placeholder
+        context_text = message_text_context.strip() if message_text_context else ""
+        prompt = prompt.replace("{context}", context_text)
 
         messages = [{"role": "user", "content": prompt}]
         try:
@@ -630,6 +641,18 @@ class FileContentParser(BaseMessageParser):
         # Extract custom_tags from kwargs (for LLM extraction)
         custom_tags = kwargs.get("custom_tags")
 
+        # Extract sibling text context .
+        message_text_context = None
+        context_items = kwargs.get("context_items")
+        if context_items:
+            sibling_texts = []
+            for ctx_item in context_items:
+                for src in getattr(ctx_item.metadata, "sources", None) or []:
+                    if src.type == "chat" and src.content:
+                        sibling_texts.append(src.content.strip())
+            if sibling_texts:
+                message_text_context = "\n".join(sibling_texts)
+
         # Use parser from utils
         parser = self.parser or get_parser()
         if not parser:
@@ -805,7 +828,9 @@ class FileContentParser(BaseMessageParser):
         def _process_chunk(chunk_idx: int, chunk_text: str) -> TextualMemoryItem:
             """Process chunk with LLM, fallback to raw on failure."""
             try:
-                response_json = self._get_doc_llm_response(chunk_text, custom_tags)
+                response_json = self._get_doc_llm_response(
+                    chunk_text, custom_tags, message_text_context=message_text_context
+                )
                 if response_json:
                     value = response_json.get("value", "").strip()
                     if value:
