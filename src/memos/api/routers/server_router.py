@@ -22,6 +22,7 @@ from memos.api.handlers.add_handler import AddHandler
 from memos.api.handlers.base_handler import HandlerDependencies
 from memos.api.handlers.chat_handler import ChatHandler
 from memos.api.handlers.feedback_handler import FeedbackHandler
+from memos.api.handlers.profile_handler import ProfileHandler
 from memos.api.handlers.search_handler import SearchHandler
 from memos.api.product_models import (
     AllStatusResponse,
@@ -52,6 +53,14 @@ from memos.api.product_models import (
     SuggestionRequest,
     SuggestionResponse,
     TaskQueueResponse,
+)
+from memos.api.profile_models import (
+    BindProfileRequest,
+    BindProfileResponse,
+    CreateProfileTemplateRequest,
+    CreateProfileTemplateResponse,
+    EditProfileRequest,
+    EditProfileResponse,
 )
 from memos.log import get_logger
 from memos.mem_scheduler.base_scheduler import BaseScheduler
@@ -95,6 +104,9 @@ redis_client = components["redis_client"]
 status_tracker = TaskStatusTracker(redis_client=redis_client)
 graph_db = components["graph_db"]
 vector_db = components["vector_db"]
+
+# Initialize profile handler (standalone, no HandlerDependencies needed)
+profile_handler = ProfileHandler()
 
 
 # =============================================================================
@@ -356,6 +368,41 @@ def feedback_memories(feedback_req: APIFeedbackRequest):
     This endpoint uses the class-based FeedbackHandler for better code organization.
     """
     return feedback_handler.handle_feedback_memories(feedback_req)
+
+
+# =============================================================================
+# Profile (Attribute Tree) API Endpoints — Mock
+# =============================================================================
+
+
+@router.post(
+    "/create_profile_template",
+    summary="Create a profile template",
+    response_model=CreateProfileTemplateResponse,
+)
+async def create_profile_template(req: CreateProfileTemplateRequest):
+    """Create a new profile (attribute tree) template."""
+    return await profile_handler.create_template(req)
+
+
+@router.post(
+    "/bind_profile_config",
+    summary="Bind user/agent to a profile template",
+    response_model=BindProfileResponse,
+)
+async def bind_profile(req: BindProfileRequest):
+    """Bind user/agent IDs to profile templates (one ID → one template currently)."""
+    return await profile_handler.bind_profile(req)
+
+
+@router.post(
+    "/edit_profile_config",
+    summary="Edit profile values",
+    response_model=EditProfileResponse,
+)
+async def edit_profile(req: EditProfileRequest):
+    """Edit profile values for a bound user/agent. Auto-binds if not yet bound."""
+    return await profile_handler.edit_profile(req)
 
 
 # =============================================================================

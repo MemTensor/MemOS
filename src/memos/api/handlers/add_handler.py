@@ -118,15 +118,22 @@ class AddHandler(BaseHandler):
         Normalize target cube ids from add_req.
         Priority:
         1) writable_cube_ids (deprecated mem_cube_id is converted to this in model validator)
-        2) fallback to user_id
+        2) user_id (single str after validator normalization)
         """
         if add_req.writable_cube_ids:
+            if isinstance(add_req.writable_cube_ids, dict):
+                return list(dict.fromkeys(add_req.writable_cube_ids.keys()))
             return list(dict.fromkeys(add_req.writable_cube_ids))
 
-        return [add_req.user_id]
+        if add_req.user_id:
+            return [add_req.user_id]
+
+        return []
 
     def _build_cube_view(self, add_req: APIADDRequest) -> MemCubeView:
         cube_ids = self._resolve_cube_ids(add_req)
+        if not cube_ids:
+            raise ValueError("No writable cube id could be resolved from add request.")
 
         if len(cube_ids) == 1:
             cube_id = cube_ids[0]

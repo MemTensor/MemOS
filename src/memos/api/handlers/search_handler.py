@@ -12,6 +12,7 @@ from typing import Any
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
+from memos.api.handlers.profile_handler import ProfileHandler
 from memos.api.product_models import APISearchRequest, SearchResponse
 from memos.log import get_logger
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
@@ -43,6 +44,7 @@ class SearchHandler(BaseHandler):
         self._validate_dependencies(
             "naive_mem_cube", "mem_scheduler", "searcher", "deepsearch_agent"
         )
+        self.profile_handler = ProfileHandler()
 
     def handle_search_memories(self, search_req: APISearchRequest) -> SearchResponse:
         """
@@ -90,6 +92,7 @@ class SearchHandler(BaseHandler):
             top_k=search_req_local.top_k,
             file_mem_proportion=0.5,
         )
+        self._attach_profile_and_event_mock_results(results, search_req_local)
 
         self.logger.info(
             f"[SearchHandler] Final search results: count={len(results)} results={results}"
@@ -99,6 +102,21 @@ class SearchHandler(BaseHandler):
             message="Search completed successfully",
             data=results,
         )
+
+    def _attach_profile_and_event_mock_results(
+        self, results: dict[str, Any], search_req: APISearchRequest
+    ) -> None:
+        include_views = set(search_req.include_memory_view or [])
+        if "profile" in include_views:
+            profile_detail_list = self.profile_handler.get_profile_for_entity(search_req.user_id)
+        else:
+            profile_detail_list = []
+
+        # Event mock is wired for interface compatibility in this phase.
+        event_detail_list: list[dict[str, Any]] = []
+
+        results["profile_detail_list"] = profile_detail_list
+        results["event_detail_list"] = event_detail_list
 
     @staticmethod
     def _apply_relativity_threshold(results: dict[str, Any], relativity: float) -> dict[str, Any]:
