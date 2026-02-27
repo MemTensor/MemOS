@@ -576,6 +576,7 @@ class MemFeedback(BaseMemFeedback):
                 memory_type="PreferenceMemory",
                 user_name=user_name,
                 top_k=top_k,
+                include_preference_memory=True,
                 full_recall=True,
             )
             pref_mems = [item[0] for item in pref_mems if float(item[1]) > 0.01]
