@@ -128,10 +128,14 @@ class NaiveRetriever(BaseRetriever):
         for pref in explicit_prefs:
             if not pref.payload.get("preference", None):
                 continue
-            if "embedding" in pref.payload or "vector" not in pref.payload:
+            if "embedding" in pref.payload:
                 payload = pref.payload
             else:
-                payload = {**pref.payload, "embedding": pref.payload.get("vector")}
+                pref_vector = getattr(pref, "vector", None)
+                if pref_vector is None:
+                    payload = pref.payload
+                else:
+                    payload = {**pref.payload, "embedding": pref_vector}
             explicit_prefs_mem.append(
                 TextualMemoryItem(
                     id=pref.id,
@@ -144,10 +148,14 @@ class NaiveRetriever(BaseRetriever):
         for pref in implicit_prefs:
             if not pref.payload.get("preference", None):
                 continue
-            if "embedding" in pref.payload or "vector" not in pref.payload:
+            if "embedding" in pref.payload:
                 payload = pref.payload
             else:
-                payload = {**pref.payload, "embedding": pref.payload.get("vector")}
+                pref_vector = getattr(pref, "vector", None)
+                if pref_vector is None:
+                    payload = pref.payload
+                else:
+                    payload = {**pref.payload, "embedding": pref_vector}
             implicit_prefs_mem.append(
                 TextualMemoryItem(
                     id=pref.id,
