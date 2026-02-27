@@ -347,7 +347,7 @@ def detect_lang(text):
         )
         cleaned_text = re.sub(r"\[[\d\-:\s]+\]", "", cleaned_text)
         # remove URLs to prevent the dilution of Chinese characters
-        cleaned_text = re.sub(r'https?://[^\s<>"{}|\\^`\[\]]+',"", cleaned_text)
+        cleaned_text = re.sub(r'https?://[^\s<>"{}|\\^`\[\]]+', "", cleaned_text)
         # extract chinese characters
         chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b740-\U0002b81f\U0002b820-\U0002ceaf\uf900-\ufaff]"
         chinese_chars = re.findall(chinese_pattern, cleaned_text)

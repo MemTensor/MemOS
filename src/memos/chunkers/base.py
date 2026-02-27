@@ -1,7 +1,8 @@
+import re
+
 from abc import ABC, abstractmethod
 
 from memos.configs.chunker import BaseChunkerConfig
-import re
 
 
 class Chunk:
@@ -36,16 +37,16 @@ class BaseChunker(ABC):
         """
         url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
         url_map = {}
-        
+
         def replace_url(match):
             url = match.group(0)
             placeholder = f"__URL_{len(url_map)}__"
             url_map[placeholder] = url
             return placeholder
-        
+
         protected_text = re.sub(url_pattern, replace_url, text)
         return protected_text, url_map
-    
+
     def restore_urls(self, text: str, url_map: dict[str, str]) -> str:
         """
         Restore protected URLs in text back to their original form.
@@ -60,5 +61,5 @@ class BaseChunker(ABC):
         restored_text = text
         for placeholder, url in url_map.items():
             restored_text = restored_text.replace(placeholder, url)
-        
+
         return restored_text
