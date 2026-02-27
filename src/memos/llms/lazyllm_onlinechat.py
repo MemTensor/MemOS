@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 
 
 class LazyLLMOnlineChatLLM(BaseLLM):
-    """LazyLLM OnlineChat backend."""
+    """LazyLLM OnlineChat backend as a unified supplier interface."""
 
     def __init__(self, config: LazyLLMOnlineChatConfig):
         self.config = config
@@ -42,7 +42,17 @@ class LazyLLMOnlineChatLLM(BaseLLM):
         if config.extra_kwargs:
             module_kwargs.update(config.extra_kwargs)
 
-        self.client = lazyllm.namespace(config.namespace).OnlineChatModule(**module_kwargs)
+        try:
+            self.client = lazyllm.namespace(config.namespace).OnlineChatModule(**module_kwargs)
+        except Exception as exc:
+            if "Unsupported source" in str(exc):
+                raise ValueError(
+                    f"Unsupported LazyLLM source '{config.source}'. "
+                    "MemOS uses LazyLLM as a unified supplier interface. "
+                    "Please use a source supported by LazyLLM, or open an issue/PR in "
+                    "https://github.com/LazyAGI/LazyLLM"
+                ) from exc
+            raise
         logger.info("LazyLLM OnlineChat LLM instance initialized")
 
     def _normalize_messages(self, messages: MessageList | str) -> MessageList:

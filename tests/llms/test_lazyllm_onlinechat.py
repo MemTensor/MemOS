@@ -82,3 +82,29 @@ class TestLazyLLMOnlineChatBackend(unittest.TestCase):
                 sys.modules.pop("lazyllm", None)
             else:
                 sys.modules["lazyllm"] = original_lazyllm
+
+    def test_init_with_unsupported_source(self):
+        """Test unsupported source message from LazyLLM."""
+        mock_namespace_module = SimpleNamespace(
+            OnlineChatModule=MagicMock(side_effect=AssertionError("Unsupported source: unknown"))
+        )
+        mock_lazyllm = SimpleNamespace(namespace=MagicMock(return_value=mock_namespace_module))
+        original_lazyllm = sys.modules.get("lazyllm")
+        sys.modules["lazyllm"] = mock_lazyllm
+        try:
+            config = LLMConfigFactory.model_validate(
+                {
+                    "backend": "lazyllm",
+                    "config": {
+                        "model_name_or_path": "test-model",
+                        "source": "unknown",
+                    },
+                }
+            )
+            with self.assertRaisesRegex(ValueError, "MemOS uses LazyLLM as a unified supplier interface"):
+                LLMFactory.from_config(config)
+        finally:
+            if original_lazyllm is None:
+                sys.modules.pop("lazyllm", None)
+            else:
+                sys.modules["lazyllm"] = original_lazyllm

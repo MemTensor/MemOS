@@ -310,7 +310,7 @@ class APIConfig:
             "namespace": os.getenv("MOS_LAZYLLM_NAMESPACE", "memos"),
             "source": os.getenv("MOS_LAZYLLM_SOURCE", "openai"),
             "api_key": os.getenv("MOS_MEMOS_API_KEY"),
-            "api_base": os.getenv("MOS_LAZYLLM_API_BASE", os.getenv("OPENAI_API_BASE")),
+            "api_base": os.getenv("MOS_LAZYLLM_API_BASE"),
             "stream": os.getenv("MOS_LAZYLLM_STREAM", "false").lower() == "true",
             "skip_auth": os.getenv("MOS_LAZYLLM_SKIP_AUTH", "false").lower() == "true",
         }
