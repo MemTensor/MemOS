@@ -1,6 +1,7 @@
 import json
 
 from collections.abc import Generator
+from contextlib import suppress
 from typing import Any
 
 from memos.configs.llm import LazyLLMOnlineChatConfig
@@ -100,10 +101,8 @@ class LazyLLMOnlineChatLLM(BaseLLM):
             function_data = tool_call.get("function", {})
             arguments = function_data.get("arguments", {})
             if isinstance(arguments, str):
-                try:
+                with suppress(json.JSONDecodeError):
                     arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    pass
             parsed_calls.append(
                 {
                     "tool_call_id": tool_call.get("id", ""),
