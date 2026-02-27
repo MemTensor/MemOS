@@ -120,7 +120,7 @@ class VLLMLLMConfig(BaseLLMConfig):
 
 
 class LazyLLMOnlineChatConfig(BaseLLMConfig):
-    namespace: str = Field(default="memos", description="LazyLLM config namespace")
+    namespace: str = Field(default="mos", description="LazyLLM config namespace")
     source: str = Field(
         default="openai",
         description="LazyLLM supplier source name (for example: openai/qwen/glm/deepseek)",

@@ -27,14 +27,14 @@ class TestLazyLLMOnlineChatBackend(unittest.TestCase):
                         "source": "openai",
                         "api_key": "sk-xxxx",
                         "api_base": "https://api.openai.com/v1",
-                        "namespace": "memos",
+                        "namespace": "mos",
                     },
                 }
             )
             llm = LLMFactory.from_config(config)
             response = llm.generate([{"role": "user", "content": "hello"}])
             self.assertEqual(response, "Hello from LazyLLM")
-            mock_lazyllm.namespace.assert_called_once_with("memos")
+            mock_lazyllm.namespace.assert_called_once_with("mos")
         finally:
             if original_lazyllm is None:
                 sys.modules.pop("lazyllm", None)

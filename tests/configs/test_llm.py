@@ -169,7 +169,7 @@ def test_lazyllm_online_chat_config():
         LazyLLMOnlineChatConfig,
         {
             "model_name_or_path": "gpt-4o-mini",
-            "namespace": "memos",
+            "namespace": "mos",
             "source": "openai",
             "api_key": "sk-test",
             "api_base": "https://api.openai.com/v1",
