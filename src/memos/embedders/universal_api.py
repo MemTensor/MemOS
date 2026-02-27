@@ -73,7 +73,6 @@ class UniversalAPIEmbedder(BaseEmbedder):
                     )
                 )
                 logger.info(f"Embeddings request succeeded with {time.time() - init_time} seconds")
-                logger.info(f"Embeddings request response: {response}")
                 return [r.embedding for r in response.data]
             except Exception as e:
                 if self.use_backup_client:
