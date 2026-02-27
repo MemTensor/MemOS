@@ -1,6 +1,7 @@
 from memos.configs.llm import (
     BaseLLMConfig,
     HFLLMConfig,
+    LazyLLMOnlineChatConfig,
     LLMConfigFactory,
     OllamaLLMConfig,
     OpenAILLMConfig,
@@ -140,10 +141,47 @@ def test_hf_llm_config():
     check_config_instantiation_invalid(HFLLMConfig)
 
 
+def test_lazyllm_online_chat_config():
+    check_config_base_class(
+        LazyLLMOnlineChatConfig,
+        required_fields=[
+            "model_name_or_path",
+        ],
+        optional_fields=[
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "top_k",
+            "remove_think_prefix",
+            "default_headers",
+            "source",
+            "api_key",
+            "api_base",
+            "stream",
+            "skip_auth",
+            "type",
+            "extra_kwargs",
+        ],
+    )
+
+    check_config_instantiation_valid(
+        LazyLLMOnlineChatConfig,
+        {
+            "model_name_or_path": "gpt-4o-mini",
+            "source": "openai",
+            "api_key": "sk-test",
+            "api_base": "https://api.openai.com/v1",
+            "stream": False,
+        },
+    )
+
+    check_config_instantiation_invalid(LazyLLMOnlineChatConfig)
+
+
 def test_llm_config_factory():
     check_config_factory_class(
         LLMConfigFactory,
-        expected_backends=["openai", "ollama", "huggingface"],
+        expected_backends=["openai", "ollama", "huggingface", "lazyllm"],
     )
 
     check_config_instantiation_valid(
