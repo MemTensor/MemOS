@@ -64,7 +64,7 @@ class SearchHandler(BaseHandler):
 
         # Expand top_k for deduplication (5x to ensure enough candidates)
         if search_req_local.dedup in ("sim", "mmr"):
-            search_req_local.top_k = search_req_local.top_k * 5
+            search_req_local.top_k = search_req_local.top_k * 3
 
         # Search and deduplicate
         cube_view = self._build_cube_view(search_req_local)
