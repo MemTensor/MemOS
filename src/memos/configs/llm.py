@@ -120,9 +120,8 @@ class VLLMLLMConfig(BaseLLMConfig):
 
 
 class LazyLLMOnlineChatConfig(BaseLLMConfig):
-    namespace: str = Field(default="mos", description="LazyLLM config namespace")
-    source: str = Field(
-        default="openai",
+    source: str | None = Field(
+        default=None,
         description="LazyLLM supplier source name (for example: openai/qwen/glm/deepseek)",
     )
     api_key: str | None = Field(default=None, description="API key for LazyLLM online source")

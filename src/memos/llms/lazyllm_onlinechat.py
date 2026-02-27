@@ -16,6 +16,7 @@ logger = get_logger(__name__)
 
 class LazyLLMOnlineChatLLM(BaseLLM):
     """LazyLLM OnlineChat backend as a unified supplier interface."""
+    _NAMESPACE = "mos"
 
     def __init__(self, config: LazyLLMOnlineChatConfig):
         self.config = config
@@ -27,12 +28,13 @@ class LazyLLMOnlineChatLLM(BaseLLM):
                 "Install with: pip install 'git+https://github.com/LazyAGI/LazyLLM.git@main'"
             ) from exc
 
-        module_kwargs: dict[str, Any] = {
-            "source": config.source,
-            "model": config.model_name_or_path,
-            "stream": config.stream,
-            "skip_auth": config.skip_auth,
-        }
+        module_kwargs: dict[str, Any] = {"model": config.model_name_or_path}
+        if config.source:
+            module_kwargs["source"] = config.source
+        if config.stream:
+            module_kwargs["stream"] = config.stream
+        if config.skip_auth:
+            module_kwargs["skip_auth"] = config.skip_auth
         if config.api_base:
             module_kwargs["base_url"] = config.api_base
         if config.api_key:
@@ -43,7 +45,7 @@ class LazyLLMOnlineChatLLM(BaseLLM):
             module_kwargs.update(config.extra_kwargs)
 
         try:
-            self.client = lazyllm.namespace(config.namespace).OnlineChatModule(**module_kwargs)
+            self.client = lazyllm.namespace(self._NAMESPACE).OnlineChatModule(**module_kwargs)
         except Exception as exc:
             if "Unsupported source" in str(exc):
                 raise ValueError(

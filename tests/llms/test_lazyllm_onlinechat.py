@@ -27,7 +27,6 @@ class TestLazyLLMOnlineChatBackend(unittest.TestCase):
                         "source": "openai",
                         "api_key": "sk-xxxx",
                         "api_base": "https://api.openai.com/v1",
-                        "namespace": "mos",
                     },
                 }
             )
