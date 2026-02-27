@@ -698,7 +698,7 @@ class MemoryHistoryManager:
 
         # create archived node for storing older versions of the memory, preserving the embedding
         emb = TextualMemoryItem(
-            **self.graph_db.get_node(primary_id, include_embedding=True)
+            **self.graph_db.get_node(primary_id, user_name=user_name, include_embedding=True)
         ).metadata.embedding
         arch_meta = _sanitize_metadata_dict(archived_item.metadata.model_dump(exclude_none=True))
         arch_meta["embedding"] = emb
