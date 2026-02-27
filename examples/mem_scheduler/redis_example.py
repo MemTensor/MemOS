@@ -1,5 +1,13 @@
-import asyncio
+# Prerequisites:
+# 1. Ensure a Redis server is running locally on the default port (6379).
+#    You can start it with: `redis-server`
+#    On macOS with Homebrew: `/opt/homebrew/bin/redis-server` or `brew services start redis`
+#    On Linux: `sudo service redis-server start`
+# 2. If Redis is running on a different host/port, update the configuration or environment variables accordingly.
+
+
 import sys
+import time
 
 from datetime import datetime
 from pathlib import Path
@@ -64,7 +72,7 @@ def service_run():
         print(
             f"Added: {res}",
         )
-        asyncio.sleep(0.5)
+        time.sleep(0.5)
 
     mem_scheduler.redis_stop_listening()
 

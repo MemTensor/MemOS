@@ -428,7 +428,8 @@ class APIRedisDBManager:
                 logger.info(f"Loaded environment variables from {env_file_path}")
             else:
                 logger.warning(
-                    f"Environment file not found: {env_file_path}, using current environment variables"
+                    f"Environment file not found: {env_file_path}, using current environment variables",
+                    stack_info=True,
                 )
         else:
             logger.info("Using current environment variables (no env_file_path provided)")
@@ -513,5 +514,5 @@ class APIRedisDBManager:
 
         except Exception as e:
             error_msg = f"Failed to create Redis connection from environment variables: {e}"
-            logger.error(error_msg)
+            logger.error(error_msg, stack_info=True)
             raise DatabaseError(error_msg) from e

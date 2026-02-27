@@ -70,7 +70,7 @@ def parse_json_result(response_text: str) -> dict:
         if "Invalid \\escape" in str(e):
             s = s.replace("\\", "\\\\")
             return json.loads(s)
-        logger.error(
+        logger.warning(
             f"[JSONParse] Failed to decode JSON: {e}\nTail: Raw {response_text} \
             json: {s}"
         )

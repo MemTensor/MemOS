@@ -3,7 +3,7 @@
 import json
 import re
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
@@ -18,6 +18,10 @@ from memos.types.openai_chat_completion_types import ChatCompletionContentPartIm
 
 from .base import BaseMessageParser, _derive_key
 from .utils import detect_lang
+
+
+if TYPE_CHECKING:
+    from memos.types.general_types import UserContext
 
 
 logger = get_logger(__name__)
@@ -151,6 +155,17 @@ class ImageParser(BaseMessageParser):
             IMAGE_ANALYSIS_PROMPT_ZH if lang == "zh" else IMAGE_ANALYSIS_PROMPT_EN
         )
 
+        # Add context if available
+        context_text = ""
+        if context_items:
+            for item in context_items:
+                if hasattr(item, "memory") and item.memory:
+                    context_text += f"{item.memory}\n"
+        context_text = context_text.strip()
+
+        # Inject context into prompt when possible
+        image_analysis_prompt = image_analysis_prompt.replace("{context}", context_text)
+
         # Build messages with image content
         messages = [
             {
@@ -168,21 +183,6 @@ class ImageParser(BaseMessageParser):
             }
         ]
 
-        # Add context if available
-        if context_items:
-            context_text = ""
-            for item in context_items:
-                if hasattr(item, "memory") and item.memory:
-                    context_text += f"{item.memory}\n"
-            if context_text:
-                messages.insert(
-                    0,
-                    {
-                        "role": "system",
-                        "content": f"Context from previous conversation:\n{context_text}",
-                    },
-                )
-
         try:
             # Call LLM with vision model
             response_text = self.llm.generate(messages)
@@ -192,6 +192,9 @@ class ImageParser(BaseMessageParser):
 
             # Parse JSON response
             response_json = self._parse_json_result(response_text)
+            if not response_json:
+                logger.warning(f"[ImageParser] Fail to parse response from LLM: {response_text}")
+                return []
 
             # Extract memory items from response
             memory_items = []
@@ -213,6 +216,7 @@ class ImageParser(BaseMessageParser):
                             key=_derive_key(summary),
                             sources=[source],
                             background=summary,
+                            **kwargs,
                         )
                     )
                 return memory_items
@@ -253,6 +257,7 @@ class ImageParser(BaseMessageParser):
                         key=key if key else _derive_key(value),
                         sources=[source],
                         background=background,
+                        **kwargs,
                     )
                     memory_items.append(memory_item)
                 except Exception as e:
@@ -274,6 +279,7 @@ class ImageParser(BaseMessageParser):
                     key=_derive_key(fallback_value),
                     sources=[source],
                     background="Image processing encountered an error.",
+                    **kwargs,
                 )
             ]
 
@@ -323,8 +329,7 @@ class ImageParser(BaseMessageParser):
                     return json.loads(s)
                 except json.JSONDecodeError:
                     pass
-            logger.error(f"[ImageParser] Failed to parse JSON: {e}\nResponse: {response_text}")
-            return {}
+            logger.warning(f"[ImageParser] Failed to parse JSON: {e}\nResponse: {response_text}")
 
     def _create_memory_item(
         self,
@@ -335,11 +340,17 @@ class ImageParser(BaseMessageParser):
         key: str,
         sources: list[SourceMessage],
         background: str = "",
+        **kwargs,
     ) -> TextualMemoryItem:
         """Create a TextualMemoryItem with the given parameters."""
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
+
+        # Extract manager_user_id and project_id from user_context
+        user_context: UserContext | None = kwargs.get("user_context")
+        manager_user_id = user_context.manager_user_id if user_context else None
+        project_id = user_context.project_id if user_context else None
 
         return TextualMemoryItem(
             memory=value,
@@ -357,5 +368,7 @@ class ImageParser(BaseMessageParser):
                 confidence=0.99,
                 type="fact",
                 info=info_,
+                manager_user_id=manager_user_id,
+                project_id=project_id,
             ),
         )

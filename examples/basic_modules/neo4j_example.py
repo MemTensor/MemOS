@@ -27,6 +27,23 @@ def embed_memory_item(memory: str) -> list[float]:
     return embedder.embed([memory])[0]
 
 
+def get_neo4j_graph(db_name: str = "paper"):
+    config = GraphDBConfigFactory(
+        backend="neo4j",
+        config={
+            "uri": "bolt://xxxx:7687",
+            "user": "neo4j",
+            "password": "xxxx",
+            "db_name": db_name,
+            "auto_create": True,
+            "embedding_dimension": 3072,
+            "use_multi_db": True,
+        },
+    )
+    graph = GraphStoreFactory.from_config(config)
+    return graph
+
+
 def example_multi_db(db_name: str = "paper"):
     # Step 1: Build factory config
     config = GraphDBConfigFactory(
@@ -537,9 +554,59 @@ def example_complex_shared_db(db_name: str = "shared-traval-group-complex", comm
     )
 
 
+def example_complex_shared_db_search_filter(db):
+    embedding = embed_memory_item(
+        "The reward function combines "
+        "multiple objectives: coverage "
+        "maximization, energy consumption "
+    )
+    print(f"get_node:{db.get_node(id='5364c28e-1e4b-485a-b1d5-1ba11bc5bc8b')}")
+
+    filter_id = {"id": "a269f2bf-f4a2-43b9-aa8d-1cb2a2eb4691"}
+    print(f"==filter_id:{db.search_by_embedding(vector=embedding, filter=filter_id)}")
+
+    filter_and_params = {
+        "and": [{"id": "a269f2bf-f4a2-43b9-aa8d-1cb2a2eb4691"}, {"source": "file123"}]
+    }
+    print(
+        f"==filter_and_params:{db.search_by_embedding(vector=embedding, filter=filter_and_params)}"
+    )
+
+    filter_or_params = {"or": [{"id": "a269f2bf-f4a2-43b9-aa8d-1cb2a2eb4691"}, {"id": "xxxxxxxx"}]}
+    print(f"==filter_or_params:{db.search_by_embedding(vector=embedding, filter=filter_or_params)}")
+    filter_like_params = {
+        "and": [
+            {"memory_type": {"like": "LongTermMemory"}},
+        ]
+    }
+    print(
+        f"==filter_like_params:{db.search_by_embedding(vector=embedding, filter=filter_like_params)}"
+    )
+
+    """
+        cypher_op_map = {"gt": ">", "lt": "<", "gte": ">=", "lte": "<="}
+    """
+    filter_lt_params = {
+        "and": [
+            {"created_at": {"gt": "2025-11-29"}},
+        ]
+    }
+    print(f"==filter_lt_params:{db.search_by_embedding(vector=embedding, filter=filter_lt_params)}")
+
+
+def example_complex_shared_db_delete_memory(db):
+    print("delete node")
+    db.delete_node(id="582de45f-8f99-4006-8062-76eea5649d94")
+    print("delete edge")
+    db.delete_edge(source_id=1, target_id=2, type="PARENT", user_name="")
+
+
 if __name__ == "__main__":
     print("\n=== Example: Multi-DB ===")
     example_multi_db(db_name="paper")
+
+    print("\n=== Example: Single-DB ===")
+    example_shared_db(db_name="shared-traval-group")
 
     print("\n=== Example: Single-DB ===")
     example_shared_db(db_name="shared-traval-group")
@@ -549,3 +616,9 @@ if __name__ == "__main__":
 
     print("\n=== Example: Single-Community-DB-Complex ===")
     example_complex_shared_db(db_name="paper", community=True)
+
+    print("\n=== Example: Single-DB-Complex searchFilter ===")
+    db = get_neo4j_graph(db_name="paper")
+    example_complex_shared_db_search_filter(db)
+
+    example_complex_shared_db_delete_memory(db)

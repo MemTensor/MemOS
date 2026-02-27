@@ -4,7 +4,7 @@ import uuid
 from abc import ABC, abstractmethod
 from concurrent.futures import as_completed
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
@@ -23,6 +23,10 @@ from memos.templates.prefer_complete_prompt import (
     NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH,
 )
 from memos.types import MessageList
+
+
+if TYPE_CHECKING:
+    from memos.types.general_types import UserContext
 
 
 logger = get_logger(__name__)
@@ -177,6 +181,7 @@ class NaiveExtractor(BaseExtractor):
         msg_type: str,
         info: dict[str, Any],
         max_workers: int = 10,
+        **kwargs,
     ) -> list[TextualMemoryItem]:
         """Extract preference memories based on the messages using thread pool for acceleration."""
         chunks: list[MessageList] = []
@@ -185,6 +190,10 @@ class NaiveExtractor(BaseExtractor):
             chunks.extend(chunk)
         if not chunks:
             return []
+
+        user_context: UserContext | None = kwargs.get("user_context")
+        user_context_dict = user_context.model_dump() if user_context else {}
+        info = {**info, **user_context_dict}
 
         memories = []
         with ContextThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as executor:

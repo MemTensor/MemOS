@@ -19,6 +19,7 @@ from memos.mem_scheduler.utils.api_utils import format_textual_memory_item
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+from memos.search import build_search_context, search_text_memories
 from memos.types import (
     MemCubeID,
     SearchMode,
@@ -43,10 +44,14 @@ class OptimizedScheduler(GeneralScheduler):
         self.session_counter = OrderedDict()
         self.max_session_history = 5
 
-        self.api_module = SchedulerAPIModule(
-            window_size=self.window_size,
-            history_memory_turns=self.history_memory_turns,
-        )
+        if self.config.use_redis_queue:
+            self.api_module = SchedulerAPIModule(
+                window_size=self.window_size,
+                history_memory_turns=self.history_memory_turns,
+            )
+        else:
+            self.api_module = None
+
         self.register_handlers(
             {
                 API_MIX_SEARCH_TASK_LABEL: self._api_mix_search_message_consumer,
@@ -100,27 +105,14 @@ class OptimizedScheduler(GeneralScheduler):
         mem_cube: NaiveMemCube,
         mode: SearchMode,
     ):
-        """Fine search memories function copied from server_router to avoid circular import"""
-        target_session_id = search_req.session_id
-        if not target_session_id:
-            target_session_id = "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-
-        # Create MemCube and perform search
-        search_results = mem_cube.text_mem.search(
-            query=search_req.query,
-            user_name=user_context.mem_cube_id,
-            top_k=search_req.top_k,
+        """Shared text-memory search via centralized search service."""
+        return search_text_memories(
+            text_mem=mem_cube.text_mem,
+            search_req=search_req,
+            user_context=user_context,
             mode=mode,
-            manual_close_internet=not search_req.internet_search,
-            search_filter=search_filter,
-            info={
-                "user_id": search_req.user_id,
-                "session_id": target_session_id,
-                "chat_history": search_req.chat_history,
-            },
+            include_embedding=(search_req.dedup == "mmr"),
         )
-        return search_results
 
     def mix_search_memories(
         self,
@@ -134,20 +126,30 @@ class OptimizedScheduler(GeneralScheduler):
             f"Mix searching memories for user {search_req.user_id} with query: {search_req.query}"
         )
 
+        if not self.config.use_redis_queue:
+            logger.warning(
+                "Redis queue is not enabled. Running in degraded mode: "
+                "FAST search only, no history memory reranking, no async updates."
+            )
+            memories = self.search_memories(
+                search_req=search_req,
+                user_context=user_context,
+                mem_cube=self.mem_cube,
+                mode=SearchMode.FAST,
+            )
+            return [
+                format_textual_memory_item(item, include_embedding=search_req.dedup == "sim")
+                for item in memories
+            ]
+
         # Get mem_cube for fast search
-        target_session_id = search_req.session_id
-        if not target_session_id:
-            target_session_id = "default_session"
-        search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
-        search_filter = search_req.filter
+        search_ctx = build_search_context(search_req=search_req)
+        search_priority = search_ctx.search_priority
+        search_filter = search_ctx.search_filter
 
         # Rerank Memories - reranker expects TextualMemoryItem objects
 
-        info = {
-            "user_id": search_req.user_id,
-            "session_id": target_session_id,
-            "chat_history": search_req.chat_history,
-        }
+        info = search_ctx.info
 
         raw_retrieved_memories = self.searcher.retrieve(
             query=search_req.query,

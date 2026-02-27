@@ -64,7 +64,7 @@ class NaiveAdder(BaseAdder):
             response = result.get("is_same", False)
             return response if isinstance(response, bool) else response.lower() == "true"
         except Exception as e:
-            logger.error(f"Error in judge_update_or_add: {e}")
+            logger.warning(f"Error in judge_update_or_add: {e}")
             # Fallback to simple string comparison
             return old_msg == new_msg
 
@@ -80,7 +80,7 @@ class NaiveAdder(BaseAdder):
             result = json.loads(response)
             return result
         except Exception as e:
-            logger.error(f"Error in judge_update_or_add_fine: {e}")
+            logger.warning(f"Error in judge_update_or_add_fine: {e}")
             return None
 
     def _judge_dup_with_text_mem(self, new_pref: MilvusVecDBItem) -> bool:
@@ -118,7 +118,7 @@ class NaiveAdder(BaseAdder):
             exists = result.get("exists", False)
             return exists
         except Exception as e:
-            logger.error(f"Error in judge_dup_with_text_mem: {e}")
+            logger.warning(f"Error in judge_dup_with_text_mem: {e}")
             return False
 
     def _judge_update_or_add_trace_op(
@@ -135,7 +135,7 @@ class NaiveAdder(BaseAdder):
             result = json.loads(response)
             return result
         except Exception as e:
-            logger.error(f"Error in judge_update_or_add_trace_op: {e}")
+            logger.warning(f"Error in judge_update_or_add_trace_op: {e}")
             return None
 
     def _dedup_explicit_pref_by_textual(
@@ -156,7 +156,7 @@ class NaiveAdder(BaseAdder):
                 try:
                     is_dup_flags[idx] = future.result()
                 except Exception as e:
-                    logger.error(
+                    logger.warning(
                         f"Error in _judge_dup_with_text_mem for pref {new_prefs[idx].id}: {e}"
                     )
                     is_dup_flags[idx] = False
@@ -407,7 +407,7 @@ class NaiveAdder(BaseAdder):
             )
 
         except Exception as e:
-            logger.error(f"Error processing memory {memory.id}: {e}")
+            logger.warning(f"Error processing memory {memory.id}: {e}")
             return None
 
     def process_memory_batch(self, memories: list[TextualMemoryItem], *args, **kwargs) -> list[str]:
@@ -480,7 +480,7 @@ class NaiveAdder(BaseAdder):
                             added_ids.append(memory_id)
                 except Exception as e:
                     memory = future_to_memory[future]
-                    logger.error(f"Error processing memory {memory.id}: {e}")
+                    logger.warning(f"Error processing memory {memory.id}: {e}")
                     continue
         return added_ids
 

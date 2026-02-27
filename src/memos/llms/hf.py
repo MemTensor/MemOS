@@ -51,7 +51,7 @@ class HFLLM(BaseLLM):
                 self.config.model_name_or_path, torch_dtype="auto", device_map="auto"
             )
         self.tokenizer = AutoTokenizer.from_pretrained(
-            self.config.model_name_or_path, use_fast=True
+            self.config.model_name_or_path, use_fast=True, force_download=True
         )
 
         # Logits processors for sampling

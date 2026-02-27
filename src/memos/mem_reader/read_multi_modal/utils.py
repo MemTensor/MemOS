@@ -97,7 +97,7 @@ def parse_json_result(response_text: str) -> dict:
                 return json.loads(s)
             except json.JSONDecodeError:
                 pass
-        logger.error(f"[JSONParse] Failed to decode JSON: {e}\nRaw: {response_text}")
+        logger.warning(f"[JSONParse] Failed to decode JSON: {e}\nRaw: {response_text}")
         return {}
 
 

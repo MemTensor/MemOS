@@ -40,15 +40,16 @@ class SimplePreferenceTextMemory(PreferenceTextMemory):
         self.retriever = retriever
 
     def get_memory(
-        self, messages: list[MessageList], type: str, info: dict[str, Any]
+        self, messages: list[MessageList], type: str, info: dict[str, Any], **kwargs
     ) -> list[TextualMemoryItem]:
         """Get memory based on the messages.
         Args:
             messages (MessageList): The messages to get memory from.
             type (str): The type of memory to get.
             info (dict[str, Any]): The info to get memory.
+            **kwargs: Additional keyword arguments to pass to the extractor.
         """
-        return self.extractor.extract(messages, type, info)
+        return self.extractor.extract(messages, type, info, **kwargs)
 
     def search(
         self, query: str, top_k: int, info=None, search_filter=None, **kwargs

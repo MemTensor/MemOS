@@ -29,25 +29,30 @@ from memos.api.product_models import (
     APIChatCompleteRequest,
     APIFeedbackRequest,
     APISearchRequest,
+    ChatBusinessRequest,
     ChatPlaygroundRequest,
     ChatRequest,
+    DeleteMemoryByRecordIdRequest,
+    DeleteMemoryByRecordIdResponse,
     DeleteMemoryRequest,
     DeleteMemoryResponse,
     ExistMemCubeIdRequest,
     ExistMemCubeIdResponse,
+    GetMemoryDashboardRequest,
     GetMemoryPlaygroundRequest,
     GetMemoryRequest,
     GetMemoryResponse,
     GetUserNamesByMemoryIdsRequest,
     GetUserNamesByMemoryIdsResponse,
     MemoryResponse,
+    RecoverMemoryByRecordIdRequest,
+    RecoverMemoryByRecordIdResponse,
     SearchResponse,
     StatusResponse,
     SuggestionRequest,
     SuggestionResponse,
     TaskQueueResponse,
 )
-from memos.graph_dbs.polardb import PolarDBGraphDB
 from memos.log import get_logger
 from memos.mem_scheduler.base_scheduler import BaseScheduler
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
@@ -290,8 +295,9 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
                 memory_req.mem_cube_ids[0] if memory_req.mem_cube_ids else memory_req.user_id
             ),
             query=memory_req.search_query,
-            top_k=20,
+            top_k=200,
             naive_mem_cube=naive_mem_cube,
+            search_type=memory_req.search_type,
         )
     else:
         return handlers.memory_handler.handle_get_all_memories(
@@ -316,6 +322,14 @@ def get_memories(memory_req: GetMemoryRequest):
 def get_memory_by_id(memory_id: str):
     return handlers.memory_handler.handle_get_memory(
         memory_id=memory_id,
+        naive_mem_cube=naive_mem_cube,
+    )
+
+
+@router.post("/get_memory_by_ids", summary="Get memory by ids", response_model=GetMemoryResponse)
+def get_memory_by_ids(memory_ids: list[str]):
+    return handlers.memory_handler.handle_get_memory_by_ids(
+        memory_ids=memory_ids,
         naive_mem_cube=naive_mem_cube,
     )
 
@@ -356,15 +370,6 @@ def feedback_memories(feedback_req: APIFeedbackRequest):
 )
 def get_user_names_by_memory_ids(request: GetUserNamesByMemoryIdsRequest):
     """Get user names by memory ids."""
-    if not isinstance(graph_db, PolarDBGraphDB):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "graph_db must be an instance of PolarDBGraphDB to use "
-                "get_user_names_by_memory_ids"
-                f"current graph_db is: {graph_db.__class__.__name__}"
-            ),
-        )
     result = graph_db.get_user_names_by_memory_ids(memory_ids=request.memory_ids)
     if vector_db:
         prefs = []
@@ -386,9 +391,69 @@ def get_user_names_by_memory_ids(request: GetUserNamesByMemoryIdsRequest):
     response_model=ExistMemCubeIdResponse,
 )
 def exist_mem_cube_id(request: ExistMemCubeIdRequest):
-    """Check if mem cube id exists."""
+    """(inner) Check if mem cube id exists."""
     return ExistMemCubeIdResponse(
         code=200,
         message="Successfully",
         data=graph_db.exist_user_name(user_name=request.mem_cube_id),
+    )
+
+
+@router.post("/chat/stream/business_user", summary="Chat with MemOS for business user")
+def chat_stream_business_user(chat_req: ChatBusinessRequest):
+    """(inner) Chat with MemOS for a specific business user. Returns SSE stream."""
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
+
+    return chat_handler.handle_chat_stream_for_business_user(chat_req)
+
+
+@router.post(
+    "/delete_memory_by_record_id",
+    summary="Delete memory by record id",
+    response_model=DeleteMemoryByRecordIdResponse,
+)
+def delete_memory_by_record_id(memory_req: DeleteMemoryByRecordIdRequest):
+    """(inner) Delete memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set."""
+    graph_db.delete_node_by_mem_cube_id(
+        mem_cube_id=memory_req.mem_cube_id,
+        delete_record_id=memory_req.record_id,
+        hard_delete=memory_req.hard_delete,
+    )
+
+    return DeleteMemoryByRecordIdResponse(
+        code=200,
+        message="Called Successfully",
+        data={"status": "success"},
+    )
+
+
+@router.post(
+    "/recover_memory_by_record_id",
+    summary="Recover memory by record id",
+    response_model=RecoverMemoryByRecordIdResponse,
+)
+def recover_memory_by_record_id(memory_req: RecoverMemoryByRecordIdRequest):
+    """(inner) Recover memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set."""
+    graph_db.recover_memory_by_mem_cube_id(
+        mem_cube_id=memory_req.mem_cube_id,
+        delete_record_id=memory_req.delete_record_id,
+    )
+
+    return RecoverMemoryByRecordIdResponse(
+        code=200,
+        message="Called Successfully",
+        data={"status": "success"},
+    )
+
+
+@router.post(
+    "/get_memory_dashboard", summary="Get memories for dashboard", response_model=GetMemoryResponse
+)
+def get_memories_dashboard(memory_req: GetMemoryDashboardRequest):
+    return handlers.memory_handler.handle_get_memories_dashboard(
+        get_mem_req=memory_req,
+        naive_mem_cube=naive_mem_cube,
     )

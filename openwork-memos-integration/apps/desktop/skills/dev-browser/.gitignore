@@ -1,0 +1,4 @@
+# Browser profile data
+profiles/
+tmp/
+node_modules/
