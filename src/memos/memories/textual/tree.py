@@ -404,10 +404,10 @@ class TreeTextMemory(BaseTextMemory):
         except Exception as e:
             logger.error(f"An error occurred while deleting memories by memory_ids: {e}")
 
-    def delete_all(self) -> None:
+    def delete_all(self, user_name: str | None = None) -> None:
         """Delete all memories and their relationships from the graph store."""
         try:
-            self.graph_store.clear()
+            self.graph_store.clear(user_name=user_name)
             logger.info("All memories and edges have been deleted from the graph.")
         except Exception as e:
             logger.error(f"An error occurred while deleting all memories: {e}")
@@ -424,7 +424,7 @@ class TreeTextMemory(BaseTextMemory):
             writable_cube_ids=writable_cube_ids, file_ids=file_ids, filter=filter
         )
 
-    def load(self, dir: str) -> None:
+    def load(self, dir: str, user_name: str | None = None) -> None:
         try:
             memory_file = os.path.join(dir, self.config.memory_filename)
 
@@ -435,7 +435,7 @@ class TreeTextMemory(BaseTextMemory):
             with open(memory_file, encoding="utf-8") as f:
                 memories = json.load(f)
 
-            self.graph_store.import_graph(memories)
+            self.graph_store.import_graph(memories, user_name=user_name)
             logger.info(f"Loaded {len(memories)} memories from {memory_file}")
 
         except FileNotFoundError:
@@ -445,10 +445,12 @@ class TreeTextMemory(BaseTextMemory):
         except Exception as e:
             logger.error(f"An error occurred while loading memories: {e}")
 
-    def dump(self, dir: str, include_embedding: bool = False) -> None:
+    def dump(self, dir: str, include_embedding: bool = False, user_name: str | None = None) -> None:
         """Dump memories to os.path.join(dir, self.config.memory_filename)"""
         try:
-            json_memories = self.graph_store.export_graph(include_embedding=include_embedding)
+            json_memories = self.graph_store.export_graph(
+                include_embedding=include_embedding, user_name=user_name
+            )
 
             os.makedirs(dir, exist_ok=True)
             memory_file = os.path.join(dir, self.config.memory_filename)
