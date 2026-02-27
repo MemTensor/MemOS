@@ -14,8 +14,6 @@ from memos.memories.textual.item import (
 )
 from memos.memories.textual.tree_text_memory.organize.history_manager import (
     MemoryHistoryManager,
-    _append_related_content,
-    _detach_related_content,
     _rebuild_fast_node_history,
 )
 
@@ -34,60 +32,6 @@ def mock_graph_db():
 @pytest.fixture
 def history_manager(mock_nli_client, mock_graph_db):
     return MemoryHistoryManager(nli_client=mock_nli_client, graph_db=mock_graph_db)
-
-
-def test_detach_related_content():
-    original_memory = "This is the original memory content."
-    item = TextualMemoryItem(memory=original_memory, metadata=TreeNodeTextualMemoryMetadata())
-
-    duplicates = ["Duplicate 1", "Duplicate 2"]
-    conflicts = ["Conflict 1", "Conflict 2"]
-
-    # 1. Append content
-    _append_related_content(item, duplicates, conflicts)
-
-    # Verify content was appended
-    assert item.memory != original_memory
-    assert "[possibly conflicting memories]" in item.memory
-    assert "[possibly duplicate memories]" in item.memory
-    assert "Duplicate 1" in item.memory
-    assert "Conflict 1" in item.memory
-
-    # 2. Detach content
-    _detach_related_content(item)
-
-    # 3. Verify content is restored
-    assert item.memory == original_memory
-
-
-def test_detach_only_conflicts():
-    original_memory = "Original memory."
-    item = TextualMemoryItem(memory=original_memory, metadata=TreeNodeTextualMemoryMetadata())
-
-    duplicates = []
-    conflicts = ["Conflict A"]
-
-    _append_related_content(item, duplicates, conflicts)
-    assert "Conflict A" in item.memory
-    assert "Duplicate" not in item.memory
-
-    _detach_related_content(item)
-    assert item.memory == original_memory
-
-
-def test_detach_only_duplicates():
-    original_memory = "Original memory."
-    item = TextualMemoryItem(memory=original_memory, metadata=TreeNodeTextualMemoryMetadata())
-
-    duplicates = ["Duplicate A"]
-    conflicts = []
-
-    _append_related_content(item, duplicates, conflicts)
-    assert "Duplicate A" in item.memory
-    assert "Conflict" not in item.memory
-
-    _detach_related_content(item)
-    assert item.memory == original_memory
 
 
 def test_truncation(history_manager, mock_nli_client):
