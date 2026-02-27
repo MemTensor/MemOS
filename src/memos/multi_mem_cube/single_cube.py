@@ -443,7 +443,10 @@ class SingleCubeView(MemCubeView):
                 },
                 search_filter=search_req.filter,
             )
-            formatted_results = self._postformat_memories(results, user_context.mem_cube_id)
+            include_embedding = os.getenv("INCLUDE_EMBEDDING", "false") == "true"
+            formatted_results = self._postformat_memories(
+                results, user_context.mem_cube_id, include_embedding=include_embedding
+            )
 
             # For each returned item, tackle with metadata.info project_id /
             # operation / manager_user_id
