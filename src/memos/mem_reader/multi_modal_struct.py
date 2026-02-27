@@ -1003,10 +1003,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     len(related),
                     len(conflicting_or_duplicate_ids),
                 )
-                # mark delete(temporarily)
-                self.history_manager.mark_memory_status(
-                    conflicting_or_duplicate_ids, "resolving", user_name=user_name
-                )
 
             except Exception as e:
                 logger.warning(f"[MultiModalStruct] Fast recall failed: {e}")

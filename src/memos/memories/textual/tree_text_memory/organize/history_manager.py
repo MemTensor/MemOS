@@ -25,61 +25,6 @@ from memos.templates.mem_reader_mem_version_prompts import (
 
 logger = logging.getLogger(__name__)
 
-CONFLICT_MEMORY_TITLE = "[possibly conflicting memories]"
-DUPLICATE_MEMORY_TITLE = "[possibly duplicate memories]"
-
-
-def _append_related_content(
-    new_item: TextualMemoryItem, duplicates: list[str], conflicts: list[str]
-) -> None:
-    """
-    Append duplicate and conflict memory contents to the new item's memory text,
-    truncated to avoid excessive length.
-    """
-    max_per_item_len = 200
-    max_section_len = 1000
-
-    def _format_section(title: str, items: list[str]) -> str:
-        if not items:
-            return ""
-
-        section_content = ""
-        for mem in items:
-            # Truncate individual item
-            snippet = mem[:max_per_item_len] + "..." if len(mem) > max_per_item_len else mem
-            # Check total section length
-            if len(section_content) + len(snippet) + 5 > max_section_len:
-                section_content += "\n- ... (more items truncated)"
-                break
-            section_content += f"\n- {snippet}"
-
-        return f"\n\n{title}:{section_content}"
-
-    append_text = ""
-    append_text += _format_section(CONFLICT_MEMORY_TITLE, conflicts)
-    append_text += _format_section(DUPLICATE_MEMORY_TITLE, duplicates)
-
-    if append_text:
-        new_item.memory += append_text
-
-
-def _detach_related_content(new_item: TextualMemoryItem) -> None:
-    """
-    Detach duplicate and conflict memory contents from the new item's memory text.
-    """
-    markers = [f"\n\n{CONFLICT_MEMORY_TITLE}:", f"\n\n{DUPLICATE_MEMORY_TITLE}:"]
-
-    cut_index = -1
-    for marker in markers:
-        idx = new_item.memory.find(marker)
-        if idx != -1 and (cut_index == -1 or idx < cut_index):
-            cut_index = idx
-
-    if cut_index != -1:
-        new_item.memory = new_item.memory[:cut_index]
-
-    return
-
 
 def _rebuild_fast_node_history(
     item: TextualMemoryItem, replacements: dict[int, list[ArchivedTextualMemory]]
@@ -284,10 +229,6 @@ class MemoryHistoryManager:
             )
             new_item.metadata.history.append(archived)
 
-        # 3. Concat duplicate/conflict memories to new_item.memory
-        # We will mark those old memories as invisible during fine processing, this op helps to avoid information loss.
-        _append_related_content(new_item, duplicate_memories, conflict_memories)
-
         return duplicate_memory_ids + conflict_memory_ids
 
     def wait_and_update_fast_history(
@@ -331,7 +272,7 @@ class MemoryHistoryManager:
                 break
 
             # 2. Check status of the fast nodes and fetch replacements for evolved ones
-            replacements = self._check_and_fetch_replacements(item, pending_indices)
+            replacements = self._check_and_fetch_replacements(item, pending_indices, user_name)
 
             # 3. If we have any resolved items, rebuild the history
             if replacements:
@@ -362,9 +303,6 @@ class MemoryHistoryManager:
         Returns:
             Formatted prompt string.
         """
-        # First, detach duplicate and conflict memory contents from the new item's memory text
-        _detach_related_content(item)
-
         duplicate_candidates = []
         conflict_candidates = []
         unrelated_candidates = []
@@ -437,14 +375,7 @@ class MemoryHistoryManager:
         for mem_data in memory_list:
             used_source_ids.update(mem_data.get("source_candidate_ids", []))
             used_conflict_ids.update(mem_data.get("conflicted_candidate_ids", []))
-        # Collect IDs referenced by restored memories
-        restored_source_ids = {
-            mem.get("source_candidate_id")
-            for mem in restored_memories
-            if mem.get("source_candidate_id")
-        }
-        # All IDs used by the LLM response
-        used_ids = used_source_ids | used_conflict_ids | restored_source_ids
+
         expected_versions = {}  # For concurrency control, need to get the recorded versions of the old memories
         candidate_id_set: set[str] = set()
         # Recover candidate IDs and their expected versions from the source item's history
@@ -454,14 +385,10 @@ class MemoryHistoryManager:
                     candidate_id_set.add(h.archived_memory_id)
                     expected_versions[h.archived_memory_id] = h.version
 
-        # IDs not used by the LLM response will be treated as unrelated
-        unrelated_ids = sorted(candidate_id_set - used_ids)
         updated_items: list[TextualMemoryItem] = []
         new_items: list[TextualMemoryItem] = []
 
-        # 1. Handle Unrelated Candidates - Restore status to activated
-        self._handle_unrelated_candidates(unrelated_ids, user_name=user_name)
-
+        # 1. Handle Unrelated Candidates - Do nothing
         # 2. Handle Memory List (Update or New)
         processed_updates, created_items = self._process_memory_updates(
             memory_list, expected_versions, user_name, source_item
@@ -478,12 +405,6 @@ class MemoryHistoryManager:
         self, item: TextualMemoryItem, user_name: str | None = None
     ) -> list[TextualMemoryItem]:
         latest_item = item.model_copy(deep=True)
-        _detach_related_content(latest_item)
-
-        history = latest_item.metadata.history or []
-        archived_ids = [h.archived_memory_id for h in history if h.archived_memory_id]
-        if archived_ids:
-            self.mark_memory_status(archived_ids, "activated", user_name or "")
 
         latest_item.id = str(uuid.uuid4())
         latest_item.metadata.is_fast = False
@@ -595,11 +516,6 @@ class MemoryHistoryManager:
 
         return results
 
-    def _handle_unrelated_candidates(self, unrelated_ids: list[str], user_name: str) -> None:
-        """Handle Unrelated Candidates - Restore status to `activated`."""
-        if unrelated_ids:
-            self.mark_memory_status(unrelated_ids, "activated", user_name)
-
     def _process_memory_updates(
         self,
         memory_list: list[dict[str, Any]],
@@ -666,7 +582,6 @@ class MemoryHistoryManager:
         new_value_item = TextualMemoryItem(
             memory=new_value, metadata=TreeNodeTextualMemoryMetadata()
         )
-        _detach_related_content(new_value_item)
         new_value = new_value_item.memory
 
         # Fetch candidate nodes in batch and then select the primary
@@ -765,7 +680,6 @@ class MemoryHistoryManager:
             latest_item = TextualMemoryItem(
                 memory=current_item.memory, metadata=TreeNodeTextualMemoryMetadata()
             )
-            _detach_related_content(latest_item)
             merged_content = self._merge_conflicting_memory(
                 latest_memory=latest_item.memory,
                 proposed_update=new_value,
@@ -869,7 +783,6 @@ class MemoryHistoryManager:
         new_value_item = TextualMemoryItem(
             memory=new_value, metadata=TreeNodeTextualMemoryMetadata()
         )
-        _detach_related_content(new_value_item)
         new_value = new_value_item.memory
         tags = mem_data.get("tags", [])
         key = mem_data.get("key", "")
@@ -915,7 +828,6 @@ class MemoryHistoryManager:
             source_history = source_item.history.copy()
             value = data.get("value", "")
             value_item = TextualMemoryItem(memory=value, metadata=TreeNodeTextualMemoryMetadata())
-            _detach_related_content(value_item)
             value = value_item.memory
             tags = data.get("tags", [])
             keys = data.get("keys", [])
