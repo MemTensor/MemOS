@@ -141,6 +141,7 @@ class MemoryHistoryManager:
         self,
         memory_items: list[TextualMemoryItem],
         status: Literal["activated", "resolving", "archived", "deleted"],
+        user_name: str | None = None,
     ) -> None:
         """
         Support status marking operations during history management. Common usages are:
@@ -157,6 +158,7 @@ class MemoryHistoryManager:
                         self.graph_db.update_node,
                         id=mem.id,
                         fields={"status": status},
+                        user_name=user_name,
                     )
                 )
 
