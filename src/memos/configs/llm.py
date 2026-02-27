@@ -120,6 +120,7 @@ class VLLMLLMConfig(BaseLLMConfig):
 
 
 class LazyLLMOnlineChatConfig(BaseLLMConfig):
+    namespace: str = Field(default="memos", description="LazyLLM config namespace")
     source: str = Field(default="openai", description="LazyLLM online source name")
     api_key: str | None = Field(default=None, description="API key for LazyLLM online source")
     api_base: str | None = Field(default=None, description="Base URL for LazyLLM online source")

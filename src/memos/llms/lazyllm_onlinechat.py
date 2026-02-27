@@ -42,7 +42,7 @@ class LazyLLMOnlineChatLLM(BaseLLM):
         if config.extra_kwargs:
             module_kwargs.update(config.extra_kwargs)
 
-        self.client = lazyllm.OnlineChatModule(**module_kwargs)
+        self.client = lazyllm.namespace(config.namespace).OnlineChatModule(**module_kwargs)
         logger.info("LazyLLM OnlineChat LLM instance initialized")
 
     def _normalize_messages(self, messages: MessageList | str) -> MessageList:

@@ -13,8 +13,9 @@ class TestLazyLLMOnlineChatBackend(unittest.TestCase):
         """Test LLMFactory with mocked lazyllm backend."""
         mock_client = MagicMock()
         mock_client.return_value = {"content": "Hello from LazyLLM", "tool_calls": None}
+        mock_namespace_module = SimpleNamespace(OnlineChatModule=MagicMock(return_value=mock_client))
 
-        mock_lazyllm = SimpleNamespace(OnlineChatModule=MagicMock(return_value=mock_client))
+        mock_lazyllm = SimpleNamespace(namespace=MagicMock(return_value=mock_namespace_module))
         original_lazyllm = sys.modules.get("lazyllm")
         sys.modules["lazyllm"] = mock_lazyllm
         try:
@@ -26,12 +27,14 @@ class TestLazyLLMOnlineChatBackend(unittest.TestCase):
                         "source": "openai",
                         "api_key": "sk-xxxx",
                         "api_base": "https://api.openai.com/v1",
+                        "namespace": "memos",
                     },
                 }
             )
             llm = LLMFactory.from_config(config)
             response = llm.generate([{"role": "user", "content": "hello"}])
             self.assertEqual(response, "Hello from LazyLLM")
+            mock_lazyllm.namespace.assert_called_once_with("memos")
         finally:
             if original_lazyllm is None:
                 sys.modules.pop("lazyllm", None)
@@ -50,8 +53,9 @@ class TestLazyLLMOnlineChatBackend(unittest.TestCase):
                 }
             ],
         }
+        mock_namespace_module = SimpleNamespace(OnlineChatModule=MagicMock(return_value=mock_client))
 
-        mock_lazyllm = SimpleNamespace(OnlineChatModule=MagicMock(return_value=mock_client))
+        mock_lazyllm = SimpleNamespace(namespace=MagicMock(return_value=mock_namespace_module))
         original_lazyllm = sys.modules.get("lazyllm")
         sys.modules["lazyllm"] = mock_lazyllm
         try:
