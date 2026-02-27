@@ -5,8 +5,8 @@ Provides functions for generating, validating, and managing API keys.
 """
 
 import hashlib
-import os
 import secrets
+
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
