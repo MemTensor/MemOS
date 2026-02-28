@@ -4119,9 +4119,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
                     edges.append({"from": from_id, "to": to_id, "type": edge_type})
                 elapsed_time = time.time() - start_time
-                logger.info(
-                    f"polardb get_edges query completed time in {elapsed_time:.2f}s"
-                )
+                logger.info(f"polardb get_edges query completed time in {elapsed_time:.2f}s")
                 return edges
 
         except Exception as e:
