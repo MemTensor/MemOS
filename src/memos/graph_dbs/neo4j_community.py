@@ -56,6 +56,9 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Safely process metadata
         metadata = _prepare_node_metadata(metadata)
 
+        # Flatten info fields to top level (for Neo4j flat structure)
+        metadata = _flatten_info_fields(metadata)
+
         # Initialize delete_time and delete_record_id fields
         metadata.setdefault("delete_time", "")
         metadata.setdefault("delete_record_id", "")
