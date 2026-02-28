@@ -959,7 +959,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         return fine_memory_items
 
     def _fast_resolve_memory_duplicates_and_conflicts(
-        self, fast_memory_items: list[TextualMemoryItem], user_name: str
+        self, item: list[TextualMemoryItem], user_name: str
     ) -> None:
         """
         1. Recall related memories
@@ -968,44 +968,44 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         4. Mark conflicting/duplicate old memory nodes as "resolving", making them invisible to /search,
            but still visible for other conflict/duplication checks' recalls.
         """
+        if not self.history_manager.is_applicable(item):
+            return
+
         if not self.pre_update_retriever or not self.history_manager:
             logger.warning(
                 "[MultiModalStruct] PreUpdateRetriever or HistoryManager is not initialized."
             )
             return
 
-        for item in fast_memory_items:
-            if not self.history_manager.is_applicable(item):
-                continue
-            try:
-                # recall related memories
-                retrieve_start = time.perf_counter()
-                related = self.pre_update_retriever.retrieve(
-                    item=item,
-                    user_name=user_name,
-                )
-                retrieve_ms = (time.perf_counter() - retrieve_start) * 1000
-                logger.info(
-                    "[MultiModalStruct] pre_update_retriever.retrieve latency_ms=%.2f item_id=%s",
-                    retrieve_ms,
-                    getattr(item, "id", None),
-                )
-                # NLI check & attaching contents
-                nli_start = time.perf_counter()
-                conflicting_or_duplicate_ids = self.history_manager.resolve_history_via_nli(
-                    item, related
-                )
-                nli_ms = (time.perf_counter() - nli_start) * 1000
-                logger.info(
-                    "[MultiModalStruct] history_manager.resolve_history_via_nli latency_ms=%.2f item_id=%s related_count=%s result_count=%s",
-                    nli_ms,
-                    getattr(item, "id", None),
-                    len(related),
-                    len(conflicting_or_duplicate_ids),
-                )
+        try:
+            # recall related memories
+            retrieve_start = time.perf_counter()
+            related = self.pre_update_retriever.retrieve(
+                item=item,
+                user_name=user_name,
+            )
+            retrieve_ms = (time.perf_counter() - retrieve_start) * 1000
+            logger.info(
+                "[MultiModalStruct] pre_update_retriever.retrieve latency_ms=%.2f item_id=%s",
+                retrieve_ms,
+                getattr(item, "id", None),
+            )
+            # NLI check & attaching contents
+            nli_start = time.perf_counter()
+            conflicting_or_duplicate_ids = self.history_manager.resolve_history_via_nli(
+                item, related
+            )
+            nli_ms = (time.perf_counter() - nli_start) * 1000
+            logger.info(
+                "[MultiModalStruct] history_manager.resolve_history_via_nli latency_ms=%.2f item_id=%s related_count=%s result_count=%s",
+                nli_ms,
+                getattr(item, "id", None),
+                len(related),
+                len(conflicting_or_duplicate_ids),
+            )
 
-            except Exception as e:
-                logger.warning(f"[MultiModalStruct] Fast recall failed: {e}")
+        except Exception as e:
+            logger.warning(f"[MultiModalStruct] Fast recall failed: {e}")
 
     def _process_async_versioning_update(
         self, item: TextualMemoryItem, mem_str: str, custom_tags: dict[str, str], **kwargs
@@ -1016,7 +1016,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         3. Call LLM and parse JSON response
         4. Apply LLM updates to memory graph and return new items
         """
+        # resolve via nli first
         user_name = kwargs.get("user_name")
+        self._fast_resolve_memory_duplicates_and_conflicts(item, user_name)
+
         self.history_manager.wait_and_update_fast_history(item, user_name, timeout_sec=30)
         lang = detect_lang(kwargs.get("chat_history") or mem_str)
         custom_tags_prompt = (
@@ -1090,12 +1093,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 scene_data_info, info, mode="fast", need_emb=False, **kwargs
             )
         fast_memory_items = self._concat_multi_modal_memories(all_memory_items)
-
-        # Perform conflict/duplicate check with old memories
-        # TODO: find a better way to pass in the user_name
-        user_name = kwargs.get("user_name")
-        if self.memory_version_switch == "on":
-            self._fast_resolve_memory_duplicates_and_conflicts(fast_memory_items, user_name)
 
         if mode == "fast":
             return fast_memory_items
