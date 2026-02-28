@@ -250,6 +250,13 @@ class MemFeedback(BaseMemFeedback):
         )
 
         logger.info(f"[Memory Feedback ADD] memory id: {added_ids!s}")
+        if not added_ids:
+            logger.warning("[Memory Feedback ADD] add returned empty list, memory may not have been persisted")
+            return {
+                "id": None,
+                "text": to_add_memory.memory,
+                "source_doc_id": None,
+            }
         return {
             "id": added_ids[0],
             "text": to_add_memory.memory,
