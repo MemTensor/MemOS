@@ -5,6 +5,7 @@ to avoid Neo4j CypherTypeError on Map-type property values.
 """
 
 import uuid
+
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 

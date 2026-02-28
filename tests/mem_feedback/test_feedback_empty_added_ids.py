@@ -5,8 +5,9 @@ without raising IndexError.
 """
 
 import uuid
+
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
