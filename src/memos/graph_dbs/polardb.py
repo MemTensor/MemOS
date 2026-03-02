@@ -196,23 +196,19 @@ class PolarDBGraphDB(BaseGraphDB):
         """
         self._semaphore.acquire()
         conn = None
+        broken = False
+
         try:
             conn = self.connection_pool.getconn()
             conn.autocommit = True
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
             yield conn
         except Exception:
-            if conn:
-                try:
-                    self.connection_pool.putconn(conn, close=True)
-                except Exception:
-                    pass
+            broken = True
             raise
         finally:
             if conn:
                 try:
-                    self.connection_pool.putconn(conn)
+                    self.connection_pool.putconn(conn, close=broken)
                 except Exception:
                     pass
             self._semaphore.release()
