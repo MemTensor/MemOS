@@ -544,8 +544,6 @@ class SingleCubeView(MemCubeView):
             )
             self.mem_scheduler.submit_messages(messages=[message_item_add])
 
-    # _process_pref_mem method removed - preferences now handled by text_mem in unified flow
-
     def add_before_search(
         self,
         messages: list[dict],
