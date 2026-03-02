@@ -124,25 +124,45 @@ class NaiveRetriever(BaseRetriever):
         explicit_prefs.sort(key=lambda x: x.score, reverse=True)
         implicit_prefs.sort(key=lambda x: x.score, reverse=True)
 
-        explicit_prefs_mem = [
-            TextualMemoryItem(
-                id=pref.id,
-                memory=pref.memory,
-                metadata=PreferenceTextualMemoryMetadata(**pref.payload),
+        explicit_prefs_mem = []
+        for pref in explicit_prefs:
+            if not pref.payload.get("preference", None):
+                continue
+            if "embedding" in pref.payload:
+                payload = pref.payload
+            else:
+                pref_vector = getattr(pref, "vector", None)
+                if pref_vector is None:
+                    payload = pref.payload
+                else:
+                    payload = {**pref.payload, "embedding": pref_vector}
+            explicit_prefs_mem.append(
+                TextualMemoryItem(
+                    id=pref.id,
+                    memory=pref.memory,
+                    metadata=PreferenceTextualMemoryMetadata(**payload),
+                )
             )
-            for pref in explicit_prefs
-            if pref.payload.get("preference", None)
-        ]
 
-        implicit_prefs_mem = [
-            TextualMemoryItem(
-                id=pref.id,
-                memory=pref.memory,
-                metadata=PreferenceTextualMemoryMetadata(**pref.payload),
+        implicit_prefs_mem = []
+        for pref in implicit_prefs:
+            if not pref.payload.get("preference", None):
+                continue
+            if "embedding" in pref.payload:
+                payload = pref.payload
+            else:
+                pref_vector = getattr(pref, "vector", None)
+                if pref_vector is None:
+                    payload = pref.payload
+                else:
+                    payload = {**pref.payload, "embedding": pref_vector}
+            implicit_prefs_mem.append(
+                TextualMemoryItem(
+                    id=pref.id,
+                    memory=pref.memory,
+                    metadata=PreferenceTextualMemoryMetadata(**payload),
+                )
             )
-            for pref in implicit_prefs
-            if pref.payload.get("preference", None)
-        ]
 
         reranker_map = {
             "naive": self._naive_reranker,
