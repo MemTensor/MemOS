@@ -58,8 +58,8 @@ class SingleCubeView(MemCubeView):
     @timed
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         """
-        Unified memory addition handling (text + preference memories).
-        Now text_mem handles both types through integrated extraction.
+        This is basically your current handle_add_memories logic,
+        but scoped to a single cube_id.
         """
         sync_mode = add_req.async_mode or self._get_sync_mode()
         self.logger.info(
@@ -73,7 +73,12 @@ class SingleCubeView(MemCubeView):
             project_id=add_req.project_id,
         )
 
-        # Call _process_text_mem which now handles both text and preference memories
+        target_session_id = add_req.session_id or "default_session"
+        self.logger.info(
+            f"[SingleCubeView] cube={self.cube_id} "
+            f"Processing add with mode={sync_mode}, session={target_session_id}"
+        )
+
         all_memories = self._process_text_mem(add_req, user_context, sync_mode)
 
         self.logger.info(f"[SingleCubeView] cube={self.cube_id} total_results={len(all_memories)}")
@@ -110,7 +115,7 @@ class SingleCubeView(MemCubeView):
         # Unified search through _search_text (includes all memory types)
         all_formatted_memories = self._search_text(search_req, user_context, search_mode)
 
-        # Build result with unified processing (handles text, tool, skill, and preference)
+        # Build result with unified processing
         memories_result = post_process_textual_mem(
             memories_result,
             all_formatted_memories,
