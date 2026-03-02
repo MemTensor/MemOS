@@ -195,31 +195,36 @@ class PolarDBGraphDB(BaseGraphDB):
 
     @contextmanager
     def _get_connection(self):
-        timeout = getattr(self, "_connection_wait_timeout", 60)
+        timeout = getattr(self, "_connection_wait_timeout", 5)
         if timeout <= 0:
             self._semaphore.acquire()
         else:
             if not self._semaphore.acquire(timeout=timeout):
+                logger.warning(f"Timeout waiting for connection slot ({timeout}s)")
                 raise RuntimeError(
-                    f"Connection pool busy: could not acquire a slot within {timeout}s "
-                    "(all connections in use). Consider increasing maxconn or reducing load."
+                    f"Connection pool busy: could not acquire a slot within {timeout}s (all connections in use)."
                 )
         conn = None
         broken = False
 
         try:
             conn = self.connection_pool.getconn()
+            logger.debug(f"Acquired connection {id(conn)} from pool")
             conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
             yield conn
         except Exception:
             broken = True
+            logger.error(f"Connection failed or broken: {e}")
             raise
         finally:
             if conn:
                 try:
                     self.connection_pool.putconn(conn, close=broken)
-                except Exception:
-                    pass
+                    logger.debug(f"Returned connection {id(conn)} to pool (broken={broken})")
+                except Exception as e:
+                    logger.warning(f"Failed to return connection to pool: {e}")
             self._semaphore.release()
 
     def _ensure_database_exists(self):
