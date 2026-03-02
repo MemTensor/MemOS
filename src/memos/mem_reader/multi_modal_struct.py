@@ -722,6 +722,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                             m_maybe_merged.get("memory_type", "LongTermMemory")
                             .replace("长期记忆", "LongTermMemory")
                             .replace("用户记忆", "UserMemory")
+                            .replace("pref", "UserMemory")
                         )
                         node = self._make_memory_item(
                             value=m_maybe_merged.get("value", ""),

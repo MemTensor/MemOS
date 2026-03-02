@@ -67,6 +67,7 @@ class Searcher:
         self.internet_retriever = internet_retriever
         self.vec_cot = search_strategy.get("cot", False) if search_strategy else False
         self.use_fast_graph = search_strategy.get("fast_graph", False) if search_strategy else False
+        self.use_fulltext = search_strategy.get("fulltext", False) if search_strategy else False
         self.manual_close_internet = manual_close_internet
         self.tokenizer = tokenizer
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
@@ -396,20 +397,21 @@ class Searcher:
                     user_name,
                 )
             )
-            tasks.append(
-                executor.submit(
-                    self._retrieve_from_keyword,
-                    query,
-                    parsed_goal,
-                    query_embedding,
-                    top_k,
-                    memory_type,
-                    search_filter,
-                    search_priority,
-                    user_name,
-                    id_filter,
+            if self.use_fulltext:
+                tasks.append(
+                    executor.submit(
+                        self._retrieve_from_keyword,
+                        query,
+                        parsed_goal,
+                        query_embedding,
+                        top_k,
+                        memory_type,
+                        search_filter,
+                        search_priority,
+                        user_name,
+                        id_filter,
+                    )
                 )
-            )
             if search_tool_memory:
                 tasks.append(
                     executor.submit(
@@ -543,16 +545,22 @@ class Searcher:
 
         id_to_score: dict[str, float] = {}
         for scope in scopes:
-            hits = self.graph_store.search_by_fulltext(
-                query_words=tsquery_terms,
-                top_k=top_k * 2,
-                status="activated",
-                scope=scope,
-                search_filter=None,
-                filter=search_filter,
-                user_name=user_name,
-                tsquery_config="jiebaqry",
-            )
+            try:
+                hits = self.graph_store.search_by_fulltext(
+                    query_words=tsquery_terms,
+                    top_k=top_k * 2,
+                    status="activated",
+                    scope=scope,
+                    search_filter=None,
+                    filter=search_filter,
+                    user_name=user_name,
+                    tsquery_config="jiebaqry",
+                )
+            except Exception:
+                logger.warning(
+                    f"[PATH-KEYWORD] search_by_fulltext failed, scope={scope}, user_name={user_name}"
+                )
+                hits = []
             for h in hits or []:
                 hid = str(h.get("id") or "").strip().strip("'\"")
                 if not hid:

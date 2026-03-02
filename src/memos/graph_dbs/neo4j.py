@@ -818,6 +818,7 @@ class Neo4jGraphDB(BaseGraphDB):
         user_name: str | None = None,
         filter: dict | None = None,
         knowledgebase_ids: list[str] | None = None,
+        return_fields: list[str] | None = None,
         **kwargs,
     ) -> list[dict]:
         """
@@ -832,9 +833,14 @@ class Neo4jGraphDB(BaseGraphDB):
             threshold (float, optional): Minimum similarity score threshold (0 ~ 1).
             search_filter (dict, optional): Additional metadata filters for search results.
                             Keys should match node properties, values are the expected values.
+            return_fields (list[str], optional): Additional node fields to include in results
+                            (e.g., ["memory", "status", "tags"]). When provided, each result
+                            dict will contain these fields in addition to 'id' and 'score'.
+                            Defaults to None (only 'id' and 'score' are returned).
 
         Returns:
             list[dict]: A list of dicts with 'id' and 'score', ordered by similarity.
+                If return_fields is specified, each dict also includes the requested fields.
 
         Notes:
             - This method uses Neo4j native vector indexing to search for similar nodes.
@@ -886,11 +892,20 @@ class Neo4jGraphDB(BaseGraphDB):
         if where_clauses:
             where_clause = "WHERE " + " AND ".join(where_clauses)
 
+        return_clause = "RETURN node.id AS id, score"
+        if return_fields:
+            validated_fields = self._validate_return_fields(return_fields)
+            extra_fields = ", ".join(
+                f"node.{field} AS {field}" for field in validated_fields if field != "id"
+            )
+            if extra_fields:
+                return_clause = f"RETURN node.id AS id, score, {extra_fields}"
+
         query = f"""
             CALL db.index.vector.queryNodes('memory_vector_index', $k, $embedding)
             YIELD node, score
             {where_clause}
-            RETURN node.id AS id, score
+            {return_clause}
         """
 
         parameters = {"embedding": vector, "k": top_k}
@@ -920,13 +935,41 @@ class Neo4jGraphDB(BaseGraphDB):
         print(f"[search_by_embedding] query: {query},parameters: {parameters}")
         with self.driver.session(database=self.db_name) as session:
             result = session.run(query, parameters)
-            records = [{"id": record["id"], "score": record["score"]} for record in result]
+            records = []
+            for record in result:
+                item = {"id": record["id"], "score": record["score"]}
+                if return_fields:
+                    record_keys = record.keys()
+                    for field in return_fields:
+                        if field != "id" and field in record_keys:
+                            item[field] = record[field]
+                records.append(item)
 
         # Threshold filtering after retrieval
         if threshold is not None:
             records = [r for r in records if r["score"] >= threshold]
 
         return records
+
+    def search_by_fulltext(
+        self,
+        query_words: list[str],
+        top_k: int = 10,
+        scope: str | None = None,
+        status: str | None = None,
+        threshold: float | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        tsquery_config: str | None = None,
+        **kwargs,
+    ) -> list[dict]:
+        """
+        TODO: Implement fulltext search for Neo4j to be compatible with TreeTextMemory's keyword/fulltext recall path.
+        Currently, return an empty list to avoid runtime errors due to missing methods when switching to Neo4j.
+        """
+        return []
 
     def get_by_metadata(
         self,

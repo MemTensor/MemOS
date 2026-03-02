@@ -239,7 +239,9 @@ class MemoryManager:
         _submit_batches(graph_nodes, "graph memory")
 
         if graph_node_ids and self.is_reorganize:
-            self.reorganizer.add_message(QueueMessage(op="add", after_node=graph_node_ids))
+            self.reorganizer.add_message(
+                QueueMessage(op="add", after_node=graph_node_ids, user_name=user_name)
+            )
 
         return added_ids
 
@@ -413,16 +415,19 @@ class MemoryManager:
             QueueMessage(
                 op="add",
                 after_node=[node_id],
+                user_name=user_name,
             )
         )
         return node_id
 
-    def _inherit_edges(self, from_id: str, to_id: str) -> None:
+    def _inherit_edges(self, from_id: str, to_id: str, user_name: str | None = None) -> None:
         """
         Migrate all non-lineage edges from `from_id` to `to_id`,
         and remove them from `from_id` after copying.
         """
-        edges = self.graph_store.get_edges(from_id, type="ANY", direction="ANY")
+        edges = self.graph_store.get_edges(
+            from_id, type="ANY", direction="ANY", user_name=user_name
+        )
 
         for edge in edges:
             if edge["type"] == "MERGED_TO":
@@ -435,20 +440,29 @@ class MemoryManager:
                 continue
 
             # Add edge to merged node if it doesn't already exist
-            if not self.graph_store.edge_exists(new_from, new_to, edge["type"], direction="ANY"):
-                self.graph_store.add_edge(new_from, new_to, edge["type"])
+            if not self.graph_store.edge_exists(
+                new_from, new_to, edge["type"], direction="ANY", user_name=user_name
+            ):
+                self.graph_store.add_edge(new_from, new_to, edge["type"], user_name=user_name)
 
             # Remove original edge if it involved the archived node
-            self.graph_store.delete_edge(edge["from"], edge["to"], edge["type"])
+            self.graph_store.delete_edge(
+                edge["from"], edge["to"], edge["type"], user_name=user_name
+            )
 
     def _ensure_structure_path(
-        self, memory_type: str, metadata: TreeNodeTextualMemoryMetadata
+        self,
+        memory_type: str,
+        metadata: TreeNodeTextualMemoryMetadata,
+        user_name: str | None = None,
     ) -> str:
         """
         Ensure structural path exists (ROOT → ... → final node), return last node ID.
 
         Args:
-            path: like ["hobby", "photography"]
+            memory_type: Memory type for the structure node.
+            metadata: Metadata containing key and other fields.
+            user_name: Optional user name for multi-tenant isolation.
 
         Returns:
             Final node ID of the structure path.
@@ -458,7 +472,8 @@ class MemoryManager:
             [
                 {"field": "memory", "op": "=", "value": metadata.key},
                 {"field": "memory_type", "op": "=", "value": memory_type},
-            ]
+            ],
+            user_name=user_name,
         )
         if existing:
             node_id = existing[0]  # Use the first match
@@ -481,14 +496,16 @@ class MemoryManager:
                 ),
             )
             self.graph_store.add_node(
-                id=new_node.id,
-                memory=new_node.memory,
-                metadata=new_node.metadata.model_dump(exclude_none=True),
+                new_node.id,
+                new_node.memory,
+                new_node.metadata.model_dump(exclude_none=True),
+                user_name=user_name,
             )
             self.reorganizer.add_message(
                 QueueMessage(
                     op="add",
                     after_node=[new_node.id],
+                    user_name=user_name,
                 )
             )
 
