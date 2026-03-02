@@ -139,6 +139,8 @@ class PolarDBGraphDB(BaseGraphDB):
             password = config.get("password")
             maxconn = config.get("maxconn", 100)
             self._connection_wait_timeout = config.get("connection_wait_timeout", 60)
+            self._skip_connection_health_check = config.get("skip_connection_health_check", False)
+            self._warm_up_on_startup = config.get("warm_up_on_startup", False)
         else:
             self.db_name = config.db_name
             self.user_name = config.user_name
@@ -148,6 +150,9 @@ class PolarDBGraphDB(BaseGraphDB):
             password = config.password
             maxconn = config.maxconn if hasattr(config, "maxconn") else 100
             self._connection_wait_timeout = getattr(config, "connection_wait_timeout", 60)
+            self._skip_connection_health_check = getattr(config, "skip_connection_health_check", False)
+            self._warm_up_on_startup = getattr(config, "warm_up_on_startup", False)
+            logger.info(f"connection_wait_timeout:{self._connection_wait_timeout},_skip_connection_health_check:{self._skip_connection_health_check},warm_up_on_startup:{self._warm_up_on_startup}")
 
         logger.info(
             f" db_name: {self.db_name} maxconn: {maxconn} connection_wait_timeout: {self._connection_wait_timeout}s"
@@ -163,12 +168,14 @@ class PolarDBGraphDB(BaseGraphDB):
             password=password,
             dbname=self.db_name,
             connect_timeout=60,  # Connection timeout in seconds
-            keepalives_idle=40,  # Seconds of inactivity before sending keepalive (should be < server idle timeout)
+            keepalives_idle=120,  # Seconds of inactivity before sending keepalive (should be < server idle timeout)
             keepalives_interval=15,  # Seconds between keepalive retries
             keepalives_count=5,  # Number of keepalive retries before considering connection dead
         )
 
         self._semaphore = threading.BoundedSemaphore(maxconn)
+        if self._warm_up_on_startup:
+            self._warm_up_search_connections()
 
         """
         # Handle auto_create
@@ -192,6 +199,27 @@ class PolarDBGraphDB(BaseGraphDB):
             return self.config.get(key, default)
         else:
             return getattr(self.config, key, default)
+
+    def _warm_up_search_connections(self, user_name: str | None = None) -> None:
+        user_name = user_name or self.user_name
+        if not user_name:
+            logger.debug("[warm_up] Skipped: no user_name for warm-up")
+            return
+        warm_count = min(5, self.connection_pool.minconn)
+        for _ in range(warm_count):
+            try:
+                self.search_by_fulltext(
+                    query_words=["warmup"],
+                    top_k=1,
+                    user_name=user_name,
+                )
+            except Exception as e:
+                logger.debug(f"[warm_up] Warm-up query failed (non-fatal): {e}")
+                break
+        logger.info(f"[warm_up] Pre-warmed {warm_count} connections for search_by_fulltext")
+
+    def warm_up_search_connections(self, user_name: str | None = None) -> None:
+        self._warm_up_search_connections(user_name)
 
     @contextmanager
     def _get_connection(self):

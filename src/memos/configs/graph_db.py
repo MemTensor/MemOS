@@ -202,6 +202,27 @@ class PolarDBGraphDBConfig(BaseConfig):
         default=100,
         description="Maximum number of connections in the connection pool",
     )
+    connection_wait_timeout: int = Field(
+        default=30,
+        ge=1,
+        le=3600,
+        description="Max seconds to wait for a connection slot before raising (0 = wait forever, not recommended)",
+    )
+    skip_connection_health_check: bool = Field(
+        default=False,
+        description=(
+            "If True, skip SELECT 1 health check when getting connections (~1-2ms saved per request). "
+            "Use only when pool/network is reliable."
+        ),
+    )
+    warm_up_on_startup: bool = Field(
+        default=True,
+        description=(
+            "If True, run search_by_fulltext warm-up on pool connections at init to reduce "
+            "first-query latency (~200ms planning). Requires user_name in config."
+        ),
+    )
+
 
     @model_validator(mode="after")
     def validate_config(self):
