@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+
 from string import Template
 
 from dotenv import load_dotenv
@@ -62,6 +63,7 @@ app.exception_handler(Exception)(APIExceptionHandler.global_exception_handler)
 
 if __name__ == "__main__":
     import argparse
+    
     import uvicorn
 
     parser = argparse.ArgumentParser()
