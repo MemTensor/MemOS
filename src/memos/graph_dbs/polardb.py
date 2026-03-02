@@ -1,9 +1,10 @@
 import json
 import random
 import textwrap
+import threading
 import time
 
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Literal
 
@@ -14,7 +15,6 @@ from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
 from memos.log import get_logger
 from memos.utils import timed
-import threading
 
 
 logger = get_logger(__name__)
@@ -214,7 +214,7 @@ class PolarDBGraphDB(BaseGraphDB):
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
             yield conn
-        except Exception:
+        except Exception as e:
             broken = True
             logger.error(f"Connection failed or broken: {e}")
             raise
@@ -241,51 +241,50 @@ class PolarDBGraphDB(BaseGraphDB):
     def _create_graph(self):
         """Create PostgreSQL schema and table for graph storage."""
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    # Create schema if it doesn't exist
-                    cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{self.db_name}_graph";')
-                    logger.info(f"Schema '{self.db_name}_graph' ensured.")
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                # Create schema if it doesn't exist
+                cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{self.db_name}_graph";')
+                logger.info(f"Schema '{self.db_name}_graph' ensured.")
 
-                    # Create Memory table if it doesn't exist
+                # Create Memory table if it doesn't exist
+                cursor.execute(f"""
+                    CREATE TABLE IF NOT EXISTS "{self.db_name}_graph"."Memory" (
+                        id TEXT PRIMARY KEY,
+                        properties JSONB NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                logger.info(f"Memory table created in schema '{self.db_name}_graph'.")
+
+                # Add embedding column if it doesn't exist (using JSONB for compatibility)
+                try:
                     cursor.execute(f"""
-                        CREATE TABLE IF NOT EXISTS "{self.db_name}_graph"."Memory" (
-                            id TEXT PRIMARY KEY,
-                            properties JSONB NOT NULL,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        );
+                        ALTER TABLE "{self.db_name}_graph"."Memory"
+                        ADD COLUMN IF NOT EXISTS embedding JSONB;
                     """)
-                    logger.info(f"Memory table created in schema '{self.db_name}_graph'.")
+                    logger.info("Embedding column added to Memory table.")
+                except Exception as e:
+                    logger.warning(f"Failed to add embedding column: {e}")
 
-                    # Add embedding column if it doesn't exist (using JSONB for compatibility)
-                    try:
-                        cursor.execute(f"""
-                            ALTER TABLE "{self.db_name}_graph"."Memory"
-                            ADD COLUMN IF NOT EXISTS embedding JSONB;
-                        """)
-                        logger.info("Embedding column added to Memory table.")
-                    except Exception as e:
-                        logger.warning(f"Failed to add embedding column: {e}")
+                # Create indexes
+                cursor.execute(f"""
+                    CREATE INDEX IF NOT EXISTS idx_memory_properties
+                    ON "{self.db_name}_graph"."Memory" USING GIN (properties);
+                """)
 
-                    # Create indexes
+                # Create vector index for embedding field
+                try:
                     cursor.execute(f"""
-                        CREATE INDEX IF NOT EXISTS idx_memory_properties
-                        ON "{self.db_name}_graph"."Memory" USING GIN (properties);
+                        CREATE INDEX IF NOT EXISTS idx_memory_embedding
+                        ON "{self.db_name}_graph"."Memory" USING ivfflat (embedding vector_cosine_ops)
+                        WITH (lists = 100);
                     """)
+                    logger.info("Vector index created for Memory table.")
+                except Exception as e:
+                    logger.warning(f"Vector index creation failed (might not be supported): {e}")
 
-                    # Create vector index for embedding field
-                    try:
-                        cursor.execute(f"""
-                            CREATE INDEX IF NOT EXISTS idx_memory_embedding
-                            ON "{self.db_name}_graph"."Memory" USING ivfflat (embedding vector_cosine_ops)
-                            WITH (lists = 100);
-                        """)
-                        logger.info("Vector index created for Memory table.")
-                    except Exception as e:
-                        logger.warning(f"Vector index creation failed (might not be supported): {e}")
-
-                    logger.info("Indexes created for Memory table.")
+                logger.info("Indexes created for Memory table.")
 
         except Exception as e:
             logger.error(f"Failed to create graph schema: {e}")
@@ -303,25 +302,24 @@ class PolarDBGraphDB(BaseGraphDB):
         Note: This creates PostgreSQL indexes on the underlying tables.
         """
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    # Create indexes on the underlying PostgreSQL tables
-                    # Apache AGE stores data in regular PostgreSQL tables
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                # Create indexes on the underlying PostgreSQL tables
+                # Apache AGE stores data in regular PostgreSQL tables
+                cursor.execute(f"""
+                    CREATE INDEX IF NOT EXISTS idx_memory_properties
+                    ON "{self.db_name}_graph"."Memory" USING GIN (properties);
+                """)
+
+                # Try to create vector index, but don't fail if it doesn't work
+                try:
                     cursor.execute(f"""
-                        CREATE INDEX IF NOT EXISTS idx_memory_properties
-                        ON "{self.db_name}_graph"."Memory" USING GIN (properties);
+                        CREATE INDEX IF NOT EXISTS idx_memory_embedding
+                        ON "{self.db_name}_graph"."Memory" USING ivfflat (embedding vector_cosine_ops);
                     """)
+                except Exception as ve:
+                    logger.warning(f"Vector index creation failed (might not be supported): {ve}")
 
-                    # Try to create vector index, but don't fail if it doesn't work
-                    try:
-                        cursor.execute(f"""
-                            CREATE INDEX IF NOT EXISTS idx_memory_embedding
-                            ON "{self.db_name}_graph"."Memory" USING ivfflat (embedding vector_cosine_ops);
-                        """)
-                    except Exception as ve:
-                        logger.warning(f"Vector index creation failed (might not be supported): {ve}")
-
-                    logger.debug("Indexes created successfully.")
+                logger.debug("Indexes created successfully.")
         except Exception as e:
             logger.warning(f"Failed to create indexes: {e}")
 
@@ -337,11 +335,10 @@ class PolarDBGraphDB(BaseGraphDB):
         params = [self.format_param_value(memory_type), self.format_param_value(user_name)]
 
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, params)
-                    result = cursor.fetchone()
-                    return result[0] if result else 0
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query, params)
+                result = cursor.fetchone()
+                return result[0] if result else 0
         except Exception as e:
             logger.error(f"[get_memory_count] Failed: {e}")
             return -1
@@ -360,11 +357,10 @@ class PolarDBGraphDB(BaseGraphDB):
         params = [self.format_param_value(scope), self.format_param_value(user_name)]
 
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, params)
-                    result = cursor.fetchone()
-                    return 1 if result else 0
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query, params)
+                result = cursor.fetchone()
+                return 1 if result else 0
         except Exception as e:
             logger.error(f"[node_not_exist] Query failed: {e}", exc_info=True)
             raise
@@ -398,32 +394,31 @@ class PolarDBGraphDB(BaseGraphDB):
             keep_latest,
         ]
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    # Execute query to get IDs to delete
-                    cursor.execute(select_query, select_params)
-                    ids_to_delete = [row[0] for row in cursor.fetchall()]
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                # Execute query to get IDs to delete
+                cursor.execute(select_query, select_params)
+                ids_to_delete = [row[0] for row in cursor.fetchall()]
 
-                    if not ids_to_delete:
-                        logger.info(f"No {memory_type} memories to remove for user {user_name}")
-                        return
+                if not ids_to_delete:
+                    logger.info(f"No {memory_type} memories to remove for user {user_name}")
+                    return
 
-                    # Build delete query
-                    placeholders = ",".join(["%s"] * len(ids_to_delete))
-                    delete_query = f"""
+                # Build delete query
+                placeholders = ",".join(["%s"] * len(ids_to_delete))
+                delete_query = f"""
                         DELETE FROM "{self.db_name}_graph"."Memory"
                         WHERE id IN ({placeholders})
                     """
-                    delete_params = ids_to_delete
+                delete_params = ids_to_delete
 
-                    # Execute deletion
-                    cursor.execute(delete_query, delete_params)
-                    deleted_count = cursor.rowcount
-                    logger.info(
-                        f"Removed {deleted_count} oldest {memory_type} memories, "
-                        f"keeping {keep_latest} latest for user {user_name}, "
-                        f"removed ids: {ids_to_delete}"
-                    )
+                # Execute deletion
+                cursor.execute(delete_query, delete_params)
+                deleted_count = cursor.rowcount
+                logger.info(
+                    f"Removed {deleted_count} oldest {memory_type} memories, "
+                    f"keeping {keep_latest} latest for user {user_name}, "
+                    f"removed ids: {ids_to_delete}"
+                )
         except Exception as e:
             logger.error(f"[remove_oldest_memory] Failed: {e}", exc_info=True)
             raise
@@ -489,9 +484,8 @@ class PolarDBGraphDB(BaseGraphDB):
             params.append(self.format_param_value(user_name))
 
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, params)
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query, params)
         except Exception as e:
             logger.error(f"[update_node] Failed to update node '{id}': {e}", exc_info=True)
             raise
@@ -516,9 +510,8 @@ class PolarDBGraphDB(BaseGraphDB):
             params.append(self.format_param_value(user_name))
 
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, params)
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query, params)
         except Exception as e:
             logger.error(f"[delete_node] Failed to delete node '{id}': {e}", exc_info=True)
             raise
@@ -527,27 +520,26 @@ class PolarDBGraphDB(BaseGraphDB):
     def create_extension(self):
         extensions = [("polar_age", "Graph engine"), ("vector", "Vector engine")]
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    # Ensure in the correct database context
-                    cursor.execute("SELECT current_database();")
-                    current_db = cursor.fetchone()[0]
-                    logger.info(f"Current database context: {current_db}")
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                # Ensure in the correct database context
+                cursor.execute("SELECT current_database();")
+                current_db = cursor.fetchone()[0]
+                logger.info(f"Current database context: {current_db}")
 
-                    for ext_name, ext_desc in extensions:
-                        try:
-                            cursor.execute(f"create extension if not exists {ext_name};")
-                            logger.info(f"Extension '{ext_name}' ({ext_desc}) ensured.")
-                        except Exception as e:
-                            if "already exists" in str(e):
-                                logger.info(f"Extension '{ext_name}' ({ext_desc}) already exists.")
-                            else:
-                                logger.warning(
-                                    f"Failed to create extension '{ext_name}' ({ext_desc}): {e}"
-                                )
-                                logger.error(
-                                    f"Failed to create extension '{ext_name}': {e}", exc_info=True
-                                )
+                for ext_name, ext_desc in extensions:
+                    try:
+                        cursor.execute(f"create extension if not exists {ext_name};")
+                        logger.info(f"Extension '{ext_name}' ({ext_desc}) ensured.")
+                    except Exception as e:
+                        if "already exists" in str(e):
+                            logger.info(f"Extension '{ext_name}' ({ext_desc}) already exists.")
+                        else:
+                            logger.warning(
+                                f"Failed to create extension '{ext_name}' ({ext_desc}): {e}"
+                            )
+                            logger.error(
+                                f"Failed to create extension '{ext_name}': {e}", exc_info=True
+                            )
         except Exception as e:
             logger.warning(f"Failed to access database context: {e}")
             logger.error(f"Failed to access database context: {e}", exc_info=True)
@@ -555,19 +547,18 @@ class PolarDBGraphDB(BaseGraphDB):
     @timed
     def create_graph(self):
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(f"""
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(f"""
                         SELECT COUNT(*) FROM ag_catalog.ag_graph
                         WHERE name = '{self.db_name}_graph';
                     """)
-                    graph_exists = cursor.fetchone()[0] > 0
+                graph_exists = cursor.fetchone()[0] > 0
 
-                    if graph_exists:
-                        logger.info(f"Graph '{self.db_name}_graph' already exists.")
-                    else:
-                        cursor.execute(f"select create_graph('{self.db_name}_graph');")
-                        logger.info(f"Graph database '{self.db_name}_graph' created.")
+                if graph_exists:
+                    logger.info(f"Graph '{self.db_name}_graph' already exists.")
+                else:
+                    cursor.execute(f"select create_graph('{self.db_name}_graph');")
+                    logger.info(f"Graph database '{self.db_name}_graph' created.")
         except Exception as e:
             logger.warning(f"Failed to create graph '{self.db_name}_graph': {e}")
             logger.error(f"Failed to create graph '{self.db_name}_graph': {e}", exc_info=True)
@@ -581,10 +572,9 @@ class PolarDBGraphDB(BaseGraphDB):
         for label_name in valid_rel_types:
             logger.info(f"Creating elabel: {label_name}")
             try:
-                with self._get_connection() as conn:
-                    with conn.cursor() as cursor:
-                        cursor.execute(f"select create_elabel('{self.db_name}_graph', '{label_name}');")
-                        logger.info(f"Successfully created elabel: {label_name}")
+                with self._get_connection() as conn, conn.cursor() as cursor:
+                    cursor.execute(f"select create_elabel('{self.db_name}_graph', '{label_name}');")
+                    logger.info(f"Successfully created elabel: {label_name}")
             except Exception as e:
                 if "already exists" in str(e):
                     logger.info(f"Label '{label_name}' already exists, skipping.")
@@ -632,13 +622,12 @@ class PolarDBGraphDB(BaseGraphDB):
         """
         logger.info(f"polardb [add_edge] query: {query}, properties: {json.dumps(properties)}")
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, (source_id, target_id, type, json.dumps(properties)))
-                    logger.info(f"Edge created: {source_id} -[{type}]-> {target_id}")
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query, (source_id, target_id, type, json.dumps(properties)))
+                logger.info(f"Edge created: {source_id} -[{type}]-> {target_id}")
 
-                    elapsed_time = time.time() - start_time
-                    logger.info(f" polardb [add_edge] insert completed time in {elapsed_time:.2f}s")
+                elapsed_time = time.time() - start_time
+                logger.info(f" polardb [add_edge] insert completed time in {elapsed_time:.2f}s")
         except Exception as e:
             logger.error(f"Failed to insert edge: {e}", exc_info=True)
             raise
@@ -656,10 +645,9 @@ class PolarDBGraphDB(BaseGraphDB):
             DELETE FROM "{self.db_name}_graph"."Edges"
             WHERE source_id = %s AND target_id = %s AND edge_type = %s
         """
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query, (source_id, target_id, type))
-                logger.info(f"Edge deleted: {source_id} -[{type}]-> {target_id}")
+        with self._get_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(query, (source_id, target_id, type))
+            logger.info(f"Edge deleted: {source_id} -[{type}]-> {target_id}")
 
     @timed
     def edge_exists_old(
@@ -714,11 +702,10 @@ class PolarDBGraphDB(BaseGraphDB):
             WHERE {where_clause}
             LIMIT 1
         """
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query, params)
-                result = cursor.fetchone()
-                return result is not None
+        with self._get_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            return result is not None
 
     @timed
     def edge_exists(
@@ -766,11 +753,10 @@ class PolarDBGraphDB(BaseGraphDB):
         query += "\nRETURN r"
         query += "\n$$) AS (r agtype)"
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query)
-                result = cursor.fetchone()
-                return result is not None and result[0] is not None
+        with self._get_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(query)
+            result = cursor.fetchone()
+            return result is not None and result[0] is not None
 
     @timed
     def get_node(
@@ -807,52 +793,51 @@ class PolarDBGraphDB(BaseGraphDB):
 
         logger.info(f"polardb [get_node] query: {query},params: {params}")
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, params)
-                    result = cursor.fetchone()
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query, params)
+                result = cursor.fetchone()
 
-                    if result:
-                        if include_embedding:
-                            _, properties_json, embedding_json = result
-                        else:
-                            _, properties_json = result
-                            embedding_json = None
+                if result:
+                    if include_embedding:
+                        _, properties_json, embedding_json = result
+                    else:
+                        _, properties_json = result
+                        embedding_json = None
 
-                        # Parse properties from JSONB if it's a string
-                        if isinstance(properties_json, str):
-                            try:
-                                properties = json.loads(properties_json)
-                            except (json.JSONDecodeError, TypeError):
-                                logger.warning(f"Failed to parse properties for node {id}")
-                                properties = {}
-                        else:
-                            properties = properties_json if properties_json else {}
+                    # Parse properties from JSONB if it's a string
+                    if isinstance(properties_json, str):
+                        try:
+                            properties = json.loads(properties_json)
+                        except (json.JSONDecodeError, TypeError):
+                            logger.warning(f"Failed to parse properties for node {id}")
+                            properties = {}
+                    else:
+                        properties = properties_json if properties_json else {}
 
-                        # Parse embedding from JSONB if it exists and include_embedding is True
-                        if include_embedding and embedding_json is not None:
-                            try:
-                                embedding = (
-                                    json.loads(embedding_json)
-                                    if isinstance(embedding_json, str)
-                                    else embedding_json
-                                )
-                                properties["embedding"] = embedding
-                            except (json.JSONDecodeError, TypeError):
-                                logger.warning(f"Failed to parse embedding for node {id}")
+                    # Parse embedding from JSONB if it exists and include_embedding is True
+                    if include_embedding and embedding_json is not None:
+                        try:
+                            embedding = (
+                                json.loads(embedding_json)
+                                if isinstance(embedding_json, str)
+                                else embedding_json
+                            )
+                            properties["embedding"] = embedding
+                        except (json.JSONDecodeError, TypeError):
+                            logger.warning(f"Failed to parse embedding for node {id}")
 
-                        elapsed_time = time.time() - start_time
-                        logger.info(
-                            f" polardb [get_node] get_node completed time in {elapsed_time:.2f}s"
-                        )
-                        return self._parse_node(
-                            {
-                                "id": id,
-                                "memory": properties.get("memory", ""),
-                                **properties,
-                            }
-                        )
-                    return None
+                    elapsed_time = time.time() - start_time
+                    logger.info(
+                        f" polardb [get_node] get_node completed time in {elapsed_time:.2f}s"
+                    )
+                    return self._parse_node(
+                        {
+                            "id": id,
+                            "memory": properties.get("memory", ""),
+                            **properties,
+                        }
+                    )
+                return None
 
         except Exception as e:
             logger.error(f"[get_node] Failed to retrieve node '{id}': {e}", exc_info=True)
@@ -893,46 +878,45 @@ class PolarDBGraphDB(BaseGraphDB):
 
         logger.info(f"get_nodes query:{query},params:{params}")
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query, params)
-                results = cursor.fetchall()
+        with self._get_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(query, params)
+            results = cursor.fetchall()
 
-                nodes = []
-                for row in results:
-                    node_id, properties_json, embedding_json = row
-                    # Parse properties from JSONB if it's a string
-                    if isinstance(properties_json, str):
-                        try:
-                            properties = json.loads(properties_json)
-                        except (json.JSONDecodeError, TypeError):
-                            logger.warning(f"Failed to parse properties for node {node_id}")
-                            properties = {}
-                    else:
-                        properties = properties_json if properties_json else {}
+            nodes = []
+            for row in results:
+                node_id, properties_json, embedding_json = row
+                # Parse properties from JSONB if it's a string
+                if isinstance(properties_json, str):
+                    try:
+                        properties = json.loads(properties_json)
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning(f"Failed to parse properties for node {node_id}")
+                        properties = {}
+                else:
+                    properties = properties_json if properties_json else {}
 
-                    # Parse embedding from JSONB if it exists
-                    if embedding_json is not None and kwargs.get("include_embedding"):
-                        try:
-                            # remove embedding
-                            embedding = (
-                                json.loads(embedding_json)
-                                if isinstance(embedding_json, str)
-                                else embedding_json
-                            )
-                            properties["embedding"] = embedding
-                        except (json.JSONDecodeError, TypeError):
-                            logger.warning(f"Failed to parse embedding for node {node_id}")
-                    nodes.append(
-                        self._parse_node(
-                            {
-                                "id": properties.get("id", node_id),
-                                "memory": properties.get("memory", ""),
-                                "metadata": properties,
-                            }
+                # Parse embedding from JSONB if it exists
+                if embedding_json is not None and kwargs.get("include_embedding"):
+                    try:
+                        # remove embedding
+                        embedding = (
+                            json.loads(embedding_json)
+                            if isinstance(embedding_json, str)
+                            else embedding_json
                         )
+                        properties["embedding"] = embedding
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning(f"Failed to parse embedding for node {node_id}")
+                nodes.append(
+                    self._parse_node(
+                        {
+                            "id": properties.get("id", node_id),
+                            "memory": properties.get("memory", ""),
+                            "metadata": properties,
+                        }
                     )
-                return nodes
+                )
+            return nodes
 
     @timed
     def get_edges_old(
@@ -1151,58 +1135,57 @@ class PolarDBGraphDB(BaseGraphDB):
         """
 
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query)
-                    results = cursor.fetchall()
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query)
+                results = cursor.fetchall()
 
-                    children = []
-                    for row in results:
-                        # Handle child_id - remove possible quotes
-                        child_id_raw = row[0].value if hasattr(row[0], "value") else str(row[0])
-                        if isinstance(child_id_raw, str):
-                            # If string starts and ends with quotes, remove quotes
-                            if child_id_raw.startswith('"') and child_id_raw.endswith('"'):
-                                child_id = child_id_raw[1:-1]
-                            else:
-                                child_id = child_id_raw
+                children = []
+                for row in results:
+                    # Handle child_id - remove possible quotes
+                    child_id_raw = row[0].value if hasattr(row[0], "value") else str(row[0])
+                    if isinstance(child_id_raw, str):
+                        # If string starts and ends with quotes, remove quotes
+                        if child_id_raw.startswith('"') and child_id_raw.endswith('"'):
+                            child_id = child_id_raw[1:-1]
                         else:
-                            child_id = str(child_id_raw)
+                            child_id = child_id_raw
+                    else:
+                        child_id = str(child_id_raw)
 
-                        # Handle embedding - get from database embedding column
-                        embedding_raw = row[1]
-                        embedding = []
-                        if embedding_raw is not None:
-                            try:
-                                if isinstance(embedding_raw, str):
-                                    # If it is a JSON string, parse it
-                                    embedding = json.loads(embedding_raw)
-                                elif isinstance(embedding_raw, list):
-                                    # If already a list, use directly
-                                    embedding = embedding_raw
-                                else:
-                                    # Try converting to list
-                                    embedding = list(embedding_raw)
-                            except (json.JSONDecodeError, TypeError, ValueError) as e:
-                                logger.warning(
-                                    f"Failed to parse embedding for child node {child_id}: {e}"
-                                )
-                                embedding = []
-
-                        # Handle memory - remove possible quotes
-                        memory_raw = row[2].value if hasattr(row[2], "value") else str(row[2])
-                        if isinstance(memory_raw, str):
-                            # If string starts and ends with quotes, remove quotes
-                            if memory_raw.startswith('"') and memory_raw.endswith('"'):
-                                memory = memory_raw[1:-1]
+                    # Handle embedding - get from database embedding column
+                    embedding_raw = row[1]
+                    embedding = []
+                    if embedding_raw is not None:
+                        try:
+                            if isinstance(embedding_raw, str):
+                                # If it is a JSON string, parse it
+                                embedding = json.loads(embedding_raw)
+                            elif isinstance(embedding_raw, list):
+                                # If already a list, use directly
+                                embedding = embedding_raw
                             else:
-                                memory = memory_raw
+                                # Try converting to list
+                                embedding = list(embedding_raw)
+                        except (json.JSONDecodeError, TypeError, ValueError) as e:
+                            logger.warning(
+                                f"Failed to parse embedding for child node {child_id}: {e}"
+                            )
+                            embedding = []
+
+                    # Handle memory - remove possible quotes
+                    memory_raw = row[2].value if hasattr(row[2], "value") else str(row[2])
+                    if isinstance(memory_raw, str):
+                        # If string starts and ends with quotes, remove quotes
+                        if memory_raw.startswith('"') and memory_raw.endswith('"'):
+                            memory = memory_raw[1:-1]
                         else:
-                            memory = str(memory_raw)
+                            memory = memory_raw
+                    else:
+                        memory = str(memory_raw)
 
-                        children.append({"id": child_id, "embedding": embedding, "memory": memory})
+                    children.append({"id": child_id, "embedding": embedding, "memory": memory})
 
-                    return children
+                return children
 
         except Exception as e:
             logger.error(f"[get_children_with_embeddings] Failed: {e}", exc_info=True)
@@ -1290,128 +1273,127 @@ class PolarDBGraphDB(BaseGraphDB):
                 """
         logger.info(f"[get_subgraph] Query: {query}")
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query)
-                    results = cursor.fetchall()
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query)
+                results = cursor.fetchall()
 
-                    if not results:
-                        return {"core_node": None, "neighbors": [], "edges": []}
+                if not results:
+                    return {"core_node": None, "neighbors": [], "edges": []}
 
-                    # Merge results from all UNION ALL rows
-                    all_centers_list = []
-                    all_neighbors_list = []
-                    all_edges_list = []
+                # Merge results from all UNION ALL rows
+                all_centers_list = []
+                all_neighbors_list = []
+                all_edges_list = []
 
-                    for result in results:
-                        if not result or not result[0]:
-                            continue
+                for result in results:
+                    if not result or not result[0]:
+                        continue
 
-                        centers_data = result[0] if result[0] else "[]"
-                        neighbors_data = result[1] if result[1] else "[]"
-                        edges_data = result[2] if result[2] else "[]"
+                    centers_data = result[0] if result[0] else "[]"
+                    neighbors_data = result[1] if result[1] else "[]"
+                    edges_data = result[2] if result[2] else "[]"
 
-                        # Parse JSON data
-                        try:
-                            # Clean ::vertex and ::edge suffixes in data
-                            if isinstance(centers_data, str):
-                                centers_data = centers_data.replace("::vertex", "")
-                            if isinstance(neighbors_data, str):
-                                neighbors_data = neighbors_data.replace("::vertex", "")
-                            if isinstance(edges_data, str):
-                                edges_data = edges_data.replace("::edge", "")
+                    # Parse JSON data
+                    try:
+                        # Clean ::vertex and ::edge suffixes in data
+                        if isinstance(centers_data, str):
+                            centers_data = centers_data.replace("::vertex", "")
+                        if isinstance(neighbors_data, str):
+                            neighbors_data = neighbors_data.replace("::vertex", "")
+                        if isinstance(edges_data, str):
+                            edges_data = edges_data.replace("::edge", "")
 
-                            centers_list = (
-                                json.loads(centers_data)
-                                if isinstance(centers_data, str)
-                                else centers_data
-                            )
-                            neighbors_list = (
-                                json.loads(neighbors_data)
-                                if isinstance(neighbors_data, str)
-                                else neighbors_data
-                            )
-                            edges_list = (
-                                json.loads(edges_data) if isinstance(edges_data, str) else edges_data
-                            )
+                        centers_list = (
+                            json.loads(centers_data)
+                            if isinstance(centers_data, str)
+                            else centers_data
+                        )
+                        neighbors_list = (
+                            json.loads(neighbors_data)
+                            if isinstance(neighbors_data, str)
+                            else neighbors_data
+                        )
+                        edges_list = (
+                            json.loads(edges_data) if isinstance(edges_data, str) else edges_data
+                        )
 
-                            # Collect data from this row
-                            if isinstance(centers_list, list):
-                                all_centers_list.extend(centers_list)
-                            if isinstance(neighbors_list, list):
-                                all_neighbors_list.extend(neighbors_list)
-                            if isinstance(edges_list, list):
-                                all_edges_list.extend(edges_list)
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Failed to parse JSON data: {e}")
-                            continue
+                        # Collect data from this row
+                        if isinstance(centers_list, list):
+                            all_centers_list.extend(centers_list)
+                        if isinstance(neighbors_list, list):
+                            all_neighbors_list.extend(neighbors_list)
+                        if isinstance(edges_list, list):
+                            all_edges_list.extend(edges_list)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse JSON data: {e}")
+                        continue
 
-                    # Deduplicate centers by ID
-                    centers_dict = {}
-                    for center_data in all_centers_list:
-                        if isinstance(center_data, dict) and "properties" in center_data:
-                            center_id_key = center_data["properties"].get("id")
-                            if center_id_key and center_id_key not in centers_dict:
-                                centers_dict[center_id_key] = center_data
+                # Deduplicate centers by ID
+                centers_dict = {}
+                for center_data in all_centers_list:
+                    if isinstance(center_data, dict) and "properties" in center_data:
+                        center_id_key = center_data["properties"].get("id")
+                        if center_id_key and center_id_key not in centers_dict:
+                            centers_dict[center_id_key] = center_data
 
-                    # Parse center node (use first center)
-                    core_node = None
-                    if centers_dict:
-                        center_data = next(iter(centers_dict.values()))
-                        if isinstance(center_data, dict) and "properties" in center_data:
-                            core_node = self._parse_node(center_data["properties"])
+                # Parse center node (use first center)
+                core_node = None
+                if centers_dict:
+                    center_data = next(iter(centers_dict.values()))
+                    if isinstance(center_data, dict) and "properties" in center_data:
+                        core_node = self._parse_node(center_data["properties"])
 
-                    # Deduplicate neighbors by ID
-                    neighbors_dict = {}
-                    for neighbor_data in all_neighbors_list:
-                        if isinstance(neighbor_data, dict) and "properties" in neighbor_data:
-                            neighbor_id = neighbor_data["properties"].get("id")
-                            if neighbor_id and neighbor_id not in neighbors_dict:
-                                neighbors_dict[neighbor_id] = neighbor_data
+                # Deduplicate neighbors by ID
+                neighbors_dict = {}
+                for neighbor_data in all_neighbors_list:
+                    if isinstance(neighbor_data, dict) and "properties" in neighbor_data:
+                        neighbor_id = neighbor_data["properties"].get("id")
+                        if neighbor_id and neighbor_id not in neighbors_dict:
+                            neighbors_dict[neighbor_id] = neighbor_data
 
-                    # Parse neighbor nodes
-                    neighbors = []
-                    for neighbor_data in neighbors_dict.values():
-                        if isinstance(neighbor_data, dict) and "properties" in neighbor_data:
-                            neighbor_parsed = self._parse_node(neighbor_data["properties"])
-                            neighbors.append(neighbor_parsed)
+                # Parse neighbor nodes
+                neighbors = []
+                for neighbor_data in neighbors_dict.values():
+                    if isinstance(neighbor_data, dict) and "properties" in neighbor_data:
+                        neighbor_parsed = self._parse_node(neighbor_data["properties"])
+                        neighbors.append(neighbor_parsed)
 
-                    # Deduplicate edges by (source, target, type)
-                    edges_dict = {}
-                    for edge_group in all_edges_list:
-                        if isinstance(edge_group, list):
-                            for edge_data in edge_group:
-                                if isinstance(edge_data, dict):
-                                    edge_key = (
-                                        edge_data.get("start_id", ""),
-                                        edge_data.get("end_id", ""),
-                                        edge_data.get("label", ""),
-                                    )
-                                    if edge_key not in edges_dict:
-                                        edges_dict[edge_key] = {
-                                            "type": edge_data.get("label", ""),
-                                            "source": edge_data.get("start_id", ""),
-                                            "target": edge_data.get("end_id", ""),
-                                        }
-                        elif isinstance(edge_group, dict):
-                            # Handle single edge (not in a list)
-                            edge_key = (
-                                edge_group.get("start_id", ""),
-                                edge_group.get("end_id", ""),
-                                edge_group.get("label", ""),
-                            )
-                            if edge_key not in edges_dict:
-                                edges_dict[edge_key] = {
-                                    "type": edge_group.get("label", ""),
-                                    "source": edge_group.get("start_id", ""),
-                                    "target": edge_group.get("end_id", ""),
-                                }
+                # Deduplicate edges by (source, target, type)
+                edges_dict = {}
+                for edge_group in all_edges_list:
+                    if isinstance(edge_group, list):
+                        for edge_data in edge_group:
+                            if isinstance(edge_data, dict):
+                                edge_key = (
+                                    edge_data.get("start_id", ""),
+                                    edge_data.get("end_id", ""),
+                                    edge_data.get("label", ""),
+                                )
+                                if edge_key not in edges_dict:
+                                    edges_dict[edge_key] = {
+                                        "type": edge_data.get("label", ""),
+                                        "source": edge_data.get("start_id", ""),
+                                        "target": edge_data.get("end_id", ""),
+                                    }
+                    elif isinstance(edge_group, dict):
+                        # Handle single edge (not in a list)
+                        edge_key = (
+                            edge_group.get("start_id", ""),
+                            edge_group.get("end_id", ""),
+                            edge_group.get("label", ""),
+                        )
+                        if edge_key not in edges_dict:
+                            edges_dict[edge_key] = {
+                                "type": edge_group.get("label", ""),
+                                "source": edge_group.get("start_id", ""),
+                                "target": edge_group.get("end_id", ""),
+                            }
 
-                    edges = list(edges_dict.values())
+                edges = list(edges_dict.values())
 
-                    return self._convert_graph_edges(
-                        {"core_node": core_node, "neighbors": neighbors, "edges": edges}
-                    )
+                return self._convert_graph_edges(
+                    {"core_node": core_node, "neighbors": neighbors, "edges": edges}
+                )
 
         except Exception as e:
             logger.error(f"Failed to get subgraph: {e}", exc_info=True)
@@ -1529,25 +1511,24 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.info(
             f"[search_by_keywords_LIKE start:]  user_name: {user_name}, query: {query}, params: {params}"
         )
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query, params)
-                results = cursor.fetchall()
-                output = []
-                for row in results:
-                    oldid = row[0]
-                    id_val = str(oldid)
-                    if id_val.startswith('"') and id_val.endswith('"'):
-                        id_val = id_val[1:-1]
-                    item = {"id": id_val}
-                    if return_fields:
-                        properties = row[2]  # properties column
-                        item.update(self._extract_fields_from_properties(properties, return_fields))
-                    output.append(item)
-                logger.info(
-                    f"[search_by_keywords_LIKE end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
-                )
-                return output
+        with self._get_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            output = []
+            for row in results:
+                oldid = row[0]
+                id_val = str(oldid)
+                if id_val.startswith('"') and id_val.endswith('"'):
+                    id_val = id_val[1:-1]
+                item = {"id": id_val}
+                if return_fields:
+                    properties = row[2]  # properties column
+                    item.update(self._extract_fields_from_properties(properties, return_fields))
+                output.append(item)
+            logger.info(
+                f"[search_by_keywords_LIKE end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
+            )
+            return output
 
     @timed
     def search_by_keywords_tfidf(
@@ -1633,26 +1614,25 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.info(
             f"[search_by_keywords_TFIDF start:] user_name: {user_name}, query: {query}, params: {params}"
         )
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query, params)
-                results = cursor.fetchall()
-                output = []
-                for row in results:
-                    oldid = row[0]
-                    id_val = str(oldid)
-                    if id_val.startswith('"') and id_val.endswith('"'):
-                        id_val = id_val[1:-1]
-                    item = {"id": id_val}
-                    if return_fields:
-                        properties = row[2]  # properties column
-                        item.update(self._extract_fields_from_properties(properties, return_fields))
-                    output.append(item)
+        with self._get_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            output = []
+            for row in results:
+                oldid = row[0]
+                id_val = str(oldid)
+                if id_val.startswith('"') and id_val.endswith('"'):
+                    id_val = id_val[1:-1]
+                item = {"id": id_val}
+                if return_fields:
+                    properties = row[2]  # properties column
+                    item.update(self._extract_fields_from_properties(properties, return_fields))
+                output.append(item)
 
-                logger.info(
-                    f"[search_by_keywords_TFIDF end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
-                )
-                return output
+            logger.info(
+                f"[search_by_keywords_TFIDF end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
+            )
+            return output
 
     @timed
     def search_by_fulltext(
@@ -1777,34 +1757,29 @@ class PolarDBGraphDB(BaseGraphDB):
         """
         params = [tsquery_string]
         logger.info(f"[search_by_fulltext] query: {query}, params: {params}")
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query, params)
-                results = cursor.fetchall()
-                output = []
-                for row in results:
-                    oldid = row[0]  # old_id
-                    rank = row[1]  # rank score (no memory_text column)
+        with self._get_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            output = []
+            for row in results:
+                oldid = row[0]  # old_id
+                rank = row[1]  # rank score (no memory_text column)
 
-                    id_val = str(oldid)
-                    if id_val.startswith('"') and id_val.endswith('"'):
-                        id_val = id_val[1:-1]
-                    score_val = float(rank)
+                id_val = str(oldid)
+                if id_val.startswith('"') and id_val.endswith('"'):
+                    id_val = id_val[1:-1]
+                score_val = float(rank)
 
-                    # Apply threshold filter if specified
-                    if threshold is None or score_val >= threshold:
-                        item = {"id": id_val, "score": score_val}
-                        if return_fields:
-                            properties = row[2]  # properties column
-                            item.update(
-                                self._extract_fields_from_properties(properties, return_fields)
-                            )
-                        output.append(item)
-                elapsed_time = time.time() - start_time
-                logger.info(
-                    f" polardb search_by_fulltext query completed time in {elapsed_time:.2f}s"
-                )
-                return output[:top_k]
+                # Apply threshold filter if specified
+                if threshold is None or score_val >= threshold:
+                    item = {"id": id_val, "score": score_val}
+                    if return_fields:
+                        properties = row[2]  # properties column
+                        item.update(self._extract_fields_from_properties(properties, return_fields))
+                    output.append(item)
+            elapsed_time = time.time() - start_time
+            logger.info(f" polardb search_by_fulltext query completed time in {elapsed_time:.2f}s")
+            return output[:top_k]
 
     @timed
     def search_by_embedding(
@@ -1901,38 +1876,35 @@ class PolarDBGraphDB(BaseGraphDB):
 
         logger.info(f"[search_by_embedding] query: {query}, params: {params}")
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                if params:
-                    cursor.execute(query, params)
-                else:
-                    cursor.execute(query)
-                results = cursor.fetchall()
-                output = []
-                for row in results:
-                    if len(row) < 5:
-                        logger.warning(f"Row has {len(row)} columns, expected 5. Row: {row}")
-                        continue
-                    oldid = row[3]  # old_id
-                    score = row[4]  # scope
-                    id_val = str(oldid)
-                    if id_val.startswith('"') and id_val.endswith('"'):
-                        id_val = id_val[1:-1]
-                    score_val = float(score)
-                    score_val = (score_val + 1) / 2  # align to neo4j, Normalized Cosine Score
-                    if threshold is None or score_val >= threshold:
-                        item = {"id": id_val, "score": score_val}
-                        if return_fields:
-                            properties = row[1]  # properties column
-                            item.update(
-                                self._extract_fields_from_properties(properties, return_fields)
-                            )
-                        output.append(item)
-                elapsed_time = time.time() - start_time
-                logger.info(
-                    f" polardb search_by_embedding query embedding completed time in {elapsed_time:.2f}s"
-                )
-                return output[:top_k]
+        with self._get_connection() as conn, conn.cursor() as cursor:
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            results = cursor.fetchall()
+            output = []
+            for row in results:
+                if len(row) < 5:
+                    logger.warning(f"Row has {len(row)} columns, expected 5. Row: {row}")
+                    continue
+                oldid = row[3]  # old_id
+                score = row[4]  # scope
+                id_val = str(oldid)
+                if id_val.startswith('"') and id_val.endswith('"'):
+                    id_val = id_val[1:-1]
+                score_val = float(score)
+                score_val = (score_val + 1) / 2  # align to neo4j, Normalized Cosine Score
+                if threshold is None or score_val >= threshold:
+                    item = {"id": id_val, "score": score_val}
+                    if return_fields:
+                        properties = row[1]  # properties column
+                        item.update(self._extract_fields_from_properties(properties, return_fields))
+                    output.append(item)
+            elapsed_time = time.time() - start_time
+            logger.info(
+                f" polardb search_by_embedding query embedding completed time in {elapsed_time:.2f}s"
+            )
+            return output[:top_k]
 
     @timed
     def get_by_metadata(
@@ -2049,11 +2021,10 @@ class PolarDBGraphDB(BaseGraphDB):
         ids = []
         logger.info(f"[get_by_metadata] cypher_query: {cypher_query}")
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(cypher_query)
-                    results = cursor.fetchall()
-                    ids = [str(item[0]).strip('"') for item in results]
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(cypher_query)
+                results = cursor.fetchall()
+                ids = [str(item[0]).strip('"') for item in results]
         except Exception as e:
             logger.warning(f"Failed to get metadata: {e}, query is {cypher_query}")
 
@@ -2208,28 +2179,27 @@ class PolarDBGraphDB(BaseGraphDB):
             GROUP BY {", ".join(group_by_fields)}
         """
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    # Handle parameterized query
-                    if params and isinstance(params, list):
-                        cursor.execute(query, params)
-                    else:
-                        cursor.execute(query)
-                    results = cursor.fetchall()
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                # Handle parameterized query
+                if params and isinstance(params, list):
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute(query)
+                results = cursor.fetchall()
 
-                    output = []
-                    for row in results:
-                        group_values = {}
-                        for i, field in enumerate(group_fields):
-                            value = row[i]
-                            if hasattr(value, "value"):
-                                group_values[field] = value.value
-                            else:
-                                group_values[field] = str(value)
-                        count_value = row[-1]  # Last column is count
-                        output.append({**group_values, "count": int(count_value)})
+                output = []
+                for row in results:
+                    group_values = {}
+                    for i, field in enumerate(group_fields):
+                        value = row[i]
+                        if hasattr(value, "value"):
+                            group_values[field] = value.value
+                        else:
+                            group_values[field] = str(value)
+                    count_value = row[-1]  # Last column is count
+                    output.append({**group_values, "count": int(count_value)})
 
-                    return output
+                return output
 
         except Exception as e:
             logger.error(f"Failed to get grouped counts: {e}", exc_info=True)
@@ -2265,10 +2235,9 @@ class PolarDBGraphDB(BaseGraphDB):
                 DETACH DELETE n
                 $$) AS (result agtype)
             """
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query)
-                    logger.info("Cleared all nodes from database.")
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query)
+                logger.info("Cleared all nodes from database.")
 
         except Exception as e:
             logger.error(f"[ERROR] Failed to clear database: {e}")
@@ -2572,26 +2541,25 @@ class PolarDBGraphDB(BaseGraphDB):
             node_ids = set()
             logger.info(f"[get_all_memory_items] cypher_query: {cypher_query}")
             try:
-                with self._get_connection() as conn:
-                    with conn.cursor() as cursor:
-                        cursor.execute(cypher_query)
-                        results = cursor.fetchall()
+                with self._get_connection() as conn, conn.cursor() as cursor:
+                    cursor.execute(cypher_query)
+                    results = cursor.fetchall()
 
-                        for row in results:
-                            """
+                    for row in results:
+                        """
                             if isinstance(row, (list, tuple)) and len(row) >= 2:
                             """
-                            if isinstance(row, list | tuple) and len(row) >= 2:
-                                embedding_val, node_val = row[0], row[1]
-                            else:
-                                embedding_val, node_val = None, row[0]
+                        if isinstance(row, list | tuple) and len(row) >= 2:
+                            embedding_val, node_val = row[0], row[1]
+                        else:
+                            embedding_val, node_val = None, row[0]
 
-                            node = self._build_node_from_agtype(node_val, embedding_val)
-                            if node:
-                                node_id = node["id"]
-                                if node_id not in node_ids:
-                                    nodes.append(node)
-                                    node_ids.add(node_id)
+                        node = self._build_node_from_agtype(node_val, embedding_val)
+                        if node:
+                            node_id = node["id"]
+                            if node_id not in node_ids:
+                                nodes.append(node)
+                                node_ids.add(node_id)
 
             except Exception as e:
                 logger.warning(f"Failed to get memories: {e}", exc_info=True)
@@ -2623,21 +2591,20 @@ class PolarDBGraphDB(BaseGraphDB):
             nodes = []
             logger.info(f"[get_all_memory_items] cypher_query: {cypher_query}")
             try:
-                with self._get_connection() as conn:
-                    with conn.cursor() as cursor:
-                        cursor.execute(cypher_query)
-                        results = cursor.fetchall()
+                with self._get_connection() as conn, conn.cursor() as cursor:
+                    cursor.execute(cypher_query)
+                    results = cursor.fetchall()
 
-                        for row in results:
-                            """
+                    for row in results:
+                        """
                             if isinstance(row[0], str):
                                 memory_data = json.loads(row[0])
                             else:
                                 memory_data = row[0]  # 如果已经是字典，直接使用
                             nodes.append(self._parse_node(memory_data))
                             """
-                            memory_data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
-                            nodes.append(self._parse_node(memory_data))
+                        memory_data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                        nodes.append(self._parse_node(memory_data))
 
             except Exception as e:
                 logger.error(f"Failed to get memories: {e}", exc_info=True)
@@ -2844,81 +2811,80 @@ class PolarDBGraphDB(BaseGraphDB):
         candidates = []
         node_ids = set()
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(cypher_query)
-                    results = cursor.fetchall()
-                    logger.info(f"Found {len(results)} structure optimization candidates")
-                    for row in results:
-                        if include_embedding:
-                            # When include_embedding=True, return full node object
-                            """
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(cypher_query)
+                results = cursor.fetchall()
+                logger.info(f"Found {len(results)} structure optimization candidates")
+                for row in results:
+                    if include_embedding:
+                        # When include_embedding=True, return full node object
+                        """
                             if isinstance(row, (list, tuple)) and len(row) >= 2:
                             """
-                            if isinstance(row, list | tuple) and len(row) >= 2:
-                                embedding_val, node_val = row[0], row[1]
-                            else:
-                                embedding_val, node_val = None, row[0]
-
-                            node = self._build_node_from_agtype(node_val, embedding_val)
-                            if node:
-                                node_id = node["id"]
-                                if node_id not in node_ids:
-                                    candidates.append(node)
-                                    node_ids.add(node_id)
+                        if isinstance(row, list | tuple) and len(row) >= 2:
+                            embedding_val, node_val = row[0], row[1]
                         else:
-                            # When include_embedding=False, return field dictionary
-                            # Define field names matching the RETURN clause
-                            field_names = [
-                                "id",
-                                "memory",
-                                "user_name",
-                                "user_id",
-                                "session_id",
-                                "status",
-                                "key",
-                                "confidence",
-                                "tags",
-                                "created_at",
-                                "updated_at",
-                                "memory_type",
-                                "sources",
-                                "source",
-                                "node_type",
-                                "visibility",
-                                "usage",
-                                "background",
-                                "graph_id",
-                            ]
+                            embedding_val, node_val = None, row[0]
 
-                            # Convert row to dictionary
-                            node_data = {}
-                            for i, field_name in enumerate(field_names):
-                                if i < len(row):
-                                    value = row[i]
-                                    # Handle special fields
-                                    if field_name in ["tags", "sources", "usage"] and isinstance(
-                                        value, str
-                                    ):
-                                        try:
-                                            # Try parsing JSON string
-                                            node_data[field_name] = json.loads(value)
-                                        except (json.JSONDecodeError, TypeError):
-                                            node_data[field_name] = value
-                                    else:
+                        node = self._build_node_from_agtype(node_val, embedding_val)
+                        if node:
+                            node_id = node["id"]
+                            if node_id not in node_ids:
+                                candidates.append(node)
+                                node_ids.add(node_id)
+                    else:
+                        # When include_embedding=False, return field dictionary
+                        # Define field names matching the RETURN clause
+                        field_names = [
+                            "id",
+                            "memory",
+                            "user_name",
+                            "user_id",
+                            "session_id",
+                            "status",
+                            "key",
+                            "confidence",
+                            "tags",
+                            "created_at",
+                            "updated_at",
+                            "memory_type",
+                            "sources",
+                            "source",
+                            "node_type",
+                            "visibility",
+                            "usage",
+                            "background",
+                            "graph_id",
+                        ]
+
+                        # Convert row to dictionary
+                        node_data = {}
+                        for i, field_name in enumerate(field_names):
+                            if i < len(row):
+                                value = row[i]
+                                # Handle special fields
+                                if field_name in ["tags", "sources", "usage"] and isinstance(
+                                    value, str
+                                ):
+                                    try:
+                                        # Try parsing JSON string
+                                        node_data[field_name] = json.loads(value)
+                                    except (json.JSONDecodeError, TypeError):
                                         node_data[field_name] = value
+                                else:
+                                    node_data[field_name] = value
 
-                            # Parse node using _parse_node_new
-                            try:
-                                node = self._parse_node_new(node_data)
-                                node_id = node["id"]
+                        # Parse node using _parse_node_new
+                        try:
+                            node = self._parse_node_new(node_data)
+                            node_id = node["id"]
 
-                                if node_id not in node_ids:
-                                    candidates.append(node)
-                                    node_ids.add(node_id)
-                                    logger.debug(f"Parsed node successfully: {node_id}")
-                            except Exception as e:
-                                logger.error(f"Failed to parse node: {e}")
+                            if node_id not in node_ids:
+                                candidates.append(node)
+                                node_ids.add(node_id)
+                                logger.debug(f"Parsed node successfully: {node_id}")
+                        except Exception as e:
+                            logger.error(f"Failed to parse node: {e}")
 
         except Exception as e:
             logger.error(f"Failed to get structure optimization candidates: {e}", exc_info=True)
@@ -3138,7 +3104,9 @@ class PolarDBGraphDB(BaseGraphDB):
                             f"[add_node] [embedding_vector-false] insert_query: {insert_query}, properties: {json.dumps(properties)}"
                         )
                 if insert_query:
-                    logger.info(f"In add node polardb: id-{id} memory-{memory} query-{insert_query}")
+                    logger.info(
+                        f"In add node polardb: id-{id} memory-{memory} query-{insert_query}"
+                    )
         except Exception as e:
             logger.error(f"[add_node] Failed to add node: {e}", exc_info=True)
             raise
@@ -3263,121 +3231,121 @@ class PolarDBGraphDB(BaseGraphDB):
             nodes_by_embedding_column[col].append(node)
 
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    # Process each group separately
-                    for embedding_column, nodes_group in nodes_by_embedding_column.items():
-                        # Batch delete existing records using IN clause
-                        ids_to_delete = [node["id"] for node in nodes_group]
-                        if ids_to_delete:
-                            delete_query = f"""
-                                DELETE FROM {self.db_name}_graph."Memory"
-                                WHERE id IN (
-                                    SELECT ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, unnest(%s::text[])::cstring)
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                # Process each group separately
+                for embedding_column, nodes_group in nodes_by_embedding_column.items():
+                    # Batch delete existing records using IN clause
+                    ids_to_delete = [node["id"] for node in nodes_group]
+                    if ids_to_delete:
+                        delete_query = f"""
+                            DELETE FROM {self.db_name}_graph."Memory"
+                            WHERE id IN (
+                                SELECT ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, unnest(%s::text[])::cstring)
+                            )
+                        """
+                        cursor.execute(delete_query, (ids_to_delete,))
+
+                    # Batch get graph_ids for all nodes
+                    get_graph_ids_query = f"""
+                        SELECT
+                            id_val,
+                            ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, id_val::text::cstring) as graph_id
+                        FROM unnest(%s::text[]) as id_val
+                    """
+                    cursor.execute(get_graph_ids_query, (ids_to_delete,))
+                    graph_id_map = {row[0]: row[1] for row in cursor.fetchall()}
+
+                    # Add graph_id to properties
+                    for node in nodes_group:
+                        graph_id = graph_id_map.get(node["id"])
+                        if graph_id:
+                            node["properties"]["graph_id"] = str(graph_id)
+
+                    # Use PREPARE/EXECUTE for efficient batch insert
+                    # Generate unique prepare statement name to avoid conflicts
+                    prepare_name = f"insert_mem_{embedding_column or 'no_embedding'}_{int(time.time() * 1000000)}"
+
+                    try:
+                        if embedding_column and any(
+                            node["embedding_vector"] for node in nodes_group
+                        ):
+                            # PREPARE statement for insert with embedding
+                            prepare_query = f"""
+                                PREPARE {prepare_name} AS
+                                INSERT INTO {self.db_name}_graph."Memory"(id, properties, {embedding_column})
+                                VALUES (
+                                    ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, $1::text::cstring),
+                                    $2::text::agtype,
+                                    $3::vector
                                 )
                             """
-                            cursor.execute(delete_query, (ids_to_delete,))
+                            logger.info(
+                                f"[add_nodes_batch] embedding Preparing prepare_name: {prepare_name}"
+                            )
+                            logger.info(
+                                f"[add_nodes_batch] embedding Preparing prepare_query: {prepare_query}"
+                            )
 
-                        # Batch get graph_ids for all nodes
-                        get_graph_ids_query = f"""
-                            SELECT
-                                id_val,
-                                ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, id_val::text::cstring) as graph_id
-                            FROM unnest(%s::text[]) as id_val
-                        """
-                        cursor.execute(get_graph_ids_query, (ids_to_delete,))
-                        graph_id_map = {row[0]: row[1] for row in cursor.fetchall()}
+                            cursor.execute(prepare_query)
 
-                        # Add graph_id to properties
-                        for node in nodes_group:
-                            graph_id = graph_id_map.get(node["id"])
-                            if graph_id:
-                                node["properties"]["graph_id"] = str(graph_id)
+                            # Execute prepared statement for each node
+                            for node in nodes_group:
+                                properties_json = json.dumps(node["properties"])
+                                embedding_json = (
+                                    json.dumps(node["embedding_vector"])
+                                    if node["embedding_vector"]
+                                    else None
+                                )
 
-                        # Use PREPARE/EXECUTE for efficient batch insert
-                        # Generate unique prepare statement name to avoid conflicts
-                        prepare_name = f"insert_mem_{embedding_column or 'no_embedding'}_{int(time.time() * 1000000)}"
+                                cursor.execute(
+                                    f"EXECUTE {prepare_name}(%s, %s, %s)",
+                                    (node["id"], properties_json, embedding_json),
+                                )
+                        else:
+                            # PREPARE statement for insert without embedding
+                            prepare_query = f"""
+                                PREPARE {prepare_name} AS
+                                INSERT INTO {self.db_name}_graph."Memory"(id, properties)
+                                VALUES (
+                                    ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, $1::text::cstring),
+                                    $2::text::agtype
+                                )
+                            """
+                            logger.info(
+                                f"[add_nodes_batch] without embedding Preparing prepare_name: {prepare_name}"
+                            )
+                            logger.info(
+                                f"[add_nodes_batch] without embedding Preparing prepare_query: {prepare_query}"
+                            )
+                            cursor.execute(prepare_query)
 
+                            # Execute prepared statement for each node
+                            for node in nodes_group:
+                                properties_json = json.dumps(node["properties"])
+
+                                cursor.execute(
+                                    f"EXECUTE {prepare_name}(%s, %s)",
+                                    (node["id"], properties_json),
+                                )
+                    finally:
+                        # DEALLOCATE prepared statement (always execute, even on error)
                         try:
-                            if embedding_column and any(
-                                node["embedding_vector"] for node in nodes_group
-                            ):
-                                # PREPARE statement for insert with embedding
-                                prepare_query = f"""
-                                    PREPARE {prepare_name} AS
-                                    INSERT INTO {self.db_name}_graph."Memory"(id, properties, {embedding_column})
-                                    VALUES (
-                                        ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, $1::text::cstring),
-                                        $2::text::agtype,
-                                        $3::vector
-                                    )
-                                """
-                                logger.info(
-                                    f"[add_nodes_batch] embedding Preparing prepare_name: {prepare_name}"
-                                )
-                                logger.info(
-                                    f"[add_nodes_batch] embedding Preparing prepare_query: {prepare_query}"
-                                )
+                            cursor.execute(f"DEALLOCATE {prepare_name}")
+                            logger.info(
+                                f"[add_nodes_batch] Deallocated prepared statement: {prepare_name}"
+                            )
+                        except Exception as dealloc_error:
+                            logger.warning(
+                                f"[add_nodes_batch] Failed to deallocate {prepare_name}: {dealloc_error}"
+                            )
 
-                                cursor.execute(prepare_query)
-
-                                # Execute prepared statement for each node
-                                for node in nodes_group:
-                                    properties_json = json.dumps(node["properties"])
-                                    embedding_json = (
-                                        json.dumps(node["embedding_vector"])
-                                        if node["embedding_vector"]
-                                        else None
-                                    )
-
-                                    cursor.execute(
-                                        f"EXECUTE {prepare_name}(%s, %s, %s)",
-                                        (node["id"], properties_json, embedding_json),
-                                    )
-                            else:
-                                # PREPARE statement for insert without embedding
-                                prepare_query = f"""
-                                    PREPARE {prepare_name} AS
-                                    INSERT INTO {self.db_name}_graph."Memory"(id, properties)
-                                    VALUES (
-                                        ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, $1::text::cstring),
-                                        $2::text::agtype
-                                    )
-                                """
-                                logger.info(
-                                    f"[add_nodes_batch] without embedding Preparing prepare_name: {prepare_name}"
-                                )
-                                logger.info(
-                                    f"[add_nodes_batch] without embedding Preparing prepare_query: {prepare_query}"
-                                )
-                                cursor.execute(prepare_query)
-
-                                # Execute prepared statement for each node
-                                for node in nodes_group:
-                                    properties_json = json.dumps(node["properties"])
-
-                                    cursor.execute(
-                                        f"EXECUTE {prepare_name}(%s, %s)", (node["id"], properties_json)
-                                    )
-                        finally:
-                            # DEALLOCATE prepared statement (always execute, even on error)
-                            try:
-                                cursor.execute(f"DEALLOCATE {prepare_name}")
-                                logger.info(
-                                    f"[add_nodes_batch] Deallocated prepared statement: {prepare_name}"
-                                )
-                            except Exception as dealloc_error:
-                                logger.warning(
-                                    f"[add_nodes_batch] Failed to deallocate {prepare_name}: {dealloc_error}"
-                                )
-
-                        logger.info(
-                            f"[add_nodes_batch] Inserted {len(nodes_group)} nodes with embedding_column={embedding_column}"
-                        )
-                        elapsed_time = time.time() - batch_start_time
-                        logger.info(
-                            f"[add_nodes_batch] PREPARE/EXECUTE batch insert completed successfully in {elapsed_time:.2f}s"
-                        )
+                    logger.info(
+                        f"[add_nodes_batch] Inserted {len(nodes_group)} nodes with embedding_column={embedding_column}"
+                    )
+                    elapsed_time = time.time() - batch_start_time
+                    logger.info(
+                        f"[add_nodes_batch] PREPARE/EXECUTE batch insert completed successfully in {elapsed_time:.2f}s"
+                    )
 
         except Exception as e:
             logger.error(f"[add_nodes_batch] Failed to add nodes: {e}", exc_info=True)
@@ -3494,52 +3462,51 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.debug(f"[get_neighbors_by_tag] query: {query}, params: {params}")
 
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, params)
-                    results = cursor.fetchall()
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query, params)
+                results = cursor.fetchall()
 
-                    nodes_with_overlap = []
-                    for row in results:
-                        node_id, properties_json, embedding_json = row
-                        properties = properties_json if properties_json else {}
+                nodes_with_overlap = []
+                for row in results:
+                    node_id, properties_json, embedding_json = row
+                    properties = properties_json if properties_json else {}
 
-                        # Parse embedding
-                        if include_embedding and embedding_json is not None:
-                            try:
-                                embedding = (
-                                    json.loads(embedding_json)
-                                    if isinstance(embedding_json, str)
-                                    else embedding_json
-                                )
-                                properties["embedding"] = embedding
-                            except (json.JSONDecodeError, TypeError):
-                                logger.warning(f"Failed to parse embedding for node {node_id}")
-
-                        # Compute tag overlap
-                        node_tags = properties.get("tags", [])
-                        if isinstance(node_tags, str):
-                            try:
-                                node_tags = json.loads(node_tags)
-                            except (json.JSONDecodeError, TypeError):
-                                node_tags = []
-
-                        overlap_tags = [tag for tag in tags if tag in node_tags]
-                        overlap_count = len(overlap_tags)
-
-                        if overlap_count >= min_overlap:
-                            node_data = self._parse_node(
-                                {
-                                    "id": properties.get("id", node_id),
-                                    "memory": properties.get("memory", ""),
-                                    "metadata": properties,
-                                }
+                    # Parse embedding
+                    if include_embedding and embedding_json is not None:
+                        try:
+                            embedding = (
+                                json.loads(embedding_json)
+                                if isinstance(embedding_json, str)
+                                else embedding_json
                             )
-                            nodes_with_overlap.append((node_data, overlap_count))
+                            properties["embedding"] = embedding
+                        except (json.JSONDecodeError, TypeError):
+                            logger.warning(f"Failed to parse embedding for node {node_id}")
 
-                    # Sort by overlap count and return top_k items
-                    nodes_with_overlap.sort(key=lambda x: x[1], reverse=True)
-                    return [node for node, _ in nodes_with_overlap[:top_k]]
+                    # Compute tag overlap
+                    node_tags = properties.get("tags", [])
+                    if isinstance(node_tags, str):
+                        try:
+                            node_tags = json.loads(node_tags)
+                        except (json.JSONDecodeError, TypeError):
+                            node_tags = []
+
+                    overlap_tags = [tag for tag in tags if tag in node_tags]
+                    overlap_count = len(overlap_tags)
+
+                    if overlap_count >= min_overlap:
+                        node_data = self._parse_node(
+                            {
+                                "id": properties.get("id", node_id),
+                                "memory": properties.get("memory", ""),
+                                "metadata": properties,
+                            }
+                        )
+                        nodes_with_overlap.append((node_data, overlap_count))
+
+                # Sort by overlap count and return top_k items
+                nodes_with_overlap.sort(key=lambda x: x[1], reverse=True)
+                return [node for node, _ in nodes_with_overlap[:top_k]]
 
         except Exception as e:
             logger.error(f"Failed to get neighbors by tag: {e}", exc_info=True)
@@ -3803,54 +3770,54 @@ class PolarDBGraphDB(BaseGraphDB):
         """
         logger.info(f"get_edges query:{query}")
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query)
-                    results = cursor.fetchall()
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query)
+                results = cursor.fetchall()
 
-                    edges = []
-                    for row in results:
-                        # Extract and clean from_id
-                        from_id_raw = row[0].value if hasattr(row[0], "value") else row[0]
-                        if (
-                            isinstance(from_id_raw, str)
-                            and from_id_raw.startswith('"')
-                            and from_id_raw.endswith('"')
-                        ):
-                            from_id = from_id_raw[1:-1]
-                        else:
-                            from_id = str(from_id_raw)
+                edges = []
+                for row in results:
+                    # Extract and clean from_id
+                    from_id_raw = row[0].value if hasattr(row[0], "value") else row[0]
+                    if (
+                        isinstance(from_id_raw, str)
+                        and from_id_raw.startswith('"')
+                        and from_id_raw.endswith('"')
+                    ):
+                        from_id = from_id_raw[1:-1]
+                    else:
+                        from_id = str(from_id_raw)
 
-                        # Extract and clean to_id
-                        to_id_raw = row[1].value if hasattr(row[1], "value") else row[1]
-                        if (
-                            isinstance(to_id_raw, str)
-                            and to_id_raw.startswith('"')
-                            and to_id_raw.endswith('"')
-                        ):
-                            to_id = to_id_raw[1:-1]
-                        else:
-                            to_id = str(to_id_raw)
+                    # Extract and clean to_id
+                    to_id_raw = row[1].value if hasattr(row[1], "value") else row[1]
+                    if (
+                        isinstance(to_id_raw, str)
+                        and to_id_raw.startswith('"')
+                        and to_id_raw.endswith('"')
+                    ):
+                        to_id = to_id_raw[1:-1]
+                    else:
+                        to_id = str(to_id_raw)
 
-                        # Extract and clean edge_type
-                        edge_type_raw = row[2].value if hasattr(row[2], "value") else row[2]
-                        if (
-                            isinstance(edge_type_raw, str)
-                            and edge_type_raw.startswith('"')
-                            and edge_type_raw.endswith('"')
-                        ):
-                            edge_type = edge_type_raw[1:-1]
-                        else:
-                            edge_type = str(edge_type_raw)
+                    # Extract and clean edge_type
+                    edge_type_raw = row[2].value if hasattr(row[2], "value") else row[2]
+                    if (
+                        isinstance(edge_type_raw, str)
+                        and edge_type_raw.startswith('"')
+                        and edge_type_raw.endswith('"')
+                    ):
+                        edge_type = edge_type_raw[1:-1]
+                    else:
+                        edge_type = str(edge_type_raw)
 
-                        edges.append({"from": from_id, "to": to_id, "type": edge_type})
-                    elapsed_time = time.time() - start_time
-                    logger.info(f"polardb get_edges query completed time in {elapsed_time:.2f}s")
-                    return edges
+                    edges.append({"from": from_id, "to": to_id, "type": edge_type})
+                elapsed_time = time.time() - start_time
+                logger.info(f"polardb get_edges query completed time in {elapsed_time:.2f}s")
+                return edges
 
         except Exception as e:
             logger.error(f"Failed to get edges: {e}", exc_info=True)
             return []
+
     def _convert_graph_edges(self, core_node: dict) -> dict:
         import copy
 
@@ -4857,65 +4824,64 @@ class PolarDBGraphDB(BaseGraphDB):
 
         total_deleted_count = 0
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    # Build WHERE conditions list
-                    where_conditions = []
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                # Build WHERE conditions list
+                where_conditions = []
 
-                    # Add memory_ids conditions
-                    if memory_ids:
-                        logger.info(f"[delete_node_by_prams] Processing {len(memory_ids)} memory_ids")
-                        id_conditions = []
-                        for node_id in memory_ids:
-                            id_conditions.append(
-                                f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{node_id}\"'::agtype"
-                            )
-                        where_conditions.append(f"({' OR '.join(id_conditions)})")
+                # Add memory_ids conditions
+                if memory_ids:
+                    logger.info(f"[delete_node_by_prams] Processing {len(memory_ids)} memory_ids")
+                    id_conditions = []
+                    for node_id in memory_ids:
+                        id_conditions.append(
+                            f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{node_id}\"'::agtype"
+                        )
+                    where_conditions.append(f"({' OR '.join(id_conditions)})")
 
-                    # Add file_ids conditions
-                    if file_ids:
-                        logger.info(f"[delete_node_by_prams] Processing {len(file_ids)} file_ids")
-                        file_id_conditions = []
-                        for file_id in file_ids:
-                            file_id_conditions.append(
-                                f"agtype_in_operator(agtype_access_operator(VARIADIC ARRAY[properties, '\"file_ids\"'::agtype]), '\"{file_id}\"'::agtype)"
-                            )
-                        where_conditions.append(f"({' OR '.join(file_id_conditions)})")
+                # Add file_ids conditions
+                if file_ids:
+                    logger.info(f"[delete_node_by_prams] Processing {len(file_ids)} file_ids")
+                    file_id_conditions = []
+                    for file_id in file_ids:
+                        file_id_conditions.append(
+                            f"agtype_in_operator(agtype_access_operator(VARIADIC ARRAY[properties, '\"file_ids\"'::agtype]), '\"{file_id}\"'::agtype)"
+                        )
+                    where_conditions.append(f"({' OR '.join(file_id_conditions)})")
 
-                    # Add filter conditions
-                    if filter_conditions:
-                        logger.info("[delete_node_by_prams] Processing filter conditions")
-                        where_conditions.extend(filter_conditions)
+                # Add filter conditions
+                if filter_conditions:
+                    logger.info("[delete_node_by_prams] Processing filter conditions")
+                    where_conditions.extend(filter_conditions)
 
-                    # Add user_name filter if provided
-                    if user_name_conditions:
-                        user_name_where = " OR ".join(user_name_conditions)
-                        where_conditions.append(f"({user_name_where})")
+                # Add user_name filter if provided
+                if user_name_conditions:
+                    user_name_where = " OR ".join(user_name_conditions)
+                    where_conditions.append(f"({user_name_where})")
 
-                    # Build final WHERE clause
-                    if not where_conditions:
-                        logger.warning("[delete_node_by_prams] No WHERE conditions to delete")
-                        return 0
+                # Build final WHERE clause
+                if not where_conditions:
+                    logger.warning("[delete_node_by_prams] No WHERE conditions to delete")
+                    return 0
 
-                    where_clause = " AND ".join(where_conditions)
+                where_clause = " AND ".join(where_conditions)
 
-                    # Delete directly without counting
-                    delete_query = f"""
-                        DELETE FROM "{self.db_name}_graph"."Memory"
-                        WHERE {where_clause}
-                    """
-                    logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
+                # Delete directly without counting
+                delete_query = f"""
+                    DELETE FROM "{self.db_name}_graph"."Memory"
+                    WHERE {where_clause}
+                """
+                logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
 
-                    cursor.execute(delete_query)
-                    deleted_count = cursor.rowcount
-                    total_deleted_count = deleted_count
+                cursor.execute(delete_query)
+                deleted_count = cursor.rowcount
+                total_deleted_count = deleted_count
 
-                    logger.info(f"[delete_node_by_prams] Deleted {deleted_count} nodes")
+                logger.info(f"[delete_node_by_prams] Deleted {deleted_count} nodes")
 
-                    elapsed_time = time.time() - batch_start_time
-                    logger.info(
-                        f"[delete_node_by_prams] Deletion completed successfully in {elapsed_time:.2f}s, total deleted {total_deleted_count} nodes"
-                    )
+                elapsed_time = time.time() - batch_start_time
+                logger.info(
+                    f"[delete_node_by_prams] Deletion completed successfully in {elapsed_time:.2f}s, total deleted {total_deleted_count} nodes"
+                )
         except Exception as e:
             logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
             raise
@@ -4984,47 +4950,47 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.info(f"[get_user_names_by_memory_ids] query: {query}")
         result_dict = {}
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query)
-                    results = cursor.fetchall()
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query)
+                results = cursor.fetchall()
 
-                    # Build result dictionary from query results
-                    for row in results:
-                        memory_id_raw = row[0]
-                        user_name_raw = row[1]
+                # Build result dictionary from query results
+                for row in results:
+                    memory_id_raw = row[0]
+                    user_name_raw = row[1]
 
-                        # Remove quotes if present
-                        if isinstance(memory_id_raw, str):
-                            memory_id = memory_id_raw.strip('"').strip("'")
-                        else:
-                            memory_id = str(memory_id_raw).strip('"').strip("'")
+                    # Remove quotes if present
+                    if isinstance(memory_id_raw, str):
+                        memory_id = memory_id_raw.strip('"').strip("'")
+                    else:
+                        memory_id = str(memory_id_raw).strip('"').strip("'")
 
-                        if isinstance(user_name_raw, str):
-                            user_name = user_name_raw.strip('"').strip("'")
-                        else:
-                            user_name = (
-                                str(user_name_raw).strip('"').strip("'") if user_name_raw else None
-                            )
+                    if isinstance(user_name_raw, str):
+                        user_name = user_name_raw.strip('"').strip("'")
+                    else:
+                        user_name = (
+                            str(user_name_raw).strip('"').strip("'") if user_name_raw else None
+                        )
 
-                        result_dict[memory_id] = user_name if user_name else None
+                    result_dict[memory_id] = user_name if user_name else None
 
-                    # Set None for memory_ids that were not found
-                    for mid in normalized_memory_ids:
-                        if mid not in result_dict:
-                            result_dict[mid] = None
+                # Set None for memory_ids that were not found
+                for mid in normalized_memory_ids:
+                    if mid not in result_dict:
+                        result_dict[mid] = None
 
-                    logger.info(
-                        f"[get_user_names_by_memory_ids] Found {len([v for v in result_dict.values() if v is not None])} memory_ids with user_names, "
-                        f"{len([v for v in result_dict.values() if v is None])} memory_ids without user_names"
-                    )
+                logger.info(
+                    f"[get_user_names_by_memory_ids] Found {len([v for v in result_dict.values() if v is not None])} memory_ids with user_names, "
+                    f"{len([v for v in result_dict.values() if v is None])} memory_ids without user_names"
+                )
 
-                    return result_dict
+                return result_dict
         except Exception as e:
             logger.error(
                 f"[get_user_names_by_memory_ids] Failed to get user names: {e}", exc_info=True
             )
             raise
+
     def exist_user_name(self, user_name: str) -> dict[str, bool]:
         """Check if user name exists in the graph.
 
@@ -5058,18 +5024,18 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.info(f"[exist_user_name] query: {query}")
         result_dict = {}
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query)
-                    count = cursor.fetchone()[0]
-                    result = count > 0
-                    result_dict[user_name] = result
-                    return result_dict
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query)
+                count = cursor.fetchone()[0]
+                result = count > 0
+                result_dict[user_name] = result
+                return result_dict
         except Exception as e:
             logger.error(
                 f"[exist_user_name] Failed to check user_name existence: {e}", exc_info=True
             )
             raise
+
     @timed
     def delete_node_by_mem_cube_id(
         self,
@@ -5093,71 +5059,75 @@ class PolarDBGraphDB(BaseGraphDB):
             return 0
 
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    user_name_condition = "ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                user_name_condition = "ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
 
-                    user_name_param = self.format_param_value(mem_cube_id)
+                user_name_param = self.format_param_value(mem_cube_id)
 
-                    if hard_delete:
-                        delete_record_id_condition = "ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) = %s::agtype"
-                        where_clause = f"{user_name_condition} AND {delete_record_id_condition}"
+                if hard_delete:
+                    delete_record_id_condition = "ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) = %s::agtype"
+                    where_clause = f"{user_name_condition} AND {delete_record_id_condition}"
 
-                        where_params = [user_name_param, self.format_param_value(delete_record_id)]
+                    where_params = [user_name_param, self.format_param_value(delete_record_id)]
 
-                        delete_query = f"""
-                            DELETE FROM "{self.db_name}_graph"."Memory"
-                            WHERE {where_clause}
-                        """
-                        logger.info(f"[delete_node_by_mem_cube_id] Hard delete query: {delete_query}")
+                    delete_query = f"""
+                        DELETE FROM "{self.db_name}_graph"."Memory"
+                        WHERE {where_clause}
+                    """
+                    logger.info(f"[delete_node_by_mem_cube_id] Hard delete query: {delete_query}")
 
-                        cursor.execute(delete_query, where_params)
-                        deleted_count = cursor.rowcount
+                    cursor.execute(delete_query, where_params)
+                    deleted_count = cursor.rowcount
 
-                        logger.info(f"[delete_node_by_mem_cube_id] Hard deleted {deleted_count} nodes")
-                        return deleted_count
-                    else:
-                        delete_time_empty_condition = (
-                            "(ag_catalog.agtype_access_operator(properties, '\"delete_time\"'::agtype) IS NULL "
-                            "OR ag_catalog.agtype_access_operator(properties, '\"delete_time\"'::agtype) = '\"\"'::agtype)"
-                        )
-                        delete_record_id_empty_condition = (
-                            "(ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) IS NULL "
-                            "OR ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) = '\"\"'::agtype)"
-                        )
-                        where_clause = f"{user_name_condition} AND {delete_time_empty_condition} AND {delete_record_id_empty_condition}"
+                    logger.info(f"[delete_node_by_mem_cube_id] Hard deleted {deleted_count} nodes")
+                    return deleted_count
+                else:
+                    delete_time_empty_condition = (
+                        "(ag_catalog.agtype_access_operator(properties, '\"delete_time\"'::agtype) IS NULL "
+                        "OR ag_catalog.agtype_access_operator(properties, '\"delete_time\"'::agtype) = '\"\"'::agtype)"
+                    )
+                    delete_record_id_empty_condition = (
+                        "(ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) IS NULL "
+                        "OR ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) = '\"\"'::agtype)"
+                    )
+                    where_clause = f"{user_name_condition} AND {delete_time_empty_condition} AND {delete_record_id_empty_condition}"
 
-                        current_time = datetime.utcnow().isoformat()
-                        update_query = f"""
-                            UPDATE "{self.db_name}_graph"."Memory"
-                            SET properties = (
-                                properties::jsonb || %s::jsonb
-                            )::text::agtype,
-                            deletetime = %s
-                            WHERE {where_clause}
-                        """
-                        update_properties = {
-                            "status": "deleted",
-                            "delete_time": current_time,
-                            "delete_record_id": delete_record_id,
-                        }
-                        logger.info(
-                            f"delete_node_by_mem_cube_id Soft delete update_query:{update_query},update_properties:{update_properties},deletetime:{current_time}"
-                        )
-                        update_params = [json.dumps(update_properties), current_time, user_name_param]
-                        cursor.execute(update_query, update_params)
-                        updated_count = cursor.rowcount
+                    current_time = datetime.utcnow().isoformat()
+                    update_query = f"""
+                        UPDATE "{self.db_name}_graph"."Memory"
+                        SET properties = (
+                            properties::jsonb || %s::jsonb
+                        )::text::agtype,
+                        deletetime = %s
+                        WHERE {where_clause}
+                    """
+                    update_properties = {
+                        "status": "deleted",
+                        "delete_time": current_time,
+                        "delete_record_id": delete_record_id,
+                    }
+                    logger.info(
+                        f"delete_node_by_mem_cube_id Soft delete update_query:{update_query},update_properties:{update_properties},deletetime:{current_time}"
+                    )
+                    update_params = [
+                        json.dumps(update_properties),
+                        current_time,
+                        user_name_param,
+                    ]
+                    cursor.execute(update_query, update_params)
+                    updated_count = cursor.rowcount
 
-                        logger.info(
-                            f"delete_node_by_mem_cube_id Soft deleted (updated) {updated_count} nodes"
-                        )
-                        return updated_count
+                    logger.info(
+                        f"delete_node_by_mem_cube_id Soft deleted (updated) {updated_count} nodes"
+                    )
+                    return updated_count
 
         except Exception as e:
             logger.error(
                 f"[delete_node_by_mem_cube_id] Failed to delete/update nodes: {e}", exc_info=True
             )
             raise
+
     @timed
     def recover_memory_by_mem_cube_id(
         self,
@@ -5184,45 +5154,44 @@ class PolarDBGraphDB(BaseGraphDB):
         )
 
         try:
-            with self._get_connection() as conn:
-                with conn.cursor() as cursor:
-                    user_name_condition = "ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
-                    delete_record_id_condition = "ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) = %s::agtype"
-                    where_clause = f"{user_name_condition} AND {delete_record_id_condition}"
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                user_name_condition = "ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
+                delete_record_id_condition = "ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) = %s::agtype"
+                where_clause = f"{user_name_condition} AND {delete_record_id_condition}"
 
-                    where_params = [
-                        self.format_param_value(mem_cube_id),
-                        self.format_param_value(delete_record_id),
-                    ]
+                where_params = [
+                    self.format_param_value(mem_cube_id),
+                    self.format_param_value(delete_record_id),
+                ]
 
-                    update_properties = {
-                        "status": "activated",
-                        "delete_record_id": "",
-                        "delete_time": "",
-                    }
+                update_properties = {
+                    "status": "activated",
+                    "delete_record_id": "",
+                    "delete_time": "",
+                }
 
-                    update_query = f"""
-                        UPDATE "{self.db_name}_graph"."Memory"
-                        SET properties = (
-                            properties::jsonb || %s::jsonb
-                        )::text::agtype,
-                        deletetime = NULL
-                        WHERE {where_clause}
-                    """
+                update_query = f"""
+                    UPDATE "{self.db_name}_graph"."Memory"
+                    SET properties = (
+                        properties::jsonb || %s::jsonb
+                    )::text::agtype,
+                    deletetime = NULL
+                    WHERE {where_clause}
+                """
 
-                    logger.info(f"[recover_memory_by_mem_cube_id] Update query: {update_query}")
-                    logger.info(
-                        f"[recover_memory_by_mem_cube_id] update_properties: {update_properties}"
-                    )
+                logger.info(f"[recover_memory_by_mem_cube_id] Update query: {update_query}")
+                logger.info(
+                    f"[recover_memory_by_mem_cube_id] update_properties: {update_properties}"
+                )
 
-                    update_params = [json.dumps(update_properties), *where_params]
-                    cursor.execute(update_query, update_params)
-                    updated_count = cursor.rowcount
+                update_params = [json.dumps(update_properties), *where_params]
+                cursor.execute(update_query, update_params)
+                updated_count = cursor.rowcount
 
-                    logger.info(
-                        f"[recover_memory_by_mem_cube_id] Recovered (updated) {updated_count} nodes"
-                    )
-                    return updated_count
+                logger.info(
+                    f"[recover_memory_by_mem_cube_id] Recovered (updated) {updated_count} nodes"
+                )
+                return updated_count
 
         except Exception as e:
             logger.error(
