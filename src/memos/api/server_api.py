@@ -13,6 +13,25 @@ from memos.api.routers.server_router import router as server_router
 
 load_dotenv()
 
+# print MemOS logo
+def log_memos_logo(lgr: logging.Logger, version: str) -> None:
+    logo_template = Template(
+        "\n"
+        "${p}⠀⠀⠀⠀⠀⢾⣿⠀⠀⠰⣿⣷⠀⠀⠀⠀⠀⠀⠀${r}${w}⣶⣦⠀⠀⠀⢀⣶⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣤⡶⠶⢶⣤⠀⠀⣠⡶⠶⢶⣄⠀${r}\n"
+        "${p}⠀⠀⠀⣠⣤⠊⠉⣦⣤⣄⠉⢹⣤⡀⠀⠀⠀⠀⠀${r}${w}⣿⣿⡆⠀⠀⣼⢿⡇⠀⣠⠤⠤⣄⠀⢠⣄⣤⣤⣄⣤⣤⣄⠀⣼⡟⠀⠀⠀⢿⣧⠀⣿⣅⠀⠈⠛⠀${r}\n"
+        "${p}⠀⠀⣠⠿⠛⠀⠀⡻⠿⢟⠀⠀⠛⠿⡀⠀⠀⠀⠀${r}${w}⣿⡇⢿⡄⣸⠏⢸⡇⢰⣿⠤⠤⠿⠇⢸⡇⠀⢸⣿⠀ ⣿⠀⣿⡇⠀⠀⠀⢸⣿⠀⠈⠙⠛⠿⣶⡀${r}\n"
+        "${p}⠰⣿⡇⠀⠀⢾⣿⠆⠀⠸⣿⡇⠀⠀⢸⣿⠆⠀⠀${r}${w}⣿⡇⠈⣿⡟⠀⢸⡇⠈⢿⣤⣤⣶⠂⢸⡇⠀⢸⣿⠀ ⣿⠀⠘⢿⣤⣤⣴⡿⠃⠀⢿⣦⣤⣤⡿⠁${r}    version ${w}%s${r}\n"
+    )
+    colors = {
+        "p": "\033[94m",    # blue
+        "w": "\033[97m",    # white
+        "r": "\033[0m",     # reset
+    }
+    if not sys.stderr.isatty():
+        colors = dict.fromkeys(colors, "")
+    banner = logo_template.substitute(colors) % (version,)
+    print(banner, file=sys.stderr, flush=True)
+    
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -41,11 +60,11 @@ app.exception_handler(Exception)(APIExceptionHandler.global_exception_handler)
 
 if __name__ == "__main__":
     import argparse
-
     import uvicorn
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
+    log_memos_logo(logger, app.version)
     uvicorn.run("memos.api.server_api:app", host="0.0.0.0", port=args.port, workers=args.workers)
