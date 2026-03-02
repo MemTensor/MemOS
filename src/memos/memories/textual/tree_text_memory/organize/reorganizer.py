@@ -52,12 +52,14 @@ class QueueMessage:
         before_edge: list[str] | list[GraphDBEdge] | None = None,
         after_node: list[str] | list[GraphDBNode] | None = None,
         after_edge: list[str] | list[GraphDBEdge] | None = None,
+        user_name: str | None = None,
     ):
         self.op = op
         self.before_node = before_node
         self.before_edge = before_edge
         self.after_node = after_node
         self.after_edge = after_edge
+        self.user_name = user_name
 
     def __str__(self) -> str:
         return f"QueueMessage(op={self.op}, before_node={self.before_node if self.before_node is None else len(self.before_node)}, after_node={self.after_node if self.after_node is None else len(self.after_node)})"
@@ -191,11 +193,15 @@ class GraphStructureReorganizer:
         logger.debug(f"Handling add operation: {str(message)[:500]}")
         added_node = message.after_node[0]
         detected_relationships = self.resolver.detect(
-            added_node, scope=added_node.metadata.memory_type
+            added_node,
+            scope=added_node.metadata.memory_type,
+            user_name=message.user_name,
         )
         if detected_relationships:
             for added_node, existing_node, relation in detected_relationships:
-                self.resolver.resolve(added_node, existing_node, relation)
+                self.resolver.resolve(
+                    added_node, existing_node, relation, user_name=message.user_name
+                )
 
         self._reorganize_needed = True
 
@@ -209,6 +215,7 @@ class GraphStructureReorganizer:
         min_cluster_size: int = 4,
         min_group_size: int = 20,
         max_duration_sec: int = 600,
+        user_name: str | None = None,
     ):
         """
         Periodically reorganize the graph:
@@ -232,7 +239,7 @@ class GraphStructureReorganizer:
             logger.info(f"[GraphStructureReorganize] Already optimizing for {scope}. Skipping.")
             return
 
-        if self.graph_store.node_not_exist(scope):
+        if self.graph_store.node_not_exist(scope, user_name=user_name):
             logger.debug(f"[GraphStructureReorganize] No nodes for scope={scope}. Skip.")
             return
 
@@ -244,12 +251,14 @@ class GraphStructureReorganizer:
 
             logger.debug(
                 f"[GraphStructureReorganize] Num of scope in self.graph_store is"
-                f" {self.graph_store.get_memory_count(scope)}"
+                f" {self.graph_store.get_memory_count(scope, user_name=user_name)}"
             )
             # Load candidate nodes
             if _check_deadline("[GraphStructureReorganize] Before loading candidates"):
                 return
-            raw_nodes = self.graph_store.get_structure_optimization_candidates(scope)
+            raw_nodes = self.graph_store.get_structure_optimization_candidates(
+                scope, user_name=user_name
+            )
             nodes = [GraphDBNode(**n) for n in raw_nodes]
 
             if not nodes:
@@ -281,6 +290,7 @@ class GraphStructureReorganizer:
                             scope,
                             local_tree_threshold,
                             min_cluster_size,
+                            user_name,
                         )
                     )
 
@@ -307,6 +317,7 @@ class GraphStructureReorganizer:
         scope: str,
         local_tree_threshold: int,
         min_cluster_size: int,
+        user_name: str | None = None,
     ):
         if len(cluster_nodes) <= min_cluster_size:
             return
@@ -319,15 +330,17 @@ class GraphStructureReorganizer:
             if len(sub_nodes) < min_cluster_size:
                 continue  # Skip tiny noise
             sub_parent_node = self._summarize_cluster(sub_nodes, scope)
-            self._create_parent_node(sub_parent_node)
-            self._link_cluster_nodes(sub_parent_node, sub_nodes)
+            self._create_parent_node(sub_parent_node, user_name=user_name)
+            self._link_cluster_nodes(sub_parent_node, sub_nodes, user_name=user_name)
             sub_parents.append(sub_parent_node)
 
         if sub_parents and len(sub_parents) >= min_cluster_size:
             cluster_parent_node = self._summarize_cluster(cluster_nodes, scope)
-            self._create_parent_node(cluster_parent_node)
+            self._create_parent_node(cluster_parent_node, user_name=user_name)
             for sub_parent in sub_parents:
-                self.graph_store.add_edge(cluster_parent_node.id, sub_parent.id, "PARENT")
+                self.graph_store.add_edge(
+                    cluster_parent_node.id, sub_parent.id, "PARENT", user_name=user_name
+                )
 
         logger.info("Adding relations/reasons")
         nodes_to_check = cluster_nodes
@@ -351,10 +364,16 @@ class GraphStructureReorganizer:
                 # 1) Add pairwise relations
                 for rel in results["relations"]:
                     if not self.graph_store.edge_exists(
-                        rel["source_id"], rel["target_id"], rel["relation_type"]
+                        rel["source_id"],
+                        rel["target_id"],
+                        rel["relation_type"],
+                        user_name=user_name,
                     ):
                         self.graph_store.add_edge(
-                            rel["source_id"], rel["target_id"], rel["relation_type"]
+                            rel["source_id"],
+                            rel["target_id"],
+                            rel["relation_type"],
+                            user_name=user_name,
                         )
 
                 # 2) Add inferred nodes and link to sources
@@ -363,14 +382,21 @@ class GraphStructureReorganizer:
                         inf_node.id,
                         inf_node.memory,
                         inf_node.metadata.model_dump(exclude_none=True),
+                        user_name=user_name,
                     )
                     for src_id in inf_node.metadata.sources:
-                        self.graph_store.add_edge(src_id, inf_node.id, "INFERS")
+                        self.graph_store.add_edge(
+                            src_id, inf_node.id, "INFERS", user_name=user_name
+                        )
 
                 # 3) Add sequence links
                 for seq in results["sequence_links"]:
-                    if not self.graph_store.edge_exists(seq["from_id"], seq["to_id"], "FOLLOWS"):
-                        self.graph_store.add_edge(seq["from_id"], seq["to_id"], "FOLLOWS")
+                    if not self.graph_store.edge_exists(
+                        seq["from_id"], seq["to_id"], "FOLLOWS", user_name=user_name
+                    ):
+                        self.graph_store.add_edge(
+                            seq["from_id"], seq["to_id"], "FOLLOWS", user_name=user_name
+                        )
 
                 # 4) Add aggregate concept nodes
                 for agg_node in results["aggregate_nodes"]:
@@ -378,9 +404,12 @@ class GraphStructureReorganizer:
                         agg_node.id,
                         agg_node.memory,
                         agg_node.metadata.model_dump(exclude_none=True),
+                        user_name=user_name,
                     )
                     for child_id in agg_node.metadata.sources:
-                        self.graph_store.add_edge(agg_node.id, child_id, "AGGREGATE_TO")
+                        self.graph_store.add_edge(
+                            agg_node.id, child_id, "AGGREGATE_TO", user_name=user_name
+                        )
 
         logger.info("[Reorganizer] Cluster relation/reasoning done.")
 
@@ -577,7 +606,7 @@ class GraphStructureReorganizer:
             )
             return {}
 
-    def _create_parent_node(self, parent_node: GraphDBNode) -> None:
+    def _create_parent_node(self, parent_node: GraphDBNode, user_name: str | None = None) -> None:
         """
         Create a new parent node for the cluster.
         """
@@ -585,17 +614,23 @@ class GraphStructureReorganizer:
             parent_node.id,
             parent_node.memory,
             parent_node.metadata.model_dump(exclude_none=True),
+            user_name=user_name,
         )
 
-    def _link_cluster_nodes(self, parent_node: GraphDBNode, child_nodes: list[GraphDBNode]):
+    def _link_cluster_nodes(
+        self,
+        parent_node: GraphDBNode,
+        child_nodes: list[GraphDBNode],
+        user_name: str | None = None,
+    ):
         """
         Add PARENT edges from the parent node to all nodes in the cluster.
         """
         for child in child_nodes:
             if not self.graph_store.edge_exists(
-                parent_node.id, child.id, "PARENT", direction="OUTGOING"
+                parent_node.id, child.id, "PARENT", direction="OUTGOING", user_name=user_name
             ):
-                self.graph_store.add_edge(parent_node.id, child.id, "PARENT")
+                self.graph_store.add_edge(parent_node.id, child.id, "PARENT", user_name=user_name)
 
     def _preprocess_message(self, message: QueueMessage) -> bool:
         message = self._convert_id_to_node(message)
@@ -613,7 +648,9 @@ class GraphStructureReorganizer:
         for i, node in enumerate(message.after_node or []):
             if not isinstance(node, str):
                 continue
-            raw_node = self.graph_store.get_node(node, include_embedding=True)
+            raw_node = self.graph_store.get_node(
+                node, include_embedding=True, user_name=message.user_name
+            )
             if raw_node is None:
                 logger.debug(f"Node with ID {node} not found in the graph store.")
                 message.after_node[i] = None

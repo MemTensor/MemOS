@@ -20,14 +20,9 @@ from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
-from memos.reranker.http_bge import HTTPBGEReranker
 
 
 logger = get_logger(__name__)
-
-# Temporary test endpoint override for HTTP reranker.
-_TEST_RERANKER_URL = "https://0f31618ba0cf91b57d.gradio.live"
-_TEST_RERANKER_MODEL = "zerank-2"
 
 
 class SearchHandler(BaseHandler):
@@ -48,13 +43,6 @@ class SearchHandler(BaseHandler):
         self._validate_dependencies(
             "naive_mem_cube", "mem_scheduler", "searcher", "deepsearch_agent"
         )
-        # Use a dedicated HTTP reranker for this handler to avoid dependency
-        # conflicts when global config uses a different reranker backend.
-        self.http_test_reranker = HTTPBGEReranker(
-            reranker_url=_TEST_RERANKER_URL,
-            model=_TEST_RERANKER_MODEL,
-            timeout=20,
-        )
 
     def handle_search_memories(self, search_req: APISearchRequest) -> SearchResponse:
         """
@@ -74,14 +62,9 @@ class SearchHandler(BaseHandler):
         # Use deepcopy to avoid modifying the original request object
         search_req_local = copy.deepcopy(search_req)
 
-        # Expand retrieval top_k for dedup candidate recall.
-        # Keep MMR output smaller than recall set to preserve filtering value.
-        recall_multiplier = 5
-        mmr_output_multiplier = 2
-        dedup_multiplier = 1
+        # Expand top_k for deduplication (5x to ensure enough candidates)
         if search_req_local.dedup in ("sim", "mmr"):
-            dedup_multiplier = recall_multiplier
-            search_req_local.top_k = search_req_local.top_k * dedup_multiplier
+            search_req_local.top_k = search_req_local.top_k * 3
 
         # Search and deduplicate
         cube_view = self._build_cube_view(search_req_local)
@@ -92,52 +75,21 @@ class SearchHandler(BaseHandler):
         results = self._apply_relativity_threshold(results, search_req_local.relativity)
 
         if search_req_local.dedup == "sim":
-            # Keep a larger candidate pool for downstream reranking.
-            results = self._dedup_text_memories(results, search_req_local.top_k)
+            results = self._dedup_text_memories(results, search_req.top_k)
+            self._strip_embeddings(results)
         elif search_req_local.dedup == "mmr":
-            pref_top_k_final = getattr(
-                search_req, "pref_top_k", getattr(search_req_local, "pref_top_k", 6)
-            )
-            mmr_text_top_k = max(search_req.top_k * mmr_output_multiplier, search_req.top_k)
-            mmr_pref_top_k = max(pref_top_k_final * mmr_output_multiplier, pref_top_k_final)
-            # MMR keeps an intermediate candidate pool (smaller than recall set),
-            # then reranker reduces to final top_k.
-            results = self._mmr_dedup_text_memories(
-                results,
-                mmr_text_top_k,
-                mmr_pref_top_k,
-            )
-
-        text_rerank_pool_top_k = search_req_local.top_k
-        if search_req_local.dedup == "mmr":
-            text_rerank_pool_top_k = max(
-                search_req.top_k * mmr_output_multiplier, search_req.top_k
-            )
+            pref_top_k = getattr(search_req_local, "pref_top_k", 6)
+            results = self._mmr_dedup_text_memories(results, search_req.top_k, pref_top_k)
+            self._strip_embeddings(results)
 
         text_mem = results["text_mem"]
         results["text_mem"] = rerank_knowledge_mem(
-            self.http_test_reranker,
+            self.reranker,
             query=search_req.query,
             text_mem=text_mem,
-            top_k=text_rerank_pool_top_k,
+            top_k=search_req_local.top_k,
             file_mem_proportion=0.5,
         )
-        pref_top_k_final = getattr(
-            search_req, "pref_top_k", getattr(search_req_local, "pref_top_k", 6)
-        )
-        reranked_text_mem, reranked_pref_mem = self._rerank_text_and_pref_memories(
-            search_req.query,
-            results.get("text_mem", []),
-            results.get("pref_mem", []),
-            text_top_k=search_req.top_k,
-            pref_top_k=pref_top_k_final,
-        )
-        results["text_mem"] = reranked_text_mem
-        results["pref_mem"] = reranked_pref_mem
-
-        # Remove embeddings only after reranking so reranker still has full signals.
-        if search_req_local.dedup in ("sim", "mmr"):
-            self._strip_embeddings(results)
 
         self.logger.info(
             f"[SearchHandler] Final search results: count={len(results)} results={results}"
@@ -200,9 +152,6 @@ class SearchHandler(BaseHandler):
             return results
 
         embeddings = self._extract_embeddings([mem for _, mem, _ in flat])
-        if embeddings is None:
-            documents = [mem.get("memory", "") for _, mem, _ in flat]
-            embeddings = self.searcher.embedder.embed(documents)
 
         similarity_matrix = cosine_similarity_matrix(embeddings)
 
@@ -283,12 +232,39 @@ class SearchHandler(BaseHandler):
         if len(flat) <= 1:
             return results
 
+        total_by_type: dict[str, int] = {"text": 0, "preference": 0}
+        existing_by_type: dict[str, int] = {"text": 0, "preference": 0}
+        missing_by_type: dict[str, int] = {"text": 0, "preference": 0}
+        missing_indices: list[int] = []
+        for idx, (mem_type, _, mem, _) in enumerate(flat):
+            if mem_type not in total_by_type:
+                total_by_type[mem_type] = 0
+                existing_by_type[mem_type] = 0
+                missing_by_type[mem_type] = 0
+            total_by_type[mem_type] += 1
+
+            embedding = mem.get("metadata", {}).get("embedding")
+            if embedding:
+                existing_by_type[mem_type] += 1
+            else:
+                missing_by_type[mem_type] += 1
+                missing_indices.append(idx)
+
+        self.logger.info(
+            "[SearchHandler] MMR embedding metadata scan: total=%s total_by_type=%s existing_by_type=%s missing_by_type=%s",
+            len(flat),
+            total_by_type,
+            existing_by_type,
+            missing_by_type,
+        )
+        if missing_indices:
+            self.logger.warning(
+                "[SearchHandler] MMR embedding metadata missing; will compute missing embeddings: missing_total=%s",
+                len(missing_indices),
+            )
+
         # Get or compute embeddings
         embeddings = self._extract_embeddings([mem for _, _, mem, _ in flat])
-        if embeddings is None:
-            self.logger.warning("[SearchHandler] Embedding is missing; recomputing embeddings")
-            documents = [mem.get("memory", "") for _, _, mem, _ in flat]
-            embeddings = self.searcher.embedder.embed(documents)
 
         # Compute similarity matrix using NumPy-optimized method
         # Returns numpy array but compatible with list[i][j] indexing
@@ -452,130 +428,33 @@ class SearchHandler(BaseHandler):
             return 0.0
         return max(similarity_matrix[index][j] for j in selected_indices)
 
-    @staticmethod
-    def _extract_embeddings(memories: list[dict[str, Any]]) -> list[list[float]] | None:
+    def _extract_embeddings(self, memories: list[dict[str, Any]]) -> list[list[float]]:
         embeddings: list[list[float]] = []
-        for mem in memories:
-            embedding = mem.get("metadata", {}).get("embedding")
-            if not embedding:
-                return None
-            embeddings.append(embedding)
+        missing_indices: list[int] = []
+        missing_documents: list[str] = []
+
+        for idx, mem in enumerate(memories):
+            metadata = mem.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+                mem["metadata"] = metadata
+
+            embedding = metadata.get("embedding")
+            if embedding:
+                embeddings.append(embedding)
+                continue
+
+            embeddings.append([])
+            missing_indices.append(idx)
+            missing_documents.append(mem.get("memory", ""))
+
+        if missing_indices:
+            computed = self.searcher.embedder.embed(missing_documents)
+            for idx, embedding in zip(missing_indices, computed, strict=False):
+                embeddings[idx] = embedding
+                memories[idx]["metadata"]["embedding"] = embedding
+
         return embeddings
-
-    def _rerank_text_and_pref_memories(
-        self,
-        query: str,
-        text_groups: list[dict[str, Any]],
-        pref_groups: list[dict[str, Any]],
-        text_top_k: int,
-        pref_top_k: int,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        if text_top_k <= 0 and pref_top_k <= 0:
-            return [], []
-
-        candidates: list[tuple[str, str, dict[str, Any]]] = []
-
-        def extend_candidates(mem_type: str, groups: list[dict[str, Any]]) -> None:
-            if not isinstance(groups, list):
-                return
-            for group in groups:
-                if not isinstance(group, dict):
-                    continue
-                cube_id = group.get("cube_id")
-                memories = group.get("memories", [])
-                if cube_id is None or not isinstance(memories, list):
-                    continue
-                for mem in memories:
-                    if isinstance(mem, dict):
-                        candidates.append((mem_type, str(cube_id), mem))
-
-        extend_candidates("text", text_groups)
-        extend_candidates("preference", pref_groups)
-        if not candidates:
-            return [], []
-
-        flat_memories = [mem for _, _, mem in candidates]
-        ranked_flat: list[dict[str, Any]] = []
-        if self.http_test_reranker:
-            try:
-                total_top_k = max(0, text_top_k) + max(0, pref_top_k)
-                rerank_res = self.http_test_reranker.rerank(
-                    query,
-                    flat_memories,
-                    top_k=min(total_top_k, len(flat_memories)),
-                )
-                ranked_flat = [item for item, _score in rerank_res if isinstance(item, dict)]
-            except Exception as exc:
-                self.logger.warning(
-                    f"[SearchHandler] joint reranker failed, fallback to score sort: {exc}"
-                )
-
-        if not ranked_flat:
-            def fallback_score(mem_type: str, mem: dict[str, Any]) -> float:
-                meta = mem.get("metadata")
-                if not isinstance(meta, dict):
-                    return 0.0
-                keys = ("relativity", "score") if mem_type == "text" else ("score", "relativity")
-                for key in keys:
-                    value = meta.get(key)
-                    if value is None:
-                        continue
-                    try:
-                        return float(value)
-                    except (TypeError, ValueError):
-                        pass
-                return 0.0
-
-            ranked_candidates = sorted(
-                candidates,
-                key=lambda item: fallback_score(item[0], item[2]),
-                reverse=True,
-            )
-            ranked_flat = [mem for _, _, mem in ranked_candidates]
-
-        candidate_type_cube: dict[str, tuple[str, str]] = {}
-        for mem_type, cube_id, mem in candidates:
-            mem_id = mem.get("id")
-            if mem_id:
-                candidate_type_cube[mem_id] = (mem_type, cube_id)
-
-        text_selected = 0
-        pref_selected = 0
-        seen_ids: set[str] = set()
-        text_by_cube: dict[str, list[dict[str, Any]]] = {}
-        pref_by_cube: dict[str, list[dict[str, Any]]] = {}
-
-        for mem in ranked_flat:
-            mem_id = mem.get("id")
-            if not mem_id or mem_id in seen_ids:
-                continue
-            type_cube = candidate_type_cube.get(mem_id)
-            if not type_cube:
-                continue
-            mem_type, cube_id = type_cube
-            if mem_type == "text":
-                if text_selected >= text_top_k:
-                    continue
-                text_by_cube.setdefault(cube_id, []).append(mem)
-                text_selected += 1
-            else:
-                if pref_selected >= pref_top_k:
-                    continue
-                pref_by_cube.setdefault(cube_id, []).append(mem)
-                pref_selected += 1
-            seen_ids.add(mem_id)
-            if text_selected >= text_top_k and pref_selected >= pref_top_k:
-                break
-
-        text_res = [
-            {"cube_id": cube_id, "memories": memories, "total_nodes": len(memories)}
-            for cube_id, memories in text_by_cube.items()
-        ]
-        pref_res = [
-            {"cube_id": cube_id, "memories": memories, "total_nodes": len(memories)}
-            for cube_id, memories in pref_by_cube.items()
-        ]
-        return text_res, pref_res
 
     @staticmethod
     def _strip_embeddings(results: dict[str, Any]) -> None:
