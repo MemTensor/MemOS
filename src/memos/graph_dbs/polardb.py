@@ -176,6 +176,7 @@ class PolarDBGraphDB(BaseGraphDB):
         self._semaphore = threading.BoundedSemaphore(maxconn)
         if self._warm_up_on_startup:
             self._warm_up_search_connections()
+            # self._warm_up_connections()
 
         """
         # Handle auto_create
@@ -221,6 +222,21 @@ class PolarDBGraphDB(BaseGraphDB):
     def warm_up_search_connections(self, user_name: str | None = None) -> None:
         self._warm_up_search_connections(user_name)
 
+    def _warm_up_connections(self):
+        warm_count = self.connection_pool.minconn
+        preheated = 0
+        logger.info(f"[warm_up] Pre-warming {warm_count} connections...")
+        for _ in range(warm_count):
+            try:
+                with self._get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                preheated += 1
+            except Exception as e:
+                logger.warning(f"[warm_up] Failed to pre-warm connection: {e}")
+                continue
+        logger.info(f"[warm_up] Pre-warmed {preheated}/{warm_count} connections")
+
     @contextmanager
     def _get_connection(self):
         timeout = getattr(self, "_connection_wait_timeout", 5)
@@ -244,7 +260,7 @@ class PolarDBGraphDB(BaseGraphDB):
             yield conn
         except Exception as e:
             broken = True
-            logger.error(f"Connection failed or broken: {e}")
+            logger.exception(f"Connection failed or broken: {e}")
             raise
         finally:
             if conn:
