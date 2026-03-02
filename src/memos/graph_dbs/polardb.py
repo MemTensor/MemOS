@@ -137,7 +137,8 @@ class PolarDBGraphDB(BaseGraphDB):
             port = config.get("port")
             user = config.get("user")
             password = config.get("password")
-            maxconn = config.get("maxconn", 100)  # De
+            maxconn = config.get("maxconn", 100)
+            self._connection_wait_timeout = config.get("connection_wait_timeout", 60)
         else:
             self.db_name = config.db_name
             self.user_name = config.user_name
@@ -146,8 +147,11 @@ class PolarDBGraphDB(BaseGraphDB):
             user = config.user
             password = config.password
             maxconn = config.maxconn if hasattr(config, "maxconn") else 100
+            self._connection_wait_timeout = getattr(config, "connection_wait_timeout", 60)
 
-        logger.info(f" db_name: {self.db_name} current maxconn is:'{maxconn}'")
+        logger.info(
+            f" db_name: {self.db_name} maxconn: {maxconn} connection_wait_timeout: {self._connection_wait_timeout}s"
+        )
 
         # Create connection pool
         self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
@@ -191,10 +195,15 @@ class PolarDBGraphDB(BaseGraphDB):
 
     @contextmanager
     def _get_connection(self):
-        """
-        安全获取连接（阻塞等待，不会抛 pool exhausted）
-        """
-        self._semaphore.acquire()
+        timeout = getattr(self, "_connection_wait_timeout", 60)
+        if timeout <= 0:
+            self._semaphore.acquire()
+        else:
+            if not self._semaphore.acquire(timeout=timeout):
+                raise RuntimeError(
+                    f"Connection pool busy: could not acquire a slot within {timeout}s "
+                    "(all connections in use). Consider increasing maxconn or reducing load."
+                )
         conn = None
         broken = False
 
