@@ -1,11 +1,34 @@
+import re
+
 from abc import ABC, abstractmethod
 from typing import Any, Literal
+
+
+# Pattern for valid field names: alphanumeric and underscores, must start with letter or underscore
+_VALID_FIELD_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 class BaseGraphDB(ABC):
     """
     Abstract base class for a graph database interface used in a memory-augmented RAG system.
     """
+
+    @staticmethod
+    def _validate_return_fields(return_fields: list[str] | None) -> list[str]:
+        """Validate and sanitize return_fields to prevent query injection.
+
+        Only allows alphanumeric characters and underscores in field names.
+        Silently drops invalid field names.
+
+        Args:
+            return_fields: List of field names to validate.
+
+        Returns:
+            List of valid field names.
+        """
+        if not return_fields:
+            return []
+        return [f for f in return_fields if _VALID_FIELD_NAME_RE.match(f)]
 
     # Node (Memory) Management
     @abstractmethod
@@ -144,16 +167,23 @@ class BaseGraphDB(ABC):
 
     # Search / recall operations
     @abstractmethod
-    def search_by_embedding(self, vector: list[float], top_k: int = 5, **kwargs) -> list[dict]:
+    def search_by_embedding(
+        self, vector: list[float], top_k: int = 5, return_fields: list[str] | None = None, **kwargs
+    ) -> list[dict]:
         """
         Retrieve node IDs based on vector similarity.
 
         Args:
             vector (list[float]): The embedding vector representing query semantics.
             top_k (int): Number of top similar nodes to retrieve.
+            return_fields (list[str], optional): Additional node fields to include in results
+                (e.g., ["memory", "status", "tags"]). When provided, each result dict will
+                contain these fields in addition to 'id' and 'score'.
+                Defaults to None (only 'id' and 'score' are returned).
 
         Returns:
             list[dict]: A list of dicts with 'id' and 'score', ordered by similarity.
+                If return_fields is specified, each dict also includes the requested fields.
 
         Notes:
             - This method may internally call a VecDB (e.g., Qdrant) or store embeddings in the graph DB itself.
