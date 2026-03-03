@@ -369,20 +369,12 @@ class MemoryHistoryManager:
         """
         memory_list = llm_response.get("memory list", [])
         restored_memories = llm_response.get("restored_memories", [])
-        used_source_ids = set()
-        used_conflict_ids = set()
-        # Collect IDs referenced by the LLM response
-        for mem_data in memory_list:
-            used_source_ids.update(mem_data.get("source_candidate_ids", []))
-            used_conflict_ids.update(mem_data.get("conflicted_candidate_ids", []))
 
         expected_versions = {}  # For concurrency control, need to get the recorded versions of the old memories
-        candidate_id_set: set[str] = set()
         # Recover candidate IDs and their expected versions from the source item's history
         if source_item.metadata and source_item.metadata.history:
             for h in source_item.metadata.history:
                 if h.archived_memory_id:
-                    candidate_id_set.add(h.archived_memory_id)
                     expected_versions[h.archived_memory_id] = h.version
 
         updated_items: list[TextualMemoryItem] = []
@@ -464,23 +456,21 @@ class MemoryHistoryManager:
 
         # Batch fetch pending nodes to check status
         nodes_data = self.graph_db.get_nodes(ids=pending_ids, user_name=user_name) or []
-        nodes_map = {n["id"]: n for n in nodes_data if n and "id" in n}
+        nodes_map = {n["id"]: TextualMemoryItem(**n) for n in nodes_data if n and "id" in n}
 
         replacements = {}
 
         for i in pending_indices:
             h_item = item.metadata.history[i]
-            node_data = nodes_map.get(h_item.archived_memory_id)
+            node = nodes_map.get(h_item.archived_memory_id)
 
-            if not node_data:
+            if not node:
                 continue
 
-            metadata = node_data.get("metadata", {})
-            status = metadata.get("status")
-
+            metadata = _sanitize_metadata_model(node.metadata)  # deal with embedded metadata
             # Condition: Fast node is processed when it is marked as 'deleted'
-            if status == "deleted":
-                evolve_to_ids = metadata.get("evolve_to", [])
+            if metadata.status == "deleted":
+                evolve_to_ids = metadata.evolve_to
 
                 new_items = self._fetch_evolved_nodes(evolve_to_ids, h_item.update_type, user_name)
                 replacements[i] = new_items
@@ -523,14 +513,14 @@ class MemoryHistoryManager:
         user_name: str,
         source_item: TextualMemoryItem,
     ) -> tuple[list[TextualMemoryItem], list[TextualMemoryItem]]:
-        """Process Memory List (Update or New)."""
+        """Process Memory List (Update or Create)."""
         updated_items: list[TextualMemoryItem] = []
         new_items: list[TextualMemoryItem] = []
         for mem_data in memory_list:
             source_ids = mem_data.get("source_candidate_ids", [])
             conflict_ids = mem_data.get("conflicted_candidate_ids", [])
 
-            # Determine if this is an update or a new node
+            # Determine if this is an update or a creation
             target_ids = source_ids + conflict_ids
 
             if target_ids:
@@ -569,11 +559,7 @@ class MemoryHistoryManager:
 
         Returns the updated primary TextualMemoryItem and optional new item when fallback is used.
         """
-        original_primary_id, primary_id, secondary_ids = (
-            target_ids[0],
-            target_ids[0],
-            target_ids[1:],
-        )
+        primary_id, secondary_ids = target_ids[0], target_ids[1:]
         new_value, tags, key = (
             mem_data.get("value", ""),
             mem_data.get("tags", []),
@@ -602,7 +588,7 @@ class MemoryHistoryManager:
         # If it has(version changed), then we need to use llm to merge again.
         new_value = self._apply_cas_merge(primary_id, current_item, expected_versions, new_value)
 
-        update_type = "duplicate" if original_primary_id in source_ids else "conflict"
+        update_type = "duplicate" if primary_id in source_ids else "conflict"
         current_item, archived_item = self.update_node_with_history(
             current_item,
             new_value,

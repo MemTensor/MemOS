@@ -390,10 +390,34 @@ class MemReadMessageHandler(BaseSchedulerHandler):
             delete_ids = list(dict.fromkeys(delete_ids))
             if delete_ids:
                 try:
-                    text_mem.delete(delete_ids, user_name=user_name)
-                    logger.info(
-                        "Delete raw/working mem_ids: %s for user_name: %s", delete_ids, user_name
-                    )
+                    if getattr(mem_reader, "memory_version_switch", "off") != "on":
+                        text_mem.delete(delete_ids, user_name=user_name)
+                        logger.info(
+                            "Delete raw/working mem_ids: %s for user_name: %s",
+                            delete_ids,
+                            user_name,
+                        )
+                    else:
+                        # change to soft-delete for mem versions
+                        flattened_memories = []
+                        if processed_memories and len(processed_memories) > 0:
+                            for memory_list in processed_memories:
+                                flattened_memories.extend(memory_list)
+                        allowed_types = ["UserMemory", "LongTermMemory"]
+                        text_mem.soft_delete(
+                            delete_ids,
+                            user_name,
+                            [
+                                mem.id
+                                for mem in flattened_memories
+                                if mem.metadata.memory_type in allowed_types
+                            ],
+                        )
+                        logger.info(
+                            "Soft delete raw/working mem_ids: %s for user_name: %s",
+                            delete_ids,
+                            user_name,
+                        )
                 except Exception as e:
                     logger.warning("Failed to delete some mem_ids %s: %s", delete_ids, e)
             else:
