@@ -173,7 +173,15 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             config: Configuration object for the reader
         """
         self.config = config
+        # Main LLM for chat/doc memory extraction (fine-tuned model)
         self.llm = LLMFactory.from_config(config.llm)
+        # General LLM for non-chat/doc tasks (hallucination filter, rewrite, merge, etc.)
+        # Falls back to main llm if not configured
+        self.general_llm = (
+            LLMFactory.from_config(config.general_llm)
+            if config.general_llm is not None
+            else self.llm
+        )
         self.embedder = EmbedderFactory.from_config(config.embedder)
         self.chunker = ChunkerFactory.from_config(config.chunker)
         self.save_rawfile = self.chunker.config.save_rawfile
@@ -505,8 +513,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         prompt = template.format(**prompt_args)
 
         # Optionally run filter and parse the output
+        # Use general_llm for rewrite (not fine-tuned for this task)
         try:
-            raw = self.llm.generate([{"role": "user", "content": prompt}])
+            raw = self.general_llm.generate([{"role": "user", "content": prompt}])
             success, parsed = parse_rewritten_response(raw)
             logger.info(
                 f"[rewrite_memories] Hallucination filter parsed successfully: {success}；prompt: {prompt}"
@@ -565,8 +574,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         prompt = template.format(**prompt_args)
 
         # Optionally run filter and parse the output
+        # Use general_llm for hallucination filter (not fine-tuned for this task)
         try:
-            raw = self.llm.generate([{"role": "user", "content": prompt}])
+            raw = self.general_llm.generate([{"role": "user", "content": prompt}])
             success, parsed = parse_keep_filter_response(raw)
             logger.info(
                 f"[filter_hallucination_in_memories] Hallucination filter parsed successfully: {success}；prompt: {prompt}"
