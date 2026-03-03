@@ -4,12 +4,8 @@ Memory handler for retrieving and managing memories.
 This module handles retrieving all memories or specific subgraphs based on queries.
 """
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
-from memos.api.handlers.formatters_handler import (
-    format_memory_item,
-    post_process_pref_mem,
-)
 from memos.api.product_models import (
     DeleteMemoryRequest,
     DeleteMemoryResponse,
@@ -27,10 +23,6 @@ from memos.mem_os.utils.format_utils import (
     remove_embedding_recursive,
     sort_children_by_memory_type,
 )
-
-
-if TYPE_CHECKING:
-    from memos.memories.textual.preference import TextualMemoryItem
 
 
 logger = get_logger(__name__)
@@ -171,8 +163,7 @@ def handle_get_subgraph(
 def handle_get_memory(memory_id: str, naive_mem_cube: NaiveMemCube) -> GetMemoryResponse:
     """
     Handler for getting a single memory by its ID.
-
-    Tries to retrieve from text memory first, then preference memory if not found.
+    Now unified to retrieve from text_mem only (includes preferences).
 
     Args:
         memory_id: The ID of the memory to retrieve
@@ -184,37 +175,12 @@ def handle_get_memory(memory_id: str, naive_mem_cube: NaiveMemCube) -> GetMemory
 
     try:
         memory = naive_mem_cube.text_mem.get(memory_id)
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to get memory {memory_id}: {e}")
         memory = None
 
-    # If not found in text memory, try preference memory
-    pref = None
-    if memory is None and naive_mem_cube.pref_mem is not None:
-        collection_names = ["explicit_preference", "implicit_preference"]
-        for collection_name in collection_names:
-            try:
-                pref = naive_mem_cube.pref_mem.get_with_collection_name(collection_name, memory_id)
-                if pref is not None:
-                    break
-            except Exception:
-                continue
-
-    # Get the data from whichever memory source succeeded
-    data = (memory or pref).model_dump() if (memory or pref) else None
-
-    if data is not None:
-        # For each returned item, tackle with metadata.info project_id /
-        # operation / manager_user_id
-        metadata = data.get("metadata", None)
-        if metadata is not None and isinstance(metadata, dict):
-            info = metadata.get("info", None)
-            if info is not None and isinstance(info, dict):
-                for key in ("project_id", "operation", "manager_user_id"):
-                    if key not in info:
-                        continue
-                    value = info.pop(key)
-                    if key not in metadata:
-                        metadata[key] = value
+    # Get the data
+    data = memory.model_dump() if memory else None
 
     return GetMemoryResponse(
         message="Memory retrieved successfully"
@@ -230,49 +196,19 @@ def handle_get_memory_by_ids(
 ) -> GetMemoryResponse:
     """
     Handler for getting multiple memories by their IDs.
+    Now unified to retrieve from text_mem only (includes preferences).
 
     Retrieves multiple memories and formats them as a list of dictionaries.
     """
     try:
         memories = naive_mem_cube.text_mem.get_by_ids(memory_ids=memory_ids)
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to get memories: {e}")
         memories = []
 
     # Ensure memories is not None
     if memories is None:
         memories = []
-
-    if naive_mem_cube.pref_mem is not None:
-        collection_names = ["explicit_preference", "implicit_preference"]
-        for collection_name in collection_names:
-            try:
-                result = naive_mem_cube.pref_mem.get_by_ids_with_collection_name(
-                    collection_name, memory_ids
-                )
-                if result is not None:
-                    result = [format_memory_item(item, save_sources=False) for item in result]
-                    memories.extend(result)
-            except Exception:
-                continue
-
-    # For each returned item, tackle with metadata.info project_id /
-    # operation / manager_user_id
-    for item in memories:
-        if not isinstance(item, dict):
-            continue
-        metadata = item.get("metadata")
-        if not isinstance(metadata, dict):
-            continue
-        info = metadata.get("info")
-        if not isinstance(info, dict):
-            continue
-
-        for key in ("project_id", "operation", "manager_user_id"):
-            if key not in info:
-                continue
-            value = info.pop(key)
-            if key not in metadata:
-                metadata[key] = value
 
     return GetMemoryResponse(
         message="Memories retrieved successfully", code=200, data={"memories": memories}
@@ -343,67 +279,31 @@ def handle_get_memories(
                 "total_nodes": total_skill_nodes,
             }
         ]
-    preferences: list[TextualMemoryItem] = []
-    total_preference_nodes = 0
 
-    format_preferences = []
-    if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
-        filter_params: dict[str, Any] = {}
-        if get_mem_req.user_id is not None:
-            filter_params["user_id"] = get_mem_req.user_id
-        if get_mem_req.mem_cube_id is not None:
-            filter_params["mem_cube_id"] = get_mem_req.mem_cube_id
-        if get_mem_req.filter is not None:
-            # Check and remove user_id/mem_cube_id from filter if present
-            filter_copy = get_mem_req.filter.copy()
-            removed_fields = []
-
-            if "user_id" in filter_copy:
-                filter_copy.pop("user_id")
-                removed_fields.append("user_id")
-            if "mem_cube_id" in filter_copy:
-                filter_copy.pop("mem_cube_id")
-                removed_fields.append("mem_cube_id")
-
-            if removed_fields:
-                logger.warning(
-                    f"Fields {removed_fields} found in filter will be ignored. "
-                    f"Use request-level user_id/mem_cube_id parameters instead."
-                )
-
-            filter_params.update(filter_copy)
-
-        preferences, total_preference_nodes = naive_mem_cube.pref_mem.get_memory_by_filter(
-            filter_params, page=get_mem_req.page, page_size=get_mem_req.page_size
+    # Get preference memories (same pattern as other memory types)
+    if get_mem_req.include_preference:
+        pref_memories_info = naive_mem_cube.text_mem.get_all(
+            user_name=get_mem_req.mem_cube_id,
+            user_id=get_mem_req.user_id,
+            page=get_mem_req.page,
+            page_size=get_mem_req.page_size,
+            filter=get_mem_req.filter,
+            memory_type=["PreferenceMemory"],
         )
-        format_preferences = [format_memory_item(item, save_sources=False) for item in preferences]
+        pref_memories, total_pref_nodes = (
+            pref_memories_info["nodes"],
+            pref_memories_info["total_nodes"],
+        )
 
-        # For each returned item, tackle with metadata.info project_id /
-        # operation / manager_user_id
-        for item in format_preferences:
-            if not isinstance(item, dict):
-                continue
-            metadata = item.get("metadata")
-            if not isinstance(metadata, dict):
-                continue
-            info = metadata.get("info")
-            if not isinstance(info, dict):
-                continue
+        results["pref_mem"] = [
+            {
+                "cube_id": get_mem_req.mem_cube_id,
+                "memories": pref_memories,
+                "total_nodes": total_pref_nodes,
+            }
+        ]
 
-            for key in ("project_id", "operation", "manager_user_id"):
-                if key not in info:
-                    continue
-                value = info.pop(key)
-                if key not in metadata:
-                    metadata[key] = value
-
-    results = post_process_pref_mem(
-        results, format_preferences, get_mem_req.mem_cube_id, get_mem_req.include_preference
-    )
-    if total_preference_nodes > 0 and results.get("pref_mem", []):
-        results["pref_mem"][0]["total_nodes"] = total_preference_nodes
-
-    # Filter to only keep text_mem, pref_mem, tool_mem
+    # Filter to only keep text_mem, pref_mem, tool_mem, skill_mem
     filtered_results = {
         "text_mem": results.get("text_mem", []),
         "pref_mem": results.get("pref_mem", []),
@@ -415,6 +315,10 @@ def handle_get_memories(
 
 
 def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: NaiveMemCube):
+    """
+    Handler for deleting memories.
+    Now unified to delete from text_mem only (includes preferences).
+    """
     logger.info(
         f"[Delete memory request] writable_cube_ids: {delete_mem_req.writable_cube_ids}, memory_ids: {delete_mem_req.memory_ids}"
     )
@@ -432,17 +336,14 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
 
     try:
         if delete_mem_req.memory_ids is not None:
+            # Unified deletion from text_mem (includes preferences)
             naive_mem_cube.text_mem.delete_by_memory_ids(delete_mem_req.memory_ids)
-            if naive_mem_cube.pref_mem is not None:
-                naive_mem_cube.pref_mem.delete(delete_mem_req.memory_ids)
         elif delete_mem_req.file_ids is not None:
             naive_mem_cube.text_mem.delete_by_filter(
                 writable_cube_ids=delete_mem_req.writable_cube_ids, file_ids=delete_mem_req.file_ids
             )
         elif delete_mem_req.filter is not None:
             naive_mem_cube.text_mem.delete_by_filter(filter=delete_mem_req.filter)
-            if naive_mem_cube.pref_mem is not None:
-                naive_mem_cube.pref_mem.delete_by_filter(filter=delete_mem_req.filter)
     except Exception as e:
         logger.error(f"Failed to delete memories: {e}", exc_info=True)
         return DeleteMemoryResponse(
@@ -572,49 +473,29 @@ def handle_get_memories_dashboard(
             for cube_id, memories in skill_mem_by_cube.items()
         ]
 
-    preferences: list[TextualMemoryItem] = []
-
-    format_preferences = []
-    if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
-        filter_params: dict[str, Any] = {}
-        if get_mem_req.user_id is not None:
-            filter_params["user_id"] = get_mem_req.user_id
-        if get_mem_req.mem_cube_id is not None:
-            filter_params["mem_cube_id"] = get_mem_req.mem_cube_id
-        if get_mem_req.filter is not None:
-            # Check and remove user_id/mem_cube_id from filter if present
-            filter_copy = get_mem_req.filter.copy()
-            removed_fields = []
-
-            if "user_id" in filter_copy:
-                filter_copy.pop("user_id")
-                removed_fields.append("user_id")
-            if "mem_cube_id" in filter_copy:
-                filter_copy.pop("mem_cube_id")
-                removed_fields.append("mem_cube_id")
-
-            if removed_fields:
-                logger.warning(
-                    f"Fields {removed_fields} found in filter will be ignored. "
-                    f"Use request-level user_id/mem_cube_id parameters instead."
-                )
-
-            filter_params.update(filter_copy)
-
-        preferences, total_preference_nodes = naive_mem_cube.pref_mem.get_memory_by_filter(
-            filter_params, page=get_mem_req.page, page_size=get_mem_req.page_size
+    if get_mem_req.include_preference:
+        pref_memories_info = naive_mem_cube.text_mem.get_all(
+            user_name=get_mem_req.mem_cube_id,
+            user_id=get_mem_req.user_id,
+            page=get_mem_req.page,
+            page_size=get_mem_req.page_size,
+            filter=get_mem_req.filter,
+            memory_type=["PreferenceMemory"],
         )
-        format_preferences = [format_memory_item(item, save_sources=False) for item in preferences]
+        pref_memories, total_preference_nodes = (
+            pref_memories_info["nodes"],
+            pref_memories_info["total_nodes"],
+        )
 
-        # Group preferences by cube_id from metadata.mem_cube_id
+        # Group preference memories by cube_id from metadata.user_name
         pref_mem_by_cube: dict[str, list] = {}
-        for pref in format_preferences:
-            cube_id = pref.get("metadata", {}).get("mem_cube_id", get_mem_req.mem_cube_id)
+        for memory in pref_memories:
+            cube_id = memory.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
             if cube_id not in pref_mem_by_cube:
                 pref_mem_by_cube[cube_id] = []
-            pref_mem_by_cube[cube_id].append(pref)
+            pref_mem_by_cube[cube_id].append(memory)
 
-        # If no preferences found, create a default entry with the requested cube_id
+        # If no memories found, create a default entry with the requested cube_id
         if not pref_mem_by_cube and get_mem_req.mem_cube_id:
             pref_mem_by_cube[get_mem_req.mem_cube_id] = []
 
