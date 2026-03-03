@@ -138,7 +138,7 @@ class PreUpdateRetriever:
             results = self.graph_db.search_by_embedding(
                 vector=q_embed,
                 top_k=top_k,
-                status=None,
+                status="activated",
                 threshold=threshold,
                 user_name=user_name,
                 filter=search_filter,
@@ -211,12 +211,9 @@ class PreUpdateRetriever:
         futures = []
         common_filter = {
             "or": [
-                {"status": "activated", "memory_type": "LongTermMemory"},
-                {"status": "activated", "memory_type": "UserMemory"},
-                {"status": "activated", "memory_type": "WorkingMemory"},
-                {"status": "resolving", "memory_type": "LongTermMemory"},
-                {"status": "resolving", "memory_type": "UserMemory"},
-                {"status": "resolving", "memory_type": "WorkingMemory"},
+                {"memory_type": "LongTermMemory"},
+                {"memory_type": "UserMemory"},
+                {"memory_type": "WorkingMemory"},
             ]
         }
 
@@ -247,7 +244,10 @@ class PreUpdateRetriever:
                         continue
 
                     for r in res:
-                        retrieved_ids.add(r["id"])
+                        # exclude self and working binding
+                        working_binding = item.metadata.working_binding or ""
+                        if r["id"] != item.id and r["id"] != working_binding:
+                            retrieved_ids.add(r["id"])
 
                 except Exception as e:
                     logger.error(f"[PreUpdateRetriever] Search future task failed: {e}")
