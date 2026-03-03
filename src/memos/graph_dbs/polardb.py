@@ -140,7 +140,8 @@ class PolarDBGraphDB(BaseGraphDB):
             maxconn = config.get("maxconn", 100)
             self._connection_wait_timeout = config.get("connection_wait_timeout", 60)
             self._skip_connection_health_check = config.get("skip_connection_health_check", False)
-            self._warm_up_on_startup = config.get("warm_up_on_startup", False)
+            self._warm_up_on_startup_by_full = config.get("warm_up_on_startup_by_full", False)
+            self._warm_up_on_startup_by_all = config.get("warm_up_on_startup_by_all", False)
         else:
             self.db_name = config.db_name
             self.user_name = config.user_name
@@ -151,8 +152,9 @@ class PolarDBGraphDB(BaseGraphDB):
             maxconn = config.maxconn if hasattr(config, "maxconn") else 100
             self._connection_wait_timeout = getattr(config, "connection_wait_timeout", 60)
             self._skip_connection_health_check = getattr(config, "skip_connection_health_check", False)
-            self._warm_up_on_startup = getattr(config, "warm_up_on_startup", False)
-            logger.info(f"connection_wait_timeout:{self._connection_wait_timeout},_skip_connection_health_check:{self._skip_connection_health_check},warm_up_on_startup:{self._warm_up_on_startup}")
+            self._warm_up_on_startup_by_full = getattr(config, "warm_up_on_startup_by_full", False)
+            self._warm_up_on_startup_by_all = getattr(config, "warm_up_on_startup_by_all", False)
+            logger.info(f"polardb init config connection_wait_timeout:{self._connection_wait_timeout},_skip_connection_health_check:{self._skip_connection_health_check},warm_up_on_startup_by_full:{self._warm_up_on_startup_by_full},warm_up_on_startup_by_all:{self._warm_up_on_startup_by_all}")
 
         logger.info(
             f" db_name: {self.db_name} maxconn: {maxconn} connection_wait_timeout: {self._connection_wait_timeout}s"
@@ -174,9 +176,10 @@ class PolarDBGraphDB(BaseGraphDB):
         )
 
         self._semaphore = threading.BoundedSemaphore(maxconn)
-        if self._warm_up_on_startup:
-            self._warm_up_search_connections()
-            # self._warm_up_connections()
+        if self._warm_up_on_startup_by_full:
+            self._warm_up_search_connections_by_full()
+        if self._warm_up_on_startup_by_all:
+            self._warm_up_connections_by_all()
 
         """
         # Handle auto_create
@@ -201,7 +204,8 @@ class PolarDBGraphDB(BaseGraphDB):
         else:
             return getattr(self.config, key, default)
 
-    def _warm_up_search_connections(self, user_name: str | None = None) -> None:
+    def _warm_up_search_connections_by_full(self, user_name: str | None = None) -> None:
+        logger.info(f"--warm_up_search_connections_by_full--start-up----")
         user_name = user_name or self.user_name
         if not user_name:
             logger.debug("[warm_up] Skipped: no user_name for warm-up")
@@ -219,10 +223,11 @@ class PolarDBGraphDB(BaseGraphDB):
                 break
         logger.info(f"[warm_up] Pre-warmed {warm_count} connections for search_by_fulltext")
 
-    def warm_up_search_connections(self, user_name: str | None = None) -> None:
-        self._warm_up_search_connections(user_name)
+    def warm_up_search_connections_by_full(self, user_name: str | None = None) -> None:
+        self._warm_up_search_connections_by_full(user_name)
 
-    def _warm_up_connections(self):
+    def _warm_up_connections_by_all(self):
+        logger.info(f"--_warm_up_connections_by_all--start-up")
         warm_count = self.connection_pool.minconn
         preheated = 0
         logger.info(f"[warm_up] Pre-warming {warm_count} connections...")

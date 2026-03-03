@@ -215,10 +215,17 @@ class PolarDBGraphDBConfig(BaseConfig):
             "Use only when pool/network is reliable."
         ),
     )
-    warm_up_on_startup: bool = Field(
+    warm_up_on_startup_by_full: bool = Field(
         default=True,
         description=(
             "If True, run search_by_fulltext warm-up on pool connections at init to reduce "
+            "first-query latency (~200ms planning). Requires user_name in config."
+        ),
+    )
+    warm_up_on_startup_by_all: bool = Field(
+        default=False,
+        description=(
+            "If True, run all connection warm-up on pool connections at init to reduce "
             "first-query latency (~200ms planning). Requires user_name in config."
         ),
     )
