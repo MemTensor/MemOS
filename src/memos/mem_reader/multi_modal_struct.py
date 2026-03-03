@@ -190,8 +190,16 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 else:
                     processed_items.append(item)
 
-        # If only one item after processing, return as-is
+        # If only one item after processing, compute embedding and return
         if len(processed_items) == 1:
+            single_item = processed_items[0]
+            if single_item and single_item.memory:
+                try:
+                    single_item.metadata.embedding = self.embedder.embed([single_item.memory])[0]
+                except Exception as e:
+                    logger.error(
+                        f"[MultiModalStruct] Error computing embedding for single item: {e}"
+                    )
             return processed_items
 
         windows = []
