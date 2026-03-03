@@ -250,8 +250,9 @@ class PreUpdateRetriever:
                         # exclude self and working binding
                         # also exclude fast nodes that's created after current node to avoid deadlock later
                         working_binding = item.metadata.working_binding or ""
+                        is_fast = bool(r.get("is_fast", False))
                         if (r["id"] != item.id and r["id"] != working_binding) and (
-                            not r["is_fast"]
+                            not is_fast
                             or datetime.fromisoformat(r["created_at"])
                             < datetime.fromisoformat(item.metadata.created_at)
                         ):
