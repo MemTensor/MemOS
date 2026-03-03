@@ -936,6 +936,7 @@ class Searcher:
             id_filter=id_filter,
             use_fast_graph=self.use_fast_graph,
         )
+
         return self.reranker.rerank(
             query=query,
             query_embedding=query_embedding[0],
