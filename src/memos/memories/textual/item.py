@@ -171,6 +171,7 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
         "ToolTrajectoryMemory",
         "RawFileMemory",
         "SkillMemory",
+        "PreferenceMemory",
     ] = Field(default="WorkingMemory", description="Memory lifecycle type.")
     sources: list[SourceMessage] | None = Field(
         default=None, description="Multiple origins of the memory (e.g., URLs, notes)."
@@ -337,8 +338,6 @@ class TextualMemoryItem(BaseModel):
 
             if v.get("relativity") is not None:
                 return SearchedTreeNodeTextualMemoryMetadata(**v)
-            if v.get("preference_type") is not None:
-                return PreferenceTextualMemoryMetadata(**v)
             if any(k in v for k in ("sources", "memory_type", "embedding", "background", "usage")):
                 return TreeNodeTextualMemoryMetadata(**v)
             return TextualMemoryMetadata(**v)

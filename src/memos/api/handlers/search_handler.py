@@ -49,7 +49,7 @@ class SearchHandler(BaseHandler):
         Main handler for search memories endpoint.
 
         Orchestrates the search process based on the requested search mode,
-        supporting both text and preference memory searches.
+        supporting text memory searches.
 
         Args:
             search_req: Search request containing query and parameters
