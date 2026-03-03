@@ -289,7 +289,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # Collect all memory texts and sources
         memory_texts = []
         all_sources = []
-        seen_content = set()  # Track seen source content to avoid duplicates
         roles = set()
         aggregated_file_ids: list[str] = []
 
@@ -303,18 +302,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 item_sources = [item_sources]
 
             for source in item_sources:
-                # Get content from source for deduplication
-                source_content = None
-                if isinstance(source, dict):
-                    source_content = source.get("content", "")
-                else:
-                    source_content = getattr(source, "content", "") or ""
-
-                # Only add if content is different (empty content is considered unique)
-                content_key = source_content if source_content else None
-                if content_key and content_key not in seen_content:
-                    seen_content.add(content_key)
-                    all_sources.append(source)
+                # Add source to all_sources
+                all_sources.append(source)
 
                 # Extract role from source
                 if hasattr(source, "role") and source.role:
