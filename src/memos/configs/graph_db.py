@@ -230,7 +230,6 @@ class PolarDBGraphDBConfig(BaseConfig):
         ),
     )
 
-
     @model_validator(mode="after")
     def validate_config(self):
         """Validate config."""

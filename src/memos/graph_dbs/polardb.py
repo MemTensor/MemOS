@@ -151,10 +151,14 @@ class PolarDBGraphDB(BaseGraphDB):
             password = config.password
             maxconn = config.maxconn if hasattr(config, "maxconn") else 100
             self._connection_wait_timeout = getattr(config, "connection_wait_timeout", 60)
-            self._skip_connection_health_check = getattr(config, "skip_connection_health_check", False)
+            self._skip_connection_health_check = getattr(
+                config, "skip_connection_health_check", False
+            )
             self._warm_up_on_startup_by_full = getattr(config, "warm_up_on_startup_by_full", False)
             self._warm_up_on_startup_by_all = getattr(config, "warm_up_on_startup_by_all", False)
-            logger.info(f"polardb init config connection_wait_timeout:{self._connection_wait_timeout},_skip_connection_health_check:{self._skip_connection_health_check},warm_up_on_startup_by_full:{self._warm_up_on_startup_by_full},warm_up_on_startup_by_all:{self._warm_up_on_startup_by_all}")
+            logger.info(
+                f"polardb init config connection_wait_timeout:{self._connection_wait_timeout},_skip_connection_health_check:{self._skip_connection_health_check},warm_up_on_startup_by_full:{self._warm_up_on_startup_by_full},warm_up_on_startup_by_all:{self._warm_up_on_startup_by_all}"
+            )
 
         logger.info(
             f" db_name: {self.db_name} maxconn: {maxconn} connection_wait_timeout: {self._connection_wait_timeout}s"
@@ -205,7 +209,7 @@ class PolarDBGraphDB(BaseGraphDB):
             return getattr(self.config, key, default)
 
     def _warm_up_search_connections_by_full(self, user_name: str | None = None) -> None:
-        logger.info(f"--warm_up_search_connections_by_full--start-up----")
+        logger.info("--warm_up_search_connections_by_full--start-up----")
         user_name = user_name or self.user_name
         if not user_name:
             logger.debug("[warm_up] Skipped: no user_name for warm-up")
@@ -227,15 +231,14 @@ class PolarDBGraphDB(BaseGraphDB):
         self._warm_up_search_connections_by_full(user_name)
 
     def _warm_up_connections_by_all(self):
-        logger.info(f"--_warm_up_connections_by_all--start-up")
+        logger.info("--_warm_up_connections_by_all--start-up")
         warm_count = self.connection_pool.minconn
         preheated = 0
         logger.info(f"[warm_up] Pre-warming {warm_count} connections...")
         for _ in range(warm_count):
             try:
-                with self._get_connection() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute("SELECT 1")
+                with self._get_connection() as conn, conn.cursor() as cur:
+                    cur.execute("SELECT 1")
                 preheated += 1
             except Exception as e:
                 logger.warning(f"[warm_up] Failed to pre-warm connection: {e}")

@@ -679,9 +679,7 @@ class APIConfig:
             # .env: CONNECTION_WAIT_TIMEOUT, SKIP_CONNECTION_HEALTH_CHECK, WARM_UP_ON_STARTUP_BY_FULL, WARM_UP_ON_STARTUP_BY_ALL
             "connection_wait_timeout": int(os.getenv("CONNECTION_WAIT_TIMEOUT", "60")),
             "skip_connection_health_check": os.getenv("SKIP_CONNECTION_HEALTH_CHECK", "false").lower() == "true",
-            "warm_up_on_startup_by_full": (
-                os.getenv("WARM_UP_ON_STARTUP_BY_FULL") or os.getenv("WARM_UP_ON_STARTUP", "true")
-            ).lower() == "true",
+            "warm_up_on_startup_by_full": os.getenv("WARM_UP_ON_STARTUP_BY_FULL","false").lower() == "true",
             "warm_up_on_startup_by_all": os.getenv("WARM_UP_ON_STARTUP_BY_ALL", "false").lower() == "true",
         }
 
