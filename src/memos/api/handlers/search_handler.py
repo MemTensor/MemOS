@@ -20,6 +20,7 @@ from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
+from memos.plugins.hooks import hookable
 
 
 logger = get_logger(__name__)
@@ -44,6 +45,7 @@ class SearchHandler(BaseHandler):
             "naive_mem_cube", "mem_scheduler", "searcher", "deepsearch_agent"
         )
 
+    @hookable("search")
     def handle_search_memories(self, search_req: APISearchRequest) -> SearchResponse:
         """
         Main handler for search memories endpoint.
