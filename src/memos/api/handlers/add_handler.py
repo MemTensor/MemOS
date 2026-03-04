@@ -15,6 +15,7 @@ from memos.memories.textual.item import (
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
+from memos.plugins.hooks import hookable
 from memos.types import MessageList
 
 
@@ -37,6 +38,7 @@ class AddHandler(BaseHandler):
             "naive_mem_cube", "mem_reader", "mem_scheduler", "feedback_server"
         )
 
+    @hookable("add")
     def handle_add_memories(self, add_req: APIADDRequest) -> MemoryResponse:
         """
         Main handler for add memories endpoint.
