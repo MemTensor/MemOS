@@ -52,6 +52,13 @@ fi
 # Checkout CE files from the enterprise commit
 echo "${CE_FILES}" | xargs git checkout "${COMMIT}" --
 
+# If there is no staged diff, the CE file content is already present on public branch.
+if git diff --cached --quiet; then
+    echo "✅ All CE changes already synced on ${PUBLIC_BRANCH}. Nothing new to commit."
+    git checkout "${EE_BRANCH}"
+    exit 0
+fi
+
 git commit --no-verify -m "${CE_MSG}"
 echo "▶ Pushing ${PUBLIC_BRANCH} to ${PUBLIC_REMOTE}..."
 git push "${PUBLIC_REMOTE}" "${PUBLIC_BRANCH}"
