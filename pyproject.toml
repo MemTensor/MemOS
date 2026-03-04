@@ -48,6 +48,12 @@ dependencies = [
     "python-dateutil (>=2.9.0.post0,<3.0.0)",
     "prometheus-client (>=0.23.1,<0.24.0)",
     "concurrent-log-handler (>=0.9.28,<1.0.0)",  # Process-safe rotating file handler
+    "redis (>=6.2.0,<7.0.0)",  # Key-value store
+    "pika (>=1.3.2,<2.0.0)",  # RabbitMQ client
+    "jieba (>=0.38.1,<0.42.1)",  # Chinese text segmentation
+    "chonkie (>=1.0.7,<2.0.0)",  # Sentence chunking
+    "pymilvus (>=2.5.12,<3.0.0)",  # Milvus vector DB
+    "psycopg2-binary (>=2.9.9,<3.0.0)",  # PostgreSQL / PolarDB driver
 ]
 
 [project.urls]
@@ -61,6 +67,9 @@ issues = "https://github.com/MemTensor/MemOS/issues"
 
 [project.scripts]
 memos = "memos.cli:main"
+
+[project.entry-points."memos.plugins"]
+demo = "memos_demo_plugin:DemoPlugin"
 
 [project.optional-dependencies]
 # These are optional dependencies for various features of MemoryOS.
@@ -153,7 +162,10 @@ build-backend = "poetry.core.masonry.api"
 # https://python-poetry.org/docs/dependency-specification#caret-requirements
 ##############################################################################
 
-packages = [{include = "memos", from = "src"}]
+packages = [
+    {include = "memos", from = "src"},
+    {include = "memos_demo_plugin", from = "extensions"},
+]
 requires-poetry = ">=2.0"
 dependencies = { "python" = ">=3.10,<4.0" }
 

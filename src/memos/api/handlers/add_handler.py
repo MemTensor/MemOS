@@ -15,6 +15,8 @@ from memos.memories.textual.item import (
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
+from memos.plugins.hook_defs import H
+from memos.plugins.hooks import hookable, trigger_hook
 from memos.types import MessageList
 
 
@@ -37,6 +39,7 @@ class AddHandler(BaseHandler):
             "naive_mem_cube", "mem_reader", "mem_scheduler", "feedback_server"
         )
 
+    @hookable("add")
     def handle_add_memories(self, add_req: APIADDRequest) -> MemoryResponse:
         """
         Main handler for add memories endpoint.
@@ -105,6 +108,9 @@ class AddHandler(BaseHandler):
                 self.logger.warning(f"[ADDFeedbackHandler] Running error: {e}")
 
         results = cube_view.add_memories(add_req)
+
+        rv = trigger_hook(H.ADD_MEMORIES_POST_PROCESS, request=add_req, result=results)
+        results = rv if rv is not None else results
 
         self.logger.info(f"[AddHandler] Final add results count={len(results)}")
 
