@@ -131,7 +131,7 @@ def test_mark_memory_status(history_manager, mock_graph_db):
     # Assert
     assert mock_graph_db.update_node.call_count == 3
 
-    # Verify we called it correctly
-    mock_graph_db.update_node.assert_any_call(id=id1, fields={"status": status})
-    mock_graph_db.update_node.assert_any_call(id=id2, fields={"status": status})
-    mock_graph_db.update_node.assert_any_call(id=id3, fields={"status": status})
+    # Verify we called it correctly (user_name=None is passed by mark_memory_status)
+    mock_graph_db.update_node.assert_any_call(id=id1, fields={"status": status}, user_name=None)
+    mock_graph_db.update_node.assert_any_call(id=id2, fields={"status": status}, user_name=None)
+    mock_graph_db.update_node.assert_any_call(id=id3, fields={"status": status}, user_name=None)

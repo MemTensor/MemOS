@@ -646,6 +646,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         return None
 
+    @timed
     def _process_string_fine(
         self,
         fast_memory_items: list[TextualMemoryItem],
@@ -720,6 +721,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                             m_maybe_merged.get("memory_type", "LongTermMemory")
                             .replace("长期记忆", "LongTermMemory")
                             .replace("用户记忆", "UserMemory")
+                            .replace("pref", "UserMemory")
                         )
                         node = self._make_memory_item(
                             value=m_maybe_merged.get("value", ""),
@@ -883,6 +885,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             logger.error(f"[MultiModalFine] Error calling LLM for tool trajectory: {e}")
             return []
 
+    @timed
     def _process_tool_trajectory_fine(
         self, fast_memory_items: list[TextualMemoryItem], info: dict[str, Any], **kwargs
     ) -> list[TextualMemoryItem]:

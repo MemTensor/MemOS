@@ -11,6 +11,7 @@ from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.item import SourceMessage, TextualMemoryItem
 from memos.types import MessagesType
+from memos.utils import timed
 
 from .assistant_parser import AssistantParser
 from .base import BaseMessageParser
@@ -120,6 +121,7 @@ class MultiModalParser:
         logger.warning(f"[MultiModalParser] Could not determine parser for message: {message}")
         return None
 
+    @timed
     def parse(
         self,
         message: MessagesType,
@@ -157,6 +159,7 @@ class MultiModalParser:
             logger.error(f"[MultiModalParser] Error parsing message: {e}")
             return []
 
+    @timed
     def parse_batch(
         self,
         messages: list[MessagesType],
@@ -182,6 +185,7 @@ class MultiModalParser:
             results.append(items)
         return results
 
+    @timed
     def process_transfer(
         self,
         source: SourceMessage,

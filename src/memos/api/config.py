@@ -335,7 +335,6 @@ class APIConfig:
                 # validation requirements during tests/import.
                 "api_base": os.getenv("MEMRADER_API_BASE", "https://api.openai.com/v1"),
                 "remove_think_prefix": True,
-                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
             },
         }
 
@@ -531,7 +530,6 @@ class APIConfig:
                                 "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
                                 "api_base": os.getenv("MEMRADER_API_BASE"),
                                 "remove_think_prefix": True,
-                                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
                             },
                         },
                         "embedder": APIConfig.get_embedder_config(),
@@ -1016,6 +1014,7 @@ class APIConfig:
                                 "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
                                 "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
                                 "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                                "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
                             },
                             "include_embedding": bool(
                                 os.getenv("INCLUDE_EMBEDDING", "false") == "true"
@@ -1098,6 +1097,7 @@ class APIConfig:
                                 "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
                                 "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
                                 "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                                "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
                             },
                             "mode": os.getenv("ASYNC_MODE", "sync"),
                             "include_embedding": bool(

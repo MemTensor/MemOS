@@ -66,7 +66,7 @@ class SearchHandler(BaseHandler):
 
         # Expand top_k for deduplication (5x to ensure enough candidates)
         if search_req_local.dedup in ("sim", "mmr"):
-            search_req_local.top_k = search_req_local.top_k * 5
+            search_req_local.top_k = search_req_local.top_k * 3
 
         # Search and deduplicate
         cube_view = self._build_cube_view(search_req_local)
@@ -122,11 +122,14 @@ class SearchHandler(BaseHandler):
                     if not isinstance(mem, dict):
                         continue
                     meta = mem.get("metadata", {})
-                    score = meta.get("relativity", 0.0) if isinstance(meta, dict) else 0.0
+                    if key == "text_mem":
+                        score = meta.get("relativity", 1.0) if isinstance(meta, dict) else 1.0
+                    else:
+                        score = meta.get("score", 1.0) if isinstance(meta, dict) else 1.0
                     try:
-                        score_val = float(score) if score is not None else 0.0
+                        score_val = float(score) if score is not None else 1.0
                     except (TypeError, ValueError):
-                        score_val = 0.0
+                        score_val = 1.0
                     if score_val >= relativity:
                         filtered.append(mem)
 
@@ -151,9 +154,6 @@ class SearchHandler(BaseHandler):
             return results
 
         embeddings = self._extract_embeddings([mem for _, mem, _ in flat])
-        if embeddings is None:
-            documents = [mem.get("memory", "") for _, mem, _ in flat]
-            embeddings = self.searcher.embedder.embed(documents)
 
         similarity_matrix = cosine_similarity_matrix(embeddings)
 
@@ -222,7 +222,11 @@ class SearchHandler(BaseHandler):
         # Flatten preference memories
         for bucket_idx, bucket in enumerate(pref_buckets):
             for mem in bucket.get("memories", []):
-                score = mem.get("metadata", {}).get("relativity", 0.0)
+                meta = mem.get("metadata", {})
+                if isinstance(meta, dict):
+                    score = meta.get("score", meta.get("relativity", 0.0))
+                else:
+                    score = 0.0
                 flat.append(
                     ("preference", bucket_idx, mem, float(score) if score is not None else 0.0)
                 )
@@ -230,12 +234,39 @@ class SearchHandler(BaseHandler):
         if len(flat) <= 1:
             return results
 
+        total_by_type: dict[str, int] = {"text": 0, "preference": 0}
+        existing_by_type: dict[str, int] = {"text": 0, "preference": 0}
+        missing_by_type: dict[str, int] = {"text": 0, "preference": 0}
+        missing_indices: list[int] = []
+        for idx, (mem_type, _, mem, _) in enumerate(flat):
+            if mem_type not in total_by_type:
+                total_by_type[mem_type] = 0
+                existing_by_type[mem_type] = 0
+                missing_by_type[mem_type] = 0
+            total_by_type[mem_type] += 1
+
+            embedding = mem.get("metadata", {}).get("embedding")
+            if embedding:
+                existing_by_type[mem_type] += 1
+            else:
+                missing_by_type[mem_type] += 1
+                missing_indices.append(idx)
+
+        self.logger.info(
+            "[SearchHandler] MMR embedding metadata scan: total=%s total_by_type=%s existing_by_type=%s missing_by_type=%s",
+            len(flat),
+            total_by_type,
+            existing_by_type,
+            missing_by_type,
+        )
+        if missing_indices:
+            self.logger.warning(
+                "[SearchHandler] MMR embedding metadata missing; will compute missing embeddings: missing_total=%s",
+                len(missing_indices),
+            )
+
         # Get or compute embeddings
         embeddings = self._extract_embeddings([mem for _, _, mem, _ in flat])
-        if embeddings is None:
-            self.logger.warning("[SearchHandler] Embedding is missing; recomputing embeddings")
-            documents = [mem.get("memory", "") for _, _, mem, _ in flat]
-            embeddings = self.searcher.embedder.embed(documents)
 
         # Compute similarity matrix using NumPy-optimized method
         # Returns numpy array but compatible with list[i][j] indexing
@@ -399,14 +430,32 @@ class SearchHandler(BaseHandler):
             return 0.0
         return max(similarity_matrix[index][j] for j in selected_indices)
 
-    @staticmethod
-    def _extract_embeddings(memories: list[dict[str, Any]]) -> list[list[float]] | None:
+    def _extract_embeddings(self, memories: list[dict[str, Any]]) -> list[list[float]]:
         embeddings: list[list[float]] = []
-        for mem in memories:
-            embedding = mem.get("metadata", {}).get("embedding")
-            if not embedding:
-                return None
-            embeddings.append(embedding)
+        missing_indices: list[int] = []
+        missing_documents: list[str] = []
+
+        for idx, mem in enumerate(memories):
+            metadata = mem.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+                mem["metadata"] = metadata
+
+            embedding = metadata.get("embedding")
+            if embedding:
+                embeddings.append(embedding)
+                continue
+
+            embeddings.append([])
+            missing_indices.append(idx)
+            missing_documents.append(mem.get("memory", ""))
+
+        if missing_indices:
+            computed = self.searcher.embedder.embed(missing_documents)
+            for idx, embedding in zip(missing_indices, computed, strict=False):
+                embeddings[idx] = embedding
+                memories[idx]["metadata"]["embedding"] = embedding
+
         return embeddings
 
     @staticmethod

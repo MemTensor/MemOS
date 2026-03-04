@@ -202,6 +202,20 @@ def handle_get_memory(memory_id: str, naive_mem_cube: NaiveMemCube) -> GetMemory
     # Get the data from whichever memory source succeeded
     data = (memory or pref).model_dump() if (memory or pref) else None
 
+    if data is not None:
+        # For each returned item, tackle with metadata.info project_id /
+        # operation / manager_user_id
+        metadata = data.get("metadata", None)
+        if metadata is not None and isinstance(metadata, dict):
+            info = metadata.get("info", None)
+            if info is not None and isinstance(info, dict):
+                for key in ("project_id", "operation", "manager_user_id"):
+                    if key not in info:
+                        continue
+                    value = info.pop(key)
+                    if key not in metadata:
+                        metadata[key] = value
+
     return GetMemoryResponse(
         message="Memory retrieved successfully"
         if data
@@ -240,6 +254,25 @@ def handle_get_memory_by_ids(
                     memories.extend(result)
             except Exception:
                 continue
+
+    # For each returned item, tackle with metadata.info project_id /
+    # operation / manager_user_id
+    for item in memories:
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        info = metadata.get("info")
+        if not isinstance(info, dict):
+            continue
+
+        for key in ("project_id", "operation", "manager_user_id"):
+            if key not in info:
+                continue
+            value = info.pop(key)
+            if key not in metadata:
+                metadata[key] = value
 
     return GetMemoryResponse(
         message="Memories retrieved successfully", code=200, data={"memories": memories}
@@ -345,6 +378,25 @@ def handle_get_memories(
         )
         format_preferences = [format_memory_item(item, save_sources=False) for item in preferences]
 
+        # For each returned item, tackle with metadata.info project_id /
+        # operation / manager_user_id
+        for item in format_preferences:
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            info = metadata.get("info")
+            if not isinstance(info, dict):
+                continue
+
+            for key in ("project_id", "operation", "manager_user_id"):
+                if key not in info:
+                    continue
+                value = info.pop(key)
+                if key not in metadata:
+                    metadata[key] = value
+
     results = post_process_pref_mem(
         results, format_preferences, get_mem_req.mem_cube_id, get_mem_req.include_preference
     )
@@ -412,6 +464,12 @@ def handle_get_memories_dashboard(
     get_mem_req: GetMemoryDashboardRequest, naive_mem_cube: NaiveMemCube
 ) -> GetMemoryResponse:
     results: dict[str, Any] = {"text_mem": [], "pref_mem": [], "tool_mem": [], "skill_mem": []}
+    # for statistics
+    total_text_nodes, total_tool_nodes, total_skill_nodes, total_preference_nodes = 0, 0, 0, 0
+    total_tool_nodes = 0
+    total_skill_nodes = 0
+    total_preference_nodes = 0
+
     text_memory_type = ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
     text_memories_info = naive_mem_cube.text_mem.get_all(
         user_name=get_mem_req.mem_cube_id,
@@ -421,7 +479,7 @@ def handle_get_memories_dashboard(
         filter=get_mem_req.filter,
         memory_type=text_memory_type,
     )
-    text_memories, _ = text_memories_info["nodes"], text_memories_info["total_nodes"]
+    text_memories, total_text_nodes = text_memories_info["nodes"], text_memories_info["total_nodes"]
 
     # Group text memories by cube_id from metadata.user_name
     text_mem_by_cube: dict[str, list] = {}
@@ -453,7 +511,7 @@ def handle_get_memories_dashboard(
             filter=get_mem_req.filter,
             memory_type=["ToolSchemaMemory", "ToolTrajectoryMemory"],
         )
-        tool_memories, _ = (
+        tool_memories, total_tool_nodes = (
             tool_memories_info["nodes"],
             tool_memories_info["total_nodes"],
         )
@@ -488,7 +546,7 @@ def handle_get_memories_dashboard(
             filter=get_mem_req.filter,
             memory_type=["SkillMemory"],
         )
-        skill_memories, _ = (
+        skill_memories, total_skill_nodes = (
             skill_memories_info["nodes"],
             skill_memories_info["total_nodes"],
         )
@@ -515,7 +573,6 @@ def handle_get_memories_dashboard(
         ]
 
     preferences: list[TextualMemoryItem] = []
-    total_preference_nodes = 0
 
     format_preferences = []
     if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
@@ -577,5 +634,14 @@ def handle_get_memories_dashboard(
         "tool_mem": results.get("tool_mem", []),
         "skill_mem": results.get("skill_mem", []),
     }
+
+    # statistics
+    statistics = {
+        "total_text_nodes": total_text_nodes,
+        "total_tool_nodes": total_tool_nodes,
+        "total_skill_nodes": total_skill_nodes,
+        "total_preference_nodes": total_preference_nodes,
+    }
+    filtered_results["statistics"] = statistics
 
     return GetMemoryResponse(message="Memories retrieved successfully", data=filtered_results)

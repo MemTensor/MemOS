@@ -68,33 +68,35 @@ class AddMessageHandler(BaseSchedulerHandler):
                 mem_item = mem_cube.text_mem.get(memory_id=memory_id, user_name=msg.mem_cube_id)
                 if mem_item is None:
                     raise ValueError(f"Memory {memory_id} not found after retries")
-                key = getattr(mem_item.metadata, "key", None) or transform_name_to_key(
-                    name=mem_item.memory
-                )
-                exists = False
                 original_content = None
                 original_item_id = None
 
-                if key and hasattr(mem_cube.text_mem, "graph_store"):
-                    candidates = mem_cube.text_mem.graph_store.get_by_metadata(
-                        [
-                            {"field": "key", "op": "=", "value": key},
-                            {
-                                "field": "memory_type",
-                                "op": "=",
-                                "value": mem_item.metadata.memory_type,
-                            },
-                        ]
+                # Determine add vs update from the merged_from field set by the upstream
+                # mem_reader during fine extraction. When the LLM merges a new memory with
+                # existing ones it writes their IDs into metadata.info["merged_from"].
+                # This avoids an extra graph DB query and the self-match / cross-user
+                # matching bugs that came with the old get_by_metadata approach.
+                merged_from = (getattr(mem_item.metadata, "info", None) or {}).get("merged_from")
+                if merged_from:
+                    merged_ids = (
+                        merged_from
+                        if isinstance(merged_from, list | tuple | set)
+                        else [merged_from]
                     )
-                    if candidates:
-                        exists = True
-                        original_item_id = candidates[0]
+                    original_item_id = merged_ids[0]
+                    try:
                         original_mem_item = mem_cube.text_mem.get(
                             memory_id=original_item_id, user_name=msg.mem_cube_id
                         )
-                        original_content = original_mem_item.memory
+                        original_content = original_mem_item.memory if original_mem_item else None
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to fetch original memory %s for update log: %s",
+                            original_item_id,
+                            e,
+                        )
 
-                if exists:
+                if merged_from:
                     prepared_update_items_with_original.append(
                         {
                             "new_item": mem_item,

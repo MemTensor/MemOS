@@ -130,6 +130,7 @@ class ChatHandler(BaseHandler):
                 include_preference=chat_req.include_preference,
                 pref_top_k=chat_req.pref_top_k,
                 filter=chat_req.filter,
+                relativity=chat_req.relativity,
             )
 
             search_response = self.search_handler.handle_search_memories(search_req)
@@ -269,6 +270,7 @@ class ChatHandler(BaseHandler):
                         include_preference=chat_req.include_preference,
                         pref_top_k=chat_req.pref_top_k,
                         filter=chat_req.filter,
+                        relativity=chat_req.relativity,
                     )
 
                     search_response = self.search_handler.handle_search_memories(search_req)
@@ -811,6 +813,7 @@ class ChatHandler(BaseHandler):
                             include_preference=chat_req.include_preference,
                             pref_top_k=chat_req.pref_top_k,
                             filter=chat_req.filter,
+                            relativity=chat_req.relativity,
                         )
 
                         search_response = self.search_handler.handle_search_memories(search_req)
