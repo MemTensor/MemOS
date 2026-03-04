@@ -345,7 +345,7 @@ def detect_lang(text):
         cleaned_text = re.sub(
             r"\b(user|assistant|query|answer)\s*:", "", cleaned_text, flags=re.IGNORECASE
         )
-        cleaned_text = re.sub(r"\[[\d\-:\s]+\]", "", cleaned_text)
+        cleaned_text = re.sub(r"\[[^\]]+\]", "", cleaned_text)
         # remove URLs to prevent the dilution of Chinese characters
         cleaned_text = re.sub(r'https?://[^\s<>"{}|\\^`\[\]]+', "", cleaned_text)
         # extract chinese characters
