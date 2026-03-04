@@ -942,7 +942,7 @@ class MemoryHistoryManager:
         for i, data in enumerate(restored_memories):
             source_item = source_items[i]
             # deal with history
-            source_history = source_item.history.copy()
+            source_history = source_item.metadata.history.copy()
             value = data.get("value", "")
             value_item = TextualMemoryItem(memory=value, metadata=TreeNodeTextualMemoryMetadata())
             value = value_item.memory
