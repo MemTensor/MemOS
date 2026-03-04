@@ -172,15 +172,18 @@ def init_server() -> dict[str, Any]:
     )
     embedder = EmbedderFactory.from_config(embedder_config)
     nli_client = NLIClient(base_url=nli_client_config["base_url"])
-    memory_history_manager = MemoryHistoryManager(
-        nli_client=nli_client, graph_db=graph_db, llm=llm, embedder=embedder
-    )
     pre_update_retriever = PreUpdateRetriever(graph_db=graph_db, embedder=embedder)
+    memory_history_manager = MemoryHistoryManager(
+        nli_client=nli_client,
+        graph_db=graph_db,
+        llm=llm,
+        embedder=embedder,
+        pre_update_retriever=pre_update_retriever,
+    )
     # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
     mem_reader = MemReaderFactory.from_config(
         mem_reader_config,
         graph_db=graph_db,
-        pre_update_retriever=pre_update_retriever,
         history_manager=memory_history_manager,
     )
     reranker = RerankerFactory.from_config(reranker_config)

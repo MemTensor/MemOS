@@ -5,7 +5,6 @@ from memos.mem_reader.base import BaseMemReader
 from memos.mem_reader.multi_modal_struct import MultiModalStructMemReader
 from memos.mem_reader.simple_struct import SimpleStructMemReader
 from memos.mem_reader.strategy_struct import StrategyStructMemReader
-from memos.memories.textual.tree_text_memory.retrieve.pre_update import PreUpdateRetriever
 from memos.memos_tools.singleton import singleton_factory
 
 
@@ -33,7 +32,6 @@ class MemReaderFactory(BaseMemReader):
         config_factory: MemReaderConfigFactory,
         graph_db: Optional["BaseGraphDB | None"] = None,
         searcher: Optional["Searcher | None"] = None,
-        pre_update_retriever: PreUpdateRetriever | None = None,
         history_manager: Optional["MemoryHistoryManager | None"] = None,
     ) -> BaseMemReader:
         """
@@ -60,12 +58,6 @@ class MemReaderFactory(BaseMemReader):
 
         if searcher is not None:
             reader.set_searcher(searcher)
-
-        if pre_update_retriever is not None:
-            if hasattr(reader, "set_pre_update_retriever"):
-                reader.set_pre_update_retriever(pre_update_retriever)
-            else:
-                reader.pre_update_retriever = pre_update_retriever
 
         if history_manager is not None:
             if hasattr(reader, "set_history_manager"):

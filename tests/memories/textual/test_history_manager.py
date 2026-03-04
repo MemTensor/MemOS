@@ -98,7 +98,7 @@ def test_format_async_update_prompt(history_manager):
     )
 
     # Execute
-    prompt = history_manager.format_async_update_prompt(item)
+    prompt = history_manager.format_prompt(item)
 
     # Verify
     assert "[ID:101]" in prompt
@@ -112,18 +112,6 @@ def test_format_async_update_prompt(history_manager):
     # Check that placeholders are gone (basic check)
     assert "${duplicate_candidates}" not in prompt
     assert "${conflict_candidates}" not in prompt
-
-
-def test_format_async_update_prompt_with_args(history_manager):
-    item = TextualMemoryItem(
-        memory="Explicit conversation",
-        metadata=TreeNodeTextualMemoryMetadata(history=[]),
-    )
-
-    prompt = history_manager.format_async_update_prompt(item, custom_tags_prompt="Custom Tags")
-
-    assert "Explicit conversation" in prompt
-    assert "Custom Tags" in prompt
 
 
 def test_apply_llm_memory_updates_new_node(history_manager, mock_graph_db):

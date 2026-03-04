@@ -1,4 +1,6 @@
+import json
 import logging
+import re
 import time
 import uuid
 
@@ -17,6 +19,7 @@ from memos.memories.textual.item import (
     TextualMemoryItem,
     TreeNodeTextualMemoryMetadata,
 )
+from memos.memories.textual.tree_text_memory.retrieve.pre_update import PreUpdateRetriever
 from memos.templates.mem_reader_mem_version_prompts import (
     ASYNC_MEMORY_UPDATE_PROMPT_DICT,
     MEMORY_MERGE_PROMPT_DICT,
@@ -86,6 +89,48 @@ def _determine_lang(sources: list | None, fallback_text: str) -> str:
     return lang
 
 
+def _parse_json_result(response_text: str) -> dict:
+    s = (response_text or "").strip()
+
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", s, flags=re.I)
+    s = (m.group(1) if m else s.replace("```", "")).strip()
+
+    i = s.find("{")
+    if i == -1:
+        return {}
+    s = s[i:].strip()
+
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+
+    j = max(s.rfind("}"), s.rfind("]"))
+    if j != -1:
+        try:
+            return json.loads(s[: j + 1])
+        except json.JSONDecodeError:
+            pass
+
+    def _cheap_close(t: str) -> str:
+        t += "}" * max(0, t.count("{") - t.count("}"))
+        t += "]" * max(0, t.count("[") - t.count("]"))
+        return t
+
+    t = _cheap_close(s)
+    try:
+        return json.loads(t)
+    except json.JSONDecodeError as e:
+        if "Invalid \\escape" in str(e):
+            s = s.replace("\\", "\\\\")
+            return json.loads(s)
+        logger.warning(
+            f"[JSONParse] Failed to decode JSON: {e}\nTail: Raw {response_text} \
+            json: {s}"
+        )
+        return {}
+
+
 class MemoryHistoryManager:
     def __init__(
         self,
@@ -93,6 +138,7 @@ class MemoryHistoryManager:
         graph_db: BaseGraphDB,
         llm: BaseLLM | None = None,
         embedder: BaseEmbedder | None = None,
+        pre_update_retriever: PreUpdateRetriever | None = None,
     ) -> None:
         """
         Initialize the MemoryHistoryManager.
@@ -106,6 +152,7 @@ class MemoryHistoryManager:
         self.graph_db = graph_db
         self.llm = llm
         self.embedder = embedder
+        self.pre_update_retriever = pre_update_retriever
 
     def _compute_embedding(self, text: str) -> list[float] | None:
         if not self.embedder:
@@ -290,9 +337,7 @@ class MemoryHistoryManager:
 
         return
 
-    def format_async_update_prompt(
-        self, item: TextualMemoryItem, custom_tags_prompt: str = ""
-    ) -> str:
+    def format_prompt(self, item: TextualMemoryItem, custom_tags_prompt: str = "") -> str:
         """
         Format the prompt for asynchronous memory update.
 
@@ -442,6 +487,92 @@ class MemoryHistoryManager:
             for future in futures:
                 future.result()
         return
+
+    def prepare_history_candidates_via_nli(self, item: TextualMemoryItem, user_name: str) -> None:
+        """
+        1. Recall related memories
+        2. Fast conflict/duplication check with NLI model
+        3. Attach conflicting/duplicate old memory contents onto fast memory items
+        """
+        if not self.is_applicable(item):
+            return
+
+        if not self.pre_update_retriever:
+            logger.warning("[MemoryHistoryManager] PreUpdateRetriever is not initialized.")
+            return
+
+        try:
+            # recall related memories
+            retrieve_start = time.perf_counter()
+            related = self.pre_update_retriever.retrieve(
+                item=item,
+                user_name=user_name,
+            )
+            retrieve_ms = (time.perf_counter() - retrieve_start) * 1000
+            logger.info(
+                "[MemoryHistoryManager] pre_update_retriever.retrieve latency_ms=%.2f item_id=%s",
+                retrieve_ms,
+                getattr(item, "id", None),
+            )
+            # NLI check & attaching contents
+            nli_start = time.perf_counter()
+            conflicting_or_duplicate_ids = self.resolve_history_via_nli(item, related)
+            nli_ms = (time.perf_counter() - nli_start) * 1000
+            logger.info(
+                "[MemoryHistoryManager] history_manager.resolve_history_via_nli latency_ms=%.2f item_id=%s related_count=%s result_count=%s",
+                nli_ms,
+                getattr(item, "id", None),
+                len(related),
+                len(conflicting_or_duplicate_ids),
+            )
+
+        except Exception as e:
+            logger.warning(f"[MultiModalStruct] Fast recall failed: {e}")
+
+    def apply_mem_version_update(
+        self,
+        original_item: TextualMemoryItem,
+        user_name: str,
+        llm: BaseLLM | None,
+        custom_tags: dict[str, str] | None,
+        custom_tags_prompt_template: str | None,
+        timeout_sec: int = 30,
+    ) -> list[TextualMemoryItem]:
+        """
+        1. Wait for 'fast histories' in the item to resolve, and rebuild its history
+        2. Build memory extraction/update prompt (include custom tags and conversation context)
+        3. Call LLM and parse JSON response
+        4. Apply LLM updates to memory graph and return new items
+        """
+        self.prepare_history_candidates_via_nli(original_item, user_name)
+        self.wait_and_update_fast_history(original_item, user_name, timeout_sec=timeout_sec)
+
+        custom_tags_prompt = (
+            custom_tags_prompt_template.replace("{custom_tags}", str(custom_tags))
+            if custom_tags_prompt_template and custom_tags
+            else ""
+        )
+        prompt = self.format_prompt(original_item, custom_tags_prompt)
+        try:
+            if llm is None:
+                raise ValueError("LLM is not initialized")
+            response_text = llm.generate([{"role": "user", "content": prompt}])
+            if not response_text:
+                raise ValueError("Empty LLM response")
+            response_json = _parse_json_result(response_text)
+            if not response_json:
+                raise ValueError("Empty LLM JSON response")
+
+            _, new_items = self.apply_llm_memory_updates(
+                response_json, original_item, user_name=user_name
+            )
+            return new_items
+
+        except Exception as e:
+            logger.warning(
+                f"[MemoryHistoryManager] Memory extraction/update fallback due to LLM failure: {e}"
+            )
+            return self.build_fallback_new_items(original_item, user_name=user_name)
 
     def _check_and_fetch_replacements(
         self, item: TextualMemoryItem, pending_indices: list[int], user_name: str

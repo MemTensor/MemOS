@@ -1,7 +1,6 @@
 import concurrent.futures
 import json
 import re
-import time
 import traceback
 
 from typing import TYPE_CHECKING, Any
@@ -58,7 +57,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         simple_config = SimpleStructMemReaderConfig(**config_dict)
         super().__init__(simple_config)
 
-        self.pre_update_retriever = None
         self.history_manager = None
         self.memory_version_switch = getattr(config, "memory_version_switch", "off")
 
@@ -704,19 +702,27 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # Determine prompt type based on sources
             prompt_type = self._determine_prompt_type(sources)
 
-            # ========== Stage 0: Memory versioning async update pipeline ==========
+            # ========== Stage 0: Memory version async extraction/update pipeline ==========
             if (
                 self.memory_version_switch == "on"
                 and self.history_manager is not None
                 and self.history_manager.is_applicable(fast_item)
             ):
                 try:
-                    new_items = self._process_async_versioning_update(
-                        fast_item, mem_str, custom_tags, **kwargs
+                    user_name = kwargs.get("user_name")
+                    lang = detect_lang(kwargs.get("chat_history") or mem_str)
+                    custom_tags_prompt_template = PROMPT_DICT["custom_tags"][lang]
+                    new_items = self.history_manager.apply_mem_version_update(
+                        fast_item,
+                        user_name,
+                        self.qwen_llm,
+                        custom_tags=custom_tags,
+                        custom_tags_prompt_template=custom_tags_prompt_template,
+                        timeout_sec=30,
                     )
                     return new_items
-                except Exception as e:
-                    logger.warning(f"[MultiModalFine] Async versioning pipeline failed: {e}")
+                except Exception as ex:
+                    logger.warning(f"[MultiModalFine] Fine memory version pipeline failed: {ex}")
                     return []
 
             # ========== Stage 1: Normal extraction (without reference) ==========
@@ -958,91 +964,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     logger.error(f"[MultiModalFine] parse error for tool trajectory: {e}")
 
         return fine_memory_items
-
-    def _fast_resolve_memory_duplicates_and_conflicts(
-        self, item: list[TextualMemoryItem], user_name: str
-    ) -> None:
-        """
-        1. Recall related memories
-        2. Fast conflict/duplication check with NLI model
-        3. Attach conflicting/duplicate old memory contents onto fast memory items
-        4. Mark conflicting/duplicate old memory nodes as "resolving", making them invisible to /search,
-           but still visible for other conflict/duplication checks' recalls.
-        """
-        if not self.history_manager.is_applicable(item):
-            return
-
-        if not self.pre_update_retriever or not self.history_manager:
-            logger.warning(
-                "[MultiModalStruct] PreUpdateRetriever or HistoryManager is not initialized."
-            )
-            return
-
-        try:
-            # recall related memories
-            retrieve_start = time.perf_counter()
-            related = self.pre_update_retriever.retrieve(
-                item=item,
-                user_name=user_name,
-            )
-            retrieve_ms = (time.perf_counter() - retrieve_start) * 1000
-            logger.info(
-                "[MultiModalStruct] pre_update_retriever.retrieve latency_ms=%.2f item_id=%s",
-                retrieve_ms,
-                getattr(item, "id", None),
-            )
-            # NLI check & attaching contents
-            nli_start = time.perf_counter()
-            conflicting_or_duplicate_ids = self.history_manager.resolve_history_via_nli(
-                item, related
-            )
-            nli_ms = (time.perf_counter() - nli_start) * 1000
-            logger.info(
-                "[MultiModalStruct] history_manager.resolve_history_via_nli latency_ms=%.2f item_id=%s related_count=%s result_count=%s",
-                nli_ms,
-                getattr(item, "id", None),
-                len(related),
-                len(conflicting_or_duplicate_ids),
-            )
-
-        except Exception as e:
-            logger.warning(f"[MultiModalStruct] Fast recall failed: {e}")
-
-    def _process_async_versioning_update(
-        self, item: TextualMemoryItem, mem_str: str, custom_tags: dict[str, str], **kwargs
-    ) -> list[TextualMemoryItem]:
-        """
-        1. Wait for fast node resolution and rebuild its history
-        2. Build async update prompt (include custom tags and conversation context)
-        3. Call LLM and parse JSON response
-        4. Apply LLM updates to memory graph and return new items
-        """
-        # resolve via nli first
-        user_name = kwargs.get("user_name")
-        self._fast_resolve_memory_duplicates_and_conflicts(item, user_name)
-
-        self.history_manager.wait_and_update_fast_history(item, user_name, timeout_sec=30)
-        lang = detect_lang(kwargs.get("chat_history") or mem_str)
-        custom_tags_prompt = (
-            PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
-            if custom_tags
-            else ""
-        )
-        prompt = self.history_manager.format_async_update_prompt(item, custom_tags_prompt)
-        try:
-            response_text = self.qwen_llm.generate([{"role": "user", "content": prompt}])
-            if not response_text:
-                raise ValueError("Empty LLM response")
-            response_json = parse_json_result(response_text)
-            if not response_json:
-                raise ValueError("Empty LLM JSON response")
-            _, new_items = self.history_manager.apply_llm_memory_updates(
-                response_json, item, user_name=user_name
-            )
-            return new_items
-        except Exception as e:
-            logger.warning(f"[MultiModalStruct] Async update fallback due to LLM failure: {e}")
-            return self.history_manager.build_fallback_new_items(item, user_name=user_name)
 
     @timed
     def _process_multi_modal_data(
