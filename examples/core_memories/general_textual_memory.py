@@ -68,21 +68,9 @@ example_memories = [
 
 example_id = "a19b6caa-5d59-42ad-8c8a-e4f7118435b4"
 
-print("===== Extract memories =====")
-# Extract memories from a conversation
-# The extractor LLM processes the conversation to identify relevant information.
-memories = m.extract(
-    [
-        {"role": "user", "content": "I love tomatoes."},
-        {"role": "assistant", "content": "Great! Tomatoes are delicious."},
-    ]
-)
-pprint.pprint(memories)
-print()
-
 print("==== Add memories ====")
-# Add the extracted memories to the memory store
-m.add(memories)
+# Add example memories to the memory store
+m.add(example_memories)
 # Add a manually created memory item
 m.add(
     [

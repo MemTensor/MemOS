@@ -128,7 +128,7 @@ class MemoryHistoryManager:
             )
             new_item.metadata.history.append(archived)
             logger.info(
-                f"[MemoryHistoryManager] Archived related memory {r_item.id} as {update_type} for new item {new_item.id}"
+                f"[Chunker: MemoryHistoryManager] Archived related memory {r_item.id} as {update_type} for new item {new_item.id}"
             )
 
         # 3. Concat duplicate/conflict memories to new_item.memory

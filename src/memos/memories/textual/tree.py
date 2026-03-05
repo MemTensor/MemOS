@@ -169,6 +169,8 @@ class TreeTextMemory(BaseTextMemory):
         tool_mem_top_k: int = 6,
         include_skill_memory: bool = False,
         skill_mem_top_k: int = 3,
+        include_preference_memory: bool = False,
+        pref_mem_top_k: int = 6,
         dedup: str | None = None,
         include_embedding: bool | None = None,
         **kwargs,
@@ -222,6 +224,8 @@ class TreeTextMemory(BaseTextMemory):
             tool_mem_top_k=tool_mem_top_k,
             include_skill_memory=include_skill_memory,
             skill_mem_top_k=skill_mem_top_k,
+            include_preference_memory=include_preference_memory,
+            pref_mem_top_k=pref_mem_top_k,
             dedup=dedup,
             **kwargs,
         )
