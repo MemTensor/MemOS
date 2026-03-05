@@ -144,7 +144,7 @@ def init_components():
         mem_reader=mem_reader,
         searcher=searcher,
         reranker=mem_reranker,
-        pref_mem=None,
+        pref_feedback=True,
     )
 
     return feedback_server, memory_manager, embedder

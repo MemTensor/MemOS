@@ -140,8 +140,6 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                 metadata.setdefault("delete_record_id", "")
 
                 embedding = metadata.pop("embedding", None)
-                if embedding is None:
-                    raise ValueError(f"Missing 'embedding' in metadata for node {node_id}")
 
                 vector_sync_status = "success"
                 vec_items.append(

@@ -128,7 +128,7 @@ class MemoryHistoryManager:
             )
             new_item.metadata.history.append(archived)
             logger.info(
-                f"[MemoryHistoryManager] Archived related memory {r_item.id} as {update_type} for new item {new_item.id}"
+                f"[Chunker: MemoryHistoryManager] Archived related memory {r_item.id} as {update_type} for new item {new_item.id}"
             )
 
         # 3. Concat duplicate/conflict memories to new_item.memory
@@ -141,6 +141,7 @@ class MemoryHistoryManager:
         self,
         memory_items: list[TextualMemoryItem],
         status: Literal["activated", "resolving", "archived", "deleted"],
+        user_name: str | None = None,
     ) -> None:
         """
         Support status marking operations during history management. Common usages are:
@@ -157,6 +158,7 @@ class MemoryHistoryManager:
                         self.graph_db.update_node,
                         id=mem.id,
                         fields={"status": status},
+                        user_name=user_name,
                     )
                 )
 

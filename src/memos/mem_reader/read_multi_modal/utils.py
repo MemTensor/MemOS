@@ -341,13 +341,32 @@ def detect_lang(text):
         if not text or not isinstance(text, str):
             return "en"
         cleaned_text = text
-        # remove role and timestamp
+        # remove role and timestamp-like prefixes
         cleaned_text = re.sub(
             r"\b(user|assistant|query|answer)\s*:", "", cleaned_text, flags=re.IGNORECASE
         )
+        # timestamps like [11:32 AM on 04 March, 2026]
+        cleaned_text = re.sub(
+            r"\[\s*\d{1,2}:\d{2}\s*(?:AM|PM)\s+on\s+\d{2}\s+[A-Za-z]+\s*,\s*\d{4}\s*\]",
+            "",
+            cleaned_text,
+            flags=re.IGNORECASE,
+        )
+        # purely numeric timestamps like [2025-01-01 10:00]
         cleaned_text = re.sub(r"\[[\d\-:\s]+\]", "", cleaned_text)
         # remove URLs to prevent the dilution of Chinese characters
-        cleaned_text = re.sub(r'https?://[^\s<>"{}|\\^`\[\]]+',"", cleaned_text)
+        cleaned_text = re.sub(r'https?://[^\s<>"{}|\\^`\[\]]+', "", cleaned_text)
+        # remove MessageType schema keywords (multimodal JSON noise)
+        cleaned_text = re.sub(
+            r"\b(text|type|image_url|imageurl|url)\b", "", cleaned_text, flags=re.IGNORECASE
+        )
+        # remove schema keywords like text / type / image_url / url
+        cleaned_text = re.sub(
+            r"\b(text|type|image_url|imageurl|url|file|file_id)\b",
+            "",
+            cleaned_text,
+            flags=re.IGNORECASE,
+        )
         # extract chinese characters
         chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b740-\U0002b81f\U0002b820-\U0002ceaf\uf900-\ufaff]"
         chinese_chars = re.findall(chinese_pattern, cleaned_text)

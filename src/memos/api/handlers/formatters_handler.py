@@ -65,49 +65,14 @@ def format_memory_item(
     return memory
 
 
-def post_process_pref_mem(
-    memories_result: dict[str, Any],
-    pref_formatted_mem: list[dict[str, Any]],
-    mem_cube_id: str,
-    include_preference: bool,
-) -> dict[str, Any]:
-    """
-    Post-process preference memory results.
-
-    Adds formatted preference memories to the result dictionary and generates
-    instruction completion strings if preferences are included.
-
-    Args:
-        memories_result: Result dictionary to update
-        pref_formatted_mem: List of formatted preference memories
-        mem_cube_id: Memory cube ID
-        include_preference: Whether to include preferences in result
-
-    Returns:
-        Updated memories_result dictionary
-    """
-    if include_preference:
-        memories_result["pref_mem"].append(
-            {
-                "cube_id": mem_cube_id,
-                "memories": pref_formatted_mem,
-                "total_nodes": len(pref_formatted_mem),
-            }
-        )
-        pref_instruction, pref_note = instruct_completion(pref_formatted_mem)
-        memories_result["pref_string"] = pref_instruction
-        memories_result["pref_note"] = pref_note
-
-    return memories_result
-
-
 def post_process_textual_mem(
     memories_result: dict[str, Any],
     text_formatted_mem: list[dict[str, Any]],
     mem_cube_id: str,
 ) -> dict[str, Any]:
     """
-    Post-process text and tool memory results.
+    Post-process text, tool, skill and preference memory results.
+    Now automatically handles preference memories.
     """
     fact_mem = [
         mem
@@ -122,6 +87,11 @@ def post_process_textual_mem(
     ]
     skill_mem = [
         mem for mem in text_formatted_mem if mem["metadata"]["memory_type"] == "SkillMemory"
+    ]
+
+    # Extract preference memories
+    pref_mem = [
+        mem for mem in text_formatted_mem if mem["metadata"]["memory_type"] == "PreferenceMemory"
     ]
 
     memories_result["text_mem"].append(
@@ -145,6 +115,19 @@ def post_process_textual_mem(
             "total_nodes": len(skill_mem),
         }
     )
+
+    memories_result["pref_mem"].append(
+        {
+            "cube_id": mem_cube_id,
+            "memories": pref_mem,
+            "total_nodes": len(pref_mem),
+        }
+    )
+    if pref_mem:
+        pref_instruction, pref_note = instruct_completion(pref_mem)
+        memories_result["pref_string"] = pref_instruction
+        memories_result["pref_note"] = pref_note
+
     return memories_result
 
 

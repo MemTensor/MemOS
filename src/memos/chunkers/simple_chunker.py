@@ -25,9 +25,15 @@ class SimpleTextSplitter:
         if not protected_text or len(protected_text) <= chunk_size:
             chunks = [protected_text] if protected_text.strip() else []
             return [self.restore_urls(chunk, url_map) for chunk in chunks]
+        protected_text, url_map = self.protect_urls(text)
+
+        if not protected_text or len(protected_text) <= chunk_size:
+            chunks = [protected_text] if protected_text.strip() else []
+            return [self.restore_urls(chunk, url_map) for chunk in chunks]
 
         chunks = []
         start = 0
+        text_len = len(protected_text)
         text_len = len(protected_text)
 
         while start < text_len:
@@ -39,10 +45,12 @@ class SimpleTextSplitter:
                 # Try to break at newline, sentence end, or space
                 for separator in ["\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", " "]:
                     last_sep = protected_text.rfind(separator, start, end)
+                    last_sep = protected_text.rfind(separator, start, end)
                     if last_sep != -1:
                         end = last_sep + len(separator)
                         break
 
+            chunk = protected_text[start:end].strip()
             chunk = protected_text[start:end].strip()
             if chunk:
                 chunks.append(chunk)
