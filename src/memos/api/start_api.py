@@ -16,8 +16,11 @@ from memos.mem_user.user_manager import UserManager, UserRole
 
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+# Silence verbose INFO loggers that dump full embeddings/LLM responses
+for _noisy in ("httpx", "memos.utils", "memos.graph_dbs.neo4j", "memos.embedders", "memos.llms", "memos.mem_reader", "memos.mem_scheduler"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 # Load environment variables
 load_dotenv(override=True)

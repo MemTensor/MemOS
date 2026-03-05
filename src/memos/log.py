@@ -196,7 +196,7 @@ LOGGING_CONFIG = {
             "filters": ["package_tree_filter", "context_filter"],
         },
         "file": {
-            "level": "INFO",
+            "level": os.getenv("MEMOS_FILE_LOG_LEVEL", "WARNING"),
             "class": "concurrent_log_handler.ConcurrentTimedRotatingFileHandler",
             "when": "midnight",
             "interval": 1,

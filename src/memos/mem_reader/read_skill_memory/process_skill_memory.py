@@ -353,6 +353,8 @@ def _split_task_chunk_by_llm(llm: BaseLLM, messages: MessageList) -> dict[str, M
             skills_llm = os.getenv("SKILLS_LLM", None)
             llm_kwargs = {"model_name_or_path": skills_llm} if skills_llm else {}
             response_text = llm.generate(prompt, **llm_kwargs)
+            if not response_text:
+                raise ValueError("LLM returned empty/None response for skill chunking")
             response_json = json.loads(response_text.replace("```json", "").replace("```", ""))
             break
         except Exception as e:
@@ -1015,9 +1017,13 @@ def process_skill_memory_fine(
     rewrite_query: bool = True,
     oss_config: dict[str, Any] | None = None,
     skills_dir_config: dict[str, Any] | None = None,
+    # PATCH: skip skill processing for fast migration
+    _SKIP_SKILL = os.getenv("MEMOS_SKIP_SKILL_PROCESSING", "").lower() in ("1", "true", "yes"),
     complete_skill_memory: bool = True,
     **kwargs,
 ) -> list[TextualMemoryItem]:
+    if _SKIP_SKILL:
+        return []
     skills_repo_backend = _get_skill_file_storage_location()
     oss_client, _missing_keys, flag = _skill_init(
         skills_repo_backend, oss_config, skills_dir_config

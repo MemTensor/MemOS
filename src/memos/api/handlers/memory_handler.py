@@ -36,6 +36,62 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _get_text_mem_records(
+    text_mem: Any,
+    mem_cube_id: str,
+    user_id: str | None = None,
+    page: int | None = None,
+    page_size: int | None = None,
+    filter: dict[str, Any] | None = None,
+    memory_type: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """
+    Compatibility wrapper for text memory `get_all` across backends.
+
+    Tree_text memories return a dict payload with `nodes` and `total_nodes`,
+    while general_text memories currently return a list. We normalize both to
+    `(nodes, total_nodes)` to keep endpoint behavior stable.
+    """
+    memory_type = memory_type.copy() if memory_type is not None else None
+    try:
+        result = text_mem.get_all(
+            user_name=mem_cube_id,
+            user_id=user_id,
+            page=page,
+            page_size=page_size,
+            filter=filter,
+            memory_type=memory_type,
+        )
+    except TypeError:
+        # Fallbacks for different backend signatures
+        try:
+            result = text_mem.get_all(
+                user_name=mem_cube_id,
+                user_id=user_id,
+                page=page,
+                page_size=page_size,
+                filter=filter,
+            )
+        except TypeError:
+            try:
+                result = text_mem.get_all(user_name=mem_cube_id)
+            except TypeError:
+                result = text_mem.get_all()
+
+    if isinstance(result, dict):
+        nodes = result.get("nodes", [])
+        total_nodes = int(result.get("total_nodes", len(nodes) if isinstance(nodes, list) else 0))
+        return nodes if isinstance(nodes, list) else list(nodes or []), total_nodes
+
+    if isinstance(result, list):
+        return result, len(result)
+
+    logger.error(
+        f"Unsupported get_all return type from {type(text_mem)}: {type(result)}"
+    )
+    return [], 0
+
+
 def handle_get_all_memories(
     user_id: str,
     mem_cube_id: str,
@@ -60,11 +116,34 @@ def handle_get_all_memories(
         reformat_memory_list = []
 
         if memory_type == "text_mem":
-            # Get all text memories from the graph database
-            memories = naive_mem_cube.text_mem.get_all(user_name=mem_cube_id)
+            # Get all text memories from backend. Tree backends return graph dict,
+            # general_text returns paginated flat nodes.
+            try:
+                raw_memories = naive_mem_cube.text_mem.get_all(
+                    user_name=mem_cube_id,
+                    user_id=user_id,
+                    page=1,
+                    page_size=100,
+                )
+            except TypeError:
+                raw_memories = naive_mem_cube.text_mem.get_all(user_name=mem_cube_id)
 
-            # Format and convert to tree structure
-            memories_cleaned = remove_embedding_recursive(memories)
+            # general_text / flat mode
+            if isinstance(raw_memories, dict) and "nodes" in raw_memories and "edges" not in raw_memories:
+                reformat_memory_list.append(
+                    {
+                        "cube_id": mem_cube_id,
+                        "memories": [{"nodes": remove_embedding_recursive(raw_memories.get("nodes", []))}],
+                        "memory_statistics": {"total_nodes": int(raw_memories.get("total_nodes", 0))},
+                    }
+                )
+                return MemoryResponse(
+                    message="Memories retrieved successfully",
+                    data=reformat_memory_list,
+                )
+
+            # tree_text / graph mode
+            memories_cleaned = remove_embedding_recursive(raw_memories)
             custom_type_ratios = {
                 "WorkingMemory": 0.20,
                 "LongTermMemory": 0.40,
@@ -73,7 +152,6 @@ def handle_get_all_memories(
             tree_result, node_type_count = convert_graph_to_tree_forworkmem(
                 memories_cleaned, target_node_count=200, type_ratios=custom_type_ratios
             )
-            # Ensure all node IDs are unique in the tree structure
             tree_result = ensure_unique_tree_ids(tree_result)
             memories_filtered = filter_nodes_by_tree_ids(tree_result, memories_cleaned)
             children = tree_result["children"]
@@ -284,15 +362,15 @@ def handle_get_memories(
 ) -> GetMemoryResponse:
     results: dict[str, Any] = {"text_mem": [], "pref_mem": [], "tool_mem": [], "skill_mem": []}
     text_memory_type = ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
-    text_memories_info = naive_mem_cube.text_mem.get_all(
-        user_name=get_mem_req.mem_cube_id,
+    text_memories, total_text_nodes = _get_text_mem_records(
+        naive_mem_cube.text_mem,
+        get_mem_req.mem_cube_id,
         user_id=get_mem_req.user_id,
         page=get_mem_req.page,
         page_size=get_mem_req.page_size,
         filter=get_mem_req.filter,
         memory_type=text_memory_type,
     )
-    text_memories, total_text_nodes = text_memories_info["nodes"], text_memories_info["total_nodes"]
     results["text_mem"] = [
         {
             "cube_id": get_mem_req.mem_cube_id,
@@ -302,17 +380,14 @@ def handle_get_memories(
     ]
 
     if get_mem_req.include_tool_memory:
-        tool_memories_info = naive_mem_cube.text_mem.get_all(
-            user_name=get_mem_req.mem_cube_id,
+        tool_memories, total_tool_nodes = _get_text_mem_records(
+            naive_mem_cube.text_mem,
+            get_mem_req.mem_cube_id,
             user_id=get_mem_req.user_id,
             page=get_mem_req.page,
             page_size=get_mem_req.page_size,
             filter=get_mem_req.filter,
             memory_type=["ToolSchemaMemory", "ToolTrajectoryMemory"],
-        )
-        tool_memories, total_tool_nodes = (
-            tool_memories_info["nodes"],
-            tool_memories_info["total_nodes"],
         )
 
         results["tool_mem"] = [
@@ -323,17 +398,14 @@ def handle_get_memories(
             }
         ]
     if get_mem_req.include_skill_memory:
-        skill_memories_info = naive_mem_cube.text_mem.get_all(
-            user_name=get_mem_req.mem_cube_id,
+        skill_memories, total_skill_nodes = _get_text_mem_records(
+            naive_mem_cube.text_mem,
+            get_mem_req.mem_cube_id,
             user_id=get_mem_req.user_id,
             page=get_mem_req.page,
             page_size=get_mem_req.page_size,
             filter=get_mem_req.filter,
             memory_type=["SkillMemory"],
-        )
-        skill_memories, total_skill_nodes = (
-            skill_memories_info["nodes"],
-            skill_memories_info["total_nodes"],
         )
 
         results["skill_mem"] = [
@@ -471,15 +543,15 @@ def handle_get_memories_dashboard(
     total_preference_nodes = 0
 
     text_memory_type = ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
-    text_memories_info = naive_mem_cube.text_mem.get_all(
-        user_name=get_mem_req.mem_cube_id,
+    text_memories, total_text_nodes = _get_text_mem_records(
+        naive_mem_cube.text_mem,
+        get_mem_req.mem_cube_id,
         user_id=get_mem_req.user_id,
         page=get_mem_req.page,
         page_size=get_mem_req.page_size,
         filter=get_mem_req.filter,
         memory_type=text_memory_type,
     )
-    text_memories, total_text_nodes = text_memories_info["nodes"], text_memories_info["total_nodes"]
 
     # Group text memories by cube_id from metadata.user_name
     text_mem_by_cube: dict[str, list] = {}
@@ -503,17 +575,14 @@ def handle_get_memories_dashboard(
     ]
 
     if get_mem_req.include_tool_memory:
-        tool_memories_info = naive_mem_cube.text_mem.get_all(
-            user_name=get_mem_req.mem_cube_id,
+        tool_memories, total_tool_nodes = _get_text_mem_records(
+            naive_mem_cube.text_mem,
+            get_mem_req.mem_cube_id,
             user_id=get_mem_req.user_id,
             page=get_mem_req.page,
             page_size=get_mem_req.page_size,
             filter=get_mem_req.filter,
             memory_type=["ToolSchemaMemory", "ToolTrajectoryMemory"],
-        )
-        tool_memories, total_tool_nodes = (
-            tool_memories_info["nodes"],
-            tool_memories_info["total_nodes"],
         )
 
         # Group tool memories by cube_id from metadata.user_name
@@ -538,17 +607,14 @@ def handle_get_memories_dashboard(
         ]
 
     if get_mem_req.include_skill_memory:
-        skill_memories_info = naive_mem_cube.text_mem.get_all(
-            user_name=get_mem_req.mem_cube_id,
+        skill_memories, total_skill_nodes = _get_text_mem_records(
+            naive_mem_cube.text_mem,
+            get_mem_req.mem_cube_id,
             user_id=get_mem_req.user_id,
             page=get_mem_req.page,
             page_size=get_mem_req.page_size,
             filter=get_mem_req.filter,
             memory_type=["SkillMemory"],
-        )
-        skill_memories, total_skill_nodes = (
-            skill_memories_info["nodes"],
-            skill_memories_info["total_nodes"],
         )
 
         # Group skill memories by cube_id from metadata.user_name

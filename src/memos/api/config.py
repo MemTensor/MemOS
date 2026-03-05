@@ -437,6 +437,7 @@ class APIConfig:
                     "provider": os.getenv("MOS_EMBEDDER_PROVIDER", "openai"),
                     "api_key": os.getenv("MOS_EMBEDDER_API_KEY", "sk-xxxx"),
                     "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
+                    "embedding_dims": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
                     "headers_extra": json.loads(os.getenv("MOS_EMBEDDER_HEADERS_EXTRA", "{}")),
                     "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
                     "backup_client": os.getenv("MOS_EMBEDDER_BACKUP_CLIENT", "false").lower()
@@ -984,43 +985,71 @@ class APIConfig:
         graph_db_backend = os.getenv(
             "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
         ).lower()
-        if graph_db_backend in graph_db_backend_map:
+        text_mem_type = os.getenv("MOS_TEXT_MEM_TYPE", "tree_text").lower()
+
+        if text_mem_type == "general_text":
+            text_mem_cfg = {
+                "backend": "general_text",
+                "config": {
+                    "extractor_llm": {"backend": "openai", "config": openai_config},
+                    "vector_db": {
+                        "backend": "qdrant",
+                        "config": {
+                            "collection_name": os.getenv("MOS_GENERAL_TEXT_COLLECTION", "general_text_mem"),
+                            "vector_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
+                            "distance_metric": "cosine",
+                            "host": os.getenv("QDRANT_HOST", "localhost"),
+                            "port": int(os.getenv("QDRANT_PORT", "6333")),
+                            "path": os.getenv("QDRANT_PATH"),
+                            "url": os.getenv("QDRANT_URL"),
+                            "api_key": os.getenv("QDRANT_API_KEY"),
+                        },
+                    },
+                    "embedder": APIConfig.get_embedder_config(),
+                },
+            }
+        elif graph_db_backend in graph_db_backend_map:
+            text_mem_cfg = {
+                "backend": "tree_text",
+                "config": {
+                    "extractor_llm": {"backend": "openai", "config": openai_config},
+                    "dispatcher_llm": {"backend": "openai", "config": openai_config},
+                    "graph_db": {
+                        "backend": graph_db_backend,
+                        "config": graph_db_backend_map[graph_db_backend],
+                    },
+                    "embedder": APIConfig.get_embedder_config(),
+                    "internet_retriever": internet_config,
+                    "reranker": APIConfig.get_reranker_config(),
+                    "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
+                    == "true",
+                    "memory_size": {
+                        "WorkingMemory": int(os.getenv("NEBULAR_WORKING_MEMORY", 20)),
+                        "LongTermMemory": int(os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6)),
+                        "UserMemory": int(os.getenv("NEBULAR_USER_MEMORY", 1e6)),
+                    },
+                    "search_strategy": {
+                        "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
+                        "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
+                        "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                        "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
+                    },
+                    "include_embedding": bool(
+                        os.getenv("INCLUDE_EMBEDDING", "false") == "true"
+                    ),
+                },
+            }
+        else:
+            raise ValueError(f"Invalid graph db backend: {graph_db_backend}")
+
+        if text_mem_cfg:
             # Create MemCube config
 
             default_cube_config = GeneralMemCubeConfig.model_validate(
                 {
                     "user_id": user_id,
                     "cube_id": f"{user_name}_default_cube",
-                    "text_mem": {
-                        "backend": "tree_text",
-                        "config": {
-                            "extractor_llm": {"backend": "openai", "config": openai_config},
-                            "dispatcher_llm": {"backend": "openai", "config": openai_config},
-                            "graph_db": {
-                                "backend": graph_db_backend,
-                                "config": graph_db_backend_map[graph_db_backend],
-                            },
-                            "embedder": APIConfig.get_embedder_config(),
-                            "internet_retriever": internet_config,
-                            "reranker": APIConfig.get_reranker_config(),
-                            "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
-                            == "true",
-                            "memory_size": {
-                                "WorkingMemory": int(os.getenv("NEBULAR_WORKING_MEMORY", 20)),
-                                "LongTermMemory": int(os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6)),
-                                "UserMemory": int(os.getenv("NEBULAR_USER_MEMORY", 1e6)),
-                            },
-                            "search_strategy": {
-                                "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
-                                "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
-                                "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
-                                "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
-                            },
-                            "include_embedding": bool(
-                                os.getenv("INCLUDE_EMBEDDING", "false") == "true"
-                            ),
-                        },
-                    },
+                    "text_mem": text_mem_cfg,
                     "act_mem": {}
                     if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
                     else APIConfig.get_activation_vllm_config(),
@@ -1030,8 +1059,6 @@ class APIConfig:
                     else APIConfig.get_preference_memory_config(),
                 }
             )
-        else:
-            raise ValueError(f"Invalid Neo4j backend: {graph_db_backend}")
         default_mem_cube = GeneralMemCube(default_cube_config)
         return default_config, default_mem_cube
 
@@ -1069,42 +1096,70 @@ class APIConfig:
         graph_db_backend = os.getenv(
             "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
         ).lower()
-        if graph_db_backend in graph_db_backend_map:
+        text_mem_type = os.getenv("MOS_TEXT_MEM_TYPE", "tree_text").lower()
+
+        if text_mem_type == "general_text":
+            text_mem_cfg = {
+                "backend": "general_text",
+                "config": {
+                    "extractor_llm": {"backend": "openai", "config": openai_config},
+                    "vector_db": {
+                        "backend": "qdrant",
+                        "config": {
+                            "collection_name": os.getenv("MOS_GENERAL_TEXT_COLLECTION", "general_text_mem"),
+                            "vector_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
+                            "distance_metric": "cosine",
+                            "host": os.getenv("QDRANT_HOST", "localhost"),
+                            "port": int(os.getenv("QDRANT_PORT", "6333")),
+                            "path": os.getenv("QDRANT_PATH"),
+                            "url": os.getenv("QDRANT_URL"),
+                            "api_key": os.getenv("QDRANT_API_KEY"),
+                        },
+                    },
+                    "embedder": APIConfig.get_embedder_config(),
+                },
+            }
+        elif graph_db_backend in graph_db_backend_map:
+            text_mem_cfg = {
+                "backend": "tree_text",
+                "config": {
+                    "extractor_llm": {"backend": "openai", "config": openai_config},
+                    "dispatcher_llm": {"backend": "openai", "config": openai_config},
+                    "graph_db": {
+                        "backend": graph_db_backend,
+                        "config": graph_db_backend_map[graph_db_backend],
+                    },
+                    "embedder": APIConfig.get_embedder_config(),
+                    "reranker": APIConfig.get_reranker_config(),
+                    "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
+                    == "true",
+                    "internet_retriever": internet_config,
+                    "memory_size": {
+                        "WorkingMemory": int(os.getenv("NEBULAR_WORKING_MEMORY", 20)),
+                        "LongTermMemory": int(os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6)),
+                        "UserMemory": int(os.getenv("NEBULAR_USER_MEMORY", 1e6)),
+                    },
+                    "search_strategy": {
+                        "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
+                        "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
+                        "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                        "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
+                    },
+                    "mode": os.getenv("ASYNC_MODE", "sync"),
+                    "include_embedding": bool(
+                        os.getenv("INCLUDE_EMBEDDING", "false") == "true"
+                    ),
+                },
+            }
+        else:
+            raise ValueError(f"Invalid graph db backend: {graph_db_backend}")
+
+        if text_mem_cfg:
             return GeneralMemCubeConfig.model_validate(
                 {
                     "user_id": "default",
                     "cube_id": "default_cube",
-                    "text_mem": {
-                        "backend": "tree_text",
-                        "config": {
-                            "extractor_llm": {"backend": "openai", "config": openai_config},
-                            "dispatcher_llm": {"backend": "openai", "config": openai_config},
-                            "graph_db": {
-                                "backend": graph_db_backend,
-                                "config": graph_db_backend_map[graph_db_backend],
-                            },
-                            "embedder": APIConfig.get_embedder_config(),
-                            "reranker": APIConfig.get_reranker_config(),
-                            "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
-                            == "true",
-                            "internet_retriever": internet_config,
-                            "memory_size": {
-                                "WorkingMemory": int(os.getenv("NEBULAR_WORKING_MEMORY", 20)),
-                                "LongTermMemory": int(os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6)),
-                                "UserMemory": int(os.getenv("NEBULAR_USER_MEMORY", 1e6)),
-                            },
-                            "search_strategy": {
-                                "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
-                                "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
-                                "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
-                                "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
-                            },
-                            "mode": os.getenv("ASYNC_MODE", "sync"),
-                            "include_embedding": bool(
-                                os.getenv("INCLUDE_EMBEDDING", "false") == "true"
-                            ),
-                        },
-                    },
+                    "text_mem": text_mem_cfg,
                     "act_mem": {}
                     if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
                     else APIConfig.get_activation_vllm_config(),
@@ -1114,5 +1169,3 @@ class APIConfig:
                     else APIConfig.get_preference_memory_config(),
                 }
             )
-        else:
-            raise ValueError(f"Invalid Neo4j backend: {graph_db_backend}")

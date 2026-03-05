@@ -135,6 +135,13 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                 metadata = _prepare_node_metadata(metadata)
                 metadata = _flatten_info_fields(metadata)
 
+                # Sanitize: Neo4j Community can't store Map/dict values as properties
+                for k, v in list(metadata.items()):
+                    if isinstance(v, dict):
+                        metadata[k] = json.dumps(v)
+                    elif isinstance(v, list) and v and isinstance(v[0], dict):
+                        metadata[k] = [json.dumps(item) if isinstance(item, dict) else item for item in v]
+
                 # Initialize delete_time and delete_record_id fields
                 metadata.setdefault("delete_time", "")
                 metadata.setdefault("delete_record_id", "")

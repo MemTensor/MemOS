@@ -33,9 +33,11 @@ class AddHandler(BaseHandler):
             dependencies: HandlerDependencies instance
         """
         super().__init__(dependencies)
-        self._validate_dependencies(
-            "naive_mem_cube", "mem_reader", "mem_scheduler", "feedback_server"
-        )
+        required = ["naive_mem_cube", "mem_reader", "mem_scheduler"]
+        text_mem = getattr(getattr(dependencies, "naive_mem_cube", None), "text_mem", None)
+        if hasattr(text_mem, "get_searcher"):
+            required.append("feedback_server")
+        self._validate_dependencies(*required)
 
     def handle_add_memories(self, add_req: APIADDRequest) -> MemoryResponse:
         """

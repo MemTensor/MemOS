@@ -61,10 +61,14 @@ class UniversalAPIEmbedder(BaseEmbedder):
             try:
 
                 async def _create_embeddings():
-                    return self.client.embeddings.create(
-                        model=getattr(self.config, "model_name_or_path", "text-embedding-3-large"),
-                        input=texts,
-                    )
+                    kwargs = {
+                        "model": getattr(self.config, "model_name_or_path", "text-embedding-3-large"),
+                        "input": texts,
+                    }
+                    dims = getattr(self.config, "embedding_dims", None)
+                    if dims:
+                        kwargs["dimensions"] = int(dims)
+                    return self.client.embeddings.create(**kwargs)
 
                 init_time = time.time()
                 response = asyncio.run(
@@ -82,14 +86,18 @@ class UniversalAPIEmbedder(BaseEmbedder):
                     try:
 
                         async def _create_embeddings_backup():
-                            return self.backup_client.embeddings.create(
-                                model=getattr(
+                            kwargs = {
+                                "model": getattr(
                                     self.config,
                                     "backup_model_name_or_path",
                                     "text-embedding-3-large",
                                 ),
-                                input=texts,
-                            )
+                                "input": texts,
+                            }
+                            dims = getattr(self.config, "embedding_dims", None)
+                            if dims:
+                                kwargs["dimensions"] = int(dims)
+                            return self.backup_client.embeddings.create(**kwargs)
 
                         init_time = time.time()
                         response = asyncio.run(

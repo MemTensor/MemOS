@@ -306,10 +306,9 @@ class Searcher:
         )
 
         query = parsed_goal.rephrased_query or query
-        # if goal has extra memories, embed them too
-        if parsed_goal.memories:
-            embed_texts = list(dict.fromkeys([query, *parsed_goal.memories]))
-            query_embedding = self.embedder.embed(embed_texts)
+        # Always embed the query; include extra memories from parsed goal if present
+        embed_texts = list(dict.fromkeys([query, *(parsed_goal.memories or [])]))
+        query_embedding = self.embedder.embed(embed_texts)
         return parsed_goal, query_embedding, context, query
 
     @timed

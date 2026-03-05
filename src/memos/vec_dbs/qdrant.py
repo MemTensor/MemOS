@@ -172,13 +172,13 @@ class QdrantVecDB(BaseVecDB):
 
         return models.Filter(must=conditions)
 
-    def get_by_id(self, id: str) -> VecDBItem | None:
+    def get_by_id(self, id: str, include_vectors: bool = False) -> VecDBItem | None:
         """Get a single item by ID."""
         response = self.client.retrieve(
             collection_name=self.config.collection_name,
             ids=[id],
             with_payload=True,
-            with_vectors=True,
+            with_vectors=include_vectors,
         )
 
         if not response:
@@ -191,13 +191,13 @@ class QdrantVecDB(BaseVecDB):
             payload=point.payload,
         )
 
-    def get_by_ids(self, ids: list[str]) -> list[VecDBItem]:
+    def get_by_ids(self, ids: list[str], include_vectors: bool = False) -> list[VecDBItem]:
         """Get multiple items by their IDs."""
         response = self.client.retrieve(
             collection_name=self.config.collection_name,
             ids=ids,
             with_payload=True,
-            with_vectors=True,
+            with_vectors=include_vectors,
         )
 
         if not response:
@@ -212,29 +212,87 @@ class QdrantVecDB(BaseVecDB):
             for point in response
         ]
 
-    def get_by_filter(self, filter: dict[str, Any], scroll_limit: int = 100) -> list[VecDBItem]:
+    def get_by_filter(
+        self,
+        filter: dict[str, Any],
+        scroll_limit: int = 100,
+        page: int | None = None,
+        page_size: int | None = None,
+        include_vectors: bool = False,
+    ) -> list[VecDBItem]:
         """
-        Retrieve all items that match the given filter criteria.
+        Retrieve items matching filter criteria, with optional pagination.
 
         Args:
             filter: Payload filters to match against stored items
             scroll_limit: Maximum number of items to retrieve per scroll request
+            page: 1-based page index for paginated retrieval
+            page_size: Number of items per page when page is provided
+            include_vectors: Whether to include vectors in response payload
 
         Returns:
-            List of items including vectors and payload that match the filter
+            List of items including payload (and vectors optionally)
         """
         qdrant_filter = self._dict_to_filter(filter) if filter else None
+
+        # Paginated retrieval path: avoid loading full collection.
+        if page is not None and page_size is not None:
+            page = max(1, int(page))
+            page_size = max(1, int(page_size))
+            start = (page - 1) * page_size
+            end = start + page_size
+
+            selected_points = []
+            seen = 0
+            offset = None
+
+            while len(selected_points) < page_size:
+                points, offset = self.client.scroll(
+                    collection_name=self.config.collection_name,
+                    limit=max(1, min(int(scroll_limit), 1000)),
+                    scroll_filter=qdrant_filter,
+                    offset=offset,
+                    with_vectors=include_vectors,
+                    with_payload=True,
+                )
+
+                if not points:
+                    break
+
+                next_seen = seen + len(points)
+                if next_seen > start:
+                    slice_start = max(0, start - seen)
+                    slice_end = min(len(points), end - seen)
+                    if slice_start < slice_end:
+                        selected_points.extend(points[slice_start:slice_end])
+
+                seen = next_seen
+
+                if offset is None or seen >= end:
+                    break
+
+            logger.info(
+                f"Qdrant retrieve by filter completed with {len(selected_points)} results (page={page}, page_size={page_size})."
+            )
+            return [
+                VecDBItem(
+                    id=point.id,
+                    vector=point.vector,
+                    payload=point.payload,
+                )
+                for point in selected_points
+            ]
+
+        # Legacy full-scan path.
         all_points = []
         offset = None
-
-        # Use scroll to paginate through all matching points
         while True:
             points, offset = self.client.scroll(
                 collection_name=self.config.collection_name,
-                limit=scroll_limit,
+                limit=max(1, min(int(scroll_limit), 1000)),
                 scroll_filter=qdrant_filter,
                 offset=offset,
-                with_vectors=True,
+                with_vectors=include_vectors,
                 with_payload=True,
             )
 
@@ -243,7 +301,6 @@ class QdrantVecDB(BaseVecDB):
 
             all_points.extend(points)
 
-            # Update offset for next iteration
             if offset is None:
                 break
 
@@ -257,9 +314,9 @@ class QdrantVecDB(BaseVecDB):
             for point in all_points
         ]
 
-    def get_all(self, scroll_limit=100) -> list[VecDBItem]:
+    def get_all(self, scroll_limit=100, include_vectors: bool = False) -> list[VecDBItem]:
         """Retrieve all items in the vector database."""
-        return self.get_by_filter({}, scroll_limit=scroll_limit)
+        return self.get_by_filter({}, scroll_limit=scroll_limit, include_vectors=include_vectors)
 
     def count(self, filter: dict[str, Any] | None = None) -> int:
         """Count items in the database, optionally with filter."""

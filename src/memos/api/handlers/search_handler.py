@@ -40,9 +40,11 @@ class SearchHandler(BaseHandler):
             dependencies: HandlerDependencies instance
         """
         super().__init__(dependencies)
-        self._validate_dependencies(
-            "naive_mem_cube", "mem_scheduler", "searcher", "deepsearch_agent"
-        )
+        required = ["naive_mem_cube", "mem_scheduler", "deepsearch_agent"]
+        text_mem = getattr(getattr(dependencies, "naive_mem_cube", None), "text_mem", None)
+        if hasattr(text_mem, "get_searcher"):
+            required.append("searcher")
+        self._validate_dependencies(*required)
 
     def handle_search_memories(self, search_req: APISearchRequest) -> SearchResponse:
         """
@@ -75,12 +77,18 @@ class SearchHandler(BaseHandler):
         results = self._apply_relativity_threshold(results, search_req_local.relativity)
 
         if search_req_local.dedup == "sim":
-            results = self._dedup_text_memories(results, search_req.top_k)
-            self._strip_embeddings(results)
+            if getattr(self, "searcher", None) is None:
+                self.logger.warning("[SearchHandler] dedup=sim requested but searcher is None; skipping dedup")
+            else:
+                results = self._dedup_text_memories(results, search_req.top_k)
+                self._strip_embeddings(results)
         elif search_req_local.dedup == "mmr":
-            pref_top_k = getattr(search_req_local, "pref_top_k", 6)
-            results = self._mmr_dedup_text_memories(results, search_req.top_k, pref_top_k)
-            self._strip_embeddings(results)
+            if getattr(self, "searcher", None) is None:
+                self.logger.warning("[SearchHandler] dedup=mmr requested but searcher is None; skipping dedup")
+            else:
+                pref_top_k = getattr(search_req_local, "pref_top_k", 6)
+                results = self._mmr_dedup_text_memories(results, search_req.top_k, pref_top_k)
+                self._strip_embeddings(results)
 
         text_mem = results["text_mem"]
         results["text_mem"] = rerank_knowledge_mem(

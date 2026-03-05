@@ -155,7 +155,7 @@ def separate_knowledge_and_conversation_mem(memories: list[dict[str, Any]]):
     knowledge_mem = []
     conversation_mem = []
     for item in memories:
-        sources = item.get("metadata", {}).get("sources", [])
+        sources = item.get("metadata", {}).get("sources") or []
         if (
             item["metadata"]["memory_type"] != "RawFileMemory"
             and len(sources) > 0
