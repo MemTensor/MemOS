@@ -292,7 +292,7 @@ class TestHookableDecorator:
             async def do_work(self, request):
                 return "async_result"
 
-        result = asyncio.get_event_loop().run_until_complete(FakeHandler().do_work("req"))
+        result = asyncio.run(FakeHandler().do_work("req"))
 
         assert result == "async_result"
         assert events == ["before", "after"]
