@@ -1777,7 +1777,6 @@ class PolarDBGraphDB(BaseGraphDB):
                 )
         where_clause_cte = f"WHERE {' AND '.join(where_with_q)}" if where_with_q else ""
         query = f"""
-            /*+ Set(max_parallel_workers_per_gather 0) */
             WITH q AS (SELECT to_tsquery('{tsquery_config}', %s) AS fq)
             SELECT {select_cols}
             FROM "{self.db_name}_graph"."Memory" m
