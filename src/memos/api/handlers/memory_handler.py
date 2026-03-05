@@ -116,14 +116,34 @@ def handle_get_all_memories(
         reformat_memory_list = []
 
         if memory_type == "text_mem":
-            # Get all text memories from the graph database
-            memories, _ = _get_text_mem_records(
-                naive_mem_cube.text_mem,
-                mem_cube_id,
-            )
+            # Get all text memories from backend. Tree backends return graph dict,
+            # general_text returns paginated flat nodes.
+            try:
+                raw_memories = naive_mem_cube.text_mem.get_all(
+                    user_name=mem_cube_id,
+                    user_id=user_id,
+                    page=1,
+                    page_size=100,
+                )
+            except TypeError:
+                raw_memories = naive_mem_cube.text_mem.get_all(user_name=mem_cube_id)
 
-            # Format and convert to tree structure
-            memories_cleaned = remove_embedding_recursive(memories)
+            # general_text / flat mode
+            if isinstance(raw_memories, dict) and "nodes" in raw_memories and "edges" not in raw_memories:
+                reformat_memory_list.append(
+                    {
+                        "cube_id": mem_cube_id,
+                        "memories": [{"nodes": remove_embedding_recursive(raw_memories.get("nodes", []))}],
+                        "memory_statistics": {"total_nodes": int(raw_memories.get("total_nodes", 0))},
+                    }
+                )
+                return MemoryResponse(
+                    message="Memories retrieved successfully",
+                    data=reformat_memory_list,
+                )
+
+            # tree_text / graph mode
+            memories_cleaned = remove_embedding_recursive(raw_memories)
             custom_type_ratios = {
                 "WorkingMemory": 0.20,
                 "LongTermMemory": 0.40,
@@ -132,7 +152,6 @@ def handle_get_all_memories(
             tree_result, node_type_count = convert_graph_to_tree_forworkmem(
                 memories_cleaned, target_node_count=200, type_ratios=custom_type_ratios
             )
-            # Ensure all node IDs are unique in the tree structure
             tree_result = ensure_unique_tree_ids(tree_result)
             memories_filtered = filter_nodes_by_tree_ids(tree_result, memories_cleaned)
             children = tree_result["children"]
