@@ -33,7 +33,6 @@ class MarkdownChunker(BaseChunker):
 
         self.config = config
         self.auto_fix_headers = auto_fix_headers
-        self.auto_fix_headers = auto_fix_headers
         self.chunker = MarkdownHeaderTextSplitter(
             headers_to_split_on=config.headers_to_split_on
             if config
@@ -55,9 +54,9 @@ class MarkdownChunker(BaseChunker):
         protected_text, url_map = self.protect_urls(text)
         # Auto-detect and fix malformed header hierarchy if enabled
         if self.auto_fix_headers and self._detect_malformed_headers(protected_text):
-            logger.info("detected malformed header hierarchy, attempting to fix...")
+            logger.info("[Chunker:] detected malformed header hierarchy, attempting to fix...")
             protected_text = self._fix_header_hierarchy(protected_text)
-            logger.info("Header hierarchy fix completed")
+            logger.info("[Chunker:] Header hierarchy fix completed")
 
         md_header_splits = self.chunker.split_text(protected_text)
         chunks = []
@@ -67,12 +66,9 @@ class MarkdownChunker(BaseChunker):
             try:
                 chunk = " ".join(list(doc.metadata.values())) + "\n" + doc.page_content
                 chunk = self.restore_urls(chunk, url_map)
-                chunk = self.restore_urls(chunk, url_map)
                 chunks.append(chunk)
             except Exception as e:
                 logger.warning(f"warning chunking document: {e}")
-                restored_chunk = self.restore_urls(doc.page_content, url_map)
-                chunks.append(restored_chunk)
                 restored_chunk = self.restore_urls(doc.page_content, url_map)
                 chunks.append(restored_chunk)
         logger.info(f"Generated chunks: {chunks[:5]}")
@@ -159,4 +155,5 @@ class MarkdownChunker(BaseChunker):
 
         # Join with newlines to preserve original formatting
         fixed_text = "\n".join(fixed_lines)
+        logger.info(f"[Chunker:] Header hierarchy fix completed: {fixed_text[:50]}...")
         return fixed_text
