@@ -150,24 +150,28 @@ class GraphStructureReorganizer:
     )
     def _run_structure_organizer_loop(self):
         """
-        Use schedule library to periodically trigger structure optimization.
-        This runs until the stop flag is set.
+        Periodically trigger structure optimization.
+        Runs on new-node events AND every ~5 minutes to mop up orphans.
         """
-        import schedule
+        logger.info("Structure optimizer loop started.")
+        last_periodic_run = 0
+        periodic_interval = 300  # 5 minutes
 
-        schedule.every(100).seconds.do(self.optimize_structure, scope="LongTermMemory")
-        schedule.every(100).seconds.do(self.optimize_structure, scope="UserMemory")
-
-        logger.info("Structure optimizer schedule started.")
         while not getattr(self, "_stop_scheduler", False):
             if any(self._is_optimizing.values()):
                 time.sleep(1)
                 continue
-            if self._reorganize_needed:
-                logger.info("[Reorganizer] Triggering optimize_structure due to new nodes.")
+
+            now = time.time()
+            should_run = self._reorganize_needed or (now - last_periodic_run >= periodic_interval)
+
+            if should_run:
+                reason = "new nodes" if self._reorganize_needed else "periodic"
+                logger.info(f"[Reorganizer] Triggering optimize_structure ({reason}).")
                 self.optimize_structure(scope="LongTermMemory")
                 self.optimize_structure(scope="UserMemory")
                 self._reorganize_needed = False
+                last_periodic_run = now
             time.sleep(30)
 
     def stop(self):
@@ -212,8 +216,8 @@ class GraphStructureReorganizer:
         self,
         scope: str = "LongTermMemory",
         local_tree_threshold: int = 10,
-        min_cluster_size: int = 4,
-        min_group_size: int = 20,
+        min_cluster_size: int = 2,
+        min_group_size: int = 3,
         max_duration_sec: int = 600,
         user_name: str | None = None,
     ):
@@ -456,7 +460,7 @@ class GraphStructureReorganizer:
         install_command="pip install scikit-learn",
         install_link="https://scikit-learn.org/stable/install.html",
     )
-    def _partition(self, nodes, min_cluster_size: int = 10, max_cluster_size: int = 20):
+    def _partition(self, nodes, min_cluster_size: int = 2, max_cluster_size: int = 20):
         """
         Partition nodes by:
         - If total nodes <= max_cluster_size -> return all nodes in one cluster.

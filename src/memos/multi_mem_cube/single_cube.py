@@ -849,12 +849,12 @@ class SingleCubeView(MemCubeView):
         target_session_id = add_req.session_id or "default_session"
 
         # Decide extraction mode:
-        # - async: always fast (ignore add_req.mode)
-        # - sync: use add_req.mode == "fast" to switch to fast pipeline, otherwise fine
+        # - Patched: always use "fine" to ensure embeddings are generated
+        # - Original fast mode skips embedding generation, breaking Qdrant persistence
         if sync_mode == "async":
-            extract_mode = "fast"
+            extract_mode = "fine"
         else:  # sync
-            extract_mode = "fast" if add_req.mode == "fast" else "fine"
+            extract_mode = "fine" if add_req.mode != "fast" else "fine"
 
         self.logger.info(
             "[SingleCubeView] cube=%s Processing text memory "

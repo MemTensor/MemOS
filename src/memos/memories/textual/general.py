@@ -78,11 +78,18 @@ class GeneralTextMemory(BaseTextMemory):
 
         return extracted_memories
 
-    def add(self, memories: list[TextualMemoryItem | dict[str, Any]]) -> None:
+    def add(
+        self, memories: list[TextualMemoryItem | dict[str, Any]], user_name: str | None = None, **kwargs
+    ) -> list[str]:
         """Add memories.
 
         Args:
             memories: List of TextualMemoryItem objects or dictionaries to add.
+            user_name: Optional user scope (ignored for general_text; kept for API compatibility).
+            **kwargs: Extra args for compatibility with tree_text callers.
+
+        Returns:
+            List of added memory IDs.
         """
         memory_items = [TextualMemoryItem(**m) if isinstance(m, dict) else m for m in memories]
 
@@ -102,6 +109,7 @@ class GeneralTextMemory(BaseTextMemory):
 
         # Add to vector db
         self.vector_db.add(vec_db_items)
+        return [item.id for item in memory_items]
 
     def update(self, memory_id: str, new_memory: TextualMemoryItem | dict[str, Any]) -> None:
         """Update a memory by memory_id."""
@@ -215,6 +223,13 @@ class GeneralTextMemory(BaseTextMemory):
         self,
     ) -> None:
         pass
+
+    def add_rawfile_nodes_n_edges(self, *args, **kwargs) -> None:
+        """Compatibility no-op for tree_text API.
+
+        general_text backend does not maintain graph nodes/edges for raw files.
+        """
+        return None
 
     def _embed_one_sentence(self, sentence: str) -> list[float]:
         """Embed a single sentence."""

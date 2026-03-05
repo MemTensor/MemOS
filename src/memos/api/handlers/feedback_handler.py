@@ -28,7 +28,11 @@ class FeedbackHandler(BaseHandler):
             dependencies: HandlerDependencies instance
         """
         super().__init__(dependencies)
-        self._validate_dependencies("mem_reader", "mem_scheduler", "searcher", "reranker")
+        required = ["mem_reader", "mem_scheduler", "reranker"]
+        text_mem = getattr(getattr(dependencies, "naive_mem_cube", None), "text_mem", None)
+        if hasattr(text_mem, "get_searcher"):
+            required.append("searcher")
+        self._validate_dependencies(*required)
 
     def handle_feedback_memories(self, feedback_req: APIFeedbackRequest) -> MemoryResponse:
         """

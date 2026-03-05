@@ -107,7 +107,7 @@ def load_default_config(user_id="default_user"):
     # Extract mandatory or special params
     openai_api_key = kwargs.pop("openai_api_key", os.getenv("OPENAI_API_KEY"))
     openai_api_base = kwargs.pop("openai_api_base", "https://api.openai.com/v1")
-    text_mem_type = kwargs.pop("text_mem_type", "tree_text")
+    text_mem_type = kwargs.pop("text_mem_type", "general_text")
 
     # Ensure embedder_model has a default value if not set
     if "embedder_model" not in kwargs:

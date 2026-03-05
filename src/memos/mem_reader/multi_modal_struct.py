@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import os
 import re
 import traceback
 
@@ -892,6 +893,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         """
         Process tool trajectory memory items through LLM to generate fine mode memories.
         """
+        if os.getenv("MOS_ENABLE_TOOL_TRAJECTORY_MEMORY", "false").lower() != "true":
+            return []
+
         if not fast_memory_items:
             return []
 
@@ -1000,23 +1004,25 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 future_tool = executor.submit(
                     self._process_tool_trajectory_fine, fast_memory_items, info, **kwargs
                 )
-                future_skill = executor.submit(
-                    process_skill_memory_fine,
-                    fast_memory_items=fast_memory_items,
-                    info=info,
-                    searcher=self.searcher,
-                    graph_db=self.graph_db,
-                    llm=self.llm,
-                    embedder=self.embedder,
-                    oss_config=self.oss_config,
-                    skills_dir_config=self.skills_dir_config,
-                    **kwargs,
-                )
+                future_skill = None
+                if os.getenv("MOS_ENABLE_SKILL_MEMORY", "false").lower() == "true":
+                    future_skill = executor.submit(
+                        process_skill_memory_fine,
+                        fast_memory_items=fast_memory_items,
+                        info=info,
+                        searcher=self.searcher,
+                        graph_db=self.graph_db,
+                        llm=self.llm,
+                        embedder=self.embedder,
+                        oss_config=self.oss_config,
+                        skills_dir_config=self.skills_dir_config,
+                        **kwargs,
+                    )
 
                 # Collect results
                 fine_memory_items_string_parser = future_string.result()
                 fine_memory_items_tool_trajectory_parser = future_tool.result()
-                fine_memory_items_skill_memory_parser = future_skill.result()
+                fine_memory_items_skill_memory_parser = future_skill.result() if future_skill else []
 
             fine_memory_items.extend(fine_memory_items_string_parser)
             fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
@@ -1067,23 +1073,25 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             future_tool = executor.submit(
                 self._process_tool_trajectory_fine, raw_nodes, info, **kwargs
             )
-            future_skill = executor.submit(
-                process_skill_memory_fine,
-                raw_nodes,
-                info,
-                searcher=self.searcher,
-                llm=self.llm,
-                embedder=self.embedder,
-                graph_db=self.graph_db,
-                oss_config=self.oss_config,
-                skills_dir_config=self.skills_dir_config,
-                **kwargs,
-            )
+            future_skill = None
+            if os.getenv("MOS_ENABLE_SKILL_MEMORY", "false").lower() == "true":
+                future_skill = executor.submit(
+                    process_skill_memory_fine,
+                    raw_nodes,
+                    info,
+                    searcher=self.searcher,
+                    llm=self.llm,
+                    embedder=self.embedder,
+                    graph_db=self.graph_db,
+                    oss_config=self.oss_config,
+                    skills_dir_config=self.skills_dir_config,
+                    **kwargs,
+                )
 
             # Collect results
             fine_memory_items_string_parser = future_string.result()
             fine_memory_items_tool_trajectory_parser = future_tool.result()
-            fine_memory_items_skill_memory_parser = future_skill.result()
+            fine_memory_items_skill_memory_parser = future_skill.result() if future_skill else []
         fine_memory_items.extend(fine_memory_items_string_parser)
         fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
         fine_memory_items.extend(fine_memory_items_skill_memory_parser)

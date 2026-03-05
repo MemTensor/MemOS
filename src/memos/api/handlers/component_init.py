@@ -41,6 +41,7 @@ from memos.memories.textual.prefer_text_memory.factory import (
     ExtractorFactory,
     RetrieverFactory,
 )
+from memos.memories.textual.general import GeneralTextMemory
 from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.history_manager import MemoryHistoryManager
@@ -63,6 +64,28 @@ if TYPE_CHECKING:
     from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
     from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 logger = get_logger(__name__)
+
+
+class _NullGraphDB:
+    """No-op graph DB for general_text-only deployments."""
+
+    def get_user_names_by_memory_ids(self, memory_ids):
+        return {}
+
+    def exist_user_name(self, user_name):
+        return False
+
+    def delete_node_by_mem_cube_id(self, mem_cube_id, delete_record_id=None, hard_delete=False):
+        return None
+
+    def recover_memory_by_mem_cube_id(self, mem_cube_id, delete_record_id=None):
+        return None
+
+    def search_by_embedding(self, *args, **kwargs):
+        return []
+
+    def get_node_by_id(self, *args, **kwargs):
+        return None
 
 
 def _get_default_memory_size(cube_config: Any) -> dict[str, int]:
@@ -160,7 +183,8 @@ def init_server() -> dict[str, Any]:
     dingding_enabled = APIConfig.is_dingding_bot_enabled()
 
     # Build component configurations
-    graph_db_config = build_graph_db_config()
+    text_mem_type = os.getenv("MOS_TEXT_MEM_TYPE", "tree_text").lower()
+    graph_db_config = build_graph_db_config() if text_mem_type != "general_text" else None
     llm_config = build_llm_config()
     chat_llm_config = build_chat_llm_config()
     embedder_config = build_embedder_config()
@@ -177,7 +201,7 @@ def init_server() -> dict[str, Any]:
     logger.debug("Component configurations built successfully")
 
     # Create component instances
-    graph_db = GraphStoreFactory.from_config(graph_db_config)
+    graph_db = GraphStoreFactory.from_config(graph_db_config) if graph_db_config else _NullGraphDB()
     vector_db = (
         VecDBFactory.from_config(vector_db_config)
         if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
@@ -191,7 +215,11 @@ def init_server() -> dict[str, Any]:
     )
     embedder = EmbedderFactory.from_config(embedder_config)
     nli_client = NLIClient(base_url=nli_client_config["base_url"])
-    memory_history_manager = MemoryHistoryManager(nli_client=nli_client, graph_db=graph_db)
+    memory_history_manager = (
+        MemoryHistoryManager(nli_client=nli_client, graph_db=graph_db)
+        if text_mem_type != "general_text"
+        else None
+    )
     # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
     mem_reader = MemReaderFactory.from_config(mem_reader_config, graph_db=graph_db)
     reranker = RerankerFactory.from_config(reranker_config)
@@ -204,32 +232,38 @@ def init_server() -> dict[str, Any]:
 
     logger.debug("Core components instantiated")
 
-    # Initialize memory manager
-    memory_manager = MemoryManager(
-        graph_db,
-        embedder,
-        llm,
-        memory_size=_get_default_memory_size(default_cube_config),
-        is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
-    )
+    text_mem_backend = getattr(default_cube_config.text_mem, "backend", "tree_text")
+    memory_manager = None
 
-    logger.debug("Memory manager initialized")
-    tokenizer = FastTokenizer()
-    # Initialize text memory
-    text_mem = SimpleTreeTextMemory(
-        llm=llm,
-        embedder=embedder,
-        mem_reader=mem_reader,
-        graph_db=graph_db,
-        reranker=reranker,
-        memory_manager=memory_manager,
-        config=default_cube_config.text_mem.config,
-        internet_retriever=internet_retriever,
-        tokenizer=tokenizer,
-        include_embedding=bool(os.getenv("INCLUDE_EMBEDDING", "false") == "true"),
-    )
+    if text_mem_backend == "general_text":
+        text_mem = GeneralTextMemory(config=default_cube_config.text_mem.config)
+        logger.debug("Text memory initialized: general_text")
+    else:
+        # Initialize memory manager for tree_text backend
+        memory_manager = MemoryManager(
+            graph_db,
+            embedder,
+            llm,
+            memory_size=_get_default_memory_size(default_cube_config),
+            is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
+        )
 
-    logger.debug("Text memory initialized")
+        logger.debug("Memory manager initialized")
+        tokenizer = FastTokenizer()
+        text_mem = SimpleTreeTextMemory(
+            llm=llm,
+            embedder=embedder,
+            mem_reader=mem_reader,
+            graph_db=graph_db,
+            reranker=reranker,
+            memory_manager=memory_manager,
+            config=default_cube_config.text_mem.config,
+            internet_retriever=internet_retriever,
+            tokenizer=tokenizer,
+            include_embedding=bool(os.getenv("INCLUDE_EMBEDDING", "false") == "true"),
+        )
+
+        logger.debug("Text memory initialized: tree_text")
 
     # Initialize preference memory components
     pref_extractor = (
@@ -305,28 +339,33 @@ def init_server() -> dict[str, Any]:
 
     logger.debug("MemCube created")
 
-    tree_mem: TreeTextMemory = naive_mem_cube.text_mem
-    searcher: Searcher = tree_mem.get_searcher(
-        manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
-        moscube=False,
-        process_llm=mem_reader.llm,
-    )
-    logger.debug("Searcher created")
+    tree_mem = naive_mem_cube.text_mem
+    searcher = None
+    feedback_server = None
+
+    if hasattr(tree_mem, "get_searcher"):
+        searcher = tree_mem.get_searcher(
+            manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
+            moscube=False,
+            process_llm=mem_reader.llm,
+        )
+        logger.debug("Searcher created")
 
     # Set searcher to mem_reader
     mem_reader.set_searcher(searcher)
 
-    # Initialize feedback server
-    feedback_server = SimpleMemFeedback(
-        llm=llm,
-        embedder=embedder,
-        graph_store=graph_db,
-        memory_manager=memory_manager,
-        mem_reader=mem_reader,
-        searcher=searcher,
-        reranker=feedback_reranker,
-        pref_mem=pref_mem,
-    )
+    # Initialize feedback server for tree_text backend only
+    if memory_manager is not None and searcher is not None:
+        feedback_server = SimpleMemFeedback(
+            llm=llm,
+            embedder=embedder,
+            graph_store=graph_db,
+            memory_manager=memory_manager,
+            mem_reader=mem_reader,
+            searcher=searcher,
+            reranker=feedback_reranker,
+            pref_mem=pref_mem,
+        )
 
     # Initialize Scheduler
     scheduler_config_dict = APIConfig.get_scheduler_config()

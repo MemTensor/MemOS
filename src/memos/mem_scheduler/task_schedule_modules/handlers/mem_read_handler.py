@@ -80,7 +80,10 @@ class MemReadMessageHandler(BaseSchedulerHandler):
 
             text_mem = mem_cube.text_mem
             if not isinstance(text_mem, TreeTextMemory):
-                logger.error("Expected TreeTextMemory but got %s", type(text_mem).__name__)
+                logger.info(
+                    "Skipping mem_read task for non-tree backend: %s",
+                    type(text_mem).__name__,
+                )
                 return
 
             self._process_memories_with_reader(

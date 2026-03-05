@@ -28,6 +28,7 @@ from memos.memories.textual.prefer_text_memory.factory import (
     ExtractorFactory,
     RetrieverFactory,
 )
+from memos.memories.textual.general import GeneralTextMemory
 from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
@@ -318,32 +319,39 @@ def init_components() -> dict[str, Any]:
     # Initialize chat llms
     logger.debug("Core components instantiated")
 
-    # Initialize memory manager
-    memory_manager = MemoryManager(
-        graph_db,
-        embedder,
-        llm,
-        memory_size=_get_default_memory_size(default_cube_config),
-        is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
-    )
+    text_mem_backend = getattr(default_cube_config.text_mem, "backend", "tree_text")
+    memory_manager = None
 
-    logger.debug("Memory manager initialized")
+    if text_mem_backend == "general_text":
+        text_mem = GeneralTextMemory(config=default_cube_config.text_mem.config)
+        logger.debug("Text memory initialized: general_text")
+    else:
+        # Initialize memory manager
+        memory_manager = MemoryManager(
+            graph_db,
+            embedder,
+            llm,
+            memory_size=_get_default_memory_size(default_cube_config),
+            is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
+        )
 
-    tokenizer = FastTokenizer()
-    # Initialize text memory
-    text_mem = SimpleTreeTextMemory(
-        llm=llm,
-        embedder=embedder,
-        mem_reader=mem_reader,
-        graph_db=graph_db,
-        reranker=reranker,
-        memory_manager=memory_manager,
-        config=default_cube_config.text_mem.config,
-        internet_retriever=internet_retriever,
-        tokenizer=tokenizer,
-    )
+        logger.debug("Memory manager initialized")
 
-    logger.debug("Text memory initialized")
+        tokenizer = FastTokenizer()
+        # Initialize text memory
+        text_mem = SimpleTreeTextMemory(
+            llm=llm,
+            embedder=embedder,
+            mem_reader=mem_reader,
+            graph_db=graph_db,
+            reranker=reranker,
+            memory_manager=memory_manager,
+            config=default_cube_config.text_mem.config,
+            internet_retriever=internet_retriever,
+            tokenizer=tokenizer,
+        )
+
+        logger.debug("Text memory initialized: tree_text")
 
     # Initialize preference memory components
     pref_extractor = (
@@ -406,22 +414,33 @@ def init_components() -> dict[str, Any]:
         para_mem=None,
     )
 
-    tree_mem: SimpleTreeTextMemory = naive_mem_cube.text_mem
-    searcher: Searcher = tree_mem.get_searcher(
-        manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
-        moscube=False,
-        process_llm=mem_reader.llm,
-    )
-    # Initialize feedback server
-    feedback_server = SimpleMemFeedback(
-        llm=llm,
-        embedder=embedder,
-        graph_store=graph_db,
-        memory_manager=memory_manager,
-        mem_reader=mem_reader,
-        searcher=searcher,
-        reranker=feedback_reranker,
-        pref_mem=pref_mem,
-    )
+    tree_mem = naive_mem_cube.text_mem
+    searcher = None
+    if hasattr(tree_mem, "get_searcher"):
+        searcher = tree_mem.get_searcher(
+            manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
+            moscube=False,
+            process_llm=mem_reader.llm,
+        )
+
+    # Initialize feedback server for tree_text backend only
+    feedback_server = None
+    if memory_manager is not None and searcher is not None:
+        feedback_server = SimpleMemFeedback(
+            llm=llm,
+            embedder=embedder,
+            graph_store=graph_db,
+            memory_manager=memory_manager,
+            mem_reader=mem_reader,
+            searcher=searcher,
+            reranker=feedback_reranker,
+            pref_mem=pref_mem,
+        )
     # Return all components as a dictionary for easy access and extension
-    return {"naive_mem_cube": naive_mem_cube, "feedback_server": feedback_server}
+    return {
+        "naive_mem_cube": naive_mem_cube,
+        "feedback_server": feedback_server,
+        "searcher": searcher,
+        "memory_manager": memory_manager,
+        "text_mem_backend": text_mem_backend,
+    }

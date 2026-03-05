@@ -46,11 +46,17 @@ class OpenAIResponsesLLM(BaseLLM):
         if tool_call_outputs:
             return self.tool_call_parser(tool_call_outputs)
 
-        output_text = getattr(response, "output_text", "")
+        output_text = getattr(response, "output_text", "") or ""
         output_reasoning = [
             item for item in response.output if isinstance(item, ResponseReasoningItem)
         ]
-        summary = output_reasoning[0].summary
+        summary = output_reasoning[0].summary if output_reasoning else None
+
+        if not output_text:
+            logger.warning(
+                "[OpenAI Responses LLM] Empty output_text from model %s",
+                kwargs.get("model_name_or_path", self.config.model_name_or_path),
+            )
 
         if self.config.remove_think_prefix:
             return remove_thinking_tags(output_text)
@@ -134,11 +140,17 @@ class AzureResponsesLLM(BaseLLM):
             else NOT_GIVEN,
         )
 
-        output_text = getattr(response, "output_text", "")
+        output_text = getattr(response, "output_text", "") or ""
         output_reasoning = [
             item for item in response.output if isinstance(item, ResponseReasoningItem)
         ]
-        summary = output_reasoning[0].summary
+        summary = output_reasoning[0].summary if output_reasoning else None
+
+        if not output_text:
+            logger.warning(
+                "[Azure Responses LLM] Empty output_text from model %s",
+                self.config.model_name_or_path,
+            )
 
         if self.config.remove_think_prefix:
             return remove_thinking_tags(output_text)
