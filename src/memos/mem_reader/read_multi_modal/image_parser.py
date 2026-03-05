@@ -144,6 +144,7 @@ class ImageParser(BaseMessageParser):
             for item in context_items:
                 if hasattr(item, "memory") and item.memory:
                     lang = detect_lang(item.memory)
+                    source.lang = lang
                     break
         if not lang:
             lang = "en"
