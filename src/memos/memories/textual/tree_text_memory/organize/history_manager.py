@@ -949,7 +949,7 @@ class MemoryHistoryManager:
             tags = data.get("tags", [])
             keys = data.get("keys", [])
             memory_type = data.get("memory_type", "LongTermMemory")
-            version = source_item.verion
+            version = source_item.metadata.version
             new_history_item = ArchivedTextualMemory(
                 version=version,
                 is_fast=False,
