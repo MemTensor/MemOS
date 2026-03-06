@@ -45,6 +45,10 @@ FILE_EXT_RE = re.compile(
 )
 
 
+KEYS_DROP_LABEL = r"(text|type|image_url|imageurl|url|file|file_id|image_id|file_data)"
+ID_KEYS_DROP_VALUE = r"(file_id|image_id)"
+
+
 def parse_json_result(response_text: str) -> dict:
     """
     Parse JSON result from LLM response.
@@ -356,13 +360,25 @@ def detect_lang(text):
         cleaned_text = re.sub(r"\[[\d\-:\s]+\]", "", cleaned_text)
         # remove URLs to prevent the dilution of Chinese characters
         cleaned_text = re.sub(r'https?://[^\s<>"{}|\\^`\[\]]+', "", cleaned_text)
-        # remove MessageType schema keywords (multimodal JSON noise)
+        # remove common id-like tokens (uuid-ish / file_id / image_id /
+        # my_id_01 etc.)
+        # uuid
         cleaned_text = re.sub(
-            r"\b(text|type|image_url|imageurl|url)\b", "", cleaned_text, flags=re.IGNORECASE
+            r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+            " ",
+            cleaned_text,
+            flags=re.IGNORECASE,
+        )
+        # key:value where key ends with _id or is id, and value is quoted or bare token
+        cleaned_text = re.sub(
+            r'(?i)\b[a-z_]*id\b\s*[:=]\s*(".*?"|\'.*?\'|[a-z0-9_\-]+)', " ", cleaned_text
+        )
+        cleaned_text = re.sub(
+            r'(?i)\b[a-z_]*_id\b\s*[:=]\s*(".*?"|\'.*?\'|[a-z0-9_\-]+)', " ", cleaned_text
         )
         # remove schema keywords like text / type / image_url / url
         cleaned_text = re.sub(
-            r"\b(text|type|image_url|imageurl|url|file|file_id)\b",
+            r"\b(text|type|image_url|imageurl|url|file|file_id|image_id|file_data)\b",
             "",
             cleaned_text,
             flags=re.IGNORECASE,
