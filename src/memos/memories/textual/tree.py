@@ -609,3 +609,33 @@ class TreeTextMemory(BaseTextMemory):
                     future.result()
                 except Exception as e:
                     logger.exception("Add edge error: ", exc_info=e)
+
+    def soft_delete(
+        self,
+        memory_ids: list[str],
+        user_name: str,
+        evolve_to_ids: list[str] | None = None,
+    ) -> None:
+        # for ruff check...
+        if not evolve_to_ids:
+            update_fields = {"status": "deleted"}
+        else:
+            update_fields = {"status": "deleted", "evolve_to": evolve_to_ids}
+
+        # Execute the actual marking operation - in db.
+        with ContextThreadPoolExecutor() as executor:
+            futures = []
+            for mid in memory_ids:
+                futures.append(
+                    executor.submit(
+                        self.graph_store.update_node,
+                        id=mid,
+                        fields=update_fields,
+                        user_name=user_name,
+                    )
+                )
+
+            # Wait for all tasks to complete and raise any exceptions
+            for future in futures:
+                future.result()
+        return

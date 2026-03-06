@@ -141,6 +141,7 @@ def separate_knowledge_and_conversation_mem(memories: list[dict[str, Any]]):
         sources = item.get("metadata", {}).get("sources", [])
         if (
             item["metadata"]["memory_type"] != "RawFileMemory"
+            and sources
             and len(sources) > 0
             and "type" in sources[0]
             and sources[0]["type"] == "file"
