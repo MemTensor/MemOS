@@ -1919,7 +1919,7 @@ class PolarDBGraphDB(BaseGraphDB):
             else:
                 pass
 
-        logger.info(" search_by_embedding query: %s", query)
+        logger.info(" search_by_embedding query: %s user_name: %s", query, user_name)
 
         with self._get_connection() as conn, conn.cursor() as cursor:
             if params:
