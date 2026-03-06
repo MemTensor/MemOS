@@ -42,7 +42,7 @@
     </a>
     <a href="https://github.com/IAAR-Shanghai/Awesome-AI-Memory">
       <img alt="Awesome AI Memory" src="https://img.shields.io/badge/Resources-Awesome--AI--Memory-8A2BE2">
-    </a>  
+    </a>
   </p>
 
 <p align="center">
@@ -55,7 +55,7 @@
   </a>
 
 </p>
-  
+
 </div>
 
 Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=github)
@@ -68,11 +68,11 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 ![](https://cdn.memtensor.com.cn/img/1770612303123_mnaisk_compressed.png)
 
 - [**72% lower token usage**](https://x.com/MemOS_dev/status/2020854044583924111) – intelligent memory retrieval instead of loading full chat history
-- [**Multi-agent memory sharing**](https://x.com/MemOS_dev/status/2020538135487062094) – multi-instance agents share memory via same user_id. Automatic context handoff.  
+- [**Multi-agent memory sharing**](https://x.com/MemOS_dev/status/2020538135487062094) – multi-instance agents share memory via same user_id. Automatic context handoff.
 
 🦞 Your lobster now has a working memory system.
 
-Get your API key: [MemOS Dashboard](https://memos-dashboard.openmem.net/cn/login/)  
+Get your API key: [MemOS Dashboard](https://memos-dashboard.openmem.net/cn/login/)
 Try it: Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)
 
 ## 📌 MemOS: Memory Operating System for AI Agents
@@ -92,7 +92,7 @@ Try it: Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTe
 
 ### News
 
-- **2025-12-24** · 🎉 **MemOS v2.0: Stardust (星尘) Release**  
+- **2025-12-24** · 🎉 **MemOS v2.0: Stardust (星尘) Release**
   Comprehensive KB (doc/URL parsing + cross-project sharing), memory feedback & precise deletion, multi-modal memory (images/charts), tool memory for agent planning, Redis Streams scheduling + DB optimizations, streaming/non-streaming chat, MCP upgrade, and lightweight quick/full deployment.
   <details>
     <summary>✨ <b>New Features</b></summary>
@@ -139,7 +139,7 @@ Try it: Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTe
 
   </details>
 
-- **2025-08-07** · 🎉 **MemOS v1.0.0 (MemCube) Release**  
+- **2025-08-07** · 🎉 **MemOS v1.0.0 (MemCube) Release**
   First MemCube release with a word-game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, improved search capabilities, and the official Playground launch.
 
   <details>
@@ -177,11 +177,11 @@ Try it: Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTe
 
   </details>
 
-- **2025-07-07** · 🎉 **MemOS v1.0: Stellar (星河) Preview Release**  
+- **2025-07-07** · 🎉 **MemOS v1.0: Stellar (星河) Preview Release**
   A SOTA Memory OS for LLMs is now open-sourced.
-- **2025-07-04** · 🎉 **MemOS Paper Release**  
+- **2025-07-04** · 🎉 **MemOS Paper Release**
   [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) is available on arXiv.
-- **2024-07-04** · 🎉 **Memory3 Model Release at WAIC 2024**  
+- **2024-07-04** · 🎉 **Memory3 Model Release at WAIC 2024**
   The Memory3 model, featuring a memory-layered architecture, was unveiled at the 2024 World Artificial Intelligence Conference.
 
 <br>
@@ -194,9 +194,9 @@ Try it: Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTe
 - Go to **API Keys** and copy your key
 
 #### Next Steps
-- [MemOS Cloud Getting Started](https://memos-docs.openmem.net/memos_cloud/quick_start/)  
+- [MemOS Cloud Getting Started](https://memos-docs.openmem.net/memos_cloud/quick_start/)
   Connect to MemOS Cloud and enable memory in minutes.
-- [MemOS Cloud Platform](https://memos.openmem.net/?from=/quickstart/)  
+- [MemOS Cloud Platform](https://memos.openmem.net/?from=/quickstart/)
   Explore the Cloud dashboard, features, and workflows.
 
 ### 🖥️ 2、Self-Hosted (Local/Private)
@@ -234,7 +234,7 @@ Try it: Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTe
     ```python
     import requests
     import json
-    
+
     data = {
         "user_id": "8736b16e-1d20-4163-980b-a5063c3facdc",
         "mem_cube_id": "b32d0977-435d-4828-a86f-4f47f8b55bca",
@@ -250,7 +250,7 @@ Try it: Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTe
         "Content-Type": "application/json"
     }
     url = "http://localhost:8000/product/add"
-    
+
     res = requests.post(url=url, headers=headers, data=json.dumps(data))
     print(f"result: {res.json()}")
     ```
@@ -258,7 +258,7 @@ Try it: Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTe
     ```python
     import requests
     import json
-    
+
     data = {
         "query": "What do I like",
         "user_id": "8736b16e-1d20-4163-980b-a5063c3facdc",
@@ -268,7 +268,7 @@ Try it: Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTe
         "Content-Type": "application/json"
     }
     url = "http://localhost:8000/product/search"
-    
+
     res = requests.post(url=url, headers=headers, data=json.dumps(data))
     print(f"result: {res.json()}")
     ```
@@ -277,8 +277,8 @@ Try it: Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTe
 
 ## 📚 Resources
 
-- **Awesome-AI-Memory**   
- This is a curated repository dedicated to resources on memory and memory systems for large language models. It systematically collects relevant research papers, frameworks, tools, and practical insights. The repository aims to organize and present the rapidly evolving research landscape of LLM memory, bridging multiple research directions including natural language processing, information retrieval, agentic systems, and cognitive science.  
+- **Awesome-AI-Memory**
+ This is a curated repository dedicated to resources on memory and memory systems for large language models. It systematically collects relevant research papers, frameworks, tools, and practical insights. The repository aims to organize and present the rapidly evolving research landscape of LLM memory, bridging multiple research directions including natural language processing, information retrieval, agentic systems, and cognitive science.
 - **Get started** 👉 [IAAR-Shanghai/Awesome-AI-Memory](https://github.com/IAAR-Shanghai/Awesome-AI-Memory)
 - **MemOS Cloud OpenClaw Plugin**
   Official OpenClaw lifecycle plugin for MemOS Cloud. It automatically recalls context from MemOS before the agent starts and saves the conversation back to MemOS after the agent finishes.
