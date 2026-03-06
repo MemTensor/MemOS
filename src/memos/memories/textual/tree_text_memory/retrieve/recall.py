@@ -61,7 +61,6 @@ class GraphMemoryRetriever:
         Returns:
             list: Combined memory items.
         """
-        logger.info(f"[0306 recall retrieve] query: {query}, user_name: {user_name}")
         if memory_scope not in [
             "WorkingMemory",
             "LongTermMemory",
@@ -342,7 +341,6 @@ class GraphMemoryRetriever:
             return []
 
         def search_single(vec, search_priority=None, search_filter=None):
-            logger.info(f"[0306 recall _vector_recall search_single] user_name: {user_name}")
             return (
                 self.graph_store.search_by_embedding(
                     vector=vec,

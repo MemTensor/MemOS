@@ -203,7 +203,6 @@ class Searcher:
         else:
             logger.debug(f"[SEARCH] Received info dict: {info}")
 
-        logger.info(f"[0306 searcher searcher.search] query: {query}, user_name: {user_name}")
         if kwargs.get("plugin", False):
             logger.info(f"[SEARCH] Retrieve from plugin: {query}")
             retrieved_results = self._retrieve_simple(
@@ -354,7 +353,6 @@ class Searcher:
             "session_id": info.get("session_id", None),
         }
         id_filter = {k: v for k, v in id_filter.items() if v is not None}
-        logger.info(f"[0306 searcher _retrieve_paths] query: {query}, user_name: {user_name}")
 
         with ContextThreadPoolExecutor(max_workers=5) as executor:
             tasks.append(
@@ -631,9 +629,7 @@ class Searcher:
             cot_embeddings.extend(query_embedding)
         else:
             cot_embeddings = query_embedding
-        logger.info(
-            f"[0306 searcher _retrieve_from_long_term_and_user] query: {query}, user_name: {user_name}"
-        )
+
         with ContextThreadPoolExecutor(max_workers=3) as executor:
             if memory_type in ["All", "AllSummaryMemory", "LongTermMemory"]:
                 tasks.append(
@@ -863,9 +859,7 @@ class Searcher:
         mode: str = "fast",
     ):
         """Retrieve and rerank from SkillMemory"""
-        logger.info(
-            f"[0306 searcher _retrieve_from_skill_memory] query: {query}, user_name: {user_name}"
-        )
+
         if memory_type not in ["All", "SkillMemory"]:
             logger.info(f"[PATH-E] '{query}' Skipped (memory_type does not match)")
             return []
