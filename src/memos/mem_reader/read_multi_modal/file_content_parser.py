@@ -367,7 +367,7 @@ class FileContentParser(BaseMessageParser):
     ) -> SourceMessage:
         """Create SourceMessage from file content part."""
         if isinstance(message, dict):
-            file_info = message.get("file", {})
+            file_info = message.get("file", {}) or {}
             source_dict = {
                 "type": "file",
                 "doc_path": file_info.get("filename") or file_info.get("file_id", ""),
