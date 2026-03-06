@@ -35,6 +35,7 @@ from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.history_manager import MemoryHistoryManager
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+from memos.memories.textual.tree_text_memory.retrieve.pre_update import PreUpdateRetriever
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
 
 
@@ -171,9 +172,20 @@ def init_server() -> dict[str, Any]:
     )
     embedder = EmbedderFactory.from_config(embedder_config)
     nli_client = NLIClient(base_url=nli_client_config["base_url"])
-    memory_history_manager = MemoryHistoryManager(nli_client=nli_client, graph_db=graph_db)
+    pre_update_retriever = PreUpdateRetriever(graph_db=graph_db, embedder=embedder)
+    memory_history_manager = MemoryHistoryManager(
+        nli_client=nli_client,
+        graph_db=graph_db,
+        llm=llm,
+        embedder=embedder,
+        pre_update_retriever=pre_update_retriever,
+    )
     # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
-    mem_reader = MemReaderFactory.from_config(mem_reader_config, graph_db=graph_db)
+    mem_reader = MemReaderFactory.from_config(
+        mem_reader_config,
+        graph_db=graph_db,
+        history_manager=memory_history_manager,
+    )
     reranker = RerankerFactory.from_config(reranker_config)
     feedback_reranker = RerankerFactory.from_config(feedback_reranker_config)
     internet_retriever = InternetRetrieverFactory.from_config(

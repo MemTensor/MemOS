@@ -13,6 +13,8 @@ NLI_MODEL_NAME = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
 NLI_DEVICE = "cuda"
 NLI_MODEL_HOST = "0.0.0.0"
 NLI_MODEL_PORT = 32532
+NLI_MAX_CONCURRENCY = 4
+NLI_INFER_TIMEOUT_SECONDS = 30.0
 
 # Configure logging for NLI Server
 logging.basicConfig(

@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from memos import log
 from memos.chunkers import ChunkerFactory
+from memos.configs.llm import LLMConfigFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
@@ -20,6 +21,9 @@ from memos.mem_reader.base import BaseMemReader
 
 if TYPE_CHECKING:
     from memos.graph_dbs.base import BaseGraphDB
+    from memos.memories.textual.tree_text_memory.organize.history_manager import (
+        MemoryHistoryManager,
+    )
     from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.mem_reader.read_multi_modal import coerce_scene_data, detect_lang
 from memos.mem_reader.utils import (
@@ -174,6 +178,15 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         """
         self.config = config
         self.llm = LLMFactory.from_config(config.llm)
+        self.qwen_llm = None
+        qwen_llm_config = getattr(config, "qwen_llm", None)
+        if qwen_llm_config:
+            try:
+                if isinstance(qwen_llm_config, dict):
+                    qwen_llm_config = LLMConfigFactory.model_validate(qwen_llm_config)
+                self.qwen_llm = LLMFactory.from_config(qwen_llm_config)
+            except Exception as e:
+                logger.warning(f"[LLM] Qwen initialization failed: {e}")
         self.embedder = EmbedderFactory.from_config(config.embedder)
         self.chunker = ChunkerFactory.from_config(config.chunker)
         self.save_rawfile = self.chunker.config.save_rawfile
@@ -185,12 +198,16 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         # Initialize graph_db as None, can be set later via set_graph_db for
         # recall operations
         self.graph_db = None
+        self.history_manager = None
 
     def set_graph_db(self, graph_db: "BaseGraphDB | None") -> None:
         self.graph_db = graph_db
 
     def set_searcher(self, searcher: "Searcher | None") -> None:
         self.searcher = searcher
+
+    def set_history_manager(self, history_manager: "MemoryHistoryManager | None") -> None:
+        self.history_manager = history_manager
 
     def _make_memory_item(
         self,
