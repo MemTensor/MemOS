@@ -173,7 +173,7 @@ class PolarDBGraphDB(BaseGraphDB):
             user=user,
             password=password,
             dbname=self.db_name,
-            connect_timeout=60,  # Connection timeout in seconds
+            connect_timeout=10,  # Connection timeout in seconds
             keepalives_idle=120,  # Seconds of inactivity before sending keepalive (should be < server idle timeout)
             keepalives_interval=15,  # Seconds between keepalive retries
             keepalives_count=5,  # Number of keepalive retries before considering connection dead
@@ -247,7 +247,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
     @contextmanager
     def _get_connection(self):
-        timeout = getattr(self, "_connection_wait_timeout", 5)
+        timeout = self._connection_wait_timeout
         if timeout <= 0:
             self._semaphore.acquire()
         else:
@@ -1919,7 +1919,7 @@ class PolarDBGraphDB(BaseGraphDB):
             else:
                 pass
 
-        logger.info(" search_by_embedding query: %s user_name: %s", query, user_name)
+        logger.info(" search_by_embedding query: %s", query)
 
         with self._get_connection() as conn, conn.cursor() as cursor:
             if params:
