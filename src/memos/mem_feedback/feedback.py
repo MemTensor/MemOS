@@ -363,6 +363,7 @@ class MemFeedback(BaseMemFeedback):
             # retrieve
             last_user_index = max(i for i, d in enumerate(chat_history_list) if d["role"] == "user")
             last_qa = " ".join([item["content"] for item in chat_history_list[last_user_index:]])
+            logger.info(f"[0306 feedback semantics_feedback] user_name: {user_name}")
             supplementary_retrieved = self._retrieve(last_qa, info=info, user_name=user_name)
             feedback_retrieved = self._retrieve(memory_item.memory, info=info, user_name=user_name)
 
@@ -504,6 +505,7 @@ class MemFeedback(BaseMemFeedback):
             if "mode:fast" not in item["metadata"]["tags"]
         ]
 
+        logger.info(f"[0306 feedback _feedback_memory] user_name: {user_name}")
         with ContextThreadPoolExecutor(max_workers=3) as ex:
             futures = {
                 ex.submit(
@@ -559,23 +561,25 @@ class MemFeedback(BaseMemFeedback):
             edges = self.searcher.graph_store.get_edges(mem_item.id, user_name=user_name)
             return (mem_item, len(edges) == 0)
 
+        logger.info(f"[0306 feedback _retrieve] user_name: {user_name}")
         text_mems = self.searcher.search(
-            query,
+            query=query,
+            top_k=top_k,
             info=info,
             memory_type="AllSummaryMemory",
             user_name=user_name,
-            top_k=top_k,
             full_recall=True,
         )
         text_mems = [item[0] for item in text_mems if float(item[1]) > 0.01]
 
         if self.pref_feedback:
+            logger.info(f"[0306 feedback _retrieve pref_feedback] user_name: {user_name}")
             pref_mems = self.searcher.search(
-                query,
+                query=query,
+                top_k=top_k,
                 info=info,
                 memory_type="PreferenceMemory",
                 user_name=user_name,
-                top_k=top_k,
                 include_preference_memory=True,
                 full_recall=True,
             )
