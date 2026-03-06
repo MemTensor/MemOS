@@ -254,8 +254,13 @@ class PolarDBGraphDB(BaseGraphDB):
             if not self._semaphore.acquire(timeout=timeout):
                 logger.warning(f"Timeout waiting for connection slot ({timeout}s)")
                 raise RuntimeError(
-                    f"Connection pool busy: could not acquire a slot within {timeout}s (all connections in use)."
+                    f"Connection pool busy: acquire a slot within {timeout}s (all connections in use)."
                 )
+        logger.info(
+            "Connection pool usage: %s/%s",
+            self.connection_pool.maxconn - self._semaphore._value,
+            self.connection_pool.maxconn,
+        )
         conn = None
         broken = False
 
@@ -264,7 +269,7 @@ class PolarDBGraphDB(BaseGraphDB):
             logger.debug(f"Acquired connection {id(conn)} from pool")
             conn.autocommit = True
             with conn.cursor() as cur:
-                cur.execute("SELECT 1")
+                cur.execute(f'SET search_path = {self.db_name}_graph, ag_catalog, "$user", public;')
             yield conn
         except Exception as e:
             broken = True
@@ -1777,6 +1782,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 )
         where_clause_cte = f"WHERE {' AND '.join(where_with_q)}" if where_with_q else ""
         query = f"""
+            /*+ Set(max_parallel_workers_per_gather 0) */
             WITH q AS (SELECT to_tsquery('{tsquery_config}', %s) AS fq)
             SELECT {select_cols}
             FROM "{self.db_name}_graph"."Memory" m
