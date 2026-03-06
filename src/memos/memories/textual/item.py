@@ -42,6 +42,7 @@ class SourceMessage(BaseModel):
     content: str | None = None
     doc_path: str | None = None
     file_info: dict | None = None
+    image_info: dict | None = None
     model_config = ConfigDict(extra="allow")
 
 

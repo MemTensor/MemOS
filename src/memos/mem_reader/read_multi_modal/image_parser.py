@@ -51,15 +51,23 @@ class ImageParser(BaseMessageParser):
             if isinstance(image_url, dict):
                 url = image_url.get("url", "")
                 detail = image_url.get("detail", "auto")
+                image_info = image_url
+                return SourceMessage(
+                    type="image",
+                    content=url,
+                    url=url,
+                    detail=detail,
+                    image_info=image_info,
+                )
             else:
                 url = str(image_url)
                 detail = "auto"
-            return SourceMessage(
-                type="image",
-                content=url,
-                url=url,
-                detail=detail,
-            )
+                return SourceMessage(
+                    type="image",
+                    content=url,
+                    url=url,
+                    detail=detail,
+                )
         return SourceMessage(type="image", content=str(message))
 
     def rebuild_from_source(
@@ -74,11 +82,16 @@ class ImageParser(BaseMessageParser):
             or (source.content or "").replace("[image_url]: ", "")
         )
         detail = getattr(source, "detail", "auto")
+        image_id = ""
+        image_info = source.image_info
+        if image_info and isinstance(image_info, dict):
+            image_id = image_info.get("image_id")
         return {
             "type": "image_url",
             "image_url": {
                 "url": url,
                 "detail": detail,
+                "image_id": str(image_id),
             },
         }
 

@@ -858,6 +858,13 @@ class DeleteMemoryRequest(BaseRequest):
     memory_ids: list[str] | None = Field(None, description="Memory IDs")
     file_ids: list[str] | None = Field(None, description="File IDs")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    auto_cleanup_working: bool | None = Field(
+        False,
+        description=(
+            "(Internal) Whether to automatically delete related WorkingMemory nodes "
+            "based on working_binding metadata when deleting by memory_ids."
+        ),
+    )
 
 
 class SuggestionRequest(BaseRequest):

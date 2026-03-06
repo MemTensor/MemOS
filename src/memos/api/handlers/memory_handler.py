@@ -320,7 +320,10 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
     Now unified to delete from text_mem only (includes preferences).
     """
     logger.info(
-        f"[Delete memory request] writable_cube_ids: {delete_mem_req.writable_cube_ids}, memory_ids: {delete_mem_req.memory_ids}"
+        "[Delete memory request] writable_cube_ids: %s, memory_ids: %s, auto_cleanup_working: %s",
+        delete_mem_req.writable_cube_ids,
+        delete_mem_req.memory_ids,
+        getattr(delete_mem_req, "auto_cleanup_working", False),
     )
     # Validate that only one of memory_ids, file_ids, or filter is provided
     provided_params = [
@@ -335,6 +338,31 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
         )
 
     try:
+        working_ids_to_delete: set[str] = set()
+        # When deleting by explicit memory_ids and auto_cleanup_working is enabled,
+        # collect related WorkingMemory ids from working_binding
+        if delete_mem_req.memory_ids is not None and getattr(
+            delete_mem_req, "auto_cleanup_working", False
+        ):
+            try:
+                memories = naive_mem_cube.text_mem.get_by_ids(memory_ids=delete_mem_req.memory_ids)
+            except Exception as e:
+                logger.warning("Failed to fetch memories before delete for working cleanup: %s", e)
+                memories = []
+
+            if memories:
+                import re
+
+                pattern = re.compile(r"\[working_binding:([0-9a-fA-F-]{36})\]")
+                for mem in memories:
+                    metadata = mem.get("metadata") or {}
+                    bg = metadata.get("background") or ""
+                    if not isinstance(bg, str):
+                        continue
+                    match = pattern.search(bg)
+                    if match:
+                        working_ids_to_delete.add(match.group(1))
+
         if delete_mem_req.memory_ids is not None:
             # Unified deletion from text_mem (includes preferences)
             naive_mem_cube.text_mem.delete_by_memory_ids(delete_mem_req.memory_ids)
@@ -344,6 +372,17 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
             )
         elif delete_mem_req.filter is not None:
             naive_mem_cube.text_mem.delete_by_filter(filter=delete_mem_req.filter)
+
+        # After main deletion, optionally clean up related WorkingMemory nodes.
+        if working_ids_to_delete:
+            try:
+                logger.info(
+                    "Auto-cleanup WorkingMemory nodes after delete, count=%d",
+                    len(working_ids_to_delete),
+                )
+                naive_mem_cube.text_mem.delete_by_memory_ids(list(working_ids_to_delete))
+            except Exception as e:
+                logger.warning("Failed to auto-cleanup WorkingMemory nodes: %s, Pass", e)
     except Exception as e:
         logger.error(f"Failed to delete memories: {e}", exc_info=True)
         return DeleteMemoryResponse(
