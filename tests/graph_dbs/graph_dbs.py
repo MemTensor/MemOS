@@ -105,3 +105,26 @@ def test_get_memory_count(graph_db):
     session_mock.run.return_value.single.return_value = {"count": 42}
     count = graph_db.get_memory_count("WorkingMemory")
     assert count == 42
+
+
+def test_add_node_sanitizes_nested_metadata(graph_db):
+    session_mock = graph_db.driver.session.return_value.__enter__.return_value
+    node_id = str(uuid.uuid4())
+    memory = "skill memory"
+    metadata = {
+        "memory_type": "SkillMemory",
+        "embedding": [0.1, 0.2, 0.3],
+        "tags": ["skill"],
+        "scripts": {"run.py": "print(1)"},
+        "others": {"README.md": "# demo"},
+        "info": {"nested": {"x": 1}, "arr_obj": [{"a": 1}]},
+    }
+
+    graph_db.add_node(node_id, memory, metadata)
+
+    _, kwargs = session_mock.run.call_args
+    sanitized = kwargs["metadata"]
+    assert isinstance(sanitized["scripts"], str)
+    assert isinstance(sanitized["others"], str)
+    assert isinstance(sanitized["nested"], str)
+    assert sanitized["arr_obj"] == ['{"a": 1}']
