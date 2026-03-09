@@ -183,6 +183,12 @@ class MemoryHistoryManager:
         tags: list[str] | None = None,
         key: str | None = None,
     ) -> tuple[TextualMemoryItem, TextualMemoryItem]:
+        """
+        This method is used to update a given item.
+        It updates the item.memory to new_memory, and pushes the old item.memory content to its history.
+        Instead, it also creates an archived_item to store the embeddings and sources of the old memory content,
+        and stores it to the graph_db.
+        """
         now = datetime.now().isoformat()
         last_update_time = item.metadata.updated_at
 
@@ -197,7 +203,7 @@ class MemoryHistoryManager:
         archived_item.metadata.updated_at = now
 
         # original memory with updated contents and history
-        archived_history = ArchivedTextualMemory(
+        history_item = ArchivedTextualMemory(
             version=item.metadata.version or 1,
             is_fast=item.metadata.is_fast or False,
             memory=item.memory,
@@ -215,7 +221,7 @@ class MemoryHistoryManager:
             item.metadata.key = key
         if item.metadata.history is None:
             item.metadata.history = []
-        item.metadata.history.append(archived_history)
+        item.metadata.history.append(history_item)
 
         return item, archived_item
 
@@ -574,6 +580,55 @@ class MemoryHistoryManager:
             )
             return self.build_fallback_new_items(original_item, user_name=user_name)
 
+    def update_from_feedback(
+        self,
+        old_item: TextualMemoryItem,
+        new_item: TextualMemoryItem,
+        user_name: str,
+        update_type: Literal[
+            "conflict", "duplicate", "extract", "unrelated", "feedback"
+        ] = "feedback",
+    ) -> tuple[TextualMemoryItem, TextualMemoryItem, dict[str, Any], dict[str, Any]]:
+        current_item, archived_item = self.update_node_with_history(
+            item=old_item.model_copy(deep=True),
+            new_memory=new_item.memory,
+            update_type=update_type,
+            tags=new_item.metadata.tags,
+            key=new_item.metadata.key,
+        )
+        current_item.metadata.background = new_item.metadata.background
+        if getattr(new_item.metadata, "sources", None) is not None:
+            current_sources = list(current_item.metadata.sources or [])
+            current_item.metadata.sources = list(new_item.metadata.sources or []) + current_sources
+        if getattr(new_item.metadata, "embedding", None) is not None:
+            current_item.metadata.embedding = new_item.metadata.embedding
+        elif self.embedder:
+            current_item.metadata.embedding = self._compute_embedding(current_item.memory)
+        if current_item.metadata.memory_type == "PreferenceMemory":
+            current_item.metadata.preference = current_item.memory
+
+        archived_embedding = getattr(old_item.metadata, "embedding", None)
+        if archived_embedding is None:
+            archived_embedding = TextualMemoryItem(
+                **self.graph_db.get_node(old_item.id, user_name=user_name, include_embedding=True)
+            ).metadata.embedding
+        arch_meta = _sanitize_metadata_dict(archived_item.metadata.model_dump(exclude_none=True))
+        arch_meta["embedding"] = archived_embedding
+        metadata_fields = _sanitize_metadata_dict(
+            current_item.metadata.model_dump(exclude_none=True)
+        )
+        history_dump = [
+            h.model_dump(exclude_none=True) for h in (current_item.metadata.history or [])
+        ]
+        update_fields = {
+            **metadata_fields,
+            "memory": current_item.memory,
+            "history": history_dump,
+            "version": current_item.metadata.version,
+            "covered_history": old_item.id,
+        }
+        return current_item, archived_item, arch_meta, update_fields
+
     def _check_and_fetch_replacements(
         self, item: TextualMemoryItem, pending_indices: list[int], user_name: str
     ) -> tuple[dict[int, list[ArchivedTextualMemory]], list[str]]:
@@ -691,15 +746,11 @@ class MemoryHistoryManager:
         Returns the updated primary TextualMemoryItem and optional new item when fallback is used.
         """
         primary_id, secondary_ids = target_ids[0], target_ids[1:]
-        new_value, tags, key = (
+        new_memory_value, tags, key = (
             mem_data.get("value", ""),
             mem_data.get("tags", []),
             mem_data.get("key", ""),
         )
-        new_value_item = TextualMemoryItem(
-            memory=new_value, metadata=TreeNodeTextualMemoryMetadata()
-        )
-        new_value = new_value_item.memory
 
         # Fetch candidate nodes in batch and then select the primary
         # We update the primary and then merge the secondaries to the primary
@@ -710,19 +761,21 @@ class MemoryHistoryManager:
             logger.warning(
                 f"[MemoryHistoryManager] Target node {primary_id} not found for update. Skipping."
             )
-            # Fallback to create new item when the source_id is hallucinated by llm
+            # Fallback to create new item when the source_id is not valid(hallucination from llm)
             new_item = self._create_new_memory(mem_data, fast_item)
             return None, new_item
         current_item = TextualMemoryItem(**node_data)
 
-        # For concurrency control, need to make sure the primary item has not been modified by others in the meantime
+        # For concurrency control, need to make sure the primary item has not been modified by others during the run.
         # If it has(version changed), then we need to use llm to merge again.
-        new_value = self._apply_cas_merge(primary_id, current_item, expected_versions, new_value)
+        new_memory_value = self._apply_cas_merge(
+            primary_id, current_item, expected_versions, new_memory_value
+        )
 
         update_type = "duplicate" if primary_id in source_ids else "conflict"
         current_item, archived_item = self.update_node_with_history(
             current_item,
-            new_value,
+            new_memory_value,
             update_type,
             tags=tags,
             key=key,
@@ -784,7 +837,7 @@ class MemoryHistoryManager:
         primary_id: str,
         current_item: TextualMemoryItem,
         expected_versions: dict[str, int],
-        new_value: str,
+        new_memory_value: str,
     ) -> str:
         expected_version = expected_versions.get(primary_id)
         current_version = current_item.metadata.version or 1
@@ -794,16 +847,13 @@ class MemoryHistoryManager:
                 f"Expected v{expected_version}, but found v{current_version} in DB. "
                 "Triggering merge logic."
             )
-            latest_item = TextualMemoryItem(
-                memory=current_item.memory, metadata=TreeNodeTextualMemoryMetadata()
-            )
             merged_content = self._merge_conflicting_memory(
-                latest_memory=latest_item.memory,
-                proposed_update=new_value,
+                latest_memory=current_item.memory,
+                proposed_update=new_memory_value,
             )
             return merged_content
 
-        return new_value
+        return new_memory_value
 
     def _merge_secondary_nodes(
         self,
@@ -883,14 +933,13 @@ class MemoryHistoryManager:
         messages = [{"role": "user", "content": prompt}]
         try:
             response = self.llm.generate(messages)
+            if not response:
+                raise ValueError("LLM response is None.")
             return response.strip()
         except Exception as e:
             logger.error(f"[MemoryHistoryManager] Failed to merge memory via LLM: {e}")
-            # Fallback: append proposed update? or just return proposed?
-            # Returning proposed might overwrite latest changes.
-            # Returning latest might lose proposed changes.
-            # Let's concatenate as a safe fallback.
-            return f"{latest_memory}\n\n[System Merge Fallback] New Info: {proposed_update}"
+            # Fallback: concatenate as a safe fallback.
+            return f"{latest_memory}\n\n[New Info]: {proposed_update}"
 
     def _create_new_memory(
         self, mem_data: dict[str, Any], fast_item: TextualMemoryItem

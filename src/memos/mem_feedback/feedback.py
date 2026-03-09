@@ -27,6 +27,7 @@ from memos.mem_feedback.utils import (
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_reader.read_multi_modal import detect_lang
 from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.tree_text_memory.organize.history_manager import MemoryHistoryManager
 from memos.memories.textual.tree_text_memory.organize.manager import (
     MemoryManager,
     extract_working_binding_ids,
@@ -89,6 +90,12 @@ class MemFeedback(BaseMemFeedback):
                 "UserMemory": 480,
             },
             is_reorganize=self.is_reorganize,
+        )
+        # Actually this is initialized through SimpleMemFeedback, so it's fine.
+        self.history_manager = MemoryHistoryManager(
+            nli_client=None,
+            graph_db=self.graph_store,
+            embedder=self.embedder,
         )
         self.stopword_manager = StopwordManager
         self.searcher: Searcher = None
@@ -287,32 +294,42 @@ class MemFeedback(BaseMemFeedback):
             new_memory_item.memory = operation["text"]
             new_memory_item.metadata.embedding = self._batch_embed([operation["text"]])[0]
 
-        if memory_type == "WorkingMemory":
-            fields = {
-                "memory": new_memory_item.memory,
-                "key": new_memory_item.metadata.key,
-                "tags": new_memory_item.metadata.tags,
-                "embedding": new_memory_item.metadata.embedding,
-                "background": new_memory_item.metadata.background,
-                "covered_history": old_memory_item.id,
-            }
-            self.graph_store.update_node(old_memory_item.id, fields=fields, user_name=user_name)
-            item_id = old_memory_item.id
-        else:
-            done = self._single_add_operation(
-                old_memory_item, new_memory_item, user_id, user_name, async_mode
-            )
-            item_id = done.get("id")
-            self.graph_store.update_node(
-                item_id, {"covered_history": old_memory_item.id}, user_name=user_name
-            )
-            self.graph_store.update_node(
-                old_memory_item.id, {"status": "archived"}, user_name=user_name
-            )
+        if getattr(self.mem_reader, "memory_version_switch", "off") != "on":
+            if memory_type == "WorkingMemory":
+                fields = {
+                    "memory": new_memory_item.memory,
+                    "key": new_memory_item.metadata.key,
+                    "tags": new_memory_item.metadata.tags,
+                    "embedding": new_memory_item.metadata.embedding,
+                    "background": new_memory_item.metadata.background,
+                    "covered_history": old_memory_item.id,
+                }
+                self.graph_store.update_node(old_memory_item.id, fields=fields, user_name=user_name)
+                item_id = old_memory_item.id
+            else:
+                done = self._single_add_operation(
+                    old_memory_item, new_memory_item, user_id, user_name, async_mode
+                )
+                item_id = done.get("id")
+                self.graph_store.update_node(
+                    item_id, {"covered_history": old_memory_item.id}, user_name=user_name
+                )
+                self.graph_store.update_node(
+                    old_memory_item.id, {"status": "archived"}, user_name=user_name
+                )
 
-        logger.info(
-            f"[Memory Feedback UPDATE] New Add:{item_id} | Set archived:{old_memory_item.id} | memory_type: {memory_type}"
-        )
+            logger.info(
+                f"[Memory Feedback UPDATE] New Add:{item_id} | Set archived:{old_memory_item.id} | memory_type: {memory_type}"
+            )
+        else:
+            item_id = self._single_update_operation_with_versions(
+                old_memory_item=old_memory_item,
+                new_memory_item=new_memory_item,
+                user_name=user_name,
+            )
+            logger.info(
+                f"[Memory Feedback UPDATE] Updated:{item_id} | history appended | memory_type: {old_memory_item.metadata.memory_type}"
+            )
 
         return {
             "id": item_id,
@@ -321,6 +338,79 @@ class MemFeedback(BaseMemFeedback):
             "archived_id": old_memory_item.id,
             "origin_memory": old_memory_item.memory,
         }
+
+    def _single_update_operation_with_versions(
+        self,
+        old_memory_item: TextualMemoryItem,
+        new_memory_item: TextualMemoryItem,
+        user_name: str,
+    ) -> str:
+        try:
+            updated_item, archived_item, archived_metadata, updated_fields = (
+                self.history_manager.update_from_feedback(
+                    old_item=old_memory_item,
+                    new_item=new_memory_item,
+                    user_name=user_name,
+                )
+            )
+        except Exception as e:
+            logger.warning(
+                "[Memory Feedback UPDATE] history fallback for %s: %s", old_memory_item.id, e
+            )
+            updated_item = old_memory_item.model_copy(deep=True)
+            updated_item.memory = new_memory_item.memory
+            updated_item.metadata.key = new_memory_item.metadata.key
+            updated_item.metadata.tags = new_memory_item.metadata.tags
+            updated_item.metadata.background = new_memory_item.metadata.background
+            if getattr(new_memory_item.metadata, "sources", None) is not None:
+                current_sources = list(updated_item.metadata.sources or [])
+                updated_item.metadata.sources = (
+                    list(new_memory_item.metadata.sources or []) + current_sources
+                )
+            if getattr(new_memory_item.metadata, "embedding", None) is not None:
+                updated_item.metadata.embedding = new_memory_item.metadata.embedding
+            if updated_item.metadata.memory_type == "PreferenceMemory":
+                updated_item.metadata.preference = updated_item.memory
+            updated_fields = {
+                "memory": updated_item.memory,
+                "key": updated_item.metadata.key,
+                "tags": updated_item.metadata.tags,
+                "embedding": updated_item.metadata.embedding,
+                "background": updated_item.metadata.background,
+                "sources": [
+                    source.model_dump(exclude_none=True)
+                    if hasattr(source, "model_dump")
+                    else source
+                    for source in (updated_item.metadata.sources or [])
+                ],
+                "covered_history": old_memory_item.id,
+            }
+            archived_item = None
+            archived_metadata = None
+
+        if archived_item and archived_metadata:
+            try:
+                self.graph_store.add_node(
+                    id=archived_item.id,
+                    memory=archived_item.memory,
+                    metadata=archived_metadata,
+                    user_name=user_name,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[Memory Feedback UPDATE] archive add failed for %s: %s",
+                    old_memory_item.id,
+                    e,
+                )
+        self._retry_db_operation(
+            lambda: self.graph_store.update_node(
+                id=updated_item.id,
+                fields=updated_fields,
+                user_name=user_name,
+            )
+        )
+        self._del_working_binding(user_name, [old_memory_item])
+        return updated_item.id
 
     def _del_working_binding(self, user_name, mem_items: list[TextualMemoryItem]) -> set[str]:
         """Delete working memory bindings"""
