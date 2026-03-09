@@ -243,7 +243,7 @@ class MemFeedback(BaseMemFeedback):
             datetime.now().isoformat()
         )
         to_add_memory.metadata.background = new_memory_item.metadata.background
-        to_add_memory.metadata.sources = []
+        to_add_memory.metadata.sources = new_memory_item.metadata.sources
 
         added_ids = self._retry_db_operation(
             lambda: self.memory_manager.add([to_add_memory], user_name=user_name, use_batch=False)
@@ -330,9 +330,7 @@ class MemFeedback(BaseMemFeedback):
             f"[Memory Feedback UPDATE] Extracted {len(bindings_to_delete)} working_binding ids to cleanup: {list(bindings_to_delete)}"
         )
 
-        delete_ids = []
-        if bindings_to_delete:
-            delete_ids = list({bindings_to_delete})
+        delete_ids = list(bindings_to_delete)
 
         for mid in delete_ids:
             try:
@@ -345,6 +343,7 @@ class MemFeedback(BaseMemFeedback):
                 logger.warning(
                     f"[0107 Feedback Core:_del_working_binding] TreeTextMemory.delete_hard: failed to delete {mid}: {e}"
                 )
+        return bindings_to_delete
 
     def semantics_feedback(
         self,
@@ -470,7 +469,7 @@ class MemFeedback(BaseMemFeedback):
                         f"[0107 Feedback Core: semantics_feedback] Operation failed for {original_op}: {e}",
                         exc_info=True,
                     )
-        if update_results:
+        if update_results and getattr(self.mem_reader, "memory_version_switch", "off") != "on":
             updated_ids = [item["archived_id"] for item in update_results]
             self._del_working_binding(updated_ids, user_name)
 
@@ -1059,7 +1058,14 @@ class MemFeedback(BaseMemFeedback):
                         tags=tags,
                         key=key,
                         embedding=embedding,
-                        sources=[{"type": "chat"}],
+                        sources=[
+                            {
+                                "type": "feedback",
+                                "role": "user",
+                                "chat_time": feedback_time,
+                                "content": feedback_content,
+                            }
+                        ],
                         background=background,
                         type="fine",
                         info=info,
