@@ -1,0 +1,23 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Generated / non-essential
+package-lock.json
+www/
+docs/
+ppt/
+
+# Database files
+*.sqlite
+*.sqlite-journal
+*.db
