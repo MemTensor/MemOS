@@ -92,7 +92,7 @@ class Searcher:
         **kwargs,
     ) -> list[tuple[TextualMemoryItem, float]]:
         logger.info(
-            f"[RECALL] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
+            f"[RECALL] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}, user_name={user_name}"
         )
         parsed_goal, query_embedding, _context, query = self._parse_task(
             query,
@@ -859,6 +859,7 @@ class Searcher:
         mode: str = "fast",
     ):
         """Retrieve and rerank from SkillMemory"""
+
         if memory_type not in ["All", "SkillMemory"]:
             logger.info(f"[PATH-E] '{query}' Skipped (memory_type does not match)")
             return []
