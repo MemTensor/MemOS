@@ -819,7 +819,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     if result:
                         fine_memory_items.extend(result)
                 except Exception as e:
-                    logger.error(f"[MultiModalFine] worker error: {e}")
+                    logger.error(f"[MultiModalFine] worker error: {e} {traceback.format_exc()}")
 
         # related preceding and following rawfilememories
         fine_memory_items = self._relate_preceding_following_rawfile_memories(fine_memory_items)
