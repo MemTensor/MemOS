@@ -45,6 +45,10 @@ FILE_EXT_RE = re.compile(
 )
 
 
+KEYS_DROP_LABEL = r"(text|type|image_url|imageurl|url|file|file_id|image_id|file_data)"
+ID_KEYS_DROP_VALUE = r"(file_id|image_id)"
+
+
 def parse_json_result(response_text: str) -> dict:
     """
     Parse JSON result from LLM response.
@@ -341,12 +345,44 @@ def detect_lang(text):
         if not text or not isinstance(text, str):
             return "en"
         cleaned_text = text
-        # remove role and timestamp
+        # remove role and timestamp-like prefixes
         cleaned_text = re.sub(
             r"\b(user|assistant|query|answer)\s*:", "", cleaned_text, flags=re.IGNORECASE
         )
+        # timestamps like [11:32 AM on 04 March, 2026]
+        cleaned_text = re.sub(
+            r"\[\s*\d{1,2}:\d{2}\s*(?:AM|PM)\s+on\s+\d{2}\s+[A-Za-z]+\s*,\s*\d{4}\s*\]",
+            "",
+            cleaned_text,
+            flags=re.IGNORECASE,
+        )
+        # purely numeric timestamps like [2025-01-01 10:00]
         cleaned_text = re.sub(r"\[[\d\-:\s]+\]", "", cleaned_text)
-
+        # remove URLs to prevent the dilution of Chinese characters
+        cleaned_text = re.sub(r'https?://[^\s<>"{}|\\^`\[\]]+', "", cleaned_text)
+        # remove common id-like tokens (uuid-ish / file_id / image_id /
+        # my_id_01 etc.)
+        # uuid
+        cleaned_text = re.sub(
+            r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+            " ",
+            cleaned_text,
+            flags=re.IGNORECASE,
+        )
+        # key:value where key ends with _id or is id, and value is quoted or bare token
+        cleaned_text = re.sub(
+            r'(?i)\b[a-z_]*id\b\s*[:=]\s*(".*?"|\'.*?\'|[a-z0-9_\-]+)', " ", cleaned_text
+        )
+        cleaned_text = re.sub(
+            r'(?i)\b[a-z_]*_id\b\s*[:=]\s*(".*?"|\'.*?\'|[a-z0-9_\-]+)', " ", cleaned_text
+        )
+        # remove schema keywords like text / type / image_url / url
+        cleaned_text = re.sub(
+            r"\b(text|type|image_url|imageurl|url|file|file_id|image_id|file_data)\b",
+            "",
+            cleaned_text,
+            flags=re.IGNORECASE,
+        )
         # extract chinese characters
         chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b740-\U0002b81f\U0002b820-\U0002ceaf\uf900-\ufaff]"
         chinese_chars = re.findall(chinese_pattern, cleaned_text)

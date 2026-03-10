@@ -23,7 +23,7 @@ class AddHandler(BaseHandler):
     """
     Handler for memory addition operations.
 
-    Handles both text and preference memory additions with sync/async support.
+    Handles text memory additions with sync/async support.
     """
 
     def __init__(self, dependencies: HandlerDependencies):
@@ -43,7 +43,7 @@ class AddHandler(BaseHandler):
         """
         Main handler for add memories endpoint.
 
-        Orchestrates the addition of both text and preference memories,
+        Orchestrates the addition of text memories,
         supporting concurrent processing.
 
         Args:

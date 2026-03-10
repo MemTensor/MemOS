@@ -169,6 +169,8 @@ class TreeTextMemory(BaseTextMemory):
         tool_mem_top_k: int = 6,
         include_skill_memory: bool = False,
         skill_mem_top_k: int = 3,
+        include_preference_memory: bool = False,
+        pref_mem_top_k: int = 6,
         dedup: str | None = None,
         include_embedding: bool | None = None,
         **kwargs,
@@ -222,6 +224,8 @@ class TreeTextMemory(BaseTextMemory):
             tool_mem_top_k=tool_mem_top_k,
             include_skill_memory=include_skill_memory,
             skill_mem_top_k=skill_mem_top_k,
+            include_preference_memory=include_preference_memory,
+            pref_mem_top_k=pref_mem_top_k,
             dedup=dedup,
             **kwargs,
         )
@@ -605,3 +609,33 @@ class TreeTextMemory(BaseTextMemory):
                     future.result()
                 except Exception as e:
                     logger.exception("Add edge error: ", exc_info=e)
+
+    def soft_delete(
+        self,
+        memory_ids: list[str],
+        user_name: str,
+        evolve_to_ids: list[str] | None = None,
+    ) -> None:
+        # for ruff check...
+        if not evolve_to_ids:
+            update_fields = {"status": "deleted"}
+        else:
+            update_fields = {"status": "deleted", "evolve_to": evolve_to_ids}
+
+        # Execute the actual marking operation - in db.
+        with ContextThreadPoolExecutor() as executor:
+            futures = []
+            for mid in memory_ids:
+                futures.append(
+                    executor.submit(
+                        self.graph_store.update_node,
+                        id=mid,
+                        fields=update_fields,
+                        user_name=user_name,
+                    )
+                )
+
+            # Wait for all tasks to complete and raise any exceptions
+            for future in futures:
+                future.result()
+        return

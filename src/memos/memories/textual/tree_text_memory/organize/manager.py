@@ -185,16 +185,19 @@ class MemoryManager:
                 "ToolTrajectoryMemory",
                 "RawFileMemory",
                 "SkillMemory",
+                "PreferenceMemory",
             ):
                 graph_node_id = (
                     memory.id if hasattr(memory, "id") else memory.id or str(uuid.uuid4())
                 )
                 metadata_dict = memory.metadata.model_dump(exclude_none=True)
                 metadata_dict["updated_at"] = datetime.now().isoformat()
+                metadata_dict["working_binding"] = working_id
 
                 # Add working_binding for fast mode
                 tags = metadata_dict.get("tags") or []
                 if "mode:fast" in tags:
+                    metadata_dict["is_fast"] = True  # Temporal fix
                     prev_bg = metadata_dict.get("background", "") or ""
                     binding_line = f"[working_binding:{working_id}] direct built from raw inputs"
                     metadata_dict["background"] = (
@@ -234,7 +237,8 @@ class MemoryManager:
                             exc_info=e,
                         )
 
-        _submit_batches(working_nodes, "WorkingMemory")
+        # TODO: working id is same with item.id, need to fix, currently stop adding WorkingMemories here.
+        #  here used to be: _submit_batches(working_nodes, "WorkingMemory")
         _submit_batches(graph_nodes, "graph memory")
 
         if graph_node_ids and self.is_reorganize:
@@ -320,6 +324,7 @@ class MemoryManager:
         ids: list[str] = []
         futures = []
 
+        # TODO: working id is same with item.id, need to fix
         working_id = memory.id if hasattr(memory, "id") else memory.id or str(uuid.uuid4())
 
         with ContextThreadPoolExecutor(max_workers=2, thread_name_prefix="mem") as ex:
@@ -341,6 +346,7 @@ class MemoryManager:
                 "ToolTrajectoryMemory",
                 "RawFileMemory",
                 "SkillMemory",
+                "PreferenceMemory",
             ):
                 f_graph = ex.submit(
                     self._add_to_graph_memory,
@@ -395,8 +401,11 @@ class MemoryManager:
         node_id = memory.id if hasattr(memory, "id") else str(uuid.uuid4())
         # Step 2: Add new node to graph
         metadata_dict = memory.metadata.model_dump(exclude_none=True)
+        if working_binding:
+            metadata_dict["working_binding"] = working_binding
         tags = metadata_dict.get("tags") or []
         if working_binding and ("mode:fast" in tags):
+            metadata_dict["is_fast"] = True  # Temporal fix
             prev_bg = metadata_dict.get("background", "") or ""
             binding_line = f"[working_binding:{working_binding}] direct built from raw inputs"
             if prev_bg:

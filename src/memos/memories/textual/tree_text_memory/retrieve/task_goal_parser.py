@@ -72,7 +72,7 @@ class TaskGoalParser:
         else:
             return ParsedTaskGoal(
                 memories=[task_description],
-                keys=[task_description],
+                keys=[],
                 tags=[],
                 goal_type="default",
                 rephrased_query=task_description,

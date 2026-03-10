@@ -4,6 +4,8 @@ This module provides a unified interface to parse different message types
 in both fast and fine modes.
 """
 
+import traceback
+
 from typing import Any
 
 from memos.embedders.base import BaseEmbedder
@@ -242,7 +244,10 @@ class MultiModalParser:
         try:
             message = parser.rebuild_from_source(source)
         except Exception as e:
-            logger.error(f"[MultiModalParser] Error rebuilding message from source: {e}")
+            logger.error(
+                f"[MultiModalParser] Error rebuilding message from "
+                f"source: {e} {traceback.format_exc()}"
+            )
             return []
 
         # Parse in fine mode (pass context_items and custom_tags to parse_fine)

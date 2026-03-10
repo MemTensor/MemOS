@@ -62,6 +62,8 @@ def search_text_memories(
         tool_mem_top_k=search_req.tool_mem_top_k,
         include_skill_memory=search_req.include_skill_memory,
         skill_mem_top_k=search_req.skill_mem_top_k,
+        include_preference_memory=search_req.include_preference,
+        pref_mem_top_k=search_req.pref_top_k,
         dedup=search_req.dedup,
         include_embedding=include_embedding,
     )
