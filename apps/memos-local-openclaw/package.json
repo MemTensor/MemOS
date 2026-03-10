@@ -1,0 +1,61 @@
+{
+  "name": "@memtensor/memos-local-openclaw-plugin",
+  "version": "1.0.0",
+  "description": "MemOS Local memory plugin for OpenClaw — full-write, hybrid-recall, progressive retrieval",
+  "type": "module",
+  "main": "index.ts",
+  "types": "dist/index.d.ts",
+  "files": [
+    "index.ts",
+    "src",
+    "dist",
+    "skill",
+    "scripts/postinstall.cjs",
+    "openclaw.plugin.json",
+    "README.md",
+    ".env.example"
+  ],
+  "openclaw": {
+    "id": "memos-local-openclaw-plugin",
+    "extensions": [
+      "./index.ts"
+    ],
+    "installDependencies": true
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "postinstall": "node scripts/postinstall.cjs",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "memory",
+    "memos",
+    "rag"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.0",
+    "@sinclair/typebox": "^0.34.48",
+    "better-sqlite3": "^12.6.2",
+    "posthog-node": "^5.28.0",
+    "puppeteer": "^24.38.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
