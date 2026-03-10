@@ -618,6 +618,58 @@ def test_update_existing_memory_no_mark_when_working_binding_matches(
 
     assert updated is not None
     assert new_item is None
+
+
+def test_update_from_feedback_returns_persistence_payload_without_side_effects(
+    history_manager, mock_graph_db
+):
+    history_manager.mark_memory_status = MagicMock()
+    memory_id = str(uuid.uuid4())
+    old_item = TextualMemoryItem(
+        id=memory_id,
+        memory="Old Content",
+        metadata=TreeNodeTextualMemoryMetadata(
+            version=2,
+            memory_type="LongTermMemory",
+            embedding=[0.1, 0.2],
+            sources=[{"type": "chat", "content": "old source"}],
+            history=[],
+        ),
+    )
+    new_item = TextualMemoryItem(
+        memory="Updated Content",
+        metadata=TreeNodeTextualMemoryMetadata(
+            tags=["fresh"],
+            key="topic",
+            background="new background",
+            embedding=[0.3, 0.4],
+            sources=[{"type": "feedback", "content": "new feedback source"}],
+            memory_type="LongTermMemory",
+        ),
+    )
+
+    current_item, archived_item, archived_metadata, update_fields = (
+        history_manager.update_from_feedback(
+            old_item=old_item,
+            new_item=new_item,
+            user_name="u1",
+        )
+    )
+
+    assert current_item.id == memory_id
+    assert current_item.memory == "Updated Content"
+    assert archived_item.memory == "Old Content"
+    assert current_item.metadata.sources[0].content == "new feedback source"
+    assert current_item.metadata.sources[0].type == "feedback"
+    assert current_item.metadata.sources[1].content == "old source"
+    assert archived_item.metadata.sources[0].content == "old source"
+    assert archived_metadata["embedding"] == [0.1, 0.2]
+    assert update_fields["memory"] == "Updated Content"
+    assert update_fields["covered_history"] == memory_id
+    assert update_fields["embedding"] == [0.3, 0.4]
+    mock_graph_db.get_node.assert_not_called()
+    mock_graph_db.add_node.assert_not_called()
+    mock_graph_db.update_node.assert_not_called()
     history_manager.mark_memory_status.assert_not_called()
 
 

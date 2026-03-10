@@ -1,5 +1,5 @@
 # MemOS with Krolik Security Extensions
-# 
+#
 # This Dockerfile builds MemOS with authentication, rate limiting, and admin API.
 # It uses the overlay pattern to keep customizations separate from base code.
 
