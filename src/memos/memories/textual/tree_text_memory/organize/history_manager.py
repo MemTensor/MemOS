@@ -996,7 +996,7 @@ class MemoryHistoryManager:
             value_item = TextualMemoryItem(memory=value, metadata=TreeNodeTextualMemoryMetadata())
             value = value_item.memory
             tags = data.get("tags", [])
-            keys = data.get("keys", [])
+            key = data.get("key", "")
             memory_type = data.get("memory_type", "LongTermMemory")
             version = source_item.metadata.version
             new_history_item = ArchivedTextualMemory(
@@ -1015,7 +1015,7 @@ class MemoryHistoryManager:
                 "is_fast": False,
                 "version": version + 1,
                 "tags": tags,
-                "key": keys,
+                "key": key,
                 "created_at": datetime.now().isoformat(),
                 "history": source_history,
                 "embedding": self._compute_embedding(value),
