@@ -67,11 +67,15 @@ class MultiModalParser:
         self.assistant_parser = AssistantParser(embedder, llm)
         self.tool_parser = ToolParser(embedder, llm)
         self.text_content_parser = TextContentParser(embedder, llm)
-        self.file_content_parser = FileContentParser(
-            embedder, llm, parser, direct_markdown_hostnames=direct_markdown_hostnames
-        )
         # Use dedicated image_parser_llm for image parsing (requires vision model)
         self.image_parser = ImageParser(embedder, self.image_parser_llm)
+        self.file_content_parser = FileContentParser(
+            embedder,
+            llm,
+            parser,
+            direct_markdown_hostnames=direct_markdown_hostnames,
+            image_parser=self.image_parser,
+        )
         self.audio_parser = None  # future
 
         self.role_parsers = {
