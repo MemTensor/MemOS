@@ -70,6 +70,7 @@ memos = "memos.cli:main"
 
 [project.entry-points."memos.plugins"]
 demo = "memos_demo_plugin:DemoPlugin"
+prompt_strategy = "memos_prompt_strategy_plugin:PromptStrategyPlugin"
 
 [project.optional-dependencies]
 # These are optional dependencies for various features of MemoryOS.
@@ -165,6 +166,7 @@ build-backend = "poetry.core.masonry.api"
 packages = [
     {include = "memos", from = "src"},
     {include = "memos_demo_plugin", from = "extensions"},
+    {include = "memos_prompt_strategy_plugin", from = "extensions"},
 ]
 requires-poetry = ">=2.0"
 dependencies = { "python" = ">=3.10,<4.0" }

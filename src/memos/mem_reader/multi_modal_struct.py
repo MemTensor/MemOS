@@ -451,6 +451,20 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         if self.config.remove_prompt_example and examples:
             prompt = prompt.replace(examples, "")
+
+        from memos.plugins.hook_defs import H as _H
+        from memos.plugins.hooks import trigger_hook as _trigger_hook
+
+        _rv = _trigger_hook(
+            _H.MEM_READER_PRE_EXTRACT,
+            prompt=prompt,
+            prompt_type=prompt_type,
+            mem_str=mem_str,
+            lang=lang,
+            sources=sources,
+        )
+        prompt = _rv if _rv is not None else prompt
+
         messages = [{"role": "user", "content": prompt}]
         try:
             response_text = self.llm.generate(messages)

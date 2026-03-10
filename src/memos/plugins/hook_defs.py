@@ -75,6 +75,9 @@ class H:
     # Custom Hook (manually triggered via trigger_hook)
     ADD_MEMORIES_POST_PROCESS = "add.memories.post_process"
 
+    # mem_reader — generic extension point before LLM extraction
+    MEM_READER_PRE_EXTRACT = "mem_reader.pre_extract"
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  CE custom Hook declarations (@hookable-generated ones need not be declared here)
@@ -85,4 +88,11 @@ define_hook(
     description="Post-process result after add_memories returns, before constructing Response",
     params=["request", "result"],
     pipe_key="result",
+)
+
+define_hook(
+    H.MEM_READER_PRE_EXTRACT,
+    description="Customize prompt before mem_reader LLM extraction",
+    params=["prompt", "prompt_type", "mem_str", "lang", "sources"],
+    pipe_key="prompt",
 )
