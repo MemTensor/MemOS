@@ -968,8 +968,8 @@ class MemoryHistoryManager:
             "embedding": self._compute_embedding(new_value),
         }
         metadata = fast_item.metadata.model_copy(deep=True)
-        for field_name, value in metadata_updates.items():
-            setattr(metadata, field_name, value)
+        for field_name, field_value in metadata_updates.items():
+            setattr(metadata, field_name, field_value)
         metadata = _sanitize_metadata_model(metadata)
 
         new_item = TextualMemoryItem(
@@ -1021,8 +1021,8 @@ class MemoryHistoryManager:
                 "embedding": self._compute_embedding(value),
             }
             metadata = fast_item.metadata.model_copy(deep=True)
-            for field_name, value in metadata_updates.items():
-                setattr(metadata, field_name, value)
+            for field_name, field_value in metadata_updates.items():
+                setattr(metadata, field_name, field_value)
             metadata = _sanitize_metadata_model(metadata)
 
             new_item = TextualMemoryItem(
