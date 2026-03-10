@@ -559,23 +559,24 @@ class MemFeedback(BaseMemFeedback):
             edges = self.searcher.graph_store.get_edges(mem_item.id, user_name=user_name)
             return (mem_item, len(edges) == 0)
 
+        logger.info(f"[feedback _retrieve] query: {query}, user_name: {user_name}")
         text_mems = self.searcher.search(
-            query,
+            query=query,
+            top_k=top_k,
             info=info,
             memory_type="AllSummaryMemory",
             user_name=user_name,
-            top_k=top_k,
             full_recall=True,
         )
         text_mems = [item[0] for item in text_mems if float(item[1]) > 0.01]
 
         if self.pref_feedback:
             pref_mems = self.searcher.search(
-                query,
+                query=query,
+                top_k=top_k,
                 info=info,
                 memory_type="PreferenceMemory",
                 user_name=user_name,
-                top_k=top_k,
                 include_preference_memory=True,
                 full_recall=True,
             )

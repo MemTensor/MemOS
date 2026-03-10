@@ -4,11 +4,13 @@ Provides simplified configuration generation for users.
 """
 
 import logging
+
 from typing import Literal
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
+
 
 logger = logging.getLogger(__name__)
 
