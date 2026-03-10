@@ -59,13 +59,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         super().__init__(simple_config)
 
         # Image parser LLM (requires vision model)
-        # Falls back to main llm if not configured
+        # Falls back to general_llm if not configured (general_llm itself falls back to main llm)
         self.image_parser_llm = (
             LLMFactory.from_config(config.image_parser_llm)
             if config.image_parser_llm is not None
-            else self.llm
+            else self.general_llm
         )
-
         # Initialize MultiModalParser for routing to different parsers
         # Pass image_parser_llm for image parsing
         self.multi_modal_parser = MultiModalParser(
@@ -1105,7 +1104,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             )
             # Add preference memory extraction
             future_pref = executor.submit(
-                process_preference_fine, raw_nodes, info, self.llm, self.embedder, **kwargs
+                process_preference_fine, raw_nodes, info, self.general_llm, self.embedder, **kwargs
             )
 
             # Collect results

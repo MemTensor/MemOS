@@ -34,7 +34,7 @@ class BaseMemReaderConfig(BaseConfig):
     )
     image_parser_llm: LLMConfigFactory | None = Field(
         default=None,
-        description="Vision LLM for image parsing. Falls back to main llm if not set.",
+        description="Vision LLM for image parsing. Falls back to general_llm if not set.",
     )
     embedder: EmbedderConfigFactory = Field(
         ..., description="Embedder configuration for the MemReader"
