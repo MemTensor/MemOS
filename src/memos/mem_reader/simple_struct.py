@@ -195,13 +195,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 self.qwen_llm = LLMFactory.from_config(qwen_llm_config)
             except Exception as e:
                 logger.warning(f"[LLM] Qwen initialization failed: {e}")
-        # General LLM for non-chat/doc tasks (hallucination filter, rewrite, merge, etc.)
-        # Falls back to main llm if not configured
-        self.general_llm = (
-            LLMFactory.from_config(config.general_llm)
-            if config.general_llm is not None
-            else self.llm
-        )
         self.embedder = EmbedderFactory.from_config(config.embedder)
         self.chunker = ChunkerFactory.from_config(config.chunker)
         self.save_rawfile = self.chunker.config.save_rawfile
