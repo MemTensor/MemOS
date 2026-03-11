@@ -21,6 +21,7 @@ from memos.mem_reader.base import BaseMemReader
 if TYPE_CHECKING:
     from memos.graph_dbs.base import BaseGraphDB
     from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
+    from memos.types.general_types import UserContext
 from memos.mem_reader.read_multi_modal import coerce_scene_data, detect_lang
 from memos.mem_reader.utils import (
     count_tokens_text,
@@ -340,6 +341,14 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             "custom_tags", None
         )  # must pop here, avoid add to info, only used in sync fine mode
 
+        user_context: UserContext | None = kwargs.get("user_context")
+        ctx_kwargs: dict[str, Any] = {}
+        if user_context:
+            if user_context.manager_user_id:
+                ctx_kwargs["manager_user_id"] = user_context.manager_user_id
+            if user_context.project_id:
+                ctx_kwargs["project_id"] = user_context.project_id
+
         if mode == "fast":
             logger.debug("Using unified Fast Mode")
 
@@ -349,7 +358,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 mem_type = "UserMemory" if roles == {"user"} else "LongTermMemory"
                 tags = ["mode:fast"]
                 return self._make_memory_item(
-                    value=text, info=info, memory_type=mem_type, tags=tags, sources=w["sources"]
+                    value=text,
+                    info=info,
+                    memory_type=mem_type,
+                    tags=tags,
+                    sources=w["sources"],
+                    **ctx_kwargs,
                 )
 
             with ContextThreadPoolExecutor(max_workers=8) as ex:
@@ -385,6 +399,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                             key=m.get("key", ""),
                             sources=w["sources"],
                             background=resp.get("summary", ""),
+                            **ctx_kwargs,
                         )
                         chat_read_nodes.append(node)
                     except Exception as e:
@@ -396,6 +411,14 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     ):
         raw_memory = raw_node.memory
         response_json = self._get_llm_response(raw_memory, custom_tags)
+
+        user_context: UserContext | None = kwargs.get("user_context")
+        ctx_kwargs: dict[str, Any] = {}
+        if user_context:
+            if user_context.manager_user_id:
+                ctx_kwargs["manager_user_id"] = user_context.manager_user_id
+            if user_context.project_id:
+                ctx_kwargs["project_id"] = user_context.project_id
 
         chat_read_nodes = []
         for memory_i_raw in response_json.get("memory list", []):
@@ -423,6 +446,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     background=response_json.get("summary", ""),
                     type_="fact",
                     confidence=0.99,
+                    **ctx_kwargs,
                 )
                 chat_read_nodes.append(node_i)
             except Exception as e:

@@ -354,6 +354,19 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if aggregated_file_ids:
             extra_kwargs["file_ids"] = aggregated_file_ids
 
+        # Propagate manager_user_id and project_id from constituent items
+        for item in items:
+            metadata = getattr(item, "metadata", None)
+            if metadata is not None:
+                if not extra_kwargs.get("manager_user_id"):
+                    mid = getattr(metadata, "manager_user_id", None)
+                    if mid:
+                        extra_kwargs["manager_user_id"] = mid
+                if not extra_kwargs.get("project_id"):
+                    pid = getattr(metadata, "project_id", None)
+                    if pid:
+                        extra_kwargs["project_id"] = pid
+
         # Extract info fields
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
@@ -1055,6 +1068,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         custom_tags=custom_tags,
                         info=info,
                         lang=lang,
+                        user_context=kwargs.get("user_context"),
                     )
                     fine_memory_items.extend(items)
             return fine_memory_items
@@ -1124,7 +1138,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             for source in sources:
                 lang = getattr(source, "lang", "en")
                 items = self.multi_modal_parser.process_transfer(
-                    source, context_items=[raw_node], info=info, custom_tags=custom_tags, lang=lang
+                    source,
+                    context_items=[raw_node],
+                    info=info,
+                    custom_tags=custom_tags,
+                    lang=lang,
+                    user_context=kwargs.get("user_context"),
                 )
                 fine_memory_items.extend(items)
         return fine_memory_items
