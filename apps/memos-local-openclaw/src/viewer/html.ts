@@ -1,4 +1,6 @@
-export const viewerHTML = `<!DOCTYPE html>
+export function viewerHTML(pluginVersion?: string): string {
+const vBadge = pluginVersion ? `<span class="version-badge">v${pluginVersion}</span>` : '';
+return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -110,6 +112,8 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .topbar .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px;color:var(--text);letter-spacing:-.02em;flex-shrink:0}
 .topbar .brand .icon{width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:22px;background:none;border-radius:0}
 .topbar .brand .sub{font-weight:400;color:var(--text-muted);font-size:11px}
+.version-badge{font-size:10px;font-weight:600;color:var(--text-muted);background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);padding:1px 7px;border-radius:6px;margin-left:6px;letter-spacing:.02em;user-select:all}
+[data-theme="light"] .version-badge{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.08);color:var(--text-sec)}
 .topbar-center{flex:1;display:flex;justify-content:center}
 .topbar .actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
 
@@ -711,7 +715,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
   <div class="topbar">
     <div class="brand">
       <div class="icon"><svg width="24" height="24" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter:drop-shadow(0 0 8px rgba(255,77,77,.3))"><defs><linearGradient id="tLG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs><path d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z" fill="url(#tLG)"/><path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#tLG)"/><path d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z" fill="url(#tLG)"/><path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round"/><path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round"/><circle cx="45" cy="35" r="6" fill="#050810"/><circle cx="75" cy="35" r="6" fill="#050810"/><circle cx="46" cy="34" r="2" fill="#00e5cc"/><circle cx="76" cy="34" r="2" fill="#00e5cc"/></svg></div>
-      <span data-i18n="title">OpenClaw Memory</span>
+      <span data-i18n="title">OpenClaw Memory</span>${vBadge}
     </div>
     <div class="topbar-center">
       <nav class="nav-tabs">
@@ -4103,3 +4107,4 @@ checkAuth();
 
 </body>
 </html>`;
+}
