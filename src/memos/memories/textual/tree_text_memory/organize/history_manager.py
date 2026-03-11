@@ -4,6 +4,7 @@ import re
 import time
 import uuid
 
+from copy import deepcopy
 from datetime import datetime
 from typing import Any, Literal
 
@@ -440,7 +441,24 @@ class MemoryHistoryManager:
         new_items.extend(created_items)
 
         # 3. Handle Restored Memories (Extract from conflict)
-        new_items.extend(self._handle_restored_memories(restored_memories, source_item, user_name))
+        valid_conflict_ids = {
+            conflict_id
+            for mem_data in memory_list
+            for conflict_id in mem_data.get("conflicted_candidate_ids", [])
+        }
+        filtered_restored_memories = [
+            mem for mem in restored_memories if mem.get("source_candidate_id") in valid_conflict_ids
+        ]
+        dropped_restored_count = len(restored_memories) - len(filtered_restored_memories)
+        if dropped_restored_count:
+            logger.warning(
+                "[MemoryHistoryManager] Dropping %s restored_memories not tied to any "
+                "conflicted_candidate_ids in this LLM response.",
+                dropped_restored_count,
+            )
+        new_items.extend(
+            self._handle_restored_memories(filtered_restored_memories, source_item, user_name)
+        )
 
         return updated_items, new_items
 
@@ -983,22 +1001,34 @@ class MemoryHistoryManager:
         self, restored_memories: list[dict[str, Any]], fast_item: TextualMemoryItem, user_name: str
     ) -> list[TextualMemoryItem]:
         """Handle Restored Memories (Extract from conflict)."""
-        source_ids = [r.get("source_candidate_id") for r in restored_memories]
-        source_items = self.graph_db.get_nodes(source_ids, user_name=user_name)
-        source_items = [TextualMemoryItem(**i) for i in source_items]
+        if not restored_memories:
+            return []
+
+        source_ids = [
+            r.get("source_candidate_id") for r in restored_memories if r.get("source_candidate_id")
+        ]
+        source_items = self.graph_db.get_nodes(source_ids, user_name=user_name) or []
+        source_item_map = {item["id"]: TextualMemoryItem(**item) for item in source_items if item}
 
         created_items = []
-        for i, data in enumerate(restored_memories):
-            source_item = source_items[i]
+        for data in restored_memories:
+            source_candidate_id = data.get("source_candidate_id")
+            source_item = source_item_map.get(source_candidate_id)
+            if source_item is None:
+                logger.warning(
+                    "[MemoryHistoryManager] Restored memory source %s not found. Skipping.",
+                    source_candidate_id,
+                )
+                continue
             # deal with history
-            source_history = source_item.metadata.history.copy()
+            source_history = deepcopy(source_item.metadata.history)
             value = data.get("value", "")
             value_item = TextualMemoryItem(memory=value, metadata=TreeNodeTextualMemoryMetadata())
             value = value_item.memory
             tags = data.get("tags", [])
             key = data.get("key", "")
             memory_type = data.get("memory_type", "LongTermMemory")
-            original_sources = source_item.metadata.sources
+            original_sources = deepcopy(source_item.metadata.sources)
             version = source_item.metadata.version
             new_history_item = ArchivedTextualMemory(
                 version=version,

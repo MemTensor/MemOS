@@ -43,12 +43,14 @@ def test_truncation(history_manager, mock_nli_client):
     mock_nli_client.compare_one_to_many.return_value = [NLIResult.DUPLICATE]
 
     # Action
-    history_manager.resolve_history_via_nli(new_item, [related_item])
+    resolved_ids = history_manager.resolve_history_via_nli(new_item, [related_item])
 
     # Assert
-    assert "possibly duplicate memories" in new_item.memory
-    assert "..." in new_item.memory  # Should be truncated
-    assert len(new_item.memory) < 1000  # Ensure reasonable length
+    assert new_item.memory == "Test"
+    assert resolved_ids == [related_item.id]
+    assert len(new_item.metadata.history) == 1
+    assert new_item.metadata.history[0].memory == long_memory
+    assert new_item.metadata.history[0].update_type == "duplicate"
 
 
 def test_empty_related_items(history_manager, mock_nli_client):
@@ -224,13 +226,37 @@ def test_apply_llm_memory_updates_update_existing(history_manager, mock_graph_db
 
 def test_apply_llm_memory_updates_restored(history_manager, mock_graph_db):
     source_id = uuid.uuid4().hex
+    existing_node = {
+        "id": source_id,
+        "memory": "Old Content",
+        "metadata": {
+            "version": 1,
+            "created_at": "2023-01-01",
+            "tags": ["old"],
+            "status": "resolving",
+            "embedding": [],
+            "memory_type": "LongTermMemory",
+        },
+    }
+    mock_graph_db.get_node.return_value = existing_node
+    mock_graph_db.get_nodes.return_value = [existing_node]
     restored_item = TextualMemoryItem(
         memory="Restored Content",
         metadata=TreeNodeTextualMemoryMetadata(history=[]),
     )
     history_manager._handle_restored_memories = MagicMock(return_value=[restored_item])
     llm_response = {
-        "memory list": [],
+        "memory list": [
+            {
+                "key": "Updated Memory",
+                "memory_type": "LongTermMemory",
+                "value": "Updated Content",
+                "tags": ["new"],
+                "source_candidate_ids": [],
+                "conflicted_candidate_ids": [source_id],
+                "history_segments": [],
+            }
+        ],
         "restored_memories": [
             {"source_candidate_id": source_id, "value": "Restored Content", "tags": ["restored"]}
         ],
@@ -254,13 +280,82 @@ def test_apply_llm_memory_updates_restored(history_manager, mock_graph_db):
         llm_response, source_item=source_item, user_name="u1"
     )
 
-    assert len(updated) == 0
+    assert len(updated) == 1
     assert len(new_items) == 1
     assert new_items[0] == restored_item
     history_manager._handle_restored_memories.assert_called_once_with(
-        llm_response["restored_memories"], source_item
+        llm_response["restored_memories"], source_item, "u1"
     )
-    mock_graph_db.add_node.assert_not_called()
+    mock_graph_db.add_node.assert_called_once()
+
+
+def test_apply_llm_memory_updates_ignores_restored_from_unrelated_candidates(
+    history_manager, mock_graph_db
+):
+    conflict_id = uuid.uuid4().hex
+    unrelated_id = uuid.uuid4().hex
+    history_manager._handle_restored_memories = MagicMock(return_value=[])
+
+    existing_node = {
+        "id": conflict_id,
+        "memory": "Old Content",
+        "metadata": {
+            "version": 1,
+            "created_at": "2023-01-01",
+            "tags": ["old"],
+            "status": "resolving",
+            "embedding": [],
+            "memory_type": "LongTermMemory",
+        },
+    }
+    mock_graph_db.get_node.return_value = existing_node
+    mock_graph_db.get_nodes.return_value = [existing_node]
+
+    llm_response = {
+        "memory list": [
+            {
+                "key": "Updated Memory",
+                "memory_type": "LongTermMemory",
+                "value": "Updated Content",
+                "tags": ["new"],
+                "source_candidate_ids": [],
+                "conflicted_candidate_ids": [conflict_id],
+                "history_segments": [],
+            }
+        ],
+        "restored_memories": [
+            {"source_candidate_id": unrelated_id, "value": "Should Be Ignored", "tags": ["ignore"]}
+        ],
+        "summary": "Summary",
+    }
+
+    source_item = TextualMemoryItem(
+        memory="New user input",
+        metadata=TreeNodeTextualMemoryMetadata(
+            history=[
+                ArchivedTextualMemory(
+                    version=1,
+                    archived_memory_id=conflict_id,
+                    memory="Old Content",
+                    update_type="conflict",
+                ),
+                ArchivedTextualMemory(
+                    version=1,
+                    archived_memory_id=unrelated_id,
+                    memory="Irrelevant Content",
+                    update_type="unrelated",
+                ),
+            ]
+        ),
+    )
+
+    updated, new_items = history_manager.apply_llm_memory_updates(
+        llm_response, source_item=source_item, user_name="u1"
+    )
+
+    assert len(updated) == 1
+    assert len(new_items) == 0
+    history_manager._handle_restored_memories.assert_called_once_with([], source_item, "u1")
 
 
 def test_apply_llm_memory_updates_unrelated(history_manager, mock_graph_db):
@@ -293,17 +388,7 @@ def test_apply_llm_memory_updates_unrelated(history_manager, mock_graph_db):
 
     assert len(updated) == 0
     assert len(new_items) == 0
-
-    # Check that update_node was called to set status="activated"
-    # mark_memory_status calls update_node for each item
-    assert mock_graph_db.update_node.call_count == 2
-
-    # We can inspect calls
-    calls = mock_graph_db.update_node.call_args_list
-    ids = sorted([c.kwargs["id"] for c in calls])
-    assert ids == sorted([id1, id2])
-    for c in calls:
-        assert c.kwargs["fields"]["status"] == "activated"
+    mock_graph_db.update_node.assert_not_called()
 
 
 def test_apply_llm_memory_updates_conflict_and_merge(history_manager, mock_graph_db):
@@ -430,7 +515,11 @@ def test_check_and_fetch_replacements_deleted(history_manager, mock_graph_db):
         memory="x", metadata=TreeNodeTextualMemoryMetadata(history=[history_item])
     )
     mock_graph_db.get_nodes.return_value = [
-        {"id": fast_id, "metadata": {"status": "deleted", "evolve_to": ["n1", "n2"]}}
+        {
+            "id": fast_id,
+            "memory": "fast",
+            "metadata": {"status": "deleted", "evolve_to": ["n1", "n2"]},
+        }
     ]
 
     replacement_item = ArchivedTextualMemory(
@@ -438,11 +527,11 @@ def test_check_and_fetch_replacements_deleted(history_manager, mock_graph_db):
     )
     history_manager._fetch_evolved_nodes = MagicMock(return_value=[replacement_item])
 
-    replacements = history_manager._check_and_fetch_replacements(item, [0])
+    replacements = history_manager._check_and_fetch_replacements(item, [0], user_name="u1")
 
     assert 0 in replacements
     assert replacements[0][0].archived_memory_id == "n1"
-    history_manager._fetch_evolved_nodes.assert_called_once_with(["n1", "n2"], "conflict")
+    history_manager._fetch_evolved_nodes.assert_called_once_with(["n1", "n2"], "conflict", "u1")
 
 
 def test_fetch_evolved_nodes_returns_archives(history_manager, mock_graph_db):
@@ -459,7 +548,7 @@ def test_fetch_evolved_nodes_returns_archives(history_manager, mock_graph_db):
         },
     ]
 
-    results = history_manager._fetch_evolved_nodes(["x1", "x2"], "duplicate")
+    results = history_manager._fetch_evolved_nodes(["x1", "x2"], "duplicate", user_name="u1")
 
     assert len(results) == 2
     ids = sorted([r.archived_memory_id for r in results])
@@ -484,12 +573,12 @@ def test_wait_and_update_fast_history_rebuilds(history_manager):
     )
     history_manager._check_and_fetch_replacements = MagicMock(return_value={0: [replacement]})
 
-    history_manager.wait_and_update_fast_history(item, timeout_sec=1)
+    history_manager.wait_and_update_fast_history(item, user_name="u1", timeout_sec=1)
 
     ids = [h.archived_memory_id for h in item.metadata.history]
     assert "n1" in ids
     assert fast_id not in ids
-    history_manager._check_and_fetch_replacements.assert_called_once()
+    history_manager._check_and_fetch_replacements.assert_called_once_with(item, [0], "u1")
 
 
 def test_update_existing_memory_cas_merge_with_llm(mock_graph_db):
@@ -665,7 +754,7 @@ def test_update_from_feedback_returns_persistence_payload_without_side_effects(
     assert archived_item.metadata.sources[0].content == "old source"
     assert archived_metadata["embedding"] == [0.1, 0.2]
     assert update_fields["memory"] == "Updated Content"
-    assert update_fields["covered_history"] == memory_id
+    assert update_fields["covered_history"] == archived_item.id
     assert update_fields["embedding"] == [0.3, 0.4]
     mock_graph_db.get_node.assert_not_called()
     mock_graph_db.add_node.assert_not_called()
@@ -734,6 +823,6 @@ def test_merge_conflicting_memory_llm_error(mock_graph_db):
 
     merged = manager._merge_conflicting_memory("Latest", "Proposed")
 
-    assert "System Merge Fallback" in merged
+    assert merged == "Latest\n\n[New Info]: Proposed"
     assert "Latest" in merged
     assert "Proposed" in merged
