@@ -625,7 +625,7 @@ class MemoryHistoryManager:
             "memory": current_item.memory,
             "history": history_dump,
             "version": current_item.metadata.version,
-            "covered_history": old_item.id,
+            "covered_history": archived_item.id,
         }
         return current_item, archived_item, arch_meta, update_fields
 
