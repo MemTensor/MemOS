@@ -4,7 +4,7 @@ import textwrap
 import threading
 import time
 
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Literal
 
@@ -283,8 +283,11 @@ class PolarDBGraphDB(BaseGraphDB):
             raise
         finally:
             if conn:
-                with suppress(Exception):
+                try:
                     self.connection_pool.putconn(conn, close=broken)
+                    logger.debug(f"Returned connection {id(conn)} to pool (broken={broken})")
+                except Exception as e:
+                    logger.warning(f"Failed to return connection to pool: {e}")
             self._semaphore.release()
 
     def _ensure_database_exists(self):
