@@ -9,7 +9,6 @@ from datetime import datetime
 from typing import Any, Literal
 
 import numpy as np
-import psycopg2
 
 from memos.configs.graph_db import PolarDBGraphDBConfig
 from memos.dependency import require_python_package
@@ -248,6 +247,8 @@ class PolarDBGraphDB(BaseGraphDB):
 
     @contextmanager
     def _get_connection(self):
+        import psycopg2
+
         timeout = self._connection_wait_timeout
         if not self._semaphore.acquire(timeout=max(timeout, 0)):
             logger.warning(f"Timeout waiting for connection slot ({timeout}s)")
