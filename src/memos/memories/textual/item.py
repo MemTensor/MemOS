@@ -69,9 +69,9 @@ class ArchivedTextualMemory(BaseModel):
     memory: str | None = Field(
         default_factory=lambda: "", description="The content of the archived version of the memory."
     )
-    update_type: Literal["conflict", "duplicate", "extract", "unrelated"] = Field(
+    update_type: Literal["conflict", "duplicate", "extract", "unrelated", "feedback"] = Field(
         default="unrelated",
-        description="The type of the memory (e.g., `conflict`, `duplicate`, `extract`, `unrelated`).",
+        description="The type of the memory (e.g., `conflict`, `duplicate`, `extract`, `unrelated`, `feedback`).",
     )
     archived_memory_id: str | None = Field(
         default=None,

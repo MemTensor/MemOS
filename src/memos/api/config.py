@@ -459,6 +459,107 @@ class APIConfig:
         return APIConfig.get_memreader_general_llm_config()
 
     @staticmethod
+    def get_memreader_general_llm_config() -> dict[str, Any]:
+        """Get general LLM configuration for non-chat/doc tasks.
+
+        Used for: hallucination filter, memory rewrite, memory merge,
+        tool trajectory extraction, skill memory extraction.
+
+        This is the fallback for image_parser_llm and preference_extractor_llm.
+        Fallback chain: MEMREADER_GENERAL_MODEL -> MEMRADER_MODEL (memreader config)
+
+        Note: If you have fine-tuned a custom model for chat/doc extraction only,
+        you should configure MEMREADER_GENERAL_MODEL to use a general-purpose LLM
+        for other tasks. Otherwise, all tasks will use the same MEMRADER_MODEL.
+        """
+        # Check if specific general model is configured
+        general_model = os.getenv("MEMREADER_GENERAL_MODEL")
+        if general_model:
+            return {
+                "backend": os.getenv("MEMREADER_GENERAL_BACKEND", "openai"),
+                "config": {
+                    "model_name_or_path": general_model,
+                    "temperature": 0.6,
+                    "max_tokens": int(os.getenv("MEMREADER_GENERAL_MAX_TOKENS", "8000")),
+                    "top_p": 0.95,
+                    "top_k": 20,
+                    "api_key": os.getenv(
+                        "MEMREADER_GENERAL_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
+                    ),
+                    "api_base": os.getenv(
+                        "MEMREADER_GENERAL_API_BASE",
+                        os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+                    ),
+                    "remove_think_prefix": True,
+                },
+            }
+        # Fallback to memreader config (same behavior as before for users who don't customize)
+        return APIConfig.get_memreader_config()
+
+    @staticmethod
+    def get_image_parser_llm_config() -> dict[str, Any]:
+        """Get LLM configuration for image parsing (requires vision model).
+
+        Used for: image content extraction and analysis.
+        Requires a vision-capable model like GPT-4V, GPT-4o, etc.
+
+        Fallback chain: IMAGE_PARSER_MODEL -> general_llm -> OpenAI config
+        """
+        image_model = os.getenv("IMAGE_PARSER_MODEL")
+        if image_model:
+            return {
+                "backend": os.getenv("IMAGE_PARSER_BACKEND", "openai"),
+                "config": {
+                    "model_name_or_path": image_model,
+                    "temperature": 0.6,
+                    "max_tokens": int(os.getenv("IMAGE_PARSER_MAX_TOKENS", "4096")),
+                    "top_p": 0.95,
+                    "top_k": 20,
+                    "api_key": os.getenv(
+                        "IMAGE_PARSER_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
+                    ),
+                    "api_base": os.getenv(
+                        "IMAGE_PARSER_API_BASE",
+                        os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+                    ),
+                    "remove_think_prefix": True,
+                },
+            }
+        # Fallback to general_llm config (which itself falls back to OpenAI)
+        return APIConfig.get_memreader_general_llm_config()
+
+    @staticmethod
+    def get_preference_extractor_llm_config() -> dict[str, Any]:
+        """Get LLM configuration for preference extraction.
+
+        Used for: extracting user preferences from conversations.
+
+        Fallback chain: PREFERENCE_EXTRACTOR_MODEL -> general_llm -> OpenAI config
+        """
+        pref_model = os.getenv("PREFERENCE_EXTRACTOR_MODEL")
+        if pref_model:
+            return {
+                "backend": os.getenv("PREFERENCE_EXTRACTOR_BACKEND", "openai"),
+                "config": {
+                    "model_name_or_path": pref_model,
+                    "temperature": 0.6,
+                    "max_tokens": int(os.getenv("PREFERENCE_EXTRACTOR_MAX_TOKENS", "8000")),
+                    "top_p": 0.95,
+                    "top_k": 20,
+                    "api_key": os.getenv(
+                        "PREFERENCE_EXTRACTOR_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
+                    ),
+                    "api_base": os.getenv(
+                        "PREFERENCE_EXTRACTOR_API_BASE",
+                        os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+                    ),
+                    "remove_think_prefix": True,
+                },
+            }
+        # Fallback to general_llm config (which itself falls back to OpenAI)
+        return APIConfig.get_memreader_general_llm_config()
+
+    @staticmethod
     def get_activation_vllm_config() -> dict[str, Any]:
         """Get Ollama configuration."""
         return {
@@ -627,6 +728,7 @@ class APIConfig:
 
         return config
 
+    @staticmethod
     def get_internet_config() -> dict[str, Any]:
         """Get embedder configuration."""
         reader_config = APIConfig.get_reader_config()

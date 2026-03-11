@@ -261,6 +261,7 @@ def init_server() -> dict[str, Any]:
         mem_reader=mem_reader,
         searcher=searcher,
         reranker=feedback_reranker,
+        history_manager=memory_history_manager,
         pref_feedback=True,
     )
 

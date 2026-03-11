@@ -179,6 +179,13 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.config = config
         # Main LLM for chat/doc memory extraction (fine-tuned model)
         self.llm = LLMFactory.from_config(config.llm)
+        # General LLM for non-chat/doc tasks (hallucination filter, rewrite, merge, etc.)
+        # Falls back to main llm if not configured
+        self.general_llm = (
+            LLMFactory.from_config(config.general_llm)
+            if config.general_llm is not None
+            else self.llm
+        )
         self.qwen_llm = None
         qwen_llm_config = getattr(config, "qwen_llm", None)
         if qwen_llm_config:
