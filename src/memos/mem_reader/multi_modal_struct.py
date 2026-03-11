@@ -477,6 +477,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             sources=sources,
         )
         prompt = _rv if _rv is not None else prompt
+        logger.info(f"[MultiModalParser] Process String Fine After Plugin: {prompt}")
 
         messages = [{"role": "user", "content": prompt}]
         try:
