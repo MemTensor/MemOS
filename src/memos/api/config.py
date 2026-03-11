@@ -339,6 +339,26 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_qwen_llm_config() -> dict[str, Any] | None:
+        if not os.getenv("QWEN_API_KEY"):
+            return None
+        return {
+            "backend": "qwen",
+            "config": {
+                "model_name_or_path": os.getenv("QWEN_MODEL", "qwen-flash"),
+                "temperature": float(os.getenv("QWEN_TEMPERATURE", "0.8")),
+                "max_tokens": int(os.getenv("QWEN_MAX_TOKENS", "8000")),
+                "top_p": float(os.getenv("QWEN_TOP_P", "0.9")),
+                "top_k": int(os.getenv("QWEN_TOP_K", "50")),
+                "remove_think_prefix": os.getenv("QWEN_REMOVE_THINK_PREFIX", "true").lower()
+                == "true",
+                "api_key": os.getenv("QWEN_API_KEY", ""),
+                "api_base": os.getenv("QWEN_API_BASE", ""),
+                "model_schema": os.getenv("QWEN_MODEL_SCHEMA", "memos.configs.llm.QwenLLMConfig"),
+            },
+        }
+
+    @staticmethod
     def get_memreader_general_llm_config() -> dict[str, Any]:
         """Get general LLM configuration for non-chat/doc tasks.
 
