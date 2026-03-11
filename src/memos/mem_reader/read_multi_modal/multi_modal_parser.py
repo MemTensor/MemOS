@@ -76,8 +76,6 @@ class MultiModalParser:
             direct_markdown_hostnames=direct_markdown_hostnames,
             image_parser=self.image_parser,
         )
-        # Use dedicated image_parser_llm for image parsing (requires vision model)
-        self.image_parser = ImageParser(embedder, self.image_parser_llm)
         self.audio_parser = None  # future
 
         self.role_parsers = {
