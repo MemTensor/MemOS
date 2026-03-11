@@ -35,7 +35,13 @@ def on_pre_extract(
         return None
 
     plugin.stats[category] += 1
-    logger.info("[PromptStrategy] Matched rule: %s", category)
+    logger.info(
+        "[PromptStrategy] Matched rule: %s | prompt_type=%s, lang=%s, text=%s",
+        category,
+        prompt_type,
+        lang,
+        mem_str[:120] + ("..." if len(mem_str) > 120 else ""),
+    )
 
     custom_prompt = plugin.registry.build_prompt(
         category=category,
@@ -43,7 +49,7 @@ def on_pre_extract(
         mem_str=mem_str,
     )
     if custom_prompt is not None:
-        logger.debug("[PromptStrategy] Using strategy prompt for %s", category)
+        logger.info("[PromptStrategy] Prompt swapped to strategy: %s", category)
         return custom_prompt
 
     return None

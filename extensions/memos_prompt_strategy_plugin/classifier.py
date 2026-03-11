@@ -105,11 +105,18 @@ class MessageClassifier:
 
     @staticmethod
     def _check_identity_relation(sources: list, text: str) -> str | None:
-        has_self = bool(_SELF_NAME_RE.search(text)) or bool(_MY_NAME_IS_EN.search(text))
-        has_relation = bool(_RELATION_NAME_RE.search(text)) or bool(_MY_RELATION_IS_EN.search(text))
+        self_names = [m.group("name") for m in _SELF_NAME_RE.finditer(text)]
+        self_names += [m.group("name") for m in _MY_NAME_IS_EN.finditer(text)]
+        relation_names = [m.group("name") for m in _RELATION_NAME_RE.finditer(text)]
+        relation_names += [m.group("name") for m in _MY_RELATION_IS_EN.finditer(text)]
 
-        if has_self or has_relation:
-            logger.info("[PromptStrategy] Identity/relation pattern detected")
+        if self_names or relation_names:
+            logger.info(
+                "[PromptStrategy] Identity/relation pattern detected — "
+                "self_names=%s, relation_names=%s",
+                self_names,
+                relation_names,
+            )
             return IDENTITY_RELATION
 
         return None
