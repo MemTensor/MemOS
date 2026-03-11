@@ -49,7 +49,7 @@ class SearchHandler(BaseHandler):
         Main handler for search memories endpoint.
 
         Orchestrates the search process based on the requested search mode,
-        supporting both text and preference memory searches.
+        supporting text memory searches.
 
         Args:
             search_req: Search request containing query and parameters
@@ -120,10 +120,7 @@ class SearchHandler(BaseHandler):
                     if not isinstance(mem, dict):
                         continue
                     meta = mem.get("metadata", {})
-                    if key == "text_mem":
-                        score = meta.get("relativity", 1.0) if isinstance(meta, dict) else 1.0
-                    else:
-                        score = meta.get("score", 1.0) if isinstance(meta, dict) else 1.0
+                    score = meta.get("relativity", 1.0) if isinstance(meta, dict) else 1.0
                     try:
                         score_val = float(score) if score is not None else 1.0
                     except (TypeError, ValueError):

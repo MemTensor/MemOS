@@ -185,6 +185,7 @@ class MemoryManager:
                 "ToolTrajectoryMemory",
                 "RawFileMemory",
                 "SkillMemory",
+                "PreferenceMemory",
             ):
                 graph_node_id = (
                     memory.id if hasattr(memory, "id") else memory.id or str(uuid.uuid4())
@@ -234,7 +235,6 @@ class MemoryManager:
                             exc_info=e,
                         )
 
-        _submit_batches(working_nodes, "WorkingMemory")
         _submit_batches(graph_nodes, "graph memory")
 
         if graph_node_ids and self.is_reorganize:
@@ -341,6 +341,7 @@ class MemoryManager:
                 "ToolTrajectoryMemory",
                 "RawFileMemory",
                 "SkillMemory",
+                "PreferenceMemory",
             ):
                 f_graph = ex.submit(
                     self._add_to_graph_memory,

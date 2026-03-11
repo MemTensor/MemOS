@@ -43,11 +43,13 @@ class SentenceChunker(BaseChunker):
 
     def chunk(self, text: str) -> list[str] | list[Chunk]:
         """Chunk the given text into smaller chunks based on sentences."""
-        chonkie_chunks = self.chunker.chunk(text)
+        protected_text, url_map = self.protect_urls(text)
+        chonkie_chunks = self.chunker.chunk(protected_text)
 
         chunks = []
         for c in chonkie_chunks:
             chunk = Chunk(text=c.text, token_count=c.token_count, sentences=c.sentences)
+            chunk = self.restore_urls(chunk.text, url_map)
             chunks.append(chunk)
 
         logger.debug(f"Generated {len(chunks)} chunks from input text")

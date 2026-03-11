@@ -114,6 +114,7 @@ class UserParser(BaseMessageParser):
                             chat_time=chat_time,
                             message_id=message_id,
                             image_path=image_info.get("url"),
+                            image_info=image_info,
                         )
                         source.lang = overall_lang
                         sources.append(source)

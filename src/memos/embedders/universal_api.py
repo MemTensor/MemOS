@@ -14,6 +14,21 @@ from memos.utils import timed_with_status
 logger = get_logger(__name__)
 
 
+def _sanitize_unicode(text: str) -> str:
+    """
+    Remove Unicode surrogates and other problematic characters.
+    Surrogates (U+D800-U+DFFF) cause UnicodeEncodeError with some APIs.
+    """
+    try:
+        # Encode with 'surrogatepass' then decode, replacing invalid chars
+        cleaned = text.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="replace")
+        # Replace replacement char with empty string for cleaner output
+        return cleaned.replace("\ufffd", "")
+    except Exception:
+        # Fallback: remove all non-BMP characters
+        return "".join(c for c in text if ord(c) < 0x10000)
+
+
 class UniversalAPIEmbedder(BaseEmbedder):
     def __init__(self, config: UniversalAPIEmbedderConfig):
         self.provider = config.provider
@@ -54,6 +69,8 @@ class UniversalAPIEmbedder(BaseEmbedder):
     def embed(self, texts: list[str]) -> list[list[float]]:
         if isinstance(texts, str):
             texts = [texts]
+        # Sanitize Unicode to prevent encoding errors with emoji/surrogates
+        texts = [_sanitize_unicode(t) for t in texts]
         # Truncate texts if max_tokens is configured
         texts = self._truncate_texts(texts)
         logger.info(f"Embeddings request with input: {texts}")

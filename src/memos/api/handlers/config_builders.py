@@ -201,3 +201,26 @@ def build_nli_client_config() -> dict[str, Any]:
         NLI client configuration dictionary
     """
     return APIConfig.get_nli_config()
+
+
+def build_general_llm_config() -> dict[str, Any]:
+    """
+    Build general LLM configuration for non-chat/doc tasks.
+
+    Used for: hallucination filter, memory rewrite, memory merge,
+    tool trajectory extraction, skill memory extraction.
+
+    Returns:
+        Validated general LLM configuration dictionary
+    """
+    return LLMConfigFactory.model_validate(APIConfig.get_memreader_general_llm_config())
+
+
+def build_image_parser_llm_config() -> dict[str, Any]:
+    """
+    Build image parser LLM configuration (requires vision model).
+
+    Returns:
+        Validated image parser LLM configuration dictionary
+    """
+    return LLMConfigFactory.model_validate(APIConfig.get_image_parser_llm_config())
