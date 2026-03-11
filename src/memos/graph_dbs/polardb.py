@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 import numpy as np
+import psycopg2
 
 from memos.configs.graph_db import PolarDBGraphDBConfig
 from memos.dependency import require_python_package
