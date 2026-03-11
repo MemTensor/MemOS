@@ -19,6 +19,16 @@ def _make_app():
     return app, plugin
 
 
+def _src(role, content):
+    class _S:
+        pass
+
+    s = _S()
+    s.role = role
+    s.content = content
+    return s
+
+
 class TestPluginLifecycle:
     def setup_method(self):
         from memos.plugins.hooks import _hooks
@@ -30,7 +40,7 @@ class TestPluginLifecycle:
 
         plugin = PromptStrategyPlugin()
         assert plugin.name == "prompt_strategy"
-        assert plugin.version == "0.1.0"
+        assert plugin.version == "0.2.0"
 
     def test_on_load_initialises_components(self):
         from memos_prompt_strategy_plugin.plugin import PromptStrategyPlugin
@@ -72,8 +82,7 @@ class TestPluginRoutes:
         resp = client.get("/prompt_strategy/strategies")
         assert resp.status_code == 200
         strategies = resp.json()
-        assert "casual_chat" in strategies
-        assert "task_oriented" in strategies
+        assert "identity_relation" in strategies
 
     def test_stats_empty(self):
         app, _ = _make_app()
@@ -89,9 +98,8 @@ class TestHookIntegration:
 
         _hooks.clear()
 
-    def test_pre_extract_classifies_and_swaps_prompt(self):
-        """When the plugin classifies a message as task_oriented, it returns
-        the task-specific prompt containing the original mem_str."""
+    def test_pre_extract_swaps_prompt_for_identity(self):
+        """When identity/relation pattern is detected, the prompt is swapped."""
         from memos.plugins.hooks import trigger_hook
 
         _, plugin = _make_app()
@@ -100,65 +108,45 @@ class TestHookIntegration:
             "mem_reader.pre_extract",
             prompt="original prompt",
             prompt_type="chat",
-            mem_str="Please schedule a meeting and remind me about the deadline",
-            lang="en",
+            mem_str="我叫王沐辰，我的儿子叫王明泽",
+            lang="zh",
             sources=[],
         )
         assert result != "original prompt"
-        assert "schedule a meeting" in result
-        assert plugin.stats["task_oriented"] >= 1
+        assert "王沐辰" in result
+        assert "王明泽" in result
+        assert plugin.stats["identity_relation"] >= 1
 
-    def test_pre_extract_preserves_prompt_when_no_rule_matches(self):
-        """When no classifier rule matches and the default prompt_type has no
-        registered strategy, the original prompt passes through unchanged."""
+    def test_pre_extract_preserves_prompt_for_normal_text(self):
+        """When no classifier rule matches, original prompt passes through."""
         from memos.plugins.hooks import trigger_hook
-
-        def _src(role, content):
-            class _S:
-                pass
-
-            s = _S()
-            s.role = role
-            s.content = content
-            return s
 
         _make_app()
 
-        sources = [
-            _src("user", "Let me think about that"),
-            _src("assistant", "Sure, take your time"),
-            _src("user", "Okay I have decided"),
-        ]
+        sources = [_src("user", "今天天气不错，出去走走吧")]
         result = trigger_hook(
             "mem_reader.pre_extract",
             prompt="original prompt",
             prompt_type="chat",
-            mem_str="Let me think about that\nSure, take your time\nOkay I have decided",
-            lang="en",
+            mem_str="今天天气不错，出去走走吧",
+            lang="zh",
             sources=sources,
         )
         assert result == "original prompt"
 
-    def test_pre_extract_tracks_stats(self):
+    def test_pre_extract_english_identity(self):
         from memos.plugins.hooks import trigger_hook
 
         _, plugin = _make_app()
 
-        trigger_hook(
+        result = trigger_hook(
             "mem_reader.pre_extract",
-            prompt="p",
+            prompt="original prompt",
             prompt_type="chat",
-            mem_str="I feel so happy and grateful today",
+            mem_str="My name is Alice and my son is Bob",
             lang="en",
             sources=[],
         )
-        trigger_hook(
-            "mem_reader.pre_extract",
-            prompt="p",
-            prompt_type="chat",
-            mem_str="```python\nimport os\nprint(os.getcwd())\n```",
-            lang="en",
-            sources=[],
-        )
-        assert plugin.stats["emotional"] >= 1
-        assert plugin.stats["code_discussion"] >= 1
+        assert result != "original prompt"
+        assert "Alice" in result
+        assert plugin.stats["identity_relation"] >= 1

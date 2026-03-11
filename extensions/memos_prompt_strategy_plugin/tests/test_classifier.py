@@ -1,19 +1,12 @@
-"""Tests for MessageClassifier rule-based classification."""
+"""Tests for the single-rule identity/relation classifier."""
 
 from memos_prompt_strategy_plugin.classifier import (
-    CASUAL_CHAT,
-    CODE_DISCUSSION,
-    EMOTIONAL,
-    KNOWLEDGE_SHARING,
-    MULTI_TURN_QA,
-    TASK_ORIENTED,
+    IDENTITY_RELATION,
     MessageClassifier,
 )
 
 
 def _src(role: str, content: str):
-    """Helper: lightweight source-like object."""
-
     class _S:
         pass
 
@@ -23,84 +16,97 @@ def _src(role: str, content: str):
     return s
 
 
-class TestClassifierRules:
+class TestIdentityRelationRule:
     def setup_method(self):
         self.clf = MessageClassifier()
 
-    # ── code_discussion ──────────────────────────────────────────
+    # ── Chinese: self-naming ────────────────────────────────────
 
-    def test_code_block_triggers_code(self):
-        sources = [_src("user", "Here is my code:\n```python\nprint('hello')\n```")]
-        result = self.clf.classify(sources, "", "chat", {})
-        assert result == CODE_DISCUSSION
+    def test_wo_jiao(self):
+        sources = [_src("user", "你好，我叫王沐辰")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
 
-    def test_tech_keywords_trigger_code(self):
-        sources = [
-            _src("user", "I need to import the SDK and call the API via HTTP with JSON payload")
-        ]
-        result = self.clf.classify(sources, "", "chat", {})
-        assert result == CODE_DISCUSSION
+    def test_wo_shi(self):
+        sources = [_src("user", "我是李明，今年30岁")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
 
-    # ── task_oriented ────────────────────────────────────────────
+    def test_wo_de_mingzi_shi(self):
+        sources = [_src("user", "我的名字是张三")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
 
-    def test_task_keywords_en(self):
-        sources = [_src("user", "Please schedule a meeting and set up the deployment pipeline")]
-        result = self.clf.classify(sources, "", "chat", {})
-        assert result == TASK_ORIENTED
+    # ── Chinese: relation naming ────────────────────────────────
 
-    def test_task_keywords_zh(self):
-        sources = [_src("user", "请帮我安排明天的会议，并提醒我截止日期")]
-        result = self.clf.classify(sources, "", "chat", {})
-        assert result == TASK_ORIENTED
+    def test_son(self):
+        sources = [_src("user", "我的儿子叫王明泽")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
 
-    # ── emotional ────────────────────────────────────────────────
+    def test_daughter(self):
+        sources = [_src("user", "我女儿叫小红")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
 
-    def test_emotion_en(self):
-        sources = [_src("user", "I feel so happy and grateful for everything today")]
-        result = self.clf.classify(sources, "", "chat", {})
-        assert result == EMOTIONAL
+    def test_wife(self):
+        sources = [_src("user", "我老婆是刘芳")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
 
-    def test_emotion_zh(self):
-        sources = [_src("user", "今天特别开心，也很感恩身边的朋友")]
-        result = self.clf.classify(sources, "", "chat", {})
-        assert result == EMOTIONAL
+    def test_mother(self):
+        sources = [_src("user", "我妈妈叫李秀英")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
 
-    # ── knowledge_sharing ────────────────────────────────────────
+    def test_friend(self):
+        sources = [_src("user", "我朋友叫赵磊")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
 
-    def test_long_text_knowledge(self):
-        long_text = "This is a detailed explanation of how transformers work.\n" * 20
-        sources = [_src("user", long_text)]
-        result = self.clf.classify(sources, "", "chat", {})
-        assert result == KNOWLEDGE_SHARING
+    def test_pet(self):
+        sources = [_src("user", "我的猫叫小花")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
 
-    # ── multi_turn_qa ────────────────────────────────────────────
+    # ── Chinese: combined self + relation ───────────────────────
 
-    def test_multi_turn_qa(self):
-        sources = [
-            _src("user", "What is the best approach for caching?"),
-            _src("assistant", "It depends on your use case. What latency do you need?"),
-            _src("user", "Under 100ms. Which solution fits?"),
-            _src("assistant", "Redis would be ideal for that latency requirement."),
-        ]
-        text = "\n".join(s.content for s in sources)
-        result = self.clf.classify(sources, text, "chat", {})
-        assert result == MULTI_TURN_QA
+    def test_combined(self):
+        sources = [_src("user", "我叫王沐辰，我的儿子叫王明泽")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
 
-    # ── casual_chat ──────────────────────────────────────────────
+    # ── English ─────────────────────────────────────────────────
 
-    def test_short_casual(self):
-        sources = [_src("user", "Hey, nice weather today!")]
-        result = self.clf.classify(sources, "", "chat", {})
-        assert result == CASUAL_CHAT
+    def test_my_name_is(self):
+        sources = [_src("user", "Hi, my name is Alice")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
 
-    # ── fallback ─────────────────────────────────────────────────
+    def test_im(self):
+        sources = [_src("user", "I'm Bob, nice to meet you")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
 
-    def test_no_match_returns_default(self):
-        sources = [
-            _src("user", "Let me think about that for a moment"),
-            _src("assistant", "Sure, take your time"),
-            _src("user", "Okay I have decided"),
-        ]
-        text = "\n".join(s.content for s in sources)
-        result = self.clf.classify(sources, text, "chat", {})
-        assert result == "chat"
+    def test_call_me(self):
+        sources = [_src("user", "Just call me Charlie")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
+
+    def test_my_son_is(self):
+        sources = [_src("user", "My son is called David")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
+
+    def test_my_wife_is(self):
+        sources = [_src("user", "My wife's name is Emma")]
+        assert self.clf.classify(sources, "", "chat", {}) == IDENTITY_RELATION
+
+    # ── No match → None ─────────────────────────────────────────
+
+    def test_no_identity_returns_none(self):
+        sources = [_src("user", "今天天气不错")]
+        assert self.clf.classify(sources, "", "chat", {}) is None
+
+    def test_task_text_returns_none(self):
+        sources = [_src("user", "请帮我安排明天的会议")]
+        assert self.clf.classify(sources, "", "chat", {}) is None
+
+    def test_code_returns_none(self):
+        sources = [_src("user", "```python\nprint('hello')\n```")]
+        assert self.clf.classify(sources, "", "chat", {}) is None
+
+    def test_empty_returns_none(self):
+        assert self.clf.classify([], "", "chat", {}) is None
+
+    # ── mem_str fallback ────────────────────────────────────────
+
+    def test_uses_mem_str_when_no_sources(self):
+        result = self.clf.classify([], "我叫王沐辰，我的儿子叫王明泽", "chat", {})
+        assert result == IDENTITY_RELATION

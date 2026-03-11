@@ -26,18 +26,21 @@ def on_pre_extract(
     sources: list,
     **_kw: Any,
 ) -> str | None:
-    """[mem_reader.pre_extract] Classify the message and swap in a tailored prompt."""
+    """[mem_reader.pre_extract] If a classifier rule matches and a
+    corresponding strategy is registered, swap in the specialised prompt;
+    otherwise return None to keep the default."""
     category = plugin.classifier.classify(sources, mem_str, prompt_type, info={})
-    plugin.stats[category] += 1
 
-    if category != prompt_type:
-        logger.info("[PromptStrategy] Classified as %s (was %s)", category, prompt_type)
+    if category is None:
+        return None
+
+    plugin.stats[category] += 1
+    logger.info("[PromptStrategy] Matched rule: %s", category)
 
     custom_prompt = plugin.registry.build_prompt(
         category=category,
         lang=lang,
         mem_str=mem_str,
-        custom_tags=None,
     )
     if custom_prompt is not None:
         logger.debug("[PromptStrategy] Using strategy prompt for %s", category)

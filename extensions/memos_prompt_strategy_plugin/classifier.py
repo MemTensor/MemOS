@@ -1,7 +1,8 @@
-"""Message classifier — categorize messages for prompt strategy selection.
+"""Message classifier — rule-chain architecture with extensible rules.
 
-Uses a rule-based pipeline (zero LLM overhead) with optional LLM fallback
-for ambiguous cases.
+Currently only one rule is registered (identity/relation naming detection).
+To add a new rule, write a static method that returns a category string on
+match or ``None`` on miss, then append it to ``self._rules`` in ``__init__``.
 """
 
 from __future__ import annotations
@@ -17,49 +18,37 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Category constants
-CASUAL_CHAT = "casual_chat"
-TASK_ORIENTED = "task_oriented"
-KNOWLEDGE_SHARING = "knowledge_sharing"
-EMOTIONAL = "emotional"
-CODE_DISCUSSION = "code_discussion"
-MULTI_TURN_QA = "multi_turn_qa"
+# ── Category constants ──────────────────────────────────────────────
+IDENTITY_RELATION = "identity_relation"
 
-ALL_CATEGORIES = [
-    CASUAL_CHAT,
-    TASK_ORIENTED,
-    KNOWLEDGE_SHARING,
-    EMOTIONAL,
-    CODE_DISCUSSION,
-    MULTI_TURN_QA,
-]
+# ── Regex patterns for identity / relation detection ────────────────
+_SELF_NAME_RE = re.compile(
+    r"我(?:的名字)?(?:是|叫)\s*(?P<name>\S+)",
+)
 
-_CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```")
-_TECH_KEYWORDS = re.compile(
-    r"\b(import|def |class |function |const |let |var |return |async |await "
-    r"|API|SDK|HTTP|JSON|SQL|docker|kubernetes|git|npm|pip)\b",
+_RELATION_WORDS = (
+    "儿子|女儿|孩子|小孩"
+    "|老婆|妻子|老公|丈夫|爱人|伴侣|对象"
+    "|爸爸|妈妈|父亲|母亲|爸|妈"
+    "|哥哥|姐姐|弟弟|妹妹|哥|姐|弟|妹"
+    "|爷爷|奶奶|外公|外婆|姥姥|姥爷"
+    "|叔叔|阿姨|舅舅|舅妈|姑姑|姑父"
+    "|朋友|同事|同学|室友|闺蜜|兄弟"
+    "|男朋友|女朋友|前任"
+    "|宠物|狗|猫"
+)
+_RELATION_NAME_RE = re.compile(
+    rf"我(?:的)?(?:{_RELATION_WORDS})(?:的名字)?(?:是|叫)\s*(?P<name>\S+)",
+)
+
+_MY_NAME_IS_EN = re.compile(
+    r"(?:my name is|i'?m|call me)\s+(?P<name>[A-Z]\w+)",
     re.IGNORECASE,
 )
-_TASK_KEYWORDS_EN = re.compile(
-    r"\b(please|todo|deadline|schedule|remind|plan|book|order|buy|send|create"
-    r"|set up|configure|install|deploy|migrate|update)\b",
+_MY_RELATION_IS_EN = re.compile(
+    r"my\s+(?:son|daughter|wife|husband|father|mother|brother|sister|friend)"
+    r"(?:'s name)?\s+is\s+(?P<name>[A-Z]\w+)",
     re.IGNORECASE,
-)
-_TASK_KEYWORDS_ZH = re.compile(
-    r"(请|帮我|提醒|安排|预定|预约|计划|任务|截止|部署|配置|安装|迁移|更新|设置|发送|创建|购买)",
-)
-_EMOTION_KEYWORDS_EN = re.compile(
-    r"\b(feel|happy|sad|angry|love|hate|miss|worry|afraid|grateful"
-    r"|excited|lonely|anxious|stressed|depressed|proud)\b",
-    re.IGNORECASE,
-)
-_EMOTION_KEYWORDS_ZH = re.compile(
-    r"(开心|难过|伤心|生气|爱|恨|想念|担心|害怕|感谢|感恩|兴奋|孤独|焦虑|压力|骄傲|烦|累|郁闷|失望|幸福)",
-)
-_QUESTION_PATTERNS = re.compile(
-    r"(\?\s*$|？\s*$|what|why|how|when|where|who|which|do you|can you|is it"
-    r"|什么|为什么|怎么|何时|哪里|谁|哪个|是否|能不能|会不会)",
-    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -76,32 +65,21 @@ def _extract_text(sources: list) -> str:
     return "\n".join(parts)
 
 
-def _count_roles(sources: list) -> dict[str, int]:
-    """Count occurrences of each role in sources."""
-    counts: dict[str, int] = {}
-    for src in sources:
-        role = None
-        if hasattr(src, "role"):
-            role = src.role
-        elif isinstance(src, dict):
-            role = src.get("role")
-        if role:
-            counts[role] = counts.get(role, 0) + 1
-    return counts
-
-
 class MessageClassifier:
-    """Rule-based message classifier with optional LLM fallback."""
+    """Rule-chain classifier.
 
-    def __init__(self, llm: Any | None = None):
-        self.llm = llm
+    Rules are evaluated in registration order; the first match wins.
+    If no rule matches, ``classify()`` returns ``None`` so the caller
+    keeps the default prompt unchanged.
+
+    To add a new rule:
+        1. Define a static/class method ``_check_xxx(sources, text) -> str | None``
+        2. Append ``("category_name", self._check_xxx)`` to ``self._rules``
+    """
+
+    def __init__(self) -> None:
         self._rules: list[tuple[str, Callable[[list, str], str | None]]] = [
-            ("code_discussion", self._check_code),
-            ("task_oriented", self._check_task),
-            ("emotional", self._check_emotion),
-            ("knowledge_sharing", self._check_knowledge),
-            ("multi_turn_qa", self._check_multi_turn_qa),
-            ("casual_chat", self._check_casual),
+            ("identity_relation", self._check_identity_relation),
         ]
 
     def classify(
@@ -110,89 +88,28 @@ class MessageClassifier:
         mem_str: str,
         default_prompt_type: str,
         info: dict[str, Any],
-    ) -> str:
-        """Classify messages and return a category label.
-
-        Returns the default_prompt_type unchanged when no rule matches
-        and no LLM fallback is configured.
-        """
+    ) -> str | None:
+        """Walk the rule chain; return the first matching category or ``None``."""
         text = _extract_text(sources) if sources else mem_str
+        if not text:
+            return None
 
         for _name, rule_fn in self._rules:
             result = rule_fn(sources, text)
             if result is not None:
                 return result
 
-        if self.llm is not None:
-            return self._llm_classify(text, default_prompt_type)
-
-        return default_prompt_type
-
-    # ── Rule functions ──────────────────────────────────────────────
-
-    @staticmethod
-    def _check_code(sources: list, text: str) -> str | None:
-        has_code_block = bool(_CODE_BLOCK_RE.search(text))
-        tech_hits = len(_TECH_KEYWORDS.findall(text))
-        if has_code_block or tech_hits >= 3:
-            return CODE_DISCUSSION
         return None
 
-    @staticmethod
-    def _check_task(sources: list, text: str) -> str | None:
-        en_hits = len(_TASK_KEYWORDS_EN.findall(text))
-        zh_hits = len(_TASK_KEYWORDS_ZH.findall(text))
-        if en_hits + zh_hits >= 2:
-            return TASK_ORIENTED
-        return None
+    # ── Rules ───────────────────────────────────────────────────────
 
     @staticmethod
-    def _check_emotion(sources: list, text: str) -> str | None:
-        en_hits = len(_EMOTION_KEYWORDS_EN.findall(text))
-        zh_hits = len(_EMOTION_KEYWORDS_ZH.findall(text))
-        if en_hits + zh_hits >= 2:
-            return EMOTIONAL
+    def _check_identity_relation(sources: list, text: str) -> str | None:
+        has_self = bool(_SELF_NAME_RE.search(text)) or bool(_MY_NAME_IS_EN.search(text))
+        has_relation = bool(_RELATION_NAME_RE.search(text)) or bool(_MY_RELATION_IS_EN.search(text))
+
+        if has_self or has_relation:
+            logger.info("[PromptStrategy] Identity/relation pattern detected")
+            return IDENTITY_RELATION
+
         return None
-
-    @staticmethod
-    def _check_knowledge(sources: list, text: str) -> str | None:
-        if len(text) > 800 and text.count("\n") >= 5:
-            return KNOWLEDGE_SHARING
-        return None
-
-    @staticmethod
-    def _check_multi_turn_qa(sources: list, text: str) -> str | None:
-        role_counts = _count_roles(sources)
-        total_turns = sum(role_counts.values())
-        question_hits = len(_QUESTION_PATTERNS.findall(text))
-        if total_turns >= 4 and question_hits >= 2:
-            return MULTI_TURN_QA
-        return None
-
-    @staticmethod
-    def _check_casual(sources: list, text: str) -> str | None:
-        role_counts = _count_roles(sources)
-        total_turns = sum(role_counts.values())
-        if total_turns <= 2 and len(text) < 200:
-            return CASUAL_CHAT
-        return None
-
-    # ── LLM fallback ────────────────────────────────────────────────
-
-    def _llm_classify(self, text: str, default: str) -> str:
-        categories_str = ", ".join(ALL_CATEGORIES)
-        prompt = (
-            f"Classify the following conversation into exactly one category.\n"
-            f"Categories: {categories_str}\n\n"
-            f"Conversation:\n{text[:2000]}\n\n"
-            f"Reply with ONLY the category name, nothing else."
-        )
-        try:
-            result = self.llm.generate([{"role": "user", "content": prompt}])
-            label = result.strip().lower().replace(" ", "_")
-            if label in ALL_CATEGORIES:
-                return label
-            logger.warning("[PromptStrategy] LLM returned unknown category: %s", label)
-        except Exception:
-            logger.exception("[PromptStrategy] LLM classification failed")
-        return default

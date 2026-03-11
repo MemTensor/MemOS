@@ -1,11 +1,11 @@
-"""Quick demo — run directly to see classification + prompt strategy in action.
+"""Quick demo — run directly to see identity/relation detection in action.
 
 Usage:
     PYTHONPATH="src:extensions" python extensions/memos_prompt_strategy_plugin/example.py
 """
 
 from memos_prompt_strategy_plugin.classifier import MessageClassifier
-from memos_prompt_strategy_plugin.strategies import StrategyRegistry
+from memos_prompt_strategy_plugin.strategies import build_identity_relation_prompt
 
 
 def _src(role: str, content: str):
@@ -18,113 +18,71 @@ def _src(role: str, content: str):
     return s
 
 
-DEMO_CONVERSATIONS = {
-    "casual_chat": {
-        "sources": [_src("user", "Hey! I really like Italian food, especially pasta.")],
-        "mem_str": "Hey! I really like Italian food, especially pasta.",
+DEMO_CONVERSATIONS = [
+    {
+        "label": "自我介绍 + 亲属关系",
+        "sources": [_src("user", "你好，我叫王沐辰，我的儿子叫王明泽")],
+        "mem_str": "你好，我叫王沐辰，我的儿子叫王明泽",
     },
-    "task_oriented": {
-        "sources": [
-            _src("user", "请帮我安排明天下午3点的会议，提醒我截止日期是周五"),
-            _src("assistant", "好的，已经帮你安排好了"),
-        ],
-        "mem_str": "请帮我安排明天下午3点的会议，提醒我截止日期是周五\n好的，已经帮你安排好了",
+    {
+        "label": "仅自我介绍",
+        "sources": [_src("user", "我是李明，今年30岁")],
+        "mem_str": "我是李明，今年30岁",
     },
-    "code_discussion": {
-        "sources": [
-            _src(
-                "user",
-                "I'm getting an error with my FastAPI app:\n"
-                "```python\n"
-                "from fastapi import APIRouter\n"
-                "router = APIRouter()\n"
-                "@router.get('/health')\n"
-                "async def health(): return {'ok': True}\n"
-                "```\n"
-                "The import fails after upgrading the SDK.",
-            ),
-        ],
-        "mem_str": (
-            "I'm getting an error with my FastAPI app:\n"
-            "```python\nfrom fastapi import APIRouter\n```\n"
-            "The import fails after upgrading the SDK."
-        ),
+    {
+        "label": "英文自我介绍 + 关系",
+        "sources": [_src("user", "Hi, my name is Alice. My son is called Bob.")],
+        "mem_str": "Hi, my name is Alice. My son is called Bob.",
     },
-    "emotional": {
-        "sources": [
-            _src("user", "今天特别开心，终于完成了马拉松，虽然很累但是非常骄傲"),
-        ],
-        "mem_str": "今天特别开心，终于完成了马拉松，虽然很累但是非常骄傲",
+    {
+        "label": "多种关系",
+        "sources": [_src("user", "我叫张三，我老婆叫李四，我女儿叫张小花，我妈妈叫王秀英")],
+        "mem_str": "我叫张三，我老婆叫李四，我女儿叫张小花，我妈妈叫王秀英",
     },
-    "multi_turn_qa": {
-        "sources": [
-            _src("user", "What's the difference between Redis and Memcached?"),
-            _src("assistant", "Redis supports more data structures. What's your use case?"),
-            _src("user", "I need pub/sub and sorted sets. Which one fits?"),
-            _src("assistant", "Redis is the clear choice for pub/sub and sorted sets."),
-        ],
-        "mem_str": (
-            "What's the difference between Redis and Memcached?\n"
-            "Redis supports more data structures. What's your use case?\n"
-            "I need pub/sub and sorted sets. Which one fits?\n"
-            "Redis is the clear choice for pub/sub and sorted sets."
-        ),
+    {
+        "label": "普通闲聊（不应命中）",
+        "sources": [_src("user", "今天天气不错，出去走走吧")],
+        "mem_str": "今天天气不错，出去走走吧",
     },
-    "knowledge_sharing": {
-        "sources": [
-            _src(
-                "user",
-                "\n".join(
-                    [
-                        "Transformers are a neural network architecture introduced in 2017.",
-                        "They use self-attention mechanisms to process sequences in parallel.",
-                        "Unlike RNNs, transformers don't require sequential computation.",
-                        "The key components are: multi-head attention, feed-forward networks,",
-                        "layer normalization, and positional encoding.",
-                        "Pre-training on large corpora followed by fine-tuning has become",
-                        "the dominant paradigm in NLP since BERT (2018).",
-                    ]
-                    * 3
-                ),
-            ),
-        ],
-        "mem_str": "Transformers are a neural network architecture..." + "x" * 800,
+    {
+        "label": "任务型（不应命中）",
+        "sources": [_src("user", "请帮我安排明天下午3点的会议")],
+        "mem_str": "请帮我安排明天下午3点的会议",
     },
-}
+]
 
 SEPARATOR = "=" * 72
 
 
 def main():
     clf = MessageClassifier()
-    reg = StrategyRegistry()
-    reg.register_defaults()
 
     print(SEPARATOR)
-    print("  Prompt Strategy Plugin — Classification Demo")
+    print("  Prompt Strategy Plugin — Identity/Relation Detection Demo")
     print(SEPARATOR)
 
-    for label, data in DEMO_CONVERSATIONS.items():
+    for data in DEMO_CONVERSATIONS:
+        label = data["label"]
         sources = data["sources"]
         mem_str = data["mem_str"]
 
         category = clf.classify(sources, mem_str, "chat", {})
-        prompt = reg.build_prompt(
-            category, "zh" if any("\u4e00" <= c <= "\u9fff" for c in mem_str) else "en", mem_str
-        )
+        hit = category is not None
 
-        status = "MATCH" if category == label else "MISMATCH"
         print(f"\n{'—' * 72}")
-        print(f"  Scenario : {label}")
-        print(f"  Classified: {category}  [{status}]")
-        print(f"  Input     : {mem_str[:80]}{'...' if len(mem_str) > 80 else ''}")
-        print(
-            f"  Prompt    : {prompt[:120]}..." if prompt else "  Prompt    : (default, no override)"
-        )
+        print(f"  Scenario: {label}")
+        print(f"  Input   : {mem_str[:80]}{'...' if len(mem_str) > 80 else ''}")
+        print(f"  Hit     : {'YES → identity_relation' if hit else 'NO → use default prompt'}")
+
+        if hit:
+            lang = "zh" if any("\u4e00" <= c <= "\u9fff" for c in mem_str) else "en"
+            prompt = build_identity_relation_prompt(lang=lang, mem_str=mem_str)
+            print(f"  Prompt  : {prompt[:120]}...")
+
         print(f"{'—' * 72}")
 
     print(f"\n{SEPARATOR}")
-    print("  All scenarios processed.")
+    print("  Done.")
     print(SEPARATOR)
 
 

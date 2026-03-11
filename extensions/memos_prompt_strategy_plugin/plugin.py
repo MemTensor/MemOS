@@ -1,4 +1,4 @@
-"""PromptStrategyPlugin — classify messages and select specialised prompts."""
+"""PromptStrategyPlugin — rule-chain classifier + strategy registry."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class PromptStrategyPlugin(MemOSPlugin):
     name = "prompt_strategy"
     version = "0.1.0"
-    description = "Classify messages and apply category-specific extraction prompts"
+    description = "Rule-chain classifier with strategy registry for specialised extraction prompts"
 
     def on_load(self) -> None:
         from memos_prompt_strategy_plugin.classifier import MessageClassifier
@@ -39,6 +39,6 @@ class PromptStrategyPlugin(MemOSPlugin):
 
     def on_shutdown(self) -> None:
         logger.info(
-            "[PromptStrategy] plugin shutdown — classification stats: %s",
+            "[PromptStrategy] plugin shutdown — stats: %s",
             dict(self.stats),
         )
