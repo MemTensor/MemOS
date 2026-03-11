@@ -27,6 +27,15 @@ describe("sqlite bootstrap path handling", () => {
     expect(pluginDir).toBe("C:\\Users\\nowcoder\\.openclaw\\extensions\\memos-local-openclaw-plugin");
   });
 
+  it("keeps compatibility with Node runtimes that only expose the one-argument fileURLToPath", () => {
+    const pluginDir = getPluginDirFromImportMeta(
+      "file:///C:/Program%20Files/OpenClaw/plugins/memos-local-openclaw-plugin/index.ts",
+      "win32",
+    );
+
+    expect(pluginDir).toBe("C:\\Program Files\\OpenClaw\\plugins\\memos-local-openclaw-plugin");
+  });
+
   it("treats Windows paths with slash and case differences as the same directory", () => {
     expect(
       isPathWithinDir(
@@ -45,6 +54,16 @@ describe("sqlite bootstrap path handling", () => {
         "win32",
       ),
     ).toBe(false);
+  });
+
+  it("allows child directories whose names start with two dots", () => {
+    expect(
+      isPathWithinDir(
+        "C:/Users/nowcoder/.openclaw/extensions/memos-local-openclaw-plugin/..cache/better-sqlite3/index.js",
+        "C:\\Users\\nowcoder\\.openclaw\\extensions\\memos-local-openclaw-plugin",
+        "win32",
+      ),
+    ).toBe(true);
   });
 });
 

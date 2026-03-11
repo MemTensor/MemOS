@@ -26,12 +26,39 @@ export type BetterSqliteRuntime = {
   clearCache: () => void;
 };
 
+function fileUrlToPathWithWindowsFallback(
+  importMetaUrl: string,
+  platform: NodeJS.Platform,
+): string {
+  const nativePath = fileURLToPath(importMetaUrl);
+  if (platform !== "win32" || process.platform === "win32" || !/^\/[A-Za-z]:/.test(nativePath)) {
+    return nativePath;
+  }
+
+  const parsedUrl = new URL(importMetaUrl);
+  if (parsedUrl.protocol !== "file:") {
+    return nativePath;
+  }
+
+  if (parsedUrl.hostname) {
+    const uncPath = decodeURIComponent(parsedUrl.pathname || "").replace(/\//g, "\\");
+    return `\\\\${parsedUrl.hostname}${uncPath}`;
+  }
+
+  let pathname = decodeURIComponent(parsedUrl.pathname || "");
+  if (/^\/[A-Za-z]:/.test(pathname)) {
+    pathname = pathname.slice(1);
+  }
+
+  return pathname.replace(/\//g, "\\");
+}
+
 export function getPluginDirFromImportMeta(
   importMetaUrl: string,
   platform: NodeJS.Platform = process.platform,
 ): string {
   const pathApi = platform === "win32" ? path.win32 : path.posix;
-  return pathApi.dirname(fileURLToPath(importMetaUrl, { windows: platform === "win32" }));
+  return pathApi.dirname(fileUrlToPathWithWindowsFallback(importMetaUrl, platform));
 }
 
 function canonicalizePath(fsPath: string, platform: NodeJS.Platform): string {
@@ -63,7 +90,10 @@ export function isPathWithinDir(
   const base = canonicalizePath(baseDir, platform);
   const relative = pathApi.relative(base, candidate);
 
-  return relative === "" || (!relative.startsWith("..") && !pathApi.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!(relative === ".." || relative.startsWith(`..${pathApi.sep}`)) && !pathApi.isAbsolute(relative))
+  );
 }
 
 function createBetterSqliteRuntime(importMetaUrl: string): BetterSqliteRuntime {
