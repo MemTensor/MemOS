@@ -326,6 +326,7 @@ class FileContentParser(BaseMessageParser):
         llm: BaseLLM | None = None,
         parser: Any | None = None,
         direct_markdown_hostnames: list[str] | None = None,
+        image_parser: ImageParser | None = None,
     ):
         """
         Initialize FileContentParser.
@@ -341,7 +342,7 @@ class FileContentParser(BaseMessageParser):
         super().__init__(embedder, llm)
         self.parser = parser
         # Initialize ImageParser for processing images in markdown
-        self.image_parser = ImageParser(embedder, llm) if llm else None
+        self.image_parser = image_parser if image_parser is not None else ImageParser(embedder, llm)
 
         # Get inner markdown hostnames from config or environment
         if direct_markdown_hostnames is not None:
@@ -367,7 +368,7 @@ class FileContentParser(BaseMessageParser):
     ) -> SourceMessage:
         """Create SourceMessage from file content part."""
         if isinstance(message, dict):
-            file_info = message.get("file", {})
+            file_info = message.get("file", {}) or {}
             source_dict = {
                 "type": "file",
                 "doc_path": file_info.get("filename") or file_info.get("file_id", ""),
@@ -470,7 +471,7 @@ class FileContentParser(BaseMessageParser):
         file_data = file_info.get("file_data", "")
         file_id = file_info.get("file_id", "")
         filename = file_info.get("filename", "")
-        file_url_flag = False
+        file_url_flag = bool(file_info)
         # Build content string based on available information
         content_parts = []
 
@@ -651,6 +652,9 @@ class FileContentParser(BaseMessageParser):
         file_id = file_info.get("file_id", "")
         filename = file_info.get("filename", "")
 
+        # Whether to keep full file_info in sources
+        file_url_flag = bool(file_info)
+
         # Extract custom_tags from kwargs (for LLM extraction)
         custom_tags = kwargs.get("custom_tags")
 
@@ -683,6 +687,7 @@ class FileContentParser(BaseMessageParser):
                     url_str = file_data[1:] if file_data.startswith("@") else file_data
 
                     if url_str.startswith(("http://", "https://")):
+                        file_url_flag = True
                         parsed_text, temp_file_path, is_markdown = self._handle_url(
                             url_str, filename
                         )
@@ -793,6 +798,7 @@ class FileContentParser(BaseMessageParser):
                 chunk_index=chunk_idx,
                 chunk_total=total_chunks,
                 chunk_content=chunk_content,
+                file_url_flag=file_url_flag,
             )
             return TextualMemoryItem(
                 memory=value,
