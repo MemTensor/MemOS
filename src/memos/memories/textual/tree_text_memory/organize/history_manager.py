@@ -625,7 +625,7 @@ class MemoryHistoryManager:
             "memory": current_item.memory,
             "history": history_dump,
             "version": current_item.metadata.version,
-            "covered_history": old_item.id,
+            "covered_history": archived_item.id,
         }
         return current_item, archived_item, arch_meta, update_fields
 
@@ -998,6 +998,7 @@ class MemoryHistoryManager:
             tags = data.get("tags", [])
             key = data.get("key", "")
             memory_type = data.get("memory_type", "LongTermMemory")
+            original_sources = source_item.metadata.sources
             version = source_item.metadata.version
             new_history_item = ArchivedTextualMemory(
                 version=version,
@@ -1014,6 +1015,7 @@ class MemoryHistoryManager:
                 "status": "activated",
                 "is_fast": False,
                 "version": version + 1,
+                "sources": original_sources,
                 "tags": tags,
                 "key": key,
                 "created_at": datetime.now().isoformat(),
