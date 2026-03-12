@@ -559,6 +559,30 @@ class MemoryHistoryManager:
             else ""
         )
         prompt = self.format_prompt(original_item, custom_tags_prompt)
+
+        # Give plugins a chance to augment/replace the prompt while
+        # preserving the version-pipeline context (history candidates, etc.)
+        try:
+            from memos.plugins.hook_defs import H as _H
+            from memos.plugins.hooks import trigger_hook as _trigger_hook
+
+            sources = original_item.metadata.sources if original_item.metadata else None
+            lang = _determine_lang(sources, original_item.memory)
+            _rv = _trigger_hook(
+                _H.MEM_READER_PRE_EXTRACT,
+                prompt=prompt,
+                prompt_type="version",
+                mem_str=original_item.memory,
+                lang=lang,
+                sources=sources or [],
+            )
+            prompt = _rv if _rv is not None else prompt
+        except Exception as hook_err:
+            logger.debug("[MemoryHistoryManager] Plugin hook skipped: %s", hook_err)
+        logger.info(
+            f"[MultiModalParser] Process String Fine After Plugin (In Version Control): {prompt}"
+        )
+
         try:
             if llm is None:
                 raise ValueError("LLM is not initialized")
