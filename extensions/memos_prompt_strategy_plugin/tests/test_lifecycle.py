@@ -150,3 +150,40 @@ class TestHookIntegration:
         assert result != "original prompt"
         assert "Alice" in result
         assert plugin.stats["identity_relation"] >= 1
+
+    def test_pre_extract_version_pipeline_appends_supplement(self):
+        """When prompt_type='version', the plugin appends identity emphasis
+        instead of replacing the entire prompt."""
+        from memos.plugins.hooks import trigger_hook
+
+        _, plugin = _make_app()
+
+        version_prompt = "...existing version prompt with candidates..."
+        result = trigger_hook(
+            "mem_reader.pre_extract",
+            prompt=version_prompt,
+            prompt_type="version",
+            mem_str="我叫王沐辰，我的儿子叫王明泽",
+            lang="zh",
+            sources=[],
+        )
+        assert version_prompt in result
+        assert "身份" in result or "关系" in result
+        assert plugin.stats["identity_relation"] >= 1
+
+    def test_pre_extract_version_pipeline_no_match(self):
+        """When prompt_type='version' but no identity pattern, prompt unchanged."""
+        from memos.plugins.hooks import trigger_hook
+
+        _make_app()
+
+        version_prompt = "...existing version prompt with candidates..."
+        result = trigger_hook(
+            "mem_reader.pre_extract",
+            prompt=version_prompt,
+            prompt_type="version",
+            mem_str="今天天气不错",
+            lang="zh",
+            sources=[],
+        )
+        assert result == version_prompt

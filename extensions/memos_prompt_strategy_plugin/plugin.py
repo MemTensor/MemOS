@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class PromptStrategyPlugin(MemOSPlugin):
     name = "prompt_strategy"
-    version = "0.1.0"
+    version = "0.2.0"
     description = "Rule-chain classifier with strategy registry for specialised extraction prompts"
 
     def on_load(self) -> None:

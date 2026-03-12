@@ -17,7 +17,7 @@ from memos.templates.mos_prompts import (
     SUGGESTION_QUERY_PROMPT_EN,
     SUGGESTION_QUERY_PROMPT_ZH,
 )
-from memos.types import MessageList
+from memos.types import MessageList, MessagesType
 
 
 logger = get_logger(__name__)
@@ -25,20 +25,29 @@ logger = get_logger(__name__)
 
 def _get_further_suggestion(
     llm: Any,
-    message: MessageList,
+    message: MessageList | str,
 ) -> list[str]:
     """
     Get further suggestion based on recent dialogue.
 
     Args:
         llm: LLM instance for generating suggestions
-        message: Recent chat messages
+        message: Recent chat messages (can be a list of message dicts or a plain string)
 
     Returns:
         List of suggestion queries
     """
     try:
-        dialogue_info = "\n".join([f"{msg['role']}: {msg['content']}" for msg in message[-2:]])
+        if isinstance(message, str):
+            dialogue_info = message
+        else:
+            dialogue_info = "\n".join(
+                [
+                    f"{msg['role']}: {msg['content']}"
+                    for msg in message[-2:]
+                    if isinstance(msg, dict)
+                ]
+            )
         further_suggestion_prompt = FURTHER_SUGGESTION_PROMPT.format(dialogue=dialogue_info)
         message_list = [{"role": "system", "content": further_suggestion_prompt}]
         response = llm.generate(message_list)
@@ -53,7 +62,7 @@ def _get_further_suggestion(
 def handle_get_suggestion_queries(
     user_id: str,
     language: str,
-    message: MessageList | None,
+    message: MessagesType | None,
     llm: Any,
     naive_mem_cube: Any,
 ) -> SuggestionResponse:
