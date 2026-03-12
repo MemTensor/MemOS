@@ -527,6 +527,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         sources: list,
         **kwargs,
     ) -> dict:
+        # TODO: delete this function
         """
         Check if extracted memory should be merged with similar existing memories.
         If merge is needed, return merged memory dict with merged_from field.
@@ -541,102 +542,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         Returns:
             Memory dict (possibly merged) with merged_from field if merged
         """
-        # If no graph_db or user_name, return original
-        if not self.graph_db or "user_name" not in kwargs:
-            return extracted_memory_dict
-        user_name = kwargs.get("user_name")
-
-        # Detect language
-        lang = "en"
-        if sources:
-            for source in sources:
-                if hasattr(source, "lang") and source.lang:
-                    lang = source.lang
-                    break
-                elif isinstance(source, dict) and source.get("lang"):
-                    lang = source.get("lang")
-                    break
-        if lang is None:
-            lang = detect_lang(mem_text)
-
-        # Search for similar memories
-        merge_threshold = kwargs.get("merge_similarity_threshold", 0.3)
-
-        try:
-            search_results = self.graph_db.search_by_embedding(
-                vector=self.embedder.embed(mem_text)[0],
-                top_k=20,
-                status="activated",
-                threshold=merge_threshold,
-                user_name=user_name,
-            )
-
-            if not search_results:
-                return extracted_memory_dict
-
-            # Get full memory details
-            similar_memory_ids = [r["id"] for r in search_results if r.get("id")]
-            similar_memories_list = [
-                self.graph_db.get_node(mem_id, include_embedding=False, user_name=user_name)
-                for mem_id in similar_memory_ids
-            ]
-
-            # Filter out None and mode:fast memories
-            filtered_similar = []
-            for mem in similar_memories_list:
-                if not mem:
-                    continue
-                mem_metadata = mem.get("metadata", {})
-                tags = mem_metadata.get("tags", [])
-                if isinstance(tags, list) and "mode:fast" in tags:
-                    continue
-                filtered_similar.append(
-                    {
-                        "id": mem.get("id"),
-                        "memory": mem.get("memory", ""),
-                    }
-                )
-            logger.info(
-                f"Valid similar memories for {mem_text} is "
-                f"{len(filtered_similar)}: {filtered_similar}"
-            )
-
-            if not filtered_similar:
-                return extracted_memory_dict
-
-            # Create a temporary TextualMemoryItem for merge check
-            temp_memory_item = TextualMemoryItem(
-                memory=mem_text,
-                metadata=TreeNodeTextualMemoryMetadata(
-                    user_id="",
-                    session_id="",
-                    memory_type=extracted_memory_dict.get("memory_type", "LongTermMemory"),
-                    status="activated",
-                    tags=extracted_memory_dict.get("tags", []),
-                    key=extracted_memory_dict.get("key", ""),
-                ),
-            )
-
-            # Try to merge with LLM
-            merge_result = self._merge_memories_with_llm(
-                temp_memory_item, filtered_similar, lang=lang
-            )
-
-            if merge_result:
-                # Return merged memory dict
-                merged_dict = extracted_memory_dict.copy()
-                merged_content = merge_result.get("value", mem_text)
-                merged_dict["value"] = merged_content
-                merged_from_ids = merge_result.get("merged_from", [])
-                merged_dict["merged_from"] = merged_from_ids
-                return merged_dict
-            else:
-                return extracted_memory_dict
-
-        except Exception as e:
-            logger.error(f"[MultiModalFine] Error in get_maybe_merged_memory: {e}")
-            # On error, return original
-            return extracted_memory_dict
+        return extracted_memory_dict
 
     def _merge_memories_with_llm(
         self,

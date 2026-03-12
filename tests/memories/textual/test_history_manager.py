@@ -1,6 +1,6 @@
 import uuid
 
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 
@@ -126,10 +126,9 @@ def test_apply_llm_memory_updates_new_node(history_manager, mock_graph_db):
                 "tags": ["tag1"],
                 "source_candidate_ids": [],
                 "conflicted_candidate_ids": [],
-                "history_segments": [],
+                "preserved_facts": [],
             }
         ],
-        "restored_memories": [],
         "summary": "Summary",
     }
 
@@ -177,10 +176,9 @@ def test_apply_llm_memory_updates_update_existing(history_manager, mock_graph_db
                 "tags": ["new"],
                 "source_candidate_ids": [existing_id],
                 "conflicted_candidate_ids": [],
-                "history_segments": [],
+                "preserved_facts": [],
             }
         ],
-        "restored_memories": [],
         "summary": "Summary",
     }
 
@@ -224,7 +222,7 @@ def test_apply_llm_memory_updates_update_existing(history_manager, mock_graph_db
     assert kwargs["fields"]["version"] == 2
 
 
-def test_apply_llm_memory_updates_restored(history_manager, mock_graph_db):
+def test_apply_llm_memory_updates_preserved_facts(history_manager, mock_graph_db):
     source_id = uuid.uuid4().hex
     existing_node = {
         "id": source_id,
@@ -244,7 +242,7 @@ def test_apply_llm_memory_updates_restored(history_manager, mock_graph_db):
         memory="Restored Content",
         metadata=TreeNodeTextualMemoryMetadata(history=[]),
     )
-    history_manager._handle_restored_memories = MagicMock(return_value=[restored_item])
+    history_manager._handle_preserved_facts = MagicMock(return_value=[restored_item])
     llm_response = {
         "memory list": [
             {
@@ -254,11 +252,15 @@ def test_apply_llm_memory_updates_restored(history_manager, mock_graph_db):
                 "tags": ["new"],
                 "source_candidate_ids": [],
                 "conflicted_candidate_ids": [source_id],
-                "history_segments": [],
+                "preserved_facts": [
+                    {
+                        "key": "Preserved Fact",
+                        "value": "Restored Content",
+                        "tags": ["restored"],
+                        "memory_type": "UserMemory",
+                    }
+                ],
             }
-        ],
-        "restored_memories": [
-            {"source_candidate_id": source_id, "value": "Restored Content", "tags": ["restored"]}
         ],
         "summary": "Summary",
     }
@@ -283,18 +285,27 @@ def test_apply_llm_memory_updates_restored(history_manager, mock_graph_db):
     assert len(updated) == 1
     assert len(new_items) == 1
     assert new_items[0] == restored_item
-    history_manager._handle_restored_memories.assert_called_once_with(
-        llm_response["restored_memories"], source_item, "u1"
+    history_manager._handle_preserved_facts.assert_called_once_with(
+        [
+            {
+                "source_candidate_id": source_id,
+                "value": "Restored Content",
+                "tags": ["restored"],
+                "key": "Preserved Fact",
+            }
+        ],
+        source_item,
+        "u1",
+        pre_update_source_item_map=ANY,
     )
     mock_graph_db.add_node.assert_called_once()
 
 
-def test_apply_llm_memory_updates_ignores_restored_from_unrelated_candidates(
+def test_apply_llm_memory_updates_drops_preserved_facts_for_create_only_items(
     history_manager, mock_graph_db
 ):
     conflict_id = uuid.uuid4().hex
-    unrelated_id = uuid.uuid4().hex
-    history_manager._handle_restored_memories = MagicMock(return_value=[])
+    history_manager._handle_preserved_facts = MagicMock(return_value=[])
 
     existing_node = {
         "id": conflict_id,
@@ -320,11 +331,23 @@ def test_apply_llm_memory_updates_ignores_restored_from_unrelated_candidates(
                 "tags": ["new"],
                 "source_candidate_ids": [],
                 "conflicted_candidate_ids": [conflict_id],
-                "history_segments": [],
-            }
-        ],
-        "restored_memories": [
-            {"source_candidate_id": unrelated_id, "value": "Should Be Ignored", "tags": ["ignore"]}
+                "preserved_facts": [],
+            },
+            {
+                "key": "Create Only Memory",
+                "memory_type": "LongTermMemory",
+                "value": "Brand New Content",
+                "tags": ["new"],
+                "source_candidate_ids": [],
+                "conflicted_candidate_ids": [],
+                "preserved_facts": [
+                    {
+                        "key": "Should Be Dropped",
+                        "value": "Should Be Ignored",
+                        "tags": ["ignore"],
+                    }
+                ],
+            },
         ],
         "summary": "Summary",
     }
@@ -339,12 +362,6 @@ def test_apply_llm_memory_updates_ignores_restored_from_unrelated_candidates(
                     memory="Old Content",
                     update_type="conflict",
                 ),
-                ArchivedTextualMemory(
-                    version=1,
-                    archived_memory_id=unrelated_id,
-                    memory="Irrelevant Content",
-                    update_type="unrelated",
-                ),
             ]
         ),
     )
@@ -355,13 +372,18 @@ def test_apply_llm_memory_updates_ignores_restored_from_unrelated_candidates(
 
     assert len(updated) == 1
     assert len(new_items) == 0
-    history_manager._handle_restored_memories.assert_called_once_with([], source_item, "u1")
+    history_manager._handle_preserved_facts.assert_called_once_with(
+        [],
+        source_item,
+        "u1",
+        pre_update_source_item_map=ANY,
+    )
 
 
 def test_apply_llm_memory_updates_unrelated(history_manager, mock_graph_db):
     id1 = uuid.uuid4().hex
     id2 = uuid.uuid4().hex
-    llm_response = {"memory list": [], "restored_memories": [], "summary": "Summary"}
+    llm_response = {"memory list": [], "summary": "Summary"}
 
     source_item = TextualMemoryItem(
         memory="New user input",
@@ -389,6 +411,44 @@ def test_apply_llm_memory_updates_unrelated(history_manager, mock_graph_db):
     assert len(updated) == 0
     assert len(new_items) == 0
     mock_graph_db.update_node.assert_not_called()
+
+
+def test_handle_preserved_facts_inherits_memory_type_from_source(history_manager):
+    source_id = uuid.uuid4().hex
+    source_item = TextualMemoryItem(
+        id=source_id,
+        memory="Wang Lin works in Shenzhen and phone number is 13800138000.",
+        metadata=TreeNodeTextualMemoryMetadata(
+            version=2,
+            memory_type="UserMemory",
+            created_at="2023-01-01",
+            sources=[],
+            history=[],
+        ),
+    )
+    fast_item = TextualMemoryItem(
+        memory="new input",
+        metadata=TreeNodeTextualMemoryMetadata(),
+    )
+
+    new_items = history_manager._handle_preserved_facts(
+        [
+            {
+                "source_candidate_id": source_id,
+                "key": "Phone number",
+                "value": "Wang Lin's phone number is 13800138000.",
+                "tags": ["contact"],
+            }
+        ],
+        fast_item=fast_item,
+        user_name="u1",
+        pre_update_source_item_map={source_id: source_item},
+    )
+
+    assert len(new_items) == 1
+    assert new_items[0].metadata.memory_type == "UserMemory"
+    assert new_items[0].metadata.key == "Phone number"
+    assert new_items[0].metadata.history[-1].archived_memory_id == source_id
 
 
 def test_apply_llm_memory_updates_conflict_and_merge(history_manager, mock_graph_db):
@@ -419,10 +479,9 @@ def test_apply_llm_memory_updates_conflict_and_merge(history_manager, mock_graph
                 "tags": [],
                 "source_candidate_ids": [],
                 "conflicted_candidate_ids": [primary_id, secondary_id],
-                "history_segments": [],
+                "preserved_facts": [],
             }
         ],
-        "restored_memories": [],
         "summary": "Summary",
     }
 

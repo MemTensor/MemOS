@@ -420,7 +420,7 @@ class MemoryHistoryManager:
             List of new or updated memory items.
         """
         memory_list = llm_response.get("memory list", [])
-        restored_memories = llm_response.get("restored_memories", [])
+        preserved_fact_tasks = self._build_preserved_fact_tasks(memory_list)
 
         expected_versions = {}  # For concurrency control, need to get the recorded versions of the old memories
         # Recover candidate IDs and their expected versions from the source item's history
@@ -432,6 +432,28 @@ class MemoryHistoryManager:
         updated_items: list[TextualMemoryItem] = []
         new_items: list[TextualMemoryItem] = []
 
+        # Snapshot source nodes before any in-place update.
+        snapshot_source_ids = {task["source_candidate_id"] for task in preserved_fact_tasks}
+        snapshot_source_ids.update(
+            str(candidate_id)
+            for mem_data in memory_list
+            for candidate_id in (
+                list(mem_data.get("source_candidate_ids", []))
+                + list(mem_data.get("conflicted_candidate_ids", []))
+            )
+            if candidate_id
+        )
+        pre_update_source_item_map: dict[str, TextualMemoryItem] = {}
+        if snapshot_source_ids:
+            snapshot_nodes = (
+                self.graph_db.get_nodes(sorted(snapshot_source_ids), user_name=user_name) or []
+            )
+            pre_update_source_item_map = {
+                item["id"]: TextualMemoryItem(**item)
+                for item in snapshot_nodes
+                if item and item.get("id")
+            }
+
         # 1. Handle Unrelated Candidates - Do nothing
         # 2. Handle Memory List (Update or New)
         processed_updates, created_items = self._process_memory_updates(
@@ -440,27 +462,58 @@ class MemoryHistoryManager:
         updated_items.extend(processed_updates)
         new_items.extend(created_items)
 
-        # 3. Handle Restored Memories (Extract from conflict)
-        valid_conflict_ids = {
-            conflict_id
-            for mem_data in memory_list
-            for conflict_id in mem_data.get("conflicted_candidate_ids", [])
-        }
-        filtered_restored_memories = [
-            mem for mem in restored_memories if mem.get("source_candidate_id") in valid_conflict_ids
-        ]
-        dropped_restored_count = len(restored_memories) - len(filtered_restored_memories)
-        if dropped_restored_count:
-            logger.warning(
-                "[MemoryHistoryManager] Dropping %s restored_memories not tied to any "
-                "conflicted_candidate_ids in this LLM response.",
-                dropped_restored_count,
-            )
+        # 3. Handle preserved facts (split still-valid subfacts out of the old node)
         new_items.extend(
-            self._handle_restored_memories(filtered_restored_memories, source_item, user_name)
+            self._handle_preserved_facts(
+                preserved_fact_tasks,
+                source_item,
+                user_name,
+                pre_update_source_item_map=pre_update_source_item_map,
+            )
         )
 
         return updated_items, new_items
+
+    def _build_preserved_fact_tasks(
+        self, memory_list: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Flatten per-update preserved facts into executable extraction tasks."""
+        tasks: list[dict[str, Any]] = []
+
+        for mem_data in memory_list:
+            preserved_facts = mem_data.get("preserved_facts", []) or []
+            if not preserved_facts:
+                continue
+
+            source_ids = list(mem_data.get("source_candidate_ids", []) or [])
+            conflict_ids = list(mem_data.get("conflicted_candidate_ids", []) or [])
+            target_ids = source_ids + conflict_ids
+            if not target_ids:
+                logger.warning(
+                    "[MemoryHistoryManager] Dropping preserved_facts for create-only memory "
+                    "item key=%s because it has no source/conflict candidate ids.",
+                    mem_data.get("key", ""),
+                )
+                continue
+
+            # A preserved fact must come from the old node referenced by this update item.
+            # When multiple target ids exist, we bind preserved facts to the primary target
+            # (the first id), which is also the node actually updated in `_update_existing_memory()`.
+            source_candidate_id = str(target_ids[0])
+            for preserved_fact in preserved_facts:
+                if not preserved_fact:
+                    continue
+                tasks.append(
+                    {
+                        "source_candidate_id": source_candidate_id,
+                        "value": preserved_fact.get("value", ""),
+                        "tags": preserved_fact.get("tags", []),
+                        "key": preserved_fact.get("key", ""),
+                        "memory_type": preserved_fact.get("memory_type", "LongTermMemory"),
+                    }
+                )
+
+        return tasks
 
     def build_fallback_new_items(
         self, item: TextualMemoryItem, user_name: str | None = None
@@ -794,8 +847,17 @@ class MemoryHistoryManager:
             mem_data.get("key", ""),
         )
 
-        # Fetch candidate nodes in batch and then select the primary
-        # We update the primary and then merge the secondaries to the primary
+        # Fetch candidate nodes from the *current* DB state and then select the primary.
+        #
+        # This read is intentionally not replaced by the pre-update snapshot captured in
+        # `apply_llm_memory_updates()`. Unlike restored memories, updates must operate on
+        # the latest DB state because:
+        # - CAS/version checking must compare against the newest persisted version
+        # - earlier updates in the same `memory_list` may already have changed a node
+        # - secondary merge decisions should reflect the current surviving nodes
+        #
+        # So this lookup is still required even though restored-memory handling now reuses
+        # a pre-update snapshot.
         nodes_data = self.graph_db.get_nodes(target_ids, user_name=user_name) or []
         nodes_map = {n["id"]: n for n in nodes_data if n and "id" in n}
         node_data = nodes_map.get(primary_id)
@@ -1023,32 +1085,53 @@ class MemoryHistoryManager:
         )
         return new_item
 
-    def _handle_restored_memories(
-        self, restored_memories: list[dict[str, Any]], fast_item: TextualMemoryItem, user_name: str
+    def _handle_preserved_facts(
+        self,
+        preserved_fact_tasks: list[dict[str, Any]],
+        fast_item: TextualMemoryItem,
+        user_name: str,
+        pre_update_source_item_map: dict[str, TextualMemoryItem] | None = None,
     ) -> list[TextualMemoryItem]:
-        """Handle Restored Memories (Extract from conflict)."""
-        if not restored_memories:
+        """Create standalone nodes for preserved facts split from an updated source node."""
+        if not preserved_fact_tasks:
             return []
 
-        source_ids = [
-            r.get("source_candidate_id") for r in restored_memories if r.get("source_candidate_id")
+        # Prefer the pre-update snapshot so preserved facts are extracted from the
+        # original source nodes referenced by the update item, not from already-updated
+        # DB state.
+        source_item_map = dict(pre_update_source_item_map or {})
+        missing_source_ids = [
+            r.get("source_candidate_id")
+            for r in preserved_fact_tasks
+            if r.get("source_candidate_id") and r.get("source_candidate_id") not in source_item_map
         ]
-        source_items = self.graph_db.get_nodes(source_ids, user_name=user_name) or []
-        source_item_map = {item["id"]: TextualMemoryItem(**item) for item in source_items if item}
+        if missing_source_ids:
+            # Fallback only for ids not present in the pre-update snapshot.
+            source_items = self.graph_db.get_nodes(missing_source_ids, user_name=user_name) or []
+            source_item_map.update(
+                {item["id"]: TextualMemoryItem(**item) for item in source_items if item}
+            )
 
         created_items = []
-        for data in restored_memories:
+        for data in preserved_fact_tasks:
             source_candidate_id = data.get("source_candidate_id")
             source_item = source_item_map.get(source_candidate_id)
             if source_item is None:
                 logger.warning(
-                    "[MemoryHistoryManager] Restored memory source %s not found. Skipping.",
+                    "[MemoryHistoryManager] Preserved fact source %s not found. Skipping.",
                     source_candidate_id,
                 )
                 continue
             # deal with history
             source_history = deepcopy(source_item.metadata.history)
             value = data.get("value", "")
+            if not value:
+                logger.warning(
+                    "[MemoryHistoryManager] Preserved fact from source %s has empty value. "
+                    "Skipping.",
+                    source_candidate_id,
+                )
+                continue
             value_item = TextualMemoryItem(memory=value, metadata=TreeNodeTextualMemoryMetadata())
             value = value_item.memory
             tags = data.get("tags", [])
@@ -1064,7 +1147,10 @@ class MemoryHistoryManager:
                 archived_memory_id=source_item.id,
                 created_at=source_item.metadata.created_at,
             )
-            source_history.append(new_history_item)  # Re-use the history of the old node
+            # Re-use the old node's history and append one more archive entry pointing to
+            # the pre-update source node itself. This keeps the extracted node anchored to
+            # the original source memory snapshot(before update).
+            source_history.append(new_history_item)
             # Create new node
             metadata_updates = {
                 "memory_type": memory_type,
