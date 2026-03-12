@@ -972,6 +972,7 @@ class MemoryHistoryManager:
         key = mem_data.get("key", "")
         background = mem_data.get("summary", "")
         memory_type = mem_data.get("memory_type", "LongTermMemory")
+        now = datetime.now().isoformat()
         metadata_updates = {
             "is_fast": False,
             "version": 1,
@@ -981,7 +982,8 @@ class MemoryHistoryManager:
             "working_binding": None,
             "tags": tags,
             "key": key,
-            "created_at": datetime.now().isoformat(),
+            "created_at": now,
+            "updated_at": now,
             "history": [],
             "embedding": self._compute_embedding(new_value),
         }
