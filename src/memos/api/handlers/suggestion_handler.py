@@ -25,19 +25,24 @@ logger = get_logger(__name__)
 
 def _get_further_suggestion(
     llm: Any,
-    message: MessageList,
+    message: MessageList | str,
 ) -> list[str]:
     """
     Get further suggestion based on recent dialogue.
 
     Args:
         llm: LLM instance for generating suggestions
-        message: Recent chat messages
+        message: Recent chat messages (MessageList or string for backward compatibility)
 
     Returns:
         List of suggestion queries
     """
     try:
+        # Handle backward compatibility: convert string to MessageList format
+        if isinstance(message, str):
+            logger.warning("Received string message, converting to MessageList format")
+            message = [{"role": "user", "content": message}]
+        
         dialogue_info = "\n".join([f"{msg['role']}: {msg['content']}" for msg in message[-2:]])
         further_suggestion_prompt = FURTHER_SUGGESTION_PROMPT.format(dialogue=dialogue_info)
         message_list = [{"role": "system", "content": further_suggestion_prompt}]
