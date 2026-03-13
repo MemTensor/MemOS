@@ -1,0 +1,11 @@
+# Paths exclusive to the enterprise repo (one per line).
+# These will NOT be synced to the public repository.
+# This file itself is also excluded from the public repo.
+
+extensions/
+pyproject.toml
+poetry.lock
+.private-paths
+scripts/sync-public.sh
+scripts/check-public-push.sh
+Makefile

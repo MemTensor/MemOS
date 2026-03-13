@@ -3,6 +3,8 @@
 install:
 	poetry install --extras all --with dev --with test
 	poetry run pre-commit install --install-hooks
+	cp scripts/check-public-push.sh .git/hooks/pre-push
+	chmod +x .git/hooks/pre-push
 
 clean:
 	rm -rf .memos
@@ -25,3 +27,6 @@ serve:
 
 openapi:
 	poetry run memos export_openapi --output docs/openapi.json
+
+sync-public:
+	@bash scripts/sync-public.sh "$(msg)" $(commit)

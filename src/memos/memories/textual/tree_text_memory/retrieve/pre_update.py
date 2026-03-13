@@ -1,6 +1,7 @@
 import concurrent.futures
 import re
 
+from datetime import datetime
 from typing import Any
 
 from memos.context.context import ContextThreadPoolExecutor
@@ -138,10 +139,11 @@ class PreUpdateRetriever:
             results = self.graph_db.search_by_embedding(
                 vector=q_embed,
                 top_k=top_k,
-                status=None,
+                status="activated",
                 threshold=threshold,
                 user_name=user_name,
                 filter=search_filter,
+                return_fields=["id", "is_fast", "created_at"],
             )
             return results
         except Exception as e:
@@ -155,6 +157,7 @@ class PreUpdateRetriever:
         top_k: int,
         search_filter: dict[str, Any] | None = None,
     ) -> list[dict]:
+        # Currently not used for large latency
         try:
             # 1. Tokenize using existing tokenizer
             keywords = self.tokenizer.tokenize_mixed(query_text)
@@ -210,8 +213,11 @@ class PreUpdateRetriever:
         # 2. Recall
         futures = []
         common_filter = {
-            "status": {"in": ["activated", "resolving"]},
-            "memory_type": {"in": ["LongTermMemory", "UserMemory", "WorkingMemory"]},
+            "or": [
+                {"memory_type": "LongTermMemory"},
+                {"memory_type": "UserMemory"},
+                {"memory_type": "WorkingMemory"},
+            ]
         }
 
         with ContextThreadPoolExecutor(max_workers=3, thread_name_prefix="fast_recall") as executor:
@@ -230,13 +236,7 @@ class PreUpdateRetriever:
                     sim_threshold,
                 )
             )
-
-            # Task B: Keyword Search
-            futures.append(
-                executor.submit(
-                    self.keyword_search, switched_query, user_name, top_k, common_filter
-                )
-            )
+            # TODO: recovering keyword search or other versions of search for multiple pathways
 
             # 3. Collect Results
             retrieved_ids = set()  # for deduplicating ids
@@ -247,7 +247,16 @@ class PreUpdateRetriever:
                         continue
 
                     for r in res:
-                        retrieved_ids.add(r["id"])
+                        # exclude self and working binding
+                        # also exclude fast nodes that's created after current node to avoid deadlock later
+                        working_binding = item.metadata.working_binding or ""
+                        is_fast = bool(r.get("is_fast", False))
+                        if (r["id"] != item.id and r["id"] != working_binding) and (
+                            not is_fast
+                            or datetime.fromisoformat(r["created_at"])
+                            < datetime.fromisoformat(item.metadata.created_at)
+                        ):
+                            retrieved_ids.add(r["id"])
 
                 except Exception as e:
                     logger.error(f"[PreUpdateRetriever] Search future task failed: {e}")

@@ -326,6 +326,7 @@ class FileContentParser(BaseMessageParser):
         llm: BaseLLM | None = None,
         parser: Any | None = None,
         direct_markdown_hostnames: list[str] | None = None,
+        image_parser: ImageParser | None = None,
     ):
         """
         Initialize FileContentParser.
@@ -341,7 +342,7 @@ class FileContentParser(BaseMessageParser):
         super().__init__(embedder, llm)
         self.parser = parser
         # Initialize ImageParser for processing images in markdown
-        self.image_parser = ImageParser(embedder, llm) if llm else None
+        self.image_parser = image_parser if image_parser is not None else ImageParser(embedder, llm)
 
         # Get inner markdown hostnames from config or environment
         if direct_markdown_hostnames is not None:
