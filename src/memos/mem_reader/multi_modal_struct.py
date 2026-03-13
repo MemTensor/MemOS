@@ -1014,20 +1014,23 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if mode == "fast":
             return fast_memory_items
         else:
+            non_file_url_fast_items = [
+                item for item in fast_memory_items if not self._is_file_url_only_item(item)
+            ]
+
             # Part A: call llm in parallel using thread pool
             fine_memory_items = []
 
             with ContextThreadPoolExecutor(max_workers=4) as executor:
                 future_string = executor.submit(
-                    self._process_string_fine, fast_memory_items, info, custom_tags, **kwargs
+                    self._process_string_fine, non_file_url_fast_items, info, custom_tags, **kwargs
                 )
                 future_tool = executor.submit(
-                    self._process_tool_trajectory_fine, fast_memory_items, info, **kwargs
+                    self._process_tool_trajectory_fine, non_file_url_fast_items, info, **kwargs
                 )
-                # Use general_llm for skill memory extraction (not fine-tuned for this task)
                 future_skill = executor.submit(
                     process_skill_memory_fine,
-                    fast_memory_items=fast_memory_items,
+                    fast_memory_items=non_file_url_fast_items,
                     info=info,
                     searcher=self.searcher,
                     graph_db=self.graph_db,
@@ -1039,7 +1042,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 )
                 future_pref = executor.submit(
                     process_preference_fine,
-                    fast_memory_items,
+                    non_file_url_fast_items,
                     info,
                     self.llm,
                     self.embedder,
@@ -1094,19 +1097,21 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             **(raw_nodes[0].metadata.info or {}),
         }
 
+        # Filter out file-URL-only items for Part A fine processing (same as _process_multi_modal_data)
+        non_file_url_nodes = [node for node in raw_nodes if not self._is_file_url_only_item(node)]
+
         fine_memory_items = []
         # Part A: call llm in parallel using thread pool
         with ContextThreadPoolExecutor(max_workers=4) as executor:
             future_string = executor.submit(
-                self._process_string_fine, raw_nodes, info, custom_tags, **kwargs
+                self._process_string_fine, non_file_url_nodes, info, custom_tags, **kwargs
             )
             future_tool = executor.submit(
-                self._process_tool_trajectory_fine, raw_nodes, info, **kwargs
+                self._process_tool_trajectory_fine, non_file_url_nodes, info, **kwargs
             )
-            # Use general_llm for skill memory extraction (not fine-tuned for this task)
             future_skill = executor.submit(
                 process_skill_memory_fine,
-                raw_nodes,
+                non_file_url_nodes,
                 info,
                 searcher=self.searcher,
                 llm=self.general_llm,
@@ -1118,7 +1123,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             )
             # Add preference memory extraction
             future_pref = executor.submit(
-                process_preference_fine, raw_nodes, info, self.general_llm, self.embedder, **kwargs
+                process_preference_fine, non_file_url_nodes, info, self.llm, self.embedder, **kwargs
             )
 
             # Collect results
@@ -1147,6 +1152,23 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 )
                 fine_memory_items.extend(items)
         return fine_memory_items
+
+    @staticmethod
+    def _is_file_url_only_item(item: TextualMemoryItem) -> bool:
+        """
+        Check if a fast memory item contains only file-URL sources.
+        Args:
+            item: TextualMemoryItem to check
+
+        Returns:
+            True if all sources are file-type with URL info (metadata only)
+        """
+        sources = item.metadata.sources or []
+        if not sources:
+            return False
+        return all(
+            getattr(s, "type", None) == "file" and getattr(s, "file_info", None) for s in sources
+        )
 
     def get_scene_data_info(self, scene_data: list, type: str) -> list[list[Any]]:
         """
