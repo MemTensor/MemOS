@@ -22,6 +22,7 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
+import { executeIntentJudge, resolveAutoRecallMaxResults } from "./src/intent-filter";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -157,6 +158,7 @@ const memosLocalPlugin = {
     }
 
     const pluginCfg = (api.pluginConfig ?? {}) as Record<string, unknown>;
+    const intentFilterOptions = ((pluginCfg as any).intentFilter ?? {}) as any;
     const stateDir = api.resolvePath("~/.openclaw");
     const ctx = buildContext(stateDir, process.cwd(), pluginCfg as any, {
       debug: (msg: string) => api.logger.info(`[debug] ${msg}`),
@@ -890,7 +892,23 @@ const memosLocalPlugin = {
         }
         ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
 
-        const result = await engine.search({ query, maxResults: 20, minScore: 0.45, ownerFilter: recallOwnerFilter });
+        const { shouldSearch } = await executeIntentJudge({
+          query,
+          summarizer,
+          ctx,
+          store,
+          recallT0,
+          performance,
+          options: intentFilterOptions,
+        });
+        if (!shouldSearch) return;
+
+        const result = await engine.search({
+          query,
+          maxResults: resolveAutoRecallMaxResults(intentFilterOptions),
+          minScore: 0.45,
+          ownerFilter: recallOwnerFilter,
+        });
         if (result.hits.length === 0) {
           ctx.log.debug("auto-recall: no candidates found");
           const dur = performance.now() - recallT0;
