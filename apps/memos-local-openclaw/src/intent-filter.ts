@@ -192,7 +192,8 @@ export function parseLLMIntent(llmOutput: string, query: string, options?: Inten
     output.toLowerCase().includes('you are a query intent analyzer') ||
     output.length > maxOutputLength;
   if (llmFailed) {
-    return { action: 'skip', reason: 'llm_failed_skipped', raw: output };
+    const fallbackAction = options?.onLlmError ?? 'skip';
+    return { action: fallbackAction, reason: 'llm_failed_skipped', raw: output };
   }
 
   // Parse fields
