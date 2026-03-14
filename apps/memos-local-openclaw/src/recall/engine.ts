@@ -231,7 +231,7 @@ export class RecallEngine {
     if (candidateSkills.length === 0) return [];
 
     // LLM relevance judgment
-    const summarizer = new Summarizer(this.ctx.config.summarizer, this.ctx.log);
+    const summarizer = new Summarizer(this.ctx.config.summarizer, this.ctx.log, undefined, this.ctx.stateDir);
     const relevantIndices = await this.judgeSkillRelevance(summarizer, query, candidateSkills);
 
     return relevantIndices.map((idx) => {

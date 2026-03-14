@@ -1,15 +1,14 @@
 import * as fs from "fs";
-import * as path from "path";
 import type { SummarizerConfig, Logger, PluginContext } from "../types";
+import { getOpenClawConfigPath } from "../config";
 
 /**
  * Build a SummarizerConfig from OpenClaw's native model configuration (openclaw.json).
  * Final fallback when both strongCfg and plugin summarizer fail or are absent.
  */
-export function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | undefined {
+export function loadOpenClawFallbackConfig(log: Logger, stateDir?: string): SummarizerConfig | undefined {
   try {
-    const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-    const cfgPath = path.join(home, ".openclaw", "openclaw.json");
+    const cfgPath = getOpenClawConfigPath(stateDir);
     if (!fs.existsSync(cfgPath)) return undefined;
 
     const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
@@ -55,7 +54,7 @@ export function buildSkillConfigChain(ctx: PluginContext): SummarizerConfig[] {
   const chain: SummarizerConfig[] = [];
   const skillCfg = ctx.config.skillEvolution?.summarizer;
   const pluginCfg = ctx.config.summarizer;
-  const fallbackCfg = loadOpenClawFallbackConfig(ctx.log);
+  const fallbackCfg = loadOpenClawFallbackConfig(ctx.log, ctx.stateDir);
   if (skillCfg) chain.push(skillCfg);
   if (pluginCfg && pluginCfg !== skillCfg) chain.push(pluginCfg);
   if (fallbackCfg) chain.push(fallbackCfg);

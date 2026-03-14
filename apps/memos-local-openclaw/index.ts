@@ -207,7 +207,7 @@ const memosLocalPlugin = {
       });
     });
 
-    const summarizer = new Summarizer(ctx.config.summarizer, ctx.log);
+    const summarizer = new Summarizer(ctx.config.summarizer, ctx.log, undefined, ctx.stateDir);
 
     api.logger.info(`memos-local: initialized (db: ${ctx.config.storage!.dbPath})`);
 

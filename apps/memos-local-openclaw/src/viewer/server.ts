@@ -14,6 +14,7 @@ import { TaskProcessor } from "../ingest/task-processor";
 import { RecallEngine } from "../recall/engine";
 import { SkillEvolver } from "../skill/evolver";
 import type { Logger, Chunk, PluginContext } from "../types";
+import { getOpenClawConfigPath, getOpenClawHome } from "../config";
 import { viewerHTML } from "./html";
 import { v4 as uuid } from "uuid";
 
@@ -958,8 +959,7 @@ export class ViewerServer {
   // ─── Config API ───
 
   private getOpenClawConfigPath(): string {
-    const home = process.env.HOME || process.env.USERPROFILE || "";
-    return path.join(home, ".openclaw", "openclaw.json");
+    return getOpenClawConfigPath(this.ctx?.stateDir ?? this.dataDir);
   }
 
   private serveConfig(res: http.ServerResponse): void {
@@ -1049,8 +1049,7 @@ export class ViewerServer {
   // ─── Migration: scan OpenClaw built-in memory ───
 
   private getOpenClawHome(): string {
-    const home = process.env.HOME || process.env.USERPROFILE || "";
-    return path.join(home, ".openclaw");
+    return getOpenClawHome(this.ctx?.stateDir ?? this.dataDir);
   }
 
   private handleMigrateScan(res: http.ServerResponse): void {
@@ -1305,7 +1304,7 @@ export class ViewerServer {
       strongCfg = pluginCfg.skillEvolution?.summarizer;
     } catch { /* no config */ }
 
-    const summarizer = new Summarizer(summarizerCfg, this.log, strongCfg);
+    const summarizer = new Summarizer(summarizerCfg, this.log, strongCfg, this.ctx?.stateDir ?? this.dataDir);
 
     // Phase 1: Import SQLite memory chunks
     if (importSqlite) {

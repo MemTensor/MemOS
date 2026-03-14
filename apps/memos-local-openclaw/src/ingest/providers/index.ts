@@ -1,6 +1,6 @@
 import * as fs from "fs";
-import * as path from "path";
 import type { SummarizerConfig, Logger } from "../../types";
+import { getOpenClawConfigPath } from "../../config";
 import { summarizeOpenAI, summarizeTaskOpenAI, judgeNewTopicOpenAI, filterRelevantOpenAI, judgeDedupOpenAI } from "./openai";
 import type { FilterResult, DedupResult } from "./openai";
 export type { FilterResult, DedupResult } from "./openai";
@@ -12,10 +12,9 @@ import { summarizeBedrock, summarizeTaskBedrock, judgeNewTopicBedrock, filterRel
  * Build a SummarizerConfig from OpenClaw's native model configuration (openclaw.json).
  * This serves as the final fallback when both strongCfg and plugin summarizer fail or are absent.
  */
-function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | undefined {
+export function loadOpenClawFallbackConfig(log: Logger, stateDir?: string): SummarizerConfig | undefined {
   try {
-    const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-    const cfgPath = path.join(home, ".openclaw", "openclaw.json");
+    const cfgPath = getOpenClawConfigPath(stateDir);
     if (!fs.existsSync(cfgPath)) return undefined;
 
     const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
@@ -61,9 +60,10 @@ export class Summarizer {
     private cfg: SummarizerConfig | undefined,
     private log: Logger,
     strongCfg?: SummarizerConfig,
+    stateDir?: string,
   ) {
     this.strongCfg = strongCfg;
-    this.fallbackCfg = loadOpenClawFallbackConfig(log);
+    this.fallbackCfg = loadOpenClawFallbackConfig(log, stateDir);
   }
 
   /**

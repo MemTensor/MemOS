@@ -20,7 +20,7 @@ export class IngestWorker {
     private ctx: PluginContext,
   ) {
     const strongCfg = ctx.config.skillEvolution?.summarizer;
-    this.summarizer = new Summarizer(ctx.config.summarizer, ctx.log, strongCfg);
+    this.summarizer = new Summarizer(ctx.config.summarizer, ctx.log, strongCfg, ctx.stateDir);
     this.taskProcessor = new TaskProcessor(store, ctx);
   }
 

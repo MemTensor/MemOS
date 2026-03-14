@@ -57,6 +57,16 @@ export function resolveConfig(raw: Partial<MemosLocalConfig> | undefined, stateD
   };
 }
 
+export function getOpenClawHome(stateDir?: string): string {
+  if (stateDir && stateDir.trim().length > 0) return stateDir;
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
+  return path.join(home, ".openclaw");
+}
+
+export function getOpenClawConfigPath(stateDir?: string): string {
+  return path.join(getOpenClawHome(stateDir), "openclaw.json");
+}
+
 export function buildContext(
   stateDir: string,
   workspaceDir: string,
