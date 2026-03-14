@@ -234,15 +234,14 @@ export async function executeIntentJudge(params: {
     ...(options ?? {}),
   };
   const timerApi = globalThis as any;
-  
+
   const intentCheck = shouldSkipOrSearch(query);
 
   // 1. Direct Skip
   if (intentCheck.action === 'skip') {
     ctx.log.debug(`auto-recall: skipped query "${query}" reason=${intentCheck.reason}`);
     const dur = performance.now() - recallT0;
-    store.recordToolCall("memory_search", dur, true);
-    store.recordApiLog("memory_search", { type: "auto_recall", query, reason: intentCheck.reason }, "skipped", dur, true);
+    store.recordApiLog("auto_recall_intent_skip", { type: "auto_recall", query, reason: intentCheck.reason }, "skipped", dur, true);
     return { shouldSearch: false };
   }
 
@@ -278,11 +277,10 @@ export async function executeIntentJudge(params: {
         ctx.log.info(`auto-recall: skipped query "${query.slice(0, 50)}" reason=${parsed.reason}`);
       }
       const dur = performance.now() - recallT0;
-      store.recordToolCall("memory_search", dur, true);
-      store.recordApiLog("memory_search", { type: "auto_recall", query, reason: parsed.reason }, "skipped", dur, true);
+      store.recordApiLog("auto_recall_intent_skip", { type: "auto_recall", query, reason: parsed.reason }, "skipped", dur, true);
       return { shouldSearch: false };
     }
-    
+
     return { shouldSearch: true };
   } catch (intentErr) {
     if (policy.onLlmError === "search") {
@@ -291,8 +289,7 @@ export async function executeIntentJudge(params: {
     }
     ctx.log.warn(`auto-recall: LLM intent judgment failed: ${intentErr}`);
     const dur = performance.now() - recallT0;
-    store.recordToolCall("memory_search", dur, true);
-    store.recordApiLog("memory_search", { type: "auto_recall", query, reason: "llm_error_skipped" }, "skipped", dur, true);
+    store.recordApiLog("auto_recall_intent_skip", { type: "auto_recall", query, reason: "llm_error_skipped" }, "skipped", dur, true);
     return { shouldSearch: false };
   }
 }
@@ -308,4 +305,3 @@ export function resolveAutoRecallMaxResults(options?: IntentFilterOptions): numb
   if (n > 20) return 20;
   return n;
 }
-

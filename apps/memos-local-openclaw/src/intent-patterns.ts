@@ -1,10 +1,10 @@
 export interface RegexPatternSource {
-  pattern: string
-  flags?: string
+  pattern: string;
+  flags?: string;
 }
 
 export interface CompiledRegexPattern {
-  regex: RegExp
+  regex: RegExp;
 }
 
 /**
@@ -35,7 +35,7 @@ export const SKIP_RECALL_PATTERN_SOURCES: RegexPatternSource[] = [
       "^(latest|today|recent).{0,12}(news|updates|events)",
     flags: "i",
   },
-]
+];
 
 /**
  * Explicit memory recall patterns
@@ -72,7 +72,7 @@ export const MEMORY_QUERY_PATTERN_SOURCES: RegexPatternSource[] = [
     pattern:
       "(那个|刚才那个|刚刚那个).{0,8}(代码|函数|问题|回答|内容)",
   },
-]
+];
 
 /**
  * compile regex patterns
@@ -82,7 +82,7 @@ export function compilePatterns(
 ): CompiledRegexPattern[] {
   return sources.map((s) => ({
     regex: new RegExp(s.pattern, s.flags ?? ""),
-  }))
+  }));
 }
 
 /**
@@ -92,6 +92,5 @@ export function matchPatterns(
   input: string,
   patterns: CompiledRegexPattern[]
 ): boolean {
-  return patterns.some((p) => p.regex.test(input))
+  return patterns.some((p) => p.regex.test(input));
 }
-

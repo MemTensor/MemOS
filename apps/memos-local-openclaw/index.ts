@@ -63,6 +63,26 @@ const pluginConfigSchema = {
         },
       },
     },
+     intentFilter: {
+       type: "object" as const,
+       description:
+         "Intent filter configuration. Controls LLM timeout and automatic recall behavior for memory search.",
+       additionalProperties: true,
+       properties: {
+         llmTimeoutMs: {
+           type: "number" as const,
+           description:
+             "Timeout in milliseconds for the intent-judging LLM call used by the intent filter (default: implementation-specific).",
+           minimum: 0,
+         },
+         autoRecallMaxResults: {
+           type: "number" as const,
+           description:
+             "Maximum number of memory results that automatic recall may return when the intent filter triggers recall.",
+           minimum: 0,
+         },
+       },
+     },
   },
 };
 
