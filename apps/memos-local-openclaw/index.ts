@@ -44,6 +44,45 @@ function deduplicateHits<T extends { summary: string }>(hits: T[]): T[] {
   return kept;
 }
 
+const NEW_SESSION_PROMPT_RE = /A new session was started via \/new or \/reset\./i;
+const INTERNAL_CONTEXT_RE = /OpenClaw runtime context \(internal\):[\s\S]*/i;
+const CONTINUE_PROMPT_RE = /^Continue where you left off\.[\s\S]*/i;
+
+function normalizeAutoRecallQuery(rawPrompt: string): string {
+  let query = rawPrompt.trim();
+
+  const senderTag = "Sender (untrusted metadata):";
+  const senderPos = query.indexOf(senderTag);
+  if (senderPos !== -1) {
+    const afterSender = query.slice(senderPos);
+    const fenceStart = afterSender.indexOf("```json");
+    const fenceEnd = fenceStart >= 0 ? afterSender.indexOf("```\n", fenceStart + 7) : -1;
+    if (fenceEnd > 0) {
+      query = afterSender.slice(fenceEnd + 4).replace(/^\s*\n/, "").trim();
+    } else {
+      const firstDblNl = afterSender.indexOf("\n\n");
+      if (firstDblNl > 0) {
+        query = afterSender.slice(firstDblNl + 2).trim();
+      }
+    }
+  }
+
+  query = stripInboundMetadata(query);
+  query = query.replace(/<[^>]+>/g, "").trim();
+
+  if (NEW_SESSION_PROMPT_RE.test(query)) {
+    query = query.replace(NEW_SESSION_PROMPT_RE, "").trim();
+    query = query.replace(/^(Execute|Run) your Session Startup sequence[^\n]*\n?/im, "").trim();
+    query = query.replace(/^Current time:[^\n]*(\n|$)/im, "").trim();
+  }
+
+  query = query.replace(INTERNAL_CONTEXT_RE, "").trim();
+  query = query.replace(CONTINUE_PROMPT_RE, "").trim();
+
+  return query;
+}
+
+
 const pluginConfigSchema = {
   type: "object" as const,
   additionalProperties: true,
@@ -874,14 +913,7 @@ const memosLocalPlugin = {
         const rawPrompt = event.prompt;
         ctx.log.debug(`auto-recall: rawPrompt="${rawPrompt.slice(0, 300)}"`);
 
-        let query = rawPrompt;
-        const lastDoubleNewline = rawPrompt.lastIndexOf("\n\n");
-        if (lastDoubleNewline > 0 && lastDoubleNewline < rawPrompt.length - 3) {
-          const tail = rawPrompt.slice(lastDoubleNewline + 2).trim();
-          if (tail.length >= 2) query = tail;
-        }
-        query = stripInboundMetadata(query);
-        query = query.replace(/<[^>]+>/g, "").trim();
+        const query = normalizeAutoRecallQuery(rawPrompt);
         recallQuery = query;
 
         if (query.length < 2) {
