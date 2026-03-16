@@ -164,7 +164,37 @@ resp = llm.generate(messages)
 print("Scenario 6:", resp)
 
 
-# Scenario 7: Using LLMFactory with Deepseek-chat + reasoning + CoT + streaming
+# Scenario 7: Using LLMFactory with MiniMax (OpenAI-compatible API)
+# Prerequisites:
+# 1. Get your API key from the MiniMax platform.
+# 2. Available models: MiniMax-M2.5 (standard), MiniMax-M2.5-highspeed (faster, 204K context).
+# Note: MiniMax requires temperature > 0 (zero is rejected).
+
+cfg_mm = LLMConfigFactory.model_validate(
+    {
+        "backend": "minimax",
+        "config": {
+            "model_name_or_path": "MiniMax-M2.5",
+            "api_key": "your-minimax-api-key",
+            "api_base": "https://api.minimax.io/v1",
+            "temperature": 0.7,
+            "max_tokens": 1024,
+        },
+    }
+)
+llm = LLMFactory.from_config(cfg_mm)
+messages = [{"role": "user", "content": "Hello, who are you"}]
+resp = llm.generate(messages)
+print("Scenario 7:", resp)
+print("==" * 20)
+
+print("Scenario 7 (streaming):\n")
+for chunk in llm.generate_stream(messages):
+    print(chunk, end="")
+print("\n" + "==" * 20)
+
+
+# Scenario 8: Using LLMFactory with DeepSeek-chat + reasoning + CoT + streaming
 
 cfg2 = LLMConfigFactory.model_validate(
     {
@@ -186,7 +216,7 @@ messages = [
         "content": "Explain how to solve this problem step-by-step. Be explicit in your thinking process. Question: If a train travels from city A to city B at 60 mph and returns at 40 mph, what is its average speed for the entire trip? Let's think step by step.",
     },
 ]
-print("Scenario 7:\n")
+print("Scenario 8:\n")
 for chunk in llm.generate_stream(messages):
     print(chunk, end="")
 print("==" * 20)
