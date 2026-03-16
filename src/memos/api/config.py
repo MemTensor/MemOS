@@ -700,20 +700,38 @@ class APIConfig:
     @staticmethod
     def get_noshared_neo4j_config(user_id) -> dict[str, Any]:
         """Get Neo4j configuration."""
-        return {
+        config = {
             "uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"),
             "user": os.getenv("NEO4J_USER", "neo4j"),
-            "db_name": f"memos{user_id.replace('-', '')}",
+            "db_name": f"{user_id.replace('_', '-')}",
             "password": os.getenv("NEO4J_PASSWORD", "12345678"),
             "auto_create": True,
             "use_multi_db": True,
             "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
         }
 
+        enable_qdrant_sync = os.getenv("MOS_NEO4J_ENABLE_QDRANT_SYNC", "true").lower() == "true"
+        if enable_qdrant_sync:
+            config["vec_config"] = {
+                "backend": "qdrant",
+                "config": {
+                    "collection_name": "neo4j_vec_db",
+                    "vector_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
+                    "distance_metric": "cosine",
+                    "host": os.getenv("QDRANT_HOST", "localhost"),
+                    "port": int(os.getenv("QDRANT_PORT", "6333")),
+                    "path": os.getenv("QDRANT_PATH"),
+                    "url": os.getenv("QDRANT_URL"),
+                    "api_key": os.getenv("QDRANT_API_KEY"),
+                },
+            }
+
+        return config
+
     @staticmethod
     def get_neo4j_shared_config(user_id: str | None = None) -> dict[str, Any]:
         """Get Neo4j configuration."""
-        return {
+        config = {
             "uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"),
             "user": os.getenv("NEO4J_USER", "neo4j"),
             "db_name": os.getenv("NEO4J_DB_NAME", "shared-tree-textual-memory"),
@@ -723,6 +741,24 @@ class APIConfig:
             "use_multi_db": False,
             "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
         }
+
+        enable_qdrant_sync = os.getenv("MOS_NEO4J_ENABLE_QDRANT_SYNC", "true").lower() == "true"
+        if enable_qdrant_sync:
+            config["vec_config"] = {
+                "backend": "qdrant",
+                "config": {
+                    "collection_name": "neo4j_vec_db",
+                    "vector_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
+                    "distance_metric": "cosine",
+                    "host": os.getenv("QDRANT_HOST", "localhost"),
+                    "port": int(os.getenv("QDRANT_PORT", "6333")),
+                    "path": os.getenv("QDRANT_PATH"),
+                    "url": os.getenv("QDRANT_URL"),
+                    "api_key": os.getenv("QDRANT_API_KEY"),
+                },
+            }
+
+        return config
 
     @staticmethod
     def get_nebular_config(user_id: str | None = None) -> dict[str, Any]:

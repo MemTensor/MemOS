@@ -1,3 +1,6 @@
+import re
+
+from collections import defaultdict
 from typing import Any
 
 from memos.configs.vec_db import QdrantVecDBConfig
@@ -62,15 +65,110 @@ class QdrantVecDB(BaseVecDB):
         except Exception as e:
             logger.warning(f"Failed to ensure default payload indexes: {e}")
 
+    def _sanitize_collection_name(self, name: str) -> str:
+        """Normalize user-scope names so they are safe as Qdrant collection names."""
+        normalized = (name or "").strip()
+        if not normalized:
+            return self.config.collection_name
+
+        # Keep a conservative charset to avoid backend-specific naming issues.
+        normalized = re.sub(r"[^a-zA-Z0-9_-]", "_", normalized).strip("_")
+        if not normalized:
+            return self.config.collection_name
+
+        return normalized[:255]
+
+    def _extract_user_scope(self, data: dict[str, Any] | None) -> str | None:
+        """Extract user scope from payload/filter for per-user collection routing."""
+        if not isinstance(data, dict):
+            return None
+
+        for key in ("user_id", "user_name"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        metadata = data.get("metadata")
+        if isinstance(metadata, dict):
+            for key in ("user_id", "user_name"):
+                value = metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+            metadata_info = metadata.get("info")
+            if isinstance(metadata_info, dict):
+                for key in ("user_id", "user_name"):
+                    value = metadata_info.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+
+        info = data.get("info")
+        if isinstance(info, dict):
+            for key in ("user_id", "user_name"):
+                value = info.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+        return None
+
+    def _resolve_collection_name(
+        self,
+        *,
+        payload: dict[str, Any] | None = None,
+        filter_dict: dict[str, Any] | None = None,
+    ) -> str:
+        """Resolve collection name from payload/filter, falling back to default config."""
+        user_scope = self._extract_user_scope(payload) or self._extract_user_scope(filter_dict)
+        if user_scope:
+            return self._sanitize_collection_name(user_scope)
+        return self.config.collection_name
+
+    def _strip_scope_filter(self, filter_dict: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Drop user scope keys from filter when collection is already user-scoped."""
+        if not filter_dict:
+            return filter_dict
+
+        effective_filter = dict(filter_dict)
+        effective_filter.pop("user_id", None)
+        effective_filter.pop("user_name", None)
+        return effective_filter
+
+    def _all_candidate_collections(self) -> list[str]:
+        """Return all collections with default collection first for compatibility."""
+        collections = self.list_collections()
+        ordered = [self.config.collection_name]
+        ordered.extend(name for name in collections if name != self.config.collection_name)
+        return ordered
+
+    def _ensure_collection_ready(self, collection_name: str) -> None:
+        """Create collection and payload indexes if missing."""
+        if self.collection_exists(collection_name):
+            return
+
+        self._create_collection_by_name(collection_name)
+        try:
+            self.ensure_payload_indexes(
+                self._default_payload_index_fields,
+                collection_name=collection_name,
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to ensure payload indexes for collection '{collection_name}': {e}"
+            )
+
     def create_collection(self) -> None:
-        """Create a new collection with specified parameters."""
+        """Create the default configured collection with specified parameters."""
+        self._create_collection_by_name(self.config.collection_name)
+
+    def _create_collection_by_name(self, collection_name: str) -> None:
+        """Create a specific collection with configured vector parameters."""
         from qdrant_client.http import models
         from qdrant_client.http.exceptions import UnexpectedResponse
 
-        if self.collection_exists(self.config.collection_name):
-            collection_info = self.client.get_collection(self.config.collection_name)
+        if self.collection_exists(collection_name):
+            collection_info = self.client.get_collection(collection_name)
             logger.warning(
-                f"Collection '{self.config.collection_name}' (vector dimension: {collection_info.config.params.vectors.size}) already exists. Skipping creation."
+                f"Collection '{collection_name}' (vector dimension: {collection_info.config.params.vectors.size}) already exists. Skipping creation."
             )
 
             return
@@ -84,7 +182,7 @@ class QdrantVecDB(BaseVecDB):
 
         try:
             self.client.create_collection(
-                collection_name=self.config.collection_name,
+                collection_name=collection_name,
                 vectors_config=models.VectorParams(
                     size=self.config.vector_dimension,
                     distance=distance_map[self.config.distance_metric],
@@ -94,7 +192,7 @@ class QdrantVecDB(BaseVecDB):
             # Cloud Qdrant returns 409 when the collection already exists; tolerate and continue.
             if getattr(err, "status_code", None) == 409 or "already exists" in str(err).lower():
                 logger.warning(
-                    f"Collection '{self.config.collection_name}' already exists. Skipping creation."
+                    f"Collection '{collection_name}' already exists. Skipping creation."
                 )
                 return
             raise
@@ -103,7 +201,7 @@ class QdrantVecDB(BaseVecDB):
             raise
 
         logger.info(
-            f"Collection '{self.config.collection_name}' created with {self.config.vector_dimension} dimensions."
+            f"Collection '{collection_name}' created with {self.config.vector_dimension} dimensions."
         )
 
     def list_collections(self) -> list[str]:
@@ -137,9 +235,15 @@ class QdrantVecDB(BaseVecDB):
         Returns:
             List of search results with distance scores and payloads.
         """
-        qdrant_filter = self._dict_to_filter(filter) if filter else None
+        collection_name = self._resolve_collection_name(filter_dict=filter)
+        if not self.collection_exists(collection_name):
+            logger.info(f"Qdrant collection '{collection_name}' does not exist, returning empty search result.")
+            return []
+
+        effective_filter = self._strip_scope_filter(filter)
+        qdrant_filter = self._dict_to_filter(effective_filter) if effective_filter else None
         response = self.client.query_points(
-            collection_name=self.config.collection_name,
+            collection_name=collection_name,
             query=query_vector,
             limit=top_k,
             query_filter=qdrant_filter,
@@ -174,43 +278,56 @@ class QdrantVecDB(BaseVecDB):
 
     def get_by_id(self, id: str) -> VecDBItem | None:
         """Get a single item by ID."""
-        response = self.client.retrieve(
-            collection_name=self.config.collection_name,
-            ids=[id],
-            with_payload=True,
-            with_vectors=True,
-        )
+        for collection_name in self._all_candidate_collections():
+            try:
+                response = self.client.retrieve(
+                    collection_name=collection_name,
+                    ids=[id],
+                    with_payload=True,
+                    with_vectors=True,
+                )
+            except Exception:
+                continue
 
-        if not response:
-            return None
+            if response:
+                point = response[0]
+                return VecDBItem(
+                    id=point.id,
+                    vector=point.vector,
+                    payload=point.payload,
+                )
 
-        point = response[0]
-        return VecDBItem(
-            id=point.id,
-            vector=point.vector,
-            payload=point.payload,
-        )
+        return None
 
     def get_by_ids(self, ids: list[str]) -> list[VecDBItem]:
         """Get multiple items by their IDs."""
-        response = self.client.retrieve(
-            collection_name=self.config.collection_name,
-            ids=ids,
-            with_payload=True,
-            with_vectors=True,
-        )
+        remaining_ids = set(ids)
+        found_items: dict[str, VecDBItem] = {}
 
-        if not response:
-            return []
+        for collection_name in self._all_candidate_collections():
+            if not remaining_ids:
+                break
 
-        return [
-            VecDBItem(
-                id=point.id,
-                vector=point.vector,
-                payload=point.payload,
-            )
-            for point in response
-        ]
+            try:
+                response = self.client.retrieve(
+                    collection_name=collection_name,
+                    ids=list(remaining_ids),
+                    with_payload=True,
+                    with_vectors=True,
+                )
+            except Exception:
+                continue
+
+            for point in response:
+                item = VecDBItem(
+                    id=point.id,
+                    vector=point.vector,
+                    payload=point.payload,
+                )
+                found_items[item.id] = item
+                remaining_ids.discard(item.id)
+
+        return [found_items[id] for id in ids if id in found_items]
 
     def get_by_filter(self, filter: dict[str, Any], scroll_limit: int = 100) -> list[VecDBItem]:
         """
@@ -223,14 +340,22 @@ class QdrantVecDB(BaseVecDB):
         Returns:
             List of items including vectors and payload that match the filter
         """
-        qdrant_filter = self._dict_to_filter(filter) if filter else None
+        collection_name = self._resolve_collection_name(filter_dict=filter)
+        if not self.collection_exists(collection_name):
+            logger.info(
+                f"Qdrant collection '{collection_name}' does not exist, returning empty filter result."
+            )
+            return []
+
+        effective_filter = self._strip_scope_filter(filter)
+        qdrant_filter = self._dict_to_filter(effective_filter) if effective_filter else None
         all_points = []
         offset = None
 
         # Use scroll to paginate through all matching points
         while True:
             points, offset = self.client.scroll(
-                collection_name=self.config.collection_name,
+                collection_name=collection_name,
                 limit=scroll_limit,
                 scroll_filter=qdrant_filter,
                 offset=offset,
@@ -263,12 +388,19 @@ class QdrantVecDB(BaseVecDB):
 
     def count(self, filter: dict[str, Any] | None = None) -> int:
         """Count items in the database, optionally with filter."""
+        collection_name = self._resolve_collection_name(filter_dict=filter)
+        if not self.collection_exists(collection_name):
+            logger.info(f"Qdrant collection '{collection_name}' does not exist, count=0.")
+            return 0
+
         qdrant_filter = None
         if filter:
-            qdrant_filter = self._dict_to_filter(filter)
+            effective_filter = self._strip_scope_filter(filter)
+            qdrant_filter = self._dict_to_filter(effective_filter) if effective_filter else None
 
         response = self.client.count(
-            collection_name=self.config.collection_name, count_filter=qdrant_filter
+            collection_name=collection_name,
+            count_filter=qdrant_filter,
         )
 
         return response.count
@@ -285,15 +417,18 @@ class QdrantVecDB(BaseVecDB):
                 - 'vector': embedding vector
                 - 'payload': additional fields for filtering/retrieval
         """
-        points = []
+        points_by_collection: dict[str, list[Any]] = defaultdict(list)
         for item in data:
             if isinstance(item, dict):
                 item = item.copy()
                 item = VecDBItem.from_dict(item)
             point = models.PointStruct(id=item.id, vector=item.vector, payload=item.payload)
-            points.append(point)
+            collection_name = self._resolve_collection_name(payload=item.payload)
+            points_by_collection[collection_name].append(point)
 
-        self.client.upsert(collection_name=self.config.collection_name, points=points)
+        for collection_name, points in points_by_collection.items():
+            self._ensure_collection_ready(collection_name)
+            self.client.upsert(collection_name=collection_name, points=points)
 
     def update(self, id: str, data: VecDBItem | dict[str, Any]) -> None:
         """Update an item in the vector database."""
@@ -303,19 +438,24 @@ class QdrantVecDB(BaseVecDB):
             data = data.copy()
             data = VecDBItem.from_dict(data)
 
+        collection_name = self._resolve_collection_name(payload=data.payload)
+        self._ensure_collection_ready(collection_name)
+
         if data.vector:
             # For vector updates (with or without payload), use upsert with the same ID
             self.client.upsert(
-                collection_name=self.config.collection_name,
+                collection_name=collection_name,
                 points=[models.PointStruct(id=id, vector=data.vector, payload=data.payload)],
             )
         else:
             # For payload-only updates
             self.client.set_payload(
-                collection_name=self.config.collection_name, payload=data.payload, points=[id]
+                collection_name=collection_name,
+                payload=data.payload,
+                points=[id],
             )
 
-    def ensure_payload_indexes(self, fields: list[str]) -> None:
+    def ensure_payload_indexes(self, fields: list[str], collection_name: str | None = None) -> None:
         """
         Create payload indexes for specified fields in the collection.
         This is idempotent: it will skip if index already exists.
@@ -323,10 +463,11 @@ class QdrantVecDB(BaseVecDB):
         Args:
             fields (list[str]): List of field names to index (as keyword).
         """
+        collection_name = collection_name or self.config.collection_name
         for field in fields:
             try:
                 self.client.create_payload_index(
-                    collection_name=self.config.collection_name,
+                    collection_name=collection_name,
                     field_name=field,
                     field_schema="keyword",  # Could be extended in future
                 )
@@ -349,7 +490,8 @@ class QdrantVecDB(BaseVecDB):
 
         """Delete items from the vector database."""
         point_ids: list[str | int] = ids
-        self.client.delete(
-            collection_name=self.config.collection_name,
-            points_selector=models.PointIdsList(points=point_ids),
-        )
+        for collection_name in self._all_candidate_collections():
+            self.client.delete(
+                collection_name=collection_name,
+                points_selector=models.PointIdsList(points=point_ids),
+            )

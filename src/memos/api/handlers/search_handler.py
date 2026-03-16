@@ -7,13 +7,17 @@ using dependency injection for better modularity and testability.
 
 import copy
 import math
+import os
+import threading
 
 from typing import Any
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
+from memos.api.handlers.component_init import create_per_db_components
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
 from memos.log import get_logger
+from memos.mem_agent.deepsearch_agent import DeepSearchMemAgent
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
     cosine_similarity_matrix,
 )
@@ -43,6 +47,35 @@ class SearchHandler(BaseHandler):
         self._validate_dependencies(
             "naive_mem_cube", "mem_scheduler", "searcher", "deepsearch_agent"
         )
+        # Cache per-database components in Neo4j multi-db mode.
+        self._per_db_cube_cache: dict[str, dict[str, Any]] = {}
+        self._cache_lock = threading.Lock()
+
+    @property
+    def _is_neo4j_multidb(self) -> bool:
+        """Return True when using Neo4j enterprise with one-database-per-cube mode."""
+        backend = os.getenv("GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "")).lower()
+        shared_db = os.getenv("MOS_NEO4J_SHARED_DB", "false").lower() == "true"
+        return backend == "neo4j" and not shared_db
+
+    def _get_per_db_components(self, db_name: str) -> dict[str, Any]:
+        """Return cached per-db components, creating them on first access."""
+        if db_name not in self._per_db_cube_cache:
+            with self._cache_lock:
+                if db_name not in self._per_db_cube_cache:
+                    self.logger.info(
+                        f"[SearchHandler] Creating per-db components for db_name={db_name!r}"
+                    )
+                    per_db = create_per_db_components(
+                        db_name=db_name,
+                        base_components=vars(self.deps),
+                    )
+                    per_db["deepsearch_agent"] = DeepSearchMemAgent(
+                        llm=self.llm,
+                        memory_retriever=per_db["text_mem"],
+                    )
+                    self._per_db_cube_cache[db_name] = per_db
+        return self._per_db_cube_cache[db_name]
 
     def handle_search_memories(self, search_req: APISearchRequest) -> SearchResponse:
         """
@@ -801,8 +834,28 @@ class SearchHandler(BaseHandler):
 
     def _build_cube_view(self, search_req: APISearchRequest, searcher=None) -> MemCubeView:
         cube_ids = self._resolve_cube_ids(search_req)
-        searcher_to_use = searcher if searcher is not None else self.searcher
+        if self._is_neo4j_multidb:
+            single_views = []
+            for cube_id in cube_ids:
+                per_db = self._get_per_db_components(cube_id)
+                searcher_to_use = searcher if searcher is not None else per_db["searcher"]
+                single_views.append(
+                    SingleCubeView(
+                        cube_id=cube_id,
+                        naive_mem_cube=per_db["naive_mem_cube"],
+                        mem_reader=per_db["mem_reader"],
+                        mem_scheduler=self.mem_scheduler,
+                        logger=self.logger,
+                        searcher=searcher_to_use,
+                        deepsearch_agent=per_db["deepsearch_agent"],
+                    )
+                )
 
+            if len(single_views) == 1:
+                return single_views[0]
+            return CompositeCubeView(cube_views=single_views, logger=self.logger)
+
+        searcher_to_use = searcher if searcher is not None else self.searcher
         if len(cube_ids) == 1:
             cube_id = cube_ids[0]
             return SingleCubeView(
@@ -814,17 +867,17 @@ class SearchHandler(BaseHandler):
                 searcher=searcher_to_use,
                 deepsearch_agent=self.deepsearch_agent,
             )
-        else:
-            single_views = [
-                SingleCubeView(
-                    cube_id=cube_id,
-                    naive_mem_cube=self.naive_mem_cube,
-                    mem_reader=self.mem_reader,
-                    mem_scheduler=self.mem_scheduler,
-                    logger=self.logger,
-                    searcher=searcher_to_use,
-                    deepsearch_agent=self.deepsearch_agent,
-                )
-                for cube_id in cube_ids
-            ]
-            return CompositeCubeView(cube_views=single_views, logger=self.logger)
+
+        single_views = [
+            SingleCubeView(
+                cube_id=cube_id,
+                naive_mem_cube=self.naive_mem_cube,
+                mem_reader=self.mem_reader,
+                mem_scheduler=self.mem_scheduler,
+                logger=self.logger,
+                searcher=searcher_to_use,
+                deepsearch_agent=self.deepsearch_agent,
+            )
+            for cube_id in cube_ids
+        ]
+        return CompositeCubeView(cube_views=single_views, logger=self.logger)
