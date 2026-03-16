@@ -2,6 +2,7 @@ import concurrent.futures
 import difflib
 import json
 import re
+import uuid
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -236,6 +237,7 @@ class MemFeedback(BaseMemFeedback):
         else:
             to_add_memory = new_memory_item.model_copy(deep=True)
 
+        to_add_memory.id = str(uuid.uuid4())
         if to_add_memory.metadata.memory_type == "PreferenceMemory":
             to_add_memory.metadata.preference = new_memory_item.memory
 
