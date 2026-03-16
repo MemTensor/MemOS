@@ -27,7 +27,39 @@ class OpenAILLM(BaseLLM):
         self.client = openai.Client(
             api_key=config.api_key, base_url=config.api_base, default_headers=config.default_headers
         )
-        logger.info("OpenAI LLM instance initialized")
+        self.use_backup_client = config.backup_client
+        if self.use_backup_client:
+            self.backup_client = openai.Client(
+                api_key=config.backup_api_key,
+                base_url=config.backup_api_base,
+                default_headers=config.backup_headers,
+            )
+            logger.info(
+                f"OpenAI LLM instance initialized with backup "
+                f"(model={config.backup_model_name_or_path})"
+            )
+        else:
+            self.backup_client = None
+            logger.info("OpenAI LLM instance initialized")
+
+    def _parse_response(self, response) -> str:
+        """Extract text content from a chat completion response."""
+        if not response.choices:
+            logger.warning("OpenAI response has no choices")
+            return ""
+
+        tool_calls = getattr(response.choices[0].message, "tool_calls", None)
+        if isinstance(tool_calls, list) and len(tool_calls) > 0:
+            return self.tool_call_parser(tool_calls)
+        response_content = response.choices[0].message.content
+        reasoning_content = getattr(response.choices[0].message, "reasoning_content", None)
+        if isinstance(reasoning_content, str) and reasoning_content:
+            reasoning_content = f"<think>{reasoning_content}</think>"
+        if self.config.remove_think_prefix:
+            return remove_thinking_tags(response_content)
+        if reasoning_content:
+            return reasoning_content + (response_content or "")
+        return response_content or ""
 
     @timed_with_status(
         log_prefix="OpenAI LLM",
@@ -50,29 +82,32 @@ class OpenAILLM(BaseLLM):
         start_time = time.perf_counter()
         logger.info(f"OpenAI LLM Request body: {request_body}")
 
-        response = self.client.chat.completions.create(**request_body)
-
-        cost_time = time.perf_counter() - start_time
-        logger.info(
-            f"Request body: {request_body}, Response from OpenAI: {response.model_dump_json()}, Cost time: {cost_time}"
-        )
-
-        if not response.choices:
-            logger.warning("OpenAI response has no choices")
-            return ""
-
-        tool_calls = getattr(response.choices[0].message, "tool_calls", None)
-        if isinstance(tool_calls, list) and len(tool_calls) > 0:
-            return self.tool_call_parser(tool_calls)
-        response_content = response.choices[0].message.content
-        reasoning_content = getattr(response.choices[0].message, "reasoning_content", None)
-        if isinstance(reasoning_content, str) and reasoning_content:
-            reasoning_content = f"<think>{reasoning_content}</think>"
-        if self.config.remove_think_prefix:
-            return remove_thinking_tags(response_content)
-        if reasoning_content:
-            return reasoning_content + (response_content or "")
-        return response_content or ""
+        try:
+            response = self.client.chat.completions.create(**request_body)
+            cost_time = time.perf_counter() - start_time
+            logger.info(
+                f"Request body: {request_body}, Response from OpenAI: "
+                f"{response.model_dump_json()}, Cost time: {cost_time}"
+            )
+            return self._parse_response(response)
+        except Exception as e:
+            if not self.use_backup_client:
+                raise
+            logger.warning(
+                f"Primary LLM request failed with {type(e).__name__}: {e}, "
+                f"falling back to backup client"
+            )
+            backup_body = {
+                **request_body,
+                "model": self.config.backup_model_name_or_path or request_body["model"],
+            }
+            backup_response = self.backup_client.chat.completions.create(**backup_body)
+            cost_time = time.perf_counter() - start_time
+            logger.info(
+                f"Backup LLM request succeeded, Response: "
+                f"{backup_response.model_dump_json()}, Cost time: {cost_time}"
+            )
+            return self._parse_response(backup_response)
 
     @timed_with_status(
         log_prefix="OpenAI LLM Stream",
