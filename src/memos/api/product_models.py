@@ -434,7 +434,7 @@ class APISearchRequest(BaseRequest):
     # Internal field for search memory type
     search_memory_type: str = Field(
         "All",
-        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory, SkillMemory",
+        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory, SkillMemory, PreferenceMemory",
     )
 
     # ==== Context ====
@@ -858,6 +858,13 @@ class DeleteMemoryRequest(BaseRequest):
     memory_ids: list[str] | None = Field(None, description="Memory IDs")
     file_ids: list[str] | None = Field(None, description="File IDs")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    auto_cleanup_working: bool | None = Field(
+        False,
+        description=(
+            "(Internal) Whether to automatically delete related WorkingMemory nodes "
+            "based on working_binding metadata when deleting by memory_ids."
+        ),
+    )
 
 
 class SuggestionRequest(BaseRequest):

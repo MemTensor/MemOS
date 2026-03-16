@@ -16,6 +16,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
         # Mock config
         self.config = MagicMock(spec=SimpleStructMemReaderConfig)
         self.config.llm = MagicMock()
+        self.config.general_llm = None  # Optional, falls back to main llm
         self.config.embedder = MagicMock()
         self.config.chunker = MagicMock()
         self.config.remove_prompt_example = MagicMock()
@@ -30,6 +31,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
 
         # Set up mock LLM and embedder
         self.reader.llm = MagicMock()
+        self.reader.general_llm = self.reader.llm  # Falls back to main llm
         self.reader.embedder = MagicMock()
         self.reader.chunker = MagicMock()
 
