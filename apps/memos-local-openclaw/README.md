@@ -178,7 +178,7 @@ Add the plugin config to `~/.openclaw/openclaw.json`:
 | Provider | `provider` value | Example `model` | Notes |
 |---|---|---|---|
 | OpenAI / compatible | `openai_compatible` | `bge-m3`, `text-embedding-3-small` | Any OpenAI-compatible API |
-| Gemini | `gemini` | `text-embedding-004` | Requires `apiKey` |
+| Gemini | `gemini` | `gemini-embedding-001` | Requires `apiKey` |
 | Cohere | `cohere` | `embed-english-v3.0` | Separates document/query embedding |
 | Voyage | `voyage` | `voyage-2` | |
 | Mistral | `mistral` | `mistral-embed` | |
