@@ -721,6 +721,8 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         user_name: str | None = None,
         filter: dict | None = None,
         knowledgebase_ids: list[str] | None = None,
+        user_name_flag: bool = True,
+        status: str | None = None,
     ) -> list[str]:
         """
         Retrieve node IDs that match given metadata filters.
@@ -745,14 +747,19 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             - Can be used for faceted recall or prefiltering before embedding rerank.
         """
         logger.info(
-            f"[get_by_metadata] filters: {filters},user_name: {user_name},filter: {filter},knowledgebase_ids: {knowledgebase_ids}"
+            f"[get_by_metadata] filters: {filters},user_name: {user_name},filter: {filter},knowledgebase_ids: {knowledgebase_ids},status: {status}"
         )
         print(
-            f"[get_by_metadata] filters: {filters},user_name: {user_name},filter: {filter},knowledgebase_ids: {knowledgebase_ids}"
+            f"[get_by_metadata] filters: {filters},user_name: {user_name},filter: {filter},knowledgebase_ids: {knowledgebase_ids},status: {status}"
         )
         user_name = user_name if user_name else self.config.user_name
         where_clauses = []
         params = {}
+
+        # Add status filter if provided
+        if status:
+            where_clauses.append("n.status = $status")
+            params["status"] = status
 
         for i, f in enumerate(filters):
             field = f["field"]
