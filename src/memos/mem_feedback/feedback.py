@@ -2,7 +2,6 @@ import concurrent.futures
 import difflib
 import json
 import re
-import uuid
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -36,7 +35,6 @@ from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import Stop
 
 
 if TYPE_CHECKING:
-    from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
     from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.templates.mem_feedback_prompts import (
     FEEDBACK_ANSWER_PROMPT,
@@ -95,7 +93,6 @@ class MemFeedback(BaseMemFeedback):
         self.stopword_manager = StopwordManager
         self.searcher: Searcher = None
         self.reranker = None
-        self.pref_mem: SimplePreferenceTextMemory = None
         self.pref_feedback: bool = False
         self.DB_IDX_READY = False
 
@@ -235,20 +232,18 @@ class MemFeedback(BaseMemFeedback):
             to_add_memory.metadata.tags = new_memory_item.metadata.tags
             to_add_memory.memory = new_memory_item.memory
             to_add_memory.metadata.embedding = new_memory_item.metadata.embedding
-
             to_add_memory.metadata.user_id = new_memory_item.metadata.user_id
-            to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
-                datetime.now().isoformat()
-            )
-            to_add_memory.metadata.background = new_memory_item.metadata.background
         else:
             to_add_memory = new_memory_item.model_copy(deep=True)
-            to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
-                datetime.now().isoformat()
-            )
-            to_add_memory.metadata.background = new_memory_item.metadata.background
 
-        to_add_memory.id = ""
+        if to_add_memory.metadata.memory_type == "PreferenceMemory":
+            to_add_memory.metadata.preference = new_memory_item.memory
+
+        to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
+            datetime.now().isoformat()
+        )
+        to_add_memory.metadata.background = new_memory_item.metadata.background
+
         added_ids = self._retry_db_operation(
             lambda: self.memory_manager.add([to_add_memory], user_name=user_name, use_batch=False)
         )
@@ -278,13 +273,6 @@ class MemFeedback(BaseMemFeedback):
         """
         Individual update operations
         """
-        if "preference" in old_memory_item.metadata.__dict__:
-            logger.info(
-                f"[0107 Feedback Core: _single_update_operation] pref_memory: {old_memory_item.id}"
-            )
-            return self._single_update_pref(
-                old_memory_item, new_memory_item, user_id, user_name, operation
-            )
 
         memory_type = old_memory_item.metadata.memory_type
         source_doc_id = (
@@ -331,68 +319,6 @@ class MemFeedback(BaseMemFeedback):
             "source_doc_id": source_doc_id,
             "archived_id": old_memory_item.id,
             "origin_memory": old_memory_item.memory,
-        }
-
-    def _single_update_pref(
-        self,
-        old_memory_item: TextualMemoryItem,
-        new_memory_item: TextualMemoryItem,
-        user_id: str,
-        user_name: str,
-        operation: dict,
-    ):
-        """update preference memory"""
-
-        feedback_context = new_memory_item.memory
-        if operation and "text" in operation and operation["text"]:
-            new_memory_item.memory = operation["text"]
-            new_memory_item.metadata.embedding = self._batch_embed([operation["text"]])[0]
-
-        to_add_memory = old_memory_item.model_copy(deep=True)
-        to_add_memory.metadata.key = new_memory_item.metadata.key
-        to_add_memory.metadata.tags = new_memory_item.metadata.tags
-        to_add_memory.memory = new_memory_item.memory
-        to_add_memory.metadata.preference = new_memory_item.memory
-        to_add_memory.metadata.embedding = new_memory_item.metadata.embedding
-
-        to_add_memory.metadata.user_id = new_memory_item.metadata.user_id
-        to_add_memory.metadata.original_text = old_memory_item.memory
-        to_add_memory.metadata.covered_history = old_memory_item.id
-
-        to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
-            datetime.now().isoformat()
-        )
-        to_add_memory.metadata.context_summary = (
-            old_memory_item.metadata.context_summary + " \n" + feedback_context
-        )
-
-        # add new memory
-        to_add_memory.id = str(uuid.uuid4())
-        added_ids = self._retry_db_operation(lambda: self.pref_mem.add([to_add_memory]))
-        # delete
-        deleted_id = old_memory_item.id
-        collection_name = old_memory_item.metadata.preference_type
-        self._retry_db_operation(
-            lambda: self.pref_mem.delete_with_collection_name(collection_name, [deleted_id])
-        )
-        # add archived
-        old_memory_item.metadata.status = "archived"
-        old_memory_item.metadata.original_text = "archived"
-        old_memory_item.metadata.embedding = [0.0] * 1024
-
-        archived_ids = self._retry_db_operation(lambda: self.pref_mem.add([old_memory_item]))
-
-        logger.info(
-            f"[Memory Feedback UPDATE Pref] New Add:{added_ids!s} | Set archived:{archived_ids!s}"
-        )
-
-        return {
-            "id": to_add_memory.id,
-            "text": new_memory_item.memory,
-            "source_doc_id": "",
-            "archived_id": old_memory_item.id,
-            "origin_memory": old_memory_item.memory,
-            "type": "preference",
         }
 
     def _del_working_binding(self, user_name, mem_items: list[TextualMemoryItem]) -> set[str]:
@@ -464,7 +390,7 @@ class MemFeedback(BaseMemFeedback):
                 for chunk in memory_chunks:
                     chunk_list = []
                     for item in chunk:
-                        if "preference" in item.metadata.__dict__:
+                        if item.metadata.memory_type == "PreferenceMemory":
                             chunk_list.append(f"{item.id}: {item.metadata.preference}")
                         else:
                             chunk_list.append(f"{item.id}: {item.memory}")
@@ -626,19 +552,55 @@ class MemFeedback(BaseMemFeedback):
 
     def _retrieve(self, query: str, info=None, top_k=20, user_name=None):
         """Retrieve memory items"""
-        retrieved_mems = self.searcher.search(
-            query, info=info, user_name=user_name, top_k=top_k, full_recall=True
+
+        def check_has_edges(mem_item: TextualMemoryItem) -> tuple[TextualMemoryItem, bool]:
+            """Check if a memory item has edges."""
+            edges = self.searcher.graph_store.get_edges(mem_item.id, user_name=user_name)
+            return (mem_item, len(edges) == 0)
+
+        logger.info(f"[feedback _retrieve] query: {query}, user_name: {user_name}")
+        text_mems = self.searcher.search(
+            query=query,
+            top_k=top_k,
+            info=info,
+            memory_type="AllSummaryMemory",
+            user_name=user_name,
+            full_recall=True,
         )
-        retrieved_mems = [item[0] for item in retrieved_mems if float(item[1]) > 0.01]
+        text_mems = [item[0] for item in text_mems if float(item[1]) > 0.01]
 
         if self.pref_feedback:
-            pref_info = {}
-            if "user_id" in info:
-                pref_info = {"user_id": info["user_id"]}
-            retrieved_prefs = self.pref_mem.search(query, top_k, pref_info)
-            return retrieved_mems + retrieved_prefs
-        else:
-            return retrieved_mems
+            pref_mems = self.searcher.search(
+                query=query,
+                top_k=top_k,
+                info=info,
+                memory_type="PreferenceMemory",
+                user_name=user_name,
+                include_preference_memory=True,
+                full_recall=True,
+            )
+            pref_mems = [item[0] for item in pref_mems if float(item[1]) > 0.01]
+            text_mems.extend(pref_mems)
+
+        # Memory with edges is not modified by feedback
+        retrieved_mems = []
+        with ContextThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(check_has_edges, item): item for item in text_mems}
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    mem_item, has_no_edges = future.result()
+                    if has_no_edges:
+                        retrieved_mems.append(mem_item)
+                except Exception as e:
+                    logger.error(f"[0107 Feedback Core: _retrieve] Error checking edges: {e}")
+
+        if len(retrieved_mems) < len(text_mems):
+            logger.info(
+                f"[0107 Feedback Core: _retrieve] {len(text_mems) - len(retrieved_mems)} "
+                f"text memories are not modified by feedback due to edges."
+            )
+
+        return retrieved_mems
 
     def _vec_query(self, new_memories_embedding: list[float], user_name=None):
         """Vector retrieval query"""
@@ -924,7 +886,7 @@ class MemFeedback(BaseMemFeedback):
             )
 
             must_part = f"{' & '.join(queries)}" if len(queries) > 1 else queries[0]
-            retrieved_ids = self.graph_store.seach_by_keywords_tfidf(
+            retrieved_ids = self.graph_store.search_by_keywords_tfidf(
                 [must_part], user_name=user_name, filter=filter_dict
             )
             if len(retrieved_ids) < 1:
@@ -932,7 +894,7 @@ class MemFeedback(BaseMemFeedback):
                     queries, top_k=100, user_name=user_name, filter=filter_dict
                 )
         else:
-            retrieved_ids = self.graph_store.seach_by_keywords_like(
+            retrieved_ids = self.graph_store.search_by_keywords_like(
                 f"%{original_word}%", user_name=user_name, filter=filter_dict
             )
 
@@ -1165,7 +1127,7 @@ class MemFeedback(BaseMemFeedback):
                 info,
                 **kwargs,
             )
-            done, pending = concurrent.futures.wait([answer_future, core_future], timeout=30)
+            _done, pending = concurrent.futures.wait([answer_future, core_future], timeout=30)
             for fut in pending:
                 fut.cancel()
             try:

@@ -4,6 +4,8 @@ This module provides a unified interface to parse different message types
 in both fast and fine modes.
 """
 
+import traceback
+
 from typing import Any
 
 from memos.embedders.base import BaseEmbedder
@@ -11,6 +13,7 @@ from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.item import SourceMessage, TextualMemoryItem
 from memos.types import MessagesType
+from memos.utils import timed
 
 from .assistant_parser import AssistantParser
 from .base import BaseMessageParser
@@ -34,6 +37,7 @@ class MultiModalParser:
         self,
         embedder: BaseEmbedder,
         llm: BaseLLM | None = None,
+        image_parser_llm: BaseLLM | None = None,
         parser: Any | None = None,
         direct_markdown_hostnames: list[str] | None = None,
     ):
@@ -42,7 +46,9 @@ class MultiModalParser:
 
         Args:
             embedder: Embedder for generating embeddings
-            llm: Optional LLM for fine mode processing
+            llm: Optional LLM for fine mode processing (chat/doc extraction)
+            image_parser_llm: Optional vision LLM for image parsing.
+                Falls back to llm if not provided.
             parser: Optional parser for parsing file contents
             direct_markdown_hostnames: List of hostnames that should return markdown directly
                 without parsing. If None, reads from FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES
@@ -50,6 +56,8 @@ class MultiModalParser:
         """
         self.embedder = embedder
         self.llm = llm
+        # Image parser LLM (requires vision model), falls back to main llm
+        self.image_parser_llm = image_parser_llm if image_parser_llm is not None else llm
         self.parser = parser
 
         # Initialize parsers for different message types
@@ -59,10 +67,15 @@ class MultiModalParser:
         self.assistant_parser = AssistantParser(embedder, llm)
         self.tool_parser = ToolParser(embedder, llm)
         self.text_content_parser = TextContentParser(embedder, llm)
+        # Use dedicated image_parser_llm for image parsing (requires vision model)
+        self.image_parser = ImageParser(embedder, self.image_parser_llm)
         self.file_content_parser = FileContentParser(
-            embedder, llm, parser, direct_markdown_hostnames=direct_markdown_hostnames
+            embedder,
+            llm,
+            parser,
+            direct_markdown_hostnames=direct_markdown_hostnames,
+            image_parser=self.image_parser,
         )
-        self.image_parser = ImageParser(embedder, llm)
         self.audio_parser = None  # future
 
         self.role_parsers = {
@@ -120,6 +133,7 @@ class MultiModalParser:
         logger.warning(f"[MultiModalParser] Could not determine parser for message: {message}")
         return None
 
+    @timed
     def parse(
         self,
         message: MessagesType,
@@ -149,6 +163,7 @@ class MultiModalParser:
             logger.warning(f"[MultiModalParser] No parser found for message: {message}")
             return []
 
+        logger.info(f"[{parser.__class__.__name__}] Parsing message in {mode} mode: {message}")
         # Parse using the appropriate parser
         try:
             return parser.parse(message, info, mode=mode, **kwargs)
@@ -156,6 +171,7 @@ class MultiModalParser:
             logger.error(f"[MultiModalParser] Error parsing message: {e}")
             return []
 
+    @timed
     def parse_batch(
         self,
         messages: list[MessagesType],
@@ -181,6 +197,7 @@ class MultiModalParser:
             results.append(items)
         return results
 
+    @timed
     def process_transfer(
         self,
         source: SourceMessage,
@@ -237,7 +254,10 @@ class MultiModalParser:
         try:
             message = parser.rebuild_from_source(source)
         except Exception as e:
-            logger.error(f"[MultiModalParser] Error rebuilding message from source: {e}")
+            logger.error(
+                f"[MultiModalParser] Error rebuilding message from "
+                f"source: {e} {traceback.format_exc()}"
+            )
             return []
 
         # Parse in fine mode (pass context_items and custom_tags to parse_fine)

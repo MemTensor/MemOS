@@ -321,23 +321,140 @@ class APIConfig:
 
     @staticmethod
     def get_memreader_config() -> dict[str, Any]:
-        """Get MemReader configuration."""
-        return {
-            "backend": "openai",
-            "config": {
-                "model_name_or_path": os.getenv("MEMRADER_MODEL", "gpt-4o-mini"),
-                "temperature": 0.6,
-                "max_tokens": int(os.getenv("MEMRADER_MAX_TOKENS", "8000")),
-                "top_p": 0.95,
-                "top_k": 20,
-                "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
-                # Default to OpenAI base URL when env var is not provided to satisfy pydantic
-                # validation requirements during tests/import.
-                "api_base": os.getenv("MEMRADER_API_BASE", "https://api.openai.com/v1"),
-                "remove_think_prefix": True,
-                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
-            },
+        """Get MemReader configuration for chat/doc extraction (fine-tuned 0.6B model).
+
+        When MEMREADER_GENERAL_MODEL is configured (i.e. a separate stable LLM exists),
+        the backup client is automatically enabled so that primary failures (self-deployed
+        model) fall back to the general LLM.
+        """
+        config = {
+            "model_name_or_path": os.getenv("MEMRADER_MODEL", "gpt-4o-mini"),
+            "temperature": 0.6,
+            "max_tokens": int(os.getenv("MEMRADER_MAX_TOKENS", "8000")),
+            "top_p": 0.95,
+            "top_k": 20,
+            "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
+            # Default to OpenAI base URL when env var is not provided to satisfy pydantic
+            # validation requirements during tests/import.
+            "api_base": os.getenv("MEMRADER_API_BASE", "https://api.openai.com/v1"),
+            "remove_think_prefix": True,
         }
+
+        general_model = os.getenv("MEMREADER_GENERAL_MODEL")
+        enable_backup = os.getenv("MEMREADER_ENABLE_BACKUP", "false").lower() == "true"
+        if general_model and enable_backup:
+            config["backup_client"] = True
+            config["backup_model_name_or_path"] = general_model
+            config["backup_api_key"] = os.getenv(
+                "MEMREADER_GENERAL_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
+            )
+            config["backup_api_base"] = os.getenv(
+                "MEMREADER_GENERAL_API_BASE",
+                os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+            )
+
+        return {"backend": "openai", "config": config}
+
+    @staticmethod
+    def get_memreader_general_llm_config() -> dict[str, Any]:
+        """Get general LLM configuration for non-chat/doc tasks.
+
+        Used for: hallucination filter, memory rewrite, memory merge,
+        tool trajectory extraction, skill memory extraction.
+
+        This is the fallback for image_parser_llm and preference_extractor_llm.
+        Fallback chain: MEMREADER_GENERAL_MODEL -> MEMRADER_MODEL (memreader config)
+
+        Note: If you have fine-tuned a custom model for chat/doc extraction only,
+        you should configure MEMREADER_GENERAL_MODEL to use a general-purpose LLM
+        for other tasks. Otherwise, all tasks will use the same MEMRADER_MODEL.
+        """
+        # Check if specific general model is configured
+        general_model = os.getenv("MEMREADER_GENERAL_MODEL")
+        if general_model:
+            return {
+                "backend": os.getenv("MEMREADER_GENERAL_BACKEND", "openai"),
+                "config": {
+                    "model_name_or_path": general_model,
+                    "temperature": 0.6,
+                    "max_tokens": int(os.getenv("MEMREADER_GENERAL_MAX_TOKENS", "8000")),
+                    "top_p": 0.95,
+                    "top_k": 20,
+                    "api_key": os.getenv(
+                        "MEMREADER_GENERAL_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
+                    ),
+                    "api_base": os.getenv(
+                        "MEMREADER_GENERAL_API_BASE",
+                        os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+                    ),
+                    "remove_think_prefix": True,
+                },
+            }
+        # Fallback to memreader config (same behavior as before for users who don't customize)
+        return APIConfig.get_memreader_config()
+
+    @staticmethod
+    def get_image_parser_llm_config() -> dict[str, Any]:
+        """Get LLM configuration for image parsing (requires vision model).
+
+        Used for: image content extraction and analysis.
+        Requires a vision-capable model like GPT-4V, GPT-4o, etc.
+
+        Fallback chain: IMAGE_PARSER_MODEL -> general_llm -> OpenAI config
+        """
+        image_model = os.getenv("IMAGE_PARSER_MODEL")
+        if image_model:
+            return {
+                "backend": os.getenv("IMAGE_PARSER_BACKEND", "openai"),
+                "config": {
+                    "model_name_or_path": image_model,
+                    "temperature": 0.6,
+                    "max_tokens": int(os.getenv("IMAGE_PARSER_MAX_TOKENS", "4096")),
+                    "top_p": 0.95,
+                    "top_k": 20,
+                    "api_key": os.getenv(
+                        "IMAGE_PARSER_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
+                    ),
+                    "api_base": os.getenv(
+                        "IMAGE_PARSER_API_BASE",
+                        os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+                    ),
+                    "remove_think_prefix": True,
+                },
+            }
+        # Fallback to general_llm config (which itself falls back to OpenAI)
+        return APIConfig.get_memreader_general_llm_config()
+
+    @staticmethod
+    def get_preference_extractor_llm_config() -> dict[str, Any]:
+        """Get LLM configuration for preference extraction.
+
+        Used for: extracting user preferences from conversations.
+
+        Fallback chain: PREFERENCE_EXTRACTOR_MODEL -> general_llm -> OpenAI config
+        """
+        pref_model = os.getenv("PREFERENCE_EXTRACTOR_MODEL")
+        if pref_model:
+            return {
+                "backend": os.getenv("PREFERENCE_EXTRACTOR_BACKEND", "openai"),
+                "config": {
+                    "model_name_or_path": pref_model,
+                    "temperature": 0.6,
+                    "max_tokens": int(os.getenv("PREFERENCE_EXTRACTOR_MAX_TOKENS", "8000")),
+                    "top_p": 0.95,
+                    "top_k": 20,
+                    "api_key": os.getenv(
+                        "PREFERENCE_EXTRACTOR_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
+                    ),
+                    "api_base": os.getenv(
+                        "PREFERENCE_EXTRACTOR_API_BASE",
+                        os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+                    ),
+                    "remove_think_prefix": True,
+                },
+            }
+        # Fallback to general_llm config (which itself falls back to OpenAI)
+        return APIConfig.get_memreader_general_llm_config()
 
     @staticmethod
     def get_activation_vllm_config() -> dict[str, Any]:
@@ -359,7 +476,7 @@ class APIConfig:
         return {
             "backend": "pref_text",
             "config": {
-                "extractor_llm": APIConfig.get_memreader_config(),
+                "extractor_llm": APIConfig.get_preference_extractor_llm_config(),
                 "vector_db": {
                     "backend": "milvus",
                     "config": APIConfig.get_milvus_config(),
@@ -440,6 +557,18 @@ class APIConfig:
                     "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
                     "headers_extra": json.loads(os.getenv("MOS_EMBEDDER_HEADERS_EXTRA", "{}")),
                     "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
+                    "backup_client": os.getenv("MOS_EMBEDDER_BACKUP_CLIENT", "false").lower()
+                    == "true",
+                    "backup_base_url": os.getenv(
+                        "MOS_EMBEDDER_BACKUP_API_BASE", "http://openai.com"
+                    ),
+                    "backup_api_key": os.getenv("MOS_EMBEDDER_BACKUP_API_KEY", "sk-xxxx"),
+                    "backup_headers_extra": json.loads(
+                        os.getenv("MOS_EMBEDDER_BACKUP_HEADERS_EXTRA", "{}")
+                    ),
+                    "backup_model_name_or_path": os.getenv(
+                        "MOS_EMBEDDER_BACKUP_MODEL", "text-embedding-3-large"
+                    ),
                 },
             }
         else:  # ollama
@@ -467,6 +596,35 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_oss_config() -> dict[str, Any] | None:
+        """Get OSS configuration and validate connection."""
+
+        config = {
+            "endpoint": os.getenv("OSS_ENDPOINT", "http://oss-cn-shanghai.aliyuncs.com"),
+            "access_key_id": os.getenv("OSS_ACCESS_KEY_ID", ""),
+            "access_key_secret": os.getenv("OSS_ACCESS_KEY_SECRET", ""),
+            "region": os.getenv("OSS_REGION", ""),
+            "bucket_name": os.getenv("OSS_BUCKET_NAME", ""),
+        }
+
+        # Validate that all required fields have values
+        required_fields = [
+            "endpoint",
+            "access_key_id",
+            "access_key_secret",
+            "region",
+            "bucket_name",
+        ]
+        missing_fields = [field for field in required_fields if not config.get(field)]
+
+        if missing_fields:
+            logger.warning(
+                f"OSS configuration incomplete. Missing fields: {', '.join(missing_fields)}"
+            )
+            return None
+
+        return config
+
     def get_internet_config() -> dict[str, Any]:
         """Get embedder configuration."""
         reader_config = APIConfig.get_reader_config()
@@ -490,13 +648,16 @@ class APIConfig:
                                 "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
                                 "api_base": os.getenv("MEMRADER_API_BASE"),
                                 "remove_think_prefix": True,
-                                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
                             },
                         },
                         "embedder": APIConfig.get_embedder_config(),
                         "chunker": {
                             "backend": "sentence",
                             "config": {
+                                "save_rawfile": os.getenv(
+                                    "MEM_READER_SAVE_RAWFILENODE", "true"
+                                ).lower()
+                                == "true",
                                 "tokenizer_or_token_counter": "gpt2",
                                 "chunk_size": 512,
                                 "chunk_overlap": 128,
@@ -507,6 +668,13 @@ class APIConfig:
                     },
                 },
             },
+        }
+
+    @staticmethod
+    def get_nli_config() -> dict[str, Any]:
+        """Get NLI model configuration."""
+        return {
+            "base_url": os.getenv("NLI_MODEL_BASE_URL", "http://localhost:32532"),
         }
 
     @staticmethod
@@ -625,7 +793,41 @@ class APIConfig:
             "user_name": user_name,
             "use_multi_db": use_multi_db,
             "auto_create": True,
-            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
+            # .env: CONNECTION_WAIT_TIMEOUT, SKIP_CONNECTION_HEALTH_CHECK, WARM_UP_ON_STARTUP_BY_FULL, WARM_UP_ON_STARTUP_BY_ALL
+            "connection_wait_timeout": int(os.getenv("CONNECTION_WAIT_TIMEOUT", "60")),
+            "skip_connection_health_check": os.getenv(
+                "SKIP_CONNECTION_HEALTH_CHECK", "false"
+            ).lower()
+            == "true",
+            "warm_up_on_startup_by_full": os.getenv("WARM_UP_ON_STARTUP_BY_FULL", "false").lower()
+            == "true",
+            "warm_up_on_startup_by_all": os.getenv("WARM_UP_ON_STARTUP_BY_ALL", "false").lower()
+            == "true",
+        }
+
+    @staticmethod
+    def get_postgres_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get PostgreSQL + pgvector configuration for MemOS graph storage.
+
+        Uses standard PostgreSQL with pgvector extension.
+        Schema: memos.memories, memos.edges
+        """
+        user_name = os.getenv("MEMOS_USER_NAME", "default")
+        if user_id:
+            user_name = f"memos_{user_id.replace('-', '')}"
+
+        return {
+            "host": os.getenv("POSTGRES_HOST", "postgres"),
+            "port": int(os.getenv("POSTGRES_PORT", "5432")),
+            "user": os.getenv("POSTGRES_USER", "n8n"),
+            "password": os.getenv("POSTGRES_PASSWORD", ""),
+            "db_name": os.getenv("POSTGRES_DB", "n8n"),
+            "schema_name": os.getenv("MEMOS_SCHEMA", "memos"),
+            "user_name": user_name,
+            "use_multi_db": False,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "384")),
+            "maxconn": int(os.getenv("POSTGRES_MAX_CONN", "20")),
         }
 
     @staticmethod
@@ -728,10 +930,16 @@ class APIConfig:
                 "backend": reader_config["backend"],
                 "config": {
                     "llm": APIConfig.get_memreader_config(),
+                    # General LLM for non-chat/doc tasks (hallucination filter, rewrite, merge, etc.)
+                    "general_llm": APIConfig.get_memreader_general_llm_config(),
+                    # Image parser LLM (requires vision model)
+                    "image_parser_llm": APIConfig.get_image_parser_llm_config(),
                     "embedder": APIConfig.get_embedder_config(),
                     "chunker": {
                         "backend": "sentence",
                         "config": {
+                            "save_rawfile": os.getenv("MEM_READER_SAVE_RAWFILENODE", "true").lower()
+                            == "true",
                             "tokenizer_or_token_counter": "gpt2",
                             "chunk_size": 512,
                             "chunk_overlap": 128,
@@ -746,6 +954,16 @@ class APIConfig:
                         ).split(",")
                         if h.strip()
                     ],
+                    "oss_config": APIConfig.get_oss_config(),
+                    "skills_dir_config": {
+                        "skills_oss_dir": os.getenv("SKILLS_OSS_DIR", "skill_memory/"),
+                        "skills_local_tmp_dir": os.getenv(
+                            "SKILLS_LOCAL_TMP_DIR", "/tmp/skill_memory/"
+                        ),
+                        "skills_local_dir": os.getenv(
+                            "SKILLS_LOCAL_DIR", "/tmp/upload_skill_memory/"
+                        ),
+                    },
                 },
             },
             "enable_textual_memory": True,
@@ -838,10 +1056,16 @@ class APIConfig:
                 "backend": reader_config["backend"],
                 "config": {
                     "llm": APIConfig.get_memreader_config(),
+                    # General LLM for non-chat/doc tasks (hallucination filter, rewrite, merge, etc.)
+                    "general_llm": APIConfig.get_memreader_general_llm_config(),
+                    # Image parser LLM (requires vision model)
+                    "image_parser_llm": APIConfig.get_image_parser_llm_config(),
                     "embedder": APIConfig.get_embedder_config(),
                     "chunker": {
                         "backend": "sentence",
                         "config": {
+                            "save_rawfile": os.getenv("MEM_READER_SAVE_RAWFILENODE", "true").lower()
+                            == "true",
                             "tokenizer_or_token_counter": "gpt2",
                             "chunk_size": 512,
                             "chunk_overlap": 128,
@@ -884,13 +1108,18 @@ class APIConfig:
             if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
             else None
         )
+        postgres_config = APIConfig.get_postgres_config(user_id=user_id)
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "nebular": nebular_config,
             "polardb": polardb_config,
+            "postgres": postgres_config,
         }
-        graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
+        # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
+        graph_db_backend = os.getenv(
+            "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
+        ).lower()
         if graph_db_backend in graph_db_backend_map:
             # Create MemCube config
 
@@ -921,6 +1150,7 @@ class APIConfig:
                                 "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
                                 "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
                                 "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                                "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
                             },
                             "include_embedding": bool(
                                 os.getenv("INCLUDE_EMBEDDING", "false") == "true"
@@ -958,18 +1188,23 @@ class APIConfig:
         neo4j_config = APIConfig.get_neo4j_config(user_id="default")
         nebular_config = APIConfig.get_nebular_config(user_id="default")
         polardb_config = APIConfig.get_polardb_config(user_id="default")
+        postgres_config = APIConfig.get_postgres_config(user_id="default")
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "nebular": nebular_config,
             "polardb": polardb_config,
+            "postgres": postgres_config,
         }
         internet_config = (
             APIConfig.get_internet_config()
             if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
             else None
         )
-        graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
+        # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
+        graph_db_backend = os.getenv(
+            "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
+        ).lower()
         if graph_db_backend in graph_db_backend_map:
             return GeneralMemCubeConfig.model_validate(
                 {
@@ -998,6 +1233,7 @@ class APIConfig:
                                 "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
                                 "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
                                 "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                                "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
                             },
                             "mode": os.getenv("ASYNC_MODE", "sync"),
                             "include_embedding": bool(

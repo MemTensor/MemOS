@@ -180,6 +180,20 @@ venv.bak/
 # but do not ignore docs/openapi.json
 !docs/openapi.json
 
+# do not ignore apps/ config files
+!apps/**/*.json
+!apps/**/*.html
+!apps/**/*.ts
+!apps/**/*.tsx
+!apps/**/*.js
+!apps/**/*.cjs
+!apps/**/*.css
+!apps/**/*.md
+!apps/**/*.yaml
+!apps/**/*.yml
+!apps/**/*.svg
+!apps/**/*.sh
+
 
 # mypy
 .mypy_cache/
@@ -216,3 +230,5 @@ cython_debug/
 outputs
 
 evaluation/data/temporal_locomo
+test_add_pipeline.py
+test_file_pipeline.py

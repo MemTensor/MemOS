@@ -67,15 +67,16 @@ class PreferenceTextMemory(BaseTextMemory):
         )
 
     def get_memory(
-        self, messages: list[MessageList], type: str, info: dict[str, Any]
+        self, messages: list[MessageList], type: str, info: dict[str, Any], **kwargs
     ) -> list[TextualMemoryItem]:
         """Get memory based on the messages.
         Args:
             messages (list[MessageList]): The messages to get memory from.
             type (str): The type of memory to get.
             info (dict[str, Any]): The info to get memory.
+            **kwargs: Additional keyword arguments to pass to the extractor.
         """
-        return self.extractor.extract(messages, type, info)
+        return self.extractor.extract(messages, type, info, **kwargs)
 
     def search(
         self, query: str, top_k: int, info=None, search_filter=None, **kwargs
@@ -91,7 +92,6 @@ class PreferenceTextMemory(BaseTextMemory):
         if not isinstance(search_filter, dict):
             search_filter = {}
         search_filter.update({"status": "activated"})
-        logger.info(f"search_filter for preference memory: {search_filter}")
         return self.retriever.retrieve(query, top_k, info, search_filter)
 
     def load(self, dir: str) -> None:

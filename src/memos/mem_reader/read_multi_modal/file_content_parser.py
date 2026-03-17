@@ -5,7 +5,7 @@ import os
 import re
 import tempfile
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tqdm import tqdm
 
@@ -34,6 +34,10 @@ from memos.templates.mem_reader_prompts import (
 from memos.types.openai_chat_completion_types import File
 
 
+if TYPE_CHECKING:
+    from memos.types.general_types import UserContext
+
+
 logger = get_logger(__name__)
 
 # Prompt dictionary for doc processing (shared by simple_struct and file_content_parser)
@@ -46,7 +50,12 @@ DOC_PROMPT_DICT = {
 class FileContentParser(BaseMessageParser):
     """Parser for file content parts."""
 
-    def _get_doc_llm_response(self, chunk_text: str, custom_tags: list[str] | None = None) -> dict:
+    def _get_doc_llm_response(
+        self,
+        chunk_text: str,
+        custom_tags: list[str] | None = None,
+        message_text_context: str | None = None,
+    ) -> dict:
         """
         Call LLM to extract memory from document chunk.
         Uses doc prompts from DOC_PROMPT_DICT.
@@ -54,9 +63,11 @@ class FileContentParser(BaseMessageParser):
         Args:
             chunk_text: Text chunk to extract memory from
             custom_tags: Optional list of custom tags for LLM extraction
+            message_text_context: Optional text from the same message that
+                provides user intent / context for understanding this document
 
         Returns:
-            Parsed JSON response from LLM or empty dict if failed
+            Parsed JSON response from LLM (dict or list) or empty dict if failed
         """
         if not self.llm:
             logger.warning("[FileContentParser] LLM not available for fine mode")
@@ -72,6 +83,10 @@ class FileContentParser(BaseMessageParser):
             else ""
         )
         prompt = prompt.replace("{custom_tags_prompt}", custom_tags_prompt)
+
+        # Inject sibling text context into prompt placeholder
+        context_text = message_text_context.strip() if message_text_context else ""
+        prompt = prompt.replace("{context}", context_text)
 
         messages = [{"role": "user", "content": prompt}]
         try:
@@ -103,14 +118,25 @@ class FileContentParser(BaseMessageParser):
                 return response.text, None, True
 
             file_ext = os.path.splitext(filename)[1].lower()
-            if file_ext in [".md", ".markdown", ".txt"]:
+            if file_ext in [".md", ".markdown", ".txt"] or self._is_oss_md(url_str):
                 return response.text, None, True
             with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=file_ext) as temp_file:
                 temp_file.write(response.content)
             return "", temp_file.name, False
         except Exception as e:
             logger.error(f"[FileContentParser] URL processing error: {e}")
-            return f"[File URL download failed: {url_str}]", None
+            return f"[File URL download failed: {url_str}]", None, False
+
+    def _is_oss_md(self, url: str) -> bool:
+        """Check if URL is an OSS markdown file based on pattern."""
+        loose_pattern = re.compile(r"^https?://[^/]*\.aliyuncs\.com/.*/([^/?#]+)")
+        match = loose_pattern.search(url)
+        if not match:
+            return False
+
+        file_name = match.group(1)
+        lower_name = file_name.lower()
+        return lower_name.endswith((".md", ".markdown", ".txt"))
 
     def _is_base64(self, data: str) -> bool:
         """Quick heuristic to check base64-like string."""
@@ -133,7 +159,12 @@ class FileContentParser(BaseMessageParser):
         return ""
 
     def _process_single_image(
-        self, image_url: str, original_ref: str, info: dict[str, Any], **kwargs
+        self,
+        image_url: str,
+        original_ref: str,
+        info: dict[str, Any],
+        header_context: list[str] | None = None,
+        **kwargs,
     ) -> tuple[str, str]:
         """
         Process a single image and return (original_ref, replacement_text).
@@ -142,6 +173,7 @@ class FileContentParser(BaseMessageParser):
             image_url: URL of the image to process
             original_ref: Original markdown image reference to replace
             info: Dictionary containing user_id and session_id
+            header_context: Optional list of header titles providing context for the image
             **kwargs: Additional parameters for ImageParser
 
         Returns:
@@ -167,20 +199,31 @@ class FileContentParser(BaseMessageParser):
                 if hasattr(item, "memory") and item.memory:
                     extracted_texts.append(str(item.memory))
 
+            # Prepare header context string if available
+            header_context_str = ""
+            if header_context:
+                # Join headers with " > " to show hierarchy
+                header_hierarchy = " > ".join(header_context)
+                header_context_str = f"[Section: {header_hierarchy}]\n\n"
+
             if extracted_texts:
                 # Combine all extracted texts
                 extracted_content = "\n".join(extracted_texts)
+                # build final replacement text
+                replacement_text = (
+                    f"{header_context_str}[Image Content from {image_url}]:\n{extracted_content}\n"
+                )
                 # Replace image with extracted content
                 return (
                     original_ref,
-                    f"\n[Image Content from {image_url}]:\n{extracted_content}\n",
+                    replacement_text,
                 )
             else:
                 # If no content extracted, keep original with a note
                 logger.warning(f"[FileContentParser] No content extracted from image: {image_url}")
                 return (
                     original_ref,
-                    f"\n[Image: {image_url} - No content extracted]\n",
+                    f"{header_context_str}[Image: {image_url} - No content extracted]\n",
                 )
 
         except Exception as e:
@@ -188,7 +231,9 @@ class FileContentParser(BaseMessageParser):
             # On error, keep original image reference
             return (original_ref, original_ref)
 
-    def _extract_and_process_images(self, text: str, info: dict[str, Any], **kwargs) -> str:
+    def _extract_and_process_images(
+        self, text: str, info: dict[str, Any], headers: dict[int, dict] | None = None, **kwargs
+    ) -> str:
         """
         Extract all images from markdown text and process them using ImageParser in parallel.
         Replaces image references with extracted text content.
@@ -196,6 +241,7 @@ class FileContentParser(BaseMessageParser):
         Args:
             text: Markdown text containing image references
             info: Dictionary containing user_id and session_id
+            headers: Optional dictionary mapping line numbers to header info
             **kwargs: Additional parameters for ImageParser
 
         Returns:
@@ -219,7 +265,13 @@ class FileContentParser(BaseMessageParser):
         for match in image_matches:
             image_url = match.group(2)
             original_ref = match.group(0)
-            tasks.append((image_url, original_ref))
+            image_position = match.start()
+
+            header_context = None
+            if headers:
+                header_context = self._get_header_context(text, image_position, headers)
+
+            tasks.append((image_url, original_ref, header_context))
 
         # Process images in parallel
         replacements = {}
@@ -228,9 +280,14 @@ class FileContentParser(BaseMessageParser):
         with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(
-                    self._process_single_image, image_url, original_ref, info, **kwargs
+                    self._process_single_image,
+                    image_url,
+                    original_ref,
+                    info,
+                    header_context,
+                    **kwargs,
                 ): (image_url, original_ref)
-                for image_url, original_ref in tasks
+                for image_url, original_ref, header_context in tasks
             }
 
             # Collect results with progress tracking
@@ -269,6 +326,7 @@ class FileContentParser(BaseMessageParser):
         llm: BaseLLM | None = None,
         parser: Any | None = None,
         direct_markdown_hostnames: list[str] | None = None,
+        image_parser: ImageParser | None = None,
     ):
         """
         Initialize FileContentParser.
@@ -284,7 +342,7 @@ class FileContentParser(BaseMessageParser):
         super().__init__(embedder, llm)
         self.parser = parser
         # Initialize ImageParser for processing images in markdown
-        self.image_parser = ImageParser(embedder, llm) if llm else None
+        self.image_parser = image_parser if image_parser is not None else ImageParser(embedder, llm)
 
         # Get inner markdown hostnames from config or environment
         if direct_markdown_hostnames is not None:
@@ -310,7 +368,7 @@ class FileContentParser(BaseMessageParser):
     ) -> SourceMessage:
         """Create SourceMessage from file content part."""
         if isinstance(message, dict):
-            file_info = message.get("file", {})
+            file_info = message.get("file", {}) or {}
             source_dict = {
                 "type": "file",
                 "doc_path": file_info.get("filename") or file_info.get("file_id", ""),
@@ -413,7 +471,7 @@ class FileContentParser(BaseMessageParser):
         file_data = file_info.get("file_data", "")
         file_id = file_info.get("file_id", "")
         filename = file_info.get("filename", "")
-        file_url_flag = False
+        file_url_flag = bool(file_info)
         # Build content string based on available information
         content_parts = []
 
@@ -465,6 +523,11 @@ class FileContentParser(BaseMessageParser):
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
 
+        # Extract manager_user_id and project_id from user_context
+        user_context: UserContext | None = kwargs.get("user_context")
+        manager_user_id = user_context.manager_user_id if user_context else None
+        project_id = user_context.project_id if user_context else None
+
         # For file content parts, default to LongTermMemory
         # (since we don't have role information at this level)
         memory_type = "LongTermMemory"
@@ -509,6 +572,8 @@ class FileContentParser(BaseMessageParser):
                     type="fact",
                     info=info_,
                     file_ids=file_ids,
+                    manager_user_id=manager_user_id,
+                    project_id=project_id,
                 ),
             )
             memory_items.append(memory_item)
@@ -541,6 +606,8 @@ class FileContentParser(BaseMessageParser):
                     type="fact",
                     info=info_,
                     file_ids=file_ids,
+                    manager_user_id=manager_user_id,
+                    project_id=project_id,
                 ),
             )
             memory_items.append(memory_item)
@@ -585,8 +652,23 @@ class FileContentParser(BaseMessageParser):
         file_id = file_info.get("file_id", "")
         filename = file_info.get("filename", "")
 
+        # Whether to keep full file_info in sources
+        file_url_flag = bool(file_info)
+
         # Extract custom_tags from kwargs (for LLM extraction)
         custom_tags = kwargs.get("custom_tags")
+
+        # Extract sibling text context .
+        message_text_context = None
+        context_items = kwargs.get("context_items")
+        if context_items:
+            sibling_texts = []
+            for ctx_item in context_items:
+                for src in getattr(ctx_item.metadata, "sources", None) or []:
+                    if src.type == "chat" and src.content:
+                        sibling_texts.append(src.content.strip())
+            if sibling_texts:
+                message_text_context = "\n".join(sibling_texts)
 
         # Use parser from utils
         parser = self.parser or get_parser()
@@ -605,6 +687,7 @@ class FileContentParser(BaseMessageParser):
                     url_str = file_data[1:] if file_data.startswith("@") else file_data
 
                     if url_str.startswith(("http://", "https://")):
+                        file_url_flag = True
                         parsed_text, temp_file_path, is_markdown = self._handle_url(
                             url_str, filename
                         )
@@ -648,9 +731,20 @@ class FileContentParser(BaseMessageParser):
                     )
         if not parsed_text:
             return []
+
+        # Extract markdown headers if applicable
+        headers = {}
+        if is_markdown:
+            headers = self._extract_markdown_headers(parsed_text)
+            logger.info(
+                f"[Chunker: FileContentParser] Extracted {len(headers)} headers from markdown"
+            )
+
         # Extract and process images from parsed_text
         if is_markdown and parsed_text and self.image_parser:
-            parsed_text = self._extract_and_process_images(parsed_text, info, **kwargs)
+            parsed_text = self._extract_and_process_images(
+                parsed_text, info, headers=headers if headers else None, **kwargs
+            )
 
         # Extract info fields
         if not info:
@@ -658,6 +752,12 @@ class FileContentParser(BaseMessageParser):
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
+
+        # Extract manager_user_id and project_id from user_context
+        user_context: UserContext | None = kwargs.get("user_context")
+        manager_user_id = user_context.manager_user_id if user_context else None
+        project_id = user_context.project_id if user_context else None
+
         if file_id:
             info_["file_id"] = file_id
         file_ids = [file_id] if file_id else []
@@ -698,6 +798,7 @@ class FileContentParser(BaseMessageParser):
                 chunk_index=chunk_idx,
                 chunk_total=total_chunks,
                 chunk_content=chunk_content,
+                file_url_flag=file_url_flag,
             )
             return TextualMemoryItem(
                 memory=value,
@@ -716,6 +817,8 @@ class FileContentParser(BaseMessageParser):
                     type="fact",
                     info=info_,
                     file_ids=file_ids,
+                    manager_user_id=manager_user_id,
+                    project_id=project_id,
                 ),
             )
 
@@ -724,7 +827,7 @@ class FileContentParser(BaseMessageParser):
             chunk_idx: int, chunk_text: str, reason: str = "raw"
         ) -> TextualMemoryItem:
             """Create fallback memory item with raw chunk text."""
-            return _make_memory_item(
+            raw_chunk_mem = _make_memory_item(
                 value=chunk_text,
                 tags=[
                     "mode:fine",
@@ -735,6 +838,11 @@ class FileContentParser(BaseMessageParser):
                 chunk_idx=chunk_idx,
                 chunk_content=chunk_text,
             )
+            tags_list = self.tokenizer.tokenize_mixed(raw_chunk_mem.metadata.key)
+            tags_list = [tag for tag in tags_list if len(tag) > 1]
+            tags_list = sorted(tags_list, key=len, reverse=True)
+            raw_chunk_mem.metadata.tags.extend(tags_list[:5])
+            return raw_chunk_mem
 
         # Handle empty chunks case
         if not valid_chunks:
@@ -751,40 +859,82 @@ class FileContentParser(BaseMessageParser):
             return [_make_fallback(idx, text, "no_llm") for idx, text in valid_chunks]
 
         # Process single chunk with LLM extraction (worker function)
-        def _process_chunk(chunk_idx: int, chunk_text: str) -> TextualMemoryItem:
-            """Process chunk with LLM, fallback to raw on failure."""
+        def _process_chunk(chunk_idx: int, chunk_text: str) -> list[TextualMemoryItem]:
+            """Process chunk with LLM, fallback to raw on failure. Returns list of memory items."""
             try:
-                response_json = self._get_doc_llm_response(chunk_text, custom_tags)
+                response_json = self._get_doc_llm_response(
+                    chunk_text, custom_tags, message_text_context=message_text_context
+                )
                 if response_json:
-                    value = response_json.get("value", "").strip()
-                    if value:
-                        tags = response_json.get("tags", [])
-                        tags = tags if isinstance(tags, list) else []
-                        tags.extend(["mode:fine", "multimodal:file"])
+                    # Handle list format response
+                    response_list = response_json.get("memory list", [])
+                    memory_items = []
+                    for item_data in response_list:
+                        if not isinstance(item_data, dict):
+                            continue
 
-                        llm_mem_type = response_json.get("memory_type", memory_type)
-                        if llm_mem_type not in ["LongTermMemory", "UserMemory"]:
-                            llm_mem_type = memory_type
+                        value = item_data.get("value", "").strip()
+                        if value:
+                            tags = item_data.get("tags", [])
+                            tags = tags if isinstance(tags, list) else []
+                            tags.extend(["mode:fine", "multimodal:file"])
+                            key_str = item_data.get("key", "")
 
-                        return _make_memory_item(
-                            value=value,
-                            mem_type=llm_mem_type,
-                            tags=tags,
-                            key=response_json.get("key"),
-                            chunk_idx=chunk_idx,
-                            chunk_content=chunk_text,
-                        )
+                            llm_mem_type = item_data.get("memory_type", memory_type)
+                            if llm_mem_type not in ["LongTermMemory", "UserMemory"]:
+                                llm_mem_type = memory_type
+
+                            memory_item = _make_memory_item(
+                                value=value,
+                                mem_type=llm_mem_type,
+                                tags=tags,
+                                key=key_str,
+                                chunk_idx=chunk_idx,
+                                chunk_content=chunk_text,
+                            )
+                            memory_items.append(memory_item)
+
+                    if memory_items:
+                        return memory_items
+                    else:
+                        return [_make_fallback(chunk_idx, chunk_text)]
             except Exception as e:
                 logger.error(f"[FileContentParser] LLM error for chunk {chunk_idx}: {e}")
 
             # Fallback to raw chunk
             logger.warning(f"[FileContentParser] Fallback to raw for chunk {chunk_idx}")
-            return _make_fallback(chunk_idx, chunk_text)
+            return [_make_fallback(chunk_idx, chunk_text)]
+
+        def _relate_chunks(items: list[TextualMemoryItem]) -> None:
+            """
+            Relate chunks to each other.
+            """
+            if len(items) <= 1:
+                return []
+
+            def get_chunk_idx(item: TextualMemoryItem) -> int:
+                """Extract chunk_idx from item's source metadata."""
+                if item.metadata.sources and len(item.metadata.sources) > 0:
+                    source = item.metadata.sources[0]
+                    if source.file_info and isinstance(source.file_info, dict):
+                        chunk_idx = source.file_info.get("chunk_index")
+                        if chunk_idx is not None:
+                            return chunk_idx
+                return float("inf")
+
+            sorted_items = sorted(items, key=get_chunk_idx)
+
+            # Relate adjacent items
+            for i in range(len(sorted_items) - 1):
+                sorted_items[i].metadata.following_id = sorted_items[i + 1].id
+                sorted_items[i + 1].metadata.preceding_id = sorted_items[i].id
+            return sorted_items
 
         # Process chunks concurrently with progress bar
         memory_items = []
         chunk_map = dict(valid_chunks)
         total_chunks = len(valid_chunks)
+        fallback_count = 0
 
         logger.info(f"[FileContentParser] Processing {total_chunks} chunks with LLM...")
 
@@ -801,21 +951,61 @@ class FileContentParser(BaseMessageParser):
             ):
                 chunk_idx = futures[future]
                 try:
-                    node = future.result()
-                    if node:
-                        memory_items.append(node)
+                    nodes = future.result()
+                    memory_items.extend(nodes)
+
+                    # Check if any node is a fallback by checking tags
+                    has_fallback = False
+                    for node in nodes:
+                        is_fallback = any(tag.startswith("fallback:") for tag in node.metadata.tags)
+                        if is_fallback:
+                            fallback_count += 1
+                            has_fallback = True
+
+                    # save raw file only if no fallback (all nodes are LLM-extracted)
+                    if not has_fallback and nodes:
+                        # Use first node's source info for raw file
+                        first_node = nodes[0]
+                        if first_node.metadata.sources and len(first_node.metadata.sources) > 0:
+                            # Collect all node IDs for summary_ids
+                            node_ids = [node.id for node in nodes]
+                            chunk_node = _make_memory_item(
+                                value=first_node.metadata.sources[0].content,
+                                mem_type="RawFileMemory",
+                                tags=[
+                                    "mode:fine",
+                                    "multimodal:file",
+                                    f"chunk:{chunk_idx + 1}/{total_chunks}",
+                                ],
+                                chunk_idx=chunk_idx,
+                                chunk_content="",
+                            )
+                            chunk_node.metadata.summary_ids = node_ids
+                            memory_items.append(chunk_node)
+
                 except Exception as e:
                     tqdm.write(f"[ERROR] Chunk {chunk_idx} failed: {e}")
                     logger.error(f"[FileContentParser] Future failed for chunk {chunk_idx}: {e}")
                     # Create fallback for failed future
                     if chunk_idx in chunk_map:
+                        fallback_count += 1
                         memory_items.append(
                             _make_fallback(chunk_idx, chunk_map[chunk_idx], "error")
                         )
 
+        fallback_percentage = (fallback_count / total_chunks * 100) if total_chunks > 0 else 0.0
         logger.info(
-            f"[FileContentParser] Completed processing {len(memory_items)}/{total_chunks} chunks"
+            f"[FileContentParser] Completed processing {len(memory_items)}/{total_chunks} chunks, "
+            f"fallback count: {fallback_count}/{total_chunks} ({fallback_percentage:.1f}%)"
         )
+        rawfile_items = [
+            memory for memory in memory_items if memory.metadata.memory_type == "RawFileMemory"
+        ]
+        mem_items = [
+            memory for memory in memory_items if memory.metadata.memory_type != "RawFileMemory"
+        ]
+        related_rawfile_items = _relate_chunks(rawfile_items)
+        memory_items = mem_items + related_rawfile_items
 
         return memory_items or [
             _make_memory_item(
@@ -824,3 +1014,94 @@ class FileContentParser(BaseMessageParser):
                 chunk_idx=None,
             )
         ]
+
+    def _extract_markdown_headers(self, text: str) -> dict[int, dict]:
+        """
+        Extract markdown headers and their positions.
+
+        Args:
+            text: Markdown text to parse
+        """
+        if not text:
+            return {}
+
+        headers = {}
+        # Pattern to match markdown headers: # Title, ## Title, etc.
+        header_pattern = r"^(#{1,6})\s+(.+)$"
+
+        lines = text.split("\n")
+        char_position = 0
+
+        for line_num, line in enumerate(lines):
+            # Match header pattern (must be at start of line)
+            match = re.match(header_pattern, line.strip())
+            if match:
+                level = len(match.group(1))  # Number of # symbols (1-6)
+                title = match.group(2).strip()  # Extract title text
+
+                # Store header info with its position
+                headers[line_num] = {"level": level, "title": title, "position": char_position}
+
+                logger.debug(f"[FileContentParser] Found H{level} at line {line_num}: {title}")
+
+            # Update character position for next line (+1 for newline character)
+            char_position += len(line) + 1
+
+        logger.info(f"[Chunker: FileContentParser] Extracted {len(headers)} headers from markdown")
+        return headers
+
+    def _get_header_context(
+        self, text: str, image_position: int, headers: dict[int, dict]
+    ) -> list[str]:
+        """
+        Get all header levels above an image position in hierarchical order.
+
+        Finds the image's line number, then identifies all preceding headers
+        and constructs the hierarchical path to the image location.
+
+        Args:
+            text: Full markdown text
+            image_position: Character position of the image in text
+            headers: Dict of headers from _extract_markdown_headers
+        """
+        if not headers:
+            return []
+
+        # Find the line number corresponding to the image position
+        lines = text.split("\n")
+        char_count = 0
+        image_line = 0
+
+        for i, line in enumerate(lines):
+            if char_count >= image_position:
+                image_line = i
+                break
+            char_count += len(line) + 1  # +1 for newline
+
+        # Filter headers that appear before the image
+        preceding_headers = {
+            line_num: info for line_num, info in headers.items() if line_num < image_line
+        }
+
+        if not preceding_headers:
+            return []
+
+        # Build hierarchical header stack
+        header_stack = []
+
+        for line_num in sorted(preceding_headers.keys()):
+            header = preceding_headers[line_num]
+            level = header["level"]
+            title = header["title"]
+
+            # Pop headers of same or lower level
+            while header_stack and header_stack[-1]["level"] >= level:
+                removed = header_stack.pop()
+                logger.debug(f"[FileContentParser] Popped H{removed['level']}: {removed['title']}")
+
+            # Push current header onto stack
+            header_stack.append({"level": level, "title": title})
+
+        # Return titles in order
+        result = [h["title"] for h in header_stack]
+        return result

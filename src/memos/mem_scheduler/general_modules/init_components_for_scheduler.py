@@ -18,17 +18,6 @@ from memos.log import get_logger
 from memos.mem_cube.navie import NaiveMemCube
 from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.mem_reader.factory import MemReaderFactory
-from memos.memories.textual.prefer_text_memory.config import (
-    AdderConfigFactory,
-    ExtractorConfigFactory,
-    RetrieverConfigFactory,
-)
-from memos.memories.textual.prefer_text_memory.factory import (
-    AdderFactory,
-    ExtractorFactory,
-    RetrieverFactory,
-)
-from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
@@ -40,7 +29,6 @@ from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import Fast
 if TYPE_CHECKING:
     from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.reranker.factory import RerankerFactory
-from memos.vec_dbs.factory import VecDBFactory
 
 
 logger = get_logger(__name__)
@@ -61,9 +49,11 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
         "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
         "nebular": APIConfig.get_nebular_config(user_id=user_id),
         "polardb": APIConfig.get_polardb_config(user_id=user_id),
+        "postgres": APIConfig.get_postgres_config(user_id=user_id),
     }
 
-    graph_db_backend = os.getenv("NEO4J_BACKEND", "nebular").lower()
+    # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
+    graph_db_backend = os.getenv("GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "nebular")).lower()
     return GraphDBConfigFactory.model_validate(
         {
             "backend": graph_db_backend,
@@ -180,36 +170,6 @@ def build_internet_retriever_config() -> dict[str, Any]:
     return InternetRetrieverConfigFactory.model_validate(APIConfig.get_internet_config())
 
 
-def build_pref_extractor_config() -> dict[str, Any]:
-    """
-    Build preference memory extractor configuration.
-
-    Returns:
-        Validated extractor configuration dictionary
-    """
-    return ExtractorConfigFactory.model_validate({"backend": "naive", "config": {}})
-
-
-def build_pref_adder_config() -> dict[str, Any]:
-    """
-    Build preference memory adder configuration.
-
-    Returns:
-        Validated adder configuration dictionary
-    """
-    return AdderConfigFactory.model_validate({"backend": "naive", "config": {}})
-
-
-def build_pref_retriever_config() -> dict[str, Any]:
-    """
-    Build preference memory retriever configuration.
-
-    Returns:
-        Validated retriever configuration dictionary
-    """
-    return RetrieverConfigFactory.model_validate({"backend": "naive", "config": {}})
-
-
 def _get_default_memory_size(cube_config: Any) -> dict[str, int]:
     """
     Get default memory size configuration.
@@ -289,20 +249,11 @@ def init_components() -> dict[str, Any]:
     reranker_config = build_reranker_config()
     feedback_reranker_config = build_feedback_reranker_config()
     internet_retriever_config = build_internet_retriever_config()
-    vector_db_config = build_vec_db_config()
-    pref_extractor_config = build_pref_extractor_config()
-    pref_adder_config = build_pref_adder_config()
-    pref_retriever_config = build_pref_retriever_config()
 
     logger.debug("Component configurations built successfully")
 
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
-    vector_db = (
-        VecDBFactory.from_config(vector_db_config)
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
-        else None
-    )
     llm = LLMFactory.from_config(llm_config)
     embedder = EmbedderFactory.from_config(embedder_config)
     # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
@@ -343,63 +294,9 @@ def init_components() -> dict[str, Any]:
 
     logger.debug("Text memory initialized")
 
-    # Initialize preference memory components
-    pref_extractor = (
-        ExtractorFactory.from_config(
-            config_factory=pref_extractor_config,
-            llm_provider=llm,
-            embedder=embedder,
-            vector_db=vector_db,
-        )
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
-        else None
-    )
-
-    pref_adder = (
-        AdderFactory.from_config(
-            config_factory=pref_adder_config,
-            llm_provider=llm,
-            embedder=embedder,
-            vector_db=vector_db,
-            text_mem=text_mem,
-        )
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
-        else None
-    )
-
-    pref_retriever = (
-        RetrieverFactory.from_config(
-            config_factory=pref_retriever_config,
-            llm_provider=llm,
-            embedder=embedder,
-            reranker=feedback_reranker,
-            vector_db=vector_db,
-        )
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
-        else None
-    )
-
-    logger.debug("Preference memory components initialized")
-
-    # Initialize preference memory
-    pref_mem = (
-        SimplePreferenceTextMemory(
-            extractor_llm=llm,
-            vector_db=vector_db,
-            embedder=embedder,
-            reranker=feedback_reranker,
-            extractor=pref_extractor,
-            adder=pref_adder,
-            retriever=pref_retriever,
-        )
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
-        else None
-    )
-
     # Create MemCube with pre-initialized memory instances
     naive_mem_cube = NaiveMemCube(
         text_mem=text_mem,
-        pref_mem=pref_mem,
         act_mem=None,
         para_mem=None,
     )
@@ -408,7 +305,7 @@ def init_components() -> dict[str, Any]:
     searcher: Searcher = tree_mem.get_searcher(
         manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
         moscube=False,
-        process_llm=mem_reader.llm,
+        process_llm=mem_reader.general_llm,
     )
     # Initialize feedback server
     feedback_server = SimpleMemFeedback(
@@ -419,7 +316,7 @@ def init_components() -> dict[str, Any]:
         mem_reader=mem_reader,
         searcher=searcher,
         reranker=feedback_reranker,
-        pref_mem=pref_mem,
+        pref_feedback=True,
     )
     # Return all components as a dictionary for easy access and extension
     return {"naive_mem_cube": naive_mem_cube, "feedback_server": feedback_server}

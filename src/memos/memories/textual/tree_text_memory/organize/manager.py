@@ -68,12 +68,14 @@ class MemoryManager:
         self.current_memory_size = {
             "WorkingMemory": 0,
             "LongTermMemory": 0,
+            "RawFileMemory": 0,
             "UserMemory": 0,
         }
         if not memory_size:
             self.memory_size = {
                 "WorkingMemory": 20,
                 "LongTermMemory": 1500,
+                "RawFileMemory": 1500,
                 "UserMemory": 480,
             }
         logger.info(f"MemorySize is {self.memory_size}")
@@ -157,9 +159,14 @@ class MemoryManager:
         graph_node_ids: list[str] = []
 
         for memory in memories:
-            working_id = str(uuid.uuid4())
+            working_id = memory.id if hasattr(memory, "id") else memory.id or str(uuid.uuid4())
 
-            if memory.metadata.memory_type not in ("ToolSchemaMemory", "ToolTrajectoryMemory"):
+            if memory.metadata.memory_type in (
+                "WorkingMemory",
+                "LongTermMemory",
+                "UserMemory",
+                "OuterMemory",
+            ):
                 working_metadata = memory.metadata.model_copy(
                     update={"memory_type": "WorkingMemory"}
                 ).model_dump(exclude_none=True)
@@ -176,8 +183,13 @@ class MemoryManager:
                 "UserMemory",
                 "ToolSchemaMemory",
                 "ToolTrajectoryMemory",
+                "RawFileMemory",
+                "SkillMemory",
+                "PreferenceMemory",
             ):
-                graph_node_id = str(uuid.uuid4())
+                graph_node_id = (
+                    memory.id if hasattr(memory, "id") else memory.id or str(uuid.uuid4())
+                )
                 metadata_dict = memory.metadata.model_dump(exclude_none=True)
                 metadata_dict["updated_at"] = datetime.now().isoformat()
 
@@ -223,11 +235,12 @@ class MemoryManager:
                             exc_info=e,
                         )
 
-        _submit_batches(working_nodes, "WorkingMemory")
         _submit_batches(graph_nodes, "graph memory")
 
         if graph_node_ids and self.is_reorganize:
-            self.reorganizer.add_message(QueueMessage(op="add", after_node=graph_node_ids))
+            self.reorganizer.add_message(
+                QueueMessage(op="add", after_node=graph_node_ids, user_name=user_name)
+            )
 
         return added_ids
 
@@ -307,10 +320,15 @@ class MemoryManager:
         ids: list[str] = []
         futures = []
 
-        working_id = str(uuid.uuid4())
+        working_id = memory.id if hasattr(memory, "id") else memory.id or str(uuid.uuid4())
 
         with ContextThreadPoolExecutor(max_workers=2, thread_name_prefix="mem") as ex:
-            if memory.metadata.memory_type not in ("ToolSchemaMemory", "ToolTrajectoryMemory"):
+            if memory.metadata.memory_type in (
+                "WorkingMemory",
+                "LongTermMemory",
+                "UserMemory",
+                "OuterMemory",
+            ):
                 f_working = ex.submit(
                     self._add_memory_to_db, memory, "WorkingMemory", user_name, working_id
                 )
@@ -321,6 +339,9 @@ class MemoryManager:
                 "UserMemory",
                 "ToolSchemaMemory",
                 "ToolTrajectoryMemory",
+                "RawFileMemory",
+                "SkillMemory",
+                "PreferenceMemory",
             ):
                 f_graph = ex.submit(
                     self._add_to_graph_memory,
@@ -372,7 +393,7 @@ class MemoryManager:
         """
         Generalized method to add memory to a graph-based memory type (e.g., LongTermMemory, UserMemory).
         """
-        node_id = str(uuid.uuid4())
+        node_id = memory.id if hasattr(memory, "id") else str(uuid.uuid4())
         # Step 2: Add new node to graph
         metadata_dict = memory.metadata.model_dump(exclude_none=True)
         tags = metadata_dict.get("tags") or []
@@ -393,16 +414,19 @@ class MemoryManager:
             QueueMessage(
                 op="add",
                 after_node=[node_id],
+                user_name=user_name,
             )
         )
         return node_id
 
-    def _inherit_edges(self, from_id: str, to_id: str) -> None:
+    def _inherit_edges(self, from_id: str, to_id: str, user_name: str | None = None) -> None:
         """
         Migrate all non-lineage edges from `from_id` to `to_id`,
         and remove them from `from_id` after copying.
         """
-        edges = self.graph_store.get_edges(from_id, type="ANY", direction="ANY")
+        edges = self.graph_store.get_edges(
+            from_id, type="ANY", direction="ANY", user_name=user_name
+        )
 
         for edge in edges:
             if edge["type"] == "MERGED_TO":
@@ -415,20 +439,29 @@ class MemoryManager:
                 continue
 
             # Add edge to merged node if it doesn't already exist
-            if not self.graph_store.edge_exists(new_from, new_to, edge["type"], direction="ANY"):
-                self.graph_store.add_edge(new_from, new_to, edge["type"])
+            if not self.graph_store.edge_exists(
+                new_from, new_to, edge["type"], direction="ANY", user_name=user_name
+            ):
+                self.graph_store.add_edge(new_from, new_to, edge["type"], user_name=user_name)
 
             # Remove original edge if it involved the archived node
-            self.graph_store.delete_edge(edge["from"], edge["to"], edge["type"])
+            self.graph_store.delete_edge(
+                edge["from"], edge["to"], edge["type"], user_name=user_name
+            )
 
     def _ensure_structure_path(
-        self, memory_type: str, metadata: TreeNodeTextualMemoryMetadata
+        self,
+        memory_type: str,
+        metadata: TreeNodeTextualMemoryMetadata,
+        user_name: str | None = None,
     ) -> str:
         """
         Ensure structural path exists (ROOT → ... → final node), return last node ID.
 
         Args:
-            path: like ["hobby", "photography"]
+            memory_type: Memory type for the structure node.
+            metadata: Metadata containing key and other fields.
+            user_name: Optional user name for multi-tenant isolation.
 
         Returns:
             Final node ID of the structure path.
@@ -438,7 +471,8 @@ class MemoryManager:
             [
                 {"field": "memory", "op": "=", "value": metadata.key},
                 {"field": "memory_type", "op": "=", "value": memory_type},
-            ]
+            ],
+            user_name=user_name,
         )
         if existing:
             node_id = existing[0]  # Use the first match
@@ -461,14 +495,16 @@ class MemoryManager:
                 ),
             )
             self.graph_store.add_node(
-                id=new_node.id,
-                memory=new_node.memory,
-                metadata=new_node.metadata.model_dump(exclude_none=True),
+                new_node.id,
+                new_node.memory,
+                new_node.metadata.model_dump(exclude_none=True),
+                user_name=user_name,
             )
             self.reorganizer.add_message(
                 QueueMessage(
                     op="add",
                     after_node=[new_node.id],
+                    user_name=user_name,
                 )
             )
 

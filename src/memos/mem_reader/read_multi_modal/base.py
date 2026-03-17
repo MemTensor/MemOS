@@ -15,6 +15,8 @@ from memos.memories.textual.item import (
     TextualMemoryItem,
     TreeNodeTextualMemoryMetadata,
 )
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
+from memos.utils import timed
 
 from .utils import detect_lang, get_text_splitter
 
@@ -89,6 +91,7 @@ class BaseMessageParser(ABC):
         """
         self.embedder = embedder
         self.llm = llm
+        self.tokenizer = FastTokenizer(use_jieba=True, use_stopwords=True)
 
     @abstractmethod
     def create_source(
@@ -245,6 +248,7 @@ class BaseMessageParser(ABC):
         else:
             raise ValueError(f"Unknown mode: {mode}. Must be 'fast' or 'fine'")
 
+    @timed
     def _split_text(self, text: str, is_markdown: bool = False) -> list[str]:
         """
         Split text into chunks using text splitter from utils.

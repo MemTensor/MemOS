@@ -1,12 +1,17 @@
 import logging
+import os
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
+from starlette.staticfiles import StaticFiles
 
 from memos.api.exceptions import APIExceptionHandler
 from memos.api.middleware.request_context import RequestContextMiddleware
 from memos.api.routers.server_router import router as server_router
 
+
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -17,6 +22,8 @@ app = FastAPI(
     description="A REST API for managing multiple users with MemOS Server.",
     version="1.0.1",
 )
+
+app.mount("/download", StaticFiles(directory=os.getenv("FILE_LOCAL_PATH")), name="static_mapping")
 
 app.add_middleware(RequestContextMiddleware, source="server_api")
 # Include routers

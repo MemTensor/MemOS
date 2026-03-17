@@ -1,28 +1,28 @@
 ## Description
 
-<!--
-Please include a summary of the changes below;
-Fill in the issue number that this PR addresses (if applicable);
-Fill in the related MemOS-Docs repository issue or PR link (if applicable);
-Mention the person who will review this PR (if you know who it is);
-Replace (summary), (issue), (docs-issue-or-pr-link), and (reviewer) with the appropriate information.
+Please include a summary of the change, the problem it solves, the implementation approach, and relevant context. List any dependencies required for this change.
 
-请在下方填写更改的摘要；
-填写此 PR 解决的问题编号（如果适用）；
-填写相关的 MemOS-Docs 仓库 issue 或 PR 链接（如果适用）；
-提及将审查此 PR 的人（如果您知道是谁）；
-替换 (summary)、(issue)、(docs-issue-or-pr-link) 和 (reviewer) 为适当的信息。
--->
+Related Issue (Required):  Fixes @issue_number
 
-Summary: (summary)
+## Type of change
 
-Fix: #(issue)
+Please delete options that are not relevant.
 
-Docs Issue/PR: (docs-issue-or-pr-link)
+- [ ] Bug fix (non-breaking change which fixes an issue)
+- [ ] New feature (non-breaking change which adds functionality)
+- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
+- [ ] Refactor (does not change functionality, e.g. code style improvements, linting)
+- [ ] Documentation update
 
-Reviewer: @(reviewer)
+## How Has This Been Tested?
 
-## Checklist:
+Please describe the tests that you ran to verify your changes. Provide instructions so we can reproduce. Please also list any relevant details for your test configuration
+
+- [ ] Unit Test
+- [ ] Test Script Or Test Steps (please provide)
+- [ ] Pipeline Automated API Test (please provide)
+
+## Checklist
 
 - [ ] I have performed a self-review of my own code | 我已自行检查了自己的代码
 - [ ] I have commented my code in hard-to-understand areas | 我已在难以理解的地方对代码进行了注释
@@ -30,3 +30,8 @@ Reviewer: @(reviewer)
 - [ ] I have created related documentation issue/PR in [MemOS-Docs](https://github.com/MemTensor/MemOS-Docs) (if applicable) | 我已在 [MemOS-Docs](https://github.com/MemTensor/MemOS-Docs) 中创建了相关的文档 issue/PR（如果适用）
 - [ ] I have linked the issue to this PR (if applicable) | 我已将 issue 链接到此 PR（如果适用）
 - [ ] I have mentioned the person who will review this PR | 我已提及将审查此 PR 的人
+
+## Reviewer Checklist
+- [ ] closes #xxxx (Replace xxxx with the GitHub issue number)
+- [ ] Made sure Checks passed
+- [ ] Tests have been provided

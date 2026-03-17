@@ -65,59 +65,33 @@ def format_memory_item(
     return memory
 
 
-def post_process_pref_mem(
-    memories_result: dict[str, Any],
-    pref_formatted_mem: list[dict[str, Any]],
-    mem_cube_id: str,
-    include_preference: bool,
-) -> dict[str, Any]:
-    """
-    Post-process preference memory results.
-
-    Adds formatted preference memories to the result dictionary and generates
-    instruction completion strings if preferences are included.
-
-    Args:
-        memories_result: Result dictionary to update
-        pref_formatted_mem: List of formatted preference memories
-        mem_cube_id: Memory cube ID
-        include_preference: Whether to include preferences in result
-
-    Returns:
-        Updated memories_result dictionary
-    """
-    if include_preference:
-        memories_result["pref_mem"].append(
-            {
-                "cube_id": mem_cube_id,
-                "memories": pref_formatted_mem,
-                "total_nodes": len(pref_formatted_mem),
-            }
-        )
-        pref_instruction, pref_note = instruct_completion(pref_formatted_mem)
-        memories_result["pref_string"] = pref_instruction
-        memories_result["pref_note"] = pref_note
-
-    return memories_result
-
-
 def post_process_textual_mem(
     memories_result: dict[str, Any],
     text_formatted_mem: list[dict[str, Any]],
     mem_cube_id: str,
 ) -> dict[str, Any]:
     """
-    Post-process text and tool memory results.
+    Post-process text, tool, skill and preference memory results.
+    Now automatically handles preference memories.
     """
     fact_mem = [
         mem
         for mem in text_formatted_mem
-        if mem["metadata"]["memory_type"] not in ["ToolSchemaMemory", "ToolTrajectoryMemory"]
+        if mem["metadata"]["memory_type"]
+        in ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory", "RawFileMemory"]
     ]
     tool_mem = [
         mem
         for mem in text_formatted_mem
         if mem["metadata"]["memory_type"] in ["ToolSchemaMemory", "ToolTrajectoryMemory"]
+    ]
+    skill_mem = [
+        mem for mem in text_formatted_mem if mem["metadata"]["memory_type"] == "SkillMemory"
+    ]
+
+    # Extract preference memories
+    pref_mem = [
+        mem for mem in text_formatted_mem if mem["metadata"]["memory_type"] == "PreferenceMemory"
     ]
 
     memories_result["text_mem"].append(
@@ -134,6 +108,26 @@ def post_process_textual_mem(
             "total_nodes": len(tool_mem),
         }
     )
+    memories_result["skill_mem"].append(
+        {
+            "cube_id": mem_cube_id,
+            "memories": skill_mem,
+            "total_nodes": len(skill_mem),
+        }
+    )
+
+    memories_result["pref_mem"].append(
+        {
+            "cube_id": mem_cube_id,
+            "memories": pref_mem,
+            "total_nodes": len(pref_mem),
+        }
+    )
+    if pref_mem:
+        pref_instruction, pref_note = instruct_completion(pref_mem)
+        memories_result["pref_string"] = pref_instruction
+        memories_result["pref_note"] = pref_note
+
     return memories_result
 
 
@@ -146,12 +140,13 @@ def separate_knowledge_and_conversation_mem(memories: list[dict[str, Any]]):
     for item in memories:
         sources = item.get("metadata", {}).get("sources", [])
         if (
-            len(sources) > 0
+            item["metadata"]["memory_type"] != "RawFileMemory"
+            and len(sources) > 0
             and "type" in sources[0]
             and sources[0]["type"] == "file"
             and "content" in sources[0]
             and sources[0]["content"] != ""
-        ):  # TODO change to memory_type
+        ):
             knowledge_mem.append(item)
         else:
             conversation_mem.append(item)
@@ -192,8 +187,7 @@ def rerank_knowledge_mem(
         key=lambda item: item.get("metadata", {}).get("relativity", 0.0),
         reverse=True,
     )
-
-    # TODO revoke sources replace memory value
+    # replace memory value with source.content for LongTermMemory, WorkingMemory or UserMemory
     for item in reranked_knowledge_mem:
         item["memory"] = item["metadata"]["sources"][0]["content"]
         item["metadata"]["sources"] = []

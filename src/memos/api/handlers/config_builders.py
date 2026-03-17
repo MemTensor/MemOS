@@ -41,9 +41,11 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
         "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
         "nebular": APIConfig.get_nebular_config(user_id=user_id),
         "polardb": APIConfig.get_polardb_config(user_id=user_id),
+        "postgres": APIConfig.get_postgres_config(user_id=user_id),
     }
 
-    graph_db_backend = os.getenv("NEO4J_BACKEND", "nebular").lower()
+    # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
+    graph_db_backend = os.getenv("GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "nebular")).lower()
     return GraphDBConfigFactory.model_validate(
         {
             "backend": graph_db_backend,
@@ -103,6 +105,7 @@ def build_chat_llm_config() -> list[dict[str, Any]]:
                 }
             ),
             "support_models": cfg.get("support_models", None),
+            "extra_body": cfg.get("extra_body", None),
         }
         for cfg in configs
     ]
@@ -188,3 +191,36 @@ def build_pref_retriever_config() -> dict[str, Any]:
         Validated retriever configuration dictionary
     """
     return RetrieverConfigFactory.model_validate({"backend": "naive", "config": {}})
+
+
+def build_nli_client_config() -> dict[str, Any]:
+    """
+    Build NLI client configuration.
+
+    Returns:
+        NLI client configuration dictionary
+    """
+    return APIConfig.get_nli_config()
+
+
+def build_general_llm_config() -> dict[str, Any]:
+    """
+    Build general LLM configuration for non-chat/doc tasks.
+
+    Used for: hallucination filter, memory rewrite, memory merge,
+    tool trajectory extraction, skill memory extraction.
+
+    Returns:
+        Validated general LLM configuration dictionary
+    """
+    return LLMConfigFactory.model_validate(APIConfig.get_memreader_general_llm_config())
+
+
+def build_image_parser_llm_config() -> dict[str, Any]:
+    """
+    Build image parser LLM configuration (requires vision model).
+
+    Returns:
+        Validated image parser LLM configuration dictionary
+    """
+    return LLMConfigFactory.model_validate(APIConfig.get_image_parser_llm_config())
