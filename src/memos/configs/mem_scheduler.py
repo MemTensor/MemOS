@@ -155,7 +155,10 @@ class SchedulerConfigFactory(BaseConfig):
     @model_validator(mode="after")
     def create_config(self) -> "SchedulerConfigFactory":
         config_class = self.backend_to_class[self.backend]
-        self.config = config_class(**self.config)
+        raw = self.config
+        if isinstance(raw, dict) and "config" in raw and "use_redis_queue" not in raw:
+            raw = raw["config"]
+        self.config = config_class(**raw)
         return self
 
 
