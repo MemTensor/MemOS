@@ -867,6 +867,8 @@ class APIConfig:
                     "MOS_SCHEDULER_ENABLE_ACTIVATION_MEMORY", "false"
                 ).lower()
                 == "true",
+                "use_redis_queue": os.getenv("MEMSCHEDULER_USE_REDIS_QUEUE", "False").lower()
+                == "true",
             },
         }
 
