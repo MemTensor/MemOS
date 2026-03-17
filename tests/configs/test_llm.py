@@ -56,6 +56,11 @@ def test_openai_llm_config():
             "remove_think_prefix",
             "extra_body",
             "default_headers",
+            "backup_client",
+            "backup_api_key",
+            "backup_api_base",
+            "backup_model_name_or_path",
+            "backup_headers",
         ],
     )
 
