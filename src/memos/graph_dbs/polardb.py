@@ -4667,6 +4667,36 @@ class PolarDBGraphDB(BaseGraphDB):
                                         condition_parts.append(
                                             f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype)::text LIKE '%{op_value}%'"
                                         )
+                            elif op == "nolike":
+                                if key.startswith("info."):
+                                    info_field = key[5:]
+                                    if isinstance(op_value, str):
+                                        escaped_value = (
+                                            escape_sql_string(op_value)
+                                            .replace("%", "\\%")
+                                            .replace("_", "\\_")
+                                        )
+                                        condition_parts.append(
+                                            f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype])::text NOT LIKE '%{escaped_value}%'"
+                                        )
+                                    else:
+                                        condition_parts.append(
+                                            f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype])::text NOT LIKE '%{op_value}%'"
+                                        )
+                                else:
+                                    if isinstance(op_value, str):
+                                        escaped_value = (
+                                            escape_sql_string(op_value)
+                                            .replace("%", "\\%")
+                                            .replace("_", "\\_")
+                                        )
+                                        condition_parts.append(
+                                            f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype)::text NOT LIKE '%{escaped_value}%'"
+                                        )
+                                    else:
+                                        condition_parts.append(
+                                            f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype)::text NOT LIKE '%{op_value}%'"
+                                        )
                     # Check if key starts with "info." prefix (for simple equality)
                     elif key.startswith("info."):
                         # Extract the field name after "info."
