@@ -278,54 +278,57 @@ class QdrantVecDB(BaseVecDB):
 
     def get_by_id(self, id: str) -> VecDBItem | None:
         """Get a single item by ID."""
-        for collection_name in self._all_candidate_collections():
-            try:
-                response = self.client.retrieve(
-                    collection_name=collection_name,
-                    ids=[id],
-                    with_payload=True,
-                    with_vectors=True,
-                )
-            except Exception:
-                continue
+        # Resolve a single collection to avoid cross-collection leakage and
+        # rely on the same scoping logic used elsewhere (e.g., get_by_filter).
+        collection_name = self._resolve_collection_name(filter_dict={})
+        if not self.collection_exists(collection_name):
+            logger.info(
+                f"Qdrant collection '{collection_name}' does not exist, returning None for get_by_id."
+            )
+            return None
 
-            if response:
-                point = response[0]
-                return VecDBItem(
-                    id=point.id,
-                    vector=point.vector,
-                    payload=point.payload,
-                )
+        response = self.client.retrieve(
+            collection_name=collection_name,
+            ids=[id],
+            with_payload=True,
+            with_vectors=True,
+        )
 
-        return None
+        if not response:
+            return None
+
+        point = response[0]
+        return VecDBItem(
+            id=point.id,
+            vector=point.vector,
+            payload=point.payload,
+        )
 
     def get_by_ids(self, ids: list[str]) -> list[VecDBItem]:
         """Get multiple items by their IDs."""
-        remaining_ids = set(ids)
+        # Resolve a single collection using the same scoping logic as other methods.
+        collection_name = self._resolve_collection_name(filter_dict={})
+        if not self.collection_exists(collection_name):
+            logger.info(
+                f"Qdrant collection '{collection_name}' does not exist, returning empty result for get_by_ids."
+            )
+            return []
+
+        response = self.client.retrieve(
+            collection_name=collection_name,
+            ids=ids,
+            with_payload=True,
+            with_vectors=True,
+        )
+
         found_items: dict[str, VecDBItem] = {}
-
-        for collection_name in self._all_candidate_collections():
-            if not remaining_ids:
-                break
-
-            try:
-                response = self.client.retrieve(
-                    collection_name=collection_name,
-                    ids=list(remaining_ids),
-                    with_payload=True,
-                    with_vectors=True,
-                )
-            except Exception:
-                continue
-
-            for point in response:
-                item = VecDBItem(
-                    id=point.id,
-                    vector=point.vector,
-                    payload=point.payload,
-                )
-                found_items[item.id] = item
-                remaining_ids.discard(item.id)
+        for point in response:
+            item = VecDBItem(
+                id=point.id,
+                vector=point.vector,
+                payload=point.payload,
+            )
+            found_items[item.id] = item
 
         return [found_items[id] for id in ids if id in found_items]
 
