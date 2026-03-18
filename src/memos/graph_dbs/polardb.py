@@ -180,10 +180,10 @@ class PolarDBGraphDB(BaseGraphDB):
         )
 
         self._semaphore = threading.BoundedSemaphore(maxconn)
-        # if self._warm_up_on_startup_by_full:
-        #     self._warm_up_search_connections_by_full()
-        # if self._warm_up_on_startup_by_all:
-        #     self._warm_up_connections_by_all()
+        if self._warm_up_on_startup_by_full:
+            self._warm_up_search_connections_by_full()
+        if self._warm_up_on_startup_by_all:
+            self._warm_up_connections_by_all()
 
         """
         # Handle auto_create
