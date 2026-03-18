@@ -180,10 +180,10 @@ class PolarDBGraphDB(BaseGraphDB):
         )
 
         self._semaphore = threading.BoundedSemaphore(maxconn)
-        if self._warm_up_on_startup_by_full:
-            self._warm_up_search_connections_by_full()
-        if self._warm_up_on_startup_by_all:
-            self._warm_up_connections_by_all()
+        # if self._warm_up_on_startup_by_full:
+        #     self._warm_up_search_connections_by_full()
+        # if self._warm_up_on_startup_by_all:
+        #     self._warm_up_connections_by_all()
 
         """
         # Handle auto_create
@@ -1840,9 +1840,8 @@ class PolarDBGraphDB(BaseGraphDB):
         **kwargs,
     ) -> list[dict]:
         logger.info(
-            "search_by_embedding user_name:%s,filter: %s, knowledgebase_ids: %s,scope:%s,status:%s,search_filter:%s,filter:%s,knowledgebase_ids:%s,return_fields:%s",
+            "search_by_embedding by user_name:%s,knowledgebase_ids: %s,scope:%s,status:%s,search_filter:%s,filter:%s,knowledgebase_ids:%s,return_fields:%s",
             user_name,
-            filter,
             knowledgebase_ids,
             scope,
             status,
@@ -1895,20 +1894,21 @@ class PolarDBGraphDB(BaseGraphDB):
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
         query = f"""
+                    set hnsw.ef_search = 100;set hnsw.iterative_scan = relaxed_order;
                     WITH t AS (
                         SELECT id,
                                properties,
                                timeline,
                                ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
-                               (1 - (embedding <=> %s::vector(1024))) AS scope
+                               (embedding <=> %s::vector(1024)) AS scope_distance
                         FROM "{self.db_name}_graph"."Memory"
                         {where_clause}
-                        ORDER BY scope DESC
+                        ORDER BY scope_distance ASC
                         LIMIT {top_k}
                     )
-                    SELECT *
+                    SELECT *,(1 - scope_distance) AS scope
                     FROM t
-                    WHERE scope > 0.1;
+                    WHERE scope_distance < 0.9;
                 """
         vector_str = convert_to_vector(vector)
         query = query.replace("%s::vector(1024)", f"'{vector_str}'::vector(1024)")
@@ -1953,7 +1953,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     output.append(item)
             elapsed_time = (time.perf_counter() - start_time) * 1000.0
             logger.info(
-                "search_by_embedding query embedding completed time took %.1f ms", elapsed_time
+                "search_by_embedding query by embedding completed time took %.1f ms", elapsed_time
             )
             return output[:top_k]
 
