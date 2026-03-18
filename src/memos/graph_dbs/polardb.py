@@ -432,14 +432,13 @@ class PolarDBGraphDB(BaseGraphDB):
     def remove_oldest_memory(
         self, memory_type: str, keep_latest: int, user_name: str | None = None
     ) -> None:
-        """
-        Remove all WorkingMemory nodes except the latest `keep_latest` entries.
-
-        Args:
-            memory_type (str): Memory type (e.g., 'WorkingMemory', 'LongTermMemory').
-            keep_latest (int): Number of latest WorkingMemory entries to keep.
-            user_name (str, optional): User name for filtering in non-multi-db mode
-        """
+        start_time = time.perf_counter()
+        logger.info(
+            "remove_oldest_memory by memory_type:%s,keep_latest: %s,user_name:%s",
+            memory_type,
+            keep_latest,
+            user_name
+        )
         user_name = user_name if user_name else self._get_config_value("user_name")
 
         # Use actual OFFSET logic, consistent with nebular.py
@@ -456,6 +455,7 @@ class PolarDBGraphDB(BaseGraphDB):
             self.format_param_value(user_name),
             keep_latest,
         ]
+        logger.info(f"remove_oldest_memory by select_query:{select_query},select_params:{select_params}")
         try:
             with self._get_connection() as conn, conn.cursor() as cursor:
                 # Execute query to get IDs to delete
@@ -482,6 +482,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     f"keeping {keep_latest} latest for user {user_name}, "
                     f"removed ids: {ids_to_delete}"
                 )
+                elapsed = (time.perf_counter() - start_time) * 1000.0
+                logger.info("remove_oldest_memory internal took %.1f ms", elapsed)
         except Exception as e:
             logger.error(f"[remove_oldest_memory] Failed: {e}", exc_info=True)
             raise
@@ -2165,25 +2167,19 @@ class PolarDBGraphDB(BaseGraphDB):
         params: dict[str, Any] | None = None,
         user_name: str | None = None,
     ) -> list[dict[str, Any]]:
-        """
-        Count nodes grouped by any fields.
-
-        Args:
-            group_fields (list[str]): Fields to group by, e.g., ["memory_type", "status"]
-            where_clause (str, optional): Extra WHERE condition. E.g.,
-            "WHERE n.status = 'activated'"
-            params (dict, optional): Parameters for WHERE clause.
-            user_name (str, optional): User name for filtering in non-multi-db mode
-
-        Returns:
-            list[dict]: e.g., [{ 'memory_type': 'WorkingMemory', 'status': 'active', 'count': 10 }, ...]
-        """
+        start_time = time.perf_counter()
+        logger.info(
+            "get_grouped_counts by group_fields:%s,where_clause: %s,params:%s,user_name:%s",
+            group_fields,
+            where_clause,
+            params,
+            user_name,
+        )
         if not group_fields:
             raise ValueError("group_fields cannot be empty")
 
         user_name = user_name if user_name else self._get_config_value("user_name")
 
-        # Build user clause
         user_clause = f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype"
         if where_clause:
             where_clause = where_clause.strip()
@@ -2194,44 +2190,43 @@ class PolarDBGraphDB(BaseGraphDB):
         else:
             where_clause = f"WHERE {user_clause}"
 
-        # Inline parameters if provided
         if params and isinstance(params, dict):
             for key, value in params.items():
-                # Handle different value types appropriately
                 if isinstance(value, str):
                     value = f"'{value}'"
                 where_clause = where_clause.replace(f"${key}", str(value))
 
-        # Handle user_name parameter in where_clause
         if "user_name = %s" in where_clause:
             where_clause = where_clause.replace(
                 "user_name = %s",
                 f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype",
             )
 
-        # Build return fields and group by fields
-        return_fields = []
-        group_by_fields = []
-
+        cte_select_list = []
+        aliases = []
         for field in group_fields:
             alias = field.replace(".", "_")
-            return_fields.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype)::text AS {alias}"
+            aliases.append(alias)
+            cte_select_list.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype) AS {alias}"
             )
-            group_by_fields.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype)::text"
-            )
-
-        # Full SQL query construction
+        outer_select = ", ".join(f"{a}::text" for a in aliases)
+        outer_group_by = ", ".join(aliases)
         query = f"""
-            SELECT {", ".join(return_fields)}, COUNT(*) AS count
-            FROM "{self.db_name}_graph"."Memory"
-            {where_clause}
-            GROUP BY {", ".join(group_by_fields)}
+            WITH t AS (
+                SELECT {", ".join(cte_select_list)}
+                FROM "{self.db_name}_graph"."Memory"
+                {where_clause}
+                LIMIT 1000
+            )
+            SELECT {outer_select}, count(*) AS count
+            FROM t
+            GROUP BY {outer_group_by}
         """
+        logger.info(f"get_grouped_counts query:{query},params:{params}")
+
         try:
             with self._get_connection() as conn, conn.cursor() as cursor:
-                # Handle parameterized query
                 if params and isinstance(params, list):
                     cursor.execute(query, params)
                 else:
@@ -2250,6 +2245,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     count_value = row[-1]  # Last column is count
                     output.append({**group_values, "count": int(count_value)})
 
+                elapsed = (time.perf_counter() - start_time) * 1000.0
+                logger.info("get_grouped_counts internal took %.1f ms", elapsed)
                 return output
 
         except Exception as e:
