@@ -437,7 +437,7 @@ class PolarDBGraphDB(BaseGraphDB):
             "remove_oldest_memory by memory_type:%s,keep_latest: %s,user_name:%s",
             memory_type,
             keep_latest,
-            user_name
+            user_name,
         )
         user_name = user_name if user_name else self._get_config_value("user_name")
 
@@ -455,7 +455,9 @@ class PolarDBGraphDB(BaseGraphDB):
             self.format_param_value(user_name),
             keep_latest,
         ]
-        logger.info(f"remove_oldest_memory by select_query:{select_query},select_params:{select_params}")
+        logger.info(
+            f"remove_oldest_memory by select_query:{select_query},select_params:{select_params}"
+        )
         try:
             with self._get_connection() as conn, conn.cursor() as cursor:
                 # Execute query to get IDs to delete
