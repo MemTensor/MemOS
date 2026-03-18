@@ -24,6 +24,9 @@ function phase(n, title) {
 
 const pluginDir = path.resolve(__dirname, "..");
 
+const nodeVersion = process.version;
+const nodeMajor = parseInt(nodeVersion.slice(1).split('.')[0], 10);
+
 console.log(`
 ${CYAN}${BOLD}┌──────────────────────────────────────────────────┐
 │  MemOS Local Memory — postinstall setup          │
@@ -31,7 +34,13 @@ ${CYAN}${BOLD}┌─────────────────────
 `);
 
 log(`Plugin dir: ${DIM}${pluginDir}${RESET}`);
-log(`Node: ${process.version}  Platform: ${process.platform}-${process.arch}`);
+log(`Node: ${GREEN}${nodeVersion}${RESET}  Platform: ${process.platform}-${process.arch}`);
+
+if (nodeMajor >= 25) {
+  warn(`Node.js ${nodeVersion} detected. This version may have compatibility issues with native modules.`);
+  log(`Recommended: Use Node.js LTS (v20 or v22) for best compatibility.`);
+  log(`You can use nvm to switch versions: ${CYAN}nvm use 22${RESET}`);
+}
 
 /* ═══════════════════════════════════════════════════════════
  *  Phase 0: Ensure all dependencies are installed
@@ -281,23 +290,39 @@ ${GREEN}${BOLD}  ┌────────────────────
 
 console.log(`
 ${YELLOW}${BOLD}  ╔══════════════════════════════════════════════════════════════╗
-  ║  ✖ better-sqlite3 native module build failed               ║
+  ║  ✖ better-sqlite3 native module build failed                 ║
   ╠══════════════════════════════════════════════════════════════╣${RESET}
-${YELLOW}  ║${RESET}                                                             ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  This plugin requires C/C++ build tools to compile         ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  the SQLite native module on first install.                ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}                                                             ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  ${BOLD}Install build tools:${RESET}                                      ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}                                                             ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  ${CYAN}macOS:${RESET}   xcode-select --install                          ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  ${CYAN}Ubuntu:${RESET}  sudo apt install build-essential python3        ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  ${CYAN}Windows:${RESET} npm install -g windows-build-tools              ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}                                                             ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  ${BOLD}Then retry:${RESET}                                                ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  This plugin requires C/C++ build tools to compile           ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  the SQLite native module on first install.                  ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${BOLD}Install build tools:${RESET}                                       ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${CYAN}macOS:${RESET}   xcode-select --install                           ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${CYAN}Ubuntu:${RESET}  sudo apt install build-essential python3         ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${CYAN}Windows:${RESET} npm install -g windows-build-tools               ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}`);
+
+if (nodeMajor >= 25) {
+  console.log(`${YELLOW}  ║${RESET}  ${BOLD}${RED}Node.js v25+ compatibility issue detected:${RESET}                ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  better-sqlite3 may not have prebuilt binaries for Node 25.   ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${BOLD}Recommended solutions:${RESET}                                     ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  1. Use Node.js LTS (v20 or v22):                             ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}     ${GREEN}nvm install 22 && nvm use 22${RESET}                            ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  2. Or use MemOS Cloud version instead:                       ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}     ${CYAN}https://github.com/MemTensor/MemOS/tree/main/apps/memos-cloud${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}`);
+}
+
+console.log(`${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${BOLD}Then retry:${RESET}                                                 ${YELLOW}║${RESET}
 ${YELLOW}  ║${RESET}  ${GREEN}cd ${pluginDir}${RESET}
-${YELLOW}  ║${RESET}  ${GREEN}npm rebuild better-sqlite3${RESET}                                ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  ${GREEN}openclaw gateway stop && openclaw gateway start${RESET}           ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}                                                             ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${GREEN}npm rebuild better-sqlite3${RESET}                                 ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${GREEN}openclaw gateway stop && openclaw gateway start${RESET}            ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
 ${YELLOW}${BOLD}  ╚══════════════════════════════════════════════════════════════╝${RESET}
 `);
 
