@@ -24,7 +24,7 @@ class TestMinimaxLLM(unittest.TestCase):
         # Config with think prefix preserved
         config_with_think = MinimaxLLMConfig.model_validate(
             {
-                "model_name_or_path": "MiniMax-M2.5",
+                "model_name_or_path": "MiniMax-M2.7",
                 "temperature": 0.7,
                 "max_tokens": 512,
                 "top_p": 0.9,
@@ -67,7 +67,7 @@ class TestMinimaxLLM(unittest.TestCase):
 
         config = MinimaxLLMConfig.model_validate(
             {
-                "model_name_or_path": "MiniMax-M2.5",
+                "model_name_or_path": "MiniMax-M2.7",
                 "temperature": 0.7,
                 "max_tokens": 512,
                 "top_p": 0.9,
@@ -89,7 +89,7 @@ class TestMinimaxLLM(unittest.TestCase):
         """Test MinimaxLLMConfig default values."""
         config = MinimaxLLMConfig.model_validate(
             {
-                "model_name_or_path": "MiniMax-M2.5",
+                "model_name_or_path": "MiniMax-M2.7",
                 "api_key": "sk-test",
             }
         )
@@ -101,14 +101,14 @@ class TestMinimaxLLM(unittest.TestCase):
         """Test MinimaxLLMConfig with custom values."""
         config = MinimaxLLMConfig.model_validate(
             {
-                "model_name_or_path": "MiniMax-M2.5-highspeed",
+                "model_name_or_path": "MiniMax-M2.7-highspeed",
                 "api_key": "sk-test",
                 "api_base": "https://custom.api.minimax.io/v1",
                 "temperature": 0.5,
                 "max_tokens": 2048,
             }
         )
-        self.assertEqual(config.model_name_or_path, "MiniMax-M2.5-highspeed")
+        self.assertEqual(config.model_name_or_path, "MiniMax-M2.7-highspeed")
         self.assertEqual(config.api_base, "https://custom.api.minimax.io/v1")
         self.assertEqual(config.temperature, 0.5)
         self.assertEqual(config.max_tokens, 2048)

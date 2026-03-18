@@ -167,14 +167,14 @@ print("Scenario 6:", resp)
 # Scenario 7: Using LLMFactory with MiniMax (OpenAI-compatible API)
 # Prerequisites:
 # 1. Get your API key from the MiniMax platform.
-# 2. Available models: MiniMax-M2.5 (standard), MiniMax-M2.5-highspeed (faster, 204K context).
-# Note: MiniMax requires temperature > 0 (zero is rejected).
+# 2. Available models: MiniMax-M2.7 (flagship), MiniMax-M2.7-highspeed (low-latency),
+#    MiniMax-M2.5, MiniMax-M2.5-highspeed.
 
 cfg_mm = LLMConfigFactory.model_validate(
     {
         "backend": "minimax",
         "config": {
-            "model_name_or_path": "MiniMax-M2.5",
+            "model_name_or_path": "MiniMax-M2.7",
             "api_key": "your-minimax-api-key",
             "api_base": "https://api.minimax.io/v1",
             "temperature": 0.7,

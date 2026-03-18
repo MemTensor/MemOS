@@ -57,11 +57,6 @@ def test_openai_llm_config():
             "remove_think_prefix",
             "extra_body",
             "default_headers",
-            "backup_client",
-            "backup_api_key",
-            "backup_api_base",
-            "backup_model_name_or_path",
-            "backup_headers",
         ],
     )
 
@@ -165,7 +160,7 @@ def test_minimax_llm_config():
     check_config_instantiation_valid(
         MinimaxLLMConfig,
         {
-            "model_name_or_path": "MiniMax-M2.5",
+            "model_name_or_path": "MiniMax-M2.7",
             "api_key": "test-key",
             "api_base": "https://api.minimax.io/v1",
             "temperature": 0.7,
