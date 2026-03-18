@@ -42,7 +42,7 @@ export class RecallEngine {
     const candidatePool = maxResults * 5;
     const ownerFilter = opts.ownerFilter;
 
-    // Step 1: Gather candidates from both FTS and vector search
+    // Step 1: Gather candidates from FTS, vector search, and pattern search
     const ftsCandidates = query
       ? this.store.ftsSearch(query, candidatePool, ownerFilter)
       : [];
@@ -60,10 +60,24 @@ export class RecallEngine {
       }
     }
 
+    // Step 1b: Pattern search (LIKE-based) as fallback for short terms that
+    // trigram FTS cannot match (trigram requires >= 3 chars).
+    const shortTerms = query
+      .replace(/[."""(){}[\]*:^~!@#$%&\\/<>,;'`?？。，！、：""''（）【】《》]/g, " ")
+      .split(/\s+/)
+      .filter((t) => t.length === 2);
+    const patternHits = shortTerms.length > 0
+      ? this.store.patternSearch(shortTerms, { limit: candidatePool })
+      : [];
+    const patternRanked = patternHits.map((h, i) => ({
+      id: h.chunkId,
+      score: 1 / (i + 1),
+    }));
+
     // Step 2: RRF fusion
     const ftsRanked = ftsCandidates.map((c) => ({ id: c.chunkId, score: c.score }));
     const vecRanked = vecCandidates.map((c) => ({ id: c.chunkId, score: c.score }));
-    const rrfScores = rrfFuse([ftsRanked, vecRanked], recallCfg.rrfK);
+    const rrfScores = rrfFuse([ftsRanked, vecRanked, patternRanked], recallCfg.rrfK);
 
     if (rrfScores.size === 0) {
       this.recordQuery(query, maxResults, minScore, 0);
@@ -118,9 +132,10 @@ export class RecallEngine {
       if (!chunk) continue;
       if (roleFilter && chunk.role !== roleFilter) continue;
 
+      const excerpt = (chunk.mergeCount ?? 0) > 0 ? chunk.summary : makeExcerpt(chunk.content);
       hits.push({
         summary: chunk.summary,
-        original_excerpt: makeExcerpt(chunk.content),
+        original_excerpt: excerpt,
         ref: {
           sessionKey: chunk.sessionKey,
           chunkId: chunk.id,
@@ -255,8 +270,8 @@ export class RecallEngine {
   ): Promise<number[]> {
     const candidateList = candidates.map((c, i) => ({
       index: i,
-      summary: `[${c.skill.name}] ${c.skill.description}`,
       role: "skill" as const,
+      content: `[${c.skill.name}] ${c.skill.description}`,
     }));
 
     try {
@@ -274,13 +289,5 @@ export class RecallEngine {
 }
 
 function makeExcerpt(content: string): string {
-  const min = 200;
-  const max = 500;
-  if (content.length <= max) return content;
-
-  let cut = content.lastIndexOf(".", max);
-  if (cut < min) cut = content.lastIndexOf(" ", max);
-  if (cut < min) cut = max;
-
-  return content.slice(0, cut) + "…";
+  return content;
 }

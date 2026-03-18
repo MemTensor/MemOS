@@ -1,5 +1,6 @@
 import { v4 as uuid } from "uuid";
 import { buildContext } from "./config";
+import { ensureSqliteBinding } from "./storage/ensure-binding";
 import { SqliteStore } from "./storage/sqlite";
 import { Embedder } from "./embedding";
 import { IngestWorker } from "./ingest/worker";
@@ -53,6 +54,8 @@ export function initPlugin(opts: PluginInitOptions = {}): MemosLocalPlugin {
   const ctx = buildContext(stateDir, workspaceDir, opts.config, opts.log);
 
   ctx.log.info("Initializing memos-local plugin...");
+
+  ensureSqliteBinding(ctx.log);
 
   const store = new SqliteStore(ctx.config.storage!.dbPath!, ctx.log);
   const embedder = new Embedder(ctx.config.embedding, ctx.log);

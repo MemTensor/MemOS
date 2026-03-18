@@ -34,6 +34,78 @@ log(`Plugin dir: ${DIM}${pluginDir}${RESET}`);
 log(`Node: ${process.version}  Platform: ${process.platform}-${process.arch}`);
 
 /* ═══════════════════════════════════════════════════════════
+ *  Pre-phase: Clean stale build artifacts on upgrade
+ *  When openclaw re-installs a new version over an existing
+ *  extensions dir, old dist/node_modules can conflict.
+ *  We nuke them so npm install gets a clean slate, but
+ *  preserve user data (.env, data/).
+ * ═══════════════════════════════════════════════════════════ */
+
+function cleanStaleArtifacts() {
+  const isExtensionsDir = pluginDir.includes(path.join(".openclaw", "extensions"));
+  if (!isExtensionsDir) return;
+
+  const pkgPath = path.join(pluginDir, "package.json");
+  if (!fs.existsSync(pkgPath)) return;
+
+  let installedVer = "unknown";
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    installedVer = pkg.version || "unknown";
+  } catch { /* ignore */ }
+
+  const markerPath = path.join(pluginDir, ".installed-version");
+  let prevVer = "";
+  try { prevVer = fs.readFileSync(markerPath, "utf-8").trim(); } catch { /* first install */ }
+
+  if (prevVer === installedVer) {
+    log(`Version unchanged (${installedVer}), skipping artifact cleanup.`);
+    return;
+  }
+
+  if (prevVer) {
+    log(`Upgrade detected: ${DIM}${prevVer}${RESET} → ${GREEN}${installedVer}${RESET}`);
+  } else {
+    log(`Fresh install: ${GREEN}${installedVer}${RESET}`);
+  }
+
+  const dirsToClean = ["dist", "node_modules"];
+  let cleaned = 0;
+  for (const dir of dirsToClean) {
+    const full = path.join(pluginDir, dir);
+    if (fs.existsSync(full)) {
+      try {
+        fs.rmSync(full, { recursive: true, force: true });
+        ok(`Cleaned stale ${dir}/`);
+        cleaned++;
+      } catch (e) {
+        warn(`Could not remove ${dir}/: ${e.message}`);
+      }
+    }
+  }
+
+  const filesToClean = ["package-lock.json"];
+  for (const f of filesToClean) {
+    const full = path.join(pluginDir, f);
+    if (fs.existsSync(full)) {
+      try { fs.unlinkSync(full); ok(`Removed stale ${f}`); cleaned++; } catch { /* ignore */ }
+    }
+  }
+
+  try { fs.writeFileSync(markerPath, installedVer + "\n", "utf-8"); } catch { /* ignore */ }
+
+  if (cleaned > 0) {
+    ok(`Cleaned ${cleaned} stale artifact(s). Fresh install will follow.`);
+  }
+}
+
+try {
+  cleanStaleArtifacts();
+} catch (e) {
+  warn(`Artifact cleanup error: ${e.message}`);
+}
+
+/* ═══════════════════════════════════════════════════════════
  *  Phase 0: Ensure all dependencies are installed
  * ═══════════════════════════════════════════════════════════ */
 
@@ -102,6 +174,7 @@ function cleanupLegacy() {
   if (!fs.existsSync(extDir)) { log("No extensions directory found, skipping."); return; }
 
   const legacyDirs = [
+    path.join(extDir, "memos-local"),
     path.join(extDir, "memos-lite"),
     path.join(extDir, "memos-lite-openclaw-plugin"),
     path.join(extDir, "node_modules", "@memtensor", "memos-lite-openclaw-plugin"),
@@ -127,7 +200,7 @@ function cleanupLegacy() {
       const cfg = JSON.parse(raw);
       const entries = cfg?.plugins?.entries;
       if (entries) {
-        const oldKeys = ["memos-lite", "memos-lite-openclaw-plugin"];
+        const oldKeys = ["memos-local", "memos-lite", "memos-lite-openclaw-plugin"];
         let cfgChanged = false;
 
         for (const oldKey of oldKeys) {
@@ -146,14 +219,26 @@ function cleanupLegacy() {
         const newEntry = entries["memos-local-openclaw-plugin"];
         if (newEntry && typeof newEntry.source === "string") {
           const oldSource = newEntry.source;
-          if (oldSource.includes("memos-lite")) {
+          if (oldSource.includes("memos-lite") || (oldSource.includes("memos-local") && !oldSource.includes("memos-local-openclaw-plugin"))) {
             newEntry.source = oldSource
               .replace(/memos-lite-openclaw-plugin/g, "memos-local-openclaw-plugin")
-              .replace(/memos-lite/g, "memos-local");
+              .replace(/memos-lite/g, "memos-local-openclaw-plugin")
+              .replace(/\/memos-local\//g, "/memos-local-openclaw-plugin/")
+              .replace(/\/memos-local$/g, "/memos-local-openclaw-plugin");
             if (newEntry.source !== oldSource) {
               log(`Updated source path: ${DIM}${oldSource}${RESET} → ${GREEN}${newEntry.source}${RESET}`);
               cfgChanged = true;
             }
+          }
+        }
+
+        const slots = cfg?.plugins?.slots;
+        if (slots && typeof slots.memory === "string") {
+          const oldSlotNames = ["memos-local", "memos-lite", "memos-lite-openclaw-plugin"];
+          if (oldSlotNames.includes(slots.memory)) {
+            log(`Migrated plugins.slots.memory: ${DIM}${slots.memory}${RESET} → ${GREEN}memos-local-openclaw-plugin${RESET}`);
+            slots.memory = "memos-local-openclaw-plugin";
+            cfgChanged = true;
           }
         }
 
@@ -185,10 +270,77 @@ try {
 }
 
 /* ═══════════════════════════════════════════════════════════
- *  Phase 2: Verify better-sqlite3 native module
+ *  Phase 2: Install bundled skill (memos-memory-guide)
  * ═══════════════════════════════════════════════════════════ */
 
-phase(2, "检查 better-sqlite3 原生模块 / Check native module");
+function installBundledSkill() {
+  phase(2, "安装记忆技能 / Install memory skill");
+
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  if (!home) { warn("Cannot determine HOME directory, skipping skill install."); return; }
+
+  const skillSrc = path.join(pluginDir, "skill", "memos-memory-guide", "SKILL.md");
+  if (!fs.existsSync(skillSrc)) {
+    warn("Bundled SKILL.md not found, skipping skill install.");
+    return;
+  }
+
+  let pluginVersion = "0.0.0";
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(pluginDir, "package.json"), "utf-8"));
+    pluginVersion = pkg.version || pluginVersion;
+  } catch { /* ignore */ }
+
+  const skillContent = fs.readFileSync(skillSrc, "utf-8");
+  const targets = [
+    path.join(home, ".openclaw", "workspace", "skills", "memos-memory-guide"),
+    path.join(home, ".openclaw", "skills", "memos-memory-guide"),
+  ];
+
+  const meta = JSON.stringify({ ownerId: "memos-local-openclaw-plugin", slug: "memos-memory-guide", version: pluginVersion, publishedAt: Date.now() });
+  const origin = JSON.stringify({ version: 1, registry: "memos-local-openclaw-plugin", slug: "memos-memory-guide", installedVersion: pluginVersion, installedAt: Date.now() });
+
+  for (const dest of targets) {
+    try {
+      fs.mkdirSync(dest, { recursive: true });
+      fs.writeFileSync(path.join(dest, "SKILL.md"), skillContent, "utf-8");
+      fs.writeFileSync(path.join(dest, "_meta.json"), meta, "utf-8");
+      const clawHubDir = path.join(dest, ".clawhub");
+      fs.mkdirSync(clawHubDir, { recursive: true });
+      fs.writeFileSync(path.join(clawHubDir, "origin.json"), origin, "utf-8");
+      ok(`Skill installed → ${DIM}${dest}${RESET}`);
+    } catch (e) {
+      warn(`Could not install skill to ${dest}: ${e.message}`);
+    }
+  }
+
+  // Register in skills-lock.json so OpenClaw Dashboard can discover it
+  const lockPath = path.join(home, ".openclaw", "workspace", "skills-lock.json");
+  try {
+    let lockData = { version: 1, skills: {} };
+    if (fs.existsSync(lockPath)) {
+      lockData = JSON.parse(fs.readFileSync(lockPath, "utf-8"));
+    }
+    if (!lockData.skills) lockData.skills = {};
+    lockData.skills["memos-memory-guide"] = { source: "memos-local-openclaw-plugin", sourceType: "plugin", computedHash: "" };
+    fs.writeFileSync(lockPath, JSON.stringify(lockData, null, 2) + "\n", "utf-8");
+    ok("Registered in skills-lock.json");
+  } catch (e) {
+    warn(`Could not update skills-lock.json: ${e.message}`);
+  }
+}
+
+try {
+  installBundledSkill();
+} catch (e) {
+  warn(`Skill install error: ${e.message}`);
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  Phase 3: Verify better-sqlite3 native module
+ * ═══════════════════════════════════════════════════════════ */
+
+phase(3, "检查 better-sqlite3 原生模块 / Check native module");
 
 const sqliteModulePath = path.join(pluginDir, "node_modules", "better-sqlite3");
 
