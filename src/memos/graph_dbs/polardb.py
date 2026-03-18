@@ -1970,30 +1970,13 @@ class PolarDBGraphDB(BaseGraphDB):
         knowledgebase_ids: list | None = None,
         user_name_flag: bool = True,
     ) -> list[str]:
-        """
-        Retrieve node IDs that match given metadata filters.
-        Supports exact match.
-
-        Args:
-        filters: List of filter dicts like:
-            [
-                {"field": "key", "op": "in", "value": ["A", "B"]},
-                {"field": "confidence", "op": ">=", "value": 80},
-                {"field": "tags", "op": "contains", "value": "AI"},
-                ...
-            ]
-        user_name (str, optional): User name for filtering in non-multi-db mode
-
-        Returns:
-            list[str]: Node IDs whose metadata match the filter conditions. (AND logic).
-        """
+        start_time = time.perf_counter()
         logger.info(
             f" get_by_metadata user_name:{user_name},filter: {filter}, knowledgebase_ids: {knowledgebase_ids},filters:{filters}"
         )
 
         user_name = user_name if user_name else self._get_config_value("user_name")
 
-        # Build WHERE conditions for cypher query
         where_conditions = []
 
         for f in filters:
@@ -2001,18 +1984,13 @@ class PolarDBGraphDB(BaseGraphDB):
             op = f.get("op", "=")
             value = f["value"]
 
-            # Format value
             if isinstance(value, str):
-                # Escape single quotes using backslash when inside $$ dollar-quoted strings
-                # In $$ delimiters, Cypher string literals can use \' to escape single quotes
                 escaped_str = value.replace("'", "\\'")
                 escaped_value = f"'{escaped_str}'"
             elif isinstance(value, list):
-                # Handle list values - use double quotes for Cypher arrays
                 list_items = []
                 for v in value:
                     if isinstance(v, str):
-                        # Escape double quotes in string values for Cypher
                         escaped_str = v.replace('"', '\\"')
                         list_items.append(f'"{escaped_str}"')
                     else:
@@ -2020,7 +1998,6 @@ class PolarDBGraphDB(BaseGraphDB):
                 escaped_value = f"[{', '.join(list_items)}]"
             else:
                 escaped_value = f"'{value}'" if isinstance(value, str) else str(value)
-            # Build WHERE conditions
             if op == "=":
                 where_conditions.append(f"n.{field} = {escaped_value}")
             elif op == "in":
@@ -2049,22 +2026,19 @@ class PolarDBGraphDB(BaseGraphDB):
             knowledgebase_ids=knowledgebase_ids,
             default_user_name=self._get_config_value("user_name"),
         )
-        logger.info(f"[get_by_metadata] user_name_conditions: {user_name_conditions}")
+        logger.info(f"get_by_metadata user_name_conditions: {user_name_conditions}")
 
-        # Add user_name WHERE clause
         if user_name_conditions:
             if len(user_name_conditions) == 1:
                 where_conditions.append(user_name_conditions[0])
             else:
                 where_conditions.append(f"({' OR '.join(user_name_conditions)})")
 
-        # Build filter conditions using common method
         filter_where_clause = self._build_filter_conditions_cypher(filter)
-        logger.info(f"[get_by_metadata] filter_where_clause: {filter_where_clause}")
+        logger.info(f"get_by_metadata filter_where_clause: {filter_where_clause}")
 
         where_str = " AND ".join(where_conditions) + filter_where_clause
 
-        # Use cypher query
         cypher_query = f"""
                SELECT * FROM cypher('{self.db_name}_graph', $$
                MATCH (n:Memory)
@@ -2074,7 +2048,7 @@ class PolarDBGraphDB(BaseGraphDB):
            """
 
         ids = []
-        logger.info(f"[get_by_metadata] cypher_query: {cypher_query}")
+        logger.info(f"get_by_metadata cypher_query: {cypher_query}")
         try:
             with self._get_connection() as conn, conn.cursor() as cursor:
                 cursor.execute(cypher_query)
@@ -2082,7 +2056,8 @@ class PolarDBGraphDB(BaseGraphDB):
                 ids = [str(item[0]).strip('"') for item in results]
         except Exception as e:
             logger.warning(f"Failed to get metadata: {e}, query is {cypher_query}")
-
+        elapsed = (time.perf_counter() - start_time) * 1000.0
+        logger.info("get_by_metadata internal took %.1f ms", elapsed)
         return ids
 
     @timed
