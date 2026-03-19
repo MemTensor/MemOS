@@ -305,7 +305,7 @@ def init_components() -> dict[str, Any]:
     searcher: Searcher = tree_mem.get_searcher(
         manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
         moscube=False,
-        process_llm=mem_reader.llm,
+        process_llm=mem_reader.general_llm,
     )
     # Initialize feedback server
     feedback_server = SimpleMemFeedback(
