@@ -325,6 +325,7 @@ function callSummarize(cfg: SummarizerConfig, text: string, log: Logger): Promis
     case "voyage":
       return summarizeOpenAI(text, cfg, log);
     case "anthropic":
+    case "minimax-portal":
       return summarizeAnthropic(text, cfg, log);
     case "gemini":
       return summarizeGemini(text, cfg, log);
@@ -348,6 +349,7 @@ function callSummarizeTask(cfg: SummarizerConfig, text: string, log: Logger): Pr
     case "voyage":
       return summarizeTaskOpenAI(text, cfg, log);
     case "anthropic":
+    case "minimax-portal":
       return summarizeTaskAnthropic(text, cfg, log);
     case "gemini":
       return summarizeTaskGemini(text, cfg, log);
@@ -371,6 +373,7 @@ function callGenerateTaskTitle(cfg: SummarizerConfig, text: string, log: Logger)
     case "voyage":
       return generateTaskTitleOpenAI(text, cfg, log);
     case "anthropic":
+    case "minimax-portal":
       return generateTaskTitleAnthropic(text, cfg, log);
     case "gemini":
       return generateTaskTitleGemini(text, cfg, log);
@@ -394,6 +397,7 @@ function callTopicJudge(cfg: SummarizerConfig, currentContext: string, newMessag
     case "voyage":
       return judgeNewTopicOpenAI(currentContext, newMessage, cfg, log);
     case "anthropic":
+    case "minimax-portal":
       return judgeNewTopicAnthropic(currentContext, newMessage, cfg, log);
     case "gemini":
       return judgeNewTopicGemini(currentContext, newMessage, cfg, log);
@@ -417,6 +421,7 @@ function callFilterRelevant(cfg: SummarizerConfig, query: string, candidates: Ar
     case "voyage":
       return filterRelevantOpenAI(query, candidates, cfg, log);
     case "anthropic":
+    case "minimax-portal":
       return filterRelevantAnthropic(query, candidates, cfg, log);
     case "gemini":
       return filterRelevantGemini(query, candidates, cfg, log);
@@ -440,6 +445,7 @@ function callJudgeDedup(cfg: SummarizerConfig, newSummary: string, candidates: A
     case "voyage":
       return judgeDedupOpenAI(newSummary, candidates, cfg, log);
     case "anthropic":
+    case "minimax-portal":
       return judgeDedupAnthropic(newSummary, candidates, cfg, log);
     case "gemini":
       return judgeDedupGemini(newSummary, candidates, cfg, log);

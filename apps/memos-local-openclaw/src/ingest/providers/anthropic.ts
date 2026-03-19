@@ -339,7 +339,13 @@ export async function judgeDedupAnthropic(
   cfg: SummarizerConfig,
   log: Logger,
 ): Promise<DedupResult> {
-  const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
+  // Normalize endpoint: ensure /v1/messages path for Anthropic API
+  const rawEndpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
+  let endpoint = rawEndpoint;
+  if (!rawEndpoint.includes("/v1/messages")) {
+    const stripped = rawEndpoint.replace(/\/$/, "");
+    endpoint = stripped.endsWith("/v1/messages") ? stripped : `${stripped}/v1/messages`;
+  }
   const model = cfg.model ?? "claude-3-haiku-20240307";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -360,7 +366,7 @@ export async function judgeDedupAnthropic(
       system: DEDUP_JUDGE_PROMPT,
       messages: [{ role: "user", content: `NEW MEMORY:\n${newSummary}\n\nEXISTING MEMORIES:\n${candidateText}` }],
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 120_000),
   });
 
   if (!resp.ok) {
