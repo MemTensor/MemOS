@@ -3658,8 +3658,11 @@ async function loadStats(){
   if(d.timeRange&&d.timeRange.earliest!=null&&d.timeRange.latest!=null){
     let e=Number(d.timeRange.earliest), l=Number(d.timeRange.latest);
     if(Number.isFinite(e)&&Number.isFinite(l)){
-      if(e<1e12) e*=1000;
-      if(l<1e12) l*=1000;
+      // Handle different timestamp formats: seconds, milliseconds, microseconds
+      if (e < 1e15 && e >= 1e12) e = Math.floor(e / 1000);  // microseconds to milliseconds
+      else if (e < 1e12) e *= 1000;  // seconds to milliseconds
+      if (l < 1e15 && l >= 1e12) l = Math.floor(l / 1000);  // microseconds to milliseconds
+      else if (l < 1e12) l *= 1000;  // seconds to milliseconds
       days=Math.round((l-e)/86400000);
       days=Math.max(0,Math.min(36500,days));
       if(days===0) days=1;
