@@ -4,6 +4,17 @@ const SKIP_ROLES: Set<Role> = new Set(["system"]);
 
 const SYSTEM_BOILERPLATE_RE = /^A new session was started via \/new or \/reset\b/;
 
+// Boot-check / memory-system injection patterns that should never be stored.
+const BOOT_CHECK_RE = /^(?:You are running a boot check|Read HEARTBEAT\.md if it exists|## Memory system — ACTION REQUIRED)/;
+
+/**
+ * Returns true for sentinel reply values that carry no user-facing content.
+ */
+function isSentinelReply(text: string): boolean {
+  const t = text.trim();
+  return t === "NO_REPLY" || t === "HEARTBEAT_OK" || t === "HEARTBEAT_CHECK";
+}
+
 const SELF_TOOLS = new Set([
   "memory_search",
   "memory_timeline",
@@ -55,6 +66,16 @@ export function captureMessages(
     const role = msg.role as Role;
     if (SKIP_ROLES.has(role)) continue;
     if (!msg.content || msg.content.trim().length === 0) continue;
+
+    // Skip sentinel replies and boot-check prompts for ALL roles.
+    if (isSentinelReply(msg.content)) {
+      log.debug(`Skipping sentinel reply`);
+      continue;
+    }
+    if (BOOT_CHECK_RE.test(msg.content.trim())) {
+      log.debug(`Skipping boot-check injection: ${msg.content.slice(0, 60)}...`);
+      continue;
+    }
 
     if (role === "tool" && msg.toolName && SELF_TOOLS.has(msg.toolName)) {
       log.debug(`Skipping self-tool result: ${msg.toolName}`);
@@ -200,6 +221,21 @@ function stripMemoryInjection(text: string): string {
     /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memory_search[^\n]*)*/gi,
     "",
   ).trim();
+
+  // ## Memory system — ACTION REQUIRED\n...
+  cleaned = cleaned.replace(
+    /## Memory system — ACTION REQUIRED[\s\S]*?(?=\n\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}|\n\[Subagent)/,
+    "",
+  ).trim();
+
+  // You are running a boot check. Follow BOOT.md instructions exactly.\n...
+  cleaned = cleaned.replace(
+    /^You are running a boot check[\s\S]*?(?=\n\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}|\n\[Subagent)/m,
+    "",
+  ).trim();
+
+  // Standalone NO_REPLY / HEARTBEAT_OK that leaked into user messages
+  cleaned = cleaned.replace(/^\s*(?:NO_REPLY|HEARTBEAT_OK|HEARTBEAT_CHECK)\s*$/gm, "").trim();
 
   // Old format: ## Retrieved memories from past conversations\n\nCRITICAL INSTRUCTION:...
   const recallIdx = cleaned.indexOf("## Retrieved memories from past conversations");
