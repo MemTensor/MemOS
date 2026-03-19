@@ -9,6 +9,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import * as fs from "fs";
 import * as path from "path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "url";
 import { buildContext } from "./src/config";
 import { SqliteStore } from "./src/storage/sqlite";
@@ -76,25 +77,56 @@ const memosLocalPlugin = {
   configSchema: pluginConfigSchema,
 
   register(api: OpenClawPluginApi) {
-    // ─── Ensure better-sqlite3 native module is available ───
-    const pluginDir = path.dirname(fileURLToPath(import.meta.url));
+    const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+    const localRequire = createRequire(import.meta.url);
+    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+
+    function detectPluginDir(startDir: string): string {
+      let cur = startDir;
+      for (let i = 0; i < 6; i++) {
+        const pkg = path.join(cur, "package.json");
+        if (fs.existsSync(pkg)) return cur;
+        const parent = path.dirname(cur);
+        if (parent === cur) break;
+        cur = parent;
+      }
+      return startDir;
+    }
+
+    const pluginDir = detectPluginDir(moduleDir);
 
     function normalizeFsPath(p: string): string {
-      return path.resolve(p).replace(/\\/g, "/").toLowerCase();
+      return path.resolve(p).replace(/^\\\\\?\\/, "").toLowerCase();
+    }
+
+    function isPathInside(baseDir: string, targetPath: string): boolean {
+      const baseNorm = normalizeFsPath(baseDir);
+      const targetNorm = normalizeFsPath(targetPath);
+      const rel = path.relative(baseNorm, targetNorm);
+      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    }
+
+    function runNpm(args: string[]) {
+      const { spawnSync } = localRequire("child_process") as typeof import("node:child_process");
+      return spawnSync(npmCmd, args, {
+        cwd: pluginDir,
+        stdio: "pipe",
+        shell: false,
+        timeout: 120_000,
+      });
     }
 
     let sqliteReady = false;
 
     function trySqliteLoad(): boolean {
       try {
-        const resolved = require.resolve("better-sqlite3", { paths: [pluginDir] });
-        const resolvedNorm = normalizeFsPath(resolved);
-        const pluginNorm = normalizeFsPath(pluginDir);
-        if (!resolvedNorm.startsWith(pluginNorm + "/") && resolvedNorm !== pluginNorm) {
+        const resolved = localRequire.resolve("better-sqlite3", { paths: [pluginDir] });
+        const resolvedReal = fs.existsSync(resolved) ? fs.realpathSync.native(resolved) : resolved;
+        if (!isPathInside(pluginDir, resolvedReal)) {
           api.logger.warn(`memos-local: better-sqlite3 resolved outside plugin dir: ${resolved}`);
           return false;
         }
-        require(resolved);
+        localRequire(resolvedReal);
         return true;
       } catch {
         return false;
@@ -107,13 +139,7 @@ const memosLocalPlugin = {
       api.logger.warn(`memos-local: better-sqlite3 not found in ${pluginDir}, attempting auto-rebuild ...`);
 
       try {
-        const { spawnSync } = require("child_process");
-        const rebuildResult = spawnSync("npm", ["rebuild", "better-sqlite3"], {
-          cwd: pluginDir,
-          stdio: "pipe",
-          shell: true,
-          timeout: 120_000,
-        });
+        const rebuildResult = runNpm(["rebuild", "better-sqlite3"]);
 
         const stdout = rebuildResult.stdout?.toString() || "";
         const stderr = rebuildResult.stderr?.toString() || "";
@@ -121,9 +147,9 @@ const memosLocalPlugin = {
         if (stderr) api.logger.warn(`memos-local: rebuild stderr: ${stderr.slice(0, 500)}`);
 
         if (rebuildResult.status === 0) {
-          Object.keys(require.cache)
+          Object.keys(localRequire.cache)
             .filter(k => k.includes("better-sqlite3") || k.includes("better_sqlite3"))
-            .forEach(k => delete require.cache[k]);
+            .forEach(k => delete localRequire.cache[k]);
           sqliteReady = trySqliteLoad();
           if (sqliteReady) {
             api.logger.info("memos-local: better-sqlite3 auto-rebuild succeeded!");
@@ -195,7 +221,7 @@ const memosLocalPlugin = {
 
     let pluginVersion = "0.0.0";
     try {
-      const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf-8"));
+      const pkg = JSON.parse(fs.readFileSync(path.join(pluginDir, "package.json"), "utf-8"));
       pluginVersion = pkg.version ?? pluginVersion;
     } catch {}
     const telemetry = new Telemetry(ctx.config.telemetry ?? {}, stateDir, pluginVersion, ctx.log);

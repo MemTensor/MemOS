@@ -1,7 +1,7 @@
 import http from "node:http";
 import os from "node:os";
 import crypto from "node:crypto";
-import { execSync, exec } from "node:child_process";
+import { execSync, exec, execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -1244,7 +1244,8 @@ export class ViewerServer {
 
             // Install dependencies
             this.log.info(`update-install: installing dependencies...`);
-            exec(`cd ${extDir} && npm install --omit=dev --ignore-scripts`, { timeout: 120_000 }, (npmErr, npmOut, npmStderr) => {
+            const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+            execFile(npmCmd, ["install", "--omit=dev", "--ignore-scripts"], { cwd: extDir, timeout: 120_000 }, (npmErr, npmOut, npmStderr) => {
               if (npmErr) {
                 try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
                 this.log.warn(`update-install: npm install failed: ${npmErr.message}`);
@@ -1252,25 +1253,21 @@ export class ViewerServer {
                 return;
               }
 
-              // Rebuild native modules (do not swallow errors)
-              exec(`cd ${extDir} && npm rebuild better-sqlite3`, { timeout: 60_000 }, (rebuildErr, rebuildOut, rebuildStderr) => {
+              execFile(npmCmd, ["rebuild", "better-sqlite3"], { cwd: extDir, timeout: 60_000 }, (rebuildErr, rebuildOut, rebuildStderr) => {
                 if (rebuildErr) {
                   this.log.warn(`update-install: better-sqlite3 rebuild failed: ${rebuildErr.message}`);
                   const stderr = String(rebuildStderr || "").trim();
                   if (stderr) this.log.warn(`update-install: rebuild stderr: ${stderr.slice(0, 500)}`);
-                  // Continue so postinstall.cjs can run (it will try rebuild again and show user guidance)
                 }
 
-                // Run postinstall.cjs: legacy cleanup, skill install, version marker, and optional sqlite re-check
                 this.log.info(`update-install: running postinstall...`);
-                exec(`cd ${extDir} && node scripts/postinstall.cjs`, { timeout: 180_000 }, (postErr, postOut, postStderr) => {
+                execFile(process.execPath, ["scripts/postinstall.cjs"], { cwd: extDir, timeout: 180_000 }, (postErr, postOut, postStderr) => {
                   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 
                   if (postErr) {
                     this.log.warn(`update-install: postinstall failed: ${postErr.message}`);
                     const postStderrStr = String(postStderr || "").trim();
                     if (postStderrStr) this.log.warn(`update-install: postinstall stderr: ${postStderrStr.slice(0, 500)}`);
-                    // Still report success; plugin is updated, user can run postinstall manually if needed
                   }
 
                   // Read new version
@@ -1440,28 +1437,6 @@ export class ViewerServer {
   private getOpenClawHome(): string {
     const home = process.env.HOME || process.env.USERPROFILE || "";
     return process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw");
-  }
-
-  private handleCleanupPolluted(res: http.ServerResponse): void {
-    try {
-      const polluted = this.store.findPollutedUserChunks();
-      let deleted = 0;
-      for (const { id, reason } of polluted) {
-        if (this.store.deleteChunk(id)) {
-          deleted++;
-          this.log.info(`Cleaned polluted chunk ${id}: ${reason}`);
-        }
-      }
-      const fixed = this.store.fixMixedUserChunks();
-      this.log.info(`Cleanup: removed ${deleted} polluted, fixed ${fixed} mixed chunks`);
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ deleted, fixed, total: polluted.length }));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.log.error(`handleCleanupPolluted error: ${msg}`);
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: msg }));
-    }
   }
 
   private handleCleanupPolluted(res: http.ServerResponse): void {
