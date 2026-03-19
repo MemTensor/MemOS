@@ -119,6 +119,21 @@ class VLLMLLMConfig(BaseLLMConfig):
     extra_body: Any = Field(default=None, description="Extra options for API")
 
 
+class LazyLLMOnlineChatConfig(BaseLLMConfig):
+    source: str | None = Field(
+        default=None,
+        description="LazyLLM supplier source name (for example: openai/qwen/glm/deepseek)",
+    )
+    api_key: str | None = Field(default=None, description="API key for LazyLLM online source")
+    api_base: str | None = Field(default=None, description="Base URL for LazyLLM online source")
+    stream: bool = Field(default=False, description="Enable stream mode in LazyLLM module")
+    skip_auth: bool = Field(default=False, description="Skip LazyLLM API key validation")
+    type: str | None = Field(default=None, description="Optional model type for LazyLLM module")
+    extra_kwargs: dict[str, Any] | None = Field(
+        default=None, description="Extra kwargs for lazyllm.OnlineChatModule"
+    )
+
+
 class LLMConfigFactory(BaseConfig):
     """Factory class for creating LLM configurations."""
 
@@ -135,6 +150,7 @@ class LLMConfigFactory(BaseConfig):
         "qwen": QwenLLMConfig,
         "deepseek": DeepSeekLLMConfig,
         "openai_new": OpenAIResponsesLLMConfig,
+        "lazyllm": LazyLLMOnlineChatConfig,
     }
 
     @field_validator("backend")

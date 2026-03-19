@@ -5,6 +5,7 @@ from memos.llms.base import BaseLLM
 from memos.llms.deepseek import DeepSeekLLM
 from memos.llms.hf import HFLLM
 from memos.llms.hf_singleton import HFSingletonLLM
+from memos.llms.lazyllm_onlinechat import LazyLLMOnlineChatLLM
 from memos.llms.ollama import OllamaLLM
 from memos.llms.openai import AzureLLM, OpenAILLM
 from memos.llms.openai_new import OpenAIResponsesLLM
@@ -26,6 +27,7 @@ class LLMFactory(BaseLLM):
         "qwen": QwenLLM,
         "deepseek": DeepSeekLLM,
         "openai_new": OpenAIResponsesLLM,
+        "lazyllm": LazyLLMOnlineChatLLM,
     }
 
     @classmethod
