@@ -1,5 +1,6 @@
 import json
 import random
+import re
 import textwrap
 import threading
 import time
@@ -18,6 +19,34 @@ from memos.utils import timed
 
 
 logger = get_logger(__name__)
+
+
+def _sanitize_tsquery_words(query_words: list[str]) -> list[str]:
+    """Sanitize query words for safe use with PostgreSQL to_tsquery().
+
+    Strips tsquery operator characters and other special symbols that can
+    cause parsing errors when mixed content (e.g. message IDs with
+    underscores, Chinese text) is passed to ``to_tsquery``.  Each word is
+    reduced to its alphanumeric/CJK core so that the jieba text-search
+    configuration can tokenize it correctly.
+
+    Returns a de-duplicated list of non-empty sanitized words.
+    """
+    # Keep word characters (letters, digits, underscore) and CJK unified ideographs.
+    valid_chars_re = re.compile(
+        r"[^\w\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]",
+    )
+    sanitized: list[str] = []
+    seen: set[str] = set()
+    for w in query_words:
+        # Strip surrounding single quotes that callers may have added for tsquery
+        w = w.strip().strip("'")
+        # Remove characters that are not word-characters or CJK
+        cleaned = valid_chars_re.sub("", w)
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            sanitized.append(cleaned)
+    return sanitized
 
 
 def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
@@ -1653,8 +1682,11 @@ class PolarDBGraphDB(BaseGraphDB):
         filter_conditions = self._build_filter_conditions_sql(filter)
         where_clauses.extend(filter_conditions)
         # Add fulltext search condition
-        # Convert query_text to OR query format: "word1 | word2 | word3"
-        tsquery_string = " | ".join(query_words)
+        # Sanitize and convert query_text to OR query format: "word1 | word2 | word3"
+        safe_words = _sanitize_tsquery_words(query_words)
+        if not safe_words:
+            return []
+        tsquery_string = " | ".join(safe_words)
 
         where_clauses.append(f"{tsvector_field} @@ to_tsquery('{tsquery_config}', %s)")
 
@@ -1768,7 +1800,10 @@ class PolarDBGraphDB(BaseGraphDB):
         filter_conditions = self._build_filter_conditions_sql(filter)
 
         where_clauses.extend(filter_conditions)
-        tsquery_string = " | ".join(query_words)
+        safe_words = _sanitize_tsquery_words(query_words)
+        if not safe_words:
+            return []
+        tsquery_string = " | ".join(safe_words)
 
         where_clauses.append(f"{tsvector_field} @@ to_tsquery('{tsquery_config}', %s)")
 
