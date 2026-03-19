@@ -69,6 +69,7 @@ def test_add_and_get_by_id(vec_db):
 
 
 def test_search(vec_db):
+    vec_db.collection_exists = MagicMock(return_value=True)
     id = str(uuid.uuid4())
     mock_response = type(
         "QueryResponse",
@@ -113,6 +114,7 @@ def test_delete(vec_db):
 
 
 def test_count(vec_db):
+    vec_db.collection_exists = MagicMock(return_value=True)
     vec_db.client.count.return_value.count = 5
     count = vec_db.count()
     assert count == 5
@@ -148,3 +150,47 @@ def test_qdrant_client_cloud_init():
         VecDBFactory.from_config(config)
 
         mockclient.assert_called_once_with(url="https://cloud.qdrant.example", api_key="secret-key")
+
+
+def test_search_routes_to_user_collection_and_strips_scope_filter(vec_db):
+    vec_db.collection_exists = MagicMock(return_value=True)
+    vec_db._dict_to_filter = MagicMock(return_value="mock_filter")
+    vec_db.client.query_points.return_value = type("QueryResponse", (object,), {"points": []})()
+
+    vec_db.search(
+        [0.1, 0.2, 0.3],
+        top_k=2,
+        filter={"user_id": "alice", "status": "activated"},
+    )
+
+    vec_db._dict_to_filter.assert_called_once_with({"status": "activated"})
+    vec_db.client.query_points.assert_called_once()
+    assert vec_db.client.query_points.call_args.kwargs["collection_name"] == "alice"
+
+
+def test_add_groups_points_into_multiple_user_collections(vec_db):
+    vec_db._ensure_collection_ready = MagicMock()
+
+    vec_db.add(
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "vector": [0.1, 0.2, 0.3],
+                "payload": {"user_id": "alice", "tag": "a"},
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "vector": [0.3, 0.2, 0.1],
+                "payload": {"user_name": "bob", "tag": "b"},
+            },
+        ]
+    )
+
+    upsert_collections = {c.kwargs["collection_name"] for c in vec_db.client.upsert.call_args_list}
+    assert upsert_collections == {"alice", "bob"}
+
+
+def test_resolve_collection_name_sanitizes_scope(vec_db):
+    collection = vec_db._resolve_collection_name(payload={"user_id": " user@-01 "})
+
+    assert collection == "user_-01"

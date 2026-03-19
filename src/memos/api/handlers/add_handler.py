@@ -5,9 +5,13 @@ This module provides a class-based implementation of add handlers,
 using dependency injection for better modularity and testability.
 """
 
+import os
+import threading
+
 from pydantic import validate_call
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
+from memos.api.handlers.component_init import create_per_db_components
 from memos.api.product_models import APIADDRequest, APIFeedbackRequest, MemoryResponse
 from memos.memories.textual.item import (
     list_all_fields,
@@ -36,6 +40,8 @@ class AddHandler(BaseHandler):
         self._validate_dependencies(
             "naive_mem_cube", "mem_reader", "mem_scheduler", "feedback_server"
         )
+        self._per_user_cube_cache: dict[str, dict] = {}
+        self._cache_lock = threading.Lock()
 
     def handle_add_memories(self, add_req: APIADDRequest) -> MemoryResponse:
         """
@@ -113,6 +119,31 @@ class AddHandler(BaseHandler):
             data=results,
         )
 
+    @property
+    def _is_neo4j_multidb(self) -> bool:
+        """Return True when using Neo4j enterprise with one-database-per-user mode."""
+        backend = os.getenv("GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "")).lower()
+        shared_db = os.getenv("MOS_NEO4J_SHARED_DB", "false").lower() == "true"
+        return backend == "neo4j" and not shared_db
+
+    def _get_per_user_components(self, user_id: str) -> dict:
+        """Return (creating on first access) per-user graph/mem components.
+
+        Uses double-checked locking so the expensive component creation happens
+        only once per user even under concurrent requests.
+        """
+        if user_id not in self._per_user_cube_cache:
+            with self._cache_lock:
+                if user_id not in self._per_user_cube_cache:
+                    self.logger.info(
+                        f"[AddHandler] Creating per-user components for user_id={user_id!r}"
+                    )
+                    self._per_user_cube_cache[user_id] = create_per_db_components(
+                        db_name=user_id,
+                        base_components=vars(self.deps),
+                    )
+        return self._per_user_cube_cache[user_id]
+
     def _resolve_cube_ids(self, add_req: APIADDRequest) -> list[str]:
         """
         Normalize target cube ids from add_req.
@@ -128,12 +159,20 @@ class AddHandler(BaseHandler):
     def _build_cube_view(self, add_req: APIADDRequest) -> MemCubeView:
         cube_ids = self._resolve_cube_ids(add_req)
 
+        if self._is_neo4j_multidb:
+            per_user = self._get_per_user_components(add_req.user_id)
+            naive_mem_cube = per_user["naive_mem_cube"]
+            mem_reader = per_user["mem_reader"]
+        else:
+            naive_mem_cube = self.naive_mem_cube
+            mem_reader = self.mem_reader
+
         if len(cube_ids) == 1:
             cube_id = cube_ids[0]
             return SingleCubeView(
                 cube_id=cube_id,
-                naive_mem_cube=self.naive_mem_cube,
-                mem_reader=self.mem_reader,
+                naive_mem_cube=naive_mem_cube,
+                mem_reader=mem_reader,
                 mem_scheduler=self.mem_scheduler,
                 logger=self.logger,
                 feedback_server=self.feedback_server,
@@ -143,8 +182,8 @@ class AddHandler(BaseHandler):
             single_views = [
                 SingleCubeView(
                     cube_id=cube_id,
-                    naive_mem_cube=self.naive_mem_cube,
-                    mem_reader=self.mem_reader,
+                    naive_mem_cube=naive_mem_cube,
+                    mem_reader=mem_reader,
                     mem_scheduler=self.mem_scheduler,
                     logger=self.logger,
                     feedback_server=self.feedback_server,
