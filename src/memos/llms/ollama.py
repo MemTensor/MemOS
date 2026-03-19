@@ -88,7 +88,7 @@ class OllamaLLM(BaseLLM):
         )
         str_response = response.message.content
         if self.config.remove_think_prefix:
-            return remove_thinking_tags(str_response)
+            return remove_thinking_tags(str_response or "")
         else:
             return str_thinking + str_response
 

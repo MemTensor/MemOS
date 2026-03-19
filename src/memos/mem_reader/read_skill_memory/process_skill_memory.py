@@ -19,7 +19,11 @@ from memos.graph_dbs.base import BaseGraphDB
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_reader.read_multi_modal import detect_lang
-from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.templates.skill_mem_prompt import (
     OTHERS_GENERATION_PROMPT,
@@ -91,6 +95,7 @@ def _batch_extract_skills(
             try:
                 skill_memory = future.result()
                 if skill_memory:
+                    skill_memory["_task_type"] = task_type
                     results.append((skill_memory, task_type, task_chunks.get(task_type, [])))
             except Exception as e:
                 logger.warning(
@@ -901,6 +906,7 @@ def create_skill_memory_item(
     skill_memory: dict[str, Any],
     info: dict[str, Any],
     embedder: BaseEmbedder | None = None,
+    sources: list[SourceMessage] | None = None,
     **kwargs: Any,
 ) -> TextualMemoryItem:
     info_ = info.copy()
@@ -923,7 +929,7 @@ def create_skill_memory_item(
         status="activated",
         tags=skill_memory.get("tags") or skill_memory.get("trigger", []),
         key=skill_memory.get("name", ""),
-        sources=[],
+        sources=sources or [],
         usage=[],
         background="",
         confidence=0.99,
@@ -1097,6 +1103,7 @@ def process_skill_memory_fine(
                 try:
                     skill_memory = future.result()
                     if skill_memory:
+                        skill_memory["_task_type"] = task_type
                         memories.append(skill_memory)
                 except Exception as e:
                     logger.warning(
@@ -1223,11 +1230,32 @@ def process_skill_memory_fine(
             except Exception as cleanup_error:
                 logger.warning(f"[PROCESS_SKILLS] Error cleaning up local files: {cleanup_error}")
 
+    # Build source lookup: (role, content) → SourceMessage from fast_memory_items
+    source_lookup: dict[tuple[str, str], SourceMessage] = {}
+    for fast_item in fast_memory_items:
+        for source in getattr(fast_item.metadata, "sources", []) or []:
+            source_lookup.setdefault((source.role, source.content), source)
+
     # Create TextualMemoryItem objects
     skill_memory_items = []
     for skill_memory in skill_memories:
         try:
-            memory_item = create_skill_memory_item(skill_memory, info, embedder, **kwargs)
+            # Match sources precisely via the task chunk messages that produced this skill
+            task_type = skill_memory.pop("_task_type", None)
+            chunk_messages = task_chunks.get(task_type, []) if task_type else []
+            skill_sources = []
+            seen = set()
+            for msg in chunk_messages:
+                key = (msg.get("role"), msg.get("content"))
+                if key not in seen:
+                    seen.add(key)
+                    source = source_lookup.get(key)
+                    if source:
+                        skill_sources.append(source)
+
+            memory_item = create_skill_memory_item(
+                skill_memory, info, embedder, sources=skill_sources, **kwargs
+            )
             skill_memory_items.append(memory_item)
         except Exception as e:
             logger.warning(f"[PROCESS_SKILLS] Error creating skill memory item: {e}")

@@ -43,6 +43,14 @@ export class ViewerServer {
   private readonly ctx?: PluginContext;
 
   private static readonly SESSION_TTL = 24 * 60 * 60 * 1000;
+  private static readonly PLUGIN_VERSION: string = (() => {
+    try {
+      const pkgPath = path.resolve(__dirname, "../../package.json");
+      return JSON.parse(fs.readFileSync(pkgPath, "utf-8")).version ?? "unknown";
+    } catch {
+      return "unknown";
+    }
+  })();
   private resetToken: string;
   private migrationRunning = false;
   private migrationAbort = false;
@@ -336,7 +344,7 @@ export class ViewerServer {
 
   private serveViewer(res: http.ServerResponse): void {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache", "Expires": "0" });
-    res.end(viewerHTML);
+    res.end(viewerHTML(ViewerServer.PLUGIN_VERSION));
   }
 
   // ─── Data APIs ───
