@@ -23,6 +23,11 @@ function phase(n, title) {
 }
 
 const pluginDir = path.resolve(__dirname, "..");
+const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+
+function normalizePathForMatch(p) {
+  return path.resolve(p).replace(/^\\\\\?\\/, "").replace(/\\/g, "/").toLowerCase();
+}
 
 console.log(`
 ${CYAN}${BOLD}┌──────────────────────────────────────────────────┐
@@ -42,7 +47,8 @@ log(`Node: ${process.version}  Platform: ${process.platform}-${process.arch}`);
  * ═══════════════════════════════════════════════════════════ */
 
 function cleanStaleArtifacts() {
-  const isExtensionsDir = pluginDir.includes(path.join(".openclaw", "extensions"));
+  const pluginDirNorm = normalizePathForMatch(pluginDir);
+  const isExtensionsDir = pluginDirNorm.includes("/.openclaw/extensions/");
   if (!isExtensionsDir) return;
 
   const pkgPath = path.join(pluginDir, "package.json");
@@ -133,10 +139,10 @@ function ensureDependencies() {
   log("Running: npm install --omit=dev ...");
 
   const startMs = Date.now();
-  const result = spawnSync("npm", ["install", "--omit=dev"], {
+  const result = spawnSync(npmCmd, ["install", "--omit=dev"], {
     cwd: pluginDir,
     stdio: "pipe",
-    shell: true,
+    shell: false,
     timeout: 120_000,
   });
   const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
@@ -223,8 +229,8 @@ function cleanupLegacy() {
             newEntry.source = oldSource
               .replace(/memos-lite-openclaw-plugin/g, "memos-local-openclaw-plugin")
               .replace(/memos-lite/g, "memos-local-openclaw-plugin")
-              .replace(/\/memos-local\//g, "/memos-local-openclaw-plugin/")
-              .replace(/\/memos-local$/g, "/memos-local-openclaw-plugin");
+              .replace(/[\\/]memos-local[\\/]/g, `${path.sep}memos-local-openclaw-plugin${path.sep}`)
+              .replace(/[\\/]memos-local$/g, `${path.sep}memos-local-openclaw-plugin`);
             if (newEntry.source !== oldSource) {
               log(`Updated source path: ${DIM}${oldSource}${RESET} → ${GREEN}${newEntry.source}${RESET}`);
               cfgChanged = true;
@@ -397,10 +403,10 @@ ${GREEN}${BOLD}  ┌────────────────────
 
 const startMs = Date.now();
 
-const result = spawnSync("npm", ["rebuild", "better-sqlite3"], {
+const result = spawnSync(npmCmd, ["rebuild", "better-sqlite3"], {
   cwd: pluginDir,
   stdio: "pipe",
-  shell: true,
+  shell: false,
   timeout: 180_000,
 });
 
