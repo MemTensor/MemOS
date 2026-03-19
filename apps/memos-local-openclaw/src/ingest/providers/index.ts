@@ -1,12 +1,46 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { SummarizerConfig, Logger } from "../../types";
-import { summarizeOpenAI, summarizeTaskOpenAI, generateTaskTitleOpenAI, judgeNewTopicOpenAI, filterRelevantOpenAI, judgeDedupOpenAI } from "./openai";
+import type { SummarizerConfig, SummaryProvider, Logger } from "../../types";
+import { summarizeOpenAI, summarizeTaskOpenAI, judgeNewTopicOpenAI, filterRelevantOpenAI, judgeDedupOpenAI } from "./openai";
 import type { FilterResult, DedupResult } from "./openai";
 export type { FilterResult, DedupResult } from "./openai";
 import { summarizeAnthropic, summarizeTaskAnthropic, generateTaskTitleAnthropic, judgeNewTopicAnthropic, filterRelevantAnthropic, judgeDedupAnthropic } from "./anthropic";
 import { summarizeGemini, summarizeTaskGemini, generateTaskTitleGemini, judgeNewTopicGemini, filterRelevantGemini, judgeDedupGemini } from "./gemini";
 import { summarizeBedrock, summarizeTaskBedrock, generateTaskTitleBedrock, judgeNewTopicBedrock, filterRelevantBedrock, judgeDedupBedrock } from "./bedrock";
+
+/**
+ * Detect provider type from provider key name or base URL.
+ */
+function detectProvider(
+  providerKey: string | undefined,
+  baseUrl: string,
+): SummaryProvider {
+  const key = providerKey?.toLowerCase() ?? "";
+  const url = baseUrl.toLowerCase();
+  if (key.includes("anthropic") || url.includes("anthropic")) return "anthropic";
+  if (key.includes("gemini") || url.includes("generativelanguage.googleapis.com")) {
+    return "gemini";
+  }
+  if (key.includes("bedrock") || url.includes("bedrock")) return "bedrock";
+  return "openai_compatible";
+}
+
+/**
+ * Return the correct endpoint for a given provider and base URL.
+ */
+function normalizeEndpointForProvider(
+  provider: SummaryProvider,
+  baseUrl: string,
+): string {
+  const stripped = baseUrl.replace(/\/+$/, "");
+  if (provider === "anthropic") {
+    if (stripped.endsWith("/v1/messages")) return stripped;
+    return `${stripped}/v1/messages`;
+  }
+  if (stripped.endsWith("/chat/completions")) return stripped;
+  if (stripped.endsWith("/completions")) return stripped;
+  return `${stripped}/chat/completions`;
+}
 
 /**
  * Build a SummarizerConfig from OpenClaw's native model configuration (openclaw.json).
@@ -37,31 +71,10 @@ function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | undefined {
     const apiKey: string | undefined = providerCfg.apiKey;
     if (!baseUrl || !apiKey) return undefined;
 
-    // Detect provider type from provider key or base URL
-    const isAnthropic = providerKey?.toLowerCase().includes("anthropic") ||
-      baseUrl.includes("anthropic.com");
-    const isBedrock = providerKey?.toLowerCase().includes("bedrock") ||
-      baseUrl.includes("bedrock");
+    const provider = detectProvider(providerKey, baseUrl);
+    const endpoint = normalizeEndpointForProvider(provider, baseUrl);
 
-    let provider: SummarizerConfig["provider"];
-    let endpoint: string;
-
-    if (isAnthropic) {
-      provider = "anthropic";
-      endpoint = baseUrl.endsWith("/messages")
-        ? baseUrl
-        : baseUrl.replace(/\/+$/, "") + "/messages";
-    } else if (isBedrock) {
-      provider = "bedrock";
-      endpoint = baseUrl;
-    } else {
-      provider = "openai_compatible";
-      endpoint = baseUrl.endsWith("/chat/completions")
-        ? baseUrl
-        : baseUrl.replace(/\/+$/, "") + "/chat/completions";
-    }
-
-    log.debug(`OpenClaw fallback model: ${modelId} via ${baseUrl} (provider=${provider})`);
+    log.debug(`OpenClaw fallback model: ${modelId} via ${baseUrl} (${provider})`);
     return {
       provider,
       endpoint,

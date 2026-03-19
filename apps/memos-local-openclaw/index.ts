@@ -12,6 +12,7 @@ import * as path from "path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "url";
 import { buildContext } from "./src/config";
+import { ensureSqliteBinding } from "./src/storage/ensure-binding";
 import { SqliteStore } from "./src/storage/sqlite";
 import { Embedder } from "./src/embedding";
 import { IngestWorker } from "./src/ingest/worker";
@@ -207,6 +208,8 @@ const memosLocalPlugin = {
       error: (msg: string) => api.logger.warn(`[error] ${msg}`),
     });
 
+    ensureSqliteBinding(ctx.log);
+
     const store = new SqliteStore(ctx.config.storage!.dbPath!, ctx.log);
     const embedder = new Embedder(ctx.config.embedding, ctx.log);
     const worker = new IngestWorker(store, embedder, ctx);
@@ -280,6 +283,18 @@ const memosLocalPlugin = {
     // Current agent ID — updated by hooks, read by tools for owner isolation.
     // Falls back to "main" when no hook has fired yet (single-agent setups).
     let currentAgentId = "main";
+
+    // ─── Check allowPromptInjection policy ───
+    // When allowPromptInjection=false, the prompt mutation fields (such as prependContext) in the hook return value
+    // will be stripped by the framework. Skip auto-recall to avoid unnecessary LLM/embedding calls.
+    const pluginEntry = (api.config as any)?.plugins?.entries?.[api.id];
+    const allowPromptInjection = pluginEntry?.hooks?.allowPromptInjection !== false;
+    if (!allowPromptInjection) {
+      api.logger.info("memos-local: allowPromptInjection=false, auto-recall disabled");
+    }
+    else {
+      api.logger.info("memos-local: allowPromptInjection=true, auto-recall enabled");
+    }
 
     const trackTool = (toolName: string, fn: (...args: any[]) => Promise<any>) =>
       async (...args: any[]) => {
@@ -940,6 +955,7 @@ const memosLocalPlugin = {
     // ─── Auto-recall: inject relevant memories before agent starts ───
 
     api.on("before_agent_start", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
+      if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
 
       const recallAgentId = hookCtx?.agentId ?? "main";

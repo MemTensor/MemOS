@@ -10,6 +10,7 @@
     "src",
     "dist",
     "skill",
+    "prebuilds",
     "scripts/postinstall.cjs",
     "openclaw.plugin.json",
     "README.md",

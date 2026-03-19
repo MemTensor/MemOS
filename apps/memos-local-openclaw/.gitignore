@@ -16,6 +16,9 @@ package-lock.json
 .installed-version
 ppt/
 
+# Prebuilt native binaries (included in npm package via `files`, not in git)
+prebuilds/
+
 # Database files
 *.sqlite
 *.sqlite-journal
