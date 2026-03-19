@@ -1052,7 +1052,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     process_preference_fine,
                     non_file_url_fast_items,
                     info,
-                    self.llm,
+                    self.general_llm,
                     self.embedder,
                     **kwargs,
                 )
@@ -1131,7 +1131,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             )
             # Add preference memory extraction
             future_pref = executor.submit(
-                process_preference_fine, non_file_url_nodes, info, self.llm, self.embedder, **kwargs
+                process_preference_fine,
+                non_file_url_nodes,
+                info,
+                self.general_llm,
+                self.embedder,
+                **kwargs,
             )
 
             # Collect results
