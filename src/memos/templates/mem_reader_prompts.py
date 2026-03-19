@@ -32,8 +32,17 @@ Return a single valid JSON object with the following structure:
     },
     ...
   ],
-  "summary": <a natural paragraph summarizing the above memories from user's perspective, 120–200 words, same language as the input>
+  "summary": <a natural paragraph summarizing the above memories from user's perspective, 120–200 words, same language as the input>,
+  "reasoning_chain": {
+    "goal": <what was the user's core goal in this conversation>,
+    "decision": <what decisions were made and why>,
+    "correction": <if there was a correction or misunderstanding, what was corrected>,
+    "preference": <any updates or changes to user preferences>,
+    "attention": <what to be careful about in future similar situations>
+  }
 }
+
+The `reasoning_chain` field captures the reasoning behind the memories — not just what happened, but why it matters and what to remember for the future. Fill each sub-field with a brief statement; if a sub-field is not applicable, write "N/A".
 
 Language rules:
 - The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input conversation.  **如果输入是中文，请输出中文**
