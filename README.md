@@ -224,6 +224,7 @@ Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/Mem
 2. Configure `docker/.env.example` and copy to `MemOS/.env`
  - The `OPENAI_API_KEY`,`MOS_EMBEDDER_API_KEY`,`MEMRADER_API_KEY` and others can be applied for through [`BaiLian`](https://bailian.console.aliyun.com/?spm=a2c4g.11186623.0.0.2f2165b08fRk4l&tab=api#/api).
  - Fill in the corresponding configuration in the `MemOS/.env` file.
+ - Supported LLM providers: **OpenAI**, **Azure OpenAI**, **Qwen (DashScope)**, **DeepSeek**, **MiniMax**, **Ollama**, **HuggingFace**, **vLLM**. Set `MOS_CHAT_MODEL_PROVIDER` to select the backend (e.g., `openai`, `qwen`, `deepseek`, `minimax`).
 3. Start the service.
 
 - Launch via Docker

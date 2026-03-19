@@ -2,6 +2,7 @@ from memos.configs.llm import (
     BaseLLMConfig,
     HFLLMConfig,
     LLMConfigFactory,
+    MinimaxLLMConfig,
     OllamaLLMConfig,
     OpenAILLMConfig,
 )
@@ -143,6 +144,37 @@ def test_hf_llm_config():
     )
 
     check_config_instantiation_invalid(HFLLMConfig)
+
+
+def test_minimax_llm_config():
+    check_config_base_class(
+        MinimaxLLMConfig,
+        required_fields=["model_name_or_path", "api_key"],
+        optional_fields=[
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "top_k",
+            "api_base",
+            "remove_think_prefix",
+            "extra_body",
+            "default_headers",
+        ],
+    )
+
+    check_config_instantiation_valid(
+        MinimaxLLMConfig,
+        {
+            "model_name_or_path": "MiniMax-M2.5",
+            "api_key": "test-key",
+            "api_base": "https://api.minimax.io/v1",
+            "temperature": 0.7,
+            "max_tokens": 1024,
+            "top_p": 0.9,
+        },
+    )
+
+    check_config_instantiation_invalid(MinimaxLLMConfig)
 
 
 def test_llm_config_factory():
