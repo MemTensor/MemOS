@@ -440,6 +440,7 @@ function callJudgeDedup(cfg: SummarizerConfig, newSummary: string, candidates: A
     case "voyage":
       return judgeDedupOpenAI(newSummary, candidates, cfg, log);
     case "anthropic":
+    case "minimax-portal":
       return judgeDedupAnthropic(newSummary, candidates, cfg, log);
     case "gemini":
       return judgeDedupGemini(newSummary, candidates, cfg, log);
