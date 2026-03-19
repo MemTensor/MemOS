@@ -135,6 +135,19 @@ nav .btn-nav:hover{border-color:rgba(99,140,255,.35);color:var(--text);backgroun
 .copy-btn.copied{border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.12);color:var(--green)}
 .copy-btn.copied .copy-icon{display:none}
 .copy-btn.copied .check-icon{display:block}
+.install-switcher{background:rgba(10,14,28,.85);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;backdrop-filter:blur(12px);box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.install-switcher-header{display:flex;align-items:center;gap:7px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.install-switcher-header .dot{width:10px;height:10px;border-radius:50%}
+.install-os-switch{margin-left:auto;display:flex;align-items:center;gap:6px;padding:3px;background:rgba(99,140,255,.08);border:1px solid var(--border);border-radius:999px}
+.install-os-switch .os-btn{background:transparent;color:var(--text-sec);border:none;font-size:11px;font-weight:700;padding:6px 10px;border-radius:999px;cursor:pointer;transition:all .2s}
+.install-os-switch .os-btn:hover{color:var(--text)}
+.install-os-switch .os-btn.active{background:var(--grad-main);color:#06080f}
+.install-switcher-body{padding:18px}
+.install-switcher-note{font-family:var(--mono);font-size:11px;line-height:1.7;color:var(--text-thr);margin-bottom:10px}
+.install-switcher-row{display:flex;align-items:center;gap:8px}
+.install-switcher-row .prompt{color:var(--green)}
+.install-switcher-row .cmd{flex:1;white-space:nowrap;overflow:auto;scrollbar-width:none;font-family:var(--mono);font-size:12px;color:var(--text)}
+.install-switcher-row .cmd::-webkit-scrollbar{display:none}
 
 /* ── Glass Cards ── */
 .value-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
@@ -371,11 +384,17 @@ body.lang-zh .lang-en{display:none !important}
   </div>
 
   <div class="hero-visual">
-    <div class="terminal glow-border">
-      <div class="terminal-bar"><span class="terminal-dot r"></span><span class="terminal-dot y"></span><span class="terminal-dot g"></span><span class="terminal-title">macOS/Linux</span></div>
-      <div class="terminal-body">
-        <div class="terminal-note"># One liner, Works everywhere. Installs everything.</div>
-        <div class="terminal-cmd-row"><span class="prompt">$</span><span class="cmd">curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</span><button type="button" class="copy-btn" data-copy="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button></div>
+    <div class="install-switcher glow-border" data-install-switcher>
+      <div class="install-switcher-header">
+        <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span>
+        <div class="install-os-switch">
+          <button type="button" class="os-btn active" data-os="unix"><span class="lang-zh">macOS/Linux</span><span class="lang-en">macOS/Linux</span></button>
+          <button type="button" class="os-btn" data-os="windows"><span class="lang-zh">Windows</span><span class="lang-en">Windows</span></button>
+        </div>
+      </div>
+      <div class="install-switcher-body">
+        <div class="install-switcher-note"><span class="lang-zh"># Works everywhere. Installs everything.</span><span class="lang-en"># Works everywhere. Installs everything.</span></div>
+        <div class="install-switcher-row"><span class="prompt">$</span><span class="cmd" data-os-cmd="unix">curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</span><span class="cmd" data-os-cmd="windows" style="display:none">powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"</span><button type="button" class="copy-btn install-copy-btn" data-copy-unix="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" data-copy-windows='powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"' data-copy="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button></div>
       </div>
     </div>
   </div>
@@ -588,17 +607,26 @@ body.lang-zh .lang-en{display:none !important}
     <div class="showcase-item">
       <div class="showcase-text">
         <h3><span class="lang-zh">1. 一键安装</span><span class="lang-en">1. Install</span></h3>
-        <p><span class="lang-zh">macOS / Linux 用户建议先安装 C++ 编译工具（用于 <code style="font-size:12px">better-sqlite3</code>）。<br><a href="./docs/troubleshooting.html" style="color:var(--cyan);font-size:12px">遇到安装问题？查看排查指南 →</a></span><span class="lang-en">macOS / Linux users: install C++ build tools first (for <code style="font-size:12px">better-sqlite3</code>).<br><a href="./docs/troubleshooting.html" style="color:var(--cyan);font-size:12px">Install issues? See troubleshooting guide →</a></span></p>
+        <p><span class="lang-zh">一行命令，自动安装所有依赖和编译工具，自动升级最新版本。<br><a href="./docs/troubleshooting.html" style="color:var(--cyan);font-size:12px">遇到安装问题？查看排查指南 →</a></span><span class="lang-en">One command automatically installs all dependencies and build tools, and upgrades to the latest version.<br><a href="./docs/troubleshooting.html" style="color:var(--cyan);font-size:12px">Install issues? See troubleshooting guide →</a></span></p>
       </div>
       <div class="showcase-visual">
-        <div class="code-block">
-          <div class="code-header"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span><span style="flex:1"></span>terminal</div>
-          <pre><span class="cmt"># Step 0: 安装编译工具 (macOS / Linux)</span>
-<span class="kw">xcode-select</span> --install        <span class="cmt"># macOS</span>
-<span class="cmt"># sudo apt install build-essential  # Linux</span>
-
-<span class="cmt"># Step 1: 安装插件 & 启动</span>
-<span class="kw">curl</span> -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</pre>
+        <div class="install-switcher" data-install-switcher>
+          <div class="install-switcher-header">
+            <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span>
+            <div class="install-os-switch">
+              <button type="button" class="os-btn active" data-os="unix"><span class="lang-zh">macOS/Linux</span><span class="lang-en">macOS/Linux</span></button>
+              <button type="button" class="os-btn" data-os="windows"><span class="lang-zh">Windows</span><span class="lang-en">Windows</span></button>
+            </div>
+          </div>
+          <div class="install-switcher-body">
+            <div class="install-switcher-note"><span class="lang-zh"># Step 1: 安装插件 & 启动</span><span class="lang-en"># Step 1: Install plugin & start</span></div>
+            <div class="install-switcher-row">
+              <span class="prompt">$</span>
+              <span class="cmd" data-os-cmd="unix">curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</span>
+              <span class="cmd" data-os-cmd="windows" style="display:none">powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"</span>
+              <button type="button" class="copy-btn install-copy-btn" data-copy-unix="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" data-copy-windows='powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"' data-copy="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -956,6 +984,22 @@ function switchConfigTab(btn,id){
       self._copiedTimer=setTimeout(function(){self.classList.remove('copied');},1200);
       copyText(text).catch(function(){});
     });
+  });
+})();
+(function(){
+  document.querySelectorAll('[data-install-switcher]').forEach(function(sw){
+    var buttons=sw.querySelectorAll('.os-btn');
+    var commands=sw.querySelectorAll('[data-os-cmd]');
+    var copyBtn=sw.querySelector('.install-copy-btn');
+    function setOs(os){
+      buttons.forEach(function(btn){btn.classList.toggle('active',btn.getAttribute('data-os')===os);});
+      commands.forEach(function(cmd){cmd.style.display=cmd.getAttribute('data-os-cmd')===os?'':'none';});
+      if(copyBtn){
+        copyBtn.setAttribute('data-copy',copyBtn.getAttribute(os==='windows'?'data-copy-windows':'data-copy-unix')||'');
+      }
+    }
+    buttons.forEach(function(btn){btn.addEventListener('click',function(){setOs(btn.getAttribute('data-os'));});});
+    setOs('unix');
   });
 })();
 </script>
