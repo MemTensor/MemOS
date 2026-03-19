@@ -114,7 +114,6 @@ class MemoryManager:
 
         if mode == "sync":
             self._cleanup_working_memory(user_name)
-            self._refresh_memory_size(user_name=user_name)
 
         return added_ids
 
