@@ -1,8 +1,6 @@
-import type { ChunkKind } from "../types";
-
 export interface RawChunk {
   content: string;
-  kind: ChunkKind;
+  kind: "paragraph";
 }
 
 const MAX_CHUNK_CHARS = 3000;
@@ -24,32 +22,27 @@ const COMMAND_LINE_RE = /^(?:\$|>|#)\s+.+$/gm;
  * Semantic-aware chunking:
  * 1. Extract fenced code blocks as whole units (never split inside)
  * 2. Detect unfenced code regions by brace-matching (functions/classes kept intact)
- * 3. Extract error stacks, list blocks, command lines
+ * 3. Extract error stacks, list blocks, command lines as separate chunks
  * 4. Split remaining prose at paragraph boundaries (double newline)
- * 5. Merge short adjacent chunks of the same kind
+ * 5. Merge short adjacent chunks
  */
 export function chunkText(text: string): RawChunk[] {
   let remaining = text;
-  const slots: Array<{ placeholder: string; chunk: RawChunk }> = [];
+  const slots: Array<{ placeholder: string; content: string }> = [];
   let counter = 0;
 
-  function ph(content: string, kind: ChunkKind): string {
+  function ph(content: string): string {
     const tag = `\x00SLOT_${counter++}\x00`;
-    slots.push({ placeholder: tag, chunk: { content: content.trim(), kind } });
+    slots.push({ placeholder: tag, content: content.trim() });
     return tag;
   }
 
-  remaining = remaining.replace(FENCED_CODE_RE, (m) => ph(m, "code_block"));
-
+  remaining = remaining.replace(FENCED_CODE_RE, (m) => ph(m));
   remaining = extractBraceBlocks(remaining, ph);
 
-  const structural: Array<{ re: RegExp; kind: ChunkKind }> = [
-    { re: ERROR_STACK_RE, kind: "error_stack" },
-    { re: LIST_BLOCK_RE, kind: "list" },
-    { re: COMMAND_LINE_RE, kind: "command" },
-  ];
-  for (const { re, kind } of structural) {
-    remaining = remaining.replace(re, (m) => ph(m, kind));
+  const structural: RegExp[] = [ERROR_STACK_RE, LIST_BLOCK_RE, COMMAND_LINE_RE];
+  for (const re of structural) {
+    remaining = remaining.replace(re, (m) => ph(m));
   }
 
   const raw: RawChunk[] = [];
@@ -64,7 +57,7 @@ export function chunkText(text: string): RawChunk[] {
       for (const part of parts) {
         const slot = slots.find((s) => s.placeholder === part);
         if (slot) {
-          raw.push(slot.chunk);
+          raw.push({ content: slot.content, kind: "paragraph" });
         } else if (part.trim().length >= MIN_CHUNK_CHARS) {
           raw.push({ content: part.trim(), kind: "paragraph" });
         }
@@ -75,8 +68,8 @@ export function chunkText(text: string): RawChunk[] {
   }
 
   for (const s of slots) {
-    if (!raw.some((c) => c.content === s.chunk.content)) {
-      raw.push(s.chunk);
+    if (!raw.some((c) => c.content === s.content)) {
+      raw.push({ content: s.content, kind: "paragraph" });
     }
   }
 
@@ -92,7 +85,7 @@ export function chunkText(text: string): RawChunk[] {
  */
 function extractBraceBlocks(
   text: string,
-  ph: (content: string, kind: ChunkKind) => string,
+  ph: (content: string) => string,
 ): string {
   const lines = text.split("\n");
   const result: string[] = [];
@@ -126,7 +119,7 @@ function extractBraceBlocks(
       if (depth <= 0 || (BLOCK_CLOSE_RE.test(line) && depth <= 0)) {
         const block = blockLines.join("\n");
         if (block.trim().length >= MIN_CHUNK_CHARS) {
-          result.push(ph(block, "code_block"));
+          result.push(ph(block));
         } else {
           result.push(block);
         }
@@ -142,7 +135,7 @@ function extractBraceBlocks(
   if (blockLines.length > 0) {
     const block = blockLines.join("\n");
     if (block.trim().length >= MIN_CHUNK_CHARS) {
-      result.push(ph(block, "code_block"));
+      result.push(ph(block));
     } else {
       result.push(block);
     }
@@ -171,11 +164,10 @@ function mergeSmallChunks(chunks: RawChunk[]): RawChunk[] {
       continue;
     }
 
-    const sameKind = buf.kind === c.kind;
     const bothSmall = buf.content.length < IDEAL_CHUNK_CHARS && c.content.length < IDEAL_CHUNK_CHARS;
     const mergedLen = buf.content.length + c.content.length + 2;
 
-    if (sameKind && bothSmall && mergedLen <= MAX_CHUNK_CHARS) {
+    if (bothSmall && mergedLen <= MAX_CHUNK_CHARS) {
       buf.content = buf.content + "\n\n" + c.content;
     } else {
       merged.push(buf);
@@ -189,29 +181,29 @@ function mergeSmallChunks(chunks: RawChunk[]): RawChunk[] {
 function splitOversized(chunks: RawChunk[]): RawChunk[] {
   const result: RawChunk[] = [];
   for (const c of chunks) {
-    if (c.content.length <= MAX_CHUNK_CHARS || c.kind === "code_block") {
+    if (c.content.length <= MAX_CHUNK_CHARS) {
       result.push(c);
       continue;
     }
-    result.push(...splitAtSentenceBoundary(c.content, c.kind));
+    result.push(...splitAtSentenceBoundary(c.content));
   }
   return result;
 }
 
-function splitAtSentenceBoundary(text: string, kind: ChunkKind): RawChunk[] {
+function splitAtSentenceBoundary(text: string): RawChunk[] {
   const sentences = text.match(/[^.!?。！？\n]+(?:[.!?。！？]+|\n{2,})/g) ?? [text];
   const result: RawChunk[] = [];
   let buf = "";
 
   for (const s of sentences) {
     if (buf.length + s.length > MAX_CHUNK_CHARS && buf.length > 0) {
-      result.push({ content: buf.trim(), kind });
+      result.push({ content: buf.trim(), kind: "paragraph" });
       buf = "";
     }
     buf += s;
   }
   if (buf.trim().length >= MIN_CHUNK_CHARS) {
-    result.push({ content: buf.trim(), kind });
+    result.push({ content: buf.trim(), kind: "paragraph" });
   }
   return result;
 }

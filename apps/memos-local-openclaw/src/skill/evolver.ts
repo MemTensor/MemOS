@@ -12,6 +12,8 @@ import { SkillUpgrader } from "./upgrader";
 import { SkillInstaller } from "./installer";
 import { buildSkillConfigChain, callLLMWithFallback } from "../shared/llm-call";
 
+export type SkillEvolvedCallback = (skillName: string, upgradeType: "created" | "upgraded") => void;
+
 export class SkillEvolver {
   private evaluator: SkillEvaluator;
   private generator: SkillGenerator;
@@ -19,6 +21,7 @@ export class SkillEvolver {
   private installer: SkillInstaller;
   private processing = false;
   private queue: Task[] = [];
+  onSkillEvolved: SkillEvolvedCallback | null = null;
 
   constructor(
     private store: SqliteStore,
@@ -279,6 +282,7 @@ Use selectedIndex 0 when none is highly relevant.`;
       if (upgraded) {
         this.store.linkTaskSkill(task.id, freshSkill.id, "evolved_from", freshSkill.version + 1);
         this.installer.syncIfInstalled(freshSkill.name);
+        this.onSkillEvolved?.(freshSkill.name, "upgraded");
       } else {
         this.store.linkTaskSkill(task.id, freshSkill.id, "applied_to", freshSkill.version);
       }
@@ -307,6 +311,7 @@ Use selectedIndex 0 when none is highly relevant.`;
       this.markChunksWithSkill(chunks, skill.id);
       this.store.linkTaskSkill(task.id, skill.id, "generated_from", 1);
       this.store.setTaskSkillMeta(task.id, { skillStatus: "generated", skillReason: evalResult.reason });
+      this.onSkillEvolved?.(skill.name, "created");
 
       const autoInstall = this.ctx.config.skillEvolution?.autoInstall ?? DEFAULTS.skillAutoInstall;
       if (autoInstall && skill.status === "active") {

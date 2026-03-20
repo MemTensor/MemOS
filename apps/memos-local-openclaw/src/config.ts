@@ -51,8 +51,6 @@ export function resolveConfig(raw: Partial<MemosLocalConfig> | undefined, stateD
     },
     telemetry: {
       enabled: telemetryEnabled,
-      posthogApiKey: cfg.telemetry?.posthogApiKey ?? process.env.POSTHOG_API_KEY ?? "",
-      posthogHost: cfg.telemetry?.posthogHost ?? process.env.POSTHOG_HOST ?? "",
     },
   };
 }

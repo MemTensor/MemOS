@@ -41,7 +41,7 @@ return `<!DOCTYPE html>
 [data-theme="light"] .auth-screen{background:linear-gradient(135deg,#f0f4ff 0%,#f8f9fb 50%,#eef2ff 100%)}
 [data-theme="light"] .auth-card{box-shadow:0 25px 50px -12px rgba(0,0,0,.08)}
 [data-theme="light"] .topbar{background:rgba(255,255,255,.92);border-bottom-color:var(--border);backdrop-filter:blur(8px)}
-[data-theme="light"] .session-item .count,[data-theme="light"] .kind-tag,[data-theme="light"] .session-tag{background:rgba(0,0,0,.05)}
+[data-theme="light"] .session-item .count,[data-theme="light"] .session-tag{background:rgba(0,0,0,.05)}
 [data-theme="light"] .card-content pre{background:#f3f4f6;border-color:var(--border)}
 [data-theme="light"] .vscore-badge{background:rgba(79,70,229,.06);color:#4f46e5}
 [data-theme="light"] ::-webkit-scrollbar-thumb{background:rgba(0,0,0,.15)}
@@ -66,10 +66,6 @@ return `<!DOCTYPE html>
 [data-theme="light"] .tool-agg-table td{background:transparent}
 [data-theme="light"] .tool-agg-table tr:hover td{background:rgba(79,70,229,.03)}
 [data-theme="light"] .tool-agg-table th{color:#9ca3af}
-[data-theme="light"] .breakdown-item{background:#f9fafb;border-color:var(--border)}
-[data-theme="light"] .breakdown-item:hover{background:#f3f4f6;border-color:#cbd5e1}
-[data-theme="light"] .breakdown-bar-wrap{background:#e5e7eb}
-[data-theme="light"] .breakdown-bar{background:linear-gradient(90deg,#4f46e5,#6366f1);box-shadow:none}
 [data-theme="light"] .range-btn{background:transparent;border-color:var(--border);color:var(--text-sec)}
 [data-theme="light"] .range-btn.active{background:rgba(79,70,229,.06);color:#4f46e5;border-color:rgba(79,70,229,.2)}
 [data-theme="light"] .range-btn:hover{border-color:#4f46e5;color:#4f46e5}
@@ -120,7 +116,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .main-content{display:flex;flex:1;max-width:1400px;margin:0 auto;width:100%;padding:28px 32px;gap:28px}
 
 /* ─── Sidebar ─── */
-.sidebar{width:260px;flex-shrink:0}
+.sidebar{width:260px;min-width:260px;flex-shrink:0}
 .sidebar .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px}
 .stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:18px;transition:all .2s}
 .stat-card:hover{border-color:var(--border-glow);background:var(--bg-card-hover)}
@@ -164,10 +160,9 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .role-tag.user{background:var(--pri-glow);color:var(--pri);border:1px solid rgba(99,102,241,.12)}
 .role-tag.assistant{background:var(--accent-glow);color:var(--accent);border:1px solid rgba(230,57,70,.2)}
 .role-tag.system{background:var(--amber-bg);color:var(--amber);border:1px solid rgba(245,158,11,.2)}
-.kind-tag{padding:4px 10px;border-radius:8px;font-size:11px;color:var(--text-sec);background:rgba(0,0,0,.2);font-weight:500}
 .card-time{font-size:12px;color:var(--text-sec);display:flex;align-items:center;gap:8px}
 .session-tag{font-size:11px;font-family:ui-monospace,monospace;color:var(--text-muted);background:rgba(0,0,0,.2);padding:3px 8px;border-radius:6px;cursor:default}
-.card-summary{font-size:15px;font-weight:600;color:var(--text);margin-bottom:10px;line-height:1.5;letter-spacing:-.01em}
+.card-summary{font-size:15px;font-weight:600;color:var(--text);margin-bottom:10px;line-height:1.5;letter-spacing:-.01em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .card-content{font-size:13px;color:var(--text-sec);line-height:1.65;max-height:0;overflow:hidden;transition:max-height .3s ease}
 .card-content.show{max-height:600px;overflow-y:auto}
 .card-content pre{white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.25);padding:14px;border-radius:10px;font-size:12px;font-family:ui-monospace,monospace;margin-top:10px;border:1px solid var(--border);color:var(--text-sec)}
@@ -212,6 +207,9 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .modal-meta-row{display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:var(--text-sec);padding:8px 0;border-top:1px dashed var(--border)}
 [data-theme="light"] .merge-history{background:rgba(0,0,0,.04)}
 [data-theme="light"] .merge-history-item{border-bottom-color:rgba(0,0,0,.06)}
+.card-merged-info{margin-top:8px;padding:8px 12px;background:rgba(16,185,129,.06);border:1px dashed rgba(16,185,129,.2);border-radius:8px;font-size:12px;line-height:1.6;color:var(--text-sec)}
+.card-merged-label{font-size:10px;font-weight:600;color:#10b981;margin-bottom:4px;display:flex;align-items:center;gap:4px}
+[data-theme="light"] .card-merged-info{background:rgba(16,185,129,.04);border-color:rgba(16,185,129,.15)}
 
 /* ─── Buttons ─── */
 .btn{padding:7px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);font-size:13px;font-weight:500;transition:all .18s ease;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
@@ -245,6 +243,16 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:28px}
 
 /* ─── Toast ─── */
+.emb-banner{display:flex;align-items:center;gap:10px;padding:12px 20px;font-size:13px;font-weight:500;border-radius:10px;margin:0 32px 0;animation:slideIn .3s ease}
+.emb-banner.warning{background:rgba(245,158,11,.1);color:#d97706;border:1px solid rgba(245,158,11,.25)}
+.emb-banner.error{background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.25)}
+[data-theme="light"] .emb-banner.warning{background:rgba(245,158,11,.08);color:#b45309}
+[data-theme="light"] .emb-banner.error{background:rgba(239,68,68,.08);color:#dc2626}
+.emb-banner span{flex:1}
+.emb-banner-btn{background:none;border:1px solid currentColor;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:600;color:inherit;cursor:pointer;white-space:nowrap;opacity:.85;transition:opacity .15s}
+.emb-banner-btn:hover{opacity:1}
+.emb-banner-close{background:none;border:none;font-size:18px;color:inherit;cursor:pointer;opacity:.5;padding:0 4px;line-height:1}
+.emb-banner-close:hover{opacity:1}
 .toast-container{position:fixed;top:80px;right:24px;z-index:1000;display:flex;flex-direction:column;gap:8px}
 .toast{padding:14px 20px;border-radius:10px;font-size:13px;font-weight:500;box-shadow:var(--shadow-lg);animation:slideIn .3s ease;display:flex;align-items:center;gap:10px;max-width:360px;border:1px solid}
 .toast.success{background:var(--green-bg);color:var(--green);border-color:rgba(16,185,129,.3)}
@@ -334,8 +342,12 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .task-chunk-role.user{color:var(--pri)}
 .task-chunk-role.assistant{color:var(--green)}
 .task-chunk-role.tool{color:var(--amber)}
-.task-chunk-bubble{padding:12px 16px;border-radius:16px;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:hidden;position:relative;transition:all .2s}
-.task-chunk-bubble.expanded{max-height:none}
+.task-chunk-bubble{padding:12px 16px;border-radius:16px;white-space:pre-wrap;word-break:break-word;max-height:none;overflow:hidden;position:relative;transition:all .2s}
+.task-chunk-bubble.collapsed{max-height:200px}
+.task-chunk-expand{display:none;align-items:center;justify-content:center;gap:4px;margin-top:4px;padding:4px 12px;font-size:12px;font-weight:600;color:var(--text-sec);cursor:pointer;user-select:none;border-radius:8px;transition:all .15s}
+.task-chunk-expand:hover{color:var(--pri);background:rgba(99,102,241,.08)}
+.task-chunk-expand .expand-arrow{display:inline-block;font-size:10px;transition:transform .2s}
+.task-chunk-expand.is-expanded .expand-arrow{transform:rotate(180deg)}
 .role-user .task-chunk-bubble{background:var(--pri);color:#000;border-bottom-right-radius:4px}
 .role-assistant .task-chunk-bubble{background:var(--bg-card);border:1px solid var(--border);color:var(--text-sec);border-bottom-left-radius:4px}
 .role-tool .task-chunk-bubble{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);color:var(--text-sec);border-bottom-left-radius:4px;font-family:'SF Mono',Monaco,Consolas,monospace;font-size:12px}
@@ -425,6 +437,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 [data-theme="light"] .nav-tabs .tab.active{background:#fff;border-color:rgba(0,0,0,.1);box-shadow:0 1px 3px rgba(0,0,0,.08);color:var(--text)}
 .analytics-view,.settings-view,.logs-view,.migrate-view{display:none;flex:1;min-width:0;flex-direction:column;gap:20px}
 .analytics-view.show,.settings-view.show,.logs-view.show,.migrate-view.show{display:flex}
+.feed-wrap,.tasks-view,.skills-view,.analytics-view,.settings-view,.logs-view,.migrate-view{max-width:960px}
 
 /* ─── Logs ─── */
 .logs-toolbar{display:flex;align-items:center;justify-content:space-between;padding:8px 0}
@@ -464,7 +477,41 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .log-stat-chip.merged{background:rgba(168,85,247,.12);color:#c084fc}
 .log-stat-chip.errors{background:rgba(248,113,113,.12);color:#f87171}
 .log-msg-list{margin-top:8px;display:flex;flex-direction:column;gap:4px}
-.log-msg-item{display:flex;gap:8px;align-items:flex-start;font-size:11.5px;line-height:1.5;padding:4px 10px;border-radius:6px;background:rgba(255,255,255,.02)}
+.log-msg-item{display:flex;gap:8px;align-items:flex-start;font-size:11.5px;line-height:1.5;padding:4px 10px;border-radius:6px;background:rgba(255,255,255,.02);overflow:hidden}
+.log-msg-item.expanded{flex-wrap:wrap}
+.recall-layers{margin-top:8px;display:flex;flex-direction:column;gap:10px}
+.recall-layer-title{font-size:11px;font-weight:600;color:var(--text-sec);margin-bottom:4px;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+.recall-layer-title .recall-expand-icon{transition:transform .15s;font-size:9px}
+.recall-layer.expanded .recall-layer-title .recall-expand-icon{transform:rotate(90deg)}
+.recall-count{font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;background:rgba(99,102,241,.1);color:var(--pri)}
+.recall-items{display:none;flex-direction:column;gap:3px}
+.recall-layer.expanded .recall-items{display:flex}
+.recall-item{font-size:11px;line-height:1.4;padding:4px 8px;border-radius:5px;background:rgba(255,255,255,.02);cursor:pointer}
+.recall-item:hover{background:rgba(99,102,241,.06)}
+[data-theme="light"] .recall-item{background:rgba(0,0,0,.02)}
+[data-theme="light"] .recall-item:hover{background:rgba(99,102,241,.06)}
+.recall-item-head{display:flex;gap:6px;align-items:center}
+.recall-idx{flex-shrink:0;font-size:10px;font-weight:600;color:var(--text-muted);min-width:14px;text-align:right}
+.recall-score{flex-shrink:0;font-family:'SF Mono',Consolas,monospace;font-size:10px;font-weight:600;padding:1px 5px;border-radius:4px}
+.recall-score.high{background:rgba(34,197,94,.12);color:#22c55e}
+.recall-score.mid{background:rgba(251,191,36,.12);color:#f59e0b}
+.recall-score.low{background:rgba(248,113,113,.1);color:var(--text-muted)}
+.recall-summary-short{flex:1;color:var(--text-sec);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recall-expand-icon{flex-shrink:0;font-size:10px;color:var(--text-muted);transition:transform .15s}
+.recall-item.expanded .recall-expand-icon{transform:rotate(90deg)}
+.recall-summary-full{display:none;margin-top:4px;padding:6px 8px 4px 28px;font-size:11px;line-height:1.5;color:var(--text);word-break:break-word;border-top:1px dashed var(--border)}
+.recall-item.expanded .recall-summary-full{display:block}
+.recall-layer.filtered .recall-layer-title{color:var(--pri)}
+.recall-layer.filtered.empty .recall-layer-title{color:var(--text-muted)}
+.recall-more{font-size:10px;color:var(--text-muted);padding:2px 8px}
+.recall-detail{padding:4px 0}
+.recall-detail-section{margin-bottom:10px}
+.recall-detail-title{font-size:11px;font-weight:600;color:var(--text-sec);margin-bottom:6px;padding-bottom:4px;border-bottom:1px dashed var(--border);cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px}
+.recall-detail-title .recall-expand-icon{transition:transform .15s;font-size:9px}
+.recall-detail-section.expanded .recall-detail-title .recall-expand-icon{transform:rotate(90deg)}
+.recall-detail-section .recall-detail-items{display:none;flex-direction:column;gap:3px}
+.recall-detail-section.expanded .recall-detail-items{display:flex}
+.recall-detail-section.filtered .recall-detail-title{color:var(--pri)}
 [data-theme="light"] .log-msg-item{background:rgba(0,0,0,.02)}
 .log-msg-role{flex-shrink:0;font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;text-transform:uppercase;letter-spacing:.3px}
 .log-msg-role.user{background:rgba(59,130,246,.12);color:#60a5fa}
@@ -477,6 +524,15 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .log-msg-action.merged{color:#c084fc}
 .log-msg-action.error{color:#f87171}
 .log-msg-text{color:var(--text);opacity:.85;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.log-msg-text-short{color:var(--text);opacity:.85;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.log-msg-text-full{display:none;color:var(--text);opacity:.85;flex:1;min-width:0;word-break:break-word;white-space:pre-wrap}
+.log-msg-item.expanded .log-msg-text-short{display:none}
+.log-msg-item.expanded .log-msg-text-full{display:block}
+.log-msg-item.expanded .recall-expand-icon{transform:rotate(90deg)}
+.log-add-detail{display:flex;flex-direction:column;gap:8px}
+.log-add-msg{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.6}
+.log-add-msg-role{flex-shrink:0;font-size:10px;font-weight:600;text-transform:uppercase;padding:2px 8px;border-radius:4px;background:rgba(99,102,241,.1);color:var(--pri)}
+.log-add-msg-content{flex:1;min-width:0;word-break:break-word;white-space:pre-wrap;color:var(--text)}
 .log-detail{display:none;border-top:1px solid var(--border);padding:0}
 .log-detail.open{display:block}
 .log-expand-btn{font-size:10px;color:var(--text-sec);opacity:.5;margin-left:auto;transition:transform .2s,opacity .15s;display:inline-block}
@@ -516,6 +572,12 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .toggle-slider::before{content:'';position:absolute;height:14px;width:14px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s}
 .toggle-switch input:checked+.toggle-slider{background:var(--pri)}
 .toggle-switch input:checked+.toggle-slider::before{transform:translateX(16px)}
+.test-conn-row{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--border)}
+.test-conn-row .btn{font-size:11px;padding:5px 14px;border:1px solid var(--border);border-radius:6px}
+.test-result{font-size:12px;line-height:1.5;word-break:break-word}
+.test-result.ok{color:#22c55e}
+.test-result.fail{color:var(--rose)}
+.test-result.loading{color:var(--text-muted)}
 .settings-actions{display:flex;gap:12px;justify-content:flex-end;align-items:center;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)}
 .settings-actions .btn{min-width:110px;padding:10px 20px;font-size:13px}
 .settings-actions .btn-primary{background:rgba(99,102,241,.08);color:var(--pri);border:1px solid rgba(99,102,241,.25);font-weight:600}
@@ -524,6 +586,29 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 [data-theme="light"] .settings-actions .btn-primary:hover{background:rgba(79,70,229,.1);border-color:#4f46e5}
 .settings-saved{display:inline-flex;align-items:center;gap:6px;color:var(--green);font-size:12px;font-weight:600;opacity:0;transition:opacity .3s}
 .settings-saved.show{opacity:1}
+.model-health-bar{margin-bottom:20px;border-radius:var(--radius-lg);overflow:visible}
+.mh-table{width:100%;border-collapse:separate;border-spacing:0;font-size:12px}
+.mh-table th{text-align:left;padding:6px 12px;font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;background:var(--bg);border-bottom:1px solid var(--border)}
+.mh-table td{padding:8px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+.mh-table tr:last-child td{border-bottom:none}
+.mh-table tr:hover td{background:rgba(99,102,241,.025)}
+.mh-table .mh-cell-name{display:flex;align-items:center;gap:8px;font-weight:500;color:var(--text)}
+.mh-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;display:inline-block}
+.mh-dot.ok{background:#22c55e;box-shadow:0 0 0 2px rgba(34,197,94,.15)}
+.mh-dot.degraded{background:#f59e0b;box-shadow:0 0 0 2px rgba(245,158,11,.15)}
+.mh-dot.error{background:#ef4444;box-shadow:0 0 0 2px rgba(239,68,68,.15);animation:healthPulse 2s ease infinite}
+.mh-dot.unknown{background:#94a3b8;box-shadow:0 0 0 2px rgba(148,163,184,.15)}
+.mh-badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;letter-spacing:.02em}
+.mh-badge.ok{background:rgba(34,197,94,.1);color:#16a34a}
+.mh-badge.degraded{background:rgba(245,158,11,.1);color:#d97706}
+.mh-badge.error{background:rgba(239,68,68,.1);color:#dc2626}
+.mh-badge.unknown{background:rgba(148,163,184,.1);color:#64748b}
+.mh-model-name{color:var(--text-muted);font-size:11px;font-family:var(--font-mono,'SFMono-Regular',Consolas,monospace)}
+.mh-err-text{font-size:11px;color:var(--rose);max-width:320px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:help}
+#mhTooltip{display:none;position:fixed;min-width:280px;max-width:480px;max-height:300px;overflow-y:auto;padding:8px 10px;background:var(--bg-card,#1e1e2e);color:var(--text,#e2e8f0);border:1px solid var(--border,#333);border-radius:6px;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;box-shadow:0 4px 12px rgba(0,0,0,.25);z-index:10000;pointer-events:none}
+.mh-time{font-size:10px;color:var(--text-muted);white-space:nowrap}
+.mh-empty{padding:16px;font-size:12px;color:var(--text-muted);text-align:center}
+@keyframes healthPulse{0%,100%{opacity:1}50%{opacity:.4}}
 .migrate-log-item{display:flex;align-items:flex-start;gap:10px;padding:8px 14px;border-bottom:1px solid var(--border);animation:migrateFadeIn .3s ease}
 .migrate-log-item:last-child{border-bottom:none}
 .migrate-log-item .log-icon{flex-shrink:0;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;margin-top:2px}
@@ -544,18 +629,19 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 @keyframes migrateFadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 .feed-wrap{flex:1;min-width:0;display:flex;flex-direction:column}
 .feed-wrap.hide{display:none}
+.analytics-view{flex-direction:column;gap:20px}
 .analytics-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
-.analytics-card{position:relative;overflow:hidden;border-radius:var(--radius-lg);padding:22px 20px;transition:all .2s ease;border:1px solid var(--border);background:var(--bg-card)}
+.analytics-card{position:relative;overflow:hidden;border-radius:var(--radius-lg);padding:18px 16px;transition:all .2s ease;border:1px solid var(--border);background:var(--bg-card)}
 .analytics-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--pri);opacity:.5}
 .analytics-card::after{display:none}
 .analytics-card:hover{transform:translateY(-2px);box-shadow:var(--shadow);border-color:var(--border-glow)}
 .analytics-card.green::before{background:var(--green)}
 .analytics-card.amber::before{background:var(--amber)}
-.analytics-card .ac-value{font-size:28px;font-weight:700;letter-spacing:-.03em;color:var(--text);line-height:1;-webkit-text-fill-color:unset;background:none}
+.analytics-card .ac-value{font-size:24px;font-weight:700;letter-spacing:-.03em;color:var(--text);line-height:1;-webkit-text-fill-color:unset;background:none}
 .analytics-card.green .ac-value{color:var(--green);background:none}
 .analytics-card.amber .ac-value{color:var(--amber);background:none}
 .analytics-card .ac-label{font-size:11px;color:var(--text-muted);margin-top:6px;font-weight:500;text-transform:uppercase;letter-spacing:.06em}
-.analytics-section{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:22px 24px;position:relative;overflow:hidden}
+.analytics-section{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px 20px;position:relative;overflow:hidden}
 .analytics-section::before{display:none}
 .analytics-section h3{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:16px;display:flex;align-items:center;gap:8px}
 .analytics-section h3 .icon{font-size:14px;opacity:.6}
@@ -601,14 +687,6 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .tool-agg-table .ms-val.slow{color:var(--accent)}
 .chart-legend .dot.violet{background:var(--violet)}
 .chart-legend .dot.green{background:var(--green)}
-.breakdown-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:20px}
-.breakdown-item{display:flex;flex-direction:column;gap:5px;padding:10px 12px;background:rgba(255,255,255,.02);border-radius:8px;border:1px solid var(--border);transition:all .15s}
-.breakdown-item:hover{border-color:var(--border-glow);background:rgba(255,255,255,.04)}
-.breakdown-item .bd-top{display:flex;align-items:center;justify-content:space-between}
-.breakdown-item .label{font-size:12px;color:var(--text-sec);font-weight:500;text-transform:capitalize}
-.breakdown-item .value{font-size:13px;font-weight:600;color:var(--text)}
-.breakdown-bar-wrap{height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden}
-.breakdown-bar{height:100%;border-radius:2px;background:var(--pri);transition:width .5s ease}
 .metrics-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap}
 .range-btn{padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-sec);font-size:12px;font-weight:500;cursor:pointer;transition:all .15s}
 .range-btn:hover{border-color:var(--pri);color:var(--pri)}
@@ -744,10 +822,12 @@ input,textarea,select{font-family:inherit;font-size:inherit}
         <div class="stat-card amber"><div class="stat-value" id="statEmbeddings">-</div><div class="stat-label" data-i18n="stat.embeddings">Embeddings</div></div>
         <div class="stat-card rose"><div class="stat-value" id="statTimeSpan">-</div><div class="stat-label" data-i18n="stat.days">Days</div></div>
       </div>
-      <div id="embeddingStatus"></div>
-      <div class="section-title" data-i18n="sidebar.sessions">Sessions</div>
-      <div class="session-list" id="sessionList"></div>
-      <button class="btn btn-sm btn-ghost" style="width:100%;margin-top:20px;justify-content:center;color:var(--text-muted);font-size:11px" onclick="clearAll()" data-i18n="sidebar.clear">\u{1F5D1} Clear All Data</button>
+      <div id="sidebarSessionSection">
+        <div id="embeddingStatus"></div>
+        <div class="section-title" data-i18n="sidebar.sessions">Sessions</div>
+        <div class="session-list" id="sessionList"></div>
+        <button class="btn btn-sm btn-ghost" style="width:100%;margin-top:20px;justify-content:center;color:var(--text-muted);font-size:11px" onclick="clearAll()" data-i18n="sidebar.clear">\u{1F5D1} Clear All Data</button>
+      </div>
     </div>
 
     <div class="feed-wrap" id="feedWrap">
@@ -763,15 +843,6 @@ input,textarea,select{font-family:inherit;font-size:inherit}
         <button class="filter-chip" data-role="assistant" onclick="setRoleFilter(this,'assistant')">Assistant</button>
         <button class="filter-chip" data-role="system" onclick="setRoleFilter(this,'system')">System</button>
         <span class="filter-sep"></span>
-        <select id="filterKind" class="filter-select" onchange="applyFilters()">
-          <option value="" data-i18n="filter.allkinds">All kinds</option>
-          <option value="paragraph" data-i18n="filter.paragraph">Paragraph</option>
-          <option value="code_block" data-i18n="filter.code">Code</option>
-          <option value="dialog" data-i18n="filter.dialog">Dialog</option>
-          <option value="list" data-i18n="filter.list">List</option>
-          <option value="error_stack" data-i18n="filter.error">Error</option>
-          <option value="command" data-i18n="filter.command">Command</option>
-        </select>
         <select id="filterSort" class="filter-select" onchange="applyFilters()">
           <option value="newest" data-i18n="filter.newest">Newest first</option>
           <option value="oldest" data-i18n="filter.oldest">Oldest first</option>
@@ -873,7 +944,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
       </div>
     </div>
     <div class="analytics-view" id="analyticsView">
-      <div class="metrics-toolbar">
+      <div class="metrics-toolbar" style="margin-bottom:0">
         <span style="font-size:12px;color:var(--text-sec);font-weight:600" data-i18n="range">Range</span>
         <button class="range-btn" data-days="7" onclick="setMetricsDays(7)">7 <span data-i18n="range.days">days</span></button>
         <button class="range-btn active" data-days="30" onclick="setMetricsDays(30)">30 <span data-i18n="range.days">days</span></button>
@@ -905,16 +976,6 @@ input,textarea,select{font-family:inherit;font-size:inherit}
         <div id="toolAggTable" style="margin-top:20px"></div>
       </div>
 
-      <div class="breakdown-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
-        <div class="analytics-section">
-          <h3><span class="icon">\u{1F464}</span> <span data-i18n="breakdown.role">By Role</span></h3>
-          <div id="breakdownRole"></div>
-        </div>
-        <div class="analytics-section">
-          <h3><span class="icon">\u{1F4DD}</span> <span data-i18n="breakdown.kind">By Kind</span></h3>
-          <div id="breakdownKind"></div>
-        </div>
-      </div>
     </div>
 
     <!-- ─── Logs View ─── -->
@@ -938,14 +999,23 @@ input,textarea,select{font-family:inherit;font-size:inherit}
     <div class="settings-view" id="settingsView">
       <div class="settings-group" id="settingsModelConfig">
         <h2 class="settings-group-title"><span data-i18n="settings.modelconfig">Model Configuration</span></h2>
+        <div class="settings-section">
+          <h3><span class="icon">\u{1F4CA}</span> <span data-i18n="settings.modelhealth">Model Health</span></h3>
+          <div class="model-health-bar" id="modelHealthBar">
+            <div style="font-size:12px;color:var(--text-muted);width:100%">Loading model status...</div>
+          </div>
+        </div>
       <div class="settings-section">
         <h3><span class="icon">\u{1F4E1}</span> <span data-i18n="settings.embedding">Embedding Model</span></h3>
         <div class="settings-grid">
           <div class="settings-field">
             <label data-i18n="settings.provider">Provider</label>
-            <select id="cfgEmbProvider">
+            <select id="cfgEmbProvider" onchange="onProviderChange('embedding')">
               <option value="openai_compatible">OpenAI Compatible</option>
               <option value="openai">OpenAI</option>
+              <option value="siliconflow">SiliconFlow (\u7845\u57FA\u6D41\u52A8)</option>
+              <option value="zhipu">Zhipu AI (\u667A\u8C31)</option>
+              <option value="bailian">Alibaba Bailian (\u767E\u70BC)</option>
               <option value="gemini">Gemini</option>
               <option value="azure_openai">Azure OpenAI</option>
               <option value="cohere">Cohere</option>
@@ -967,6 +1037,10 @@ input,textarea,select{font-family:inherit;font-size:inherit}
             <input type="password" id="cfgEmbApiKey" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022">
           </div>
         </div>
+        <div class="test-conn-row">
+          <button class="btn btn-sm btn-ghost" onclick="testModel('embedding')" id="testEmbBtn" data-i18n="settings.test">Test Connection</button>
+          <span class="test-result" id="testEmbResult"></span>
+        </div>
       </div>
 
       <div class="settings-section">
@@ -974,9 +1048,14 @@ input,textarea,select{font-family:inherit;font-size:inherit}
         <div class="settings-grid">
           <div class="settings-field">
             <label data-i18n="settings.provider">Provider</label>
-            <select id="cfgSumProvider">
+            <select id="cfgSumProvider" onchange="onProviderChange('summarizer')">
               <option value="openai_compatible">OpenAI Compatible</option>
               <option value="openai">OpenAI</option>
+              <option value="siliconflow">SiliconFlow (\u7845\u57FA\u6D41\u52A8)</option>
+              <option value="zhipu">Zhipu AI (\u667A\u8C31)</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="bailian">Alibaba Bailian (\u767E\u70BC)</option>
+              <option value="moonshot">Moonshot (Kimi)</option>
               <option value="anthropic">Anthropic</option>
               <option value="gemini">Gemini</option>
               <option value="azure_openai">Azure OpenAI</option>
@@ -999,6 +1078,10 @@ input,textarea,select{font-family:inherit;font-size:inherit}
             <label data-i18n="settings.temperature">Temperature</label>
             <input type="number" id="cfgSumTemp" step="0.1" min="0" max="2" placeholder="0">
           </div>
+        </div>
+        <div class="test-conn-row">
+          <button class="btn btn-sm btn-ghost" onclick="testModel('summarizer')" id="testSumBtn" data-i18n="settings.test">Test Connection</button>
+          <span class="test-result" id="testSumResult"></span>
         </div>
       </div>
       </div>
@@ -1029,10 +1112,15 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <div class="settings-grid">
             <div class="settings-field">
               <label data-i18n="settings.provider">Provider</label>
-              <select id="cfgSkillProvider">
+              <select id="cfgSkillProvider" onchange="onProviderChange('skill')">
                 <option value="">— <span data-i18n="settings.skill.usemain">Use main summarizer</span> —</option>
                 <option value="openai_compatible">OpenAI Compatible</option>
                 <option value="openai">OpenAI</option>
+                <option value="siliconflow">SiliconFlow (\u7845\u57FA\u6D41\u52A8)</option>
+                <option value="zhipu">Zhipu AI (\u667A\u8C31)</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="bailian">Alibaba Bailian (\u767E\u70BC)</option>
+                <option value="moonshot">Moonshot (Kimi)</option>
                 <option value="anthropic">Anthropic</option>
                 <option value="gemini">Gemini</option>
                 <option value="azure_openai">Azure OpenAI</option>
@@ -1051,6 +1139,10 @@ input,textarea,select{font-family:inherit;font-size:inherit}
               <label>API Key</label>
               <input type="password" id="cfgSkillApiKey" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022">
             </div>
+          </div>
+          <div class="test-conn-row">
+            <button class="btn btn-sm btn-ghost" onclick="testModel('skill')" id="testSkillBtn" data-i18n="settings.test">Test Connection</button>
+            <span class="test-result" id="testSkillResult"></span>
           </div>
         </div>
       </div>
@@ -1123,7 +1215,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
         </div>
 
         <div id="migrateActions" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-          <button class="btn btn-ghost" onclick="migrateScan()" id="migrateScanBtn" data-i18n="migrate.scan">Scan Data Sources</button>
+          <button class="btn" onclick="migrateScan(true)" id="migrateScanBtn" style="background:var(--bg);border:1px solid var(--border);color:var(--text);font-weight:600;padding:7px 18px;cursor:pointer" data-i18n="migrate.scan">Scan Data Sources</button>
           <button class="btn btn-primary" onclick="migrateStart()" id="migrateStartBtn" style="display:none" data-i18n="migrate.start">Start Import</button>
           <span id="migrateConcurrencyRow" style="display:none;align-items:center;gap:6px">
             <span style="font-size:11px;color:var(--text-muted)" data-i18n="migrate.concurrency.label">Concurrent agents</span>
@@ -1264,14 +1356,13 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 <!-- ─── Memory Modal ─── -->
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal">
-    <h2 id="modalTitle" data-i18n="modal.new">New Memory</h2>
+    <h2 id="modalTitle" data-i18n="modal.edit">Edit Memory</h2>
     <div class="form-group"><label data-i18n="modal.role">Role</label><select id="mRole"><option value="user">User</option><option value="assistant">Assistant</option><option value="system">System</option></select></div>
     <div class="form-group"><label data-i18n="modal.content">Content</label><textarea id="mContent" rows="4" data-i18n-ph="modal.content.ph" placeholder="Memory content..."></textarea></div>
     <div class="form-group"><label data-i18n="modal.summary">Summary</label><input type="text" id="mSummary" data-i18n-ph="modal.summary.ph" placeholder="Brief summary (optional)"></div>
-    <div class="form-group"><label data-i18n="modal.kind">Kind</label><select id="mKind"><option value="paragraph" data-i18n="filter.paragraph">Paragraph</option><option value="code" data-i18n="filter.code">Code</option><option value="dialog" data-i18n="filter.dialog">Dialog</option></select></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal()" data-i18n="modal.cancel">Cancel</button>
-      <button class="btn btn-primary" id="modalSubmit" onclick="submitModal()" data-i18n="modal.create">Create</button>
+      <button class="btn btn-primary" id="modalSubmit" onclick="submitModal()" data-i18n="modal.save">Save</button>
     </div>
   </div>
 </div>
@@ -1281,6 +1372,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 
 <script>
 let activeSession=null,activeRole='',editingId=null,searchTimer=null,memoryCache={},currentPage=1,totalPages=1,totalCount=0,PAGE_SIZE=40,metricsDays=30;
+let _embeddingWarningShown=false;
 
 /* ─── i18n ─── */
 const I18N={
@@ -1340,6 +1432,8 @@ const I18N={
     'tasks.untitled':'Untitled Task',
     'tasks.chunks':'Related Memories',
     'tasks.nochunks':'No memories in this task yet.',
+    'tasks.expand':'Show more',
+    'tasks.collapse':'Show less',
     'tasks.skipped.default':'This conversation was too brief to generate a summary. It will not appear in search results.',
     'refresh':'\\u21BB Refresh',
     'logout':'Logout',
@@ -1358,13 +1452,6 @@ const I18N={
     'search.meta.text':' text',
     'search.meta.results':' results',
     'filter.all':'All',
-    'filter.allkinds':'All kinds',
-    'filter.paragraph':'Paragraph',
-    'filter.code':'Code',
-    'filter.dialog':'Dialog',
-    'filter.list':'List',
-    'filter.error':'Error',
-    'filter.command':'Command',
     'filter.newest':'Newest first',
     'filter.oldest':'Oldest first',
     'filter.allowners':'All owners',
@@ -1380,6 +1467,8 @@ const I18N={
     'card.delete':'Delete',
     'card.evolved':'Evolved',
     'card.times':'times',
+    'card.newMessage':'New message',
+    'card.mergedInfo':'Merged memory',
     'card.updated':'updated',
     'card.evolveHistory':'Evolution History',
     'card.oldSummary':'Old',
@@ -1403,21 +1492,15 @@ const I18N={
     'chart.toolperf':'Tool Response Time',
     'chart.list':'List',
     'chart.search':'Search',
-    'breakdown.role':'By Role',
-    'breakdown.kind':'By Kind',
-    'modal.new':'New Memory',
     'modal.edit':'Edit Memory',
     'modal.role':'Role',
     'modal.content':'Content',
     'modal.content.ph':'Memory content...',
     'modal.summary':'Summary',
     'modal.summary.ph':'Brief summary (optional)',
-    'modal.kind':'Kind',
     'modal.cancel':'Cancel',
-    'modal.create':'Create',
     'modal.save':'Save',
     'modal.err.empty':'Please enter content',
-    'toast.created':'Memory created',
     'toast.updated':'Memory updated',
     'toast.deleted':'Memory deleted',
     'toast.opfail':'Operation failed',
@@ -1432,6 +1515,9 @@ const I18N={
     'confirm.clearall2':'Are you absolutely sure?',
     'embed.on':'Embedding: ',
     'embed.off':'No embedding model',
+    'embed.warn.local':'Using built-in mini model (384d). Search quality is limited — configure an embedding model in Settings for best results.',
+    'embed.err.fail':'Embedding model error detected. Check Settings → Model Health.',
+    'embed.banner.goto':'Go to Settings',
     'lang.switch':'中',
     'tab.logs':'\u{1F4DD} Logs',
     'logs.allTools':'All Tools',
@@ -1441,9 +1527,15 @@ const I18N={
     'logs.output':'OUTPUT',
     'logs.empty':'No logs yet. Logs will appear here when tools are called.',
     'logs.ago':'ago',
+    'logs.recall.initial':'Initial Retrieval',
+    'logs.recall.filtered':'LLM Filtered',
+    'logs.recall.noHits':'No matching memories',
+    'logs.recall.noneRelevant':'LLM filter: none relevant',
+    'logs.recall.more':'{n} more...',
     'tab.import':'\u{1F4E5} Import',
     'tab.settings':'\u2699 Settings',
     'settings.modelconfig':'Model Configuration',
+    'settings.modelhealth':'Model Health',
     'settings.embedding':'Embedding Model',
     'settings.summarizer':'Summarizer Model',
     'settings.skill':'Skill Evolution',
@@ -1464,11 +1556,25 @@ const I18N={
     'settings.telemetry.hint':'Anonymous usage analytics to help improve the plugin. Only sends tool names, latencies, and version info. No memory content, queries, or personal data is ever sent.',
     'settings.viewerport':'Viewer Port',
     'settings.viewerport.hint':'Requires restart to take effect',
+    'settings.test':'Test Connection',
+    'settings.test.loading':'Testing...',
+    'settings.test.ok':'Connected',
+    'settings.test.fail':'Failed',
+    'settings.session.expired':'Session expired, please refresh the page to log in again',
     'settings.save':'Save Settings',
     'settings.reset':'Reset',
     'settings.saved':'Saved',
     'settings.restart.hint':'Some changes require restarting the OpenClaw gateway to take effect.',
     'settings.save.fail':'Failed to save settings',
+    'settings.save.emb.required':'Embedding model is required. Please configure an embedding model before saving.',
+    'settings.save.emb.fail':'Embedding model test failed, cannot save',
+    'settings.save.sum.fail':'Summarizer model test failed, cannot save',
+    'settings.save.skill.fail':'Skill model test failed, cannot save',
+    'settings.save.sum.fallback':'Summarizer model is not configured — will use OpenClaw native model as fallback.',
+    'settings.save.skill.fallback':'Skill dedicated model is not configured — will use OpenClaw native model as fallback.',
+    'settings.save.fallback.model':'Fallback model: ',
+    'settings.save.fallback.none':'Not available (no OpenClaw native model found)',
+    'settings.save.fallback.confirm':'Continue to save?',
     'migrate.title':'Import OpenClaw Memory',
     'migrate.desc':'Migrate your existing OpenClaw built-in memories and conversation history into this plugin. The import process uses smart deduplication to avoid duplicates.',
     'migrate.modes.title':'Three ways to use:',
@@ -1487,12 +1593,18 @@ const I18N={
     'migrate.scan':'Scan Data Sources',
     'migrate.start':'Start Import',
     'migrate.scanning':'Scanning...',
+    'migrate.scan.required':'Please scan data sources first',
+    'migrate.scan.done':'Scan complete \u2014 {n} new items found',
+    'migrate.imported.hint':'{n} items already imported',
+    'migrate.reconnect.hint':'--- {n} items processed before page reload ---',
     'migrate.stat.stored':'Stored',
     'migrate.stat.skipped':'Skipped',
     'migrate.stat.merged':'Merged',
     'migrate.stat.errors':'Errors',
     'migrate.phase.sqlite':'Importing memory index...',
     'migrate.phase.sessions':'Importing conversation history...',
+    'migrate.phase.stopped':'Import stopped',
+    'migrate.phase.done':'Import completed',
     'migrate.chunks':'chunks',
     'migrate.sessions.count':'sessions, {n} messages',
     'migrate.nodata':'No OpenClaw data found to import.',
@@ -1518,7 +1630,8 @@ const I18N={
     'pp.select.warn':'Please select at least one option.',
     'pp.skill.created':'Skill created',
     'pp.stat.tasks':'Tasks',
-    'pp.stat.skills':'Skills',
+    'pp.stat.skills':'Evolutions',
+    'pp.stat.skills.total':'Skills',
     'pp.stat.errors':'Errors',
     'pp.stat.skipped':'Skipped',
     'pp.info.skipped':'{n} sessions already processed, skipping.',
@@ -1575,7 +1688,15 @@ const I18N={
     'skill.cancel':'Cancel',
     'skill.delete.confirm':'Are you sure you want to delete this skill? This will also remove all associated files and cannot be undone.',
     'skill.delete.error':'Failed to delete skill: ',
-    'skill.save.error':'Failed to save skill: '
+    'skill.save.error':'Failed to save skill: ',
+    'update.available':'New version available',
+    'update.run':'Run',
+    'update.btn':'Update',
+    'update.installing':'Installing...',
+    'update.success':'Updated!',
+    'update.failed':'Update failed',
+    'update.restarting':'Restarting service...',
+    'update.dismiss':'Dismiss'
   },
   zh:{
     'title':'OpenClaw 记忆',
@@ -1633,6 +1754,8 @@ const I18N={
     'tasks.untitled':'未命名任务',
     'tasks.chunks':'关联记忆',
     'tasks.nochunks':'此任务暂无关联记忆。',
+    'tasks.expand':'展开全文',
+    'tasks.collapse':'收起',
     'tasks.skipped.default':'对话内容过少，未生成摘要。该任务不会出现在检索结果中。',
     'refresh':'\\u21BB 刷新',
     'logout':'退出',
@@ -1651,13 +1774,6 @@ const I18N={
     'search.meta.text':' 文本',
     'search.meta.results':' 条结果',
     'filter.all':'全部',
-    'filter.allkinds':'所有类型',
-    'filter.paragraph':'段落',
-    'filter.code':'代码',
-    'filter.dialog':'对话',
-    'filter.list':'列表',
-    'filter.error':'错误',
-    'filter.command':'命令',
     'filter.newest':'最新优先',
     'filter.oldest':'最早优先',
     'filter.allowners':'所有归属',
@@ -1673,6 +1789,8 @@ const I18N={
     'card.delete':'删除',
     'card.evolved':'已演化',
     'card.times':'次',
+    'card.newMessage':'新消息',
+    'card.mergedInfo':'合并记忆',
     'card.updated':'更新于',
     'card.evolveHistory':'演化记录',
     'card.oldSummary':'旧摘要',
@@ -1696,21 +1814,15 @@ const I18N={
     'chart.toolperf':'工具响应耗时',
     'chart.list':'列表',
     'chart.search':'搜索',
-    'breakdown.role':'按角色',
-    'breakdown.kind':'按类型',
-    'modal.new':'新建记忆',
     'modal.edit':'编辑记忆',
     'modal.role':'角色',
     'modal.content':'内容',
     'modal.content.ph':'记忆内容...',
     'modal.summary':'摘要',
     'modal.summary.ph':'简要摘要（可选）',
-    'modal.kind':'类型',
     'modal.cancel':'取消',
-    'modal.create':'创建',
     'modal.save':'保存',
     'modal.err.empty':'请输入内容',
-    'toast.created':'记忆已创建',
     'toast.updated':'记忆已更新',
     'toast.deleted':'记忆已删除',
     'toast.opfail':'操作失败',
@@ -1725,6 +1837,9 @@ const I18N={
     'confirm.clearall2':'你真的确定吗？',
     'embed.on':'嵌入模型：',
     'embed.off':'无嵌入模型',
+    'embed.warn.local':'当前使用内置迷你模型（384维），搜索效果有限。强烈建议在「设置」中配置专用 Embedding 模型以获得最佳效果。',
+    'embed.err.fail':'Embedding 模型调用异常，请前往「设置 → 模型健康」检查。',
+    'embed.banner.goto':'前往设置',
     'lang.switch':'EN',
     'tab.logs':'\u{1F4DD} 日志',
     'logs.allTools':'全部工具',
@@ -1734,9 +1849,15 @@ const I18N={
     'logs.output':'输出',
     'logs.empty':'暂无日志。当工具被调用时日志会显示在这里。',
     'logs.ago':'前',
+    'logs.recall.initial':'初始检索',
+    'logs.recall.filtered':'LLM 过滤后',
+    'logs.recall.noHits':'未匹配到记忆',
+    'logs.recall.noneRelevant':'LLM 过滤：无相关记忆',
+    'logs.recall.more':'还有 {n} 条...',
     'tab.import':'\u{1F4E5} 导入',
     'tab.settings':'\u2699 设置',
     'settings.modelconfig':'模型配置',
+    'settings.modelhealth':'模型健康',
     'settings.embedding':'嵌入模型',
     'settings.summarizer':'摘要模型',
     'settings.skill':'技能进化',
@@ -1757,11 +1878,25 @@ const I18N={
     'settings.telemetry.hint':'匿名使用统计，帮助改进插件。仅发送工具名称、响应时间和版本信息，不会发送任何记忆内容、搜索查询或个人数据。',
     'settings.viewerport':'Viewer 端口',
     'settings.viewerport.hint':'修改后需重启网关生效',
+    'settings.test':'测试连接',
+    'settings.test.loading':'测试中...',
+    'settings.test.ok':'连接成功',
+    'settings.test.fail':'连接失败',
+    'settings.session.expired':'登录已过期，请刷新页面重新登录',
     'settings.save':'保存设置',
     'settings.reset':'重置',
     'settings.saved':'已保存',
     'settings.restart.hint':'部分设置修改后需要重启 OpenClaw 网关才能生效。',
     'settings.save.fail':'保存设置失败',
+    'settings.save.emb.required':'嵌入模型为必填项，请先配置嵌入模型再保存。',
+    'settings.save.emb.fail':'嵌入模型测试失败，无法保存',
+    'settings.save.sum.fail':'摘要模型测试失败，无法保存',
+    'settings.save.skill.fail':'技能模型测试失败，无法保存',
+    'settings.save.sum.fallback':'摘要模型未配置 — 将使用 OpenClaw 原生模型作为降级方案。',
+    'settings.save.skill.fallback':'技能专用模型未配置 — 将使用 OpenClaw 原生模型作为降级方案。',
+    'settings.save.fallback.model':'降级模型：',
+    'settings.save.fallback.none':'不可用（未检测到 OpenClaw 原生模型）',
+    'settings.save.fallback.confirm':'是否继续保存？',
     'migrate.title':'导入 OpenClaw 记忆',
     'migrate.desc':'将 OpenClaw 内置的记忆数据和对话历史迁移到本插件中。导入过程使用智能去重，避免重复导入。',
     'migrate.modes.title':'三种使用方式：',
@@ -1780,12 +1915,18 @@ const I18N={
     'migrate.scan':'扫描数据源',
     'migrate.start':'开始导入',
     'migrate.scanning':'扫描中...',
+    'migrate.scan.required':'请先扫描数据源',
+    'migrate.scan.done':'扫描完成 — 发现 {n} 条新数据可导入',
+    'migrate.imported.hint':'已导入 {n} 条记忆',
+    'migrate.reconnect.hint':'--- 页面刷新前已处理 {n} 条 ---',
     'migrate.stat.stored':'已存储',
     'migrate.stat.skipped':'已跳过',
     'migrate.stat.merged':'已合并',
     'migrate.stat.errors':'错误',
     'migrate.phase.sqlite':'正在导入记忆索引...',
     'migrate.phase.sessions':'正在导入对话历史...',
+    'migrate.phase.stopped':'导入已停止',
+    'migrate.phase.done':'导入完成',
     'migrate.chunks':'条记忆',
     'migrate.sessions.count':'个会话，{n} 条消息',
     'migrate.nodata':'未找到可导入的 OpenClaw 数据。',
@@ -1811,7 +1952,8 @@ const I18N={
     'pp.select.warn':'请至少选择一个选项。',
     'pp.skill.created':'技能已创建',
     'pp.stat.tasks':'任务',
-    'pp.stat.skills':'技能',
+    'pp.stat.skills':'进化',
+    'pp.stat.skills.total':'技能',
     'pp.stat.errors':'错误',
     'pp.stat.skipped':'已跳过',
     'pp.info.skipped':'已有 {n} 个会话处理过，自动跳过。',
@@ -1868,7 +2010,15 @@ const I18N={
     'skill.cancel':'取消',
     'skill.delete.confirm':'确定要删除此技能吗？关联的文件也会被删除，此操作不可撤销。',
     'skill.delete.error':'删除技能失败：',
-    'skill.save.error':'保存技能失败：'
+    'skill.save.error':'保存技能失败：',
+    'update.available':'发现新版本',
+    'update.run':'执行命令',
+    'update.btn':'更新',
+    'update.installing':'安装中...',
+    'update.success':'更新完成',
+    'update.failed':'更新失败',
+    'update.restarting':'正在重启服务...',
+    'update.dismiss':'关闭'
   }
 };
 const LANG_KEY='memos-viewer-lang';
@@ -1984,6 +2134,7 @@ function switchView(view){
   const logsView=document.getElementById('logsView');
   const settingsView=document.getElementById('settingsView');
   const migrateView=document.getElementById('migrateView');
+  const sidebar=document.getElementById('sidebar');
   feedWrap.classList.add('hide');
   analyticsView.classList.remove('show');
   tasksView.classList.remove('show');
@@ -1991,26 +2142,33 @@ function switchView(view){
   logsView.classList.remove('show');
   settingsView.classList.remove('show');
   migrateView.classList.remove('show');
-  if(view==='analytics'){
-    analyticsView.classList.add('show');
-    loadMetrics();
-  } else if(view==='tasks'){
-    tasksView.classList.add('show');
-    loadTasks();
-  } else if(view==='skills'){
-    skillsView.classList.add('show');
-    loadSkills();
-  } else if(view==='logs'){
-    logsView.classList.add('show');
-    loadLogs();
-  } else if(view==='settings'){
-    settingsView.classList.add('show');
-    loadConfig();
-  } else if(view==='import'){
-    migrateView.classList.add('show');
-    if(!window._migrateRunning) migrateScan();
-  } else {
+  const sessionSection=document.getElementById('sidebarSessionSection');
+  if(view==='memories'){
     feedWrap.classList.remove('hide');
+    sessionSection.style.visibility='';
+    sessionSection.style.pointerEvents='';
+  } else if(view==='tasks'||view==='skills'){
+    sessionSection.style.visibility='hidden';
+    sessionSection.style.pointerEvents='none';
+    if(view==='tasks'){tasksView.classList.add('show');loadTasks();}
+    else{skillsView.classList.add('show');loadSkills();}
+  } else {
+    sessionSection.style.visibility='hidden';
+    sessionSection.style.pointerEvents='none';
+    if(view==='analytics'){
+      analyticsView.classList.add('show');
+      loadMetrics();
+    } else if(view==='logs'){
+      logsView.classList.add('show');
+      loadLogs();
+    } else if(view==='settings'){
+      settingsView.classList.add('show');
+      loadConfig();
+      loadModelHealth();
+    } else if(view==='import'){
+      migrateView.classList.add('show');
+      if(!window._migrateRunning) migrateScan(false);
+    }
   }
 }
 
@@ -2077,6 +2235,39 @@ function formatLogTime(ts){
   return y+'-'+m+'-'+day+' '+time;
 }
 
+function parseMemoryAddEntries(out){
+  var lines=out.split('\\n');
+  var results=[];
+  for(var i=0;i<lines.length;i++){
+    var line=lines[i].trim();
+    if(!line) continue;
+    if(line.startsWith('{')){
+      try{
+        var obj=JSON.parse(line);
+        if(obj.role&&obj.action){results.push({role:obj.role,action:obj.action,summary:obj.summary||'',content:obj.content||'',reason:obj.reason||''});continue;}
+      }catch(e){}
+    }
+    var rm=line.match(/^\\[(\\w+)\\]\\s*([^\u2192]+)\u2192/);
+    if(rm){
+      var role=rm[1],actionRaw=rm[2].trim();
+      var action='stored';
+      if(actionRaw.indexOf('exact-dup')>=0||actionRaw.indexOf('\u23ED')>=0) action='exact-dup';
+      else if(actionRaw.indexOf('dedup')>=0||actionRaw.indexOf('\uD83D\uDD01')>=0) action='dedup';
+      else if(actionRaw.indexOf('merged')>=0||actionRaw.indexOf('\uD83D\uDD00')>=0) action='merged';
+      else if(actionRaw.indexOf('error')>=0||actionRaw.indexOf('\u274C')>=0) action='error';
+      var afterArrow=line.replace(/^\\[\\w+\\]\\s*[^\u2192]+\u2192\\s*/,'');
+      var contentLines=[afterArrow];
+      while(i+1<lines.length&&!lines[i+1].trim().startsWith('[')&&!lines[i+1].trim().startsWith('{')){
+        i++;
+        if(lines[i].trim()) contentLines.push(lines[i]);
+        else contentLines.push('');
+      }
+      results.push({role:role,action:action,summary:'',content:contentLines.join('\\n'),reason:''});
+    }
+  }
+  return results;
+}
+
 function buildLogSummary(lg){
   let inputObj=null;
   try{inputObj=JSON.parse(lg.input);}catch(_){}
@@ -2084,11 +2275,54 @@ function buildLogSummary(lg){
   const tn=lg.toolName;
   if(tn==='memory_search'&&inputObj){
     const q=inputObj.query||'';
-    if(q) html+='<div class="log-summary-query">'+escapeHtml(q.length>200?q.slice(0,200)+'...':q)+'</div>';
-    const outLines=(lg.output||'').split('\\n');
-    const memCount=outLines.filter(l=>l.match(/^\\d+\\.\\s*\\[/)).length;
-    if(memCount>0) html+='<div style="margin-top:4px;font-size:11px;color:var(--text-sec)">\u{1F4CE} '+memCount+' memories retrieved</div>';
-    else if(lg.output&&lg.output.includes('no hits')) html+='<div style="margin-top:4px;font-size:11px;color:var(--text-sec)">\u2205 No matching memories</div>';
+    if(q) html+='<div class="log-summary-query">'+escapeHtml(q)+'</div>';
+    var recallData=null;
+    try{recallData=JSON.parse(lg.output);}catch(_){}
+    if(recallData&&recallData.candidates){
+      var cands=recallData.candidates||[];
+      var filtered=recallData.filtered||[];
+      if(cands.length===0){
+        html+='<div style="margin-top:4px;font-size:11px;color:var(--text-sec)">\u2205 '+t('logs.recall.noHits')+'</div>';
+      }else{
+        html+='<div class="recall-layers">';
+        html+='<div class="recall-layer" onclick="this.classList.toggle(\\\'expanded\\\')">';
+        html+='<div class="recall-layer-title"><span class="recall-expand-icon">\u25B6</span>\u{1F50D} '+t('logs.recall.initial')+' <span class="recall-count">'+cands.length+'</span></div>';
+        html+='<div class="recall-items">';
+        cands.forEach(function(c,i){
+          var scoreClass=c.score>=0.7?'high':c.score>=0.5?'mid':'low';
+          var shortText=escapeHtml(c.summary||c.content||c.original_excerpt||'');
+          var fullText=escapeHtml(c.content||c.original_excerpt||c.summary||'');
+          html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
+          html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'user')+'">'+(c.role||'user')+'</span><span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+          html+='<div class="recall-summary-full">'+fullText+'</div>';
+          html+='</div>';
+        });
+        html+='</div></div>';
+        if(filtered.length>0){
+          html+='<div class="recall-layer filtered" onclick="this.classList.toggle(\\\'expanded\\\')">';
+          html+='<div class="recall-layer-title"><span class="recall-expand-icon">\u25B6</span>\u2705 '+t('logs.recall.filtered')+' <span class="recall-count">'+filtered.length+'</span></div>';
+          html+='<div class="recall-items">';
+          filtered.forEach(function(f){
+            var scoreClass=f.score>=0.7?'high':f.score>=0.5?'mid':'low';
+            var shortText=escapeHtml(f.summary||f.content||f.original_excerpt||'');
+            var fullText=escapeHtml(f.content||f.original_excerpt||f.summary||'');
+            html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
+            html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+f.score.toFixed(2)+'</span><span class="log-msg-role '+(f.role||'user')+'">'+(f.role||'user')+'</span><span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+            html+='<div class="recall-summary-full">'+fullText+'</div>';
+            html+='</div>';
+          });
+          html+='</div></div>';
+        }else{
+          html+='<div style="font-size:10px;color:var(--text-muted);margin-top:2px">\u26A0 '+t('logs.recall.noneRelevant')+'</div>';
+        }
+        html+='</div>';
+      }
+    }else{
+      var outLines=(lg.output||'').split('\\n');
+      var memCount=outLines.filter(function(l){return l.match(/^\\d+\\.\\s*\\[/)}).length;
+      if(memCount>0) html+='<div style="margin-top:4px;font-size:11px;color:var(--text-sec)">\u{1F4CE} '+memCount+' memories retrieved</div>';
+      else if(lg.output&&lg.output.includes('no hits')) html+='<div style="margin-top:4px;font-size:11px;color:var(--text-sec)">\u2205 No matching memories</div>';
+    }
   }else if(tn==='memory_add'&&inputObj){
     const out=lg.output||'';
     const statsMatch=out.match(/^([^\\n]+)/);
@@ -2101,39 +2335,18 @@ function buildLogSummary(lg){
       });
       html+='</div>';
     }
-    const outLines=out.split('\\n').filter(l=>l.startsWith('['));
-    if(outLines.length>0){
+    var parsed=parseMemoryAddEntries(out);
+    if(parsed.length>0){
       html+='<div class="log-msg-list">';
-      outLines.forEach(function(l){
-        var rm=l.match(/^\\[(\\w+)\\]\\s*([^\u2192]+)\u2192\\s*(.*)/);
-        if(rm){
-          var role=rm[1],actionRaw=rm[2].trim(),text=rm[3].trim();
-          var actionCls='stored';
-          if(actionRaw.indexOf('exact-dup')>=0||actionRaw.indexOf('\u23ED')>=0) actionCls='exact-dup';
-          else if(actionRaw.indexOf('dedup')>=0||actionRaw.indexOf('\uD83D\uDD01')>=0) actionCls='dedup';
-          else if(actionRaw.indexOf('merged')>=0||actionRaw.indexOf('\uD83D\uDD00')>=0) actionCls='merged';
-          else if(actionRaw.indexOf('error')>=0||actionRaw.indexOf('\u274C')>=0) actionCls='error';
-          var actionLabel={'stored':'\u2713 stored','exact-dup':'\u23ED skip','dedup':'\uD83D\uDD01 dedup','merged':'\uD83D\uDD00 merged','error':'\u2717 error'}[actionCls]||actionCls;
-          html+='<div class="log-msg-item">'+
-            '<span class="log-msg-role '+role+'">'+role+'</span>'+
-            '<span class="log-msg-action '+actionCls+'">'+actionLabel+'</span>'+
-            '<span class="log-msg-text">'+escapeHtml(text.length>150?text.slice(0,150)+'...':text)+'</span>'+
-          '</div>';
-        }else{
-          html+='<div class="log-msg-item"><span class="log-msg-text">'+escapeHtml(l.length>200?l.slice(0,200)+'...':l)+'</span></div>';
-        }
-      });
-      html+='</div>';
-    }else if(inputObj.details&&Array.isArray(inputObj.details)&&inputObj.details.length>0){
-      html+='<div class="log-msg-list">';
-      inputObj.details.forEach(function(d){
-        var s=typeof d==='string'?d:String(d);
-        var dm=s.match(/^\\[(\\w+)\\]\\s*(.*)/);
-        if(dm){
-          html+='<div class="log-msg-item"><span class="log-msg-role '+dm[1]+'">'+dm[1]+'</span><span class="log-msg-text">'+escapeHtml(dm[2].length>150?dm[2].slice(0,150)+'...':dm[2])+'</span></div>';
-        }else{
-          html+='<div class="log-msg-item"><span class="log-msg-text">'+escapeHtml(s.length>150?s.slice(0,150)+'...':s)+'</span></div>';
-        }
+      parsed.forEach(function(e){
+        var actionCls=e.action==='exact-dup'?'exact-dup':e.action==='dedup'?'dedup':e.action==='merged'?'merged':e.action==='error'?'error':'stored';
+        var actionLabel={'stored':'\u2713 stored','exact-dup':'\u23ED skip','dedup':'\uD83D\uDD01 dedup','merged':'\uD83D\uDD00 merged','error':'\u2717 error'}[actionCls]||actionCls;
+        var displayText=e.content.split('\\n')[0].trim();
+        html+='<div class="log-msg-item">'+
+          '<span class="log-msg-role '+e.role+'">'+e.role+'</span>'+
+          '<span class="log-msg-action '+actionCls+'">'+actionLabel+'</span>'+
+          '<span class="log-msg-text">'+escapeHtml(displayText)+'</span>'+
+        '</div>';
       });
       html+='</div>';
     }
@@ -2141,9 +2354,51 @@ function buildLogSummary(lg){
     const keys=Object.keys(inputObj);
     keys.slice(0,4).forEach(k=>{
       const v=String(inputObj[k]);
-      html+='<span class="log-summary-kv"><span class="kv-label">'+escapeHtml(k)+':</span><span class="kv-val">'+escapeHtml(v.length>60?v.slice(0,60)+'...':v)+'</span></span>';
+      html+='<span class="log-summary-kv"><span class="kv-label">'+escapeHtml(k)+':</span><span class="kv-val">'+escapeHtml(v)+'</span></span>';
     });
   }
+  return html;
+}
+function buildRecallDetailHtml(rd){
+  var html='<div class="recall-detail">';
+  var cands=rd.candidates||[];
+  var filtered=rd.filtered||[];
+  if(cands.length>0){
+    html+='<div class="recall-detail-section" onclick="this.classList.toggle(\\\'expanded\\\')">';
+    html+='<div class="recall-detail-title"><span class="recall-expand-icon">\u25B6</span>\u{1F50D} '+t('logs.recall.initial')+' ('+cands.length+')</div>';
+    html+='<div class="recall-detail-items">';
+    cands.forEach(function(c,i){
+      var scoreClass=c.score>=0.7?'high':c.score>=0.5?'mid':'low';
+      var shortText=escapeHtml(c.summary||c.content||c.original_excerpt||'');
+      var fullText=escapeHtml(c.content||c.original_excerpt||c.summary||'');
+      html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
+      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+c.score.toFixed(3)+'</span><span class="log-msg-role '+(c.role||'user')+'">'+(c.role||'user')+'</span><span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+      html+='<div class="recall-summary-full">'+fullText+'</div>';
+      html+='</div>';
+    });
+    html+='</div></div>';
+  }
+  if(filtered.length>0){
+    html+='<div class="recall-detail-section filtered" onclick="this.classList.toggle(\\\'expanded\\\')">';
+    html+='<div class="recall-detail-title"><span class="recall-expand-icon">\u25B6</span>\u2705 '+t('logs.recall.filtered')+' ('+filtered.length+')</div>';
+    html+='<div class="recall-detail-items">';
+    filtered.forEach(function(f,i){
+      var scoreClass=f.score>=0.7?'high':f.score>=0.5?'mid':'low';
+      var shortText=escapeHtml(f.summary||f.content||f.original_excerpt||'');
+      var fullText=escapeHtml(f.content||f.original_excerpt||f.summary||'');
+      html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
+      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+f.score.toFixed(3)+'</span><span class="log-msg-role '+(f.role||'user')+'">'+(f.role||'user')+'</span><span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+      html+='<div class="recall-summary-full">'+fullText+'</div>';
+      html+='</div>';
+    });
+    html+='</div></div>';
+  }else if(cands.length>0){
+    html+='<div style="font-size:10px;color:var(--text-muted);margin-top:4px">\u26A0 '+t('logs.recall.noneRelevant')+'</div>';
+  }
+  if(rd.status==='error'&&rd.error){
+    html+='<div style="margin-top:8px;color:var(--accent);font-size:12px">\u274C '+escapeHtml(rd.error)+'</div>';
+  }
+  html+='</div>';
   return html;
 }
 function renderLogs(logs){
@@ -2158,7 +2413,29 @@ function renderLogs(logs){
     const toolCls=lg.toolName.replace(/[^a-zA-Z0-9_]/g,'_');
     const dur=lg.durationMs<1000?Math.round(lg.durationMs)+'ms':(lg.durationMs/1000).toFixed(1)+'s';
     let inputDisplay='';
-    try{const parsed=JSON.parse(lg.input);inputDisplay=JSON.stringify(parsed,null,2);}catch(_){inputDisplay=lg.input;}
+    let inputHtml='';
+    let outputHtml='';
+    try{
+      const parsed=JSON.parse(lg.input);
+      if(lg.toolName==='memory_add'){
+        var addEntries=parseMemoryAddEntries(lg.output||'');
+        if(addEntries.length>0){
+          inputHtml='<div class="log-add-detail">';
+          addEntries.forEach(function(e){
+            inputHtml+='<div class="log-add-msg"><div class="log-add-msg-role">'+escapeHtml(e.role)+'</div><div class="log-add-msg-content">'+escapeHtml(e.content).replace(/\\n/g,'<br>')+'</div></div>';
+          });
+          inputHtml+='</div>';
+        }
+      }else if(parsed.type==='auto_recall'||parsed.type==='tool_call'){
+        inputDisplay=JSON.stringify({query:parsed.query},null,2);
+      }else{
+        inputDisplay=JSON.stringify(parsed,null,2);
+      }
+    }catch(_){inputDisplay=lg.input;}
+    try{
+      var rd2=null;try{rd2=JSON.parse(lg.output);}catch(_e){}
+      if(rd2&&rd2.candidates){outputHtml=buildRecallDetailHtml(rd2);}
+    }catch(_){}
     const summary=buildLogSummary(lg);
     return '<div class="log-entry" id="log-'+i+'">'+
       '<div class="log-header" onclick="toggleLog('+i+')">'+
@@ -2172,11 +2449,11 @@ function renderLogs(logs){
       '<div class="log-detail" id="log-detail-'+i+'">'+
         '<div class="log-io-section">'+
           '<div class="log-io-label">\u25B6 '+t('logs.input')+'</div>'+
-          '<pre class="log-io-content">'+escapeHtml(inputDisplay)+'</pre>'+
+          (inputHtml?inputHtml:'<pre class="log-io-content">'+escapeHtml(inputDisplay)+'</pre>')+
         '</div>'+
         '<div class="log-io-section">'+
           '<div class="log-io-label">\u25C0 '+t('logs.output')+'</div>'+
-          '<pre class="log-io-content">'+escapeHtml(lg.output)+'</pre>'+
+          (outputHtml?outputHtml:'<pre class="log-io-content">'+escapeHtml(lg.output)+'</pre>')+
         '</div>'+
       '</div>'+
     '</div>';
@@ -2219,8 +2496,6 @@ async function loadMetrics(){
   document.getElementById('mSessions').textContent=formatNum(d.totals.sessions);
   document.getElementById('mEmbeddings').textContent=formatNum(d.totals.embeddings);
   renderChartWrites(d.writesPerDay);
-  renderBreakdown(d.roleBreakdown,'breakdownRole');
-  renderBreakdown(d.kindBreakdown,'breakdownKind');
   loadToolMetrics();
 }
 
@@ -2289,7 +2564,6 @@ async function loadTasks(){
         '</div>'+
         '<div class="card-actions" onclick="event.stopPropagation()">'+
           '<button class="btn btn-sm btn-ghost" onclick="openTaskDetail(\\''+task.id+'\\')">'+t('card.expand')+'</button>'+
-          '<button class="btn btn-sm btn-ghost" onclick="editTaskInline(\\''+task.id+'\\')">'+t('card.edit')+'</button>'+
           (task.status==='completed'&&(!task.skillStatus||task.skillStatus==='not_generated'||task.skillStatus==='skipped')?'<button class="btn btn-sm btn-ghost" onclick="retrySkillGen(\\''+task.id+'\\')">'+t('task.retrySkill.short')+'</button>':'')+
           '<button class="btn btn-sm btn-ghost" style="color:var(--accent)" onclick="deleteTask(\\''+task.id+'\\')">'+t('task.delete')+'</button>'+
         '</div>'+
@@ -2364,14 +2638,16 @@ async function openTaskDetail(taskId){
     if(task.chunks.length===0){
       document.getElementById('taskDetailChunks').innerHTML='<div style="color:var(--text-muted);padding:12px;font-size:13px">'+t('tasks.nochunks')+'</div>';
     }else{
-      document.getElementById('taskDetailChunks').innerHTML=task.chunks.map(c=>{
+      document.getElementById('taskDetailChunks').innerHTML=task.chunks.map(function(c,i){
         var roleLabel=c.role==='user'?t('tasks.role.user'):c.role==='assistant'?t('tasks.role.assistant'):c.role.toUpperCase();
         return '<div class="task-chunk-item role-'+c.role+'">'+
           '<div class="task-chunk-role '+c.role+'">'+roleLabel+'</div>'+
-          '<div class="task-chunk-bubble" onclick="this.classList.toggle(\\\'expanded\\\')">'+esc(c.content)+'</div>'+
+          '<div class="task-chunk-bubble collapsed" id="chunk_b_'+i+'">'+esc(c.content)+'</div>'+
+          '<div class="task-chunk-expand" id="chunk_e_'+i+'" onclick="toggleChunkExpand('+i+')"><span class="expand-arrow">▼</span> <span class="expand-label">'+t('tasks.expand')+'</span></div>'+
           '<div class="task-chunk-time">'+formatTime(c.createdAt)+'</div>'+
         '</div>';
       }).join('');
+      setTimeout(function(){initChunkExpanders(task.chunks.length)},50);
     }
   }catch(e){
     document.getElementById('taskDetailTitle').textContent=t('tasks.error');
@@ -2435,6 +2711,33 @@ function renderTaskSkillSection(task){
   }
 }
 
+function initChunkExpanders(count){
+  for(var i=0;i<count;i++){
+    var b=document.getElementById('chunk_b_'+i);
+    var e=document.getElementById('chunk_e_'+i);
+    if(b && b.scrollHeight > b.clientHeight + 4){
+      e.style.display='flex';
+    } else if(b) {
+      b.classList.remove('collapsed');
+    }
+  }
+}
+function toggleChunkExpand(i){
+  var b=document.getElementById('chunk_b_'+i);
+  var e=document.getElementById('chunk_e_'+i);
+  if(!b||!e)return;
+  var expanding=b.classList.contains('collapsed');
+  if(expanding){
+    b.classList.remove('collapsed');
+    e.classList.add('is-expanded');
+    e.querySelector('.expand-label').textContent=t('tasks.collapse');
+  }else{
+    b.classList.add('collapsed');
+    e.classList.remove('is-expanded');
+    e.querySelector('.expand-label').textContent=t('tasks.expand');
+  }
+}
+
 function closeTaskDetail(event){
   if(event && event.target!==document.getElementById('taskDetailOverlay')) return;
   document.getElementById('taskDetailOverlay').classList.remove('show');
@@ -2462,32 +2765,6 @@ async function deleteTask(taskId){
   }catch(e){ alert(t('task.delete.error')+e.message); }
 }
 
-async function editTaskInline(){
-  if(!_currentTaskData) return;
-  var task=_currentTaskData;
-  var titleEl=document.getElementById('taskDetailTitle');
-  var summaryEl=document.getElementById('taskDetailSummary');
-  var actionsEl=document.getElementById('taskDetailActions');
-
-  titleEl.innerHTML='<input id="editTaskTitle" class="filter-input" style="width:100%;font-size:16px;font-weight:600" value="'+esc(task.title||'')+'"/>';
-  summaryEl.innerHTML='<textarea id="editTaskSummary" class="filter-input" style="width:100%;min-height:80px;font-size:13px;resize:vertical">'+esc(task.summary||'')+'</textarea>';
-  actionsEl.innerHTML=
-    '<button class="btn btn-primary" onclick="saveTaskEdit()" style="font-size:12px">'+t('task.save')+'</button>'+
-    '<button class="btn btn-ghost" onclick="openTaskDetail(\\''+esc(task.id)+'\\')" style="font-size:12px">'+t('task.cancel')+'</button>';
-}
-
-async function saveTaskEdit(){
-  if(!_currentTaskId) return;
-  var title=document.getElementById('editTaskTitle').value.trim();
-  var summary=document.getElementById('editTaskSummary').value.trim();
-  try{
-    const r=await fetch('/api/task/'+_currentTaskId,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:title,summary:summary})});
-    const d=await r.json();
-    if(!r.ok) throw new Error(d.error||'unknown');
-    openTaskDetail(_currentTaskId);
-    loadTasks();
-  }catch(e){ alert(t('task.save.error')+e.message); }
-}
 
 /* ─── Skills View Logic ─── */
 let skillsStatusFilter='';
@@ -2548,7 +2825,6 @@ async function loadSkills(){
         '</div>'+
         '<div class="card-actions" onclick="event.stopPropagation()">'+
           '<button class="btn btn-sm btn-ghost" onclick="openSkillDetail(\\''+skill.id+'\\')">'+t('card.expand')+'</button>'+
-          '<button class="btn btn-sm btn-ghost" onclick="editSkillInline(\\''+skill.id+'\\')">'+t('card.edit')+'</button>'+
           (skill.visibility==='public'?'<button class="btn btn-sm btn-ghost" onclick="toggleSkillPublic(\\''+skill.id+'\\',false)">\\u{1F512} '+t('skills.setPrivate')+'</button>':'<button class="btn btn-sm btn-ghost" onclick="toggleSkillPublic(\\''+skill.id+'\\',true)">\\u{1F310} '+t('skills.setPublic')+'</button>')+
           '<button class="btn btn-sm btn-ghost" style="color:var(--accent)" onclick="deleteSkill(\\''+skill.id+'\\')">'+t('skill.delete')+'</button>'+
         '</div>'+
@@ -2695,11 +2971,11 @@ async function toggleSkillVisibility(){
   const newVis=btn.dataset.vis==='public'?'private':'public';
   try{
     const r=await fetch('/api/skill/'+currentSkillId+'/visibility',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({visibility:newVis})});
-    if(!r.ok) throw new Error('Failed: '+r.status);
+    if(!r.ok){var errBody='';try{var ej=await r.json();errBody=ej.error||JSON.stringify(ej);}catch(x){errBody=await r.text();}throw new Error(r.status+': '+errBody);}
     openSkillDetail(currentSkillId);
     loadSkills();
   }catch(e){
-    alert('Error: '+e.message);
+    toast('Error: '+e.message,'error');
   }
 }
 
@@ -2707,12 +2983,124 @@ async function toggleSkillPublic(id,setPublic){
   const newVis=setPublic?'public':'private';
   try{
     const r=await fetch('/api/skill/'+id+'/visibility',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({visibility:newVis})});
-    if(!r.ok) throw new Error('Failed: '+r.status);
+    if(!r.ok){var errBody='';try{var ej=await r.json();errBody=ej.error||JSON.stringify(ej);}catch(x){errBody=await r.text();}throw new Error(r.status+': '+errBody);}
     toast(setPublic?t('toast.setPublic'):t('toast.setPrivate'),'success');
     loadSkills();
   }catch(e){
     toast('Error: '+e.message,'error');
   }
+}
+
+/* ─── Model Health Status ─── */
+
+const HEALTH_ROLE_LABELS={
+  'embedding':'Embedding',
+  'summarize':'Summarizer',
+  'filterRelevant':'Memory Filter',
+  'judgeDedup':'Dedup Judge',
+  'summarizeTask':'Task Summarizer',
+  'judgeNewTopic':'Topic Judge'
+};
+
+function classifyError(msg){
+  if(!msg) return '';
+  if(msg.indexOf('\u989D\u5EA6\u5DF2\u7528\u5C3D')>=0||msg.indexOf('quota')>=0||msg.indexOf('RemainQuota')>=0) return 'API quota exhausted';
+  if(msg.indexOf('401')>=0||msg.indexOf('Unauthorized')>=0) return 'Auth failed (401)';
+  if(msg.indexOf('timeout')>=0||msg.indexOf('Timeout')>=0) return 'Request timed out';
+  if(msg.indexOf('429')>=0) return 'Rate limited (429)';
+  if(msg.indexOf('ECONNREFUSED')>=0) return 'Connection refused';
+  if(msg.indexOf('ENOTFOUND')>=0) return 'DNS resolution failed';
+  if(msg.indexOf('403')>=0) return 'Forbidden (403)';
+  if(msg.indexOf('503')>=0||msg.indexOf('upstream connect error')>=0||msg.indexOf('Service Unavailable')>=0) return 'Service unavailable (503)';
+  if(msg.indexOf('502')>=0||msg.indexOf('Bad Gateway')>=0) return 'Bad gateway (502)';
+  if(msg.indexOf('500')>=0||msg.indexOf('Internal Server Error')>=0) return 'Server error (500)';
+  if(msg.indexOf('404')>=0||msg.indexOf('Not Found')>=0) return 'Not found (404)';
+  if(msg.indexOf('fetch failed')>=0||msg.indexOf('ETIMEDOUT')>=0) return 'Network error';
+  if(msg.indexOf('Unknown')>=0&&msg.indexOf('provider')>=0) return 'Unknown provider';
+  var m=msg.match(/\((\d{3})\)/); if(m) return 'HTTP error ('+m[1]+')';
+  return msg.length>80?msg.substring(0,77)+'...':msg;
+}
+
+function shortenModel(s){return s?s.replace('openai_compatible/','').replace('openai/',''):'\u2014';}
+
+async function loadModelHealth(){
+  var bar=document.getElementById('modelHealthBar');
+  if(!bar) return;
+  try{
+    var r=await fetch('/api/model-health');
+    if(!r.ok){bar.innerHTML='<div class="mh-empty">Health data unavailable</div>';return;}
+    var d=await r.json();
+    var models=d.models||[];
+    if(models.length===0){
+      bar.innerHTML='<div class="mh-empty">No model calls recorded yet</div>';
+      return;
+    }
+    var order=['embedding','summarize','filterRelevant','judgeDedup','summarizeTask','judgeNewTopic'];
+    models.sort(function(a,b){var ai=order.indexOf(a.role),bi=order.indexOf(b.role);if(ai<0)ai=99;if(bi<0)bi=99;return ai-bi;});
+
+    var h='<table class="mh-table"><thead><tr>';
+    h+='<th style="width:30px"></th><th>Role</th><th>Status</th><th>Model</th><th>Issue</th><th style="text-align:right">Updated</th>';
+    h+='</tr></thead><tbody>';
+
+    for(var i=0;i<models.length;i++){
+      var m=models[i];
+      var st=m.status||'unknown';
+      var label=HEALTH_ROLE_LABELS[m.role]||m.role;
+      var badgeText=st==='ok'?'OK':st==='degraded'?'Degraded':st==='error'?'Error':'\u2014';
+      var ago='';
+      if(st==='ok'&&m.lastSuccess) ago=timeAgo(m.lastSuccess);
+      else if(m.lastError) ago=timeAgo(m.lastError);
+
+      h+='<tr>';
+      h+='<td><span class="mh-dot '+st+'"></span></td>';
+      h+='<td><span style="font-weight:500">'+escapeHtml(label)+'</span></td>';
+      h+='<td><span class="mh-badge '+st+'">'+badgeText+'</span></td>';
+      h+='<td><span class="mh-model-name">'+escapeHtml(shortenModel(m.model))+'</span></td>';
+
+      var issue='';
+      if((st==='error'||st==='degraded')&&m.lastErrorMessage){
+        var shortErr=classifyError(m.lastErrorMessage);
+        if(m.failedModel&&m.failedModel!==m.model) issue=shortenModel(m.failedModel)+': ';
+        issue+=shortErr;
+        if(m.consecutiveErrors>1) issue+=' ('+m.consecutiveErrors+'x)';
+      }
+      if(issue) h+='<td><span class="mh-err-text" data-err="'+escapeHtml(m.lastErrorMessage||'')+'">'+escapeHtml(issue)+'</span></td>';
+      else h+='<td><span style="color:var(--text-muted);font-size:11px">\u2014</span></td>';
+
+      h+='<td style="text-align:right"><span class="mh-time">'+(ago||'\u2014')+'</span></td>';
+      h+='</tr>';
+    }
+    h+='</tbody></table>';
+    bar.innerHTML=h;
+    initMhTooltips();
+  }catch(e){
+    bar.innerHTML='<div class="mh-empty">Failed to load model health</div>';
+  }
+}
+
+function initMhTooltips(){
+  var tip=document.getElementById('mhTooltip');
+  if(!tip){tip=document.createElement('div');tip.id='mhTooltip';document.body.appendChild(tip);}
+  document.querySelectorAll('.mh-err-text[data-err]').forEach(function(el){
+    el.addEventListener('mouseenter',function(e){
+      var msg=el.getAttribute('data-err');
+      if(!msg)return;
+      tip.textContent=msg;
+      tip.style.display='block';
+      var rect=el.getBoundingClientRect();
+      tip.style.left=Math.max(0,Math.min(rect.left,window.innerWidth-490))+'px';
+      tip.style.top=(rect.bottom+6)+'px';
+    });
+    el.addEventListener('mouseleave',function(){tip.style.display='none';});
+  });
+}
+
+function timeAgo(ts){
+  var diff=Date.now()-ts;
+  if(diff<60000) return 'just now';
+  if(diff<3600000) return Math.floor(diff/60000)+'m ago';
+  if(diff<86400000) return Math.floor(diff/3600000)+'h ago';
+  return Math.floor(diff/86400000)+'d ago';
 }
 
 /* ─── Settings / Config ─── */
@@ -2755,7 +3143,37 @@ async function loadConfig(){
   }
 }
 
+var _providerDefaults={
+  siliconflow:{endpoint:'https://api.siliconflow.cn/v1',embModel:'BAAI/bge-m3',chatModel:'Qwen/Qwen2.5-7B-Instruct'},
+  openai:{endpoint:'https://api.openai.com/v1',embModel:'text-embedding-3-small',chatModel:'gpt-4o-mini'},
+  anthropic:{endpoint:'https://api.anthropic.com/v1/messages',chatModel:'claude-3-haiku-20240307'},
+  cohere:{endpoint:'https://api.cohere.com/v2',embModel:'embed-english-v3.0'},
+  mistral:{endpoint:'https://api.mistral.ai/v1',embModel:'mistral-embed'},
+  voyage:{endpoint:'https://api.voyageai.com/v1',embModel:'voyage-3'},
+  gemini:{endpoint:'',embModel:'text-embedding-004',chatModel:'gemini-2.0-flash'},
+  zhipu:{endpoint:'https://open.bigmodel.cn/api/paas/v4',embModel:'embedding-3',chatModel:'glm-4-flash'},
+  deepseek:{endpoint:'https://api.deepseek.com/v1',chatModel:'deepseek-chat'},
+  bailian:{endpoint:'https://dashscope.aliyuncs.com/compatible-mode/v1',embModel:'text-embedding-v3',chatModel:'qwen-max'},
+  moonshot:{endpoint:'https://api.moonshot.cn/v1',chatModel:'moonshot-v1-8k'}
+};
+function onProviderChange(section){
+  var map={embedding:['cfgEmbEndpoint','cfgEmbModel','emb'],summarizer:['cfgSumEndpoint','cfgSumModel','chat'],skill:['cfgSkillEndpoint','cfgSkillModel','chat']};
+  var m=map[section];if(!m)return;
+  var sel=document.getElementById(section==='embedding'?'cfgEmbProvider':section==='summarizer'?'cfgSumProvider':'cfgSkillProvider');
+  var pv=sel.value;
+  var def=_providerDefaults[pv];
+  if(!def)return;
+  var epEl=document.getElementById(m[0]);
+  var mdEl=document.getElementById(m[1]);
+  if(def.endpoint&&!epEl.value.trim()) epEl.value=def.endpoint;
+  if(m[2]==='emb'&&def.embModel&&!mdEl.value.trim()) mdEl.value=def.embModel;
+  if(m[2]==='chat'&&def.chatModel&&!mdEl.value.trim()) mdEl.value=def.chatModel;
+}
+
 async function saveConfig(){
+  var saveBtn=document.querySelector('.settings-actions .btn-primary');
+  saveBtn.disabled=true;saveBtn.textContent=t('settings.test.loading');
+
   const cfg={};
   const embP=document.getElementById('cfgEmbProvider').value;
   if(embP){
@@ -2765,11 +3183,15 @@ async function saveConfig(){
     const k=document.getElementById('cfgEmbApiKey').value.trim();if(k) cfg.embedding.apiKey=k;
   }
   const sumP=document.getElementById('cfgSumProvider').value;
-  if(sumP){
+  const sumModel=document.getElementById('cfgSumModel').value.trim();
+  const sumEndpoint=document.getElementById('cfgSumEndpoint').value.trim();
+  const sumApiKey=document.getElementById('cfgSumApiKey').value.trim();
+  var hasSumConfig=!!(sumModel||sumEndpoint||sumApiKey);
+  if(hasSumConfig&&sumP){
     cfg.summarizer={provider:sumP};
-    const v=document.getElementById('cfgSumModel').value.trim();if(v) cfg.summarizer.model=v;
-    const e=document.getElementById('cfgSumEndpoint').value.trim();if(e) cfg.summarizer.endpoint=e;
-    const k=document.getElementById('cfgSumApiKey').value.trim();if(k) cfg.summarizer.apiKey=k;
+    if(sumModel) cfg.summarizer.model=sumModel;
+    if(sumEndpoint) cfg.summarizer.endpoint=sumEndpoint;
+    if(sumApiKey) cfg.summarizer.apiKey=sumApiKey;
     const tp=document.getElementById('cfgSumTemp').value.trim();if(tp!=='') cfg.summarizer.temperature=Number(tp);
   }
   cfg.skillEvolution={
@@ -2780,29 +3202,123 @@ async function saveConfig(){
   const mk=document.getElementById('cfgSkillMinChunks').value.trim();if(mk) cfg.skillEvolution.minChunksForEval=Number(mk);
 
   const skP=document.getElementById('cfgSkillProvider').value;
-  if(skP){
+  const skModel=document.getElementById('cfgSkillModel').value.trim();
+  const skEndpoint=document.getElementById('cfgSkillEndpoint').value.trim();
+  const skApiKey=document.getElementById('cfgSkillApiKey').value.trim();
+  var hasSkillConfig=!!(skP&&(skModel||skEndpoint||skApiKey));
+  if(hasSkillConfig){
     cfg.skillEvolution.summarizer={provider:skP};
-    const sv=document.getElementById('cfgSkillModel').value.trim();if(sv) cfg.skillEvolution.summarizer.model=sv;
-    const se=document.getElementById('cfgSkillEndpoint').value.trim();if(se) cfg.skillEvolution.summarizer.endpoint=se;
-    const sk=document.getElementById('cfgSkillApiKey').value.trim();if(sk) cfg.skillEvolution.summarizer.apiKey=sk;
+    if(skModel) cfg.skillEvolution.summarizer.model=skModel;
+    if(skEndpoint) cfg.skillEvolution.summarizer.endpoint=skEndpoint;
+    if(skApiKey) cfg.skillEvolution.summarizer.apiKey=skApiKey;
   }
 
   const vp=document.getElementById('cfgViewerPort').value.trim();
   if(vp) cfg.viewerPort=Number(vp);
+  cfg.telemetry={enabled:document.getElementById('cfgTelemetryEnabled').checked};
 
-  cfg.telemetry={
-    enabled:document.getElementById('cfgTelemetryEnabled').checked
-  };
+  function done(){saveBtn.disabled=false;saveBtn.textContent=t('settings.save');}
 
+  // 1) Embedding model is required
+  if(!embP||embP===''){done();toast(t('settings.save.emb.required'),'error');return;}
+
+  // 2) Test embedding
+  try{
+    var er=await fetch('/api/test-model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'embedding',provider:cfg.embedding.provider,model:cfg.embedding.model||'',endpoint:cfg.embedding.endpoint||'',apiKey:cfg.embedding.apiKey||''})});
+    if(er.status===401){done();toast(t('settings.session.expired'),'error');return;}
+    var ed=await er.json();
+    if(!ed.ok){done();toast(t('settings.save.emb.fail')+': '+ed.error,'error');document.getElementById('testEmbResult').className='test-result fail';document.getElementById('testEmbResult').innerHTML='\\u274C '+ed.error;return;}
+    document.getElementById('testEmbResult').className='test-result ok';document.getElementById('testEmbResult').innerHTML='\\u2705 '+t('settings.test.ok');
+  }catch(e){done();toast(t('settings.save.emb.fail')+': '+e.message,'error');return;}
+
+  // 3) Test summarizer if user filled it
+  if(hasSumConfig&&cfg.summarizer){
+    try{
+      var sr=await fetch('/api/test-model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'summarizer',provider:cfg.summarizer.provider,model:cfg.summarizer.model||'',endpoint:cfg.summarizer.endpoint||'',apiKey:cfg.summarizer.apiKey||''})});
+      if(sr.status===401){done();toast(t('settings.session.expired'),'error');return;}
+      var sd=await sr.json();
+      if(!sd.ok){done();toast(t('settings.save.sum.fail')+': '+sd.error,'error');document.getElementById('testSumResult').className='test-result fail';document.getElementById('testSumResult').innerHTML='\\u274C '+sd.error;return;}
+      document.getElementById('testSumResult').className='test-result ok';document.getElementById('testSumResult').innerHTML='\\u2705 '+t('settings.test.ok');
+    }catch(e){done();toast(t('settings.save.sum.fail')+': '+e.message,'error');return;}
+  }
+
+  // 4) Test skill model if user filled it
+  if(hasSkillConfig&&cfg.skillEvolution.summarizer){
+    try{
+      var kr=await fetch('/api/test-model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'summarizer',provider:cfg.skillEvolution.summarizer.provider,model:cfg.skillEvolution.summarizer.model||'',endpoint:cfg.skillEvolution.summarizer.endpoint||'',apiKey:cfg.skillEvolution.summarizer.apiKey||''})});
+      if(kr.status===401){done();toast(t('settings.session.expired'),'error');return;}
+      var kd=await kr.json();
+      if(!kd.ok){done();toast(t('settings.save.skill.fail')+': '+kd.error,'error');document.getElementById('testSkillResult').className='test-result fail';document.getElementById('testSkillResult').innerHTML='\\u274C '+kd.error;return;}
+      document.getElementById('testSkillResult').className='test-result ok';document.getElementById('testSkillResult').innerHTML='\\u2705 '+t('settings.test.ok');
+    }catch(e){done();toast(t('settings.save.skill.fail')+': '+e.message,'error');return;}
+  }
+
+  // 5) If summarizer or skill model not configured, check OpenClaw fallback and confirm
+  if(!hasSumConfig||!hasSkillConfig){
+    try{
+      var fr=await fetch('/api/fallback-model');
+      var fb=await fr.json();
+      var msgs=[];
+      if(!hasSumConfig){msgs.push(t('settings.save.sum.fallback'));}
+      if(!hasSkillConfig){msgs.push(t('settings.save.skill.fallback'));}
+      var fbInfo=fb.available?(fb.model+' ('+fb.baseUrl+')'):t('settings.save.fallback.none');
+      var confirmMsg=msgs.join('\\n')+'\\n\\n'+t('settings.save.fallback.model')+fbInfo+'\\n\\n'+t('settings.save.fallback.confirm');
+      if(!confirm(confirmMsg)){done();return;}
+    }catch(e){}
+  }
+
+  // 6) All tests passed, save
   try{
     const r=await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
     if(!r.ok) throw new Error(await r.text());
     const el=document.getElementById('settingsSaved');
     el.classList.add('show');
     setTimeout(()=>el.classList.remove('show'),2500);
+    toast(t('settings.saved'),'success');
   }catch(e){
-    showToast(t('settings.save.fail')+': '+e.message,'error');
+    toast(t('settings.save.fail')+': '+e.message,'error');
+  }finally{done();}
+}
+
+async function testModel(type){
+  var ids={embedding:['Emb','cfgEmbProvider','cfgEmbModel','cfgEmbEndpoint','cfgEmbApiKey'],summarizer:['Sum','cfgSumProvider','cfgSumModel','cfgSumEndpoint','cfgSumApiKey'],skill:['Skill','cfgSkillProvider','cfgSkillModel','cfgSkillEndpoint','cfgSkillApiKey']};
+  var c=ids[type];if(!c)return;
+  var resultEl=document.getElementById('test'+c[0]+'Result');
+  var btn=document.getElementById('test'+c[0]+'Btn');
+  var provider=document.getElementById(c[1]).value;
+  var model=document.getElementById(c[2]).value.trim();
+  var endpoint=document.getElementById(c[3]).value.trim();
+  var apiKey=document.getElementById(c[4]).value.trim();
+  if(!provider||(provider!=='local'&&!model)){
+    resultEl.className='test-result fail';
+    resultEl.innerHTML='\\u274C '+t('settings.test.fail')+'<div style="margin-top:4px;font-size:11px;color:var(--text-muted)">Provider and Model are required</div>';
+    return;
   }
+  if(provider!=='local'&&!apiKey){
+    resultEl.className='test-result fail';
+    resultEl.innerHTML='\\u274C '+t('settings.test.fail')+'<div style="margin-top:4px;font-size:11px;color:var(--text-muted)">API Key is required</div>';
+    return;
+  }
+  resultEl.className='test-result loading';resultEl.textContent=t('settings.test.loading');
+  btn.disabled=true;
+  try{
+    var body={type:type,provider:provider,model:model,endpoint:endpoint,apiKey:apiKey};
+    var r=await fetch('/api/test-model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(r.status===401){resultEl.className='test-result fail';resultEl.innerHTML='\\u274C '+t('settings.session.expired');btn.disabled=false;return;}
+    var d=await r.json();
+    if(d.ok){
+      resultEl.className='test-result ok';
+      resultEl.innerHTML='\\u2705 '+t('settings.test.ok')+(d.detail?'<div style="margin-top:4px;font-size:11px;color:var(--text-muted)">'+esc(d.detail)+'</div>':'');
+    }else{
+      var errMsg=(d.error||'Unknown error').replace(/:\s*$/,'').trim();
+      resultEl.className='test-result fail';
+      resultEl.innerHTML='\\u274C '+t('settings.test.fail')+(errMsg?'<div style="margin-top:6px;font-size:11px;padding:8px 10px;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);border-radius:6px;white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;font-family:SF Mono,Monaco,Consolas,monospace">'+esc(errMsg)+'</div>':'');
+    }
+  }catch(e){
+    var catchMsg=(e.message||'Network error').replace(/:\s*$/,'').trim();
+    resultEl.className='test-result fail';
+    resultEl.innerHTML='\\u274C '+t('settings.test.fail')+(catchMsg?'<div style="margin-top:6px;font-size:11px;padding:8px 10px;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);border-radius:6px;white-space:pre-wrap;word-break:break-all">'+esc(catchMsg)+'</div>':'');
+  }finally{btn.disabled=false;}
 }
 
 function renderSkillMarkdown(md){
@@ -2848,28 +3364,6 @@ async function deleteSkill(skillId){
   }catch(e){ alert(t('skill.delete.error')+e.message); }
 }
 
-function editSkillInline(){
-  var skill=window._currentSkillData;
-  if(!skill) return;
-  var descEl=document.getElementById('skillDetailDesc');
-  var actionsEl=document.getElementById('skillDetailActions');
-  descEl.innerHTML='<textarea id="editSkillDesc" class="filter-input" style="width:100%;min-height:60px;font-size:13px;resize:vertical">'+esc(skill.description||'')+'</textarea>';
-  actionsEl.innerHTML=
-    '<button class="btn btn-primary" onclick="saveSkillEdit()" style="font-size:12px">'+t('skill.save')+'</button>'+
-    '<button class="btn btn-ghost" onclick="openSkillDetail(\\''+esc(skill.id)+'\\')" style="font-size:12px">'+t('skill.cancel')+'</button>';
-}
-
-async function saveSkillEdit(){
-  if(!currentSkillId) return;
-  var desc=document.getElementById('editSkillDesc').value.trim();
-  try{
-    const r=await fetch('/api/skill/'+currentSkillId,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({description:desc})});
-    const d=await r.json();
-    if(!r.ok) throw new Error(d.error||'unknown');
-    openSkillDetail(currentSkillId);
-    loadSkills();
-  }catch(e){ alert(t('skill.save.error')+e.message); }
-}
 
 function formatDuration(ms){
   const s=Math.floor(ms/1000);
@@ -3135,22 +3629,12 @@ function renderToolAgg(data){
     '</tbody></table>';
 }
 
-function renderBreakdown(obj,containerId){
-  const el=document.getElementById(containerId);
-  if(!el)return;
-  const entries=Object.entries(obj||{}).sort((a,b)=>b[1]-a[1]);
-  const total=entries.reduce((s,[,v])=>s+v,0)||1;
-  el.innerHTML=entries.map(([label,value])=>{
-    const pct=Math.round((value/total)*100);
-    return '<div class="breakdown-item"><div class="bd-top"><span class="label">'+esc(label)+'</span><span class="value">'+value+' <span style="font-size:11px;font-weight:500;color:var(--text-muted)">('+pct+'%)</span></span></div><div class="breakdown-bar-wrap"><div class="breakdown-bar" style="width:'+pct+'%"></div></div></div>';
-  }).join('');
-}
-
 /* ─── Data loading ─── */
 async function loadAll(){
   await Promise.all([loadStats(),loadMemories()]);
   checkMigrateStatus();
   connectPPSSE();
+  checkForUpdate();
 }
 
 async function loadStats(){
@@ -3190,6 +3674,20 @@ async function loadStats(){
     provEl.innerHTML='<div class="provider-badge offline"><span>\\u26A0</span> '+t('embed.off')+'</div>';
   }
 
+  if(!_embeddingWarningShown){
+    _embeddingWarningShown=true;
+    if(!d.embeddingProvider||d.embeddingProvider==='local'||d.embeddingProvider==='none'){
+      showEmbeddingBanner(t('embed.warn.local'),'warning');
+    }
+    fetch('/api/model-health').then(r=>r.json()).then(mh=>{
+      var models=mh.models||[];
+      var embModel=models.find(m=>m.role==='embedding');
+      if(embModel&&embModel.status==='error'){
+        showEmbeddingBanner(t('embed.err.fail'),'error');
+      }
+    }).catch(()=>{});
+  }
+
   const sl=document.getElementById('sessionList');
   sl.innerHTML='<div class="session-item'+(activeSession===null?' active':'')+'" onclick="filterSession(null)"><span>'+t('sidebar.allsessions')+'</span><span class="count">'+tm+'</span></div>';
   (d.sessions||[]).forEach(s=>{
@@ -3213,8 +3711,6 @@ function getFilterParams(){
   const p=new URLSearchParams();
   if(activeSession) p.set('session',activeSession);
   if(activeRole) p.set('role',activeRole);
-  const kind=document.getElementById('filterKind').value;
-  if(kind) p.set('kind',kind);
   const df=document.getElementById('dateFrom').value;
   if(df) p.set('dateFrom',df);
   const dt=document.getElementById('dateTo').value;
@@ -3253,17 +3749,24 @@ async function doSearch(q){
   if(!q.trim()){currentPage=1;loadMemories();return}
   const list=document.getElementById('memoryList');
   list.innerHTML='<div class="spinner"></div>';
-  const p=getFilterParams();
-  p.set('q',q);
-  const r=await fetch('/api/search?'+p.toString());
-  const d=await r.json();
-  const meta=[];
-  if(d.vectorCount>0) meta.push(d.vectorCount+t('search.meta.semantic'));
-  if(d.ftsCount>0) meta.push(d.ftsCount+t('search.meta.text'));
-  meta.push(d.total+t('search.meta.results'));
-  document.getElementById('searchMeta').textContent=meta.join(' \\u00B7 ');
-  renderMemories(d.results||[]);
-  document.getElementById('pagination').innerHTML='';
+  try{
+    const p=getFilterParams();
+    p.set('q',q);
+    const r=await fetch('/api/search?'+p.toString());
+    const d=await r.json();
+    const total=d.total||0;
+    const meta=[];
+    if(d.vectorCount>0) meta.push(d.vectorCount+t('search.meta.semantic'));
+    if(d.ftsCount>0) meta.push(d.ftsCount+t('search.meta.text'));
+    meta.push(total+t('search.meta.results'));
+    document.getElementById('searchMeta').textContent=meta.join(' \\u00B7 ');
+    renderMemories(d.results||[]);
+    document.getElementById('pagination').innerHTML='';
+  }catch(e){
+    document.getElementById('searchMeta').textContent='0'+t('search.meta.results');
+    renderMemories([]);
+    document.getElementById('pagination').innerHTML='';
+  }
 }
 
 function debounceSearch(){
@@ -3311,18 +3814,19 @@ function renderMemories(items){
   list.innerHTML=items.map(m=>{
     const time=m.created_at?new Date(typeof m.created_at==='number'?m.created_at:m.created_at).toLocaleString('zh-CN'):'';
     const role=m.role||'user';
-    const kind=m.kind||'paragraph';
-    const summary=esc(m.summary||m.content?.slice(0,120)||'');
-    const content=esc(m.content||'');
+    const rawSummary=m.summary||'';
+    const rawContent=m.content||'';
+    const content=esc(rawContent);
     const id=m.id;
     const vscore=m._vscore?'<span class="vscore-badge">'+Math.round(m._vscore*100)+'%</span>':'';
     const sid=m.session_key||'';
     const sidShort=sid.length>18?sid.slice(0,6)+'..'+sid.slice(-6):sid;
     const mc=m.merge_count||0;
+    const cardTitle=esc(rawSummary||rawContent||'');
     const mergeBadge=mc>0?'<span class="merge-badge">\\u{1F504} '+t('card.evolved')+' '+mc+t('card.times')+'</span>':'';
     const updatedAt=(m.updated_at&&m.updated_at>m.created_at)?'<span class="card-updated">'+t('card.updated')+' '+new Date(m.updated_at).toLocaleString('zh-CN')+'</span>':'';
     const ds=m.dedup_status||'active';
-    const isInactive=ds==='duplicate'||ds==='merged';
+    const isInactive=ds==='merged';
     const dedupBadge=ds==='duplicate'?'<span class="dedup-badge duplicate">'+t('card.dedupDuplicate')+'</span>':ds==='merged'?'<span class="dedup-badge merged">'+t('card.dedupMerged')+'</span>':'';
     const isImported=sid.startsWith('openclaw-import-')||sid.startsWith('openclaw-session-');
     const importBadge=isImported?'<span class="import-badge">\u{1F990} '+t('card.imported')+'</span>':'';
@@ -3330,7 +3834,7 @@ function renderMemories(items){
     const isPublicMem=ownerVal==='public';
     const ownerBadge=isPublicMem?'<span class="owner-badge public">\\u{1F310} '+t('filter.public')+'</span>':'<span class="owner-badge agent">\\u{1F512} '+t('filter.private')+'</span>';
     let dedupInfo='';
-    if(isInactive){
+    if(ds==='duplicate'||ds==='merged'){
       const reason=m.dedup_reason?'<span style="font-size:11px;color:var(--text-muted)">'+t('card.dedupReason')+esc(m.dedup_reason)+'</span>':'';
       const target=m.dedup_target?'<span class="dedup-target-link" onclick="scrollToMemory(\\''+m.dedup_target+'\\')">'+t('card.dedupTarget')+m.dedup_target.slice(0,8)+'...</span>':'';
       dedupInfo='<div style="margin-top:6px;font-size:11px">'+target+' '+reason+'</div>';
@@ -3353,8 +3857,23 @@ function renderMemories(items){
       }catch(e){}
     }
     return '<div class="memory-card'+(isInactive?' dedup-inactive':'')+'">'+
-      '<div class="card-header"><div class="meta"><span class="role-tag '+role+'">'+role+'</span><span class="kind-tag">'+kind+'</span>'+ownerBadge+importBadge+dedupBadge+mergeBadge+'</div><span class="card-time"><span class="session-tag" title="'+esc(sid)+'">'+esc(sidShort)+'</span> '+time+updatedAt+'</span></div>'+
-      '<div class="card-summary">'+summary+'</div>'+
+      '<div class="card-header"><div class="meta"><span class="role-tag '+role+'">'+role+'</span>'+ownerBadge+importBadge+dedupBadge+mergeBadge+'</div><span class="card-time"><span class="session-tag" title="'+esc(sid)+'">'+esc(sidShort)+'</span> '+time+updatedAt+'</span></div>'+
+      '<div class="card-summary">'+cardTitle+'</div>'+
+      (function(){
+        if(mc<=0) return '';
+        var mergeHtml='<div class="card-merged-info">';
+        mergeHtml+='<div class="card-merged-label">\\u{1F504} '+t('card.mergedInfo')+' ('+mc+t('card.times')+')</div>';
+        var sources=m.merge_sources||[];
+        if(sources.length>0){
+          mergeHtml+='<div style="display:flex;flex-wrap:wrap;gap:6px">';
+          sources.forEach(function(s){
+            mergeHtml+='<span class="dedup-target-link" onclick="scrollToMemory(\\''+s.id+'\\')">\\u{1F517} '+s.id.slice(0,8)+'...</span>';
+          });
+          mergeHtml+='</div>';
+        }
+        mergeHtml+='</div>';
+        return mergeHtml;
+      })()+
       dedupInfo+
       '<div class="card-content" id="content-'+id+'"><pre>'+content+'</pre></div>'+
       historyHtml+
@@ -3433,12 +3952,11 @@ async function showMemoryModal(chunkId){
     const m=data.memory;
     const role=(m.role||'unknown').toUpperCase();
     const roleCls=(m.role||'').toLowerCase();
-    const kind=m.kind||'paragraph';
     const ds=m.dedup_status||'active';
     const time=new Date(m.created_at).toLocaleString('zh-CN');
     const updated=m.updated_at?new Date(m.updated_at).toLocaleString('zh-CN'):'';
     let html='<div class="modal-memory-card">';
-    html+='<div class="modal-header-row"><span class="role-tag '+roleCls+'">'+role+'</span><span class="kind-tag">'+kind+'</span>';
+    html+='<div class="modal-header-row"><span class="role-tag '+roleCls+'">'+role+'</span>';
     if(ds!=='active') html+='<span class="dedup-badge '+(ds==='duplicate'?'duplicate':'merged')+'">'+ds+'</span>';
     html+='</div>';
     html+='<div class="modal-field"><div class="modal-field-label">ID</div><div class="modal-field-val" style="font-family:monospace;font-size:11px">'+esc(m.id)+'</div></div>';
@@ -3496,17 +4014,6 @@ function renderSummaryHtml(raw){
 }
 
 /* ─── CRUD ─── */
-function openCreateModal(){
-  editingId=null;
-  document.getElementById('modalTitle').textContent=t('modal.new');
-  document.getElementById('modalSubmit').textContent=t('modal.create');
-  document.getElementById('mRole').value='user';
-  document.getElementById('mContent').value='';
-  document.getElementById('mSummary').value='';
-  document.getElementById('mKind').value='paragraph';
-  document.getElementById('modalOverlay').classList.add('show');
-}
-
 function openEditModal(id){
   const m=memoryCache[id];
   if(!m){toast(t('toast.notfound'),'error');return}
@@ -3516,7 +4023,6 @@ function openEditModal(id){
   document.getElementById('mRole').value=m.role||'user';
   document.getElementById('mContent').value=m.content||'';
   document.getElementById('mSummary').value=m.summary||'';
-  document.getElementById('mKind').value=m.kind||'paragraph';
   document.getElementById('modalOverlay').classList.add('show');
 }
 
@@ -3525,21 +4031,16 @@ function closeModal(){
 }
 
 async function submitModal(){
+  if(!editingId)return;
   const data={
     role:document.getElementById('mRole').value,
     content:document.getElementById('mContent').value,
     summary:document.getElementById('mSummary').value,
-    kind:document.getElementById('mKind').value,
   };
   if(!data.content.trim()){toast(t('modal.err.empty'),'error');return}
-  let r;
-  if(editingId){
-    r=await fetch('/api/memory/'+editingId,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
-  } else {
-    r=await fetch('/api/memory',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
-  }
+  const r=await fetch('/api/memory/'+editingId,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
   const d=await r.json();
-  if(d.ok){toast(editingId?t('toast.updated'):t('toast.created'),'success');closeModal();loadAll();}
+  if(d.ok){toast(t('toast.updated'),'success');closeModal();loadAll();}
   else{toast(d.error||t('toast.opfail'),'error')}
 }
 
@@ -3562,12 +4063,15 @@ async function toggleMemoryPublic(id,setPublic){
 }
 
 async function clearAll(){
-  if(!confirm(t('confirm.clearall')))return;
-  if(!confirm(t('confirm.clearall2')))return;
-  const r=await fetch('/api/memories',{method:'DELETE'});
-  const d=await r.json();
-  if(d.ok){toast(t('toast.cleared'),'success');loadAll();}
-  else{toast(t('toast.clearfail'),'error')}
+  try{
+    if(!confirm(t('confirm.clearall')))return;
+    if(!confirm(t('confirm.clearall2')))return;
+    const r=await fetch('/api/memories',{method:'DELETE'});
+    if(r.status===401){toast(t('settings.session.expired'),'error');return;}
+    const d=await r.json();
+    if(d.ok){toast(t('toast.cleared'),'success');loadAll();}
+    else{toast(t('toast.clearfail'),'error')}
+  }catch(e){toast('Error: '+e.message,'error')}
 }
 
 /* ─── Migration ─── */
@@ -3587,7 +4091,7 @@ let migrateStats={stored:0,skipped:0,merged:0,errors:0};
   });
 })();
 
-async function migrateScan(){
+async function migrateScan(showToast){
   const btn=document.getElementById('migrateScanBtn');
   btn.disabled=true;
   btn.textContent=t('migrate.scanning');
@@ -3620,9 +4124,31 @@ async function migrateScan(){
         t('migrate.config.warn.desc')+' ('+parts.join(', ')+')';
     }
 
+    const imported=d.importedChunkCount||0;
+    const remaining=Math.max(0,(d.totalItems||0)-imported);
+
     if(d.totalItems>0 && d.configReady){
       document.getElementById('migrateStartBtn').style.display='inline-flex';
       document.getElementById('migrateConcurrencyRow').style.display='inline-flex';
+      if(d.hasImportedData){
+        document.getElementById('migrateStartBtn').textContent=t('migrate.resume');
+      }else{
+        document.getElementById('migrateStartBtn').textContent=t('migrate.start');
+      }
+    }
+
+    var hintEl=document.getElementById('migrateImportedHint');
+    if(!hintEl){
+      hintEl=document.createElement('div');
+      hintEl.id='migrateImportedHint';
+      hintEl.style.cssText='font-size:12px;color:var(--text-sec);padding:6px 0';
+      document.getElementById('migrateActions').appendChild(hintEl);
+    }
+    if(imported>0){
+      hintEl.textContent=t('migrate.imported.hint').replace('{n}',imported);
+      hintEl.style.display='block';
+    }else{
+      hintEl.style.display='none';
     }
 
     if(d.totalItems===0){
@@ -3632,6 +4158,7 @@ async function migrateScan(){
     if(d.hasImportedData){
       document.getElementById('postprocessSection').style.display='block';
     }
+    if(showToast) toast(t('migrate.scan.done').replace('{n}',remaining),'success');
   }catch(e){
     toast('Scan failed: '+e.message,'error');
   }finally{
@@ -3641,27 +4168,36 @@ async function migrateScan(){
 }
 
 function migrateStart(){
-  if(!migrateScanData||!migrateScanData.configReady)return;
-  if(!confirm(t('migrate.start')+'?'))return;
+  const isResume=document.getElementById('migrateStartBtn').textContent===t('migrate.resume');
+  if(!isResume){
+    if(!migrateScanData||!migrateScanData.configReady){
+      toast(t('migrate.scan.required'),'error');
+      return;
+    }
+    if(!confirm(t('migrate.start')+'?'))return;
+  }
 
   const concSel=document.getElementById('migrateConcurrency');
   const concurrency=concSel?parseInt(concSel.value,10)||1:1;
 
   window._migrateRunning=true;
-  _migrateStatusChecked=false;
+  _migrateStatusChecked=true;
   document.getElementById('migrateStartBtn').style.display='none';
   document.getElementById('migrateScanBtn').disabled=true;
+  var hintEl=document.getElementById('migrateImportedHint');
+  if(hintEl) hintEl.style.display='none';
   document.getElementById('migrateConcurrencyRow').style.display='none';
   document.getElementById('migrateConcurrencyWarn').style.display='none';
   document.getElementById('migrateProgress').style.display='block';
   document.getElementById('migrateLiveLog').innerHTML='';
   migrateStats={stored:0,skipped:0,merged:0,errors:0};
   updateMigrateStats();
+  document.getElementById('migrateBar').style.width='0%';
+  document.getElementById('migrateCounter').textContent='';
 
   document.getElementById('migrateStopBtn').disabled=false;
-  document.getElementById('migrateBar').style.width='0%';
+  document.getElementById('migrateStopBtn').style.display='inline-flex';
   document.getElementById('migrateBar').style.background='linear-gradient(90deg,#6366f1,#8b5cf6)';
-  document.getElementById('migrateCounter').textContent='';
   const body=JSON.stringify({sources:['sqlite','sessions'],concurrency});
   connectMigrateSSE('/api/migrate/start','POST',body);
 }
@@ -3698,7 +4234,7 @@ function readSSEStream(r){
   const NL=String.fromCharCode(10);
   function pump(){
     reader.read().then(({done,value})=>{
-      if(done){if(!migrateDoneCalled&&!window._migrateRunning)onMigrateDone(false);return;}
+      if(done){if(!migrateDoneCalled)onMigrateDone(false);return;}
       buf+=decoder.decode(value,{stream:true});
       const lines=buf.split(NL);
       buf=lines.pop()||'';
@@ -3721,7 +4257,7 @@ function readSSEStream(r){
 
 var _migrateStatusChecked=false;
 async function checkMigrateStatus(){
-  if(_migrateStatusChecked) return;
+  if(_migrateStatusChecked||window._migrateRunning) return;
   _migrateStatusChecked=true;
   try{
     const r=await fetch('/api/migrate/status');
@@ -3743,7 +4279,18 @@ async function checkMigrateStatus(){
       document.getElementById('migrateCounter').textContent=s.processed+' / '+s.total+' ('+pct+'%)';
       const label=s.phase==='sqlite'?t('migrate.phase.sqlite'):t('migrate.phase.sessions');
       document.getElementById('migratePhaseLabel').textContent=label;
+      document.getElementById('migrateStopBtn').style.display='inline-flex';
+      if(s.processed>0){
+        const log=document.getElementById('migrateLiveLog');
+        const hint=document.createElement('div');
+        hint.style.cssText='text-align:center;padding:8px 12px;color:var(--text-muted);font-size:11px;border-bottom:1px solid var(--border)';
+        hint.textContent=t('migrate.reconnect.hint').replace('{n}',s.processed);
+        log.appendChild(hint);
+      }
       connectMigrateSSE('/api/migrate/stream','GET',null);
+      fetch('/api/migrate/scan').then(function(sr){return sr.json()}).then(function(sd){
+        if(sd&&sd.hasImportedData) document.getElementById('postprocessSection').style.display='block';
+      }).catch(function(){});
     }else if(s.done&&(s.stored>0||s.skipped>0||s.stopped)){
       migrateStats={stored:s.stored,skipped:s.skipped,merged:s.merged,errors:s.errors};
       updateMigrateStats();
@@ -3841,18 +4388,23 @@ function onMigrateDone(wasStopped,skipReload){
   document.getElementById('migrateScanBtn').disabled=false;
   document.getElementById('migrateStopBtn').disabled=true;
   document.getElementById('migrateStopBtn').textContent=t('migrate.stop');
+  document.getElementById('migrateStopBtn').style.display='none';
   if(wasStopped){
     document.getElementById('migrateBar').style.background='linear-gradient(90deg,#f59e0b,#fbbf24)';
     document.getElementById('migrateStartBtn').style.display='inline-flex';
     document.getElementById('migrateStartBtn').textContent=t('migrate.resume');
+    document.getElementById('migratePhaseLabel').textContent=t('migrate.phase.stopped');
   }else{
     document.getElementById('migrateBar').style.width='100%';
     document.getElementById('migrateBar').style.background='linear-gradient(90deg,#22c55e,#16a34a)';
     const total=migrateStats.stored+migrateStats.skipped+migrateStats.merged+migrateStats.errors;
     if(total>0) document.getElementById('migrateCounter').textContent=total+' / '+total+' (100%)';
+    document.getElementById('migratePhaseLabel').textContent=t('migrate.phase.done');
   }
   fetch('/api/migrate/scan').then(r=>{if(!r.ok)throw new Error();return r.json()}).then(d=>{
-    if(d&&d.hasImportedData) document.getElementById('postprocessSection').style.display='block';
+    if(d&&d.hasImportedData){
+      document.getElementById('postprocessSection').style.display='block';
+    }
   }).catch(()=>{});
   if(!skipReload) loadAll();
 }
@@ -3980,12 +4532,18 @@ function connectPPSSE(){
       }).catch(function(){});
     }else if(s.done){
       document.getElementById('postprocessSection').style.display='block';
-      ppStats={tasks:s.tasksCreated||0,skills:s.skillsCreated||0,errors:s.errors||0,skipped:0};
+      ppStats={tasks:s.tasksCreated||0,skills:s.skillsCreated||0,errors:s.errors||0,skipped:s.skippedSessions||0};
       updatePPStats();
       document.getElementById('ppProgress').style.display='block';
-      var pct2=s.total>0?Math.round((s.processed/s.total)*100):0;
-      document.getElementById('ppBar').style.width=pct2+'%';
-      document.getElementById('ppCounter').textContent=s.processed+' / '+s.total+' ('+pct2+'%)';
+      var totalAll=(s.total||0)+(s.skippedSessions||0);
+      if(totalAll>0){
+        document.getElementById('ppBar').style.width='100%';
+        document.getElementById('ppCounter').textContent=totalAll+' / '+totalAll+' (100%)';
+      }else{
+        var pct2=s.total>0?Math.round((s.processed/s.total)*100):0;
+        document.getElementById('ppBar').style.width=pct2+'%';
+        document.getElementById('ppCounter').textContent=s.processed+' / '+s.total+' ('+pct2+'%)';
+      }
       ppDone(!!s.stopped,false,true);
     }
   }).catch(function(){});
@@ -3993,9 +4551,11 @@ function connectPPSSE(){
 
 function handlePPEvent(evtType,data){
   if(evtType==='progress'){
-    var pct=data.total>0?Math.round((data.processed/data.total)*100):0;
-    document.getElementById('ppBar').style.width=pct+'%';
-    document.getElementById('ppCounter').textContent=data.processed+' / '+data.total+' ('+pct+'%)';
+    if(data.total>0){
+      var pct=Math.round((data.processed/data.total)*100);
+      document.getElementById('ppBar').style.width=pct+'%';
+      document.getElementById('ppCounter').textContent=data.processed+' / '+data.total+' ('+pct+'%)';
+    }
   }else if(evtType==='info'){
     if(data.alreadyProcessed>0){
       ppStats.skipped=data.alreadyProcessed;
@@ -4004,6 +4564,10 @@ function handlePPEvent(evtType,data){
     }
     if(data.pending===0){
       appendPPLogItem({step:'done',session:t('pp.info.allDone'),index:'',total:''});
+      document.getElementById('ppPhaseLabel').textContent=t('pp.info.allDone');
+      document.getElementById('ppBar').style.width='100%';
+      document.getElementById('ppBar').style.background='linear-gradient(90deg,#22c55e,#16a34a)';
+      document.getElementById('ppCounter').textContent=data.alreadyProcessed+' / '+data.totalSessions;
     }else{
       document.getElementById('ppPhaseLabel').textContent=t('pp.info.pending').replace('{n}',data.pending);
     }
@@ -4015,12 +4579,10 @@ function handlePPEvent(evtType,data){
       document.getElementById('ppPhaseLabel').textContent=t('pp.running')+' — '+actionLabel+' — '+label;
     }
     if(data.step==='done'){
-      if(data.action==='skill-only'){
-        ppStats.skills++;
-      }else{
+      if(data.action!=='skill-only'){
         ppStats.tasks++;
+        updatePPStats();
       }
-      updatePPStats();
     }else if(data.step==='error'){
       ppStats.errors++;
       updatePPStats();
@@ -4048,6 +4610,7 @@ function ppDone(wasStopped,wasFailed,skipReload){
   document.getElementById('ppStopBtn').style.display='none';
   document.getElementById('ppStartBtn').style.display='inline-flex';
   document.getElementById('ppStartBtn').textContent=wasStopped?t('pp.resume'):t('pp.start');
+  document.getElementById('ppStartBtn').disabled=false;
   var doneEl=document.getElementById('ppDone');
   doneEl.style.display='block';
   if(wasFailed){
@@ -4055,19 +4618,55 @@ function ppDone(wasStopped,wasFailed,skipReload){
     doneEl.style.color='#ef4444';
     doneEl.textContent=t('pp.failed')||'Processing failed — check error above';
     document.getElementById('ppBar').style.background='linear-gradient(90deg,#ef4444,#dc2626)';
+    document.getElementById('ppPhaseLabel').textContent=t('pp.failed');
   }else if(wasStopped){
     doneEl.style.background='rgba(245,158,11,.06)';
     doneEl.style.color='#f59e0b';
     doneEl.textContent=t('pp.stopped');
     document.getElementById('ppBar').style.background='linear-gradient(90deg,#f59e0b,#fbbf24)';
+    document.getElementById('ppPhaseLabel').textContent=t('pp.stopped');
   }else{
     doneEl.style.background='rgba(34,197,94,.06)';
     doneEl.style.color='#22c55e';
-    doneEl.textContent=t('pp.done')+' ('+t('pp.stat.tasks')+': '+ppStats.tasks+', '+t('pp.stat.skills')+': '+ppStats.skills+')';
     document.getElementById('ppBar').style.width='100%';
     document.getElementById('ppBar').style.background='linear-gradient(90deg,#22c55e,#16a34a)';
+    document.getElementById('ppPhaseLabel').textContent=t('pp.done');
+    var ppTotal=ppStats.tasks+ppStats.skipped+ppStats.errors;
+    if(ppTotal>0) document.getElementById('ppCounter').textContent=ppTotal+' / '+ppTotal+' (100%)';
+    fetch('/api/migrate/postprocess/status').then(function(r){return r.json()}).then(function(st){
+      var totalTasks=st.existingTasks||0;
+      var totalSkills=st.existingSkills||0;
+      var lines=[];
+      if(ppStats.tasks>0) lines.push(t('pp.stat.tasks')+' +'+ppStats.tasks);
+      if(ppStats.skills>0) lines.push(t('pp.stat.skills')+' +'+ppStats.skills);
+      if(ppStats.skipped>0) lines.push(t('pp.stat.skipped')+': '+ppStats.skipped);
+      var runText=lines.length>0?' ('+lines.join(', ')+')':'';
+      var totalText=' — '+t('pp.stat.tasks')+' '+totalTasks+', '+t('pp.stat.skills.total')+' '+totalSkills;
+      doneEl.textContent=t('pp.done')+runText+totalText;
+    }).catch(function(){
+      var parts=[];
+      if(ppStats.tasks>0) parts.push(t('pp.stat.tasks')+': '+ppStats.tasks);
+      if(ppStats.skills>0) parts.push(t('pp.stat.skills')+': '+ppStats.skills);
+      if(ppStats.skipped>0) parts.push(t('pp.stat.skipped')+': '+ppStats.skipped);
+      doneEl.textContent=t('pp.done')+(parts.length>0?' ('+parts.join(', ')+')':'');
+    });
   }
   if(!skipReload) loadAll();
+}
+
+/* ─── Embedding Banner ─── */
+function showEmbeddingBanner(msg,type){
+  if(document.getElementById('embBanner')) return;
+  var cls=type==='error'?'emb-banner error':'emb-banner warning';
+  var icon=type==='error'?'\\u274C':'\\u26A0\\uFE0F';
+  var btn='<button class="emb-banner-btn" onclick="switchView(\\'settings\\');this.parentElement.remove()">'+t('embed.banner.goto')+'</button>';
+  var close='<button class="emb-banner-close" onclick="this.parentElement.remove()">&times;</button>';
+  var el=document.createElement('div');
+  el.id='embBanner';
+  el.className=cls;
+  el.innerHTML=icon+' <span>'+esc(msg)+'</span>'+btn+close;
+  var mc=document.querySelector('.main-content');
+  if(mc) mc.parentElement.insertBefore(el,mc);
 }
 
 /* ─── Toast ─── */
@@ -4086,6 +4685,78 @@ const VIEWER_THEME_KEY='memos-viewer-theme';
 function initViewerTheme(){const s=localStorage.getItem(VIEWER_THEME_KEY);const theme=(s==='light'||s==='dark')?s:'dark';document.documentElement.setAttribute('data-theme',theme);}
 function toggleViewerTheme(){const el=document.documentElement;const cur=el.getAttribute('data-theme')||'dark';const next=cur==='dark'?'light':'dark';el.setAttribute('data-theme',next);localStorage.setItem(VIEWER_THEME_KEY,next);}
 initViewerTheme();
+
+/* ─── Update check ─── */
+function waitForGatewayAndReload(maxAttempts,attempt){
+  attempt=attempt||0;
+  if(attempt>=maxAttempts){window.location.reload();return;}
+  setTimeout(function(){
+    fetch('/api/auth/status').then(function(){
+      window.location.reload();
+    }).catch(function(){waitForGatewayAndReload(maxAttempts,attempt+1);});
+  },3000);
+}
+function doUpdateInstall(packageSpec,btnEl,statusEl){
+  btnEl.disabled=true;
+  btnEl.textContent=t('update.installing');
+  btnEl.style.cssText='background:rgba(99,102,241,.15);color:var(--pri);border:1px solid rgba(99,102,241,.3);border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;cursor:wait;white-space:nowrap';
+  fetch('/api/update-install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({packageSpec:packageSpec})})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.ok){
+        btnEl.textContent=t('update.success');
+        btnEl.style.cssText='background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;cursor:default;white-space:nowrap';
+        if(statusEl)statusEl.textContent=t('update.restarting');
+        waitForGatewayAndReload(40);
+      }else{
+        btnEl.textContent=t('update.btn');
+        btnEl.style.cssText='background:none;border:1px solid currentColor;border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;color:inherit;cursor:pointer;white-space:nowrap;opacity:.85';
+        btnEl.disabled=false;
+        if(statusEl)statusEl.textContent=t('update.failed')+': '+(d.error||'').slice(0,60);
+        setTimeout(function(){if(statusEl)statusEl.textContent='';},8000);
+      }
+    })
+    .catch(function(){
+      btnEl.textContent=t('update.btn');
+      btnEl.style.cssText='background:none;border:1px solid currentColor;border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;color:inherit;cursor:pointer;white-space:nowrap;opacity:.85';
+      btnEl.disabled=false;
+    });
+}
+async function checkForUpdate(){
+  try{
+    const r=await fetch('/api/update-check');
+    if(!r.ok)return;
+    const d=await r.json();
+    if(!d.updateAvailable)return;
+    const pkgSpec=d.installCommand?d.installCommand.replace(/^(?:npx\s+)?openclaw\s+plugins\s+install\s+/,''):(d.packageName+'@'+d.latest);
+    var banner=document.createElement('div');
+    banner.id='updateBanner';
+    banner.style.cssText='display:flex;align-items:center;gap:10px;padding:12px 20px;font-size:13px;font-weight:500;border-radius:10px;margin:0 32px;animation:slideIn .3s ease;background:rgba(245,158,11,.1);color:#d97706;border:1px solid rgba(245,158,11,.25)';
+    var textNode=document.createElement('div');
+    textNode.style.cssText='display:flex;align-items:center;gap:8px;flex-shrink:0';
+    textNode.innerHTML='\u{1F4E6} '+t('update.available')+' <b style="margin:0 2px">v'+esc(d.current)+'</b> \u2192 <b style="margin:0 2px">v'+esc(d.latest)+'</b>';
+    var btnUpdate=document.createElement('button');
+    btnUpdate.className='emb-banner-btn';
+    btnUpdate.textContent=t('update.btn');
+    var statusDiv=document.createElement('div');
+    statusDiv.style.cssText='font-size:11px;opacity:.8;flex-shrink:0';
+    btnUpdate.onclick=function(){doUpdateInstall(pkgSpec,btnUpdate,statusDiv)};
+    textNode.appendChild(btnUpdate);
+    var spacer=document.createElement('div');
+    spacer.style.cssText='flex:1';
+    var btnClose=document.createElement('button');
+    btnClose.className='emb-banner-close';
+    btnClose.innerHTML='&times;';
+    btnClose.onclick=function(){banner.remove()};
+    banner.appendChild(textNode);
+    banner.appendChild(statusDiv);
+    banner.appendChild(spacer);
+    banner.appendChild(btnClose);
+    var embBanner=document.querySelector('.emb-banner');
+    if(embBanner&&embBanner.parentNode){embBanner.parentNode.insertBefore(banner,embBanner);}
+    else{var ct=document.querySelector('.content-area')||document.querySelector('main')||document.body;if(ct.firstChild)ct.insertBefore(banner,ct.firstChild);else ct.appendChild(banner);}
+  }catch(e){}
+}
 
 /* ─── Init ─── */
 document.getElementById('modalOverlay').addEventListener('click',e=>{if(e.target.id==='modalOverlay')closeModal()});
