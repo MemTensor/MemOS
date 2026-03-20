@@ -321,22 +321,39 @@ class APIConfig:
 
     @staticmethod
     def get_memreader_config() -> dict[str, Any]:
-        """Get MemReader configuration for chat/doc extraction (fine-tuned 0.6B model)."""
-        return {
-            "backend": "openai",
-            "config": {
-                "model_name_or_path": os.getenv("MEMRADER_MODEL", "gpt-4o-mini"),
-                "temperature": 0.6,
-                "max_tokens": int(os.getenv("MEMRADER_MAX_TOKENS", "8000")),
-                "top_p": 0.95,
-                "top_k": 20,
-                "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
-                # Default to OpenAI base URL when env var is not provided to satisfy pydantic
-                # validation requirements during tests/import.
-                "api_base": os.getenv("MEMRADER_API_BASE", "https://api.openai.com/v1"),
-                "remove_think_prefix": True,
-            },
+        """Get MemReader configuration for chat/doc extraction (fine-tuned 0.6B model).
+
+        When MEMREADER_GENERAL_MODEL is configured (i.e. a separate stable LLM exists),
+        the backup client is automatically enabled so that primary failures (self-deployed
+        model) fall back to the general LLM.
+        """
+        config = {
+            "model_name_or_path": os.getenv("MEMRADER_MODEL", "gpt-4o-mini"),
+            "temperature": 0.6,
+            "max_tokens": int(os.getenv("MEMRADER_MAX_TOKENS", "8000")),
+            "top_p": 0.95,
+            "top_k": 20,
+            "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
+            # Default to OpenAI base URL when env var is not provided to satisfy pydantic
+            # validation requirements during tests/import.
+            "api_base": os.getenv("MEMRADER_API_BASE", "https://api.openai.com/v1"),
+            "remove_think_prefix": True,
         }
+
+        general_model = os.getenv("MEMREADER_GENERAL_MODEL")
+        enable_backup = os.getenv("MEMREADER_ENABLE_BACKUP", "false").lower() == "true"
+        if general_model and enable_backup:
+            config["backup_client"] = True
+            config["backup_model_name_or_path"] = general_model
+            config["backup_api_key"] = os.getenv(
+                "MEMREADER_GENERAL_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
+            )
+            config["backup_api_base"] = os.getenv(
+                "MEMREADER_GENERAL_API_BASE",
+                os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+            )
+
+        return {"backend": "openai", "config": config}
 
     @staticmethod
     def get_memreader_general_llm_config() -> dict[str, Any]:
@@ -837,7 +854,7 @@ class APIConfig:
                 ),
                 "context_window_size": int(os.getenv("MOS_SCHEDULER_CONTEXT_WINDOW_SIZE", "5")),
                 "thread_pool_max_workers": int(
-                    os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "10000")
+                    os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "200")
                 ),
                 "consume_interval_seconds": float(
                     os.getenv("MOS_SCHEDULER_CONSUME_INTERVAL_SECONDS", "0.01")
@@ -849,6 +866,8 @@ class APIConfig:
                 "enable_activation_memory": os.getenv(
                     "MOS_SCHEDULER_ENABLE_ACTIVATION_MEMORY", "false"
                 ).lower()
+                == "true",
+                "use_redis_queue": os.getenv("MEMSCHEDULER_USE_REDIS_QUEUE", "False").lower()
                 == "true",
             },
         }
