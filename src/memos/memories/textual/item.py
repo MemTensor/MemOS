@@ -194,6 +194,10 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
         default="",
         description="background of this node",
     )
+    reasoning_chain: dict | None = Field(
+        default=None,
+        description="reasoning chain: goal, decision, correction, preference, attention",
+    )
 
     file_ids: list[str] | None = Field(
         default_factory=list,

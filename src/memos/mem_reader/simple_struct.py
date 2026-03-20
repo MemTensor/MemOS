@@ -399,6 +399,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                             key=m.get("key", ""),
                             sources=w["sources"],
                             background=resp.get("summary", ""),
+                            reasoning_chain=resp.get("reasoning_chain"),
                             **ctx_kwargs,
                         )
                         chat_read_nodes.append(node)
@@ -444,6 +445,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     key=memory_i_raw.get("key", ""),
                     sources=raw_node.metadata.sources,
                     background=response_json.get("summary", ""),
+                    reasoning_chain=response_json.get("reasoning_chain"),
                     type_="fact",
                     confidence=0.99,
                     **ctx_kwargs,
