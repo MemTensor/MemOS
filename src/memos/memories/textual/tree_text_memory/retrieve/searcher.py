@@ -71,6 +71,32 @@ class Searcher:
         self.manual_close_internet = manual_close_internet
         self.tokenizer = tokenizer
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
+        self._retrieve_executor = ContextThreadPoolExecutor(max_workers=5, thread_name_prefix="retrieve")
+        self.retrieve_timeout_seconds = 20.0
+    def close(self) -> None:
+        """Release background resources (executors).
+
+        Safe to call multiple times.
+        """
+        for ex_name in ("_usage_executor", "_retrieve_executor"):
+            ex = getattr(self, ex_name, None)
+            if ex is None:
+                continue
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                # Python<3.9 compatibility: cancel_futures not supported
+                ex.shutdown(wait=False)
+            except Exception:
+                logger.debug("[Searcher] failed to shutdown %s", ex_name, exc_info=True)
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
 
     @timed
     def retrieve(
@@ -346,7 +372,11 @@ class Searcher:
         include_preference_memory: bool = False,
         pref_mem_top_k: int = 6,
     ):
-        """Run A/B/C/D/E/F retrieval paths in parallel"""
+        """Run A/B/C/D/E/F retrieval paths in parallel.
+
+        IMPORTANT: do NOT create a new ThreadPoolExecutor per request.
+        Reuse an instance-level pool to avoid thread leaks / exhaustion.
+        """
         tasks = []
         id_filter = {
             "user_id": info.get("user_id", None),
@@ -354,10 +384,54 @@ class Searcher:
         }
         id_filter = {k: v for k, v in id_filter.items() if v is not None}
 
-        with ContextThreadPoolExecutor(max_workers=5) as executor:
+        executor = self._retrieve_executor
+
+        tasks.append(
+            executor.submit(
+                self._retrieve_from_working_memory,
+                query,
+                parsed_goal,
+                query_embedding,
+                top_k,
+                memory_type,
+                search_filter,
+                search_priority,
+                user_name,
+                id_filter,
+            )
+        )
+        tasks.append(
+            executor.submit(
+                self._retrieve_from_long_term_and_user,
+                query,
+                parsed_goal,
+                query_embedding,
+                top_k,
+                memory_type,
+                search_filter,
+                search_priority,
+                user_name,
+                id_filter,
+                mode=mode,
+            )
+        )
+        tasks.append(
+            executor.submit(
+                self._retrieve_from_internet,
+                query,
+                parsed_goal,
+                query_embedding,
+                top_k,
+                info,
+                mode,
+                memory_type,
+                user_name,
+            )
+        )
+        if self.use_fulltext:
             tasks.append(
                 executor.submit(
-                    self._retrieve_from_working_memory,
+                    self._retrieve_from_keyword,
                     query,
                     parsed_goal,
                     query_embedding,
@@ -369,13 +443,14 @@ class Searcher:
                     id_filter,
                 )
             )
+        if search_tool_memory:
             tasks.append(
                 executor.submit(
-                    self._retrieve_from_long_term_and_user,
+                    self._retrieve_from_tool_memory,
                     query,
                     parsed_goal,
                     query_embedding,
-                    top_k,
+                    tool_mem_top_k,
                     memory_type,
                     search_filter,
                     search_priority,
@@ -384,85 +459,47 @@ class Searcher:
                     mode=mode,
                 )
             )
+        if include_skill_memory:
             tasks.append(
                 executor.submit(
-                    self._retrieve_from_internet,
+                    self._retrieve_from_skill_memory,
                     query,
                     parsed_goal,
                     query_embedding,
-                    top_k,
-                    info,
-                    mode,
+                    skill_mem_top_k,
                     memory_type,
+                    search_filter,
+                    search_priority,
                     user_name,
+                    id_filter,
+                    mode=mode,
                 )
             )
-            if self.use_fulltext:
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_keyword,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        top_k,
-                        memory_type,
-                        search_filter,
-                        search_priority,
-                        user_name,
-                        id_filter,
-                    )
+        if include_preference_memory:
+            tasks.append(
+                executor.submit(
+                    self._retrieve_from_preference_memory,
+                    query,
+                    parsed_goal,
+                    query_embedding,
+                    pref_mem_top_k,
+                    memory_type,
+                    search_filter,
+                    search_priority,
+                    user_name,
+                    id_filter,
+                    mode=mode,
                 )
-            if search_tool_memory:
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_tool_memory,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        tool_mem_top_k,
-                        memory_type,
-                        search_filter,
-                        search_priority,
-                        user_name,
-                        id_filter,
-                        mode=mode,
-                    )
-                )
-            if include_skill_memory:
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_skill_memory,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        skill_mem_top_k,
-                        memory_type,
-                        search_filter,
-                        search_priority,
-                        user_name,
-                        id_filter,
-                        mode=mode,
-                    )
-                )
-            if include_preference_memory:
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_preference_memory,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        pref_mem_top_k,
-                        memory_type,
-                        search_filter,
-                        search_priority,
-                        user_name,
-                        id_filter,
-                        mode=mode,
-                    )
-                )
-            results = []
-            for t in tasks:
-                results.extend(t.result())
+            )
+
+        results = []
+        timeout_s = getattr(self, "retrieve_timeout_seconds", 20.0)
+        for t in tasks:
+            try:
+                results.extend(t.result(timeout=timeout_s))
+            except Exception as e:
+                t.cancel()
+                logger.warning("[SEARCH] retrieve path failed/timeout: %s", e, exc_info=True)
 
         logger.info(f"[SEARCH] Total raw results: {len(results)}")
         return results
