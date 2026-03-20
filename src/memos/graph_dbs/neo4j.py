@@ -72,6 +72,27 @@ def _flatten_info_fields(metadata: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
+def _sanitize_neo4j_value(value: Any) -> Any:
+    """Convert values unsupported by Neo4j properties into safe serializations."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, list):
+        if all(item is None or isinstance(item, (str, int, float, bool)) for item in value):
+            return value
+        return [json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item) for item in value]
+
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+    return str(value)
+
+
+def _sanitize_neo4j_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Ensure all metadata values are valid Neo4j property types."""
+    return {key: _sanitize_neo4j_value(value) for key, value in metadata.items()}
+
+
 class Neo4jGraphDB(BaseGraphDB):
     """Neo4j-based implementation of a graph memory store."""
 
@@ -208,6 +229,9 @@ class Neo4jGraphDB(BaseGraphDB):
 
         # Flatten info fields to top level (for Neo4j flat structure)
         metadata = _flatten_info_fields(metadata)
+
+        # Ensure Neo4j property compatibility (no nested map/list-of-map values)
+        metadata = _sanitize_neo4j_metadata(metadata)
 
         # Initialize delete_time and delete_record_id fields
         metadata.setdefault("delete_time", "")
