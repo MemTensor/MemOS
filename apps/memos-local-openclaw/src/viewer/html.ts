@@ -168,6 +168,27 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .card-time{font-size:12px;color:var(--text-sec);display:flex;align-items:center;gap:8px}
 .session-tag{font-size:11px;font-family:ui-monospace,monospace;color:var(--text-muted);background:rgba(0,0,0,.2);padding:3px 8px;border-radius:6px;cursor:default}
 .card-summary{font-size:15px;font-weight:600;color:var(--text);margin-bottom:10px;line-height:1.5;letter-spacing:-.01em}
+.card-tab-bar{display:flex;gap:2px;margin-bottom:10px;margin-top:2px}
+.card-tab-btn{background:transparent;border:none;color:var(--text-muted);font-size:12px;padding:4px 10px;border-radius:6px;cursor:pointer;transition:all .15s;font-family:inherit}
+.card-tab-btn:hover{background:rgba(128,128,128,.1);color:var(--text)}
+.card-tab-btn.active{background:rgba(99,102,241,.12);color:#818cf8;font-weight:600}
+[data-theme="light"] .card-tab-btn.active{background:rgba(99,102,241,.08);color:#4f46e5}
+.card-reasoning-section{display:none}
+.card-reasoning-section.active{display:block}
+.reasoning-chain{margin-top:8px;display:flex;flex-direction:column;gap:8px}
+.reasoning-item{display:flex;align-items:flex-start;gap:8px;font-size:12px}
+.reasoning-label{font-weight:600;min-width:72px;color:var(--text-sec);padding:2px 6px;border-radius:4px;flex-shrink:0}
+.reasoning-label.goal{background:rgba(16,185,129,.12);color:#10b981}
+.reasoning-label.decision{background:rgba(59,130,246,.12);color:#3b82f6}
+.reasoning-label.correction{background:rgba(239,68,68,.12);color:#ef4444}
+.reasoning-label.preference{background:rgba(245,158,11,.12);color:#f59e0b}
+.reasoning-label.attention{background:rgba(139,92,246,.12);color:#8b5cf6}
+[data-theme="light"] .reasoning-label.goal{background:rgba(16,185,129,.1);color:#059669}
+[data-theme="light"] .reasoning-label.decision{background:rgba(59,130,246,.1);color:#2563eb}
+[data-theme="light"] .reasoning-label.correction{background:rgba(239,68,68,.1);color:#dc2626}
+[data-theme="light"] .reasoning-label.preference{background:rgba(245,158,11,.1);color:#d97706}
+[data-theme="light"] .reasoning-label.attention{background:rgba(139,92,246,.1);color:#7c3aed}
+.reasoning-value{color:var(--text);line-height:1.5;flex:1}
 .card-content{font-size:13px;color:var(--text-sec);line-height:1.65;max-height:0;overflow:hidden;transition:max-height .3s ease}
 .card-content.show{max-height:600px;overflow-y:auto}
 .card-content pre{white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.25);padding:14px;border-radius:10px;font-size:12px;font-family:ui-monospace,monospace;margin-top:10px;border:1px solid var(--border);color:var(--text-sec)}
@@ -1380,6 +1401,14 @@ const I18N={
     'card.delete':'Delete',
     'card.evolved':'Evolved',
     'card.times':'times',
+    'card.summaryTab':'Summary',
+    'card.reasoningTab':'Reasoning',
+    'card.reasoningEmpty':'No reasoning chain',
+    'card.reasoningGoal':'Goal',
+    'card.reasoningDecision':'Decision',
+    'card.reasoningCorrection':'Correction',
+    'card.reasoningPreference':'Preference',
+    'card.reasoningAttention':'Attention',
     'card.updated':'updated',
     'card.evolveHistory':'Evolution History',
     'card.oldSummary':'Old',
@@ -1673,6 +1702,14 @@ const I18N={
     'card.delete':'删除',
     'card.evolved':'已演化',
     'card.times':'次',
+    'card.summaryTab':'摘要',
+    'card.reasoningTab':'推理链',
+    'card.reasoningEmpty':'暂无推理链',
+    'card.reasoningGoal':'目标',
+    'card.reasoningDecision':'决策',
+    'card.reasoningCorrection':'纠正',
+    'card.reasoningPreference':'偏好',
+    'card.reasoningAttention':'注意',
     'card.updated':'更新于',
     'card.evolveHistory':'演化记录',
     'card.oldSummary':'旧摘要',
@@ -3304,6 +3341,26 @@ function clearDateFilter(){
 }
 
 /* ─── Rendering ─── */
+function buildReasoningChainHtml(rc){
+  if(!rc) return '<div style="font-size:12px;color:var(--text-muted);padding:8px 0">'+t('card.reasoningEmpty')+'</div>';
+  const fields=[
+    {key:'goal',label:t('card.reasoningGoal')},
+    {key:'decision',label:t('card.reasoningDecision')},
+    {key:'correction',label:t('card.reasoningCorrection')},
+    {key:'preference',label:t('card.reasoningPreference')},
+    {key:'attention',label:t('card.reasoningAttention')}
+  ];
+  let html='<div class="reasoning-chain">';
+  fields.forEach(function(f){
+    const val=rc[f.key];
+    if(val&&val!=='N/A'){
+      html+='<div class="reasoning-item"><span class="reasoning-label '+f.key+'">'+f.label+'</span><span class="reasoning-value">'+esc(val)+'</span></div>';
+    }
+  });
+  html+='</div>';
+  return html;
+}
+
 function renderMemories(items){
   const list=document.getElementById('memoryList');
   if(!items.length){
@@ -3357,7 +3414,18 @@ function renderMemories(items){
     }
     return '<div class="memory-card'+(isInactive?' dedup-inactive':'')+'">'+
       '<div class="card-header"><div class="meta"><span class="role-tag '+role+'">'+role+'</span><span class="kind-tag">'+kind+'</span>'+ownerBadge+importBadge+dedupBadge+mergeBadge+'</div><span class="card-time"><span class="session-tag" title="'+esc(sid)+'">'+esc(sidShort)+'</span> '+time+updatedAt+'</span></div>'+
-      '<div class="card-summary">'+summary+'</div>'+
+      (function(){
+        var rc=m.reasoning_chain||null;
+        var hasRc=rc&&(rc.goal||rc.decision||rc.correction||rc.preference||rc.attention);
+        var tabBar='<div class="card-tab-bar">'+
+          '<button class="card-tab-btn active" id="tab-sum-'+id+'" onclick="switchCardTab(\\''+id+'\\',\\'summary\\')">'+t('card.summaryTab')+'</button>'+
+          (hasRc?'<button class="card-tab-btn" id="tab-rea-'+id+'" onclick="switchCardTab(\\''+id+'\\',\\'reasoning\\')">'+t('card.reasoningTab')+'</button>':'')+
+          '</div>';
+        var summaryDiv='<div id="summary-'+id+'" class="card-tab-content">'+
+          '<div style="font-size:13px;color:var(--text-sec);line-height:1.6;margin-bottom:8px">'+summary+'</div></div>';
+        var reasoningDiv='<div id="reasoning-'+id+'" class="card-reasoning-section">'+buildReasoningChainHtml(rc)+'</div>';
+        return tabBar+summaryDiv+reasoningDiv;
+      })()+
       dedupInfo+
       '<div class="card-content" id="content-'+id+'"><pre>'+content+'</pre></div>'+
       historyHtml+
@@ -3408,6 +3476,23 @@ function toggleHistory(id){
 function toggleContent(id){
   const el=document.getElementById('content-'+id);
   el.classList.toggle('show');
+}
+
+function switchCardTab(id, tab){
+  const sumBtn=document.getElementById('tab-sum-'+id);
+  const reaBtn=document.getElementById('tab-rea-'+id);
+  const sumEl=document.getElementById('summary-'+id);
+  const reaEl=document.getElementById('reasoning-'+id);
+  if(!sumBtn||!reaBtn) return;
+  if(tab==='summary'){
+    sumBtn.classList.add('active');reaBtn.classList.remove('active');
+    if(sumEl) sumEl.style.display='';
+    if(reaEl) reaEl.style.display='none';
+  } else {
+    sumBtn.classList.remove('active');reaBtn.classList.add('active');
+    if(sumEl) sumEl.style.display='none';
+    if(reaEl) reaEl.style.display='block';
+  }
 }
 
 function scrollToMemory(targetId){
