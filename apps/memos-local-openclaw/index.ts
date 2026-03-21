@@ -928,7 +928,7 @@ const memosLocalPlugin = {
 
     // ─── Auto-recall: inject relevant memories before agent starts ───
 
-    api.on("before_agent_start", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
+    api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
 
