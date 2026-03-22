@@ -2482,20 +2482,14 @@ export class ViewerServer {
     });
   }
 
-  /** When Hub admin removes a shared memory, clear local team_shared_chunks / hub_memories mirror so the client list shows correct scope. */
+  /** Badge-only: clear Client team-share UI metadata when Hub admin removes that memory. Does NOT touch chunks, embeddings, or hub_memories (recall paths). */
   private handleSyncHubRemoval(req: http.IncomingMessage, res: http.ServerResponse): void {
-    this.readBody(req, async (body) => {
+    this.readBody(req, (body) => {
       try {
         const parsed = JSON.parse(body || "{}");
         const sourceChunkId = String(parsed.sourceChunkId || "");
         if (!sourceChunkId) return this.jsonResponse(res, { ok: false, error: "missing_source_chunk_id" }, 400);
         this.store.deleteTeamSharedChunk(sourceChunkId);
-        try {
-          const hubClient = await this.resolveHubClientAware();
-          if (hubClient.userId) {
-            this.store.deleteHubMemoryBySource(hubClient.userId, sourceChunkId);
-          }
-        } catch { /* ignore */ }
         this.jsonResponse(res, { ok: true, sourceChunkId });
       } catch (e) {
         this.jsonResponse(res, { ok: false, error: String(e) }, 500);

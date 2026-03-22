@@ -7767,7 +7767,7 @@ function getFilterParams(){
   return p;
 }
 
-/** Hub admin removed a shared memory — clear local team_shared_chunks so badges match (notifications carry sourceChunkId in message). */
+/** Hub admin removed a shared memory — badge-only: clear team_shared_chunks (never touches chunks/embeddings/hub_memories recall data). */
 async function syncTeamShareRemovedFromNotifications(){
   try{
     var r=await fetch('/api/sharing/notifications');
