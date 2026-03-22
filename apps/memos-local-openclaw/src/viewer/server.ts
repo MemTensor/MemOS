@@ -2488,7 +2488,17 @@ export class ViewerServer {
       try {
         const parsed = JSON.parse(body || "{}");
         const sourceChunkId = String(parsed.sourceChunkId || "");
+        const memoryIdFromNotif = parsed.memoryId != null && parsed.memoryId !== "" ? String(parsed.memoryId) : "";
         if (!sourceChunkId) return this.jsonResponse(res, { ok: false, error: "missing_source_chunk_id" }, 400);
+        // Admin removal notifications stay in the feed; if the user re-shared, team_shared_chunks has a new hub_memory_id.
+        // Only clear the badge when this notification refers to the same Hub row we still track (or no id — legacy).
+        if (memoryIdFromNotif) {
+          const current = this.store.getTeamSharedChunk(sourceChunkId);
+          const curId = current?.hubMemoryId ? String(current.hubMemoryId) : "";
+          if (curId && curId !== memoryIdFromNotif) {
+            return this.jsonResponse(res, { ok: true, sourceChunkId, skipped: true, reason: "stale_notification_re_shared" });
+          }
+        }
         this.store.deleteTeamSharedChunk(sourceChunkId);
         this.jsonResponse(res, { ok: true, sourceChunkId });
       } catch (e) {

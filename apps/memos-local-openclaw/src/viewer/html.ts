@@ -7779,7 +7779,7 @@ async function syncTeamShareRemovedFromNotifications(){
       try{
         var meta=JSON.parse(n.message);
         if(meta.sourceChunkId){
-          await fetch('/api/sharing/sync-hub-removal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceChunkId:meta.sourceChunkId})});
+          await fetch('/api/sharing/sync-hub-removal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceChunkId:meta.sourceChunkId,memoryId:meta.memoryId||''})});
         }
       }catch(e){}
     }
