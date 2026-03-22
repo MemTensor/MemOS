@@ -464,6 +464,68 @@ sudo apt install build-essential python3
 <h2><span class="lang-zh">👥 团队共享中心</span><span class="lang-en">👥 Team Sharing Hub</span></h2>
 <p><span class="lang-zh">Team Sharing 将多个 OpenClaw 实例连接为协作网络。一个实例作为 <strong>Hub</strong>（团队服务端），其他实例作为 <strong>Client</strong> 连接。私有数据始终留在本地，仅明确共享的任务、记忆和技能对团队可见。</span><span class="lang-en">Team Sharing connects multiple OpenClaw instances into a collaborative network. One instance serves as the <strong>Hub</strong> (team server) while others connect as <strong>Clients</strong>. Private data stays local — only explicitly shared tasks, memories, and skills are visible to the team.</span></p>
 
+<!-- Hub-Client Architecture Diagram -->
+<div style="max-width:780px;margin:32px auto;background:rgba(0,0,0,.15);border:1px solid rgba(0,229,255,.12);border-radius:16px;padding:24px 12px 16px;overflow-x:auto">
+<svg viewBox="0 0 780 200" width="780" height="200" xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;height:auto">
+  <defs>
+    <linearGradient id="dgHub" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(0,229,255,.18)"/><stop offset="100%" stop-color="rgba(99,140,255,.18)"/></linearGradient>
+    <linearGradient id="dgCli" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(177,108,255,.14)"/><stop offset="100%" stop-color="rgba(99,140,255,.14)"/></linearGradient>
+    <linearGradient id="dgClaw" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient>
+  </defs>
+  <!-- Hub -->
+  <rect x="280" y="10" width="220" height="80" rx="12" fill="url(#dgHub)" stroke="rgba(0,229,255,.3)" stroke-width="1.5"><animate attributeName="stroke-opacity" values=".3;.6;.3" dur="3s" repeatCount="indefinite"/></rect>
+  <path d="M306 42c-4-2-6 0-5 5s4 3 5 0c1-2 1-4 0-5z" fill="url(#dgClaw)"/><path d="M322 42c4-2 6 0 5 5s-4 3-5 0c-1-2-1-4 0-5z" fill="url(#dgClaw)"/>
+  <circle cx="314" cy="38" r="9" fill="url(#dgClaw)"/>
+  <circle cx="311" cy="36" r="1.8" fill="#050810"/><circle cx="317" cy="36" r="1.8" fill="#050810"/>
+  <circle cx="311.5" cy="35.4" r=".7" fill="#00e5cc"><animate attributeName="opacity" values="1;.3;1" dur="3s" repeatCount="indefinite"/></circle>
+  <circle cx="317.5" cy="35.4" r=".7" fill="#00e5cc"><animate attributeName="opacity" values="1;.3;1" dur="3s" repeatCount="indefinite" begin=".1s"/></circle>
+  <text x="334" y="40" font-size="13" font-weight="800" fill="#00e5ff" font-family="system-ui,sans-serif">Hub</text>
+  <text x="334" y="55" font-size="9" fill="rgba(200,210,255,.55)" font-family="system-ui,sans-serif"><tspan class="lang-zh">团队服务端 · 共享记忆/技能</tspan><tspan class="lang-en">Team Server · Shared Memory/Skills</tspan></text>
+  <rect x="334" y="64" width="40" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/><text x="340" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="monospace">🧠 86</text>
+  <rect x="380" y="64" width="40" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/><text x="386" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="monospace">📋 12</text>
+  <rect x="426" y="64" width="36" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/><text x="432" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="monospace">⚡ 5</text>
+  <!-- Client A -->
+  <rect x="20" y="120" width="200" height="70" rx="10" fill="url(#dgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+  <path d="M44 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#dgClaw)"/><path d="M56 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#dgClaw)"/>
+  <circle cx="50" cy="145" r="7" fill="url(#dgClaw)"/><circle cx="47.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="52.5" cy="143.5" r="1.2" fill="#050810"/>
+  <text x="66" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="system-ui,sans-serif">OpenClaw A</text>
+  <text x="66" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="system-ui,sans-serif"><tspan class="lang-zh">前端开发 · 234 记忆</tspan><tspan class="lang-en">Frontend · 234 Memories</tspan></text>
+  <circle cx="182" cy="142" r="4" fill="#00e676"/><text x="192" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="monospace">online</text>
+  <rect x="40" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/><text x="48" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="monospace">📤 skill_publish</text>
+  <!-- Client B -->
+  <rect x="250" y="120" width="200" height="70" rx="10" fill="url(#dgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+  <path d="M274 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#dgClaw)"/><path d="M286 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#dgClaw)"/>
+  <circle cx="280" cy="145" r="7" fill="url(#dgClaw)"/><circle cx="277.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="282.5" cy="143.5" r="1.2" fill="#050810"/>
+  <text x="296" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="system-ui,sans-serif">OpenClaw B</text>
+  <text x="296" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="system-ui,sans-serif"><tspan class="lang-zh">后端开发 · 158 记忆</tspan><tspan class="lang-en">Backend · 158 Memories</tspan></text>
+  <circle cx="412" cy="142" r="4" fill="#00e676"/><text x="422" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="monospace">online</text>
+  <rect x="270" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/><text x="278" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="monospace">📤 task_share</text>
+  <!-- Client C -->
+  <rect x="480" y="120" width="200" height="70" rx="10" fill="url(#dgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+  <path d="M504 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#dgClaw)"/><path d="M516 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#dgClaw)"/>
+  <circle cx="510" cy="145" r="7" fill="url(#dgClaw)"/><circle cx="507.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="512.5" cy="143.5" r="1.2" fill="#050810"/>
+  <text x="526" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="system-ui,sans-serif">OpenClaw C</text>
+  <text x="526" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="system-ui,sans-serif"><tspan class="lang-zh">测试工程 · 89 记忆</tspan><tspan class="lang-en">QA/Testing · 89 Memories</tspan></text>
+  <circle cx="642" cy="142" r="4" fill="#00e676"/><text x="652" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="monospace">online</text>
+  <rect x="500" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/><text x="508" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="monospace">⬇ skill_pull</text>
+  <!-- ...N -->
+  <rect x="710" y="130" width="56" height="50" rx="10" fill="rgba(99,140,255,.06)" stroke="rgba(99,140,255,.15)" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="738" y="153" text-anchor="middle" font-size="16" font-weight="800" fill="rgba(99,140,255,.3)" font-family="system-ui,sans-serif">…N</text>
+  <text x="738" y="170" text-anchor="middle" font-size="7" fill="rgba(200,210,255,.25)" font-family="system-ui,sans-serif"><tspan class="lang-zh">更多实例</tspan><tspan class="lang-en">More</tspan></text>
+  <!-- Connections -->
+  <path d="M340,90 C300,105 170,110 120,118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5"><animate attributeName="stroke-dasharray" values="0,200;200,0" dur="2s" repeatCount="indefinite"/></path>
+  <line x1="390" y1="90" x2="350" y2="118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5"><animate attributeName="stroke-dasharray" values="0,100;100,0" dur="2s" repeatCount="indefinite" begin=".3s"/></line>
+  <path d="M440,90 C480,105 530,110 580,118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5"><animate attributeName="stroke-dasharray" values="0,200;200,0" dur="2s" repeatCount="indefinite" begin=".6s"/></path>
+  <path d="M490,90 C550,100 680,110 710,148" fill="none" stroke="rgba(99,140,255,.2)" stroke-width="1" stroke-dasharray="4 4" opacity=".4"/>
+  <!-- Particles -->
+  <circle r="2" fill="#00e5ff" opacity=".6"><animateMotion dur="3s" repeatCount="indefinite" path="M120,170 C170,130 300,100 340,50"/><animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite"/></circle>
+  <circle r="2" fill="#b16cff" opacity=".6"><animateMotion dur="3s" repeatCount="indefinite" begin="1s" path="M350,170 C360,130 370,100 390,50"/><animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite" begin="1s"/></circle>
+  <circle r="2" fill="#00e5ff" opacity=".6"><animateMotion dur="3s" repeatCount="indefinite" begin="2s" path="M580,170 C530,130 480,100 440,50"/><animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite" begin="2s"/></circle>
+  <circle r="1.5" fill="#00e676" opacity=".5"><animateMotion dur="2.5s" repeatCount="indefinite" begin=".5s" path="M440,50 C480,100 530,130 570,170"/><animate attributeName="opacity" values="0;.7;0" dur="2.5s" repeatCount="indefinite" begin=".5s"/></circle>
+  <circle r="1.5" fill="#ffca28" opacity=".5"><animateMotion dur="2.5s" repeatCount="indefinite" begin="1.5s" path="M340,50 C300,100 170,130 120,170"/><animate attributeName="opacity" values="0;.7;0" dur="2.5s" repeatCount="indefinite" begin="1.5s"/></circle>
+</svg>
+</div>
+
 <div class="card-grid">
   <div class="card"><div class="card-icon">🏗️</div><h4>Hub-Client</h4><p><span class="lang-zh">一个 Hub 存储共享数据，客户端按需查询。角色可动态切换。</span><span class="lang-en">One Hub stores shared data; clients query on demand. Roles switchable dynamically.</span></p></div>
   <div class="card"><div class="card-icon">🔌</div><h4><span class="lang-zh">端口自动推导</span><span class="lang-en">Auto Port</span></h4><p><span class="lang-zh">Hub 端口自动从网关端口推导（+11），冲突时重试最多 3 次。</span><span class="lang-en">Hub port auto-derived from gateway port (+11); retries up to 3 times on conflict.</span></p></div>
