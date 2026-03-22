@@ -7419,6 +7419,9 @@ function connectNotifSSE(){
           _notifUnread=d.unreadCount||0;
           renderNotifBadge();
           if(_notifUnread>prev&&_notifPanelOpen) loadNotifications();
+          if(_notifUnread>prev&&_activeView==='memories'&&memorySearchScope!=='hub'){
+            syncTeamShareRemovedFromNotifications().then(function(){ loadMemories(currentPage,true); });
+          }
         }
         if(d.type==='cleared'){
           _notifUnread=0;_notifCache=[];
