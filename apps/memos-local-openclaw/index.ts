@@ -180,7 +180,7 @@ const memosLocalPlugin = {
     }
 
     let pluginCfg = (api.pluginConfig ?? {}) as Record<string, unknown>;
-    const stateDir = api.resolvePath("~/.openclaw");
+    const stateDir = process.env.OPENCLAW_STATE_DIR || api.resolvePath("~/.openclaw");
 
     // Fallback: read config from file if not provided by OpenClaw
     const configPath = path.join(stateDir, "state", "memos-local", "config.json");
@@ -1314,7 +1314,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // ─── Tool: memory_viewer ───
 
-    const viewerPort = (pluginCfg as any).viewerPort ?? 18799;
+    const gatewayPort = (api.config as any)?.gateway?.port ?? 18789;
+    const viewerPort = (pluginCfg as any).viewerPort ?? (gatewayPort + 10);
 
     api.registerTool(
       {
@@ -2297,6 +2298,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // ─── Memory Viewer (web UI) ───
 
+    const derivedHubPort = gatewayPort + 11;
+
     const viewer = new ViewerServer({
       store,
       embedder,
@@ -2304,10 +2307,10 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       log: ctx.log,
       dataDir: stateDir,
       ctx,
+      defaultHubPort: derivedHubPort,
     });
-
     const hubServer = ctx.config.sharing?.enabled && ctx.config.sharing.role === "hub"
-      ? new HubServer({ store, log: ctx.log, config: ctx.config, dataDir: stateDir, embedder })
+      ? new HubServer({ store, log: ctx.log, config: ctx.config, dataDir: stateDir, embedder, defaultHubPort: derivedHubPort })
       : null;
 
     // ─── Service lifecycle ───

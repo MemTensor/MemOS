@@ -1654,7 +1654,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
                     <li><span data-i18n="guide.join.s1">Ask your team admin for the Server Address and Team Token</span></li>
                     <li><span data-i18n="guide.join.s2">Enable sharing above, select "Client" mode</span></li>
                     <li><span data-i18n="guide.join.s3">Fill in Server Address and Team Token, click "Test Connection"</span></li>
-                    <li><span data-i18n="guide.join.s4">Save settings and restart the OpenClaw gateway (page refreshes automatically)</span></li>
+                    <li><span data-i18n="guide.join.s4">Click "Save & Apply" — the service restarts automatically (page refreshes)</span></li>
                   </ol>
                   <button class="btn-guide" onclick="guideGoToHub('client')" data-i18n="guide.join.btn">\u2192 Configure Client Mode</button>
                 </div>
@@ -1666,7 +1666,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
                   <div class="team-guide-opt-desc" data-i18n="guide.hub.desc">Be the team server. Run it on this device so others can connect and share memories with you.</div>
                   <ol class="team-guide-steps">
                     <li><span data-i18n="guide.hub.s1">Enable sharing above, select "Server" mode</span></li>
-                    <li><span data-i18n="guide.hub.s2">Set a team name, save settings, and restart the gateway (page refreshes automatically)</span></li>
+                    <li><span data-i18n="guide.hub.s2">Set a team name, click "Save & Apply" — the service restarts automatically</span></li>
                     <li><span data-i18n="guide.hub.s3">Share the Server Address and Team Token with your team members</span></li>
                     <li><span data-i18n="guide.hub.s4">Approve join requests in the Admin Panel</span></li>
                   </ol>
@@ -1727,7 +1727,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
                   <div style="font-weight:700;color:var(--text);margin-bottom:4px" data-i18n="settings.hub.clientSteps.title">Quick Setup (3 steps)</div>
                   <div><span style="color:var(--accent)">1.</span> <span data-i18n="settings.hub.clientSteps.s1">Ask your team admin for the Server Address and Team Token</span></div>
                   <div><span style="color:var(--accent)">2.</span> <span data-i18n="settings.hub.clientSteps.s2">Fill them in below, click "Test Connection" to verify</span></div>
-                  <div><span style="color:var(--accent)">3.</span> <span data-i18n="settings.hub.clientSteps.s3">Click "Save Settings", then restart OpenClaw gateway (page refreshes automatically)</span></div>
+                  <div><span style="color:var(--accent)">3.</span> <span data-i18n="settings.hub.clientSteps.s3">Click "Save & Apply" — the service will restart and page refreshes automatically</span></div>
                 </div>
                 <div class="settings-grid">
                   <div class="settings-field full-width">
@@ -2123,8 +2123,13 @@ const I18N={
     'notif.userJoin':'New user requests to join the team',
     'notif.userOnline':'User came online',
     'notif.userOffline':'User went offline',
+    'notif.userLeft':'User has left the team',
     'notif.membershipApproved':'Your team join request has been approved',
     'notif.membershipRejected':'Your team join request has been declined',
+    'notif.membershipRemoved':'You have been removed from the team by the admin',
+    'notif.hubShutdown':'The team server has been shut down',
+    'notif.rolePromoted':'You have been promoted to admin',
+    'notif.roleDemoted':'You have been changed to member',
     'notif.clearAll':'Clear all',
     'notif.timeAgo.just':'just now',
     'notif.timeAgo.min':'{n}m ago',
@@ -2275,12 +2280,12 @@ const I18N={
     'settings.test.ok':'Connected',
     'settings.test.fail':'Failed',
     'settings.session.expired':'Session expired, please refresh the page to log in again',
-    'settings.save':'Save Settings',
+    'settings.save':'Save & Apply',
     'settings.reset':'Reset',
     'settings.saved':'Saved',
-    'settings.restart.hint':'Some changes require restarting the OpenClaw gateway to take effect.',
-    'settings.restart.autoRefresh':'Page will refresh automatically after the gateway restarts...',
-    'settings.restart.waiting':'Configuration saved. Waiting for gateway to restart...',
+    'settings.restart.hint':'Changes will take effect after the service restarts automatically.',
+    'settings.restart.autoRefresh':'Service restarting, page will refresh automatically...',
+    'settings.restart.waiting':'Configuration saved. Service is restarting...',
     'settings.save.fail':'Failed to save settings',
     'settings.save.emb.required':'Embedding model is required. Please configure an embedding model before saving.',
     'settings.save.emb.fail':'Embedding model test failed, cannot save',
@@ -2407,16 +2412,16 @@ const I18N={
     'settings.hub.tokenCopied':'Team Token copied!',
     'settings.hub.hubSteps.title':'Quick Setup (3 steps)',
     'settings.hub.hubSteps.s1':'Fill in Team Name below (or keep default)',
-    'settings.hub.hubSteps.s2':'Click "Save Settings", then restart OpenClaw gateway',
+    'settings.hub.hubSteps.s2':'Click "Save & Apply" — the service will restart automatically',
     'settings.hub.hubSteps.s3':'Share the Server Address and Team Token below with your team members',
     'settings.hub.clientSteps.title':'Quick Setup (3 steps)',
     'settings.hub.clientSteps.s1':'Ask your team admin for the Server Address and Team Token',
     'settings.hub.clientSteps.s2':'Fill them in below, click "Test Connection" to verify',
-    'settings.hub.clientSteps.s3':'Click "Save Settings", then restart OpenClaw gateway (page refreshes automatically)',
+    'settings.hub.clientSteps.s3':'Click "Save & Apply" — the service will restart and page refreshes automatically',
     'settings.hub.shareInfo.title':'Share this info with your team members:',
     'settings.hub.shareInfo.yourIP':'your-IP',
     'settings.hub.shareInfo.clickCopy':'Click to copy',
-    'settings.hub.restartAlert':'Team sharing config saved! Please restart the OpenClaw gateway for changes to take effect.\\n\\nRun: openclaw gateway stop && openclaw gateway start',
+    'settings.hub.restartAlert':'Team sharing config saved! The service will restart automatically to apply changes.',
     'settings.hub.hubAddress':'Server Address',
     'settings.hub.hubAddress.hint':'Team server address, e.g. 192.168.1.100:18800',
     'settings.hub.teamTokenClient':'Team Token',
@@ -2437,6 +2442,10 @@ const I18N={
     'sidebar.hub':'\u{1F310} Team Sharing',
     'sharing.sidebar.connected':'Connected',
     'sharing.sidebar.disconnected':'Disconnected',
+    'sharing.sidebar.hubRunning':'Hub Running',
+    'sharing.sidebar.teamName':'Team',
+    'sharing.sidebar.members':'Members',
+    'sharing.sidebar.online':'online',
     'sharing.sidebar.pending':'Pending Approval',
     'sharing.sidebar.rejected':'Rejected',
     'sharing.sidebar.starting':'Starting...',
@@ -2453,6 +2462,11 @@ const I18N={
     'sharing.retryJoin':'Retry Join',
     'sharing.retryJoin.hint':'Clears local data and re-submits the join request',
     'sharing.retryJoin.confirm':'This will clear your current connection and re-submit a join request. Continue?',
+    'sharing.leaveTeam':'Leave Team',
+    'sharing.leaveTeam.confirm':'You are about to leave team "{team}".\\n\\nWhat will happen:\\n\\u2022 You will disconnect from the team server\\n\\u2022 The team admin will be notified that you left\\n\\u2022 You will no longer receive shared memories, tasks, or skills\\n\\u2022 Your local data is preserved and not affected\\n\\u2022 You can rejoin later if the admin approves\\n\\nAre you sure?',
+    'sharing.leaveTeam.success':'You have left the team. Sharing has been disabled.',
+    'sharing.leaveTeam.fail':'Failed to leave team',
+    'sharing.team.default':'the team',
     'sharing.retryJoin.success':'Join request re-submitted. Waiting for admin approval.',
     'sharing.retryJoin.fail':'Failed to retry join',
     'sharing.ownerRemoved':'(removed)',
@@ -2506,6 +2520,7 @@ const I18N={
     'admin.editName':'Edit Name',
     'admin.lastAdminHint':'Last admin — cannot remove or demote',
     'admin.ownerHint':'Hub owner — cannot be demoted or removed',
+    'admin.selfHint':'This is you',
     'admin.editNamePrompt':'Enter new username:',
     'confirm.promoteAdmin':'Promote this user to admin? They will be able to manage all team members and resources.',
     'confirm.demoteMember':'Demote this admin to member?',
@@ -2567,6 +2582,8 @@ const I18N={
     'toast.userApproved':'User approved',
     'sharing.approved.toast':'Your join request has been approved!',
     'sharing.rejected.toast':'Your join request was rejected by the admin.',
+    'sharing.hubOffline.toast':'Team server is offline. Will reconnect automatically when it comes back.',
+    'sharing.hubReconnected.toast':'Team server is back online! Connection restored.',
     'toast.userRejected':'User rejected',
     'toast.approveFail':'Approve failed',
     'toast.rejectFail':'Reject failed',
@@ -2726,9 +2743,10 @@ const I18N={
     'update.dismiss':'Dismiss',
     'sharing.disable.confirm.hub':'You are about to shut down the team server.\\n\\nWhat will happen:\\n\\u2022 All connected team members will be disconnected\\n\\u2022 They will no longer be able to sync memories, tasks, or skills\\n\\u2022 Shared data is preserved and will be available when you re-enable\\n\\nAre you sure?',
     'sharing.disable.confirm.client':'You are about to disconnect from the team.\\n\\nWhat will happen:\\n\\u2022 You will no longer receive shared memories, tasks, or skills from the team\\n\\u2022 Your local data is preserved and will not be affected\\n\\u2022 You can reconnect later by re-enabling sharing\\n\\nAre you sure?',
-    'sharing.disable.restartAlert':'Sharing has been disabled. Please restart the OpenClaw gateway for the change to take effect.\\n\\nRun: openclaw gateway stop && openclaw gateway start',
-    'sharing.switch.hubToClient':'You are about to switch from Server to Client mode.\\n\\nWhat will happen:\\n\\u2022 The Hub server will shut down after restart\\n\\u2022 All connected team members will be disconnected\\n\\u2022 Shared data on the Hub is preserved for future use\\n\\u2022 You will join the specified remote team as a client\\n\\nAre you sure?',
-    'sharing.switch.clientToHub':'You are about to switch from Client to Server mode.\\n\\nWhat will happen:\\n\\u2022 You will disconnect from the current team\\n\\u2022 A new Hub server will start after restart\\n\\u2022 Your local data is not affected\\n\\nAre you sure?',
+    'sharing.disable.restartAlert':'Sharing has been disabled. The service will restart automatically to apply the change.',
+    'sharing.switch.hubToClient':'You are about to switch from Server to Client mode.\\n\\nWhat will happen:\\n\\u2022 The Hub server will shut down after the service restarts\\n\\u2022 All connected team members will be disconnected\\n\\u2022 Shared data on the Hub is preserved for future use\\n\\u2022 You will join the specified remote team as a client\\n\\nAre you sure?',
+    'sharing.switch.clientToHub':'You are about to switch from Client to Server mode.\\n\\nWhat will happen:\\n\\u2022 You will disconnect from the current team\\n\\u2022 A new Hub server will start after the service restarts\\n\\u2022 Your local data is not affected\\n\\nAre you sure?',
+    'sharing.switch.hubAddress':'You are about to leave the current team and join a different one.\\n\\nWhat will happen:\\n\\u2022 You will disconnect from the current team server\\n\\u2022 The current team admin will be notified that you left\\n\\u2022 You will join the new team server as a new member\\n\\u2022 Your local data is not affected\\n\\nAre you sure?',
     'admin.notEnabled.title':'Team sharing is not enabled',
     'admin.notEnabled.desc':'The Admin Panel is used to manage team members, shared memories, tasks, and skills. To use this feature, you need to enable team sharing first.',
     'admin.notEnabled.setupHub':'Set Up as Team Server',
@@ -2746,12 +2764,12 @@ const I18N={
     'guide.join.s1':'Ask your team admin for the Server Address and Team Token',
     'guide.join.s2':'Go to Settings \u2192 Team Sharing, enable sharing, select "Client" mode',
     'guide.join.s3':'Fill in Server Address and Team Token, click "Test Connection"',
-    'guide.join.s4':'Save settings and restart the OpenClaw gateway (page refreshes automatically)',
+    'guide.join.s4':'Click "Save & Apply" — the service restarts automatically (page refreshes)',
     'guide.join.btn':'\u2192 Configure Client Mode',
     'guide.hub.title':'Start Your Own Team Server',
     'guide.hub.desc':'Be the team server. Run it on this device so others can connect and share memories with you.',
     'guide.hub.s1':'Go to Settings \u2192 Team Sharing, enable sharing, select "Server" mode',
-    'guide.hub.s2':'Set a team name, save settings, and restart the gateway (page refreshes automatically)',
+    'guide.hub.s2':'Set a team name, click "Save & Apply" — the service restarts automatically',
     'guide.hub.s3':'Share the Server Address and Team Token with your team members',
     'guide.hub.s4':'Approve join requests in the Admin Panel',
     'guide.hub.btn':'\u2192 Configure Server Mode'
@@ -2842,8 +2860,13 @@ const I18N={
     'notif.userJoin':'有新用户申请加入团队',
     'notif.userOnline':'用户上线了',
     'notif.userOffline':'用户下线了',
+    'notif.userLeft':'用户已退出团队',
     'notif.membershipApproved':'你的团队加入申请已通过',
     'notif.membershipRejected':'你的团队加入申请已被拒绝',
+    'notif.membershipRemoved':'你已被管理员移出团队',
+    'notif.hubShutdown':'团队服务已关闭',
+    'notif.rolePromoted':'你已被提升为管理员',
+    'notif.roleDemoted':'你已被设为普通成员',
     'notif.clearAll':'清除全部',
     'notif.timeAgo.just':'刚刚',
     'notif.timeAgo.min':'{n}分钟前',
@@ -2994,12 +3017,12 @@ const I18N={
     'settings.test.ok':'连接成功',
     'settings.test.fail':'连接失败',
     'settings.session.expired':'登录已过期，请刷新页面重新登录',
-    'settings.save':'保存设置',
+    'settings.save':'保存并应用',
     'settings.reset':'重置',
     'settings.saved':'已保存',
-    'settings.restart.hint':'部分设置修改后需要重启 OpenClaw 网关才能生效。',
-    'settings.restart.autoRefresh':'网关重启后页面将自动刷新...',
-    'settings.restart.waiting':'配置已保存，正在等待网关重启...',
+    'settings.restart.hint':'修改将在服务自动重启后生效。',
+    'settings.restart.autoRefresh':'服务重启中，页面将自动刷新...',
+    'settings.restart.waiting':'配置已保存，服务正在重启...',
     'settings.save.fail':'保存设置失败',
     'settings.save.emb.required':'嵌入模型为必填项，请先配置嵌入模型再保存。',
     'settings.save.emb.fail':'嵌入模型测试失败，无法保存',
@@ -3126,16 +3149,16 @@ const I18N={
     'settings.hub.tokenCopied':'团队令牌已复制！',
     'settings.hub.hubSteps.title':'快速配置（3 步）',
     'settings.hub.hubSteps.s1':'填写下方团队名称（或保持默认）',
-    'settings.hub.hubSteps.s2':'点击"保存设置"，然后重启 OpenClaw 网关',
+    'settings.hub.hubSteps.s2':'点击「保存并应用」，服务将自动重启',
     'settings.hub.hubSteps.s3':'将下方的服务器地址和团队令牌分享给团队成员',
     'settings.hub.clientSteps.title':'快速配置（3 步）',
     'settings.hub.clientSteps.s1':'向团队管理员获取服务器地址和团队令牌',
     'settings.hub.clientSteps.s2':'填入下方，点击"测试连接"验证连通性',
-    'settings.hub.clientSteps.s3':'点击「保存设置」，然后重启 OpenClaw 网关（页面会自动刷新）',
+    'settings.hub.clientSteps.s3':'点击「保存并应用」，服务将自动重启（页面会自动刷新）',
     'settings.hub.shareInfo.title':'请将以下信息分享给团队成员：',
     'settings.hub.shareInfo.yourIP':'你的IP',
     'settings.hub.shareInfo.clickCopy':'点击复制',
-    'settings.hub.restartAlert':'团队共享配置已保存！请重启 OpenClaw 网关使配置生效。\\n\\n执行命令：openclaw gateway stop && openclaw gateway start',
+    'settings.hub.restartAlert':'团队共享配置已保存！服务将自动重启以应用更改。',
     'settings.hub.hubAddress':'服务器地址',
     'settings.hub.hubAddress.hint':'团队服务器地址，如 192.168.1.100:18800',
     'settings.hub.teamTokenClient':'团队令牌',
@@ -3156,6 +3179,10 @@ const I18N={
     'sidebar.hub':'\u{1F310} 团队共享',
     'sharing.sidebar.connected':'已连接',
     'sharing.sidebar.disconnected':'已断开',
+    'sharing.sidebar.hubRunning':'服务运行中',
+    'sharing.sidebar.teamName':'团队',
+    'sharing.sidebar.members':'成员',
+    'sharing.sidebar.online':'在线',
     'sharing.sidebar.pending':'等待审核',
     'sharing.sidebar.rejected':'已拒绝',
     'sharing.sidebar.starting':'启动中...',
@@ -3172,6 +3199,11 @@ const I18N={
     'sharing.retryJoin':'重新申请',
     'sharing.retryJoin.hint':'清除本地连接数据并重新提交加入申请',
     'sharing.retryJoin.confirm':'这将清除当前连接数据并重新提交加入申请，是否继续？',
+    'sharing.leaveTeam':'退出团队',
+    'sharing.leaveTeam.confirm':'你即将退出团队「{team}」。\\n\\n退出后将会：\\n\\u2022 断开与团队服务器的连接\\n\\u2022 团队管理员会收到你退出的通知\\n\\u2022 你将无法再接收团队共享的记忆、任务和技能\\n\\u2022 你的本地数据不受影响，会完整保留\\n\\u2022 之后可以重新申请加入（需管理员审批）\\n\\n确定要退出吗？',
+    'sharing.leaveTeam.success':'你已退出团队，团队共享已关闭。',
+    'sharing.leaveTeam.fail':'退出团队失败',
+    'sharing.team.default':'该团队',
     'sharing.retryJoin.success':'加入申请已重新提交，请等待管理员审核。',
     'sharing.retryJoin.fail':'重新申请失败',
     'sharing.ownerRemoved':'(已移除)',
@@ -3225,6 +3257,7 @@ const I18N={
     'admin.editName':'编辑名称',
     'admin.lastAdminHint':'唯一管理员 — 无法删除或降级',
     'admin.ownerHint':'Hub 创建者 — 不可降级或移除',
+    'admin.selfHint':'这是你自己',
     'admin.editNamePrompt':'请输入新用户名：',
     'confirm.promoteAdmin':'确定要将此用户提升为管理员吗？管理员可以管理所有团队成员和资源。',
     'confirm.demoteMember':'确定要将此管理员降为普通成员吗？',
@@ -3286,6 +3319,8 @@ const I18N={
     'toast.userApproved':'用户已批准',
     'sharing.approved.toast':'您的加入申请已通过审核！',
     'sharing.rejected.toast':'您的加入申请已被管理员拒绝。',
+    'sharing.hubOffline.toast':'团队服务已离线，恢复后将自动重新连接。',
+    'sharing.hubReconnected.toast':'团队服务已恢复上线，连接已自动恢复！',
     'toast.userRejected':'用户已拒绝',
     'toast.approveFail':'批准失败',
     'toast.rejectFail':'拒绝失败',
@@ -3445,9 +3480,10 @@ const I18N={
     'update.dismiss':'关闭',
     'sharing.disable.confirm.hub':'你即将关闭团队服务。\\n\\n关闭后将会：\\n\\u2022 所有已连接的团队成员将断开连接\\n\\u2022 他们将无法继续同步记忆、任务和技能\\n\\u2022 已共享的数据会保留，重新开启后仍可使用\\n\\n确定要关闭吗？',
     'sharing.disable.confirm.client':'你即将断开与团队的连接。\\n\\n断开后将会：\\n\\u2022 你将无法再接收团队共享的记忆、任务和技能\\n\\u2022 你的本地数据不受影响，会完整保留\\n\\u2022 之后可以随时重新开启共享来恢复连接\\n\\n确定要断开吗？',
-    'sharing.disable.restartAlert':'共享已关闭。请重启 OpenClaw 网关使更改生效。\\n\\n执行命令：openclaw gateway stop && openclaw gateway start',
-    'sharing.switch.hubToClient':'你即将从服务端模式切换为客户端模式。\\n\\n切换后将会：\\n\\u2022 Hub 服务将在重启后关闭\\n\\u2022 所有已连接的团队成员将断开连接\\n\\u2022 Hub 上的共享数据会保留，以后可恢复使用\\n\\u2022 你将作为客户端加入指定的远程团队\\n\\n确定要切换吗？',
-    'sharing.switch.clientToHub':'你即将从客户端模式切换为服务端模式。\\n\\n切换后将会：\\n\\u2022 你将断开与当前团队的连接\\n\\u2022 重启后将启动新的 Hub 服务\\n\\u2022 你的本地数据不受影响\\n\\n确定要切换吗？',
+    'sharing.disable.restartAlert':'共享已关闭，服务将自动重启以应用更改。',
+    'sharing.switch.hubToClient':'你即将从服务端模式切换为客户端模式。\\n\\n切换后将会：\\n\\u2022 Hub 服务将在服务重启后关闭\\n\\u2022 所有已连接的团队成员将断开连接\\n\\u2022 Hub 上的共享数据会保留，以后可恢复使用\\n\\u2022 你将作为客户端加入指定的远程团队\\n\\n确定要切换吗？',
+    'sharing.switch.clientToHub':'你即将从客户端模式切换为服务端模式。\\n\\n切换后将会：\\n\\u2022 你将断开与当前团队的连接\\n\\u2022 服务重启后将启动新的 Hub 服务\\n\\u2022 你的本地数据不受影响\\n\\n确定要切换吗？',
+    'sharing.switch.hubAddress':'你即将离开当前团队并加入新的团队。\\n\\n操作后将会：\\n\\u2022 你将断开与当前团队服务器的连接\\n\\u2022 当前团队管理员会收到你离开的通知\\n\\u2022 你将作为新成员加入新的团队服务器\\n\\u2022 你的本地数据不受影响\\n\\n确定要切换吗？',
     'admin.notEnabled.title':'团队共享尚未开启',
     'admin.notEnabled.desc':'管理面板用于管理团队成员、共享的记忆、任务和技能。使用此功能前，需要先开启团队共享。',
     'admin.notEnabled.setupHub':'配置为团队服务端',
@@ -3465,12 +3501,12 @@ const I18N={
     'guide.join.s1':'向团队管理员索取服务器地址和团队令牌',
     'guide.join.s2':'前往「设置 → 团队共享」，开启共享，选择「客户端」模式',
     'guide.join.s3':'填写服务器地址和团队令牌，点击「测试连接」',
-    'guide.join.s4':'保存设置并重启 OpenClaw 网关（页面会自动刷新）',
+    'guide.join.s4':'点击「保存并应用」，服务将自动重启（页面会自动刷新）',
     'guide.join.btn':'\u2192 配置客户端模式',
     'guide.hub.title':'自建团队服务',
     'guide.hub.desc':'将本机作为团队服务端，让其他成员连接过来共享记忆。',
     'guide.hub.s1':'前往「设置 → 团队共享」，开启共享，选择「服务端」模式',
-    'guide.hub.s2':'设置团队名称，保存设置后重启网关（页面会自动刷新）',
+    'guide.hub.s2':'设置团队名称，点击「保存并应用」，服务将自动重启',
     'guide.hub.s3':'将服务器地址和团队令牌分享给团队成员',
     'guide.hub.s4':'在管理面板中审批加入请求',
     'guide.hub.btn':'\u2192 配置服务端模式'
@@ -3576,12 +3612,28 @@ async function doReset(){
 }
 
 var _sharingRole='client';
+var _loadedClientHubAddress='';
 function _genToken(len){
   var a=new Uint8Array(len||18);crypto.getRandomValues(a);
   return btoa(String.fromCharCode.apply(null,a)).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
 }
-function onSharingToggle(){
-  var on=document.getElementById('cfgSharingEnabled').checked;
+async function onSharingToggle(){
+  var chk=document.getElementById('cfgSharingEnabled');
+  var on=chk.checked;
+  if(!on && sharingStatusCache && sharingStatusCache.enabled){
+    var prevRole=sharingStatusCache.role;
+    var confirmMsg=prevRole==='hub'?t('sharing.disable.confirm.hub'):t('sharing.disable.confirm.client');
+    if(!(await confirmModal(confirmMsg,{danger:true}))){
+      chk.checked=true;
+      return;
+    }
+    var cfg={sharing:{enabled:false,role:prevRole}};
+    chk.disabled=true;
+    var result=await doSaveConfig(cfg, null, 'hubSaved');
+    chk.disabled=false;
+    if(!result){chk.checked=true;return;}
+    return;
+  }
   document.getElementById('sharingConfigPanel').style.display=on?'block':'none';
   var pw=document.getElementById('sharingPanelsWrap');
   if(pw) pw.style.display=on?'':'none';
@@ -3652,13 +3704,6 @@ async function testHubConnection(){
   if(!addr){result.innerHTML='<span style="color:var(--rose)">\u274C '+t('settings.hub.test.noAddr')+'</span>';return;}
   btn.disabled=true;result.innerHTML=t('settings.hub.test.testing');
   try{
-    var ipsData=await fetch('/api/local-ips').then(function(r){return r.json();});
-    var localAddrs=['127.0.0.1','localhost','0.0.0.0'].concat(ipsData.ips||[]);
-    var parsed=new URL(addr.indexOf('://')>-1?addr:'http://'+addr);
-    if(localAddrs.indexOf(parsed.hostname)>=0){
-      result.innerHTML='<span style="color:var(--rose)">\u274C '+t('sharing.cannotJoinSelf')+'</span>';
-      btn.disabled=false;return;
-    }
   }catch(e){}
   try{
     var url=addr.match(/^https?:\\/\\//)?addr:'http://'+addr;
@@ -3781,11 +3826,21 @@ async function loadSharingStatus(forcePending){
     var curStatus=conn.rejected?'rejected':conn.pendingApproval?'pending':conn.connected?'connected':'none';
     var hubActive=d.role==='hub'||curStatus==='connected';
     _updateScopeSelectorsVisibility(hubActive);
-    if(_lastSharingConnStatus==='pending'&&curStatus==='rejected'){
+    if(_lastSharingConnStatus==='pending'&&curStatus==='rejected'&&d.role==='client'){
       toast(t('sharing.rejected.toast'),'error');
     }
-    if(_lastSharingConnStatus==='pending'&&curStatus==='connected'){
+    if(_lastSharingConnStatus==='pending'&&curStatus==='connected'&&d.role==='client'){
       toast(t('sharing.approved.toast'),'success');
+      loadMemories();loadTasks();loadSkills();
+      if(_notifSSE){_notifSSE.close();_notifSSE=null;_notifSSEConnected=false;}
+      connectNotifSSE();
+      loadNotifications();
+    }
+    if(_lastSharingConnStatus==='connected'&&curStatus==='none'&&d.role==='client'){
+      toast(t('sharing.hubOffline.toast'),'error');
+    }
+    if(_lastSharingConnStatus==='none'&&curStatus==='connected'&&d.role==='client'){
+      toast(t('sharing.hubReconnected.toast'),'success');
       loadMemories();loadTasks();loadSkills();
       if(_notifSSE){_notifSSE.close();_notifSSE=null;_notifSSEConnected=false;}
       connectNotifSSE();
@@ -3815,7 +3870,8 @@ function renderSharingSidebar(data){
   var badgeEl=document.getElementById('sharingSidebarConnBadge');
   if(!statusEl||!hintEl) return;
   var conn=data&&data.connection||{};
-  var fp=JSON.stringify({e:!!data&&!!data.enabled,r:data&&data.role,pa:!!conn.pendingApproval,rj:!!conn.rejected,c:!!conn.connected,u:conn.user&&conn.user.username,tn:conn.teamName,cc:!!data&&!!data.clientConfigured,hu:data&&data.hubUrl});
+  var hs=data&&data.hubStats||{};
+  var fp=JSON.stringify({e:!!data&&!!data.enabled,r:data&&data.role,pa:!!conn.pendingApproval,rj:!!conn.rejected,c:!!conn.connected,u:conn.user&&conn.user.username,tn:conn.teamName,cc:!!data&&!!data.clientConfigured,hu:data&&data.hubUrl,tm:hs.totalMembers,om:hs.onlineMembers,pm:hs.pendingMembers});
   if(fp===_lastSidebarFingerprint) return;
   _lastSidebarFingerprint=fp;
   if(!data||!data.enabled){
@@ -3830,8 +3886,16 @@ function renderSharingSidebar(data){
     badgeEl.innerHTML='<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:2px 8px;border-radius:9999px;background:'+color+'15;color:'+color+'"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:'+color+(glow?';box-shadow:0 0 4px '+color:'')+'"></span>'+esc(text)+'</span>';
   }
   if(data.role==='hub'){
-    setBadge('#34d399',t('sharing.sidebar.connected'),true);
-    statusEl.innerHTML='';
+    setBadge('#34d399',t('sharing.sidebar.hubRunning'),true);
+    var hs=data.hubStats||{};
+    var html='<div class="info-grid">';
+    if(conn.teamName) html+='<span class="label">'+t('sharing.sidebar.teamName')+'</span><span class="value" style="font-weight:600">'+esc(conn.teamName)+'</span>';
+    html+='<span class="label">'+t('sharing.sidebar.members')+'</span><span class="value">'+(hs.totalMembers||0)+' <span style="opacity:.5;font-size:10px">/ '+t('sharing.sidebar.online')+' '+(hs.onlineMembers||0)+'</span></span>';
+    if(hs.pendingMembers>0){
+      html+='<span class="label">'+t('sharing.sidebar.pending')+'</span><span class="value" style="color:var(--yellow,#fbbf24);font-weight:600">'+hs.pendingMembers+'</span>';
+    }
+    html+='</div>';
+    statusEl.innerHTML=html;
     hintEl.textContent='';
   }else if(conn.pendingApproval&&conn.user){
     setBadge('#fbbf24',t('sharing.sidebar.pending'),false);
@@ -3902,7 +3966,6 @@ function renderSharingSettings(data){
   var conn=data.connection||{};
   var user=conn.user||{};
   var actualRole=data.role||_sharingRole||'client';
-  if(data.role) _sharingRole=data.role;
   var prevIsAdmin=!!window._isHubAdmin;
   var isAdmin=(data.admin&&data.admin.canManageUsers)||(conn.connected&&user.role==='admin')||(actualRole==='hub');
   window._isHubAdmin=isAdmin;
@@ -3966,7 +4029,10 @@ function renderSharingSettings(data){
         '<button class="btn btn-sm" onclick="updateHubUsername()" style="padding:2px 10px;font-size:11px">'+t('sharing.saveUsername')+'</button>'+
       '</span>';
       sh+='<span class="hic-label">'+t('sharing.team')+'</span><span class="hic-value">'+esc(conn.teamName||'-')+'</span>';
-      sh+='</div></div>';
+      sh+='</div>'+
+        '<div style="border-top:1px solid var(--border);margin-top:10px;padding:10px 16px 6px;display:flex;align-items:center;justify-content:flex-end">'+
+        '<button class="btn btn-sm" onclick="leaveTeam()" style="color:#ef4444;border-color:rgba(239,68,68,.3);font-size:11px;padding:4px 12px">'+t('sharing.leaveTeam')+'</button>'+
+        '</div></div>';
     }else{
       sh+='</div><div class="hic-empty" style="color:var(--text-muted)">'+t('sharing.disconnected.hint')+'</div>'+
         '<div style="margin-top:10px;padding:0 16px 14px"><button class="btn btn-sm btn-primary" id="btnRetryConn" onclick="retryConnection()">'+t('sharing.retryConnection')+'</button>'+
@@ -4016,6 +4082,22 @@ async function retryHubJoin(){
       toast(d.error||t('sharing.retryJoin.fail'),'error');
     }
   }catch(e){toast(t('sharing.retryJoin.fail')+': '+e.message,'error');}
+}
+
+async function leaveTeam(){
+  var teamName=(sharingStatusCache&&sharingStatusCache.connection&&sharingStatusCache.connection.teamName)||'';
+  var msg=t('sharing.leaveTeam.confirm').replace('{team}',teamName||t('sharing.team.default'));
+  if(!(await confirmModal(msg,{danger:true}))) return;
+  try{
+    var r=await fetch('/api/sharing/leave',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    var d=await r.json();
+    if(d.ok){
+      toast(t('sharing.leaveTeam.success'),'success');
+      showRestartOverlay(t('settings.restart.waiting'));
+    }else{
+      toast(d.error||t('sharing.leaveTeam.fail'),'error');
+    }
+  }catch(e){toast(t('sharing.leaveTeam.fail')+': '+e.message,'error');}
 }
 
 async function updateHubUsername(){
@@ -4106,8 +4188,7 @@ async function rejectSharingUser(userId,username){
 function updateTeamGuide(sharingData){
   var el=document.getElementById('teamSetupGuide');
   if(!el) return;
-  var isConfigured=sharingData&&sharingData.enabled;
-  el.style.display=isConfigured?'none':'block';
+  el.style.display='block';
 }
 function guideGoToHub(role){
   switchSettingsTab('hub',document.querySelector('.settings-tab-btn[data-tab="hub"]'));
@@ -4307,9 +4388,10 @@ function auRelativeTime(ts){
   return t('notif.timeAgo.day').replace('{n}',Math.floor(diff/86400000));
 }
 
-function renderAdminUserCard(u,adminCount){
+function renderAdminUserCard(u,adminCount,myUserId){
   var uid=escAttr(u.id);
   var uname=escAttr(u.username||'');
+  var isSelf=!!(myUserId&&u.id===myUserId);
   var online=!!u.isOnline;
   var statusCls=online?'online':'offline';
 
@@ -4343,7 +4425,9 @@ function renderAdminUserCard(u,adminCount){
   var infoHtml='<div class="au-info">'+infoRows.join('')+'</div>';
 
   var actions='';
-  if(u.isOwner){
+  if(isSelf){
+    actions+='<span style="font-size:11px;color:var(--text-muted);padding:4px 0">'+t('admin.selfHint')+'</span>';
+  }else if(u.isOwner){
     actions+='<span style="font-size:11px;color:var(--text-muted);padding:4px 0">'+t('admin.ownerHint')+'</span>';
   }else if(u.role!=='admin'){
     actions+='<button class="btn btn-sm btn-ghost" onclick="adminToggleRole(&quot;'+uid+'&quot;,&quot;admin&quot;)" style="color:var(--accent)">'+t('admin.promoteAdmin')+'</button>';
@@ -4395,6 +4479,7 @@ function renderAdminUsers(users,pending){
   offlineUsers.sort(function(a,b){return (b.lastActiveAt||0)-(a.lastActiveAt||0);});
   var sorted=onlineUsers.concat(offlineUsers);
   var adminCount=users.filter(function(x){return x.role==='admin';}).length;
+  var myUserId=sharingStatusCache&&sharingStatusCache.connection&&sharingStatusCache.connection.user?sharingStatusCache.connection.user.id:null;
 
   if(sorted.length===0){
     html+='<div class="admin-empty"><span class="ae-icon">\u{1F465}</span>'+t('admin.noActiveUsers')+'</div>';
@@ -4403,13 +4488,13 @@ function renderAdminUsers(users,pending){
     if(onlineUsers.length===0){
       html+='<div style="font-size:12px;color:var(--text-muted);padding:8px 0 12px">\u2014</div>';
     }else{
-      for(var i=0;i<onlineUsers.length;i++) html+=renderAdminUserCard(onlineUsers[i],adminCount);
+      for(var i=0;i<onlineUsers.length;i++) html+=renderAdminUserCard(onlineUsers[i],adminCount,myUserId);
     }
     html+='<div class="au-group-header"><span class="au-group-dot offline"></span>'+t('admin.offlineUsers')+' <span class="au-group-count">('+offlineUsers.length+')</span></div>';
     if(offlineUsers.length===0){
       html+='<div style="font-size:12px;color:var(--text-muted);padding:8px 0 12px">\u2014</div>';
     }else{
-      for(var j=0;j<offlineUsers.length;j++) html+=renderAdminUserCard(offlineUsers[j],adminCount);
+      for(var j=0;j<offlineUsers.length;j++) html+=renderAdminUserCard(offlineUsers[j],adminCount,myUserId);
     }
   }
   el.innerHTML=html;
@@ -6579,6 +6664,7 @@ async function loadConfig(){
     document.getElementById('cfgHubTeamName').value=hub.teamName||'';
     document.getElementById('cfgHubTeamToken').value=hub.teamToken||'';
     document.getElementById('cfgClientHubAddress').value=client.hubAddress||'';
+    _loadedClientHubAddress=client.hubAddress||'';
     document.getElementById('cfgClientTeamToken').value=client.teamToken||'';
     document.getElementById('cfgClientNickname').value=client.nickname||'';
     document.getElementById('cfgClientUserToken').value=client.userToken||'';
@@ -6624,15 +6710,19 @@ function flashSaved(id){
 }
 
 async function doSaveConfig(cfg, btnEl, savedId){
-  btnEl.disabled=true;btnEl.textContent=t('settings.test.loading');
-  function done(){btnEl.disabled=false;btnEl.textContent=t('settings.save');}
+  if(btnEl){btnEl.disabled=true;btnEl.textContent=t('settings.test.loading');}
+  function done(){if(btnEl){btnEl.disabled=false;btnEl.textContent=t('settings.save');}}
   try{
     const r=await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
     if(r.status===401){done();toast(t('settings.session.expired'),'error');return null;}
     if(!r.ok) throw new Error(await r.text());
     var data=await r.json().catch(function(){return {ok:true};});
     flashSaved(savedId);
-    done();
+    if(data&&data.restart){
+      showRestartOverlay(t('settings.restart.waiting'));
+    }else{
+      done();
+    }
     return data;
   }catch(e){
     toast(t('settings.save.fail')+': '+e.message,'error');
@@ -6758,7 +6848,7 @@ async function saveHubConfig(){
     var hubTeamName=document.getElementById('cfgHubTeamName').value.trim();
     var hubTeamToken=document.getElementById('cfgHubTeamToken').value.trim();
     var hubAdminName=document.getElementById('cfgHubAdminName').value.trim();
-    cfg.sharing.hub={port:hubPort?Number(hubPort):18800};
+    if(hubPort) cfg.sharing.hub={port:Number(hubPort)}; else cfg.sharing.hub={};
     if(hubTeamName) cfg.sharing.hub.teamName=hubTeamName;
     if(hubTeamToken) cfg.sharing.hub.teamToken=hubTeamToken;
     cfg.sharing.client={hubAddress:'',userToken:'',teamToken:''};
@@ -6775,15 +6865,9 @@ async function saveHubConfig(){
     if(clientNickname) cfg.sharing.client.nickname=clientNickname;
     if(clientTeamToken) cfg.sharing.client.teamToken=clientTeamToken;
     if(clientUserToken) cfg.sharing.client.userToken=clientUserToken;
-    cfg.sharing.hub={port:18800,teamName:'',teamToken:''};
+    cfg.sharing.hub={teamName:'',teamToken:''};
     if(clientAddr){
       try{
-        var ips=await fetch('/api/local-ips').then(function(r){return r.json();});
-        var localAddrs=['127.0.0.1','localhost','0.0.0.0'].concat(ips.ips||[]);
-        var parsed=new URL(clientAddr.indexOf('://')>-1?clientAddr:'http://'+clientAddr);
-        if(localAddrs.indexOf(parsed.hostname)>=0){
-          done();toast(t('sharing.cannotJoinSelf'),'error');return;
-        }
       }catch(e){}
       try{
         var testUrl=clientAddr.indexOf('://')>-1?clientAddr:'http://'+clientAddr;
@@ -6809,6 +6893,12 @@ async function saveHubConfig(){
   if(prevSharingEnabled&&sharingEnabled&&prevRole&&prevRole!==_sharingRole){
     var switchMsg=prevRole==='hub'?t('sharing.switch.hubToClient'):t('sharing.switch.clientToHub');
     if(!(await confirmModal(switchMsg,{danger:true}))){done();return;}
+  }
+  if(prevSharingEnabled&&sharingEnabled&&prevRole==='client'&&_sharingRole==='client'){
+    var newAddr=(document.getElementById('cfgClientHubAddress').value||'').trim();
+    if(_loadedClientHubAddress&&newAddr&&newAddr!==_loadedClientHubAddress){
+      if(!(await confirmModal(t('sharing.switch.hubAddress'),{danger:true}))){done();return;}
+    }
   }
 
   var result=await doSaveConfig(cfg, saveBtn, 'hubSaved');
@@ -7378,7 +7468,12 @@ function notifTimeAgo(ts){
 function notifIcon(resource,type){
   if(type==='user_online') return '\\u{1F7E2}';
   if(type==='user_offline') return '\\u{1F534}';
+  if(type==='user_left') return '\\u{1F6AA}';
   if(type==='user_join_request') return '\\u{1F464}';
+  if(type==='membership_removed') return '\\u{26D4}';
+  if(type==='hub_shutdown') return '\\u{1F6D1}';
+  if(type==='role_promoted') return '\\u{2B06}';
+  if(type==='role_demoted') return '\\u{2B07}';
   if(resource==='memory') return '\\u{1F4DD}';
   if(resource==='task') return '\\u{1F4CB}';
   if(resource==='skill') return '\\u{1F9E0}';
@@ -7404,11 +7499,26 @@ function notifTypeText(n){
   if(n.type==='user_offline'){
     return t('notif.userOffline');
   }
+  if(n.type==='user_left'){
+    return t('notif.userLeft');
+  }
   if(n.type==='membership_approved'){
     return t('notif.membershipApproved');
   }
   if(n.type==='membership_rejected'){
     return t('notif.membershipRejected');
+  }
+  if(n.type==='membership_removed'){
+    return t('notif.membershipRemoved');
+  }
+  if(n.type==='hub_shutdown'){
+    return t('notif.hubShutdown');
+  }
+  if(n.type==='role_promoted'){
+    return t('notif.rolePromoted');
+  }
+  if(n.type==='role_demoted'){
+    return t('notif.roleDemoted');
   }
   return n.message||n.type;
 }
@@ -7444,6 +7554,21 @@ function renderNotifBadge(){
   }
 }
 
+var _notifKnownTypes={membership_approved:1,membership_rejected:1,membership_removed:1,hub_shutdown:1,user_left:1,user_online:1,user_offline:1,user_join_request:1,role_promoted:1,role_demoted:1,resource_removed:1,resource_shared:1,resource_unshared:1};
+function notifDisplayTitle(n){
+  if(_notifKnownTypes[n.type]) return notifTypeText(n);
+  return n.title||notifTypeText(n);
+}
+function notifDisplayDetail(n){
+  if(_notifKnownTypes[n.type]){
+    if(n.type==='resource_removed'||n.type==='resource_shared'||n.type==='resource_unshared') return n.title||'';
+    var m=n.title&&n.title.match(/["\u201C]([^"\u201D]+)["\u201D]/);
+    if(m) return m[1];
+    if(n.type==='user_left'||n.type==='user_online'||n.type==='user_offline'||n.type==='user_join_request') return n.title||'';
+    return '';
+  }
+  return n.title||'';
+}
 function renderNotifPanel(){
   var body=document.getElementById('notifPanelBody');
   if(!body) return;
@@ -7453,11 +7578,12 @@ function renderNotifPanel(){
   }
   body.innerHTML=_notifCache.map(function(n){
     var cls='notif-item'+(n.read?'':' unread');
+    var detail=notifDisplayDetail(n);
     return '<div class="'+cls+'" onclick="markNotifRead(&quot;'+esc(n.id)+'&quot;)">'+
       '<div class="notif-item-icon">'+notifIcon(n.resource,n.type)+'</div>'+
       '<div class="notif-item-body">'+
-        '<div class="notif-item-title">'+esc(notifTypeText(n))+'</div>'+
-        '<div class="notif-item-name">'+esc(n.title)+'</div>'+
+        '<div class="notif-item-title">'+esc(notifDisplayTitle(n))+'</div>'+
+        (detail?'<div class="notif-item-name">'+esc(detail)+'</div>':'')+
         '<div class="notif-item-time">'+notifTimeAgo(n.createdAt)+'</div>'+
       '</div>'+
       '<div class="notif-item-dot"></div>'+
@@ -8743,7 +8869,7 @@ function confirmModal(message,opts){
     _confirmResolve=resolve;
     var overlay=document.getElementById('confirmOverlay');
     document.getElementById('confirmTitle').textContent=opts.title||t('confirm.title')||'\u786E\u8BA4';
-    document.getElementById('confirmBody').textContent=message||'';
+    document.getElementById('confirmBody').innerText=message||'';
     var okBtn=document.getElementById('confirmOkBtn');
     okBtn.textContent=opts.okText||t('confirm.ok')||'\u786E\u5B9A';
     okBtn.className='btn-confirm-ok'+(opts.danger?' danger':'');
@@ -8784,14 +8910,35 @@ function showRestartOverlay(msg){
 /* ─── Update check ─── */
 function waitForGatewayAndReload(maxAttempts,attempt){
   attempt=attempt||0;
+  var phase=arguments.length>2?arguments[2]:'waitDown';
+  var MAX_WAIT_DOWN=8;
   function forceReload(){window.location.href=window.location.pathname+'?_t='+Date.now();}
   if(attempt>=maxAttempts){forceReload();return;}
+  var delay=phase==='waitDown'?1500:2500;
   setTimeout(function(){
     fetch('/api/auth/status').then(function(r){
-      if(r.ok||r.status===401||r.status===403) forceReload();
-      else waitForGatewayAndReload(maxAttempts,attempt+1);
-    }).catch(function(){waitForGatewayAndReload(maxAttempts,attempt+1);});
-  },3000);
+      if(phase==='waitDown'){
+        if(r.ok||r.status===401||r.status===403){
+          if(attempt>=MAX_WAIT_DOWN){
+            forceReload();
+          }else{
+            waitForGatewayAndReload(maxAttempts,attempt+1,'waitDown');
+          }
+        }else{
+          waitForGatewayAndReload(maxAttempts,0,'waitUp');
+        }
+      }else{
+        if(r.ok||r.status===401||r.status===403) forceReload();
+        else waitForGatewayAndReload(maxAttempts,attempt+1,'waitUp');
+      }
+    }).catch(function(){
+      if(phase==='waitDown'){
+        waitForGatewayAndReload(maxAttempts,0,'waitUp');
+      }else{
+        waitForGatewayAndReload(maxAttempts,attempt+1,'waitUp');
+      }
+    });
+  },delay);
 }
 function doUpdateInstall(packageSpec,btnEl,statusEl){
   btnEl.disabled=true;

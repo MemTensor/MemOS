@@ -14,6 +14,7 @@ type HubServerOptions = {
   config: MemosLocalConfig;
   dataDir: string;
   embedder?: Embedder;
+  defaultHubPort?: number;
 };
 
 type HubAuthState = {
@@ -79,18 +80,31 @@ export class HubServer {
       }
     });
 
+    const MAX_PORT_RETRIES = 3;
+    let hubPort = this.port;
     await new Promise<void>((resolve, reject) => {
-      const onError = (err: Error) => {
-        this.server?.off("listening", onListening);
-        reject(err);
+      let retries = 0;
+      const onError = (err: NodeJS.ErrnoException) => {
+        if (err.code === "EADDRINUSE" && retries < MAX_PORT_RETRIES) {
+          retries++;
+          hubPort = this.port + retries;
+          this.opts.log.warn(`Hub port ${hubPort - 1} in use, trying ${hubPort}`);
+          this.server!.listen(hubPort, "0.0.0.0");
+        } else {
+          this.server?.off("listening", onListening);
+          reject(err);
+        }
       };
       const onListening = () => {
         this.server?.off("error", onError);
+        if (hubPort !== this.port) {
+          this.opts.log.info(`Hub started on fallback port ${hubPort} (configured: ${this.port})`);
+        }
         resolve();
       };
-      this.server!.once("error", onError);
+      this.server!.on("error", onError);
       this.server!.once("listening", onListening);
-      this.server!.listen(this.port, "0.0.0.0");
+      this.server!.listen(hubPort, "0.0.0.0");
     });
 
     const bootstrap = this.userManager.ensureBootstrapAdmin(
@@ -109,19 +123,37 @@ export class HubServer {
     this.initOnlineTracking();
     this.offlineCheckTimer = setInterval(() => this.checkOfflineUsers(), HubServer.OFFLINE_CHECK_INTERVAL_MS);
 
-    return `http://127.0.0.1:${this.port}`;
+    return `http://127.0.0.1:${hubPort}`;
   }
 
   async stop(): Promise<void> {
     if (this.offlineCheckTimer) { clearInterval(this.offlineCheckTimer); this.offlineCheckTimer = undefined; }
     if (!this.server) return;
+
+    try {
+      const activeUsers = this.opts.store.listHubUsers("active");
+      const ownerId = this.authState.bootstrapAdminUserId || "";
+      for (const u of activeUsers) {
+        if (u.id === ownerId) continue;
+        try {
+          this.opts.store.insertHubNotification({
+            id: randomUUID(), userId: u.id, type: "hub_shutdown",
+            resource: "system", title: `Team server "${this.teamName}" has been shut down by the admin.`,
+          });
+        } catch { /* best-effort */ }
+      }
+    } catch { /* best-effort */ }
+
     const server = this.server;
     this.server = undefined;
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 
   private get port(): number {
-    return this.opts.config.sharing?.hub?.port ?? 18800;
+    const configured = this.opts.config.sharing?.hub?.port;
+    const derived = this.opts.defaultHubPort;
+    if (derived && (!configured || configured === 18800)) return derived;
+    return configured ?? 18800;
   }
 
   private get teamName(): string {
@@ -320,6 +352,22 @@ export class HubServer {
       return this.json(res, 200, { status: user.status });
     }
 
+    if (req.method === "POST" && routePath === "/api/v1/hub/withdraw-pending") {
+      const body = await this.readJson(req);
+      if (!body || body.teamToken !== this.teamToken) {
+        return this.json(res, 403, { error: "invalid_team_token" });
+      }
+      const userId = String(body.userId || "");
+      if (!userId) return this.json(res, 400, { error: "missing_user_id" });
+      const user = this.opts.store.getHubUser(userId);
+      if (!user) return this.json(res, 200, { ok: true });
+      if (user.status === "pending") {
+        this.userManager.markUserLeft(userId);
+        this.opts.log.info(`Hub: user "${user.username}" (${userId}) withdrew pending application`);
+      }
+      return this.json(res, 200, { ok: true });
+    }
+
     // All endpoints below require authentication + rate limiting
     const auth = this.authenticate(req);
     if (!auth) return this.json(res, 401, { error: "unauthorized" });
@@ -336,7 +384,7 @@ export class HubServer {
     if (req.method === "POST" && routePath === "/api/v1/hub/leave") {
       this.userManager.markUserLeft(auth.userId);
       this.knownOnlineUsers.delete(auth.userId);
-      this.notifyAdmins("user_offline", "user", auth.username, auth.userId);
+      this.notifyAdmins("user_left", "user", auth.username, auth.userId);
       this.opts.log.info(`Hub: user "${auth.username}" (${auth.userId}) left voluntarily, status set to "left"`);
       return this.json(res, 200, { ok: true });
     }
@@ -441,6 +489,13 @@ export class HubServer {
       const updatedUser = { ...user, role: newRole as "admin" | "member" };
       this.opts.store.upsertHubUser(updatedUser);
       this.opts.log.info(`Hub: admin "${auth.userId}" changed role of "${userId}" to "${newRole}"`);
+      try {
+        const notifType = newRole === "admin" ? "role_promoted" : "role_demoted";
+        this.opts.store.insertHubNotification({
+          id: randomUUID(), userId, type: notifType,
+          resource: "user", title: `Your role in team "${this.teamName}" has been changed to ${newRole}.`,
+        });
+      } catch { /* best-effort */ }
       return this.json(res, 200, { ok: true, role: newRole });
     }
 
@@ -478,9 +533,16 @@ export class HubServer {
       if (!userId) return this.json(res, 400, { error: "missing_user_id" });
       if (userId === auth.userId) return this.json(res, 400, { error: "cannot_remove_self" });
       if (userId === this.authState.bootstrapAdminUserId) return this.json(res, 403, { error: "cannot_remove_owner", message: "The hub owner cannot be removed" });
+      try {
+        this.opts.store.insertHubNotification({
+          id: randomUUID(), userId, type: "membership_removed",
+          resource: "user", title: `You have been removed from team "${this.teamName}" by the admin.`,
+        });
+      } catch { /* best-effort */ }
       const cleanResources = body?.cleanResources === true;
       const deleted = this.opts.store.deleteHubUser(userId, cleanResources);
       if (!deleted) return this.json(res, 404, { error: "not_found" });
+      this.knownOnlineUsers.delete(userId);
       this.opts.log.info(`Hub: admin "${auth.userId}" removed user "${userId}" (cleanResources=${cleanResources})`);
       return this.json(res, 200, { ok: true });
     }

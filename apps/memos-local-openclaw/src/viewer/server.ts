@@ -34,6 +34,7 @@ export interface ViewerServerOptions {
   log: Logger;
   dataDir: string;
   ctx?: PluginContext;
+  defaultHubPort?: number;
 }
 
 interface AuthState {
@@ -51,6 +52,8 @@ export class ViewerServer {
   private readonly authFile: string;
   private readonly auth: AuthState;
   private readonly ctx?: PluginContext;
+  private readonly cookieName: string;
+  private readonly defaultHubPort: number;
 
   private static readonly SESSION_TTL = 24 * 60 * 60 * 1000;
   private static readonly PLUGIN_VERSION: string = (() => {
@@ -99,17 +102,31 @@ export class ViewerServer {
     this.ctx = opts.ctx;
     this.authFile = path.join(opts.dataDir, "viewer-auth.json");
     this.auth = { passwordHash: null, sessions: new Map() };
+    this.cookieName = `memos_token_${opts.port}`;
+    this.defaultHubPort = opts.defaultHubPort ?? 18800;
     this.resetToken = crypto.randomBytes(16).toString("hex");
     this.loadAuth();
   }
 
+  private getHubPort(): number {
+    const configured = this.ctx?.config?.sharing?.hub?.port;
+    if (configured && configured !== 18800) return configured;
+    return this.defaultHubPort;
+  }
+
   start(): Promise<string> {
+    const MAX_PORT_RETRIES = 5;
     return new Promise((resolve, reject) => {
+      let retries = 0;
       this.server = http.createServer((req, res) => this.handleRequest(req, res));
       this.server.on("error", (err: NodeJS.ErrnoException) => {
-        if (err.code === "EADDRINUSE") {
-          this.log.warn(`Viewer port ${this.port} in use, trying ${this.port + 1}`);
-          this.server!.listen(this.port + 1, "0.0.0.0");
+        if (err.code === "EADDRINUSE" && retries < MAX_PORT_RETRIES) {
+          retries++;
+          const nextPort = this.port + retries;
+          this.log.warn(`Viewer port ${this.port + retries - 1} in use, trying ${nextPort}`);
+          this.server!.listen(nextPort, "0.0.0.0");
+        } else if (err.code === "EADDRINUSE") {
+          reject(new Error(`Viewer failed to find open port after ${MAX_PORT_RETRIES} retries (tried ${this.port}–${this.port + MAX_PORT_RETRIES})`));
         } else {
           reject(err);
         }
@@ -187,7 +204,8 @@ export class ViewerServer {
 
   private isValidSession(req: http.IncomingMessage): boolean {
     const cookie = req.headers.cookie ?? "";
-    const match = cookie.match(/memos_token=([a-f0-9]+)/);
+    const re = new RegExp(`${this.cookieName}=([a-f0-9]+)`);
+    const match = cookie.match(re);
     if (!match) return false;
     const expiry = this.auth.sessions.get(match[1]);
     if (!expiry) return false;
@@ -270,6 +288,7 @@ export class ViewerServer {
       else if (p === "/api/sharing/remove-user" && req.method === "POST") this.handleSharingRemoveUser(req, res);
       else if (p === "/api/sharing/change-role" && req.method === "POST") this.handleSharingChangeRole(req, res);
       else if (p === "/api/sharing/retry-join" && req.method === "POST") this.handleRetryJoin(req, res);
+      else if (p === "/api/sharing/leave" && req.method === "POST") this.handleLeaveTeam(req, res);
       else if (p === "/api/sharing/search/memories" && req.method === "POST") this.handleSharingMemorySearch(req, res);
       else if (p === "/api/sharing/memories/list" && req.method === "GET") this.serveSharingMemoryList(res, url);
       else if (p === "/api/sharing/tasks/list" && req.method === "GET") this.serveSharingTaskList(res, url);
@@ -350,7 +369,7 @@ export class ViewerServer {
         const token = this.createSession();
         res.writeHead(200, {
           "Content-Type": "application/json",
-          "Set-Cookie": `memos_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
+          "Set-Cookie": `${this.cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
         });
         res.end(JSON.stringify({ ok: true, message: "Password set successfully" }));
       } catch (err) {
@@ -372,7 +391,7 @@ export class ViewerServer {
         const token = this.createSession();
         res.writeHead(200, {
           "Content-Type": "application/json",
-          "Set-Cookie": `memos_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
+          "Set-Cookie": `${this.cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
         });
         res.end(JSON.stringify({ ok: true }));
       } catch (err) {
@@ -384,11 +403,12 @@ export class ViewerServer {
 
   private handleLogout(req: http.IncomingMessage, res: http.ServerResponse): void {
     const cookie = req.headers.cookie ?? "";
-    const match = cookie.match(/memos_token=([a-f0-9]+)/);
+    const re = new RegExp(`${this.cookieName}=([a-f0-9]+)`);
+    const match = cookie.match(re);
     if (match) this.auth.sessions.delete(match[1]);
     res.writeHead(200, {
       "Content-Type": "application/json",
-      "Set-Cookie": "memos_token=; Path=/; HttpOnly; Max-Age=0",
+      "Set-Cookie": `${this.cookieName}=; Path=/; HttpOnly; Max-Age=0`,
     });
     res.end(JSON.stringify({ ok: true }));
   }
@@ -415,7 +435,7 @@ export class ViewerServer {
         const sessionToken = this.createSession();
         res.writeHead(200, {
           "Content-Type": "application/json",
-          "Set-Cookie": `memos_token=${sessionToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
+          "Set-Cookie": `${this.cookieName}=${sessionToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
         });
         res.end(JSON.stringify({ ok: true, message: "Password reset successfully" }));
       } catch (err) {
@@ -1522,6 +1542,7 @@ export class ViewerServer {
   // ─── Config API ───
 
   private getOpenClawConfigPath(): string {
+    if (process.env.OPENCLAW_CONFIG_PATH) return process.env.OPENCLAW_CONFIG_PATH;
     const home = process.env.HOME || process.env.USERPROFILE || "";
     const ocHome = process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw");
     return path.join(ocHome, "openclaw.json");
@@ -1611,7 +1632,20 @@ export class ViewerServer {
         base.connection.teamName = info?.teamName ?? sharing.hub?.teamName ?? null;
         base.connection.apiVersion = info?.apiVersion ?? null;
       } catch { /* ignore */ }
-      this.jsonResponse(res, base);
+
+      const hubStats: any = { totalMembers: 0, onlineMembers: 0, pendingMembers: 0 };
+      try {
+        const activeUsers = this.store.listHubUsers("active");
+        const pendingUsers = this.store.listHubUsers("pending");
+        const now = Date.now();
+        const OFFLINE_THRESHOLD = 120_000;
+        hubStats.totalMembers = activeUsers.length;
+        hubStats.onlineMembers = activeUsers.filter(u =>
+          u.lastActiveAt && (now - u.lastActiveAt < OFFLINE_THRESHOLD),
+        ).length;
+        hubStats.pendingMembers = pendingUsers.length;
+      } catch { /* best-effort */ }
+      this.jsonResponse(res, { ...base, hubStats });
       return;
     }
 
@@ -1776,15 +1810,6 @@ export class ViewerServer {
       }
       try {
         const hubUrl = normalizeHubUrl(hubAddress);
-        const localIPs = this.getLocalIPs();
-        localIPs.push("127.0.0.1", "localhost", "0.0.0.0");
-        try {
-          const u = new URL(hubUrl);
-          const targetPort = u.port || (u.protocol === "https:" ? "443" : "80");
-          if (localIPs.includes(u.hostname) && targetPort === String(this.port)) {
-            return this.jsonResponse(res, { ok: false, error: "cannot_join_self" });
-          }
-        } catch {}
         const os = await import("os");
         const nickname = sharing.client?.nickname;
         const username = nickname || os.userInfo().username || "user";
@@ -2213,7 +2238,7 @@ export class ViewerServer {
     // Hub 模式：连接自己，用 bootstrap admin token
     const sharing = this.ctx.config.sharing;
     if (sharing?.role === "hub") {
-      const hubPort = sharing.hub?.port ?? 18800;
+      const hubPort = this.getHubPort();
       const hubUrl = `http://127.0.0.1:${hubPort}`;
       try {
         const authPath = path.join(this.dataDir, "hub-auth.json");
@@ -2607,13 +2632,14 @@ export class ViewerServer {
           if (merged.role === "client" && merged.client) {
             const clientCfg = merged.client as Record<string, unknown>;
             const addr = String(clientCfg.hubAddress || "");
-            if (addr) {
+            if (addr && oldSharingRole === "hub" && oldSharingEnabled) {
+              const selfHubPort = (oldSharing?.hub as Record<string, unknown>)?.port ?? 18800;
               const localIPs = this.getLocalIPs();
               localIPs.push("127.0.0.1", "localhost", "0.0.0.0");
               try {
                 const u = new URL(addr.startsWith("http") ? addr : `http://${addr}`);
                 const targetPort = u.port || (u.protocol === "https:" ? "443" : "80");
-                if (localIPs.includes(u.hostname) && targetPort === String(this.port)) {
+                if (localIPs.includes(u.hostname) && targetPort === String(selfHubPort)) {
                   res.writeHead(400, { "Content-Type": "application/json" });
                   res.end(JSON.stringify({ error: "cannot_join_self" }));
                   return;
@@ -2638,12 +2664,9 @@ export class ViewerServer {
           const wasClient = oldSharingEnabled && oldSharingRole === "client";
           const isClient = newEnabled && newRole === "client";
           if (wasClient && !isClient) {
-            this.notifyHubLeave();
-            const oldConn = this.store.getClientHubConnection();
-            if (oldConn) {
-              this.store.setClientHubConnection({ ...oldConn, userToken: "", lastKnownStatus: "left" });
-            }
-            this.log.info("Client hub connection token cleared (sharing disabled or role changed), identity preserved");
+            await this.withdrawOrLeaveHub();
+            this.store.clearClientHubConnection();
+            this.log.info("Client hub connection cleared (sharing disabled or role changed)");
           }
 
           if (wasClient && isClient) {
@@ -2661,7 +2684,7 @@ export class ViewerServer {
           if (merged.role === "hub") {
             merged.client = { hubAddress: "", userToken: "", teamToken: "" };
           } else if (merged.role === "client") {
-            merged.hub = { port: 18800, teamName: "", teamToken: "" };
+            merged.hub = { teamName: "", teamToken: "" };
           }
           config.sharing = merged;
         }
@@ -2684,7 +2707,12 @@ export class ViewerServer {
           }
         }
 
-        this.jsonResponse(res, { ok: true, joinStatus });
+        this.jsonResponse(res, { ok: true, joinStatus, restart: true });
+
+        setTimeout(() => {
+          this.log.info("config-save: triggering gateway restart via SIGUSR1...");
+          try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
+        }, 500);
       } catch (e) {
         this.log.warn(`handleSaveConfig error: ${e}`);
         res.writeHead(500, { "Content-Type": "application/json" });
@@ -2727,6 +2755,41 @@ export class ViewerServer {
     return result.status;
   }
 
+  private handleLeaveTeam(_req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(_req, async () => {
+      try {
+        await this.withdrawOrLeaveHub();
+        this.store.clearClientHubConnection();
+
+        const configPath = this.getOpenClawConfigPath();
+        if (configPath && fs.existsSync(configPath)) {
+          const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+          const pluginKey = Object.keys(raw.plugins?.entries ?? {}).find(k => k.includes("memos-local"));
+          if (pluginKey) {
+            const cfg = raw.plugins.entries[pluginKey].config ?? {};
+            if (cfg.sharing) {
+              cfg.sharing.enabled = false;
+              cfg.sharing.client = { hubAddress: "", userToken: "", teamToken: "" };
+            }
+            raw.plugins.entries[pluginKey].config = cfg;
+            fs.writeFileSync(configPath, JSON.stringify(raw, null, 2) + "\n");
+            this.log.info("handleLeaveTeam: config updated, sharing disabled");
+          }
+        }
+
+        this.jsonResponse(res, { ok: true, restart: true });
+
+        setTimeout(() => {
+          this.log.info("handleLeaveTeam: triggering gateway restart via SIGUSR1...");
+          try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
+        }, 500);
+      } catch (e) {
+        this.log.warn(`handleLeaveTeam error: ${e}`);
+        this.jsonResponse(res, { ok: false, error: String(e) });
+      }
+    });
+  }
+
   private async notifyHubLeave(): Promise<void> {
     try {
       const hub = this.resolveHubConnection();
@@ -2745,11 +2808,49 @@ export class ViewerServer {
     }
   }
 
+  private async withdrawOrLeaveHub(): Promise<void> {
+    try {
+      const persisted = this.store.getClientHubConnection();
+      const sharing = this.ctx?.config?.sharing;
+
+      if (persisted?.userToken && persisted?.hubUrl) {
+        await hubRequestJson(persisted.hubUrl, persisted.userToken, "/api/v1/hub/leave", { method: "POST" });
+        this.log.info("Notified Hub of voluntary leave (had token)");
+        return;
+      }
+
+      const hub = this.resolveHubConnection();
+      if (hub?.userToken) {
+        await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/leave", { method: "POST" });
+        this.log.info("Notified Hub of voluntary leave (resolved connection)");
+        return;
+      }
+
+      const hubUrl = persisted?.hubUrl || (sharing?.client?.hubAddress ? normalizeHubUrl(sharing.client.hubAddress) : null);
+      const userId = persisted?.userId;
+      const teamToken = sharing?.client?.teamToken;
+      if (hubUrl && userId && teamToken) {
+        const withdrawUrl = `${normalizeHubUrl(hubUrl)}/api/v1/hub/withdraw-pending`;
+        await fetch(withdrawUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ teamToken, userId }),
+        });
+        this.log.info("Withdrew pending application from Hub");
+        return;
+      }
+
+      this.log.info("No hub connection to clean up (no token, no pending)");
+    } catch (e) {
+      this.log.warn(`Failed to withdraw/leave Hub: ${e}`);
+    }
+  }
+
   private async notifyHubShutdown(): Promise<void> {
     try {
       const sharing = this.ctx?.config.sharing;
       if (!sharing || sharing.role !== "hub") return;
-      const hubPort = sharing.hub?.port ?? 18800;
+      const hubPort = this.getHubPort();
       const authPath = path.join(this.dataDir, "hub-auth.json");
       let adminToken: string | undefined;
       try {
@@ -2834,13 +2935,17 @@ export class ViewerServer {
         const { hubUrl } = JSON.parse(body);
         if (!hubUrl) { this.jsonResponse(res, { ok: false, error: "hubUrl is required" }); return; }
         try {
-          const localIPs = this.getLocalIPs();
-          localIPs.push("127.0.0.1", "localhost", "0.0.0.0");
-          const parsed = new URL(hubUrl.startsWith("http") ? hubUrl : `http://${hubUrl}`);
-          const targetPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-          if (localIPs.includes(parsed.hostname) && targetPort === String(this.port)) {
-            this.jsonResponse(res, { ok: false, error: "cannot_join_self" });
-            return;
+          const sharing = this.ctx?.config?.sharing;
+          if (sharing?.enabled && sharing.role === "hub") {
+            const selfHubPort = this.getHubPort();
+            const localIPs = this.getLocalIPs();
+            localIPs.push("127.0.0.1", "localhost", "0.0.0.0");
+            const parsed = new URL(hubUrl.startsWith("http") ? hubUrl : `http://${hubUrl}`);
+            const targetPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+            if (localIPs.includes(parsed.hostname) && targetPort === String(selfHubPort)) {
+              this.jsonResponse(res, { ok: false, error: "cannot_join_self" });
+              return;
+            }
           }
         } catch {}
         const url = hubUrl.replace(/\/+$/, "") + "/api/v1/hub/info";
@@ -3078,10 +3183,9 @@ export class ViewerServer {
                   this.log.info(`update-install: success! Updated to ${newVersion}`);
                   this.jsonResponse(res, { ok: true, version: newVersion });
 
-                  // Trigger Gateway restart after response is sent
                   setTimeout(() => {
-                    this.log.info(`update-install: triggering gateway restart...`);
-                    process.kill(process.pid, "SIGUSR1");
+                    this.log.info(`update-install: triggering gateway restart via SIGUSR1...`);
+                    try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
                   }, 500);
                 });
               });
