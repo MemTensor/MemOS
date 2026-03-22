@@ -1,5 +1,6 @@
 import json
 import random
+import re
 import textwrap
 import time
 
@@ -95,6 +96,38 @@ def clean_properties(props):
 def escape_sql_string(value: str) -> str:
     """Escape single quotes in SQL string."""
     return value.replace("'", "''")
+
+
+# Valid edge label names used in the graph schema.
+_VALID_EDGE_LABELS = frozenset({
+    "AGGREGATE_TO", "FOLLOWS", "INFERS", "MERGED_TO", "RELATE_TO", "PARENT",
+})
+
+
+def _validate_sql_identifier(value: str) -> str:
+    """Validate that a value is a safe SQL identifier (alphanumeric/underscores only).
+
+    Raises ValueError if the value contains characters outside [a-zA-Z0-9_].
+    """
+    if not value or not re.match(r'^[a-zA-Z0-9_]+$', value):
+        raise ValueError(
+            f"Invalid SQL identifier: {value!r}. "
+            "Only alphanumeric characters and underscores are allowed."
+        )
+    return value
+
+
+def _validate_edge_label(label: str) -> str:
+    """Validate that an edge label is in the set of known edge types.
+
+    Raises ValueError if the label is not a recognized edge type.
+    """
+    if label not in _VALID_EDGE_LABELS:
+        raise ValueError(
+            f"Invalid edge label: {label!r}. "
+            f"Must be one of: {', '.join(sorted(_VALID_EDGE_LABELS))}"
+        )
+    return label
 
 
 class PolarDBGraphDB(BaseGraphDB):
@@ -742,19 +775,21 @@ class PolarDBGraphDB(BaseGraphDB):
     @timed
     def create_graph(self):
         # Get a connection from the pool
+        _validate_sql_identifier(self.db_name)
         conn = None
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                cursor.execute(f"""
-                    SELECT COUNT(*) FROM ag_catalog.ag_graph
-                    WHERE name = '{self.db_name}_graph';
-                """)
+                cursor.execute(
+                    "SELECT COUNT(*) FROM ag_catalog.ag_graph WHERE name = %s",
+                    (f"{self.db_name}_graph",),
+                )
                 graph_exists = cursor.fetchone()[0] > 0
 
                 if graph_exists:
                     logger.info(f"Graph '{self.db_name}_graph' already exists.")
                 else:
+                    # create_graph() requires a literal name; db_name is validated above
                     cursor.execute(f"select create_graph('{self.db_name}_graph');")
                     logger.info(f"Graph database '{self.db_name}_graph' created.")
         except Exception as e:
@@ -811,17 +846,24 @@ class PolarDBGraphDB(BaseGraphDB):
         properties = {}
         if user_name is not None:
             properties["user_name"] = user_name
+
+        # Validate edge label and escape user-supplied values
+        _validate_edge_label(type)
+        _validate_sql_identifier(self.db_name)
+        src_esc = escape_sql_string(source_id)
+        tgt_esc = escape_sql_string(target_id)
+
         query = f"""
             INSERT INTO {self.db_name}_graph."{type}"(id, start_id, end_id, properties)
             SELECT
                 ag_catalog._next_graph_id('{self.db_name}_graph'::name, '{type}'),
-                ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, '{source_id}'::text::cstring),
-                ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, '{target_id}'::text::cstring),
-                jsonb_build_object('user_name', '{user_name}')::text::agtype
+                ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, '{src_esc}'::text::cstring),
+                ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, '{tgt_esc}'::text::cstring),
+                jsonb_build_object('user_name', %s)::text::agtype
             WHERE NOT EXISTS (
                 SELECT 1 FROM {self.db_name}_graph."{type}"
-                WHERE start_id = ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, '{source_id}'::text::cstring)
-                  AND end_id   = ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, '{target_id}'::text::cstring)
+                WHERE start_id = ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, '{src_esc}'::text::cstring)
+                  AND end_id   = ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, '{tgt_esc}'::text::cstring)
             );
         """
         logger.info(f"polardb [add_edge] query: {query}, properties: {json.dumps(properties)}")
@@ -829,7 +871,7 @@ class PolarDBGraphDB(BaseGraphDB):
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                cursor.execute(query, (source_id, target_id, type, json.dumps(properties)))
+                cursor.execute(query, (user_name or "",))
                 logger.info(f"Edge created: {source_id} -[{type}]-> {target_id}")
 
                 elapsed_time = time.time() - start_time
@@ -961,12 +1003,18 @@ class PolarDBGraphDB(BaseGraphDB):
             raise ValueError(
                 f"Invalid direction: {direction}. Must be 'OUTGOING', 'INCOMING', or 'ANY'."
             )
+        # Escape user-supplied values for safe embedding in Cypher
+        src_esc = escape_sql_string(source_id)
+        tgt_esc = escape_sql_string(target_id)
+        uname_esc = escape_sql_string(user_name or "")
+
         query = f"SELECT * FROM cypher('{self.db_name}_graph', $$"
         query += f"\nMATCH {pattern}"
-        query += f"\nWHERE a.user_name = '{user_name}' AND b.user_name = '{user_name}'"
-        query += f"\nAND a.id = '{source_id}' AND b.id = '{target_id}'"
+        query += f"\nWHERE a.user_name = '{uname_esc}' AND b.user_name = '{uname_esc}'"
+        query += f"\nAND a.id = '{src_esc}' AND b.id = '{tgt_esc}'"
         if type != "ANY":
-            query += f"\n AND type(r) = '{type}'"
+            type_esc = escape_sql_string(type)
+            query += f"\n AND type(r) = '{type_esc}'"
 
         query += "\nRETURN r"
         query += "\n$$) AS (r agtype)"
@@ -1350,14 +1398,16 @@ class PolarDBGraphDB(BaseGraphDB):
     ) -> list[dict[str, Any]]:
         """Get children nodes with their embeddings."""
         user_name = user_name if user_name else self._get_config_value("user_name")
-        where_user = f"AND p.user_name = '{user_name}' AND c.user_name = '{user_name}'"
+        id_esc = escape_sql_string(id)
+        uname_esc = escape_sql_string(user_name or "")
+        where_user = f"AND p.user_name = '{uname_esc}' AND c.user_name = '{uname_esc}'"
 
         query = f"""
             WITH t as (
                 SELECT *
                 FROM cypher('{self.db_name}_graph', $$
                 MATCH (p:Memory)-[r:PARENT]->(c:Memory)
-                WHERE p.id = '{id}' {where_user}
+                WHERE p.id = '{id_esc}' {where_user}
                 RETURN id(c) as cid, c.id AS id, c.memory AS memory
                 $$) as (cid agtype, id agtype, memory agtype)
                 )
@@ -1461,6 +1511,11 @@ class PolarDBGraphDB(BaseGraphDB):
 
         if center_id.startswith('"') and center_id.endswith('"'):
             center_id = center_id[1:-1]
+
+        # Escape user-supplied values for safe embedding in Cypher
+        center_id_esc = escape_sql_string(center_id)
+        center_status_esc = escape_sql_string(center_status)
+        uname_esc = escape_sql_string(user_name or "")
         # Use a simplified query to get the subgraph (temporarily only direct neighbors)
         """
             SELECT * FROM cypher('{self.db_name}_graph', $$
@@ -1482,9 +1537,9 @@ class PolarDBGraphDB(BaseGraphDB):
                 SELECT * FROM cypher('{self.db_name}_graph', $$
                         MATCH(center: Memory)-[r]->(neighbor:Memory)
                         WHERE
-                        center.id = '{center_id}'
-                        AND center.status = '{center_status}'
-                        AND center.user_name = '{user_name}'
+                        center.id = '{center_id_esc}'
+                        AND center.status = '{center_status_esc}'
+                        AND center.user_name = '{uname_esc}'
                         RETURN collect(DISTINCT center), collect(DISTINCT neighbor), collect(DISTINCT r)
                     $$ ) as (centers agtype, neighbors agtype, rels agtype);
                 """
@@ -1494,16 +1549,16 @@ class PolarDBGraphDB(BaseGraphDB):
                 SELECT * FROM cypher('{self.db_name}_graph', $$
                         MATCH(center: Memory)-[r]->(neighbor:Memory)
                         WHERE
-                        center.id = '{center_id}'
-                        AND center.status = '{center_status}'
-                        AND center.user_name = '{user_name}'
+                        center.id = '{center_id_esc}'
+                        AND center.status = '{center_status_esc}'
+                        AND center.user_name = '{uname_esc}'
                         RETURN collect(DISTINCT center), collect(DISTINCT neighbor), collect(DISTINCT r)
                 UNION ALL
                         MATCH(center: Memory)-[r]->(n:Memory)-[r1]->(neighbor:Memory)
                         WHERE
-                       center.id = '{center_id}'
-                        AND center.status = '{center_status}'
-                        AND center.user_name = '{user_name}'
+                       center.id = '{center_id_esc}'
+                        AND center.status = '{center_status_esc}'
+                        AND center.user_name = '{uname_esc}'
                         RETURN collect(DISTINCT center), collect(DISTINCT neighbor), collect(DISTINCT r1)
                     $$ ) as (centers agtype, neighbors agtype, rels agtype);
                 """
@@ -2403,7 +2458,8 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name = user_name if user_name else self._get_config_value("user_name")
 
         # Build user clause
-        user_clause = f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype"
+        uname_gc_esc = escape_sql_string(user_name or "")
+        user_clause = f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{uname_gc_esc}\"'::agtype"
         if where_clause:
             where_clause = where_clause.strip()
             if where_clause.upper().startswith("WHERE"):
@@ -2418,8 +2474,10 @@ class PolarDBGraphDB(BaseGraphDB):
             for key, value in params.items():
                 # Handle different value types appropriately
                 if isinstance(value, str):
-                    value = f"'{value}'"
-                where_clause = where_clause.replace(f"${key}", str(value))
+                    value = f"'{escape_sql_string(value)}'"
+                else:
+                    value = str(value)
+                where_clause = where_clause.replace(f"${key}", value)
 
         # Handle user_name parameter in where_clause
         if "user_name = %s" in where_clause:
@@ -2502,10 +2560,11 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name = user_name if user_name else self._get_config_value("user_name")
 
         try:
+            uname_esc = escape_sql_string(user_name or "")
             query = f"""
                 SELECT * FROM cypher('{self.db_name}_graph', $$
                 MATCH (n:Memory)
-                WHERE n.user_name = '{user_name}'
+                WHERE n.user_name = '{uname_esc}'
                 DETACH DELETE n
                 $$) AS (result agtype)
             """
@@ -2724,11 +2783,13 @@ class PolarDBGraphDB(BaseGraphDB):
     def count_nodes(self, scope: str, user_name: str | None = None) -> int:
         user_name = user_name if user_name else self.config.user_name
 
+        scope_esc = escape_sql_string(scope)
+        uname_esc = escape_sql_string(user_name or "")
         query = f"""
             SELECT * FROM cypher('{self.db_name}_graph', $$
                 MATCH (n:Memory)
-                WHERE n.memory_type = '{scope}'
-                AND n.user_name = '{user_name}'
+                WHERE n.memory_type = '{scope_esc}'
+                AND n.user_name = '{uname_esc}'
                 RETURN count(n)
             $$) AS (count agtype)
         """
@@ -2795,9 +2856,11 @@ class PolarDBGraphDB(BaseGraphDB):
         # Use cypher query to retrieve memory items
         if include_embedding:
             # Build WHERE clause with user_name/knowledgebase_ids and filter
-            where_parts = [f"n.memory_type = '{scope}'"]
-            if status:
-                where_parts.append(f"n.status = '{status}'")
+            scope_esc = escape_sql_string(scope)
+            status_esc = escape_sql_string(status) if status else None
+            where_parts = [f"n.memory_type = '{scope_esc}'"]
+            if status_esc:
+                where_parts.append(f"n.status = '{status_esc}'")
             if user_name_where:
                 # user_name_where already contains parentheses if it's an OR condition
                 where_parts.append(user_name_where)
@@ -2857,9 +2920,11 @@ class PolarDBGraphDB(BaseGraphDB):
             return nodes
         else:
             # Build WHERE clause with user_name/knowledgebase_ids and filter
-            where_parts = [f"n.memory_type = '{scope}'"]
-            if status:
-                where_parts.append(f"n.status = '{status}'")
+            scope_esc = escape_sql_string(scope)
+            status_esc = escape_sql_string(status) if status else None
+            where_parts = [f"n.memory_type = '{scope_esc}'"]
+            if status_esc:
+                where_parts.append(f"n.status = '{status_esc}'")
             if user_name_where:
                 # user_name_where already contains parentheses if it's an OR condition
                 where_parts.append(user_name_where)
@@ -2925,11 +2990,13 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Use cypher query to retrieve memory items
         if include_embedding:
+            scope_esc = escape_sql_string(scope)
+            uname_esc = escape_sql_string(user_name or "")
             cypher_query = f"""
                 WITH t as (
                     SELECT * FROM cypher('{self.db_name}_graph', $$
                     MATCH (n:Memory)
-                    WHERE n.memory_type = '{scope}' AND n.user_name = '{user_name}'
+                    WHERE n.memory_type = '{scope_esc}' AND n.user_name = '{uname_esc}'
                     RETURN id(n) as id1,n
                     LIMIT 100
                     $$) AS (id1 agtype,n agtype)
@@ -2942,10 +3009,12 @@ class PolarDBGraphDB(BaseGraphDB):
                 WHERE t.id1 = m.id;
                 """
         else:
+            scope_esc = escape_sql_string(scope)
+            uname_esc = escape_sql_string(user_name or "")
             cypher_query = f"""
                 SELECT * FROM cypher('{self.db_name}_graph', $$
                 MATCH (n:Memory)
-                WHERE n.memory_type = '{scope}' AND n.user_name = '{user_name}'
+                WHERE n.memory_type = '{scope_esc}' AND n.user_name = '{uname_esc}'
                 RETURN properties(n) as props
                 LIMIT 100
                 $$) AS (nprops agtype)
@@ -3078,9 +3147,9 @@ class PolarDBGraphDB(BaseGraphDB):
         cypher_query = f"""
             SELECT * FROM cypher('{self.db_name}_graph', $$
             MATCH (n:Memory)
-            WHERE n.memory_type = '{scope}'
+            WHERE n.memory_type = '{escape_sql_string(scope)}'
               AND n.status = 'activated'
-              AND n.user_name = '{user_name}'
+              AND n.user_name = '{escape_sql_string(user_name or "")}'
             OPTIONAL MATCH (n)-[:PARENT]->(c:Memory)
             OPTIONAL MATCH (p:Memory)-[:PARENT]->(n)
             WITH n, c, p
