@@ -366,10 +366,10 @@ body.lang-zh .lang-en{display:none !important}
     <span class="lang-en">Give Your OpenClaw<br><span class="grad">Lasting Intelligence</span></span>
   </h1>
   <p class="desc">
-    <span class="lang-zh">为 OpenClaw 注入持久记忆与自进化技能<br>完全本地化  全量可视化管理  分级模型极致省钱</span>
-    <span class="lang-en">Persistent memory and self-evolving skills for OpenClaw agents.<br>100% local storage, full visualization dashboard, and tiered models for cost efficiency.</span>
+    <span class="lang-zh">为 OpenClaw 注入持久记忆与自进化技能<br>多实例团队协作  完全本地化  全量可视化管理</span>
+    <span class="lang-en">Persistent memory, self-evolving skills, and multi-instance team collaboration for OpenClaw agents.<br>100% local storage, full visualization, and team sharing.</span>
   </p>
-  <p class="sub-line"><span class="lang-zh">把 MemOS 带进你的 OpenClaw</span><span class="lang-en">Bring MemOS to your OpenClaw workflow</span></p>
+  <p class="sub-line"><span class="lang-zh">多个 OpenClaw 协同进化，越用越聪明</span><span class="lang-en">Multiple OpenClaw agents evolve together, getting smarter over time</span></p>
   <div class="ctas">
     <a href="#quickstart" class="btn btn-glow lang-zh">立即安装 →</a><a href="#quickstart" class="btn btn-glow lang-en">Get Started →</a>
     <a href="https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-openclaw" class="btn btn-outline" target="_blank" rel="noopener">
@@ -391,6 +391,127 @@ body.lang-zh .lang-en{display:none !important}
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- ── Multi-Agent Hero Visual ── -->
+  <div class="hero-agents" style="max-width:780px;margin:48px auto 0;animation:fadeUp .7s ease .55s both">
+    <svg viewBox="0 0 780 200" width="780" height="200" xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;height:auto">
+      <defs>
+        <linearGradient id="hgHub" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(0,229,255,.18)"/><stop offset="100%" stop-color="rgba(99,140,255,.18)"/></linearGradient>
+        <linearGradient id="hgCli" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(177,108,255,.14)"/><stop offset="100%" stop-color="rgba(99,140,255,.14)"/></linearGradient>
+        <linearGradient id="hgClaw" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient>
+        <marker id="hgA" markerWidth="6" markerHeight="4" refX="6" refY="2" orient="auto"><polygon points="0 0,6 2,0 4" fill="#00e5ff" opacity=".8"/></marker>
+        <marker id="hgB" markerWidth="6" markerHeight="4" refX="6" refY="2" orient="auto"><polygon points="0 0,6 2,0 4" fill="#b16cff" opacity=".6"/></marker>
+      </defs>
+
+      <!-- Hub (center) -->
+      <rect x="280" y="10" width="220" height="80" rx="12" fill="url(#hgHub)" stroke="rgba(0,229,255,.3)" stroke-width="1.5">
+        <animate attributeName="stroke-opacity" values=".3;.6;.3" dur="3s" repeatCount="indefinite"/>
+      </rect>
+      <!-- Hub claw -->
+      <path d="M306 42c-4-2-6 0-5 5s4 3 5 0c1-2 1-4 0-5z" fill="url(#hgClaw)"/>
+      <path d="M322 42c4-2 6 0 5 5s-4 3-5 0c-1-2-1-4 0-5z" fill="url(#hgClaw)"/>
+      <circle cx="314" cy="38" r="9" fill="url(#hgClaw)"/>
+      <circle cx="311" cy="36" r="1.8" fill="#050810"/><circle cx="317" cy="36" r="1.8" fill="#050810"/>
+      <circle cx="311.5" cy="35.4" r=".7" fill="#00e5cc"><animate attributeName="opacity" values="1;.3;1" dur="3s" repeatCount="indefinite"/></circle>
+      <circle cx="317.5" cy="35.4" r=".7" fill="#00e5cc"><animate attributeName="opacity" values="1;.3;1" dur="3s" repeatCount="indefinite" begin=".1s"/></circle>
+      <text x="334" y="40" font-size="13" font-weight="800" fill="#00e5ff" font-family="var(--font)">Hub</text>
+      <text x="334" y="55" font-size="9" fill="rgba(200,210,255,.5)" font-family="var(--font)"><tspan class="lang-zh">团队服务端 · 共享记忆/技能</tspan><tspan class="lang-en">Team Server · Shared Memory/Skills</tspan></text>
+      <!-- Hub data badges -->
+      <rect x="334" y="64" width="40" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/>
+      <text x="340" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="var(--mono)">🧠 86</text>
+      <rect x="380" y="64" width="40" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/>
+      <text x="386" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="var(--mono)">📋 12</text>
+      <rect x="426" y="64" width="36" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/>
+      <text x="432" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="var(--mono)">⚡ 5</text>
+
+      <!-- Client 1 (left) -->
+      <rect x="20" y="120" width="200" height="70" rx="10" fill="url(#hgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+      <path d="M44 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#hgClaw)"/>
+      <path d="M56 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#hgClaw)"/>
+      <circle cx="50" cy="145" r="7" fill="url(#hgClaw)"/>
+      <circle cx="47.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="52.5" cy="143.5" r="1.2" fill="#050810"/>
+      <circle cx="48" cy="143" r=".5" fill="#00e5cc"/><circle cx="53" cy="143" r=".5" fill="#00e5cc"/>
+      <text x="66" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="var(--font)">OpenClaw A</text>
+      <text x="66" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="var(--font)"><tspan class="lang-zh">前端开发 · 234 记忆</tspan><tspan class="lang-en">Frontend · 234 Memories</tspan></text>
+      <circle cx="182" cy="142" r="4" fill="#00e676"/>
+      <text x="192" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="var(--mono)">online</text>
+      <!-- Skill share label -->
+      <rect x="40" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/>
+      <text x="48" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">📤 skill_publish</text>
+
+      <!-- Client 2 (center-left) -->
+      <rect x="250" y="120" width="200" height="70" rx="10" fill="url(#hgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+      <path d="M274 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#hgClaw)"/>
+      <path d="M286 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#hgClaw)"/>
+      <circle cx="280" cy="145" r="7" fill="url(#hgClaw)"/>
+      <circle cx="277.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="282.5" cy="143.5" r="1.2" fill="#050810"/>
+      <circle cx="278" cy="143" r=".5" fill="#00e5cc"/><circle cx="283" cy="143" r=".5" fill="#00e5cc"/>
+      <text x="296" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="var(--font)">OpenClaw B</text>
+      <text x="296" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="var(--font)"><tspan class="lang-zh">后端开发 · 158 记忆</tspan><tspan class="lang-en">Backend · 158 Memories</tspan></text>
+      <circle cx="412" cy="142" r="4" fill="#00e676"/>
+      <text x="422" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="var(--mono)">online</text>
+      <rect x="270" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/>
+      <text x="278" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">📤 task_share</text>
+
+      <!-- Client 3 (right) -->
+      <rect x="480" y="120" width="200" height="70" rx="10" fill="url(#hgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+      <path d="M504 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#hgClaw)"/>
+      <path d="M516 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#hgClaw)"/>
+      <circle cx="510" cy="145" r="7" fill="url(#hgClaw)"/>
+      <circle cx="507.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="512.5" cy="143.5" r="1.2" fill="#050810"/>
+      <circle cx="508" cy="143" r=".5" fill="#00e5cc"/><circle cx="513" cy="143" r=".5" fill="#00e5cc"/>
+      <text x="526" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="var(--font)">OpenClaw C</text>
+      <text x="526" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="var(--font)"><tspan class="lang-zh">测试工程 · 89 记忆</tspan><tspan class="lang-en">QA/Testing · 89 Memories</tspan></text>
+      <circle cx="642" cy="142" r="4" fill="#00e676"/>
+      <text x="652" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="var(--mono)">online</text>
+      <rect x="500" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/>
+      <text x="508" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">⬇ skill_pull</text>
+
+      <!-- Floating "N" indicator (right edge) -->
+      <rect x="710" y="130" width="56" height="50" rx="10" fill="rgba(99,140,255,.06)" stroke="rgba(99,140,255,.15)" stroke-width="1" stroke-dasharray="4 3"/>
+      <text x="738" y="153" text-anchor="middle" font-size="16" font-weight="800" fill="rgba(99,140,255,.3)" font-family="var(--font)">…N</text>
+      <text x="738" y="170" text-anchor="middle" font-size="7" fill="rgba(200,210,255,.25)" font-family="var(--font)"><tspan class="lang-zh">更多实例</tspan><tspan class="lang-en">More</tspan></text>
+
+      <!-- Connection lines with animated dashes -->
+      <!-- Hub → Client A -->
+      <path d="M340,90 C300,105 170,110 120,118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5">
+        <animate attributeName="stroke-dasharray" values="0,200;200,0" dur="2s" repeatCount="indefinite"/>
+      </path>
+      <!-- Hub → Client B -->
+      <line x1="390" y1="90" x2="350" y2="118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5">
+        <animate attributeName="stroke-dasharray" values="0,100;100,0" dur="2s" repeatCount="indefinite" begin=".3s"/>
+      </line>
+      <!-- Hub → Client C -->
+      <path d="M440,90 C480,105 530,110 580,118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5">
+        <animate attributeName="stroke-dasharray" values="0,200;200,0" dur="2s" repeatCount="indefinite" begin=".6s"/>
+      </path>
+      <!-- Hub → ...N -->
+      <path d="M490,90 C550,100 680,110 710,148" fill="none" stroke="rgba(99,140,255,.2)" stroke-width="1" stroke-dasharray="4 4" opacity=".4"/>
+
+      <!-- Animated data particles flowing up -->
+      <circle r="2" fill="#00e5ff" opacity=".6">
+        <animateMotion dur="3s" repeatCount="indefinite" path="M120,170 C170,130 300,100 340,50"/>
+        <animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="2" fill="#b16cff" opacity=".6">
+        <animateMotion dur="3s" repeatCount="indefinite" begin="1s" path="M350,170 C360,130 370,100 390,50"/>
+        <animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite" begin="1s"/>
+      </circle>
+      <circle r="2" fill="#00e5ff" opacity=".6">
+        <animateMotion dur="3s" repeatCount="indefinite" begin="2s" path="M580,170 C530,130 480,100 440,50"/>
+        <animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite" begin="2s"/>
+      </circle>
+      <!-- Particles flowing down (skill pull) -->
+      <circle r="1.5" fill="#00e676" opacity=".5">
+        <animateMotion dur="2.5s" repeatCount="indefinite" begin=".5s" path="M440,50 C480,100 530,130 570,170"/>
+        <animate attributeName="opacity" values="0;.7;0" dur="2.5s" repeatCount="indefinite" begin=".5s"/>
+      </circle>
+      <circle r="1.5" fill="#ffca28" opacity=".5">
+        <animateMotion dur="2.5s" repeatCount="indefinite" begin="1.5s" path="M340,50 C300,100 170,130 120,170"/>
+        <animate attributeName="opacity" values="0;.7;0" dur="2.5s" repeatCount="indefinite" begin="1.5s"/>
+      </circle>
+    </svg>
   </div>
 </div>
 </section>
