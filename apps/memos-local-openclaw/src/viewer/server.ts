@@ -309,6 +309,7 @@ export class ViewerServer {
       else if (p === "/api/sharing/notifications" && req.method === "GET") this.serveSharingNotifications(res, url);
       else if (p === "/api/sharing/notifications/read" && req.method === "POST") this.handleSharingNotificationsRead(req, res);
       else if (p === "/api/sharing/notifications/clear" && req.method === "POST") this.handleSharingNotificationsClear(req, res);
+      else if (p === "/api/sharing/sync-hub-removal" && req.method === "POST") this.handleSyncHubRemoval(req, res);
       else if (p === "/api/notifications/stream" && req.method === "GET") this.handleNotifSSE(req, res);
       else if (p === "/api/admin/shared-tasks" && req.method === "GET") this.serveAdminSharedTasks(res);
       else if (p.match(/^\/api\/admin\/shared-tasks\/[^/]+\/detail$/) && req.method === "GET") this.serveHubTaskDetail(res, p);
@@ -2477,6 +2478,27 @@ export class ViewerServer {
         this.broadcastNotifSSE({ type: "cleared", unreadCount: 0 });
       } catch (err) {
         this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  /** When Hub admin removes a shared memory, clear local team_shared_chunks / hub_memories mirror so the client list shows correct scope. */
+  private handleSyncHubRemoval(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const sourceChunkId = String(parsed.sourceChunkId || "");
+        if (!sourceChunkId) return this.jsonResponse(res, { ok: false, error: "missing_source_chunk_id" }, 400);
+        this.store.deleteTeamSharedChunk(sourceChunkId);
+        try {
+          const hubClient = await this.resolveHubClientAware();
+          if (hubClient.userId) {
+            this.store.deleteHubMemoryBySource(hubClient.userId, sourceChunkId);
+          }
+        } catch { /* ignore */ }
+        this.jsonResponse(res, { ok: true, sourceChunkId });
+      } catch (e) {
+        this.jsonResponse(res, { ok: false, error: String(e) }, 500);
       }
     });
   }

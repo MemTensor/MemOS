@@ -950,7 +950,18 @@ export class HubServer {
       const deleted = this.opts.store.deleteHubMemoryById(memoryId);
       if (!deleted) return this.json(res, 404, { error: "not_found" });
       if (memInfo) {
-        this.opts.store.insertHubNotification({ id: randomUUID(), userId: memInfo.sourceUserId, type: "resource_removed", resource: "memory", title: memInfo.summary || memInfo.id });
+        const payload = JSON.stringify({
+          memoryId,
+          sourceChunkId: memInfo.sourceChunkId,
+        });
+        this.opts.store.insertHubNotification({
+          id: randomUUID(),
+          userId: memInfo.sourceUserId,
+          type: "resource_removed",
+          resource: "memory",
+          title: memInfo.summary || memInfo.id,
+          message: payload,
+        });
       }
       return this.json(res, 200, { ok: true });
     }

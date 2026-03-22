@@ -7764,11 +7764,31 @@ function getFilterParams(){
   return p;
 }
 
+/** Hub admin removed a shared memory — clear local team_shared_chunks so badges match (notifications carry sourceChunkId in message). */
+async function syncTeamShareRemovedFromNotifications(){
+  try{
+    var r=await fetch('/api/sharing/notifications');
+    var d=await r.json();
+    var list=d.notifications||[];
+    for(var i=0;i<list.length;i++){
+      var n=list[i];
+      if(n.type!=='resource_removed'||n.resource!=='memory'||!n.message) continue;
+      try{
+        var meta=JSON.parse(n.message);
+        if(meta.sourceChunkId){
+          await fetch('/api/sharing/sync-hub-removal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceChunkId:meta.sourceChunkId})});
+        }
+      }catch(e){}
+    }
+  }catch(e){}
+}
+
 async function loadMemories(page,silent){
   if(page) currentPage=page;
   const list=document.getElementById('memoryList');
   if(!silent) list.innerHTML='<div class="spinner"></div>';
   try{
+    if(!silent) await syncTeamShareRemovedFromNotifications();
     const p=getFilterParams();
     p.set('limit',PAGE_SIZE);
     p.set('page',currentPage);
