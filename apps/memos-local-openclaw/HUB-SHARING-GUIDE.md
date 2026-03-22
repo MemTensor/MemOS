@@ -4,12 +4,19 @@ This guide explains how to use the v4 team sharing workflow in `memos-local-open
 
 ## What v4 adds
 
-The plugin now supports a **Server-Client** sharing model:
+The plugin now supports a **Hub-Client** sharing model with comprehensive team management:
 
 - **Local memory stays local** unless you explicitly share it
-- **One team server** stores team-shared tasks, memories, and skills
-- **Clients connect to the server** with a user token
-- **Admins approve users** before they can access team data
+- **One Hub** stores team-shared tasks, memories, and skills
+- **Clients connect to the Hub** and submit join requests for admin approval
+- **Hub port auto-derivation** — Hub port is automatically derived from the gateway port (`gatewayPort + 11`), avoiding port conflicts in multi-instance setups
+- **Port retry** — If the derived/configured port is in use, the Hub retries up to 3 consecutive ports
+- **Admins approve users** before they can access team data; admins can promote, demote, and remove members
+- **Self-removal prevention** — Admins cannot accidentally remove themselves
+- **Notification system** — Role changes (promoted/demoted), resource events (shared/unshared/removed), and Hub status changes trigger real-time notifications
+- **Pending withdrawal** — Clients can cancel pending join requests when switching roles
+- **Leave team** — Clients can leave a team with confirmation; proper cleanup and Hub notification
+- **Graceful role transitions** — Switching between Hub/Client triggers confirmation prompts, connection cleanup, and restart
 - **Search scope** can be `local`, `group`, or `all`
 - **Shared skills** can be published to a group or to the whole team
 
@@ -95,9 +102,9 @@ Use this on the first machine in the team.
             "enabled": true,
             "role": "hub",
             "hub": {
-              "port": 18800,
               "teamName": "My Team",
               "teamToken": "${MEMOS_TEAM_TOKEN}"
+              // port is auto-derived from gateway port; set explicitly only if needed
             }
           }
         }
@@ -118,10 +125,13 @@ Use this on the first machine in the team.
 
 The team admin can:
 
-- approve or reject join requests
-- review pending users
+- approve or reject join requests from the pending users panel
+- promote members to admin or demote admins to regular members (affected users receive notifications)
+- remove team members (with confirmation prompt; self-removal is prevented)
+- view team overview: team name, total members, active members
 - see team connection and server information
 - manage who can access shared team data
+- when disabling sharing (shutting down Hub), all connected clients receive a `hub_shutdown` notification
 
 ## Option B: Join an existing team server
 
@@ -334,6 +344,49 @@ In the current plugin build:
 - `openclaw` host-backed providers are defined in types, but are **not available in this sidecar build unless host capabilities are explicitly supported**
 
 If you want predictable production behavior today, configure your embedding and summarizer providers explicitly.
+
+## Multi-Instance Deployment
+
+When running multiple OpenClaw instances on the same machine (e.g., personal + work):
+
+### Port isolation
+
+- **Viewer port**: Auto-derived per instance — no conflicts
+- **Hub port**: Auto-derived as `gatewayPort + 11` (e.g., gateway `18789` → Hub `18800`, gateway `19001` → Hub `19012`)
+- **Port retry**: If the auto-derived port is in use, the Hub tries up to 3 consecutive ports automatically
+
+### Session isolation
+
+Each Viewer instance uses a unique cookie name based on its port, so you can be logged into multiple Viewer instances simultaneously in the same browser.
+
+### Database isolation
+
+Each OpenClaw instance uses its own state directory and database. Configure via `OPENCLAW_STATE_DIR` environment variable or `--state-dir` flag.
+
+### Example: Dual-instance setup
+
+```bash
+# Instance 1 (Personal): gateway on 18789, viewer on 18799, hub on 18800
+OPENCLAW_CONFIG_PATH=~/oc-personal/openclaw.json openclaw gateway start
+
+# Instance 2 (Work): gateway on 19001, viewer on 19011, hub on 19012
+OPENCLAW_CONFIG_PATH=~/oc-work/openclaw.json openclaw gateway start
+```
+
+## Notifications
+
+The system sends real-time notifications for these events:
+
+| Event | Recipient | Message |
+|---|---|---|
+| Role promoted (to admin) | The promoted user | "You have been promoted to admin" |
+| Role demoted (to member) | The demoted user | "You have been changed to regular member" |
+| Resource shared | Team members | Resource name with sharing action |
+| Resource unshared | Team members | Resource name with unsharing action |
+| Resource removed | Resource owner | Resource name with removal action |
+| Hub shutdown | All connected clients | Hub has been shut down |
+| Member joined | Admin | New member has joined the team |
+| Member left | Admin | Member has left the team |
 
 ## Troubleshooting
 

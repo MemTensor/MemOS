@@ -1,7 +1,7 @@
 {
   "id": "memos-local-openclaw-plugin",
   "name": "MemOS Local Memory",
-  "description": "Full-write local conversation memory with hybrid search (RRF + MMR + recency). Provides memory_search, memory_get, task_summary, memory_timeline, memory_viewer for layered retrieval.",
+  "description": "Full-write local conversation memory with hybrid search (RRF + MMR + recency), task summarization, skill evolution, and team sharing (Hub-Client). Provides memory_search, memory_get, task_summary, skill_search, task_share, network_skill_pull, network_team_info, memory_viewer for layered retrieval and team collaboration.",
   "kind": "memory",
   "version": "0.1.12",
   "skills": [

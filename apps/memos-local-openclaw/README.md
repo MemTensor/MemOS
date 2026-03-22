@@ -49,12 +49,16 @@ Persistent local conversation memory for [OpenClaw](https://github.com/nicepkg/o
 - **LLM fallback chain** — `skillSummarizer` → `summarizer` → OpenClaw native model (auto-detected from `openclaw.json`). If all configured models fail, the next in chain is tried automatically
 
 ### Team Sharing (v4)
-- **Server-Client collaboration** — One team server stores shared tasks, memories, and skills; clients keep private data local and query the server only when needed
+- **Hub-Client architecture** — One Hub stores shared data; clients keep private data local and query the Hub on demand. Roles can be switched dynamically with proper confirmation and cleanup
+- **Hub port auto-derivation** — Hub port derived from gateway port (`gatewayPort + 11`) to avoid conflicts in multi-instance setups; automatic port retry on `EADDRINUSE`
+- **Admin approval flow** — Join requests require admin approval; admins can promote, demote, and remove members (with self-removal prevention)
+- **Notification system** — Role change notifications (promoted/demoted), resource sharing notifications (shared/unshared/removed) with localized messages, Hub shutdown alerts
 - **Scoped retrieval** — `memory_search` and `skill_search` support `local`, `group`, and `all` search scopes
-- **Admin approval flow** — Team members are approved by the admin before they can access shared data
 - **Task sharing** — `task_share` / `task_unshare` push or remove task memories from the team without changing local private storage
 - **Skill publish/pull** — Skills can be published to team visibility scopes and pulled back locally as full bundles for offline reuse
-- **Viewer support** — The Memory Viewer now includes team connection state, pending approvals, scoped search, task share controls, and team skill pull actions
+- **Graceful state transitions** — Client-to-Hub switch triggers confirmation, pending request withdrawal, connection cleanup, and automatic restart
+- **Multi-instance support** — Viewer port, Hub port, sessions, and databases are all isolated per instance; supports running multiple OpenClaw instances on the same machine
+- **Viewer integration** — Full team management UI: connection state, member management, pending approvals, scoped search, task share controls, skill pull, notification feed, and setup guide
 
 ### Memory Migration — Reconnect 🦐
 - **One-click import** — Seamlessly migrate OpenClaw's native built-in memories (SQLite + JSONL) into the MemOS intelligent memory system
@@ -259,15 +263,84 @@ memos-local: started (embedding: openai_compatible)
 ╚══════════════════════════════════════════╝
 ```
 
-## Team Sharing Quick Start (v4)
+## Team Sharing (v4)
 
-If you want team sharing, do this after the basic install works:
+Team Sharing turns multiple OpenClaw instances into a collaborative memory network. One instance serves as the **Hub** (team server), others connect as **Clients**. Private data stays local; only explicitly shared tasks, memories, and skills are visible to the team.
 
-1. **Pick a server machine** and set `sharing.enabled=true`, `sharing.role="hub"`, plus `sharing.hub.port`, `sharing.hub.teamName`, and `sharing.hub.teamToken`.
-2. **Configure each client machine** with `sharing.enabled=true`, `sharing.role="client"`, `sharing.client.hubAddress`, and `sharing.client.userToken`.
-3. **Open Viewer → Settings → Team Sharing** to verify connection state, current user, role, and groups.
-4. **Search with scope** `Group` or `All` in Memories and Skills to query team data alongside local data.
-5. **Share tasks** from the Tasks view and **pull skills** from the Skills view.
+### Key Capabilities
+
+| Capability | Description |
+|---|---|
+| **Hub / Client architecture** | One Hub stores shared data; clients keep private data local and query the Hub on demand |
+| **Hub port auto-derivation** | Hub port is automatically derived from the gateway port (`gatewayPort + 11`), avoiding port conflicts in multi-instance setups. Explicit `hub.port` config overrides this. |
+| **Port retry on conflict** | If the derived/configured Hub port is in use (`EADDRINUSE`), the server automatically retries up to 3 consecutive ports |
+| **Admin approval flow** | New members submit join requests; admin approves/rejects from the Viewer |
+| **Self-removal prevention** | Admins cannot accidentally remove themselves from the team |
+| **Role change notifications** | When an admin promotes/demotes a member, the affected user receives a notification |
+| **Resource notifications** | Shared/unshared/removed resources trigger localized notifications with resource names |
+| **Pending withdrawal** | Clients can cancel pending join requests when switching roles or disabling sharing |
+| **Graceful role transitions** | Switching from Client to Hub (or vice versa) triggers confirmation prompts, proper cleanup of remote connections, and restart |
+| **Hub shutdown notification** | When a Hub owner disables sharing, all connected clients receive a `hub_shutdown` notification |
+| **Leave team** | Clients can leave a team with a confirmation dialog; the Hub is notified and the client's data is cleaned up |
+| **Scoped retrieval** | `memory_search` and `skill_search` support `local`, `group`, and `all` search scopes |
+| **Task sharing** | Push/remove task memories to/from the team |
+| **Skill publish/pull** | Publish skills to team visibility; pull team skills locally as full bundles for offline use |
+
+### Quick Setup
+
+**Option A — Start a Hub (team server):**
+
+```jsonc
+{
+  "config": {
+    "sharing": {
+      "enabled": true,
+      "role": "hub",
+      "hub": {
+        "teamName": "My Team",
+        "teamToken": "${MEMOS_TEAM_TOKEN}"
+        // port is auto-derived; set explicitly only if needed
+      }
+    }
+  }
+}
+```
+
+**Option B — Join as Client:**
+
+```jsonc
+{
+  "config": {
+    "sharing": {
+      "enabled": true,
+      "role": "client",
+      "client": {
+        "hubAddress": "192.168.1.100:18800"
+      }
+    }
+  }
+}
+```
+
+You can also configure sharing entirely through the **Viewer → Settings → Team Sharing** panel — no need to edit `openclaw.json` manually.
+
+### Multi-Instance Deployment
+
+When running multiple OpenClaw instances on the same machine (e.g., personal + work):
+
+- **Viewer port**: Each instance derives its Viewer port from the gateway port, so they won't conflict
+- **Hub port**: Auto-derived as `gatewayPort + 11` (e.g., gateway `18789` → Hub `18800`, gateway `19001` → Hub `19012`)
+- **Session isolation**: Each instance uses a separate cookie name based on its Viewer port, so multiple Viewers can be logged in simultaneously
+- **Database isolation**: Each instance uses its own `memos.db` under its respective state directory
+
+### Viewer Team Sharing Panel
+
+The **Settings → Team Sharing** panel provides a complete management interface:
+
+- **Hub mode**: Team name, member count, active members, pending approvals, admin controls (approve/reject/promote/demote/remove)
+- **Client mode**: Connection status, team info, leave team button, notification feed
+- **Setup guide cards**: Always visible — choose "Host a Team" or "Join a Team" with step-by-step instructions
+- **Real-time notifications**: Role changes, resource sharing events, Hub status changes
 
 For the full end-user workflow, see [`HUB-SHARING-GUIDE.md`](./HUB-SHARING-GUIDE.md).
 
