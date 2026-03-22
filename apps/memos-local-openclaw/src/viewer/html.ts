@@ -287,7 +287,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .admin-card-tag.tag-version{background:rgba(139,92,246,.1);color:#8b5cf6}
 .admin-card-tag.tag-visibility{background:rgba(99,102,241,.08);color:var(--pri)}
 .admin-card-tag.tag-group{background:rgba(139,92,246,.08);color:#8b5cf6}
-.admin-card-preview{font-size:12px;color:var(--text-sec);line-height:1.5;margin:8px 0;padding:10px 12px;background:rgba(99,102,241,.02);border-radius:10px;border:1px solid rgba(99,102,241,.08);max-height:120px;overflow:hidden;white-space:pre-wrap;word-break:break-all;position:relative;-webkit-mask-image:linear-gradient(to bottom,#000 70%,transparent 100%);mask-image:linear-gradient(to bottom,#000 70%,transparent 100%)}
+.admin-card-preview{font-size:12px;color:var(--text-sec);line-height:1.5;margin:8px 0;padding:10px 12px;background:rgba(99,102,241,.02);border-radius:10px;border:1px solid rgba(99,102,241,.08);max-height:120px;overflow:hidden;white-space:pre-wrap;word-break:break-all;position:relative;-webkit-mask-image:linear-gradient(to bottom,#000 88%,transparent 100%);mask-image:linear-gradient(to bottom,#000 88%,transparent 100%)}
 .admin-card-actions{display:inline-flex;gap:6px;margin-left:auto;align-items:center;flex-shrink:0}
 .admin-card-time{font-size:11px;color:var(--text-muted)}
 .admin-card-detail{display:none;margin-top:0;padding:20px 24px 24px;border-top:1px dashed rgba(99,102,241,.12);background:linear-gradient(180deg,rgba(99,102,241,.02) 0%,transparent 60%);animation:adminDetailIn .25s ease}
@@ -322,7 +322,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .adm-msg-side.assistant .adm-msg-role{color:var(--green)}
 .adm-msg-time{font-size:9px;color:var(--text-muted)}
 .adm-msg-body{flex:1;min-width:0;padding:12px 16px;font-size:13px;line-height:1.75;color:var(--text);white-space:pre-wrap;word-break:break-word}
-.adm-msg-body.collapsed{max-height:120px;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 65%,transparent);mask-image:linear-gradient(180deg,#000 65%,transparent)}
+.adm-msg-body.collapsed{max-height:120px;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 88%,transparent);mask-image:linear-gradient(180deg,#000 88%,transparent)}
 .adm-msg-toggle{display:none;padding:0 16px 8px;font-size:11px;color:var(--pri);cursor:pointer;transition:color .15s}
 .adm-msg-toggle:hover{color:var(--pri-dark)}
 .admin-card-expand-btn{font-size:12px;color:var(--pri);cursor:pointer;background:none;border:none;padding:2px 6px;font-family:inherit}

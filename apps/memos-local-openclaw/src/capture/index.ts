@@ -167,8 +167,11 @@ export function stripInboundMetadata(text: string): string {
 /** Strip <think…>…</think> blocks emitted by DeepSeek-style reasoning models. */
 const THINKING_TAG_RE = /<think[\s>][\s\S]*?<\/think>\s*/gi;
 
+/** Unwrap <final>…</final> tags from MiniMax-style models (keep content, strip tags). */
+const FINAL_TAG_RE = /<\/?final\s*>/gi;
+
 function stripThinkingTags(text: string): string {
-  return text.replace(THINKING_TAG_RE, "");
+  return text.replace(THINKING_TAG_RE, "").replace(FINAL_TAG_RE, "").trim();
 }
 
 function extractEnvelopeTimestamp(text: string): number | null {

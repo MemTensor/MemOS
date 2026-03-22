@@ -792,6 +792,15 @@ export class SqliteStore {
         shared_at       INTEGER NOT NULL
       );
 
+      -- Client: team share UI metadata only (no hub_memories row — avoids local FTS/embed recall duplication)
+      CREATE TABLE IF NOT EXISTS team_shared_chunks (
+        chunk_id       TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+        hub_memory_id  TEXT NOT NULL DEFAULT '',
+        visibility     TEXT NOT NULL DEFAULT 'public',
+        group_id       TEXT,
+        shared_at      INTEGER NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS hub_users (
         id             TEXT PRIMARY KEY,
         username       TEXT NOT NULL UNIQUE,
@@ -1369,6 +1378,7 @@ export class SqliteStore {
       "skill_versions",
       "skills",
       "local_shared_memories",
+      "team_shared_chunks",
       "local_shared_tasks",
       "embeddings",
       "chunks",
@@ -2352,6 +2362,45 @@ export class SqliteStore {
 
   deleteHubMemoryById(memoryId: string): boolean {
     const info = this.db.prepare('DELETE FROM hub_memories WHERE id = ?').run(memoryId);
+    return info.changes > 0;
+  }
+
+  // ─── Team share metadata (Client role — UI only, not used for local recall / FTS) ───
+
+  upsertTeamSharedChunk(
+    chunkId: string,
+    row: { hubMemoryId?: string; visibility?: string; groupId?: string | null },
+  ): void {
+    const now = Date.now();
+    const vis = row.visibility === "group" ? "group" : "public";
+    const gid = vis === "group" ? (row.groupId ?? null) : null;
+    this.db.prepare(`
+      INSERT INTO team_shared_chunks (chunk_id, hub_memory_id, visibility, group_id, shared_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(chunk_id) DO UPDATE SET
+        hub_memory_id = excluded.hub_memory_id,
+        visibility = excluded.visibility,
+        group_id = excluded.group_id,
+        shared_at = excluded.shared_at
+    `).run(chunkId, row.hubMemoryId ?? "", vis, gid, now);
+  }
+
+  getTeamSharedChunk(chunkId: string): { chunkId: string; hubMemoryId: string; visibility: string; groupId: string | null; sharedAt: number } | null {
+    const r = this.db.prepare("SELECT chunk_id, hub_memory_id, visibility, group_id, shared_at FROM team_shared_chunks WHERE chunk_id = ?").get(chunkId) as {
+      chunk_id: string; hub_memory_id: string; visibility: string; group_id: string | null; shared_at: number;
+    } | undefined;
+    if (!r) return null;
+    return {
+      chunkId: r.chunk_id,
+      hubMemoryId: r.hub_memory_id,
+      visibility: r.visibility,
+      groupId: r.group_id,
+      sharedAt: r.shared_at,
+    };
+  }
+
+  deleteTeamSharedChunk(chunkId: string): boolean {
+    const info = this.db.prepare("DELETE FROM team_shared_chunks WHERE chunk_id = ?").run(chunkId);
     return info.changes > 0;
   }
 

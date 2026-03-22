@@ -492,6 +492,12 @@ export class ViewerServer {
         const placeholders = chunkIds.map(() => "?").join(",");
         const sharedRows = db.prepare(`SELECT source_chunk_id, visibility, group_id FROM hub_memories WHERE source_chunk_id IN (${placeholders})`).all(...chunkIds) as Array<{ source_chunk_id: string; visibility: string; group_id: string | null }>;
         for (const r of sharedRows) sharingMap.set(r.source_chunk_id, r);
+        const teamMetaRows = db.prepare(`SELECT chunk_id, visibility, group_id FROM team_shared_chunks WHERE chunk_id IN (${placeholders})`).all(...chunkIds) as Array<{ chunk_id: string; visibility: string; group_id: string | null }>;
+        for (const r of teamMetaRows) {
+          if (!sharingMap.has(r.chunk_id)) {
+            sharingMap.set(r.chunk_id, { visibility: r.visibility, group_id: r.group_id });
+          }
+        }
         const localRows = db.prepare(`SELECT chunk_id, original_owner, shared_at FROM local_shared_memories WHERE chunk_id IN (${placeholders})`).all(...chunkIds) as Array<{ chunk_id: string; original_owner: string; shared_at: number }>;
         for (const r of localRows) localShareMap.set(r.chunk_id, r);
       } catch {
@@ -1252,15 +1258,19 @@ export class ViewerServer {
               body: JSON.stringify({ memory: { sourceChunkId: refreshedChunk.id, role: refreshedChunk.role, content: refreshedChunk.content, summary: refreshedChunk.summary, kind: refreshedChunk.kind, groupId: null, visibility: "public" } }),
             });
             if (!isLocalShared) this.store.markMemorySharedLocally(chunkId);
-            if (hubClient.userId && this.ctx?.config?.sharing?.role === "hub") {
+            const memoryId = String((response as any)?.memoryId ?? "");
+            const isHubRole = this.ctx?.config?.sharing?.role === "hub";
+            if (hubClient.userId && isHubRole) {
               const existing = this.store.getHubMemoryBySource(hubClient.userId, chunkId);
               this.store.upsertHubMemory({
-                id: (response as any)?.memoryId ?? existing?.id ?? crypto.randomUUID(),
+                id: memoryId || existing?.id || crypto.randomUUID(),
                 sourceChunkId: chunkId, sourceUserId: hubClient.userId,
                 role: refreshedChunk.role, content: refreshedChunk.content, summary: refreshedChunk.summary ?? "",
                 kind: refreshedChunk.kind, groupId: null, visibility: "public",
                 createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
               });
+            } else if (hubClient.userId) {
+              this.store.upsertTeamSharedChunk(chunkId, { hubMemoryId: memoryId, visibility: "public", groupId: null });
             }
             hubSynced = true;
           } else {
@@ -1274,6 +1284,7 @@ export class ViewerServer {
                 method: "POST", body: JSON.stringify({ sourceChunkId: chunkId }),
               });
               if (hubClient.userId) this.store.deleteHubMemoryBySource(hubClient.userId, chunkId);
+              this.store.deleteTeamSharedChunk(chunkId);
               hubSynced = true;
             } catch (err) { this.log.warn(`Failed to unshare memory from team: ${err}`); }
           }
@@ -1286,6 +1297,7 @@ export class ViewerServer {
                 method: "POST", body: JSON.stringify({ sourceChunkId: chunkId }),
               });
               if (hubClient.userId) this.store.deleteHubMemoryBySource(hubClient.userId, chunkId);
+              this.store.deleteTeamSharedChunk(chunkId);
               hubSynced = true;
             } catch (err) { this.log.warn(`Failed to unshare memory from team: ${err}`); }
           }
@@ -1495,7 +1507,17 @@ export class ViewerServer {
 
   private getHubMemoryForChunk(chunkId: string): any {
     const db = (this.store as any).db;
-    return db.prepare("SELECT * FROM hub_memories WHERE source_chunk_id = ? LIMIT 1").get(chunkId);
+    const hub = db.prepare("SELECT * FROM hub_memories WHERE source_chunk_id = ? LIMIT 1").get(chunkId);
+    if (hub) return hub;
+    const ts = this.store.getTeamSharedChunk(chunkId);
+    if (ts) {
+      return {
+        source_chunk_id: chunkId,
+        visibility: ts.visibility,
+        group_id: ts.groupId,
+      };
+    }
+    return undefined;
   }
 
   private getHubTaskForLocal(taskId: string): any {
@@ -2105,11 +2127,12 @@ export class ViewerServer {
             },
           }),
         });
+        const mid = String((response as any)?.memoryId ?? "");
         if (hubClient.userId && this.ctx?.config?.sharing?.role === "hub") {
           const now = Date.now();
           const existing = this.store.getHubMemoryBySource(hubClient.userId, chunk.id);
           this.store.upsertHubMemory({
-            id: (response as any)?.memoryId ?? existing?.id ?? crypto.randomUUID(),
+            id: mid || existing?.id || crypto.randomUUID(),
             sourceChunkId: chunk.id,
             sourceUserId: hubClient.userId,
             role: chunk.role,
@@ -2121,6 +2144,8 @@ export class ViewerServer {
             createdAt: existing?.createdAt ?? now,
             updatedAt: now,
           });
+        } else if (hubClient.userId) {
+          this.store.upsertTeamSharedChunk(chunk.id, { hubMemoryId: mid, visibility, groupId });
         }
         this.jsonResponse(res, { ok: true, chunkId, visibility, response });
       } catch (err) {
@@ -2142,6 +2167,7 @@ export class ViewerServer {
         });
         const hubUserId = hubClient.userId;
         if (hubUserId) this.store.deleteHubMemoryBySource(hubUserId, chunkId);
+        this.store.deleteTeamSharedChunk(chunkId);
         this.jsonResponse(res, { ok: true, chunkId });
       } catch (err) {
         this.jsonResponse(res, { ok: false, error: String(err) });
