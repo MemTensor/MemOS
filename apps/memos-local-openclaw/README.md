@@ -9,7 +9,7 @@ Persistent local conversation memory for [OpenClaw](https://github.com/nicepkg/o
 
 **Full-write | Hybrid Search | Task Summarization & Skill Evolution | Team Sharing | Memory Viewer**
 
-> **Homepage:**  🌐 [Homepage](https://memos-claw.openmem.net) · 📖 [Documentation](https://memos-claw.openmem.net/docs/index.html) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-openclaw-plugin)
+> 🌐 [Homepage](https://memos-claw.openmem.net) · 📖 [Documentation](https://memos-claw.openmem.net/docs/) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-openclaw-plugin) · 🛠 [Troubleshooting](https://memos-claw.openmem.net/docs/troubleshooting.html)
 
 ## Why MemOS
 
@@ -91,35 +91,29 @@ Persistent local conversation memory for [OpenClaw](https://github.com/nicepkg/o
 
 ### 1. Install
 
-**Step 0 — Prepare build environment (macOS / Linux):**
+One command installs the plugin, all dependencies, and build tools automatically. Supports auto-upgrade to the latest version.
 
-This plugin uses `better-sqlite3`, a native C/C++ module. On **macOS** and **Linux**, prebuilt binaries may not be available, so **install C++ build tools first** to ensure a smooth installation:
+**macOS / Linux:**
 
 ```bash
-# macOS
-xcode-select --install
-
-# Linux (Ubuntu / Debian)
-sudo apt install build-essential python3
+curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash
 ```
 
-> **Windows users:** `better-sqlite3` ships prebuilt binaries for Windows + Node.js LTS, so you can usually skip this step and go directly to Step 1. If installation still fails, install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (select "C++ build tools" workload).
->
-> Already have build tools? Skip to Step 1. Not sure? Run the install command above — it's safe to re-run.
->
-> **Still having issues?** See the [Troubleshooting](#troubleshooting) section, the [detailed troubleshooting guide](https://memtensor.github.io/MemOS/apps/memos-local-openclaw/docs/troubleshooting.html), or the [official better-sqlite3 troubleshooting docs](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md).
+**Windows (PowerShell):**
 
-**Step 1 — Install the plugin:**
+```powershell
+powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"
+```
+
+**Alternative — Install via OpenClaw CLI:**
 
 ```bash
 openclaw plugins install @memtensor/memos-local-openclaw-plugin
 ```
 
-The plugin is installed under `~/.openclaw/extensions/memos-local-openclaw-plugin` and registered as `memos-local-openclaw-plugin`. Dependencies and `better-sqlite3` native module are built automatically during installation.
-
 > **Note:** The Memory Viewer starts only when the **OpenClaw gateway** is running. After install, **configure** `openclaw.json` (step 2) and **start the gateway** (step 3); the viewer will then be available at `http://127.0.0.1:18799`.
 >
-> **Installation failed?** If `better-sqlite3` compilation fails during install, manually rebuild after ensuring build tools are installed:
+> **Installation failed?** See the [Troubleshooting](#troubleshooting) section, the [detailed troubleshooting guide](https://memos-claw.openmem.net/docs/troubleshooting.html), or the [official better-sqlite3 troubleshooting docs](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md). You can also try manually rebuilding the native module:
 > ```bash
 > cd ~/.openclaw/extensions/memos-local-openclaw-plugin && npm rebuild better-sqlite3
 > ```
