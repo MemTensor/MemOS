@@ -225,7 +225,7 @@ const memosLocalPlugin = {
       const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf-8"));
       pluginVersion = pkg.version ?? pluginVersion;
     } catch {}
-    const telemetry = new Telemetry(ctx.config.telemetry ?? {}, stateDir, pluginVersion, ctx.log);
+    const telemetry = new Telemetry(ctx.config.telemetry ?? {}, stateDir, pluginVersion, ctx.log, pluginDir);
 
     // Install bundled memory-guide skill so OpenClaw loads it (write from embedded content so it works regardless of deploy layout)
     const workspaceSkillsDir = path.join(workspaceDir, "skills");
