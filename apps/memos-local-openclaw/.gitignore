@@ -32,3 +32,4 @@ telemetry.credentials.json
 *.sqlite
 *.sqlite-journal
 *.db
+/~/.openclaw/
