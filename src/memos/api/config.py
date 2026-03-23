@@ -626,7 +626,20 @@ class APIConfig:
         return config
 
     def get_internet_config() -> dict[str, Any]:
-        """Get embedder configuration."""
+        """Get internet retriever configuration."""
+        tavily_api_key = os.getenv("TAVILY_API_KEY", "")
+        bocha_api_key = os.getenv("BOCHA_API_KEY", "")
+
+        # Use Tavily if TAVILY_API_KEY is set and BOCHA_API_KEY is absent
+        if tavily_api_key and not bocha_api_key:
+            return {
+                "backend": "tavily",
+                "config": {
+                    "api_key": tavily_api_key,
+                    "max_results": 15,
+                },
+            }
+
         reader_config = APIConfig.get_reader_config()
         return {
             "backend": "bocha",
