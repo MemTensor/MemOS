@@ -2196,7 +2196,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 SELECT {", ".join(cte_select_list)}
                 FROM "{self.db_name}_graph"."Memory"
                 {where_clause}
-                LIMIT 1000
+                LIMIT 100
             )
             SELECT {outer_select}, count(*) AS count
             FROM t
