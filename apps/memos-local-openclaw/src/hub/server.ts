@@ -414,6 +414,10 @@ export class HubServer {
         ttlMs,
       );
       this.userManager.approveUser(updated.id, newToken);
+      if (updated.id === this.authState.bootstrapAdminUserId) {
+        this.authState.bootstrapAdminToken = newToken;
+        this.saveAuthState();
+      }
       this.opts.log.info(`Hub: user "${auth.userId}" renamed to "${newUsername}"`);
       return this.json(res, 200, { ok: true, username: newUsername, userToken: newToken });
     }
@@ -522,6 +526,10 @@ export class HubServer {
       const updated = this.opts.store.getHubUser(userId)!;
       const finalUser = { ...updated, username: newUsername };
       this.opts.store.upsertHubUser(finalUser);
+      if (userId === this.authState.bootstrapAdminUserId) {
+        this.authState.bootstrapAdminToken = newToken;
+        this.saveAuthState();
+      }
       this.opts.log.info(`Hub: admin "${auth.userId}" renamed user "${userId}" to "${newUsername}"`);
       return this.json(res, 200, { ok: true, username: newUsername });
     }
@@ -942,7 +950,18 @@ export class HubServer {
       const deleted = this.opts.store.deleteHubMemoryById(memoryId);
       if (!deleted) return this.json(res, 404, { error: "not_found" });
       if (memInfo) {
-        this.opts.store.insertHubNotification({ id: randomUUID(), userId: memInfo.sourceUserId, type: "resource_removed", resource: "memory", title: memInfo.summary || memInfo.id });
+        const payload = JSON.stringify({
+          memoryId,
+          sourceChunkId: memInfo.sourceChunkId,
+        });
+        this.opts.store.insertHubNotification({
+          id: randomUUID(),
+          userId: memInfo.sourceUserId,
+          type: "resource_removed",
+          resource: "memory",
+          title: memInfo.summary || memInfo.id,
+          message: payload,
+        });
       }
       return this.json(res, 200, { ok: true });
     }

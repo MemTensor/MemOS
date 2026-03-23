@@ -225,7 +225,7 @@ const memosLocalPlugin = {
       const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf-8"));
       pluginVersion = pkg.version ?? pluginVersion;
     } catch {}
-    const telemetry = new Telemetry(ctx.config.telemetry ?? {}, stateDir, pluginVersion, ctx.log);
+    const telemetry = new Telemetry(ctx.config.telemetry ?? {}, stateDir, pluginVersion, ctx.log, pluginDir);
 
     // Install bundled memory-guide skill so OpenClaw loads it (write from embedded content so it works regardless of deploy layout)
     const workspaceSkillsDir = path.join(workspaceDir, "skills");
@@ -388,8 +388,7 @@ const memosLocalPlugin = {
 
       const memoryId = response?.memoryId ?? `${chunk.id}-hub`;
 
-      // Only persist hub_memories locally in Hub mode where this DB owns the data.
-      // Client mode relies on the remote Hub for storage and search.
+      // Hub role: full hub_memories row for local recall/embeddings. Client: metadata only (team_shared_chunks) for UI.
       if (ctx.config.sharing?.role === "hub") {
         const now = Date.now();
         const existing = store.getHubMemoryBySource(hubClient.userId, chunk.id);
@@ -406,6 +405,8 @@ const memosLocalPlugin = {
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
         });
+      } else if (ctx.config.sharing?.enabled && hubClient.userId) {
+        store.upsertTeamSharedChunk(chunk.id, { hubMemoryId: memoryId, visibility, groupId });
       }
 
       return { memoryId, visibility, groupId };
@@ -425,6 +426,7 @@ const memosLocalPlugin = {
         body: JSON.stringify({ sourceChunkId: chunk.id }),
       });
       store.deleteHubMemoryBySource(hubClient.userId, chunk.id);
+      store.deleteTeamSharedChunk(chunk.id);
     };
 
     // ─── Tool: memory_search ───
