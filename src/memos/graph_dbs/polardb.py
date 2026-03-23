@@ -249,6 +249,7 @@ class PolarDBGraphDB(BaseGraphDB):
     @contextmanager
     def _get_connection(self):
         import psycopg2
+
         timeout = self._connection_wait_timeout
         if timeout is None or timeout <= 0:
             self._semaphore.acquire()
