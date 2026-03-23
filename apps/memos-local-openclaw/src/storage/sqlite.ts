@@ -116,6 +116,7 @@ export class SqliteStore {
     this.migrateLocalSharedTasksOwner();
     this.migrateHubUserIdentityFields();
     this.migrateClientHubConnectionIdentityFields();
+    this.migrateTeamSharingInstanceId();
     this.log.debug("Database schema initialized");
   }
 
@@ -174,6 +175,40 @@ export class SqliteStore {
         this.log.info("Migrated: added last_known_status to client_hub_connection");
       }
     } catch { /* table may not exist yet */ }
+  }
+
+  private migrateTeamSharingInstanceId(): void {
+    try {
+      const tscCols = this.db.prepare("PRAGMA table_info(team_shared_chunks)").all() as Array<{ name: string }>;
+      if (tscCols.length > 0 && !tscCols.some(c => c.name === "hub_instance_id")) {
+        this.db.exec("ALTER TABLE team_shared_chunks ADD COLUMN hub_instance_id TEXT NOT NULL DEFAULT ''");
+        this.log.info("Migrated: added hub_instance_id to team_shared_chunks");
+      }
+    } catch { /* table may not exist yet */ }
+    try {
+      const lstCols = this.db.prepare("PRAGMA table_info(local_shared_tasks)").all() as Array<{ name: string }>;
+      if (lstCols.length > 0 && !lstCols.some(c => c.name === "hub_instance_id")) {
+        this.db.exec("ALTER TABLE local_shared_tasks ADD COLUMN hub_instance_id TEXT NOT NULL DEFAULT ''");
+        this.log.info("Migrated: added hub_instance_id to local_shared_tasks");
+      }
+    } catch { /* table may not exist yet */ }
+    try {
+      const connCols = this.db.prepare("PRAGMA table_info(client_hub_connection)").all() as Array<{ name: string }>;
+      if (connCols.length > 0 && !connCols.some(c => c.name === "hub_instance_id")) {
+        this.db.exec("ALTER TABLE client_hub_connection ADD COLUMN hub_instance_id TEXT NOT NULL DEFAULT ''");
+        this.log.info("Migrated: added hub_instance_id to client_hub_connection");
+      }
+    } catch { /* table may not exist yet */ }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS team_shared_skills (
+        skill_id        TEXT PRIMARY KEY,
+        hub_skill_id    TEXT NOT NULL DEFAULT '',
+        visibility      TEXT NOT NULL DEFAULT 'public',
+        group_id        TEXT,
+        hub_instance_id TEXT NOT NULL DEFAULT '',
+        shared_at       INTEGER NOT NULL
+      )
+    `);
   }
 
   private migrateOwnerFields(): void {
@@ -778,12 +813,13 @@ export class SqliteStore {
       );
 
       CREATE TABLE IF NOT EXISTS local_shared_tasks (
-        task_id       TEXT PRIMARY KEY,
-        hub_task_id   TEXT NOT NULL,
-        visibility    TEXT NOT NULL DEFAULT 'public',
-        group_id      TEXT,
-        synced_chunks INTEGER NOT NULL DEFAULT 0,
-        shared_at     INTEGER NOT NULL
+        task_id         TEXT PRIMARY KEY,
+        hub_task_id     TEXT NOT NULL,
+        visibility      TEXT NOT NULL DEFAULT 'public',
+        group_id        TEXT,
+        synced_chunks   INTEGER NOT NULL DEFAULT 0,
+        hub_instance_id TEXT NOT NULL DEFAULT '',
+        shared_at       INTEGER NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS local_shared_memories (
@@ -794,11 +830,21 @@ export class SqliteStore {
 
       -- Client: team share UI metadata only (no hub_memories row — avoids local FTS/embed recall duplication)
       CREATE TABLE IF NOT EXISTS team_shared_chunks (
-        chunk_id       TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
-        hub_memory_id  TEXT NOT NULL DEFAULT '',
-        visibility     TEXT NOT NULL DEFAULT 'public',
-        group_id       TEXT,
-        shared_at      INTEGER NOT NULL
+        chunk_id        TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+        hub_memory_id   TEXT NOT NULL DEFAULT '',
+        visibility      TEXT NOT NULL DEFAULT 'public',
+        group_id        TEXT,
+        hub_instance_id TEXT NOT NULL DEFAULT '',
+        shared_at       INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS team_shared_skills (
+        skill_id        TEXT PRIMARY KEY,
+        hub_skill_id    TEXT NOT NULL DEFAULT '',
+        visibility      TEXT NOT NULL DEFAULT 'public',
+        group_id        TEXT,
+        hub_instance_id TEXT NOT NULL DEFAULT '',
+        shared_at       INTEGER NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS hub_users (
@@ -959,12 +1005,7 @@ export class SqliteStore {
       CREATE INDEX IF NOT EXISTS idx_hub_memories_visibility ON hub_memories(visibility);
       CREATE INDEX IF NOT EXISTS idx_hub_memories_group ON hub_memories(group_id);
 
-      CREATE TABLE IF NOT EXISTS hub_memory_embeddings (
-        memory_id    TEXT PRIMARY KEY REFERENCES hub_memories(id) ON DELETE CASCADE,
-        vector       BLOB NOT NULL,
-        dimensions   INTEGER NOT NULL,
-        updated_at   INTEGER NOT NULL
-      );
+      -- hub_memory_embeddings removed: vectors are now computed on-the-fly at search time
 
       CREATE VIRTUAL TABLE IF NOT EXISTS hub_memories_fts USING fts5(
         summary,
@@ -1379,6 +1420,7 @@ export class SqliteStore {
       "skills",
       "local_shared_memories",
       "team_shared_chunks",
+      "team_shared_skills",
       "local_shared_tasks",
       "embeddings",
       "chunks",
@@ -1803,8 +1845,8 @@ export class SqliteStore {
 
   setClientHubConnection(conn: ClientHubConnection): void {
     this.db.prepare(`
-      INSERT INTO client_hub_connection (id, hub_url, user_id, username, user_token, role, connected_at, identity_key, last_known_status)
-      VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO client_hub_connection (id, hub_url, user_id, username, user_token, role, connected_at, identity_key, last_known_status, hub_instance_id)
+      VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         hub_url = excluded.hub_url,
         user_id = excluded.user_id,
@@ -1813,8 +1855,9 @@ export class SqliteStore {
         role = excluded.role,
         connected_at = excluded.connected_at,
         identity_key = excluded.identity_key,
-        last_known_status = excluded.last_known_status
-    `).run(conn.hubUrl, conn.userId, conn.username, conn.userToken, conn.role, conn.connectedAt, conn.identityKey ?? "", conn.lastKnownStatus ?? "");
+        last_known_status = excluded.last_known_status,
+        hub_instance_id = excluded.hub_instance_id
+    `).run(conn.hubUrl, conn.userId, conn.username, conn.userToken, conn.role, conn.connectedAt, conn.identityKey ?? "", conn.lastKnownStatus ?? "", conn.hubInstanceId ?? "");
   }
 
   getClientHubConnection(): ClientHubConnection | null {
@@ -1828,32 +1871,33 @@ export class SqliteStore {
 
   // ─── Local Shared Tasks (client-side tracking) ───
 
-  markTaskShared(taskId: string, hubTaskId: string, syncedChunks: number, visibility: string, groupId?: string | null): void {
+  markTaskShared(taskId: string, hubTaskId: string, syncedChunks: number, visibility: string, groupId?: string | null, hubInstanceId?: string): void {
     this.db.prepare(`
-      INSERT INTO local_shared_tasks (task_id, hub_task_id, visibility, group_id, synced_chunks, shared_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO local_shared_tasks (task_id, hub_task_id, visibility, group_id, synced_chunks, hub_instance_id, shared_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(task_id) DO UPDATE SET
         hub_task_id = excluded.hub_task_id,
         visibility = excluded.visibility,
         group_id = excluded.group_id,
         synced_chunks = excluded.synced_chunks,
+        hub_instance_id = excluded.hub_instance_id,
         shared_at = excluded.shared_at
-    `).run(taskId, hubTaskId, visibility, groupId ?? null, syncedChunks, Date.now());
+    `).run(taskId, hubTaskId, visibility, groupId ?? null, syncedChunks, hubInstanceId ?? "", Date.now());
   }
 
   unmarkTaskShared(taskId: string): void {
     this.db.prepare('DELETE FROM local_shared_tasks WHERE task_id = ?').run(taskId);
   }
 
-  getLocalSharedTask(taskId: string): { taskId: string; hubTaskId: string; visibility: string; groupId: string | null; syncedChunks: number; sharedAt: number } | null {
+  getLocalSharedTask(taskId: string): { taskId: string; hubTaskId: string; visibility: string; groupId: string | null; syncedChunks: number; sharedAt: number; hubInstanceId: string } | null {
     const row = this.db.prepare('SELECT * FROM local_shared_tasks WHERE task_id = ?').get(taskId) as any;
     if (!row) return null;
-    return { taskId: row.task_id, hubTaskId: row.hub_task_id, visibility: row.visibility, groupId: row.group_id, syncedChunks: row.synced_chunks, sharedAt: row.shared_at };
+    return { taskId: row.task_id, hubTaskId: row.hub_task_id, visibility: row.visibility, groupId: row.group_id, syncedChunks: row.synced_chunks, sharedAt: row.shared_at, hubInstanceId: row.hub_instance_id || "" };
   }
 
-  listLocalSharedTasks(): Array<{ taskId: string; hubTaskId: string; visibility: string; groupId: string | null; syncedChunks: number }> {
-    const rows = this.db.prepare('SELECT task_id, hub_task_id, visibility, group_id, synced_chunks FROM local_shared_tasks').all() as any[];
-    return rows.map(r => ({ taskId: r.task_id, hubTaskId: r.hub_task_id, visibility: r.visibility, groupId: r.group_id, syncedChunks: r.synced_chunks }));
+  listLocalSharedTasks(): Array<{ taskId: string; hubTaskId: string; visibility: string; groupId: string | null; syncedChunks: number; hubInstanceId: string }> {
+    const rows = this.db.prepare('SELECT task_id, hub_task_id, visibility, group_id, synced_chunks, hub_instance_id FROM local_shared_tasks').all() as any[];
+    return rows.map(r => ({ taskId: r.task_id, hubTaskId: r.hub_task_id, visibility: r.visibility, groupId: r.group_id, syncedChunks: r.synced_chunks, hubInstanceId: r.hub_instance_id || "" }));
   }
 
   // ─── Local Shared Memories (client-side tracking) ───
@@ -1958,11 +2002,23 @@ export class SqliteStore {
     });
   }
 
+  deleteHubMemoriesByUser(userId: string): void {
+    this.db.prepare('DELETE FROM hub_memories WHERE source_user_id = ?').run(userId);
+  }
+
+  deleteHubTasksByUser(userId: string): void {
+    this.db.prepare('DELETE FROM hub_tasks WHERE source_user_id = ?').run(userId);
+  }
+
+  deleteHubSkillsByUser(userId: string): void {
+    this.db.prepare('DELETE FROM hub_skills WHERE source_user_id = ?').run(userId);
+  }
+
   deleteHubUser(userId: string, cleanResources = false): boolean {
     if (cleanResources) {
-      this.db.prepare('DELETE FROM hub_tasks WHERE source_user_id = ?').run(userId);
-      this.db.prepare('DELETE FROM hub_skills WHERE source_user_id = ?').run(userId);
-      this.db.prepare('DELETE FROM hub_memories WHERE source_user_id = ?').run(userId);
+      this.deleteHubTasksByUser(userId);
+      this.deleteHubSkillsByUser(userId);
+      this.deleteHubMemoriesByUser(userId);
       const result = this.db.prepare('DELETE FROM hub_users WHERE id = ?').run(userId);
       return result.changes > 0;
     }
@@ -2369,25 +2425,26 @@ export class SqliteStore {
 
   upsertTeamSharedChunk(
     chunkId: string,
-    row: { hubMemoryId?: string; visibility?: string; groupId?: string | null },
+    row: { hubMemoryId?: string; visibility?: string; groupId?: string | null; hubInstanceId?: string },
   ): void {
     const now = Date.now();
     const vis = row.visibility === "group" ? "group" : "public";
     const gid = vis === "group" ? (row.groupId ?? null) : null;
     this.db.prepare(`
-      INSERT INTO team_shared_chunks (chunk_id, hub_memory_id, visibility, group_id, shared_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO team_shared_chunks (chunk_id, hub_memory_id, visibility, group_id, hub_instance_id, shared_at)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(chunk_id) DO UPDATE SET
         hub_memory_id = excluded.hub_memory_id,
         visibility = excluded.visibility,
         group_id = excluded.group_id,
+        hub_instance_id = excluded.hub_instance_id,
         shared_at = excluded.shared_at
-    `).run(chunkId, row.hubMemoryId ?? "", vis, gid, now);
+    `).run(chunkId, row.hubMemoryId ?? "", vis, gid, row.hubInstanceId ?? "", now);
   }
 
-  getTeamSharedChunk(chunkId: string): { chunkId: string; hubMemoryId: string; visibility: string; groupId: string | null; sharedAt: number } | null {
-    const r = this.db.prepare("SELECT chunk_id, hub_memory_id, visibility, group_id, shared_at FROM team_shared_chunks WHERE chunk_id = ?").get(chunkId) as {
-      chunk_id: string; hub_memory_id: string; visibility: string; group_id: string | null; shared_at: number;
+  getTeamSharedChunk(chunkId: string): { chunkId: string; hubMemoryId: string; visibility: string; groupId: string | null; hubInstanceId: string; sharedAt: number } | null {
+    const r = this.db.prepare("SELECT chunk_id, hub_memory_id, visibility, group_id, hub_instance_id, shared_at FROM team_shared_chunks WHERE chunk_id = ?").get(chunkId) as {
+      chunk_id: string; hub_memory_id: string; visibility: string; group_id: string | null; hub_instance_id: string; shared_at: number;
     } | undefined;
     if (!r) return null;
     return {
@@ -2395,6 +2452,7 @@ export class SqliteStore {
       hubMemoryId: r.hub_memory_id,
       visibility: r.visibility,
       groupId: r.group_id,
+      hubInstanceId: r.hub_instance_id || "",
       sharedAt: r.shared_at,
     };
   }
@@ -2402,6 +2460,58 @@ export class SqliteStore {
   deleteTeamSharedChunk(chunkId: string): boolean {
     const info = this.db.prepare("DELETE FROM team_shared_chunks WHERE chunk_id = ?").run(chunkId);
     return info.changes > 0;
+  }
+
+  // ─── Team Shared Skills (Client role — UI metadata only) ───
+
+  upsertTeamSharedSkill(skillId: string, row: { hubSkillId?: string; visibility?: string; groupId?: string | null; hubInstanceId?: string }): void {
+    const now = Date.now();
+    const vis = row.visibility === "group" ? "group" : "public";
+    const gid = vis === "group" ? (row.groupId ?? null) : null;
+    this.db.prepare(`
+      INSERT INTO team_shared_skills (skill_id, hub_skill_id, visibility, group_id, hub_instance_id, shared_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(skill_id) DO UPDATE SET
+        hub_skill_id = excluded.hub_skill_id,
+        visibility = excluded.visibility,
+        group_id = excluded.group_id,
+        hub_instance_id = excluded.hub_instance_id,
+        shared_at = excluded.shared_at
+    `).run(skillId, row.hubSkillId ?? "", vis, gid, row.hubInstanceId ?? "", now);
+  }
+
+  getTeamSharedSkill(skillId: string): { skillId: string; hubSkillId: string; visibility: string; groupId: string | null; hubInstanceId: string; sharedAt: number } | null {
+    const r = this.db.prepare("SELECT * FROM team_shared_skills WHERE skill_id = ?").get(skillId) as any;
+    if (!r) return null;
+    return { skillId: r.skill_id, hubSkillId: r.hub_skill_id, visibility: r.visibility, groupId: r.group_id, hubInstanceId: r.hub_instance_id || "", sharedAt: r.shared_at };
+  }
+
+  deleteTeamSharedSkill(skillId: string): boolean {
+    return this.db.prepare("DELETE FROM team_shared_skills WHERE skill_id = ?").run(skillId).changes > 0;
+  }
+
+  // ─── Team sharing cleanup (role switch / leave) ───
+
+  clearTeamSharedChunks(): void {
+    this.db.prepare("DELETE FROM team_shared_chunks").run();
+  }
+
+  clearTeamSharedSkills(): void {
+    this.db.prepare("DELETE FROM team_shared_skills").run();
+  }
+
+  downgradeTeamSharedTasksToLocal(): void {
+    this.db.prepare("UPDATE local_shared_tasks SET hub_task_id = '', hub_instance_id = '', visibility = 'public', group_id = NULL, synced_chunks = 0").run();
+  }
+
+  downgradeTeamSharedTaskToLocal(taskId: string): void {
+    this.db.prepare("UPDATE local_shared_tasks SET hub_task_id = '', hub_instance_id = '', visibility = 'public', group_id = NULL, synced_chunks = 0 WHERE task_id = ?").run(taskId);
+  }
+
+  clearAllTeamSharingState(): void {
+    this.clearTeamSharedChunks();
+    this.clearTeamSharedSkills();
+    this.downgradeTeamSharedTasksToLocal();
   }
 
   // ─── Hub Notifications ───
@@ -2445,20 +2555,8 @@ export class SqliteStore {
     this.db.prepare('DELETE FROM hub_notifications WHERE user_id = ?').run(userId);
   }
 
-  upsertHubMemoryEmbedding(memoryId: string, vector: Float32Array): void {
-    const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
-    this.db.prepare(`
-      INSERT INTO hub_memory_embeddings (memory_id, vector, dimensions, updated_at)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(memory_id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions, updated_at = excluded.updated_at
-    `).run(memoryId, buf, vector.length, Date.now());
-  }
-
-  getHubMemoryEmbedding(memoryId: string): Float32Array | null {
-    const row = this.db.prepare('SELECT vector, dimensions FROM hub_memory_embeddings WHERE memory_id = ?').get(memoryId) as { vector: Buffer; dimensions: number } | undefined;
-    if (!row) return null;
-    return new Float32Array(row.vector.buffer, row.vector.byteOffset, row.dimensions);
-  }
+  // upsertHubMemoryEmbedding / getHubMemoryEmbedding removed:
+  // hub memory vectors are now computed on-the-fly at search time.
 
   searchHubMemories(query: string, options?: { userId?: string; maxResults?: number }): Array<{ hit: HubMemorySearchRow; rank: number }> {
     const limit = options?.maxResults ?? 10;
@@ -2478,17 +2576,7 @@ export class SqliteStore {
     return rows.map((row, idx) => ({ hit: row, rank: idx + 1 }));
   }
 
-  getVisibleHubMemoryEmbeddings(userId: string): Array<{ memoryId: string; vector: Float32Array }> {
-    const rows = this.db.prepare(`
-      SELECT hme.memory_id, hme.vector, hme.dimensions
-      FROM hub_memory_embeddings hme
-      JOIN hub_memories hm ON hm.id = hme.memory_id
-    `).all() as Array<{ memory_id: string; vector: Buffer; dimensions: number }>;
-    return rows.map(r => ({
-      memoryId: r.memory_id,
-      vector: new Float32Array(r.vector.buffer, r.vector.byteOffset, r.dimensions),
-    }));
-  }
+  // getVisibleHubMemoryEmbeddings removed: vectors computed on-the-fly at search time.
 
   getVisibleHubSearchHitByMemoryId(memoryId: string, userId: string): HubMemorySearchRow | null {
     const row = this.db.prepare(`
@@ -2740,6 +2828,7 @@ interface ClientHubConnection {
   connectedAt: number;
   identityKey?: string;
   lastKnownStatus?: string;
+  hubInstanceId?: string;
 }
 
 interface ClientHubConnectionRow {
@@ -2751,6 +2840,7 @@ interface ClientHubConnectionRow {
   connected_at: number;
   identity_key?: string;
   last_known_status?: string;
+  hub_instance_id?: string;
 }
 
 function rowToClientHubConnection(row: ClientHubConnectionRow): ClientHubConnection {
@@ -2763,6 +2853,7 @@ function rowToClientHubConnection(row: ClientHubConnectionRow): ClientHubConnect
     connectedAt: row.connected_at,
     identityKey: row.identity_key || "",
     lastKnownStatus: row.last_known_status || "",
+    hubInstanceId: row.hub_instance_id || "",
   };
 }
 

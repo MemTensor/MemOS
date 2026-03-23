@@ -21,6 +21,7 @@ type HubAuthState = {
   authSecret: string;
   bootstrapAdminUserId?: string;
   bootstrapAdminToken?: string;
+  hubInstanceId?: string;
 };
 
 export class HubServer {
@@ -168,13 +169,23 @@ export class HubServer {
     return this.authState.authSecret;
   }
 
+  get hubInstanceId(): string {
+    return this.authState.hubInstanceId ?? "";
+  }
+
   private loadAuthState(): HubAuthState {
     try {
       const raw = fs.readFileSync(this.authStatePath, "utf8");
       const parsed = JSON.parse(raw) as HubAuthState;
-      if (parsed.authSecret) return parsed;
+      if (parsed.authSecret) {
+        if (!parsed.hubInstanceId) {
+          parsed.hubInstanceId = randomUUID();
+          fs.writeFileSync(this.authStatePath, JSON.stringify(parsed, null, 2), "utf8");
+        }
+        return parsed;
+      }
     } catch {}
-    const initial = { authSecret: randomBytes(32).toString("hex") } as HubAuthState;
+    const initial: HubAuthState = { authSecret: randomBytes(32).toString("hex"), hubInstanceId: randomUUID() };
     fs.mkdirSync(path.dirname(this.authStatePath), { recursive: true });
     fs.writeFileSync(this.authStatePath, JSON.stringify(initial, null, 2), "utf8");
     return initial;
@@ -215,19 +226,8 @@ export class HubServer {
     });
   }
 
-  private embedMemoryAsync(memoryId: string, summary: string, content: string): void {
-    const embedder = this.opts.embedder;
-    if (!embedder) return;
-    const text = summary || content.slice(0, 500);
-    embedder.embed([text]).then((vectors) => {
-      if (vectors[0]) {
-        this.opts.store.upsertHubMemoryEmbedding(memoryId, new Float32Array(vectors[0]));
-        this.opts.log.info(`hub: embedded shared memory ${memoryId}`);
-      }
-    }).catch((err) => {
-      this.opts.log.warn(`hub: embedding shared memory failed: ${err}`);
-    });
-  }
+  // Hub memory embeddings are now computed on-the-fly at search time (two-stage retrieval)
+  // rather than cached in hub_memory_embeddings table, so no embedMemoryAsync needed.
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const url = new URL(req.url || "/", `http://127.0.0.1:${this.port}`);
@@ -238,6 +238,7 @@ export class HubServer {
         teamName: this.teamName,
         version: "0.0.0",
         apiVersion: "v1",
+        hubInstanceId: this.hubInstanceId,
       });
     }
 
@@ -382,10 +383,13 @@ export class HubServer {
     }
 
     if (req.method === "POST" && routePath === "/api/v1/hub/leave") {
+      this.opts.store.deleteHubMemoriesByUser(auth.userId);
+      this.opts.store.deleteHubTasksByUser(auth.userId);
+      this.opts.store.deleteHubSkillsByUser(auth.userId);
       this.userManager.markUserLeft(auth.userId);
       this.knownOnlineUsers.delete(auth.userId);
       this.notifyAdmins("user_left", "user", auth.username, auth.userId);
-      this.opts.log.info(`Hub: user "${auth.username}" (${auth.userId}) left voluntarily, status set to "left"`);
+      this.opts.log.info(`Hub: user "${auth.username}" (${auth.userId}) left voluntarily, resources cleaned, status set to "left"`);
       return this.json(res, 200, { ok: true });
     }
 
@@ -611,9 +615,7 @@ export class HubServer {
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       });
-      if (this.opts.embedder) {
-        this.embedMemoryAsync(memoryId, String(m.summary || ""), String(m.content || ""));
-      }
+      // No embedding on share — hub memory vectors are computed on-the-fly at search time
       if (!existing) {
         this.notifyAdmins("resource_shared", "memory", String(m.summary || m.content?.slice(0, 60) || memoryId), auth.userId);
       }
@@ -660,24 +662,38 @@ export class HubServer {
       // Track which IDs are memories vs chunks
       const memoryIdSet = new Set(memFtsHits.map(({ hit }) => hit.id));
 
-      // Attempt vector search and RRF merge if embedder is available
+      // Two-stage retrieval: FTS candidates first, then embed + cosine rerank
       let mergedIds: string[];
       if (this.opts.embedder) {
         try {
           const [queryVec] = await this.opts.embedder.embed([query]);
           if (queryVec) {
             const allEmb = this.opts.store.getVisibleHubEmbeddings(auth.userId);
-            const memEmb = this.opts.store.getVisibleHubMemoryEmbeddings(auth.userId);
             const scored: Array<{ id: string; score: number }> = [];
-            const cosineSim = (vec: Float32Array) => {
+            const cosineSim = (a: Float32Array | number[], b: number[]) => {
               let dot = 0, nA = 0, nB = 0;
-              for (let i = 0; i < queryVec.length && i < vec.length; i++) {
-                dot += queryVec[i] * vec[i]; nA += queryVec[i] * queryVec[i]; nB += vec[i] * vec[i];
+              const len = Math.min(a.length, b.length);
+              for (let i = 0; i < len; i++) {
+                dot += a[i] * b[i]; nA += a[i] * a[i]; nB += b[i] * b[i];
               }
               return nA > 0 && nB > 0 ? dot / (Math.sqrt(nA) * Math.sqrt(nB)) : 0;
             };
-            for (const e of allEmb) scored.push({ id: e.chunkId, score: cosineSim(e.vector) });
-            for (const e of memEmb) { scored.push({ id: e.memoryId, score: cosineSim(e.vector) }); memoryIdSet.add(e.memoryId); }
+            for (const e of allEmb) scored.push({ id: e.chunkId, score: cosineSim(e.vector, queryVec) });
+
+            // Hub memories: embed FTS candidates on-the-fly instead of reading cached vectors
+            if (memFtsHits.length > 0) {
+              const memTexts = memFtsHits.map(({ hit }) => (hit.summary || hit.content || "").slice(0, 500));
+              try {
+                const memVecs = await this.opts.embedder.embed(memTexts);
+                memFtsHits.forEach(({ hit }, i) => {
+                  if (memVecs[i]) {
+                    scored.push({ id: hit.id, score: cosineSim(new Float32Array(memVecs[i]), queryVec) });
+                    memoryIdSet.add(hit.id);
+                  }
+                });
+              } catch { /* best-effort */ }
+            }
+
             scored.sort((a, b) => b.score - a.score);
             const topScored = scored.slice(0, maxResults * 2);
 

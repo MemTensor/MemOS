@@ -47,7 +47,10 @@ export function createMemoryGetTool(store: SqliteStore): ToolDefinition {
         return { error: `Chunk not found: ${ref.chunkId}` };
       }
 
-      const content = chunk.content;
+      let content = chunk.content;
+      if (content.length > maxChars) {
+        content = content.slice(0, maxChars) + "…";
+      }
 
       const result: GetResult = {
         content,
