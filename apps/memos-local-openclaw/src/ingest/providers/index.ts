@@ -49,8 +49,8 @@ function normalizeEndpointForProvider(
 function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | undefined {
   try {
     const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-    const ocHome = process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw");
-    const cfgPath = path.join(ocHome, "openclaw.json");
+    const cfgPath = process.env.OPENCLAW_CONFIG_PATH
+      || path.join(process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw"), "openclaw.json");
     if (!fs.existsSync(cfgPath)) return undefined;
 
     const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
@@ -154,6 +154,7 @@ export class Summarizer {
   constructor(
     private cfg: SummarizerConfig | undefined,
     private log: Logger,
+    private openclawAPI?: OpenClawAPI,
     strongCfg?: SummarizerConfig,
   ) {
     this.strongCfg = strongCfg;
@@ -163,11 +164,20 @@ export class Summarizer {
   /**
    * Ordered config chain: strongCfg → cfg → fallbackCfg (OpenClaw native model).
    * Returns configs that are defined, in priority order.
+   * Openclaw configs without hostCompletion capability or without openclawAPI are excluded.
    */
   private getConfigChain(): SummarizerConfig[] {
     const chain: SummarizerConfig[] = [];
     if (this.strongCfg) chain.push(this.strongCfg);
-    if (this.cfg) chain.push(this.cfg);
+    if (this.cfg) {
+      if (this.cfg.provider === "openclaw") {
+        if (this.cfg.capabilities?.hostCompletion === true && this.openclawAPI) {
+          chain.push(this.cfg);
+        }
+      } else {
+        chain.push(this.cfg);
+      }
+    }
     if (this.fallbackCfg) chain.push(this.fallbackCfg);
     return chain;
   }
@@ -251,7 +261,9 @@ export class Summarizer {
       return taskFallback(text);
     }
 
-    const result = await this.tryChain("summarizeTask", (cfg) => callSummarizeTask(cfg, text, this.log));
+    const result = await this.tryChain("summarizeTask", (cfg) =>
+      cfg.provider === "openclaw" ? this.summarizeTaskOpenClaw(text) : callSummarizeTask(cfg, text, this.log),
+    );
     return result ?? taskFallback(text);
   }
 
@@ -290,7 +302,11 @@ export class Summarizer {
     if (!this.cfg && !this.fallbackCfg) return null;
     if (candidates.length === 0) return { relevant: [], sufficient: true };
 
-    const result = await this.tryChain("filterRelevant", (cfg) => callFilterRelevant(cfg, query, candidates, this.log));
+    const result = await this.tryChain("filterRelevant", (cfg) =>
+      cfg.provider === "openclaw"
+        ? this.filterRelevantOpenClaw(query, candidates)
+        : callFilterRelevant(cfg, query, candidates, this.log),
+    );
     return result ?? null;
   }
 
@@ -301,12 +317,143 @@ export class Summarizer {
     if (!this.cfg && !this.fallbackCfg) return null;
     if (candidates.length === 0) return null;
 
-    const result = await this.tryChain("judgeDedup", (cfg) => callJudgeDedup(cfg, newSummary, candidates, this.log));
+    const result = await this.tryChain("judgeDedup", (cfg) =>
+      cfg.provider === "openclaw"
+        ? this.judgeDedupOpenClaw(newSummary, candidates)
+        : callJudgeDedup(cfg, newSummary, candidates, this.log),
+    );
     return result ?? { action: "NEW", reason: "all_models_failed" };
   }
 
   getStrongConfig(): SummarizerConfig | undefined {
     return this.strongCfg;
+  }
+
+  // ─── OpenClaw API Implementation ───
+
+  private requireOpenClawAPI(): void {
+    if (!this.openclawAPI) {
+      throw new Error(
+        "OpenClaw API not available. Ensure sharing.capabilities.hostCompletion is enabled in config."
+      );
+    }
+  }
+
+  private async summarizeOpenClaw(text: string): Promise<string> {
+    this.requireOpenClawAPI();
+    const prompt = [
+      `Summarize the text in ONE concise sentence (max 120 characters). IMPORTANT: Use the SAME language as the input text — if the input is Chinese, write Chinese; if English, write English. Preserve exact names, commands, error codes. No bullet points, no preamble — output only the sentence.`,
+      ``,
+      text.slice(0, 2000),
+    ].join("\n");
+
+    const response = await this.openclawAPI!.complete({
+      prompt,
+      maxTokens: 100,
+      temperature: 0,
+      model: this.cfg?.model,
+    });
+
+    return response.text.trim().slice(0, 200);
+  }
+
+  private async summarizeTaskOpenClaw(text: string): Promise<string> {
+    this.requireOpenClawAPI();
+    const prompt = [
+      OPENCLAW_TASK_SUMMARY_PROMPT,
+      ``,
+      text,
+    ].join("\n");
+
+    const response = await this.openclawAPI!.complete({
+      prompt,
+      maxTokens: 4096,
+      temperature: 0.1,
+      model: this.cfg?.model,
+    });
+
+    return response.text.trim();
+  }
+
+  private async judgeNewTopicOpenClaw(currentContext: string, newMessage: string): Promise<boolean> {
+    this.requireOpenClawAPI();
+    const prompt = [
+      OPENCLAW_TOPIC_JUDGE_PROMPT,
+      ``,
+      `CURRENT CONVERSATION SUMMARY:`,
+      currentContext,
+      ``,
+      `NEW USER MESSAGE:`,
+      newMessage,
+    ].join("\n");
+
+    const response = await this.openclawAPI!.complete({
+      prompt,
+      maxTokens: 10,
+      temperature: 0,
+      model: this.cfg?.model,
+    });
+
+    const answer = response.text.trim().toUpperCase();
+    this.log.debug(`Topic judge result: "${answer}"`);
+    return answer.startsWith("NEW");
+  }
+
+  private async filterRelevantOpenClaw(
+    query: string,
+    candidates: Array<{ index: number; role: string; content: string; time?: string }>,
+  ): Promise<FilterResult> {
+    this.requireOpenClawAPI();
+    const candidateText = candidates
+      .map((c) => `${c.index}. [${c.role}] ${c.content}`)
+      .join("\n");
+
+    const prompt = [
+      OPENCLAW_FILTER_RELEVANT_PROMPT,
+      ``,
+      `QUERY: ${query}`,
+      ``,
+      `CANDIDATES:`,
+      candidateText,
+    ].join("\n");
+
+    const response = await this.openclawAPI!.complete({
+      prompt,
+      maxTokens: 200,
+      temperature: 0,
+      model: this.cfg?.model,
+    });
+
+    return parseFilterResult(response.text.trim(), this.log);
+  }
+
+  private async judgeDedupOpenClaw(
+    newSummary: string,
+    candidates: Array<{ index: number; summary: string; chunkId: string }>,
+  ): Promise<DedupResult> {
+    this.requireOpenClawAPI();
+    const candidateText = candidates
+      .map((c) => `${c.index}. ${c.summary}`)
+      .join("\n");
+
+    const prompt = [
+      OPENCLAW_DEDUP_JUDGE_PROMPT,
+      ``,
+      `NEW MEMORY:`,
+      newSummary,
+      ``,
+      `EXISTING MEMORIES:`,
+      candidateText,
+    ].join("\n");
+
+    const response = await this.openclawAPI!.complete({
+      prompt,
+      maxTokens: 300,
+      temperature: 0,
+      model: this.cfg?.model,
+    });
+
+    return parseDedupResult(response.text.trim(), this.log);
   }
 }
 

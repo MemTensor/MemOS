@@ -39,7 +39,7 @@ export class TaskProcessor {
     private ctx: PluginContext,
   ) {
     const strongCfg = ctx.config.skillEvolution?.summarizer;
-    this.summarizer = new Summarizer(ctx.config.summarizer, ctx.log, strongCfg);
+    this.summarizer = new Summarizer(ctx.config.summarizer, ctx.log, ctx.openclawAPI, strongCfg);
   }
 
   onTaskCompleted(cb: (task: Task) => void): void {

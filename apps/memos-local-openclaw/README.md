@@ -5,11 +5,11 @@
 [![Node.js >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
 [![GitHub](https://img.shields.io/badge/GitHub-Source-181717?logo=github)](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-openclaw)
 
-Persistent local conversation memory for [OpenClaw](https://github.com/nicepkg/openclaw) AI Agents. Every conversation is automatically captured, semantically indexed, and instantly recallable — with **task summarization & skill evolution**, and **multi-agent collaborative memory**.
+Persistent local conversation memory for [OpenClaw](https://github.com/nicepkg/openclaw) AI Agents. Every conversation is automatically captured, semantically indexed, and instantly recallable — with **task summarization & skill evolution**, **team sharing for memories and skills**, and **multi-agent collaborative memory**.
 
-**Full-write | Hybrid Search | Task Summarization & Skill Evolution | Multi-Agent Collaboration | Memory Viewer**
+**Full-write | Hybrid Search | Task Summarization & Skill Evolution | Team Sharing | Memory Viewer**
 
-> **Homepage:**  🌐 [Homepage](https://memos-claw.openmem.net) · 📖 [Documentation](https://memos-claw.openmem.net/docs/index.html) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-openclaw-plugin)
+> 🌐 [Homepage](https://memos-claw.openmem.net) · 📖 [Documentation](https://memos-claw.openmem.net/docs/) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-openclaw-plugin) · 🛠 [Troubleshooting](https://memos-claw.openmem.net/docs/troubleshooting.html)
 
 ## Why MemOS
 
@@ -48,13 +48,17 @@ Persistent local conversation memory for [OpenClaw](https://github.com/nicepkg/o
 - **Dedicated model** — Optional separate LLM model for skill generation (e.g., Claude 4.6 for higher quality)
 - **LLM fallback chain** — `skillSummarizer` → `summarizer` → OpenClaw native model (auto-detected from `openclaw.json`). If all configured models fail, the next in chain is tried automatically
 
-### Multi-Agent Collaboration
-- **Memory isolation** — Each agent's memories are tagged with `owner`. During search, agents only see their own private memories and explicitly shared `public` memories
-- **Public memory** — `memory_write_public` tool allows agents to write shared knowledge accessible to all agents (e.g., team decisions, conventions, shared configs)
-- **Skill sharing** — Skills have a `visibility` toggle (`private`/`public`). Public skills are discoverable by all agents via `skill_search`
-- **Skill discovery** — `skill_search` combines FTS (name + description) and vector search (description embedding) with RRF fusion, followed by LLM relevance judgment. Supports `scope` parameter: `mix` (default), `self`, or `public`
-- **Publish/unpublish** — `skill_publish` / `skill_unpublish` tools toggle skill visibility. Other agents can search, preview, and install public skills
-- **Agent-aware capture** — `agent_end` event extracts `agentId` to tag all captured messages with the correct owner
+### Team Sharing (v4)
+- **Hub-Client architecture** — One Hub stores shared data; clients keep private data local and query the Hub on demand. Roles can be switched dynamically with proper confirmation and cleanup
+- **Hub port auto-derivation** — Hub port derived from gateway port (`gatewayPort + 11`) to avoid conflicts in multi-instance setups; automatic port retry on `EADDRINUSE`
+- **Admin approval flow** — Join requests require admin approval; admins can promote, demote, and remove members (with self-removal prevention)
+- **Notification system** — Role change notifications (promoted/demoted), resource sharing notifications (shared/unshared/removed) with localized messages, Hub shutdown alerts
+- **Scoped retrieval** — `memory_search` and `skill_search` support `local`, `group`, and `all` search scopes
+- **Task sharing** — `task_share` / `task_unshare` push or remove task memories from the team without changing local private storage
+- **Skill publish/pull** — Skills can be published to team visibility scopes and pulled back locally as full bundles for offline reuse
+- **Graceful state transitions** — Client-to-Hub switch triggers confirmation, pending request withdrawal, connection cleanup, and automatic restart
+- **Multi-instance support** — Viewer port, Hub port, sessions, and databases are all isolated per instance; supports running multiple OpenClaw instances on the same machine
+- **Viewer integration** — Full team management UI: connection state, member management, pending approvals, scoped search, task share controls, skill pull, notification feed, and setup guide
 
 ### Memory Migration — Reconnect 🦐
 - **One-click import** — Seamlessly migrate OpenClaw's native built-in memories (SQLite + JSONL) into the MemOS intelligent memory system
@@ -87,35 +91,29 @@ Persistent local conversation memory for [OpenClaw](https://github.com/nicepkg/o
 
 ### 1. Install
 
-**Step 0 — Prepare build environment (macOS / Linux):**
+One command installs the plugin, all dependencies, and build tools automatically. Supports auto-upgrade to the latest version.
 
-This plugin uses `better-sqlite3`, a native C/C++ module. On **macOS** and **Linux**, prebuilt binaries may not be available, so **install C++ build tools first** to ensure a smooth installation:
+**macOS / Linux:**
 
 ```bash
-# macOS
-xcode-select --install
-
-# Linux (Ubuntu / Debian)
-sudo apt install build-essential python3
+curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash
 ```
 
-> **Windows users:** `better-sqlite3` ships prebuilt binaries for Windows + Node.js LTS, so you can usually skip this step and go directly to Step 1. If installation still fails, install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (select "C++ build tools" workload).
->
-> Already have build tools? Skip to Step 1. Not sure? Run the install command above — it's safe to re-run.
->
-> **Still having issues?** See the [Troubleshooting](#troubleshooting) section, the [detailed troubleshooting guide](https://memtensor.github.io/MemOS/apps/memos-local-openclaw/docs/troubleshooting.html), or the [official better-sqlite3 troubleshooting docs](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md).
+**Windows (PowerShell):**
 
-**Step 1 — Install the plugin:**
+```powershell
+powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"
+```
+
+**Alternative — Install via OpenClaw CLI:**
 
 ```bash
 openclaw plugins install @memtensor/memos-local-openclaw-plugin
 ```
 
-The plugin is installed under `~/.openclaw/extensions/memos-local-openclaw-plugin` and registered as `memos-local-openclaw-plugin`. Dependencies and `better-sqlite3` native module are built automatically during installation.
-
 > **Note:** The Memory Viewer starts only when the **OpenClaw gateway** is running. After install, **configure** `openclaw.json` (step 2) and **start the gateway** (step 3); the viewer will then be available at `http://127.0.0.1:18799`.
 >
-> **Installation failed?** If `better-sqlite3` compilation fails during install, manually rebuild after ensuring build tools are installed:
+> **Installation failed?** See the [Troubleshooting](#troubleshooting) section, the [detailed troubleshooting guide](https://memos-claw.openmem.net/docs/troubleshooting.html), or the [official better-sqlite3 troubleshooting docs](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md). You can also try manually rebuilding the native module:
 > ```bash
 > cd ~/.openclaw/extensions/memos-local-openclaw-plugin && npm rebuild better-sqlite3
 > ```
@@ -184,7 +182,7 @@ Add the plugin config to `~/.openclaw/openclaw.json`:
 | Mistral | `mistral` | `mistral-embed` | |
 | Local (offline) | `local` | — | Uses `Xenova/all-MiniLM-L6-v2`, no API needed |
 
-> **No embedding config?** The plugin falls back to the local model automatically. You can start with zero configuration and add a cloud provider later for better quality.
+> **No embedding config?** In the current sidecar build, the plugin falls back to the local embedding model automatically. If you need deterministic team-wide behavior, configure an explicit provider.
 
 #### Summarizer Provider Options
 
@@ -258,6 +256,87 @@ memos-local: started (embedding: openai_compatible)
 ║  Open in browser to manage memories       ║
 ╚══════════════════════════════════════════╝
 ```
+
+## Team Sharing (v4)
+
+Team Sharing turns multiple OpenClaw instances into a collaborative memory network. One instance serves as the **Hub** (team server), others connect as **Clients**. Private data stays local; only explicitly shared tasks, memories, and skills are visible to the team.
+
+### Key Capabilities
+
+| Capability | Description |
+|---|---|
+| **Hub / Client architecture** | One Hub stores shared data; clients keep private data local and query the Hub on demand |
+| **Hub port auto-derivation** | Hub port is automatically derived from the gateway port (`gatewayPort + 11`), avoiding port conflicts in multi-instance setups. Explicit `hub.port` config overrides this. |
+| **Port retry on conflict** | If the derived/configured Hub port is in use (`EADDRINUSE`), the server automatically retries up to 3 consecutive ports |
+| **Admin approval flow** | New members submit join requests; admin approves/rejects from the Viewer |
+| **Self-removal prevention** | Admins cannot accidentally remove themselves from the team |
+| **Role change notifications** | When an admin promotes/demotes a member, the affected user receives a notification |
+| **Resource notifications** | Shared/unshared/removed resources trigger localized notifications with resource names |
+| **Pending withdrawal** | Clients can cancel pending join requests when switching roles or disabling sharing |
+| **Graceful role transitions** | Switching from Client to Hub (or vice versa) triggers confirmation prompts, proper cleanup of remote connections, and restart |
+| **Hub shutdown notification** | When a Hub owner disables sharing, all connected clients receive a `hub_shutdown` notification |
+| **Leave team** | Clients can leave a team with a confirmation dialog; the Hub is notified and the client's data is cleaned up |
+| **Scoped retrieval** | `memory_search` and `skill_search` support `local`, `group`, and `all` search scopes |
+| **Task sharing** | Push/remove task memories to/from the team |
+| **Skill publish/pull** | Publish skills to team visibility; pull team skills locally as full bundles for offline use |
+
+### Quick Setup
+
+**Option A — Start a Hub (team server):**
+
+```jsonc
+{
+  "config": {
+    "sharing": {
+      "enabled": true,
+      "role": "hub",
+      "hub": {
+        "teamName": "My Team",
+        "teamToken": "${MEMOS_TEAM_TOKEN}"
+        // port is auto-derived; set explicitly only if needed
+      }
+    }
+  }
+}
+```
+
+**Option B — Join as Client:**
+
+```jsonc
+{
+  "config": {
+    "sharing": {
+      "enabled": true,
+      "role": "client",
+      "client": {
+        "hubAddress": "192.168.1.100:18800"
+      }
+    }
+  }
+}
+```
+
+You can also configure sharing entirely through the **Viewer → Settings → Team Sharing** panel — no need to edit `openclaw.json` manually.
+
+### Multi-Instance Deployment
+
+When running multiple OpenClaw instances on the same machine (e.g., personal + work):
+
+- **Viewer port**: Each instance derives its Viewer port from the gateway port, so they won't conflict
+- **Hub port**: Auto-derived as `gatewayPort + 11` (e.g., gateway `18789` → Hub `18800`, gateway `19001` → Hub `19012`)
+- **Session isolation**: Each instance uses a separate cookie name based on its Viewer port, so multiple Viewers can be logged in simultaneously
+- **Database isolation**: Each instance uses its own `memos.db` under its respective state directory
+
+### Viewer Team Sharing Panel
+
+The **Settings → Team Sharing** panel provides a complete management interface:
+
+- **Hub mode**: Team name, member count, active members, pending approvals, admin controls (approve/reject/promote/demote/remove)
+- **Client mode**: Connection status, team info, leave team button, notification feed
+- **Setup guide cards**: Always visible — choose "Host a Team" or "Join a Team" with step-by-step instructions
+- **Real-time notifications**: Role changes, resource sharing events, Hub status changes
+
+For the full end-user workflow, see [`HUB-SHARING-GUIDE.md`](./HUB-SHARING-GUIDE.md).
 
 ### 5. Verify Memory is Working
 
@@ -361,21 +440,26 @@ Query → FTS5 + Vector dual recall → RRF Fusion → MMR Rerank
 
 ## Agent Tools
 
-The plugin provides **12 smart tools** (11 registered tools + auto-recall) and auto-installs the **memos-memory-guide** skill:
+The plugin provides local memory tools plus v4 team-sharing tools, and auto-installs the **memos-memory-guide** skill:
 
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
 | `auto_recall` | Automatically injects relevant memories into agent context each turn (via `before_agent_start` hook) | Runs automatically — no manual call needed |
-| `memory_search` | Search memories (auto-filtered to current agent + public); returns excerpts + `chunkId` / `task_id` | When auto-recall returned nothing or you need a different query |
-| `memory_get` | Get full original text of a memory chunk | When you need to verify exact details from a search hit |
-| `memory_timeline` | Surrounding conversation around a chunk | When you need the exact dialogue before/after a hit |
-| `memory_write_public` | Write a memory to the shared public space (owner="public") | When the agent discovers knowledge all agents should access |
-| `task_summary` | Full structured summary of a completed task | When a hit has `task_id` and you need the full story (goal, steps, result) |
-| `skill_get` | Get skill content by `skillId` or `taskId` | When a hit has a linked task/skill and you want the reusable experience guide |
+| `memory_search` | Search memories with `scope: local | group | all`; team hits are returned separately from local hits | When auto-recall returned nothing or you need local + shared context |
+| `memory_get` | Get full original text of a local memory chunk | When you need to verify exact details from a local search hit |
+| `memory_timeline` | Surrounding conversation around a local chunk | When you need the exact dialogue before/after a local hit |
+| `network_memory_detail` | Fetch full content for a team memory hit | When a shared search hit looks relevant and you need full detail |
+| `memory_write_public` | Write a memory to the local shared public space (`owner="public"`) | When the agent discovers knowledge all local agents should access |
+| `task_summary` | Full structured summary of a completed task | When a hit has `task_id` and you need the full story |
+| `task_share` | Push a local task and its memories to the team | When a task should be searchable by your group or the whole team |
+| `task_unshare` | Remove a shared task from the team | When a task should stop being shared |
+| `skill_get` | Get local skill content by `skillId` or `taskId` | When a hit has a linked task/skill and you want the reusable guide |
 | `skill_install` | Install a skill into the agent workspace | When the skill should be permanently available for future turns |
-| `skill_search` | Search skills via FTS + vector + LLM relevance; scope: `mix` / `self` / `public` | When an agent needs to discover existing skills for a task |
-| `skill_publish` | Set a skill's visibility to public | When a skill should be discoverable by other agents |
-| `skill_unpublish` | Set a skill's visibility back to private | When a skill should no longer be shared |
+| `skill_search` | Search skills with `scope: local | group | all` | When an agent needs to discover local or team-shared skills |
+| `skill_publish` | Publish a skill to team sharing or local public visibility, depending on scope | When a skill should be shared with teammates |
+| `skill_unpublish` | Make a previously shared skill private again | When a skill should no longer be shared |
+| `network_skill_pull` | Pull a team skill bundle into local storage | When a teammate's shared skill should be usable locally/offline |
+| `network_team_info` | Show current team server URL, user, role, and groups | When you need to inspect current team connection state |
 | `memory_viewer` | Get the URL of the Memory Viewer web UI | When the user asks where to view or manage their memories |
 
 ### Search Parameters
@@ -403,7 +487,7 @@ Open `http://127.0.0.1:18799` in your browser after starting the gateway.
 | **Analytics** | Daily write/read activity charts, memory/task/skill totals, role breakdown |
 | **Logs** | Tool call log (memory_search, auto_recall, memory_add, etc.) with input/output, duration, and tool filter; auto-refresh |
 | **Import** | 🦐 OpenClaw native memory migration — scan, one-click import with real-time SSE progress, smart dedup, pause/resume; post-processing for task & skill generation |
-| **Settings** | Online configuration for embedding model, summarizer model, skill evolution settings, viewer port |
+| **Settings** | Online configuration plus **Team Sharing** status, current role, team/groups, and admin pending-user actions |
 
 **Viewer won't open?**
 

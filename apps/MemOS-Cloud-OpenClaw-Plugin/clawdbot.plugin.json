@@ -1,0 +1,169 @@
+{
+  "id": "memos-cloud-openclaw-plugin",
+  "name": "MemOS Cloud OpenClaw Plugin",
+  "description": "MemOS Cloud recall + add memory via lifecycle hooks",
+  "version": "0.1.9",
+  "kind": "lifecycle",
+  "main": "./index.js",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "MemOS Cloud base URL"
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "MemOS API Key (Token auth; supports ~/.openclaw/.env, ~/.moltbot/.env, ~/.clawdbot/.env; falls back to process env)"
+      },
+      "userId": {
+        "type": "string",
+        "description": "MemOS user_id (default: openclaw-user)",
+        "default": "openclaw-user"
+      },
+      "conversationId": {
+        "type": "string",
+        "description": "Override conversation_id"
+      },
+      "conversationIdPrefix": {
+        "type": "string",
+        "description": "conversation_id prefix"
+      },
+      "conversationIdSuffix": {
+        "type": "string",
+        "description": "conversation_id suffix"
+      },
+      "conversationSuffixMode": {
+        "type": "string",
+        "enum": [
+          "none",
+          "counter"
+        ],
+        "default": "none"
+      },
+      "resetOnNew": {
+        "type": "boolean",
+        "default": true
+      },
+      "queryPrefix": {
+        "type": "string",
+        "description": "Prefix added to search queries"
+      },
+      "maxQueryChars": {
+        "type": "integer",
+        "description": "Max chars for search query"
+      },
+      "recallEnabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "recallGlobal": {
+        "type": "boolean",
+        "default": true
+      },
+      "addEnabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "captureStrategy": {
+        "type": "string",
+        "enum": [
+          "last_turn",
+          "full_session"
+        ],
+        "default": "last_turn"
+      },
+      "maxMessageChars": {
+        "type": "integer",
+        "description": "Max chars per message when adding",
+        "default": 20000
+      },
+      "maxItemChars": {
+        "type": "integer",
+        "description": "Max chars per memory item when injecting prompt",
+        "default": 8000
+      },
+      "includeAssistant": {
+        "type": "boolean",
+        "default": true
+      },
+      "memoryLimitNumber": {
+        "type": "integer",
+        "default": 6
+      },
+      "preferenceLimitNumber": {
+        "type": "integer",
+        "default": 6
+      },
+      "includePreference": {
+        "type": "boolean",
+        "default": true
+      },
+      "includeToolMemory": {
+        "type": "boolean",
+        "default": false
+      },
+      "toolMemoryLimitNumber": {
+        "type": "integer",
+        "default": 6
+      },
+      "filter": {
+        "type": "object",
+        "description": "MemOS search filter"
+      },
+      "knowledgebaseIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "tags": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "info": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "agentId": {
+        "type": "string"
+      },
+      "multiAgentMode": {
+        "type": "boolean",
+        "default": false
+      },
+      "appId": {
+        "type": "string"
+      },
+      "allowPublic": {
+        "type": "boolean",
+        "default": false
+      },
+      "allowKnowledgebaseIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "asyncMode": {
+        "type": "boolean",
+        "default": true
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "default": 5000
+      },
+      "retries": {
+        "type": "integer",
+        "default": 1
+      },
+      "throttleMs": {
+        "type": "integer",
+        "default": 0
+      }
+    },
+    "additionalProperties": false
+  }
+}

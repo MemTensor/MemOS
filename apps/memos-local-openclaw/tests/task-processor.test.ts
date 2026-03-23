@@ -285,6 +285,8 @@ describe("TaskProcessor", () => {
     const now = Date.now();
     const gap = 121 * 60 * 1000;
 
+    vi.spyOn((processor as any).summarizer, "judgeNewTopic").mockResolvedValue(null);
+
     insertTestChunk({ id: "d1", sessionKey: "s1", role: "user", content: "what is my name and who am I please tell me", createdAt: now });
     insertTestChunk({ id: "d2", sessionKey: "s1", role: "assistant", content: "I do not have any information about your name or identity in my memory at this time", createdAt: now + 1 });
     insertTestChunk({ id: "d3", sessionKey: "s1", role: "user", content: "what is my name and who am I please tell me", createdAt: now + 2 });

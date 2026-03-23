@@ -14,13 +14,80 @@ import { vectorSearch } from "../storage/vector";
 import { TaskProcessor } from "../ingest/task-processor";
 import { RecallEngine } from "../recall/engine";
 import { SkillEvolver } from "../skill/evolver";
-import type { Logger, Chunk, PluginContext } from "../types";
+import { resolveConfig } from "../config";
+import { getHubStatus } from "../client/connector";
+import { type ResolvedHubClient, hubGetMemoryDetail, hubListMemories, hubListTasks, hubListSkills, hubRequestJson, hubSearchMemories, hubSearchSkills, hubUpdateUsername, normalizeHubUrl, resolveHubClient } from "../client/hub";
+import { buildSkillBundleForHub, fetchHubSkillBundle, restoreSkillBundleFromHub } from "../client/skill-sync";
+import type { Logger, Chunk, PluginContext, MemosLocalConfig } from "../types";
 import { viewerHTML } from "./html";
 import { v4 as uuid } from "uuid";
 
-function normalizeTimestamp(ts: number): number {
-  if (ts < 1e12) return ts * 1000;
-  return ts;
+export interface MigrationStepFailureCounts {
+  summarization: number;
+  dedup: number;
+  embedding: number;
+}
+
+export interface MigrationStateSnapshot {
+  phase: string;
+  stored: number;
+  skipped: number;
+  merged: number;
+  errors: number;
+  processed: number;
+  total: number;
+  lastItem: any;
+  done: boolean;
+  stopped: boolean;
+  stepFailures: MigrationStepFailureCounts;
+  success: boolean;
+}
+
+function createInitialStepFailures(): MigrationStepFailureCounts {
+  return { summarization: 0, dedup: 0, embedding: 0 };
+}
+
+export function computeMigrationSuccess(state: Pick<MigrationStateSnapshot, "errors" | "stepFailures">): boolean {
+  const sf = state.stepFailures;
+  return state.errors === 0 && sf.summarization === 0 && sf.dedup === 0 && sf.embedding === 0;
+}
+
+export function createInitialMigrationState(): MigrationStateSnapshot {
+  const stepFailures = createInitialStepFailures();
+  return {
+    phase: "",
+    stored: 0,
+    skipped: 0,
+    merged: 0,
+    errors: 0,
+    processed: 0,
+    total: 0,
+    lastItem: null,
+    done: false,
+    stopped: false,
+    stepFailures,
+    success: computeMigrationSuccess({ errors: 0, stepFailures }),
+  };
+}
+
+export function applyMigrationItemToState(state: MigrationStateSnapshot, d: any): void {
+  if (d.status === "stored") state.stored++;
+  else if (d.status === "skipped" || d.status === "duplicate") state.skipped++;
+  else if (d.status === "merged") state.merged++;
+  else if (d.status === "error") state.errors++;
+
+  if (Array.isArray(d.stepFailures)) {
+    for (const step of d.stepFailures) {
+      if (step === "summarization") state.stepFailures.summarization++;
+      else if (step === "dedup") state.stepFailures.dedup++;
+      else if (step === "embedding") state.stepFailures.embedding++;
+    }
+  }
+
+  state.processed = d.index ?? state.processed + 1;
+  state.total = d.total ?? state.total;
+  state.lastItem = d;
+  state.success = computeMigrationSuccess(state);
 }
 
 export interface ViewerServerOptions {
@@ -30,6 +97,7 @@ export interface ViewerServerOptions {
   log: Logger;
   dataDir: string;
   ctx?: PluginContext;
+  defaultHubPort?: number;
 }
 
 interface AuthState {
@@ -47,6 +115,8 @@ export class ViewerServer {
   private readonly authFile: string;
   private readonly auth: AuthState;
   private readonly ctx?: PluginContext;
+  private readonly cookieName: string;
+  private readonly defaultHubPort: number;
 
   private static readonly SESSION_TTL = 24 * 60 * 60 * 1000;
   private static readonly PLUGIN_VERSION: string = (() => {
@@ -60,18 +130,7 @@ export class ViewerServer {
   private resetToken: string;
   private migrationRunning = false;
   private migrationAbort = false;
-  private migrationState: {
-    phase: string;
-    stored: number;
-    skipped: number;
-    merged: number;
-    errors: number;
-    processed: number;
-    total: number;
-    lastItem: any;
-    done: boolean;
-    stopped: boolean;
-  } = { phase: "", stored: 0, skipped: 0, merged: 0, errors: 0, processed: 0, total: 0, lastItem: null, done: false, stopped: false };
+  private migrationState: MigrationStateSnapshot = createInitialMigrationState();
   private migrationSSEClients: http.ServerResponse[] = [];
 
   private ppRunning = false;
@@ -79,6 +138,12 @@ export class ViewerServer {
   private ppState: { running: boolean; done: boolean; stopped: boolean; processed: number; total: number; tasksCreated: number; skillsCreated: number; errors: number; skippedSessions: number; totalSessions: number } =
     { running: false, done: false, stopped: false, processed: 0, total: 0, tasksCreated: 0, skillsCreated: 0, errors: 0, skippedSessions: 0, totalSessions: 0 };
   private ppSSEClients: http.ServerResponse[] = [];
+
+  private notifSSEClients: http.ServerResponse[] = [];
+  private notifPollTimer?: ReturnType<typeof setInterval>;
+  private lastKnownNotifCount = 0;
+  private hubHeartbeatTimer?: ReturnType<typeof setInterval>;
+  private static readonly HUB_HEARTBEAT_INTERVAL_MS = 45_000;
 
   constructor(opts: ViewerServerOptions) {
     this.store = opts.store;
@@ -89,25 +154,40 @@ export class ViewerServer {
     this.ctx = opts.ctx;
     this.authFile = path.join(opts.dataDir, "viewer-auth.json");
     this.auth = { passwordHash: null, sessions: new Map() };
+    this.cookieName = `memos_token_${opts.port}`;
+    this.defaultHubPort = opts.defaultHubPort ?? 18800;
     this.resetToken = crypto.randomBytes(16).toString("hex");
     this.loadAuth();
   }
 
+  private getHubPort(): number {
+    const configured = this.ctx?.config?.sharing?.hub?.port;
+    if (configured && configured !== 18800) return configured;
+    return this.defaultHubPort;
+  }
+
   start(): Promise<string> {
+    const MAX_PORT_RETRIES = 5;
     return new Promise((resolve, reject) => {
+      let retries = 0;
       this.server = http.createServer((req, res) => this.handleRequest(req, res));
       this.server.on("error", (err: NodeJS.ErrnoException) => {
-        if (err.code === "EADDRINUSE") {
-          this.log.warn(`Viewer port ${this.port} in use, trying ${this.port + 1}`);
-          this.server!.listen(this.port + 1, "127.0.0.1");
+        if (err.code === "EADDRINUSE" && retries < MAX_PORT_RETRIES) {
+          retries++;
+          const nextPort = this.port + retries;
+          this.log.warn(`Viewer port ${this.port + retries - 1} in use, trying ${nextPort}`);
+          this.server!.listen(nextPort, "0.0.0.0");
+        } else if (err.code === "EADDRINUSE") {
+          reject(new Error(`Viewer failed to find open port after ${MAX_PORT_RETRIES} retries (tried ${this.port}–${this.port + MAX_PORT_RETRIES})`));
         } else {
           reject(err);
         }
       });
-      this.server.listen(this.port, "127.0.0.1", () => {
+      this.server.listen(this.port, "0.0.0.0", () => {
         const addr = this.server!.address();
         const actualPort = typeof addr === "object" && addr ? addr.port : this.port;
         this.autoCleanupPolluted();
+        this.startHubHeartbeat();
         resolve(`http://127.0.0.1:${actualPort}`);
       });
     });
@@ -130,6 +210,10 @@ export class ViewerServer {
   }
 
   stop(): void {
+    this.stopHubHeartbeat();
+    this.stopNotifPoll();
+    for (const c of this.notifSSEClients) { try { c.end(); } catch {} }
+    this.notifSSEClients = [];
     this.server?.close();
     this.server = null;
   }
@@ -172,7 +256,8 @@ export class ViewerServer {
 
   private isValidSession(req: http.IncomingMessage): boolean {
     const cookie = req.headers.cookie ?? "";
-    const match = cookie.match(/memos_token=([a-f0-9]+)/);
+    const re = new RegExp(`${this.cookieName}=([a-f0-9]+)`);
+    const match = cookie.match(re);
     if (!match) return false;
     const expiry = this.auth.sessions.get(match[1]);
     if (!expiry) return false;
@@ -220,7 +305,12 @@ export class ViewerServer {
       }
 
       if (p === "/api/memories" && req.method === "GET") this.serveMemories(res, url);
-      else if (p === "/api/stats") this.serveStats(res);
+      else if (p === "/api/memories/share-local" && req.method === "POST") this.handleMemoryLocalShare(req, res);
+      else if (p === "/api/memories/unshare-local" && req.method === "POST") this.handleMemoryLocalUnshare(req, res);
+      else if (p.match(/^\/api\/memory\/[^/]+\/scope$/) && req.method === "PUT") this.handleMemoryScope(req, res, p);
+      else if (p.match(/^\/api\/task\/[^/]+\/scope$/) && req.method === "PUT") this.handleTaskScope(req, res, p);
+      else if (p.match(/^\/api\/skill\/[^/]+\/scope$/) && req.method === "PUT") this.handleSkillScope(req, res, p);
+      else if (p === "/api/stats") this.serveStats(res, url);
       else if (p === "/api/metrics") this.serveMetrics(res, url);
       else if (p === "/api/tool-metrics") this.serveToolMetrics(res, url);
       else if (p === "/api/search") this.serveSearch(req, res, url);
@@ -243,6 +333,45 @@ export class ViewerServer {
       else if (p === "/api/memories" && req.method === "DELETE") this.handleDeleteAll(res);
       else if (p === "/api/logs" && req.method === "GET") this.serveLogs(res, url);
       else if (p === "/api/log-tools" && req.method === "GET") this.serveLogTools(res);
+      else if (p === "/api/sharing/status" && req.method === "GET") this.serveSharingStatus(res);
+      else if (p === "/api/sharing/pending-users" && req.method === "GET") this.serveSharingPendingUsers(res);
+      else if (p === "/api/sharing/approve-user" && req.method === "POST") this.handleSharingApproveUser(req, res);
+      else if (p === "/api/sharing/reject-user" && req.method === "POST") this.handleSharingRejectUser(req, res);
+      else if (p === "/api/sharing/remove-user" && req.method === "POST") this.handleSharingRemoveUser(req, res);
+      else if (p === "/api/sharing/change-role" && req.method === "POST") this.handleSharingChangeRole(req, res);
+      else if (p === "/api/sharing/retry-join" && req.method === "POST") this.handleRetryJoin(req, res);
+      else if (p === "/api/sharing/leave" && req.method === "POST") this.handleLeaveTeam(req, res);
+      else if (p === "/api/sharing/search/memories" && req.method === "POST") this.handleSharingMemorySearch(req, res);
+      else if (p === "/api/sharing/memories/list" && req.method === "GET") this.serveSharingMemoryList(res, url);
+      else if (p === "/api/sharing/tasks/list" && req.method === "GET") this.serveSharingTaskList(res, url);
+      else if (p === "/api/sharing/skills/list" && req.method === "GET") this.serveSharingSkillList(res, url);
+      else if (p === "/api/sharing/memory-detail" && req.method === "POST") this.handleSharingMemoryDetail(req, res);
+      else if (p === "/api/sharing/search/skills" && req.method === "GET") this.serveSharingSkillSearch(res, url);
+      else if (p === "/api/sharing/tasks/share" && req.method === "POST") this.handleSharingTaskShare(req, res);
+      else if (p === "/api/sharing/tasks/unshare" && req.method === "POST") this.handleSharingTaskUnshare(req, res);
+      else if (p === "/api/sharing/update-username" && req.method === "POST") this.handleUpdateUsername(req, res);
+      else if (p === "/api/sharing/rename-user" && req.method === "POST") this.handleAdminRenameUser(req, res);
+      else if (p === "/api/sharing/test-hub" && req.method === "POST") this.handleTestHubConnection(req, res);
+      else if (p === "/api/sharing/memories/share" && req.method === "POST") this.handleSharingMemoryShare(req, res);
+      else if (p === "/api/sharing/memories/unshare" && req.method === "POST") this.handleSharingMemoryUnshare(req, res);
+      else if (p === "/api/sharing/skills/pull" && req.method === "POST") this.handleSharingSkillPull(req, res);
+      else if (p === "/api/sharing/skills/share" && req.method === "POST") this.handleSharingSkillShare(req, res);
+      else if (p === "/api/sharing/skills/unshare" && req.method === "POST") this.handleSharingSkillUnshare(req, res);
+      else if (p === "/api/sharing/users" && req.method === "GET") this.serveSharingUsers(res);
+      else if (p === "/api/sharing/notifications" && req.method === "GET") this.serveSharingNotifications(res, url);
+      else if (p === "/api/sharing/notifications/read" && req.method === "POST") this.handleSharingNotificationsRead(req, res);
+      else if (p === "/api/sharing/notifications/clear" && req.method === "POST") this.handleSharingNotificationsClear(req, res);
+      else if (p === "/api/sharing/sync-hub-removal" && req.method === "POST") this.handleSyncHubRemoval(req, res);
+      else if (p === "/api/notifications/stream" && req.method === "GET") this.handleNotifSSE(req, res);
+      else if (p === "/api/admin/shared-tasks" && req.method === "GET") this.serveAdminSharedTasks(res);
+      else if (p.match(/^\/api\/admin\/shared-tasks\/[^/]+\/detail$/) && req.method === "GET") this.serveHubTaskDetail(res, p);
+      else if (p.match(/^\/api\/admin\/shared-tasks\/[^/]+$/) && req.method === "DELETE") this.handleAdminDeleteTask(res, p);
+      else if (p === "/api/admin/shared-skills" && req.method === "GET") this.serveAdminSharedSkills(res);
+      else if (p.match(/^\/api\/admin\/shared-skills\/[^/]+\/detail$/) && req.method === "GET") this.serveHubSkillDetail(res, p);
+      else if (p.match(/^\/api\/admin\/shared-skills\/[^/]+$/) && req.method === "DELETE") this.handleAdminDeleteSkill(res, p);
+      else if (p === "/api/admin/shared-memories" && req.method === "GET") this.serveAdminSharedMemories(res);
+      else if (p.match(/^\/api\/admin\/shared-memories\/[^/]+$/) && req.method === "DELETE") this.handleAdminDeleteMemory(res, p);
+      else if (p === "/api/local-ips" && req.method === "GET") this.serveLocalIPs(res);
       else if (p === "/api/config" && req.method === "GET") this.serveConfig(res);
       else if (p === "/api/config" && req.method === "PUT") this.handleSaveConfig(req, res);
       else if (p === "/api/test-model" && req.method === "POST") this.handleTestModel(req, res);
@@ -293,7 +422,7 @@ export class ViewerServer {
         const token = this.createSession();
         res.writeHead(200, {
           "Content-Type": "application/json",
-          "Set-Cookie": `memos_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
+          "Set-Cookie": `${this.cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
         });
         res.end(JSON.stringify({ ok: true, message: "Password set successfully" }));
       } catch (err) {
@@ -315,7 +444,7 @@ export class ViewerServer {
         const token = this.createSession();
         res.writeHead(200, {
           "Content-Type": "application/json",
-          "Set-Cookie": `memos_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
+          "Set-Cookie": `${this.cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
         });
         res.end(JSON.stringify({ ok: true }));
       } catch (err) {
@@ -327,11 +456,12 @@ export class ViewerServer {
 
   private handleLogout(req: http.IncomingMessage, res: http.ServerResponse): void {
     const cookie = req.headers.cookie ?? "";
-    const match = cookie.match(/memos_token=([a-f0-9]+)/);
+    const re = new RegExp(`${this.cookieName}=([a-f0-9]+)`);
+    const match = cookie.match(re);
     if (match) this.auth.sessions.delete(match[1]);
     res.writeHead(200, {
       "Content-Type": "application/json",
-      "Set-Cookie": "memos_token=; Path=/; HttpOnly; Max-Age=0",
+      "Set-Cookie": `${this.cookieName}=; Path=/; HttpOnly; Max-Age=0`,
     });
     res.end(JSON.stringify({ ok: true }));
   }
@@ -358,7 +488,7 @@ export class ViewerServer {
         const sessionToken = this.createSession();
         res.writeHead(200, {
           "Content-Type": "application/json",
-          "Set-Cookie": `memos_token=${sessionToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
+          "Set-Cookie": `${this.cookieName}=${sessionToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
         });
         res.end(JSON.stringify({ ok: true, message: "Password reset successfully" }));
       } catch (err) {
@@ -393,23 +523,53 @@ export class ViewerServer {
     const params: any[] = [];
     if (session) { conditions.push("session_key = ?"); params.push(session); }
     if (role) { conditions.push("role = ?"); params.push(role); }
-    if (owner) { conditions.push("owner = ?"); params.push(owner); }
+    if (owner && owner.startsWith("agent:")) {
+      conditions.push("(owner = ? OR owner = 'public')");
+      params.push(owner);
+    } else if (owner) {
+      conditions.push("owner = ?"); params.push(owner);
+    }
     if (dateFrom) { conditions.push("created_at >= ?"); params.push(new Date(dateFrom).getTime()); }
     if (dateTo) { conditions.push("created_at <= ?"); params.push(new Date(dateTo).getTime()); }
 
     const where = conditions.length > 0 ? " WHERE " + conditions.join(" AND ") : "";
     const totalRow = db.prepare("SELECT COUNT(*) as count FROM chunks" + where).get(...params) as any;
-    const rawMemories = db.prepare("SELECT * FROM chunks" + where + ` ORDER BY created_at ${sortBy} LIMIT ? OFFSET ?`).all(...params, limit, offset);
+    const rawMemories = db.prepare("SELECT * FROM chunks" + where + ` ORDER BY CASE WHEN dedup_status IN ('duplicate','merged') THEN 1 ELSE 0 END ASC, created_at ${sortBy} LIMIT ? OFFSET ?`).all(...params, limit, offset);
     const findMergeSources = db.prepare("SELECT id, summary, role FROM chunks WHERE dedup_target = ? AND (dedup_status = 'merged' OR dedup_status = 'duplicate')");
+
+    const chunkIds = rawMemories.map((m: any) => m.id);
+    const sharingMap = new Map<string, { visibility: string; group_id: string | null }>();
+    const localShareMap = new Map<string, { original_owner: string; shared_at: number }>();
+    if (chunkIds.length > 0) {
+      try {
+        const placeholders = chunkIds.map(() => "?").join(",");
+        const sharedRows = db.prepare(`SELECT source_chunk_id, visibility, group_id FROM hub_memories WHERE source_chunk_id IN (${placeholders})`).all(...chunkIds) as Array<{ source_chunk_id: string; visibility: string; group_id: string | null }>;
+        for (const r of sharedRows) sharingMap.set(r.source_chunk_id, r);
+        const teamMetaRows = db.prepare(`SELECT chunk_id, visibility, group_id FROM team_shared_chunks WHERE chunk_id IN (${placeholders})`).all(...chunkIds) as Array<{ chunk_id: string; visibility: string; group_id: string | null }>;
+        for (const r of teamMetaRows) {
+          if (!sharingMap.has(r.chunk_id)) {
+            sharingMap.set(r.chunk_id, { visibility: r.visibility, group_id: r.group_id });
+          }
+        }
+        const localRows = db.prepare(`SELECT chunk_id, original_owner, shared_at FROM local_shared_memories WHERE chunk_id IN (${placeholders})`).all(...chunkIds) as Array<{ chunk_id: string; original_owner: string; shared_at: number }>;
+        for (const r of localRows) localShareMap.set(r.chunk_id, r);
+      } catch {
+      }
+    }
     const memories = rawMemories.map((m: any) => {
-      if (m.role === "user" && m.content) {
-        m = { ...m, content: stripInboundMetadata(m.content) };
-      }
-      if (m.merge_count > 0) {
+      const out: any = m.role === "user" && m.content ? { ...m, content: stripInboundMetadata(m.content) } : { ...m };
+      if (out.merge_count > 0) {
         const sources = findMergeSources.all(m.id) as Array<{ id: string; summary: string; role: string }>;
-        m.merge_sources = sources;
+        out.merge_sources = sources;
       }
-      return m;
+      const shared = sharingMap.get(m.id);
+      const localShared = localShareMap.get(m.id);
+      out.sharingVisibility = shared?.visibility ?? null;
+      out.sharingGroupId = shared?.group_id ?? null;
+      out.localSharing = out.owner === "public";
+      out.localSharingManaged = !!localShared;
+      out.localOriginalOwner = localShared?.original_owner ?? null;
+      return out;
     });
 
     this.store.recordViewerEvent("list");
@@ -426,7 +586,21 @@ export class ViewerServer {
   }
 
   private serveToolMetrics(res: http.ServerResponse, url: URL): void {
-    const minutes = Math.min(1440, Math.max(10, Number(url.searchParams.get("minutes")) || 60));
+    const fromParam = url.searchParams.get("from");
+    const toParam = url.searchParams.get("to");
+    if (fromParam) {
+      const fromMs = new Date(fromParam).getTime();
+      const toMs = toParam ? new Date(toParam).getTime() : Date.now();
+      if (isNaN(fromMs) || isNaN(toMs)) {
+        this.jsonResponse(res, { error: "Invalid date" }, 400);
+        return;
+      }
+      const diffMin = Math.max(10, Math.min(43200, Math.round((toMs - fromMs) / 60000)));
+      const data = this.store.getToolMetrics(diffMin, fromMs, toMs);
+      this.jsonResponse(res, data);
+      return;
+    }
+    const minutes = Math.min(43200, Math.max(10, Number(url.searchParams.get("minutes")) || 60));
     const data = this.store.getToolMetrics(minutes);
     this.jsonResponse(res, data);
   }
@@ -434,13 +608,15 @@ export class ViewerServer {
   private serveTasks(res: http.ServerResponse, url: URL): void {
     this.store.recordViewerEvent("tasks_list");
     const status = url.searchParams.get("status") ?? undefined;
+    const owner = url.searchParams.get("owner") ?? undefined;
     const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit")) || 50));
     const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
-    const { tasks, total } = this.store.listTasks({ status, limit, offset });
+    const { tasks, total } = this.store.listTasks({ status, limit, offset, owner });
 
     const db = (this.store as any).db;
     const items = tasks.map((t) => {
-      const meta = db.prepare("SELECT skill_status FROM tasks WHERE id = ?").get(t.id) as { skill_status: string | null } | undefined;
+      const meta = db.prepare("SELECT skill_status, owner FROM tasks WHERE id = ?").get(t.id) as { skill_status: string | null; owner: string | null } | undefined;
+      const sharedTask = db.prepare("SELECT visibility FROM hub_tasks WHERE source_task_id = ? ORDER BY updated_at DESC LIMIT 1").get(t.id) as { visibility: string } | undefined;
       return {
         id: t.id,
         sessionKey: t.sessionKey,
@@ -451,6 +627,8 @@ export class ViewerServer {
         endedAt: t.endedAt,
         chunkCount: this.store.countChunksByTask(t.id),
         skillStatus: meta?.skill_status ?? null,
+        owner: meta?.owner ?? "agent:main",
+        sharingVisibility: sharedTask?.visibility ?? null,
       };
     });
 
@@ -485,6 +663,7 @@ export class ViewerServer {
     const db = (this.store as any).db;
     const meta = db.prepare("SELECT skill_status, skill_reason FROM tasks WHERE id = ?").get(taskId) as
       { skill_status: string | null; skill_reason: string | null } | undefined;
+    const sharedTask = db.prepare("SELECT visibility, group_id FROM hub_tasks WHERE source_task_id = ? ORDER BY updated_at DESC LIMIT 1").get(taskId) as { visibility: string | null; group_id: string | null } | undefined;
 
     this.jsonResponse(res, {
       id: task.id,
@@ -492,16 +671,20 @@ export class ViewerServer {
       title: task.title,
       summary: task.summary,
       status: task.status,
+      owner: task.owner ?? "agent:main",
       startedAt: task.startedAt,
       endedAt: task.endedAt,
       chunks: chunkItems,
       skillStatus: meta?.skill_status ?? null,
       skillReason: meta?.skill_reason ?? null,
       skillLinks,
+      sharingVisibility: sharedTask?.visibility ?? null,
+      sharingGroupId: sharedTask?.group_id ?? null,
+      hubTaskId: sharedTask ? true : false,
     });
   }
 
-  private serveStats(res: http.ServerResponse): void {
+  private serveStats(res: http.ServerResponse, url?: URL): void {
     const emptyStats = {
       totalMemories: 0, totalSessions: 0, totalEmbeddings: 0, totalSkills: 0,
       embeddingProvider: this.embedder?.provider ?? "none",
@@ -514,6 +697,8 @@ export class ViewerServer {
       this.jsonResponse(res, emptyStats);
       return;
     }
+
+    const ownerFilter = url?.searchParams.get("owner") ?? "";
 
     try {
       const db = (this.store as any).db;
@@ -530,9 +715,19 @@ export class ViewerServer {
       }
       let embCount = 0;
       try { embCount = (db.prepare("SELECT COUNT(*) as count FROM embeddings").get() as any).count; } catch { /* table may not exist */ }
-      const sessionList = db.prepare(
-        "SELECT session_key, COUNT(*) as count, MIN(created_at) as earliest, MAX(created_at) as latest FROM chunks GROUP BY session_key ORDER BY latest DESC",
-      ).all() as any[];
+      let sessionQuery: string;
+      let sessionParams: any[];
+      if (ownerFilter && ownerFilter.startsWith("agent:")) {
+        sessionQuery = "SELECT session_key, COUNT(*) as count, MIN(created_at) as earliest, MAX(created_at) as latest FROM chunks WHERE (owner = ? OR owner = 'public') GROUP BY session_key ORDER BY latest DESC";
+        sessionParams = [ownerFilter];
+      } else if (ownerFilter) {
+        sessionQuery = "SELECT session_key, COUNT(*) as count, MIN(created_at) as earliest, MAX(created_at) as latest FROM chunks WHERE owner = ? GROUP BY session_key ORDER BY latest DESC";
+        sessionParams = [ownerFilter];
+      } else {
+        sessionQuery = "SELECT session_key, COUNT(*) as count, MIN(created_at) as earliest, MAX(created_at) as latest FROM chunks GROUP BY session_key ORDER BY latest DESC";
+        sessionParams = [];
+      }
+      const sessionList = db.prepare(sessionQuery).all(...sessionParams) as any[];
 
       let skillCount = 0;
       try { skillCount = (db.prepare("SELECT COUNT(*) as count FROM skills").get() as any).count; } catch { /* table may not exist yet */ }
@@ -545,9 +740,15 @@ export class ViewerServer {
 
       let owners: string[] = [];
       try {
-        const ownerRows = db.prepare("SELECT DISTINCT owner FROM chunks WHERE owner IS NOT NULL ORDER BY owner").all() as any[];
+        const ownerRows = db.prepare("SELECT DISTINCT owner FROM chunks WHERE owner IS NOT NULL AND owner LIKE 'agent:%' ORDER BY owner").all() as any[];
         owners = ownerRows.map((o: any) => o.owner);
       } catch { /* column may not exist yet */ }
+
+      let currentAgentOwner = "agent:main";
+      try {
+        const latest = db.prepare("SELECT owner FROM chunks WHERE owner IS NOT NULL AND owner LIKE 'agent:%' ORDER BY created_at DESC LIMIT 1").get() as any;
+        if (latest?.owner) currentAgentOwner = latest.owner;
+      } catch { /* best-effort */ }
 
       this.jsonResponse(res, {
         totalMemories: total.count, totalSessions: sessions.count, totalEmbeddings: embCount,
@@ -557,6 +758,7 @@ export class ViewerServer {
         timeRange: { earliest: timeRange.earliest, latest: timeRange.latest },
         sessions: sessionList,
         owners,
+        currentAgentOwner,
       });
     } catch (e) {
       this.log.warn(`stats error: ${e}`);
@@ -668,7 +870,12 @@ export class ViewerServer {
     if (visibility) {
       skills = skills.filter(s => s.visibility === visibility);
     }
-    this.jsonResponse(res, { skills });
+    const db = (this.store as any).db;
+    const enriched = skills.map(s => {
+      const hub = db.prepare("SELECT visibility FROM hub_skills WHERE source_skill_id = ? ORDER BY updated_at DESC LIMIT 1").get(s.id) as { visibility: string } | undefined;
+      return { ...s, sharingVisibility: hub?.visibility ?? null };
+    });
+    this.jsonResponse(res, { skills: enriched });
   }
 
   private serveSkillDetail(res: http.ServerResponse, urlPath: string): void {
@@ -684,8 +891,11 @@ export class ViewerServer {
     const relatedTasks = this.store.getTasksBySkill(skillId);
     const files = fs.existsSync(skill.dirPath) ? this.walkDir(skill.dirPath, skill.dirPath) : [];
 
+    const db = (this.store as any).db;
+    const sharedSkill = db.prepare("SELECT visibility, group_id FROM hub_skills WHERE source_skill_id = ? ORDER BY updated_at DESC LIMIT 1").get(skillId) as { visibility: string | null; group_id: string | null } | undefined;
+
     this.jsonResponse(res, {
-      skill,
+      skill: { ...skill, sharingVisibility: sharedSkill?.visibility ?? null, sharingGroupId: sharedSkill?.group_id ?? null },
       versions: versions.map(v => ({
         id: v.id,
         version: v.version,
@@ -796,7 +1006,7 @@ export class ViewerServer {
   private handleSkillVisibility(req: http.IncomingMessage, res: http.ServerResponse, urlPath: string): void {
     const segments = urlPath.split("/");
     const skillId = segments[segments.length - 2];
-    this.readBody(req, (body) => {
+    this.readBody(req, async (body) => {
       try {
         const parsed = JSON.parse(body);
         const visibility = parsed.visibility;
@@ -812,7 +1022,46 @@ export class ViewerServer {
           return;
         }
         this.store.setSkillVisibility(skillId, visibility);
-        this.jsonResponse(res, { ok: true, skillId, visibility });
+
+        let hubSynced = false;
+        const sharing = this.ctx?.config?.sharing;
+        if (sharing?.enabled && this.ctx) {
+          try {
+            const hubClient = await this.resolveHubClientAware();
+            if (visibility === "public") {
+              const bundle = buildSkillBundleForHub(this.store, skillId);
+              const response = await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/skills/publish", {
+                method: "POST",
+                body: JSON.stringify({ visibility: "public", groupId: null, metadata: bundle.metadata, bundle: bundle.bundle }),
+              }) as any;
+              if (hubClient.userId) {
+                const existing = this.store.getHubSkillBySource(hubClient.userId, skillId);
+                this.store.upsertHubSkill({
+                  id: response?.skillId ?? existing?.id ?? crypto.randomUUID(),
+                  sourceSkillId: skillId, sourceUserId: hubClient.userId,
+                  name: skill.name, description: skill.description, version: skill.version,
+                  groupId: null, visibility: "public",
+                  bundle: JSON.stringify(bundle.bundle), qualityScore: skill.qualityScore,
+                  createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
+                });
+              }
+              hubSynced = true;
+              this.log.info(`Skill "${skill.name}" published to Hub`);
+            } else {
+              await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/skills/unpublish", {
+                method: "POST",
+                body: JSON.stringify({ sourceSkillId: skillId }),
+              });
+              if (hubClient.userId) this.store.deleteHubSkillBySource(hubClient.userId, skillId);
+              hubSynced = true;
+              this.log.info(`Skill "${skill.name}" unpublished from Hub`);
+            }
+          } catch (hubErr) {
+            this.log.warn(`Hub sync failed for skill visibility change: ${hubErr}`);
+          }
+        }
+
+        this.jsonResponse(res, { ok: true, skillId, visibility, hubSynced });
       } catch (err) {
         const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
         this.log.error(`handleSkillVisibility error: skillId=${skillId}, body=${body}, err=${errMsg}`);
@@ -877,11 +1126,21 @@ export class ViewerServer {
     });
   }
 
-  private handleSkillDelete(res: http.ServerResponse, urlPath: string): void {
+  private async handleSkillDelete(res: http.ServerResponse, urlPath: string): Promise<void> {
     const skillId = urlPath.replace("/api/skill/", "");
     const skill = this.store.getSkill(skillId);
     if (!skill) { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Skill not found" })); return; }
-    // Remove skill directory from disk
+    try {
+      const hub = this.resolveHubConnection();
+      if (hub) {
+        await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/skills/unpublish", {
+          method: "POST",
+          body: JSON.stringify({ sourceSkillId: skillId }),
+        }).catch(() => {});
+      }
+      const db = (this.store as any).db;
+      db.prepare("DELETE FROM hub_skills WHERE source_skill_id = ?").run(skillId);
+    } catch (_) {}
     try {
       if (skill.dirPath && fs.existsSync(skill.dirPath)) {
         fs.rmSync(skill.dirPath, { recursive: true, force: true });
@@ -928,7 +1187,15 @@ export class ViewerServer {
     const cleaned = chunk.role === "user" && chunk.content
       ? { ...chunk, content: stripInboundMetadata(chunk.content) }
       : chunk;
-    this.jsonResponse(res, { memory: cleaned });
+    const localShared = this.store.getLocalSharedMemory(chunkId);
+    this.jsonResponse(res, {
+      memory: {
+        ...cleaned,
+        localSharing: cleaned.owner === "public",
+        localSharingManaged: !!localShared,
+        localOriginalOwner: localShared?.originalOwner ?? null,
+      },
+    });
   }
 
   private handleUpdate(req: http.IncomingMessage, res: http.ServerResponse, urlPath: string): void {
@@ -955,6 +1222,365 @@ export class ViewerServer {
     const chunkId = urlPath.replace("/api/memory/", "");
     if (this.store.deleteChunk(chunkId)) this.jsonResponse(res, { ok: true });
     else { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Not found" })); }
+  }
+
+  private handleMemoryLocalShare(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, (body) => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const chunkId = String(parsed.chunkId || "");
+        if (!chunkId) return this.jsonResponse(res, { ok: false, error: "missing_chunk_id" }, 400);
+        const result = this.store.markMemorySharedLocally(chunkId);
+        if (!result.ok) {
+          return this.jsonResponse(res, { ok: false, error: result.reason ?? "share_failed" }, result.reason === "not_found" ? 404 : 400);
+        }
+        this.jsonResponse(res, {
+          ok: true,
+          chunkId,
+          owner: result.owner,
+          localSharing: true,
+          localSharingManaged: true,
+          localOriginalOwner: result.originalOwner ?? null,
+        });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) }, 400);
+      }
+    });
+  }
+
+  private handleMemoryLocalUnshare(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, (body) => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const chunkId = String(parsed.chunkId || "");
+        const privateOwner = typeof parsed.privateOwner === "string" ? parsed.privateOwner : undefined;
+        if (!chunkId) return this.jsonResponse(res, { ok: false, error: "missing_chunk_id" }, 400);
+        const result = this.store.unmarkMemorySharedLocally(chunkId, privateOwner);
+        if (!result.ok) {
+          return this.jsonResponse(res, { ok: false, error: result.reason ?? "unshare_failed" }, result.reason === "not_found" ? 404 : 400);
+        }
+        this.jsonResponse(res, {
+          ok: true,
+          chunkId,
+          owner: result.owner,
+          localSharing: false,
+          localOriginalOwner: result.originalOwner ?? null,
+        });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) }, 400);
+      }
+    });
+  }
+
+  // ─── Unified scope API ───
+
+  private handleMemoryScope(req: http.IncomingMessage, res: http.ServerResponse, urlPath: string): void {
+    const chunkId = urlPath.split("/")[3];
+    this.readBody(req, async (body) => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const scope = parsed.scope as string;
+        if (!["private", "local", "team"].includes(scope)) {
+          return this.jsonResponse(res, { ok: false, error: "scope must be 'private', 'local', or 'team'" }, 400);
+        }
+        const db = (this.store as any).db;
+        const chunk = db.prepare("SELECT * FROM chunks WHERE id = ?").get(chunkId) as any;
+        if (!chunk) return this.jsonResponse(res, { ok: false, error: "not_found" }, 404);
+
+        if (chunk.dedup_status && chunk.dedup_status !== "active") {
+          return this.jsonResponse(res, { ok: false, error: "inactive_memory", message: "Merged/duplicate memories cannot be shared" }, 400);
+        }
+
+        const isLocalShared = chunk.owner === "public";
+        const hubMemory = this.getHubMemoryForChunk(chunkId);
+        const isTeamShared = !!hubMemory;
+        const currentScope = isTeamShared ? "team" : isLocalShared ? "local" : "private";
+
+        if (scope === currentScope) {
+          return this.jsonResponse(res, { ok: true, scope, changed: false });
+        }
+
+        let hubSynced = false;
+
+        if (scope === "team") {
+          if (!isTeamShared) {
+            const hubClient = await this.resolveHubClientAware();
+            const refreshedChunk = db.prepare("SELECT * FROM chunks WHERE id = ?").get(chunkId) as any;
+            const response = await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/memories/share", {
+              method: "POST",
+              body: JSON.stringify({ memory: { sourceChunkId: refreshedChunk.id, role: refreshedChunk.role, content: refreshedChunk.content, summary: refreshedChunk.summary, kind: refreshedChunk.kind, groupId: null, visibility: "public" } }),
+            });
+            if (!isLocalShared) this.store.markMemorySharedLocally(chunkId);
+            const memoryId = String((response as any)?.memoryId ?? "");
+            const isHubRole = this.ctx?.config?.sharing?.role === "hub";
+            if (hubClient.userId && isHubRole) {
+              const existing = this.store.getHubMemoryBySource(hubClient.userId, chunkId);
+              this.store.upsertHubMemory({
+                id: memoryId || existing?.id || crypto.randomUUID(),
+                sourceChunkId: chunkId, sourceUserId: hubClient.userId,
+                role: refreshedChunk.role, content: refreshedChunk.content, summary: refreshedChunk.summary ?? "",
+                kind: refreshedChunk.kind, groupId: null, visibility: "public",
+                createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
+              });
+            } else if (hubClient.userId) {
+              this.store.upsertTeamSharedChunk(chunkId, { hubMemoryId: memoryId, visibility: "public", groupId: null });
+            }
+            hubSynced = true;
+          } else {
+            if (!isLocalShared) this.store.markMemorySharedLocally(chunkId);
+          }
+        } else if (scope === "local") {
+          if (isTeamShared) {
+            try {
+              const hubClient = await this.resolveHubClientAware();
+              await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/memories/unshare", {
+                method: "POST", body: JSON.stringify({ sourceChunkId: chunkId }),
+              });
+              if (hubClient.userId) this.store.deleteHubMemoryBySource(hubClient.userId, chunkId);
+              this.store.deleteTeamSharedChunk(chunkId);
+              hubSynced = true;
+            } catch (err) { this.log.warn(`Failed to unshare memory from team: ${err}`); }
+          }
+          if (!isLocalShared) this.store.markMemorySharedLocally(chunkId);
+        } else {
+          if (isTeamShared) {
+            try {
+              const hubClient = await this.resolveHubClientAware();
+              await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/memories/unshare", {
+                method: "POST", body: JSON.stringify({ sourceChunkId: chunkId }),
+              });
+              if (hubClient.userId) this.store.deleteHubMemoryBySource(hubClient.userId, chunkId);
+              this.store.deleteTeamSharedChunk(chunkId);
+              hubSynced = true;
+            } catch (err) { this.log.warn(`Failed to unshare memory from team: ${err}`); }
+          }
+          if (isLocalShared) this.store.unmarkMemorySharedLocally(chunkId);
+        }
+
+        this.jsonResponse(res, { ok: true, scope, changed: true, hubSynced });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) }, 500);
+      }
+    });
+  }
+
+  private handleTaskScope(req: http.IncomingMessage, res: http.ServerResponse, urlPath: string): void {
+    const taskId = urlPath.split("/")[3];
+    this.readBody(req, async (body) => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const scope = parsed.scope as string;
+        if (!["private", "local", "team"].includes(scope)) {
+          return this.jsonResponse(res, { ok: false, error: "scope must be 'private', 'local', or 'team'" }, 400);
+        }
+        const task = this.store.getTask(taskId);
+        if (!task) return this.jsonResponse(res, { ok: false, error: "task_not_found" }, 404);
+
+        if (scope !== "private" && task.status !== "completed") {
+          return this.jsonResponse(res, { ok: false, error: "only_completed_tasks_can_be_shared" }, 400);
+        }
+
+        const isLocalShared = task.owner === "public";
+        const hubTask = this.getHubTaskForLocal(taskId);
+        const isTeamShared = !!hubTask;
+        const currentScope = isTeamShared ? "team" : isLocalShared ? "local" : "private";
+
+        if (scope === currentScope) {
+          return this.jsonResponse(res, { ok: true, scope, changed: false });
+        }
+
+        let hubSynced = false;
+
+        if (scope === "team") {
+          if (!isTeamShared) {
+            const chunks = this.store.getChunksByTask(taskId);
+            const hubClient = await this.resolveHubClientAware();
+            const refreshedTask = this.store.getTask(taskId)!;
+            const response = await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/tasks/share", {
+              method: "POST",
+              body: JSON.stringify({
+                task: { id: refreshedTask.id, sourceTaskId: refreshedTask.id, title: refreshedTask.title, summary: refreshedTask.summary, groupId: null, visibility: "public", createdAt: refreshedTask.startedAt ?? Date.now(), updatedAt: refreshedTask.updatedAt ?? Date.now() },
+                chunks: chunks.map((c) => ({ id: c.id, hubTaskId: refreshedTask.id, sourceTaskId: refreshedTask.id, sourceChunkId: c.id, role: c.role, content: c.content, summary: c.summary, kind: c.kind, groupId: null, visibility: "public", createdAt: c.createdAt ?? Date.now() })),
+              }),
+            });
+            if (hubClient.userId) {
+              const existing = this.store.getHubTaskBySource(hubClient.userId, taskId);
+              this.store.upsertHubTask({
+                id: (response as any)?.taskId ?? existing?.id ?? crypto.randomUUID(),
+                sourceTaskId: taskId, sourceUserId: hubClient.userId, title: refreshedTask.title ?? "",
+                summary: refreshedTask.summary ?? "", groupId: null, visibility: "public",
+                createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
+              });
+            }
+            hubSynced = true;
+          }
+          if (!isLocalShared) {
+            const originalOwner = task.owner;
+            const db = (this.store as any).db;
+            db.prepare("INSERT INTO local_shared_tasks (task_id, hub_task_id, original_owner, shared_at) VALUES (?, ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET original_owner = excluded.original_owner, shared_at = excluded.shared_at").run(taskId, "", originalOwner, Date.now());
+            db.prepare("UPDATE tasks SET owner = 'public' WHERE id = ?").run(taskId);
+          }
+        }
+
+        if (scope === "local") {
+          if (!isLocalShared) {
+            const originalOwner = task.owner;
+            const db = (this.store as any).db;
+            db.prepare("INSERT INTO local_shared_tasks (task_id, hub_task_id, original_owner, shared_at) VALUES (?, ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET original_owner = excluded.original_owner, shared_at = excluded.shared_at").run(taskId, "", originalOwner, Date.now());
+            db.prepare("UPDATE tasks SET owner = 'public' WHERE id = ?").run(taskId);
+          }
+        }
+
+        if (scope === "local" && isTeamShared) {
+          try {
+            const hubClient = await this.resolveHubClientAware();
+            await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/tasks/unshare", {
+              method: "POST", body: JSON.stringify({ sourceTaskId: taskId }),
+            });
+            if (hubClient.userId) this.store.deleteHubTaskBySource(hubClient.userId, taskId);
+            hubSynced = true;
+          } catch (err) { this.log.warn(`Failed to unshare task from team: ${err}`); }
+        }
+
+        if (scope === "private") {
+          if (isTeamShared) {
+            try {
+              const hubClient = await this.resolveHubClientAware();
+              await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/tasks/unshare", {
+                method: "POST", body: JSON.stringify({ sourceTaskId: taskId }),
+              });
+              if (hubClient.userId) this.store.deleteHubTaskBySource(hubClient.userId, taskId);
+              hubSynced = true;
+            } catch (err) { this.log.warn(`Failed to unshare task from team: ${err}`); }
+          }
+          if (isLocalShared) {
+            const db = (this.store as any).db;
+            const shared = db.prepare("SELECT original_owner FROM local_shared_tasks WHERE task_id = ?").get(taskId) as any;
+            const restoreOwner = shared?.original_owner ?? task.owner;
+            if (restoreOwner && restoreOwner !== "public") {
+              db.prepare("UPDATE tasks SET owner = ? WHERE id = ?").run(restoreOwner, taskId);
+            }
+            db.prepare("DELETE FROM local_shared_tasks WHERE task_id = ?").run(taskId);
+          }
+        }
+
+        this.jsonResponse(res, { ok: true, scope, changed: true, hubSynced });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) }, 500);
+      }
+    });
+  }
+
+  private handleSkillScope(req: http.IncomingMessage, res: http.ServerResponse, urlPath: string): void {
+    const skillId = urlPath.split("/")[3];
+    this.readBody(req, async (body) => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const scope = parsed.scope as string;
+        if (!["private", "local", "team"].includes(scope)) {
+          return this.jsonResponse(res, { ok: false, error: "scope must be 'private', 'local', or 'team'" }, 400);
+        }
+        const skill = this.store.getSkill(skillId);
+        if (!skill) return this.jsonResponse(res, { ok: false, error: "skill_not_found" }, 404);
+
+        if (scope !== "private" && skill.status !== "active") {
+          return this.jsonResponse(res, { ok: false, error: "only_active_skills_can_be_shared" }, 400);
+        }
+
+        const isLocalShared = skill.visibility === "public";
+        const hubSkill = this.getHubSkillForLocal(skillId);
+        const isTeamShared = !!hubSkill;
+        const currentScope = isTeamShared ? "team" : isLocalShared ? "local" : "private";
+
+        if (scope === currentScope) {
+          return this.jsonResponse(res, { ok: true, scope, changed: false });
+        }
+
+        let hubSynced = false;
+
+        if (scope === "team") {
+          if (!isTeamShared) {
+            const bundle = buildSkillBundleForHub(this.store, skillId);
+            const hubClient = await this.resolveHubClientAware();
+            const response = await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/skills/publish", {
+              method: "POST",
+              body: JSON.stringify({ visibility: "public", groupId: null, metadata: bundle.metadata, bundle: bundle.bundle }),
+            });
+            if (hubClient.userId) {
+              const existing = this.store.getHubSkillBySource(hubClient.userId, skillId);
+              this.store.upsertHubSkill({
+                id: (response as any)?.skillId ?? existing?.id ?? crypto.randomUUID(),
+                sourceSkillId: skillId, sourceUserId: hubClient.userId,
+                name: skill.name, description: skill.description, version: skill.version,
+                groupId: null, visibility: "public",
+                bundle: JSON.stringify(bundle.bundle), qualityScore: skill.qualityScore,
+                createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
+              });
+            }
+            hubSynced = true;
+          }
+          if (!isLocalShared) this.store.setSkillVisibility(skillId, "public");
+        }
+
+        if (scope === "local") {
+          if (!isLocalShared) this.store.setSkillVisibility(skillId, "public");
+        }
+
+        if (scope === "local" && isTeamShared) {
+          try {
+            const hubClient = await this.resolveHubClientAware();
+            await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/skills/unpublish", {
+              method: "POST", body: JSON.stringify({ sourceSkillId: skillId }),
+            });
+            if (hubClient.userId) this.store.deleteHubSkillBySource(hubClient.userId, skillId);
+            hubSynced = true;
+          } catch (err) { this.log.warn(`Failed to unpublish skill from team: ${err}`); }
+        }
+
+        if (scope === "private") {
+          if (isTeamShared) {
+            try {
+              const hubClient = await this.resolveHubClientAware();
+              await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/skills/unpublish", {
+                method: "POST", body: JSON.stringify({ sourceSkillId: skillId }),
+              });
+              if (hubClient.userId) this.store.deleteHubSkillBySource(hubClient.userId, skillId);
+              hubSynced = true;
+            } catch (err) { this.log.warn(`Failed to unpublish skill from team: ${err}`); }
+          }
+          if (isLocalShared) this.store.setSkillVisibility(skillId, "private");
+        }
+
+        this.jsonResponse(res, { ok: true, scope, changed: true, hubSynced });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) }, 500);
+      }
+    });
+  }
+
+  private getHubMemoryForChunk(chunkId: string): any {
+    const db = (this.store as any).db;
+    const hub = db.prepare("SELECT * FROM hub_memories WHERE source_chunk_id = ? LIMIT 1").get(chunkId);
+    if (hub) return hub;
+    const ts = this.store.getTeamSharedChunk(chunkId);
+    if (ts) {
+      return {
+        source_chunk_id: chunkId,
+        visibility: ts.visibility,
+        group_id: ts.groupId,
+      };
+    }
+    return undefined;
+  }
+
+  private getHubTaskForLocal(taskId: string): any {
+    const db = (this.store as any).db;
+    return db.prepare("SELECT * FROM hub_tasks WHERE source_task_id = ? LIMIT 1").get(taskId);
+  }
+
+  private getHubSkillForLocal(skillId: string): any {
+    const db = (this.store as any).db;
+    return db.prepare("SELECT * FROM hub_skills WHERE source_skill_id = ? LIMIT 1").get(skillId);
   }
 
   private handleDeleteSession(res: http.ServerResponse, url: URL): void {
@@ -991,9 +1617,1048 @@ export class ViewerServer {
   // ─── Config API ───
 
   private getOpenClawConfigPath(): string {
+    if (process.env.OPENCLAW_CONFIG_PATH) return process.env.OPENCLAW_CONFIG_PATH;
     const home = process.env.HOME || process.env.USERPROFILE || "";
     const ocHome = process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw");
     return path.join(ocHome, "openclaw.json");
+  }
+
+  private getPluginEntryConfig(raw: any): Record<string, unknown> {
+    const entries = raw?.plugins?.entries ?? {};
+    return entries["memos-local-openclaw-plugin"]?.config
+      ?? entries["memos-lite-openclaw-plugin"]?.config
+      ?? entries["memos-lite"]?.config
+      ?? {};
+  }
+
+  private getResolvedViewerConfig(raw?: any): MemosLocalConfig {
+    const pluginCfg = this.getPluginEntryConfig(raw);
+    const stateDir = this.ctx?.stateDir ?? this.getOpenClawHome();
+    return resolveConfig(pluginCfg as Partial<MemosLocalConfig>, stateDir);
+  }
+
+  private hasUsableEmbeddingProvider(cfg: MemosLocalConfig): boolean {
+    const embedding = cfg.embedding;
+    if (!embedding?.provider) return false;
+    if (embedding.provider === "openclaw") {
+      return !!(this.ctx?.openclawAPI) && embedding.capabilities?.hostEmbedding === true;
+    }
+    return true;
+  }
+
+  private hasUsableSummarizerProvider(cfg: MemosLocalConfig): boolean {
+    const summarizer = cfg.summarizer;
+    if (!summarizer?.provider) return false;
+    if (summarizer.provider === "openclaw") {
+      return !!(this.ctx?.openclawAPI) && summarizer.capabilities?.hostCompletion === true;
+    }
+    return true;
+  }
+
+  private async serveSharingStatus(res: http.ServerResponse): Promise<void> {
+    const sharing = this.ctx?.config?.sharing;
+    const persisted = this.store.getClientHubConnection();
+    const resolvedHubUrl = sharing?.client?.hubAddress ? normalizeHubUrl(sharing.client.hubAddress) : persisted?.hubUrl ?? null;
+    const hasClientConfig = Boolean(
+      (sharing?.client?.hubAddress && sharing?.client?.userToken) ||
+      (persisted?.hubUrl && persisted?.userToken),
+    );
+    const base = {
+      enabled: Boolean(sharing?.enabled),
+      role: sharing?.role ?? null,
+      clientConfigured: hasClientConfig,
+      hubUrl: resolvedHubUrl,
+      connection: { connected: false, user: null as any, hubUrl: undefined as string | undefined, teamName: null as string | null, apiVersion: null as string | null },
+      admin: { canManageUsers: false, rejectSupported: false },
+    };
+
+    if (!this.ctx || !sharing?.enabled) {
+      this.jsonResponse(res, base);
+      return;
+    }
+
+    // Hub 模式下，本机就是管理者，直接赋予 admin 权限
+    if (sharing.role === "hub") {
+      base.admin.canManageUsers = true;
+      base.admin.rejectSupported = true;
+      base.connection.connected = true;
+      base.connection.hubUrl = resolvedHubUrl ?? undefined;
+
+      let adminUser: any = { username: "hub-admin", role: "admin" };
+      try {
+        const hub = this.resolveHubConnection();
+        if (hub) {
+          const me = await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/me", { method: "GET" }) as any;
+          if (me) {
+            adminUser = {
+              id: me.id,
+              username: me.username ?? "hub-admin",
+              role: me.role ?? "admin",
+            };
+          }
+        }
+      } catch { /* fallback to default */ }
+      base.connection.user = adminUser;
+
+      // Fetch team info from own hub
+      try {
+        const selfUrl = resolvedHubUrl || `http://localhost:${sharing.hub?.port ?? 21816}`;
+        const info = await fetch(`${selfUrl}/api/v1/hub/info`).then(r => r.ok ? r.json() : null).catch(() => null) as any;
+        base.connection.teamName = info?.teamName ?? sharing.hub?.teamName ?? null;
+        base.connection.apiVersion = info?.apiVersion ?? null;
+      } catch { /* ignore */ }
+
+      const hubStats: any = { totalMembers: 0, onlineMembers: 0, pendingMembers: 0 };
+      try {
+        const activeUsers = this.store.listHubUsers("active");
+        const pendingUsers = this.store.listHubUsers("pending");
+        const now = Date.now();
+        const OFFLINE_THRESHOLD = 120_000;
+        hubStats.totalMembers = activeUsers.length;
+        hubStats.onlineMembers = activeUsers.filter(u =>
+          u.lastActiveAt && (now - u.lastActiveAt < OFFLINE_THRESHOLD),
+        ).length;
+        hubStats.pendingMembers = pendingUsers.length;
+      } catch { /* best-effort */ }
+      this.jsonResponse(res, { ...base, hubStats });
+      return;
+    }
+
+    const hasPendingConnection = Boolean(persisted?.hubUrl && persisted?.userId && !persisted?.userToken);
+    if (!hasClientConfig && !hasPendingConnection) {
+      this.jsonResponse(res, base);
+      return;
+    }
+
+    try {
+      const status = await getHubStatus(this.store, this.ctx.config);
+      const output = { ...base, connection: { ...base.connection, ...status } } as any;
+      if (status.user?.status === "pending") {
+        output.connection.pendingApproval = true;
+      }
+      if (status.user?.status === "rejected") {
+        output.connection.rejected = true;
+      }
+      if (status.user?.status === "removed") {
+        output.connection.removed = true;
+      }
+      if (status.connected && status.hubUrl) {
+        try {
+          const info = await fetch(`${status.hubUrl}/api/v1/hub/info`).then((r) => (r.ok ? r.json() : null)).catch(() => null) as any;
+          output.connection.teamName = info?.teamName ?? null;
+          output.connection.apiVersion = info?.apiVersion ?? null;
+        } catch {}
+      } else if (status.hubUrl) {
+        try {
+          const info = await fetch(`${status.hubUrl}/api/v1/hub/info`).then((r) => (r.ok ? r.json() : null)).catch(() => null) as any;
+          output.connection.teamName = info?.teamName ?? null;
+        } catch {}
+      }
+      output.admin.canManageUsers = status.connected && status.user?.role === "admin";
+      output.admin.rejectSupported = output.admin.canManageUsers;
+      this.jsonResponse(res, output);
+    } catch (err) {
+      this.jsonResponse(res, { ...base, error: String(err) });
+    }
+  }
+
+  private async serveSharingPendingUsers(res: http.ServerResponse): Promise<void> {
+    if (!this.ctx) return this.jsonResponse(res, { users: [], error: "sharing_unavailable" });
+    try {
+      const hub = this.resolveHubConnection();
+      if (!hub) return this.jsonResponse(res, { users: [], error: "not_configured" });
+      const data = await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/admin/pending-users", { method: "GET" }) as any;
+      this.jsonResponse(res, { users: Array.isArray(data?.users) ? data.users : [] });
+    } catch (err) {
+      this.jsonResponse(res, { users: [], error: String(err) });
+    }
+  }
+
+  private handleSharingApproveUser(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const hub = this.resolveHubConnection();
+        if (!hub) return this.jsonResponse(res, { ok: false, error: "not_configured" });
+        const result = await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/admin/approve-user", {
+          method: "POST",
+          body: JSON.stringify({ userId: parsed.userId, username: parsed.username }),
+        });
+        this.jsonResponse(res, { ok: true, result });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private handleSharingRejectUser(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const hub = this.resolveHubConnection();
+        if (!hub) return this.jsonResponse(res, { ok: false, error: "not_configured" });
+        const result = await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/admin/reject-user", {
+          method: "POST",
+          body: JSON.stringify({ userId: parsed.userId }),
+        });
+        this.jsonResponse(res, { ok: true, result });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private handleSharingChangeRole(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const hub = this.resolveHubConnection();
+        if (!hub) return this.jsonResponse(res, { ok: false, error: "not_configured" });
+        const result = await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/admin/change-role", {
+          method: "POST",
+          body: JSON.stringify({ userId: parsed.userId, role: parsed.role }),
+        });
+        this.jsonResponse(res, { ok: true, result });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private handleSharingRemoveUser(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const hub = this.resolveHubConnection();
+        if (!hub) return this.jsonResponse(res, { ok: false, error: "not_configured" });
+        const result = await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/admin/remove-user", {
+          method: "POST",
+          body: JSON.stringify({ userId: parsed.userId, cleanResources: parsed.cleanResources === true }),
+        });
+        this.jsonResponse(res, { ok: true, result });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private handleAdminRenameUser(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const hub = this.resolveHubConnection();
+        if (!hub) return this.jsonResponse(res, { ok: false, error: "not_configured" });
+        const result = await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/admin/rename-user", {
+          method: "POST",
+          body: JSON.stringify({ userId: parsed.userId, username: parsed.username }),
+        });
+        this.jsonResponse(res, { ok: true, result });
+      } catch (err) {
+        const errStr = String(err);
+        if (errStr.includes("username_taken")) {
+          this.jsonResponse(res, { ok: false, error: "username_taken" });
+        } else if (errStr.includes("invalid_params")) {
+          this.jsonResponse(res, { ok: false, error: "invalid_params" });
+        } else {
+          this.jsonResponse(res, { ok: false, error: errStr });
+        }
+      }
+    });
+  }
+
+  private handleRetryJoin(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (_body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      const sharing = this.ctx.config.sharing;
+      if (!sharing?.enabled || sharing.role !== "client") {
+        return this.jsonResponse(res, { ok: false, error: "not_in_client_mode" });
+      }
+      const hubAddress = sharing.client?.hubAddress ?? "";
+      const teamToken = sharing.client?.teamToken ?? "";
+      if (!hubAddress || !teamToken) {
+        return this.jsonResponse(res, { ok: false, error: "missing_hub_address_or_team_token" });
+      }
+      try {
+        const hubUrl = normalizeHubUrl(hubAddress);
+        const os = await import("os");
+        const nickname = sharing.client?.nickname;
+        const username = nickname || os.userInfo().username || "user";
+        const hostname = os.hostname() || "unknown";
+        const persisted = this.store.getClientHubConnection();
+        const existingIdentityKey = persisted?.identityKey || "";
+        const result = await hubRequestJson(hubUrl, "", "/api/v1/hub/join", {
+          method: "POST",
+          body: JSON.stringify({ teamToken, username, deviceName: hostname, reapply: true, identityKey: existingIdentityKey }),
+        }) as any;
+        const returnedIdentityKey = String(result.identityKey || existingIdentityKey || "");
+        this.store.setClientHubConnection({
+          hubUrl,
+          userId: String(result.userId || ""),
+          username,
+          userToken: result.userToken || "",
+          role: "member",
+          connectedAt: Date.now(),
+          identityKey: returnedIdentityKey,
+          lastKnownStatus: result.status || "",
+        });
+        this.jsonResponse(res, { ok: true, status: result.status || "pending" });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private async serveSharingMemoryList(res: http.ServerResponse, url: URL): Promise<void> {
+    if (!this.ctx) return this.jsonResponse(res, { memories: [], error: "sharing_unavailable" });
+    try {
+      const limit = Number(url.searchParams.get("limit") || 40);
+      const hub = this.resolveHubConnection();
+      let data: any;
+      if (hub) {
+        data = await hubRequestJson(hub.hubUrl, hub.userToken, `/api/v1/hub/memories?limit=${limit}`);
+      } else {
+        data = await hubListMemories(this.store, this.ctx, { limit });
+      }
+      this.jsonResponse(res, { memories: Array.isArray(data?.memories) ? data.memories : [] });
+    } catch (err) {
+      this.jsonResponse(res, { memories: [], error: String(err) });
+    }
+  }
+
+  private async serveSharingTaskList(res: http.ServerResponse, url: URL): Promise<void> {
+    if (!this.ctx) return this.jsonResponse(res, { tasks: [], error: "sharing_unavailable" });
+    try {
+      const limit = Number(url.searchParams.get("limit") || 40);
+      const hub = this.resolveHubConnection();
+      let data: any;
+      if (hub) {
+        data = await hubRequestJson(hub.hubUrl, hub.userToken, `/api/v1/hub/tasks?limit=${limit}`);
+      } else {
+        data = await hubListTasks(this.store, this.ctx, { limit });
+      }
+      this.jsonResponse(res, { tasks: Array.isArray(data?.tasks) ? data.tasks : [] });
+    } catch (err) {
+      this.jsonResponse(res, { tasks: [], error: String(err) });
+    }
+  }
+
+  private async serveSharingSkillList(res: http.ServerResponse, url: URL): Promise<void> {
+    if (!this.ctx) return this.jsonResponse(res, { skills: [], error: "sharing_unavailable" });
+    try {
+      const limit = Number(url.searchParams.get("limit") || 40);
+      const hub = this.resolveHubConnection();
+      let data: any;
+      if (hub) {
+        data = await hubRequestJson(hub.hubUrl, hub.userToken, `/api/v1/hub/skills/list?limit=${limit}`);
+      } else {
+        data = await hubListSkills(this.store, this.ctx, { limit });
+      }
+      this.jsonResponse(res, { skills: Array.isArray(data?.skills) ? data.skills : [] });
+    } catch (err) {
+      this.jsonResponse(res, { skills: [], error: String(err) });
+    }
+  }
+
+  private handleSharingMemorySearch(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { local: { hits: [], meta: {} }, hub: { hits: [], meta: { totalCandidates: 0, searchedGroups: [], includedPublic: false } }, error: "sharing_unavailable" });
+      const emptyHub = { hits: [], meta: { totalCandidates: 0, searchedGroups: [], includedPublic: false } };
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const query = String(parsed.query || "");
+        const role = typeof parsed.role === "string" ? parsed.role : undefined;
+        const maxResults = typeof parsed.maxResults === "number" ? parsed.maxResults : 10;
+        const scope = parsed.scope === "group" || parsed.scope === "all" || parsed.scope === "hub" ? (parsed.scope === "hub" ? "all" : parsed.scope) : "local";
+        const local = this.searchLocalViewerMemories(query, { role, maxResults });
+        if (scope === "local") {
+          return this.jsonResponse(res, { local: { hits: local.hits, meta: local.meta }, hub: emptyHub });
+        }
+        try {
+          const conn = this.resolveHubConnection();
+          let hub: any;
+          if (conn) {
+            hub = await hubRequestJson(conn.hubUrl, conn.userToken, "/api/v1/hub/search", {
+              method: "POST", body: JSON.stringify({ query, maxResults, scope }),
+            });
+          } else {
+            hub = await hubSearchMemories(this.store, this.ctx!, { query, maxResults, scope });
+          }
+          this.jsonResponse(res, { local: { hits: local.hits, meta: local.meta }, hub });
+        } catch (err) {
+          this.jsonResponse(res, { local: { hits: local.hits, meta: local.meta }, hub: emptyHub, error: String(err) });
+        }
+      } catch (err) {
+        this.jsonResponse(res, { local: { hits: [], meta: {} }, hub: emptyHub, error: String(err) });
+      }
+    });
+  }
+
+  private handleSharingMemoryDetail(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const detail = await hubGetMemoryDetail(this.store, this.ctx, { remoteHitId: String(parsed.remoteHitId || "") });
+        this.jsonResponse(res, detail);
+      } catch (err) {
+        this.jsonResponse(res, { error: String(err) });
+      }
+    });
+  }
+
+  private async serveSharingSkillSearch(res: http.ServerResponse, url: URL): Promise<void> {
+    if (!this.ctx) return this.jsonResponse(res, { local: { hits: [] }, hub: { hits: [] }, error: "sharing_unavailable" });
+    try {
+      const query = String(url.searchParams.get("query") || "");
+      const scope = url.searchParams.get("scope") === "group" || url.searchParams.get("scope") === "all" ? url.searchParams.get("scope")! : "local";
+      const recall = new RecallEngine(this.store, this.embedder, this.ctx);
+      const localHits = await recall.searchSkills(query, "mix" as any, "agent:main");
+      if (scope === "local") {
+        return this.jsonResponse(res, { local: { hits: localHits }, hub: { hits: [] } });
+      }
+      try {
+        const hub = await hubSearchSkills(this.store, this.ctx, { query, maxResults: Number(url.searchParams.get("maxResults") || 20) });
+        this.jsonResponse(res, { local: { hits: localHits }, hub });
+      } catch (err) {
+        this.jsonResponse(res, { local: { hits: localHits }, hub: { hits: [] }, error: String(err) });
+      }
+    } catch (err) {
+      this.jsonResponse(res, { local: { hits: [] }, hub: { hits: [] }, error: String(err) });
+    }
+  }
+
+  private searchLocalViewerMemories(query: string, options?: { role?: string; maxResults?: number }): { hits: any[]; meta: Record<string, unknown> } {
+    const db = (this.store as any).db;
+    const role = options?.role;
+    const maxResults = options?.maxResults ?? 10;
+    const params: any[] = [];
+    let rows: any[] = [];
+    try {
+      let sql = "SELECT c.* FROM chunks_fts f JOIN chunks c ON f.rowid = c.rowid WHERE chunks_fts MATCH ?";
+      params.push(query);
+      if (role) {
+        sql += " AND c.role = ?";
+        params.push(role);
+      }
+      sql += " ORDER BY rank LIMIT ?";
+      params.push(maxResults);
+      rows = db.prepare(sql).all(...params);
+    } catch {
+      const likeParams: any[] = [`%${query}%`, `%${query}%`];
+      let sql = "SELECT * FROM chunks WHERE (content LIKE ? OR summary LIKE ?)";
+      if (role) {
+        sql += " AND role = ?";
+        likeParams.push(role);
+      }
+      sql += " ORDER BY created_at DESC LIMIT ?";
+      likeParams.push(maxResults);
+      rows = db.prepare(sql).all(...likeParams);
+    }
+    const hits = rows.map((row: any, idx: number) => ({
+      id: row.id,
+      summary: row.summary || row.content?.slice(0, 120) || "",
+      excerpt: row.content || "",
+      score: Math.max(0.3, 1 - idx * 0.1),
+      role: row.role,
+      ref: { sessionKey: row.session_key, chunkId: row.id, turnId: row.turn_id, seq: row.seq },
+      taskId: row.task_id ?? null,
+      skillId: row.skill_id ?? null,
+    }));
+    return { hits, meta: { total: hits.length, usedMaxResults: maxResults } };
+  }
+
+  private handleSharingTaskShare(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const taskId = String(parsed.taskId || "");
+        const visibility = "public";
+        const groupId: string | undefined = undefined;
+        const task = this.store.getTask(taskId);
+        if (!task) return this.jsonResponse(res, { ok: false, error: "task_not_found" });
+        const chunks = this.store.getChunksByTask(taskId);
+        if (chunks.length === 0) return this.jsonResponse(res, { ok: false, error: "no_chunks" });
+        const hubClient = await this.resolveHubClientAware();
+        const response = await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/tasks/share", {
+          method: "POST",
+          body: JSON.stringify({
+            task: {
+              id: task.id,
+              sourceTaskId: task.id,
+              title: task.title,
+              summary: task.summary,
+              groupId: null,
+              visibility,
+              createdAt: task.startedAt ?? Date.now(),
+              updatedAt: task.updatedAt ?? Date.now(),
+            },
+            chunks: chunks.map((chunk) => ({
+              id: chunk.id,
+              hubTaskId: task.id,
+              sourceTaskId: task.id,
+              sourceChunkId: chunk.id,
+              role: chunk.role,
+              content: chunk.content,
+              summary: chunk.summary,
+              kind: chunk.kind,
+              createdAt: chunk.createdAt,
+            })),
+          }),
+        });
+        const hubUserId = hubClient.userId;
+        if (hubUserId) {
+          this.store.upsertHubTask({
+            id: task.id,
+            sourceTaskId: task.id,
+            sourceUserId: hubUserId,
+            title: task.title,
+            summary: task.summary,
+            groupId: null,
+            visibility,
+            createdAt: task.startedAt ?? Date.now(),
+            updatedAt: task.updatedAt ?? Date.now(),
+          });
+        }
+        this.jsonResponse(res, { ok: true, taskId, visibility, response });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private handleSharingTaskUnshare(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const taskId = String(parsed.taskId || "");
+        const task = this.store.getTask(taskId);
+        if (!task) return this.jsonResponse(res, { ok: false, error: "task_not_found" });
+        const hubClient = await this.resolveHubClientAware();
+        await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/tasks/unshare", {
+          method: "POST",
+          body: JSON.stringify({ sourceTaskId: task.id }),
+        });
+        const hubUserId = hubClient.userId;
+        if (hubUserId) this.store.deleteHubTaskBySource(hubUserId, task.id);
+        this.jsonResponse(res, { ok: true, taskId });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private handleSharingMemoryShare(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const chunkId = String(parsed.chunkId || "");
+        const visibility = "public";
+        const groupId: string | undefined = undefined;
+        const db = (this.store as any).db;
+        const chunk = db.prepare("SELECT * FROM chunks WHERE id = ?").get(chunkId) as any;
+        if (!chunk) return this.jsonResponse(res, { ok: false, error: "memory_not_found" });
+        const hubClient = await this.resolveHubClientAware();
+        const response = await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/memories/share", {
+          method: "POST",
+          body: JSON.stringify({
+            memory: {
+              sourceChunkId: chunk.id,
+              role: chunk.role,
+              content: chunk.content,
+              summary: chunk.summary,
+              kind: chunk.kind,
+              groupId: null,
+              visibility,
+            },
+          }),
+        });
+        const mid = String((response as any)?.memoryId ?? "");
+        if (hubClient.userId && this.ctx?.config?.sharing?.role === "hub") {
+          const now = Date.now();
+          const existing = this.store.getHubMemoryBySource(hubClient.userId, chunk.id);
+          this.store.upsertHubMemory({
+            id: mid || existing?.id || crypto.randomUUID(),
+            sourceChunkId: chunk.id,
+            sourceUserId: hubClient.userId,
+            role: chunk.role,
+            content: chunk.content,
+            summary: chunk.summary ?? "",
+            kind: chunk.kind,
+            groupId: null,
+            visibility,
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now,
+          });
+        } else if (hubClient.userId) {
+          this.store.upsertTeamSharedChunk(chunk.id, { hubMemoryId: mid, visibility, groupId });
+        }
+        this.jsonResponse(res, { ok: true, chunkId, visibility, response });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private handleSharingMemoryUnshare(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const chunkId = String(parsed.chunkId || "");
+        const hubClient = await this.resolveHubClientAware();
+        await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/memories/unshare", {
+          method: "POST",
+          body: JSON.stringify({ sourceChunkId: chunkId }),
+        });
+        const hubUserId = hubClient.userId;
+        if (hubUserId) this.store.deleteHubMemoryBySource(hubUserId, chunkId);
+        this.store.deleteTeamSharedChunk(chunkId);
+        this.jsonResponse(res, { ok: true, chunkId });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private handleSharingSkillPull(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const skillId = String(parsed.skillId || "");
+        const payload = await fetchHubSkillBundle(this.store, this.ctx, { skillId });
+        const restored = restoreSkillBundleFromHub(this.store, this.ctx, payload);
+        this.jsonResponse(res, { ok: true, pulled: true, hubSkillId: skillId, ...restored });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private handleSharingSkillShare(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const skillId = String(parsed.skillId || "");
+        const visibility = "public";
+        const groupId: string | null = null;
+        const skill = this.store.getSkill(skillId);
+        if (!skill) return this.jsonResponse(res, { ok: false, error: "skill_not_found" });
+        const bundle = buildSkillBundleForHub(this.store, skillId);
+        const hubClient = await this.resolveHubClientAware();
+        const response = await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/skills/publish", {
+          method: "POST",
+          body: JSON.stringify({
+            visibility,
+            groupId: null,
+            metadata: bundle.metadata,
+            bundle: bundle.bundle,
+          }),
+        });
+        const hubUserId = hubClient.userId;
+        if (hubUserId) {
+          const existing = this.store.getHubSkillBySource(hubUserId, skillId);
+          this.store.upsertHubSkill({
+            id: (response as any)?.skillId ?? existing?.id ?? crypto.randomUUID(),
+            sourceSkillId: skillId,
+            sourceUserId: hubUserId,
+            name: skill.name,
+            description: skill.description,
+            version: skill.version,
+            groupId: null,
+            visibility,
+            bundle: JSON.stringify(bundle.bundle),
+            qualityScore: skill.qualityScore,
+            createdAt: existing?.createdAt ?? Date.now(),
+            updatedAt: Date.now(),
+          });
+        }
+        this.jsonResponse(res, { ok: true, skillId, visibility, response });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private handleSharingSkillUnshare(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const skillId = String(parsed.skillId || "");
+        const skill = this.store.getSkill(skillId);
+        if (!skill) return this.jsonResponse(res, { ok: false, error: "skill_not_found" });
+        const hubClient = await this.resolveHubClientAware();
+        await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/skills/unpublish", {
+          method: "POST",
+          body: JSON.stringify({ sourceSkillId: skill.id }),
+        });
+        const hubUserId = hubClient.userId;
+        if (hubUserId) this.store.deleteHubSkillBySource(hubUserId, skill.id);
+        this.jsonResponse(res, { ok: true, skillId });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private resolveHubConnection(): { hubUrl: string; userToken: string } | null {
+    if (!this.ctx) return null;
+
+    // Hub 模式：连接自己，用 bootstrap admin token
+    const sharing = this.ctx.config.sharing;
+    if (sharing?.role === "hub") {
+      const hubPort = this.getHubPort();
+      const hubUrl = `http://127.0.0.1:${hubPort}`;
+      try {
+        const authPath = path.join(this.dataDir, "hub-auth.json");
+        const authData = JSON.parse(fs.readFileSync(authPath, "utf8"));
+        const adminToken = authData?.bootstrapAdminToken;
+        if (adminToken) return { hubUrl, userToken: adminToken };
+      } catch {
+        // hub-auth.json 不存在或读取失败，fall through
+      }
+    }
+
+    // Client 模式：用配置的 hubAddress + userToken
+    const conn = this.store.getClientHubConnection();
+    const hubUrl = conn?.hubUrl || this.ctx.config.sharing?.client?.hubAddress || "";
+    const userToken = conn?.userToken || this.ctx.config.sharing?.client?.userToken || "";
+    if (!hubUrl || !userToken) return null;
+    return { hubUrl: normalizeHubUrl(hubUrl), userToken };
+  }
+
+  /** resolveHubClient 的 viewer 版本：hub 模式下使用 bootstrap admin 身份 */
+  private async resolveHubClientAware(): Promise<ResolvedHubClient> {
+    if (!this.ctx) throw new Error("sharing_unavailable");
+    const sharing = this.ctx.config.sharing;
+    if (sharing?.role === "hub") {
+      const hub = this.resolveHubConnection();
+      if (hub) {
+        const me = await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/me", { method: "GET" }) as any;
+        return {
+          hubUrl: hub.hubUrl,
+          userToken: hub.userToken,
+          userId: String(me.id),
+          username: String(me.username ?? "hub-admin"),
+          role: String(me.role ?? "admin"),
+        };
+      }
+    }
+    return resolveHubClient(this.store, this.ctx);
+  }
+
+  private async serveSharingUsers(res: http.ServerResponse): Promise<void> {
+    const hub = this.resolveHubConnection();
+    if (!hub) return this.jsonResponse(res, { users: [], error: "not_configured" });
+    try {
+      const data = await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/admin/users", { method: "GET" }) as any;
+      this.jsonResponse(res, { users: Array.isArray(data?.users) ? data.users : [] });
+    } catch (err) {
+      this.jsonResponse(res, { users: [], error: String(err) });
+    }
+  }
+
+  // ─── Admin management endpoints (Hub-side data) ───
+
+  private async serveAdminSharedTasks(res: http.ServerResponse): Promise<void> {
+    const hub = this.resolveHubConnection();
+    if (!hub) return this.jsonResponse(res, { tasks: [], error: "not_configured" });
+    try {
+      const data = await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/admin/shared-tasks", { method: "GET" }) as any;
+      const tasks = Array.isArray(data?.tasks) ? data.tasks : [];
+      for (const tk of tasks) {
+        if (!tk.summary && tk.sourceTaskId) {
+          const local = this.store.getTask(tk.sourceTaskId);
+          if (local) { tk.summary = local.summary; tk.title = tk.title || local.title; }
+        }
+      }
+      this.jsonResponse(res, { tasks });
+    } catch (err) {
+      this.jsonResponse(res, { tasks: [], error: String(err) });
+    }
+  }
+
+  private async handleAdminDeleteTask(res: http.ServerResponse, p: string): Promise<void> {
+    const hub = this.resolveHubConnection();
+    if (!hub) return this.jsonResponse(res, { ok: false, error: "not_configured" });
+    const taskId = decodeURIComponent(p.replace("/api/admin/shared-tasks/", ""));
+    try {
+      await hubRequestJson(hub.hubUrl, hub.userToken, `/api/v1/hub/admin/shared-tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+      this.jsonResponse(res, { ok: true });
+    } catch (err) {
+      this.jsonResponse(res, { ok: false, error: String(err) });
+    }
+  }
+
+  private async serveHubTaskDetail(res: http.ServerResponse, p: string): Promise<void> {
+    const hub = this.resolveHubConnection();
+    if (!hub) return this.jsonResponse(res, { error: "not_configured" }, 500);
+    const m = p.match(/^\/api\/admin\/shared-tasks\/([^/]+)\/detail$/);
+    if (!m) return this.jsonResponse(res, { error: "bad_request" }, 400);
+    const taskId = decodeURIComponent(m[1]);
+    try {
+      const data = await hubRequestJson(hub.hubUrl, hub.userToken, `/api/v1/hub/shared-tasks/${encodeURIComponent(taskId)}/detail`, { method: "GET" }) as any;
+      this.jsonResponse(res, data);
+    } catch (err) {
+      this.jsonResponse(res, { error: String(err) }, 500);
+    }
+  }
+
+  private async serveHubSkillDetail(res: http.ServerResponse, p: string): Promise<void> {
+    const hub = this.resolveHubConnection();
+    if (!hub) return this.jsonResponse(res, { error: "not_configured" }, 500);
+    const m = p.match(/^\/api\/admin\/shared-skills\/([^/]+)\/detail$/);
+    if (!m) return this.jsonResponse(res, { error: "bad_request" }, 400);
+    const skillId = decodeURIComponent(m[1]);
+    try {
+      const data = await hubRequestJson(hub.hubUrl, hub.userToken, `/api/v1/hub/shared-skills/${encodeURIComponent(skillId)}/detail`, { method: "GET" }) as any;
+      this.jsonResponse(res, data);
+    } catch (err) {
+      this.jsonResponse(res, { error: String(err) }, 500);
+    }
+  }
+
+  private async serveAdminSharedSkills(res: http.ServerResponse): Promise<void> {
+    const hub = this.resolveHubConnection();
+    if (!hub) return this.jsonResponse(res, { skills: [], error: "not_configured" });
+    try {
+      const data = await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/admin/shared-skills", { method: "GET" }) as any;
+      const skills = Array.isArray(data?.skills) ? data.skills : [];
+      for (const sk of skills) {
+        if (!sk.description && sk.sourceSkillId) {
+          const local = this.store.getSkill(sk.sourceSkillId);
+          if (local) { sk.description = sk.description || local.description; sk.name = sk.name || local.name; }
+        }
+      }
+      this.jsonResponse(res, { skills });
+    } catch (err) {
+      this.jsonResponse(res, { skills: [], error: String(err) });
+    }
+  }
+
+  private async handleAdminDeleteSkill(res: http.ServerResponse, p: string): Promise<void> {
+    const hub = this.resolveHubConnection();
+    if (!hub) return this.jsonResponse(res, { ok: false, error: "not_configured" });
+    const skillId = decodeURIComponent(p.replace("/api/admin/shared-skills/", ""));
+    try {
+      await hubRequestJson(hub.hubUrl, hub.userToken, `/api/v1/hub/admin/shared-skills/${encodeURIComponent(skillId)}`, { method: "DELETE" });
+      this.jsonResponse(res, { ok: true });
+    } catch (err) {
+      this.jsonResponse(res, { ok: false, error: String(err) });
+    }
+  }
+
+  private async serveAdminSharedMemories(res: http.ServerResponse): Promise<void> {
+    const hub = this.resolveHubConnection();
+    if (!hub) return this.jsonResponse(res, { memories: [], error: "not_configured" });
+    try {
+      const data = await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/admin/shared-memories", { method: "GET" }) as any;
+      const memories = Array.isArray(data?.memories) ? data.memories : [];
+      for (const m of memories) {
+        if (!m.content && m.sourceChunkId) {
+          const local = this.store.getChunk(m.sourceChunkId);
+          if (local) { m.content = local.content; if (!m.summary && local.summary) m.summary = local.summary; }
+        }
+      }
+      this.jsonResponse(res, { memories });
+    } catch (err) {
+      this.jsonResponse(res, { memories: [], error: String(err) });
+    }
+  }
+
+  private async handleAdminDeleteMemory(res: http.ServerResponse, p: string): Promise<void> {
+    const hub = this.resolveHubConnection();
+    if (!hub) return this.jsonResponse(res, { ok: false, error: "not_configured" });
+    const memoryId = decodeURIComponent(p.replace("/api/admin/shared-memories/", ""));
+    try {
+      await hubRequestJson(hub.hubUrl, hub.userToken, `/api/v1/hub/admin/shared-memories/${encodeURIComponent(memoryId)}`, { method: "DELETE" });
+      this.jsonResponse(res, { ok: true });
+    } catch (err) {
+      this.jsonResponse(res, { ok: false, error: String(err) });
+    }
+  }
+
+  private async serveSharingNotifications(res: http.ServerResponse, url: URL): Promise<void> {
+    const hub = this.resolveHubConnection();
+    if (!hub) return this.jsonResponse(res, { notifications: [], unreadCount: 0 });
+    try {
+      const unread = url.searchParams.get("unread") === "1" ? "?unread=1" : "";
+      const data = await hubRequestJson(hub.hubUrl, hub.userToken, `/api/v1/hub/notifications${unread}`) as any;
+      this.jsonResponse(res, data);
+    } catch {
+      this.jsonResponse(res, { notifications: [], unreadCount: 0 });
+    }
+  }
+
+  private handleSharingNotificationsRead(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const hub = this.resolveHubConnection();
+    if (!hub) return this.jsonResponse(res, { ok: false, error: "not_configured" });
+    this.readBody(req, async (raw) => {
+      try {
+        const body = JSON.parse(raw || "{}");
+        await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/notifications/read", { method: "POST", body: JSON.stringify(body) });
+        this.jsonResponse(res, { ok: true });
+        try {
+          const data = (await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/notifications?unread=1")) as any;
+          const count = data?.unreadCount ?? 0;
+          this.lastKnownNotifCount = count;
+          this.broadcastNotifSSE({ type: "update", unreadCount: count });
+        } catch { /* best effort */ }
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  private handleSharingNotificationsClear(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const hub = this.resolveHubConnection();
+    if (!hub) return this.jsonResponse(res, { ok: false, error: "not_configured" });
+    this.readBody(req, async () => {
+      try {
+        await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/notifications/clear", { method: "POST", body: "{}" });
+        this.jsonResponse(res, { ok: true });
+        this.broadcastNotifSSE({ type: "cleared", unreadCount: 0 });
+      } catch (err) {
+        this.jsonResponse(res, { ok: false, error: String(err) });
+      }
+    });
+  }
+
+  /** Badge-only: clear Client team-share UI metadata when Hub admin removes that memory. Does NOT touch chunks, embeddings, or hub_memories (recall paths). */
+  private handleSyncHubRemoval(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, (body) => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const sourceChunkId = String(parsed.sourceChunkId || "");
+        const memoryIdFromNotif = parsed.memoryId != null && parsed.memoryId !== "" ? String(parsed.memoryId) : "";
+        if (!sourceChunkId) return this.jsonResponse(res, { ok: false, error: "missing_source_chunk_id" }, 400);
+        // Admin removal notifications stay in the feed; if the user re-shared, team_shared_chunks has a new hub_memory_id.
+        // Only clear the badge when this notification refers to the same Hub row we still track (or no id — legacy).
+        if (memoryIdFromNotif) {
+          const current = this.store.getTeamSharedChunk(sourceChunkId);
+          const curId = current?.hubMemoryId ? String(current.hubMemoryId) : "";
+          if (curId && curId !== memoryIdFromNotif) {
+            return this.jsonResponse(res, { ok: true, sourceChunkId, skipped: true, reason: "stale_notification_re_shared" });
+          }
+        }
+        this.store.deleteTeamSharedChunk(sourceChunkId);
+        this.jsonResponse(res, { ok: true, sourceChunkId });
+      } catch (e) {
+        this.jsonResponse(res, { ok: false, error: String(e) }, 500);
+      }
+    });
+  }
+
+  private handleNotifSSE(req: http.IncomingMessage, res: http.ServerResponse): void {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.write("data: {\"type\":\"connected\"}\n\n");
+    this.notifSSEClients.push(res);
+    if (!this.notifPollTimer) this.startNotifPoll();
+    else this.notifPollImmediate();
+    req.on("close", () => {
+      this.notifSSEClients = this.notifSSEClients.filter((c) => c !== res);
+      if (this.notifSSEClients.length === 0) this.stopNotifPoll();
+    });
+  }
+
+  private broadcastNotifSSE(data: Record<string, unknown>): void {
+    const msg = `data: ${JSON.stringify(data)}\n\n`;
+    this.notifSSEClients = this.notifSSEClients.filter((c) => {
+      try { c.write(msg); return true; } catch { return false; }
+    });
+  }
+
+  private startNotifPoll(): void {
+    this.stopNotifPoll();
+    const tick = async () => {
+      const hub = this.resolveHubConnection();
+      if (!hub) return;
+      try {
+        const data = (await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/notifications?unread=1")) as any;
+        const count = data?.unreadCount ?? 0;
+        if (count !== this.lastKnownNotifCount) {
+          this.lastKnownNotifCount = count;
+          this.broadcastNotifSSE({ type: "update", unreadCount: count });
+        }
+      } catch { /* ignore */ }
+    };
+    tick();
+    this.notifPollTimer = setInterval(tick, 3000);
+  }
+
+  private stopNotifPoll(): void {
+    if (this.notifPollTimer) { clearInterval(this.notifPollTimer); this.notifPollTimer = undefined; }
+  }
+
+  private notifPollImmediate(): void {
+    const hub = this.resolveHubConnection();
+    if (!hub) return;
+    hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/notifications?unread=1")
+      .then((data: any) => {
+        const count = data?.unreadCount ?? 0;
+        if (count !== this.lastKnownNotifCount) {
+          this.lastKnownNotifCount = count;
+          this.broadcastNotifSSE({ type: "update", unreadCount: count });
+        }
+      })
+      .catch(() => {});
+  }
+
+  private startHubHeartbeat(): void {
+    this.stopHubHeartbeat();
+    const sendHeartbeat = async () => {
+      try {
+        const hub = this.resolveHubConnection();
+        if (!hub) {
+          const persisted = this.store.getClientHubConnection();
+          if (persisted?.hubUrl && persisted?.userToken) {
+            await hubRequestJson(persisted.hubUrl, persisted.userToken, "/api/v1/hub/heartbeat", { method: "POST" });
+          }
+          return;
+        }
+        await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/heartbeat", { method: "POST" });
+      } catch { /* best-effort */ }
+    };
+    sendHeartbeat();
+    this.hubHeartbeatTimer = setInterval(sendHeartbeat, ViewerServer.HUB_HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHubHeartbeat(): void {
+    if (this.hubHeartbeatTimer) { clearInterval(this.hubHeartbeatTimer); this.hubHeartbeatTimer = undefined; }
+  }
+
+  private getLocalIPs(): string[] {
+    const nets = os.networkInterfaces();
+    const ips: string[] = [];
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name] ?? []) {
+        if (net.family === "IPv4" && !net.internal) {
+          ips.push(net.address);
+        }
+      }
+    }
+    return ips;
+  }
+
+  private serveLocalIPs(res: http.ServerResponse): void {
+    const ips = this.getLocalIPs();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ips }));
   }
 
   private serveConfig(res: http.ServerResponse): void {
@@ -1016,7 +2681,9 @@ export class ViewerServer {
         ?? entries["memos-lite-openclaw-plugin"]
         ?? entries["memos-lite"]
         ?? {};
-      if (pluginEntry.viewerPort == null && topEntry.viewerPort) {
+      if ((pluginEntry as any).viewerPort != null) {
+        result.viewerPort = (pluginEntry as any).viewerPort;
+      } else if (topEntry.viewerPort) {
         result.viewerPort = topEntry.viewerPort;
       }
       this.jsonResponse(res, result);
@@ -1027,7 +2694,7 @@ export class ViewerServer {
   }
 
   private handleSaveConfig(req: http.IncomingMessage, res: http.ServerResponse): void {
-    this.readBody(req, (body) => {
+    this.readBody(req, async (body) => {
       try {
         const newCfg = JSON.parse(body);
         const cfgPath = this.getOpenClawConfigPath();
@@ -1050,20 +2717,357 @@ export class ViewerServer {
         if (!entry.config) entry.config = {};
         const config = entry.config as Record<string, unknown>;
 
+        const oldSharing = config.sharing as Record<string, unknown> | undefined;
+        const oldSharingRole = oldSharing?.role as string | undefined;
+        const oldSharingEnabled = Boolean(oldSharing?.enabled);
+        const oldClientHubAddress = String((oldSharing?.client as Record<string, unknown>)?.hubAddress || "");
+
         if (newCfg.embedding) config.embedding = newCfg.embedding;
         if (newCfg.summarizer) config.summarizer = newCfg.summarizer;
         if (newCfg.skillEvolution) config.skillEvolution = newCfg.skillEvolution;
         if (newCfg.viewerPort) config.viewerPort = newCfg.viewerPort;
         if (newCfg.telemetry !== undefined) config.telemetry = newCfg.telemetry;
+        if (newCfg.sharing !== undefined) {
+          const existing = (config.sharing as Record<string, unknown>) || {};
+          const merged = { ...existing, ...newCfg.sharing };
+          if (newCfg.sharing.capabilities && existing.capabilities) {
+            merged.capabilities = { ...(existing.capabilities as Record<string, unknown>), ...newCfg.sharing.capabilities };
+          }
+          if (merged.role === "client" && merged.client) {
+            const clientCfg = merged.client as Record<string, unknown>;
+            const addr = String(clientCfg.hubAddress || "");
+            if (addr && oldSharingRole === "hub" && oldSharingEnabled) {
+              const selfHubPort = (oldSharing?.hub as Record<string, unknown>)?.port ?? 18800;
+              const localIPs = this.getLocalIPs();
+              localIPs.push("127.0.0.1", "localhost", "0.0.0.0");
+              try {
+                const u = new URL(addr.startsWith("http") ? addr : `http://${addr}`);
+                const targetPort = u.port || (u.protocol === "https:" ? "443" : "80");
+                if (localIPs.includes(u.hostname) && targetPort === String(selfHubPort)) {
+                  res.writeHead(400, { "Content-Type": "application/json" });
+                  res.end(JSON.stringify({ error: "cannot_join_self" }));
+                  return;
+                }
+              } catch {}
+            }
+          }
+
+          const newRole = merged.role as string | undefined;
+          const newEnabled = Boolean(merged.enabled);
+
+          // Detect disabling sharing or switching away from hub mode
+          const wasHub = oldSharingEnabled && oldSharingRole === "hub";
+          const isHub = newEnabled && newRole === "hub";
+          if (wasHub && !isHub) {
+            await this.notifyHubShutdown();
+            this.stopHubHeartbeat();
+            this.log.info("Hub shutting down: notified connected clients");
+          }
+
+          // Detect disabling sharing or switching away from client mode
+          const wasClient = oldSharingEnabled && oldSharingRole === "client";
+          const isClient = newEnabled && newRole === "client";
+          if (wasClient && !isClient) {
+            await this.withdrawOrLeaveHub();
+            this.store.clearClientHubConnection();
+            this.log.info("Client hub connection cleared (sharing disabled or role changed)");
+          }
+
+          if (wasClient && isClient) {
+            const newClientAddr = String((merged.client as Record<string, unknown>)?.hubAddress || "");
+            if (newClientAddr && oldClientHubAddress && normalizeHubUrl(newClientAddr) !== normalizeHubUrl(oldClientHubAddress)) {
+              this.notifyHubLeave();
+              const oldConn = this.store.getClientHubConnection();
+              if (oldConn) {
+                this.store.setClientHubConnection({ ...oldConn, hubUrl: normalizeHubUrl(newClientAddr), userToken: "", lastKnownStatus: "hub_changed" });
+              }
+              this.log.info("Client hub connection token cleared (switched to different Hub), identity preserved");
+            }
+          }
+
+          if (merged.role === "hub") {
+            merged.client = { hubAddress: "", userToken: "", teamToken: "" };
+          } else if (merged.role === "client") {
+            merged.hub = { teamName: "", teamToken: "" };
+          }
+          config.sharing = merged;
+        }
 
         fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
         fs.writeFileSync(cfgPath, JSON.stringify(raw, null, 2), "utf-8");
         this.log.info("Plugin config updated via Viewer");
-        this.jsonResponse(res, { ok: true });
+        this.stopHubHeartbeat();
+
+        // When switching to client mode or re-enabling sharing as client, send join request
+        const finalSharing = config.sharing as Record<string, unknown> | undefined;
+        const nowClient = Boolean(finalSharing?.enabled) && finalSharing?.role === "client";
+        const previouslyClient = oldSharingEnabled && oldSharingRole === "client";
+        let joinStatus: string | undefined;
+        if (nowClient && !previouslyClient) {
+          try {
+            joinStatus = await this.autoJoinOnSave(finalSharing);
+          } catch (e) {
+            this.log.warn(`Auto-join on save failed: ${e}`);
+          }
+        }
+
+        this.jsonResponse(res, { ok: true, joinStatus, restart: true });
+
+        setTimeout(() => {
+          this.log.info("config-save: triggering gateway restart via SIGUSR1...");
+          try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
+        }, 500);
       } catch (e) {
         this.log.warn(`handleSaveConfig error: ${e}`);
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: String(e) }));
+      }
+    });
+  }
+
+  private async autoJoinOnSave(sharing: Record<string, unknown>): Promise<string | undefined> {
+    const clientCfg = sharing.client as Record<string, unknown> | undefined;
+    const hubAddress = String(clientCfg?.hubAddress || "");
+    const teamToken = String(clientCfg?.teamToken || "");
+    if (!hubAddress || !teamToken) return undefined;
+    const hubUrl = normalizeHubUrl(hubAddress);
+    const os = await import("os");
+    const nickname = String(clientCfg?.nickname || "");
+    const username = nickname || os.userInfo().username || "user";
+    const hostname = os.hostname() || "unknown";
+    const persisted = this.store.getClientHubConnection();
+    const existingIdentityKey = persisted?.identityKey || "";
+    const result = await hubRequestJson(hubUrl, "", "/api/v1/hub/join", {
+      method: "POST",
+      body: JSON.stringify({ teamToken, username, deviceName: hostname, identityKey: existingIdentityKey }),
+    }) as any;
+    const returnedIdentityKey = String(result.identityKey || existingIdentityKey || "");
+    this.store.setClientHubConnection({
+      hubUrl,
+      userId: String(result.userId || ""),
+      username,
+      userToken: result.userToken || "",
+      role: "member",
+      connectedAt: Date.now(),
+      identityKey: returnedIdentityKey,
+      lastKnownStatus: result.status || "",
+    });
+    this.log.info(`Auto-join on save: status=${result.status}, userId=${result.userId}`);
+    if (result.userToken) {
+      this.startHubHeartbeat();
+    }
+    return result.status;
+  }
+
+  private handleLeaveTeam(_req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(_req, async () => {
+      try {
+        await this.withdrawOrLeaveHub();
+        this.store.clearClientHubConnection();
+
+        const configPath = this.getOpenClawConfigPath();
+        if (configPath && fs.existsSync(configPath)) {
+          const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+          const pluginKey = Object.keys(raw.plugins?.entries ?? {}).find(k => k.includes("memos-local"));
+          if (pluginKey) {
+            const cfg = raw.plugins.entries[pluginKey].config ?? {};
+            if (cfg.sharing) {
+              cfg.sharing.enabled = false;
+              cfg.sharing.client = { hubAddress: "", userToken: "", teamToken: "" };
+            }
+            raw.plugins.entries[pluginKey].config = cfg;
+            fs.writeFileSync(configPath, JSON.stringify(raw, null, 2) + "\n");
+            this.log.info("handleLeaveTeam: config updated, sharing disabled");
+          }
+        }
+
+        this.jsonResponse(res, { ok: true, restart: true });
+
+        setTimeout(() => {
+          this.log.info("handleLeaveTeam: triggering gateway restart via SIGUSR1...");
+          try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
+        }, 500);
+      } catch (e) {
+        this.log.warn(`handleLeaveTeam error: ${e}`);
+        this.jsonResponse(res, { ok: false, error: String(e) });
+      }
+    });
+  }
+
+  private async notifyHubLeave(): Promise<void> {
+    try {
+      const hub = this.resolveHubConnection();
+      if (hub) {
+        await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/leave", { method: "POST" });
+        this.log.info("Notified Hub of voluntary leave");
+        return;
+      }
+      const persisted = this.store.getClientHubConnection();
+      if (persisted?.hubUrl && persisted?.userToken) {
+        await hubRequestJson(persisted.hubUrl, persisted.userToken, "/api/v1/hub/leave", { method: "POST" });
+        this.log.info("Notified Hub of voluntary leave (persisted connection)");
+      }
+    } catch (e) {
+      this.log.warn(`Failed to notify Hub of leave: ${e}`);
+    }
+  }
+
+  private async withdrawOrLeaveHub(): Promise<void> {
+    try {
+      const persisted = this.store.getClientHubConnection();
+      const sharing = this.ctx?.config?.sharing;
+
+      if (persisted?.userToken && persisted?.hubUrl) {
+        await hubRequestJson(persisted.hubUrl, persisted.userToken, "/api/v1/hub/leave", { method: "POST" });
+        this.log.info("Notified Hub of voluntary leave (had token)");
+        return;
+      }
+
+      const hub = this.resolveHubConnection();
+      if (hub?.userToken) {
+        await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/leave", { method: "POST" });
+        this.log.info("Notified Hub of voluntary leave (resolved connection)");
+        return;
+      }
+
+      const hubUrl = persisted?.hubUrl || (sharing?.client?.hubAddress ? normalizeHubUrl(sharing.client.hubAddress) : null);
+      const userId = persisted?.userId;
+      const teamToken = sharing?.client?.teamToken;
+      if (hubUrl && userId && teamToken) {
+        const withdrawUrl = `${normalizeHubUrl(hubUrl)}/api/v1/hub/withdraw-pending`;
+        await fetch(withdrawUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ teamToken, userId }),
+        });
+        this.log.info("Withdrew pending application from Hub");
+        return;
+      }
+
+      this.log.info("No hub connection to clean up (no token, no pending)");
+    } catch (e) {
+      this.log.warn(`Failed to withdraw/leave Hub: ${e}`);
+    }
+  }
+
+  private async notifyHubShutdown(): Promise<void> {
+    try {
+      const sharing = this.ctx?.config.sharing;
+      if (!sharing || sharing.role !== "hub") return;
+      const hubPort = this.getHubPort();
+      const authPath = path.join(this.dataDir, "hub-auth.json");
+      let adminToken: string | undefined;
+      try {
+        const authData = JSON.parse(fs.readFileSync(authPath, "utf8"));
+        adminToken = authData?.bootstrapAdminToken;
+      } catch { return; }
+      if (!adminToken) return;
+
+      const users = this.store.listHubUsers("active");
+      const { v4: uuidv4 } = require("uuid");
+      for (const u of users) {
+        try {
+          this.store.insertHubNotification({
+            id: uuidv4(),
+            userId: u.id,
+            type: "hub_shutdown",
+            resource: "hub",
+            title: "Hub is shutting down",
+            message: "The Hub server is shutting down. You may be disconnected.",
+          });
+        } catch (e) {
+          this.log.warn(`Failed to insert shutdown notification for user ${u.id}: ${e}`);
+        }
+      }
+      this.log.info(`Hub shutdown: notified ${users.length} approved user(s)`);
+    } catch (e) {
+      this.log.warn(`notifyHubShutdown error: ${e}`);
+    }
+  }
+
+  private handleUpdateUsername(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      if (!this.ctx) return this.jsonResponse(res, { error: "sharing_unavailable" });
+      try {
+        const { username } = JSON.parse(body || "{}");
+        if (!username || typeof username !== "string" || username.trim().length < 2 || username.trim().length > 32) {
+          return this.jsonResponse(res, { error: "invalid_username" }, 400);
+        }
+        const trimmed = username.trim();
+        const hubClient = await this.resolveHubClientAware();
+        const result = await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/me/update-profile", {
+          method: "POST",
+          body: JSON.stringify({ username: trimmed }),
+        }) as any;
+        if (result.ok && result.userToken) {
+          const sharing = this.ctx.config.sharing;
+          if (sharing?.role === "hub") {
+            try {
+              const authPath = path.join(this.dataDir, "hub-auth.json");
+              const authData = JSON.parse(fs.readFileSync(authPath, "utf8"));
+              authData.bootstrapAdminToken = result.userToken;
+              fs.writeFileSync(authPath, JSON.stringify(authData, null, 2), "utf-8");
+              this.log.info("hub-auth.json updated with new admin token after username change");
+            } catch (e) {
+              this.log.warn(`Failed to update hub-auth.json: ${e}`);
+            }
+          } else {
+            const persistedConn = this.store.getClientHubConnection();
+            if (persistedConn) {
+              this.store.setClientHubConnection({
+                ...persistedConn,
+                username: result.username,
+                userToken: result.userToken,
+              });
+            }
+          }
+        }
+        this.jsonResponse(res, result);
+      } catch (err: any) {
+        const msg = String(err?.message || err);
+        if (msg.includes("409") || msg.includes("username_taken")) {
+          return this.jsonResponse(res, { error: "username_taken" }, 409);
+        }
+        this.jsonResponse(res, { error: msg }, 500);
+      }
+    });
+  }
+
+  private handleTestHubConnection(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      try {
+        const { hubUrl } = JSON.parse(body);
+        if (!hubUrl) { this.jsonResponse(res, { ok: false, error: "hubUrl is required" }); return; }
+        try {
+          const sharing = this.ctx?.config?.sharing;
+          if (sharing?.enabled && sharing.role === "hub") {
+            const selfHubPort = this.getHubPort();
+            const localIPs = this.getLocalIPs();
+            localIPs.push("127.0.0.1", "localhost", "0.0.0.0");
+            const parsed = new URL(hubUrl.startsWith("http") ? hubUrl : `http://${hubUrl}`);
+            const targetPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+            if (localIPs.includes(parsed.hostname) && targetPort === String(selfHubPort)) {
+              this.jsonResponse(res, { ok: false, error: "cannot_join_self" });
+              return;
+            }
+          }
+        } catch {}
+        const url = hubUrl.replace(/\/+$/, "") + "/api/v1/hub/info";
+        const ctrl = new AbortController();
+        const timeout = setTimeout(() => ctrl.abort(), 8000);
+        try {
+          const r = await fetch(url, { signal: ctrl.signal });
+          clearTimeout(timeout);
+          if (!r.ok) { this.jsonResponse(res, { ok: false, error: `HTTP ${r.status}` }); return; }
+          const info = await r.json() as Record<string, unknown>;
+          this.jsonResponse(res, { ok: true, teamName: info.teamName || "", apiVersion: info.apiVersion || "" });
+        } catch (e: unknown) {
+          clearTimeout(timeout);
+          const msg = e instanceof Error ? e.message : String(e);
+          this.jsonResponse(res, { ok: false, error: msg.includes("abort") ? "Connection timeout (8s)" : msg });
+        }
+      } catch (e) {
+        this.jsonResponse(res, { ok: false, error: String(e) });
       }
     });
   }
@@ -1280,10 +3284,9 @@ export class ViewerServer {
                   this.log.info(`update-install: success! Updated to ${newVersion}`);
                   this.jsonResponse(res, { ok: true, version: newVersion });
 
-                  // Trigger Gateway restart after response is sent
                   setTimeout(() => {
-                    this.log.info(`update-install: triggering gateway restart...`);
-                    process.kill(process.pid, "SIGUSR1");
+                    this.log.info(`update-install: triggering gateway restart via SIGUSR1...`);
+                    try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
                   }, 500);
                 });
               });
@@ -1465,7 +3468,7 @@ export class ViewerServer {
     try {
       const ocHome = this.getOpenClawHome();
       const memoryDir = path.join(ocHome, "memory");
-      const sessionsDir = path.join(ocHome, "agents", "main", "sessions");
+      const agentsDir = path.join(ocHome, "agents");
 
       const sqliteFiles: Array<{ file: string; chunks: number }> = [];
       if (fs.existsSync(memoryDir)) {
@@ -1484,31 +3487,36 @@ export class ViewerServer {
 
       let sessionCount = 0;
       let messageCount = 0;
-      if (fs.existsSync(sessionsDir)) {
-        const jsonlFiles = fs.readdirSync(sessionsDir).filter(f => f.includes(".jsonl"));
-        sessionCount = jsonlFiles.length;
-        for (const f of jsonlFiles) {
-          try {
-            const content = fs.readFileSync(path.join(sessionsDir, f), "utf-8");
-            const lines = content.split("\n").filter(l => l.trim());
-            for (const line of lines) {
-              try {
-                const obj = JSON.parse(line);
-                if (obj.type === "message") {
-                  const role = obj.message?.role ?? obj.role;
-                  if (role === "user" || role === "assistant") {
-                    const mc = obj.message?.content ?? obj.content;
-                    let txt = "";
-                    if (typeof mc === "string") txt = mc;
-                    else if (Array.isArray(mc)) txt = mc.filter((p: any) => p.type === "text" && p.text).map((p: any) => p.text).join("\n");
-                    else txt = JSON.stringify(mc);
-                    if (role === "user") txt = stripInboundMetadata(txt);
-                    if (txt && txt.length >= 10) messageCount++;
+      if (fs.existsSync(agentsDir)) {
+        for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue;
+          const sessDir = path.join(agentsDir, entry.name, "sessions");
+          if (!fs.existsSync(sessDir)) continue;
+          const jsonlFiles = fs.readdirSync(sessDir).filter(f => f.includes(".jsonl"));
+          sessionCount += jsonlFiles.length;
+          for (const f of jsonlFiles) {
+            try {
+              const content = fs.readFileSync(path.join(sessDir, f), "utf-8");
+              const lines = content.split("\n").filter(l => l.trim());
+              for (const line of lines) {
+                try {
+                  const obj = JSON.parse(line);
+                  if (obj.type === "message") {
+                    const role = obj.message?.role ?? obj.role;
+                    if (role === "user" || role === "assistant") {
+                      const mc = obj.message?.content ?? obj.content;
+                      let txt = "";
+                      if (typeof mc === "string") txt = mc;
+                      else if (Array.isArray(mc)) txt = mc.filter((p: any) => p.type === "text" && p.text).map((p: any) => p.text).join("\n");
+                      else txt = JSON.stringify(mc);
+                      if (role === "user") txt = stripInboundMetadata(txt);
+                      if (txt && txt.length >= 10) messageCount++;
+                    }
                   }
-                }
-              } catch { /* skip bad lines */ }
-            }
-          } catch { /* skip unreadable */ }
+                } catch { /* skip bad lines */ }
+              }
+            } catch { /* skip unreadable */ }
+          }
         }
       }
 
@@ -1616,7 +3624,7 @@ export class ViewerServer {
     } else if (this.migrationState.done) {
       const evtName = this.migrationState.stopped ? "stopped" : "done";
       res.write(`event: state\ndata: ${JSON.stringify(this.migrationState)}\n\n`);
-      res.write(`event: ${evtName}\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+      res.write(`event: ${evtName}\ndata: ${JSON.stringify({ ok: this.migrationState.success, ...this.migrationState })}\n\n`);
       res.end();
     } else {
       res.end();
@@ -1657,19 +3665,12 @@ export class ViewerServer {
         this.migrationSSEClients = this.migrationSSEClients.filter(c => c !== res);
       });
 
-      this.migrationAbort = false;
-      this.migrationState = { phase: "", stored: 0, skipped: 0, merged: 0, errors: 0, processed: 0, total: 0, lastItem: null, done: false, stopped: false };
+      this.migrationState = createInitialMigrationState();
 
       const send = (event: string, data: unknown) => {
         if (event === "item") {
           const d = data as any;
-          if (d.status === "stored") this.migrationState.stored++;
-          else if (d.status === "skipped" || d.status === "duplicate") this.migrationState.skipped++;
-          else if (d.status === "merged") this.migrationState.merged++;
-          else if (d.status === "error") this.migrationState.errors++;
-          this.migrationState.processed = d.index ?? this.migrationState.processed + 1;
-          this.migrationState.total = d.total ?? this.migrationState.total;
-          this.migrationState.lastItem = d;
+          applyMigrationItemToState(this.migrationState, d);
         } else if (event === "phase") {
           this.migrationState.phase = (data as any).phase;
         } else if (event === "progress") {
@@ -1682,11 +3683,13 @@ export class ViewerServer {
       this.runMigration(send, opts.sources, concurrency).finally(() => {
         this.migrationRunning = false;
         this.migrationState.done = true;
+        this.migrationState.success = computeMigrationSuccess(this.migrationState);
+        const donePayload = { ok: this.migrationState.success, ...this.migrationState };
         if (this.migrationAbort) {
           this.migrationState.stopped = true;
-          this.broadcastSSE("stopped", { ok: true, ...this.migrationState });
+          this.broadcastSSE("stopped", donePayload);
         } else {
-          this.broadcastSSE("done", { ok: true });
+          this.broadcastSSE("done", donePayload);
         }
         this.migrationAbort = false;
         const clientsToClose = [...this.migrationSSEClients];
@@ -1783,11 +3786,24 @@ export class ViewerServer {
               }
 
               try {
-                const summary = await summarizer.summarize(row.text);
+                const stepFailures: Array<"summarization" | "dedup" | "embedding"> = [];
+                let summary = "";
+                try {
+                  summary = await summarizer.summarize(row.text);
+                } catch (err) {
+                  stepFailures.push("summarization");
+                  this.log.warn(`Migration summarization failed: ${err}`);
+                }
+                if (!summary) {
+                  stepFailures.push("summarization");
+                  summary = row.text.slice(0, 200);
+                }
+
                 let embedding: number[] | null = null;
                 try {
                   [embedding] = await this.embedder.embed([summary]);
                 } catch (err) {
+                  stepFailures.push("embedding");
                   this.log.warn(`Migration embed failed: ${err}`);
                 }
 
@@ -1806,26 +3822,31 @@ export class ViewerServer {
                     }).filter(c => c.summary);
 
                     if (candidates.length > 0) {
-                      const dedupResult = await summarizer.judgeDedup(summary, candidates);
-                      if (dedupResult?.action === "DUPLICATE" && dedupResult.targetIndex) {
-                        const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
-                        if (targetId) {
-                          dedupStatus = "duplicate";
-                          dedupTarget = targetId;
-                          dedupReason = dedupResult.reason;
+                      try {
+                        const dedupResult = await summarizer.judgeDedup(summary, candidates);
+                        if (dedupResult?.action === "DUPLICATE" && dedupResult.targetIndex) {
+                          const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
+                          if (targetId) {
+                            dedupStatus = "duplicate";
+                            dedupTarget = targetId;
+                            dedupReason = dedupResult.reason;
+                          }
+                        } else if (dedupResult?.action === "UPDATE" && dedupResult.targetIndex && dedupResult.mergedSummary) {
+                          const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
+                          if (targetId) {
+                            this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, row.text);
+                            try {
+                              const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]);
+                              if (newEmb) this.store.upsertEmbedding(targetId, newEmb);
+                            } catch { /* best-effort */ }
+                            dedupStatus = "merged";
+                            dedupTarget = targetId;
+                            dedupReason = dedupResult.reason;
+                          }
                         }
-                      } else if (dedupResult?.action === "UPDATE" && dedupResult.targetIndex && dedupResult.mergedSummary) {
-                        const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
-                        if (targetId) {
-                          this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, row.text);
-                          try {
-                            const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]);
-                            if (newEmb) this.store.upsertEmbedding(targetId, newEmb);
-                          } catch { /* best-effort */ }
-                          dedupStatus = "merged";
-                          dedupTarget = targetId;
-                          dedupReason = dedupResult.reason;
-                        }
+                      } catch (err) {
+                        stepFailures.push("dedup");
+                        this.log.warn(`Migration dedup judgment failed: ${err}`);
                       }
                     }
                   }
@@ -1868,7 +3889,13 @@ export class ViewerServer {
                   preview: row.text.slice(0, 120),
                   summary: summary.slice(0, 80),
                   source: file,
+                  stepFailures,
                 });
+                if (stepFailures.length > 0) {
+                  this.log.warn(`[MIGRATION] sqlite item imported with step failures: ${stepFailures.join(",")}`);
+                } else {
+                  this.log.info("[MIGRATION] sqlite item imported successfully (all steps)");
+                }
               } catch (err) {
                 totalErrors++;
                 send("item", {
@@ -1998,11 +4025,24 @@ export class ViewerServer {
               }
 
               try {
-                const summary = await summarizer.summarize(content);
+                const stepFailures: Array<"summarization" | "dedup" | "embedding"> = [];
+                let summary = "";
+                try {
+                  summary = await summarizer.summarize(content);
+                } catch (err) {
+                  stepFailures.push("summarization");
+                  this.log.warn(`Migration summarization failed: ${err}`);
+                }
+                if (!summary) {
+                  stepFailures.push("summarization");
+                  summary = content.slice(0, 200);
+                }
+
                 let embedding: number[] | null = null;
                 try {
                   [embedding] = await this.embedder.embed([summary]);
                 } catch (err) {
+                  stepFailures.push("embedding");
                   this.log.warn(`Migration embed failed: ${err}`);
                 }
 
@@ -2021,17 +4061,22 @@ export class ViewerServer {
                     }).filter(c => c.summary);
 
                     if (candidates.length > 0) {
-                      const dedupResult = await summarizer.judgeDedup(summary, candidates);
-                      if (dedupResult?.action === "DUPLICATE" && dedupResult.targetIndex) {
-                        const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
-                        if (targetId) { dedupStatus = "duplicate"; dedupTarget = targetId; dedupReason = dedupResult.reason; }
-                      } else if (dedupResult?.action === "UPDATE" && dedupResult.targetIndex && dedupResult.mergedSummary) {
-                        const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
-                        if (targetId) {
-                          this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, content);
-                          try { const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]); if (newEmb) this.store.upsertEmbedding(targetId, newEmb); } catch { /* best-effort */ }
-                          dedupStatus = "merged"; dedupTarget = targetId; dedupReason = dedupResult.reason;
+                      try {
+                        const dedupResult = await summarizer.judgeDedup(summary, candidates);
+                        if (dedupResult?.action === "DUPLICATE" && dedupResult.targetIndex) {
+                          const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
+                          if (targetId) { dedupStatus = "duplicate"; dedupTarget = targetId; dedupReason = dedupResult.reason; }
+                        } else if (dedupResult?.action === "UPDATE" && dedupResult.targetIndex && dedupResult.mergedSummary) {
+                          const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
+                          if (targetId) {
+                            this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, content);
+                            try { const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]); if (newEmb) this.store.upsertEmbedding(targetId, newEmb); } catch { /* best-effort */ }
+                            dedupStatus = "merged"; dedupTarget = targetId; dedupReason = dedupResult.reason;
+                          }
                         }
+                      } catch (err) {
+                        stepFailures.push("dedup");
+                        this.log.warn(`Migration dedup judgment failed: ${err}`);
                       }
                     }
                   }
@@ -2051,7 +4096,12 @@ export class ViewerServer {
                 if (embedding && dedupStatus === "active") this.store.upsertEmbedding(chunkId, embedding);
 
                 totalStored++;
-                send("item", { index: idx, total: totalMsgs, status: dedupStatus === "active" ? "stored" : dedupStatus, preview: content.slice(0, 120), summary: summary.slice(0, 80), source: file, agent: agentId, role: msgRole });
+                send("item", { index: idx, total: totalMsgs, status: dedupStatus === "active" ? "stored" : dedupStatus, preview: content.slice(0, 120), summary: summary.slice(0, 80), source: file, agent: agentId, role: msgRole, stepFailures });
+                if (stepFailures.length > 0) {
+                  this.log.warn(`[MIGRATION] session item imported with step failures: ${stepFailures.join(",")}`);
+                } else {
+                  this.log.info("[MIGRATION] session item imported successfully (all steps)");
+                }
               } catch (err) {
                 totalErrors++;
                 send("item", { index: idx, total: totalMsgs, status: "error", preview: content.slice(0, 120), source: file, agent: agentId, error: String(err).slice(0, 200) });
@@ -2092,7 +4142,14 @@ export class ViewerServer {
     }
 
     send("progress", { total: totalProcessed, processed: totalProcessed, phase: "done" });
-    send("summary", { totalProcessed, totalStored, totalSkipped, totalErrors });
+    send("summary", {
+      totalProcessed,
+      totalStored,
+      totalSkipped,
+      totalErrors,
+      success: computeMigrationSuccess(this.migrationState),
+      stepFailures: this.migrationState.stepFailures,
+    });
   }
 
   // ─── Post-processing: independent task/skill generation ───
@@ -2363,8 +4420,8 @@ export class ViewerServer {
     req.on("end", () => cb(body));
   }
 
-  private jsonResponse(res: http.ServerResponse, data: unknown): void {
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+  private jsonResponse(res: http.ServerResponse, data: unknown, statusCode = 200): void {
+    res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(data));
   }
 }

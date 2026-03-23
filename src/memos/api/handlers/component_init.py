@@ -233,7 +233,7 @@ def init_server() -> dict[str, Any]:
     searcher: Searcher = tree_mem.get_searcher(
         manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
         moscube=False,
-        process_llm=mem_reader.llm,
+        process_llm=mem_reader.general_llm,
     )
     logger.debug("Searcher created")
 
@@ -255,12 +255,13 @@ def init_server() -> dict[str, Any]:
     # Initialize Scheduler
     scheduler_config_dict = APIConfig.get_scheduler_config()
     scheduler_config = SchedulerConfigFactory(
-        backend="optimized_scheduler", config=scheduler_config_dict
+        backend=scheduler_config_dict["backend"],
+        config=scheduler_config_dict["config"],
     )
     mem_scheduler: OptimizedScheduler = SchedulerFactory.from_config(scheduler_config)
     mem_scheduler.initialize_modules(
         chat_llm=llm,
-        process_llm=mem_reader.llm,
+        process_llm=mem_reader.general_llm,
         db_engine=BaseDBManager.create_default_sqlite_engine(),
         mem_reader=mem_reader,
         redis_client=redis_client,
