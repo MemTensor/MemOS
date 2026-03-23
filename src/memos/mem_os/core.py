@@ -132,7 +132,7 @@ class MOSCore:
                 # Configure scheduler general_modules
                 self._mem_scheduler.initialize_modules(
                     chat_llm=self.chat_llm,
-                    process_llm=self.mem_reader.llm,
+                    process_llm=self.mem_reader.general_llm,
                     db_engine=self.user_manager.engine,
                 )
             self._mem_scheduler.start()

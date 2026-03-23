@@ -63,6 +63,8 @@ pip-delete-this-directory.txt
 
 # Unit test / coverage reports
 htmlcov/
+report/
+cov-report/
 .tox/
 .nox/
 .coverage
@@ -225,6 +227,9 @@ cython_debug/
 
 # DS_Store
 .DS_Store
+
+# OpenWork integration assets (managed separately)
+apps/openwork-memos-integration/apps/desktop/public/assets/usecases/
 
 # Outputs and Evaluation Results
 outputs

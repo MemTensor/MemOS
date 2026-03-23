@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>MemOS Local — 交互式演示 | Interactive Demo</title>
+<meta name="description" content="MemOS Local 记忆导入、智能检索、Viewer 管理交互式演示">
+<link rel="icon" href="https://statics.memtensor.com.cn/logo/color-m.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#06080f;--bg-card:rgba(14,18,32,.7);--bg-card-hover:rgba(20,26,48,.8);
+  --border:rgba(99,140,255,.1);--border-glow:rgba(99,140,255,.25);
+  --text:#eef1ff;--text-sec:rgba(200,210,255,.55);--text-thr:rgba(160,175,220,.3);
+  --cyan:#00e5ff;--blue:#638cff;--purple:#b16cff;--magenta:#ff3cac;--green:#00e676;--amber:#ffca28;
+  --grad-main:linear-gradient(135deg,#00e5ff,#638cff,#b16cff);
+  --grad-hot:linear-gradient(135deg,#ff3cac,#b16cff,#638cff);
+  --glow-cyan:0 0 30px rgba(0,229,255,.15);--glow-purple:0 0 30px rgba(177,108,255,.15);
+  --font:'Inter',system-ui,-apple-system,sans-serif;
+  --mono:'SF Mono','Fira Code','JetBrains Mono',monospace;
+  --radius:14px;
+}
+::selection{background:rgba(99,140,255,.3);color:#fff}
+html{scroll-behavior:smooth}
+body{font-family:var(--font);color:var(--text);background:var(--bg);line-height:1.6;overflow-x:hidden}
+a{color:var(--text);text-decoration:none;transition:all .2s}
+
+.grid-bg{position:fixed;inset:0;z-index:0;pointer-events:none;background-image:linear-gradient(rgba(99,140,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(99,140,255,.03) 1px,transparent 1px);background-size:60px 60px}
+.orb{position:fixed;border-radius:50%;filter:blur(80px);pointer-events:none;z-index:0}
+.orb-1{width:600px;height:600px;background:radial-gradient(circle,rgba(0,229,255,.06),transparent 70%);top:-200px;left:-100px;animation:orbFloat 20s ease-in-out infinite}
+.orb-2{width:500px;height:500px;background:radial-gradient(circle,rgba(177,108,255,.05),transparent 70%);bottom:-150px;right:-100px;animation:orbFloat 25s ease-in-out infinite reverse}
+@keyframes orbFloat{0%,100%{transform:translate(0,0)}25%{transform:translate(30px,-40px)}50%{transform:translate(-20px,30px)}75%{transform:translate(40px,20px)}}
+
+.container{max-width:1200px;margin:0 auto;padding:0 24px}
+
+nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:0 24px;backdrop-filter:blur(24px) saturate(1.4);background:rgba(6,8,15,.75);border-bottom:1px solid var(--border)}
+nav .inner{max-width:1200px;margin:0 auto;display:flex;align-items:center;height:60px}
+nav .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:17px}
+nav .brand .icon{font-size:24px}
+nav .brand .sub{font-size:10px;color:var(--text-sec);font-weight:400;display:block;line-height:1.1}
+nav .links{margin-left:auto;display:flex;align-items:center;gap:4px}
+nav .links a{color:var(--text-sec);font-size:13px;font-weight:500;padding:6px 12px;border-radius:8px;transition:all .2s}
+nav .links a:hover{color:var(--text);background:rgba(99,140,255,.06)}
+.btn-nav{background:transparent;color:var(--text-sec);font-weight:600;border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:13px;transition:all .2s}
+.btn-nav:hover{border-color:rgba(99,140,255,.35);color:var(--text);background:rgba(99,140,255,.06)}
+.lang-switch{display:inline-flex;align-items:stretch;margin-left:8px;padding:2px;border:1px solid var(--border);border-radius:8px}
+.lang-switch .lang-btn{background:transparent;border:none;color:var(--text-thr);padding:5px 11px;font-size:12px;font-weight:500;cursor:pointer;border-radius:6px;transition:all .2s}
+.lang-switch .lang-btn:hover{color:var(--text-sec)}
+.lang-switch .lang-btn.active{background:rgba(99,140,255,.08);color:var(--text)}
+body.lang-en .lang-zh{display:none !important}
+body.lang-zh .lang-en{display:none !important}
+
+.hero{padding:100px 0 40px;text-align:center;position:relative;z-index:1}
+.hero h1{font-size:clamp(28px,5vw,52px);font-weight:900;letter-spacing:-.04em;line-height:1.1;margin-bottom:14px}
+.hero h1 .grad{background:var(--grad-main);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero .desc{color:var(--text-sec);font-size:15px;max-width:600px;margin:0 auto 36px;line-height:1.8}
+
+.scene-tabs{display:flex;justify-content:center;gap:6px;margin-bottom:48px;position:relative;z-index:1}
+.scene-tab{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 28px;font-size:14px;font-weight:700;color:var(--text-sec);cursor:pointer;transition:all .25s;backdrop-filter:blur(8px)}
+.scene-tab:hover{border-color:var(--border-glow);color:var(--text)}
+.scene-tab.active{background:var(--grad-main);color:#06080f;border-color:transparent;box-shadow:0 0 24px rgba(0,229,255,.15)}
+
+.scene{display:none;position:relative;z-index:1;animation:fadeUp .5s ease}
+.scene.active{display:block}
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+
+.demo-stage{max-width:960px;margin:0 auto}
+
+.step-bar{display:flex;align-items:center;gap:0;margin-bottom:36px;position:relative}
+.step-bar::before{content:'';position:absolute;top:50%;left:28px;right:28px;height:2px;background:var(--border);transform:translateY(-50%);z-index:0}
+.step-item{display:flex;flex-direction:column;align-items:center;gap:8px;flex:1;position:relative;z-index:1;cursor:pointer;transition:all .3s}
+.step-item .step-dot{width:36px;height:36px;border-radius:50%;background:var(--bg-card);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:var(--text-thr);transition:all .3s}
+.step-item.done .step-dot{background:rgba(0,230,118,.1);border-color:var(--green);color:var(--green)}
+.step-item.active .step-dot{background:var(--grad-main);border-color:transparent;color:#06080f;box-shadow:0 0 20px rgba(0,229,255,.2)}
+.step-item .step-label{font-size:11px;font-weight:600;color:var(--text-thr);transition:color .3s;text-align:center}
+.step-item.active .step-label,.step-item.done .step-label{color:var(--text-sec)}
+
+.step-content{display:none;animation:fadeUp .4s ease}
+.step-content.active{display:block}
+
+.sim-panel{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;backdrop-filter:blur(12px);box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.sim-bar{display:flex;align-items:center;gap:7px;padding:14px 18px;border-bottom:1px solid var(--border)}
+.sim-bar .dots{display:flex;gap:6px}
+.sim-bar .dots span{width:10px;height:10px;border-radius:50%}
+.sim-bar .title{flex:1;text-align:center;font-size:11px;color:var(--text-thr);font-family:var(--mono)}
+.sim-body{padding:24px;min-height:320px}
+
+.sim-stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.sim-stat{background:rgba(99,140,255,.04);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center}
+.sim-stat .val{font-size:28px;font-weight:900;background:var(--grad-main);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.sim-stat .lbl{font-size:10px;color:var(--text-thr);margin-top:2px}
+
+.sim-progress{margin:16px 0}
+.sim-progress-bar{height:8px;border-radius:4px;background:rgba(99,140,255,.08);overflow:hidden;position:relative}
+.sim-progress-fill{height:100%;border-radius:4px;background:var(--grad-main);transition:width 1.5s ease;width:0}
+.sim-progress-label{display:flex;justify-content:space-between;font-size:11px;color:var(--text-sec);margin-top:6px}
+
+.sim-log{max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;background:rgba(10,14,28,.5);padding:12px;font-family:var(--mono);font-size:11px;line-height:1.9}
+.sim-log::-webkit-scrollbar{width:4px}
+.sim-log::-webkit-scrollbar-thumb{background:rgba(99,140,255,.15);border-radius:2px}
+.log-ok{color:var(--green)}.log-skip{color:var(--amber)}.log-dup{color:var(--blue)}.log-err{color:var(--magenta)}.log-dim{color:var(--text-thr)}
+
+.sim-search{display:flex;gap:10px;margin-bottom:20px}
+.sim-search input{flex:1;background:rgba(10,14,28,.5);border:1px solid var(--border);border-radius:10px;padding:12px 16px;font-size:14px;font-family:var(--font);color:var(--text);outline:none;transition:border-color .2s}
+.sim-search input:focus{border-color:var(--cyan)}
+.sim-search button{background:var(--grad-main);color:#06080f;border:none;border-radius:10px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer;transition:all .2s}
+.sim-search button:hover{transform:translateY(-1px);box-shadow:0 0 20px rgba(0,229,255,.2)}
+
+.sim-results{display:flex;flex-direction:column;gap:10px}
+.sim-result{background:rgba(99,140,255,.03);border:1px solid var(--border);border-radius:10px;padding:14px 16px;transition:all .2s;animation:fadeUp .3s ease}
+.sim-result:hover{border-color:var(--border-glow);background:rgba(99,140,255,.06)}
+.sim-result .r-header{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.sim-result .r-role{font-size:9px;font-weight:700;padding:2px 8px;border-radius:4px;text-transform:uppercase}
+.r-role-user{background:rgba(0,229,255,.1);color:var(--cyan)}
+.r-role-assistant{background:rgba(0,230,118,.1);color:var(--green)}
+.sim-result .r-score{margin-left:auto;font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px;background:rgba(177,108,255,.1);color:var(--purple)}
+.sim-result .r-summary{font-size:12px;color:var(--text-sec);line-height:1.7}
+.sim-result .r-meta{font-size:10px;color:var(--text-thr);margin-top:6px;display:flex;gap:12px}
+
+.retrieval-flow{display:flex;align-items:center;justify-content:center;gap:0;margin-bottom:24px;flex-wrap:wrap}
+.rf-node{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px 16px;text-align:center;transition:all .3s}
+.rf-node.lit{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+.rf-node .rf-icon{font-size:18px;margin-bottom:4px}
+.rf-node .rf-label{font-size:10px;font-weight:700;color:var(--text-sec)}
+.rf-arrow{color:var(--text-thr);font-size:16px;padding:0 6px}
+
+.viewer-tabs{display:flex;gap:3px;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.viewer-tab{font-size:11px;padding:6px 14px;border-radius:8px;color:var(--text-thr);cursor:pointer;transition:all .2s;font-weight:600}
+.viewer-tab:hover{color:var(--text-sec);background:rgba(99,140,255,.04)}
+.viewer-tab.active{background:var(--grad-main);color:#06080f}
+.viewer-pane{display:none;animation:fadeUp .3s ease}
+.viewer-pane.active{display:block}
+
+.v-stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+.v-stat{background:rgba(99,140,255,.04);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center}
+.v-stat .v-val{font-size:22px;font-weight:900;color:var(--text)}
+.v-stat .v-lbl{font-size:9px;color:var(--text-thr);margin-top:2px}
+
+.v-list{display:flex;flex-direction:column;gap:6px}
+.v-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:8px;border:1px solid var(--border);transition:all .15s;font-size:11px}
+.v-item:hover{background:rgba(99,140,255,.04);border-color:var(--border-glow)}
+.v-item .v-role{font-size:8px;font-weight:700;padding:2px 6px;border-radius:3px;text-transform:uppercase;flex-shrink:0}
+.v-item .v-text{color:var(--text-sec);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.v-item .v-time{color:var(--text-thr);font-size:9px;flex-shrink:0}
+.v-item .v-badge{font-size:8px;padding:1px 6px;border-radius:4px;font-weight:600;flex-shrink:0}
+
+.task-card{background:rgba(99,140,255,.03);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:10px;transition:all .2s}
+.task-card:hover{border-color:var(--border-glow)}
+.task-card h5{font-size:13px;font-weight:700;margin-bottom:4px}
+.task-card .t-meta{font-size:10px;color:var(--text-thr);display:flex;gap:10px;margin-bottom:6px}
+.task-card .t-status{font-size:9px;font-weight:700;padding:2px 8px;border-radius:4px}
+.t-completed{background:rgba(0,230,118,.1);color:var(--green)}
+.t-skipped{background:rgba(255,202,40,.1);color:var(--amber)}
+.task-card p{font-size:11px;color:var(--text-sec);line-height:1.7;margin:0}
+
+.skill-card{background:rgba(177,108,255,.03);border:1px solid rgba(177,108,255,.12);border-radius:10px;padding:16px;margin-bottom:10px}
+.skill-card h5{font-size:13px;font-weight:700;margin-bottom:4px;color:var(--purple)}
+.skill-card .s-meta{font-size:10px;color:var(--text-thr);display:flex;gap:10px;margin-bottom:6px}
+.skill-card p{font-size:11px;color:var(--text-sec);line-height:1.7;margin:0}
+
+.action-row{display:flex;gap:10px;margin-top:20px;justify-content:center}
+.btn-sim{display:inline-flex;align-items:center;gap:8px;padding:12px 28px;border-radius:12px;font-size:14px;font-weight:700;border:none;cursor:pointer;transition:all .25s}
+.btn-sim-primary{background:var(--grad-main);color:#06080f}
+.btn-sim-primary:hover{transform:translateY(-2px);box-shadow:0 0 24px rgba(0,229,255,.2)}
+.btn-sim-outline{background:transparent;color:var(--text);border:1px solid var(--border)}
+.btn-sim-outline:hover{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+
+footer{border-top:1px solid var(--border);padding:36px 0;position:relative;z-index:1;text-align:center}
+footer .copy{color:var(--text-thr);font-size:10px}
+
+@media(max-width:900px){
+  .sim-stat-row{grid-template-columns:repeat(2,1fr)}
+  .retrieval-flow{gap:4px}
+  .v-stat-row{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:600px){
+  .scene-tabs{flex-direction:column;align-items:stretch}
+  .sim-stat-row{grid-template-columns:1fr}
+  .step-bar{flex-direction:column;gap:12px}
+  .step-bar::before{display:none}
+  nav .links a:not(.btn-nav):not(.lang-switch){display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+<div class="orb orb-1"></div>
+<div class="orb orb-2"></div>
+
+<nav>
+<div class="inner">
+  <a href="../index.html" class="brand"><img src="https://statics.memtensor.com.cn/logo/white-memos.svg" alt="MemOS" style="width:55px;height:55px"><span>MemOS<sup style="font-size:9px;font-weight:600;opacity:.6;margin-left:2px;vertical-align:super">Local</sup><span class="sub lang-zh">交互式演示</span><span class="sub lang-en">Interactive Demo</span></span></a>
+  <div class="links">
+    <a href="../index.html" class="lang-zh">← 返回主页</a><a href="../index.html" class="lang-en">← Back Home</a>
+    <a href="../docs/index.html" class="btn-nav lang-zh">文档</a><a href="../docs/index.html" class="btn-nav lang-en">Docs</a>
+    <span class="lang-switch"><button type="button" class="lang-btn active" data-lang="zh">中</button><button type="button" class="lang-btn" data-lang="en">EN</button></span>
+  </div>
+</div>
+</nav>
+
+<section class="hero">
+<div class="container">
+  <h1><span class="lang-zh">沉浸体验 <span class="grad">MemOS Local</span></span><span class="lang-en">Experience <span class="grad">MemOS Local</span></span></h1>
+  <p class="desc"><span class="lang-zh">交互式演示记忆导入、智能检索和 Viewer 管理的完整流程。所有数据均为模拟，无需安装即可体验。</span><span class="lang-en">Interactive demo of memory import, smart retrieval, and Viewer management. All data is simulated — no installation required.</span></p>
+</div>
+</section>
+
+<div class="container">
+  <div class="scene-tabs">
+    <div class="scene-tab active" onclick="switchScene('import')"><span class="lang-zh">🦐 记忆导入</span><span class="lang-en">🦐 Memory Import</span></div>
+    <div class="scene-tab" onclick="switchScene('search')"><span class="lang-zh">🔍 智能检索</span><span class="lang-en">🔍 Smart Retrieval</span></div>
+    <div class="scene-tab" onclick="switchScene('viewer')"><span class="lang-zh">📊 Viewer 管理</span><span class="lang-en">📊 Viewer Dashboard</span></div>
+  </div>
+</div>
+
+<!-- ═══ Scene 1: Memory Import ═══ -->
+<div class="scene active" id="scene-import">
+<div class="container"><div class="demo-stage">
+
+  <div class="step-bar" id="import-steps">
+    <div class="step-item active" onclick="importStep(0)">
+      <div class="step-dot">1</div>
+      <div class="step-label"><span class="lang-zh">扫描记忆</span><span class="lang-en">Scan</span></div>
+    </div>
+    <div class="step-item" onclick="importStep(1)">
+      <div class="step-dot">2</div>
+      <div class="step-label"><span class="lang-zh">导入迁移</span><span class="lang-en">Import</span></div>
+    </div>
+    <div class="step-item" onclick="importStep(2)">
+      <div class="step-dot">3</div>
+      <div class="step-label"><span class="lang-zh">导入完成</span><span class="lang-en">Complete</span></div>
+    </div>
+  </div>
+
+  <!-- Step 0: Scan -->
+  <div class="step-content active" id="import-step-0">
+    <div class="sim-panel">
+      <div class="sim-bar"><div class="dots"><span style="background:#ff5f57"></span><span style="background:#ffbd2e"></span><span style="background:#28ca42"></span></div><div class="title">Memory Viewer — Import</div></div>
+      <div class="sim-body">
+        <div style="text-align:center;margin-bottom:20px">
+          <div style="font-size:48px;margin-bottom:8px">🦐</div>
+          <h3 style="font-size:18px;font-weight:800;margin-bottom:6px"><span class="lang-zh">导入 OpenClaw 记忆</span><span class="lang-en">Import OpenClaw Memories</span></h3>
+          <p style="font-size:13px;color:var(--text-sec)"><span class="lang-zh">将 OpenClaw 内置的记忆数据和对话历史迁移到智能记忆系统。</span><span class="lang-en">Migrate OpenClaw's built-in memory data and conversation history to the intelligent memory system.</span></p>
+        </div>
+        <div class="sim-stat-row">
+          <div class="sim-stat"><div class="val">3</div><div class="lbl"><span class="lang-zh">SQLite 文件</span><span class="lang-en">SQLite Files</span></div></div>
+          <div class="sim-stat"><div class="val">1,349</div><div class="lbl"><span class="lang-zh">对话消息</span><span class="lang-en">Messages</span></div></div>
+          <div class="sim-stat"><div class="val">55</div><div class="lbl"><span class="lang-zh">会话</span><span class="lang-en">Sessions</span></div></div>
+          <div class="sim-stat"><div class="val">✓</div><div class="lbl"><span class="lang-zh">配置就绪</span><span class="lang-en">Config Ready</span></div></div>
+        </div>
+        <div class="action-row">
+          <button class="btn-sim btn-sim-primary" onclick="importStep(1)"><span class="lang-zh">开始导入 →</span><span class="lang-en">Start Import →</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 1: Importing -->
+  <div class="step-content" id="import-step-1">
+    <div class="sim-panel">
+      <div class="sim-bar"><div class="dots"><span style="background:#ff5f57"></span><span style="background:#ffbd2e"></span><span style="background:#28ca42"></span></div><div class="title">Memory Viewer — Importing...</div></div>
+      <div class="sim-body">
+        <div class="sim-stat-row">
+          <div class="sim-stat"><div class="val" id="s-stored">0</div><div class="lbl" style="color:var(--green)"><span class="lang-zh">✓ 已导入</span><span class="lang-en">✓ Stored</span></div></div>
+          <div class="sim-stat"><div class="val" id="s-skipped">0</div><div class="lbl" style="color:var(--amber)"><span class="lang-zh">⏭ 跳过</span><span class="lang-en">⏭ Skipped</span></div></div>
+          <div class="sim-stat"><div class="val" id="s-merged">0</div><div class="lbl" style="color:var(--blue)"><span class="lang-zh">🔀 合并</span><span class="lang-en">🔀 Merged</span></div></div>
+          <div class="sim-stat"><div class="val" id="s-errors">0</div><div class="lbl" style="color:var(--magenta)"><span class="lang-zh">✕ 错误</span><span class="lang-en">✕ Errors</span></div></div>
+        </div>
+        <div class="sim-progress">
+          <div class="sim-progress-bar"><div class="sim-progress-fill" id="import-bar"></div></div>
+          <div class="sim-progress-label"><span id="import-pct">0%</span><span id="import-count">0 / 597</span></div>
+        </div>
+        <div class="sim-log" id="import-log"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2: Complete -->
+  <div class="step-content" id="import-step-2">
+    <div class="sim-panel">
+      <div class="sim-bar"><div class="dots"><span style="background:#ff5f57"></span><span style="background:#ffbd2e"></span><span style="background:#28ca42"></span></div><div class="title">Memory Viewer — Import Complete</div></div>
+      <div class="sim-body">
+        <div style="text-align:center;margin-bottom:24px">
+          <div style="font-size:48px;margin-bottom:8px">✅</div>
+          <h3 style="font-size:18px;font-weight:800;margin-bottom:6px"><span class="lang-zh">导入完成</span><span class="lang-en">Import Complete</span></h3>
+          <p style="font-size:13px;color:var(--text-sec)"><span class="lang-zh">共处理 597 条记忆：422 条导入，156 条智能去重跳过，19 条合并升级。</span><span class="lang-en">Processed 597 memories: 422 imported, 156 deduped, 19 merged.</span></p>
+        </div>
+        <div class="sim-stat-row">
+          <div class="sim-stat"><div class="val" style="-webkit-text-fill-color:var(--green);color:var(--green)">422</div><div class="lbl"><span class="lang-zh">已导入</span><span class="lang-en">Imported</span></div></div>
+          <div class="sim-stat"><div class="val" style="-webkit-text-fill-color:var(--amber);color:var(--amber)">156</div><div class="lbl"><span class="lang-zh">智能跳过</span><span class="lang-en">Smart Skip</span></div></div>
+          <div class="sim-stat"><div class="val" style="-webkit-text-fill-color:var(--blue);color:var(--blue)">19</div><div class="lbl"><span class="lang-zh">合并升级</span><span class="lang-en">Merged</span></div></div>
+          <div class="sim-stat"><div class="val" style="-webkit-text-fill-color:var(--magenta);color:var(--magenta)">0</div><div class="lbl"><span class="lang-zh">错误</span><span class="lang-en">Errors</span></div></div>
+        </div>
+        <div class="action-row">
+          <button class="btn-sim btn-sim-primary" onclick="switchScene('search')"><span class="lang-zh">体验智能检索 →</span><span class="lang-en">Try Smart Retrieval →</span></button>
+          <button class="btn-sim btn-sim-outline" onclick="importStep(0)"><span class="lang-zh">重新演示</span><span class="lang-en">Replay</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div></div>
+</div>
+
+<!-- ═══ Scene 2: Smart Retrieval ═══ -->
+<div class="scene" id="scene-search">
+<div class="container"><div class="demo-stage">
+
+  <div class="sim-panel">
+    <div class="sim-bar"><div class="dots"><span style="background:#ff5f57"></span><span style="background:#ffbd2e"></span><span style="background:#28ca42"></span></div><div class="title">Memory Viewer — Search</div></div>
+    <div class="sim-body">
+      <div class="sim-search">
+        <input type="text" id="search-input" placeholder="搜索记忆... / Search memories..." value="">
+        <button onclick="runSearch()"><span class="lang-zh">检索</span><span class="lang-en">Search</span></button>
+      </div>
+
+      <div class="retrieval-flow" id="rf-flow" style="display:none">
+        <div class="rf-node" id="rf-fts"><div class="rf-icon">📝</div><div class="rf-label">FTS5</div></div>
+        <div class="rf-arrow">→</div>
+        <div class="rf-node" id="rf-vec"><div class="rf-icon">🧮</div><div class="rf-label">Vector</div></div>
+        <div class="rf-arrow">→</div>
+        <div class="rf-node" id="rf-rrf"><div class="rf-icon">🔀</div><div class="rf-label">RRF</div></div>
+        <div class="rf-arrow">→</div>
+        <div class="rf-node" id="rf-mmr"><div class="rf-icon">🎯</div><div class="rf-label">MMR</div></div>
+        <div class="rf-arrow">→</div>
+        <div class="rf-node" id="rf-out"><div class="rf-icon">📋</div><div class="rf-label">Results</div></div>
+      </div>
+
+      <div id="search-results"></div>
+
+      <div id="search-presets" style="margin-top:20px;text-align:center">
+        <p style="font-size:12px;color:var(--text-thr);margin-bottom:10px"><span class="lang-zh">试试这些查询：</span><span class="lang-en">Try these queries:</span></p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
+          <button style="background:rgba(99,140,255,.06);border:1px solid var(--border);border-radius:8px;padding:6px 14px;font-size:12px;color:var(--text-sec);cursor:pointer;transition:all .2s;font-family:var(--font)" onclick="presetSearch('阿里云ECS安全组')"><span class="lang-zh">阿里云ECS安全组</span><span class="lang-en">Alibaba Cloud ECS</span></button>
+          <button style="background:rgba(99,140,255,.06);border:1px solid var(--border);border-radius:8px;padding:6px 14px;font-size:12px;color:var(--text-sec);cursor:pointer;transition:all .2s;font-family:var(--font)" onclick="presetSearch('红烧肉做法')"><span class="lang-zh">红烧肉做法</span><span class="lang-en">Braised pork recipe</span></button>
+          <button style="background:rgba(99,140,255,.06);border:1px solid var(--border);border-radius:8px;padding:6px 14px;font-size:12px;color:var(--text-sec);cursor:pointer;transition:all .2s;font-family:var(--font)" onclick="presetSearch('工作经历整理')"><span class="lang-zh">工作经历整理</span><span class="lang-en">Work experience</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div></div>
+</div>
+
+<!-- ═══ Scene 3: Viewer Dashboard ═══ -->
+<div class="scene" id="scene-viewer">
+<div class="container"><div class="demo-stage">
+
+  <div class="sim-panel">
+    <div class="sim-bar"><div class="dots"><span style="background:#ff5f57"></span><span style="background:#ffbd2e"></span><span style="background:#28ca42"></span></div><div class="title">Memory Viewer — http://127.0.0.1:18799</div></div>
+    <div class="sim-body">
+      <div class="viewer-tabs">
+        <div class="viewer-tab active" onclick="viewerTab('memories')"><span class="lang-zh">📚 记忆</span><span class="lang-en">📚 Memories</span></div>
+        <div class="viewer-tab" onclick="viewerTab('tasks')"><span class="lang-zh">📋 任务</span><span class="lang-en">📋 Tasks</span></div>
+        <div class="viewer-tab" onclick="viewerTab('skills')"><span class="lang-zh">🧠 技能</span><span class="lang-en">🧠 Skills</span></div>
+        <div class="viewer-tab" onclick="viewerTab('analytics')"><span class="lang-zh">📊 分析</span><span class="lang-en">📊 Analytics</span></div>
+        <div class="viewer-tab" onclick="viewerTab('logs')"><span class="lang-zh">📝 日志</span><span class="lang-en">📝 Logs</span></div>
+        <div class="viewer-tab" onclick="viewerTab('vimport')"><span class="lang-zh">📥 导入</span><span class="lang-en">📥 Import</span></div>
+        <div class="viewer-tab" onclick="viewerTab('settings')"><span class="lang-zh">⚙ 设置</span><span class="lang-en">⚙ Settings</span></div>
+      </div>
+
+      <!-- Memories Pane -->
+      <div class="viewer-pane active" id="vp-memories">
+        <div class="v-stat-row">
+          <div class="v-stat" style="border-left:2px solid var(--cyan)"><div class="v-val">597</div><div class="v-lbl"><span class="lang-zh">记忆</span><span class="lang-en">Memories</span></div></div>
+          <div class="v-stat" style="border-left:2px solid var(--green)"><div class="v-val">55</div><div class="v-lbl"><span class="lang-zh">会话</span><span class="lang-en">Sessions</span></div></div>
+          <div class="v-stat" style="border-left:2px solid var(--amber)"><div class="v-val">422</div><div class="v-lbl"><span class="lang-zh">嵌入</span><span class="lang-en">Embeddings</span></div></div>
+          <div class="v-stat" style="border-left:2px solid var(--magenta)"><div class="v-val">6</div><div class="v-lbl"><span class="lang-zh">天数</span><span class="lang-en">Days</span></div></div>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:12px;align-items:center">
+          <div style="flex:1;background:rgba(10,14,28,.5);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:11px;color:var(--text-thr);display:flex;align-items:center;gap:6px"><span>🔍</span><span class="lang-zh">搜索记忆（支持语义搜索）</span><span class="lang-en">Search memories (supports semantic search)</span></div>
+          <div style="display:flex;gap:3px">
+            <span style="font-size:10px;padding:4px 10px;border-radius:6px;background:rgba(0,229,255,.08);color:var(--cyan);border:1px solid rgba(0,229,255,.15);font-weight:600">All</span>
+            <span style="font-size:10px;padding:4px 10px;border-radius:6px;color:var(--text-thr)">User</span>
+            <span style="font-size:10px;padding:4px 10px;border-radius:6px;color:var(--text-thr)">Assistant</span>
+          </div>
+        </div>
+        <div class="v-list">
+          <div class="v-item"><span class="v-role" style="background:rgba(0,229,255,.1);color:var(--cyan)">USER</span><span class="v-text"><span class="lang-zh">帮我查一下阿里云ECS安全组怎么配置，需要开放6333端口给Qdrant使用</span><span class="lang-en">How to configure Alibaba Cloud ECS security groups? Need to open port 6333 for Qdrant</span></span><span class="v-badge" style="background:rgba(255,60,172,.1);color:var(--magenta)">🦐</span><span class="v-time">03/04 10:41</span></div>
+          <div class="v-item"><span class="v-role" style="background:rgba(0,230,118,.1);color:var(--green)">ASST</span><span class="v-text"><span class="lang-zh">安全组配置需要在ECS控制台中设置入站和出站规则，包括端口范围、协议类型、授权对象等。具体步骤如下：1. 登录ECS控制台 → 网络与安全 → 安全组；2. 选择实例所在安全组 → 添加规则；3. 协议类型选 TCP，端口范围填 6333/6333，授权对象填你的客户端 IP</span><span class="lang-en">Security group configuration requires setting inbound and outbound rules in ECS console, including port range, protocol type, and authorization target. Steps: 1. Login ECS console → Network & Security → Security Groups; 2. Select instance security group → Add Rule; 3. Protocol TCP, port 6333/6333, authorize your client IP</span></span><span class="v-badge" style="background:rgba(255,60,172,.1);color:var(--magenta)">🦐</span><span class="v-time">03/04 10:41</span></div>
+          <div class="v-item"><span class="v-role" style="background:rgba(0,229,255,.1);color:var(--cyan)">USER</span><span class="v-text"><span class="lang-zh">红烧肉怎么做？要那种入口即化的</span><span class="lang-en">How to make braised pork? The melt-in-mouth kind</span></span><span class="v-badge" style="background:rgba(255,60,172,.1);color:var(--magenta)">🦐</span><span class="v-time">03/04 09:42</span></div>
+          <div class="v-item"><span class="v-role" style="background:rgba(0,230,118,.1);color:var(--green)">ASST</span><span class="v-text"><span class="lang-zh">经典红烧肉做法：五花肉切块冷水下锅焯水，热锅炒糖色至枣红色，加入五花肉翻炒上色，加生抽老抽料酒，小火慢炖1.5小时。入口即化的关键：小火慢炖、糖色不要炒过头、焯水后冰水激一下</span><span class="lang-en">Classic braised pork recipe: cut pork belly into cubes, blanch in cold water, stir-fry sugar caramel to dark red, add pork belly and coat evenly, add soy sauce and cooking wine, simmer on low heat for 1.5 hours. Key to melt-in-mouth: low heat slow simmer, don't over-caramelize sugar, ice bath after blanching</span></span><span class="v-time">03/04 09:42</span></div>
+          <div class="v-item"><span class="v-role" style="background:rgba(0,229,255,.1);color:var(--cyan)">USER</span><span class="v-text"><span class="lang-zh">帮我整理一下我的工作经历，用于更新简历</span><span class="lang-en">Help me organize my work experience for resume update</span></span><span class="v-time">03/05 09:07</span></div>
+        </div>
+        <div style="text-align:center;margin-top:12px;font-size:10px;color:var(--text-thr)">1 - 5 / 597</div>
+      </div>
+
+      <!-- Tasks Pane -->
+      <div class="viewer-pane" id="vp-tasks">
+        <div style="display:flex;gap:16px;margin-bottom:16px">
+          <div style="text-align:center"><span style="font-size:20px;font-weight:900;color:var(--text)">4</span><span style="display:block;font-size:9px;color:var(--text-thr)"><span class="lang-zh">总任务</span><span class="lang-en">Total</span></span></div>
+          <div style="text-align:center"><span style="font-size:20px;font-weight:900;color:var(--green)">3</span><span style="display:block;font-size:9px;color:var(--text-thr)"><span class="lang-zh">已完成</span><span class="lang-en">Completed</span></span></div>
+          <div style="text-align:center"><span style="font-size:20px;font-weight:900;color:var(--cyan)">1</span><span style="display:block;font-size:9px;color:var(--text-thr)"><span class="lang-zh">进行中</span><span class="lang-en">Active</span></span></div>
+          <div style="text-align:center"><span style="font-size:20px;font-weight:900;color:var(--amber)">0</span><span style="display:block;font-size:9px;color:var(--text-thr)"><span class="lang-zh">跳过</span><span class="lang-en">Skipped</span></span></div>
+        </div>
+        <div class="task-card"><h5><span class="lang-zh">阿里云ECS安全组设置与Qdrant集成</span><span class="lang-en">Alibaba Cloud ECS Security Groups & Qdrant Integration</span></h5><div class="t-meta"><span class="t-status t-completed"><span class="lang-zh">已完成</span><span class="lang-en">Completed</span></span><span><span class="lang-zh">📄 98 条记忆</span><span class="lang-en">📄 98 memories</span></span><span>03/04</span></div><p><span class="lang-zh">用户请求帮助配置阿里云ECS安全组以支持Qdrant向量数据库的集成部署，涉及端口开放、防火墙规则设置和安全最佳实践。</span><span class="lang-en">User requested help configuring Alibaba Cloud ECS security groups for Qdrant vector database integration deployment, involving port opening, firewall rules, and security best practices.</span></p></div>
+        <div class="task-card"><h5><span class="lang-zh">红烧肉做法</span><span class="lang-en">Braised Pork Recipe</span></h5><div class="t-meta"><span class="t-status t-completed"><span class="lang-zh">已完成</span><span class="lang-en">Completed</span></span><span><span class="lang-zh">📄 4 条记忆</span><span class="lang-en">📄 4 memories</span></span><span>03/04</span></div><p><span class="lang-zh">用户询问红烧肉的详细做法，助手提供了从选材到烹饪的完整步骤，包括入口即化的关键技巧。</span><span class="lang-en">User asked for detailed braised pork recipe. Assistant provided complete steps from ingredient selection to cooking, including key tips for melt-in-mouth texture.</span></p></div>
+        <div class="task-card"><h5><span class="lang-zh">工作经历整理</span><span class="lang-en">Work Experience Summary</span></h5><div class="t-meta"><span class="t-status t-completed"><span class="lang-zh">已完成</span><span class="lang-en">Completed</span></span><span><span class="lang-zh">📄 8 条记忆</span><span class="lang-en">📄 8 memories</span></span><span>03/05</span></div><p><span class="lang-zh">整理和结构化用户的工作经历信息，用于简历和职业规划。涵盖2018-2021阿里云高级工程师及近期AI Agent项目。</span><span class="lang-en">Organized and structured user's work experience for resume and career planning. Covers 2018-2021 Alibaba Cloud senior engineer and recent AI Agent projects.</span></p></div>
+        <div class="task-card"><h5><span class="lang-zh">OpenClaw 插件与记忆管理</span><span class="lang-en">OpenClaw Plugin & Memory Management</span></h5><div class="t-meta"><span class="t-status" style="background:rgba(0,229,255,.1);color:var(--cyan);font-size:9px;padding:2px 8px;border-radius:4px;font-weight:700"><span class="lang-zh">进行中</span><span class="lang-en">Active</span></span><span><span class="lang-zh">📄 19 条记忆</span><span class="lang-en">📄 19 memories</span></span><span>03/05</span></div><p><span class="lang-zh">用户探索 OpenClaw 的插件系统和 MemOS 记忆管理功能，包括安装配置、Viewer 使用和记忆迁移。</span><span class="lang-en">User explored OpenClaw's plugin system and MemOS memory management features, including installation, Viewer usage, and memory migration.</span></p></div>
+      </div>
+
+      <!-- Skills Pane -->
+      <div class="viewer-pane" id="vp-skills">
+        <div style="display:flex;gap:16px;margin-bottom:16px">
+          <div style="text-align:center"><span style="font-size:20px;font-weight:900;color:var(--text)">2</span><span style="display:block;font-size:9px;color:var(--text-thr)"><span class="lang-zh">总技能</span><span class="lang-en">Total</span></span></div>
+        </div>
+        <div class="skill-card"><h5>🧠 memos-memory-guide</h5><div class="s-meta"><span style="background:rgba(0,230,118,.1);color:var(--green);font-size:9px;padding:2px 8px;border-radius:4px;font-weight:700"><span class="lang-zh">生效中</span><span class="lang-en">Active</span></span><span>v1</span><span><span class="lang-zh">质量: 8.5</span><span class="lang-en">Quality: 8.5</span></span><span style="font-size:9px;color:var(--text-thr)"><span class="lang-zh">已安装</span><span class="lang-en">Installed</span></span></div><p><span class="lang-zh">Agent 记忆工具使用指南 — 指导 Agent 何时使用 memory_search、memory_timeline、task_summary、skill_get 等工具，自动优化召回策略。</span><span class="lang-en">Agent memory tool usage guide — guides the Agent on when to use memory_search, memory_timeline, task_summary, skill_get tools, auto-optimizing recall strategy.</span></p></div>
+        <div class="skill-card"><h5>⚡ cloud-infrastructure-setup</h5><div class="s-meta"><span style="background:rgba(0,230,118,.1);color:var(--green);font-size:9px;padding:2px 8px;border-radius:4px;font-weight:700"><span class="lang-zh">生效中</span><span class="lang-en">Active</span></span><span>v2</span><span><span class="lang-zh">质量: 7.8</span><span class="lang-en">Quality: 7.8</span></span><span style="font-size:9px;color:var(--text-thr)"><span class="lang-zh">已安装</span><span class="lang-en">Installed</span></span></div><p><span class="lang-zh">从多次云基础设施配置对话中提炼的技能 — 安全组配置、端口管理、服务部署的标准化流程与踩坑警告。</span><span class="lang-en">Skill distilled from multiple cloud infrastructure conversations — standardized processes for security groups, port management, service deployment, and pitfall warnings.</span></p></div>
+      </div>
+
+      <!-- Analytics Pane -->
+      <div class="viewer-pane" id="vp-analytics">
+        <div class="v-stat-row">
+          <div class="v-stat" style="border-left:2px solid var(--cyan)"><div class="v-val">597</div><div class="v-lbl"><span class="lang-zh">总记忆</span><span class="lang-en">Total Memories</span></div></div>
+          <div class="v-stat" style="border-left:2px solid var(--green)"><div class="v-val">+47</div><div class="v-lbl"><span class="lang-zh">今日写入</span><span class="lang-en">Writes Today</span></div></div>
+          <div class="v-stat" style="border-left:2px solid var(--text-sec)"><div class="v-val">55</div><div class="v-lbl"><span class="lang-zh">会话</span><span class="lang-en">Sessions</span></div></div>
+          <div class="v-stat" style="border-left:2px solid var(--amber)"><div class="v-val">422</div><div class="v-lbl"><span class="lang-zh">嵌入</span><span class="lang-en">Embeddings</span></div></div>
+        </div>
+        <div style="margin-top:16px">
+          <p style="font-size:12px;font-weight:700;color:var(--text-sec);margin-bottom:12px"><span class="lang-zh">📊 每日记忆写入量</span><span class="lang-en">📊 Memory Writes per Day</span></p>
+          <div style="display:flex;align-items:flex-end;gap:4px;height:80px;padding:4px 0">
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:100%;border-radius:3px 3px 0 0;background:var(--grad-main);height:20px"></div><span style="font-size:7px;color:var(--text-thr)">02/28</span></div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:100%;border-radius:3px 3px 0 0;background:var(--grad-main);height:35px"></div><span style="font-size:7px;color:var(--text-thr)">03/01</span></div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:100%;border-radius:3px 3px 0 0;background:var(--grad-main);height:50px"></div><span style="font-size:7px;color:var(--text-thr)">03/02</span></div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:100%;border-radius:3px 3px 0 0;background:var(--grad-main);height:28px"></div><span style="font-size:7px;color:var(--text-thr)">03/03</span></div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:100%;border-radius:3px 3px 0 0;background:var(--grad-main);height:65px"></div><span style="font-size:7px;color:var(--text-thr)">03/04</span></div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:100%;border-radius:3px 3px 0 0;background:var(--grad-main);height:42px"></div><span style="font-size:7px;color:var(--text-thr)">03/05</span></div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:100%;border-radius:3px 3px 0 0;background:var(--grad-main);height:10px"></div><span style="font-size:7px;color:var(--text-thr)">03/06</span></div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:20px">
+          <div>
+            <p style="font-size:11px;font-weight:700;color:var(--text-sec);margin-bottom:8px"><span class="lang-zh">👤 按角色</span><span class="lang-en">👤 By Role</span></p>
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;color:var(--text-sec);width:60px">user</span><div style="flex:1;height:6px;border-radius:3px;background:rgba(99,140,255,.08);overflow:hidden"><div style="width:45%;height:100%;border-radius:3px;background:var(--cyan)"></div></div><span style="font-size:9px;color:var(--text-thr)">269</span></div>
+              <div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;color:var(--text-sec);width:60px">assistant</span><div style="flex:1;height:6px;border-radius:3px;background:rgba(99,140,255,.08);overflow:hidden"><div style="width:52%;height:100%;border-radius:3px;background:var(--green)"></div></div><span style="font-size:9px;color:var(--text-thr)">311</span></div>
+              <div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;color:var(--text-sec);width:60px">system</span><div style="flex:1;height:6px;border-radius:3px;background:rgba(99,140,255,.08);overflow:hidden"><div style="width:3%;height:100%;border-radius:3px;background:var(--purple)"></div></div><span style="font-size:9px;color:var(--text-thr)">17</span></div>
+            </div>
+          </div>
+          <div>
+            <p style="font-size:11px;font-weight:700;color:var(--text-sec);margin-bottom:8px"><span class="lang-zh">📝 按类型</span><span class="lang-en">📝 By Kind</span></p>
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;color:var(--text-sec);width:60px">paragraph</span><div style="flex:1;height:6px;border-radius:3px;background:rgba(99,140,255,.08);overflow:hidden"><div style="width:60%;height:100%;border-radius:3px;background:var(--blue)"></div></div><span style="font-size:9px;color:var(--text-thr)">358</span></div>
+              <div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;color:var(--text-sec);width:60px">code_block</span><div style="flex:1;height:6px;border-radius:3px;background:rgba(99,140,255,.08);overflow:hidden"><div style="width:25%;height:100%;border-radius:3px;background:var(--amber)"></div></div><span style="font-size:9px;color:var(--text-thr)">149</span></div>
+              <div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;color:var(--text-sec);width:60px">dialog</span><div style="flex:1;height:6px;border-radius:3px;background:rgba(99,140,255,.08);overflow:hidden"><div style="width:15%;height:100%;border-radius:3px;background:var(--magenta)"></div></div><span style="font-size:9px;color:var(--text-thr)">90</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Logs Pane -->
+      <div class="viewer-pane" id="vp-logs">
+        <div style="display:flex;gap:6px;margin-bottom:12px;align-items:center">
+          <span style="font-size:10px;padding:4px 10px;border-radius:6px;background:rgba(0,229,255,.08);color:var(--cyan);border:1px solid rgba(0,229,255,.15);font-weight:600">All</span>
+          <span style="font-size:10px;padding:4px 10px;border-radius:6px;color:var(--text-thr)">auto_recall</span>
+          <span style="font-size:10px;padding:4px 10px;border-radius:6px;color:var(--text-thr)">memory_search</span>
+          <span style="font-size:10px;padding:4px 10px;border-radius:6px;color:var(--text-thr)">memory_add</span>
+        </div>
+        <div class="v-list">
+          <div class="v-item"><span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:rgba(0,229,255,.1);color:var(--cyan);flex-shrink:0">auto_recall</span><span class="v-text" style="font-family:var(--mono);font-size:10px"><span class="lang-zh">query: "帮我查一下阿里云ECS安全组" → 3 results (142ms)</span><span class="lang-en">query: "Alibaba Cloud ECS security groups" → 3 results (142ms)</span></span><span class="v-time">03/04 10:41</span></div>
+          <div class="v-item"><span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:rgba(0,230,118,.1);color:var(--green);flex-shrink:0">memory_add</span><span class="v-text" style="font-family:var(--mono);font-size:10px"><span class="lang-zh">session: openclaw-0084da3f, chunks: 4, dedup: 1 skip (87ms)</span><span class="lang-en">session: openclaw-0084da3f, chunks: 4, dedup: 1 skip (87ms)</span></span><span class="v-time">03/04 10:42</span></div>
+          <div class="v-item"><span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:rgba(99,140,255,.1);color:var(--blue);flex-shrink:0">memory_search</span><span class="v-text" style="font-family:var(--mono);font-size:10px"><span class="lang-zh">query: "红烧肉做法" → 2 results, score: 0.96-0.78 (95ms)</span><span class="lang-en">query: "braised pork recipe" → 2 results, score: 0.96-0.78 (95ms)</span></span><span class="v-time">03/04 09:43</span></div>
+          <div class="v-item"><span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:rgba(177,108,255,.1);color:var(--purple);flex-shrink:0">task_summary</span><span class="v-text" style="font-family:var(--mono);font-size:10px"><span class="lang-zh">task: "阿里云ECS安全组设置" → completed, 98 chunks (210ms)</span><span class="lang-en">task: "ECS Security Groups" → completed, 98 chunks (210ms)</span></span><span class="v-time">03/04 11:00</span></div>
+        </div>
+      </div>
+
+      <!-- Import Pane -->
+      <div class="viewer-pane" id="vp-vimport">
+        <div style="text-align:center;padding:20px 0">
+          <div style="font-size:36px;margin-bottom:8px">🦐</div>
+          <h4 style="font-size:16px;font-weight:800;margin-bottom:6px"><span class="lang-zh">导入 OpenClaw 记忆</span><span class="lang-en">Import OpenClaw Memories</span></h4>
+          <p style="font-size:12px;color:var(--text-sec);margin-bottom:16px"><span class="lang-zh">将 OpenClaw 内置记忆迁移到智能记忆系统，支持断点续传和智能去重。</span><span class="lang-en">Migrate OpenClaw built-in memories to the intelligent memory system. Supports resume and smart dedup.</span></p>
+          <div style="display:inline-flex;gap:8px">
+            <span style="font-size:11px;padding:8px 20px;border-radius:8px;background:var(--grad-main);color:#06080f;font-weight:700"><span class="lang-zh">开始导入</span><span class="lang-en">Start Import</span></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Pane -->
+      <div class="viewer-pane" id="vp-settings">
+        <div style="font-size:11px;color:var(--text-sec);line-height:2;font-family:var(--mono)">
+          <div style="padding:6px 0;border-bottom:1px solid var(--border);font-weight:700;color:var(--text)">Embedding</div>
+          <div style="display:grid;grid-template-columns:80px 1fr;gap:2px 10px;padding:6px 0">
+            <span style="color:var(--text-thr)">Provider</span><span>openai_compatible</span>
+            <span style="color:var(--text-thr)">Model</span><span>bge-m3</span>
+            <span style="color:var(--text-thr)">Endpoint</span><span>https://your-api-endpoint/v1</span>
+            <span style="color:var(--text-thr)">API Key</span><span>sk-••••••</span>
+          </div>
+          <div style="padding:6px 0;border-bottom:1px solid var(--border);border-top:1px solid var(--border);font-weight:700;color:var(--text)">Summarizer</div>
+          <div style="display:grid;grid-template-columns:80px 1fr;gap:2px 10px;padding:6px 0">
+            <span style="color:var(--text-thr)">Provider</span><span>openai_compatible</span>
+            <span style="color:var(--text-thr)">Model</span><span>gpt-4o-mini</span>
+            <span style="color:var(--text-thr)">Endpoint</span><span>https://your-api-endpoint/v1</span>
+            <span style="color:var(--text-thr)">API Key</span><span>sk-••••••</span>
+          </div>
+          <div style="padding:6px 0;border-top:1px solid var(--border);display:grid;grid-template-columns:80px 1fr;gap:2px 10px">
+            <span style="color:var(--text-thr)">Viewer Port</span><span>18799</span>
+            <span style="color:var(--text-thr)">Password</span><span>••••</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div></div>
+</div>
+
+<div style="height:80px"></div>
+
+<footer><div class="container"><div class="copy">© 2026 MemTensor. MemOS Local OpenClaw Plugin — Interactive Demo</div></div></footer>
+
+<script>
+(function(){
+  var key='memos-local-lang',lang=(typeof localStorage!=='undefined'&&localStorage.getItem(key))||'zh';
+  document.body.classList.add('lang-'+lang);
+  document.querySelectorAll('.lang-btn').forEach(function(btn){
+    btn.classList.toggle('active',btn.getAttribute('data-lang')===lang);
+    btn.addEventListener('click',function(){
+      var L=this.getAttribute('data-lang');document.body.classList.remove('lang-zh','lang-en');document.body.classList.add('lang-'+L);
+      try{localStorage.setItem(key,L);}catch(e){}
+      document.querySelectorAll('.lang-btn').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-lang')===L);});
+    });
+  });
+})();
+
+function switchScene(id){
+  document.querySelectorAll('.scene').forEach(function(s){s.classList.remove('active')});
+  document.querySelectorAll('.scene-tab').forEach(function(t){t.classList.remove('active')});
+  var el=document.getElementById('scene-'+id);
+  if(el)el.classList.add('active');
+  var tabs=document.querySelectorAll('.scene-tab');
+  var map={import:0,search:1,viewer:2};
+  if(map[id]!==undefined&&tabs[map[id]])tabs[map[id]].classList.add('active');
+}
+
+var importTimer=null;
+function importStep(n){
+  if(importTimer){clearInterval(importTimer);importTimer=null;}
+  var steps=document.querySelectorAll('#import-steps .step-item');
+  var contents=document.querySelectorAll('#scene-import .step-content');
+  steps.forEach(function(s,i){s.classList.remove('active','done');if(i<n)s.classList.add('done');if(i===n)s.classList.add('active');});
+  contents.forEach(function(c){c.classList.remove('active')});
+  var target=document.getElementById('import-step-'+n);
+  if(target)target.classList.add('active');
+  if(n===1) runImportSim();
+}
+
+function runImportSim(){
+  var total=597,current=0,stored=0,skipped=0,merged=0,errors=0;
+  var log=document.getElementById('import-log');
+  log.innerHTML='';
+  var samples=[
+    {text:'会话启动与插件查询',status:'stored'},{text:'OpenClaw 控制界面会话',status:'stored'},
+    {text:'红烧肉做法',status:'stored'},{text:'唐波的常住地查询',status:'stored'},
+    {text:'工作经历整理',status:'stored'},{text:'合同甲方地址查询',status:'stored'},
+    {text:'美以袭击伊朗天数计算',status:'stored'},{text:'记忆系统初始化...',status:'stored'},
+    {text:'重复: 常住地查询 (相似度 92%)',status:'skipped'},{text:'合并: 工作经历更新版本',status:'merged'},
+    {text:'阿里云ECS安全组设置',status:'stored'},{text:'重复: ECS配置说明 (相似度 89%)',status:'skipped'},
+    {text:'Qdrant向量数据库部署',status:'stored'},{text:'个人偏好设置',status:'stored'},
+    {text:'重复: 红烧肉步骤 (相似度 95%)',status:'skipped'},{text:'合并: 云基础设施配置',status:'merged'},
+  ];
+  var si=0;
+  importTimer=setInterval(function(){
+    current+=Math.floor(Math.random()*8)+3;
+    if(current>total)current=total;
+    var sample=samples[si%samples.length];si++;
+    if(sample.status==='stored')stored++;
+    else if(sample.status==='skipped')skipped++;
+    else if(sample.status==='merged')merged++;
+    else errors++;
+    document.getElementById('s-stored').textContent=stored;
+    document.getElementById('s-skipped').textContent=skipped;
+    document.getElementById('s-merged').textContent=merged;
+    document.getElementById('s-errors').textContent=errors;
+    var pct=Math.round((current/total)*100);
+    document.getElementById('import-bar').style.width=pct+'%';
+    document.getElementById('import-pct').textContent=pct+'%';
+    document.getElementById('import-count').textContent=current+' / '+total;
+    var cls=sample.status==='stored'?'log-ok':sample.status==='skipped'?'log-skip':sample.status==='merged'?'log-dup':'log-err';
+    var icon=sample.status==='stored'?'✓':sample.status==='skipped'?'⏭':sample.status==='merged'?'🔀':'✕';
+    log.innerHTML+='<div><span class="'+cls+'">'+icon+'</span> <span class="log-dim">['+current+'/'+total+']</span> '+sample.text+'</div>';
+    log.scrollTop=log.scrollHeight;
+    if(current>=total){clearInterval(importTimer);importTimer=null;
+      document.getElementById('s-stored').textContent='422';
+      document.getElementById('s-skipped').textContent='156';
+      document.getElementById('s-merged').textContent='19';
+      setTimeout(function(){importStep(2);},800);
+    }
+  },200);
+}
+
+var searchData={
+  '阿里云ECS安全组':[
+    {role:'user',score:97,summary:'帮我查一下阿里云ECS安全组怎么配置，需要开放6333端口给Qdrant使用',session:'openclaw-session-0084da3f',time:'03/04 10:41'},
+    {role:'assistant',score:94,summary:'安全组配置步骤：1. 登录ECS控制台 → 安全组 → 添加规则；2. 协议TCP，端口6333，授权对象为指定IP段...',session:'openclaw-session-0084da3f',time:'03/04 10:41'},
+    {role:'user',score:82,summary:'Qdrant部署在Docker里面，需要映射端口吗？',session:'openclaw-session-0084da3f',time:'03/04 10:45'},
+  ],
+  '红烧肉做法':[
+    {role:'user',score:96,summary:'红烧肉怎么做？要那种入口即化的',session:'openclaw-session-15466f1c',time:'03/04 09:42'},
+    {role:'assistant',score:93,summary:'经典红烧肉做法：五花肉切块冷水下锅焯水，热锅炒糖色至枣红色，加入五花肉翻炒上色，加生抽老抽料酒...',session:'openclaw-session-15466f1c',time:'03/04 09:42'},
+    {role:'assistant',score:78,summary:'入口即化的关键：1) 小火慢炖至少1.5小时；2) 糖色不要炒过头；3) 焯水后冰水激一下让肉质Q弹...',session:'openclaw-session-15466f1c',time:'03/04 09:45'},
+  ],
+  '工作经历整理':[
+    {role:'user',score:95,summary:'帮我整理一下我的工作经历，用于更新简历',session:'openclaw-session-25879f7c',time:'03/05 09:07'},
+    {role:'assistant',score:91,summary:'根据之前的对话记录整理的工作经历：2018-2021 阿里云高级工程师，负责云原生基础设施...',session:'openclaw-session-25879f7c',time:'03/05 09:08'},
+    {role:'user',score:85,summary:'补充一下最近在做的AI Agent项目',session:'openclaw-session-25879f7c',time:'03/05 09:10'},
+  ]
+};
+
+function presetSearch(q){
+  document.getElementById('search-input').value=q;
+  runSearch();
+}
+
+function runSearch(){
+  var q=document.getElementById('search-input').value.trim();
+  if(!q)return;
+  var flow=document.getElementById('rf-flow');
+  flow.style.display='flex';
+  var nodes=['rf-fts','rf-vec','rf-rrf','rf-mmr','rf-out'];
+  nodes.forEach(function(id){document.getElementById(id).classList.remove('lit')});
+  document.getElementById('search-results').innerHTML='';
+  document.getElementById('search-presets').style.display='none';
+  var i=0;
+  var litTimer=setInterval(function(){
+    if(i<nodes.length){document.getElementById(nodes[i]).classList.add('lit');i++;}
+    else{clearInterval(litTimer);showResults(q);}
+  },300);
+}
+
+function showResults(q){
+  var results=null;
+  for(var key in searchData){if(q.indexOf(key)!==-1||key.indexOf(q)!==-1){results=searchData[key];break;}}
+  if(!results){
+    results=[
+      {role:'assistant',score:72,summary:'相关记忆片段：根据上下文分析，与 "'+q+'" 相关的信息分布在多个会话中...',session:'openclaw-session-mixed',time:'03/05'},
+      {role:'user',score:65,summary:'之前提到过类似的话题...',session:'openclaw-session-mixed',time:'03/04'},
+    ];
+  }
+  var html='<div class="sim-results">';
+  results.forEach(function(r){
+    html+='<div class="sim-result"><div class="r-header"><span class="r-role '+(r.role==='user'?'r-role-user':'r-role-assistant')+'">'+r.role+'</span><span style="font-size:10px;color:var(--text-thr)">'+r.session+'</span><span class="r-score">'+r.score+'%</span></div><div class="r-summary">'+r.summary+'</div><div class="r-meta"><span>'+r.time+'</span><span>🦐 OpenClaw Native</span></div></div>';
+  });
+  html+='</div>';
+  document.getElementById('search-results').innerHTML=html;
+}
+
+function viewerTab(id){
+  document.querySelectorAll('.viewer-tab').forEach(function(t){t.classList.remove('active')});
+  document.querySelectorAll('.viewer-pane').forEach(function(p){p.classList.remove('active')});
+  var tabs=document.querySelectorAll('.viewer-tab');
+  var map={memories:0,tasks:1,skills:2,analytics:3,logs:4,vimport:5,settings:6};
+  if(map[id]!==undefined&&tabs[map[id]])tabs[map[id]].classList.add('active');
+  var pane=document.getElementById('vp-'+id);
+  if(pane)pane.classList.add('active');
+}
+
+if(location.hash){
+  var h=location.hash.slice(1);
+  if(h==='import'||h==='search'||h==='viewer')switchScene(h);
+}
+
+document.getElementById('search-input').addEventListener('keydown',function(e){if(e.key==='Enter')runSearch();});
+</script>
+</body>
+</html>

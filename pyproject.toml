@@ -4,7 +4,7 @@
 ##############################################################################
 
 name = "MemoryOS"
-version = "2.0.8"
+version = "2.0.10"
 description = "Intelligence Begins with Memory"
 license = {text = "Apache-2.0"}
 readme = "README.md"
@@ -170,6 +170,8 @@ optional = true
 [tool.poetry.group.test.dependencies]
 pytest = "^8.3.5"
 pytest-asyncio = "^0.23.5"
+pytest-cov = "^6.1"
+pytest-html = "^4.2"
 ruff = "^0.11.8"
 
 [tool.poetry.group.eval]
@@ -206,6 +208,23 @@ pythonpath = "src"
 filterwarnings = [
     "ignore::DeprecationWarning:qdrant_client.*",
 ]
+
+
+[tool.coverage.run]
+source = ["src/memos"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+]
+
+[tool.coverage.html]
+directory = "cov-report"
 
 
 [tool.ruff]

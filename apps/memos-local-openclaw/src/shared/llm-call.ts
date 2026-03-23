@@ -1,6 +1,35 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { SummarizerConfig, Logger, PluginContext } from "../types";
+import type { SummarizerConfig, SummaryProvider, Logger, PluginContext } from "../types";
+
+/**
+ * Detect provider type from provider key name or base URL.
+ */
+function detectProvider(providerKey: string | undefined, baseUrl: string): SummaryProvider {
+  const key = providerKey?.toLowerCase() ?? "";
+  const url = baseUrl.toLowerCase();
+  if (key.includes("anthropic") || url.includes("anthropic")) return "anthropic";
+  if (key.includes("gemini") || url.includes("generativelanguage.googleapis.com")) {
+    return "gemini";
+  }
+  if (key.includes("bedrock") || url.includes("bedrock")) return "bedrock";
+  return "openai_compatible";
+}
+
+/**
+ * Return the correct default endpoint for a given provider.
+ */
+function defaultEndpointForProvider(provider: SummaryProvider, baseUrl: string): string {
+  const stripped = baseUrl.replace(/\/+$/, "");
+  if (provider === "anthropic") {
+    if (stripped.endsWith("/v1/messages")) return stripped;
+    return `${stripped}/v1/messages`;
+  }
+  // OpenAI-compatible providers
+  if (stripped.endsWith("/chat/completions")) return stripped;
+  if (stripped.endsWith("/completions")) return stripped;
+  return `${stripped}/chat/completions`;
+}
 
 /**
  * Build a SummarizerConfig from OpenClaw's native model configuration (openclaw.json).
@@ -30,13 +59,12 @@ export function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | unde
     const apiKey: string | undefined = providerCfg.apiKey;
     if (!baseUrl || !apiKey) return undefined;
 
-    const endpoint = baseUrl.endsWith("/chat/completions")
-      ? baseUrl
-      : baseUrl.replace(/\/+$/, "") + "/chat/completions";
+    const provider = detectProvider(providerKey, baseUrl);
+    const endpoint = defaultEndpointForProvider(provider, baseUrl);
 
-    log.debug(`OpenClaw fallback model: ${modelId} via ${baseUrl}`);
+    log.debug(`OpenClaw fallback model: ${modelId} via ${baseUrl} (${provider})`);
     return {
-      provider: "openai_compatible",
+      provider,
       endpoint,
       apiKey,
       model: modelId,
@@ -68,22 +96,84 @@ export interface LLMCallOptions {
   timeoutMs?: number;
 }
 
-function normalizeEndpoint(url: string): string {
+function normalizeOpenAIEndpoint(url: string): string {
   const stripped = url.replace(/\/+$/, "");
   if (stripped.endsWith("/chat/completions")) return stripped;
   if (stripped.endsWith("/completions")) return stripped;
   return `${stripped}/chat/completions`;
 }
 
+function normalizeAnthropicEndpoint(url: string): string {
+  const stripped = url.replace(/\/+$/, "");
+  if (stripped.endsWith("/v1/messages")) return stripped;
+  if (stripped.endsWith("/messages")) return stripped;
+  return `${stripped}/v1/messages`;
+}
+
+function isAnthropicProvider(cfg: SummarizerConfig): boolean {
+  return cfg.provider === "anthropic";
+}
+
 /**
  * Make a single LLM call with the given config. Throws on failure.
+ * Dispatches to Anthropic or OpenAI-compatible format based on provider.
  */
 export async function callLLMOnce(
   cfg: SummarizerConfig,
   prompt: string,
   opts: LLMCallOptions = {},
 ): Promise<string> {
-  const endpoint = normalizeEndpoint(cfg.endpoint ?? "https://api.openai.com/v1/chat/completions");
+  if (isAnthropicProvider(cfg)) {
+    return callLLMOnceAnthropic(cfg, prompt, opts);
+  }
+  return callLLMOnceOpenAI(cfg, prompt, opts);
+}
+
+async function callLLMOnceAnthropic(
+  cfg: SummarizerConfig,
+  prompt: string,
+  opts: LLMCallOptions = {},
+): Promise<string> {
+  const endpoint = normalizeAnthropicEndpoint(
+    cfg.endpoint ?? "https://api.anthropic.com/v1/messages",
+  );
+  const model = cfg.model ?? "claude-3-haiku-20240307";
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "x-api-key": cfg.apiKey ?? "",
+    "anthropic-version": "2023-06-01",
+    ...cfg.headers,
+  };
+
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
+      temperature: opts.temperature ?? 0.1,
+      max_tokens: opts.maxTokens ?? 1024,
+      messages: [{ role: "user", content: prompt }],
+    }),
+    signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`LLM call failed (${resp.status}): ${body}`);
+  }
+
+  const json = (await resp.json()) as { content: Array<{ type: string; text: string }> };
+  return json.content.find((c) => c.type === "text")?.text?.trim() ?? "";
+}
+
+async function callLLMOnceOpenAI(
+  cfg: SummarizerConfig,
+  prompt: string,
+  opts: LLMCallOptions = {},
+): Promise<string> {
+  const endpoint = normalizeOpenAIEndpoint(
+    cfg.endpoint ?? "https://api.openai.com/v1/chat/completions",
+  );
   const model = cfg.model ?? "gpt-4o-mini";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
