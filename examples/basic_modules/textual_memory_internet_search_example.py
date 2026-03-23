@@ -368,17 +368,17 @@ else:
 print("\n" + "=" * 80)
 print("ALL TESTS COMPLETED")
 print("=" * 80)
-print("\n Summary:")
-print("  Tested BochaAI web search retriever")
+print("\n💡 Summary:")
+print("  ✓ Tested BochaAI web search retriever")
 if google_api_key and google_search_engine_id:
-    print("  Tested Google Custom Search API")
+    print("  ✓ Tested Google Custom Search API")
 else:
-    print("  Skipped Google Custom Search API (credentials not set)")
+    print("  ⏭️  Skipped Google Custom Search API (credentials not set)")
 if tavily_api_key:
     print("  Tested Tavily Search API")
 else:
     print("  Skipped Tavily Search API (credentials not set)")
-print("\n Quick Start:")
+print("\n💡 Quick Start:")
 print("  # Set BochaAI API key")
 print("  export BOCHA_API_KEY='sk-your-bocha-api-key'")
 print("  ")

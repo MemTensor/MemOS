@@ -70,9 +70,6 @@ class BochaSearchConfig(BaseInternetRetrieverConfig):
 class TavilySearchConfig(BaseInternetRetrieverConfig):
     """Configuration class for Tavily Search API."""
 
-    search_engine_id: str | None = Field(
-        None, description="Not used for Tavily Search (kept for compatibility)"
-    )
     max_results: int = Field(default=20, description="Maximum number of results to retrieve")
 
 

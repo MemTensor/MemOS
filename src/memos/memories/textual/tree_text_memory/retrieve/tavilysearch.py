@@ -170,6 +170,11 @@ class TavilySearchRetriever:
         self, result: dict, query: str, parsed_goal: str, info: dict[str, Any], mode="fast"
     ) -> list[TextualMemoryItem]:
         """Process one Tavily search result into TextualMemoryItem."""
+        if mode != "fast":
+            logger.warning(
+                "TavilySearchRetriever only supports mode=\"fast\"; ignoring mode=%r",
+                mode,
+            )
         title = result.get("title", "")
         content = result.get("content", "")
         summary = content  # Tavily returns content as the snippet/summary
