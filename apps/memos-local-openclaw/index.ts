@@ -1779,31 +1779,6 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       { name: "network_skill_pull" },
     );
 
-    // ─── Inject recall context as system message (hidden from chat UI) ───
-    // `prependContext` (from before_agent_start) is prepended to user messages and
-    // therefore visible in the chat box. To keep injected memories invisible to the
-    // user while still feeding them to the model, we stash the recall result in
-    // `pendingRecallContext` and inject it as a system-level message via the
-    // `before_context_send` hook, which fires synchronously during prompt assembly.
-    let pendingRecallContext: string | null = null;
-
-    api.on("before_context_send", (event: { messages: Array<{ role: string; content: string | unknown }> }) => {
-      if (!pendingRecallContext) return;
-      const memoryContext = pendingRecallContext;
-      pendingRecallContext = null;
-      // Insert after the last system message (before the first user/assistant turn).
-      // This keeps the static system prompt at the very beginning of the sequence so
-      // KV-cache prefixes stay stable across requests — the provider can reuse the
-      // cached keys/values for the system prompt even though the memory block changes.
-      const firstNonSystemIdx = event.messages.findIndex((m) => m.role !== "system");
-      if (firstNonSystemIdx === -1) {
-        event.messages.push({ role: "system", content: memoryContext });
-      } else {
-        event.messages.splice(firstNonSystemIdx, 0, { role: "system", content: memoryContext });
-      }
-      ctx.log.info(`before_context_send: injected recall context as system message at idx=${firstNonSystemIdx === -1 ? event.messages.length - 1 : firstNonSystemIdx} (${memoryContext.length} chars)`);
-    });
-
     // ─── Auto-recall: inject relevant memories before agent starts ───
 
     api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
@@ -1909,8 +1884,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
                   "\n\nYou SHOULD call `skill_get` to retrieve the full guide before attempting the task.";
                 ctx.log.info(`auto-recall-skill (no-memory path): injecting ${topSkills.length} skill(s)`);
                 try { store.recordApiLog("skill_search", { type: "auto_recall_skill", query }, JSON.stringify(topSkills), dur, true); } catch { /* best-effort */ }
-                pendingRecallContext = skillContext;
-                return {};
+                return { prependContext: skillContext };
               }
             } catch (err) {
               ctx.log.debug(`auto-recall-skill (no-memory path): failed: ${err}`);
@@ -1919,11 +1893,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
           if (query.length > 50) {
             const noRecallHint =
-              "## Memory system\n\n" +
+              "## Memory system — ACTION REQUIRED\n\n" +
               "Auto-recall found no results for a long query. " +
-              "Call `memory_search` with a shortened query (2-5 key words) before answering.";
-            pendingRecallContext = noRecallHint;
-            return {};
+              "You MUST call `memory_search` now with a shortened query (2-5 key words) before answering. " +
+              "Do NOT skip this step. Do NOT answer without searching first.";
+            return { prependContext: noRecallHint };
           }
           return;
         }
@@ -1959,7 +1933,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
               }), dur, true);
               if (query.length > 50) {
                 const noRecallHint =
-                  "## Memory system\n\n" +
+                  "## Memory system — ACTION REQUIRED\n\n" +
                   "Auto-recall found no relevant results for a long query. " +
                   "You MUST call `memory_search` now with a shortened query (2-5 key words) before answering. " +
                   "Do NOT skip this step. Do NOT answer without searching first.";
@@ -2011,9 +1985,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         const tipsText = "\n\nAvailable follow-up tools:\n" + tips.join("\n");
 
         const contextParts = [
-          "## Recalled memories",
+          "## User's conversation history (from memory system)",
           "",
-          "The following facts were retrieved from previous conversations with this user. Treat them as established knowledge.",
+          "IMPORTANT: The following are facts from previous conversations with this user.",
+          "You MUST treat these as established knowledge and use them directly when answering.",
+          "Do NOT say you don't know or don't have information if the answer is in these memories.",
           "",
           lines.join("\n\n"),
         ];
@@ -2097,18 +2073,18 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         }), recallDur, true);
         telemetry.trackAutoRecall(filteredHits.length, recallDur);
 
-        ctx.log.info(`auto-recall: stashing recall context for system message injection (${context.length} chars), sufficient=${sufficient}, skills=${skillSection ? "yes" : "no"}`);
+        ctx.log.info(`auto-recall: returning prependContext (${context.length} chars), sufficient=${sufficient}, skills=${skillSection ? "yes" : "no"}`);
 
         if (!sufficient) {
           const searchHint =
             "\n\nIf these memories don't fully answer the question, " +
             "call `memory_search` with a shorter or rephrased query to find more.";
-          pendingRecallContext = context + searchHint;
-          return {};
+          return { prependContext: context + searchHint };
         }
 
-        pendingRecallContext = context;
-        return {};
+        return {
+          prependContext: context,
+        };
       } catch (err) {
         const dur = performance.now() - recallT0;
         store.recordToolCall("memory_search", dur, false);
