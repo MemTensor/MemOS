@@ -1,5 +1,6 @@
 import * as path from "path";
-import { DEFAULTS, type MemosLocalConfig, type PluginContext, type Logger } from "./types";
+import { DEFAULTS, type MemosLocalConfig, type PluginContext, type Logger, type EmbeddingConfig, type SummarizerConfig } from "./types";
+import { OpenClawAPIClient, type HostModelsConfig } from "./openclaw-api";
 
 const ENV_RE = /\$\{([A-Z_][A-Z0-9_]*)\}/g;
 
@@ -20,6 +21,24 @@ function deepResolveEnv<T>(obj: T): T {
   return obj;
 }
 
+function resolveProviderFallback<T extends { provider?: string; capabilities?: unknown }>(
+  config: T | undefined,
+  fallbackProvider: T["provider"],
+  enabled: boolean,
+): T | undefined {
+  if (!config) {
+    return enabled
+      ? ({ provider: fallbackProvider } as T)
+      : undefined;
+  }
+
+  if (config.provider == null && enabled) {
+    return { ...config, provider: fallbackProvider };
+  }
+
+  return config;
+}
+
 export function resolveConfig(raw: Partial<MemosLocalConfig> | undefined, stateDir: string): MemosLocalConfig {
   const cfg = deepResolveEnv(raw ?? {});
 
@@ -27,6 +46,11 @@ export function resolveConfig(raw: Partial<MemosLocalConfig> | undefined, stateD
   const telemetryEnabled =
     cfg.telemetry?.enabled ??
     (telemetryEnvVar === "false" || telemetryEnvVar === "0" ? false : true);
+  const sharingCapabilities = {
+    hostEmbedding: cfg.sharing?.capabilities?.hostEmbedding ?? false,
+    hostCompletion: cfg.sharing?.capabilities?.hostCompletion ?? false,
+    hostSkill: cfg.sharing?.capabilities?.hostSkill ?? false,
+  };
 
   return {
     ...cfg,
@@ -52,6 +76,62 @@ export function resolveConfig(raw: Partial<MemosLocalConfig> | undefined, stateD
     telemetry: {
       enabled: telemetryEnabled,
     },
+    summarizer: (() => {
+      const summarizerConfig = resolveProviderFallback<SummarizerConfig>(
+        cfg.summarizer,
+        "openclaw",
+        sharingCapabilities.hostCompletion,
+      );
+      return summarizerConfig
+        ? {
+            ...summarizerConfig,
+            capabilities: sharingCapabilities,
+          }
+        : undefined;
+    })(),
+    embedding: (() => {
+      const embeddingConfig = resolveProviderFallback<EmbeddingConfig>(
+        cfg.embedding,
+        "openclaw",
+        sharingCapabilities.hostEmbedding,
+      );
+      return embeddingConfig
+        ? {
+            ...embeddingConfig,
+            capabilities: sharingCapabilities,
+          }
+        : undefined;
+    })(),
+    skillEvolution: cfg.skillEvolution ? {
+      ...cfg.skillEvolution,
+      summarizer: (() => {
+        const skSumCfg = resolveProviderFallback<SummarizerConfig>(
+          cfg.skillEvolution!.summarizer as SummarizerConfig | undefined,
+          "openclaw",
+          sharingCapabilities.hostSkill,
+        );
+        return skSumCfg
+          ? { ...skSumCfg, capabilities: sharingCapabilities }
+          : undefined;
+      })(),
+    } : undefined,
+    sharing: (() => {
+      const role = cfg.sharing?.role ?? "client";
+      const enabled = cfg.sharing?.enabled ?? false;
+      const hub = role === "hub" ? {
+        port: cfg.sharing?.hub?.port ?? 18800,
+        teamName: cfg.sharing?.hub?.teamName ?? "",
+        teamToken: cfg.sharing?.hub?.teamToken ?? "",
+      } : { port: 18800, teamName: "", teamToken: "" };
+      const client = role === "client" ? {
+        hubAddress: cfg.sharing?.client?.hubAddress ?? "",
+        userToken: cfg.sharing?.client?.userToken ?? "",
+        teamToken: cfg.sharing?.client?.teamToken ?? "",
+        pendingUserId: cfg.sharing?.client?.pendingUserId ?? "",
+        nickname: cfg.sharing?.client?.nickname ?? "",
+      } : { hubAddress: "", userToken: "", teamToken: "", pendingUserId: "", nickname: "" };
+      return { enabled, role, hub, client, capabilities: sharingCapabilities };
+    })(),
   };
 }
 
@@ -60,6 +140,7 @@ export function buildContext(
   workspaceDir: string,
   rawConfig: Partial<MemosLocalConfig> | undefined,
   log?: Logger,
+  hostModels?: HostModelsConfig,
 ): PluginContext {
   const defaultLog: Logger = {
     debug: (...args) => console.debug("[memos-local]", ...args),
@@ -68,10 +149,19 @@ export function buildContext(
     error: (...args) => console.error("[memos-local]", ...args),
   };
 
+  const logger = log ?? defaultLog;
+  const config = resolveConfig(rawConfig, stateDir);
+
+  // Create OpenClawAPI instance if host capabilities are enabled
+  const openclawAPI = (config.sharing?.capabilities?.hostEmbedding || config.sharing?.capabilities?.hostCompletion || config.sharing?.capabilities?.hostSkill)
+    ? new OpenClawAPIClient(logger, hostModels)
+    : undefined;
+
   return {
     stateDir,
     workspaceDir,
-    config: resolveConfig(rawConfig, stateDir),
-    log: log ?? defaultLog,
+    config,
+    log: logger,
+    openclawAPI,
   };
 }

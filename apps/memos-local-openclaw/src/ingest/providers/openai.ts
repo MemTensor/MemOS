@@ -316,7 +316,7 @@ export async function filterRelevantOpenAI(
   return parseFilterResult(raw, log);
 }
 
-function parseFilterResult(raw: string, log: Logger): FilterResult {
+export function parseFilterResult(raw: string, log: Logger): FilterResult {
   try {
     const match = raw.match(/\{[\s\S]*\}/);
     if (match) {

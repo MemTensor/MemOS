@@ -33,6 +33,9 @@ const SENTINEL_FAST_RE = new RegExp(
 const ENVELOPE_PREFIX_RE =
   /^\s*\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+[A-Z]{3}[+-]\d{1,2}\]\s*/;
 
+const ENVELOPE_EXTRACT_RE =
+  /^\s*\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}(?::\d{2})?)\s+([A-Z]{3}[+-]\d{1,2})\]/;
+
 /**
  * Extract writable messages from a conversation turn.
  *
@@ -47,9 +50,11 @@ export function captureMessages(
   evidenceTag: string,
   log: Logger,
   owner?: string,
+  userSearchTime?: number,
 ): ConversationMessage[] {
   const now = Date.now();
   const result: ConversationMessage[] = [];
+  let lastTimestamp = 0;
 
   for (const msg of messages) {
     const role = msg.role as Role;
@@ -75,10 +80,19 @@ export function captureMessages(
     }
     if (!content.trim()) continue;
 
+    let ts: number;
+    if (role === "user" && userSearchTime && userSearchTime > 0) {
+      ts = userSearchTime;
+    } else {
+      ts = now;
+    }
+    if (ts <= lastTimestamp) ts = lastTimestamp + 1;
+    lastTimestamp = ts;
+
     result.push({
       role,
       content,
-      timestamp: now,
+      timestamp: ts,
       turnId,
       sessionKey,
       toolName: role === "tool" ? msg.toolName : undefined,
@@ -150,11 +164,28 @@ export function stripInboundMetadata(text: string): string {
   return stripEnvelopePrefix(result.join("\n")).trim();
 }
 
-/** Strip <think…>…</think⟩ blocks emitted by DeepSeek-style reasoning models. */
+/** Strip <think…>…</think> blocks emitted by DeepSeek-style reasoning models. */
 const THINKING_TAG_RE = /<think[\s>][\s\S]*?<\/think>\s*/gi;
 
+/** Unwrap <final>…</final> tags from MiniMax-style models (keep content, strip tags). */
+const FINAL_TAG_RE = /<\/?final\s*>/gi;
+
 function stripThinkingTags(text: string): string {
-  return text.replace(THINKING_TAG_RE, "");
+  return text.replace(THINKING_TAG_RE, "").replace(FINAL_TAG_RE, "").trim();
+}
+
+function extractEnvelopeTimestamp(text: string): number | null {
+  const m = ENVELOPE_EXTRACT_RE.exec(text);
+  if (!m) return null;
+  const [, date, time, tz] = m;
+  const timeStr = time.includes(":") && time.split(":").length === 3 ? time : time + ":00";
+  const offsetMatch = tz.match(/([+-])(\d{1,2})$/);
+  const offsetStr = offsetMatch
+    ? `${offsetMatch[1]}${offsetMatch[2].padStart(2, "0")}:00`
+    : "+00:00";
+  const iso = `${date}T${timeStr}${offsetStr}`;
+  const ts = new Date(iso).getTime();
+  return Number.isNaN(ts) ? null : ts;
 }
 
 function stripEnvelopePrefix(text: string): string {

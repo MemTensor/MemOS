@@ -18,14 +18,26 @@ export interface TelemetryConfig {
   enabled?: boolean;
 }
 
-const ARMS_ENDPOINT =
-  "https://proj-xtrace-e218d9316b328f196a3c640cc7ca84-cn-hangzhou.cn-hangzhou.log.aliyuncs.com" +
-  "/rum/web/v2" +
-  "?workspace=default-cms-1026429231103299-cn-hangzhou" +
-  "&service_id=a3u72ukxmr@066657d42a13a9a9f337f";
-
-const ARMS_PID = "a3u72ukxmr@066657d42a13a9a9f337f";
-const ARMS_ENV = "prod";
+function loadTelemetryCredentials(pluginDir?: string): { endpoint: string; pid: string; env: string } {
+  if (process.env.MEMOS_ARMS_ENDPOINT) {
+    return {
+      endpoint: process.env.MEMOS_ARMS_ENDPOINT,
+      pid: process.env.MEMOS_ARMS_PID ?? "",
+      env: process.env.MEMOS_ARMS_ENV ?? "prod",
+    };
+  }
+  const bases = pluginDir ? [pluginDir, path.join(pluginDir, "src")] : [];
+  if (typeof __dirname === "string") bases.push(path.resolve(__dirname, ".."), __dirname);
+  const candidates = bases.map(b => path.join(b, "telemetry.credentials.json"));
+  for (const credPath of candidates) {
+    try {
+      const raw = fs.readFileSync(credPath, "utf-8");
+      const creds = JSON.parse(raw);
+      if (creds.endpoint) return { endpoint: creds.endpoint, pid: creds.pid ?? "", env: creds.env ?? "prod" };
+    } catch {}
+  }
+  return { endpoint: "", pid: "", env: "prod" };
+}
 
 const FLUSH_AT = 10;
 const FLUSH_INTERVAL_MS = 30_000;
@@ -54,8 +66,11 @@ export class Telemetry {
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private sessionId: string;
   private firstSeenDate: string;
+  private armsEndpoint: string;
+  private armsPid: string;
+  private armsEnv: string;
 
-  constructor(config: TelemetryConfig, stateDir: string, pluginVersion: string, log: Logger) {
+  constructor(config: TelemetryConfig, stateDir: string, pluginVersion: string, log: Logger, pluginDir?: string) {
     this.log = log;
     this.pluginVersion = pluginVersion;
     this.enabled = config.enabled !== false;
@@ -63,8 +78,18 @@ export class Telemetry {
     this.firstSeenDate = this.loadOrCreateFirstSeen(stateDir);
     this.sessionId = this.loadOrCreateSessionId(stateDir);
 
-    if (!this.enabled) {
-      this.log.debug("Telemetry disabled (opt-out via TELEMETRY_ENABLED=false)");
+    const creds = loadTelemetryCredentials(pluginDir);
+    this.armsEndpoint = creds.endpoint;
+    this.armsPid = creds.pid;
+    this.armsEnv = creds.env;
+
+    if (!this.enabled || !this.armsEndpoint) {
+      this.enabled = false;
+      this.log.debug(
+        !this.armsEndpoint
+          ? "Telemetry disabled (no credentials configured)"
+          : "Telemetry disabled (opt-out)",
+      );
       return;
     }
 
@@ -174,8 +199,8 @@ export class Telemetry {
   private buildPayload(events: ArmsEvent[]): Record<string, unknown> {
     return {
       app: {
-        id: ARMS_PID,
-        env: ARMS_ENV,
+        id: this.armsPid,
+        env: this.armsEnv,
         version: this.pluginVersion,
         type: "node",
       },
@@ -194,7 +219,7 @@ export class Telemetry {
     const payload = this.buildPayload(batch);
 
     try {
-      const resp = await fetch(ARMS_ENDPOINT, {
+      const resp = await fetch(this.armsEndpoint, {
         method: "POST",
         headers: { "Content-Type": "text/plain" },
         body: JSON.stringify(payload),

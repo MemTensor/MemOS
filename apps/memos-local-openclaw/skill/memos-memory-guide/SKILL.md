@@ -1,17 +1,22 @@
 ---
 name: memos-memory-guide
-description: "Use the MemOS Local memory system to search and use the user's past conversations. Use this skill whenever the user refers to past chats, their own preferences or history, or when you need to answer from prior context. When auto-recall returns nothing (long or unclear user query), generate your own short search query and call memory_search. Available tools: memory_search, memory_get, memory_write_public, task_summary, skill_get, skill_search, skill_install, skill_publish, skill_unpublish, memory_timeline, memory_viewer."
+description: "Use the MemOS Local memory system to search and use the user's past conversations. Use this skill whenever the user refers to past chats, their own preferences or history, or when you need to answer from prior context. When auto-recall returns nothing (long or unclear user query), generate your own short search query and call memory_search. Available tools: memory_search, memory_get, memory_write_public, memory_share, memory_unshare, task_summary, skill_get, skill_search, skill_install, skill_publish, skill_unpublish, network_memory_detail, network_skill_pull, network_team_info, memory_timeline, memory_viewer."
 ---
 
 # MemOS Local Memory — Agent Guide
 
-This skill describes how to use the MemOS memory tools so you can reliably search and use the user's long-term conversation history, share knowledge across agents, and discover public skills.
+This skill describes how to use the MemOS memory tools so you can reliably search and use the user's long-term conversation history, query team-shared data, share tasks, and discover or pull reusable skills.
+
+Two sharing planes exist and must not be confused:
+
+- **Local agent sharing:** visible to agents in the same OpenClaw workspace only.
+- **Team sharing:** visible to teammates through the configured team server.
 
 ## How memory is provided each turn
 
 - **Automatic recall (hook):** At the start of each turn, the system runs a memory search using the user's current message and injects relevant past memories into your context. You do not need to call any tool for that.
 - **When that is not enough:** If the user's message is very long, vague, or the automatic search returns **no memories**, you should **generate your own short, focused query** and call `memory_search` yourself.
-- **Memory isolation:** Each agent can only see its own memories and memories marked as `public`. Other agents' private memories are invisible to you.
+- **Memory isolation:** Each agent can only see its own local private memories and local `public` memories. Team-shared data only appears when you search with `scope="group"` or `scope="all"`.
 
 ## Tools — what they do and when to call
 
@@ -24,9 +29,10 @@ This skill describes how to use the MemOS memory tools so you can reliably searc
   - You need to search with a different angle (e.g. filter by `role='user'`).
 - **Parameters:**
   - `query` (string, **required**) — Natural language search query.
-  - `maxResults` (number, optional) — Max results, default 20, max 20.
-  - `minScore` (number, optional) — Minimum score 0–1, default 0.45, floor 0.35.
-  - `role` (string, optional) — Filter by role: `'user'`, `'assistant'`, or `'tool'`. Use `'user'` to find what the user said.
+  - `scope` (string, optional) — `'local'` (default) for current agent + local shared memories, or `'group'` / `'all'` to include team-shared memories.
+  - `maxResults` (number, optional) — Increase when the first search is too narrow.
+  - `minScore` (number, optional) — Lower slightly if recall is too strict.
+  - `role` (string, optional) — Filter local results by `'user'`, `'assistant'`, `'tool'`, or `'system'`.
 
 ### memory_get
 
@@ -38,11 +44,31 @@ This skill describes how to use the MemOS memory tools so you can reliably searc
 
 ### memory_write_public
 
-- **What it does:** Write a piece of information to public memory. Public memories are visible to all agents during `memory_search`. Use for shared knowledge, team decisions, or cross-agent coordination information.
-- **When to call:** In multi-agent or collaborative scenarios, when you have persistent information useful to everyone (e.g. shared decisions, conventions, configurations, workflows). Do not write session-only or purely private content.
+- **What it does:** Create a brand new local shared memory. These memories are visible to all agents in the same OpenClaw workspace during `memory_search`. This does **not** publish anything to the team server.
+- **When to call:** In multi-agent or collaborative scenarios, when you want to create a new persistent shared note from scratch (e.g. shared decisions, conventions, configurations, workflows). Do not use it if you already have a specific memory chunk to expose.
 - **Parameters:**
-  - `content` (string, **required**) — The content to write to public memory.
+  - `content` (string, **required**) — The content to write to local shared memory.
   - `summary` (string, optional) — Short summary of the content.
+
+### memory_share
+
+- **What it does:** Share an existing memory either with local OpenClaw agents, to the team, or to both.
+- **When to call:** You already have a useful memory chunk and want to expose it beyond the current agent.
+- **Do not use when:** You are creating a new shared note from scratch. In that case use `memory_write_public`.
+- **Parameters:**
+  - `chunkId` (string, **required**) — Existing memory chunk ID.
+  - `target` (string, optional) — `'agents'` (default), `'hub'`, or `'both'`.
+  - `visibility` (string, optional) — Team visibility when target includes team: `'public'` (default) or `'group'`.
+  - `groupId` (string, optional) — Optional team group ID when `visibility='group'`.
+
+### memory_unshare
+
+- **What it does:** Remove an existing memory from local agent sharing, team sharing, or both.
+- **When to call:** A memory should no longer be visible outside the current agent or should be removed from the team.
+- **Parameters:**
+  - `chunkId` (string, **required**) — Existing memory chunk ID.
+  - `target` (string, optional) — `'agents'`, `'hub'`, or `'all'` (default).
+  - `privateOwner` (string, optional) — Rare fallback only for older public memories that have no recorded original owner.
 
 ### task_summary
 
@@ -62,11 +88,11 @@ This skill describes how to use the MemOS memory tools so you can reliably searc
 
 ### skill_search
 
-- **What it does:** Search available skills by natural language. Searches your own skills, public skills, or both — controlled by the `scope` parameter.
+- **What it does:** Search available skills by natural language. Searches your own skills, local shared skills, or both. It can also include team skills.
 - **When to call:** The current task requires a capability or guide you don't have. Use `skill_search` to find one first; after finding it, use `skill_get` to read it, then `skill_install` to load it for future turns.
 - **Parameters:**
   - `query` (string, **required**) — Natural language description of the needed skill.
-  - `scope` (string, optional) — Search scope: `'mix'` (default, self + public), `'self'` (own only), `'public'` (public only).
+  - `scope` (string, optional) — `'mix'` (default, self + local shared), `'self'`, `'public'` (local shared only), or `'group'` / `'all'` to include team results.
 
 ### skill_install
 
@@ -77,17 +103,47 @@ This skill describes how to use the MemOS memory tools so you can reliably searc
 
 ### skill_publish
 
-- **What it does:** Make a skill public so other agents can discover and install it via `skill_search`.
-- **When to call:** You have a useful skill that other agents could benefit from, and you want to share it.
+- **What it does:** Share a skill with local agents, or publish it to the team.
+- **When to call:** You have a useful skill that other agents or your team could benefit from.
 - **Parameters:**
   - `skillId` (string, **required**) — The skill ID to publish.
+  - `target` (string, optional) — `'agents'` (default) or `'hub'`.
+  - `visibility` (string, optional) — When `target='hub'`, use `'public'` (default) or `'group'`.
+  - `groupId` (string, optional) — Optional team group ID when `target='hub'` and `visibility='group'`.
+  - `scope` (string, optional) — Backward-compatible alias for old calls. Prefer `target` + `visibility` in new calls.
 
 ### skill_unpublish
 
-- **What it does:** Make a skill private again. Other agents will no longer be able to discover it.
+- **What it does:** Stop local agent sharing, remove a team-published copy, or do both.
 - **When to call:** You want to stop sharing a previously published skill.
 - **Parameters:**
   - `skillId` (string, **required**) — The skill ID to unpublish.
+  - `target` (string, optional) — `'agents'` (default), `'hub'`, or `'all'`.
+
+### network_memory_detail
+
+- **What it does:** Fetches the full content behind a team search hit.
+- **When to call:** A `memory_search` result came from the team and you need the full shared memory content.
+- **Parameters:** `remoteHitId`.
+
+### task_share / task_unshare
+
+- **What they do:** Share a local task to the team, or remove it later.
+- **When to call:** A task is valuable to your group or to the whole team and should be discoverable via shared search.
+- **Parameters:** `taskId`, plus sharing visibility/scope when required.
+
+### network_skill_pull
+
+- **What it does:** Pulls a team-shared skill bundle down into local storage.
+- **When to call:** `skill_search` found a useful team skill and you want to use it locally or offline.
+- **Parameters:** `skillId`.
+
+### network_team_info
+
+- **What it does:** Returns current team server connection information, user, role, and groups.
+- **When to call:** You need to confirm whether team sharing is configured or which groups the current client belongs to.
+- **Call this first before:** `memory_share(... target='hub'|'both')`, `memory_unshare(... target='hub'|'all')`, `task_share`, `task_unshare`, `skill_publish(... target='hub')`, `skill_unpublish(... target='hub'|'all')`, or `network_skill_pull`.
+- **Parameters:** none.
 
 ### memory_timeline
 
@@ -123,13 +179,19 @@ This skill describes how to use the MemOS memory tools so you can reliably searc
 6. **You need a capability/guide that you don't have**
    → Call `skill_search(query="...", scope="mix")` to discover available skills.
 
-7. **You have shared knowledge useful to all agents**
-   → Call `memory_write_public(content="...")` to persist it in public memory.
+7. **You have new shared knowledge useful to all local agents**
+   → Call `memory_write_public(content="...")`.
 
-8. **You want to share/stop sharing a skill with other agents**
-   → Call `skill_publish(skillId="...")` or `skill_unpublish(skillId="...")`.
+8. **You already have an existing memory chunk and want to expose or hide it**
+   → Call `memory_share(chunkId="...", target="agents|hub|both")` or `memory_unshare(chunkId="...", target="agents|hub|all")`.
 
-9. **User asks where to see or manage their memories**
+9. **You are about to do anything team-sharing-related**
+   → Call `network_team_info()` first if team server availability is uncertain.
+
+10. **You want to share/stop sharing a skill with local agents or team**
+   → Prefer `skill_publish(skillId="...", target="agents|hub", visibility=...)` and `skill_unpublish(skillId="...", target="agents|hub|all")`.
+
+11. **User asks where to see or manage their memories**
    → Call `memory_viewer()` and share the URL.
 
 ## Writing good search queries
@@ -144,6 +206,6 @@ This skill describes how to use the MemOS memory tools so you can reliably searc
 Each memory is tagged with an `owner` (e.g. `agent:main`, `agent:sales-bot`). This is handled **automatically** — you do not need to pass any owner parameter.
 
 - **Your memories:** All tools (`memory_search`, `memory_get`, `memory_timeline`) automatically scope queries to your agent's own memories.
-- **Public memories:** Memories marked as `public` are visible to all agents. Use `memory_write_public` to write shared knowledge.
+- **Local shared memories:** Memories marked as local shared are visible to all agents in the same OpenClaw workspace. Use `memory_write_public` to create them, or `memory_share(target='agents')` to expose an existing chunk.
 - **Cross-agent isolation:** You cannot see memories owned by other agents (unless they are public).
 - **How it works:** The system identifies your agent ID from the OpenClaw runtime context and applies owner filtering automatically on every search, recall, and retrieval.
