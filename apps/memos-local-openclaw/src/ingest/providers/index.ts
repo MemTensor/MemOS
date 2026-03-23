@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { SummarizerConfig, SummaryProvider, Logger } from "../../types";
-import { summarizeOpenAI, summarizeTaskOpenAI, judgeNewTopicOpenAI, filterRelevantOpenAI, judgeDedupOpenAI } from "./openai";
+import { summarizeOpenAI, summarizeTaskOpenAI, generateTaskTitleOpenAI, judgeNewTopicOpenAI, filterRelevantOpenAI, judgeDedupOpenAI } from "./openai";
 import type { FilterResult, DedupResult } from "./openai";
 export type { FilterResult, DedupResult } from "./openai";
 import { summarizeAnthropic, summarizeTaskAnthropic, generateTaskTitleAnthropic, judgeNewTopicAnthropic, filterRelevantAnthropic, judgeDedupAnthropic } from "./anthropic";
@@ -319,6 +319,8 @@ function callSummarize(cfg: SummarizerConfig, text: string, log: Logger): Promis
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
+    case "deepseek":
+    case "moonshot":
     case "bailian":
     case "cohere":
     case "mistral":
@@ -342,6 +344,8 @@ function callSummarizeTask(cfg: SummarizerConfig, text: string, log: Logger): Pr
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
+    case "deepseek":
+    case "moonshot":
     case "bailian":
     case "cohere":
     case "mistral":
@@ -365,6 +369,8 @@ function callGenerateTaskTitle(cfg: SummarizerConfig, text: string, log: Logger)
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
+    case "deepseek":
+    case "moonshot":
     case "bailian":
     case "cohere":
     case "mistral":
@@ -388,6 +394,8 @@ function callTopicJudge(cfg: SummarizerConfig, currentContext: string, newMessag
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
+    case "deepseek":
+    case "moonshot":
     case "bailian":
     case "cohere":
     case "mistral":
@@ -411,6 +419,8 @@ function callFilterRelevant(cfg: SummarizerConfig, query: string, candidates: Ar
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
+    case "deepseek":
+    case "moonshot":
     case "bailian":
     case "cohere":
     case "mistral":
@@ -434,6 +444,8 @@ function callJudgeDedup(cfg: SummarizerConfig, newSummary: string, candidates: A
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
+    case "deepseek":
+    case "moonshot":
     case "bailian":
     case "cohere":
     case "mistral":
@@ -482,4 +494,3 @@ function wordCount(text: string): number {
   if (noCjk) count += noCjk.split(/\s+/).filter(Boolean).length;
   return count;
 }
-
