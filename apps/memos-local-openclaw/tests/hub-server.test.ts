@@ -128,7 +128,7 @@ describe("hub server", () => {
     await expect(server.start()).rejects.toThrow(/team token/i);
   });
 
-  it("should fail cleanly on port conflict", async () => {
+  it("should fall back to the next available port on conflict", async () => {
     const dir1 = fs.mkdtempSync(path.join(os.tmpdir(), "memos-hub-1-"));
     const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), "memos-hub-2-"));
     dirs.push(dir1, dir2);
@@ -151,8 +151,86 @@ describe("hub server", () => {
     } as any);
     servers.push(server1, server2);
 
-    await server1.start();
-    await expect(server2.start()).rejects.toThrow();
+    const url1 = await server1.start();
+    const url2 = await server2.start();
+
+    expect(url1).toBe("http://127.0.0.1:18911");
+    expect(url2).toBe("http://127.0.0.1:18912");
+  });
+
+  it("should keep shared resources for offline users until they explicitly leave", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memos-hub-offline-"));
+    dirs.push(dir);
+
+    const store = new SqliteStore(path.join(dir, "test.db"), noopLog);
+    stores.push(store);
+
+    const server = new HubServer({
+      store,
+      log: noopLog,
+      config: { sharing: { enabled: true, role: "hub", hub: { port: 18914, teamName: "Offline", teamToken: "offline-secret" } } },
+      dataDir: dir,
+    } as any);
+    servers.push(server);
+    await server.start();
+
+    const offlineUserId = "offline-member";
+    store.upsertHubUser({
+      id: offlineUserId,
+      username: "offline-user",
+      deviceName: "Offline Mac",
+      role: "member",
+      status: "active",
+      groups: [],
+      tokenHash: "hash",
+      createdAt: 1,
+      approvedAt: 1,
+    });
+    store.updateHubUserActivity(offlineUserId, "127.0.0.1", Date.now() - 11 * 60 * 1000);
+    store.upsertHubMemory({
+      id: "offline-memory-1",
+      sourceChunkId: "offline-chunk-1",
+      sourceUserId: offlineUserId,
+      role: "assistant",
+      content: "offline memory content",
+      summary: "offline memory",
+      kind: "paragraph",
+      groupId: null,
+      visibility: "public",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    store.upsertHubTask({
+      id: "offline-task-1",
+      sourceTaskId: "offline-task-source-1",
+      sourceUserId: offlineUserId,
+      title: "offline task",
+      summary: "offline task summary",
+      groupId: null,
+      visibility: "public",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    store.upsertHubSkill({
+      id: "offline-skill-1",
+      sourceSkillId: "offline-skill-source-1",
+      sourceUserId: offlineUserId,
+      name: "offline skill",
+      description: "offline skill description",
+      version: 1,
+      groupId: null,
+      visibility: "public",
+      bundle: JSON.stringify({ skill_md: "# Offline Skill", scripts: [], references: [], evals: [] }),
+      qualityScore: 0.8,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    (server as any).checkOfflineUsers();
+
+    expect(store.getHubMemoryBySource(offlineUserId, "offline-chunk-1")).not.toBeNull();
+    expect(store.getHubTaskBySource(offlineUserId, "offline-task-source-1")).not.toBeNull();
+    expect(store.getHubSkillBySource(offlineUserId, "offline-skill-source-1")).not.toBeNull();
   });
 });
 

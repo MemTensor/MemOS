@@ -406,7 +406,8 @@ const memosLocalPlugin = {
           updatedAt: now,
         });
       } else if (ctx.config.sharing?.enabled && hubClient.userId) {
-        store.upsertTeamSharedChunk(chunk.id, { hubMemoryId: memoryId, visibility, groupId });
+        const conn = store.getClientHubConnection();
+        store.upsertTeamSharedChunk(chunk.id, { hubMemoryId: memoryId, visibility, groupId, hubInstanceId: conn?.hubInstanceId ?? "" });
       }
 
       return { memoryId, visibility, groupId };
@@ -448,7 +449,7 @@ const memosLocalPlugin = {
           hubAddress: Type.Optional(Type.String({ description: "Optional Hub address override for group/all search." })),
           userToken: Type.Optional(Type.String({ description: "Optional Hub bearer token override for group/all search." })),
         }),
-        execute: trackTool("memory_search", async (_toolCallId: any, params: any) => {
+        execute: trackTool("memory_search", async (_toolCallId: any, params: any, context?: any) => {
           const {
             query,
             scope: rawScope,
@@ -474,8 +475,8 @@ const memosLocalPlugin = {
           }
           const searchLimit = typeof maxResults === "number" ? Math.max(1, Math.min(20, Math.round(maxResults))) : 10;
 
-          const agentId = currentAgentId;
-          const ownerFilter = [getCurrentOwner(), "public"];
+          const agentId = context?.agentId ?? currentAgentId;
+          const ownerFilter = [`agent:${agentId}`, "public"];
           const effectiveMaxResults = searchLimit;
           ctx.log.debug(`memory_search query="${query}" maxResults=${effectiveMaxResults} minScore=${minScore ?? 0.45} role=${role ?? "all"} owner=agent:${agentId}`);
           const result = await engine.search({ query, maxResults: effectiveMaxResults, minScore, role, ownerFilter });
@@ -713,14 +714,15 @@ const memosLocalPlugin = {
           chunkId: Type.String({ description: "The chunkId from a memory_search hit" }),
           window: Type.Optional(Type.Number({ description: "Context window ±N (default 2)" })),
         }),
-        execute: trackTool("memory_timeline", async (_toolCallId: any, params: any) => {
-          ctx.log.debug(`memory_timeline called (agent=${currentAgentId})`);
+        execute: trackTool("memory_timeline", async (_toolCallId: any, params: any, context?: any) => {
+          const agentId = context?.agentId ?? currentAgentId;
+          ctx.log.debug(`memory_timeline called (agent=${agentId})`);
           const { chunkId, window: win } = params as {
             chunkId: string;
             window?: number;
           };
 
-          const ownerFilter = [`agent:${currentAgentId}`, "public"];
+          const ownerFilter = [`agent:${agentId}`, "public"];
           const anchorChunk = store.getChunkForOwners(chunkId, ownerFilter);
           if (!anchorChunk) {
             return {
@@ -778,7 +780,8 @@ const memosLocalPlugin = {
           const { chunkId, maxChars } = params as { chunkId: string; maxChars?: number };
           const limit = Math.min(maxChars ?? DEFAULTS.getMaxCharsDefault, DEFAULTS.getMaxCharsMax);
 
-          const ownerFilter = [`agent:${currentAgentId}`, "public"];
+          const agentId = context?.agentId ?? currentAgentId;
+          const ownerFilter = [`agent:${agentId}`, "public"];
           const chunk = store.getChunkForOwners(chunkId, ownerFilter);
           if (!chunk) {
             return {
@@ -952,7 +955,8 @@ const memosLocalPlugin = {
             }),
           }) as any;
 
-          store.markTaskShared(task.id, hubTaskId, chunks.length, visibility, groupId);
+          const conn = store.getClientHubConnection();
+          store.markTaskShared(task.id, hubTaskId, chunks.length, visibility, groupId, conn?.hubInstanceId ?? "");
 
           return {
             content: [{ type: "text", text: `Shared task "${task.title}" with ${chunks.length} chunks to the hub.` }],
@@ -2245,6 +2249,10 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       const shared = store.listLocalSharedTasks();
       if (shared.length === 0) return;
 
+      // Only sync tasks that have a hub_task_id (actively shared to remote)
+      const conn = store.getClientHubConnection();
+      const currentHubInstanceId = conn?.hubInstanceId || "";
+
       let hubClient: { hubUrl: string; userToken: string; userId: string } | undefined;
       try {
         hubClient = await resolveHubClient(store, ctx);
@@ -2254,6 +2262,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       const { v4: uuidv4 } = require("uuid");
 
       for (const entry of shared) {
+        if (!entry.hubTaskId) continue;
+        if (currentHubInstanceId && entry.hubInstanceId && entry.hubInstanceId !== currentHubInstanceId) continue;
         const task = store.getTask(entry.taskId);
         if (!task) continue;
         const chunks = store.getChunksByTask(entry.taskId);
@@ -2291,7 +2301,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
               })),
             }),
           });
-          store.markTaskShared(entry.taskId, entry.hubTaskId, chunks.length, entry.visibility, entry.groupId);
+          store.markTaskShared(entry.taskId, entry.hubTaskId, chunks.length, entry.visibility, entry.groupId, currentHubInstanceId);
         } catch (err) {
           ctx.log.warn(`incremental sync failed for task=${entry.taskId}: ${err}`);
         }
