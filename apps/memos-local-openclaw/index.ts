@@ -1785,6 +1785,13 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
 
+      // Skip auto-recall for cron sessions to prevent meta-discussion contamination (#1311)
+      const sessionKey = hookCtx?.sessionKey ?? "";
+      if (/:cron:/.test(sessionKey)) {
+        ctx.log.info("auto-recall: cron session detected, skipping to avoid meta-discussion contamination");
+        return;
+      }
+
       const recallAgentId = hookCtx?.agentId ?? "main";
       currentAgentId = recallAgentId;
       const recallOwnerFilter = [`agent:${recallAgentId}`, "public"];
