@@ -2,7 +2,7 @@
  * Provider and model configuration types for multi-provider support
  */
 
-export type ProviderType = 'anthropic' | 'openai' | 'openrouter' | 'google' | 'xai' | 'ollama' | 'deepseek' | 'zai' | 'custom' | 'bedrock' | 'litellm';
+export type ProviderType = 'anthropic' | 'openai' | 'openrouter' | 'google' | 'xai' | 'ollama' | 'deepseek' | 'zai' | 'novita' | 'custom' | 'bedrock' | 'litellm';
 
 export interface ProviderConfig {
   id: ProviderType;
@@ -257,6 +257,39 @@ export const DEFAULT_PROVIDERS: ProviderConfig[] = [
         provider: 'zai',
         fullId: 'zai/glm-4.5-flash',
         contextWindow: 128000,
+        supportsVision: false,
+      },
+    ],
+  },
+  {
+    id: 'novita',
+    name: 'Novita AI',
+    requiresApiKey: true,
+    apiKeyEnvVar: 'NOVITA_API_KEY',
+    baseUrl: 'https://api.novita.ai/openai',
+    models: [
+      {
+        id: 'moonshotai/kimi-k2.5',
+        displayName: 'Kimi K2.5 (Default)',
+        provider: 'novita',
+        fullId: 'novita/moonshotai/kimi-k2.5',
+        contextWindow: 262144,
+        supportsVision: true,
+      },
+      {
+        id: 'zai-org/glm-5',
+        displayName: 'GLM 5',
+        provider: 'novita',
+        fullId: 'novita/zai-org/glm-5',
+        contextWindow: 202800,
+        supportsVision: false,
+      },
+      {
+        id: 'minimax/minimax-m2.5',
+        displayName: 'MiniMax M2.5',
+        provider: 'novita',
+        fullId: 'novita/minimax/minimax-m2.5',
+        contextWindow: 204800,
         supportsVision: false,
       },
     ],
