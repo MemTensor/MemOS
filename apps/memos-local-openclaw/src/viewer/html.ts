@@ -2235,6 +2235,7 @@ const I18N={
     'logs.empty':'No logs yet. Logs will appear here when tools are called.',
     'logs.ago':'ago',
     'logs.recall.initial':'Initial Retrieval',
+    'logs.recall.hubRemote':'Hub Remote',
     'logs.recall.filtered':'LLM Filtered',
     'logs.recall.noHits':'No matching memories',
     'logs.recall.noneRelevant':'LLM filter: none relevant',
@@ -2978,6 +2979,7 @@ const I18N={
     'logs.empty':'暂无日志。当工具被调用时日志会显示在这里。',
     'logs.ago':'前',
     'logs.recall.initial':'初始检索',
+    'logs.recall.hubRemote':'远程召回',
     'logs.recall.filtered':'LLM 过滤后',
     'logs.recall.noHits':'未匹配到记忆',
     'logs.recall.noneRelevant':'LLM 过滤：无相关记忆',
@@ -5602,6 +5604,24 @@ function buildLogSummary(lg){
           html+='</div>';
         });
         html+='</div></div>';
+        var hubCands=recallData.hubCandidates||[];
+        html+='<div class="recall-layer hub-recall" onclick="this.classList.toggle(\\\'expanded\\\')">';
+        html+='<div class="recall-layer-title"><span class="recall-expand-icon">\u25B6</span>\u{1F310} '+t('logs.recall.hubRemote')+' <span class="recall-count">'+hubCands.length+'</span></div>';
+        if(hubCands.length>0){
+          html+='<div class="recall-items">';
+          hubCands.forEach(function(c){
+            var scoreClass=c.score>=0.7?'high':c.score>=0.5?'mid':'low';
+            var shortText=escapeHtml(c.summary||c.original_excerpt||'');
+            var fullText=escapeHtml(c.original_excerpt||c.summary||'');
+            var owner=c.ownerName?' ['+escapeHtml(c.ownerName)+']':'';
+            html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
+            html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'assistant')+'">'+(c.role||'assistant')+'</span><span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>'+owner+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+            html+='<div class="recall-summary-full">'+fullText+'</div>';
+            html+='</div>';
+          });
+          html+='</div>';
+        }
+        html+='</div>';
         if(filtered.length>0){
           html+='<div class="recall-layer filtered" onclick="this.classList.toggle(\\\'expanded\\\')">';
           html+='<div class="recall-layer-title"><span class="recall-expand-icon">\u25B6</span>\u2705 '+t('logs.recall.filtered')+' <span class="recall-count">'+filtered.length+'</span></div>';
@@ -5667,6 +5687,7 @@ function buildLogSummary(lg){
 function buildRecallDetailHtml(rd){
   var html='<div class="recall-detail">';
   var cands=rd.candidates||[];
+  var hubCands=rd.hubCandidates||[];
   var filtered=rd.filtered||[];
   if(cands.length>0){
     html+='<div class="recall-detail-section" onclick="this.classList.toggle(\\\'expanded\\\')">';
@@ -5684,6 +5705,23 @@ function buildRecallDetailHtml(rd){
     });
     html+='</div></div>';
   }
+  html+='<div class="recall-detail-section hub-recall" onclick="this.classList.toggle(\\\'expanded\\\')">';
+  html+='<div class="recall-detail-title"><span class="recall-expand-icon">\u25B6</span>\u{1F310} '+t('logs.recall.hubRemote')+' ('+hubCands.length+')</div>';
+  if(hubCands.length>0){
+    html+='<div class="recall-detail-items">';
+    hubCands.forEach(function(c,i){
+      var scoreClass=c.score>=0.7?'high':c.score>=0.5?'mid':'low';
+      var shortText=escapeHtml(c.summary||c.original_excerpt||'');
+      var fullText=escapeHtml(c.original_excerpt||c.summary||'');
+      var owner=c.ownerName?' ['+escapeHtml(c.ownerName)+']':'';
+      html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
+      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'assistant')+'">'+(c.role||'assistant')+'</span><span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>'+owner+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+      html+='<div class="recall-summary-full">'+fullText+'</div>';
+      html+='</div>';
+    });
+    html+='</div>';
+  }
+  html+='</div>';
   if(filtered.length>0){
     html+='<div class="recall-detail-section filtered" onclick="this.classList.toggle(\\\'expanded\\\')">';
     html+='<div class="recall-detail-title"><span class="recall-expand-icon">\u25B6</span>\u2705 '+t('logs.recall.filtered')+' ('+filtered.length+')</div>';
@@ -5699,7 +5737,7 @@ function buildRecallDetailHtml(rd){
       html+='</div>';
     });
     html+='</div></div>';
-  }else if(cands.length>0){
+  }else if(cands.length>0||hubCands.length>0){
     html+='<div style="font-size:10px;color:var(--text-muted);margin-top:4px">\u26A0 '+t('logs.recall.noneRelevant')+'</div>';
   }
   if(rd.status==='error'&&rd.error){
