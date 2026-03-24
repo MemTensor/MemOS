@@ -1,7 +1,7 @@
 import http from "node:http";
 import os from "node:os";
 import crypto from "node:crypto";
-import { execSync, exec } from "node:child_process";
+import { execSync, exec, execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -22,9 +22,72 @@ import type { Logger, Chunk, PluginContext, MemosLocalConfig } from "../types";
 import { viewerHTML } from "./html";
 import { v4 as uuid } from "uuid";
 
-function normalizeTimestamp(ts: number): number {
-  if (ts < 1e12) return ts * 1000;
-  return ts;
+export interface MigrationStepFailureCounts {
+  summarization: number;
+  dedup: number;
+  embedding: number;
+}
+
+export interface MigrationStateSnapshot {
+  phase: string;
+  stored: number;
+  skipped: number;
+  merged: number;
+  errors: number;
+  processed: number;
+  total: number;
+  lastItem: any;
+  done: boolean;
+  stopped: boolean;
+  stepFailures: MigrationStepFailureCounts;
+  success: boolean;
+}
+
+function createInitialStepFailures(): MigrationStepFailureCounts {
+  return { summarization: 0, dedup: 0, embedding: 0 };
+}
+
+export function computeMigrationSuccess(state: Pick<MigrationStateSnapshot, "errors" | "stepFailures">): boolean {
+  const sf = state.stepFailures;
+  return state.errors === 0 && sf.summarization === 0 && sf.dedup === 0 && sf.embedding === 0;
+}
+
+export function createInitialMigrationState(): MigrationStateSnapshot {
+  const stepFailures = createInitialStepFailures();
+  return {
+    phase: "",
+    stored: 0,
+    skipped: 0,
+    merged: 0,
+    errors: 0,
+    processed: 0,
+    total: 0,
+    lastItem: null,
+    done: false,
+    stopped: false,
+    stepFailures,
+    success: computeMigrationSuccess({ errors: 0, stepFailures }),
+  };
+}
+
+export function applyMigrationItemToState(state: MigrationStateSnapshot, d: any): void {
+  if (d.status === "stored") state.stored++;
+  else if (d.status === "skipped" || d.status === "duplicate") state.skipped++;
+  else if (d.status === "merged") state.merged++;
+  else if (d.status === "error") state.errors++;
+
+  if (Array.isArray(d.stepFailures)) {
+    for (const step of d.stepFailures) {
+      if (step === "summarization") state.stepFailures.summarization++;
+      else if (step === "dedup") state.stepFailures.dedup++;
+      else if (step === "embedding") state.stepFailures.embedding++;
+    }
+  }
+
+  state.processed = d.index ?? state.processed + 1;
+  state.total = d.total ?? state.total;
+  state.lastItem = d;
+  state.success = computeMigrationSuccess(state);
 }
 
 export interface ViewerServerOptions {
@@ -67,18 +130,7 @@ export class ViewerServer {
   private resetToken: string;
   private migrationRunning = false;
   private migrationAbort = false;
-  private migrationState: {
-    phase: string;
-    stored: number;
-    skipped: number;
-    merged: number;
-    errors: number;
-    processed: number;
-    total: number;
-    lastItem: any;
-    done: boolean;
-    stopped: boolean;
-  } = { phase: "", stored: 0, skipped: 0, merged: 0, errors: 0, processed: 0, total: 0, lastItem: null, done: false, stopped: false };
+  private migrationState: MigrationStateSnapshot = createInitialMigrationState();
   private migrationSSEClients: http.ServerResponse[] = [];
 
   private ppRunning = false;
@@ -3269,7 +3321,8 @@ export class ViewerServer {
 
             // Install dependencies
             this.log.info(`update-install: installing dependencies...`);
-            exec(`cd ${extDir} && npm install --omit=dev --ignore-scripts`, { timeout: 120_000 }, (npmErr, npmOut, npmStderr) => {
+            const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+            execFile(npmCmd, ["install", "--omit=dev", "--ignore-scripts"], { cwd: extDir, timeout: 120_000 }, (npmErr, npmOut, npmStderr) => {
               if (npmErr) {
                 try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
                 this.log.warn(`update-install: npm install failed: ${npmErr.message}`);
@@ -3277,25 +3330,21 @@ export class ViewerServer {
                 return;
               }
 
-              // Rebuild native modules (do not swallow errors)
-              exec(`cd ${extDir} && npm rebuild better-sqlite3`, { timeout: 60_000 }, (rebuildErr, rebuildOut, rebuildStderr) => {
+              execFile(npmCmd, ["rebuild", "better-sqlite3"], { cwd: extDir, timeout: 60_000 }, (rebuildErr, rebuildOut, rebuildStderr) => {
                 if (rebuildErr) {
                   this.log.warn(`update-install: better-sqlite3 rebuild failed: ${rebuildErr.message}`);
                   const stderr = String(rebuildStderr || "").trim();
                   if (stderr) this.log.warn(`update-install: rebuild stderr: ${stderr.slice(0, 500)}`);
-                  // Continue so postinstall.cjs can run (it will try rebuild again and show user guidance)
                 }
 
-                // Run postinstall.cjs: legacy cleanup, skill install, version marker, and optional sqlite re-check
                 this.log.info(`update-install: running postinstall...`);
-                exec(`cd ${extDir} && node scripts/postinstall.cjs`, { timeout: 180_000 }, (postErr, postOut, postStderr) => {
+                execFile(process.execPath, ["scripts/postinstall.cjs"], { cwd: extDir, timeout: 180_000 }, (postErr, postOut, postStderr) => {
                   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 
                   if (postErr) {
                     this.log.warn(`update-install: postinstall failed: ${postErr.message}`);
                     const postStderrStr = String(postStderr || "").trim();
                     if (postStderrStr) this.log.warn(`update-install: postinstall stderr: ${postStderrStr.slice(0, 500)}`);
-                    // Still report success; plugin is updated, user can run postinstall manually if needed
                   }
 
                   // Read new version
@@ -3648,7 +3697,7 @@ export class ViewerServer {
     } else if (this.migrationState.done) {
       const evtName = this.migrationState.stopped ? "stopped" : "done";
       res.write(`event: state\ndata: ${JSON.stringify(this.migrationState)}\n\n`);
-      res.write(`event: ${evtName}\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+      res.write(`event: ${evtName}\ndata: ${JSON.stringify({ ok: this.migrationState.success, ...this.migrationState })}\n\n`);
       res.end();
     } else {
       res.end();
@@ -3689,19 +3738,12 @@ export class ViewerServer {
         this.migrationSSEClients = this.migrationSSEClients.filter(c => c !== res);
       });
 
-      this.migrationAbort = false;
-      this.migrationState = { phase: "", stored: 0, skipped: 0, merged: 0, errors: 0, processed: 0, total: 0, lastItem: null, done: false, stopped: false };
+      this.migrationState = createInitialMigrationState();
 
       const send = (event: string, data: unknown) => {
         if (event === "item") {
           const d = data as any;
-          if (d.status === "stored") this.migrationState.stored++;
-          else if (d.status === "skipped" || d.status === "duplicate") this.migrationState.skipped++;
-          else if (d.status === "merged") this.migrationState.merged++;
-          else if (d.status === "error") this.migrationState.errors++;
-          this.migrationState.processed = d.index ?? this.migrationState.processed + 1;
-          this.migrationState.total = d.total ?? this.migrationState.total;
-          this.migrationState.lastItem = d;
+          applyMigrationItemToState(this.migrationState, d);
         } else if (event === "phase") {
           this.migrationState.phase = (data as any).phase;
         } else if (event === "progress") {
@@ -3714,11 +3756,13 @@ export class ViewerServer {
       this.runMigration(send, opts.sources, concurrency).finally(() => {
         this.migrationRunning = false;
         this.migrationState.done = true;
+        this.migrationState.success = computeMigrationSuccess(this.migrationState);
+        const donePayload = { ok: this.migrationState.success, ...this.migrationState };
         if (this.migrationAbort) {
           this.migrationState.stopped = true;
-          this.broadcastSSE("stopped", { ok: true, ...this.migrationState });
+          this.broadcastSSE("stopped", donePayload);
         } else {
-          this.broadcastSSE("done", { ok: true });
+          this.broadcastSSE("done", donePayload);
         }
         this.migrationAbort = false;
         const clientsToClose = [...this.migrationSSEClients];
@@ -3815,11 +3859,24 @@ export class ViewerServer {
               }
 
               try {
-                const summary = await summarizer.summarize(row.text);
+                const stepFailures: Array<"summarization" | "dedup" | "embedding"> = [];
+                let summary = "";
+                try {
+                  summary = await summarizer.summarize(row.text);
+                } catch (err) {
+                  stepFailures.push("summarization");
+                  this.log.warn(`Migration summarization failed: ${err}`);
+                }
+                if (!summary) {
+                  stepFailures.push("summarization");
+                  summary = row.text.slice(0, 200);
+                }
+
                 let embedding: number[] | null = null;
                 try {
                   [embedding] = await this.embedder.embed([summary]);
                 } catch (err) {
+                  stepFailures.push("embedding");
                   this.log.warn(`Migration embed failed: ${err}`);
                 }
 
@@ -3838,26 +3895,31 @@ export class ViewerServer {
                     }).filter(c => c.summary);
 
                     if (candidates.length > 0) {
-                      const dedupResult = await summarizer.judgeDedup(summary, candidates);
-                      if (dedupResult?.action === "DUPLICATE" && dedupResult.targetIndex) {
-                        const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
-                        if (targetId) {
-                          dedupStatus = "duplicate";
-                          dedupTarget = targetId;
-                          dedupReason = dedupResult.reason;
+                      try {
+                        const dedupResult = await summarizer.judgeDedup(summary, candidates);
+                        if (dedupResult?.action === "DUPLICATE" && dedupResult.targetIndex) {
+                          const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
+                          if (targetId) {
+                            dedupStatus = "duplicate";
+                            dedupTarget = targetId;
+                            dedupReason = dedupResult.reason;
+                          }
+                        } else if (dedupResult?.action === "UPDATE" && dedupResult.targetIndex && dedupResult.mergedSummary) {
+                          const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
+                          if (targetId) {
+                            this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, row.text);
+                            try {
+                              const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]);
+                              if (newEmb) this.store.upsertEmbedding(targetId, newEmb);
+                            } catch { /* best-effort */ }
+                            dedupStatus = "merged";
+                            dedupTarget = targetId;
+                            dedupReason = dedupResult.reason;
+                          }
                         }
-                      } else if (dedupResult?.action === "UPDATE" && dedupResult.targetIndex && dedupResult.mergedSummary) {
-                        const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
-                        if (targetId) {
-                          this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, row.text);
-                          try {
-                            const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]);
-                            if (newEmb) this.store.upsertEmbedding(targetId, newEmb);
-                          } catch { /* best-effort */ }
-                          dedupStatus = "merged";
-                          dedupTarget = targetId;
-                          dedupReason = dedupResult.reason;
-                        }
+                      } catch (err) {
+                        stepFailures.push("dedup");
+                        this.log.warn(`Migration dedup judgment failed: ${err}`);
                       }
                     }
                   }
@@ -3900,7 +3962,13 @@ export class ViewerServer {
                   preview: row.text.slice(0, 120),
                   summary: summary.slice(0, 80),
                   source: file,
+                  stepFailures,
                 });
+                if (stepFailures.length > 0) {
+                  this.log.warn(`[MIGRATION] sqlite item imported with step failures: ${stepFailures.join(",")}`);
+                } else {
+                  this.log.info("[MIGRATION] sqlite item imported successfully (all steps)");
+                }
               } catch (err) {
                 totalErrors++;
                 send("item", {
@@ -4030,11 +4098,24 @@ export class ViewerServer {
               }
 
               try {
-                const summary = await summarizer.summarize(content);
+                const stepFailures: Array<"summarization" | "dedup" | "embedding"> = [];
+                let summary = "";
+                try {
+                  summary = await summarizer.summarize(content);
+                } catch (err) {
+                  stepFailures.push("summarization");
+                  this.log.warn(`Migration summarization failed: ${err}`);
+                }
+                if (!summary) {
+                  stepFailures.push("summarization");
+                  summary = content.slice(0, 200);
+                }
+
                 let embedding: number[] | null = null;
                 try {
                   [embedding] = await this.embedder.embed([summary]);
                 } catch (err) {
+                  stepFailures.push("embedding");
                   this.log.warn(`Migration embed failed: ${err}`);
                 }
 
@@ -4053,17 +4134,22 @@ export class ViewerServer {
                     }).filter(c => c.summary);
 
                     if (candidates.length > 0) {
-                      const dedupResult = await summarizer.judgeDedup(summary, candidates);
-                      if (dedupResult?.action === "DUPLICATE" && dedupResult.targetIndex) {
-                        const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
-                        if (targetId) { dedupStatus = "duplicate"; dedupTarget = targetId; dedupReason = dedupResult.reason; }
-                      } else if (dedupResult?.action === "UPDATE" && dedupResult.targetIndex && dedupResult.mergedSummary) {
-                        const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
-                        if (targetId) {
-                          this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, content);
-                          try { const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]); if (newEmb) this.store.upsertEmbedding(targetId, newEmb); } catch { /* best-effort */ }
-                          dedupStatus = "merged"; dedupTarget = targetId; dedupReason = dedupResult.reason;
+                      try {
+                        const dedupResult = await summarizer.judgeDedup(summary, candidates);
+                        if (dedupResult?.action === "DUPLICATE" && dedupResult.targetIndex) {
+                          const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
+                          if (targetId) { dedupStatus = "duplicate"; dedupTarget = targetId; dedupReason = dedupResult.reason; }
+                        } else if (dedupResult?.action === "UPDATE" && dedupResult.targetIndex && dedupResult.mergedSummary) {
+                          const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
+                          if (targetId) {
+                            this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, content);
+                            try { const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]); if (newEmb) this.store.upsertEmbedding(targetId, newEmb); } catch { /* best-effort */ }
+                            dedupStatus = "merged"; dedupTarget = targetId; dedupReason = dedupResult.reason;
+                          }
                         }
+                      } catch (err) {
+                        stepFailures.push("dedup");
+                        this.log.warn(`Migration dedup judgment failed: ${err}`);
                       }
                     }
                   }
@@ -4083,7 +4169,12 @@ export class ViewerServer {
                 if (embedding && dedupStatus === "active") this.store.upsertEmbedding(chunkId, embedding);
 
                 totalStored++;
-                send("item", { index: idx, total: totalMsgs, status: dedupStatus === "active" ? "stored" : dedupStatus, preview: content.slice(0, 120), summary: summary.slice(0, 80), source: file, agent: agentId, role: msgRole });
+                send("item", { index: idx, total: totalMsgs, status: dedupStatus === "active" ? "stored" : dedupStatus, preview: content.slice(0, 120), summary: summary.slice(0, 80), source: file, agent: agentId, role: msgRole, stepFailures });
+                if (stepFailures.length > 0) {
+                  this.log.warn(`[MIGRATION] session item imported with step failures: ${stepFailures.join(",")}`);
+                } else {
+                  this.log.info("[MIGRATION] session item imported successfully (all steps)");
+                }
               } catch (err) {
                 totalErrors++;
                 send("item", { index: idx, total: totalMsgs, status: "error", preview: content.slice(0, 120), source: file, agent: agentId, error: String(err).slice(0, 200) });
@@ -4124,7 +4215,14 @@ export class ViewerServer {
     }
 
     send("progress", { total: totalProcessed, processed: totalProcessed, phase: "done" });
-    send("summary", { totalProcessed, totalStored, totalSkipped, totalErrors });
+    send("summary", {
+      totalProcessed,
+      totalStored,
+      totalSkipped,
+      totalErrors,
+      success: computeMigrationSuccess(this.migrationState),
+      stepFailures: this.migrationState.stepFailures,
+    });
   }
 
   // ─── Post-processing: independent task/skill generation ───

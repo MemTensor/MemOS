@@ -150,6 +150,8 @@ export type SummaryProvider =
   | "bedrock"
   | "zhipu"
   | "siliconflow"
+  | "deepseek"
+  | "moonshot"
   | "bailian"
   | "cohere"
   | "mistral"
