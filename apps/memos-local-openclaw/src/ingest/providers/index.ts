@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { SummarizerConfig, SummaryProvider, Logger } from "../../types";
-import { summarizeOpenAI, summarizeTaskOpenAI, generateTaskTitleOpenAI, judgeNewTopicOpenAI, filterRelevantOpenAI, judgeDedupOpenAI } from "./openai";
+import type { SummarizerConfig, SummaryProvider, Logger, OpenClawAPI } from "../../types";
+import { summarizeOpenAI, summarizeTaskOpenAI, generateTaskTitleOpenAI, judgeNewTopicOpenAI, filterRelevantOpenAI, judgeDedupOpenAI, parseFilterResult, parseDedupResult } from "./openai";
 import type { FilterResult, DedupResult } from "./openai";
 export type { FilterResult, DedupResult } from "./openai";
 import { summarizeAnthropic, summarizeTaskAnthropic, generateTaskTitleAnthropic, judgeNewTopicAnthropic, filterRelevantAnthropic, judgeDedupAnthropic } from "./anthropic";
@@ -329,6 +329,27 @@ export class Summarizer {
     return this.strongCfg;
   }
 
+  // ─── OpenClaw Prompts ───
+
+  static readonly OPENCLAW_TOPIC_JUDGE_PROMPT = `You are a conversation topic change detector.
+Given a CURRENT CONVERSATION SUMMARY and a NEW USER MESSAGE, decide: has the user started a COMPLETELY NEW topic that is unrelated to the current conversation?
+Reply with a single word: "NEW" if topic changed, "SAME" if it continues.`;
+
+  static readonly OPENCLAW_FILTER_RELEVANT_PROMPT = `You are a memory relevance judge.
+Given a QUERY and CANDIDATE memories, decide: does each candidate help answer the query?
+RULES:
+1. Include candidates whose content provides useful facts/context for the query.
+2. Exclude candidates that merely share a topic but contain no useful information.
+3. DEDUPLICATION: When multiple candidates convey the same or very similar information, keep ONLY the most complete one and exclude the rest.
+4. If none help, return {"relevant":[],"sufficient":false}.
+OUTPUT — JSON only: {"relevant":[1,3],"sufficient":true}`;
+
+  static readonly OPENCLAW_DEDUP_JUDGE_PROMPT = `You are a memory deduplication system.
+Given a NEW memory summary and EXISTING candidates, decide if the new memory duplicates any existing one.
+Reply with JSON: {"action":"MERGE","mergeTarget":2,"reason":"..."} or {"action":"NEW","reason":"..."}`;
+
+  static readonly OPENCLAW_TASK_SUMMARY_PROMPT = `Summarize the following task conversation into a structured report. Preserve key decisions, code, commands, and outcomes. Use the same language as the input.`;
+
   // ─── OpenClaw API Implementation ───
 
   private requireOpenClawAPI(): void {
@@ -360,7 +381,7 @@ export class Summarizer {
   private async summarizeTaskOpenClaw(text: string): Promise<string> {
     this.requireOpenClawAPI();
     const prompt = [
-      OPENCLAW_TASK_SUMMARY_PROMPT,
+      Summarizer.OPENCLAW_TASK_SUMMARY_PROMPT,
       ``,
       text,
     ].join("\n");
@@ -378,7 +399,7 @@ export class Summarizer {
   private async judgeNewTopicOpenClaw(currentContext: string, newMessage: string): Promise<boolean> {
     this.requireOpenClawAPI();
     const prompt = [
-      OPENCLAW_TOPIC_JUDGE_PROMPT,
+      Summarizer.OPENCLAW_TOPIC_JUDGE_PROMPT,
       ``,
       `CURRENT CONVERSATION SUMMARY:`,
       currentContext,
@@ -409,7 +430,7 @@ export class Summarizer {
       .join("\n");
 
     const prompt = [
-      OPENCLAW_FILTER_RELEVANT_PROMPT,
+      Summarizer.OPENCLAW_FILTER_RELEVANT_PROMPT,
       ``,
       `QUERY: ${query}`,
       ``,
@@ -437,7 +458,7 @@ export class Summarizer {
       .join("\n");
 
     const prompt = [
-      OPENCLAW_DEDUP_JUDGE_PROMPT,
+      Summarizer.OPENCLAW_DEDUP_JUDGE_PROMPT,
       ``,
       `NEW MEMORY:`,
       newSummary,

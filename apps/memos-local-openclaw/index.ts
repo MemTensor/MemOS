@@ -1639,16 +1639,32 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
               };
             }
 
-            const localText = localHits.length > 0
-              ? localHits.map((h, i) => `${i + 1}. [${h.name}] ${h.description.slice(0, 150)}${h.visibility === "public" ? " (shared to local agents)" : ""}`).join("\n")
+            let filteredLocal = localHits;
+            let filteredHub = hub.hits;
+            if (localHits.length > 0 && hub.hits.length > 0) {
+              const allCandidates = [
+                ...localHits.map((h, i) => ({ index: i + 1, role: "skill" as const, content: `[${h.name}] ${h.description.slice(0, 200)}` })),
+                ...hub.hits.map((h, i) => ({ index: localHits.length + i + 1, role: "skill" as const, content: `[${h.name}] ${h.description.slice(0, 200)}` })),
+              ];
+              const mergedFilter = await summarizer.filterRelevant(skillQuery, allCandidates);
+              if (mergedFilter !== null && mergedFilter.relevant.length > 0) {
+                const relevantSet = new Set(mergedFilter.relevant);
+                filteredLocal = localHits.filter((_, i) => relevantSet.has(i + 1));
+                filteredHub = hub.hits.filter((_, i) => relevantSet.has(localHits.length + i + 1));
+                ctx.log.debug(`skill_search LLM filter (merged): local ${localHits.length}→${filteredLocal.length}, hub ${hub.hits.length}→${filteredHub.length}`);
+              }
+            }
+
+            const localText = filteredLocal.length > 0
+              ? filteredLocal.map((h, i) => `${i + 1}. [${h.name}] ${h.description.slice(0, 150)}${h.visibility === "public" ? " (shared to local agents)" : ""}`).join("\n")
               : "(none)";
-            const hubText = hub.hits.length > 0
-              ? hub.hits.map((h, i) => `${i + 1}. [${h.name}] ${h.description.slice(0, 150)} (${h.visibility}${h.groupName ? `:${h.groupName}` : ""}, owner=${h.ownerName})`).join("\n")
+            const hubText = filteredHub.length > 0
+              ? filteredHub.map((h, i) => `${i + 1}. [${h.name}] ${h.description.slice(0, 150)} (${h.visibility}${h.groupName ? `:${h.groupName}` : ""}, owner=${h.ownerName})`).join("\n")
               : "(none)";
 
             return {
               content: [{ type: "text", text: `Local skills:\n${localText}\n\nHub skills:\n${hubText}` }],
-              details: { query: skillQuery, scope: rawScope, local: { hits: localHits }, hub },
+              details: { query: skillQuery, scope: rawScope, local: { hits: filteredLocal }, hub: { hits: filteredHub } },
             };
           }
 

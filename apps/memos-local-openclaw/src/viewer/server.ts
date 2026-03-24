@@ -1915,18 +1915,25 @@ export class ViewerServer {
 
   private handleRetryJoin(req: http.IncomingMessage, res: http.ServerResponse): void {
     this.readBody(req, async (_body) => {
-      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable", errorCode: "sharing_unavailable" });
       const sharing = this.ctx.config.sharing;
       if (!sharing?.enabled || sharing.role !== "client") {
-        return this.jsonResponse(res, { ok: false, error: "not_in_client_mode" });
+        return this.jsonResponse(res, { ok: false, error: "not_in_client_mode", errorCode: "not_in_client_mode" });
       }
       const hubAddress = sharing.client?.hubAddress ?? "";
       const teamToken = sharing.client?.teamToken ?? "";
       if (!hubAddress || !teamToken) {
-        return this.jsonResponse(res, { ok: false, error: "missing_hub_address_or_team_token" });
+        return this.jsonResponse(res, { ok: false, error: "missing_hub_address_or_team_token", errorCode: "missing_config" });
       }
+      const hubUrl = normalizeHubUrl(hubAddress);
+
       try {
-        const hubUrl = normalizeHubUrl(hubAddress);
+        await hubRequestJson(hubUrl, "", "/api/v1/hub/info", { method: "GET" });
+      } catch {
+        return this.jsonResponse(res, { ok: false, error: "hub_unreachable", errorCode: "hub_unreachable" });
+      }
+
+      try {
         const os = await import("os");
         const nickname = sharing.client?.nickname;
         const username = nickname || os.userInfo().username || "user";
@@ -1954,9 +1961,19 @@ export class ViewerServer {
           lastKnownStatus: result.status || "",
           hubInstanceId,
         });
+        if (result.status === "blocked") {
+          return this.jsonResponse(res, { ok: false, error: "blocked", errorCode: "blocked" });
+        }
         this.jsonResponse(res, { ok: true, status: result.status || "pending" });
       } catch (err) {
-        this.jsonResponse(res, { ok: false, error: String(err) });
+        const errStr = String(err);
+        if (errStr.includes("(409)") || errStr.includes("username_taken")) {
+          return this.jsonResponse(res, { ok: false, error: "username_taken", errorCode: "username_taken" });
+        }
+        if (errStr.includes("(403)") || errStr.includes("invalid_team_token")) {
+          return this.jsonResponse(res, { ok: false, error: "invalid_team_token", errorCode: "invalid_team_token" });
+        }
+        this.jsonResponse(res, { ok: false, error: errStr, errorCode: "unknown" });
       }
     });
   }
@@ -2869,12 +2886,22 @@ export class ViewerServer {
         const nowClient = Boolean(finalSharing?.enabled) && finalSharing?.role === "client";
         const previouslyClient = oldSharingEnabled && oldSharingRole === "client";
         let joinStatus: string | undefined;
+        let joinError: string | undefined;
         if (nowClient && !previouslyClient) {
           try {
             joinStatus = await this.autoJoinOnSave(finalSharing);
           } catch (e) {
-            this.log.warn(`Auto-join on save failed: ${e}`);
+            const msg = String(e instanceof Error ? e.message : e);
+            this.log.warn(`Auto-join on save failed: ${msg}`);
+            if (msg === "hub_unreachable" || msg === "username_taken" || msg === "invalid_team_token") {
+              joinError = msg;
+            }
           }
+        }
+
+        if (joinError) {
+          this.jsonResponse(res, { ok: true, joinError, restart: false });
+          return;
         }
 
         this.jsonResponse(res, { ok: true, joinStatus, restart: true });
@@ -2897,16 +2924,37 @@ export class ViewerServer {
     const teamToken = String(clientCfg?.teamToken || "");
     if (!hubAddress || !teamToken) return undefined;
     const hubUrl = normalizeHubUrl(hubAddress);
+
+    try {
+      await hubRequestJson(hubUrl, "", "/api/v1/hub/info", { method: "GET" });
+    } catch {
+      throw new Error("hub_unreachable");
+    }
+
     const os = await import("os");
     const nickname = String(clientCfg?.nickname || "");
     const username = nickname || os.userInfo().username || "user";
     const hostname = os.hostname() || "unknown";
     const persisted = this.store.getClientHubConnection();
     const existingIdentityKey = persisted?.identityKey || "";
-    const result = await hubRequestJson(hubUrl, "", "/api/v1/hub/join", {
-      method: "POST",
-      body: JSON.stringify({ teamToken, username, deviceName: hostname, identityKey: existingIdentityKey }),
-    }) as any;
+
+    let result: any;
+    try {
+      result = await hubRequestJson(hubUrl, "", "/api/v1/hub/join", {
+        method: "POST",
+        body: JSON.stringify({ teamToken, username, deviceName: hostname, identityKey: existingIdentityKey }),
+      });
+    } catch (err) {
+      const errStr = String(err);
+      if (errStr.includes("(409)") || errStr.includes("username_taken")) {
+        throw new Error("username_taken");
+      }
+      if (errStr.includes("(403)") || errStr.includes("invalid_team_token")) {
+        throw new Error("invalid_team_token");
+      }
+      throw err;
+    }
+
     const returnedIdentityKey = String(result.identityKey || existingIdentityKey || "");
     let hubInstanceId = persisted?.hubInstanceId || "";
     try {
@@ -3125,14 +3173,43 @@ export class ViewerServer {
             }
           }
         } catch {}
-        const url = hubUrl.replace(/\/+$/, "") + "/api/v1/hub/info";
+        const baseUrl = hubUrl.replace(/\/+$/, "");
+        const infoUrl = baseUrl + "/api/v1/hub/info";
         const ctrl = new AbortController();
         const timeout = setTimeout(() => ctrl.abort(), 8000);
         try {
-          const r = await fetch(url, { signal: ctrl.signal });
+          const r = await fetch(infoUrl, { signal: ctrl.signal });
           clearTimeout(timeout);
           if (!r.ok) { this.jsonResponse(res, { ok: false, error: `HTTP ${r.status}` }); return; }
           const info = await r.json() as Record<string, unknown>;
+
+          const { teamToken, nickname } = JSON.parse(body);
+          if (teamToken) {
+            const username = (typeof nickname === "string" && nickname.trim()) || os.userInfo().username || "user";
+            const persisted = this.store.getClientHubConnection();
+            const identityKey = persisted?.identityKey || "";
+            try {
+              const joinR = await fetch(baseUrl + "/api/v1/hub/join", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ teamToken, username, identityKey, deviceName: os.hostname(), dryRun: true }),
+              });
+              const joinData = await joinR.json() as Record<string, unknown>;
+              if (!joinR.ok && joinData.error === "username_taken") {
+                this.jsonResponse(res, { ok: false, error: "username_taken", teamName: info.teamName || "" });
+                return;
+              }
+              if (!joinR.ok && joinData.error === "invalid_team_token") {
+                this.jsonResponse(res, { ok: false, error: "invalid_team_token", teamName: info.teamName || "" });
+                return;
+              }
+              if (joinR.ok && joinData.status === "blocked") {
+                this.jsonResponse(res, { ok: false, error: "blocked", teamName: info.teamName || "" });
+                return;
+              }
+            } catch { /* join check is best-effort; connection itself is OK */ }
+          }
+
           this.jsonResponse(res, { ok: true, teamName: info.teamName || "", apiVersion: info.apiVersion || "" });
         } catch (e: unknown) {
           clearTimeout(timeout);
@@ -3945,8 +4022,8 @@ export class ViewerServer {
                   mergeCount: 0,
                   lastHitAt: null,
                   mergeHistory: "[]",
-                  createdAt: normalizeTimestamp(row.updated_at),
-                  updatedAt: normalizeTimestamp(row.updated_at),
+                  createdAt: Number(row.updated_at) < 1e12 ? Number(row.updated_at) * 1000 : Number(row.updated_at),
+                  updatedAt: Number(row.updated_at) < 1e12 ? Number(row.updated_at) * 1000 : Number(row.updated_at),
                 };
 
                 this.store.insertChunk(chunk);
