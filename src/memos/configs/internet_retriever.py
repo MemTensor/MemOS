@@ -67,6 +67,12 @@ class BochaSearchConfig(BaseInternetRetrieverConfig):
     )
 
 
+class TavilySearchConfig(BaseInternetRetrieverConfig):
+    """Configuration class for Tavily Search API."""
+
+    max_results: int = Field(default=20, description="Maximum number of results to retrieve")
+
+
 class InternetRetrieverConfigFactory(BaseConfig):
     """Factory class for creating internet retriever configurations."""
 
@@ -82,6 +88,7 @@ class InternetRetrieverConfigFactory(BaseConfig):
         "bing": BingSearchConfig,
         "xinyu": XinyuSearchConfig,
         "bocha": BochaSearchConfig,
+        "tavily": TavilySearchConfig,
     }
 
     @field_validator("backend")
