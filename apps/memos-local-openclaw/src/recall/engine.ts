@@ -62,10 +62,20 @@ export class RecallEngine {
 
     // Step 1b: Pattern search (LIKE-based) as fallback for short terms that
     // trigram FTS cannot match (trigram requires >= 3 chars).
-    const shortTerms = query
-      .replace(/[."""(){}[\]*:^~!@#$%&\\/<>,;'`?？。，！、：""''（）【】《》]/g, " ")
-      .split(/\s+/)
-      .filter((t) => t.length === 2);
+    // For CJK text without spaces, extract bigrams (2-char sliding windows)
+    // so that queries like "唐波是谁" produce ["唐波", "波是", "是谁"].
+    const cleaned = query.replace(/[."""(){}[\]*:^~!@#$%&\\/<>,;'`?？。，！、：""''（）【】《》]/g, " ");
+    const spaceSplit = cleaned.split(/\s+/).filter((t) => t.length === 2);
+    const cjkBigrams: string[] = [];
+    const cjkRuns = cleaned.match(/[\u4e00-\u9fff\u3400-\u4dbf\uF900-\uFAFF]{2,}/g);
+    if (cjkRuns) {
+      for (const run of cjkRuns) {
+        for (let i = 0; i <= run.length - 2; i++) {
+          cjkBigrams.push(run.slice(i, i + 2));
+        }
+      }
+    }
+    const shortTerms = [...new Set([...spaceSplit, ...cjkBigrams])];
     const patternHits = shortTerms.length > 0
       ? this.store.patternSearch(shortTerms, { limit: candidatePool })
       : [];
@@ -74,58 +84,41 @@ export class RecallEngine {
       score: 1 / (i + 1),
     }));
 
-    // Step 1c: Hub memories — two-stage retrieval (no cached embeddings).
-    // Stage 1: FTS + pattern to get candidates.
-    // Stage 2: embed candidates on-the-fly + cosine rerank.
+    // Step 1c: Hub memories — FTS + pattern + cached embeddings (same strategy as chunks/skills).
     let hubMemFtsRanked: Array<{ id: string; score: number }> = [];
     let hubMemVecRanked: Array<{ id: string; score: number }> = [];
     let hubMemPatternRanked: Array<{ id: string; score: number }> = [];
     if (query && this.ctx.config.sharing?.enabled && this.ctx.config.sharing.role === "hub") {
-      // Stage 1: cheap text retrieval
-      const hubCandidateTexts = new Map<string, string>();
       try {
         const hubFtsHits = this.store.searchHubMemories(query, { maxResults: candidatePool });
-        hubMemFtsRanked = hubFtsHits.map(({ hit }, i) => {
-          hubCandidateTexts.set(hit.id, (hit.summary || hit.content || "").slice(0, 500));
-          return { id: `hubmem:${hit.id}`, score: 1 / (i + 1) };
-        });
+        hubMemFtsRanked = hubFtsHits.map(({ hit }, i) => ({ id: `hubmem:${hit.id}`, score: 1 / (i + 1) }));
       } catch { /* hub_memories table may not exist */ }
       if (shortTerms.length > 0) {
         try {
           const hubPatternHits = this.store.hubMemoryPatternSearch(shortTerms, { limit: candidatePool });
-          hubMemPatternRanked = hubPatternHits.map((h, i) => {
-            hubCandidateTexts.set(h.memoryId, (h.content || "").slice(0, 500));
-            return { id: `hubmem:${h.memoryId}`, score: 1 / (i + 1) };
-          });
+          hubMemPatternRanked = hubPatternHits.map((h, i) => ({ id: `hubmem:${h.memoryId}`, score: 1 / (i + 1) }));
         } catch { /* best-effort */ }
       }
 
-      // Stage 2: embed candidates on-the-fly and cosine rerank
-      if (hubCandidateTexts.size > 0) {
-        try {
-          const qv = await this.embedder.embedQuery(query).catch(() => null);
-          if (qv) {
-            const ids = [...hubCandidateTexts.keys()];
-            const texts = ids.map(id => hubCandidateTexts.get(id)!);
-            const vecs = await this.embedder.embed(texts);
-            const scored: Array<{ id: string; score: number }> = [];
-            for (let j = 0; j < ids.length; j++) {
-              if (!vecs[j]) continue;
-              const v = vecs[j];
-              let dot = 0, nA = 0, nB = 0;
-              for (let i = 0; i < qv.length && i < v.length; i++) {
-                dot += qv[i] * v[i]; nA += qv[i] * qv[i]; nB += v[i] * v[i];
-              }
-              const sim = nA > 0 && nB > 0 ? dot / (Math.sqrt(nA) * Math.sqrt(nB)) : 0;
-              if (sim > 0.3) {
-                scored.push({ id: `hubmem:${ids[j]}`, score: sim });
-              }
+      try {
+        const qv = await this.embedder.embedQuery(query).catch(() => null);
+        if (qv) {
+          const memEmbs = this.store.getVisibleHubMemoryEmbeddings("__hub__");
+          const scored: Array<{ id: string; score: number }> = [];
+          for (const e of memEmbs) {
+            let dot = 0, nA = 0, nB = 0;
+            const len = Math.min(qv.length, e.vector.length);
+            for (let i = 0; i < len; i++) {
+              dot += qv[i] * e.vector[i]; nA += qv[i] * qv[i]; nB += e.vector[i] * e.vector[i];
             }
-            scored.sort((a, b) => b.score - a.score);
-            hubMemVecRanked = scored.slice(0, candidatePool);
+            const sim = nA > 0 && nB > 0 ? dot / (Math.sqrt(nA) * Math.sqrt(nB)) : 0;
+            if (sim > 0.3) scored.push({ id: `hubmem:${e.memoryId}`, score: sim });
           }
-        } catch { /* best-effort */ }
-      }
+          scored.sort((a, b) => b.score - a.score);
+          hubMemVecRanked = scored.slice(0, candidatePool);
+        }
+      } catch { /* best-effort */ }
+
       const hubTotal = hubMemFtsRanked.length + hubMemVecRanked.length + hubMemPatternRanked.length;
       if (hubTotal > 0) {
         this.ctx.log.debug(`recall: hub_memories candidates: fts=${hubMemFtsRanked.length}, vec=${hubMemVecRanked.length}, pattern=${hubMemPatternRanked.length}`);

@@ -258,10 +258,11 @@ RULES:
 1. A candidate is relevant if its content provides facts, context, or data that directly supports answering the query.
 2. A candidate that merely shares the same broad topic/domain but contains NO useful information for answering is NOT relevant.
 3. If NO candidate can help answer the query, return {"relevant":[],"sufficient":false} — do NOT force-pick the "least irrelevant" one.
+4. DEDUPLICATION: When multiple candidates convey the same or very similar information, keep ONLY the most complete/detailed one and exclude the rest. Do NOT return near-duplicate snippets.
 
 OUTPUT — JSON only:
 {"relevant":[1,3],"sufficient":true}
-- "relevant": candidate numbers whose content helps answer the query. [] if none can help.
+- "relevant": candidate numbers whose content helps answer the query. [] if none can help. Duplicates removed — only unique information.
 - "sufficient": true only if the selected memories fully answer the query.`;
 
 export interface FilterResult {

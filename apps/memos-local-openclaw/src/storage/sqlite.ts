@@ -1005,7 +1005,12 @@ export class SqliteStore {
       CREATE INDEX IF NOT EXISTS idx_hub_memories_visibility ON hub_memories(visibility);
       CREATE INDEX IF NOT EXISTS idx_hub_memories_group ON hub_memories(group_id);
 
-      -- hub_memory_embeddings removed: vectors are now computed on-the-fly at search time
+      CREATE TABLE IF NOT EXISTS hub_memory_embeddings (
+        memory_id   TEXT PRIMARY KEY REFERENCES hub_memories(id) ON DELETE CASCADE,
+        vector      BLOB NOT NULL,
+        dimensions  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+      );
 
       CREATE VIRTUAL TABLE IF NOT EXISTS hub_memories_fts USING fts5(
         summary,
@@ -1249,6 +1254,13 @@ export class SqliteStore {
         LIMIT ?
       `).all(...params) as Array<{ memory_id: string; content: string; role: string; created_at: number }>;
       return rows.map(r => ({ memoryId: r.memory_id, content: r.content, role: r.role, createdAt: r.created_at }));
+    } catch { return []; }
+  }
+
+  listHubMemories(opts: { limit?: number } = {}): Array<{ id: string; summary?: string; content?: string }> {
+    const limit = opts.limit ?? 200;
+    try {
+      return this.db.prepare("SELECT id, summary, content FROM hub_memories ORDER BY created_at DESC LIMIT ?").all(limit) as Array<{ id: string; summary?: string; content?: string }>;
     } catch { return []; }
   }
 
@@ -2190,6 +2202,36 @@ export class SqliteStore {
     `).all() as Array<{ skill_id: string; vector: Buffer; dimensions: number }>;
     return rows.map(r => ({
       skillId: r.skill_id,
+      vector: new Float32Array(r.vector.buffer, r.vector.byteOffset, r.dimensions),
+    }));
+  }
+
+  upsertHubMemoryEmbedding(memoryId: string, vector: Float32Array): void {
+    const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
+    this.db.prepare(`
+      INSERT INTO hub_memory_embeddings (memory_id, vector, dimensions, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(memory_id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions, updated_at = excluded.updated_at
+    `).run(memoryId, buf, vector.length, Date.now());
+  }
+
+  getHubMemoryEmbedding(memoryId: string): Float32Array | null {
+    const row = this.db.prepare('SELECT vector, dimensions FROM hub_memory_embeddings WHERE memory_id = ?').get(memoryId) as { vector: Buffer; dimensions: number } | undefined;
+    if (!row) return null;
+    return new Float32Array(row.vector.buffer, row.vector.byteOffset, row.dimensions);
+  }
+
+  getVisibleHubMemoryEmbeddings(userId: string): Array<{ memoryId: string; vector: Float32Array }> {
+    const rows = this.db.prepare(`
+      SELECT hme.memory_id, hme.vector, hme.dimensions
+      FROM hub_memory_embeddings hme
+      JOIN hub_memories hm ON hm.id = hme.memory_id
+      WHERE hm.visibility = 'public'
+        OR hm.source_user_id = ?
+        OR EXISTS (SELECT 1 FROM hub_group_members gm WHERE gm.group_id = hm.group_id AND gm.user_id = ?)
+    `).all(userId, userId) as Array<{ memory_id: string; vector: Buffer; dimensions: number }>;
+    return rows.map(r => ({
+      memoryId: r.memory_id,
       vector: new Float32Array(r.vector.buffer, r.vector.byteOffset, r.dimensions),
     }));
   }

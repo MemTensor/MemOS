@@ -1,7 +1,7 @@
 import http from "node:http";
 import os from "node:os";
 import crypto from "node:crypto";
-import { execSync, exec } from "node:child_process";
+import { execSync, exec, execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -1915,18 +1915,25 @@ export class ViewerServer {
 
   private handleRetryJoin(req: http.IncomingMessage, res: http.ServerResponse): void {
     this.readBody(req, async (_body) => {
-      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable", errorCode: "sharing_unavailable" });
       const sharing = this.ctx.config.sharing;
       if (!sharing?.enabled || sharing.role !== "client") {
-        return this.jsonResponse(res, { ok: false, error: "not_in_client_mode" });
+        return this.jsonResponse(res, { ok: false, error: "not_in_client_mode", errorCode: "not_in_client_mode" });
       }
       const hubAddress = sharing.client?.hubAddress ?? "";
       const teamToken = sharing.client?.teamToken ?? "";
       if (!hubAddress || !teamToken) {
-        return this.jsonResponse(res, { ok: false, error: "missing_hub_address_or_team_token" });
+        return this.jsonResponse(res, { ok: false, error: "missing_hub_address_or_team_token", errorCode: "missing_config" });
       }
+      const hubUrl = normalizeHubUrl(hubAddress);
+
       try {
-        const hubUrl = normalizeHubUrl(hubAddress);
+        await hubRequestJson(hubUrl, "", "/api/v1/hub/info", { method: "GET" });
+      } catch {
+        return this.jsonResponse(res, { ok: false, error: "hub_unreachable", errorCode: "hub_unreachable" });
+      }
+
+      try {
         const os = await import("os");
         const nickname = sharing.client?.nickname;
         const username = nickname || os.userInfo().username || "user";
@@ -1954,9 +1961,19 @@ export class ViewerServer {
           lastKnownStatus: result.status || "",
           hubInstanceId,
         });
+        if (result.status === "blocked") {
+          return this.jsonResponse(res, { ok: false, error: "blocked", errorCode: "blocked" });
+        }
         this.jsonResponse(res, { ok: true, status: result.status || "pending" });
       } catch (err) {
-        this.jsonResponse(res, { ok: false, error: String(err) });
+        const errStr = String(err);
+        if (errStr.includes("(409)") || errStr.includes("username_taken")) {
+          return this.jsonResponse(res, { ok: false, error: "username_taken", errorCode: "username_taken" });
+        }
+        if (errStr.includes("(403)") || errStr.includes("invalid_team_token")) {
+          return this.jsonResponse(res, { ok: false, error: "invalid_team_token", errorCode: "invalid_team_token" });
+        }
+        this.jsonResponse(res, { ok: false, error: errStr, errorCode: "unknown" });
       }
     });
   }
@@ -2869,20 +2886,25 @@ export class ViewerServer {
         const nowClient = Boolean(finalSharing?.enabled) && finalSharing?.role === "client";
         const previouslyClient = oldSharingEnabled && oldSharingRole === "client";
         let joinStatus: string | undefined;
+        let joinError: string | undefined;
         if (nowClient && !previouslyClient) {
           try {
             joinStatus = await this.autoJoinOnSave(finalSharing);
           } catch (e) {
-            this.log.warn(`Auto-join on save failed: ${e}`);
+            const msg = String(e instanceof Error ? e.message : e);
+            this.log.warn(`Auto-join on save failed: ${msg}`);
+            if (msg === "hub_unreachable" || msg === "username_taken" || msg === "invalid_team_token") {
+              joinError = msg;
+            }
           }
         }
 
-        this.jsonResponse(res, { ok: true, joinStatus, restart: true });
+        if (joinError) {
+          this.jsonResponse(res, { ok: true, joinError, restart: false });
+          return;
+        }
 
-        setTimeout(() => {
-          this.log.info("config-save: triggering gateway restart via SIGUSR1...");
-          try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
-        }, 500);
+        this.jsonResponseAndRestart(res, { ok: true, joinStatus, restart: true }, "config-save");
       } catch (e) {
         this.log.warn(`handleSaveConfig error: ${e}`);
         res.writeHead(500, { "Content-Type": "application/json" });
@@ -2897,16 +2919,37 @@ export class ViewerServer {
     const teamToken = String(clientCfg?.teamToken || "");
     if (!hubAddress || !teamToken) return undefined;
     const hubUrl = normalizeHubUrl(hubAddress);
+
+    try {
+      await hubRequestJson(hubUrl, "", "/api/v1/hub/info", { method: "GET" });
+    } catch {
+      throw new Error("hub_unreachable");
+    }
+
     const os = await import("os");
     const nickname = String(clientCfg?.nickname || "");
     const username = nickname || os.userInfo().username || "user";
     const hostname = os.hostname() || "unknown";
     const persisted = this.store.getClientHubConnection();
     const existingIdentityKey = persisted?.identityKey || "";
-    const result = await hubRequestJson(hubUrl, "", "/api/v1/hub/join", {
-      method: "POST",
-      body: JSON.stringify({ teamToken, username, deviceName: hostname, identityKey: existingIdentityKey }),
-    }) as any;
+
+    let result: any;
+    try {
+      result = await hubRequestJson(hubUrl, "", "/api/v1/hub/join", {
+        method: "POST",
+        body: JSON.stringify({ teamToken, username, deviceName: hostname, identityKey: existingIdentityKey }),
+      });
+    } catch (err) {
+      const errStr = String(err);
+      if (errStr.includes("(409)") || errStr.includes("username_taken")) {
+        throw new Error("username_taken");
+      }
+      if (errStr.includes("(403)") || errStr.includes("invalid_team_token")) {
+        throw new Error("invalid_team_token");
+      }
+      throw err;
+    }
+
     const returnedIdentityKey = String(result.identityKey || existingIdentityKey || "");
     let hubInstanceId = persisted?.hubInstanceId || "";
     try {
@@ -2954,12 +2997,7 @@ export class ViewerServer {
           }
         }
 
-        this.jsonResponse(res, { ok: true, restart: true });
-
-        setTimeout(() => {
-          this.log.info("handleLeaveTeam: triggering gateway restart via SIGUSR1...");
-          try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
-        }, 500);
+        this.jsonResponseAndRestart(res, { ok: true, restart: true }, "handleLeaveTeam");
       } catch (e) {
         this.log.warn(`handleLeaveTeam error: ${e}`);
         this.jsonResponse(res, { ok: false, error: String(e) });
@@ -3125,14 +3163,43 @@ export class ViewerServer {
             }
           }
         } catch {}
-        const url = hubUrl.replace(/\/+$/, "") + "/api/v1/hub/info";
+        const baseUrl = hubUrl.replace(/\/+$/, "");
+        const infoUrl = baseUrl + "/api/v1/hub/info";
         const ctrl = new AbortController();
         const timeout = setTimeout(() => ctrl.abort(), 8000);
         try {
-          const r = await fetch(url, { signal: ctrl.signal });
+          const r = await fetch(infoUrl, { signal: ctrl.signal });
           clearTimeout(timeout);
           if (!r.ok) { this.jsonResponse(res, { ok: false, error: `HTTP ${r.status}` }); return; }
           const info = await r.json() as Record<string, unknown>;
+
+          const { teamToken, nickname } = JSON.parse(body);
+          if (teamToken) {
+            const username = (typeof nickname === "string" && nickname.trim()) || os.userInfo().username || "user";
+            const persisted = this.store.getClientHubConnection();
+            const identityKey = persisted?.identityKey || "";
+            try {
+              const joinR = await fetch(baseUrl + "/api/v1/hub/join", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ teamToken, username, identityKey, deviceName: os.hostname(), dryRun: true }),
+              });
+              const joinData = await joinR.json() as Record<string, unknown>;
+              if (!joinR.ok && joinData.error === "username_taken") {
+                this.jsonResponse(res, { ok: false, error: "username_taken", teamName: info.teamName || "" });
+                return;
+              }
+              if (!joinR.ok && joinData.error === "invalid_team_token") {
+                this.jsonResponse(res, { ok: false, error: "invalid_team_token", teamName: info.teamName || "" });
+                return;
+              }
+              if (joinR.ok && joinData.status === "blocked") {
+                this.jsonResponse(res, { ok: false, error: "blocked", teamName: info.teamName || "" });
+                return;
+              }
+            } catch { /* join check is best-effort; connection itself is OK */ }
+          }
+
           this.jsonResponse(res, { ok: true, teamName: info.teamName || "", apiVersion: info.apiVersion || "" });
         } catch (e: unknown) {
           clearTimeout(timeout);
@@ -3217,26 +3284,35 @@ export class ViewerServer {
   }
 
   private async handleUpdateCheck(res: http.ServerResponse): Promise<void> {
+    const sendNoStore = (data: unknown, statusCode = 200) => {
+      res.writeHead(statusCode, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+      });
+      res.end(JSON.stringify(data));
+    };
     try {
       const pkgPath = this.findPluginPackageJson();
       if (!pkgPath) {
-        this.jsonResponse(res, { updateAvailable: false, error: "package.json not found" });
+        sendNoStore({ updateAvailable: false, error: "package.json not found" });
         return;
       }
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
       const current = pkg.version as string;
       const name = pkg.name as string;
       if (!current || !name) {
-        this.jsonResponse(res, { updateAvailable: false, current });
+        sendNoStore({ updateAvailable: false, current });
         return;
       }
       const { computeUpdateCheck } = await import("../update-check");
       const result = await computeUpdateCheck(name, current, fetch, 6_000);
       if (!result) {
-        this.jsonResponse(res, { updateAvailable: false, current, packageName: name });
+        sendNoStore({ updateAvailable: false, current, packageName: name });
         return;
       }
-      this.jsonResponse(res, {
+      sendNoStore({
         updateAvailable: result.updateAvailable,
         current: result.current,
         latest: result.latest,
@@ -3247,7 +3323,7 @@ export class ViewerServer {
       });
     } catch (e) {
       this.log.warn(`handleUpdateCheck error: ${e}`);
-      this.jsonResponse(res, { updateAvailable: false, error: String(e) });
+      sendNoStore({ updateAvailable: false, error: String(e) });
     }
   }
 
@@ -3256,13 +3332,14 @@ export class ViewerServer {
     req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
     req.on("end", () => {
       try {
-        const { packageSpec: rawSpec } = JSON.parse(body);
+        const { packageSpec: rawSpec, targetVersion: rawTargetVersion } = JSON.parse(body);
         if (!rawSpec || typeof rawSpec !== "string") {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: false, error: "Missing packageSpec" }));
           return;
         }
         const packageSpec = rawSpec.trim().replace(/^(?:npx\s+)?openclaw\s+plugins\s+install\s+/i, "");
+        const targetVersion = typeof rawTargetVersion === "string" ? rawTargetVersion.trim() : "";
         const allowed = /^@[\w-]+\/[\w.-]+(@[\w.-]+)?$/;
         this.log.info(`update-install: received packageSpec="${packageSpec}" (len=${packageSpec.length})`);
         if (!allowed.test(packageSpec)) {
@@ -3279,16 +3356,42 @@ export class ViewerServer {
         const shortName = pluginName?.replace(/^@[\w-]+\//, "") ?? "memos-local-openclaw-plugin";
         const extDir = path.join(os.homedir(), ".openclaw", "extensions", shortName);
         const tmpDir = path.join(os.tmpdir(), `openclaw-update-${Date.now()}`);
+        const backupDir = path.join(path.dirname(extDir), `${shortName}.backup-${Date.now()}`);
+        let backupReady = false;
+
+        const cleanupTmpDir = () => {
+          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+        };
+        const rollbackInstall = () => {
+          try { fs.rmSync(extDir, { recursive: true, force: true }); } catch {}
+          if (!backupReady) return;
+          try {
+            fs.renameSync(backupDir, extDir);
+            backupReady = false;
+            this.log.info(`update-install: restored previous version from ${backupDir}`);
+          } catch (restoreErr: any) {
+            this.log.warn(`update-install: failed to restore previous version: ${restoreErr?.message ?? restoreErr}`);
+          }
+        };
+        const discardBackup = () => {
+          if (!backupReady) return;
+          try {
+            fs.rmSync(backupDir, { recursive: true, force: true });
+            backupReady = false;
+          } catch (cleanupErr: any) {
+            this.log.warn(`update-install: failed to remove backup dir ${backupDir}: ${cleanupErr?.message ?? cleanupErr}`);
+          }
+        };
 
         // Download via npm pack, extract, and replace extension dir.
         // Does NOT touch openclaw.json → no config watcher SIGUSR1.
         this.log.info(`update-install: downloading ${packageSpec} via npm pack...`);
         fs.mkdirSync(tmpDir, { recursive: true });
-        exec(`npm pack ${packageSpec} --pack-destination ${tmpDir}`, { timeout: 60_000 }, (packErr, packOut) => {
+        exec(`npm pack ${packageSpec} --pack-destination ${tmpDir} --prefer-online`, { timeout: 60_000 }, (packErr, packOut) => {
           if (packErr) {
             this.log.warn(`update-install: npm pack failed: ${packErr.message}`);
             this.jsonResponse(res, { ok: false, error: `Download failed: ${packErr.message}` });
-            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+            cleanupTmpDir();
             return;
           }
           const tgzFile = packOut.trim().split("\n").pop()!;
@@ -3301,7 +3404,7 @@ export class ViewerServer {
             if (tarErr) {
               this.log.warn(`update-install: tar extract failed: ${tarErr.message}`);
               this.jsonResponse(res, { ok: false, error: `Extract failed: ${tarErr.message}` });
-              try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+              cleanupTmpDir();
               return;
             }
 
@@ -3309,61 +3412,79 @@ export class ViewerServer {
             const srcDir = path.join(extractDir, "package");
             if (!fs.existsSync(srcDir)) {
               this.jsonResponse(res, { ok: false, error: "Extracted package has no 'package' dir" });
-              try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+              cleanupTmpDir();
               return;
             }
 
             // Replace extension directory
             this.log.info(`update-install: replacing ${extDir}...`);
-            try { fs.rmSync(extDir, { recursive: true, force: true }); } catch {}
-            fs.mkdirSync(path.dirname(extDir), { recursive: true });
-            fs.renameSync(srcDir, extDir);
+            try {
+              fs.mkdirSync(path.dirname(extDir), { recursive: true });
+              try { fs.rmSync(backupDir, { recursive: true, force: true }); } catch {}
+              if (fs.existsSync(extDir)) {
+                fs.renameSync(extDir, backupDir);
+                backupReady = true;
+              }
+              fs.renameSync(srcDir, extDir);
+            } catch (replaceErr: any) {
+              this.log.warn(`update-install: replace failed: ${replaceErr?.message ?? replaceErr}`);
+              cleanupTmpDir();
+              rollbackInstall();
+              this.jsonResponse(res, { ok: false, error: `Replace failed: ${replaceErr?.message ?? replaceErr}` });
+              return;
+            }
 
             // Install dependencies
             this.log.info(`update-install: installing dependencies...`);
-            exec(`cd ${extDir} && npm install --omit=dev --ignore-scripts`, { timeout: 120_000 }, (npmErr, npmOut, npmStderr) => {
+            const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+            execFile(npmCmd, ["install", "--omit=dev", "--ignore-scripts"], { cwd: extDir, timeout: 120_000 }, (npmErr, npmOut, npmStderr) => {
               if (npmErr) {
-                try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
                 this.log.warn(`update-install: npm install failed: ${npmErr.message}`);
+                cleanupTmpDir();
+                rollbackInstall();
                 this.jsonResponse(res, { ok: false, error: `Dependency install failed: ${npmStderr || npmErr.message}` });
                 return;
               }
 
-              // Rebuild native modules (do not swallow errors)
-              exec(`cd ${extDir} && npm rebuild better-sqlite3`, { timeout: 60_000 }, (rebuildErr, rebuildOut, rebuildStderr) => {
+              execFile(npmCmd, ["rebuild", "better-sqlite3"], { cwd: extDir, timeout: 60_000 }, (rebuildErr, rebuildOut, rebuildStderr) => {
                 if (rebuildErr) {
                   this.log.warn(`update-install: better-sqlite3 rebuild failed: ${rebuildErr.message}`);
                   const stderr = String(rebuildStderr || "").trim();
                   if (stderr) this.log.warn(`update-install: rebuild stderr: ${stderr.slice(0, 500)}`);
-                  // Continue so postinstall.cjs can run (it will try rebuild again and show user guidance)
                 }
 
-                // Run postinstall.cjs: legacy cleanup, skill install, version marker, and optional sqlite re-check
                 this.log.info(`update-install: running postinstall...`);
-                exec(`cd ${extDir} && node scripts/postinstall.cjs`, { timeout: 180_000 }, (postErr, postOut, postStderr) => {
-                  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+                execFile(process.execPath, ["scripts/postinstall.cjs"], { cwd: extDir, timeout: 180_000 }, (postErr, postOut, postStderr) => {
+                  cleanupTmpDir();
 
                   if (postErr) {
                     this.log.warn(`update-install: postinstall failed: ${postErr.message}`);
                     const postStderrStr = String(postStderr || "").trim();
                     if (postStderrStr) this.log.warn(`update-install: postinstall stderr: ${postStderrStr.slice(0, 500)}`);
-                    // Still report success; plugin is updated, user can run postinstall manually if needed
+                    rollbackInstall();
+                    this.jsonResponse(res, { ok: false, error: `Postinstall failed: ${postStderrStr || postErr.message}` });
+                    return;
                   }
 
-                  // Read new version
                   let newVersion = "unknown";
                   try {
                     const newPkg = JSON.parse(fs.readFileSync(path.join(extDir, "package.json"), "utf-8"));
                     newVersion = newPkg.version ?? newVersion;
                   } catch {}
 
-                  this.log.info(`update-install: success! Updated to ${newVersion}`);
-                  this.jsonResponse(res, { ok: true, version: newVersion });
+                  if (targetVersion && newVersion !== targetVersion) {
+                    this.log.warn(`update-install: version mismatch! expected=${targetVersion}, got=${newVersion} — rolling back`);
+                    rollbackInstall();
+                    this.jsonResponse(res, {
+                      ok: false,
+                      error: `Version mismatch: expected ${targetVersion} but downloaded ${newVersion}. npm cache may be stale — please try again.`,
+                    });
+                    return;
+                  }
 
-                  setTimeout(() => {
-                    this.log.info(`update-install: triggering gateway restart via SIGUSR1...`);
-                    try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
-                  }, 500);
+                  discardBackup();
+                  this.log.info(`update-install: success! Updated to ${newVersion}`);
+                  this.jsonResponseAndRestart(res, { ok: true, version: newVersion }, "update-install");
                 });
               });
             });
@@ -3948,8 +4069,8 @@ export class ViewerServer {
                   mergeCount: 0,
                   lastHitAt: null,
                   mergeHistory: "[]",
-                  createdAt: normalizeTimestamp(row.updated_at),
-                  updatedAt: normalizeTimestamp(row.updated_at),
+                  createdAt: Number(row.updated_at) < 1e12 ? Number(row.updated_at) * 1000 : Number(row.updated_at),
+                  updatedAt: Number(row.updated_at) < 1e12 ? Number(row.updated_at) * 1000 : Number(row.updated_at),
                 };
 
                 this.store.insertChunk(chunk);
@@ -4494,6 +4615,22 @@ export class ViewerServer {
     let body = "";
     req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
     req.on("end", () => cb(body));
+  }
+
+  private jsonResponseAndRestart(
+    res: http.ServerResponse,
+    data: unknown,
+    source: string,
+    delayMs = 1500,
+    statusCode = 200,
+  ): void {
+    res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify(data), () => {
+      setTimeout(() => {
+        this.log.info(`${source}: triggering gateway restart via SIGUSR1...`);
+        try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
+      }, delayMs);
+    });
   }
 
   private jsonResponse(res: http.ServerResponse, data: unknown, statusCode = 200): void {

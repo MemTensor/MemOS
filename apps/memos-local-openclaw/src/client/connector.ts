@@ -229,22 +229,28 @@ export async function getHubStatus(store: SqliteStore, config: MemosLocalConfig)
             body: JSON.stringify({ teamToken, userId: conn.userId }),
           }) as any;
           if (regResult.status === "active" && regResult.userToken) {
-            store.setClientHubConnection({
+            const updatedConn = {
               ...conn,
               hubUrl: normalizeHubUrl(hubAddress),
               userToken: regResult.userToken,
               connectedAt: Date.now(),
               lastKnownStatus: "active",
-            });
+            };
+            store.setClientHubConnection(updatedConn);
             try {
               const me = await hubRequestJson(normalizeHubUrl(hubAddress), regResult.userToken, "/api/v1/hub/me", { method: "GET" }) as any;
+              const latestUsername = String(me.username ?? "");
+              const latestRole = String(me.role ?? "member") as UserRole;
+              if (latestUsername !== conn.username || latestRole !== conn.role) {
+                store.setClientHubConnection({ ...updatedConn, username: latestUsername, role: latestRole });
+              }
               return {
                 connected: true,
                 hubUrl: normalizeHubUrl(hubAddress),
                 user: {
                   id: String(me.id),
-                  username: String(me.username ?? ""),
-                  role: String(me.role ?? "member") as UserRole,
+                  username: latestUsername,
+                  role: latestRole,
                   status: String(me.status ?? "active"),
                   groups: Array.isArray(me.groups) ? me.groups : [],
                 },

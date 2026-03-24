@@ -6,7 +6,7 @@ return `<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" href="https://statics.memtensor.com.cn/logo/color-m.svg" type="image/svg+xml">
-<title>MemOS 记忆</title>
+<title>OpenClaw 记忆</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1192,7 +1192,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
   <div class="topbar-inner">
     <div class="brand">
       <span class="memos-logo"><svg width="28" height="28" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="topLG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs><path d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z" fill="url(#topLG)"/><path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#topLG)"/><path d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z" fill="url(#topLG)"/><path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round"/><path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round"/><circle cx="45" cy="35" r="6" fill="#050810"/><circle cx="75" cy="35" r="6" fill="#050810"/><circle cx="46" cy="34" r="2" fill="#00e5cc"/><circle cx="76" cy="34" r="2" fill="#00e5cc"/></svg></span>
-      <div class="brand-col"><span data-i18n="title" class="brand-title">MemOS</span><span data-i18n="subtitle" class="brand-powered">Powered by MemOS</span></div>${vBadge}
+      <div class="brand-col"><span data-i18n="title" class="brand-title">OpenClaw 记忆</span><span data-i18n="subtitle" class="brand-powered">Powered by MemOS</span></div>${vBadge}
     </div>
     <div class="topbar-center">
       <nav class="nav-tabs">
@@ -2038,7 +2038,7 @@ let _currentAgentOwner='agent:main';
 /* ─── i18n ─── */
 const I18N={
   en:{
-    'title':'MemOS',
+    'title':'OpenClaw Memory',
     'subtitle':'Powered by MemOS',
     'setup.desc':'Set a password to protect your memories',
     'setup.pw':'Enter a password (4+ characters)',
@@ -2130,6 +2130,8 @@ const I18N={
     'notif.hubShutdown':'The team server has been shut down',
     'notif.rolePromoted':'You have been promoted to admin',
     'notif.roleDemoted':'You have been changed to member',
+    'notif.usernameRenamed':'Your nickname has been changed by the admin',
+    'notif.usernameRenamed.detail':'{oldName} → {newName}',
     'notif.clearAll':'Clear all',
     'notif.timeAgo.just':'just now',
     'notif.timeAgo.min':'{n}m ago',
@@ -2233,6 +2235,7 @@ const I18N={
     'logs.empty':'No logs yet. Logs will appear here when tools are called.',
     'logs.ago':'ago',
     'logs.recall.initial':'Initial Retrieval',
+    'logs.recall.hubRemote':'Hub Remote',
     'logs.recall.filtered':'LLM Filtered',
     'logs.recall.noHits':'No matching memories',
     'logs.recall.noneRelevant':'LLM filter: none relevant',
@@ -2469,6 +2472,10 @@ const I18N={
     'sharing.team.default':'the team',
     'sharing.retryJoin.success':'Join request re-submitted. Waiting for admin approval.',
     'sharing.retryJoin.fail':'Failed to retry join',
+    'sharing.joinError.hubUnreachable':'Unable to connect to the team server. The server may be offline or the network is unavailable. Please check the server address and try again.',
+    'sharing.joinError.usernameTaken':'The username is already taken on this team server. Please go to Settings and change your nickname, then try again.',
+    'sharing.joinError.invalidToken':'The team token is invalid. Please check with your team admin and update the token in Settings.',
+    'sharing.joinError.blocked':'Your account has been blocked by the team admin. Please contact the admin for assistance.',
     'sharing.ownerRemoved':'(removed)',
     'sharing.cannotJoinSelf':'Cannot join your own server. Please enter a remote server address.',
     'scope.hub':'Team',
@@ -2775,7 +2782,7 @@ const I18N={
     'guide.hub.btn':'\u2192 Configure Server Mode'
   },
   zh:{
-    'title':'MemOS 记忆',
+    'title':'OpenClaw 记忆',
     'subtitle':'由 MemOS 驱动',
     'setup.desc':'设置密码以保护你的记忆数据',
     'setup.pw':'输入密码（至少4位）',
@@ -2867,6 +2874,8 @@ const I18N={
     'notif.hubShutdown':'团队服务已关闭',
     'notif.rolePromoted':'你已被提升为管理员',
     'notif.roleDemoted':'你已被设为普通成员',
+    'notif.usernameRenamed':'你的昵称已被管理员修改',
+    'notif.usernameRenamed.detail':'{oldName} → {newName}',
     'notif.clearAll':'清除全部',
     'notif.timeAgo.just':'刚刚',
     'notif.timeAgo.min':'{n}分钟前',
@@ -2970,6 +2979,7 @@ const I18N={
     'logs.empty':'暂无日志。当工具被调用时日志会显示在这里。',
     'logs.ago':'前',
     'logs.recall.initial':'初始检索',
+    'logs.recall.hubRemote':'远程召回',
     'logs.recall.filtered':'LLM 过滤后',
     'logs.recall.noHits':'未匹配到记忆',
     'logs.recall.noneRelevant':'LLM 过滤：无相关记忆',
@@ -3206,6 +3216,10 @@ const I18N={
     'sharing.team.default':'该团队',
     'sharing.retryJoin.success':'加入申请已重新提交，请等待管理员审核。',
     'sharing.retryJoin.fail':'重新申请失败',
+    'sharing.joinError.hubUnreachable':'无法连接到团队服务器，服务器可能已下线或网络不可用。请检查服务器地址后重试。',
+    'sharing.joinError.usernameTaken':'该用户名在团队服务器上已被占用，请到设置中修改昵称后再重试。',
+    'sharing.joinError.invalidToken':'团队令牌无效，请向管理员确认令牌并在设置中更新。',
+    'sharing.joinError.blocked':'您的账号已被团队管理员封禁，请联系管理员处理。',
     'sharing.ownerRemoved':'(已移除)',
     'sharing.cannotJoinSelf':'不能加入自己的服务端，请输入远程服务器地址。',
     'scope.hub':'团队',
@@ -3529,7 +3543,7 @@ function applyI18n(){
   });
   const step2=document.getElementById('resetStep2Desc');
   if(step2) step2.innerHTML=t('reset.step2.desc.pre')+'<span style="font-family:monospace;font-size:12px;color:var(--pri)">password reset token: <strong>a1b2c3d4e5f6...</strong></span>'+t('reset.step2.desc.post');
-  document.title=t('title')+' - MemOS';
+  document.title=t('title')+' - OpenClaw';
   if(typeof loadStats==='function' && document.getElementById('app').style.display==='flex'){loadStats();}
   if(document.querySelector('.analytics-view.show') && typeof loadMetrics==='function'){loadMetrics();}
 }
@@ -3702,18 +3716,25 @@ async function testHubConnection(){
   var result=document.getElementById('hubConnTestResult');
   var addr=document.getElementById('cfgClientHubAddress').value.trim();
   if(!addr){result.innerHTML='<span style="color:var(--rose)">\u274C '+t('settings.hub.test.noAddr')+'</span>';return;}
+  var tokenEl=document.getElementById('cfgClientTeamToken');
+  var teamToken=tokenEl?tokenEl.value.trim():'';
+  if(!teamToken){result.innerHTML='<span style="color:var(--rose)">\u274C '+t('settings.hub.teamToken.required')+'</span>';return;}
+  var nicknameEl=document.getElementById('cfgClientNickname');
+  var nickname=nicknameEl?nicknameEl.value.trim():'';
   btn.disabled=true;result.innerHTML=t('settings.hub.test.testing');
-  try{
-  }catch(e){}
   try{
     var url=addr.match(/^https?:\\/\\//)?addr:'http://'+addr;
     url=url.replace(/\\/+$/,'');
-    var r=await fetch('/api/sharing/test-hub',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hubUrl:url})});
+    var r=await fetch('/api/sharing/test-hub',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hubUrl:url,teamToken:teamToken,nickname:nickname})});
     var d=await r.json();
     if(d.ok){
       result.innerHTML='<span style="color:var(--green)">\u2705 '+t('settings.hub.test.ok')+(d.teamName?' — '+esc(d.teamName):'')+'</span>';
     }else{
-      var errMsg=d.error==='cannot_join_self'?t('sharing.cannotJoinSelf'):(d.error||t('settings.hub.test.fail'));
+      var errMsg;
+      if(d.error==='cannot_join_self') errMsg=t('sharing.cannotJoinSelf');
+      else if(d.error==='username_taken') errMsg=t('sharing.joinError.usernameTaken');
+      else if(d.error==='invalid_team_token') errMsg=t('sharing.joinError.invalidToken');
+      else errMsg=d.error||t('settings.hub.test.fail');
       result.innerHTML='<span style="color:var(--rose)">\u274C '+errMsg+'</span>';
     }
   }catch(e){
@@ -4079,7 +4100,18 @@ async function retryHubJoin(){
       _lastSidebarFingerprint='';_lastSettingsFingerprint='';_lastSharingConnStatus='';
       setTimeout(function(){loadSharingStatus(true);},800);
     }else{
-      toast(d.error||t('sharing.retryJoin.fail'),'error');
+      var code=d.errorCode||'';
+      if(code==='hub_unreachable'){
+        alertModal(t('sharing.joinError.hubUnreachable'));
+      }else if(code==='username_taken'){
+        alertModal(t('sharing.joinError.usernameTaken'));
+      }else if(code==='invalid_team_token'){
+        alertModal(t('sharing.joinError.invalidToken'));
+      }else if(code==='blocked'){
+        alertModal(t('sharing.joinError.blocked'));
+      }else{
+        toast(d.error||t('sharing.retryJoin.fail'),'error');
+      }
     }
   }catch(e){toast(t('sharing.retryJoin.fail')+': '+e.message,'error');}
 }
@@ -5572,6 +5604,24 @@ function buildLogSummary(lg){
           html+='</div>';
         });
         html+='</div></div>';
+        var hubCands=recallData.hubCandidates||[];
+        html+='<div class="recall-layer hub-recall" onclick="this.classList.toggle(\\\'expanded\\\')">';
+        html+='<div class="recall-layer-title"><span class="recall-expand-icon">\u25B6</span>\u{1F310} '+t('logs.recall.hubRemote')+' <span class="recall-count">'+hubCands.length+'</span></div>';
+        if(hubCands.length>0){
+          html+='<div class="recall-items">';
+          hubCands.forEach(function(c){
+            var scoreClass=c.score>=0.7?'high':c.score>=0.5?'mid':'low';
+            var shortText=escapeHtml(c.summary||c.original_excerpt||'');
+            var fullText=escapeHtml(c.original_excerpt||c.summary||'');
+            var owner=c.ownerName?' ['+escapeHtml(c.ownerName)+']':'';
+            html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
+            html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'assistant')+'">'+(c.role||'assistant')+'</span><span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>'+owner+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+            html+='<div class="recall-summary-full">'+fullText+'</div>';
+            html+='</div>';
+          });
+          html+='</div>';
+        }
+        html+='</div>';
         if(filtered.length>0){
           html+='<div class="recall-layer filtered" onclick="this.classList.toggle(\\\'expanded\\\')">';
           html+='<div class="recall-layer-title"><span class="recall-expand-icon">\u25B6</span>\u2705 '+t('logs.recall.filtered')+' <span class="recall-count">'+filtered.length+'</span></div>';
@@ -5637,6 +5687,7 @@ function buildLogSummary(lg){
 function buildRecallDetailHtml(rd){
   var html='<div class="recall-detail">';
   var cands=rd.candidates||[];
+  var hubCands=rd.hubCandidates||[];
   var filtered=rd.filtered||[];
   if(cands.length>0){
     html+='<div class="recall-detail-section" onclick="this.classList.toggle(\\\'expanded\\\')">';
@@ -5654,6 +5705,23 @@ function buildRecallDetailHtml(rd){
     });
     html+='</div></div>';
   }
+  html+='<div class="recall-detail-section hub-recall" onclick="this.classList.toggle(\\\'expanded\\\')">';
+  html+='<div class="recall-detail-title"><span class="recall-expand-icon">\u25B6</span>\u{1F310} '+t('logs.recall.hubRemote')+' ('+hubCands.length+')</div>';
+  if(hubCands.length>0){
+    html+='<div class="recall-detail-items">';
+    hubCands.forEach(function(c,i){
+      var scoreClass=c.score>=0.7?'high':c.score>=0.5?'mid':'low';
+      var shortText=escapeHtml(c.summary||c.original_excerpt||'');
+      var fullText=escapeHtml(c.original_excerpt||c.summary||'');
+      var owner=c.ownerName?' ['+escapeHtml(c.ownerName)+']':'';
+      html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
+      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'assistant')+'">'+(c.role||'assistant')+'</span><span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>'+owner+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+      html+='<div class="recall-summary-full">'+fullText+'</div>';
+      html+='</div>';
+    });
+    html+='</div>';
+  }
+  html+='</div>';
   if(filtered.length>0){
     html+='<div class="recall-detail-section filtered" onclick="this.classList.toggle(\\\'expanded\\\')">';
     html+='<div class="recall-detail-title"><span class="recall-expand-icon">\u25B6</span>\u2705 '+t('logs.recall.filtered')+' ('+filtered.length+')</div>';
@@ -5669,7 +5737,7 @@ function buildRecallDetailHtml(rd){
       html+='</div>';
     });
     html+='</div></div>';
-  }else if(cands.length>0){
+  }else if(cands.length>0||hubCands.length>0){
     html+='<div style="font-size:10px;color:var(--text-muted);margin-top:4px">\u26A0 '+t('logs.recall.noneRelevant')+'</div>';
   }
   if(rd.status==='error'&&rd.error){
@@ -6666,7 +6734,8 @@ async function loadConfig(){
     document.getElementById('cfgClientHubAddress').value=client.hubAddress||'';
     _loadedClientHubAddress=client.hubAddress||'';
     document.getElementById('cfgClientTeamToken').value=client.teamToken||'';
-    document.getElementById('cfgClientNickname').value=client.nickname||'';
+    var hubUsername=sharingStatusCache&&sharingStatusCache.connection&&sharingStatusCache.connection.user&&sharingStatusCache.connection.user.username;
+    document.getElementById('cfgClientNickname').value=hubUsername||client.nickname||'';
     document.getElementById('cfgClientUserToken').value=client.userToken||'';
     onSharingToggle();
     updateHubShareInfo();
@@ -6868,18 +6937,18 @@ async function saveHubConfig(){
     cfg.sharing.hub={teamName:'',teamToken:''};
     if(clientAddr){
       try{
-      }catch(e){}
-      try{
         var testUrl=clientAddr.indexOf('://')>-1?clientAddr:'http://'+clientAddr;
         testUrl=testUrl.replace(/\\/+$/,'');
-        var tr=await fetch('/api/sharing/test-hub',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hubUrl:testUrl})});
+        var tr=await fetch('/api/sharing/test-hub',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hubUrl:testUrl,teamToken:clientTeamToken,nickname:clientNickname})});
         var td=await tr.json();
         if(!td.ok){
-          var errMsg=td.error==='cannot_join_self'?t('sharing.cannotJoinSelf'):(td.error||t('settings.hub.test.fail'));
-          done();toast(errMsg,'error');return;
-    }
-  }catch(e){
-        done();toast(t('settings.hub.test.fail')+': '+String(e),'error');return;
+          if(td.error==='cannot_join_self'){done();alertModal(t('sharing.cannotJoinSelf'));return;}
+          if(td.error==='username_taken'){done();alertModal(t('sharing.joinError.usernameTaken'));return;}
+          if(td.error==='invalid_team_token'){done();alertModal(t('sharing.joinError.invalidToken'));return;}
+          done();alertModal(td.error||t('settings.hub.test.fail'));return;
+        }
+      }catch(e){
+        done();alertModal(t('sharing.joinError.hubUnreachable'));return;
       }
     }
   }
@@ -6909,7 +6978,17 @@ async function saveHubConfig(){
         try{await fetch('/api/sharing/update-username',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:adminNameEl.value.trim()})});}catch(e){}
       }
     }
-    if(sharingEnabled&&_sharingRole==='client'&&result.joinStatus){
+    if(sharingEnabled&&_sharingRole==='client'&&result.joinError){
+      if(result.joinError==='hub_unreachable'){
+        alertModal(t('sharing.joinError.hubUnreachable'));
+      }else if(result.joinError==='username_taken'){
+        alertModal(t('sharing.joinError.usernameTaken'));
+      }else if(result.joinError==='invalid_team_token'){
+        alertModal(t('sharing.joinError.invalidToken'));
+      }else{
+        toast(t('sharing.retryJoin.fail'),'error');
+      }
+    }else if(sharingEnabled&&_sharingRole==='client'&&result.joinStatus){
       if(result.joinStatus==='pending'){
         toast(t('sharing.joinSent.pending'),'success');
       }else if(result.joinStatus==='active'){
@@ -7477,6 +7556,7 @@ function notifIcon(resource,type){
   if(type==='hub_shutdown') return '\\u{1F6D1}';
   if(type==='role_promoted') return '\\u{2B06}';
   if(type==='role_demoted') return '\\u{2B07}';
+  if(type==='username_renamed') return '\\u{270F}';
   if(resource==='memory') return '\\u{1F4DD}';
   if(resource==='task') return '\\u{1F4CB}';
   if(resource==='skill') return '\\u{1F9E0}';
@@ -7523,6 +7603,9 @@ function notifTypeText(n){
   if(n.type==='role_demoted'){
     return t('notif.roleDemoted');
   }
+  if(n.type==='username_renamed'){
+    return t('notif.usernameRenamed');
+  }
   return n.message||n.type;
 }
 
@@ -7557,7 +7640,7 @@ function renderNotifBadge(){
   }
 }
 
-var _notifKnownTypes={membership_approved:1,membership_rejected:1,membership_removed:1,hub_shutdown:1,user_left:1,user_online:1,user_offline:1,user_join_request:1,role_promoted:1,role_demoted:1,resource_removed:1,resource_shared:1,resource_unshared:1};
+var _notifKnownTypes={membership_approved:1,membership_rejected:1,membership_removed:1,hub_shutdown:1,user_left:1,user_online:1,user_offline:1,user_join_request:1,role_promoted:1,role_demoted:1,resource_removed:1,resource_shared:1,resource_unshared:1,username_renamed:1};
 function notifDisplayTitle(n){
   if(_notifKnownTypes[n.type]) return notifTypeText(n);
   return n.title||notifTypeText(n);
@@ -7565,6 +7648,11 @@ function notifDisplayTitle(n){
 function notifDisplayDetail(n){
   if(_notifKnownTypes[n.type]){
     if(n.type==='resource_removed'||n.type==='resource_shared'||n.type==='resource_unshared') return n.title||'';
+    if(n.type==='username_renamed'){
+      var rm=n.title&&n.title.match(/from "([^"]+)" to "([^"]+)"/);
+      if(rm) return t('notif.usernameRenamed.detail').replace('{oldName}',rm[1]).replace('{newName}',rm[2]);
+      return '';
+    }
     var m=n.title&&n.title.match(/["\u201C]([^"\u201D]+)["\u201D]/);
     if(m) return m[1];
     if(n.type==='user_left'||n.type==='user_online'||n.type==='user_offline'||n.type==='user_join_request') return n.title||'';
@@ -8963,11 +9051,11 @@ function waitForGatewayAndReload(maxAttempts,attempt){
     });
   },delay);
 }
-function doUpdateInstall(packageSpec,btnEl,statusEl){
+function doUpdateInstall(packageSpec,btnEl,statusEl,targetVersion){
   btnEl.disabled=true;
   btnEl.textContent=t('update.installing');
   btnEl.style.cssText='background:rgba(99,102,241,.15);color:var(--pri);border:1px solid rgba(99,102,241,.3);border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;cursor:wait;white-space:nowrap';
-  fetch('/api/update-install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({packageSpec:packageSpec})})
+  fetch('/api/update-install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({packageSpec:packageSpec,targetVersion:targetVersion||''})})
     .then(function(r){return r.json()})
     .then(function(d){
       if(d.ok){
@@ -8990,11 +9078,11 @@ function doUpdateInstall(packageSpec,btnEl,statusEl){
 }
 async function checkForUpdate(){
   try{
-    const r=await fetch('/api/update-check');
+    const r=await fetch('/api/update-check?_t='+Date.now(),{cache:'no-store'});
     if(!r.ok)return;
     const d=await r.json();
     if(!d.updateAvailable)return;
-    const pkgSpec=d.installCommand?d.installCommand.replace(/^(?:npx\s+)?openclaw\s+plugins\s+install\s+/,''):(d.packageName+'@'+d.latest);
+    const pkgSpec=d.packageName+'@'+d.latest;
     var bannerWrap=document.createElement('div');
     bannerWrap.id='updateBannerWrap';
     bannerWrap.style.cssText='background:linear-gradient(135deg,rgba(99,102,241,.08),rgba(139,92,246,.06));border-bottom:1px solid rgba(99,102,241,.18);backdrop-filter:blur(8px);animation:slideIn .3s ease';
@@ -9011,7 +9099,7 @@ async function checkForUpdate(){
     btnUpdate.onmouseleave=function(){this.style.opacity='1';this.style.transform='scale(1)'};
     var statusDiv=document.createElement('div');
     statusDiv.style.cssText='font-size:11px;opacity:.7;flex-shrink:0';
-    btnUpdate.onclick=function(){doUpdateInstall(pkgSpec,btnUpdate,statusDiv)};
+    btnUpdate.onclick=function(){doUpdateInstall(pkgSpec,btnUpdate,statusDiv,d.latest)};
     textNode.appendChild(btnUpdate);
     var spacer=document.createElement('div');
     spacer.style.cssText='flex:1';
