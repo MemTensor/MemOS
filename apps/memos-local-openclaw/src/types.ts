@@ -150,10 +150,13 @@ export type SummaryProvider =
   | "bedrock"
   | "zhipu"
   | "siliconflow"
+  | "deepseek"
+  | "moonshot"
   | "bailian"
   | "cohere"
   | "mistral"
   | "voyage"
+  | "novita"
   | "openclaw";
 
 export type EmbeddingProvider =
@@ -164,6 +167,7 @@ export type EmbeddingProvider =
   | "cohere"
   | "mistral"
   | "voyage"
+  | "novita"
   | "local"
   | "openclaw";
 

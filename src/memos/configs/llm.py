@@ -72,6 +72,13 @@ class DeepSeekLLMConfig(OpenAILLMConfig):
     )
 
 
+class NovitaLLMConfig(OpenAILLMConfig):
+    api_base: str = Field(
+        default="https://api.novita.ai/openai",
+        description="Base URL for Novita AI OpenAI-compatible API",
+    )
+
+
 class AzureLLMConfig(BaseLLMConfig):
     base_url: str = Field(
         default="https://api.openai.azure.com/",
@@ -146,6 +153,7 @@ class LLMConfigFactory(BaseConfig):
         "huggingface_singleton": HFLLMConfig,  # Add singleton support
         "qwen": QwenLLMConfig,
         "deepseek": DeepSeekLLMConfig,
+        "novita": NovitaLLMConfig,
         "openai_new": OpenAIResponsesLLMConfig,
     }
 
