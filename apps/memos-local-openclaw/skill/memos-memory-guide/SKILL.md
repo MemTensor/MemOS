@@ -1,6 +1,26 @@
 ---
 name: memos-memory-guide
 description: "Use the MemOS Local memory system to search and use the user's past conversations. Use this skill whenever the user refers to past chats, their own preferences or history, or when you need to answer from prior context. When auto-recall returns nothing (long or unclear user query), generate your own short search query and call memory_search. Available tools: memory_search, memory_get, memory_write_public, memory_share, memory_unshare, task_summary, skill_get, skill_search, skill_install, skill_publish, skill_unpublish, network_memory_detail, network_skill_pull, network_team_info, memory_timeline, memory_viewer."
+metadata:
+  openclaw:
+    requires:
+      bins:
+        - node
+        - npm
+      anyBins:
+        - curl
+        - wget
+      env:
+        - OPENCLAW_STATE_DIR
+        - OPENCLAW_CONFIG_PATH
+      config:
+        - ~/.openclaw/openclaw.json
+    install:
+      - kind: node
+        package: better-sqlite3
+        bins: []
+    emoji: "\U0001F9E0"
+    homepage: https://github.com/nicekate/MemOS
 ---
 
 # MemOS Local Memory — Agent Guide
