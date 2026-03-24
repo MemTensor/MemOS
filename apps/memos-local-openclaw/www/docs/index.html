@@ -102,6 +102,25 @@ tr:hover td{background:var(--bg-alt)}
 .callout strong{color:var(--text)}
 .callout.warn{border-color:var(--amber);background:var(--amber-bg)}
 .callout.success{border-color:var(--green);background:var(--green-bg)}
+.install-switcher{background:var(--code-bg);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin:12px 0 18px}
+.install-switcher-header{display:flex;align-items:center;gap:6px;padding:10px 12px;border-bottom:1px solid var(--border)}
+.install-switcher-header .dot{width:9px;height:9px;border-radius:50%}
+.install-os-switch{margin-left:auto;display:flex;align-items:center;gap:6px;padding:3px;background:var(--muted);border:1px solid var(--border);border-radius:999px}
+.install-os-switch .os-btn{background:transparent;border:none;color:var(--text-sec);font-size:11px;font-weight:700;padding:5px 10px;border-radius:999px;cursor:pointer;transition:all .15s}
+.install-os-switch .os-btn.active{background:var(--grad-main);color:#06080f}
+.install-switcher-body{padding:14px 16px}
+.install-note{font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--text-thr);margin-bottom:8px}
+.install-row{display:flex;align-items:center;gap:8px}
+.install-row .prompt{color:var(--green);font-family:var(--mono);font-size:12px}
+.install-row .cmd{font-family:var(--mono);font-size:12px;color:var(--code-text);line-height:1.8;flex:1;white-space:nowrap;overflow:auto;scrollbar-width:none}
+.install-row .cmd::-webkit-scrollbar{display:none}
+.install-copy-btn{width:26px;height:26px;display:flex;align-items:center;justify-content:center;background:var(--muted);border:1px solid var(--border);color:var(--accent);border-radius:7px;cursor:pointer;transition:all .15s;flex-shrink:0;padding:0}
+.install-copy-btn:hover{border-color:var(--accent)}
+.install-copy-btn .copy-icon,.install-copy-btn .check-icon{width:13px;height:13px;display:block}
+.install-copy-btn .check-icon{display:none;color:var(--green)}
+.install-copy-btn.copied{border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.12);color:var(--green)}
+.install-copy-btn.copied .copy-icon{display:none}
+.install-copy-btn.copied .check-icon{display:block}
 
 .diagram{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:24px 20px;margin:18px 0;overflow-x:auto}
 .diagram-flow{display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:center;min-width:560px}
@@ -280,29 +299,48 @@ body.lang-zh .lang-en{display:none !important}
   <li><span class="lang-zh">Embedding / Summarizer API 可选，不配自动用本地模型</span><span class="lang-en">Embedding / Summarizer APIs optional, falls back to local</span></li>
 </ul>
 
-<h4><span class="lang-zh">Step 0：安装 C++ 编译工具（macOS / Linux 推荐）</span><span class="lang-en">Step 0: Install C++ Build Tools (macOS / Linux recommended)</span></h4>
-<p><span class="lang-zh">插件依赖 <code>better-sqlite3</code> 原生模块。<strong>macOS / Linux</strong> 用户建议先安装编译工具，可大幅提升安装成功率。<strong>Windows</strong> 用户使用 Node.js LTS 版本时通常有预编译文件，可直接跳到 Step 1。</span><span class="lang-en">The plugin depends on <code>better-sqlite3</code>, a native C/C++ module. <strong>macOS / Linux</strong> users should install build tools first. <strong>Windows</strong> users with Node.js LTS usually have prebuilt binaries and can skip to Step 1.</span></p>
-<pre><code><span class="cmt"># macOS</span>
-xcode-select --install
+<h4><span class="lang-zh">Step 1：安装插件 & 启动</span><span class="lang-en">Step 1: Install Plugin & Start</span><br><span class="lang-zh" style="color:var(--text)">首次安装</span><span class="lang-en" style="color:var(--text)">First Install</span></h4>
+<div class="install-switcher" data-install-switcher>
+  <div class="install-switcher-header">
+    <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span>
+    <div class="install-os-switch">
+      <button type="button" class="os-btn active" data-os="unix"><span class="lang-zh">macOS/Linux</span><span class="lang-en">macOS/Linux</span></button>
+      <button type="button" class="os-btn" data-os="windows"><span class="lang-zh">Windows</span><span class="lang-en">Windows</span></button>
+    </div>
+  </div>
+  <div class="install-switcher-body">
+    <div class="install-row">
+      <span class="prompt">$</span>
+      <span class="cmd" data-os-cmd="unix">curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</span>
+      <span class="cmd" data-os-cmd="windows" style="display:none">powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"</span>
+      <button type="button" class="install-copy-btn" data-copy-unix="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" data-copy-windows='powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"' data-copy="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+    </div>
+  </div>
+</div>
 
-<span class="cmt"># Linux (Ubuntu / Debian)</span>
-sudo apt install build-essential python3
-
-<span class="cmt"># Windows: 通常无需操作。如安装失败，安装 Visual Studio Build Tools:</span>
-<span class="cmt"># https://visualstudio.microsoft.com/visual-cpp-build-tools/</span></code><span class="lang">bash</span></pre>
-
-<h4><span class="lang-zh">Step 1：安装插件 & 启动</span><span class="lang-en">Step 1: Install Plugin & Start</span></h4>
-<pre><code><span class="kw">openclaw</span> plugins install @memtensor/memos-local-openclaw-plugin
-<span class="kw">openclaw</span> gateway start</code><span class="lang">bash</span></pre>
-
-<div class="callout warn"><span class="lang-zh"><strong>安装失败？</strong>最常见的问题是 <code>better-sqlite3</code> 原生模块编译失败。请确认已执行上方 Step 0，然后手动重建：<code>cd ~/.openclaw/extensions/memos-local-openclaw-plugin && npm rebuild better-sqlite3</code>。更多方案请查看 <a href="troubleshooting.html">安装排查指南</a> 或 <a href="https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md" target="_blank">better-sqlite3 官方文档</a>。</span><span class="lang-en"><strong>Install failed?</strong> The most common issue is <code>better-sqlite3</code> compilation failure. Ensure Step 0 is done, then manually rebuild: <code>cd ~/.openclaw/extensions/memos-local-openclaw-plugin && npm rebuild better-sqlite3</code>. See the <a href="troubleshooting.html">troubleshooting guide</a> or <a href="https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md" target="_blank">official better-sqlite3 docs</a> for more solutions.</span></div>
+<div class="callout warn"><span class="lang-zh"><strong>安装失败？</strong>最常见的问题是 <code>better-sqlite3</code> 原生模块编译失败，可手动重建：<code>cd ~/.openclaw/extensions/memos-local-openclaw-plugin && npm rebuild better-sqlite3</code>。更多方案请查看 <a href="troubleshooting.html">安装排查指南</a> 或 <a href="https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md" target="_blank">better-sqlite3 官方文档</a>。</span><span class="lang-en"><strong>Install failed?</strong> The most common issue is <code>better-sqlite3</code> compilation failure. You can manually rebuild it: <code>cd ~/.openclaw/extensions/memos-local-openclaw-plugin && npm rebuild better-sqlite3</code>. See the <a href="troubleshooting.html">troubleshooting guide</a> or <a href="https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md" target="_blank">official better-sqlite3 docs</a> for more solutions.</span></div>
 
 <h3><span class="lang-zh">升级</span><span class="lang-en">Upgrade</span></h3>
-<pre><code><span class="kw">openclaw</span> plugins update memos-local-openclaw-plugin
-<span class="kw">openclaw</span> gateway stop && <span class="kw">openclaw</span> gateway start</code><span class="lang">bash</span></pre>
+<div class="install-switcher" data-install-switcher>
+  <div class="install-switcher-header">
+    <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span>
+    <div class="install-os-switch">
+      <button type="button" class="os-btn active" data-os="unix"><span class="lang-zh">macOS/Linux</span><span class="lang-en">macOS/Linux</span></button>
+      <button type="button" class="os-btn" data-os="windows"><span class="lang-zh">Windows</span><span class="lang-en">Windows</span></button>
+    </div>
+  </div>
+  <div class="install-switcher-body">
+    <div class="install-row">
+      <span class="prompt">$</span>
+      <span class="cmd" data-os-cmd="unix">curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</span>
+      <span class="cmd" data-os-cmd="windows" style="display:none">powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"</span>
+      <button type="button" class="install-copy-btn" data-copy-unix="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" data-copy-windows='powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"' data-copy="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+    </div>
+  </div>
+</div>
 <div class="callout"><span class="lang-zh">升级自动完成依赖安装、旧版清理和原生模块编译，无需手动操作。如果 update 命令不可用，先删除旧目录再重新安装：<code>rm -rf ~/.openclaw/extensions/memos-local-openclaw-plugin && openclaw plugins install @memtensor/memos-local-openclaw-plugin</code>（记忆数据不受影响）。</span><span class="lang-en">Upgrade automatically handles dependencies, legacy cleanup, and native module compilation. If update is unavailable, delete the old directory first: <code>rm -rf ~/.openclaw/extensions/memos-local-openclaw-plugin && openclaw plugins install @memtensor/memos-local-openclaw-plugin</code> (memory data is stored separately and won't be affected).</span></div>
 
-<h3 id="config"><span class="lang-zh">配置</span><span class="lang-en">Configuration</span></h3>
+<h4 id="config"><span class="lang-zh">Step2: 配置</span><span class="lang-en">Step2: Configuration</span></h4>
 <p><span class="lang-zh"><strong>两种方式</strong>：编辑 <code>openclaw.json</code> 或通过 Viewer 网页面板在线修改。支持分级模型。</span><span class="lang-en"><strong>Two methods</strong>: edit <code>openclaw.json</code> or via Viewer web panel. Tiered models supported.</span></p>
 <pre><code>{
   <span class="str">"plugins"</span>: {
@@ -692,6 +730,43 @@ function toggleDocsTheme(){var el=document.documentElement;var n=(el.getAttribut
 initDocsTheme();
 </script>
 <script>
+(function(){
+  function copyText(text){
+    if(navigator.clipboard&&navigator.clipboard.writeText){return navigator.clipboard.writeText(text);}
+    return new Promise(function(resolve,reject){
+      var ta=document.createElement('textarea');
+      ta.value=text;
+      ta.setAttribute('readonly','');
+      ta.style.position='fixed';
+      ta.style.opacity='0';
+      document.body.appendChild(ta);
+      ta.select();
+      try{document.execCommand('copy');document.body.removeChild(ta);resolve();}
+      catch(err){document.body.removeChild(ta);reject(err);}
+    });
+  }
+  document.querySelectorAll('[data-install-switcher]').forEach(function(sw){
+    var buttons=sw.querySelectorAll('.os-btn');
+    var commands=sw.querySelectorAll('[data-os-cmd]');
+    var copyBtn=sw.querySelector('.install-copy-btn');
+    function setOs(os){
+      buttons.forEach(function(btn){btn.classList.toggle('active',btn.getAttribute('data-os')===os);});
+      commands.forEach(function(cmd){cmd.style.display=cmd.getAttribute('data-os-cmd')===os?'':'none';});
+      if(copyBtn){copyBtn.setAttribute('data-copy',copyBtn.getAttribute(os==='windows'?'data-copy-windows':'data-copy-unix')||'');}
+    }
+    buttons.forEach(function(btn){btn.addEventListener('click',function(){setOs(btn.getAttribute('data-os'));});});
+    if(copyBtn){
+      copyBtn.addEventListener('click',function(){
+        var self=this;
+        copyText(self.getAttribute('data-copy')||'').catch(function(){});
+        self.classList.add('copied');
+        if(self._copiedTimer){clearTimeout(self._copiedTimer);}
+        self._copiedTimer=setTimeout(function(){self.classList.remove('copied');},1200);
+      });
+    }
+    setOs('unix');
+  });
+})();
 (function(){
   const links=document.querySelectorAll('.sidebar a'),secs=[];
   links.forEach(a=>{const h=a.getAttribute('href');if(h&&h.startsWith('#')){const el=document.getElementById(h.slice(1));if(el)secs.push({el,link:a});}});

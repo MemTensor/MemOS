@@ -52,26 +52,21 @@ export async function computeUpdateCheck(
 
   if (onBeta) {
     channel = "beta";
-    // Beta users: only compare against beta tag; never suggest "updating" to stable via gt confusion.
     if (betaTag && semver.valid(betaTag) && semver.gt(betaTag, current)) {
       updateAvailable = true;
       targetVersion = betaTag;
-      installCommand = `openclaw plugins install ${packageName}@beta`;
     } else {
       targetVersion = betaTag && semver.valid(betaTag) ? betaTag : current;
-      if (betaTag && semver.valid(betaTag) && semver.eq(betaTag, current)) {
-        installCommand = `openclaw plugins install ${packageName}@beta`;
-      }
     }
+    installCommand = `openclaw plugins install ${packageName}@${targetVersion}`;
   } else {
-    // Stable users: compare against latest only.
     if (latestTag && semver.valid(latestTag) && semver.gt(latestTag, current)) {
       updateAvailable = true;
       targetVersion = latestTag;
-      installCommand = `openclaw plugins install ${packageName}`;
     } else {
       targetVersion = latestTag && semver.valid(latestTag) ? latestTag : current;
     }
+    installCommand = `openclaw plugins install ${packageName}@${targetVersion}`;
   }
 
   // Beta user + stable exists on latest: optional hint to switch to stable (not counted as "update").
