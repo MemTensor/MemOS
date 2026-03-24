@@ -4,6 +4,7 @@
 const { spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const { validateNativeBinding } = require("./native-binding.cjs");
 
 const RESET = "\x1b[0m";
 const GREEN = "\x1b[32m";
@@ -377,35 +378,31 @@ function findSqliteBinding() {
 
 function sqliteBindingsExist() {
   const found = findSqliteBinding();
-  if (found) {
-    log(`Native binding found: ${DIM}${found}${RESET}`);
-    return true;
+  if (!found) return false;
+  log(`Native binding found: ${DIM}${found}${RESET}`);
+  const status = validateNativeBinding(found);
+  if (status.ok) return true;
+  if (status.reason === "node-module-version") {
+    warn("Native binding exists but was compiled for a different Node.js version.");
+  } else {
+    warn("Native binding exists but failed to load.");
   }
+  warn(`${DIM}${status.message}${RESET}`);
   return false;
 }
 
 if (sqliteBindingsExist()) {
   ok("better-sqlite3 is ready.");
 } else {
-  warn("better-sqlite3 native bindings not found in plugin dir.");
+  warn("better-sqlite3 native bindings are missing or not loadable.");
   log(`Searched in: ${DIM}${sqliteModulePath}/build/${RESET}`);
   log("Running: npm rebuild better-sqlite3 (may take 30-60s)...");
-}
-
-const startMs = Date.now();
-
-const result = spawnSync(npmCmd, ["rebuild", "better-sqlite3"], {
-  cwd: pluginDir,
-  stdio: "pipe",
-  shell: false,
-  timeout: 180_000,
-});
 
   const startMs = Date.now();
-  const result = spawnSync("npm", ["rebuild", "better-sqlite3"], {
+  const result = spawnSync(npmCmd, ["rebuild", "better-sqlite3"], {
     cwd: pluginDir,
     stdio: "pipe",
-    shell: true,
+    shell: false,
     timeout: 180_000,
   });
   const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);

@@ -1,6 +1,6 @@
 {
   "name": "@memtensor/memos-local-openclaw-plugin",
-  "version": "1.0.6-beta.2",
+  "version": "1.0.6-beta.11",
   "description": "MemOS Local memory plugin for OpenClaw — full-write, hybrid-recall, progressive retrieval",
   "type": "module",
   "main": "index.ts",
@@ -11,6 +11,7 @@
     "dist",
     "skill",
     "prebuilds",
+    "scripts/native-binding.cjs",
     "scripts/postinstall.cjs",
     "openclaw.plugin.json",
     "telemetry.credentials.json",

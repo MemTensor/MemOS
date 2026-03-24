@@ -9051,11 +9051,11 @@ function waitForGatewayAndReload(maxAttempts,attempt){
     });
   },delay);
 }
-function doUpdateInstall(packageSpec,btnEl,statusEl){
+function doUpdateInstall(packageSpec,btnEl,statusEl,targetVersion){
   btnEl.disabled=true;
   btnEl.textContent=t('update.installing');
   btnEl.style.cssText='background:rgba(99,102,241,.15);color:var(--pri);border:1px solid rgba(99,102,241,.3);border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;cursor:wait;white-space:nowrap';
-  fetch('/api/update-install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({packageSpec:packageSpec})})
+  fetch('/api/update-install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({packageSpec:packageSpec,targetVersion:targetVersion||''})})
     .then(function(r){return r.json()})
     .then(function(d){
       if(d.ok){
@@ -9078,11 +9078,11 @@ function doUpdateInstall(packageSpec,btnEl,statusEl){
 }
 async function checkForUpdate(){
   try{
-    const r=await fetch('/api/update-check');
+    const r=await fetch('/api/update-check?_t='+Date.now(),{cache:'no-store'});
     if(!r.ok)return;
     const d=await r.json();
     if(!d.updateAvailable)return;
-    const pkgSpec=d.installCommand?d.installCommand.replace(/^(?:npx\s+)?openclaw\s+plugins\s+install\s+/,''):(d.packageName+'@'+d.latest);
+    const pkgSpec=d.packageName+'@'+d.latest;
     var bannerWrap=document.createElement('div');
     bannerWrap.id='updateBannerWrap';
     bannerWrap.style.cssText='background:linear-gradient(135deg,rgba(99,102,241,.08),rgba(139,92,246,.06));border-bottom:1px solid rgba(99,102,241,.18);backdrop-filter:blur(8px);animation:slideIn .3s ease';
@@ -9099,7 +9099,7 @@ async function checkForUpdate(){
     btnUpdate.onmouseleave=function(){this.style.opacity='1';this.style.transform='scale(1)'};
     var statusDiv=document.createElement('div');
     statusDiv.style.cssText='font-size:11px;opacity:.7;flex-shrink:0';
-    btnUpdate.onclick=function(){doUpdateInstall(pkgSpec,btnUpdate,statusDiv)};
+    btnUpdate.onclick=function(){doUpdateInstall(pkgSpec,btnUpdate,statusDiv,d.latest)};
     textNode.appendChild(btnUpdate);
     var spacer=document.createElement('div');
     spacer.style.cssText='flex:1';
