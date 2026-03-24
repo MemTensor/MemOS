@@ -61,6 +61,7 @@ export class Embedder {
         case "zhipu":
         case "siliconflow":
         case "bailian":
+        case "novita":
           result = await embedOpenAI(texts, cfg!, this.log); break;
         case "gemini":
           result = await embedGemini(texts, cfg!, this.log); break;

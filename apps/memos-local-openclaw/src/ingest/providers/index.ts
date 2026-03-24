@@ -22,6 +22,7 @@ function detectProvider(
     return "gemini";
   }
   if (key.includes("bedrock") || url.includes("bedrock")) return "bedrock";
+  if (key.includes("novita") || url.includes("api.novita.ai")) return "novita";
   return "openai_compatible";
 }
 
@@ -472,6 +473,7 @@ function callSummarize(cfg: SummarizerConfig, text: string, log: Logger): Promis
     case "cohere":
     case "mistral":
     case "voyage":
+    case "novita":
       return summarizeOpenAI(text, cfg, log);
     case "anthropic":
       return summarizeAnthropic(text, cfg, log);
@@ -497,6 +499,7 @@ function callSummarizeTask(cfg: SummarizerConfig, text: string, log: Logger): Pr
     case "cohere":
     case "mistral":
     case "voyage":
+    case "novita":
       return summarizeTaskOpenAI(text, cfg, log);
     case "anthropic":
       return summarizeTaskAnthropic(text, cfg, log);
@@ -522,6 +525,7 @@ function callGenerateTaskTitle(cfg: SummarizerConfig, text: string, log: Logger)
     case "cohere":
     case "mistral":
     case "voyage":
+    case "novita":
       return generateTaskTitleOpenAI(text, cfg, log);
     case "anthropic":
       return generateTaskTitleAnthropic(text, cfg, log);
@@ -547,6 +551,7 @@ function callTopicJudge(cfg: SummarizerConfig, currentContext: string, newMessag
     case "cohere":
     case "mistral":
     case "voyage":
+    case "novita":
       return judgeNewTopicOpenAI(currentContext, newMessage, cfg, log);
     case "anthropic":
       return judgeNewTopicAnthropic(currentContext, newMessage, cfg, log);
@@ -572,6 +577,7 @@ function callFilterRelevant(cfg: SummarizerConfig, query: string, candidates: Ar
     case "cohere":
     case "mistral":
     case "voyage":
+    case "novita":
       return filterRelevantOpenAI(query, candidates, cfg, log);
     case "anthropic":
       return filterRelevantAnthropic(query, candidates, cfg, log);
@@ -597,6 +603,7 @@ function callJudgeDedup(cfg: SummarizerConfig, newSummary: string, candidates: A
     case "cohere":
     case "mistral":
     case "voyage":
+    case "novita":
       return judgeDedupOpenAI(newSummary, candidates, cfg, log);
     case "anthropic":
       return judgeDedupAnthropic(newSummary, candidates, cfg, log);
