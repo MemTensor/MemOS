@@ -1800,7 +1800,6 @@ class PolarDBGraphDB(BaseGraphDB):
             FROM "{self.db_name}_graph"."Memory" m
             CROSS JOIN q
             {where_clause_cte}
-            ORDER BY rank DESC
             LIMIT {top_k};
         """
         params = [tsquery_string]
