@@ -441,7 +441,7 @@ class PolarDBGraphDB(BaseGraphDB):
         )
         user_name = user_name if user_name else self._get_config_value("user_name")
 
-        # Use actual OFFSET logic, consistent with nebular.py
+        # Use actual OFFSET logic for deterministic pruning
         # First find IDs to delete, then delete them
         select_query = f"""
             SELECT id FROM "{self.db_name}_graph"."Memory"
@@ -3539,7 +3539,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         user_name = user_name if user_name else self._get_config_value("user_name")
 
-        # Build query conditions; keep consistent with nebular.py
+        # Build query conditions shared with other graph backends
         where_clauses = [
             'n.status = "activated"',
             'NOT (n.node_type = "reasoning")',
@@ -3592,7 +3592,7 @@ class PolarDBGraphDB(BaseGraphDB):
         # Add overlap_count
         result_fields.append("overlap_count agtype")
         result_fields_str = ", ".join(result_fields)
-        # Use Cypher query; keep consistent with nebular.py
+        # Use Cypher query to keep the graph query path aligned
         query = f"""
             SELECT * FROM (
                 SELECT * FROM cypher('{self.db_name}_graph', $$
