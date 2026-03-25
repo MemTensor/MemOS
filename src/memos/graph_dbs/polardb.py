@@ -165,7 +165,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Create connection pool
         self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=5,
+            minconn=2,
             maxconn=maxconn,
             host=host,
             port=port,
@@ -176,6 +176,7 @@ class PolarDBGraphDB(BaseGraphDB):
             keepalives_idle=120,  # Seconds of inactivity before sending keepalive (should be < server idle timeout)
             keepalives_interval=15,  # Seconds between keepalive retries
             keepalives_count=5,  # Number of keepalive retries before considering connection dead
+            keepalives=1,
             options=f"-c search_path={self.db_name}_graph,ag_catalog,$user,public",
         )
 
@@ -250,39 +251,40 @@ class PolarDBGraphDB(BaseGraphDB):
         import psycopg2
 
         timeout = self._connection_wait_timeout
-        if not self._semaphore.acquire(timeout=max(timeout, 0)):
+        if timeout is None or timeout <= 0:
+            self._semaphore.acquire()
+        elif not self._semaphore.acquire(timeout=timeout):
             logger.warning(f"Timeout waiting for connection slot ({timeout}s)")
             raise RuntimeError("Connection pool busy")
-        logger.info(
-            "Connection pool usage: %s/%s",
-            self.connection_pool.maxconn - self._semaphore._value,
-            self.connection_pool.maxconn,
-        )
+
         conn = None
         broken = False
         try:
-            conn = self.connection_pool.getconn()
-            conn.autocommit = True
             for attempt in range(2):
+                conn = self.connection_pool.getconn()
+                conn.autocommit = True
                 try:
                     with conn.cursor() as cur:
                         cur.execute("SELECT 1")
                     break
                 except psycopg2.Error:
-                    logger.warning("Dead connection detected, recreating (attempt %d)", attempt + 1)
+                    logger.warning(f"Dead connection detected, recreating (attempt {attempt + 1})")
                     self.connection_pool.putconn(conn, close=True)
-                    conn = self.connection_pool.getconn()
-                    conn.autocommit = True
+                    conn = None
             else:
                 raise RuntimeError("Cannot obtain valid DB connection after 2 attempts")
             with conn.cursor() as cur:
                 cur.execute(f'SET search_path = {self.db_name}_graph, ag_catalog, "$user", public;')
             yield conn
-        except Exception:
+        except (psycopg2.Error, psycopg2.OperationalError) as e:
             broken = True
+            logger.exception(f"Database connection busy : {e}")
+            raise
+        except Exception as e:
+            logger.exception(f"Unexpected error: {e}")
             raise
         finally:
-            if conn:
+            if conn is not None:
                 try:
                     self.connection_pool.putconn(conn, close=broken)
                     logger.debug(f"Returned connection {id(conn)} to pool (broken={broken})")
@@ -1798,7 +1800,6 @@ class PolarDBGraphDB(BaseGraphDB):
             FROM "{self.db_name}_graph"."Memory" m
             CROSS JOIN q
             {where_clause_cte}
-            ORDER BY rank DESC
             LIMIT {top_k};
         """
         params = [tsquery_string]
@@ -2194,7 +2195,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 SELECT {", ".join(cte_select_list)}
                 FROM "{self.db_name}_graph"."Memory"
                 {where_clause}
-                LIMIT 1000
+                LIMIT 100
             )
             SELECT {outer_select}, count(*) AS count
             FROM t
@@ -2409,55 +2410,46 @@ class PolarDBGraphDB(BaseGraphDB):
         order_clause = """
             ORDER BY ag_catalog.agtype_access_operator(properties, '"created_at"'::agtype) DESC NULLS LAST,id DESC
         """
+        count_query = f"""
+            SELECT COUNT(*) AS total_count
+            FROM "{self.db_name}_graph"."Memory"
+            {where_clause}
+        """
         if include_embedding:
-            node_query = f"""
-                WITH filtered AS (
-                    SELECT id, properties, embedding
-                    FROM "{self.db_name}_graph"."Memory"
-                    {where_clause}
-                )
-                SELECT p.id, p.properties, p.embedding, c.total_count
-                FROM (SELECT COUNT(*) AS total_count FROM filtered) c
-                LEFT JOIN LATERAL (
-                    SELECT id, properties, embedding
-                    FROM filtered
-                    {order_clause}
-                    {pagination_clause}
-                ) p ON TRUE
+            data_query = f"""
+                SELECT id, properties, embedding
+                FROM "{self.db_name}_graph"."Memory"
+                {where_clause}
+                {order_clause}
+                {pagination_clause}
             """
         else:
-            node_query = f"""
-                WITH filtered AS (
-                    SELECT id, properties
-                    FROM "{self.db_name}_graph"."Memory"
-                    {where_clause}
-                )
-                SELECT p.id, p.properties, c.total_count
-                FROM (SELECT COUNT(*) AS total_count FROM filtered) c
-                LEFT JOIN LATERAL (
-                    SELECT id, properties
-                    FROM filtered
-                    {order_clause}
-                    {pagination_clause}
-                ) p ON TRUE
+            data_query = f"""
+                SELECT id, properties
+                FROM "{self.db_name}_graph"."Memory"
+                {where_clause}
+                {order_clause}
+                {pagination_clause}
             """
-        logger.info(f"[export_graph nodes] Query: {node_query}")
+        logger.info(f"[export_graph nodes] count_query: {count_query}")
+        logger.info(f"[export_graph nodes] data_query: {data_query}")
 
         try:
             with self._get_connection() as conn, conn.cursor() as cursor:
-                cursor.execute(node_query)
+                cursor.execute(count_query)
+                count_row = cursor.fetchone()
+                total_nodes = int(count_row[0]) if count_row and count_row[0] is not None else 0
+
+                cursor.execute(data_query)
                 node_results = cursor.fetchall()
             nodes = []
 
             for row in node_results:
                 if include_embedding:
-                    row_id, properties_json, embedding_json, row_total_count = row
+                    row_id, properties_json, embedding_json = row
                 else:
-                    row_id, properties_json, row_total_count = row
+                    row_id, properties_json = row
                     embedding_json = None
-
-                if row_total_count is not None:
-                    total_nodes = int(row_total_count)
 
                 if row_id is None:
                     continue
