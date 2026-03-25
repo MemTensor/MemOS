@@ -317,3 +317,84 @@ def init_server() -> dict[str, Any]:
         "nli_client": nli_client,
         "memory_history_manager": memory_history_manager,
     }
+
+
+def create_per_db_components(db_name: str, base_components: dict[str, Any]) -> dict[str, Any]:
+    """Create a set of per-database components for multi-db isolation.
+
+    Reuses expensive shared singletons (LLM, embedder, reranker, etc.) but builds
+    a fresh graph_db, MemoryManager, SimpleTreeTextMemory, NaiveMemCube, and
+    searcher for the specified Neo4j database name.
+
+    The returned ``mem_reader`` is a shallow copy of the shared one whose
+    ``searcher`` is overridden to point at the new database, so deduplication
+    during add operates against the correct graph.
+
+    Args:
+        db_name: Target Neo4j database name (auto-created when ``auto_create=True``).
+        base_components: Shared component dict returned by :func:`init_server`.
+
+    Returns:
+        Dict with keys: ``graph_db``, ``memory_manager``, ``text_mem``,
+        ``naive_mem_cube``, ``searcher``, ``mem_reader``.
+    """
+    import copy
+
+    from memos.api.config import APIConfig
+    from memos.configs.graph_db import GraphDBConfigFactory
+    from memos.graph_dbs.factory import GraphStoreFactory
+
+    graph_db_backend = os.getenv(
+        "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j")
+    ).lower()
+    neo4j_cfg = APIConfig.get_neo4j_config(user_id=db_name)
+    new_graph_db = GraphStoreFactory.from_config(
+        GraphDBConfigFactory.model_validate(
+            {"backend": graph_db_backend, "config": neo4j_cfg}
+        )
+    )
+
+    default_cube_config = base_components["default_cube_config"]
+    new_memory_manager = MemoryManager(
+        new_graph_db,
+        base_components["embedder"],
+        base_components["llm"],
+        memory_size=_get_default_memory_size(default_cube_config),
+        is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
+    )
+
+    new_text_mem = SimpleTreeTextMemory(
+        llm=base_components["llm"],
+        embedder=base_components["embedder"],
+        mem_reader=base_components["mem_reader"],
+        graph_db=new_graph_db,
+        reranker=base_components["reranker"],
+        memory_manager=new_memory_manager,
+        config=default_cube_config.text_mem.config,
+        internet_retriever=base_components["internet_retriever"],
+        tokenizer=FastTokenizer(),
+        include_embedding=bool(os.getenv("INCLUDE_EMBEDDING", "false") == "true"),
+    )
+
+    new_naive_mem_cube = NaiveMemCube(text_mem=new_text_mem, act_mem=None, para_mem=None)
+
+    new_searcher = new_text_mem.get_searcher(
+        manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
+        moscube=False,
+        process_llm=base_components["mem_reader"].llm,
+    )
+
+    # Shallow-copy the shared mem_reader and point its searcher at the new database
+    # so deduplication reads target the correct graph store.
+    new_mem_reader = copy.copy(base_components["mem_reader"])
+    new_mem_reader.set_searcher(new_searcher)
+
+    logger.info(f"[create_per_db_components] Created components for db_name={db_name!r}")
+    return {
+        "graph_db": new_graph_db,
+        "memory_manager": new_memory_manager,
+        "text_mem": new_text_mem,
+        "naive_mem_cube": new_naive_mem_cube,
+        "searcher": new_searcher,
+        "mem_reader": new_mem_reader,
+    }

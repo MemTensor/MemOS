@@ -69,6 +69,13 @@ class Neo4jGraphDBConfig(BaseGraphDBConfig):
     )
 
     embedding_dimension: int = Field(default=768, description="Dimension of vector embedding")
+    vec_config: VectorDBConfigFactory | None = Field(
+        default=None,
+        description=(
+            "Optional external vector DB config for syncing embeddings (e.g., Qdrant). "
+            "When provided, graph writes can also sync to vector storage."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_config(self):

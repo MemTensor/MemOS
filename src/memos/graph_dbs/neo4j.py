@@ -8,6 +8,8 @@ from memos.configs.graph_db import Neo4jGraphDBConfig
 from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
 from memos.log import get_logger
+from memos.vec_dbs.factory import VecDBFactory
+from memos.vec_dbs.item import VecDBItem
 
 
 logger = get_logger(__name__)
@@ -104,6 +106,16 @@ class Neo4jGraphDB(BaseGraphDB):
         self.driver = GraphDatabase.driver(config.uri, auth=(config.user, config.password))
         self.db_name = config.db_name
         self.user_name = config.user_name
+        self.vec_db = None
+
+        if config.vec_config is not None:
+            try:
+                self.vec_db = VecDBFactory.from_config(config.vec_config)
+                logger.info("[Neo4jGraphDB] External vector DB sync is enabled.")
+            except Exception as e:
+                logger.warning(
+                    f"[Neo4jGraphDB] Failed to initialize external vector DB sync, disabling it: {e}"
+                )
 
         self.system_db_name = "system" if config.use_multi_db else config.db_name
         if config.auto_create:
@@ -230,6 +242,13 @@ class Neo4jGraphDB(BaseGraphDB):
             for idx in range(len(metadata["sources"])):
                 metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
 
+        vec_item: VecDBItem | None = self._build_vec_item(
+            id=id,
+            memory=memory,
+            metadata=metadata,
+            user_name=user_name,
+        )
+
         with self.driver.session(database=self.db_name) as session:
             session.run(
                 query,
@@ -239,6 +258,9 @@ class Neo4jGraphDB(BaseGraphDB):
                 updated_at=updated_at,
                 metadata=metadata,
             )
+
+        if vec_item is not None and self.vec_db is not None:
+            self.vec_db.add([vec_item])
 
     def add_nodes_batch(
         self,
@@ -267,6 +289,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
         # Prepare all nodes
         prepared_nodes = []
+        vec_items: list[VecDBItem] = []
         for node_data in nodes:
             try:
                 id = node_data["id"]
@@ -297,6 +320,15 @@ class Neo4jGraphDB(BaseGraphDB):
                 if metadata.get("sources"):
                     for idx in range(len(metadata["sources"])):
                         metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
+
+                vec_item = self._build_vec_item(
+                    id=id,
+                    memory=memory,
+                    metadata=metadata,
+                    user_name=effective_user_name,
+                )
+                if vec_item is not None:
+                    vec_items.append(vec_item)
 
                 prepared_nodes.append(
                     {
@@ -348,6 +380,55 @@ class Neo4jGraphDB(BaseGraphDB):
         except Exception as e:
             logger.error(f"[add_nodes_batch] Failed to add nodes: {e}", exc_info=True)
             raise
+
+        if vec_items and self.vec_db is not None:
+            self.vec_db.add(vec_items)
+
+    def _build_vec_item(
+        self,
+        id: str,
+        memory: str,
+        metadata: dict[str, Any],
+        user_name: str | None,
+    ) -> VecDBItem | None:
+        """Build vector item for optional external vector DB sync."""
+        if self.vec_db is None:
+            return None
+
+        embedding = metadata.get("embedding")
+        if embedding is None:
+            logger.warning(
+                f"[Neo4jGraphDB] Missing embedding for node {id}, skip external vector sync."
+            )
+            return None
+
+        payload = {
+            "memory": memory,
+            "vector_sync": "success",
+            **metadata,
+        }
+
+        if user_name and "user_name" not in payload:
+            payload["user_name"] = user_name
+
+        # In multi-db mode, keep Neo4j db_name as-is (often '-') but route vector scope with
+        # underscore naming so Qdrant collection naming remains stable per logical user id.
+        if self.config.use_multi_db and "user_id" not in payload:
+            payload["user_id"] = self._get_vec_user_scope()
+
+        return VecDBItem(
+            id=id,
+            vector=embedding,
+            payload=payload,
+        )
+
+    def _get_vec_user_scope(self) -> str:
+        """Return vector routing user scope name for multi-db mode.
+
+        Neo4j database names may use '-' while Qdrant collections are expected to use
+        '_' by API user_id convention.
+        """
+        return (self.db_name or "").replace("-", "_")
 
     def update_node(self, id: str, fields: dict[str, Any], user_name: str | None = None) -> None:
         """
@@ -511,10 +592,10 @@ class Neo4jGraphDB(BaseGraphDB):
             Dictionary of node fields, or None if not found.
         """
         logger.info(f"[get_node] id: {id}")
-        user_name = kwargs.get("user_name")
+        user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
         where_user = ""
         params = {"id": id}
-        if user_name is not None:
+        if not self.config.use_multi_db and (self.config.user_name or user_name):
             where_user = " AND n.user_name = $user_name"
             params["user_name"] = user_name
 
@@ -852,6 +933,122 @@ class Neo4jGraphDB(BaseGraphDB):
             matching archived or merged nodes.
         """
         user_name = user_name if user_name else self.config.user_name
+
+        # Prefer external vector DB path (e.g., Qdrant) when configured.
+        if self.vec_db is not None:
+            vec_filter: dict[str, Any] = {"vector_sync": "success"}
+            if scope:
+                vec_filter["memory_type"] = scope
+            if status:
+                vec_filter["status"] = status
+
+            # Keep routing key consistent with write path:
+            # - multi-db: payload/filter carries user_id from db_name normalized to '_'
+            # - shared-db: payload carries user_name
+            if self.config.use_multi_db:
+                vec_filter["user_id"] = self._get_vec_user_scope()
+            elif kwargs.get("cube_name"):
+                vec_filter["user_name"] = kwargs["cube_name"]
+            elif user_name:
+                vec_filter["user_name"] = user_name
+
+            if search_filter:
+                vec_filter.update(search_filter)
+
+            # resolved_collection = self.vec_db.config.collection_name
+            # resolve_collection_fn = getattr(self.vec_db, "_resolve_collection_name", None)
+            # if callable(resolve_collection_fn):
+            #     try:
+            #         resolved_collection = resolve_collection_fn(filter_dict=vec_filter)
+            #     except Exception as e:
+            #         print(f"[DEBUG] collection_resolve_error: {e}")
+
+            # print(f"[DEBUG] vec_filter: {vec_filter}")
+            # print(f"[DEBUG] collection(config): {self.vec_db.config.collection_name}")
+            # print(f"[DEBUG] collection(resolved): {resolved_collection}")
+
+            vec_results = self.vec_db.search(query_vector=vector, top_k=top_k, filter=vec_filter)
+
+            if threshold is not None:
+                vec_results = [r for r in vec_results if r.score is None or r.score >= threshold]
+
+            vec_ids = [r.id for r in vec_results]
+            if not vec_ids:
+                return []
+
+            # Fast path: no extra graph-side filtering needed.
+            if not filter and not knowledgebase_ids and not return_fields:
+                return [{"id": r.id, "score": r.score} for r in vec_results]
+
+            # Build Neo4j post-filter query on vector result IDs.
+            where_clauses = ["n.id IN $vec_ids"]
+            params: dict[str, Any] = {"vec_ids": vec_ids}
+
+            user_name_conditions, user_name_params = self._build_user_name_and_kb_ids_conditions_cypher(
+                user_name=user_name,
+                knowledgebase_ids=knowledgebase_ids,
+                default_user_name=self.config.user_name,
+                node_alias="n",
+            )
+
+            if user_name_conditions:
+                if len(user_name_conditions) == 1:
+                    where_clauses.append(user_name_conditions[0])
+                else:
+                    where_clauses.append(f"({' OR '.join(user_name_conditions)})")
+
+            filter_conditions, filter_params = self._build_filter_conditions_cypher(
+                filter=filter,
+                param_counter_start=0,
+                node_alias="n",
+            )
+            where_clauses.extend(filter_conditions)
+
+            params.update(user_name_params)
+            if filter_params:
+                params.update(filter_params)
+
+            return_clause = "RETURN n.id AS id"
+            if return_fields:
+                validated_fields = self._validate_return_fields(return_fields)
+                extra_fields = ", ".join(
+                    f"n.{field} AS {field}" for field in validated_fields if field != "id"
+                )
+                if extra_fields:
+                    return_clause = f"RETURN n.id AS id, {extra_fields}"
+
+            query = f"""
+                MATCH (n:Memory)
+                WHERE {' AND '.join(where_clauses)}
+                {return_clause}
+            """
+
+            with self.driver.session(database=self.db_name) as session:
+                neo4j_results = list(session.run(query, params))
+
+            if return_fields:
+                neo4j_data = {}
+                for record in neo4j_results:
+                    node_id = record["id"]
+                    neo4j_data[node_id] = {
+                        field: record[field]
+                        for field in return_fields
+                        if field != "id" and field in record.keys()
+                    }
+                valid_ids = set(neo4j_data.keys())
+            else:
+                valid_ids = {record["id"] for record in neo4j_results}
+
+            filtered_results = []
+            for r in vec_results:
+                if r.id in valid_ids:
+                    item = {"id": r.id, "score": r.score}
+                    if return_fields:
+                        item.update(neo4j_data.get(r.id, {}))
+                    filtered_results.append(item)
+
+            return filtered_results
+
         # Build WHERE clause dynamically
         where_clauses = []
         if scope:
