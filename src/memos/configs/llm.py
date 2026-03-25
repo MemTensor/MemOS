@@ -28,6 +28,22 @@ class OpenAILLMConfig(BaseLLMConfig):
         default="https://api.openai.com/v1", description="Base URL for OpenAI API"
     )
     extra_body: Any = Field(default=None, description="extra body")
+    backup_client: bool = Field(
+        default=False,
+        description="Whether to enable backup client for fallback on primary failure",
+    )
+    backup_api_key: str | None = Field(
+        default=None, description="API key for backup OpenAI-compatible endpoint"
+    )
+    backup_api_base: str | None = Field(
+        default=None, description="Base URL for backup OpenAI-compatible endpoint"
+    )
+    backup_model_name_or_path: str | None = Field(
+        default=None, description="Model name for backup endpoint"
+    )
+    backup_headers: dict[str, Any] | None = Field(
+        default=None, description="Default headers for backup client requests"
+    )
 
 
 class OpenAIResponsesLLMConfig(BaseLLMConfig):
@@ -42,22 +58,18 @@ class OpenAIResponsesLLMConfig(BaseLLMConfig):
     )
 
 
-class QwenLLMConfig(BaseLLMConfig):
-    api_key: str = Field(..., description="API key for DashScope (Qwen)")
+class QwenLLMConfig(OpenAILLMConfig):
     api_base: str = Field(
         default="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         description="Base URL for Qwen OpenAI-compatible API",
     )
-    extra_body: Any = Field(default=None, description="extra body")
 
 
-class DeepSeekLLMConfig(BaseLLMConfig):
-    api_key: str = Field(..., description="API key for DeepSeek")
+class DeepSeekLLMConfig(OpenAILLMConfig):
     api_base: str = Field(
         default="https://api.deepseek.com",
         description="Base URL for DeepSeek OpenAI-compatible API",
     )
-    extra_body: Any = Field(default=None, description="Extra options for API")
 
 
 class AzureLLMConfig(BaseLLMConfig):

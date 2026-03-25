@@ -75,7 +75,7 @@
 - [**72% lower token usage**](https://x.com/MemOS_dev/status/2020854044583924111) — intelligent memory retrieval instead of loading full chat history
 - [**Multi-agent memory sharing**](https://x.com/MemOS_dev/status/2020538135487062094) — multi-instance agents share memory via same user_id, automatic context handoff
 
-Get your API key: [MemOS Dashboard](https://memos-dashboard.openmem.net/cn/login/)  
+Get your API key: [MemOS Dashboard](https://memos-dashboard.openmem.net/cn/login/)
 Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)
 
 ### 🧠 Local Plugin — 100% On-Device Memory
@@ -84,7 +84,7 @@ Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/Mem
 - **Hybrid search + task & skill evolution** — FTS5 + vector search, auto task summarization, reusable skills that self-upgrade
 - **Multi-agent collaboration + Memory Viewer** — memory isolation, skill sharing, full web dashboard with 7 management pages
 
- 🌐 [Homepage](https://memos-claw.openmem.net) · 
+ 🌐 [Homepage](https://memos-claw.openmem.net) ·
 📖 [Documentation](https://memos-claw.openmem.net/docs/index.html) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-openclaw-plugin)
 
 ## 📌 MemOS: Memory Operating System for AI Agents
@@ -104,10 +104,10 @@ Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/Mem
 
 ### News
 
-- **2026-03-08** · 🦞 **MemOS OpenClaw Plugin — Cloud & Local**  
+- **2026-03-08** · 🦞 **MemOS OpenClaw Plugin — Cloud & Local**
   Official OpenClaw memory plugins launched. **Cloud Plugin**: hosted memory service with 72% lower token usage and multi-agent memory sharing ([MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)). **Local Plugin** (`v1.0.0`): 100% on-device memory with persistent SQLite, hybrid search (FTS5 + vector), task summarization & skill evolution, multi-agent collaboration, and a full Memory Viewer dashboard.
 
-- **2025-12-24** · 🎉 **MemOS v2.0: Stardust (星尘) Release**  
+- **2025-12-24** · 🎉 **MemOS v2.0: Stardust (星尘) Release**
   Comprehensive KB (doc/URL parsing + cross-project sharing), memory feedback & precise deletion, multi-modal memory (images/charts), tool memory for agent planning, Redis Streams scheduling + DB optimizations, streaming/non-streaming chat, MCP upgrade, and lightweight quick/full deployment.
   <details>
     <summary>✨ <b>New Features</b></summary>
@@ -155,7 +155,7 @@ Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/Mem
   </details>
 
 - **2025-08-07** · 🎉 **MemOS v1.0.0 (MemCube) Release**
-  First MemCube release with a word-game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, improved search capabilities, and the official Playground launch.
+  First MemCube release with a word-game demo, LongMemEval evaluation, BochaAISearchRetriever integration, improved search capabilities, and the official Playground launch.
 
   <details>
     <summary>✨ <b>New Features</b></summary>
@@ -176,7 +176,7 @@ Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/Mem
 
   **Plaintext Memory**
   - Integrated internet search with Bocha.
-  - Added support for Nebula database.
+  - Expanded graph database support.
   - Added contextual understanding for the tree-structured plaintext memory search interface.
 
   </details>
@@ -188,7 +188,7 @@ Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/Mem
   - Fixed the concat_cache method.
 
   **Plaintext Memory**
-  - Fixed Nebula search-related issues.
+  - Fixed graph search-related issues.
 
   </details>
 

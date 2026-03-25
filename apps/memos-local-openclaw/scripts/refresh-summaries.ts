@@ -62,36 +62,66 @@ async function main() {
     process.exit(1);
   }
 
+  const isAnthropic = cfg.provider === "anthropic"
+    || cfg.endpoint?.toLowerCase().includes("anthropic");
+
   console.log(`Summarizer: ${cfg.provider} / ${cfg.model}`);
 
   let endpoint = cfg.endpoint.replace(/\/+$/, "");
-  if (!endpoint.endsWith("/chat/completions")) endpoint += "/chat/completions";
+  if (isAnthropic) {
+    if (!endpoint.endsWith("/v1/messages") && !endpoint.endsWith("/messages")) {
+      endpoint += "/v1/messages";
+    }
+  } else {
+    if (!endpoint.endsWith("/chat/completions")) endpoint += "/chat/completions";
+  }
 
   async function callLLM(text: string): Promise<string> {
+    const headers: Record<string, string> = isAnthropic
+      ? {
+          "Content-Type": "application/json",
+          "x-api-key": cfg.apiKey,
+          "anthropic-version": "2023-06-01",
+        }
+      : {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cfg.apiKey}`,
+        };
+
+    const body = isAnthropic
+      ? JSON.stringify({
+          model: cfg.model,
+          temperature: 0.1,
+          max_tokens: 4096,
+          system: TASK_SUMMARY_PROMPT,
+          messages: [{ role: "user", content: text }],
+        })
+      : JSON.stringify({
+          model: cfg.model,
+          temperature: 0.1,
+          max_tokens: 4096,
+          messages: [
+            { role: "system", content: TASK_SUMMARY_PROMPT },
+            { role: "user", content: text },
+          ],
+        });
+
     const resp = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${cfg.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: cfg.model,
-        temperature: 0.1,
-        max_tokens: 4096,
-        messages: [
-          { role: "system", content: TASK_SUMMARY_PROMPT },
-          { role: "user", content: text },
-        ],
-      }),
+      headers,
+      body,
       signal: AbortSignal.timeout(60_000),
     });
 
     if (!resp.ok) {
-      const body = await resp.text();
-      throw new Error(`API ${resp.status}: ${body.slice(0, 200)}`);
+      const respBody = await resp.text();
+      throw new Error(`API ${resp.status}: ${respBody.slice(0, 200)}`);
     }
 
     const json = (await resp.json()) as any;
+    if (isAnthropic) {
+      return json.content?.find((c: any) => c.type === "text")?.text?.trim() ?? "";
+    }
     return json.choices[0]?.message?.content?.trim() ?? "";
   }
 

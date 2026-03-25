@@ -55,14 +55,7 @@ export interface Task {
   updatedAt: number;
 }
 
-export type ChunkKind =
-  | "paragraph"
-  | "code_block"
-  | "error_stack"
-  | "command"
-  | "list"
-  | "mixed"
-  | "tool_result";
+export type ChunkKind = "paragraph";
 
 export interface ChunkRef {
   sessionKey: string;
@@ -151,7 +144,13 @@ export type SummaryProvider =
   | "anthropic"
   | "gemini"
   | "azure_openai"
-  | "bedrock";
+  | "bedrock"
+  | "zhipu"
+  | "siliconflow"
+  | "bailian"
+  | "cohere"
+  | "mistral"
+  | "voyage";
 
 export type EmbeddingProvider =
   | "openai"
@@ -252,8 +251,6 @@ export interface SkillEvolutionConfig {
 
 export interface TelemetryConfig {
   enabled?: boolean;
-  posthogApiKey?: string;
-  posthogHost?: string;
 }
 
 export interface MemosLocalConfig {
@@ -294,7 +291,7 @@ export const DEFAULTS = {
   mmrLambda: 0.7,
   recencyHalfLifeDays: 14,
   vectorSearchMaxChunks: 0,
-  dedupSimilarityThreshold: 0.60,
+  dedupSimilarityThreshold: 0.80,
   evidenceWrapperTag: "STORED_MEMORY",
   excerptMinChars: 200,
   excerptMaxChars: 500,

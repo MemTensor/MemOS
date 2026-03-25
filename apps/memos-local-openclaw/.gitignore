@@ -13,9 +13,11 @@ Thumbs.db
 
 # Generated / non-essential
 package-lock.json
-www/
-docs/
+.installed-version
 ppt/
+
+# Prebuilt native binaries (included in npm package via `files`, not in git)
+prebuilds/
 
 # Database files
 *.sqlite

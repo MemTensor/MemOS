@@ -102,7 +102,11 @@ jobs:
       if: ${{ !startsWith(matrix.os, 'macos-13') }}
       run: |
         poetry install --no-interaction --extras all
-    - name: PyTest unit tests
+    - name: PyTest unit tests with coverage
       if: ${{ !startsWith(matrix.os, 'macos-13') }}
+      shell: bash
       run: |
-        poetry run pytest tests -vv --durations=10
+        poetry run pytest tests -vv --durations=10 \
+          --cov=src/memos \
+          --cov-report=term-missing \
+          --cov-fail-under=28
