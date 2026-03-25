@@ -56,7 +56,7 @@ class OpenAILLM(BaseLLM):
         if isinstance(reasoning_content, str) and reasoning_content:
             reasoning_content = f"<think>{reasoning_content}</think>"
         if self.config.remove_think_prefix:
-            return remove_thinking_tags(response_content)
+            return remove_thinking_tags(response_content or "")
         if reasoning_content:
             return reasoning_content + (response_content or "")
         return response_content or ""
@@ -202,7 +202,7 @@ class AzureLLM(BaseLLM):
             return self.tool_call_parser(response.choices[0].message.tool_calls)
         response_content = response.choices[0].message.content
         if self.config.remove_think_prefix:
-            return remove_thinking_tags(response_content)
+            return remove_thinking_tags(response_content or "")
         else:
             return response_content or ""
 

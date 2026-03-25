@@ -46,7 +46,7 @@ export class SqliteStore {
         content,
         content='chunks',
         content_rowid='rowid',
-        tokenize='porter unicode61'
+        tokenize='trigram'
       );
 
       CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
@@ -109,6 +109,7 @@ export class SqliteStore {
     this.migrateOwnerFields();
     this.migrateSkillVisibility();
     this.migrateSkillEmbeddingsAndFts();
+    this.migrateFtsToTrigram();
     this.log.debug("Database schema initialized");
   }
 
@@ -159,7 +160,7 @@ export class SqliteStore {
         description,
         content='skills',
         content_rowid='rowid',
-        tokenize='porter unicode61'
+        tokenize='trigram'
       );
     `);
 
@@ -193,6 +194,81 @@ export class SqliteStore {
         this.log.info(`Migrated: backfilled skills_fts for ${skillCount} skills`);
       }
     } catch { /* best-effort */ }
+  }
+
+  private migrateFtsToTrigram(): void {
+    // Check if chunks_fts still uses the old tokenizer (porter unicode61)
+    try {
+      const row = this.db.prepare(
+        "SELECT sql FROM sqlite_master WHERE name='chunks_fts'"
+      ).get() as { sql: string } | undefined;
+      if (row && row.sql && !row.sql.includes("trigram")) {
+        this.log.info("Migrating chunks_fts from porter/unicode61 to trigram tokenizer...");
+        this.db.exec("DROP TRIGGER IF EXISTS chunks_ai");
+        this.db.exec("DROP TRIGGER IF EXISTS chunks_ad");
+        this.db.exec("DROP TRIGGER IF EXISTS chunks_au");
+        this.db.exec("DROP TABLE IF EXISTS chunks_fts");
+        this.db.exec(`
+          CREATE VIRTUAL TABLE chunks_fts USING fts5(
+            summary, content, content='chunks', content_rowid='rowid',
+            tokenize='trigram'
+          )
+        `);
+        this.db.exec(`
+          CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
+            INSERT INTO chunks_fts(rowid, summary, content) VALUES (new.rowid, new.summary, new.content);
+          END;
+          CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
+            INSERT INTO chunks_fts(chunks_fts, rowid, summary, content) VALUES ('delete', old.rowid, old.summary, old.content);
+          END;
+          CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN
+            INSERT INTO chunks_fts(chunks_fts, rowid, summary, content) VALUES ('delete', old.rowid, old.summary, old.content);
+            INSERT INTO chunks_fts(rowid, summary, content) VALUES (new.rowid, new.summary, new.content);
+          END
+        `);
+        this.db.exec("INSERT INTO chunks_fts(rowid, summary, content) SELECT rowid, summary, content FROM chunks");
+        const count = (this.db.prepare("SELECT COUNT(*) as c FROM chunks_fts").get() as { c: number }).c;
+        this.log.info(`Migrated chunks_fts to trigram: ${count} rows indexed`);
+      }
+    } catch (err) {
+      this.log.warn(`Failed to migrate chunks_fts to trigram: ${err}`);
+    }
+
+    // Same for skills_fts
+    try {
+      const row = this.db.prepare(
+        "SELECT sql FROM sqlite_master WHERE name='skills_fts'"
+      ).get() as { sql: string } | undefined;
+      if (row && row.sql && !row.sql.includes("trigram")) {
+        this.log.info("Migrating skills_fts to trigram tokenizer...");
+        this.db.exec("DROP TRIGGER IF EXISTS skills_ai");
+        this.db.exec("DROP TRIGGER IF EXISTS skills_ad");
+        this.db.exec("DROP TRIGGER IF EXISTS skills_au");
+        this.db.exec("DROP TABLE IF EXISTS skills_fts");
+        this.db.exec(`
+          CREATE VIRTUAL TABLE skills_fts USING fts5(
+            name, description, content='skills', content_rowid='rowid',
+            tokenize='trigram'
+          )
+        `);
+        this.db.exec(`
+          CREATE TRIGGER skills_ai AFTER INSERT ON skills BEGIN
+            INSERT INTO skills_fts(rowid, name, description) VALUES (new.rowid, new.name, new.description);
+          END;
+          CREATE TRIGGER skills_ad AFTER DELETE ON skills BEGIN
+            INSERT INTO skills_fts(skills_fts, rowid, name, description) VALUES ('delete', old.rowid, old.name, old.description);
+          END;
+          CREATE TRIGGER skills_au AFTER UPDATE ON skills BEGIN
+            INSERT INTO skills_fts(skills_fts, rowid, name, description) VALUES ('delete', old.rowid, old.name, old.description);
+            INSERT INTO skills_fts(rowid, name, description) VALUES (new.rowid, new.name, new.description);
+          END
+        `);
+        this.db.exec("INSERT INTO skills_fts(rowid, name, description) SELECT rowid, name, description FROM skills");
+        this.log.info("Migrated skills_fts to trigram");
+      }
+    } catch (err) {
+      this.log.warn(`Failed to migrate skills_fts to trigram: ${err}`);
+    }
   }
 
   private migrateTaskId(): void {
@@ -530,8 +606,6 @@ export class SqliteStore {
   getMetrics(days: number): {
     writesPerDay: Array<{ date: string; count: number }>;
     viewerCallsPerDay: Array<{ date: string; list: number; search: number; total: number }>;
-    roleBreakdown: Record<string, number>;
-    kindBreakdown: Record<string, number>;
     totals: { memories: number; sessions: number; embeddings: number; todayWrites: number; todayViewerCalls: number };
   } {
     const since = Date.now() - days * 86400 * 1000;
@@ -566,11 +640,6 @@ export class SqliteStore {
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([date, v]) => ({ date, list: v.list, search: v.search, total: v.list + v.search }));
 
-    const roles = this.db.prepare("SELECT role, COUNT(*) as count FROM chunks GROUP BY role").all() as Array<{ role: string; count: number }>;
-    const kinds = this.db.prepare("SELECT kind, COUNT(*) as count FROM chunks GROUP BY kind").all() as Array<{ kind: string; count: number }>;
-    const roleBreakdown = Object.fromEntries(roles.map((r) => [r.role, r.count]));
-    const kindBreakdown = Object.fromEntries(kinds.map((k) => [k.kind, k.count]));
-
     const totalChunks = (this.db.prepare("SELECT COUNT(*) as c FROM chunks").get() as { c: number }).c;
     const totalSessions = (this.db.prepare("SELECT COUNT(DISTINCT session_key) as c FROM chunks").get() as { c: number }).c;
     const totalEmbeddings = (this.db.prepare("SELECT COUNT(*) as c FROM embeddings").get() as { c: number }).c;
@@ -580,8 +649,6 @@ export class SqliteStore {
     return {
       writesPerDay,
       viewerCallsPerDay,
-      roleBreakdown,
-      kindBreakdown,
       totals: {
         memories: totalChunks,
         sessions: totalSessions,
@@ -859,6 +926,59 @@ export class SqliteStore {
     return result.changes > 0;
   }
 
+  /**
+   * Find user-role chunks that contain system-injected content that should
+   * have been stripped before storage. Returns chunk IDs and a preview.
+   */
+  findPollutedUserChunks(): Array<{ id: string; preview: string; reason: string }> {
+    const results: Array<{ id: string; preview: string; reason: string }> = [];
+    const patterns: Array<{ sql: string; reason: string }> = [
+      { sql: "content LIKE '%<memory_context>%'", reason: "memory_context injection" },
+      { sql: "content LIKE '%=== MemOS LONG-TERM MEMORY%'", reason: "MemOS legacy injection" },
+      { sql: "content LIKE '%[MemOS Auto-Recall]%'", reason: "MemOS Auto-Recall injection" },
+      { sql: "content LIKE '%## Memory system%No memories were automatically recalled%'", reason: "Memory system no-recall hint" },
+      { sql: "content LIKE '%## Retrieved memories from past conversations%CRITICAL INSTRUCTION%'", reason: "prependContext recall injection" },
+      { sql: "content LIKE '%VERIFIED facts the user previously shared%'", reason: "VERIFIED facts injection" },
+      { sql: "content LIKE '%<memos_system_instruction>%'", reason: "memos_system_instruction injection" },
+      { sql: "content LIKE '%📝 Related memories:%'", reason: "Related memories injection" },
+    ];
+    for (const { sql, reason } of patterns) {
+      const rows = this.db.prepare(
+        `SELECT id, substr(content, 1, 120) AS preview FROM chunks WHERE role = 'user' AND ${sql}`,
+      ).all() as Array<{ id: string; preview: string }>;
+      for (const row of rows) {
+        results.push({ id: row.id, preview: row.preview, reason });
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Find user chunks where user+assistant content was mixed together
+   * (separated by \n\n---\n), and truncate to keep only the user's part.
+   */
+  fixMixedUserChunks(): number {
+    const rows = this.db.prepare(
+      `SELECT id, content FROM chunks WHERE role = 'user'
+       AND content LIKE '%' || char(10) || char(10) || '---' || char(10) || '%'
+       AND length(content) > 300`,
+    ).all() as Array<{ id: string; content: string }>;
+
+    let fixed = 0;
+    for (const { id, content } of rows) {
+      const dashIdx = content.indexOf("\n\n---\n");
+      if (dashIdx > 5) {
+        const userPart = content.slice(0, dashIdx).trim();
+        if (userPart.length >= 5 && userPart.length < content.length) {
+          this.db.prepare("UPDATE chunks SET content = ?, updated_at = ? WHERE id = ?")
+            .run(userPart, Date.now(), id);
+          fixed++;
+        }
+      }
+    }
+    return fixed;
+  }
+
   // ─── Delete ───
 
   deleteChunk(chunkId: string): boolean {
@@ -873,15 +993,25 @@ export class SqliteStore {
 
   deleteAll(): number {
     this.db.exec("PRAGMA foreign_keys = OFF");
-    this.db.prepare("DELETE FROM task_skills").run();
-    this.db.prepare("DELETE FROM skill_versions").run();
-    this.db.prepare("DELETE FROM skills").run();
-    this.db.prepare("DELETE FROM embeddings").run();
-    this.db.prepare("DELETE FROM chunks").run();
-    this.db.prepare("DELETE FROM tasks").run();
-    this.db.prepare("DELETE FROM viewer_events").run();
-    this.db.prepare("DELETE FROM api_logs").run();
-    this.db.prepare("DELETE FROM tool_calls").run();
+    const tables = [
+      "task_skills",
+      "skill_embeddings",
+      "skill_versions",
+      "skills",
+      "embeddings",
+      "chunks",
+      "tasks",
+      "viewer_events",
+      "api_logs",
+      "tool_calls",
+    ];
+    for (const table of tables) {
+      try {
+        this.db.prepare(`DELETE FROM ${table}`).run();
+      } catch (err) {
+        this.log.warn(`deleteAll: failed to clear ${table}: ${err}`);
+      }
+    }
     this.db.exec("PRAGMA foreign_keys = ON");
     const remaining = this.countChunks();
     return remaining === 0 ? 1 : 0;
@@ -1044,14 +1174,16 @@ export class SqliteStore {
    */
   findActiveChunkByHash(content: string, owner?: string): string | null {
     const hash = contentHash(content);
+    // Check ANY existing chunk with the same hash (regardless of dedup_status)
+    // to prevent re-creating duplicates when all prior copies have been marked duplicate/merged.
     if (owner) {
       const row = this.db.prepare(
-        "SELECT id FROM chunks WHERE content_hash = ? AND dedup_status = 'active' AND owner = ? LIMIT 1",
+        "SELECT id FROM chunks WHERE content_hash = ? AND owner = ? ORDER BY CASE dedup_status WHEN 'active' THEN 0 ELSE 1 END LIMIT 1",
       ).get(hash, owner) as { id: string } | undefined;
       return row?.id ?? null;
     }
     const row = this.db.prepare(
-      "SELECT id FROM chunks WHERE content_hash = ? AND dedup_status = 'active' LIMIT 1",
+      "SELECT id FROM chunks WHERE content_hash = ? ORDER BY CASE dedup_status WHEN 'active' THEN 0 ELSE 1 END LIMIT 1",
     ).get(hash) as { id: string } | undefined;
     return row?.id ?? null;
   }
@@ -1307,7 +1439,7 @@ export class SqliteStore {
  */
 function sanitizeFtsQuery(raw: string): string {
   const tokens = raw
-    .replace(/[."""(){}[\]*:^~!@#$%&\\/<>,;'`]/g, " ")
+    .replace(/[."""(){}[\]*:^~!@#$%&\\/<>,;'`-]/g, " ")
     .split(/\s+/)
     .map((t) => t.trim().replace(/^-+|-+$/g, ""))
     .filter((t) => t.length > 1)

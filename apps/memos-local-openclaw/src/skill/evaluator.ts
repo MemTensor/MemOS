@@ -52,7 +52,7 @@ Task title: {TITLE}
 Task summary:
 {SUMMARY}
 
-LANGUAGE RULE: The "reason" field MUST use the SAME language as the task title/summary. Chinese input → Chinese reason. English input → English reason. "suggestedName" stays in English kebab-case.
+LANGUAGE RULE (MUST FOLLOW): Detect the language of the task title/summary. If it is Chinese, the "reason" field MUST be in Chinese. If English, reason in English. Only "suggestedName" stays in English kebab-case. 如果任务标题/摘要是中文，reason 必须用中文。
 
 Reply in JSON only, no extra text:
 {
