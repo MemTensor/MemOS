@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { buildContext } from "../src/config";
 import { Embedder } from "../src/embedding";
 import { Summarizer } from "../src/ingest/providers";
+import { loadOpenClawFallbackConfig } from "../src/shared/llm-call";
 import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
@@ -282,6 +283,152 @@ describe("OpenClaw Fallback Configuration", () => {
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
+  });
+
+  describe("SecretRef apiKey resolution in loadOpenClawFallbackConfig", () => {
+    const noopLog = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    };
+    let tmpDir: string;
+    let savedConfigPath: string | undefined;
+    let savedStateDir: string | undefined;
+
+    afterEach(() => {
+      if (savedConfigPath !== undefined) process.env.OPENCLAW_CONFIG_PATH = savedConfigPath;
+      else delete process.env.OPENCLAW_CONFIG_PATH;
+      if (savedStateDir !== undefined) process.env.OPENCLAW_STATE_DIR = savedStateDir;
+      else delete process.env.OPENCLAW_STATE_DIR;
+      if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function setupFakeConfig(openclawJson: object): string {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "memos-secretref-"));
+      const cfgPath = path.join(tmpDir, "openclaw.json");
+      fs.writeFileSync(cfgPath, JSON.stringify(openclawJson), "utf-8");
+      savedConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      savedStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_CONFIG_PATH = cfgPath;
+      return cfgPath;
+    }
+
+    it("should resolve plain string apiKey", () => {
+      setupFakeConfig({
+        agents: { defaults: { model: { primary: "anthropic/claude-3-haiku" } } },
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              apiKey: "sk-ant-plain-key-123",
+            },
+          },
+        },
+      });
+      const cfg = loadOpenClawFallbackConfig(noopLog);
+      expect(cfg).toBeDefined();
+      expect(cfg!.apiKey).toBe("sk-ant-plain-key-123");
+      expect(cfg!.provider).toBe("anthropic");
+      expect(cfg!.model).toBe("claude-3-haiku");
+    });
+
+    it("should resolve env-sourced SecretRef apiKey", () => {
+      const testKey = "sk-ant-secretref-test-" + Date.now();
+      process.env.__MEMOS_TEST_ANTHROPIC_KEY = testKey;
+      try {
+        setupFakeConfig({
+          agents: { defaults: { model: { primary: "anthropic/claude-3-haiku" } } },
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.com",
+                apiKey: { source: "env", provider: "anthropic", id: "__MEMOS_TEST_ANTHROPIC_KEY" },
+              },
+            },
+          },
+        });
+        const cfg = loadOpenClawFallbackConfig(noopLog);
+        expect(cfg).toBeDefined();
+        expect(cfg!.apiKey).toBe(testKey);
+        expect(cfg!.provider).toBe("anthropic");
+      } finally {
+        delete process.env.__MEMOS_TEST_ANTHROPIC_KEY;
+      }
+    });
+
+    it("should return undefined when SecretRef env var is not set", () => {
+      delete process.env.__MEMOS_TEST_MISSING_KEY;
+      setupFakeConfig({
+        agents: { defaults: { model: { primary: "anthropic/claude-3-haiku" } } },
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              apiKey: { source: "env", provider: "anthropic", id: "__MEMOS_TEST_MISSING_KEY" },
+            },
+          },
+        },
+      });
+      const cfg = loadOpenClawFallbackConfig(noopLog);
+      expect(cfg).toBeUndefined();
+    });
+
+    it("should return undefined when apiKey is missing entirely", () => {
+      setupFakeConfig({
+        agents: { defaults: { model: { primary: "anthropic/claude-3-haiku" } } },
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+            },
+          },
+        },
+      });
+      const cfg = loadOpenClawFallbackConfig(noopLog);
+      expect(cfg).toBeUndefined();
+    });
+
+    it("should return undefined for unsupported SecretRef source", () => {
+      setupFakeConfig({
+        agents: { defaults: { model: { primary: "anthropic/claude-3-haiku" } } },
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              apiKey: { source: "vault", provider: "anthropic", id: "some-vault-id" },
+            },
+          },
+        },
+      });
+      const cfg = loadOpenClawFallbackConfig(noopLog);
+      expect(cfg).toBeUndefined();
+    });
+
+    it("should resolve SecretRef apiKey for OpenAI-compatible provider", () => {
+      const testKey = "sk-openai-test-" + Date.now();
+      process.env.__MEMOS_TEST_OPENAI_KEY = testKey;
+      try {
+        setupFakeConfig({
+          agents: { defaults: { model: { primary: "custom-provider/gpt-4o-mini" } } },
+          models: {
+            providers: {
+              "custom-provider": {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: { source: "env", provider: "openai", id: "__MEMOS_TEST_OPENAI_KEY" },
+              },
+            },
+          },
+        });
+        const cfg = loadOpenClawFallbackConfig(noopLog);
+        expect(cfg).toBeDefined();
+        expect(cfg!.apiKey).toBe(testKey);
+        expect(cfg!.provider).toBe("openai_compatible");
+        expect(cfg!.model).toBe("gpt-4o-mini");
+      } finally {
+        delete process.env.__MEMOS_TEST_OPENAI_KEY;
+      }
+    });
   });
 
   it("should use rule fallback when summarizer openclaw provider fails", async () => {
