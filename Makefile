@@ -36,7 +36,7 @@ pre_commit:
 	poetry run pre-commit run -a
 
 serve:
-	poetry run uvicorn memos.api.start_api:app
+	poetry run uvicorn memos.api.server_api:app
 
 openapi:
 	poetry run memos export_openapi --output docs/openapi.json

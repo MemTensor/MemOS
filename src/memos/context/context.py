@@ -155,7 +155,7 @@ def get_current_user_name() -> str | None:
 
 def get_current_source() -> str | None:
     """
-    Get the current request's source (e.g., 'product_api' or 'server_api').
+    Get the current request's source (for example, 'server_api').
     """
     context = _request_context.get()
     if context:
