@@ -298,6 +298,18 @@ class APIConfig:
         }
 
     @staticmethod
+    def lazyllm_config() -> dict[str, Any]:
+        """Get LazyLLM OnlineChat configuration."""
+        return {
+            "model_name_or_path": os.getenv("MOS_CHAT_MODEL", "gpt-4o-mini"),
+            "temperature": float(os.getenv("MOS_CHAT_TEMPERATURE", "0.8")),
+            "max_tokens": int(os.getenv("MOS_MAX_TOKENS", "8000")),
+            "top_p": float(os.getenv("MOS_TOP_P", "0.9")),
+            "top_k": int(os.getenv("MOS_TOP_K", "50")),
+            "remove_think_prefix": True,
+        }
+
+    @staticmethod
     def get_activation_config() -> dict[str, Any]:
         """Get Ollama configuration."""
         return {
@@ -916,12 +928,14 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
+        lazyllm_config = APIConfig.lazyllm_config()
         reader_config = APIConfig.get_reader_config()
 
         backend_model = {
             "openai": openai_config,
             "huggingface": qwen_config,
             "vllm": vllm_config,
+            "lazyllm": lazyllm_config,
         }
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
         mysql_config = APIConfig.get_mysql_config()
@@ -1039,6 +1053,7 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
+        lazyllm_config = APIConfig.lazyllm_config()
         mysql_config = APIConfig.get_mysql_config()
         reader_config = APIConfig.get_reader_config()
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
@@ -1046,6 +1061,7 @@ class APIConfig:
             "openai": openai_config,
             "huggingface": qwen_config,
             "vllm": vllm_config,
+            "lazyllm": lazyllm_config,
         }
         # Create MOSConfig
         config_dict = {

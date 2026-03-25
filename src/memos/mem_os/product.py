@@ -1201,8 +1201,10 @@ class MOSProduct(MOSCore):
                 )
             elif self.config.chat_model.backend == "vllm":
                 response_stream = self.chat_llm.generate_stream(current_messages)
+            else:
+                response_stream = self.chat_llm.generate_stream(current_messages)
         else:
-            if self.config.chat_model.backend in ["huggingface", "vllm", "openai"]:
+            if self.config.chat_model.backend in ["huggingface", "vllm", "openai", "lazyllm"]:
                 response_stream = self.chat_llm.generate_stream(current_messages)
             else:
                 response_stream = self.chat_llm.generate(current_messages)
@@ -1219,7 +1221,7 @@ class MOSProduct(MOSCore):
         full_response = ""
         token_count = 0
         # Use tiktoken for proper token-based chunking
-        if self.config.chat_model.backend not in ["huggingface", "vllm", "openai"]:
+        if self.config.chat_model.backend not in ["huggingface", "vllm", "openai", "lazyllm"]:
             # For non-huggingface backends, we need to collect the full response first
             full_response_text = ""
             for chunk in response_stream:
