@@ -29,6 +29,16 @@ app.add_middleware(RequestContextMiddleware, source="server_api")
 # Include routers
 app.include_router(server_router)
 
+
+@app.get("/health")
+def health_check():
+    """Container and load balancer health endpoint."""
+    return {
+        "status": "healthy",
+        "service": "memos",
+        "version": app.version,
+    }
+
 # Request validation failed
 app.exception_handler(RequestValidationError)(APIExceptionHandler.validation_error_handler)
 # Invalid business code parameters
