@@ -810,12 +810,19 @@ class PolarDBGraphDB(BaseGraphDB):
             raise ValueError(
                 f"Invalid direction: {direction}. Must be 'OUTGOING', 'INCOMING', or 'ANY'."
             )
+
+        # Escape user-supplied values for safe embedding in Cypher
+        src_esc = escape_sql_string(source_id)
+        tgt_esc = escape_sql_string(target_id)
+        uname_esc = escape_sql_string(user_name or "")
+
         query = f"SELECT * FROM cypher('{self.db_name}_graph', $$"
         query += f"\nMATCH {pattern}"
-        query += f"\nWHERE a.user_name = '{user_name}' AND b.user_name = '{user_name}'"
-        query += f"\nAND a.id = '{source_id}' AND b.id = '{target_id}'"
+        query += f"\nWHERE a.user_name = '{uname_esc}' AND b.user_name = '{uname_esc}'"
+        query += f"\nAND a.id = '{src_esc}' AND b.id = '{tgt_esc}'"
         if type != "ANY":
-            query += f"\n AND type(r) = '{type}'"
+            type_esc = escape_sql_string(type)
+            query += f"\n AND type(r) = '{type_esc}'"
 
         query += "\nRETURN r"
         query += "\n$$) AS (r agtype)"
