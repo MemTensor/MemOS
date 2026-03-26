@@ -916,18 +916,17 @@ class Neo4jGraphDB(BaseGraphDB):
                 WITH node, vector.similarity.cosine(node.embedding, $embedding) AS score
                 {return_clause}
                 ORDER BY score DESC
-                LIMIT $limit
+                LIMIT $top_k
             """
+            parameters = {"embedding": vector, "top_k": top_k}
         else:
             # No filter: use ANN vector index for efficiency.
             query = f"""
-                CALL db.index.vector.queryNodes('memory_vector_index', $k, $embedding)
+                CALL db.index.vector.queryNodes('memory_vector_index', $top_k, $embedding)
                 YIELD node, score
                 {return_clause}
-                LIMIT $limit
             """
-
-        parameters = {"embedding": vector, "k": top_k, "limit": top_k}
+            parameters = {"embedding": vector, "top_k": top_k}
 
         if scope:
             parameters["scope"] = scope
