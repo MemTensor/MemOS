@@ -39,7 +39,7 @@ def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         metadata["embedding"] = [float(x) for x in embedding]
 
     # serialization
-    if metadata["sources"]:
+    if metadata.get("sources"):
         for idx in range(len(metadata["sources"])):
             metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
     return metadata
@@ -226,7 +226,7 @@ class Neo4jGraphDB(BaseGraphDB):
         """
 
         # serialization
-        if metadata["sources"]:
+        if metadata.get("sources"):
             for idx in range(len(metadata["sources"])):
                 metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
 
