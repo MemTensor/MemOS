@@ -14,13 +14,26 @@ class APIExceptionHandler:
     @staticmethod
     async def validation_error_handler(request: Request, exc: RequestValidationError):
         """Handle request validation errors."""
-        logger.error(f"Validation error: {exc.errors()}")
+        errors = exc.errors()
+        path = request.url.path
+        method = request.method
+
+        readable_errors = []
+        for err in errors:
+            loc = " -> ".join(str(loc_i) for loc_i in err.get("loc", []))
+            readable_errors.append(
+                f"[{loc}] {err.get('msg', 'unknown error')} (type: {err.get('type', 'unknown')})"
+            )
+
+        logger.error(
+            f"Validation error on {method} {path}: {readable_errors}, raw errors: {errors}"
+        )
         return JSONResponse(
             status_code=422,
             content={
                 "code": 422,
-                "message": "Parameter validation error",
-                "detail": exc.errors(),
+                "message": f"Parameter validation error on {method} {path}: {'; '.join(readable_errors)}",
+                "detail": errors,
                 "data": None,
             },
         )

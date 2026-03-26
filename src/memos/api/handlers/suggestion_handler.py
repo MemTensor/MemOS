@@ -17,7 +17,7 @@ from memos.templates.mos_prompts import (
     SUGGESTION_QUERY_PROMPT_EN,
     SUGGESTION_QUERY_PROMPT_ZH,
 )
-from memos.types import MessageList
+from memos.types import MessageList, MessagesType
 
 
 logger = get_logger(__name__)
@@ -58,7 +58,7 @@ def _get_further_suggestion(
 def handle_get_suggestion_queries(
     user_id: str,
     language: str,
-    message: MessageList | None,
+    message: MessagesType | None,
     llm: Any,
     naive_mem_cube: Any,
 ) -> SuggestionResponse:

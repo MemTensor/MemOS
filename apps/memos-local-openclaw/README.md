@@ -504,7 +504,7 @@ TELEMETRY_ENABLED=false
 
 ### Technical details
 
-- Uses [PostHog](https://posthog.com) for event collection
+- Uses Aliyun ARMS RUM for event collection
 - Each installation gets a random anonymous UUID (stored at `~/.openclaw/memos-local/.anonymous-id`)
 - Events are batched and sent in the background; failures are silently ignored
 - The anonymous ID is never linked to any personal information

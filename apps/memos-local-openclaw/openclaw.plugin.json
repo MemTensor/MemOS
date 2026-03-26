@@ -4,6 +4,9 @@
   "description": "Full-write local conversation memory with hybrid search (RRF + MMR + recency). Provides memory_search, memory_get, task_summary, memory_timeline, memory_viewer for layered retrieval.",
   "kind": "memory",
   "version": "0.1.11",
+  "skills": [
+    "skill/memos-memory-guide"
+  ],
   "homepage": "https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-openclaw",
   "configSchema": {
     "type": "object",

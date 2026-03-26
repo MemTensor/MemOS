@@ -47,13 +47,14 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
     graph_db_backend_map = {
         "neo4j-community": APIConfig.get_neo4j_community_config(user_id=user_id),
         "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
-        "nebular": APIConfig.get_nebular_config(user_id=user_id),
         "polardb": APIConfig.get_polardb_config(user_id=user_id),
         "postgres": APIConfig.get_postgres_config(user_id=user_id),
     }
 
     # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
-    graph_db_backend = os.getenv("GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "nebular")).lower()
+    graph_db_backend = os.getenv(
+        "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
+    ).lower()
     return GraphDBConfigFactory.model_validate(
         {
             "backend": graph_db_backend,
@@ -305,7 +306,7 @@ def init_components() -> dict[str, Any]:
     searcher: Searcher = tree_mem.get_searcher(
         manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
         moscube=False,
-        process_llm=mem_reader.llm,
+        process_llm=mem_reader.general_llm,
     )
     # Initialize feedback server
     feedback_server = SimpleMemFeedback(

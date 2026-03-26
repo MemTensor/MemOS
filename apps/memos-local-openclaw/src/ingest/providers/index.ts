@@ -1,12 +1,46 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { SummarizerConfig, Logger } from "../../types";
+import type { SummarizerConfig, SummaryProvider, Logger } from "../../types";
 import { summarizeOpenAI, summarizeTaskOpenAI, judgeNewTopicOpenAI, filterRelevantOpenAI, judgeDedupOpenAI } from "./openai";
 import type { FilterResult, DedupResult } from "./openai";
 export type { FilterResult, DedupResult } from "./openai";
-import { summarizeAnthropic, summarizeTaskAnthropic, judgeNewTopicAnthropic, filterRelevantAnthropic, judgeDedupAnthropic } from "./anthropic";
-import { summarizeGemini, summarizeTaskGemini, judgeNewTopicGemini, filterRelevantGemini, judgeDedupGemini } from "./gemini";
-import { summarizeBedrock, summarizeTaskBedrock, judgeNewTopicBedrock, filterRelevantBedrock, judgeDedupBedrock } from "./bedrock";
+import { summarizeAnthropic, summarizeTaskAnthropic, generateTaskTitleAnthropic, judgeNewTopicAnthropic, filterRelevantAnthropic, judgeDedupAnthropic } from "./anthropic";
+import { summarizeGemini, summarizeTaskGemini, generateTaskTitleGemini, judgeNewTopicGemini, filterRelevantGemini, judgeDedupGemini } from "./gemini";
+import { summarizeBedrock, summarizeTaskBedrock, generateTaskTitleBedrock, judgeNewTopicBedrock, filterRelevantBedrock, judgeDedupBedrock } from "./bedrock";
+
+/**
+ * Detect provider type from provider key name or base URL.
+ */
+function detectProvider(
+  providerKey: string | undefined,
+  baseUrl: string,
+): SummaryProvider {
+  const key = providerKey?.toLowerCase() ?? "";
+  const url = baseUrl.toLowerCase();
+  if (key.includes("anthropic") || url.includes("anthropic")) return "anthropic";
+  if (key.includes("gemini") || url.includes("generativelanguage.googleapis.com")) {
+    return "gemini";
+  }
+  if (key.includes("bedrock") || url.includes("bedrock")) return "bedrock";
+  return "openai_compatible";
+}
+
+/**
+ * Return the correct endpoint for a given provider and base URL.
+ */
+function normalizeEndpointForProvider(
+  provider: SummaryProvider,
+  baseUrl: string,
+): string {
+  const stripped = baseUrl.replace(/\/+$/, "");
+  if (provider === "anthropic") {
+    if (stripped.endsWith("/v1/messages")) return stripped;
+    return `${stripped}/v1/messages`;
+  }
+  if (stripped.endsWith("/chat/completions")) return stripped;
+  if (stripped.endsWith("/completions")) return stripped;
+  return `${stripped}/chat/completions`;
+}
 
 /**
  * Build a SummarizerConfig from OpenClaw's native model configuration (openclaw.json).
@@ -15,7 +49,8 @@ import { summarizeBedrock, summarizeTaskBedrock, judgeNewTopicBedrock, filterRel
 function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | undefined {
   try {
     const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-    const cfgPath = path.join(home, ".openclaw", "openclaw.json");
+    const ocHome = process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw");
+    const cfgPath = path.join(ocHome, "openclaw.json");
     if (!fs.existsSync(cfgPath)) return undefined;
 
     const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
@@ -36,13 +71,12 @@ function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | undefined {
     const apiKey: string | undefined = providerCfg.apiKey;
     if (!baseUrl || !apiKey) return undefined;
 
-    const endpoint = baseUrl.endsWith("/chat/completions")
-      ? baseUrl
-      : baseUrl.replace(/\/+$/, "") + "/chat/completions";
+    const provider = detectProvider(providerKey, baseUrl);
+    const endpoint = normalizeEndpointForProvider(provider, baseUrl);
 
-    log.debug(`OpenClaw fallback model: ${modelId} via ${baseUrl}`);
+    log.debug(`OpenClaw fallback model: ${modelId} via ${baseUrl} (${provider})`);
     return {
-      provider: "openai_compatible",
+      provider,
       endpoint,
       apiKey,
       model: modelId,
@@ -52,6 +86,66 @@ function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | undefined {
     return undefined;
   }
 }
+
+// ─── Model Health Tracking ───
+
+export interface ModelHealthEntry {
+  role: string;
+  status: "ok" | "degraded" | "error" | "unknown";
+  lastSuccess: number | null;
+  lastError: number | null;
+  lastErrorMessage: string | null;
+  consecutiveErrors: number;
+  model: string | null;
+  failedModel: string | null;
+}
+
+class ModelHealthTracker {
+  private state = new Map<string, ModelHealthEntry>();
+  private pendingErrors = new Map<string, { model: string; error: string }>();
+
+  recordSuccess(role: string, model: string): void {
+    const entry = this.getOrCreate(role);
+    const pending = this.pendingErrors.get(role);
+    if (pending) {
+      entry.status = "degraded";
+      entry.lastError = Date.now();
+      entry.lastErrorMessage = pending.error.length > 300 ? pending.error.slice(0, 300) + "..." : pending.error;
+      entry.failedModel = pending.model;
+      this.pendingErrors.delete(role);
+    } else {
+      entry.status = "ok";
+    }
+    entry.lastSuccess = Date.now();
+    entry.consecutiveErrors = 0;
+    entry.model = model;
+  }
+
+  recordError(role: string, model: string, error: string): void {
+    const entry = this.getOrCreate(role);
+    entry.lastError = Date.now();
+    entry.lastErrorMessage = error.length > 300 ? error.slice(0, 300) + "..." : error;
+    entry.consecutiveErrors++;
+    entry.failedModel = model;
+    entry.status = "error";
+    this.pendingErrors.set(role, { model, error: entry.lastErrorMessage });
+  }
+
+  getAll(): ModelHealthEntry[] {
+    return [...this.state.values()];
+  }
+
+  private getOrCreate(role: string): ModelHealthEntry {
+    let entry = this.state.get(role);
+    if (!entry) {
+      entry = { role, status: "unknown", lastSuccess: null, lastError: null, lastErrorMessage: null, consecutiveErrors: 0, model: null, failedModel: null };
+      this.state.set(role, entry);
+    }
+    return entry;
+  }
+}
+
+export const modelHealth = new ModelHealthTracker();
 
 export class Summarizer {
   private strongCfg: SummarizerConfig | undefined;
@@ -88,24 +182,68 @@ export class Summarizer {
   ): Promise<T | undefined> {
     const chain = this.getConfigChain();
     for (let i = 0; i < chain.length; i++) {
+      const modelInfo = `${chain[i].provider}/${chain[i].model ?? "?"}`;
       try {
-        return await fn(chain[i]);
+        const result = await fn(chain[i]);
+        modelHealth.recordSuccess(label, modelInfo);
+        return result;
       } catch (err) {
         const level = i < chain.length - 1 ? "warn" : "error";
-        const modelInfo = `${chain[i].provider}/${chain[i].model ?? "?"}`;
         this.log[level](`${label} failed (${modelInfo}), ${i < chain.length - 1 ? "trying next" : "no more fallbacks"}: ${err}`);
+        modelHealth.recordError(label, modelInfo, String(err));
       }
     }
     return undefined;
   }
 
   async summarize(text: string): Promise<string> {
-    if (!this.cfg && !this.fallbackCfg) {
-      return ruleFallback(text);
+    const cleaned = stripMarkdown(text).trim();
+
+    if (wordCount(cleaned) <= 10) {
+      return cleaned;
     }
 
-    const result = await this.tryChain("summarize", (cfg) => callSummarize(cfg, text, this.log));
-    return result ?? ruleFallback(text);
+    if (!this.cfg && !this.fallbackCfg) {
+      return ruleFallback(cleaned);
+    }
+
+    const accept = (s: string | undefined): s is string =>
+      !!s && s.length > 0 && s.length < cleaned.length;
+
+    let llmCalled = false;
+    try {
+      const result = await this.tryChain("summarize", (cfg) => callSummarize(cfg, text, this.log));
+      llmCalled = true;
+      const resultCleaned = result ? stripMarkdown(result).trim() : undefined;
+
+      if (accept(resultCleaned)) {
+        return resultCleaned;
+      }
+
+      if (resultCleaned !== undefined && resultCleaned !== null) {
+        const len: number = (resultCleaned as string).length;
+        this.log.warn(`summarize: result (${len}) >= input (${cleaned.length}), retrying`);
+      }
+    } catch (err) {
+      this.log.warn(`summarize primary failed: ${err}`);
+    }
+
+    const fallback = this.fallbackCfg ?? this.cfg;
+    if (fallback) {
+      try {
+        const retry = await callSummarize(fallback, text, this.log);
+        llmCalled = true;
+        const retryCleaned = retry ? stripMarkdown(retry).trim() : undefined;
+        if (accept(retryCleaned)) {
+          modelHealth.recordSuccess("summarize", `${fallback.provider}/${fallback.model ?? "?"}`);
+          return retryCleaned;
+        }
+      } catch (err) {
+        this.log.warn(`summarize fallback retry failed: ${err}`);
+      }
+    }
+
+    return llmCalled ? cleaned : ruleFallback(cleaned);
   }
 
   async summarizeTask(text: string): Promise<string> {
@@ -117,16 +255,37 @@ export class Summarizer {
     return result ?? taskFallback(text);
   }
 
-  async judgeNewTopic(currentContext: string, newMessage: string): Promise<boolean | null> {
-    if (!this.cfg && !this.fallbackCfg) return null;
+  async generateTaskTitle(text: string): Promise<string> {
+    if (!this.cfg && !this.fallbackCfg) return "";
+    const result = await this.tryChain("generateTaskTitle", (cfg) => callGenerateTaskTitle(cfg, text, this.log));
+    return result ?? "";
+  }
 
-    const result = await this.tryChain("judgeNewTopic", (cfg) => callTopicJudge(cfg, currentContext, newMessage, this.log));
-    return result ?? null;
+  async judgeNewTopic(currentContext: string, newMessage: string): Promise<boolean | null> {
+    const chain: SummarizerConfig[] = [];
+    if (this.strongCfg) chain.push(this.strongCfg);
+    if (this.fallbackCfg) chain.push(this.fallbackCfg);
+    if (chain.length === 0 && this.cfg) chain.push(this.cfg);
+    if (chain.length === 0) return null;
+
+    for (let i = 0; i < chain.length; i++) {
+      const modelInfo = `${chain[i].provider}/${chain[i].model ?? "?"}`;
+      try {
+        const result = await callTopicJudge(chain[i], currentContext, newMessage, this.log);
+        modelHealth.recordSuccess("judgeNewTopic", modelInfo);
+        return result;
+      } catch (err) {
+        const level = i < chain.length - 1 ? "warn" : "error";
+        this.log[level](`judgeNewTopic failed (${modelInfo}), ${i < chain.length - 1 ? "trying next" : "no more fallbacks"}: ${err}`);
+        modelHealth.recordError("judgeNewTopic", modelInfo, String(err));
+      }
+    }
+    return null;
   }
 
   async filterRelevant(
     query: string,
-    candidates: Array<{ index: number; summary: string; role: string }>,
+    candidates: Array<{ index: number; role: string; content: string; time?: string }>,
   ): Promise<FilterResult | null> {
     if (!this.cfg && !this.fallbackCfg) return null;
     if (candidates.length === 0) return { relevant: [], sufficient: true };
@@ -158,6 +317,12 @@ function callSummarize(cfg: SummarizerConfig, text: string, log: Logger): Promis
     case "openai":
     case "openai_compatible":
     case "azure_openai":
+    case "zhipu":
+    case "siliconflow":
+    case "bailian":
+    case "cohere":
+    case "mistral":
+    case "voyage":
       return summarizeOpenAI(text, cfg, log);
     case "anthropic":
       return summarizeAnthropic(text, cfg, log);
@@ -175,6 +340,12 @@ function callSummarizeTask(cfg: SummarizerConfig, text: string, log: Logger): Pr
     case "openai":
     case "openai_compatible":
     case "azure_openai":
+    case "zhipu":
+    case "siliconflow":
+    case "bailian":
+    case "cohere":
+    case "mistral":
+    case "voyage":
       return summarizeTaskOpenAI(text, cfg, log);
     case "anthropic":
       return summarizeTaskAnthropic(text, cfg, log);
@@ -187,11 +358,40 @@ function callSummarizeTask(cfg: SummarizerConfig, text: string, log: Logger): Pr
   }
 }
 
+function callGenerateTaskTitle(cfg: SummarizerConfig, text: string, log: Logger): Promise<string> {
+  switch (cfg.provider) {
+    case "openai":
+    case "openai_compatible":
+    case "azure_openai":
+    case "zhipu":
+    case "siliconflow":
+    case "bailian":
+    case "cohere":
+    case "mistral":
+    case "voyage":
+      return generateTaskTitleOpenAI(text, cfg, log);
+    case "anthropic":
+      return generateTaskTitleAnthropic(text, cfg, log);
+    case "gemini":
+      return generateTaskTitleGemini(text, cfg, log);
+    case "bedrock":
+      return generateTaskTitleBedrock(text, cfg, log);
+    default:
+      throw new Error(`Unknown summarizer provider: ${cfg.provider}`);
+  }
+}
+
 function callTopicJudge(cfg: SummarizerConfig, currentContext: string, newMessage: string, log: Logger): Promise<boolean> {
   switch (cfg.provider) {
     case "openai":
     case "openai_compatible":
     case "azure_openai":
+    case "zhipu":
+    case "siliconflow":
+    case "bailian":
+    case "cohere":
+    case "mistral":
+    case "voyage":
       return judgeNewTopicOpenAI(currentContext, newMessage, cfg, log);
     case "anthropic":
       return judgeNewTopicAnthropic(currentContext, newMessage, cfg, log);
@@ -204,11 +404,17 @@ function callTopicJudge(cfg: SummarizerConfig, currentContext: string, newMessag
   }
 }
 
-function callFilterRelevant(cfg: SummarizerConfig, query: string, candidates: Array<{ index: number; summary: string; role: string }>, log: Logger): Promise<FilterResult> {
+function callFilterRelevant(cfg: SummarizerConfig, query: string, candidates: Array<{ index: number; role: string; content: string; time?: string }>, log: Logger): Promise<FilterResult> {
   switch (cfg.provider) {
     case "openai":
     case "openai_compatible":
     case "azure_openai":
+    case "zhipu":
+    case "siliconflow":
+    case "bailian":
+    case "cohere":
+    case "mistral":
+    case "voyage":
       return filterRelevantOpenAI(query, candidates, cfg, log);
     case "anthropic":
       return filterRelevantAnthropic(query, candidates, cfg, log);
@@ -226,6 +432,12 @@ function callJudgeDedup(cfg: SummarizerConfig, newSummary: string, candidates: A
     case "openai":
     case "openai_compatible":
     case "azure_openai":
+    case "zhipu":
+    case "siliconflow":
+    case "bailian":
+    case "cohere":
+    case "mistral":
+    case "voyage":
       return judgeDedupOpenAI(newSummary, candidates, cfg, log);
     case "anthropic":
       return judgeDedupAnthropic(newSummary, candidates, cfg, log);
@@ -240,26 +452,34 @@ function callJudgeDedup(cfg: SummarizerConfig, newSummary: string, candidates: A
 
 // ─── Fallbacks ───
 
+function ruleFallback(text: string): string {
+  const lines = text.split("\n").filter((l) => l.trim().length > 5);
+  return (lines[0] ?? text).trim();
+}
+
 function taskFallback(text: string): string {
   const lines = text.split("\n").filter((l) => l.trim().length > 10);
   return lines.slice(0, 30).join("\n").slice(0, 2000);
 }
 
-function ruleFallback(text: string): string {
-  const lines = text.split("\n").filter((l) => l.trim().length > 10);
-  const first = (lines[0] ?? text).trim();
-
-  const entityRe = [/`[^`]+`/g, /\b(?:error|Error|ERROR)\s*[:：]\s*.{5,60}/g];
-  const entities: string[] = [];
-  for (const re of entityRe) {
-    for (const m of text.matchAll(re)) {
-      if (entities.length < 3) entities.push(m[0].slice(0, 50));
-    }
-  }
-
-  let summary = first.length > 120 ? first.slice(0, 117) + "..." : first;
-  if (entities.length > 0) {
-    summary += ` (${entities.join(", ")})`;
-  }
-  return summary.slice(0, 200);
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .trim();
 }
+
+/** Count "words": CJK characters count as 1 word each, latin words separated by spaces. */
+function wordCount(text: string): number {
+  let count = 0;
+  const cjk = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g;
+  const cjkMatches = text.match(cjk);
+  if (cjkMatches) count += cjkMatches.length;
+  const noCjk = text.replace(cjk, " ").trim();
+  if (noCjk) count += noCjk.split(/\s+/).filter(Boolean).length;
+  return count;
+}
+
