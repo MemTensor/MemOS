@@ -27,11 +27,6 @@ def test_base_llm_config():
             "top_k",
             "remove_think_prefix",
             "default_headers",
-            "backup_client",
-            "backup_api_key",
-            "backup_api_base",
-            "backup_model_name_or_path",
-            "backup_headers",
         ],
     )
 
@@ -164,6 +159,11 @@ def test_minimax_llm_config():
             "remove_think_prefix",
             "extra_body",
             "default_headers",
+            "backup_client",
+            "backup_api_key",
+            "backup_api_base",
+            "backup_model_name_or_path",
+            "backup_headers",
         ],
     )
 
