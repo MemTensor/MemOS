@@ -47,7 +47,7 @@ def build_minimal_components():
 
     # Build component configurations using APIConfig methods (like config_builders.py)
 
-    # Graph DB configuration - using APIConfig.get_nebular_config()
+    # Graph DB configuration - using APIConfig graph DB helpers
     graph_db_backend = os.getenv("NEO4J_BACKEND", "polardb").lower()
     graph_db_backend_map = {
         "polardb": APIConfig.get_polardb_config(),
