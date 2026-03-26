@@ -39,6 +39,7 @@ def health_check():
         "version": app.version,
     }
 
+
 # Request validation failed
 app.exception_handler(RequestValidationError)(APIExceptionHandler.validation_error_handler)
 # Invalid business code parameters
