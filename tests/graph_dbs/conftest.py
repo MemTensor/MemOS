@@ -9,7 +9,9 @@ optional dependencies (transformers, etc.) are not available.
 import logging
 import sys
 import types
+
 from unittest.mock import MagicMock
+
 
 # ── Patch memos.log before anything else imports it ──────────────────────
 

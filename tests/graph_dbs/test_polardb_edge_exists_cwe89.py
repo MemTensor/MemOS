@@ -204,13 +204,16 @@ class TestEdgeExistsSourceCodeSafety:
         indent = None
         for i, line in enumerate(lines):
             # Match the @timed edge_exists, not edge_exists_old
-            if "def edge_exists(" in line and "edge_exists_old" not in line:
-                # Check if preceded by @timed decorator
-                if i > 0 and "@timed" in lines[i - 1]:
-                    in_method = True
-                    indent = len(line) - len(line.lstrip())
-                    method_lines.append(line)
-                    continue
+            if (
+                "def edge_exists(" in line
+                and "edge_exists_old" not in line
+                and i > 0
+                and "@timed" in lines[i - 1]
+            ):
+                in_method = True
+                indent = len(line) - len(line.lstrip())
+                method_lines.append(line)
+                continue
             if in_method:
                 stripped = line.lstrip()
                 current_indent = len(line) - len(line.lstrip()) if stripped else indent + 4
