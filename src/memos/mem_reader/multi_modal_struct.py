@@ -927,6 +927,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         project_id = user_context.project_id if user_context else None
 
         for fast_item in fast_memory_items:
+            sources = fast_item.metadata.sources or []
+            if not isinstance(sources, list):
+                sources = [sources]
+
             # Extract memory text (string content)
             mem_str = fast_item.memory or ""
             if not mem_str.strip() or (
@@ -954,6 +958,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         tool_used_status=m.get("tool_used_status", []),
                         manager_user_id=manager_user_id,
                         project_id=project_id,
+                        sources=sources,
                     )
                     fine_memory_items.append(node)
                 except Exception as e:
@@ -1047,7 +1052,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     process_preference_fine,
                     non_file_url_fast_items,
                     info,
-                    self.llm,
+                    self.general_llm,
                     self.embedder,
                     **kwargs,
                 )
@@ -1126,7 +1131,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             )
             # Add preference memory extraction
             future_pref = executor.submit(
-                process_preference_fine, non_file_url_nodes, info, self.llm, self.embedder, **kwargs
+                process_preference_fine,
+                non_file_url_nodes,
+                info,
+                self.general_llm,
+                self.embedder,
+                **kwargs,
             )
 
             # Collect results

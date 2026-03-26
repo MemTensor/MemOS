@@ -28,7 +28,6 @@ from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.mem_cube.navie import NaiveMemCube
 from memos.mem_feedback.simple_feedback import SimpleMemFeedback
-from memos.mem_os.product_server import MOSServer
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.orm_modules.base_model import BaseDBManager
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
@@ -211,15 +210,6 @@ def init_server() -> dict[str, Any]:
 
     logger.debug("Text memory initialized")
 
-    # Initialize MOS Server
-    mos_server = MOSServer(
-        mem_reader=mem_reader,
-        llm=llm,
-        online_bot=False,
-    )
-
-    logger.debug("MOS server initialized")
-
     # Create MemCube with pre-initialized memory instances
     naive_mem_cube = NaiveMemCube(
         text_mem=text_mem,
@@ -255,7 +245,8 @@ def init_server() -> dict[str, Any]:
     # Initialize Scheduler
     scheduler_config_dict = APIConfig.get_scheduler_config()
     scheduler_config = SchedulerConfigFactory(
-        backend="optimized_scheduler", config=scheduler_config_dict
+        backend=scheduler_config_dict["backend"],
+        config=scheduler_config_dict["config"],
     )
     mem_scheduler: OptimizedScheduler = SchedulerFactory.from_config(scheduler_config)
     mem_scheduler.initialize_modules(
@@ -303,7 +294,6 @@ def init_server() -> dict[str, Any]:
         "internet_retriever": internet_retriever,
         "memory_manager": memory_manager,
         "default_cube_config": default_cube_config,
-        "mos_server": mos_server,
         "mem_scheduler": mem_scheduler,
         "naive_mem_cube": naive_mem_cube,
         "searcher": searcher,

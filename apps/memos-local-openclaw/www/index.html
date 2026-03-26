@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>MemOS — OpenClaw 记忆插件 | 本地化 · 智能进化 · 全量可视化</title>
+<meta name="description" content="MemOS — OpenClaw 本地记忆插件。完全本地化，全量可视化管理，技能自动进化，大幅提升 Agent 执行效果。">
+<link rel="icon" href="https://statics.memtensor.com.cn/logo/color-m.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#06080f;
+  --bg-card:rgba(14,18,32,.7);
+  --bg-card-hover:rgba(20,26,48,.8);
+  --border:rgba(99,140,255,.1);
+  --border-glow:rgba(99,140,255,.25);
+  --text:#eef1ff;
+  --text-sec:rgba(200,210,255,.55);
+  --text-thr:rgba(160,175,220,.3);
+  --cyan:#00e5ff;
+  --blue:#638cff;
+  --purple:#b16cff;
+  --magenta:#ff3cac;
+  --green:#00e676;
+  --amber:#ffca28;
+  --grad-main:linear-gradient(135deg,#00e5ff,#638cff,#b16cff);
+  --grad-hot:linear-gradient(135deg,#ff3cac,#b16cff,#638cff);
+  --grad-subtle:linear-gradient(135deg,rgba(0,229,255,.12),rgba(177,108,255,.12));
+  --glow-cyan:0 0 30px rgba(0,229,255,.15);
+  --glow-purple:0 0 30px rgba(177,108,255,.15);
+  --font:'Inter',system-ui,-apple-system,sans-serif;
+  --mono:'SF Mono','Fira Code','JetBrains Mono',monospace;
+  --radius:14px;
+}
+::selection{background:rgba(99,140,255,.3);color:#fff}
+html{scroll-behavior:smooth}
+body{font-family:var(--font);color:var(--text);background:var(--bg);line-height:1.6;overflow-x:hidden}
+a{color:var(--text);text-decoration:none;transition:all .2s}
+
+.container{max-width:1200px;margin:0 auto;padding:0 24px}
+
+/* ── Grid Overlay ── */
+.grid-bg{position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:
+    linear-gradient(rgba(99,140,255,.03) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(99,140,255,.03) 1px,transparent 1px);
+  background-size:60px 60px;
+}
+
+/* ── Floating Orbs ── */
+.orb{position:fixed;border-radius:50%;filter:blur(80px);pointer-events:none;z-index:0}
+.orb-1{width:600px;height:600px;background:radial-gradient(circle,rgba(0,229,255,.08),transparent 70%);top:-200px;left:-100px;animation:orbFloat 20s ease-in-out infinite}
+.orb-2{width:500px;height:500px;background:radial-gradient(circle,rgba(177,108,255,.07),transparent 70%);bottom:-150px;right:-100px;animation:orbFloat 25s ease-in-out infinite reverse}
+.orb-3{width:400px;height:400px;background:radial-gradient(circle,rgba(255,60,172,.05),transparent 70%);top:40%;left:50%;animation:orbFloat 18s ease-in-out infinite 5s}
+@keyframes orbFloat{0%,100%{transform:translate(0,0)}25%{transform:translate(30px,-40px)}50%{transform:translate(-20px,30px)}75%{transform:translate(40px,20px)}}
+
+/* ── Nav ── */
+nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:0 24px;backdrop-filter:blur(24px) saturate(1.4);background:rgba(6,8,15,.75);border-bottom:1px solid var(--border)}
+nav .inner{max-width:1200px;margin:0 auto;display:flex;align-items:center;height:60px}
+nav .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:17px;letter-spacing:-.02em}
+nav .brand .icon{font-size:24px}
+nav .brand .sub{font-size:10px;color:var(--text-sec);font-weight:400;display:block;line-height:1.1}
+nav .links{margin-left:auto;display:flex;align-items:center;gap:4px}
+nav .links a{color:var(--text-sec);font-size:13px;font-weight:500;padding:6px 12px;border-radius:8px;transition:all .2s}
+nav .links a:hover{color:var(--text);background:rgba(99,140,255,.06)}
+nav .btn-nav{background:transparent;color:var(--text-sec);font-weight:600;border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:13px;transition:all .2s}
+nav .btn-nav:hover{border-color:rgba(99,140,255,.35);color:var(--text);background:rgba(99,140,255,.06)}
+
+/* ── Buttons ── */
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 32px;border-radius:12px;font-size:14px;font-weight:700;border:none;cursor:pointer;transition:all .25s;text-decoration:none;letter-spacing:.01em}
+.btn-glow{background:var(--grad-main);color:#06080f;box-shadow:0 0 24px rgba(0,229,255,.2),0 0 60px rgba(99,140,255,.1);position:relative;overflow:hidden}
+.btn-glow::after{content:'';position:absolute;inset:-1px;background:var(--grad-main);filter:blur(12px);opacity:.4;z-index:-1;transition:opacity .3s}
+.btn-glow:hover{transform:translateY(-2px);box-shadow:0 0 32px rgba(0,229,255,.3),0 0 80px rgba(99,140,255,.15);color:#06080f}
+.btn-glow:hover::after{opacity:.6}
+.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border);backdrop-filter:blur(8px)}
+.btn-outline:hover{border-color:var(--blue);background:rgba(99,140,255,.06);box-shadow:var(--glow-cyan)}
+
+/* ── Section ── */
+.section{padding:120px 0;position:relative;z-index:1}
+.section-header{text-align:center;margin-bottom:64px}
+.section h2{font-size:clamp(28px,4.5vw,48px);font-weight:900;letter-spacing:-.04em;margin-bottom:14px;line-height:1.1}
+.section h2 .hl{background:var(--grad-main);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.section .section-desc{color:var(--text-sec);font-size:15px;max-width:560px;margin:0 auto;line-height:1.8}
+
+/* ── Glowing Line Divider ── */
+.glow-line{height:1px;background:linear-gradient(90deg,transparent,var(--blue),var(--cyan),var(--blue),transparent);opacity:.3;margin:0}
+
+/* ── Magic Badge ── */
+.magic-badge{display:inline-flex;align-items:center;gap:8px;padding:6px 18px;border-radius:24px;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.06);font-size:12px;font-weight:600;color:var(--cyan);margin-bottom:28px;backdrop-filter:blur(8px);animation:badgePulse 3s ease-in-out infinite}
+@keyframes badgePulse{0%,100%{box-shadow:0 0 0 rgba(0,229,255,0)}50%{box-shadow:0 0 20px rgba(0,229,255,.1)}}
+
+/* ── Hero ── */
+.hero{padding:160px 0 80px;text-align:center;position:relative;overflow:hidden;z-index:1}
+.hero>*{position:relative;z-index:1}
+.hero h1{font-size:clamp(40px,7vw,80px);font-weight:900;letter-spacing:-.05em;line-height:1.05;margin-bottom:24px;animation:fadeUp .7s ease .1s both}
+.hero h1 .grad{background:var(--grad-main);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;position:relative}
+.hero h1 .grad::after{content:'';position:absolute;bottom:-4px;left:0;right:0;height:3px;background:var(--grad-main);border-radius:2px;opacity:.6}
+.hero .desc{font-size:clamp(15px,1.6vw,18px);color:var(--text-sec);max-width:620px;margin:0 auto 14px;line-height:1.85;animation:fadeUp .7s ease .2s both}
+.hero .sub-line{font-size:14px;color:var(--text-thr);margin-bottom:36px;animation:fadeUp .7s ease .28s both;letter-spacing:.03em}
+.hero .ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-bottom:56px;animation:fadeUp .7s ease .35s both}
+@keyframes fadeUp{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+@keyframes clawFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@keyframes clawBlink{0%,90%,100%{opacity:1}95%{opacity:.3}}
+@keyframes clawWiggle{0%,100%{transform:rotate(0)}25%{transform:rotate(-3deg)}75%{transform:rotate(3deg)}}
+@keyframes clawSnap{0%,85%,100%{transform:rotate(0)}90%{transform:rotate(-8deg)}95%{transform:rotate(0)}}
+.claw-icon{animation:clawFloat 4s ease-in-out infinite;cursor:pointer;transition:transform .3s ease}
+.claw-icon:hover{transform:scale(1.1);animation:none}
+.claw-icon svg{filter:drop-shadow(0 0 20px rgba(255,77,77,.4));transition:filter .3s ease}
+.claw-icon:hover svg{filter:drop-shadow(0 0 30px rgba(0,229,204,.6))}
+.claw-icon .eye-glow{animation:clawBlink 3s ease-in-out infinite}
+.claw-icon .antenna{animation:clawWiggle 2s ease-in-out infinite;transform-origin:center}
+.claw-icon .claw-left{animation:clawSnap 4s ease-in-out infinite;transform-origin:right center}
+.claw-icon .claw-right{animation:clawSnap 4s ease-in-out infinite .2s;transform-origin:left center}
+
+/* ── Terminal ── */
+.hero-visual{max-width:700px;margin:0 auto;animation:fadeUp .7s ease .45s both}
+.terminal{background:rgba(10,14,28,.85);border:1px solid var(--border);border-radius:16px;overflow:hidden;backdrop-filter:blur(12px);box-shadow:0 20px 60px rgba(0,0,0,.4),0 0 40px rgba(99,140,255,.05)}
+.terminal-bar{display:flex;align-items:center;gap:7px;padding:14px 18px;border-bottom:1px solid var(--border)}
+.terminal-dot{width:12px;height:12px;border-radius:50%}
+.terminal-dot.r{background:#ff5f57}.terminal-dot.y{background:#ffbd2e}.terminal-dot.g{background:#28ca42}
+.terminal-title{flex:1;text-align:center;font-size:11px;color:var(--text-thr);letter-spacing:.05em}
+.terminal-body{padding:22px;font-family:var(--mono);font-size:12.5px;line-height:2.1;color:var(--text-sec);text-align:left}
+.terminal-body .prompt{color:var(--green)}.terminal-body .cmd{color:var(--text)}.terminal-body .ok{color:var(--green)}.terminal-body .hl{color:var(--cyan)}.terminal-body .dim{color:var(--text-thr)}
+.terminal-cmd-row{display:flex;align-items:center;gap:8px;position:relative;z-index:2}
+.terminal-cmd-row .cmd{flex:1;white-space:nowrap;overflow:auto;scrollbar-width:none}
+.terminal-cmd-row .cmd::-webkit-scrollbar{display:none}
+.terminal-note{color:var(--text-thr);line-height:1.6;margin-bottom:8px}
+.copy-btn{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:rgba(99,140,255,.08);border:1px solid var(--border);color:var(--cyan);border-radius:8px;cursor:pointer;transition:all .2s;flex-shrink:0;padding:0}
+.copy-btn:hover{border-color:var(--border-glow);background:rgba(0,229,255,.12);color:var(--text)}
+.copy-btn .copy-icon,.copy-btn .check-icon{width:14px;height:14px;display:block}
+.copy-btn .check-icon{display:none;color:var(--green)}
+.copy-btn.copied{border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.12);color:var(--green)}
+.copy-btn.copied .copy-icon{display:none}
+.copy-btn.copied .check-icon{display:block}
+
+/* ── Glass Cards ── */
+.value-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.value-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:30px;transition:all .35s;backdrop-filter:blur(12px);position:relative;overflow:hidden}
+.value-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad-main);opacity:0;transition:opacity .35s}
+.value-card:hover{border-color:var(--border-glow);background:var(--bg-card-hover);transform:translateY(-4px);box-shadow:var(--glow-cyan)}
+.value-card:hover::before{opacity:1}
+.value-card h3{font-size:15px;font-weight:700;margin-bottom:6px}
+.value-card p{font-size:13px;color:var(--text-sec);line-height:1.75;margin:0}
+.value-card .vc-icon{font-size:32px;margin-bottom:16px;display:block}
+
+/* ── Showcase ── */
+.showcase{display:flex;flex-direction:column;gap:80px}
+.showcase-item{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center}
+.showcase-item.reverse{direction:rtl}
+.showcase-item.reverse>*{direction:ltr}
+.showcase-text h3{font-size:24px;font-weight:800;margin-bottom:12px;line-height:1.25}
+.showcase-text h3 .hl{background:var(--grad-main);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.showcase-text p{color:var(--text-sec);font-size:14px;line-height:1.9;margin-bottom:16px}
+.stag{display:inline-block;font-size:11px;font-weight:600;padding:4px 12px;border-radius:8px;background:rgba(99,140,255,.08);color:var(--blue);margin:0 5px 5px 0;border:1px solid rgba(99,140,255,.1)}
+
+/* ── Code Block ── */
+.code-block{background:rgba(10,14,28,.85);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;backdrop-filter:blur(12px);box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.code-block .code-header{display:flex;align-items:center;gap:7px;padding:12px 16px;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-thr)}
+.code-block .code-header .dot{width:10px;height:10px;border-radius:50%}
+.code-block pre{padding:18px;font-family:var(--mono);font-size:11.5px;line-height:1.9;color:var(--text-sec);overflow-x:auto}
+.code-block .kw{color:var(--cyan)}.code-block .str{color:var(--green)}.code-block .cmt{color:rgba(200,210,255,.2)}.code-block .fn{color:var(--amber)}.code-block .num{color:#fde68a}
+
+/* ── Config Tabs ── */
+.config-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);background:rgba(10,14,28,.5)}
+.config-tab{padding:11px 26px;font-size:13px;font-weight:600;color:var(--text-thr);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .2s;background:none;border-top:none;border-left:none;border-right:none}
+.config-tab.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+.config-tab:hover{color:var(--text-sec)}
+.config-pane{display:none;animation:fadeUp .3s ease}
+.config-pane.active{display:block}
+
+/* ── Viewer Mock ── */
+.viewer-mock{background:rgba(10,14,28,.85);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;backdrop-filter:blur(12px);box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.viewer-mock-bar{display:flex;align-items:center;gap:7px;padding:11px 16px;border-bottom:1px solid var(--border)}
+.viewer-mock-bar .dots{display:flex;gap:6px}
+.viewer-mock-bar .dots span{width:10px;height:10px;border-radius:50%}
+.viewer-mock-bar .url{flex:1;text-align:center;font-size:10px;color:var(--text-thr);font-family:var(--mono)}
+.viewer-mock-body{padding:16px;min-height:260px}
+.vm-nav{display:flex;gap:3px;margin-bottom:14px;padding-bottom:11px;border-bottom:1px solid var(--border)}
+.vm-nav span{font-size:10px;padding:5px 12px;border-radius:8px;color:var(--text-thr);cursor:default;transition:all .2s}
+.vm-nav span.active{background:var(--grad-main);color:#06080f;font-weight:700}
+.vm-cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.vm-card{background:rgba(99,140,255,.04);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:10px}
+.vm-card .vm-label{color:var(--text-thr);margin-bottom:4px;font-weight:500}
+.vm-card .vm-value{font-size:18px;font-weight:800;color:var(--text)}
+.vm-list{margin-top:12px}
+.vm-row{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:10px;color:var(--text-sec);border-bottom:1px solid rgba(99,140,255,.05);transition:background .2s}
+.vm-row:hover{background:rgba(99,140,255,.04)}
+.vm-row .vm-role{font-size:8px;font-weight:700;padding:2px 6px;border-radius:4px;text-transform:uppercase}
+.vm-role-u{background:rgba(0,229,255,.1);color:var(--cyan)}
+.vm-role-a{background:rgba(0,230,118,.1);color:var(--green)}
+.vm-row .vm-time{margin-left:auto;color:var(--text-thr);font-size:9px}
+
+/* ── Architecture ── */
+.arch-container{max-width:960px;margin:0 auto}
+.arch-svg-wrap{width:100%;overflow-x:auto;padding:12px 0}
+.arch-svg-wrap svg{display:block;margin:0 auto}
+.arch-svg-wrap svg text{font-family:var(--font)}
+.arch-svg-wrap svg .nd{fill:rgba(10,14,28,.85);stroke:rgba(99,140,255,.12);stroke-width:1;rx:10;ry:10}
+.arch-svg-wrap svg .nd:hover{stroke:rgba(99,140,255,.3);filter:drop-shadow(0 0 8px rgba(99,140,255,.1))}
+.arch-svg-wrap svg .fl-s{stroke:rgba(99,140,255,.25);stroke-width:1.5;fill:none;marker-end:url(#aW)}
+.arch-svg-wrap svg .fl-d{stroke:var(--cyan);stroke-width:1.5;fill:none;stroke-dasharray:6 3;marker-end:url(#aO)}
+.arch-svg-wrap svg .fl-b{stroke:rgba(99,140,255,.25);stroke-width:1.5;fill:none;marker-end:url(#aW)}
+.arch-svg-wrap svg .fl-r{stroke:rgba(177,108,255,.15);stroke-width:1;fill:none;stroke-dasharray:5 3;marker-end:url(#aG)}
+.arch-svg-wrap svg .lbl-bg{fill:var(--bg);stroke:none;rx:4;ry:4}
+
+/* ── Highlight Box ── */
+.hbox{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:36px;margin-top:40px;backdrop-filter:blur(12px);position:relative;overflow:hidden}
+.hbox::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad-hot);opacity:.6}
+.hbox h4{font-size:17px;font-weight:800;margin-bottom:18px}
+.hgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.hitem{display:flex;gap:12px;align-items:flex-start;padding:14px;border-radius:10px;background:rgba(99,140,255,.03);border:1px solid var(--border);transition:all .25s}
+.hitem:hover{border-color:var(--border-glow);background:rgba(99,140,255,.06);box-shadow:var(--glow-cyan)}
+.hitem .hico{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;background:rgba(99,140,255,.08);border:1px solid rgba(99,140,255,.1)}
+.hitem h5{font-size:13px;font-weight:700;margin-bottom:3px}
+.hitem p{font-size:11px;color:var(--text-sec);line-height:1.6;margin:0}
+
+/* ── Providers ── */
+.provider-grid{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;padding:12px 0}
+.provider{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 22px;font-size:13px;font-weight:600;color:var(--text-sec);transition:all .25s;backdrop-filter:blur(8px)}
+.provider:hover{border-color:var(--cyan);color:var(--text);box-shadow:0 0 16px rgba(0,229,255,.08)}
+
+/* ── Tools ── */
+.tool-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.tool-card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center;transition:all .3s;backdrop-filter:blur(8px);position:relative;overflow:hidden}
+.tool-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad-main);opacity:0;transition:opacity .3s}
+.tool-card:hover{border-color:var(--border-glow);transform:translateY(-3px);box-shadow:var(--glow-cyan)}
+.tool-card:hover::before{opacity:1}
+.tool-card .ticon{font-size:26px;margin-bottom:10px}
+.tool-card h4{font-size:12px;font-weight:700;font-family:var(--mono);margin-bottom:3px;color:var(--text)}
+.tool-card p{font-size:10px;color:var(--text-sec)}
+
+/* ── CTA ── */
+.cta-section{text-align:center;padding:120px 0;position:relative;overflow:hidden;z-index:1}
+.cta-section::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 60% 50% at 50% 100%,rgba(0,229,255,.04),transparent),radial-gradient(ellipse 40% 50% at 50% 80%,rgba(177,108,255,.03),transparent);pointer-events:none}
+.cta-section h2{font-size:clamp(28px,4.5vw,48px);font-weight:900;margin-bottom:14px;line-height:1.1;position:relative}
+.cta-section .desc{color:var(--text-sec);font-size:14px;max-width:500px;margin:0 auto 36px;line-height:1.8;position:relative}
+
+footer{border-top:1px solid var(--border);padding:36px 0;position:relative;z-index:1}
+footer .inner{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px}
+footer .brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px;color:var(--text-sec)}
+footer .links{display:flex;gap:20px}
+footer .links a{color:var(--text-thr);font-size:12px}
+footer .links a:hover{color:var(--cyan)}
+footer .copy{color:var(--text-thr);font-size:10px;width:100%;text-align:center;margin-top:12px}
+
+/* ── Lang ── */
+.lang-switch{display:inline-flex;align-items:stretch;margin-left:8px;padding:2px;border:1px solid var(--border);border-radius:8px}
+.lang-switch .lang-btn{background:transparent;border:none;color:var(--text-thr);padding:5px 11px;font-size:12px;font-weight:500;cursor:pointer;border-radius:6px;transition:all .2s}
+.lang-switch .lang-btn:hover{color:var(--text-sec)}
+.lang-switch .lang-btn.active{background:rgba(99,140,255,.08);color:var(--text)}
+body.lang-en .lang-zh{display:none !important}
+body.lang-zh .lang-en{display:none !important}
+
+/* ── Animated Gradient Border (for hero terminal) ── */
+.glow-border{position:relative;border-radius:16px}
+.glow-border::before{content:'';position:absolute;inset:-1px;border-radius:17px;padding:1px;background:var(--grad-main);-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.5;animation:borderRotate 4s linear infinite;pointer-events:none}
+@keyframes borderRotate{from{filter:hue-rotate(0deg)}to{filter:hue-rotate(360deg)}}
+
+/* ── Migration Section ── */
+.mig-features{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:36px}
+.mig-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:28px 22px;text-align:center;transition:all .35s;backdrop-filter:blur(12px);position:relative;overflow:hidden}
+.mig-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad-hot);opacity:0;transition:opacity .35s}
+.mig-card:hover{border-color:var(--border-glow);background:var(--bg-card-hover);transform:translateY(-4px);box-shadow:var(--glow-purple)}
+.mig-card:hover::before{opacity:1}
+.mig-card .mig-icon{font-size:36px;margin-bottom:14px;display:block}
+.mig-card h4{font-size:14px;font-weight:700;margin-bottom:6px}
+.mig-card p{font-size:12px;color:var(--text-sec);line-height:1.7;margin:0}
+
+.demo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:40px}
+.demo-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:0;overflow:hidden;transition:all .35s;backdrop-filter:blur(12px);position:relative}
+.demo-card:hover{border-color:var(--border-glow);transform:translateY(-4px);box-shadow:0 20px 60px rgba(0,0,0,.3),var(--glow-cyan)}
+.demo-card .demo-visual{height:160px;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+.demo-card .demo-visual::before{content:'';position:absolute;inset:0;opacity:.6}
+.demo-card:nth-child(1) .demo-visual::before{background:linear-gradient(135deg,rgba(255,60,172,.08),rgba(177,108,255,.12))}
+.demo-card:nth-child(2) .demo-visual::before{background:linear-gradient(135deg,rgba(0,229,255,.08),rgba(99,140,255,.12))}
+.demo-card:nth-child(3) .demo-visual::before{background:linear-gradient(135deg,rgba(0,230,118,.08),rgba(255,202,40,.08))}
+.demo-card .demo-body{padding:22px}
+.demo-card .demo-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--cyan);margin-bottom:8px}
+.demo-card h4{font-size:16px;font-weight:800;margin-bottom:8px}
+.demo-card .demo-desc{font-size:12px;color:var(--text-sec);line-height:1.7;margin-bottom:16px}
+.demo-card .demo-steps{display:flex;flex-direction:column;gap:6px;margin-bottom:18px}
+.demo-card .demo-step{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-sec)}
+.demo-card .demo-step .step-num{width:20px;height:20px;border-radius:50%;background:rgba(99,140,255,.1);color:var(--blue);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0;border:1px solid rgba(99,140,255,.15)}
+.demo-card .demo-cta{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--cyan);transition:all .2s}
+.demo-card .demo-cta:hover{color:var(--text);transform:translateX(4px)}
+
+.demo-mock{width:90%;max-width:200px}
+.demo-mock-bar{height:10px;display:flex;align-items:center;gap:3px;padding:0 6px;border-bottom:1px solid var(--border);background:rgba(10,14,28,.5);border-radius:8px 8px 0 0}
+.demo-mock-bar span{width:4px;height:4px;border-radius:50%}
+.demo-mock-content{background:rgba(10,14,28,.7);border:1px solid var(--border);border-radius:0 0 8px 8px;padding:10px;min-height:80px}
+
+/* ── Responsive ── */
+@media(max-width:900px){
+  .value-grid{grid-template-columns:1fr}
+  .showcase-item,.showcase-item.reverse{grid-template-columns:1fr;gap:28px;direction:ltr}
+  .hgrid{grid-template-columns:1fr}
+  .tool-grid{grid-template-columns:repeat(2,1fr)}
+  .arch-svg-wrap svg{min-width:680px}
+  .mig-features{grid-template-columns:repeat(2,1fr)}
+  .demo-grid{grid-template-columns:1fr}
+}
+@media(max-width:600px){
+  nav .links a:not(.btn-nav):not(.lang-switch){display:none}
+  .hero{padding:120px 0 50px}
+  .tool-grid{grid-template-columns:1fr}
+  .mig-features{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+<div class="orb orb-1"></div>
+<div class="orb orb-2"></div>
+<div class="orb orb-3"></div>
+
+<nav>
+<div class="inner">
+  <div class="brand"><img src="https://statics.memtensor.com.cn/logo/white-memos.svg" alt="MemOS" style="width:55px;height:55px"><span>MemOS<span class="sub lang-zh">OpenClaw 本地插件</span><span class="sub lang-en">OpenClaw Local Plugin</span></span></div>
+  <div class="links">
+    <a href="#why" class="lang-zh">亮点</a><a href="#why" class="lang-en">Highlights</a>
+    <a href="#features" class="lang-zh">能力</a><a href="#features" class="lang-en">Features</a>
+    <a href="#architecture" class="lang-zh">架构</a><a href="#architecture" class="lang-en">Architecture</a>
+    <a href="#quickstart" class="lang-zh">快速开始</a><a href="#quickstart" class="lang-en">Get Started</a>
+    <a href="#migration" class="lang-zh">记忆迁移</a><a href="#migration" class="lang-en">Migration</a>
+    <a href="./docs/index.html" class="btn-nav lang-zh">文档</a><a href="./docs/index.html" class="btn-nav lang-en">Docs</a>
+    <span class="lang-switch"><button type="button" class="lang-btn active" data-lang="zh">中</button><button type="button" class="lang-btn" data-lang="en">EN</button></span>
+  </div>
+</div>
+</nav>
+
+<!-- ════════ Hero ════════ -->
+<section class="hero">
+<div class="container">
+  <div class="hero-mascot claw-icon" style="width:100px;height:100px;margin:0 auto 28px;animation:fadeUp .7s ease .05s both,clawFloat 4s ease-in-out infinite">
+    <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
+      <defs><linearGradient id="hLG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs>
+      <path d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z" fill="url(#hLG)" class="claw-body"/>
+      <path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#hLG)" class="claw-left"/>
+      <path d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z" fill="url(#hLG)" class="claw-right"/>
+      <path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round" class="antenna"/>
+      <path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round" class="antenna"/>
+      <circle cx="45" cy="35" r="6" fill="#050810" class="eye"/>
+      <circle cx="75" cy="35" r="6" fill="#050810" class="eye"/>
+      <circle cx="46" cy="34" r="2" fill="#00e5cc" class="eye-glow"/>
+      <circle cx="76" cy="34" r="2" fill="#00e5cc" class="eye-glow"/>
+    </svg>
+  </div>
+  <div class="magic-badge">
+    <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--cyan);box-shadow:0 0 6px var(--cyan);animation:blink 2s infinite"></span>
+    <span class="lang-zh">OpenClaw 本地插件 · MIT 开源</span><span class="lang-en">OpenClaw Local Plugin · MIT</span>
+  </div>
+  <h1>
+    <span class="lang-zh">让你的 OpenClaw<br><span class="grad">越用越聪明</span></span>
+    <span class="lang-en">Give Your OpenClaw<br><span class="grad">Lasting Intelligence</span></span>
+  </h1>
+  <p class="desc">
+    <span class="lang-zh">为 OpenClaw 注入持久记忆与自进化技能<br>完全本地化  全量可视化管理  分级模型极致省钱</span>
+    <span class="lang-en">Persistent memory and self-evolving skills for OpenClaw agents.<br>100% local storage, full visualization dashboard, and tiered models for cost efficiency.</span>
+  </p>
+  <p class="sub-line"><span class="lang-zh">把 MemOS 带进你的 OpenClaw</span><span class="lang-en">Bring MemOS to your OpenClaw workflow</span></p>
+  <div class="ctas">
+    <a href="#quickstart" class="btn btn-glow lang-zh">立即安装 →</a><a href="#quickstart" class="btn btn-glow lang-en">Get Started →</a>
+    <a href="https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-openclaw" class="btn btn-outline" target="_blank" rel="noopener">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+      GitHub
+    </a>
+  </div>
+
+  <div class="hero-visual">
+    <div class="terminal glow-border">
+      <div class="terminal-bar"><span class="terminal-dot r"></span><span class="terminal-dot y"></span><span class="terminal-dot g"></span><span class="terminal-title">macOS/Linux</span></div>
+      <div class="terminal-body">
+        <div class="terminal-note"># One liner, Works everywhere. Installs everything.</div>
+        <div class="terminal-cmd-row"><span class="prompt">$</span><span class="cmd">curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</span><button type="button" class="copy-btn" data-copy="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button></div>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Why ════════ -->
+<section class="section" id="why">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">没有记忆的 Agent，每次都<span class="hl">从零开始</span></span><span class="lang-en">Without Memory, Every Task <span class="hl">Starts from Zero</span></span></h2>
+    <p class="section-desc"><span class="lang-zh">MemOS 为 OpenClaw 注入持久记忆与自进化技能。</span><span class="lang-en">MemOS equips OpenClaw with persistent memory and self-evolving skills.</span></p>
+  </div>
+  <div class="value-grid">
+    <div class="value-card"><div class="vc-icon">💻</div><h3><span class="lang-zh">完全本地化</span><span class="lang-en">Fully Local</span></h3><p><span class="lang-zh">记忆、任务、技能全存本机 SQLite，零云依赖。</span><span class="lang-en">All data stored in local SQLite — zero cloud dependency, complete privacy.</span></p></div>
+    <div class="value-card"><div class="vc-icon">🧠</div><h3><span class="lang-zh">全量可视化管理</span><span class="lang-en">Full Visualization</span></h3><p><span class="lang-zh">内置管理面板，记忆 / 任务 / 技能完全透明可控。</span><span class="lang-en">Built-in web dashboard — memories, tasks, and skills fully transparent and controllable.</span></p></div>
+    <div class="value-card"><div class="vc-icon">⚡</div><h3><span class="lang-zh">任务总结与技能进化</span><span class="lang-en">Task Summary & Skill Evolution</span></h3><p><span class="lang-zh">碎片对话自动归纳为结构化任务，再提炼为可复用技能并持续升级。从「记住」到「学会」，同一个坑不踩两次。</span><span class="lang-en">Fragmented conversations auto-organized into structured tasks, then distilled into reusable skills that evolve over time. From "remembering" to "mastering" — never repeat the same mistake twice.</span></p></div>
+    <div class="value-card"><div class="vc-icon">💰</div><h3><span class="lang-zh">分级模型 · 省钱</span><span class="lang-en">Tiered Models</span></h3><p><span class="lang-zh">Embedding 轻量、摘要中等、技能高质量——按需分配，大幅省钱。</span><span class="lang-en">Lightweight, mid-tier, and high-quality models layered by purpose — maximum performance at minimum cost.</span></p></div>
+    <div class="value-card"><div class="vc-icon">🤝</div><h3><span class="lang-zh">多智能体协同</span><span class="lang-en">Multi-Agent Collaboration</span></h3><p><span class="lang-zh">记忆隔离 + 公共记忆 + 技能共享。多个 Agent 各有私域记忆，又能共享知识与技能，协同进化。</span><span class="lang-en">Memory isolation + public memory + skill sharing. Each agent has private memories while sharing knowledge and skills for collective evolution.</span></p></div>
+    <div class="value-card"><div class="vc-icon">🦞</div><h3><span class="lang-zh">OpenClaw 原生记忆导入</span><span class="lang-en">Native Memory Import</span></h3><p><span class="lang-zh">一键迁移 OpenClaw 内置记忆，智能去重、断点续传、实时进度。你过往的记忆不会丢失，再续前缘。</span><span class="lang-en">One-click migration from OpenClaw built-in memories. Smart dedup, resume anytime, real-time progress. Your past memories, never lost.</span></p></div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Features ════════ -->
+<section class="section" id="features">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">三大引擎，驱动 Agent <span class="hl">协同进化</span></span><span class="lang-en">Three Engines That Drive <span class="hl">Collaborative Evolution</span></span></h2>
+  </div>
+  <div class="showcase">
+    <div class="showcase-item">
+      <div class="showcase-text">
+        <h3><span class="lang-zh">任务总结与技能<span class="hl">自进化</span></span><span class="lang-en">Task Summary & Skill <span class="hl">Evolution</span></span></h3>
+        <p><span class="lang-zh">碎片对话自动归组为结构化任务（目标 → 步骤 → 结果），再由 LLM 评估提炼为可复用技能。遇到相似场景时自动升级——更快、更准、更省 Token。从「能记住」到「会做」，同一个坑不踩两次。任务与技能支持编辑、删除、重试等完整管理。</span><span class="lang-en">Fragmented conversations are auto-organized into structured tasks (goal → steps → result), then LLM evaluates and distills them into reusable skills. Skills auto-upgrade on similar scenarios — faster, more accurate, lower cost. From "remembering" to "mastering" — never repeat the same mistake. Full CRUD for tasks and skills.</span></p>
+        <div><span class="stag"><span class="lang-zh">逐轮话题检测</span><span class="lang-en">Per-Turn Topic Detection</span></span><span class="stag"><span class="lang-zh">结构化摘要</span><span class="lang-en">Structured Summary</span></span><span class="stag"><span class="lang-zh">自动评估</span><span class="lang-en">Auto Evaluate</span></span><span class="stag"><span class="lang-zh">版本管理</span><span class="lang-en">Versioning</span></span><span class="stag"><span class="lang-zh">LLM 降级链</span><span class="lang-en">LLM Fallback</span></span></div>
+      </div>
+      <div class="showcase-visual">
+        <div class="code-block">
+          <div class="code-header"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span><span style="flex:1"></span>Task → Skill Evolution</div>
+          <pre><span class="fn">Task:</span> <span class="str">"部署 Nginx 反向代理"</span>  <span class="kw">completed</span>
+<span class="fn">Goal:</span>  <span class="str">配置反向代理到 Node.js</span>
+<span class="fn">Steps:</span> 1. nginx conf  2. upstream  3. SSL  4. reload
+<span class="fn">Result:</span> <span style="color:var(--green)">✓ HTTPS 正常</span>
+
+<span class="fn">Evaluating:</span> shouldGenerate=<span class="kw">true</span>  conf=<span class="num">0.85</span>
+→ SKILL.md + scripts → quality <span class="num">8.5</span>/10
+<span style="color:var(--green)">✓ "nginx-proxy" v1 created</span>
+
+<span class="cmt">// 再次执行时自动升级</span>
+<span class="fn">Upgrade:</span> <span class="kw">extend</span> → added WebSocket
+<span style="color:var(--green)">✓ v2 (score: 9.0)</span></pre>
+        </div>
+      </div>
+    </div>
+    <div class="showcase-item">
+      <div class="showcase-text">
+        <h3><span class="lang-zh">多智能体<span class="hl">协同</span>进化</span><span class="lang-en">Multi-Agent <span class="hl">Collaborative</span> Evolution</span></h3>
+        <p><span class="lang-zh">每个 Agent 拥有独立的私域记忆，互不可见。但通过「公共记忆」和「技能共享」机制，Agent 之间能够共享决策、经验与能力。一个 Agent 学会的技能，可以发布为公共技能，其他 Agent 搜索并安装后即可复用。多智能体不再各自为战，而是协同进化、共同进步。</span><span class="lang-en">Each agent has isolated private memory, invisible to others. But through public memory and skill sharing, agents can share decisions, experiences, and capabilities. Skills learned by one agent can be published for others to discover and install. Multi-agent systems no longer work in silos — they evolve collaboratively, growing together.</span></p>
+        <div><span class="stag"><span class="lang-zh">记忆隔离</span><span class="lang-en">Memory Isolation</span></span><span class="stag"><span class="lang-zh">公共记忆</span><span class="lang-en">Public Memory</span></span><span class="stag"><span class="lang-zh">技能共享</span><span class="lang-en">Skill Sharing</span></span></div>
+      </div>
+      <div class="showcase-visual">
+        <div class="code-block">
+          <div class="code-header"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span><span style="flex:1"></span>Multi-Agent Collaboration</div>
+          <pre><span class="fn">Agent Alpha:</span>
+  <span class="kw">memory_search</span>(<span class="str">"deploy config"</span>)
+  → <span class="cmt">sees own + public memories only</span>
+  <span class="kw">memory_write_public</span>(<span class="str">"shared deploy config"</span>)
+  <span class="kw">skill_publish</span>(<span class="str">"nginx-proxy"</span>) <span style="color:var(--green)">✓ now public</span>
+
+<span class="fn">Agent Beta:</span>
+  <span class="kw">skill_search</span>(<span class="str">"nginx deployment"</span>)
+  → <span style="color:var(--cyan)">Found: nginx-proxy (public)</span>
+  <span class="kw">skill_install</span>(<span class="str">"nginx-proxy"</span>) <span style="color:var(--green)">✓ installed</span></pre>
+        </div>
+      </div>
+    </div>
+    <div class="showcase-item reverse">
+      <div class="showcase-text">
+        <h3><span class="lang-zh">全量记忆<span class="hl">可视化</span>管理</span><span class="lang-en">Full Memory <span class="hl">Visualization</span></span></h3>
+        <p><span class="lang-zh">内置 Web 管理面板——记忆、任务、技能、分析、日志、导入、设置共 7 页。任务以对话气泡还原，技能支持版本对比与下载，日志页可查看工具调用输入输出与耗时。</span><span class="lang-en">Built-in dashboard — 7 pages: memories, tasks, skills, analytics, logs, import, and settings. Task details as chat bubbles. Logs show tool call I/O and duration.</span></p>
+      </div>
+      <div class="showcase-visual">
+        <div class="viewer-mock">
+          <div class="viewer-mock-bar"><div class="dots"><span style="background:#ff5f57"></span><span style="background:#ffbd2e"></span><span style="background:#28ca42"></span></div><div class="url">127.0.0.1:18799</div></div>
+          <div class="viewer-mock-body">
+            <div class="vm-nav"><span class="active">Memories</span><span>Tasks</span><span>Skills</span><span>Analytics</span><span>Logs</span><span>Import</span><span>Settings</span></div>
+            <div class="vm-cards">
+              <div class="vm-card"><div class="vm-label"><span class="lang-zh">总记忆</span><span class="lang-en">Total</span></div><div class="vm-value">1,284</div></div>
+              <div class="vm-card"><div class="vm-label"><span class="lang-zh">今日</span><span class="lang-en">Today</span></div><div class="vm-value" style="color:var(--green)">+47</div></div>
+              <div class="vm-card"><div class="vm-label"><span class="lang-zh">任务</span><span class="lang-en">Tasks</span></div><div class="vm-value">12</div></div>
+              <div class="vm-card"><div class="vm-label"><span class="lang-zh">技能</span><span class="lang-en">Skills</span></div><div class="vm-value" style="color:var(--cyan)">8</div></div>
+            </div>
+            <div class="vm-list">
+              <div class="vm-row"><span class="vm-role vm-role-u">user</span><span class="lang-zh">帮我配置 Nginx 反向代理到 3000 端口</span><span class="lang-en">Set up Nginx proxy to port 3000</span><span class="vm-time">2m</span></div>
+              <div class="vm-row"><span class="vm-role vm-role-a">asst</span><span class="lang-zh">好的，创建 nginx 配置文件并写入 upstream 配置。</span><span class="lang-en">Creating nginx config file and writing upstream block.</span><span class="vm-time">2m</span></div>
+              <div class="vm-row"><span class="vm-role vm-role-u">user</span><span class="lang-zh">还需要加 SSL 证书</span><span class="lang-en">Also add SSL cert</span><span class="vm-time">5m</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Architecture ════════ -->
+<section class="section" id="architecture">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">从对话到记忆到技能的<span class="hl">智能闭环</span></span><span class="lang-en">The <span class="hl">Intelligent Loop</span>: Conversation → Memory → Skill</span></h2>
+  </div>
+  <div class="arch-container">
+    <div class="arch-svg-wrap">
+      <svg viewBox="0 0 960 556" width="960" height="556" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="aW" markerWidth="6" markerHeight="4" refX="6" refY="2" orient="auto"><polygon points="0 0,6 2,0 4" fill="rgba(99,140,255,.4)"/></marker>
+          <marker id="aO" markerWidth="6" markerHeight="4" refX="6" refY="2" orient="auto"><polygon points="0 0,6 2,0 4" fill="#00e5ff"/></marker>
+          <marker id="aG" markerWidth="6" markerHeight="4" refX="6" refY="2" orient="auto"><polygon points="0 0,6 2,0 4" fill="rgba(177,108,255,.3)"/></marker>
+        </defs>
+
+        <rect x="8" y="8" width="944" height="90" rx="12" fill="rgba(10,14,28,.7)" stroke="rgba(99,140,255,.08)" stroke-width="1"/>
+        <text x="24" y="26" font-size="11" font-weight="800" fill="#eef1ff"><tspan class="lang-zh">① 记忆写入</tspan><tspan class="lang-en">① Memory Write</tspan></text>
+        <text x="24" y="38" font-size="7" fill="rgba(200,210,255,.35)"><tspan class="lang-zh">异步队列 · 智能去重(重复/更新/新增) · 更新时合并</tspan><tspan class="lang-en">Async queue · Smart dedup (DUP/UP/NEW) · Merge history</tspan></text>
+        <rect class="nd" x="200" y="50" width="80" height="26"/><text x="240" y="67" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff">Capture</text>
+        <rect class="nd" x="310" y="50" width="70" height="26"/><text x="345" y="67" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff">Chunk</text>
+        <rect class="nd" x="410" y="50" width="80" height="26"/><text x="450" y="67" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff">Summary</text>
+        <rect class="nd" x="520" y="50" width="70" height="26"/><text x="555" y="67" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff">Embed</text>
+        <rect class="nd" x="620" y="50" width="88" height="26"/><text x="664" y="61" text-anchor="middle" font-size="8" font-weight="700" fill="#00e5ff"><tspan class="lang-zh">智能去重</tspan><tspan class="lang-en">Smart Dedup</tspan></text><text x="664" y="71" text-anchor="middle" font-size="6" fill="rgba(200,210,255,.5)">Top-5·LLM DUP/UP/NEW</text>
+        <rect class="nd" x="718" y="50" width="100" height="26"/><text x="768" y="67" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff">SQLite+FTS5</text>
+        <line class="fl-s" x1="280" y1="63" x2="308" y2="63"/><line class="fl-s" x1="380" y1="63" x2="408" y2="63"/><line class="fl-s" x1="490" y1="63" x2="518" y2="63"/><line class="fl-s" x1="590" y1="63" x2="618" y2="63"/><line class="fl-s" x1="708" y1="63" x2="716" y2="63"/>
+
+        <rect x="8" y="124" width="944" height="74" rx="12" fill="rgba(10,14,28,.7)" stroke="rgba(99,140,255,.08)" stroke-width="1"/>
+        <text x="24" y="148" font-size="11" font-weight="800" fill="#eef1ff"><tspan class="lang-zh">② 任务总结</tspan><tspan class="lang-en">② Task Summarization</tspan></text>
+        <text x="24" y="162" font-size="8" fill="rgba(200,210,255,.35)"><tspan class="lang-zh">异步 · 检测边界 → 结构化摘要</tspan><tspan class="lang-en">Async · Boundaries → Summary</tspan></text>
+        <rect class="nd" x="220" y="140" width="90" height="26"/><text x="265" y="157" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff"><tspan class="lang-zh">话题检测</tspan><tspan class="lang-en">Topic</tspan></text>
+        <rect class="nd" x="370" y="140" width="90" height="26"/><text x="415" y="157" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff"><tspan class="lang-zh">质量过滤</tspan><tspan class="lang-en">Filter</tspan></text>
+        <rect class="nd" x="520" y="140" width="100" height="26"/><text x="570" y="157" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff"><tspan class="lang-zh">LLM 摘要</tspan><tspan class="lang-en">LLM Summary</tspan></text>
+        <rect class="nd" x="680" y="140" width="80" height="26"/><text x="720" y="157" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff"><tspan class="lang-zh">标题生成</tspan><tspan class="lang-en">Title</tspan></text>
+        <line class="fl-d" x1="310" y1="153" x2="368" y2="153"/><line class="fl-d" x1="460" y1="153" x2="518" y2="153"/><line class="fl-d" x1="620" y1="153" x2="678" y2="153"/>
+        <path class="fl-d" d="M768,78 L768,88 Q768,104 745,104 L250,104 Q230,104 230,116 L230,138"/>
+        <rect class="lbl-bg" x="430" y="96" width="80" height="14"/><text x="470" y="106" text-anchor="middle" font-size="7" fill="#00e5ff" font-weight="600"><tspan class="lang-zh">异步触发</tspan><tspan class="lang-en">Async</tspan></text>
+
+        <rect x="8" y="224" width="944" height="74" rx="12" fill="rgba(10,14,28,.7)" stroke="rgba(99,140,255,.08)" stroke-width="1"/>
+        <text x="24" y="248" font-size="11" font-weight="800" fill="#eef1ff"><tspan class="lang-zh">③ 技能进化</tspan><tspan class="lang-en">③ Skill Evolution</tspan></text>
+        <text x="24" y="262" font-size="8" fill="rgba(200,210,255,.35)"><tspan class="lang-zh">异步 · 评估 → 生成/升级 → 安装</tspan><tspan class="lang-en">Async · Evaluate → Create/Upgrade</tspan></text>
+        <rect class="nd" x="220" y="240" width="90" height="26"/><text x="265" y="257" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff"><tspan class="lang-zh">规则过滤</tspan><tspan class="lang-en">Rules</tspan></text>
+        <rect class="nd" x="370" y="240" width="90" height="26"/><text x="415" y="257" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff"><tspan class="lang-zh">LLM 评估</tspan><tspan class="lang-en">Evaluate</tspan></text>
+        <rect class="nd" x="520" y="240" width="100" height="26"/><text x="570" y="257" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff"><tspan class="lang-zh">生成/升级</tspan><tspan class="lang-en">Create/Up</tspan></text>
+        <rect class="nd" x="680" y="240" width="80" height="26"/><text x="720" y="257" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff"><tspan class="lang-zh">质量评分</tspan><tspan class="lang-en">Score</tspan></text>
+        <line class="fl-d" x1="310" y1="253" x2="368" y2="253"/><line class="fl-d" x1="460" y1="253" x2="518" y2="253"/><line class="fl-d" x1="620" y1="253" x2="678" y2="253"/>
+        <path class="fl-d" d="M720,168 L720,188 Q720,204 705,204 L250,204 Q230,204 230,216 L230,238"/>
+        <rect class="lbl-bg" x="410" y="196" width="100" height="14"/><text x="460" y="206" text-anchor="middle" font-size="7" fill="#00e5ff" font-weight="600"><tspan class="lang-zh">异步 · 任务完成后</tspan><tspan class="lang-en">Async · After task</tspan></text>
+
+        <rect x="8" y="324" width="944" height="74" rx="12" fill="rgba(10,14,28,.7)" stroke="rgba(99,140,255,.08)" stroke-width="1"/>
+        <text x="24" y="348" font-size="11" font-weight="800" fill="#eef1ff"><tspan class="lang-zh">④ 智能检索</tspan><tspan class="lang-en">④ Smart Retrieval</tspan></text>
+        <text x="24" y="362" font-size="8" fill="rgba(200,210,255,.35)"><tspan class="lang-zh">记忆 → 任务 → 技能 三层递进</tspan><tspan class="lang-en">Memory → Task → Skill</tspan></text>
+        <rect class="nd" x="200" y="340" width="80" height="26"/><text x="240" y="357" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff">Hybrid</text>
+        <rect class="nd" x="310" y="340" width="60" height="26"/><text x="340" y="357" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff">RRF</text>
+        <rect class="nd" x="400" y="340" width="60" height="26"/><text x="430" y="357" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff">MMR</text>
+        <rect class="nd" x="490" y="340" width="70" height="26"/><text x="525" y="357" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff">Decay</text>
+        <rect class="nd" x="590" y="340" width="80" height="26"/><text x="630" y="357" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff">Task</text>
+        <rect class="nd" x="700" y="340" width="80" height="26"/><text x="740" y="357" text-anchor="middle" font-size="9" font-weight="600" fill="#eef1ff">Skill</text>
+        <line class="fl-b" x1="280" y1="353" x2="308" y2="353"/><line class="fl-b" x1="370" y1="353" x2="398" y2="353"/><line class="fl-b" x1="460" y1="353" x2="488" y2="353"/><line class="fl-b" x1="560" y1="353" x2="588" y2="353"/><line class="fl-b" x1="670" y1="353" x2="698" y2="353"/>
+        <path class="fl-r" d="M818,78 L870,78 Q880,78 880,88 L880,332 Q880,342 870,342 L782,342"/>
+        <path class="fl-r" d="M768,168 L850,168 Q860,168 860,178 L860,332 Q860,342 850,342 L782,342"/>
+        <path class="fl-r" d="M768,268 L840,268 Q850,268 850,278 L850,332 Q850,342 840,342 L782,342"/>
+
+        <rect x="8" y="426" width="944" height="118" rx="12" fill="rgba(0,229,255,.02)" stroke="rgba(0,229,255,.1)" stroke-width="1"/>
+        <text x="480" y="450" text-anchor="middle" font-size="11" font-weight="800" fill="#00e5ff"><tspan class="lang-zh">🔄 进化闭环 — Agent 越用越强</tspan><tspan class="lang-en">🔄 Evolution Loop — Agents Get Smarter</tspan></text>
+        <rect class="nd" x="30" y="466" width="190" height="36"/><text x="40" y="486" font-size="14">💬</text><text x="58" y="488" font-size="9" font-weight="700" fill="#eef1ff"><tspan class="lang-zh">对话自动沉淀</tspan><tspan class="lang-en">Auto Capture</tspan></text>
+        <rect class="nd" x="250" y="466" width="190" height="36"/><text x="260" y="486" font-size="14">📋</text><text x="278" y="488" font-size="9" font-weight="700" fill="#eef1ff"><tspan class="lang-zh">碎片→结构化知识</tspan><tspan class="lang-en">Fragments→Knowledge</tspan></text>
+        <rect class="nd" x="470" y="466" width="190" height="36"/><text x="480" y="486" font-size="14">⚡</text><text x="498" y="488" font-size="9" font-weight="700" fill="#eef1ff"><tspan class="lang-zh">经验固化为技能</tspan><tspan class="lang-en">Experience→Skills</tspan></text>
+        <rect class="nd" x="690" y="466" width="200" height="36"/><text x="700" y="486" font-size="14">🚀</text><text x="718" y="488" font-size="9" font-weight="700" fill="#eef1ff"><tspan class="lang-zh">技能持续进化</tspan><tspan class="lang-en">Skills Evolve</tspan></text>
+        <line class="fl-s" x1="222" y1="484" x2="248" y2="484"/><line class="fl-d" x1="442" y1="484" x2="468" y2="484"/><line class="fl-d" x1="662" y1="484" x2="688" y2="484"/>
+        <path d="M890,506 Q900,536 480,544 Q60,536 70,506" fill="none" stroke="#00e5ff" stroke-width="1.5" stroke-dasharray="4 3" opacity=".4" marker-end="url(#aO)"/>
+        <rect class="lbl-bg" x="400" y="534" width="160" height="12"/><text x="480" y="543" text-anchor="middle" font-size="7" fill="#00e5ff" font-weight="600"><tspan class="lang-zh">反馈闭环 · 下次执行自动调用已有技能</tspan><tspan class="lang-en">Feedback loop · Auto-invoke next run</tspan></text>
+      </svg>
+    </div>
+
+    <div class="hbox">
+      <h4><span class="lang-zh">💡 为什么这套架构对 OpenClaw 至关重要</span><span class="lang-en">💡 Why This Architecture Matters</span></h4>
+      <div class="hgrid">
+        <div class="hitem"><div class="hico">📋</div><div><h5><span class="lang-zh">Task：碎片→知识</span><span class="lang-en">Tasks: Fragments→Knowledge</span></h5><p><span class="lang-zh">多轮对话组织为完整知识单元，检索效率大幅提升。</span><span class="lang-en">Multi-turn dialogues organized into reusable knowledge units.</span></p></div></div>
+        <div class="hitem"><div class="hico">⚡</div><div><h5><span class="lang-zh">Skill：记住→会做</span><span class="lang-en">Skills: Remember→Do</span></h5><p><span class="lang-zh">实战操作指南，相似任务直接调用，跳过摸索。</span><span class="lang-en">Battle-tested procedural guides, invoked automatically on similar tasks.</span></p></div></div>
+        <div class="hitem"><div class="hico">🔄</div><div><h5><span class="lang-zh">自动进化：越用越强</span><span class="lang-en">Auto-Evolution</span></h5><p><span class="lang-zh">新经验触发 Skill 升级（refine/extend/fix）。</span><span class="lang-en">New experiences trigger automatic skill upgrades (refine / extend / fix).</span></p></div></div>
+        <div class="hitem"><div class="hico">💰</div><div><h5><span class="lang-zh">分级模型：按需配算力</span><span class="lang-en">Tiered Models</span></h5><p><span class="lang-zh">轻量/中等/高质量模型分层配置，极致省钱。</span><span class="lang-en">Purpose-matched models for maximum cost efficiency.</span></p></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Quick Start ════════ -->
+<section class="section" id="quickstart">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">60 秒<span class="hl">上手</span></span><span class="lang-en">Up and Running in <span class="hl">60 Seconds</span></span></h2>
+    <p class="section-desc"><span class="lang-zh">npm 一键安装，两种配置方式任选。</span><span class="lang-en">One-command install. Two configuration methods.</span></p>
+  </div>
+  <div class="showcase">
+    <div class="showcase-item">
+      <div class="showcase-text">
+        <h3><span class="lang-zh">1. 一键安装</span><span class="lang-en">1. Install</span></h3>
+        <p><span class="lang-zh">macOS / Linux 用户建议先安装 C++ 编译工具（用于 <code style="font-size:12px">better-sqlite3</code>）。<br><a href="./docs/troubleshooting.html" style="color:var(--cyan);font-size:12px">遇到安装问题？查看排查指南 →</a></span><span class="lang-en">macOS / Linux users: install C++ build tools first (for <code style="font-size:12px">better-sqlite3</code>).<br><a href="./docs/troubleshooting.html" style="color:var(--cyan);font-size:12px">Install issues? See troubleshooting guide →</a></span></p>
+      </div>
+      <div class="showcase-visual">
+        <div class="code-block">
+          <div class="code-header"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span><span style="flex:1"></span>terminal</div>
+          <pre><span class="cmt"># Step 0: 安装编译工具 (macOS / Linux)</span>
+<span class="kw">xcode-select</span> --install        <span class="cmt"># macOS</span>
+<span class="cmt"># sudo apt install build-essential  # Linux</span>
+
+<span class="cmt"># Step 1: 安装插件 & 启动</span>
+<span class="kw">curl</span> -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</pre>
+        </div>
+      </div>
+    </div>
+    <div class="showcase-item reverse">
+      <div class="showcase-text">
+        <h3><span class="lang-zh">2. 配置</span><span class="lang-en">2. Config</span></h3>
+        <p><span class="lang-zh">网页面板：<code>http://127.0.0.1:18799</code> 登录后点「设置」。或编辑 <code>openclaw.json</code>。</span><span class="lang-en">Web panel: <code>http://127.0.0.1:18799</code> → Settings. Or edit <code>openclaw.json</code>.</span></p>
+      </div>
+      <div class="showcase-visual">
+        <div class="config-tabs">
+          <button class="config-tab active" onclick="switchConfigTab(this,'cw')"><span class="lang-zh">网页面板</span><span class="lang-en">Web Panel</span></button>
+          <button class="config-tab" onclick="switchConfigTab(this,'cf')"><span class="lang-zh">配置文件</span><span class="lang-en">Config File</span></button>
+        </div>
+        <div id="cw" class="config-pane active">
+          <div class="viewer-mock" style="border-top:none;border-radius:0 0 var(--radius) var(--radius)">
+            <div class="viewer-mock-bar"><div class="dots"><span style="background:#ff5f57"></span><span style="background:#ffbd2e"></span><span style="background:#28ca42"></span></div><div class="url">127.0.0.1:18799</div></div>
+            <div class="viewer-mock-body" style="min-height:auto;padding:14px;max-height:200px;overflow-y:auto">
+              <div class="vm-nav"><span>Memories</span><span>Tasks</span><span>Skills</span><span>Analytics</span><span>Logs</span><span class="active">Settings</span></div>
+              <div style="font-size:11px;color:var(--text-sec);line-height:1.8;font-family:var(--mono)">
+                <div style="padding:6px 10px;border-bottom:1px solid var(--border)"><span style="color:var(--text-thr)">Embedding</span></div>
+                <div style="padding:6px 10px;display:grid;grid-template-columns:80px 1fr;gap:4px 8px;font-size:10px">
+                  <span style="color:var(--text-thr)">Provider</span><span>openai_compatible</span>
+                  <span style="color:var(--text-thr)">Model</span><span style="color:var(--text)">bge-m3</span>
+                  <span style="color:var(--text-thr)">Endpoint</span><span>https://your-api-endpoint/v1</span>
+                  <span style="color:var(--text-thr)">API Key</span><span>sk-••••••</span>
+                </div>
+                <div style="padding:6px 10px;border-top:1px solid var(--border);border-bottom:1px solid var(--border)"><span style="color:var(--text-thr)">Summarizer</span></div>
+                <div style="padding:6px 10px;display:grid;grid-template-columns:80px 1fr;gap:4px 8px;font-size:10px">
+                  <span style="color:var(--text-thr)">Provider</span><span>openai_compatible</span>
+                  <span style="color:var(--text-thr)">Model</span><span style="color:var(--text)">gpt-4o-mini</span>
+                  <span style="color:var(--text-thr)">Endpoint</span><span>https://your-api-endpoint/v1</span>
+                  <span style="color:var(--text-thr)">API Key</span><span>sk-••••••</span>
+                </div>
+                <div style="padding:6px 10px;border-top:1px solid var(--border);border-bottom:1px solid var(--border)"><span style="color:var(--text-thr)">Skill Evolution</span></div>
+                <div style="padding:6px 10px;display:grid;grid-template-columns:80px 1fr;gap:4px 8px;font-size:10px">
+                  <span style="color:var(--text-thr)">Model</span><span style="color:var(--cyan)">claude-4.6-opus</span>
+                  <span style="color:var(--text-thr)">Endpoint</span><span>https://your-api-endpoint/v1</span>
+                </div>
+                <div style="padding:6px 10px;border-top:1px solid var(--border);display:grid;grid-template-columns:80px 1fr;gap:4px 8px;font-size:10px">
+                  <span style="color:var(--text-thr)">Viewer Port</span><span style="color:var(--text)">18799</span>
+                </div>
+              </div>
+              <div style="text-align:center;margin-top:10px;font-size:10px;color:var(--text-thr)"><span class="lang-zh">保存即生效</span><span class="lang-en">Save to apply</span></div>
+            </div>
+          </div>
+        </div>
+        <div id="cf" class="config-pane">
+          <div class="code-block" style="border-top:none;border-radius:0 0 var(--radius) var(--radius);max-height:260px;overflow-y:auto">
+            <pre>{
+  <span class="str">"plugins"</span>: {
+    <span class="str">"slots"</span>: { <span class="str">"memory"</span>: <span class="str">"memos-local-openclaw-plugin"</span> },
+    <span class="str">"entries"</span>: {
+      <span class="str">"memos-local-openclaw-plugin"</span>: {
+        <span class="str">"config"</span>: {
+          <span class="str">"embedding"</span>: {
+            <span class="str">"provider"</span>: <span class="str">"openai_compatible"</span>,
+            <span class="str">"model"</span>: <span class="str">"bge-m3"</span>,
+            <span class="str">"endpoint"</span>: <span class="str">"https://your-api-endpoint/v1"</span>,
+            <span class="str">"apiKey"</span>: <span class="str">"sk-••••••"</span>
+          },
+          <span class="str">"summarizer"</span>: {
+            <span class="str">"provider"</span>: <span class="str">"openai_compatible"</span>,
+            <span class="str">"model"</span>: <span class="str">"gpt-4o-mini"</span>,
+            <span class="str">"endpoint"</span>: <span class="str">"https://your-api-endpoint/v1"</span>,
+            <span class="str">"apiKey"</span>: <span class="str">"sk-••••••"</span>
+          },
+          <span class="str">"skillEvolution"</span>: {
+            <span class="str">"summarizer"</span>: {
+              <span class="str">"provider"</span>: <span class="str">"openai_compatible"</span>,
+              <span class="str">"model"</span>: <span class="str">"claude-4.6-opus"</span>,
+              <span class="str">"endpoint"</span>: <span class="str">"https://your-api-endpoint/v1"</span>,
+              <span class="str">"apiKey"</span>: <span class="str">"sk-••••••"</span>
+            }
+          },
+          <span class="str">"viewerPort"</span>: <span class="num">18799</span>
+        }
+      }
+    }
+  }
+}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Providers ════════ -->
+<section class="section">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">适配你的<span class="hl">技术栈</span></span><span class="lang-en">Works with Your <span class="hl">Preferred Stack</span></span></h2>
+    <p class="section-desc"><span class="lang-zh">OpenAI 兼容 API 即插即用，无配置自动降级本地模型。</span><span class="lang-en">Any OpenAI-compatible API works out of the box. Automatic fallback to local models when no API key is configured.</span></p>
+  </div>
+  <div class="provider-grid">
+    <div class="provider">OpenAI</div><div class="provider">Anthropic</div><div class="provider">Gemini</div><div class="provider">Bedrock</div><div class="provider">Cohere</div><div class="provider">Voyage</div><div class="provider">Mistral</div><div class="provider"><span class="lang-zh">本地</span><span class="lang-en">Local</span></div>
+  </div>
+</div>
+</section>
+
+<!-- ════════ Tools ════════ -->
+<section class="section">
+<div class="container">
+  <div class="section-header"><h2><span class="lang-zh">12 个<span class="hl">智能工具</span></span><span class="lang-en">12 <span class="hl">Smart Tools</span></span></h2></div>
+  <div class="tool-grid">
+    <div class="tool-card"><div class="ticon">🧠</div><h4>auto_recall</h4><p><span class="lang-zh">每轮自动回忆</span><span class="lang-en">Auto recall each turn</span></p></div>
+    <div class="tool-card"><div class="ticon">🔍</div><h4>memory_search</h4><p><span class="lang-zh">记忆检索</span><span class="lang-en">Memory search</span></p></div>
+    <div class="tool-card"><div class="ticon">📄</div><h4>memory_get</h4><p><span class="lang-zh">获取完整记忆</span><span class="lang-en">Get full memory</span></p></div>
+    <div class="tool-card"><div class="ticon">📜</div><h4>memory_timeline</h4><p><span class="lang-zh">上下文邻居</span><span class="lang-en">Context neighbors</span></p></div>
+    <div class="tool-card"><div class="ticon">📢</div><h4>memory_write_public</h4><p><span class="lang-zh">写入公共记忆</span><span class="lang-en">Write public memory</span></p></div>
+    <div class="tool-card"><div class="ticon">📋</div><h4>task_summary</h4><p><span class="lang-zh">任务摘要</span><span class="lang-en">Task summary</span></p></div>
+    <div class="tool-card"><div class="ticon">⚡</div><h4>skill_get</h4><p><span class="lang-zh">技能指南</span><span class="lang-en">Skill guide</span></p></div>
+    <div class="tool-card"><div class="ticon">📦</div><h4>skill_install</h4><p><span class="lang-zh">安装技能</span><span class="lang-en">Install skill</span></p></div>
+    <div class="tool-card"><div class="ticon">🔎</div><h4>skill_search</h4><p><span class="lang-zh">技能发现</span><span class="lang-en">Skill discovery</span></p></div>
+    <div class="tool-card"><div class="ticon">🌍</div><h4>skill_publish</h4><p><span class="lang-zh">公开技能</span><span class="lang-en">Publish skill</span></p></div>
+    <div class="tool-card"><div class="ticon">🔒</div><h4>skill_unpublish</h4><p><span class="lang-zh">取消公开</span><span class="lang-en">Unpublish skill</span></p></div>
+    <div class="tool-card"><div class="ticon">🌐</div><h4>memory_viewer</h4><p><span class="lang-zh">管理面板</span><span class="lang-en">Dashboard</span></p></div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Migration ════════ -->
+<section class="section" id="migration">
+<div class="container">
+  <div class="section-header">
+    <div class="magic-badge">
+      <span>🦞</span>
+      <span class="lang-zh">OpenClaw 原生记忆导入</span><span class="lang-en">OpenClaw Native Memory Import</span>
+    </div>
+    <h2><span class="lang-zh">再续前缘 —<br>过往的记忆，<span class="hl">不会丢失</span></span><span class="lang-en">Reconnect —<br>Your Past Memories, <span class="hl">Never Lost</span></span></h2>
+    <p class="section-desc"><span class="lang-zh">从 OpenClaw 原生 SQLite 和会话记录中无缝迁移，智能去重、自动摘要、技能生成一气呵成。你和 AI 共同积累的每一段对话，都值得被记住。</span><span class="lang-en">Seamlessly migrate from OpenClaw's native SQLite and session logs. Smart deduplication, auto-summarization, and skill generation — all in one flow. Every conversation you've built with your AI deserves to be preserved.</span></p>
+  </div>
+
+  <div class="mig-features">
+    <div class="mig-card">
+      <span class="mig-icon">🚀</span>
+      <h4><span class="lang-zh">一键迁移</span><span class="lang-en">One-Click Import</span></h4>
+      <p><span class="lang-zh">自动扫描 OpenClaw 原生记忆文件，一键启动导入，实时显示进度与统计。</span><span class="lang-en">Automatically scans OpenClaw native memory files. Start import with one click and monitor real-time progress.</span></p>
+    </div>
+    <div class="mig-card">
+      <span class="mig-icon">🧬</span>
+      <h4><span class="lang-zh">智能去重</span><span class="lang-en">Smart Dedup</span></h4>
+      <p><span class="lang-zh">向量相似度 + LLM 判断双重去重，相似内容自动合并，不留冗余。</span><span class="lang-en">Vector similarity combined with LLM judgment for dual-layer deduplication. Similar content is automatically merged with zero redundancy.</span></p>
+    </div>
+    <div class="mig-card">
+      <span class="mig-icon">⏸️</span>
+      <h4><span class="lang-zh">断点续传</span><span class="lang-en">Resume Anytime</span></h4>
+      <p><span class="lang-zh">支持随时暂停，刷新页面后自动恢复进度。后台持续运行，已处理的自动跳过。</span><span class="lang-en">Pause anytime and auto-resume on page refresh. Runs in the background, automatically skipping already processed items.</span></p>
+    </div>
+    <div class="mig-card">
+      <span class="mig-icon">⚡</span>
+      <h4><span class="lang-zh">任务与技能生成</span><span class="lang-en">Task & Skill Gen</span></h4>
+      <p><span class="lang-zh">导入后可选生成任务摘要和技能进化，同一 Agent 内串行处理，不同 Agent 之间并行（可配置 1–8 并发度），支持暂停和断点续传。</span><span class="lang-en">Optionally generate task summaries and evolve skills. Serial within each agent, parallel across agents (configurable 1–8 concurrency), with full pause and resume support.</span></p>
+    </div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Demo Showcase ════════ -->
+<section class="section" id="demo">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">沉浸体验<span class="hl">完整流程</span></span><span class="lang-en">Experience the <span class="hl">Complete Workflow</span></span></h2>
+    <p class="section-desc"><span class="lang-zh">从记忆导入到智能检索再到可视化管理，一站式体验 MemOS 的核心能力。</span><span class="lang-en">From memory import to smart retrieval to visual management — explore MemOS's core capabilities in an interactive demo.</span></p>
+  </div>
+
+  <div class="demo-grid">
+    <a href="./demo/index.html#import" class="demo-card" style="text-decoration:none">
+      <div class="demo-visual">
+        <div class="demo-mock">
+          <div class="demo-mock-bar"><span style="background:#ff5f57"></span><span style="background:#ffbd2e"></span><span style="background:#28ca42"></span></div>
+          <div class="demo-mock-content">
+            <div style="display:flex;gap:6px;margin-bottom:6px">
+              <div style="width:40%;height:6px;border-radius:3px;background:rgba(255,60,172,.3)"></div>
+              <div style="width:30%;height:6px;border-radius:3px;background:rgba(177,108,255,.3)"></div>
+            </div>
+            <div style="height:4px;border-radius:2px;background:linear-gradient(90deg,var(--cyan),var(--purple));width:65%;margin-bottom:8px"></div>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <div style="display:flex;gap:4px;align-items:center"><div style="width:10px;height:10px;border-radius:3px;background:rgba(0,230,118,.15);border:1px solid rgba(0,230,118,.3)"></div><div style="height:3px;border-radius:2px;background:rgba(200,210,255,.1);flex:1"></div></div>
+              <div style="display:flex;gap:4px;align-items:center"><div style="width:10px;height:10px;border-radius:3px;background:rgba(0,229,255,.15);border:1px solid rgba(0,229,255,.3)"></div><div style="height:3px;border-radius:2px;background:rgba(200,210,255,.08);flex:1"></div></div>
+              <div style="display:flex;gap:4px;align-items:center"><div style="width:10px;height:10px;border-radius:3px;background:rgba(255,202,40,.15);border:1px solid rgba(255,202,40,.3)"></div><div style="height:3px;border-radius:2px;background:rgba(200,210,255,.06);flex:1"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="demo-body">
+        <div class="demo-tag"><span class="lang-zh">场景一</span><span class="lang-en">Scene 1</span></div>
+        <h4><span class="lang-zh">🦞 记忆导入</span><span class="lang-en">🦞 Memory Import</span></h4>
+        <p class="demo-desc"><span class="lang-zh">从 OpenClaw 原生格式无缝迁移，实时进度与智能去重。</span><span class="lang-en">Seamlessly migrate from OpenClaw's native format with real-time progress and smart deduplication.</span></p>
+        <div class="demo-steps">
+          <div class="demo-step"><span class="step-num">1</span><span class="lang-zh">扫描原生记忆文件</span><span class="lang-en">Scan native memory files</span></div>
+          <div class="demo-step"><span class="step-num">2</span><span class="lang-zh">一键导入与去重</span><span class="lang-en">One-click import & dedup</span></div>
+          <div class="demo-step"><span class="step-num">3</span><span class="lang-zh">生成任务与技能</span><span class="lang-en">Generate tasks & skills</span></div>
+        </div>
+        <span class="demo-cta"><span class="lang-zh">开始体验 →</span><span class="lang-en">Try it →</span></span>
+      </div>
+    </a>
+
+    <a href="./demo/index.html#search" class="demo-card" style="text-decoration:none">
+      <div class="demo-visual">
+        <div class="demo-mock">
+          <div class="demo-mock-bar"><span style="background:#ff5f57"></span><span style="background:#ffbd2e"></span><span style="background:#28ca42"></span></div>
+          <div class="demo-mock-content">
+            <div style="height:8px;border-radius:4px;border:1px solid var(--border);margin-bottom:8px;position:relative;overflow:hidden"><div style="position:absolute;left:6px;top:50%;transform:translateY(-50%);width:3px;height:3px;border-radius:50%;background:var(--cyan)"></div></div>
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <div style="display:flex;gap:4px;align-items:center"><div style="font-size:6px;color:var(--cyan)">FTS</div><div style="height:3px;border-radius:2px;background:rgba(0,229,255,.15);flex:1"></div></div>
+              <div style="display:flex;gap:4px;align-items:center"><div style="font-size:6px;color:var(--purple)">VEC</div><div style="height:3px;border-radius:2px;background:rgba(177,108,255,.15);flex:1"></div></div>
+              <div style="display:flex;gap:4px;align-items:center"><div style="font-size:6px;color:var(--green)">RRF</div><div style="height:3px;border-radius:2px;background:rgba(0,230,118,.15);flex:1"></div></div>
+            </div>
+            <div style="margin-top:6px;height:2px;border-radius:1px;background:var(--grad-main);width:85%"></div>
+          </div>
+        </div>
+      </div>
+      <div class="demo-body">
+        <div class="demo-tag"><span class="lang-zh">场景二</span><span class="lang-en">Scene 2</span></div>
+        <h4><span class="lang-zh">🔍 智能检索</span><span class="lang-en">🔍 Smart Retrieval</span></h4>
+        <p class="demo-desc"><span class="lang-zh">FTS5 全文 + 向量相似度 + RRF 融合 + MMR 重排，多策略混合召回。</span><span class="lang-en">FTS5 full-text search, vector similarity, RRF fusion, and MMR reranking — multi-strategy hybrid recall for precise results.</span></p>
+        <div class="demo-steps">
+          <div class="demo-step"><span class="step-num">1</span><span class="lang-zh">输入自然语言查询</span><span class="lang-en">Enter natural language query</span></div>
+          <div class="demo-step"><span class="step-num">2</span><span class="lang-zh">多路混合检索融合</span><span class="lang-en">Multi-path hybrid retrieval</span></div>
+          <div class="demo-step"><span class="step-num">3</span><span class="lang-zh">相关度排序展示</span><span class="lang-en">Relevance-ranked results</span></div>
+        </div>
+        <span class="demo-cta"><span class="lang-zh">开始体验 →</span><span class="lang-en">Try it →</span></span>
+      </div>
+    </a>
+
+    <a href="./demo/index.html#viewer" class="demo-card" style="text-decoration:none">
+      <div class="demo-visual">
+        <div class="demo-mock">
+          <div class="demo-mock-bar"><span style="background:#ff5f57"></span><span style="background:#ffbd2e"></span><span style="background:#28ca42"></span></div>
+          <div class="demo-mock-content">
+            <div style="display:flex;gap:3px;margin-bottom:6px">
+              <div style="font-size:5px;padding:1px 4px;border-radius:3px;background:var(--grad-main);color:#06080f;font-weight:700">Memories</div>
+              <div style="font-size:5px;padding:1px 4px;border-radius:3px;color:var(--text-thr)">Tasks</div>
+              <div style="font-size:5px;padding:1px 4px;border-radius:3px;color:var(--text-thr)">Skills</div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px;margin-bottom:6px">
+              <div style="background:rgba(99,140,255,.04);border:1px solid var(--border);border-radius:4px;padding:3px;text-align:center"><div style="font-size:10px;font-weight:800;color:var(--text)">597</div><div style="font-size:4px;color:var(--text-thr)">memories</div></div>
+              <div style="background:rgba(99,140,255,.04);border:1px solid var(--border);border-radius:4px;padding:3px;text-align:center"><div style="font-size:10px;font-weight:800;color:var(--text)">55</div><div style="font-size:4px;color:var(--text-thr)">sessions</div></div>
+            </div>
+            <div style="height:3px;border-radius:2px;background:rgba(200,210,255,.06);margin-bottom:2px"></div>
+            <div style="height:3px;border-radius:2px;background:rgba(200,210,255,.04);margin-bottom:2px"></div>
+            <div style="height:3px;border-radius:2px;background:rgba(200,210,255,.03)"></div>
+          </div>
+        </div>
+      </div>
+      <div class="demo-body">
+        <div class="demo-tag"><span class="lang-zh">场景三</span><span class="lang-en">Scene 3</span></div>
+        <h4><span class="lang-zh">📊 Viewer 管理</span><span class="lang-en">📊 Viewer Dashboard</span></h4>
+        <p class="demo-desc"><span class="lang-zh">七大管理页面：记忆浏览、任务摘要、技能进化、数据分析、日志追踪、记忆导入、在线配置。</span><span class="lang-en">Seven management pages: memories, tasks, skills, analytics, logs, import, and settings.</span></p>
+        <div class="demo-steps">
+          <div class="demo-step"><span class="step-num">1</span><span class="lang-zh">记忆 CRUD 管理</span><span class="lang-en">Memory CRUD management</span></div>
+          <div class="demo-step"><span class="step-num">2</span><span class="lang-zh">任务与技能追踪</span><span class="lang-en">Task & skill tracking</span></div>
+          <div class="demo-step"><span class="step-num">3</span><span class="lang-zh">数据洞察分析</span><span class="lang-en">Data insights & analytics</span></div>
+        </div>
+        <span class="demo-cta"><span class="lang-zh">开始体验 →</span><span class="lang-en">Try it →</span></span>
+      </div>
+    </a>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ CTA ════════ -->
+<section class="cta-section">
+<div class="container">
+  <div class="claw-icon" style="width:64px;height:64px;margin:0 auto 24px">
+    <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
+      <defs><linearGradient id="cLG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs>
+      <path d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z" fill="url(#cLG)" class="claw-body"/>
+      <path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#cLG)" class="claw-left"/>
+      <path d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z" fill="url(#cLG)" class="claw-right"/>
+      <path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round" class="antenna"/>
+      <path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round" class="antenna"/>
+      <circle cx="45" cy="35" r="6" fill="#050810" class="eye"/>
+      <circle cx="75" cy="35" r="6" fill="#050810" class="eye"/>
+      <circle cx="46" cy="34" r="2" fill="#00e5cc" class="eye-glow"/>
+      <circle cx="76" cy="34" r="2" fill="#00e5cc" class="eye-glow"/>
+    </svg>
+  </div>
+  <h2><span class="lang-zh">让你的 OpenClaw<br><span class="hl">越用越聪明</span></span><span class="lang-en">Give Your OpenClaw<br><span class="hl">Lasting Intelligence</span></span></h2>
+  <p class="desc"><span class="lang-zh">完全本地化 · 全量可视化 · 任务与技能自进化 · 多智能体协同 · 记忆迁移</span><span class="lang-en">100% local · Full dashboard · Task & skill evolution · Multi-agent collaboration · Memory migration</span></p>
+  <div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;position:relative">
+    <a href="#quickstart" class="btn btn-glow"><span class="lang-zh">立即安装 →</span><span class="lang-en">Get Started →</span></a>
+    <a href="./docs/index.html" class="btn btn-outline"><span class="lang-zh">查看文档</span><span class="lang-en">Docs</span></a>
+  </div>
+</div>
+</section>
+
+<footer>
+<div class="container">
+  <div class="inner">
+    <div class="brand"><img src="https://statics.memtensor.com.cn/logo/white-memos.svg" alt="MemOS" style="width:28px;height:28px"> MemOS</div>
+    <div class="links"><a href="./docs/index.html">Docs</a><a href="https://www.npmjs.com/package/@memtensor/memos-local-openclaw-plugin" target="_blank">npm</a><a href="https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-openclaw" target="_blank">GitHub</a><a href="https://github.com/MemTensor/MemOS/blob/main/LICENSE" target="_blank">MIT</a></div>
+  </div>
+  <div class="copy">© 2026 MemTensor. MemOS OpenClaw Plugin.</div>
+</div>
+</footer>
+
+<script>
+(function(){
+  var key='memos-local-lang',lang=(typeof localStorage!=='undefined'&&localStorage.getItem(key))||'zh';
+  document.body.classList.add('lang-'+lang);
+  document.querySelectorAll('.lang-btn').forEach(function(btn){
+    btn.classList.toggle('active',btn.getAttribute('data-lang')===lang);
+    btn.addEventListener('click',function(){
+      var L=this.getAttribute('data-lang');document.body.classList.remove('lang-zh','lang-en');document.body.classList.add('lang-'+L);
+      try{localStorage.setItem(key,L);}catch(e){}
+      document.querySelectorAll('.lang-btn').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-lang')===L);});
+    });
+  });
+})();
+function switchConfigTab(btn,id){
+  document.querySelectorAll('.config-tab').forEach(function(t){t.classList.remove('active')});
+  document.querySelectorAll('.config-pane').forEach(function(p){p.classList.remove('active')});
+  btn.classList.add('active');document.getElementById(id).classList.add('active');
+}
+(function(){
+  function copyText(text){
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function(resolve,reject){
+      var ta=document.createElement('textarea');
+      ta.value=text;
+      ta.setAttribute('readonly','');
+      ta.style.position='fixed';
+      ta.style.opacity='0';
+      document.body.appendChild(ta);
+      ta.select();
+      try{
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        resolve();
+      }catch(err){
+        document.body.removeChild(ta);
+        reject(err);
+      }
+    });
+  }
+  document.querySelectorAll('.copy-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var text=this.getAttribute('data-copy')||'';
+      var self=this;
+      self.classList.add('copied');
+      if(self._copiedTimer){clearTimeout(self._copiedTimer);}
+      self._copiedTimer=setTimeout(function(){self.classList.remove('copied');},1200);
+      copyText(text).catch(function(){});
+    });
+  });
+})();
+</script>
+<style>@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}</style>
+<script>
+(function(){
+  var obs=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.style.opacity='1';e.target.style.transform='translateY(0)';}});},{threshold:0.08,rootMargin:'0px 0px -40px 0px'});
+  document.querySelectorAll('.value-card,.provider,.showcase-item,.tool-card,.hitem,.mig-card,.demo-card').forEach(function(el){
+    el.style.opacity='0';el.style.transform='translateY(24px)';el.style.transition='opacity .6s ease,transform .6s ease';obs.observe(el);
+  });
+})();
+</script>
+</body>
+</html>

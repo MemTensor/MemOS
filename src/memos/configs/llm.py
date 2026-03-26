@@ -72,7 +72,7 @@ class DeepSeekLLMConfig(OpenAILLMConfig):
     )
 
 
-class MinimaxLLMConfig(BaseLLMConfig):
+class MinimaxLLMConfig(OpenAILLMConfig):
     api_key: str = Field(..., description="API key for MiniMax")
     api_base: str = Field(
         default="https://api.minimax.io/v1",

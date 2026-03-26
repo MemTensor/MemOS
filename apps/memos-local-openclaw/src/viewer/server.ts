@@ -1,12 +1,13 @@
 import http from "node:http";
+import os from "node:os";
 import crypto from "node:crypto";
-import { execSync } from "node:child_process";
+import { execSync, exec } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import type { SqliteStore } from "../storage/sqlite";
 import type { Embedder } from "../embedding";
-import { Summarizer } from "../ingest/providers";
+import { Summarizer, modelHealth } from "../ingest/providers";
 import { findTopSimilar } from "../ingest/dedup";
 import { stripInboundMetadata } from "../capture";
 import { vectorSearch } from "../storage/vector";
@@ -16,6 +17,11 @@ import { SkillEvolver } from "../skill/evolver";
 import type { Logger, Chunk, PluginContext } from "../types";
 import { viewerHTML } from "./html";
 import { v4 as uuid } from "uuid";
+
+function normalizeTimestamp(ts: number): number {
+  if (ts < 1e12) return ts * 1000;
+  return ts;
+}
 
 export interface ViewerServerOptions {
   store: SqliteStore;
@@ -70,8 +76,8 @@ export class ViewerServer {
 
   private ppRunning = false;
   private ppAbort = false;
-  private ppState: { running: boolean; done: boolean; stopped: boolean; processed: number; total: number; tasksCreated: number; skillsCreated: number; errors: number } =
-    { running: false, done: false, stopped: false, processed: 0, total: 0, tasksCreated: 0, skillsCreated: 0, errors: 0 };
+  private ppState: { running: boolean; done: boolean; stopped: boolean; processed: number; total: number; tasksCreated: number; skillsCreated: number; errors: number; skippedSessions: number; totalSessions: number } =
+    { running: false, done: false, stopped: false, processed: 0, total: 0, tasksCreated: 0, skillsCreated: 0, errors: 0, skippedSessions: 0, totalSessions: 0 };
   private ppSSEClients: http.ServerResponse[] = [];
 
   constructor(opts: ViewerServerOptions) {
@@ -101,9 +107,26 @@ export class ViewerServer {
       this.server.listen(this.port, "127.0.0.1", () => {
         const addr = this.server!.address();
         const actualPort = typeof addr === "object" && addr ? addr.port : this.port;
+        this.autoCleanupPolluted();
         resolve(`http://127.0.0.1:${actualPort}`);
       });
     });
+  }
+
+  private autoCleanupPolluted(): void {
+    try {
+      const polluted = this.store.findPollutedUserChunks();
+      let deleted = 0;
+      for (const { id } of polluted) {
+        if (this.store.deleteChunk(id)) deleted++;
+      }
+      const fixed = this.store.fixMixedUserChunks();
+      if (deleted > 0 || fixed > 0) {
+        this.log.info(`Auto-cleanup: removed ${deleted} polluted chunks, fixed ${fixed} mixed user+assistant chunks`);
+      }
+    } catch (err) {
+      this.log.warn(`Auto-cleanup failed: ${err}`);
+    }
   }
 
   stop(): void {
@@ -213,7 +236,6 @@ export class ViewerServer {
       else if (p.startsWith("/api/skill/") && req.method === "DELETE") this.handleSkillDelete(res, p);
       else if (p.startsWith("/api/skill/") && req.method === "PUT") this.handleSkillUpdate(req, res, p);
       else if (p.startsWith("/api/skill/") && req.method === "GET") this.serveSkillDetail(res, p);
-      else if (p === "/api/memory" && req.method === "POST") this.handleCreate(req, res);
       else if (p.startsWith("/api/memory/") && req.method === "GET") this.serveMemoryDetail(res, p);
       else if (p.startsWith("/api/memory/") && req.method === "PUT") this.handleUpdate(req, res, p);
       else if (p.startsWith("/api/memory/") && req.method === "DELETE") this.handleDelete(res, p);
@@ -223,7 +245,13 @@ export class ViewerServer {
       else if (p === "/api/log-tools" && req.method === "GET") this.serveLogTools(res);
       else if (p === "/api/config" && req.method === "GET") this.serveConfig(res);
       else if (p === "/api/config" && req.method === "PUT") this.handleSaveConfig(req, res);
+      else if (p === "/api/test-model" && req.method === "POST") this.handleTestModel(req, res);
+      else if (p === "/api/model-health" && req.method === "GET") this.serveModelHealth(res);
+      else if (p === "/api/fallback-model" && req.method === "GET") this.serveFallbackModel(res);
+      else if (p === "/api/update-check" && req.method === "GET") this.handleUpdateCheck(res);
+      else if (p === "/api/update-install" && req.method === "POST") this.handleUpdateInstall(req, res);
       else if (p === "/api/auth/logout" && req.method === "POST") this.handleLogout(req, res);
+      else if (p === "/api/cleanup-polluted" && req.method === "POST") this.handleCleanupPolluted(res);
       else if (p === "/api/migrate/scan" && req.method === "GET") this.handleMigrateScan(res);
       else if (p === "/api/migrate/start" && req.method === "POST") this.handleMigrateStart(req, res);
       else if (p === "/api/migrate/status" && req.method === "GET") this.handleMigrateStatus(res);
@@ -355,7 +383,6 @@ export class ViewerServer {
     const offset = (page - 1) * limit;
     const session = url.searchParams.get("session") ?? undefined;
     const role = url.searchParams.get("role") ?? undefined;
-    const kind = url.searchParams.get("kind") ?? undefined;
     const dateFrom = url.searchParams.get("dateFrom") ?? undefined;
     const dateTo = url.searchParams.get("dateTo") ?? undefined;
     const owner = url.searchParams.get("owner") ?? undefined;
@@ -366,7 +393,6 @@ export class ViewerServer {
     const params: any[] = [];
     if (session) { conditions.push("session_key = ?"); params.push(session); }
     if (role) { conditions.push("role = ?"); params.push(role); }
-    if (kind) { conditions.push("kind = ?"); params.push(kind); }
     if (owner) { conditions.push("owner = ?"); params.push(owner); }
     if (dateFrom) { conditions.push("created_at >= ?"); params.push(new Date(dateFrom).getTime()); }
     if (dateTo) { conditions.push("created_at <= ?"); params.push(new Date(dateTo).getTime()); }
@@ -374,9 +400,14 @@ export class ViewerServer {
     const where = conditions.length > 0 ? " WHERE " + conditions.join(" AND ") : "";
     const totalRow = db.prepare("SELECT COUNT(*) as count FROM chunks" + where).get(...params) as any;
     const rawMemories = db.prepare("SELECT * FROM chunks" + where + ` ORDER BY created_at ${sortBy} LIMIT ? OFFSET ?`).all(...params, limit, offset);
+    const findMergeSources = db.prepare("SELECT id, summary, role FROM chunks WHERE dedup_target = ? AND (dedup_status = 'merged' OR dedup_status = 'duplicate')");
     const memories = rawMemories.map((m: any) => {
       if (m.role === "user" && m.content) {
-        return { ...m, content: stripInboundMetadata(m.content) };
+        m = { ...m, content: stripInboundMetadata(m.content) };
+      }
+      if (m.merge_count > 0) {
+        const sources = findMergeSources.all(m.id) as Array<{ id: string; summary: string; role: string }>;
+        m.merge_sources = sources;
       }
       return m;
     });
@@ -414,7 +445,7 @@ export class ViewerServer {
         id: t.id,
         sessionKey: t.sessionKey,
         title: t.title,
-        summary: t.summary ? (t.summary.length > 300 ? t.summary.slice(0, 297) + "..." : t.summary) : "",
+        summary: t.summary ?? "",
         status: t.status,
         startedAt: t.startedAt,
         endedAt: t.endedAt,
@@ -437,8 +468,7 @@ export class ViewerServer {
 
     const chunks = this.store.getChunksByTask(taskId);
     const chunkItems = chunks.map((c) => {
-      let text = c.role === "user" ? stripInboundMetadata(c.content) : c.content;
-      if (text.length > 500) text = text.slice(0, 497) + "...";
+      const text = c.role === "user" ? stripInboundMetadata(c.content) : c.content;
       return { id: c.id, role: c.role, content: text, summary: c.summary, createdAt: c.createdAt };
     });
 
@@ -475,7 +505,7 @@ export class ViewerServer {
     const emptyStats = {
       totalMemories: 0, totalSessions: 0, totalEmbeddings: 0, totalSkills: 0,
       embeddingProvider: this.embedder?.provider ?? "none",
-      roleBreakdown: {}, kindBreakdown: {}, dedupBreakdown: {},
+      dedupBreakdown: {},
       timeRange: { earliest: null, latest: null },
       sessions: [],
     };
@@ -489,11 +519,17 @@ export class ViewerServer {
       const db = (this.store as any).db;
       const total = db.prepare("SELECT COUNT(*) as count FROM chunks").get() as any;
       const sessions = db.prepare("SELECT COUNT(DISTINCT session_key) as count FROM chunks").get() as any;
-      const roles = db.prepare("SELECT role, COUNT(*) as count FROM chunks GROUP BY role").all() as any[];
-      const timeRange = db.prepare("SELECT MIN(created_at) as earliest, MAX(created_at) as latest FROM chunks").get() as any;
+      const timeRange = db.prepare("SELECT MIN(created_at) as earliest, MAX(created_at) as latest FROM chunks WHERE dedup_status = 'active'").get() as any;
+      const MIN_VALID_TS = 1704067200000; // 2024-01-01
+      if (timeRange.earliest != null && timeRange.earliest < MIN_VALID_TS) {
+        timeRange.earliest = db.prepare("SELECT MIN(created_at) as v FROM chunks WHERE dedup_status = 'active' AND created_at >= ?").get(MIN_VALID_TS) as any;
+        timeRange.earliest = timeRange.earliest?.v ?? null;
+      }
+      if (timeRange.latest != null && timeRange.latest < MIN_VALID_TS) {
+        timeRange.latest = null;
+      }
       let embCount = 0;
       try { embCount = (db.prepare("SELECT COUNT(*) as count FROM embeddings").get() as any).count; } catch { /* table may not exist */ }
-      const kinds = db.prepare("SELECT kind, COUNT(*) as count FROM chunks GROUP BY kind").all() as any[];
       const sessionList = db.prepare(
         "SELECT session_key, COUNT(*) as count, MIN(created_at) as earliest, MAX(created_at) as latest FROM chunks GROUP BY session_key ORDER BY latest DESC",
       ).all() as any[];
@@ -517,8 +553,6 @@ export class ViewerServer {
         totalMemories: total.count, totalSessions: sessions.count, totalEmbeddings: embCount,
         totalSkills: skillCount,
         embeddingProvider: this.embedder.provider,
-        roleBreakdown: Object.fromEntries(roles.map((r: any) => [r.role, r.count])),
-        kindBreakdown: Object.fromEntries(kinds.map((k: any) => [k.kind, k.count])),
         dedupBreakdown,
         timeRange: { earliest: timeRange.earliest, latest: timeRange.latest },
         sessions: sessionList,
@@ -535,44 +569,70 @@ export class ViewerServer {
     if (!q.trim()) { this.jsonResponse(res, { results: [], query: q }); return; }
 
     const role = url.searchParams.get("role") ?? undefined;
-    const kind = url.searchParams.get("kind") ?? undefined;
+    const session = url.searchParams.get("session") ?? undefined;
+    const owner = url.searchParams.get("owner") ?? undefined;
     const dateFrom = url.searchParams.get("dateFrom") ?? undefined;
     const dateTo = url.searchParams.get("dateTo") ?? undefined;
 
     const passesFilter = (r: any): boolean => {
       if (role && r.role !== role) return false;
-      if (kind && r.kind !== kind) return false;
+      if (session && r.session_key !== session) return false;
+      if (owner && r.owner !== owner) return false;
       if (dateFrom && r.created_at < new Date(dateFrom).getTime()) return false;
       if (dateTo && r.created_at > new Date(dateTo).getTime()) return false;
       return true;
     };
 
+    const ftsFilters: string[] = [];
+    const likeFilters: string[] = [];
+    const sqlParams: any[] = [];
+    if (session) { ftsFilters.push("c.session_key = ?"); likeFilters.push("session_key = ?"); sqlParams.push(session); }
+    if (owner) { ftsFilters.push("c.owner = ?"); likeFilters.push("owner = ?"); sqlParams.push(owner); }
+    const ftsWhere = ftsFilters.length > 0 ? " AND " + ftsFilters.join(" AND ") : "";
+    const likeWhere = likeFilters.length > 0 ? " AND " + likeFilters.join(" AND ") : "";
+
     const db = (this.store as any).db;
     let ftsResults: any[] = [];
     try {
       ftsResults = db.prepare(
-        "SELECT c.* FROM chunks_fts f JOIN chunks c ON f.rowid = c.rowid WHERE chunks_fts MATCH ? ORDER BY rank LIMIT 100",
-      ).all(q).filter(passesFilter);
-    } catch {
-      ftsResults = db.prepare(
-        "SELECT * FROM chunks WHERE content LIKE ? OR summary LIKE ? ORDER BY created_at DESC LIMIT 100",
-      ).all(`%${q}%`, `%${q}%`).filter(passesFilter);
+        `SELECT c.* FROM chunks_fts f JOIN chunks c ON f.rowid = c.rowid WHERE chunks_fts MATCH ?${ftsWhere} ORDER BY rank LIMIT 100`,
+      ).all(q, ...sqlParams).filter(passesFilter);
+    } catch { /* FTS syntax error, fall through */ }
+    if (ftsResults.length === 0) {
+      try {
+        ftsResults = db.prepare(
+          `SELECT * FROM chunks WHERE (content LIKE ? OR summary LIKE ?)${likeWhere} ORDER BY created_at DESC LIMIT 100`,
+        ).all(`%${q}%`, `%${q}%`, ...sqlParams).filter(passesFilter);
+      } catch (err) {
+        this.log.warn(`LIKE search failed: ${err}`);
+      }
     }
 
     const SEMANTIC_THRESHOLD = 0.64;
+    const VECTOR_TIMEOUT_MS = 8000;
     let vectorResults: any[] = [];
     let scoreMap = new Map<string, number>();
     try {
-      const queryVec = await this.embedder.embedQuery(q);
-      const hits = vectorSearch(this.store, queryVec, 40);
-      scoreMap = new Map(hits.map(h => [h.chunkId, h.score]));
-      const hitIds = new Set(hits.filter(h => h.score >= SEMANTIC_THRESHOLD).map(h => h.chunkId));
-      if (hitIds.size > 0) {
-        const placeholders = [...hitIds].map(() => "?").join(",");
-        const rows = db.prepare(`SELECT * FROM chunks WHERE id IN (${placeholders})`).all(...hitIds).filter(passesFilter);
-        rows.forEach((r: any) => { r._vscore = scoreMap.get(r.id) ?? 0; });
-        rows.sort((a: any, b: any) => (b._vscore ?? 0) - (a._vscore ?? 0));
-        vectorResults = rows;
+      const vecPromise = (async () => {
+        const queryVec = await this.embedder.embedQuery(q);
+        return vectorSearch(this.store, queryVec, 40);
+      })();
+      const hits = await Promise.race([
+        vecPromise,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), VECTOR_TIMEOUT_MS)),
+      ]);
+      if (hits) {
+        scoreMap = new Map(hits.map(h => [h.chunkId, h.score]));
+        const hitIds = new Set(hits.filter(h => h.score >= SEMANTIC_THRESHOLD).map(h => h.chunkId));
+        if (hitIds.size > 0) {
+          const placeholders = [...hitIds].map(() => "?").join(",");
+          const rows = db.prepare(`SELECT * FROM chunks WHERE id IN (${placeholders})${likeWhere}`).all(...hitIds, ...sqlParams).filter(passesFilter);
+          rows.forEach((r: any) => { r._vscore = scoreMap.get(r.id) ?? 0; });
+          rows.sort((a: any, b: any) => (b._vscore ?? 0) - (a._vscore ?? 0));
+          vectorResults = rows;
+        }
+      } else {
+        this.log.warn("Vector search timed out, returning FTS results only");
       }
     } catch (err) {
       this.log.warn(`Vector search failed (falling back to FTS only): ${err}`);
@@ -584,14 +644,10 @@ export class ViewerServer {
       if (!seenIds.has(r.id)) { seenIds.add(r.id); merged.push(r); }
     }
     for (const r of ftsResults) {
-      if (seenIds.has(r.id)) continue;
-      const vscore = scoreMap.get(r.id);
-      if (vscore !== undefined && vscore < SEMANTIC_THRESHOLD) continue;
-      seenIds.add(r.id); merged.push(r);
+      if (!seenIds.has(r.id)) { seenIds.add(r.id); merged.push(r); }
     }
 
-    const fallback = merged.length === 0 && ftsResults.length > 0;
-    const results = fallback ? ftsResults.slice(0, 20) : merged;
+    const results = merged.length > 0 ? merged : ftsResults.slice(0, 20);
 
     this.store.recordViewerEvent("search");
     this.jsonResponse(res, {
@@ -600,7 +656,6 @@ export class ViewerServer {
       vectorCount: vectorResults.length,
       ftsCount: ftsResults.length,
       total: results.length,
-      fallbackFts: fallback,
     });
   }
 
@@ -759,9 +814,10 @@ export class ViewerServer {
         this.store.setSkillVisibility(skillId, visibility);
         this.jsonResponse(res, { ok: true, skillId, visibility });
       } catch (err) {
-        this.log.error(`handleSkillVisibility error: skillId=${skillId}, body=${body}, err=${err}`);
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: String(err) }));
+        const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+        this.log.error(`handleSkillVisibility error: skillId=${skillId}, body=${body}, err=${errMsg}`);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: errMsg }));
       }
     });
   }
@@ -861,35 +917,6 @@ export class ViewerServer {
 
   // ─── CRUD ───
 
-  private handleCreate(req: http.IncomingMessage, res: http.ServerResponse): void {
-    this.readBody(req, (body) => {
-      try {
-        const data = JSON.parse(body);
-        if (!data.content || typeof data.content !== "string" || !data.content.trim()) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "content is required and must be a non-empty string" }));
-          return;
-        }
-        const { v4: uuidv4 } = require("uuid");
-        const id = uuidv4();
-        const now = Date.now();
-        this.store.insertChunk({
-          id, sessionKey: data.session_key || "manual", turnId: `manual-${now}`, seq: 0,
-          role: data.role || "user", content: data.content, kind: data.kind || "paragraph",
-          summary: data.summary || data.content.slice(0, 100),
-          taskId: null, skillId: null, owner: data.owner || "agent:main",
-          dedupStatus: "active", dedupTarget: null, dedupReason: null,
-          mergeCount: 0, lastHitAt: null, mergeHistory: "[]",
-          createdAt: now, updatedAt: now, embedding: null,
-        });
-        this.jsonResponse(res, { ok: true, id, message: "Memory created" });
-      } catch (err) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: String(err) }));
-      }
-    });
-  }
-
   private serveMemoryDetail(res: http.ServerResponse, urlPath: string): void {
     const chunkId = urlPath.replace("/api/memory/", "");
     const chunk = this.store.getChunk(chunkId);
@@ -914,7 +941,7 @@ export class ViewerServer {
           res.end(JSON.stringify({ error: "content must be a non-empty string" }));
           return;
         }
-        const ok = this.store.updateChunk(chunkId, { summary: data.summary, content: data.content, role: data.role, kind: data.kind, owner: data.owner });
+        const ok = this.store.updateChunk(chunkId, { summary: data.summary, content: data.content, role: data.role, owner: data.owner });
         if (ok) this.jsonResponse(res, { ok: true, message: "Memory updated" });
         else { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Not found" })); }
       } catch (err) {
@@ -938,19 +965,25 @@ export class ViewerServer {
   }
 
   private handleDeleteAll(res: http.ServerResponse): void {
-    const result = this.store.deleteAll();
-    // Clean up skills-store directory
-    const skillsStoreDir = path.join(this.dataDir, "skills-store");
     try {
-      if (fs.existsSync(skillsStoreDir)) {
-        fs.rmSync(skillsStoreDir, { recursive: true });
-        fs.mkdirSync(skillsStoreDir, { recursive: true });
-        this.log.info("Cleared skills-store directory");
+      const result = this.store.deleteAll();
+      const skillsStoreDir = path.join(this.dataDir, "skills-store");
+      try {
+        if (fs.existsSync(skillsStoreDir)) {
+          fs.rmSync(skillsStoreDir, { recursive: true });
+          fs.mkdirSync(skillsStoreDir, { recursive: true });
+          this.log.info("Cleared skills-store directory");
+        }
+      } catch (err) {
+        this.log.warn(`Failed to clear skills-store: ${err}`);
       }
+      this.jsonResponse(res, { ok: true, deleted: result });
     } catch (err) {
-      this.log.warn(`Failed to clear skills-store: ${err}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.error(`handleDeleteAll error: ${msg}`);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: msg }));
     }
-    this.jsonResponse(res, { ok: true, deleted: result });
   }
 
   // ─── Helpers ───
@@ -959,7 +992,8 @@ export class ViewerServer {
 
   private getOpenClawConfigPath(): string {
     const home = process.env.HOME || process.env.USERPROFILE || "";
-    return path.join(home, ".openclaw", "openclaw.json");
+    const ocHome = process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw");
+    return path.join(ocHome, "openclaw.json");
   }
 
   private serveConfig(res: http.ServerResponse): void {
@@ -972,11 +1006,13 @@ export class ViewerServer {
       const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
       const entries = raw?.plugins?.entries ?? {};
       const pluginEntry = entries["memos-local-openclaw-plugin"]?.config
+        ?? entries["memos-local"]?.config
         ?? entries["memos-lite-openclaw-plugin"]?.config
         ?? entries["memos-lite"]?.config
         ?? {};
       const result: Record<string, unknown> = { ...pluginEntry };
       const topEntry = entries["memos-local-openclaw-plugin"]
+        ?? entries["memos-local"]
         ?? entries["memos-lite-openclaw-plugin"]
         ?? entries["memos-lite"]
         ?? {};
@@ -1005,6 +1041,7 @@ export class ViewerServer {
         if (!plugins.entries) plugins.entries = {};
         const entries = plugins.entries as Record<string, unknown>;
         const entryKey = entries["memos-local-openclaw-plugin"] ? "memos-local-openclaw-plugin"
+          : entries["memos-local"] ? "memos-local"
           : entries["memos-lite-openclaw-plugin"] ? "memos-lite-openclaw-plugin"
           : entries["memos-lite"] ? "memos-lite"
           : "memos-local-openclaw-plugin";
@@ -1031,6 +1068,358 @@ export class ViewerServer {
     });
   }
 
+  private handleTestModel(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req, async (body) => {
+      try {
+        const { type, provider, model, endpoint, apiKey } = JSON.parse(body);
+        if (!provider) {
+          this.jsonResponse(res, { ok: false, error: "provider is required" });
+          return;
+        }
+        if (type === "embedding") {
+          const dims = await this.testEmbeddingModel(provider, model, endpoint, apiKey);
+          this.jsonResponse(res, { ok: true, detail: `${provider}/${model}`, dimensions: dims });
+        } else {
+          await this.testChatModel(provider, model, endpoint, apiKey);
+          this.jsonResponse(res, { ok: true, detail: `${provider}/${model}` });
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.log.warn(`test-model failed: ${msg}`);
+        this.jsonResponse(res, { ok: false, error: msg });
+      }
+    });
+  }
+
+  private serveModelHealth(res: http.ServerResponse): void {
+    this.jsonResponse(res, { models: modelHealth.getAll() });
+  }
+
+  private serveFallbackModel(res: http.ServerResponse): void {
+    try {
+      const cfgPath = this.getOpenClawConfigPath();
+      if (!fs.existsSync(cfgPath)) {
+        this.jsonResponse(res, { available: false });
+        return;
+      }
+      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+      const agentModel: string | undefined = raw?.agents?.defaults?.model?.primary;
+      if (!agentModel) {
+        this.jsonResponse(res, { available: false });
+        return;
+      }
+      const [providerKey, modelId] = agentModel.includes("/")
+        ? agentModel.split("/", 2)
+        : [undefined, agentModel];
+      const providerCfg = providerKey
+        ? raw?.models?.providers?.[providerKey]
+        : Object.values(raw?.models?.providers ?? {})[0] as Record<string, unknown> | undefined;
+      if (!providerCfg || !providerCfg.baseUrl || !providerCfg.apiKey) {
+        this.jsonResponse(res, { available: false });
+        return;
+      }
+      this.jsonResponse(res, { available: true, model: modelId || agentModel, baseUrl: providerCfg.baseUrl });
+    } catch {
+      this.jsonResponse(res, { available: false });
+    }
+  }
+
+  private findPluginPackageJson(): string | null {
+    let dir = __dirname;
+    for (let i = 0; i < 6; i++) {
+      const candidate = path.join(dir, "package.json");
+      if (fs.existsSync(candidate)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(candidate, "utf-8"));
+          if (pkg.name && pkg.name.includes("memos-local")) return candidate;
+        } catch { /* skip */ }
+      }
+      dir = path.dirname(dir);
+    }
+    return null;
+  }
+
+  private async handleUpdateCheck(res: http.ServerResponse): Promise<void> {
+    try {
+      const pkgPath = this.findPluginPackageJson();
+      if (!pkgPath) {
+        this.jsonResponse(res, { updateAvailable: false, error: "package.json not found" });
+        return;
+      }
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+      const current = pkg.version as string;
+      const name = pkg.name as string;
+      if (!current || !name) {
+        this.jsonResponse(res, { updateAvailable: false, current });
+        return;
+      }
+      const { computeUpdateCheck } = await import("../update-check");
+      const result = await computeUpdateCheck(name, current, fetch, 6_000);
+      if (!result) {
+        this.jsonResponse(res, { updateAvailable: false, current, packageName: name });
+        return;
+      }
+      this.jsonResponse(res, {
+        updateAvailable: result.updateAvailable,
+        current: result.current,
+        latest: result.latest,
+        packageName: result.packageName,
+        channel: result.channel,
+        installCommand: result.installCommand,
+        stableChannel: result.stableChannel,
+      });
+    } catch (e) {
+      this.log.warn(`handleUpdateCheck error: ${e}`);
+      this.jsonResponse(res, { updateAvailable: false, error: String(e) });
+    }
+  }
+
+  private handleUpdateInstall(req: http.IncomingMessage, res: http.ServerResponse): void {
+    let body = "";
+    req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+    req.on("end", () => {
+      try {
+        const { packageSpec: rawSpec } = JSON.parse(body);
+        if (!rawSpec || typeof rawSpec !== "string") {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "Missing packageSpec" }));
+          return;
+        }
+        const packageSpec = rawSpec.trim().replace(/^(?:npx\s+)?openclaw\s+plugins\s+install\s+/i, "");
+        const allowed = /^@[\w-]+\/[\w.-]+(@[\w.-]+)?$/;
+        this.log.info(`update-install: received packageSpec="${packageSpec}" (len=${packageSpec.length})`);
+        if (!allowed.test(packageSpec)) {
+          this.log.warn(`update-install: rejected packageSpec="${packageSpec}" — does not match ${allowed}`);
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: `Invalid package spec: "${packageSpec}"` }));
+          return;
+        }
+
+        const pkgPath = this.findPluginPackageJson();
+        const pluginName = pkgPath
+          ? (() => { try { return JSON.parse(fs.readFileSync(pkgPath, "utf-8")).name; } catch { return null; } })()
+          : null;
+        const shortName = pluginName?.replace(/^@[\w-]+\//, "") ?? "memos-local-openclaw-plugin";
+        const extDir = path.join(os.homedir(), ".openclaw", "extensions", shortName);
+        const tmpDir = path.join(os.tmpdir(), `openclaw-update-${Date.now()}`);
+
+        // Download via npm pack, extract, and replace extension dir.
+        // Does NOT touch openclaw.json → no config watcher SIGUSR1.
+        this.log.info(`update-install: downloading ${packageSpec} via npm pack...`);
+        fs.mkdirSync(tmpDir, { recursive: true });
+        exec(`npm pack ${packageSpec} --pack-destination ${tmpDir}`, { timeout: 60_000 }, (packErr, packOut) => {
+          if (packErr) {
+            this.log.warn(`update-install: npm pack failed: ${packErr.message}`);
+            this.jsonResponse(res, { ok: false, error: `Download failed: ${packErr.message}` });
+            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+            return;
+          }
+          const tgzFile = packOut.trim().split("\n").pop()!;
+          const tgzPath = path.join(tmpDir, tgzFile);
+          this.log.info(`update-install: downloaded ${tgzFile}, extracting...`);
+
+          const extractDir = path.join(tmpDir, "extract");
+          fs.mkdirSync(extractDir, { recursive: true });
+          exec(`tar -xzf ${tgzPath} -C ${extractDir}`, { timeout: 30_000 }, (tarErr) => {
+            if (tarErr) {
+              this.log.warn(`update-install: tar extract failed: ${tarErr.message}`);
+              this.jsonResponse(res, { ok: false, error: `Extract failed: ${tarErr.message}` });
+              try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+              return;
+            }
+
+            // npm pack extracts to a "package" subdirectory
+            const srcDir = path.join(extractDir, "package");
+            if (!fs.existsSync(srcDir)) {
+              this.jsonResponse(res, { ok: false, error: "Extracted package has no 'package' dir" });
+              try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+              return;
+            }
+
+            // Replace extension directory
+            this.log.info(`update-install: replacing ${extDir}...`);
+            try { fs.rmSync(extDir, { recursive: true, force: true }); } catch {}
+            fs.mkdirSync(path.dirname(extDir), { recursive: true });
+            fs.renameSync(srcDir, extDir);
+
+            // Install dependencies
+            this.log.info(`update-install: installing dependencies...`);
+            exec(`cd ${extDir} && npm install --omit=dev --ignore-scripts`, { timeout: 120_000 }, (npmErr, npmOut, npmStderr) => {
+              if (npmErr) {
+                try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+                this.log.warn(`update-install: npm install failed: ${npmErr.message}`);
+                this.jsonResponse(res, { ok: false, error: `Dependency install failed: ${npmStderr || npmErr.message}` });
+                return;
+              }
+
+              // Rebuild native modules (do not swallow errors)
+              exec(`cd ${extDir} && npm rebuild better-sqlite3`, { timeout: 60_000 }, (rebuildErr, rebuildOut, rebuildStderr) => {
+                if (rebuildErr) {
+                  this.log.warn(`update-install: better-sqlite3 rebuild failed: ${rebuildErr.message}`);
+                  const stderr = String(rebuildStderr || "").trim();
+                  if (stderr) this.log.warn(`update-install: rebuild stderr: ${stderr.slice(0, 500)}`);
+                  // Continue so postinstall.cjs can run (it will try rebuild again and show user guidance)
+                }
+
+                // Run postinstall.cjs: legacy cleanup, skill install, version marker, and optional sqlite re-check
+                this.log.info(`update-install: running postinstall...`);
+                exec(`cd ${extDir} && node scripts/postinstall.cjs`, { timeout: 180_000 }, (postErr, postOut, postStderr) => {
+                  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+
+                  if (postErr) {
+                    this.log.warn(`update-install: postinstall failed: ${postErr.message}`);
+                    const postStderrStr = String(postStderr || "").trim();
+                    if (postStderrStr) this.log.warn(`update-install: postinstall stderr: ${postStderrStr.slice(0, 500)}`);
+                    // Still report success; plugin is updated, user can run postinstall manually if needed
+                  }
+
+                  // Read new version
+                  let newVersion = "unknown";
+                  try {
+                    const newPkg = JSON.parse(fs.readFileSync(path.join(extDir, "package.json"), "utf-8"));
+                    newVersion = newPkg.version ?? newVersion;
+                  } catch {}
+
+                  this.log.info(`update-install: success! Updated to ${newVersion}`);
+                  this.jsonResponse(res, { ok: true, version: newVersion });
+
+                  // Trigger Gateway restart after response is sent
+                  setTimeout(() => {
+                    this.log.info(`update-install: triggering gateway restart...`);
+                    process.kill(process.pid, "SIGUSR1");
+                  }, 500);
+                });
+              });
+            });
+          });
+        });
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: String(e) }));
+      }
+    });
+  }
+
+  private async testEmbeddingModel(provider: string, model: string, endpoint: string, apiKey: string): Promise<number | undefined> {
+    if (provider === "local") {
+      return 384;
+    }
+    const baseUrl = (endpoint || "https://api.openai.com/v1").replace(/\/+$/, "");
+    const embUrl = baseUrl.endsWith("/embeddings") ? baseUrl : `${baseUrl}/embeddings`;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    };
+    if (provider === "cohere") {
+      headers["Authorization"] = `Bearer ${apiKey}`;
+      const resp = await fetch(baseUrl.replace(/\/v\d+.*/, "/v2/embed"), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ texts: ["test embedding vector"], model: model || "embed-english-v3.0", input_type: "search_query", embedding_types: ["float"] }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!resp.ok) {
+        const txt = await resp.text();
+        throw new Error(`Cohere embed ${resp.status}: ${txt}`);
+      }
+      const json = await resp.json() as any;
+      const vecs = json?.embeddings?.float;
+      if (!Array.isArray(vecs) || vecs.length === 0 || !Array.isArray(vecs[0]) || vecs[0].length === 0) {
+        throw new Error("Cohere returned empty embedding vector");
+      }
+      return vecs[0].length;
+    }
+    if (provider === "gemini") {
+      const url = `https://generativelanguage.googleapis.com/v1/models/${model || "text-embedding-004"}:embedContent?key=${apiKey}`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: { parts: [{ text: "test embedding vector" }] } }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!resp.ok) {
+        const txt = await resp.text();
+        throw new Error(`Gemini embed ${resp.status}: ${txt}`);
+      }
+      const json = await resp.json() as any;
+      const vec = json?.embedding?.values;
+      if (!Array.isArray(vec) || vec.length === 0) {
+        throw new Error("Gemini returned empty embedding vector");
+      }
+      return vec.length;
+    }
+    const resp = await fetch(embUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ input: ["test embedding vector"], model: model || "text-embedding-3-small" }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!resp.ok) {
+      const txt = await resp.text();
+      throw new Error(`${resp.status}: ${txt}`);
+    }
+    const json = await resp.json() as any;
+    const data = json?.data;
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new Error("API returned no embedding data");
+    }
+    const vec = data[0]?.embedding;
+    if (!Array.isArray(vec) || vec.length === 0) {
+      throw new Error(`API returned empty embedding vector (got ${JSON.stringify(vec)?.slice(0, 100)})`);
+    }
+    return vec.length;
+  }
+
+  private async testChatModel(provider: string, model: string, endpoint: string, apiKey: string): Promise<void> {
+    const baseUrl = (endpoint || "https://api.openai.com/v1").replace(/\/+$/, "");
+    if (provider === "anthropic") {
+      const url = endpoint || "https://api.anthropic.com/v1/messages";
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({ model: model || "claude-3-haiku-20240307", max_tokens: 5, messages: [{ role: "user", content: "hi" }] }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!resp.ok) {
+        const txt = await resp.text();
+        throw new Error(`Anthropic ${resp.status}: ${txt}`);
+      }
+      return;
+    }
+    if (provider === "gemini") {
+      const url = `https://generativelanguage.googleapis.com/v1/models/${model || "gemini-1.5-flash"}:generateContent?key=${apiKey}`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts: [{ text: "hi" }] }], generationConfig: { maxOutputTokens: 5 } }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!resp.ok) {
+        const txt = await resp.text();
+        throw new Error(`Gemini ${resp.status}: ${txt}`);
+      }
+      return;
+    }
+    const chatUrl = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
+    const resp = await fetch(chatUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ model: model || "gpt-4o-mini", max_tokens: 5, messages: [{ role: "user", content: "hi" }] }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!resp.ok) {
+      const txt = await resp.text();
+      throw new Error(`${resp.status}: ${txt}`);
+    }
+  }
+
   private serveLogs(res: http.ServerResponse, url: URL): void {
     const limit = Math.min(Number(url.searchParams.get("limit") ?? 20), 200);
     const offset = Math.max(0, Number(url.searchParams.get("offset") ?? 0));
@@ -1050,7 +1439,51 @@ export class ViewerServer {
 
   private getOpenClawHome(): string {
     const home = process.env.HOME || process.env.USERPROFILE || "";
-    return path.join(home, ".openclaw");
+    return process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw");
+  }
+
+  private handleCleanupPolluted(res: http.ServerResponse): void {
+    try {
+      const polluted = this.store.findPollutedUserChunks();
+      let deleted = 0;
+      for (const { id, reason } of polluted) {
+        if (this.store.deleteChunk(id)) {
+          deleted++;
+          this.log.info(`Cleaned polluted chunk ${id}: ${reason}`);
+        }
+      }
+      const fixed = this.store.fixMixedUserChunks();
+      this.log.info(`Cleanup: removed ${deleted} polluted, fixed ${fixed} mixed chunks`);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ deleted, fixed, total: polluted.length }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.error(`handleCleanupPolluted error: ${msg}`);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: msg }));
+    }
+  }
+
+  private handleCleanupPolluted(res: http.ServerResponse): void {
+    try {
+      const polluted = this.store.findPollutedUserChunks();
+      let deleted = 0;
+      for (const { id, reason } of polluted) {
+        if (this.store.deleteChunk(id)) {
+          deleted++;
+          this.log.info(`Cleaned polluted chunk ${id}: ${reason}`);
+        }
+      }
+      const fixed = this.store.fixMixedUserChunks();
+      this.log.info(`Cleanup: removed ${deleted} polluted, fixed ${fixed} mixed chunks`);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ deleted, fixed, total: polluted.length }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.error(`handleCleanupPolluted error: ${msg}`);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: msg }));
+    }
   }
 
   private handleMigrateScan(res: http.ServerResponse): void {
@@ -1111,8 +1544,9 @@ export class ViewerServer {
         try {
           const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
           const pluginCfg = raw?.plugins?.entries?.["memos-local-openclaw-plugin"]?.config ??
-                            raw?.plugins?.entries?.["memos-lite"]?.config ??
-                            raw?.plugins?.entries?.["memos-lite-openclaw-plugin"]?.config ?? {};
+                            raw?.plugins?.entries?.["memos-local"]?.config ??
+                            raw?.plugins?.entries?.["memos-lite-openclaw-plugin"]?.config ??
+                            raw?.plugins?.entries?.["memos-lite"]?.config ?? {};
           const emb = pluginCfg.embedding;
           hasEmbedding = !!(emb && emb.provider);
           const sum = pluginCfg.summarizer;
@@ -1121,10 +1555,18 @@ export class ViewerServer {
       }
 
       let importedSessions: string[] = [];
+      let importedChunkCount = 0;
       try {
         if (this.store) {
           importedSessions = this.store.getDistinctSessionKeys()
             .filter((sk: string) => sk.startsWith("openclaw-import-") || sk.startsWith("openclaw-session-"));
+          if (importedSessions.length > 0) {
+            const placeholders = importedSessions.map(() => "?").join(",");
+            const row = (this.store as any).db.prepare(
+              `SELECT COUNT(*) as cnt FROM chunks WHERE session_key IN (${placeholders})`
+            ).get(...importedSessions) as { cnt: number };
+            importedChunkCount = row?.cnt ?? 0;
+          }
         }
       } catch (storeErr) {
         this.log.warn(`migrate/scan: store query failed: ${storeErr}`);
@@ -1139,6 +1581,7 @@ export class ViewerServer {
         hasSummarizer,
         hasImportedData: importedSessions.length > 0,
         importedSessionCount: importedSessions.length,
+        importedChunkCount,
       });
     } catch (e) {
       this.log.warn(`migrate/scan error: ${e}`);
@@ -1270,11 +1713,14 @@ export class ViewerServer {
         } else {
           this.broadcastSSE("done", { ok: true });
         }
-        for (const c of this.migrationSSEClients) {
-          try { c.end(); } catch { /* ignore */ }
-        }
-        this.migrationSSEClients = [];
         this.migrationAbort = false;
+        const clientsToClose = [...this.migrationSSEClients];
+        this.migrationSSEClients = [];
+        setTimeout(() => {
+          for (const c of clientsToClose) {
+            try { c.end(); } catch { /* ignore */ }
+          }
+        }, 500);
       });
     });
   }
@@ -1295,17 +1741,16 @@ export class ViewerServer {
 
     const cfgPath = this.getOpenClawConfigPath();
     let summarizerCfg: any;
-    let strongCfg: any;
     try {
       const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
       const pluginCfg = raw?.plugins?.entries?.["memos-local-openclaw-plugin"]?.config ??
-                        raw?.plugins?.entries?.["memos-lite"]?.config ??
-                        raw?.plugins?.entries?.["memos-lite-openclaw-plugin"]?.config ?? {};
+                        raw?.plugins?.entries?.["memos-local"]?.config ??
+                        raw?.plugins?.entries?.["memos-lite-openclaw-plugin"]?.config ??
+                        raw?.plugins?.entries?.["memos-lite"]?.config ?? {};
       summarizerCfg = pluginCfg.summarizer;
-      strongCfg = pluginCfg.skillEvolution?.summarizer;
     } catch { /* no config */ }
 
-    const summarizer = new Summarizer(summarizerCfg, this.log, strongCfg);
+    const summarizer = new Summarizer(summarizerCfg, this.log);
 
     // Phase 1: Import SQLite memory chunks
     if (importSqlite) {
@@ -1431,8 +1876,8 @@ export class ViewerServer {
                   mergeCount: 0,
                   lastHitAt: null,
                   mergeHistory: "[]",
-                  createdAt: row.updated_at * 1000,
-                  updatedAt: row.updated_at * 1000,
+                  createdAt: normalizeTimestamp(row.updated_at),
+                  updatedAt: normalizeTimestamp(row.updated_at),
                 };
 
                 this.store.insertChunk(chunk);
@@ -1706,7 +2151,7 @@ export class ViewerServer {
       res.on("close", () => { this.ppSSEClients = this.ppSSEClients.filter(c => c !== res); });
 
       this.ppAbort = false;
-      this.ppState = { running: true, done: false, stopped: false, processed: 0, total: 0, tasksCreated: 0, skillsCreated: 0, errors: 0 };
+      this.ppState = { running: true, done: false, stopped: false, processed: 0, total: 0, tasksCreated: 0, skillsCreated: 0, errors: 0, skippedSessions: 0, totalSessions: 0 };
 
       const send = (event: string, data: unknown) => {
         this.broadcastPPSSE(event, data);
@@ -1723,9 +2168,12 @@ export class ViewerServer {
         } else {
           this.broadcastPPSSE("done", { ...this.ppState });
         }
-        for (const c of this.ppSSEClients) { try { c.end(); } catch { /* */ } }
-        this.ppSSEClients = [];
         this.ppAbort = false;
+        const ppClientsToClose = [...this.ppSSEClients];
+        this.ppSSEClients = [];
+        setTimeout(() => {
+          for (const c of ppClientsToClose) { try { c.end(); } catch { /* */ } }
+        }, 500);
       });
     });
   }
@@ -1757,7 +2205,13 @@ export class ViewerServer {
   }
 
   private handlePostprocessStatus(res: http.ServerResponse): void {
-    this.jsonResponse(res, this.ppState);
+    let existingTasks = 0;
+    let existingSkills = 0;
+    try {
+      existingTasks = (this.store as any).db.prepare("SELECT COUNT(*) as c FROM tasks").get()?.c ?? 0;
+      existingSkills = this.store.countSkills("active");
+    } catch { /* */ }
+    this.jsonResponse(res, { ...this.ppState, existingTasks, existingSkills });
   }
 
   private broadcastPPSSE(event: string, data: unknown): void {
@@ -1807,12 +2261,18 @@ export class ViewerServer {
     }
 
     this.ppState.total = pendingItems.length;
+    this.ppState.skippedSessions = skippedCount;
+    this.ppState.totalSessions = importSessions.length;
+    const existingTaskCount = (this.store as any).db.prepare("SELECT COUNT(*) as c FROM tasks WHERE session_key IN (" + importSessions.map(() => "?").join(",") + ")").get(...importSessions)?.c ?? 0;
+    const existingSkillCount = this.store.countSkills("active");
     send("info", {
       totalSessions: importSessions.length,
       alreadyProcessed: skippedCount,
       pending: pendingItems.length,
       agents: Array.from(agentGroups.keys()),
       concurrency,
+      existingTasks: existingTaskCount,
+      existingSkills: existingSkillCount,
     });
     send("progress", { processed: 0, total: pendingItems.length });
 
