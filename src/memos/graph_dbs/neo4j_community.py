@@ -61,34 +61,35 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         metadata.setdefault("delete_record_id", "")
 
         # serialization
-        if metadata["sources"]:
+        if metadata.get("sources"):
             for idx in range(len(metadata["sources"])):
                 metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
         # Extract required fields
         embedding = metadata.pop("embedding", None)
-        if embedding is None:
-            raise ValueError(f"Missing 'embedding' in metadata for node {id}")
 
         # Merge node and set metadata
         created_at = metadata.pop("created_at")
         updated_at = metadata.pop("updated_at")
-        vector_sync_status = "success"
+        vector_sync_status = "skipped"
 
-        try:
-            # Write to Vector DB
-            item = VecDBItem(
-                id=id,
-                vector=embedding,
-                payload={
-                    "memory": memory,
-                    "vector_sync": vector_sync_status,
-                    **metadata,  # unpack all metadata keys to top-level
-                },
-            )
-            self.vec_db.add([item])
-        except Exception as e:
-            logger.warning(f"[VecDB] Vector insert failed for node {id}: {e}")
-            vector_sync_status = "failed"
+        if embedding is not None:
+            vector_sync_status = "success"
+            try:
+                item = VecDBItem(
+                    id=id,
+                    vector=embedding,
+                    payload={
+                        "memory": memory,
+                        "vector_sync": vector_sync_status,
+                        **metadata,
+                    },
+                )
+                self.vec_db.add([item])
+            except Exception as e:
+                logger.warning(f"[VecDB] Vector insert failed for node {id}: {e}")
+                vector_sync_status = "failed"
+        else:
+            logger.warning(f"[add_node] No embedding for node {id}, skipping vector DB insert")
 
         metadata["vector_sync"] = vector_sync_status
         query = """
@@ -141,18 +142,21 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
                 embedding = metadata.pop("embedding", None)
 
-                vector_sync_status = "success"
-                vec_items.append(
-                    VecDBItem(
-                        id=node_id,
-                        vector=embedding,
-                        payload={
-                            "memory": memory,
-                            "vector_sync": vector_sync_status,
-                            **metadata,
-                        },
+                if embedding is not None:
+                    vector_sync_status = "success"
+                    vec_items.append(
+                        VecDBItem(
+                            id=node_id,
+                            vector=embedding,
+                            payload={
+                                "memory": memory,
+                                "vector_sync": vector_sync_status,
+                                **metadata,
+                            },
+                        )
                     )
-                )
+                else:
+                    vector_sync_status = "skipped"
 
                 created_at = metadata.pop("created_at")
                 updated_at = metadata.pop("updated_at")
@@ -1138,12 +1142,12 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                 node[time_field] = node[time_field].isoformat()
         node.pop("user_name", None)
         # serialization
-        if node["sources"]:
+        if node.get("sources"):
             for idx in range(len(node["sources"])):
                 if not (
                     isinstance(node["sources"][idx], str)
                     and node["sources"][idx][0] == "{"
-                    and node["sources"][idx][0] == "}"
+                    and node["sources"][idx][-1] == "}"
                 ):
                     break
                 node["sources"][idx] = json.loads(node["sources"][idx])
@@ -1179,7 +1183,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                     if not (
                         isinstance(node["sources"][idx], str)
                         and node["sources"][idx][0] == "{"
-                        and node["sources"][idx][0] == "}"
+                        and node["sources"][idx][-1] == "}"
                     ):
                         break
                     node["sources"][idx] = json.loads(node["sources"][idx])

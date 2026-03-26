@@ -901,14 +901,18 @@ class Neo4jGraphDB(BaseGraphDB):
             if extra_fields:
                 return_clause = f"RETURN node.id AS id, score, {extra_fields}"
 
+        has_post_filter = bool(where_clause)
+        vector_k = max(top_k * 10, 200) if has_post_filter else top_k
+
         query = f"""
             CALL db.index.vector.queryNodes('memory_vector_index', $k, $embedding)
             YIELD node, score
             {where_clause}
             {return_clause}
+            LIMIT $limit
         """
 
-        parameters = {"embedding": vector, "k": top_k}
+        parameters = {"embedding": vector, "k": vector_k, "limit": top_k}
 
         if scope:
             parameters["scope"] = scope
@@ -1842,7 +1846,7 @@ class Neo4jGraphDB(BaseGraphDB):
                 if not (
                     isinstance(node["sources"][idx], str)
                     and node["sources"][idx][0] == "{"
-                    and node["sources"][idx][0] == "}"
+                    and node["sources"][idx][-1] == "}"
                 ):
                     break
                 node["sources"][idx] = json.loads(node["sources"][idx])
