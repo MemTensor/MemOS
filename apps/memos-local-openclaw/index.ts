@@ -1401,9 +1401,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         name: "memory_share",
         label: "Share Memory",
         description:
-          "Share an existing memory either with local OpenClaw agents, to the Hub team, or to both targets. " +
-          "Use this only for an existing chunkId. Use target='agents' for local multi-agent sharing, target='hub' for team sharing, or target='both' for both. " +
-          "If you need to create a brand new shared memory instead of exposing an existing one, use memory_write_public.",
+          "Share an existing stored memory (requires a real chunkId from the database) to the Hub team, or to both targets. " +
+          "If you want to share content from the conversation, please first retrieve the memories related to that content to obtain the correct chunkId(s), then proceed with the sharing. " +
+          "target='agents' (default): when retrieved memories would clearly help other agents in the same OpenClaw workspace, you may share proactively without asking the user. " +
+          "target='hub' or 'both': do not share to the team Hub without explicit user consent when the content would benefit collaborators—explain briefly, ask first, and only call hub/both after they agree (Hub must be configured). " +
+          "To create a brand-new shared note with no existing chunk, use memory_write_public.",
         parameters: Type.Object({
           chunkId: Type.String({ description: "Existing local memory chunk ID to share" }),
           target: Type.Optional(Type.String({ description: "Share target: 'agents' (default), 'hub', or 'both'" })),

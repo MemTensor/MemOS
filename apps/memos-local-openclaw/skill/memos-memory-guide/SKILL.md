@@ -73,8 +73,11 @@ Two sharing planes exist and must not be confused:
 ### memory_share
 
 - **What it does:** Share an existing memory either with local OpenClaw agents, to the team, or to both.
-- **When to call:** You already have a useful memory chunk and want to expose it beyond the current agent.
-- **Do not use when:** You are creating a new shared note from scratch. In that case use `memory_write_public`.
+- **When to call:**
+  - If you want to share conversation content to team or hub, first retrieve memories related to that content to obtain the right `chunkId`(s), then share.
+  - `target='agents'` (default): When those memories would clearly help other agents in the same workspace, you may share proactively without asking the user.
+  - `target='hub'` or `'both'`: Only after explicit user consent when the content would benefit collaborators—explain briefly, ask first, then call `hub`/`both` (Hub must be configured). Never silently Hub-share.
+- **Do not use when:** You are creating a brand-new shared note with **no** existing chunk—use `memory_write_public` instead.
 - **Parameters:**
   - `chunkId` (string, **required**) — Existing memory chunk ID.
   - `target` (string, optional) — `'agents'` (default), `'hub'`, or `'both'`.
