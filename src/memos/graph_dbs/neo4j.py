@@ -39,7 +39,7 @@ def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         metadata["embedding"] = [float(x) for x in embedding]
 
     # serialization
-    if metadata["sources"]:
+    if metadata.get("sources"):
         for idx in range(len(metadata["sources"])):
             metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
     return metadata
@@ -73,7 +73,10 @@ def _flatten_info_fields(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 class Neo4jGraphDB(BaseGraphDB):
-    """Neo4j-based implementation of a graph memory store."""
+    """Neo4j-based implementation of a graph memory store.
+
+    Requires Neo4j >= 5.18 for vector.similarity.cosine() pre-filtering support.
+    """
 
     @require_python_package(
         import_name="neo4j",
@@ -226,7 +229,7 @@ class Neo4jGraphDB(BaseGraphDB):
         """
 
         # serialization
-        if metadata["sources"]:
+        if metadata.get("sources"):
             for idx in range(len(metadata["sources"])):
                 metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
 
@@ -843,13 +846,14 @@ class Neo4jGraphDB(BaseGraphDB):
                 If return_fields is specified, each dict also includes the requested fields.
 
         Notes:
-            - This method uses Neo4j native vector indexing to search for similar nodes.
-            - If scope is provided, it restricts results to nodes with matching memory_type.
-            - If 'status' is provided, only nodes with the matching status will be returned.
+            - When filters are present (scope, status, user_name, etc.), this method uses
+              Neo4j 5.18+ pre-filtering: MATCH + WHERE narrows candidates first, then
+              vector.similarity.cosine() computes similarity only on the filtered set.
+              This avoids the post-filter problem where queryNodes' global top-k excludes
+              the target user's nodes in a multi-tenant shared database.
+            - When no filters are present, the ANN vector index (db.index.vector.queryNodes)
+              is used for maximum efficiency.
             - If threshold is provided, only results with score >= threshold will be returned.
-            - If search_filter is provided, additional WHERE clauses will be added for metadata filtering.
-            - Typical use case: restrict to 'status = activated' to avoid
-            matching archived or merged nodes.
         """
         user_name = user_name if user_name else self.config.user_name
         # Build WHERE clause dynamically
@@ -901,14 +905,28 @@ class Neo4jGraphDB(BaseGraphDB):
             if extra_fields:
                 return_clause = f"RETURN node.id AS id, score, {extra_fields}"
 
-        query = f"""
-            CALL db.index.vector.queryNodes('memory_vector_index', $k, $embedding)
-            YIELD node, score
-            {where_clause}
-            {return_clause}
-        """
-
-        parameters = {"embedding": vector, "k": top_k}
+        if where_clause:
+            # Pre-filtering (Neo4j 5.18+): filter nodes first, then compute similarity.
+            # This avoids the post-filter problem where relevant nodes are excluded
+            # from the global top-k returned by queryNodes.
+            where_clause += " AND node.embedding IS NOT NULL"
+            query = f"""
+                MATCH (node:Memory)
+                {where_clause}
+                WITH node, vector.similarity.cosine(node.embedding, $embedding) AS score
+                {return_clause}
+                ORDER BY score DESC
+                LIMIT $top_k
+            """
+            parameters = {"embedding": vector, "top_k": top_k}
+        else:
+            # No filter: use ANN vector index for efficiency.
+            query = f"""
+                CALL db.index.vector.queryNodes('memory_vector_index', $top_k, $embedding)
+                YIELD node, score
+                {return_clause}
+            """
+            parameters = {"embedding": vector, "top_k": top_k}
 
         if scope:
             parameters["scope"] = scope
@@ -1842,7 +1860,7 @@ class Neo4jGraphDB(BaseGraphDB):
                 if not (
                     isinstance(node["sources"][idx], str)
                     and node["sources"][idx][0] == "{"
-                    and node["sources"][idx][0] == "}"
+                    and node["sources"][idx][-1] == "}"
                 ):
                     break
                 node["sources"][idx] = json.loads(node["sources"][idx])
