@@ -68,8 +68,8 @@ export function initPlugin(opts: PluginInitOptions = {}): MemosLocalPlugin {
 
   const tools: ToolDefinition[] = [
     createMemorySearchTool(engine, store, ctx, sharedState),
-    createMemoryTimelineTool(store),
-    createMemoryGetTool(store),
+    createMemoryTimelineTool(store, workspaceDir),
+    createMemoryGetTool(store, workspaceDir),
     createNetworkMemoryDetailTool(store, ctx),
   ];
 
