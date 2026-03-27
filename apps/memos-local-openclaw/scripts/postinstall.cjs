@@ -226,7 +226,35 @@ function sqliteBindingsExist() {
   return false;
 }
 
-if (sqliteBindingsExist()) {
+/**
+ * Check whether better-sqlite3 can actually be loaded by the current
+ * Node.js runtime.  A binding file may exist on disk but still fail
+ * with NODE_MODULE_VERSION mismatch after a Node.js or plugin update.
+ */
+function sqliteLoadsSuccessfully() {
+  try {
+    require(path.join(sqliteModulePath, "lib", "index.js"));
+    return true;
+  } catch (e) {
+    if (e && e.message && e.message.includes("NODE_MODULE_VERSION")) {
+      warn("ABI version mismatch — native module was built for a different Node.js version.");
+      return false;
+    }
+    // For any other load error fall through to the rebuild path as well.
+    return false;
+  }
+}
+
+let needsRebuild = false;
+
+if (!sqliteBindingsExist()) {
+  warn("better-sqlite3 native bindings not found in plugin dir.");
+  log(`Searched in: ${DIM}${sqliteModulePath}/build/${RESET}`);
+  needsRebuild = true;
+} else if (!sqliteLoadsSuccessfully()) {
+  log("Native binding file exists but cannot be loaded by current Node.js.");
+  needsRebuild = true;
+} else {
   ok("better-sqlite3 is ready.");
   console.log(`
 ${GREEN}${BOLD}  ┌──────────────────────────────────────────────────┐
@@ -237,11 +265,9 @@ ${GREEN}${BOLD}  ┌────────────────────
   └──────────────────────────────────────────────────┘${RESET}
 `);
   process.exit(0);
-} else {
-  warn("better-sqlite3 native bindings not found in plugin dir.");
-  log(`Searched in: ${DIM}${sqliteModulePath}/build/${RESET}`);
-  log("Running: npm rebuild better-sqlite3 (may take 30-60s)...");
 }
+
+log("Running: npm rebuild better-sqlite3 (may take 30-60s)...");
 
 const startMs = Date.now();
 
