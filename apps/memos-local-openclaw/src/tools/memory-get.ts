@@ -1,13 +1,10 @@
 import type { SqliteStore } from "../storage/sqlite";
 import type { ToolDefinition, GetResult, ChunkRef } from "../types";
 import { DEFAULTS } from "../types";
+import { resolveDefaultOwner, resolveOwnerFilter } from "./resolve-owner";
 
-function resolveOwnerFilter(owner: unknown): string[] {
-  const resolvedOwner = typeof owner === "string" && owner.trim().length > 0 ? owner : "agent:main";
-  return resolvedOwner === "public" ? ["public"] : [resolvedOwner, "public"];
-}
-
-export function createMemoryGetTool(store: SqliteStore): ToolDefinition {
+export function createMemoryGetTool(store: SqliteStore, workspaceDir?: string): ToolDefinition {
+  const defaultOwner = resolveDefaultOwner(workspaceDir);
   return {
     name: "memory_get",
     description:
@@ -41,7 +38,7 @@ export function createMemoryGetTool(store: SqliteStore): ToolDefinition {
         DEFAULTS.getMaxCharsMax,
       );
 
-      const chunk = store.getChunksByRef(ref, resolveOwnerFilter(input.owner));
+      const chunk = store.getChunksByRef(ref, resolveOwnerFilter(input.owner, defaultOwner));
 
       if (!chunk) {
         return { error: `Chunk not found: ${ref.chunkId}` };
