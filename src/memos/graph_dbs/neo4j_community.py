@@ -5,7 +5,12 @@ from datetime import datetime
 from typing import Any
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
-from memos.graph_dbs.neo4j import Neo4jGraphDB, _flatten_info_fields, _prepare_node_metadata
+from memos.graph_dbs.neo4j import (
+    Neo4jGraphDB,
+    _flatten_info_fields,
+    _prepare_node_metadata,
+    _sanitize_neo4j_metadata,
+)
 from memos.log import get_logger
 from memos.vec_dbs.factory import VecDBFactory
 from memos.vec_dbs.item import VecDBItem
@@ -55,6 +60,8 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         # Safely process metadata
         metadata = _prepare_node_metadata(metadata)
+        metadata = _flatten_info_fields(metadata)
+        metadata = _sanitize_neo4j_metadata(metadata)
 
         # Initialize delete_time and delete_record_id fields
         metadata.setdefault("delete_time", "")
@@ -135,6 +142,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
                 metadata = _prepare_node_metadata(metadata)
                 metadata = _flatten_info_fields(metadata)
+                metadata = _sanitize_neo4j_metadata(metadata)
 
                 # Initialize delete_time and delete_record_id fields
                 metadata.setdefault("delete_time", "")
