@@ -102,6 +102,11 @@ skill-mem = [
     "alibabacloud-oss-v2 (>=1.2.2,<1.2.3)",
 ]
 
+# Tavily Search
+tavily = [
+    "tavily-python (>=0.5.0,<1.0.0)",
+]
+
 # All optional dependencies
 # Allow users to install with `pip install MemoryOS[all]`
 all = [
@@ -129,6 +134,7 @@ all = [
     "nltk (>=3.9.1,<4.0.0)",
     "rake-nltk (>=1.0.6,<1.1.0)",
     "alibabacloud-oss-v2 (>=1.2.2,<1.2.3)",
+    "tavily-python (>=0.5.0,<1.0.0)",
 
     # Uncategorized dependencies
 ]
