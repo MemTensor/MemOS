@@ -318,6 +318,8 @@ export interface MemosLocalConfig {
   };
   capture?: {
     evidenceWrapperTag?: string;
+    /** Session key substrings to skip capture entirely (e.g. [":cron:", "agent:wechat"]). Default: [":cron:"] */
+    skipSessionPatterns?: string[];
   };
   skillEvolution?: SkillEvolutionConfig;
   telemetry?: TelemetryConfig;
