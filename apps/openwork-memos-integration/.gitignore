@@ -1,0 +1,26 @@
+node_modules/
+dist/
+out/
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Lock files
+pnpm-lock.yaml
+package-lock.json
+bun.lock
+
+# Binary assets (fonts, large images, videos)
+*.ttf
+*.woff
+*.woff2
+*.mp4
+*.webm
+public/assets/usecases/
+docs/video-thumbnail.png
+
+# Build artifacts
+*.tsbuildinfo

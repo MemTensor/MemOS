@@ -434,7 +434,7 @@ class APISearchRequest(BaseRequest):
     # Internal field for search memory type
     search_memory_type: str = Field(
         "All",
-        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory, SkillMemory",
+        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory, SkillMemory, PreferenceMemory",
     )
 
     # ==== Context ====
@@ -869,6 +869,14 @@ class DeleteMemoryRequest(BaseRequest):
     conversation_id: str | None = Field(
         None,
         description="Alias of session_id for backward compatibility.",
+    )
+      
+    auto_cleanup_working: bool | None = Field(
+        False,
+        description=(
+            "(Internal) Whether to automatically delete related WorkingMemory nodes "
+            "based on working_binding metadata when deleting by memory_ids."
+        ),
     )
 
     @model_validator(mode="after")

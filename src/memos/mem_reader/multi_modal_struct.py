@@ -10,6 +10,7 @@ from memos.configs.mem_reader import MultiModalStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.mem_reader.read_multi_modal import MultiModalParser, detect_lang
 from memos.mem_reader.read_multi_modal.base import _derive_key
+from memos.mem_reader.read_pref_memory.process_preference_memory import process_preference_fine
 from memos.mem_reader.read_skill_memory.process_skill_memory import process_skill_memory_fine
 from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
 from memos.mem_reader.utils import parse_json_result
@@ -39,6 +40,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             config: Configuration object for the reader
         """
         from memos.configs.mem_reader import SimpleStructMemReaderConfig
+        from memos.llms.factory import LLMFactory
 
         # Extract direct_markdown_hostnames before converting to SimpleStructMemReaderConfig
         direct_markdown_hostnames = getattr(config, "direct_markdown_hostnames", None)
@@ -56,10 +58,19 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         simple_config = SimpleStructMemReaderConfig(**config_dict)
         super().__init__(simple_config)
 
+        # Image parser LLM (requires vision model)
+        # Falls back to general_llm if not configured (general_llm itself falls back to main llm)
+        self.image_parser_llm = (
+            LLMFactory.from_config(config.image_parser_llm)
+            if config.image_parser_llm is not None
+            else self.general_llm
+        )
         # Initialize MultiModalParser for routing to different parsers
+        # Pass image_parser_llm for image parsing
         self.multi_modal_parser = MultiModalParser(
             embedder=self.embedder,
             llm=self.llm,
+            image_parser_llm=self.image_parser_llm,
             parser=None,
             direct_markdown_hostnames=direct_markdown_hostnames,
         )
@@ -189,8 +200,16 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 else:
                     processed_items.append(item)
 
-        # If only one item after processing, return as-is
+        # If only one item after processing, compute embedding and return
         if len(processed_items) == 1:
+            single_item = processed_items[0]
+            if single_item and single_item.memory:
+                try:
+                    single_item.metadata.embedding = self.embedder.embed([single_item.memory])[0]
+                except Exception as e:
+                    logger.error(
+                        f"[MultiModalStruct] Error computing embedding for single item: {e}"
+                    )
             return processed_items
 
         windows = []
@@ -288,7 +307,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # Collect all memory texts and sources
         memory_texts = []
         all_sources = []
-        seen_content = set()  # Track seen source content to avoid duplicates
         roles = set()
         aggregated_file_ids: list[str] = []
 
@@ -302,18 +320,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 item_sources = [item_sources]
 
             for source in item_sources:
-                # Get content from source for deduplication
-                source_content = None
-                if isinstance(source, dict):
-                    source_content = source.get("content", "")
-                else:
-                    source_content = getattr(source, "content", "") or ""
-
-                # Only add if content is different (empty content is considered unique)
-                content_key = source_content if source_content else None
-                if content_key and content_key not in seen_content:
-                    seen_content.add(content_key)
-                    all_sources.append(source)
+                # Add source to all_sources
+                all_sources.append(source)
 
                 # Extract role from source
                 if hasattr(source, "role") and source.role:
@@ -345,6 +353,19 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         extra_kwargs: dict[str, Any] = {}
         if aggregated_file_ids:
             extra_kwargs["file_ids"] = aggregated_file_ids
+
+        # Propagate manager_user_id and project_id from constituent items
+        for item in items:
+            metadata = getattr(item, "metadata", None)
+            if metadata is not None:
+                if not extra_kwargs.get("manager_user_id"):
+                    mid = getattr(metadata, "manager_user_id", None)
+                    if mid:
+                        extra_kwargs["manager_user_id"] = mid
+                if not extra_kwargs.get("project_id"):
+                    pid = getattr(metadata, "project_id", None)
+                    if pid:
+                        extra_kwargs["project_id"] = pid
 
         # Extract info fields
         info_ = info.copy()
@@ -631,7 +652,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         )
 
         try:
-            response_text = self.llm.generate([{"role": "user", "content": merge_prompt}])
+            # Use general_llm for memory merge (not fine-tuned for this task)
+            response_text = self.general_llm.generate([{"role": "user", "content": merge_prompt}])
             merge_result = parse_json_result(response_text)
 
             if merge_result.get("should_merge", False):
@@ -809,7 +831,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     if result:
                         fine_memory_items.extend(result)
                 except Exception as e:
-                    logger.error(f"[MultiModalFine] worker error: {e}")
+                    logger.error(f"[MultiModalFine] worker error: {e} {traceback.format_exc()}")
 
         # related preceding and following rawfilememories
         fine_memory_items = self._relate_preceding_following_rawfile_memories(fine_memory_items)
@@ -873,12 +895,14 @@ class MultiModalStructMemReader(SimpleStructMemReader):
     def _get_llm_tool_trajectory_response(self, mem_str: str) -> dict:
         """
         Generete tool trajectory experience item by llm.
+        Uses general_llm as this task is not fine-tuned for the main model.
         """
         try:
             lang = detect_lang(mem_str)
             template = TOOL_TRAJECTORY_PROMPT_ZH if lang == "zh" else TOOL_TRAJECTORY_PROMPT_EN
             prompt = template.replace("{messages}", mem_str)
-            rsp = self.llm.generate([{"role": "user", "content": prompt}])
+            # Use general_llm for tool trajectory (not fine-tuned for this task)
+            rsp = self.general_llm.generate([{"role": "user", "content": prompt}])
             rsp = rsp.replace("```json", "").replace("```", "")
             return json.loads(rsp)
         except Exception as e:
@@ -903,6 +927,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         project_id = user_context.project_id if user_context else None
 
         for fast_item in fast_memory_items:
+            sources = fast_item.metadata.sources or []
+            if not isinstance(sources, list):
+                sources = [sources]
+
             # Extract memory text (string content)
             mem_str = fast_item.memory or ""
             if not mem_str.strip() or (
@@ -930,6 +958,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         tool_used_status=m.get("tool_used_status", []),
                         manager_user_id=manager_user_id,
                         project_id=project_id,
+                        sources=sources,
                     )
                     fine_memory_items.append(node)
                 except Exception as e:
@@ -958,6 +987,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # Use MultiModalParser to parse the scene data
         # If it's a list, parse each item; otherwise parse as single message
         if isinstance(scene_data_info, list):
+            # Pre-expand multimodal messages
+            expanded_messages = self._expand_multimodal_messages(scene_data_info)
+
             # Parse each message in the list
             all_memory_items = []
             # Use thread pool to parse each message in parallel, but keep the original order
@@ -972,7 +1004,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         need_emb=False,
                         **kwargs,
                     )
-                    for msg in scene_data_info
+                    for msg in expanded_messages
                 ]
                 # collect results in original order
                 for future in futures:
@@ -990,26 +1022,38 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if mode == "fast":
             return fast_memory_items
         else:
+            non_file_url_fast_items = [
+                item for item in fast_memory_items if not self._is_file_url_only_item(item)
+            ]
+
             # Part A: call llm in parallel using thread pool
             fine_memory_items = []
 
-            with ContextThreadPoolExecutor(max_workers=3) as executor:
+            with ContextThreadPoolExecutor(max_workers=4) as executor:
                 future_string = executor.submit(
-                    self._process_string_fine, fast_memory_items, info, custom_tags, **kwargs
+                    self._process_string_fine, non_file_url_fast_items, info, custom_tags, **kwargs
                 )
                 future_tool = executor.submit(
-                    self._process_tool_trajectory_fine, fast_memory_items, info, **kwargs
+                    self._process_tool_trajectory_fine, non_file_url_fast_items, info, **kwargs
                 )
                 future_skill = executor.submit(
                     process_skill_memory_fine,
-                    fast_memory_items=fast_memory_items,
+                    fast_memory_items=non_file_url_fast_items,
                     info=info,
                     searcher=self.searcher,
                     graph_db=self.graph_db,
-                    llm=self.llm,
+                    llm=self.general_llm,
                     embedder=self.embedder,
                     oss_config=self.oss_config,
                     skills_dir_config=self.skills_dir_config,
+                    **kwargs,
+                )
+                future_pref = executor.submit(
+                    process_preference_fine,
+                    non_file_url_fast_items,
+                    info,
+                    self.general_llm,
+                    self.embedder,
                     **kwargs,
                 )
 
@@ -1017,10 +1061,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 fine_memory_items_string_parser = future_string.result()
                 fine_memory_items_tool_trajectory_parser = future_tool.result()
                 fine_memory_items_skill_memory_parser = future_skill.result()
+                fine_memory_items_pref_parser = future_pref.result()
 
             fine_memory_items.extend(fine_memory_items_string_parser)
             fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
             fine_memory_items.extend(fine_memory_items_skill_memory_parser)
+            fine_memory_items.extend(fine_memory_items_pref_parser)
 
             # Part B: get fine multimodal items
             for fast_item in fast_memory_items:
@@ -1033,6 +1079,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         custom_tags=custom_tags,
                         info=info,
                         lang=lang,
+                        user_context=kwargs.get("user_context"),
                     )
                     fine_memory_items.extend(items)
             return fine_memory_items
@@ -1058,25 +1105,37 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             **(raw_nodes[0].metadata.info or {}),
         }
 
+        # Filter out file-URL-only items for Part A fine processing (same as _process_multi_modal_data)
+        non_file_url_nodes = [node for node in raw_nodes if not self._is_file_url_only_item(node)]
+
         fine_memory_items = []
         # Part A: call llm in parallel using thread pool
-        with ContextThreadPoolExecutor(max_workers=2) as executor:
+        with ContextThreadPoolExecutor(max_workers=4) as executor:
             future_string = executor.submit(
-                self._process_string_fine, raw_nodes, info, custom_tags, **kwargs
+                self._process_string_fine, non_file_url_nodes, info, custom_tags, **kwargs
             )
             future_tool = executor.submit(
-                self._process_tool_trajectory_fine, raw_nodes, info, **kwargs
+                self._process_tool_trajectory_fine, non_file_url_nodes, info, **kwargs
             )
             future_skill = executor.submit(
                 process_skill_memory_fine,
-                raw_nodes,
+                non_file_url_nodes,
                 info,
                 searcher=self.searcher,
-                llm=self.llm,
+                llm=self.general_llm,
                 embedder=self.embedder,
                 graph_db=self.graph_db,
                 oss_config=self.oss_config,
                 skills_dir_config=self.skills_dir_config,
+                **kwargs,
+            )
+            # Add preference memory extraction
+            future_pref = executor.submit(
+                process_preference_fine,
+                non_file_url_nodes,
+                info,
+                self.general_llm,
+                self.embedder,
                 **kwargs,
             )
 
@@ -1084,9 +1143,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             fine_memory_items_string_parser = future_string.result()
             fine_memory_items_tool_trajectory_parser = future_tool.result()
             fine_memory_items_skill_memory_parser = future_skill.result()
+            fine_memory_items_pref_parser = future_pref.result()
+
         fine_memory_items.extend(fine_memory_items_string_parser)
         fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
         fine_memory_items.extend(fine_memory_items_skill_memory_parser)
+        fine_memory_items.extend(fine_memory_items_pref_parser)
 
         # Part B: get fine multimodal items
         for raw_node in raw_nodes:
@@ -1094,10 +1156,99 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             for source in sources:
                 lang = getattr(source, "lang", "en")
                 items = self.multi_modal_parser.process_transfer(
-                    source, context_items=[raw_node], info=info, custom_tags=custom_tags, lang=lang
+                    source,
+                    context_items=[raw_node],
+                    info=info,
+                    custom_tags=custom_tags,
+                    lang=lang,
+                    user_context=kwargs.get("user_context"),
                 )
                 fine_memory_items.extend(items)
         return fine_memory_items
+
+    @staticmethod
+    def _expand_multimodal_messages(messages: list) -> list:
+        """
+        Expand messages whose ``content`` is a list into individual
+        sub-messages so that each modality is routed to its specialised
+        parser during fast-mode parsing.
+
+        For a message like::
+
+            {
+                "content": [
+                    {"type": "text", "text": "Analyze this file"},
+                    {"type": "file", "file": {"file_data": "https://...", ...}},
+                    {"type": "image_url", "image_url": {"url": "https://..."}},
+                ],
+                "role": "user",
+                "chat_time": "03:14 PM on 13 March, 2026",
+            }
+
+        The result will be::
+
+            [
+                {"content": "Analyze this file", "role": "user", "chat_time": "..."},
+                {"type": "file", "file": {"file_data": "https://...", ...}},
+                {"type": "image_url", "image_url": {"url": "https://..."}},
+            ]
+
+        Messages whose ``content`` is already a plain string (or that are
+        not dicts) are passed through unchanged.
+        """
+        expanded: list = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                expanded.append(msg)
+                continue
+
+            content = msg.get("content")
+            if not isinstance(content, list):
+                expanded.append(msg)
+                continue
+
+            # ---- content is a list: split by modality ----
+            text_parts: list[str] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    text_parts.append(str(part))
+                    continue
+
+                part_type = part.get("type", "")
+                if part_type == "text":
+                    text_parts.append(part.get("text", ""))
+                elif part_type in ("file", "image", "image_url"):
+                    # Extract as a standalone message for its specialised parser
+                    expanded.append(part)
+                else:
+                    text_parts.append(f"[{part_type}]")
+
+            # Reconstruct a text-only version of the original message
+            # (preserving role, chat_time, message_id, etc.)
+            text_content = "\n".join(t for t in text_parts if t.strip())
+            if text_content.strip():
+                text_msg = {k: v for k, v in msg.items() if k != "content"}
+                text_msg["content"] = text_content
+                expanded.append(text_msg)
+
+        return expanded
+
+    @staticmethod
+    def _is_file_url_only_item(item: TextualMemoryItem) -> bool:
+        """
+        Check if a fast memory item contains only file-URL sources.
+        Args:
+            item: TextualMemoryItem to check
+
+        Returns:
+            True if all sources are file-type with URL info (metadata only)
+        """
+        sources = item.metadata.sources or []
+        if not sources:
+            return False
+        return all(
+            getattr(s, "type", None) == "file" and getattr(s, "file_info", None) for s in sources
+        )
 
     def get_scene_data_info(self, scene_data: list, type: str) -> list[list[Any]]:
         """

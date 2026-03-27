@@ -19,6 +19,9 @@ class ImageURL(TypedDict, total=False):
     [Vision guide](https://platform.openai.com/docs/guides/vision#low-or-high-fidelity-image-understanding).
     """
 
+    image_id: str
+    """Optional custom image id for tracking image sources."""
+
 
 class ChatCompletionContentPartImageParam(TypedDict, total=False):
     image_url: Required[ImageURL]

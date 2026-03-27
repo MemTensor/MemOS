@@ -32,7 +32,6 @@ from memos.api.handlers.config_builders import (
 )
 from memos.api.handlers.formatters_handler import (
     format_memory_item,
-    post_process_pref_mem,
     to_iter,
 )
 
@@ -54,7 +53,6 @@ __all__ = [
     "formatters_handler",
     "init_server",
     "memory_handler",
-    "post_process_pref_mem",
     "scheduler_handler",
     "search_handler",
     "suggestion_handler",

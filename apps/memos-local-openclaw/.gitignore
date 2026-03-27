@@ -1,0 +1,25 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Generated / non-essential
+package-lock.json
+.installed-version
+ppt/
+
+# Prebuilt native binaries (included in npm package via `files`, not in git)
+prebuilds/
+
+# Database files
+*.sqlite
+*.sqlite-journal
+*.db
