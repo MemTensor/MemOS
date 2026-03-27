@@ -443,8 +443,6 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
             naive_mem_cube.text_mem.delete_by_filter(
                 writable_cube_ids=delete_mem_req.writable_cube_ids, file_ids=delete_mem_req.file_ids
             )
-        elif delete_mem_req.filter is not None:
-            naive_mem_cube.text_mem.delete_by_filter(filter=delete_mem_req.filter)
         elif has_filter_mode:
             merged_filter = _merge_delete_filter(delete_mem_req.filter, quick_constraints)
             naive_mem_cube.text_mem.delete_by_filter(
