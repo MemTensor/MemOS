@@ -132,9 +132,29 @@ nav .btn-nav:hover{border-color:rgba(99,140,255,.35);color:var(--text);backgroun
 .copy-btn:hover{border-color:var(--border-glow);background:rgba(0,229,255,.12);color:var(--text)}
 .copy-btn .copy-icon,.copy-btn .check-icon{width:14px;height:14px;display:block}
 .copy-btn .check-icon{display:none;color:var(--green)}
+/* ── OS Tabs ── */
+.os-tabs{display:flex;gap:0;margin-bottom:0}
+.os-tab{padding:8px 20px;font-size:12px;font-weight:600;color:var(--text-thr);cursor:pointer;border:none;background:none;border-bottom:2px solid transparent;transition:all .2s}
+.os-tab.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+.os-tab:hover{color:var(--text-sec)}
+.os-pane{display:none}
+.os-pane.active{display:block}
 .copy-btn.copied{border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.12);color:var(--green)}
 .copy-btn.copied .copy-icon{display:none}
 .copy-btn.copied .check-icon{display:block}
+.install-switcher{background:rgba(10,14,28,.85);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;backdrop-filter:blur(12px);box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.install-switcher-header{display:flex;align-items:center;gap:7px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.install-switcher-header .dot{width:10px;height:10px;border-radius:50%}
+.install-os-switch{margin-left:auto;display:flex;align-items:center;gap:6px;padding:3px;background:rgba(99,140,255,.08);border:1px solid var(--border);border-radius:999px}
+.install-os-switch .os-btn{background:transparent;color:var(--text-sec);border:none;font-size:11px;font-weight:700;padding:6px 10px;border-radius:999px;cursor:pointer;transition:all .2s}
+.install-os-switch .os-btn:hover{color:var(--text)}
+.install-os-switch .os-btn.active{background:var(--grad-main);color:#06080f}
+.install-switcher-body{padding:18px;text-align:left}
+.install-switcher-note{font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--text-thr);margin-bottom:10px}
+.install-switcher-row{display:flex;align-items:center;gap:8px}
+.install-switcher-row .prompt{color:var(--green)}
+.install-switcher-row .cmd{flex:1;white-space:nowrap;overflow:auto;scrollbar-width:none;font-family:var(--mono);font-size:12px;color:var(--text)}
+.install-switcher-row .cmd::-webkit-scrollbar{display:none}
 
 /* ── Glass Cards ── */
 .value-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
@@ -325,6 +345,7 @@ body.lang-zh .lang-en{display:none !important}
     <a href="#features" class="lang-zh">能力</a><a href="#features" class="lang-en">Features</a>
     <a href="#architecture" class="lang-zh">架构</a><a href="#architecture" class="lang-en">Architecture</a>
     <a href="#quickstart" class="lang-zh">快速开始</a><a href="#quickstart" class="lang-en">Get Started</a>
+    <a href="#team-sharing" class="lang-zh">团队共享</a><a href="#team-sharing" class="lang-en">Team Sharing</a>
     <a href="#migration" class="lang-zh">记忆迁移</a><a href="#migration" class="lang-en">Migration</a>
     <a href="./docs/index.html" class="btn-nav lang-zh">文档</a><a href="./docs/index.html" class="btn-nav lang-en">Docs</a>
     <span class="lang-switch"><button type="button" class="lang-btn active" data-lang="zh">中</button><button type="button" class="lang-btn" data-lang="en">EN</button></span>
@@ -358,10 +379,10 @@ body.lang-zh .lang-en{display:none !important}
     <span class="lang-en">Give Your OpenClaw<br><span class="grad">Lasting Intelligence</span></span>
   </h1>
   <p class="desc">
-    <span class="lang-zh">为 OpenClaw 注入持久记忆与自进化技能<br>完全本地化  全量可视化管理  分级模型极致省钱</span>
-    <span class="lang-en">Persistent memory and self-evolving skills for OpenClaw agents.<br>100% local storage, full visualization dashboard, and tiered models for cost efficiency.</span>
+    <span class="lang-zh">为 OpenClaw 注入持久记忆与自进化技能<br>多实例团队协作  完全本地化  全量可视化管理</span>
+    <span class="lang-en">Persistent memory, self-evolving skills, and multi-instance team collaboration for OpenClaw agents.<br>100% local storage, full visualization, and team sharing.</span>
   </p>
-  <p class="sub-line"><span class="lang-zh">把 MemOS 带进你的 OpenClaw</span><span class="lang-en">Bring MemOS to your OpenClaw workflow</span></p>
+  <p class="sub-line"><span class="lang-zh">多个 OpenClaw 协同进化，越用越聪明</span><span class="lang-en">Multiple OpenClaw agents evolve together, getting smarter over time</span></p>
   <div class="ctas">
     <a href="#quickstart" class="btn btn-glow lang-zh">立即安装 →</a><a href="#quickstart" class="btn btn-glow lang-en">Get Started →</a>
     <a href="https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-openclaw" class="btn btn-outline" target="_blank" rel="noopener">
@@ -370,15 +391,85 @@ body.lang-zh .lang-en{display:none !important}
     </a>
   </div>
 
+  <!-- ── Multi-Agent Hero Visual ── -->
+  <div class="hero-agents" style="max-width:780px;margin:36px auto 40px;animation:fadeUp .7s ease .4s both">
+    <svg viewBox="0 0 780 200" width="780" height="200" xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;height:auto">
+      <defs>
+        <linearGradient id="hgHub" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(0,229,255,.18)"/><stop offset="100%" stop-color="rgba(99,140,255,.18)"/></linearGradient>
+        <linearGradient id="hgCli" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(177,108,255,.14)"/><stop offset="100%" stop-color="rgba(99,140,255,.14)"/></linearGradient>
+        <linearGradient id="hgClaw" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient>
+      </defs>
+      <!-- Hub (center) -->
+      <rect x="280" y="10" width="220" height="80" rx="12" fill="url(#hgHub)" stroke="rgba(0,229,255,.3)" stroke-width="1.5"><animate attributeName="stroke-opacity" values=".3;.6;.3" dur="3s" repeatCount="indefinite"/></rect>
+      <path d="M306 42c-4-2-6 0-5 5s4 3 5 0c1-2 1-4 0-5z" fill="url(#hgClaw)"/><path d="M322 42c4-2 6 0 5 5s-4 3-5 0c-1-2-1-4 0-5z" fill="url(#hgClaw)"/>
+      <circle cx="314" cy="38" r="9" fill="url(#hgClaw)"/>
+      <circle cx="311" cy="36" r="1.8" fill="#050810"/><circle cx="317" cy="36" r="1.8" fill="#050810"/>
+      <circle cx="311.5" cy="35.4" r=".7" fill="#00e5cc"><animate attributeName="opacity" values="1;.3;1" dur="3s" repeatCount="indefinite"/></circle>
+      <circle cx="317.5" cy="35.4" r=".7" fill="#00e5cc"><animate attributeName="opacity" values="1;.3;1" dur="3s" repeatCount="indefinite" begin=".1s"/></circle>
+      <text x="334" y="40" font-size="13" font-weight="800" fill="#00e5ff" font-family="var(--font)">Hub</text>
+      <text x="334" y="55" font-size="9" fill="rgba(200,210,255,.5)" font-family="var(--font)"><tspan class="lang-zh">团队服务端 · 共享记忆/技能</tspan><tspan class="lang-en">Team Server · Shared Memory/Skills</tspan></text>
+      <rect x="334" y="64" width="40" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/><text x="340" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="var(--mono)">🧠 86</text>
+      <rect x="380" y="64" width="40" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/><text x="386" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="var(--mono)">📋 12</text>
+      <rect x="426" y="64" width="36" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/><text x="432" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="var(--mono)">⚡ 5</text>
+      <!-- Client A -->
+      <rect x="20" y="120" width="200" height="70" rx="10" fill="url(#hgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+      <path d="M44 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#hgClaw)"/><path d="M56 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#hgClaw)"/>
+      <circle cx="50" cy="145" r="7" fill="url(#hgClaw)"/><circle cx="47.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="52.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="48" cy="143" r=".5" fill="#00e5cc"/><circle cx="53" cy="143" r=".5" fill="#00e5cc"/>
+      <text x="66" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="var(--font)">OpenClaw A</text>
+      <text x="66" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="var(--font)"><tspan class="lang-zh">前端开发 · 234 记忆</tspan><tspan class="lang-en">Frontend · 234 Memories</tspan></text>
+      <circle cx="182" cy="142" r="4" fill="#00e676"/><text x="192" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="var(--mono)">online</text>
+      <rect x="40" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/><text x="48" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">📤 skill_publish</text>
+      <!-- Client B -->
+      <rect x="250" y="120" width="200" height="70" rx="10" fill="url(#hgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+      <path d="M274 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#hgClaw)"/><path d="M286 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#hgClaw)"/>
+      <circle cx="280" cy="145" r="7" fill="url(#hgClaw)"/><circle cx="277.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="282.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="278" cy="143" r=".5" fill="#00e5cc"/><circle cx="283" cy="143" r=".5" fill="#00e5cc"/>
+      <text x="296" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="var(--font)">OpenClaw B</text>
+      <text x="296" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="var(--font)"><tspan class="lang-zh">后端开发 · 158 记忆</tspan><tspan class="lang-en">Backend · 158 Memories</tspan></text>
+      <circle cx="412" cy="142" r="4" fill="#00e676"/><text x="422" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="var(--mono)">online</text>
+      <rect x="270" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/><text x="278" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">📤 task_share</text>
+      <!-- Client C -->
+      <rect x="480" y="120" width="200" height="70" rx="10" fill="url(#hgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+      <path d="M504 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#hgClaw)"/><path d="M516 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#hgClaw)"/>
+      <circle cx="510" cy="145" r="7" fill="url(#hgClaw)"/><circle cx="507.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="512.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="508" cy="143" r=".5" fill="#00e5cc"/><circle cx="513" cy="143" r=".5" fill="#00e5cc"/>
+      <text x="526" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="var(--font)">OpenClaw C</text>
+      <text x="526" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="var(--font)"><tspan class="lang-zh">测试工程 · 89 记忆</tspan><tspan class="lang-en">QA/Testing · 89 Memories</tspan></text>
+      <circle cx="642" cy="142" r="4" fill="#00e676"/><text x="652" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="var(--mono)">online</text>
+      <rect x="500" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/><text x="508" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">⬇ skill_pull</text>
+      <!-- ...N -->
+      <rect x="710" y="130" width="56" height="50" rx="10" fill="rgba(99,140,255,.06)" stroke="rgba(99,140,255,.15)" stroke-width="1" stroke-dasharray="4 3"/>
+      <text x="738" y="153" text-anchor="middle" font-size="16" font-weight="800" fill="rgba(99,140,255,.3)" font-family="var(--font)">…N</text>
+      <text x="738" y="170" text-anchor="middle" font-size="7" fill="rgba(200,210,255,.25)" font-family="var(--font)"><tspan class="lang-zh">更多实例</tspan><tspan class="lang-en">More</tspan></text>
+      <!-- Connections -->
+      <path d="M340,90 C300,105 170,110 120,118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5"><animate attributeName="stroke-dasharray" values="0,200;200,0" dur="2s" repeatCount="indefinite"/></path>
+      <line x1="390" y1="90" x2="350" y2="118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5"><animate attributeName="stroke-dasharray" values="0,100;100,0" dur="2s" repeatCount="indefinite" begin=".3s"/></line>
+      <path d="M440,90 C480,105 530,110 580,118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5"><animate attributeName="stroke-dasharray" values="0,200;200,0" dur="2s" repeatCount="indefinite" begin=".6s"/></path>
+      <path d="M490,90 C550,100 680,110 710,148" fill="none" stroke="rgba(99,140,255,.2)" stroke-width="1" stroke-dasharray="4 4" opacity=".4"/>
+      <!-- Particles up -->
+      <circle r="2" fill="#00e5ff" opacity=".6"><animateMotion dur="3s" repeatCount="indefinite" path="M120,170 C170,130 300,100 340,50"/><animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite"/></circle>
+      <circle r="2" fill="#b16cff" opacity=".6"><animateMotion dur="3s" repeatCount="indefinite" begin="1s" path="M350,170 C360,130 370,100 390,50"/><animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite" begin="1s"/></circle>
+      <circle r="2" fill="#00e5ff" opacity=".6"><animateMotion dur="3s" repeatCount="indefinite" begin="2s" path="M580,170 C530,130 480,100 440,50"/><animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite" begin="2s"/></circle>
+      <!-- Particles down -->
+      <circle r="1.5" fill="#00e676" opacity=".5"><animateMotion dur="2.5s" repeatCount="indefinite" begin=".5s" path="M440,50 C480,100 530,130 570,170"/><animate attributeName="opacity" values="0;.7;0" dur="2.5s" repeatCount="indefinite" begin=".5s"/></circle>
+      <circle r="1.5" fill="#ffca28" opacity=".5"><animateMotion dur="2.5s" repeatCount="indefinite" begin="1.5s" path="M340,50 C300,100 170,130 120,170"/><animate attributeName="opacity" values="0;.7;0" dur="2.5s" repeatCount="indefinite" begin="1.5s"/></circle>
+    </svg>
+  </div>
+
   <div class="hero-visual">
-    <div class="terminal glow-border">
-      <div class="terminal-bar"><span class="terminal-dot r"></span><span class="terminal-dot y"></span><span class="terminal-dot g"></span><span class="terminal-title">macOS/Linux</span></div>
-      <div class="terminal-body">
-        <div class="terminal-note"># One liner, Works everywhere. Installs everything.</div>
-        <div class="terminal-cmd-row"><span class="prompt">$</span><span class="cmd">curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</span><button type="button" class="copy-btn" data-copy="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button></div>
+    <div class="install-switcher glow-border" data-install-switcher>
+      <div class="install-switcher-header">
+        <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span>
+        <div class="install-os-switch">
+          <button type="button" class="os-btn active" data-os="unix"><span class="lang-zh">macOS/Linux</span><span class="lang-en">macOS/Linux</span></button>
+          <button type="button" class="os-btn" data-os="windows"><span class="lang-zh">Windows</span><span class="lang-en">Windows</span></button>
+        </div>
+      </div>
+      <div class="install-switcher-body">
+        <div class="install-switcher-note"><span class="lang-zh"># Works everywhere. Installs everything.</span><span class="lang-en"># Works everywhere. Installs everything.</span></div>
+        <div class="install-switcher-row"><span class="prompt">$</span><span class="cmd" data-os-cmd="unix">curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</span><span class="cmd" data-os-cmd="windows" style="display:none">powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"</span><button type="button" class="copy-btn install-copy-btn" data-copy-unix="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" data-copy-windows='powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"' data-copy="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button></div>
       </div>
     </div>
   </div>
+
 </div>
 </section>
 
@@ -396,7 +487,7 @@ body.lang-zh .lang-en{display:none !important}
     <div class="value-card"><div class="vc-icon">🧠</div><h3><span class="lang-zh">全量可视化管理</span><span class="lang-en">Full Visualization</span></h3><p><span class="lang-zh">内置管理面板，记忆 / 任务 / 技能完全透明可控。</span><span class="lang-en">Built-in web dashboard — memories, tasks, and skills fully transparent and controllable.</span></p></div>
     <div class="value-card"><div class="vc-icon">⚡</div><h3><span class="lang-zh">任务总结与技能进化</span><span class="lang-en">Task Summary & Skill Evolution</span></h3><p><span class="lang-zh">碎片对话自动归纳为结构化任务，再提炼为可复用技能并持续升级。从「记住」到「学会」，同一个坑不踩两次。</span><span class="lang-en">Fragmented conversations auto-organized into structured tasks, then distilled into reusable skills that evolve over time. From "remembering" to "mastering" — never repeat the same mistake twice.</span></p></div>
     <div class="value-card"><div class="vc-icon">💰</div><h3><span class="lang-zh">分级模型 · 省钱</span><span class="lang-en">Tiered Models</span></h3><p><span class="lang-zh">Embedding 轻量、摘要中等、技能高质量——按需分配，大幅省钱。</span><span class="lang-en">Lightweight, mid-tier, and high-quality models layered by purpose — maximum performance at minimum cost.</span></p></div>
-    <div class="value-card"><div class="vc-icon">🤝</div><h3><span class="lang-zh">多智能体协同</span><span class="lang-en">Multi-Agent Collaboration</span></h3><p><span class="lang-zh">记忆隔离 + 公共记忆 + 技能共享。多个 Agent 各有私域记忆，又能共享知识与技能，协同进化。</span><span class="lang-en">Memory isolation + public memory + skill sharing. Each agent has private memories while sharing knowledge and skills for collective evolution.</span></p></div>
+    <div class="value-card"><div class="vc-icon">🤝</div><h3><span class="lang-zh">团队共享 & 多智能体协同</span><span class="lang-en">Team Sharing & Multi-Agent</span></h3><p><span class="lang-zh">Hub-Client 架构跨实例共享记忆、任务与技能。记忆隔离 + 公共记忆 + 团队审批 + 实时通知，多 Agent 协同进化。</span><span class="lang-en">Hub-Client architecture for cross-instance sharing of memories, tasks, and skills. Memory isolation + public memory + team approval + real-time notifications for collaborative evolution.</span></p></div>
     <div class="value-card"><div class="vc-icon">🦞</div><h3><span class="lang-zh">OpenClaw 原生记忆导入</span><span class="lang-en">Native Memory Import</span></h3><p><span class="lang-zh">一键迁移 OpenClaw 内置记忆，智能去重、断点续传、实时进度。你过往的记忆不会丢失，再续前缘。</span><span class="lang-en">One-click migration from OpenClaw built-in memories. Smart dedup, resume anytime, real-time progress. Your past memories, never lost.</span></p></div>
   </div>
 </div>
@@ -582,23 +673,32 @@ body.lang-zh .lang-en{display:none !important}
 <div class="container">
   <div class="section-header">
     <h2><span class="lang-zh">60 秒<span class="hl">上手</span></span><span class="lang-en">Up and Running in <span class="hl">60 Seconds</span></span></h2>
-    <p class="section-desc"><span class="lang-zh">npm 一键安装，两种配置方式任选。</span><span class="lang-en">One-command install. Two configuration methods.</span></p>
+    <p class="section-desc"><span class="lang-zh">无论新安装还是升级，一行命令搞定</span><span class="lang-en">One-command install. Two configuration methods.</span></p>
   </div>
   <div class="showcase">
     <div class="showcase-item">
       <div class="showcase-text">
-        <h3><span class="lang-zh">1. 一键安装</span><span class="lang-en">1. Install</span></h3>
-        <p><span class="lang-zh">macOS / Linux 用户建议先安装 C++ 编译工具（用于 <code style="font-size:12px">better-sqlite3</code>）。<br><a href="./docs/troubleshooting.html" style="color:var(--cyan);font-size:12px">遇到安装问题？查看排查指南 →</a></span><span class="lang-en">macOS / Linux users: install C++ build tools first (for <code style="font-size:12px">better-sqlite3</code>).<br><a href="./docs/troubleshooting.html" style="color:var(--cyan);font-size:12px">Install issues? See troubleshooting guide →</a></span></p>
+        <h3><span class="lang-zh">1.一键安装/升级</span><span class="lang-en">1. Install</span></h3>
+        <p><span class="lang-zh">一行命令安装/升级，自动检测环境，安装所有依赖和编译工具，自动升级最新版本。<br><a href="./docs/troubleshooting.html" style="color:var(--cyan);font-size:12px">遇到安装问题？查看排查指南 →</a></span><span class="lang-en">One command automatically installs all dependencies and build tools, and upgrades to the latest version.<br><a href="./docs/troubleshooting.html" style="color:var(--cyan);font-size:12px">Install issues? See troubleshooting guide →</a></span></p>
       </div>
       <div class="showcase-visual">
-        <div class="code-block">
-          <div class="code-header"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span><span style="flex:1"></span>terminal</div>
-          <pre><span class="cmt"># Step 0: 安装编译工具 (macOS / Linux)</span>
-<span class="kw">xcode-select</span> --install        <span class="cmt"># macOS</span>
-<span class="cmt"># sudo apt install build-essential  # Linux</span>
-
-<span class="cmt"># Step 1: 安装插件 & 启动</span>
-<span class="kw">curl</span> -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</pre>
+        <div class="install-switcher" data-install-switcher>
+          <div class="install-switcher-header">
+            <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span>
+            <div class="install-os-switch">
+              <button type="button" class="os-btn active" data-os="unix"><span class="lang-zh">macOS/Linux</span><span class="lang-en">macOS/Linux</span></button>
+              <button type="button" class="os-btn" data-os="windows"><span class="lang-zh">Windows</span><span class="lang-en">Windows</span></button>
+            </div>
+          </div>
+          <div class="install-switcher-body">
+            <div class="install-switcher-note"><span class="lang-zh"># Step 1: 安装插件 & 启动</span><span class="lang-en"># Step 1: Install plugin & start</span></div>
+            <div class="install-switcher-row">
+              <span class="prompt">$</span>
+              <span class="cmd" data-os-cmd="unix">curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</span>
+              <span class="cmd" data-os-cmd="windows" style="display:none">powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"</span>
+              <button type="button" class="copy-btn install-copy-btn" data-copy-unix="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" data-copy-windows='powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"' data-copy="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -705,7 +805,7 @@ body.lang-zh .lang-en{display:none !important}
 <!-- ════════ Tools ════════ -->
 <section class="section">
 <div class="container">
-  <div class="section-header"><h2><span class="lang-zh">12 个<span class="hl">智能工具</span></span><span class="lang-en">12 <span class="hl">Smart Tools</span></span></h2></div>
+  <div class="section-header"><h2><span class="lang-zh">17 个<span class="hl">智能工具</span></span><span class="lang-en">17 <span class="hl">Smart Tools</span></span></h2></div>
   <div class="tool-grid">
     <div class="tool-card"><div class="ticon">🧠</div><h4>auto_recall</h4><p><span class="lang-zh">每轮自动回忆</span><span class="lang-en">Auto recall each turn</span></p></div>
     <div class="tool-card"><div class="ticon">🔍</div><h4>memory_search</h4><p><span class="lang-zh">记忆检索</span><span class="lang-en">Memory search</span></p></div>
@@ -719,6 +819,210 @@ body.lang-zh .lang-en{display:none !important}
     <div class="tool-card"><div class="ticon">🌍</div><h4>skill_publish</h4><p><span class="lang-zh">公开技能</span><span class="lang-en">Publish skill</span></p></div>
     <div class="tool-card"><div class="ticon">🔒</div><h4>skill_unpublish</h4><p><span class="lang-zh">取消公开</span><span class="lang-en">Unpublish skill</span></p></div>
     <div class="tool-card"><div class="ticon">🌐</div><h4>memory_viewer</h4><p><span class="lang-zh">管理面板</span><span class="lang-en">Dashboard</span></p></div>
+    <div class="tool-card"><div class="ticon">📤</div><h4>task_share</h4><p><span class="lang-zh">共享任务</span><span class="lang-en">Share task</span></p></div>
+    <div class="tool-card"><div class="ticon">📥</div><h4>task_unshare</h4><p><span class="lang-zh">取消共享</span><span class="lang-en">Unshare task</span></p></div>
+    <div class="tool-card"><div class="ticon">🔗</div><h4>network_memory_detail</h4><p><span class="lang-zh">团队记忆详情</span><span class="lang-en">Team memory detail</span></p></div>
+    <div class="tool-card"><div class="ticon">⬇️</div><h4>network_skill_pull</h4><p><span class="lang-zh">拉取团队技能</span><span class="lang-en">Pull team skill</span></p></div>
+    <div class="tool-card"><div class="ticon">👥</div><h4>network_team_info</h4><p><span class="lang-zh">团队信息</span><span class="lang-en">Team info</span></p></div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Team Sharing ════════ -->
+<section class="section" id="team-sharing">
+<div class="container">
+  <div class="section-header">
+    <div class="magic-badge">
+      <span>👥</span>
+      <span class="lang-zh">团队共享中心</span><span class="lang-en">Team Sharing Hub</span>
+    </div>
+    <h2><span class="lang-zh">多实例协作 —<br>让团队的 Agent <span class="hl">共同进化</span></span><span class="lang-en">Multi-Instance Collaboration —<br>Your Team's Agents <span class="hl">Evolve Together</span></span></h2>
+    <p class="section-desc"><span class="lang-zh">Hub-Client 架构，一个服务端存储共享数据，客户端按需查询。私有数据始终留在本地，只有明确共享的内容才对团队可见。端口自动推导，多实例无冲突。</span><span class="lang-en">Hub-Client architecture — one Hub stores shared data while clients query on demand. Private data stays local; only explicitly shared content is visible to the team. Auto-derived ports, zero conflicts for multi-instance setups.</span></p>
+  </div>
+
+  <!-- ── Hub-Client Architecture Diagram ── -->
+  <div class="arch-container" style="margin-bottom:60px">
+    <div class="arch-svg-wrap">
+      <svg viewBox="0 0 960 520" width="960" height="520" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="tsHub" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(0,229,255,.15)"/><stop offset="100%" stop-color="rgba(99,140,255,.15)"/></linearGradient>
+          <linearGradient id="tsClient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(177,108,255,.12)"/><stop offset="100%" stop-color="rgba(99,140,255,.12)"/></linearGradient>
+          <linearGradient id="tsClaw" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient>
+          <marker id="tsA" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#00e5ff" opacity=".7"/></marker>
+          <marker id="tsB" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="rgba(177,108,255,.7)"/></marker>
+          <filter id="tsGlow"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        </defs>
+
+        <!-- Hub Server (center-top) -->
+        <rect x="310" y="20" width="340" height="200" rx="16" fill="url(#tsHub)" stroke="rgba(0,229,255,.3)" stroke-width="1.5"/>
+        <rect x="310" y="20" width="340" height="36" rx="16" fill="rgba(0,229,255,.06)"/>
+        <rect x="310" y="40" width="340" height="16" rx="0" fill="rgba(0,229,255,.06)"/>
+        <!-- Hub claw icon -->
+        <path d="M338 38c-4-2-6 0-5 4s4 3 5 0c1-2 1-3 0-4z" fill="url(#tsClaw)"/>
+        <path d="M354 38c4-2 6 0 5 4s-4 3-5 0c-1-2-1-3 0-4z" fill="url(#tsClaw)"/>
+        <circle cx="346" cy="34" r="8" fill="url(#tsClaw)"/>
+        <circle cx="343" cy="32" r="1.5" fill="#050810"/><circle cx="349" cy="32" r="1.5" fill="#050810"/>
+        <circle cx="343.5" cy="31.5" r=".6" fill="#00e5cc"/><circle cx="349.5" cy="31.5" r=".6" fill="#00e5cc"/>
+        <text x="366" y="42" font-size="13" font-weight="800" fill="#00e5ff" font-family="var(--font)">Hub Server</text>
+        <text x="570" y="42" font-size="10" fill="rgba(200,210,255,.4)" font-family="var(--mono)">:18800</text>
+        <!-- Team info -->
+        <text x="334" y="78" font-size="10" fill="rgba(200,210,255,.5)" font-family="var(--font)"><tspan class="lang-zh">团队名称</tspan><tspan class="lang-en">Team</tspan></text>
+        <text x="420" y="78" font-size="11" font-weight="700" fill="#eef1ff" font-family="var(--font)">Engineering Team</text>
+        <!-- Members list with status dots -->
+        <circle cx="340" cy="102" r="4" fill="#00e676"/><text x="350" y="106" font-size="10" font-weight="600" fill="#eef1ff" font-family="var(--font)">Admin: tangbo</text><text x="490" y="106" font-size="9" fill="rgba(0,230,118,.7)" font-family="var(--mono)">online</text>
+        <circle cx="340" cy="122" r="4" fill="#00e676"/><text x="350" y="126" font-size="10" font-weight="600" fill="rgba(200,210,255,.6)" font-family="var(--font)">Member: alice</text><text x="490" y="126" font-size="9" fill="rgba(0,230,118,.7)" font-family="var(--mono)">online</text>
+        <circle cx="340" cy="142" r="4" fill="#ffca28"/><text x="350" y="146" font-size="10" font-weight="600" fill="rgba(200,210,255,.6)" font-family="var(--font)">Member: charlie</text><text x="490" y="146" font-size="9" fill="rgba(255,202,40,.7)" font-family="var(--mono)">offline</text>
+        <circle cx="340" cy="162" r="4" fill="rgba(177,108,255,.7)"/><text x="350" y="166" font-size="10" font-weight="600" fill="rgba(200,210,255,.4)" font-family="var(--font)">Pending: bob</text><text x="490" y="166" font-size="9" fill="rgba(177,108,255,.6)" font-family="var(--mono)"><tspan class="lang-zh">待审批</tspan><tspan class="lang-en">pending</tspan></text>
+        <!-- Shared data badges -->
+        <rect x="334" y="182" width="54" height="20" rx="6" fill="rgba(0,229,255,.08)" stroke="rgba(0,229,255,.15)" stroke-width="1"/>
+        <text x="342" y="196" font-size="8" font-weight="600" fill="#00e5ff" font-family="var(--font)"><tspan class="lang-zh">📋 12 任务</tspan><tspan class="lang-en">📋 12 Tasks</tspan></text>
+        <rect x="396" y="182" width="54" height="20" rx="6" fill="rgba(0,229,255,.08)" stroke="rgba(0,229,255,.15)" stroke-width="1"/>
+        <text x="404" y="196" font-size="8" font-weight="600" fill="#00e5ff" font-family="var(--font)"><tspan class="lang-zh">🧠 86 记忆</tspan><tspan class="lang-en">🧠 86 Mems</tspan></text>
+        <rect x="458" y="182" width="54" height="20" rx="6" fill="rgba(0,229,255,.08)" stroke="rgba(0,229,255,.15)" stroke-width="1"/>
+        <text x="466" y="196" font-size="8" font-weight="600" fill="#00e5ff" font-family="var(--font)"><tspan class="lang-zh">⚡ 5 技能</tspan><tspan class="lang-en">⚡ 5 Skills</tspan></text>
+
+        <!-- Client 1: Alice (bottom-left) -->
+        <rect x="40" y="320" width="260" height="180" rx="14" fill="url(#tsClient)" stroke="rgba(177,108,255,.2)" stroke-width="1"/>
+        <rect x="40" y="320" width="260" height="32" rx="14" fill="rgba(177,108,255,.05)"/>
+        <rect x="40" y="338" width="260" height="14" rx="0" fill="rgba(177,108,255,.05)"/>
+        <!-- Client 1 claw -->
+        <path d="M62 336c-3-1.5-5 0-4 3s3 2.5 4 0c.8-1.5.8-2.5 0-3z" fill="url(#tsClaw)"/>
+        <path d="M76 336c3-1.5 5 0 4 3s-3 2.5-4 0c-.8-1.5-.8-2.5 0-3z" fill="url(#tsClaw)"/>
+        <circle cx="69" cy="333" r="7" fill="url(#tsClaw)"/>
+        <circle cx="66.5" cy="331" r="1.3" fill="#050810"/><circle cx="71.5" cy="331" r="1.3" fill="#050810"/>
+        <circle cx="67" cy="330.6" r=".5" fill="#00e5cc"/><circle cx="72" cy="330.6" r=".5" fill="#00e5cc"/>
+        <text x="84" y="340" font-size="11" font-weight="700" fill="#b16cff" font-family="var(--font)">Client: Alice</text>
+        <text x="230" y="340" font-size="9" fill="rgba(200,210,255,.3)" font-family="var(--mono)">:19001</text>
+        <!-- Alice's local + shared view -->
+        <text x="60" y="374" font-size="9" fill="rgba(200,210,255,.4)" font-family="var(--font)"><tspan class="lang-zh">本地私有</tspan><tspan class="lang-en">Local Private</tspan></text>
+        <rect x="60" y="380" width="80" height="16" rx="4" fill="rgba(99,140,255,.06)" stroke="rgba(99,140,255,.08)" stroke-width="1"/><text x="68" y="392" font-size="7.5" fill="rgba(200,210,255,.5)" font-family="var(--mono)">🧠 234 memories</text>
+        <rect x="60" y="400" width="80" height="16" rx="4" fill="rgba(99,140,255,.06)" stroke="rgba(99,140,255,.08)" stroke-width="1"/><text x="68" y="412" font-size="7.5" fill="rgba(200,210,255,.5)" font-family="var(--mono)">⚡ 3 skills</text>
+        <text x="165" y="374" font-size="9" fill="rgba(0,229,255,.5)" font-family="var(--font)"><tspan class="lang-zh">团队可见</tspan><tspan class="lang-en">Team Shared</tspan></text>
+        <rect x="165" y="380" width="115" height="16" rx="4" fill="rgba(0,229,255,.04)" stroke="rgba(0,229,255,.1)" stroke-width="1"/><text x="173" y="392" font-size="7.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">📋 task_share → hub</text>
+        <rect x="165" y="400" width="115" height="16" rx="4" fill="rgba(0,229,255,.04)" stroke="rgba(0,229,255,.1)" stroke-width="1"/><text x="173" y="412" font-size="7.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">⚡ skill_publish</text>
+        <!-- Search scope -->
+        <rect x="60" y="432" width="220" height="22" rx="6" fill="rgba(99,140,255,.04)" stroke="rgba(99,140,255,.1)" stroke-width="1"/>
+        <text x="70" y="447" font-size="8" fill="rgba(200,210,255,.4)" font-family="var(--mono)">🔍 memory_search(scope: </text><text x="214" y="447" font-size="8" font-weight="700" fill="#00e5ff" font-family="var(--mono)">all</text><text x="228" y="447" font-size="8" fill="rgba(200,210,255,.4)" font-family="var(--mono)">)</text>
+        <!-- Notifications -->
+        <rect x="60" y="460" width="220" height="18" rx="4" fill="rgba(0,230,118,.04)" stroke="rgba(0,230,118,.1)" stroke-width="1"/>
+        <text x="68" y="473" font-size="7.5" fill="rgba(0,230,118,.6)" font-family="var(--mono)">🔔 role_promoted → admin</text>
+
+        <!-- Client 2: Bob (bottom-center) -->
+        <rect x="350" y="320" width="260" height="180" rx="14" fill="url(#tsClient)" stroke="rgba(177,108,255,.15)" stroke-width="1" stroke-dasharray="4 3"/>
+        <rect x="350" y="320" width="260" height="32" rx="14" fill="rgba(177,108,255,.03)"/>
+        <rect x="350" y="338" width="260" height="14" rx="0" fill="rgba(177,108,255,.03)"/>
+        <!-- Bob claw -->
+        <path d="M372 336c-3-1.5-5 0-4 3s3 2.5 4 0c.8-1.5.8-2.5 0-3z" fill="url(#tsClaw)" opacity=".5"/>
+        <path d="M386 336c3-1.5 5 0 4 3s-3 2.5-4 0c-.8-1.5-.8-2.5 0-3z" fill="url(#tsClaw)" opacity=".5"/>
+        <circle cx="379" cy="333" r="7" fill="url(#tsClaw)" opacity=".5"/>
+        <circle cx="376.5" cy="331" r="1.3" fill="#050810"/><circle cx="381.5" cy="331" r="1.3" fill="#050810"/>
+        <circle cx="377" cy="330.6" r=".5" fill="#00e5cc" opacity=".5"/><circle cx="382" cy="330.6" r=".5" fill="#00e5cc" opacity=".5"/>
+        <text x="394" y="340" font-size="11" font-weight="700" fill="rgba(177,108,255,.5)" font-family="var(--font)">Client: Bob</text>
+        <text x="538" y="340" font-size="9" fill="rgba(200,210,255,.2)" font-family="var(--mono)">:19201</text>
+        <rect x="370" y="370" width="220" height="40" rx="8" fill="rgba(255,202,40,.04)" stroke="rgba(255,202,40,.12)" stroke-width="1"/>
+        <text x="480" y="386" text-anchor="middle" font-size="18" fill="rgba(255,202,40,.4)">⏳</text>
+        <text x="480" y="402" text-anchor="middle" font-size="9" fill="rgba(255,202,40,.5)" font-family="var(--font)"><tspan class="lang-zh">等待管理员审批…</tspan><tspan class="lang-en">Waiting for admin approval…</tspan></text>
+        <!-- Join request -->
+        <rect x="370" y="425" width="220" height="20" rx="6" fill="rgba(177,108,255,.04)" stroke="rgba(177,108,255,.1)" stroke-width="1"/>
+        <text x="480" y="439" text-anchor="middle" font-size="8" fill="rgba(177,108,255,.5)" font-family="var(--mono)">POST /api/v1/hub/join → pending</text>
+        <!-- Withdraw option -->
+        <rect x="370" y="455" width="220" height="20" rx="6" fill="rgba(99,140,255,.04)" stroke="rgba(99,140,255,.1)" stroke-width="1"/>
+        <text x="480" y="469" text-anchor="middle" font-size="8" fill="rgba(200,210,255,.35)" font-family="var(--mono)"><tspan class="lang-zh">可随时撤回申请 withdraw-pending</tspan><tspan class="lang-en">Can withdraw anytime withdraw-pending</tspan></text>
+
+        <!-- Client 3: Charlie (bottom-right) -->
+        <rect x="660" y="320" width="260" height="180" rx="14" fill="url(#tsClient)" stroke="rgba(177,108,255,.2)" stroke-width="1"/>
+        <rect x="660" y="320" width="260" height="32" rx="14" fill="rgba(177,108,255,.05)"/>
+        <rect x="660" y="338" width="260" height="14" rx="0" fill="rgba(177,108,255,.05)"/>
+        <!-- Charlie claw -->
+        <path d="M682 336c-3-1.5-5 0-4 3s3 2.5 4 0c.8-1.5.8-2.5 0-3z" fill="url(#tsClaw)"/>
+        <path d="M696 336c3-1.5 5 0 4 3s-3 2.5-4 0c-.8-1.5-.8-2.5 0-3z" fill="url(#tsClaw)"/>
+        <circle cx="689" cy="333" r="7" fill="url(#tsClaw)"/>
+        <circle cx="686.5" cy="331" r="1.3" fill="#050810"/><circle cx="691.5" cy="331" r="1.3" fill="#050810"/>
+        <circle cx="687" cy="330.6" r=".5" fill="#00e5cc"/><circle cx="692" cy="330.6" r=".5" fill="#00e5cc"/>
+        <text x="704" y="340" font-size="11" font-weight="700" fill="#b16cff" font-family="var(--font)">Client: Charlie</text>
+        <text x="860" y="340" font-size="9" fill="rgba(200,210,255,.3)" font-family="var(--mono)">:19401</text>
+        <!-- Charlie's data -->
+        <text x="680" y="374" font-size="9" fill="rgba(200,210,255,.4)" font-family="var(--font)"><tspan class="lang-zh">本地私有</tspan><tspan class="lang-en">Local Private</tspan></text>
+        <rect x="680" y="380" width="80" height="16" rx="4" fill="rgba(99,140,255,.06)" stroke="rgba(99,140,255,.08)" stroke-width="1"/><text x="688" y="392" font-size="7.5" fill="rgba(200,210,255,.5)" font-family="var(--mono)">🧠 158 memories</text>
+        <rect x="680" y="400" width="80" height="16" rx="4" fill="rgba(99,140,255,.06)" stroke="rgba(99,140,255,.08)" stroke-width="1"/><text x="688" y="412" font-size="7.5" fill="rgba(200,210,255,.5)" font-family="var(--mono)">⚡ 7 skills</text>
+        <text x="785" y="374" font-size="9" fill="rgba(0,229,255,.5)" font-family="var(--font)"><tspan class="lang-zh">从团队拉取</tspan><tspan class="lang-en">Pulled from Team</tspan></text>
+        <rect x="785" y="380" width="115" height="16" rx="4" fill="rgba(0,229,255,.04)" stroke="rgba(0,229,255,.1)" stroke-width="1"/><text x="793" y="392" font-size="7.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">⬇ network_skill_pull</text>
+        <rect x="785" y="400" width="115" height="16" rx="4" fill="rgba(0,229,255,.04)" stroke="rgba(0,229,255,.1)" stroke-width="1"/><text x="793" y="412" font-size="7.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">🔍 scope: group</text>
+        <!-- Offline status -->
+        <rect x="680" y="432" width="220" height="22" rx="6" fill="rgba(255,202,40,.04)" stroke="rgba(255,202,40,.1)" stroke-width="1"/>
+        <text x="690" y="447" font-size="8" fill="rgba(255,202,40,.5)" font-family="var(--mono)"><tspan class="lang-zh">⚠ 离线 — 本地记忆正常工作</tspan><tspan class="lang-en">⚠ offline — local memory works</tspan></text>
+        <!-- Hub reconnect -->
+        <rect x="680" y="460" width="220" height="18" rx="4" fill="rgba(0,229,255,.04)" stroke="rgba(0,229,255,.08)" stroke-width="1"/>
+        <text x="688" y="473" font-size="7.5" fill="rgba(0,229,255,.4)" font-family="var(--mono)"><tspan class="lang-zh">🔄 Hub 上线后自动重连</tspan><tspan class="lang-en">🔄 Auto-reconnect when Hub is back</tspan></text>
+
+        <!-- Connection lines: Hub → Clients -->
+        <!-- Hub → Alice -->
+        <path d="M380,220 C380,265 170,280 170,318" fill="none" stroke="#00e5ff" stroke-width="1.5" stroke-dasharray="6 3" marker-end="url(#tsA)" opacity=".6"/>
+        <rect x="220" y="258" width="90" height="16" rx="4" fill="rgba(6,8,15,.9)" stroke="rgba(0,229,255,.15)" stroke-width="1"/>
+        <text x="265" y="269" text-anchor="middle" font-size="7" font-weight="600" fill="#00e5ff" font-family="var(--font)"><tspan class="lang-zh">✓ 已连接</tspan><tspan class="lang-en">✓ connected</tspan></text>
+        <!-- Hub → Bob (dashed, pending) -->
+        <path d="M480,220 C480,265 480,280 480,318" fill="none" stroke="rgba(177,108,255,.4)" stroke-width="1.5" stroke-dasharray="3 5" marker-end="url(#tsB)" opacity=".5"/>
+        <rect x="435" y="265" width="90" height="16" rx="4" fill="rgba(6,8,15,.9)" stroke="rgba(177,108,255,.15)" stroke-width="1"/>
+        <text x="480" y="276" text-anchor="middle" font-size="7" font-weight="600" fill="rgba(177,108,255,.6)" font-family="var(--font)"><tspan class="lang-zh">⏳ 待审批</tspan><tspan class="lang-en">⏳ pending</tspan></text>
+        <!-- Hub → Charlie (offline) -->
+        <path d="M580,220 C580,265 790,280 790,318" fill="none" stroke="rgba(255,202,40,.3)" stroke-width="1.5" stroke-dasharray="3 6" opacity=".4"/>
+        <rect x="648" y="258" width="80" height="16" rx="4" fill="rgba(6,8,15,.9)" stroke="rgba(255,202,40,.15)" stroke-width="1"/>
+        <text x="688" y="269" text-anchor="middle" font-size="7" font-weight="600" fill="rgba(255,202,40,.5)" font-family="var(--font)"><tspan class="lang-zh">⚠ 离线</tspan><tspan class="lang-en">⚠ offline</tspan></text>
+
+        <!-- Data flow arrows: Alice sharing up -->
+        <path d="M230,380 C230,310 350,280 400,220" fill="none" stroke="rgba(0,229,255,.25)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#tsA)" opacity=".5"/>
+        <text x="280" y="300" font-size="7" fill="rgba(0,229,255,.4)" font-family="var(--mono)" transform="rotate(-40,280,300)">task_share</text>
+
+        <!-- Skill pull arrow: Hub → Charlie -->
+        <path d="M600,190 C650,220 750,280 800,380" fill="none" stroke="rgba(177,108,255,.25)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#tsB)" opacity=".5"/>
+        <text x="700" y="290" font-size="7" fill="rgba(177,108,255,.4)" font-family="var(--mono)" transform="rotate(40,700,290)">skill_pull</text>
+
+        <!-- Port info box -->
+        <rect x="0" y="260" width="130" height="50" rx="8" fill="rgba(10,14,28,.85)" stroke="rgba(99,140,255,.1)" stroke-width="1"/>
+        <text x="10" y="278" font-size="8" font-weight="700" fill="rgba(200,210,255,.4)" font-family="var(--font)"><tspan class="lang-zh">端口自动推导</tspan><tspan class="lang-en">Auto Port Derivation</tspan></text>
+        <text x="10" y="292" font-size="7" fill="rgba(200,210,255,.3)" font-family="var(--mono)">hub = gateway + 11</text>
+        <text x="10" y="304" font-size="7" fill="rgba(200,210,255,.3)" font-family="var(--mono)">EADDRINUSE → retry ×3</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="showcase">
+    <div class="showcase-item">
+      <div class="showcase-text">
+        <h3><span class="lang-zh">Hub-Client <span class="hl">协作架构</span></span><span class="lang-en">Hub-Client <span class="hl">Architecture</span></span></h3>
+        <p><span class="lang-zh">一台机器作为 Hub 服务端管理团队数据，其他实例作为 Client 连接。加入需要管理员审批，角色可随时切换。支持同一台机器运行多个 OpenClaw 实例（如个人 + 工作），端口和数据完全隔离。</span><span class="lang-en">One machine serves as the Hub managing team data while others connect as Clients. Joining requires admin approval, and roles can be switched anytime. Supports multiple OpenClaw instances on the same machine (e.g., personal + work) with full port and data isolation.</span></p>
+        <div><span class="stag"><span class="lang-zh">审批流程</span><span class="lang-en">Approval Flow</span></span><span class="stag"><span class="lang-zh">端口自动推导</span><span class="lang-en">Auto Port</span></span><span class="stag"><span class="lang-zh">角色切换</span><span class="lang-en">Role Switch</span></span><span class="stag"><span class="lang-zh">多实例隔离</span><span class="lang-en">Multi-Instance</span></span></div>
+      </div>
+      <div class="showcase-visual">
+        <div class="code-block">
+          <div class="code-header"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span><span style="flex:1"></span>Admin Controls & Notifications</div>
+          <pre><span class="fn">Admin Panel:</span>
+  <span class="kw">approve</span>(bob)       <span style="color:var(--green)">✓ approved</span>
+  <span class="kw">promote</span>(alice)     → <span style="color:var(--cyan)">🔔 role_promoted</span>
+  <span class="kw">demote</span>(alice)      → <span style="color:var(--amber)">🔔 role_demoted</span>
+  <span class="kw">remove</span>(bob)        → confirm → <span style="color:var(--green)">✓ removed</span>
+  <span class="kw">remove</span>(self)       → <span style="color:var(--magenta)">✗ blocked</span>
+
+<span class="fn">Hub Shutdown:</span>
+  → <span style="color:var(--amber)">📢 hub_shutdown → all clients</span>
+
+<span class="fn">Client Leave:</span>
+  → confirm → notify hub → cleanup → <span style="color:var(--green)">✓</span></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="hbox">
+    <h4><span class="lang-zh">🔄 团队共享支持的操作</span><span class="lang-en">🔄 Team Sharing Operations</span></h4>
+    <div class="hgrid">
+      <div class="hitem"><div class="hico">🔍</div><div><h5><span class="lang-zh">跨域检索</span><span class="lang-en">Scoped Search</span></h5><p><span class="lang-zh">Local / Group / All 三级搜索范围，本地 + 团队记忆混合召回。</span><span class="lang-en">Local / Group / All search scopes with hybrid local + team recall.</span></p></div></div>
+      <div class="hitem"><div class="hico">📤</div><div><h5><span class="lang-zh">任务共享</span><span class="lang-en">Task Sharing</span></h5><p><span class="lang-zh">将本地任务及记忆推送到团队，随时取消共享。</span><span class="lang-en">Push local tasks and memories to team, unshare anytime.</span></p></div></div>
+      <div class="hitem"><div class="hico">⚡</div><div><h5><span class="lang-zh">技能发布与拉取</span><span class="lang-en">Skill Publish & Pull</span></h5><p><span class="lang-zh">发布技能到团队，其他成员拉取完整 bundle 到本地离线使用。</span><span class="lang-en">Publish skills to team; members pull full bundles locally for offline use.</span></p></div></div>
+      <div class="hitem"><div class="hico">🛡️</div><div><h5><span class="lang-zh">优雅降级</span><span class="lang-en">Graceful Degradation</span></h5><p><span class="lang-zh">Hub 离线时本地记忆和技能正常运作，搜索自动降级为本地结果。</span><span class="lang-en">Local memory and skills work normally when Hub is offline; search auto-falls back to local results.</span></p></div></div>
+    </div>
   </div>
 </div>
 </section>
@@ -888,7 +1192,7 @@ body.lang-zh .lang-en{display:none !important}
     </svg>
   </div>
   <h2><span class="lang-zh">让你的 OpenClaw<br><span class="hl">越用越聪明</span></span><span class="lang-en">Give Your OpenClaw<br><span class="hl">Lasting Intelligence</span></span></h2>
-  <p class="desc"><span class="lang-zh">完全本地化 · 全量可视化 · 任务与技能自进化 · 多智能体协同 · 记忆迁移</span><span class="lang-en">100% local · Full dashboard · Task & skill evolution · Multi-agent collaboration · Memory migration</span></p>
+  <p class="desc"><span class="lang-zh">完全本地化 · 全量可视化 · 任务与技能自进化 · 团队共享中心 · 多智能体协同 · 记忆迁移</span><span class="lang-en">100% local · Full dashboard · Task & skill evolution · Team sharing hub · Multi-agent collaboration · Memory migration</span></p>
   <div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;position:relative">
     <a href="#quickstart" class="btn btn-glow"><span class="lang-zh">立即安装 →</span><span class="lang-en">Get Started →</span></a>
     <a href="./docs/index.html" class="btn btn-outline"><span class="lang-zh">查看文档</span><span class="lang-en">Docs</span></a>
@@ -924,6 +1228,15 @@ function switchConfigTab(btn,id){
   document.querySelectorAll('.config-pane').forEach(function(p){p.classList.remove('active')});
   btn.classList.add('active');document.getElementById(id).classList.add('active');
 }
+function switchOsTab(btn,group,os){
+  var parent=btn.parentElement;
+  parent.querySelectorAll('.os-tab').forEach(function(t){t.classList.remove('active')});
+  btn.classList.add('active');
+  var container=parent.closest('.terminal,.code-block');
+  container.querySelectorAll('.os-pane').forEach(function(p){p.classList.remove('active')});
+  var pane=document.getElementById(group+'-'+os);
+  if(pane)pane.classList.add('active');
+}
 (function(){
   function copyText(text){
     if(navigator.clipboard&&navigator.clipboard.writeText){
@@ -956,6 +1269,22 @@ function switchConfigTab(btn,id){
       self._copiedTimer=setTimeout(function(){self.classList.remove('copied');},1200);
       copyText(text).catch(function(){});
     });
+  });
+})();
+(function(){
+  document.querySelectorAll('[data-install-switcher]').forEach(function(sw){
+    var buttons=sw.querySelectorAll('.os-btn');
+    var commands=sw.querySelectorAll('[data-os-cmd]');
+    var copyBtn=sw.querySelector('.install-copy-btn');
+    function setOs(os){
+      buttons.forEach(function(btn){btn.classList.toggle('active',btn.getAttribute('data-os')===os);});
+      commands.forEach(function(cmd){cmd.style.display=cmd.getAttribute('data-os-cmd')===os?'':'none';});
+      if(copyBtn){
+        copyBtn.setAttribute('data-copy',copyBtn.getAttribute(os==='windows'?'data-copy-windows':'data-copy-unix')||'');
+      }
+    }
+    buttons.forEach(function(btn){btn.addEventListener('click',function(){setOs(btn.getAttribute('data-os'));});});
+    setOs('unix');
   });
 })();
 </script>

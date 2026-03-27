@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { SummarizerConfig, SummaryProvider, Logger, PluginContext } from "../types";
+import type { SummarizerConfig, SummaryProvider, Logger, PluginContext, OpenClawAPI } from "../types";
 
 /**
  * Detect provider type from provider key name or base URL.
@@ -25,7 +25,6 @@ function defaultEndpointForProvider(provider: SummaryProvider, baseUrl: string):
     if (stripped.endsWith("/v1/messages")) return stripped;
     return `${stripped}/v1/messages`;
   }
-  // OpenAI-compatible providers
   if (stripped.endsWith("/chat/completions")) return stripped;
   if (stripped.endsWith("/completions")) return stripped;
   return `${stripped}/chat/completions`;
@@ -38,7 +37,8 @@ function defaultEndpointForProvider(provider: SummaryProvider, baseUrl: string):
 export function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | undefined {
   try {
     const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-    const cfgPath = path.join(home, ".openclaw", "openclaw.json");
+    const cfgPath = process.env.OPENCLAW_CONFIG_PATH
+      || path.join(process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw"), "openclaw.json");
     if (!fs.existsSync(cfgPath)) return undefined;
 
     const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
@@ -94,6 +94,8 @@ export interface LLMCallOptions {
   maxTokens?: number;
   temperature?: number;
   timeoutMs?: number;
+  /** Pass ctx.openclawAPI so callLLMOnce can handle provider === "openclaw" */
+  openclawAPI?: OpenClawAPI;
 }
 
 function normalizeOpenAIEndpoint(url: string): string {
@@ -116,6 +118,7 @@ function isAnthropicProvider(cfg: SummarizerConfig): boolean {
 
 /**
  * Make a single LLM call with the given config. Throws on failure.
+ * When cfg.provider === "openclaw", delegates to the OpenClaw host completion API.
  * Dispatches to Anthropic or OpenAI-compatible format based on provider.
  */
 export async function callLLMOnce(
@@ -123,6 +126,20 @@ export async function callLLMOnce(
   prompt: string,
   opts: LLMCallOptions = {},
 ): Promise<string> {
+  if (cfg.provider === "openclaw") {
+    const api = opts.openclawAPI;
+    if (!api) {
+      throw new Error("OpenClaw API not available. Ensure sharing.capabilities.hostCompletion is enabled.");
+    }
+    const response = await api.complete({
+      prompt,
+      maxTokens: opts.maxTokens ?? 1024,
+      temperature: opts.temperature ?? 0.1,
+      model: cfg.model,
+    });
+    return response.text.trim();
+  }
+
   if (isAnthropicProvider(cfg)) {
     return callLLMOnceAnthropic(cfg, prompt, opts);
   }

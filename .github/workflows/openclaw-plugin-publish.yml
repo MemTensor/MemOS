@@ -25,7 +25,7 @@ jobs:
         include:
           - os: macos-14
             platform: darwin-arm64
-          - os: macos-13
+          - os: macos-15
             platform: darwin-x64
           - os: ubuntu-latest
             platform: linux-x64
@@ -41,6 +41,11 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      - name: Rebuild for x64 under Rosetta (darwin-x64 only)
+        if: matrix.platform == 'darwin-x64'
+        run: |
+          arch -x86_64 npm rebuild better-sqlite3
 
       - name: Collect prebuild
         shell: bash
@@ -86,6 +91,13 @@ jobs:
 
       - name: Install dependencies (skip native build)
         run: npm install --ignore-scripts
+
+      - name: Generate telemetry credentials
+        run: node scripts/generate-telemetry-credentials.cjs
+        env:
+          MEMOS_ARMS_ENDPOINT: ${{ secrets.MEMOS_ARMS_ENDPOINT }}
+          MEMOS_ARMS_PID: ${{ secrets.MEMOS_ARMS_PID }}
+          MEMOS_ARMS_ENV: ${{ secrets.MEMOS_ARMS_ENV }}
 
       - name: Bump version
         run: npm version ${{ inputs.version }} --no-git-tag-version

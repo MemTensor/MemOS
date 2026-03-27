@@ -23,6 +23,11 @@ function phase(n, title) {
 }
 
 const pluginDir = path.resolve(__dirname, "..");
+const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+
+function normalizePathForMatch(p) {
+  return path.resolve(p).replace(/^\\\\\?\\/, "").replace(/\\/g, "/").toLowerCase();
+}
 
 console.log(`
 ${CYAN}${BOLD}┌──────────────────────────────────────────────────┐
@@ -42,7 +47,8 @@ log(`Node: ${process.version}  Platform: ${process.platform}-${process.arch}`);
  * ═══════════════════════════════════════════════════════════ */
 
 function cleanStaleArtifacts() {
-  const isExtensionsDir = pluginDir.includes(path.join(".openclaw", "extensions"));
+  const pluginDirNorm = normalizePathForMatch(pluginDir);
+  const isExtensionsDir = pluginDirNorm.includes("/.openclaw/extensions/");
   if (!isExtensionsDir) return;
 
   const pkgPath = path.join(pluginDir, "package.json");
@@ -133,10 +139,10 @@ function ensureDependencies() {
   log("Running: npm install --omit=dev ...");
 
   const startMs = Date.now();
-  const result = spawnSync("npm", ["install", "--omit=dev"], {
+  const result = spawnSync(npmCmd, ["install", "--omit=dev"], {
     cwd: pluginDir,
     stdio: "pipe",
-    shell: true,
+    shell: false,
     timeout: 120_000,
   });
   const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
@@ -223,8 +229,8 @@ function cleanupLegacy() {
             newEntry.source = oldSource
               .replace(/memos-lite-openclaw-plugin/g, "memos-local-openclaw-plugin")
               .replace(/memos-lite/g, "memos-local-openclaw-plugin")
-              .replace(/\/memos-local\//g, "/memos-local-openclaw-plugin/")
-              .replace(/\/memos-local$/g, "/memos-local-openclaw-plugin");
+              .replace(/[\\/]memos-local[\\/]/g, `${path.sep}memos-local-openclaw-plugin${path.sep}`)
+              .replace(/[\\/]memos-local$/g, `${path.sep}memos-local-openclaw-plugin`);
             if (newEntry.source !== oldSource) {
               log(`Updated source path: ${DIM}${oldSource}${RESET} → ${GREEN}${newEntry.source}${RESET}`);
               cfgChanged = true;
@@ -380,15 +386,6 @@ function sqliteBindingsExist() {
 
 if (sqliteBindingsExist()) {
   ok("better-sqlite3 is ready.");
-  console.log(`
-${GREEN}${BOLD}  ┌──────────────────────────────────────────────────┐
-  │  ✔ Setup complete!                                │
-  │                                                    │
-  │  Restart gateway:                                  │
-  │  ${CYAN}openclaw gateway stop && openclaw gateway start${GREEN}  │
-  └──────────────────────────────────────────────────┘${RESET}
-`);
-  process.exit(0);
 } else {
   warn("better-sqlite3 native bindings not found in plugin dir.");
   log(`Searched in: ${DIM}${sqliteModulePath}/build/${RESET}`);
@@ -397,41 +394,32 @@ ${GREEN}${BOLD}  ┌────────────────────
 
 const startMs = Date.now();
 
-const result = spawnSync("npm", ["rebuild", "better-sqlite3"], {
+const result = spawnSync(npmCmd, ["rebuild", "better-sqlite3"], {
   cwd: pluginDir,
   stdio: "pipe",
-  shell: true,
+  shell: false,
   timeout: 180_000,
 });
 
-const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
-const stdout = (result.stdout || "").toString().trim();
-const stderr = (result.stderr || "").toString().trim();
+  const startMs = Date.now();
+  const result = spawnSync("npm", ["rebuild", "better-sqlite3"], {
+    cwd: pluginDir,
+    stdio: "pipe",
+    shell: true,
+    timeout: 180_000,
+  });
+  const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
+  const stdout = (result.stdout || "").toString().trim();
+  const stderr = (result.stderr || "").toString().trim();
+  if (stdout) log(`rebuild output: ${DIM}${stdout.slice(0, 500)}${RESET}`);
+  if (stderr) warn(`rebuild stderr: ${DIM}${stderr.slice(0, 500)}${RESET}`);
 
-if (stdout) log(`rebuild output: ${DIM}${stdout.slice(0, 500)}${RESET}`);
-if (stderr) warn(`rebuild stderr: ${DIM}${stderr.slice(0, 500)}${RESET}`);
-
-if (result.status === 0) {
-  if (sqliteBindingsExist()) {
+  if (result.status === 0 && sqliteBindingsExist()) {
     ok(`better-sqlite3 rebuilt successfully (${elapsed}s).`);
-    console.log(`
-${GREEN}${BOLD}  ┌──────────────────────────────────────────────────┐
-  │  ✔ Setup complete!                                │
-  │                                                    │
-  │  Restart gateway:                                  │
-  │  ${CYAN}openclaw gateway stop && openclaw gateway start${GREEN}  │
-  └──────────────────────────────────────────────────┘${RESET}
-`);
-    process.exit(0);
   } else {
-    fail(`Rebuild completed but bindings still missing (${elapsed}s).`);
-    fail(`Looked in: ${sqliteModulePath}/build/`);
-  }
-} else {
-  fail(`Rebuild failed with exit code ${result.status} (${elapsed}s).`);
-}
-
-console.log(`
+    if (result.status !== 0) fail(`Rebuild failed with exit code ${result.status} (${elapsed}s).`);
+    else { fail(`Rebuild completed but bindings still missing (${elapsed}s).`); fail(`Looked in: ${sqliteModulePath}/build/`); }
+    console.log(`
 ${YELLOW}${BOLD}  ╔══════════════════════════════════════════════════════════════╗
   ║  ✖ better-sqlite3 native module build failed               ║
   ╠══════════════════════════════════════════════════════════════╣${RESET}
@@ -452,5 +440,270 @@ ${YELLOW}  ║${RESET}  ${GREEN}openclaw gateway stop && openclaw gateway start$
 ${YELLOW}  ║${RESET}                                                             ${YELLOW}║${RESET}
 ${YELLOW}${BOLD}  ╚══════════════════════════════════════════════════════════════╝${RESET}
 `);
+  }
+}
 
-process.exit(0);
+/* ═══════════════════════════════════════════════════════════
+ *  Phase 3: Interactive LAN Sharing Setup
+ * ═══════════════════════════════════════════════════════════ */
+
+const rlMod = require("readline");
+const os = require("os");
+const crypto = require("crypto");
+
+function getLocalIPs() {
+  const nets = os.networkInterfaces();
+  const results = [];
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === "IPv4" && !net.internal) {
+        results.push({ name, address: net.address });
+      }
+    }
+  }
+  return results;
+}
+
+function generateTeamToken() {
+  return crypto.randomBytes(18).toString("base64url");
+}
+
+function createPrompt() {
+  const rl = rlMod.createInterface({ input: process.stdin, output: process.stdout });
+  return {
+    ask(q) { return new Promise((resolve) => rl.question(q, (a) => resolve(a.trim()))); },
+    close() { rl.close(); },
+  };
+}
+
+async function setupSharingWizard() {
+  if (!process.stdin.isTTY) {
+    log("Non-interactive environment, skipping sharing setup wizard.");
+    return;
+  }
+  if (process.env.MEMOS_SKIP_SETUP === "1") {
+    log("MEMOS_SKIP_SETUP=1, skipping sharing setup.");
+    return;
+  }
+
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const cfgPath = path.join(home, ".openclaw", "openclaw.json");
+  if (!fs.existsSync(cfgPath)) {
+    log("~/.openclaw/openclaw.json not found, skipping sharing setup.");
+    return;
+  }
+
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  } catch (e) {
+    warn(`Cannot parse openclaw.json: ${e.message}`);
+    return;
+  }
+
+  const pluginEntry = cfg?.plugins?.entries?.["memos-local-openclaw-plugin"];
+  const existingSharing = pluginEntry?.config?.sharing;
+
+  if (existingSharing?.enabled) {
+    const roleLabel = existingSharing.role === "hub" ? "Hub (团队中心)" : "Client (团队成员)";
+    log(`已检测到共享配置: 角色 = ${BOLD}${roleLabel}${RESET}`);
+    const prompt = createPrompt();
+    const ans = await prompt.ask(`  是否重新配置？/ Reconfigure? (y/N) > `);
+    prompt.close();
+    if (ans.toLowerCase() !== "y") {
+      ok("保留现有共享配置。");
+      return;
+    }
+  }
+
+  phase(3, "局域网共享设置 / LAN Sharing Setup");
+
+  const prompt = createPrompt();
+
+  const enableAns = await prompt.ask(`  是否启用局域网记忆共享？/ Enable LAN sharing? (y/N) > `);
+  if (enableAns.toLowerCase() !== "y") {
+    prompt.close();
+    log("未启用共享。你可以稍后在 openclaw.json 中手动配置。");
+    return;
+  }
+
+  console.log(`
+  ${BOLD}请选择你的角色 / Choose your role:${RESET}
+    ${GREEN}1)${RESET} 创建团队 (Hub)   — 成为团队管理员，其他人连接你
+    ${GREEN}2)${RESET} 加入团队 (Client) — 连接到已有的 Hub
+`);
+
+  const roleAns = await prompt.ask(`  请输入 1 或 2 / Enter 1 or 2 > `);
+
+  let sharingConfig;
+
+  if (roleAns === "1") {
+    console.log(`\n  ${CYAN}${BOLD}── Hub 设置 / Hub Setup ──${RESET}\n`);
+
+    const teamName = (await prompt.ask(`  团队名称 / Team name (默认: My Team) > `)) || "My Team";
+    const portStr = (await prompt.ask(`  Hub 端口 / Hub port (默认: 18800) > `)) || "18800";
+    const port = parseInt(portStr, 10) || 18800;
+    const teamToken = generateTeamToken();
+
+    sharingConfig = {
+      enabled: true,
+      role: "hub",
+      hub: { port, teamName, teamToken },
+    };
+
+    const localIPs = getLocalIPs();
+    const displayIP = localIPs.length > 0 ? localIPs[0].address : "<your-ip>";
+
+    console.log(`
+${GREEN}${BOLD}  ┌────────────────────────────────────────────────────────────┐
+  │  ✔ Hub 配置完成！/ Hub configured!                        │
+  │                                                            │
+  │  请将以下信息分享给团队成员:                                │
+  │  Share this info with your team:                           │
+  │                                                            │
+  │  ${CYAN}Hub 地址 / Address : ${displayIP}:${port}${GREEN}
+  │  ${CYAN}Team Token         : ${teamToken}${GREEN}
+  │                                                            │
+  │  团队成员安装插件时选择 "加入团队" 并输入以上信息。          │
+  └────────────────────────────────────────────────────────────┘${RESET}
+`);
+
+    if (localIPs.length > 1) {
+      log("检测到多个网络接口 / Multiple network interfaces:");
+      for (const ip of localIPs) {
+        log(`  ${ip.name}: ${BOLD}${ip.address}:${port}${RESET}`);
+      }
+    }
+
+  } else if (roleAns === "2") {
+    console.log(`\n  ${CYAN}${BOLD}── 加入团队 / Join Team ──${RESET}\n`);
+
+    const hubAddress = await prompt.ask(`  Hub 地址 / Hub address (如 192.168.1.100:18800) > `);
+    if (!hubAddress) {
+      prompt.close();
+      warn("Hub 地址不能为空，跳过配置。");
+      return;
+    }
+
+    const teamToken = await prompt.ask(`  Team Token (由 Hub 创建者提供 / from Hub creator) > `);
+    if (!teamToken) {
+      prompt.close();
+      warn("Team Token 不能为空，跳过配置。");
+      return;
+    }
+
+    const username = (await prompt.ask(`  你的用户名 / Your username (默认: ${os.userInfo().username}) > `)) || os.userInfo().username;
+
+    const hubUrl = /^https?:\/\//i.test(hubAddress.trim()) ? hubAddress.trim() : `http://${hubAddress.trim()}`;
+    log(`正在加入团队 / Joining team at: ${BOLD}${hubUrl}${RESET} ...`);
+
+    let userToken = "";
+    let joinOk = false;
+
+    try {
+      const http = require("http");
+      const https = require("https");
+      const joinResult = await new Promise((resolve, reject) => {
+        const postData = JSON.stringify({ teamToken, username, deviceName: os.hostname() });
+        const url = new URL(`${hubUrl}/api/v1/hub/join`);
+        const mod = url.protocol === "https:" ? https : http;
+        const reqObj = mod.request({
+          hostname: url.hostname, port: url.port, path: url.pathname,
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(postData) },
+          timeout: 8000,
+        }, (resp) => {
+          let data = "";
+          resp.on("data", (c) => { data += c; });
+          resp.on("end", () => {
+            try { resolve({ status: resp.statusCode, body: JSON.parse(data) }); }
+            catch { resolve({ status: resp.statusCode, body: data }); }
+          });
+        });
+        reqObj.on("error", reject);
+        reqObj.on("timeout", () => { reqObj.destroy(); reject(new Error("timeout")); });
+        reqObj.write(postData);
+        reqObj.end();
+      });
+
+      if (joinResult.status === 200 && joinResult.body.userToken) {
+        userToken = joinResult.body.userToken;
+        joinOk = true;
+        ok(`加入成功！/ Joined successfully! 用户: ${BOLD}${username}${RESET}`);
+      } else if (joinResult.status === 403) {
+        prompt.close();
+        fail("Team Token 无效 / Invalid Team Token");
+        return;
+      } else {
+        warn(`Hub 返回 / Hub responded: ${joinResult.status} ${JSON.stringify(joinResult.body)}`);
+        log("配置将被保存，gateway 启动时会用 Team Token 自动重试加入。");
+      }
+    } catch (e) {
+      warn(`无法连接 Hub / Cannot reach Hub: ${e.message}`);
+      log("配置将被保存，gateway 启动时会用 Team Token 自动重试加入。");
+    }
+
+    sharingConfig = {
+      enabled: true,
+      role: "client",
+      client: { hubAddress, teamToken },
+    };
+    if (userToken) sharingConfig.client.userToken = userToken;
+
+    const statusMsg = joinOk
+      ? `已加入团队，重启 gateway 即生效`
+      : `Hub 暂不可达，gateway 启动时会自动加入`;
+    console.log(`
+${GREEN}${BOLD}  ┌────────────────────────────────────────────────────────────┐
+  │  ✔ Client 配置完成！/ Client configured!                  │
+  │  ${CYAN}Hub: ${hubAddress}${GREEN}
+  │  ${CYAN}${statusMsg}${GREEN}
+  └────────────────────────────────────────────────────────────┘${RESET}
+`);
+
+  } else {
+    prompt.close();
+    warn(`无效选择 "${roleAns}"，跳过配置。你可以稍后在 openclaw.json 中手动配置。`);
+    return;
+  }
+
+  prompt.close();
+
+  try {
+    if (!cfg.plugins) cfg.plugins = {};
+    if (!cfg.plugins.entries) cfg.plugins.entries = {};
+    if (!cfg.plugins.entries["memos-local-openclaw-plugin"]) {
+      cfg.plugins.entries["memos-local-openclaw-plugin"] = { enabled: true };
+    }
+    const entry = cfg.plugins.entries["memos-local-openclaw-plugin"];
+    if (!entry.config) entry.config = {};
+    entry.config.sharing = sharingConfig;
+
+    const backup = cfgPath + ".bak-" + Date.now();
+    fs.copyFileSync(cfgPath, backup);
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n", "utf-8");
+    ok(`配置已写入 / Config saved: ${DIM}~/.openclaw/openclaw.json${RESET}`);
+    log(`备份 / Backup: ${DIM}${backup}${RESET}`);
+  } catch (e) {
+    fail(`写入配置失败 / Config write failed: ${e.message}`);
+    warn("请手动编辑 ~/.openclaw/openclaw.json 添加 sharing 配置。");
+  }
+}
+
+(async () => {
+  try {
+    await setupSharingWizard();
+  } catch (e) {
+    warn(`Setup wizard error: ${e.message}`);
+  }
+
+  console.log(`
+${GREEN}${BOLD}  ┌──────────────────────────────────────────────────┐
+  │  ✔ Setup complete!                                │
+  │                                                    │
+  │  Restart gateway:                                  │
+  │  ${CYAN}openclaw gateway stop && openclaw gateway start${GREEN}  │
+  └──────────────────────────────────────────────────┘${RESET}
+`);
+  process.exit(0);
+})();

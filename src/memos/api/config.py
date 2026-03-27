@@ -640,7 +640,26 @@ class APIConfig:
         return config
 
     def get_internet_config() -> dict[str, Any]:
-        """Get embedder configuration."""
+        """Get internet retriever configuration.
+
+        Supports backends: bocha (default), tavily, google, bing, xinyu.
+        Set INTERNET_SEARCH_BACKEND env var to choose the backend.
+        For Tavily, set TAVILY_API_KEY env var.
+        For Bocha, set BOCHA_API_KEY env var.
+        """
+        backend = os.getenv("INTERNET_SEARCH_BACKEND", "bocha").lower()
+
+        if backend == "tavily":
+            return {
+                "backend": "tavily",
+                "config": {
+                    "api_key": os.getenv("TAVILY_API_KEY", ""),
+                    "max_results": 10,
+                    "search_depth": os.getenv("TAVILY_SEARCH_DEPTH", "basic"),
+                    "include_answer": os.getenv("TAVILY_INCLUDE_ANSWER", "false").lower() == "true",
+                },
+            }
+
         reader_config = APIConfig.get_reader_config()
         return {
             "backend": "bocha",

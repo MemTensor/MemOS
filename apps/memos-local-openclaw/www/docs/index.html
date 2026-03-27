@@ -102,6 +102,25 @@ tr:hover td{background:var(--bg-alt)}
 .callout strong{color:var(--text)}
 .callout.warn{border-color:var(--amber);background:var(--amber-bg)}
 .callout.success{border-color:var(--green);background:var(--green-bg)}
+.install-switcher{background:var(--code-bg);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin:12px 0 18px}
+.install-switcher-header{display:flex;align-items:center;gap:6px;padding:10px 12px;border-bottom:1px solid var(--border)}
+.install-switcher-header .dot{width:9px;height:9px;border-radius:50%}
+.install-os-switch{margin-left:auto;display:flex;align-items:center;gap:6px;padding:3px;background:var(--muted);border:1px solid var(--border);border-radius:999px}
+.install-os-switch .os-btn{background:transparent;border:none;color:var(--text-sec);font-size:11px;font-weight:700;padding:5px 10px;border-radius:999px;cursor:pointer;transition:all .15s}
+.install-os-switch .os-btn.active{background:var(--grad-main);color:#06080f}
+.install-switcher-body{padding:14px 16px}
+.install-note{font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--text-thr);margin-bottom:8px}
+.install-row{display:flex;align-items:center;gap:8px}
+.install-row .prompt{color:var(--green);font-family:var(--mono);font-size:12px}
+.install-row .cmd{font-family:var(--mono);font-size:12px;color:var(--code-text);line-height:1.8;flex:1;white-space:nowrap;overflow:auto;scrollbar-width:none}
+.install-row .cmd::-webkit-scrollbar{display:none}
+.install-copy-btn{width:26px;height:26px;display:flex;align-items:center;justify-content:center;background:var(--muted);border:1px solid var(--border);color:var(--accent);border-radius:7px;cursor:pointer;transition:all .15s;flex-shrink:0;padding:0}
+.install-copy-btn:hover{border-color:var(--accent)}
+.install-copy-btn .copy-icon,.install-copy-btn .check-icon{width:13px;height:13px;display:block}
+.install-copy-btn .check-icon{display:none;color:var(--green)}
+.install-copy-btn.copied{border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.12);color:var(--green)}
+.install-copy-btn.copied .copy-icon{display:none}
+.install-copy-btn.copied .check-icon{display:block}
 
 .diagram{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:24px 20px;margin:18px 0;overflow-x:auto}
 .diagram-flow{display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:center;min-width:560px}
@@ -156,6 +175,7 @@ body.lang-zh .lang-en{display:none !important}
     <a href="#quickstart" class="lang-zh">快速开始</a><a href="#quickstart" class="lang-en">Quick Start</a>
     <a href="#migration" class="lang-zh">记忆迁移</a><a href="#migration" class="lang-en">Migration</a>
     <a href="#api">API</a>
+    <a href="#sharing-overview" class="lang-zh">团队共享</a><a href="#sharing-overview" class="lang-en">Sharing</a>
     <a href="#config" class="lang-zh">配置</a><a href="#config" class="lang-en">Config</a>
     <button type="button" class="theme-toggle-btn" onclick="toggleDocsTheme()" title="Toggle theme"><span class="icon-moon">&#127769;</span><span class="icon-sun">&#9728;</span></button>
     <span class="lang-switch"><button type="button" class="lang-btn active" data-lang="zh">中</button><button type="button" class="lang-btn" data-lang="en">EN</button></span>
@@ -189,6 +209,13 @@ body.lang-zh .lang-en{display:none !important}
   <div class="group"><div class="group-title">API</div>
     <a href="#tool-search">memory_search</a><a href="#tool-get">memory_get</a><a href="#tool-timeline">memory_timeline</a><a href="#tool-task">task_summary</a><a href="#tool-skill">skill_get / install</a><a href="#tool-write-public">memory_write_public</a><a href="#tool-skill-search">skill_search</a><a href="#tool-skill-publish">skill_publish</a><a href="#tool-viewer">memory_viewer</a><a href="#api-viewer">Viewer HTTP</a>
   </div>
+  <div class="group"><div class="group-title"><span class="lang-zh">团队共享</span><span class="lang-en">Team Sharing</span></div>
+    <a href="#sharing-overview"><span class="lang-zh">概述</span><span class="lang-en">Overview</span></a>
+    <a href="#sharing-setup"><span class="lang-zh">配置</span><span class="lang-en">Setup</span></a>
+    <a href="#sharing-admin"><span class="lang-zh">管理员</span><span class="lang-en">Admin</span></a>
+    <a href="#sharing-multi"><span class="lang-zh">多实例</span><span class="lang-en">Multi-Instance</span></a>
+    <a href="#sharing-notif"><span class="lang-zh">通知</span><span class="lang-en">Notifications</span></a>
+  </div>
   <div class="group"><div class="group-title"><span class="lang-zh">进阶</span><span class="lang-en">Advanced</span></div>
     <a href="#multi-agent"><span class="lang-zh">多智能体</span><span class="lang-en">Multi-Agent</span></a><a href="#llm-fallback"><span class="lang-zh">LLM 降级链</span><span class="lang-en">LLM Fallback</span></a><a href="#database"><span class="lang-zh">数据库</span><span class="lang-en">Database</span></a><a href="#security"><span class="lang-zh">安全</span><span class="lang-en">Security</span></a><a href="#defaults"><span class="lang-zh">默认值</span><span class="lang-en">Defaults</span></a><a href="troubleshooting.html"><span class="lang-zh">安装排查</span><span class="lang-en">Troubleshooting</span></a>
   </div>
@@ -216,6 +243,7 @@ body.lang-zh .lang-en{display:none !important}
   <div class="card"><div class="card-icon">💰</div><h4><span class="lang-zh">分级模型</span><span class="lang-en">Tiered Models</span></h4><p><span class="lang-zh">Embedding/摘要/技能可独立配置不同模型。</span><span class="lang-en">Each pipeline configurable with different models.</span></p></div>
   <div class="card"><div class="card-icon">🤝</div><h4><span class="lang-zh">多智能体协同</span><span class="lang-en">Multi-Agent</span></h4><p><span class="lang-zh">记忆隔离 + 公共记忆 + 技能共享，多 Agent 协同进化。</span><span class="lang-en">Memory isolation + public memory + skill sharing for collective evolution.</span></p></div>
   <div class="card"><div class="card-icon">🦐</div><h4><span class="lang-zh">原生记忆导入</span><span class="lang-en">Native Memory Import</span></h4><p><span class="lang-zh">一键迁移 OpenClaw 内置记忆，智能去重、断点续传、实时进度。</span><span class="lang-en">One-click migration from OpenClaw built-in memories with smart dedup, resume, and real-time progress.</span></p></div>
+  <div class="card"><div class="card-icon">👥</div><h4><span class="lang-zh">团队共享中心</span><span class="lang-en">Team Sharing Hub</span></h4><p><span class="lang-zh">Hub-Client 架构，跨实例共享记忆/任务/技能。审批流程、角色管理、实时通知、端口自动推导。</span><span class="lang-en">Hub-Client architecture for cross-instance sharing. Approval flow, role management, real-time notifications, auto port derivation.</span></p></div>
   <div class="card"><div class="card-icon">🔗</div><h4><span class="lang-zh">LLM 智能降级</span><span class="lang-en">LLM Fallback Chain</span></h4><p><span class="lang-zh">技能模型 → 摘要模型 → OpenClaw 原生模型三级自动降级，零手动干预。</span><span class="lang-en">Skill model → summarizer → OpenClaw native model, auto-fallback with zero manual intervention.</span></p></div>
   <div class="card"><div class="card-icon">✏️</div><h4><span class="lang-zh">任务/技能 CRUD</span><span class="lang-en">Task & Skill CRUD</span></h4><p><span class="lang-zh">列表卡片直接编辑、删除、重试技能生成、切换可见性。</span><span class="lang-en">Edit, delete, retry skill gen, toggle visibility — all from list cards.</span></p></div>
 </div>
@@ -271,29 +299,48 @@ body.lang-zh .lang-en{display:none !important}
   <li><span class="lang-zh">Embedding / Summarizer API 可选，不配自动用本地模型</span><span class="lang-en">Embedding / Summarizer APIs optional, falls back to local</span></li>
 </ul>
 
-<h4><span class="lang-zh">Step 0：安装 C++ 编译工具（macOS / Linux 推荐）</span><span class="lang-en">Step 0: Install C++ Build Tools (macOS / Linux recommended)</span></h4>
-<p><span class="lang-zh">插件依赖 <code>better-sqlite3</code> 原生模块。<strong>macOS / Linux</strong> 用户建议先安装编译工具，可大幅提升安装成功率。<strong>Windows</strong> 用户使用 Node.js LTS 版本时通常有预编译文件，可直接跳到 Step 1。</span><span class="lang-en">The plugin depends on <code>better-sqlite3</code>, a native C/C++ module. <strong>macOS / Linux</strong> users should install build tools first. <strong>Windows</strong> users with Node.js LTS usually have prebuilt binaries and can skip to Step 1.</span></p>
-<pre><code><span class="cmt"># macOS</span>
-xcode-select --install
+<h4><span class="lang-zh">Step 1：安装插件 & 启动</span><span class="lang-en">Step 1: Install Plugin & Start</span><br><span class="lang-zh" style="color:var(--text)">首次安装</span><span class="lang-en" style="color:var(--text)">First Install</span></h4>
+<div class="install-switcher" data-install-switcher>
+  <div class="install-switcher-header">
+    <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span>
+    <div class="install-os-switch">
+      <button type="button" class="os-btn active" data-os="unix"><span class="lang-zh">macOS/Linux</span><span class="lang-en">macOS/Linux</span></button>
+      <button type="button" class="os-btn" data-os="windows"><span class="lang-zh">Windows</span><span class="lang-en">Windows</span></button>
+    </div>
+  </div>
+  <div class="install-switcher-body">
+    <div class="install-row">
+      <span class="prompt">$</span>
+      <span class="cmd" data-os-cmd="unix">curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</span>
+      <span class="cmd" data-os-cmd="windows" style="display:none">powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"</span>
+      <button type="button" class="install-copy-btn" data-copy-unix="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" data-copy-windows='powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"' data-copy="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+    </div>
+  </div>
+</div>
 
-<span class="cmt"># Linux (Ubuntu / Debian)</span>
-sudo apt install build-essential python3
-
-<span class="cmt"># Windows: 通常无需操作。如安装失败，安装 Visual Studio Build Tools:</span>
-<span class="cmt"># https://visualstudio.microsoft.com/visual-cpp-build-tools/</span></code><span class="lang">bash</span></pre>
-
-<h4><span class="lang-zh">Step 1：安装插件 & 启动</span><span class="lang-en">Step 1: Install Plugin & Start</span></h4>
-<pre><code><span class="kw">openclaw</span> plugins install @memtensor/memos-local-openclaw-plugin
-<span class="kw">openclaw</span> gateway start</code><span class="lang">bash</span></pre>
-
-<div class="callout warn"><span class="lang-zh"><strong>安装失败？</strong>最常见的问题是 <code>better-sqlite3</code> 原生模块编译失败。请确认已执行上方 Step 0，然后手动重建：<code>cd ~/.openclaw/extensions/memos-local-openclaw-plugin && npm rebuild better-sqlite3</code>。更多方案请查看 <a href="troubleshooting.html">安装排查指南</a> 或 <a href="https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md" target="_blank">better-sqlite3 官方文档</a>。</span><span class="lang-en"><strong>Install failed?</strong> The most common issue is <code>better-sqlite3</code> compilation failure. Ensure Step 0 is done, then manually rebuild: <code>cd ~/.openclaw/extensions/memos-local-openclaw-plugin && npm rebuild better-sqlite3</code>. See the <a href="troubleshooting.html">troubleshooting guide</a> or <a href="https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md" target="_blank">official better-sqlite3 docs</a> for more solutions.</span></div>
+<div class="callout warn"><span class="lang-zh"><strong>安装失败？</strong>最常见的问题是 <code>better-sqlite3</code> 原生模块编译失败，可手动重建：<code>cd ~/.openclaw/extensions/memos-local-openclaw-plugin && npm rebuild better-sqlite3</code>。更多方案请查看 <a href="troubleshooting.html">安装排查指南</a> 或 <a href="https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md" target="_blank">better-sqlite3 官方文档</a>。</span><span class="lang-en"><strong>Install failed?</strong> The most common issue is <code>better-sqlite3</code> compilation failure. You can manually rebuild it: <code>cd ~/.openclaw/extensions/memos-local-openclaw-plugin && npm rebuild better-sqlite3</code>. See the <a href="troubleshooting.html">troubleshooting guide</a> or <a href="https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md" target="_blank">official better-sqlite3 docs</a> for more solutions.</span></div>
 
 <h3><span class="lang-zh">升级</span><span class="lang-en">Upgrade</span></h3>
-<pre><code><span class="kw">openclaw</span> plugins update memos-local-openclaw-plugin
-<span class="kw">openclaw</span> gateway stop && <span class="kw">openclaw</span> gateway start</code><span class="lang">bash</span></pre>
+<div class="install-switcher" data-install-switcher>
+  <div class="install-switcher-header">
+    <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span>
+    <div class="install-os-switch">
+      <button type="button" class="os-btn active" data-os="unix"><span class="lang-zh">macOS/Linux</span><span class="lang-en">macOS/Linux</span></button>
+      <button type="button" class="os-btn" data-os="windows"><span class="lang-zh">Windows</span><span class="lang-en">Windows</span></button>
+    </div>
+  </div>
+  <div class="install-switcher-body">
+    <div class="install-row">
+      <span class="prompt">$</span>
+      <span class="cmd" data-os-cmd="unix">curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash</span>
+      <span class="cmd" data-os-cmd="windows" style="display:none">powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"</span>
+      <button type="button" class="install-copy-btn" data-copy-unix="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" data-copy-windows='powershell -c "irm https://cdn.memtensor.com.cn/memos-local-openclaw/install.ps1 | iex"' data-copy="curl -fsSL https://cdn.memtensor.com.cn/memos-local-openclaw/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+    </div>
+  </div>
+</div>
 <div class="callout"><span class="lang-zh">升级自动完成依赖安装、旧版清理和原生模块编译，无需手动操作。如果 update 命令不可用，先删除旧目录再重新安装：<code>rm -rf ~/.openclaw/extensions/memos-local-openclaw-plugin && openclaw plugins install @memtensor/memos-local-openclaw-plugin</code>（记忆数据不受影响）。</span><span class="lang-en">Upgrade automatically handles dependencies, legacy cleanup, and native module compilation. If update is unavailable, delete the old directory first: <code>rm -rf ~/.openclaw/extensions/memos-local-openclaw-plugin && openclaw plugins install @memtensor/memos-local-openclaw-plugin</code> (memory data is stored separately and won't be affected).</span></div>
 
-<h3 id="config"><span class="lang-zh">配置</span><span class="lang-en">Configuration</span></h3>
+<h4 id="config"><span class="lang-zh">Step2: 配置</span><span class="lang-en">Step2: Configuration</span></h4>
 <p><span class="lang-zh"><strong>两种方式</strong>：编辑 <code>openclaw.json</code> 或通过 Viewer 网页面板在线修改。支持分级模型。</span><span class="lang-en"><strong>Two methods</strong>: edit <code>openclaw.json</code> or via Viewer web panel. Tiered models supported.</span></p>
 <pre><code>{
   <span class="str">"plugins"</span>: {
@@ -451,6 +498,148 @@ sudo apt install build-essential python3
 </table>
 </section>
 
+<section id="sharing-overview" class="section">
+<h2><span class="lang-zh">👥 团队共享中心</span><span class="lang-en">👥 Team Sharing Hub</span></h2>
+<p><span class="lang-zh">Team Sharing 将多个 OpenClaw 实例连接为协作网络。一个实例作为 <strong>Hub</strong>（团队服务端），其他实例作为 <strong>Client</strong> 连接。私有数据始终留在本地，仅明确共享的任务、记忆和技能对团队可见。</span><span class="lang-en">Team Sharing connects multiple OpenClaw instances into a collaborative network. One instance serves as the <strong>Hub</strong> (team server) while others connect as <strong>Clients</strong>. Private data stays local — only explicitly shared tasks, memories, and skills are visible to the team.</span></p>
+
+<!-- Hub-Client Architecture Diagram -->
+<div style="max-width:780px;margin:32px auto;background:rgba(0,0,0,.15);border:1px solid rgba(0,229,255,.12);border-radius:16px;padding:24px 12px 16px;overflow-x:auto">
+<svg viewBox="0 0 780 200" width="780" height="200" xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;height:auto">
+  <defs>
+    <linearGradient id="dgHub" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(0,229,255,.18)"/><stop offset="100%" stop-color="rgba(99,140,255,.18)"/></linearGradient>
+    <linearGradient id="dgCli" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(177,108,255,.14)"/><stop offset="100%" stop-color="rgba(99,140,255,.14)"/></linearGradient>
+    <linearGradient id="dgClaw" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient>
+  </defs>
+  <!-- Hub -->
+  <rect x="280" y="10" width="220" height="80" rx="12" fill="url(#dgHub)" stroke="rgba(0,229,255,.3)" stroke-width="1.5"><animate attributeName="stroke-opacity" values=".3;.6;.3" dur="3s" repeatCount="indefinite"/></rect>
+  <path d="M306 42c-4-2-6 0-5 5s4 3 5 0c1-2 1-4 0-5z" fill="url(#dgClaw)"/><path d="M322 42c4-2 6 0 5 5s-4 3-5 0c-1-2-1-4 0-5z" fill="url(#dgClaw)"/>
+  <circle cx="314" cy="38" r="9" fill="url(#dgClaw)"/>
+  <circle cx="311" cy="36" r="1.8" fill="#050810"/><circle cx="317" cy="36" r="1.8" fill="#050810"/>
+  <circle cx="311.5" cy="35.4" r=".7" fill="#00e5cc"><animate attributeName="opacity" values="1;.3;1" dur="3s" repeatCount="indefinite"/></circle>
+  <circle cx="317.5" cy="35.4" r=".7" fill="#00e5cc"><animate attributeName="opacity" values="1;.3;1" dur="3s" repeatCount="indefinite" begin=".1s"/></circle>
+  <text x="334" y="40" font-size="13" font-weight="800" fill="#00e5ff" font-family="system-ui,sans-serif">Hub</text>
+  <text x="334" y="55" font-size="9" fill="rgba(200,210,255,.55)" font-family="system-ui,sans-serif"><tspan class="lang-zh">团队服务端 · 共享记忆/技能</tspan><tspan class="lang-en">Team Server · Shared Memory/Skills</tspan></text>
+  <rect x="334" y="64" width="40" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/><text x="340" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="monospace">🧠 86</text>
+  <rect x="380" y="64" width="40" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/><text x="386" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="monospace">📋 12</text>
+  <rect x="426" y="64" width="36" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/><text x="432" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="monospace">⚡ 5</text>
+  <!-- Client A -->
+  <rect x="20" y="120" width="200" height="70" rx="10" fill="url(#dgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+  <path d="M44 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#dgClaw)"/><path d="M56 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#dgClaw)"/>
+  <circle cx="50" cy="145" r="7" fill="url(#dgClaw)"/><circle cx="47.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="52.5" cy="143.5" r="1.2" fill="#050810"/>
+  <text x="66" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="system-ui,sans-serif">OpenClaw A</text>
+  <text x="66" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="system-ui,sans-serif"><tspan class="lang-zh">前端开发 · 234 记忆</tspan><tspan class="lang-en">Frontend · 234 Memories</tspan></text>
+  <circle cx="182" cy="142" r="4" fill="#00e676"/><text x="192" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="monospace">online</text>
+  <rect x="40" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/><text x="48" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="monospace">📤 skill_publish</text>
+  <!-- Client B -->
+  <rect x="250" y="120" width="200" height="70" rx="10" fill="url(#dgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+  <path d="M274 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#dgClaw)"/><path d="M286 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#dgClaw)"/>
+  <circle cx="280" cy="145" r="7" fill="url(#dgClaw)"/><circle cx="277.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="282.5" cy="143.5" r="1.2" fill="#050810"/>
+  <text x="296" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="system-ui,sans-serif">OpenClaw B</text>
+  <text x="296" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="system-ui,sans-serif"><tspan class="lang-zh">后端开发 · 158 记忆</tspan><tspan class="lang-en">Backend · 158 Memories</tspan></text>
+  <circle cx="412" cy="142" r="4" fill="#00e676"/><text x="422" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="monospace">online</text>
+  <rect x="270" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/><text x="278" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="monospace">📤 task_share</text>
+  <!-- Client C -->
+  <rect x="480" y="120" width="200" height="70" rx="10" fill="url(#dgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+  <path d="M504 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#dgClaw)"/><path d="M516 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#dgClaw)"/>
+  <circle cx="510" cy="145" r="7" fill="url(#dgClaw)"/><circle cx="507.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="512.5" cy="143.5" r="1.2" fill="#050810"/>
+  <text x="526" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="system-ui,sans-serif">OpenClaw C</text>
+  <text x="526" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="system-ui,sans-serif"><tspan class="lang-zh">测试工程 · 89 记忆</tspan><tspan class="lang-en">QA/Testing · 89 Memories</tspan></text>
+  <circle cx="642" cy="142" r="4" fill="#00e676"/><text x="652" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="monospace">online</text>
+  <rect x="500" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/><text x="508" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="monospace">⬇ skill_pull</text>
+  <!-- ...N -->
+  <rect x="710" y="130" width="56" height="50" rx="10" fill="rgba(99,140,255,.06)" stroke="rgba(99,140,255,.15)" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="738" y="153" text-anchor="middle" font-size="16" font-weight="800" fill="rgba(99,140,255,.3)" font-family="system-ui,sans-serif">…N</text>
+  <text x="738" y="170" text-anchor="middle" font-size="7" fill="rgba(200,210,255,.25)" font-family="system-ui,sans-serif"><tspan class="lang-zh">更多实例</tspan><tspan class="lang-en">More</tspan></text>
+  <!-- Connections -->
+  <path d="M340,90 C300,105 170,110 120,118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5"><animate attributeName="stroke-dasharray" values="0,200;200,0" dur="2s" repeatCount="indefinite"/></path>
+  <line x1="390" y1="90" x2="350" y2="118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5"><animate attributeName="stroke-dasharray" values="0,100;100,0" dur="2s" repeatCount="indefinite" begin=".3s"/></line>
+  <path d="M440,90 C480,105 530,110 580,118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5"><animate attributeName="stroke-dasharray" values="0,200;200,0" dur="2s" repeatCount="indefinite" begin=".6s"/></path>
+  <path d="M490,90 C550,100 680,110 710,148" fill="none" stroke="rgba(99,140,255,.2)" stroke-width="1" stroke-dasharray="4 4" opacity=".4"/>
+  <!-- Particles -->
+  <circle r="2" fill="#00e5ff" opacity=".6"><animateMotion dur="3s" repeatCount="indefinite" path="M120,170 C170,130 300,100 340,50"/><animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite"/></circle>
+  <circle r="2" fill="#b16cff" opacity=".6"><animateMotion dur="3s" repeatCount="indefinite" begin="1s" path="M350,170 C360,130 370,100 390,50"/><animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite" begin="1s"/></circle>
+  <circle r="2" fill="#00e5ff" opacity=".6"><animateMotion dur="3s" repeatCount="indefinite" begin="2s" path="M580,170 C530,130 480,100 440,50"/><animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite" begin="2s"/></circle>
+  <circle r="1.5" fill="#00e676" opacity=".5"><animateMotion dur="2.5s" repeatCount="indefinite" begin=".5s" path="M440,50 C480,100 530,130 570,170"/><animate attributeName="opacity" values="0;.7;0" dur="2.5s" repeatCount="indefinite" begin=".5s"/></circle>
+  <circle r="1.5" fill="#ffca28" opacity=".5"><animateMotion dur="2.5s" repeatCount="indefinite" begin="1.5s" path="M340,50 C300,100 170,130 120,170"/><animate attributeName="opacity" values="0;.7;0" dur="2.5s" repeatCount="indefinite" begin="1.5s"/></circle>
+</svg>
+</div>
+
+<div class="card-grid">
+  <div class="card"><div class="card-icon">🏗️</div><h4>Hub-Client</h4><p><span class="lang-zh">一个 Hub 存储共享数据，客户端按需查询。角色可动态切换。</span><span class="lang-en">One Hub stores shared data; clients query on demand. Roles switchable dynamically.</span></p></div>
+  <div class="card"><div class="card-icon">🔌</div><h4><span class="lang-zh">端口自动推导</span><span class="lang-en">Auto Port</span></h4><p><span class="lang-zh">Hub 端口自动从网关端口推导（+11），冲突时重试最多 3 次。</span><span class="lang-en">Hub port auto-derived from gateway port (+11); retries up to 3 times on conflict.</span></p></div>
+  <div class="card"><div class="card-icon">✅</div><h4><span class="lang-zh">审批流程</span><span class="lang-en">Approval Flow</span></h4><p><span class="lang-zh">新成员提交加入申请，管理员审批后方可访问团队数据。</span><span class="lang-en">New members submit join requests; admin approval required before accessing team data.</span></p></div>
+  <div class="card"><div class="card-icon">🔔</div><h4><span class="lang-zh">实时通知</span><span class="lang-en">Notifications</span></h4><p><span class="lang-zh">角色变更、资源共享/移除、Hub 上下线等事件即时通知。</span><span class="lang-en">Instant notifications for role changes, resource sharing/removal, Hub status changes.</span></p></div>
+</div>
+
+<h3 id="sharing-setup"><span class="lang-zh">配置</span><span class="lang-en">Setup</span></h3>
+<h4><span class="lang-zh">启动 Hub（团队服务端）</span><span class="lang-en">Start a Hub (Team Server)</span></h4>
+<pre><code>{
+  <span class="str">"sharing"</span>: {
+    <span class="str">"enabled"</span>: <span class="kw">true</span>,
+    <span class="str">"role"</span>: <span class="str">"hub"</span>,
+    <span class="str">"hub"</span>: {
+      <span class="str">"teamName"</span>: <span class="str">"My Team"</span>,
+      <span class="str">"teamToken"</span>: <span class="str">"${MEMOS_TEAM_TOKEN}"</span>
+      <span class="cmt">// port auto-derived from gateway; set explicitly only if needed</span>
+    }
+  }
+}</code><span class="lang">json</span></pre>
+
+<h4><span class="lang-zh">加入 Hub（客户端）</span><span class="lang-en">Join a Hub (Client)</span></h4>
+<pre><code>{
+  <span class="str">"sharing"</span>: {
+    <span class="str">"enabled"</span>: <span class="kw">true</span>,
+    <span class="str">"role"</span>: <span class="str">"client"</span>,
+    <span class="str">"client"</span>: {
+      <span class="str">"hubAddress"</span>: <span class="str">"192.168.1.100:18800"</span>
+    }
+  }
+}</code><span class="lang">json</span></pre>
+<div class="callout success"><span class="lang-zh">也可以通过 <strong>Viewer → 设置 → 团队共享</strong> 面板直接配置，无需手动编辑 JSON。</span><span class="lang-en">You can also configure sharing through the <strong>Viewer → Settings → Team Sharing</strong> panel without editing JSON.</span></div>
+
+<h3 id="sharing-admin"><span class="lang-zh">管理员功能</span><span class="lang-en">Admin Features</span></h3>
+<table>
+<tr><th><span class="lang-zh">功能</span><span class="lang-en">Feature</span></th><th><span class="lang-zh">说明</span><span class="lang-en">Description</span></th></tr>
+<tr><td><span class="lang-zh">审批加入</span><span class="lang-en">Approve/Reject</span></td><td><span class="lang-zh">审批或拒绝待审用户</span><span class="lang-en">Approve or reject pending members</span></td></tr>
+<tr><td><span class="lang-zh">提升/降级</span><span class="lang-en">Promote/Demote</span></td><td><span class="lang-zh">提升成员为管理员或降级为普通成员；被操作用户收到通知</span><span class="lang-en">Promote members to admin or demote to regular member; affected users receive notifications</span></td></tr>
+<tr><td><span class="lang-zh">移除成员</span><span class="lang-en">Remove Member</span></td><td><span class="lang-zh">移除团队成员（带确认弹窗，不可移除自己）</span><span class="lang-en">Remove team members (with confirmation, self-removal prevented)</span></td></tr>
+<tr><td><span class="lang-zh">团队概览</span><span class="lang-en">Team Overview</span></td><td><span class="lang-zh">查看团队名称、总成员数、活跃成员数</span><span class="lang-en">View team name, total members, active member count</span></td></tr>
+<tr><td><span class="lang-zh">Hub 关闭通知</span><span class="lang-en">Shutdown Notify</span></td><td><span class="lang-zh">关闭 Hub 时自动通知所有客户端</span><span class="lang-en">All clients notified automatically when Hub shuts down</span></td></tr>
+</table>
+
+<h3 id="sharing-multi"><span class="lang-zh">多实例部署</span><span class="lang-en">Multi-Instance Deployment</span></h3>
+<p><span class="lang-zh">同一台机器上可运行多个 OpenClaw 实例（如个人 + 工作），端口和数据完全隔离：</span><span class="lang-en">Run multiple OpenClaw instances on the same machine (e.g., personal + work) with full isolation:</span></p>
+<table>
+<tr><th><span class="lang-zh">资源</span><span class="lang-en">Resource</span></th><th><span class="lang-zh">隔离方式</span><span class="lang-en">Isolation</span></th><th><span class="lang-zh">示例</span><span class="lang-en">Example</span></th></tr>
+<tr><td>Viewer</td><td><span class="lang-zh">自动推导端口</span><span class="lang-en">Auto-derived port</span></td><td>18799 / 19011</td></tr>
+<tr><td>Hub</td><td>gatewayPort + 11</td><td>18800 / 19012</td></tr>
+<tr><td>Cookie</td><td><span class="lang-zh">基于端口的唯一名称</span><span class="lang-en">Port-based unique name</span></td><td>memos_session_18799 / memos_session_19011</td></tr>
+<tr><td>Database</td><td><span class="lang-zh">独立 state 目录</span><span class="lang-en">Separate state dir</span></td><td>~/.openclaw/memos-local/ / ~/oc-work/memos-local/</td></tr>
+</table>
+
+<h3 id="sharing-notif"><span class="lang-zh">通知事件</span><span class="lang-en">Notification Events</span></h3>
+<table>
+<tr><th><span class="lang-zh">事件</span><span class="lang-en">Event</span></th><th><span class="lang-zh">接收方</span><span class="lang-en">Recipient</span></th></tr>
+<tr><td>role_promoted</td><td><span class="lang-zh">被提升的用户</span><span class="lang-en">Promoted user</span></td></tr>
+<tr><td>role_demoted</td><td><span class="lang-zh">被降级的用户</span><span class="lang-en">Demoted user</span></td></tr>
+<tr><td>resource_shared</td><td><span class="lang-zh">团队成员</span><span class="lang-en">Team members</span></td></tr>
+<tr><td>resource_removed</td><td><span class="lang-zh">资源所有者</span><span class="lang-en">Resource owner</span></td></tr>
+<tr><td>hub_shutdown</td><td><span class="lang-zh">所有客户端</span><span class="lang-en">All clients</span></td></tr>
+<tr><td>member_joined / left</td><td><span class="lang-zh">管理员</span><span class="lang-en">Admin</span></td></tr>
+</table>
+
+<h3><span class="lang-zh">团队共享 API 工具</span><span class="lang-en">Team Sharing API Tools</span></h3>
+<table>
+<tr><th>Tool</th><th><span class="lang-zh">说明</span><span class="lang-en">Description</span></th></tr>
+<tr><td><code>task_share</code> / <code>task_unshare</code></td><td><span class="lang-zh">将任务推送到 / 移除出团队</span><span class="lang-en">Push task to / remove from team</span></td></tr>
+<tr><td><code>skill_publish</code> / <code>skill_unpublish</code></td><td><span class="lang-zh">发布 / 取消发布技能到团队</span><span class="lang-en">Publish / unpublish skill to team</span></td></tr>
+<tr><td><code>network_memory_detail</code></td><td><span class="lang-zh">获取团队记忆完整内容</span><span class="lang-en">Fetch full team memory content</span></td></tr>
+<tr><td><code>network_skill_pull</code></td><td><span class="lang-zh">拉取团队技能到本地</span><span class="lang-en">Pull team skill bundle locally</span></td></tr>
+<tr><td><code>network_team_info</code></td><td><span class="lang-zh">查看当前团队连接状态</span><span class="lang-en">Show current team connection state</span></td></tr>
+</table>
+<div class="callout"><span class="lang-zh">完整的团队共享工作流请参阅 <a href="https://github.com/MemTensor/MemOS/blob/main/apps/memos-local-openclaw/HUB-SHARING-GUIDE.md" target="_blank">HUB-SHARING-GUIDE.md</a>。</span><span class="lang-en">For the complete team sharing workflow, see <a href="https://github.com/MemTensor/MemOS/blob/main/apps/memos-local-openclaw/HUB-SHARING-GUIDE.md" target="_blank">HUB-SHARING-GUIDE.md</a>.</span></div>
+</section>
+
 <section id="multi-agent" class="section">
 <h2><span class="lang-zh">多智能体协同</span><span class="lang-en">Multi-Agent Collaboration</span></h2>
 <p><span class="lang-zh">MemOS 原生支持多 Agent 场景。每个 Agent 的记忆和任务通过 <code>owner</code> 字段隔离（格式 <code>agent:{agentId}</code>），检索时自动过滤为当前 Agent + public。</span><span class="lang-en">MemOS natively supports multi-agent scenarios. Each agent's memories and tasks are isolated via an <code>owner</code> field (<code>agent:{agentId}</code>); retrieval automatically filters to current agent + public.</span></p>
@@ -541,6 +730,43 @@ function toggleDocsTheme(){var el=document.documentElement;var n=(el.getAttribut
 initDocsTheme();
 </script>
 <script>
+(function(){
+  function copyText(text){
+    if(navigator.clipboard&&navigator.clipboard.writeText){return navigator.clipboard.writeText(text);}
+    return new Promise(function(resolve,reject){
+      var ta=document.createElement('textarea');
+      ta.value=text;
+      ta.setAttribute('readonly','');
+      ta.style.position='fixed';
+      ta.style.opacity='0';
+      document.body.appendChild(ta);
+      ta.select();
+      try{document.execCommand('copy');document.body.removeChild(ta);resolve();}
+      catch(err){document.body.removeChild(ta);reject(err);}
+    });
+  }
+  document.querySelectorAll('[data-install-switcher]').forEach(function(sw){
+    var buttons=sw.querySelectorAll('.os-btn');
+    var commands=sw.querySelectorAll('[data-os-cmd]');
+    var copyBtn=sw.querySelector('.install-copy-btn');
+    function setOs(os){
+      buttons.forEach(function(btn){btn.classList.toggle('active',btn.getAttribute('data-os')===os);});
+      commands.forEach(function(cmd){cmd.style.display=cmd.getAttribute('data-os-cmd')===os?'':'none';});
+      if(copyBtn){copyBtn.setAttribute('data-copy',copyBtn.getAttribute(os==='windows'?'data-copy-windows':'data-copy-unix')||'');}
+    }
+    buttons.forEach(function(btn){btn.addEventListener('click',function(){setOs(btn.getAttribute('data-os'));});});
+    if(copyBtn){
+      copyBtn.addEventListener('click',function(){
+        var self=this;
+        copyText(self.getAttribute('data-copy')||'').catch(function(){});
+        self.classList.add('copied');
+        if(self._copiedTimer){clearTimeout(self._copiedTimer);}
+        self._copiedTimer=setTimeout(function(){self.classList.remove('copied');},1200);
+      });
+    }
+    setOs('unix');
+  });
+})();
 (function(){
   const links=document.querySelectorAll('.sidebar a'),secs=[];
   links.forEach(a=>{const h=a.getAttribute('href');if(h&&h.startsWith('#')){const el=document.getElementById(h.slice(1));if(el)secs.push({el,link:a});}});

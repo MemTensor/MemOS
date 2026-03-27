@@ -185,3 +185,4 @@ py-key-value-shared==0.2.8
 PyJWT==2.10.1
 pytest==9.0.2
 alibabacloud-oss-v2==1.2.2
+tavily-python==0.5.0

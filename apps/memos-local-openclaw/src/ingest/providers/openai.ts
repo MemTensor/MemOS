@@ -70,7 +70,7 @@ export async function summarizeTaskOpenAI(
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
+    body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: cfg.temperature ?? 0.1,
       max_tokens: 4096,
@@ -78,7 +78,7 @@ export async function summarizeTaskOpenAI(
         { role: "system", content: TASK_SUMMARY_PROMPT },
         { role: "user", content: text },
       ],
-    }),
+    })),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
@@ -119,7 +119,7 @@ export async function generateTaskTitleOpenAI(
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
+    body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
       max_tokens: 100,
@@ -127,7 +127,7 @@ export async function generateTaskTitleOpenAI(
         { role: "system", content: TASK_TITLE_PROMPT },
         { role: "user", content: text },
       ],
-    }),
+    })),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
   });
 
@@ -156,14 +156,14 @@ export async function summarizeOpenAI(
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
+    body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: cfg.temperature ?? 0,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: `[TEXT TO SUMMARIZE]\n${text}\n[/TEXT TO SUMMARIZE]` },
       ],
-    }),
+    })),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 30_000),
   });
 
@@ -223,7 +223,7 @@ export async function judgeNewTopicOpenAI(
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
+    body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
       max_tokens: 10,
@@ -231,7 +231,7 @@ export async function judgeNewTopicOpenAI(
         { role: "system", content: TOPIC_JUDGE_PROMPT },
         { role: "user", content: userContent },
       ],
-    }),
+    })),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
   });
 
@@ -293,7 +293,7 @@ export async function filterRelevantOpenAI(
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
+    body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
       max_tokens: 200,
@@ -301,7 +301,7 @@ export async function filterRelevantOpenAI(
         { role: "system", content: FILTER_RELEVANT_PROMPT },
         { role: "user", content: `QUERY: ${query}\n\nCANDIDATES:\n${candidateText}` },
       ],
-    }),
+    })),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
   });
 
@@ -316,7 +316,7 @@ export async function filterRelevantOpenAI(
   return parseFilterResult(raw, log);
 }
 
-function parseFilterResult(raw: string, log: Logger): FilterResult {
+export function parseFilterResult(raw: string, log: Logger): FilterResult {
   try {
     const match = raw.match(/\{[\s\S]*\}/);
     if (match) {
@@ -385,7 +385,7 @@ export async function judgeDedupOpenAI(
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
+    body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
       max_tokens: 300,
@@ -393,7 +393,7 @@ export async function judgeDedupOpenAI(
         { role: "system", content: DEDUP_JUDGE_PROMPT },
         { role: "user", content: `NEW MEMORY:\n${newSummary}\n\nEXISTING MEMORIES:\n${candidateText}` },
       ],
-    }),
+    })),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
   });
 
@@ -431,4 +431,21 @@ function normalizeChatEndpoint(url: string): string {
   if (stripped.endsWith("/chat/completions")) return stripped;
   if (stripped.endsWith("/completions")) return stripped;
   return `${stripped}/chat/completions`;
+}
+
+/**
+ * Zhipu AI (glm-4.7, glm-5, etc.) uses reasoning tokens that consume max_tokens budget,
+ * leaving no room for actual output. This helper injects {"thinking":{"type":"disabled"}}
+ * for zhipu endpoints to disable the built-in reasoning mode.
+ */
+function isZhipuEndpoint(endpoint: string): boolean {
+  return /bigmodel\.cn|zhipuai/.test(endpoint);
+}
+
+function buildRequestBody(cfg: SummarizerConfig, body: Record<string, unknown>): Record<string, unknown> {
+  const endpoint = cfg.endpoint ?? "";
+  if (isZhipuEndpoint(endpoint)) {
+    body.thinking = { type: "disabled" };
+  }
+  return body;
 }
