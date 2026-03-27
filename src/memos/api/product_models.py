@@ -870,7 +870,6 @@ class DeleteMemoryRequest(BaseRequest):
         None,
         description="Alias of session_id for backward compatibility.",
     )
-      
     auto_cleanup_working: bool | None = Field(
         False,
         description=(
