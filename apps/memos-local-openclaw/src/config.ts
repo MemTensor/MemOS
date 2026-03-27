@@ -72,6 +72,7 @@ export function resolveConfig(raw: Partial<MemosLocalConfig> | undefined, stateD
     },
     capture: {
       evidenceWrapperTag: cfg.capture?.evidenceWrapperTag ?? DEFAULTS.evidenceWrapperTag,
+      skipSessionPatterns: cfg.capture?.skipSessionPatterns ?? [":cron:"],
     },
     telemetry: {
       enabled: telemetryEnabled,

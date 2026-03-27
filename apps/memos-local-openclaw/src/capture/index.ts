@@ -62,10 +62,19 @@ export function captureMessages(
   log: Logger,
   owner?: string,
   userSearchTime?: number,
+  skipSessionPatterns?: string[],
 ): ConversationMessage[] {
   const now = Date.now();
   const result: ConversationMessage[] = [];
   let lastTimestamp = 0;
+
+  // Skip capturing sessions matching configured patterns (e.g. [":cron:", "agent:wechat"]).
+  if (sessionKey && skipSessionPatterns && skipSessionPatterns.length > 0) {
+    if (skipSessionPatterns.some(p => sessionKey.includes(p))) {
+      log.debug(`Skipping filtered session capture: ${sessionKey}`);
+      return result;
+    }
+  }
 
   for (const msg of messages) {
     const role = msg.role as Role;

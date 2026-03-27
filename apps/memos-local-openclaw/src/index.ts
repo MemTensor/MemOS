@@ -92,7 +92,7 @@ export function initPlugin(opts: PluginInitOptions = {}): MemosLocalPlugin {
       const userSearchTime = sharedState.lastSearchTime || 0;
       sharedState.lastSearchTime = 0;
 
-      const captured = captureMessages(messages, session, turnId, tag, ctx.log, owner, userSearchTime);
+      const captured = captureMessages(messages, session, turnId, tag, ctx.log, owner, userSearchTime, ctx.config.capture?.skipSessionPatterns);
       if (captured.length > 0) {
         worker.enqueue(captured);
       }
