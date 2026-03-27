@@ -74,13 +74,16 @@ def _flatten_info_fields(metadata: dict[str, Any]) -> dict[str, Any]:
 
 def _sanitize_neo4j_value(value: Any) -> Any:
     """Convert values unsupported by Neo4j properties into safe serializations."""
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, str | int | float | bool):
         return value
 
     if isinstance(value, list):
-        if all(item is None or isinstance(item, (str, int, float, bool)) for item in value):
+        if all(item is None or isinstance(item, str | int | float | bool) for item in value):
             return value
-        return [json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item) for item in value]
+        return [
+            json.dumps(item, ensure_ascii=False) if isinstance(item, dict | list) else str(item)
+            for item in value
+        ]
 
     if isinstance(value, dict):
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
