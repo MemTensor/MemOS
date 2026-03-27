@@ -74,9 +74,7 @@ class TavilySearchConfig(BaseInternetRetrieverConfig):
         None, description="Not used for Tavily Search (kept for compatibility)"
     )
     max_results: int = Field(default=10, description="Maximum number of results to retrieve")
-    search_depth: str = Field(
-        default="basic", description="Search depth: 'basic' or 'advanced'"
-    )
+    search_depth: str = Field(default="basic", description="Search depth: 'basic' or 'advanced'")
     include_answer: bool = Field(
         default=False, description="Whether to include an AI-generated answer"
     )

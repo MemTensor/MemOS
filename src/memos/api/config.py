@@ -656,9 +656,7 @@ class APIConfig:
                     "api_key": os.getenv("TAVILY_API_KEY", ""),
                     "max_results": 10,
                     "search_depth": os.getenv("TAVILY_SEARCH_DEPTH", "basic"),
-                    "include_answer": os.getenv(
-                        "TAVILY_INCLUDE_ANSWER", "false"
-                    ).lower() == "true",
+                    "include_answer": os.getenv("TAVILY_INCLUDE_ANSWER", "false").lower() == "true",
                 },
             }
 
