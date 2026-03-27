@@ -72,6 +72,15 @@ class DeepSeekLLMConfig(OpenAILLMConfig):
     )
 
 
+class MinimaxLLMConfig(OpenAILLMConfig):
+    api_key: str = Field(..., description="API key for MiniMax")
+    api_base: str = Field(
+        default="https://api.minimax.io/v1",
+        description="Base URL for MiniMax OpenAI-compatible API",
+    )
+    extra_body: Any = Field(default=None, description="Extra options for API")
+
+
 class AzureLLMConfig(BaseLLMConfig):
     base_url: str = Field(
         default="https://api.openai.azure.com/",
@@ -146,6 +155,7 @@ class LLMConfigFactory(BaseConfig):
         "huggingface_singleton": HFLLMConfig,  # Add singleton support
         "qwen": QwenLLMConfig,
         "deepseek": DeepSeekLLMConfig,
+        "minimax": MinimaxLLMConfig,
         "openai_new": OpenAIResponsesLLMConfig,
     }
 

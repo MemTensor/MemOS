@@ -36,7 +36,6 @@ class HandlerDependencies:
         vector_db: Any | None = None,
         internet_retriever: Any | None = None,
         memory_manager: Any | None = None,
-        mos_server: Any | None = None,
         feedback_server: Any | None = None,
         **kwargs,
     ):
@@ -54,7 +53,6 @@ class HandlerDependencies:
             vector_db: Vector database instance
             internet_retriever: Internet retriever instance
             memory_manager: Memory manager instance
-            mos_server: MOS server instance
             **kwargs: Additional dependencies
         """
         self.llm = llm
@@ -68,7 +66,6 @@ class HandlerDependencies:
         self.vector_db = vector_db
         self.internet_retriever = internet_retriever
         self.memory_manager = memory_manager
-        self.mos_server = mos_server
         self.feedback_server = feedback_server
 
         # Store any additional dependencies
@@ -157,11 +154,6 @@ class BaseHandler:
     def vector_db(self):
         """Get vector database instance."""
         return self.deps.vector_db
-
-    @property
-    def mos_server(self):
-        """Get MOS server instance."""
-        return self.deps.mos_server
 
     @property
     def deepsearch_agent(self):

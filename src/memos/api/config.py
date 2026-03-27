@@ -285,6 +285,20 @@ class APIConfig:
         }
 
     @staticmethod
+    def minimax_config() -> dict[str, Any]:
+        """Get MiniMax configuration."""
+        return {
+            "model_name_or_path": os.getenv("MOS_CHAT_MODEL", "MiniMax-M2.7"),
+            "temperature": float(os.getenv("MOS_CHAT_TEMPERATURE", "0.8")),
+            "max_tokens": int(os.getenv("MOS_MAX_TOKENS", "8000")),
+            "top_p": float(os.getenv("MOS_TOP_P", "0.9")),
+            "top_k": int(os.getenv("MOS_TOP_K", "50")),
+            "remove_think_prefix": True,
+            "api_key": os.getenv("MINIMAX_API_KEY", "your-api-key-here"),
+            "api_base": os.getenv("MINIMAX_API_BASE", "https://api.minimax.io/v1"),
+        }
+
+    @staticmethod
     def vllm_config() -> dict[str, Any]:
         """Get Qwen configuration."""
         return {
@@ -762,21 +776,6 @@ class APIConfig:
             "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
         }
 
-    @staticmethod
-    def get_nebular_config(user_id: str | None = None) -> dict[str, Any]:
-        """Get Nebular configuration."""
-        return {
-            "uri": json.loads(os.getenv("NEBULAR_HOSTS", '["localhost"]')),
-            "user": os.getenv("NEBULAR_USER", "root"),
-            "password": os.getenv("NEBULAR_PASSWORD", "xxxxxx"),
-            "space": os.getenv("NEBULAR_SPACE", "shared-tree-textual-memory"),
-            "user_name": f"memos{user_id.replace('-', '')}",
-            "use_multi_db": False,
-            "auto_create": True,
-            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
-        }
-
-    @staticmethod
     def get_milvus_config():
         return {
             "collection_name": [
@@ -937,12 +936,14 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
+        minimax_config = APIConfig.minimax_config()
         reader_config = APIConfig.get_reader_config()
 
         backend_model = {
             "openai": openai_config,
             "huggingface": qwen_config,
             "vllm": vllm_config,
+            "minimax": minimax_config,
         }
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
         mysql_config = APIConfig.get_mysql_config()
@@ -1060,6 +1061,7 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
+        minimax_config = APIConfig.minimax_config()
         mysql_config = APIConfig.get_mysql_config()
         reader_config = APIConfig.get_reader_config()
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
@@ -1067,6 +1069,7 @@ class APIConfig:
             "openai": openai_config,
             "huggingface": qwen_config,
             "vllm": vllm_config,
+            "minimax": minimax_config,
         }
         # Create MOSConfig
         config_dict = {
@@ -1124,7 +1127,6 @@ class APIConfig:
 
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id)
         neo4j_config = APIConfig.get_neo4j_config(user_id)
-        nebular_config = APIConfig.get_nebular_config(user_id)
         polardb_config = APIConfig.get_polardb_config(user_id)
         internet_config = (
             APIConfig.get_internet_config()
@@ -1135,7 +1137,6 @@ class APIConfig:
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
-            "nebular": nebular_config,
             "polardb": polardb_config,
             "postgres": postgres_config,
         }
@@ -1165,9 +1166,9 @@ class APIConfig:
                             "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
                             == "true",
                             "memory_size": {
-                                "WorkingMemory": int(os.getenv("NEBULAR_WORKING_MEMORY", 20)),
-                                "LongTermMemory": int(os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6)),
-                                "UserMemory": int(os.getenv("NEBULAR_USER_MEMORY", 1e6)),
+                                "WorkingMemory": int(os.getenv("MOS_WORKING_MEMORY", 20)),
+                                "LongTermMemory": int(os.getenv("MOS_LONGTERM_MEMORY", 1e6)),
+                                "UserMemory": int(os.getenv("MOS_USER_MEMORY", 1e6)),
                             },
                             "search_strategy": {
                                 "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
@@ -1190,7 +1191,7 @@ class APIConfig:
                 }
             )
         else:
-            raise ValueError(f"Invalid Neo4j backend: {graph_db_backend}")
+            raise ValueError(f"Invalid graph DB backend: {graph_db_backend}")
         default_mem_cube = GeneralMemCube(default_cube_config)
         return default_config, default_mem_cube
 
@@ -1209,13 +1210,11 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id="default")
         neo4j_config = APIConfig.get_neo4j_config(user_id="default")
-        nebular_config = APIConfig.get_nebular_config(user_id="default")
         polardb_config = APIConfig.get_polardb_config(user_id="default")
         postgres_config = APIConfig.get_postgres_config(user_id="default")
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
-            "nebular": nebular_config,
             "polardb": polardb_config,
             "postgres": postgres_config,
         }
@@ -1248,9 +1247,9 @@ class APIConfig:
                             == "true",
                             "internet_retriever": internet_config,
                             "memory_size": {
-                                "WorkingMemory": int(os.getenv("NEBULAR_WORKING_MEMORY", 20)),
-                                "LongTermMemory": int(os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6)),
-                                "UserMemory": int(os.getenv("NEBULAR_USER_MEMORY", 1e6)),
+                                "WorkingMemory": int(os.getenv("MOS_WORKING_MEMORY", 20)),
+                                "LongTermMemory": int(os.getenv("MOS_LONGTERM_MEMORY", 1e6)),
+                                "UserMemory": int(os.getenv("MOS_USER_MEMORY", 1e6)),
                             },
                             "search_strategy": {
                                 "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
@@ -1274,4 +1273,4 @@ class APIConfig:
                 }
             )
         else:
-            raise ValueError(f"Invalid Neo4j backend: {graph_db_backend}")
+            raise ValueError(f"Invalid graph DB backend: {graph_db_backend}")
