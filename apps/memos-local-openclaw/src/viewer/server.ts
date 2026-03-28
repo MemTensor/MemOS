@@ -770,6 +770,9 @@ export class ViewerServer {
     const q = url.searchParams.get("q") ?? "";
     if (!q.trim()) { this.jsonResponse(res, { results: [], query: q }); return; }
 
+    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit")) || 20));
+    const minScore = Math.max(0.35, Math.min(1, Number(url.searchParams.get("minScore")) || 0.64));
+
     const role = url.searchParams.get("role") ?? undefined;
     const session = url.searchParams.get("session") ?? undefined;
     const owner = url.searchParams.get("owner") ?? undefined;
@@ -810,7 +813,7 @@ export class ViewerServer {
       }
     }
 
-    const SEMANTIC_THRESHOLD = 0.64;
+    const SEMANTIC_THRESHOLD = minScore;
     const VECTOR_TIMEOUT_MS = 8000;
     let vectorResults: any[] = [];
     let scoreMap = new Map<string, number>();
@@ -849,7 +852,7 @@ export class ViewerServer {
       if (!seenIds.has(r.id)) { seenIds.add(r.id); merged.push(r); }
     }
 
-    const results = merged.length > 0 ? merged : ftsResults.slice(0, 20);
+    const results = (merged.length > 0 ? merged : ftsResults.slice(0, limit)).slice(0, limit);
 
     this.store.recordViewerEvent("search");
     this.jsonResponse(res, {
@@ -858,6 +861,8 @@ export class ViewerServer {
       vectorCount: vectorResults.length,
       ftsCount: ftsResults.length,
       total: results.length,
+      limit,
+      minScore,
     });
   }
 
