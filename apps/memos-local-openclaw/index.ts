@@ -250,7 +250,7 @@ const memosLocalPlugin = {
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(pluginDir, "package.json"), "utf-8"));
       pluginVersion = pkg.version ?? pluginVersion;
-    } catch {}
+    } catch { }
     const telemetry = new Telemetry(ctx.config.telemetry ?? {}, stateDir, pluginVersion, ctx.log, pluginDir);
 
     // Install bundled memory-guide skill so OpenClaw loads it (write from embedded content so it works regardless of deploy layout)
@@ -279,15 +279,9 @@ const memosLocalPlugin = {
         const cfg = JSON.parse(raw);
         const allow: string[] | undefined = cfg?.tools?.allow;
         if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins")) {
-          const lastEntry = JSON.stringify(allow[allow.length - 1]);
-          const patched = raw.replace(
-            new RegExp(`(${lastEntry})(\\s*\\])`),
-            `$1,\n      "group:plugins"$2`,
-          );
-          if (patched !== raw && patched.includes("group:plugins")) {
-            fs.writeFileSync(openclawJsonPath, patched, "utf-8");
-            ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
-          }
+          cfg.tools.allow.push("group:plugins");
+          fs.writeFileSync(openclawJsonPath, JSON.stringify(cfg, null, 2) + "\n", "utf-8");
+          ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
         }
       }
     } catch (e) {
@@ -607,9 +601,9 @@ const memosLocalPlugin = {
             };
             const localText = filteredHits.length > 0
               ? filteredHits.map((h, i) => {
-                  const excerpt = h.original_excerpt.length > 220 ? h.original_excerpt.slice(0, 217) + "..." : h.original_excerpt;
-                  return `${i + 1}. [${h.source.role}]${originLabel(h)} ${excerpt}`;
-                }).join("\n")
+                const excerpt = h.original_excerpt.length > 220 ? h.original_excerpt.slice(0, 217) + "..." : h.original_excerpt;
+                return `${i + 1}. [${h.source.role}]${originLabel(h)} ${excerpt}`;
+              }).join("\n")
               : "(none)";
             const hubText = filteredHubHits.length > 0
               ? filteredHubHits.map((h, i) => `${i + 1}. [${h.ownerName}] [团队] ${h.summary}${h.groupName ? ` (${h.groupName})` : ""}`).join("\n")
