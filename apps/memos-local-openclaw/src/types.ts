@@ -312,6 +312,8 @@ export interface MemosLocalConfig {
     recencyHalfLifeDays?: number;
     /** Cap vector search to this many most recent chunks. 0 = no cap (search all; may get slower with 200k+ chunks). If you set a cap for performance, use a large value (e.g. 200000–300000) so older memories are still in the window; FTS always searches all. */
     vectorSearchMaxChunks?: number;
+    /** Number of conversation rounds (user+assistant pairs) used by topic-judge to determine if recall should run. 0 = disabled (always recall). Default: 4. */
+    topicJudgeRounds?: number;
   };
   dedup?: {
     similarityThreshold?: number;
