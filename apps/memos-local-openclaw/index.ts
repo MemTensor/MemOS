@@ -1807,6 +1807,104 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // ─── Auto-recall: inject relevant memories before agent starts ───
 
+    /**
+     * Pre-filter: use LLM to check if the new message continues the current topic.
+     * Returns "skip" to skip recall (same topic), "proceed" to run recall (new topic or disabled/error).
+     *
+     * Config:
+     *   topicJudgeRounds = 0  → disabled, always returns "proceed"
+     *   topicJudgeRounds > 0  → enabled, uses that many conversation rounds for context
+     */
+    async function topicJudgePreFilter(opts: {
+      messages: unknown[] | undefined;
+      query: string;
+      topicJudgeRounds: number;
+      summarizer: Summarizer;
+      log: { info: (...args: any[]) => void; warn: (...args: any[]) => void; debug: (...args: any[]) => void };
+    }): Promise<"skip" | "proceed"> {
+      const { messages, query, topicJudgeRounds, summarizer, log } = opts;
+
+      if (topicJudgeRounds <= 0) return "proceed";
+      if (!Array.isArray(messages) || messages.length < 3) return "proceed";
+
+      try {
+        const msgs = messages as Array<Record<string, unknown>>;
+        const rawMsgs = msgs.slice(-20);
+        const merged: Array<{ role: string; text: string }> = [];
+        for (const m of rawMsgs) {
+          const role = m.role as string;
+          if (role === "tool") continue;
+          let text = "";
+          if (typeof m.content === "string") {
+            text = m.content;
+          } else if (Array.isArray(m.content)) {
+            for (const block of m.content as Array<Record<string, unknown>>) {
+              if (block.type === "text" && typeof block.text === "string") text += block.text + " ";
+            }
+          }
+          text = text.trim();
+          if (!text) continue;
+          if (merged.length > 0 && merged[merged.length - 1].role === role) {
+            merged[merged.length - 1].text += "\n\n" + text;
+          } else {
+            merged.push({ role, text });
+          }
+        }
+        if (merged.length > 0) merged.pop();
+
+        const sliceLen = topicJudgeRounds * 2;
+        const lastN = merged.length > sliceLen ? merged.slice(-sliceLen) : merged;
+        if (lastN.length > 0 && lastN[0].role !== "user") lastN.shift();
+        if (lastN.length > 0 && lastN[lastN.length - 1].role !== "assistant") lastN.pop();
+
+        const MAX_CONTEXT_LEN = 500;
+        const HEAD_TAIL = 150;
+        const contextLines = lastN.map((m) => {
+          const role = (m.role === "user") ? "USER" : "ASSISTANT";
+          let text = m.text;
+          if (role === "USER") {
+            const senderIdx = text.lastIndexOf("Sender (untrusted metadata):");
+            if (senderIdx > 0) text = text.slice(senderIdx);
+            const fenceStart = text.indexOf("```json");
+            const fenceEnd = fenceStart >= 0 ? text.indexOf("```\n", fenceStart + 7) : -1;
+            if (fenceEnd > 0) text = text.slice(fenceEnd + 4).replace(/^\s*\n/, "").trim();
+            if (senderIdx < 0) {
+              const injectEnd = text.indexOf("rephrased query to find more.\n\n");
+              if (injectEnd !== -1) {
+                text = text.slice(injectEnd + "rephrased query to find more.\n\n".length).trim();
+              } else {
+                const injectEnd2 = text.indexOf("Do NOT skip this step. Do NOT answer without searching first.\n\n");
+                if (injectEnd2 !== -1) {
+                  text = text.slice(injectEnd2 + "Do NOT skip this step. Do NOT answer without searching first.\n\n".length).trim();
+                }
+              }
+            }
+          }
+          text = text.replace(/^\[.*?\]\s*/, "").trim();
+          if (text.length > MAX_CONTEXT_LEN) {
+            text = text.slice(0, HEAD_TAIL) + "..." + text.slice(-HEAD_TAIL);
+          }
+          return `${role}: ${text.trim()}`;
+        }).filter((l) => l.split(": ")[1]?.length > 0);
+
+        if (contextLines.length < 2) {
+          log.info(`[auto-recall] topic-judge: too-few-lines (${contextLines.length}), skip recall`);
+          return "skip";
+        }
+
+        const currentContext = contextLines.join("\n");
+        log.info(`[auto-recall] topic-judge: lines=${contextLines.length}, query="${query.slice(0, 60)}"`);
+        const isNew = await summarizer.judgeNewTopic(currentContext, query);
+        const topicResult = isNew === true ? "NEW" : isNew === false ? "SAME" : `ERROR(${isNew})`;
+        log.info(`[auto-recall] topic-judge: result=${topicResult}`);
+
+        return isNew === false ? "skip" : "proceed";
+      } catch (judgeErr) {
+        log.warn(`[auto-recall] topic-judge error="${judgeErr}", fallback=proceed`);
+        return "proceed";
+      }
+    }
+
     api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
@@ -1848,6 +1946,16 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           return;
         }
         ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
+
+        // ─── Pre-filter: topic-judge to skip recall on topic continuation ───
+        const shouldSkipRecall = await topicJudgePreFilter({
+          messages: event.messages,
+          query,
+          topicJudgeRounds: ctx.config.recall?.topicJudgeRounds ?? 4,
+          summarizer,
+          log: ctx.log,
+        });
+        if (shouldSkipRecall === "skip") return;
 
         const result = await engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwnerFilter });
 
