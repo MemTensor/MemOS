@@ -246,6 +246,11 @@ if (!config.plugins.allow.includes(pluginId)) {
   config.plugins.allow.push(pluginId);
 }
 
+if (!config.plugins.slots || typeof config.plugins.slots !== 'object') {
+  config.plugins.slots = {};
+}
+config.plugins.slots.contextEngine = 'memos-local-openclaw-plugin';
+
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 NODE
   success "OpenClaw config updated, OpenClaw 配置已更新: ${OPENCLAW_CONFIG_PATH}"

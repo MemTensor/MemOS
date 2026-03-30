@@ -31,6 +31,18 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
+import {
+  type AgentMessage as CEAgentMessage,
+  type PendingInjection,
+  deduplicateHits as ceDeduplicateHits,
+  formatMemoryBlock,
+  appendMemoryToMessage,
+  removeExistingMemoryBlock,
+  messageHasMemoryBlock,
+  getTextFromMessage,
+  insertSyntheticAssistantEntry,
+  findTargetAssistantEntry,
+} from "./src/context-engine";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -318,6 +330,214 @@ const memosLocalPlugin = {
     }
     else {
       api.logger.info("memos-local: allowPromptInjection=true, auto-recall enabled");
+    }
+
+    // ─── Context Engine: inject memories into assistant messages ───
+    // Memories are wrapped in <relevant-memories> tags which OpenClaw's UI
+    // automatically strips from assistant messages, keeping the chat clean.
+    // Persisted to the session file so the prompt prefix stays stable for KV cache.
+
+    let pendingInjection: PendingInjection | null = null;
+
+    try {
+      api.registerContextEngine("memos-local-openclaw-plugin", () => ({
+        info: {
+          id: "memos-local-openclaw-plugin",
+          name: "MemOS Local Memory Context Engine",
+          version: "1.0.0",
+        },
+
+        async ingest() {
+          return { ingested: false };
+        },
+
+        async assemble(params: {
+          sessionId: string;
+          sessionKey?: string;
+          messages: CEAgentMessage[];
+          tokenBudget?: number;
+          model?: string;
+          prompt?: string;
+        }) {
+          const { messages, prompt, sessionId, sessionKey } = params;
+
+          if (!allowPromptInjection || !prompt || prompt.length < 3) {
+            return { messages, estimatedTokens: 0 };
+          }
+
+          const recallT0 = performance.now();
+          try {
+            let query = prompt;
+            const senderTag = "Sender (untrusted metadata):";
+            const senderPos = query.indexOf(senderTag);
+            if (senderPos !== -1) {
+              const afterSender = query.slice(senderPos);
+              const fenceStart = afterSender.indexOf("```json");
+              const fenceEnd = fenceStart >= 0 ? afterSender.indexOf("```\n", fenceStart + 7) : -1;
+              if (fenceEnd > 0) {
+                query = afterSender.slice(fenceEnd + 4).replace(/^\s*\n/, "").trim();
+              } else {
+                const firstDblNl = afterSender.indexOf("\n\n");
+                if (firstDblNl > 0) {
+                  query = afterSender.slice(firstDblNl + 2).trim();
+                }
+              }
+            }
+            query = stripInboundMetadata(query).replace(/<[^>]+>/g, "").trim();
+
+            if (query.length < 2) {
+              return { messages, estimatedTokens: 0 };
+            }
+
+            ctx.log.debug(`context-engine assemble: query="${query.slice(0, 80)}"`);
+
+            const recallOwner = [`agent:${currentAgentId}`, "public"];
+            const result = await engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwner });
+            const filteredHits = ceDeduplicateHits(
+              result.hits.filter((h: SearchHit) => h.score >= 0.5),
+            );
+
+            if (filteredHits.length === 0) {
+              ctx.log.debug("context-engine assemble: no memory hits");
+              return { messages, estimatedTokens: 0 };
+            }
+
+            const memoryBlock = formatMemoryBlock(filteredHits);
+            const cloned: CEAgentMessage[] = messages.map((m) => structuredClone(m));
+
+            let lastAssistantIdx = -1;
+            for (let i = cloned.length - 1; i >= 0; i--) {
+              if (cloned[i].role === "assistant") {
+                lastAssistantIdx = i;
+                break;
+              }
+            }
+
+            const sk = sessionKey ?? sessionId;
+
+            if (lastAssistantIdx < 0) {
+              const syntheticAssistant: CEAgentMessage = {
+                role: "assistant",
+                content: [{ type: "text", text: memoryBlock }],
+                timestamp: Date.now(),
+                stopReason: "end_turn",
+                usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+              };
+              pendingInjection = { sessionKey: sk, memoryBlock, isSynthetic: true };
+              ctx.log.info(`context-engine assemble: first turn, injecting synthetic assistant (${filteredHits.length} memories)`);
+              return { messages: [...cloned, syntheticAssistant], estimatedTokens: 0 };
+            }
+
+            removeExistingMemoryBlock(cloned[lastAssistantIdx]);
+            appendMemoryToMessage(cloned[lastAssistantIdx], memoryBlock);
+            pendingInjection = { sessionKey: sk, memoryBlock, isSynthetic: false };
+
+            const dur = performance.now() - recallT0;
+            ctx.log.info(`context-engine assemble: injected ${filteredHits.length} memories into assistant[${lastAssistantIdx}] (${dur.toFixed(0)}ms)`);
+            return { messages: cloned, estimatedTokens: 0 };
+          } catch (err) {
+            ctx.log.warn(`context-engine assemble failed: ${err}`);
+            return { messages, estimatedTokens: 0 };
+          }
+        },
+
+        async afterTurn() {},
+
+        async compact(params: any) {
+          try {
+            const { delegateCompactionToRuntime } = await import("openclaw/plugin-sdk");
+            return await delegateCompactionToRuntime(params);
+          } catch {
+            return { ok: true, compacted: false, reason: "delegateCompactionToRuntime not available" };
+          }
+        },
+
+        async maintain(params: {
+          sessionId: string;
+          sessionKey?: string;
+          sessionFile: string;
+          runtimeContext?: { rewriteTranscriptEntries?: (req: any) => Promise<any> };
+        }) {
+          const noChange = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+
+          if (!pendingInjection) return noChange;
+
+          const sk = params.sessionKey ?? params.sessionId;
+          if (pendingInjection.sessionKey !== sk) {
+            pendingInjection = null;
+            return { ...noChange, reason: "session mismatch" };
+          }
+
+          try {
+            if (pendingInjection.isSynthetic) {
+              // First turn: INSERT synthetic assistant before existing entries
+              const { SessionManager } = await import("@mariozechner/pi-coding-agent");
+              const sm = SessionManager.open(params.sessionFile);
+              const ok = insertSyntheticAssistantEntry(sm, pendingInjection.memoryBlock);
+              pendingInjection = null;
+              if (ok) {
+                ctx.log.info("context-engine maintain: persisted synthetic assistant message");
+                return { changed: true, bytesFreed: 0, rewrittenEntries: 1 };
+              }
+              return { ...noChange, reason: "empty branch, could not insert synthetic" };
+            }
+
+            // Subsequent turns: REPLACE last assistant entry with memory-injected version
+            if (!params.runtimeContext?.rewriteTranscriptEntries) {
+              pendingInjection = null;
+              return { ...noChange, reason: "rewriteTranscriptEntries not available" };
+            }
+
+            const { SessionManager } = await import("@mariozechner/pi-coding-agent");
+            const sm = SessionManager.open(params.sessionFile);
+            const branch = sm.getBranch();
+            const targetEntry = findTargetAssistantEntry(branch);
+
+            if (!targetEntry) {
+              pendingInjection = null;
+              return { ...noChange, reason: "no target assistant entry found" };
+            }
+
+            const modifiedMessage = structuredClone(targetEntry.message!);
+            removeExistingMemoryBlock(modifiedMessage as CEAgentMessage);
+            appendMemoryToMessage(modifiedMessage as CEAgentMessage, pendingInjection.memoryBlock);
+
+            const result = await params.runtimeContext.rewriteTranscriptEntries({
+              replacements: [{ entryId: targetEntry.id, message: modifiedMessage }],
+            });
+
+            ctx.log.info(`context-engine maintain: persisted memory to assistant entry ${targetEntry.id}`);
+            pendingInjection = null;
+            return result;
+          } catch (err) {
+            ctx.log.warn(`context-engine maintain failed: ${err}`);
+            pendingInjection = null;
+            return { ...noChange, reason: String(err) };
+          }
+        },
+      }));
+
+      ctx.log.info("memos-local: registered context engine 'memos-local-openclaw-plugin'");
+    } catch (err) {
+      ctx.log.warn(`memos-local: context engine registration failed (${err}), memory injection will use before_prompt_build fallback`);
+    }
+
+    // ─── Memory Prompt Section: static instructions for the LLM ───
+    try {
+      api.registerMemoryPromptSection(() => [
+        "## Memory System",
+        "",
+        "Assistant messages in this conversation may contain <relevant-memories> blocks.",
+        "These are NOT part of the assistant's original response.",
+        "They contain background knowledge and memories relevant to the next user message,",
+        "injected by the user's local memory system before each query.",
+        "Use them as context to better understand and respond to the following user message.",
+        "Do not mention, quote, or repeat these memory blocks in your replies.",
+        "",
+      ]);
+      ctx.log.info("memos-local: registered memory prompt section");
+    } catch (err) {
+      ctx.log.warn(`memos-local: registerMemoryPromptSection failed: ${err}`);
     }
 
     const trackTool = (toolName: string, fn: (...args: any[]) => Promise<any>) =>
@@ -1773,7 +1993,9 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       { name: "network_skill_pull" },
     );
 
-    // ─── Auto-recall: inject relevant memories before agent starts ───
+    // ─── Skill auto-recall: inject relevant skills before agent starts ───
+    // Memory injection is handled by the Context Engine above.
+    // This hook only handles skill auto-recall via prependContext.
 
     api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
       if (!allowPromptInjection) return {};
@@ -1781,21 +2003,18 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
       const recallAgentId = hookCtx?.agentId ?? "main";
       currentAgentId = recallAgentId;
-      const recallOwnerFilter = [`agent:${recallAgentId}`, "public"];
-      ctx.log.info(`auto-recall: agentId=${recallAgentId} (from hookCtx)`);
+
+      const skillAutoRecall = ctx.config.skillEvolution?.autoRecallSkills ?? DEFAULTS.skillAutoRecall;
+      if (!skillAutoRecall) return;
 
       const recallT0 = performance.now();
-      let recallQuery = "";
 
       try {
-        const rawPrompt = event.prompt;
-        ctx.log.debug(`auto-recall: rawPrompt="${rawPrompt.slice(0, 300)}"`);
-
-        let query = rawPrompt;
+        let query = event.prompt;
         const senderTag = "Sender (untrusted metadata):";
-        const senderPos = rawPrompt.indexOf(senderTag);
+        const senderPos = query.indexOf(senderTag);
         if (senderPos !== -1) {
-          const afterSender = rawPrompt.slice(senderPos);
+          const afterSender = query.slice(senderPos);
           const fenceStart = afterSender.indexOf("```json");
           const fenceEnd = fenceStart >= 0 ? afterSender.indexOf("```\n", fenceStart + 7) : -1;
           if (fenceEnd > 0) {
@@ -1807,276 +2026,48 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             }
           }
         }
-        query = stripInboundMetadata(query);
-        query = query.replace(/<[^>]+>/g, "").trim();
-        recallQuery = query;
+        query = stripInboundMetadata(query).replace(/<[^>]+>/g, "").trim();
+        if (query.length < 2) return;
 
-        if (query.length < 2) {
-          ctx.log.debug("auto-recall: extracted query too short, skipping");
-          return;
-        }
-        ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
-
-        // ── Phase 1: Local search ∥ Hub search (parallel) ──
-        const arLocalP = engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwnerFilter });
-        const arHubP = ctx.config?.sharing?.enabled
-          ? hubSearchMemories(store, ctx, { query, maxResults: 10, scope: "all" })
-              .catch((err: any) => { ctx.log.debug(`auto-recall: hub search failed (${err})`); return { hits: [] as any[], meta: {} }; })
-          : Promise.resolve({ hits: [] as any[], meta: {} });
-
-        const [result, arHubResult] = await Promise.all([arLocalP, arHubP]);
-
-        const localHits = result.hits.filter((h) => h.origin !== "hub-memory");
-        const hubLocalHits = result.hits.filter((h) => h.origin === "hub-memory");
-        const hubRemoteHits: SearchHit[] = (arHubResult.hits ?? []).map((h: any) => ({
-          summary: h.summary,
-          original_excerpt: h.excerpt || h.summary,
-          ref: { sessionKey: "", chunkId: h.remoteHitId ?? "", turnId: "", seq: 0 },
-          score: 0.9,
-          taskId: null,
-          skillId: null,
-          origin: "hub-remote" as const,
-          source: { ts: h.source?.ts, role: h.source?.role ?? "assistant", sessionKey: "" },
-          ownerName: h.ownerName,
-          groupName: h.groupName,
-        }));
-        const allHubHits = [...hubLocalHits, ...hubRemoteHits];
-
-        ctx.log.debug(`auto-recall: local=${localHits.length}, hub-memory=${hubLocalHits.length}, hub-remote=${hubRemoteHits.length}`);
-
-        const rawLocalCandidates = localHits.map((h) => ({
-          score: h.score, role: h.source.role, summary: h.summary,
-          content: (h.original_excerpt ?? "").slice(0, 200), origin: h.origin || "local",
-        }));
-        const rawHubCandidates = allHubHits.map((h) => ({
-          score: h.score, role: h.source.role, summary: h.summary,
-          content: (h.original_excerpt ?? "").slice(0, 200), origin: h.origin || "hub-remote",
-          ownerName: (h as any).ownerName ?? "", groupName: (h as any).groupName ?? "",
-        }));
-
-        const allRawHits = [...localHits, ...allHubHits];
-
-        if (allRawHits.length === 0) {
-          ctx.log.debug("auto-recall: no memory candidates found");
-          const dur = performance.now() - recallT0;
-          store.recordToolCall("memory_search", dur, true);
-          store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
-            candidates: rawLocalCandidates, hubCandidates: rawHubCandidates, filtered: [],
-          }), dur, true);
-
-          const skillAutoRecallEarly = ctx.config.skillEvolution?.autoRecallSkills ?? DEFAULTS.skillAutoRecall;
-          if (skillAutoRecallEarly) {
-            try {
-              const skillLimit = ctx.config.skillEvolution?.autoRecallSkillLimit ?? DEFAULTS.skillAutoRecallLimit;
-              const skillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
-              const topSkills = skillHits.slice(0, skillLimit);
-              if (topSkills.length > 0) {
-                const skillLines = topSkills.map((sc, i) => {
-                  const manifest = skillInstaller.getCompanionManifest(sc.skillId);
-                  let badge = "";
-                  if (manifest?.installed) badge = " [installed]";
-                  else if (manifest?.installMode === "install_recommended") badge = " [has scripts, install recommended]";
-                  else if (manifest?.hasCompanionFiles) badge = " [has companion files]";
-                  return `${i + 1}. **${sc.name}**${badge} — ${sc.description.slice(0, 200)}\n   → call \`skill_get(skillId="${sc.skillId}")\` for the full guide`;
-                });
-                const skillContext = "## Relevant skills from past experience\n\n" +
-                  "No direct memory matches were found, but these skills from past tasks may help:\n\n" +
-                  skillLines.join("\n\n") +
-                  "\n\nYou SHOULD call `skill_get` to retrieve the full guide before attempting the task.";
-                ctx.log.info(`auto-recall-skill (no-memory path): injecting ${topSkills.length} skill(s)`);
-                try { store.recordApiLog("skill_search", { type: "auto_recall_skill", query }, JSON.stringify(topSkills), dur, true); } catch { /* best-effort */ }
-                return { prependContext: skillContext };
-              }
-            } catch (err) {
-              ctx.log.debug(`auto-recall-skill (no-memory path): failed: ${err}`);
-            }
-          }
-
-          if (query.length > 50) {
-            const noRecallHint =
-              "## Memory system — ACTION REQUIRED\n\n" +
-              "Auto-recall found no results for a long query. " +
-              "You MUST call `memory_search` now with a shortened query (2-5 key words) before answering. " +
-              "Do NOT skip this step. Do NOT answer without searching first.";
-            return { prependContext: noRecallHint };
-          }
-          return;
-        }
-
-        // ── Phase 2: Merge all → single LLM filter ──
-        const mergedForFilter = allRawHits.map((h, i) => ({
-          index: i + 1,
-          role: h.source.role,
-          content: (h.original_excerpt ?? "").slice(0, 300),
-          time: h.source.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
-        }));
-
-        let filteredHits = allRawHits;
-        let sufficient = false;
-
-        const filterResult = await summarizer.filterRelevant(query, mergedForFilter);
-        if (filterResult !== null) {
-          sufficient = filterResult.sufficient;
-          if (filterResult.relevant.length > 0) {
-            const indexSet = new Set(filterResult.relevant);
-            filteredHits = allRawHits.filter((_, i) => indexSet.has(i + 1));
-          } else {
-            const dur = performance.now() - recallT0;
-            store.recordToolCall("memory_search", dur, true);
-            store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
-              candidates: rawLocalCandidates, hubCandidates: rawHubCandidates, filtered: [],
-            }), dur, true);
-            if (query.length > 50) {
-              const noRecallHint =
-                "## Memory system — ACTION REQUIRED\n\n" +
-                "Auto-recall found no relevant results for a long query. " +
-                "You MUST call `memory_search` now with a shortened query (2-5 key words) before answering. " +
-                "Do NOT skip this step. Do NOT answer without searching first.";
-              return { prependContext: noRecallHint };
-            }
-            return;
-          }
-        }
-
-        const beforeDedup = filteredHits.length;
-        filteredHits = deduplicateHits(filteredHits);
-        ctx.log.debug(`auto-recall: merged ${allRawHits.length} → ${beforeDedup} relevant → ${filteredHits.length} after dedup, sufficient=${sufficient}`);
-
-        const lines = filteredHits.map((h, i) => {
-          const excerpt = h.original_excerpt;
-          const oTag = h.origin === "local-shared" ? " [本机共享]" : h.origin === "hub-memory" ? " [团队缓存]" : "";
-          const parts: string[] = [`${i + 1}. [${h.source.role}]${oTag}`];
-          if (excerpt) parts.push(`   ${excerpt}`);
-          parts.push(`   chunkId="${h.ref.chunkId}"`);
-          if (h.taskId) {
-            const task = store.getTask(h.taskId);
-            if (task && task.status !== "skipped") {
-              parts.push(`   task_id="${h.taskId}"`);
-            }
-          }
-          return parts.join("\n");
-        });
-
-        const hasTask = filteredHits.some((h) => {
-          if (!h.taskId) return false;
-          const t = store.getTask(h.taskId);
-          return t && t.status !== "skipped";
-        });
-        const tips: string[] = [];
-        if (hasTask) {
-          tips.push("- A hit has `task_id` → call `task_summary(taskId=\"...\")` to get the full task context (steps, code, results)");
-          tips.push("- A task may have a reusable guide → call `skill_get(taskId=\"...\")` to retrieve the experience/skill");
-        }
-        tips.push("- Need more surrounding dialogue → call `memory_timeline(chunkId=\"...\")` to expand context around a hit");
-        const tipsText = "\n\nAvailable follow-up tools:\n" + tips.join("\n");
-
-        const contextParts = [
-          "## User's conversation history (from memory system)",
-          "",
-          "IMPORTANT: The following are facts from previous conversations with this user.",
-          "You MUST treat these as established knowledge and use them directly when answering.",
-          "Do NOT say you don't know or don't have information if the answer is in these memories.",
-          "",
-          lines.join("\n\n"),
-        ];
-        if (tipsText) contextParts.push(tipsText);
-
-        // ─── Skill auto-recall ───
-        const skillAutoRecall = ctx.config.skillEvolution?.autoRecallSkills ?? DEFAULTS.skillAutoRecall;
         const skillLimit = ctx.config.skillEvolution?.autoRecallSkillLimit ?? DEFAULTS.skillAutoRecallLimit;
-        let skillSection = "";
+        const skillCandidateMap = new Map<string, { name: string; description: string; skillId: string; source: string }>();
 
-        if (skillAutoRecall) {
-          try {
-            const skillCandidateMap = new Map<string, { name: string; description: string; skillId: string; source: string }>();
-
-            // Source 1: direct skill search based on user query
-            try {
-              const directSkillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
-              for (const sh of directSkillHits.slice(0, skillLimit + 2)) {
-                if (!skillCandidateMap.has(sh.skillId)) {
-                  skillCandidateMap.set(sh.skillId, { name: sh.name, description: sh.description, skillId: sh.skillId, source: "query" });
-                }
-              }
-            } catch (err) {
-              ctx.log.debug(`auto-recall-skill: direct search failed: ${err}`);
+        try {
+          const directSkillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
+          for (const sh of directSkillHits.slice(0, skillLimit + 2)) {
+            if (!skillCandidateMap.has(sh.skillId)) {
+              skillCandidateMap.set(sh.skillId, { name: sh.name, description: sh.description, skillId: sh.skillId, source: "query" });
             }
-
-            // Source 2: skills linked to tasks from memory hits
-            const taskIds = new Set<string>();
-            for (const h of filteredHits) {
-              if (h.taskId) {
-                const t = store.getTask(h.taskId);
-                if (t && t.status !== "skipped") taskIds.add(h.taskId);
-              }
-            }
-            for (const tid of taskIds) {
-              const linked = store.getSkillsByTask(tid);
-              for (const rs of linked) {
-                if (!skillCandidateMap.has(rs.skill.id)) {
-                  skillCandidateMap.set(rs.skill.id, { name: rs.skill.name, description: rs.skill.description, skillId: rs.skill.id, source: `task:${tid}` });
-                }
-              }
-            }
-
-            const skillCandidates = [...skillCandidateMap.values()].slice(0, skillLimit);
-
-            if (skillCandidates.length > 0) {
-              const skillLines = skillCandidates.map((sc, i) => {
-                const manifest = skillInstaller.getCompanionManifest(sc.skillId);
-                let badge = "";
-                if (manifest?.installed) badge = " [installed]";
-                else if (manifest?.installMode === "install_recommended") badge = " [has scripts, install recommended]";
-                else if (manifest?.hasCompanionFiles) badge = " [has companion files]";
-                const action = `call \`skill_get(skillId="${sc.skillId}")\``;
-                return `${i + 1}. **${sc.name}**${badge} — ${sc.description.slice(0, 200)}\n   → ${action}`;
-              });
-              skillSection = "\n\n## Relevant skills from past experience\n\n" +
-                "The following skills were distilled from similar previous tasks. " +
-                "You SHOULD call `skill_get` to retrieve the full guide before attempting the task.\n\n" +
-                skillLines.join("\n\n");
-
-              ctx.log.info(`auto-recall-skill: injecting ${skillCandidates.length} skill(s): ${skillCandidates.map(s => s.name).join(", ")}`);
-              try {
-                store.recordApiLog("skill_search", { type: "auto_recall_skill", query }, JSON.stringify(skillCandidates), performance.now() - recallT0, true);
-              } catch { /* best-effort */ }
-            } else {
-              ctx.log.debug("auto-recall-skill: no matching skills found");
-            }
-          } catch (err) {
-            ctx.log.debug(`auto-recall-skill: failed: ${err}`);
           }
+        } catch (err) {
+          ctx.log.debug(`auto-recall-skill: direct search failed: ${err}`);
         }
 
-        if (skillSection) contextParts.push(skillSection);
-        const context = contextParts.join("\n");
+        const skillCandidates = [...skillCandidateMap.values()].slice(0, skillLimit);
+        if (skillCandidates.length === 0) return;
 
-        const recallDur = performance.now() - recallT0;
-        store.recordToolCall("memory_search", recallDur, true);
-        store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
-          candidates: rawLocalCandidates,
-          hubCandidates: rawHubCandidates,
-          filtered: filteredHits.map(h => ({ score: h.score, role: h.source.role, summary: h.summary, content: h.original_excerpt, origin: h.origin || "local" })),
-        }), recallDur, true);
-        telemetry.trackAutoRecall(filteredHits.length, recallDur);
+        const skillLines = skillCandidates.map((sc, i) => {
+          const manifest = skillInstaller.getCompanionManifest(sc.skillId);
+          let badge = "";
+          if (manifest?.installed) badge = " [installed]";
+          else if (manifest?.installMode === "install_recommended") badge = " [has scripts, install recommended]";
+          else if (manifest?.hasCompanionFiles) badge = " [has companion files]";
+          const action = `call \`skill_get(skillId="${sc.skillId}")\``;
+          return `${i + 1}. **${sc.name}**${badge} — ${sc.description.slice(0, 200)}\n   → ${action}`;
+        });
+        const skillContext = "## Relevant skills from past experience\n\n" +
+          "The following skills were distilled from similar previous tasks. " +
+          "You SHOULD call `skill_get` to retrieve the full guide before attempting the task.\n\n" +
+          skillLines.join("\n\n");
 
-        ctx.log.info(`auto-recall: returning prependContext (${context.length} chars), sufficient=${sufficient}, skills=${skillSection ? "yes" : "no"}`);
+        ctx.log.info(`auto-recall-skill: injecting ${skillCandidates.length} skill(s): ${skillCandidates.map(s => s.name).join(", ")}`);
+        try {
+          store.recordApiLog("skill_search", { type: "auto_recall_skill", query }, JSON.stringify(skillCandidates), performance.now() - recallT0, true);
+        } catch { /* best-effort */ }
 
-        if (!sufficient) {
-          const searchHint =
-            "\n\nIf these memories don't fully answer the question, " +
-            "call `memory_search` with a shorter or rephrased query to find more.";
-          return { prependContext: context + searchHint };
-        }
-
-        return {
-          prependContext: context,
-        };
+        return { prependContext: skillContext };
       } catch (err) {
-        const dur = performance.now() - recallT0;
-        store.recordToolCall("memory_search", dur, false);
-        try { store.recordApiLog("memory_search", { type: "auto_recall", query: recallQuery }, `error: ${String(err)}`, dur, false); } catch (_) { /* best-effort */ }
-        ctx.log.warn(`auto-recall failed: ${String(err)}`);
+        ctx.log.warn(`auto-recall-skill failed: ${String(err)}`);
       }
     });
 
