@@ -2,7 +2,7 @@
   "id": "memos-cloud-openclaw-plugin",
   "name": "MemOS Cloud OpenClaw Plugin",
   "description": "MemOS Cloud recall + add memory via lifecycle hooks",
-  "version": "0.1.9",
+  "version": "0.1.11",
   "kind": "lifecycle",
   "main": "./index.js",
   "configSchema": {
@@ -40,6 +40,11 @@
           "counter"
         ],
         "default": "none"
+      },
+      "useDirectSessionUserId": {
+        "type": "boolean",
+        "description": "When enabled, direct-session keys like agent:main:<provider>:direct:<id> use the direct id as MemOS user_id instead of the default configured userId.",
+        "default": false
       },
       "resetOnNew": {
         "type": "boolean",
@@ -109,7 +114,47 @@
       },
       "filter": {
         "type": "object",
-        "description": "MemOS search filter"
+        "description": "MemOS search filter",
+        "additionalProperties": true
+      },
+      "relativity": {
+        "type": "number",
+        "description": "Search relativity threshold",
+        "default": 0.45
+      },
+      "recallFilterEnabled": {
+        "type": "boolean",
+        "default": false
+      },
+      "recallFilterBaseUrl": {
+        "type": "string",
+        "description": "OpenAI-compatible API base URL for recall filtering"
+      },
+      "recallFilterApiKey": {
+        "type": "string"
+      },
+      "recallFilterModel": {
+        "type": "string"
+      },
+      "recallFilterTimeoutMs": {
+        "type": "integer",
+        "default": 30000
+      },
+      "recallFilterRetries": {
+        "type": "integer",
+        "default": 1
+      },
+      "recallFilterCandidateLimit": {
+        "type": "integer",
+        "default": 30
+      },
+      "recallFilterMaxItemChars": {
+        "type": "integer",
+        "default": 500
+      },
+      "recallFilterFailOpen": {
+        "type": "boolean",
+        "default": true
       },
       "knowledgebaseIds": {
         "type": "array",
@@ -133,6 +178,13 @@
       "multiAgentMode": {
         "type": "boolean",
         "default": false
+      },
+      "allowedAgents": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "When multiAgentMode is true, only these agent IDs will activate the memory plugin. Comma-separated in env var MEMOS_ALLOWED_AGENTS. Empty list means all agents are allowed."
       },
       "appId": {
         "type": "string"
@@ -162,6 +214,108 @@
       "throttleMs": {
         "type": "integer",
         "default": 0
+      },
+      "agentOverrides": {
+        "type": "object",
+        "description": "Per-agent config overrides. Keys are agent IDs, values override global defaults for that agent.",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "knowledgebaseIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "memoryLimitNumber": {
+              "type": "integer"
+            },
+            "preferenceLimitNumber": {
+              "type": "integer"
+            },
+            "includePreference": {
+              "type": "boolean"
+            },
+            "includeToolMemory": {
+              "type": "boolean"
+            },
+            "toolMemoryLimitNumber": {
+              "type": "integer"
+            },
+            "includeSkill": {
+              "type": "boolean"
+            },
+            "skillLimitNumber": {
+              "type": "integer"
+            },
+            "relativity": {
+              "type": "number"
+            },
+            "filter": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "recallEnabled": {
+              "type": "boolean"
+            },
+            "addEnabled": {
+              "type": "boolean"
+            },
+            "captureStrategy": {
+              "type": "string",
+              "enum": [
+                "last_turn",
+                "full_session"
+              ]
+            },
+            "queryPrefix": {
+              "type": "string"
+            },
+            "maxQueryChars": {
+              "type": "integer"
+            },
+            "maxItemChars": {
+              "type": "integer"
+            },
+            "maxMessageChars": {
+              "type": "integer"
+            },
+            "includeAssistant": {
+              "type": "boolean"
+            },
+            "recallGlobal": {
+              "type": "boolean"
+            },
+            "recallFilterEnabled": {
+              "type": "boolean"
+            },
+            "recallFilterModel": {
+              "type": "string"
+            },
+            "recallFilterBaseUrl": {
+              "type": "string"
+            },
+            "recallFilterApiKey": {
+              "type": "string"
+            },
+            "allowKnowledgebaseIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "throttleMs": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": false
+        }
       }
     },
     "additionalProperties": false
