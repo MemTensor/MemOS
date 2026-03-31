@@ -577,7 +577,6 @@ const memosLocalPlugin = {
         }
       };
 
-    const getCurrentOwner = () => `agent:${currentAgentId}`;
     const resolveMemorySearchScope = (scope?: string): "local" | "group" | "all" =>
       scope === "group" || scope === "all" ? scope : "local";
     const resolveMemoryShareTarget = (target?: string): "agents" | "hub" | "both" =>
@@ -668,7 +667,7 @@ const memosLocalPlugin = {
     // ─── Tool: memory_search ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_search",
         label: "Memory Search",
         description:
@@ -684,7 +683,7 @@ const memosLocalPlugin = {
           hubAddress: Type.Optional(Type.String({ description: "Optional Hub address override for group/all search." })),
           userToken: Type.Optional(Type.String({ description: "Optional Hub bearer token override for group/all search." })),
         }),
-        execute: trackTool("memory_search", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("memory_search", async (_toolCallId: any, params: any) => {
           const {
             query,
             scope: rawScope,
@@ -705,9 +704,6 @@ const memosLocalPlugin = {
           const role = rawRole === "user" || rawRole === "assistant" || rawRole === "tool" || rawRole === "system" ? rawRole : undefined;
           const minScore = typeof rawMinScore === "number" ? Math.max(0.35, Math.min(1, rawMinScore)) : undefined;
           let searchScope = resolveMemorySearchScope(rawScope);
-          if (searchScope === "local" && ctx.config?.sharing?.enabled) {
-            searchScope = "all";
-          }
           const searchLimit = typeof maxResults === "number" ? Math.max(1, Math.min(20, Math.round(maxResults))) : 10;
 
           const agentId = context?.agentId ?? currentAgentId;
@@ -727,7 +723,7 @@ const memosLocalPlugin = {
 
           // Split local results: pure-local vs hub-memory (Hub role's hub_memories mixed in by RecallEngine)
           const localHits = result.hits.filter((h) => h.origin !== "hub-memory");
-          const hubLocalHits = result.hits.filter((h) => h.origin === "hub-memory");
+          const hubLocalHits = searchScope !== "local" ? result.hits.filter((h) => h.origin === "hub-memory") : [];
 
           const rawLocalCandidates = localHits.map((h) => ({
             chunkId: h.ref.chunkId,
@@ -892,14 +888,14 @@ const memosLocalPlugin = {
             },
           };
         }),
-      },
+      }),
       { name: "memory_search" },
     );
 
     // ─── Tool: memory_timeline ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_timeline",
         label: "Memory Timeline",
         description:
@@ -909,7 +905,7 @@ const memosLocalPlugin = {
           chunkId: Type.String({ description: "The chunkId from a memory_search hit" }),
           window: Type.Optional(Type.Number({ description: "Context window ±N (default 2)" })),
         }),
-        execute: trackTool("memory_timeline", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("memory_timeline", async (_toolCallId: any, params: any) => {
           const agentId = context?.agentId ?? currentAgentId;
           ctx.log.debug(`memory_timeline called (agent=${agentId})`);
           const { chunkId, window: win } = params as {
@@ -953,14 +949,14 @@ const memosLocalPlugin = {
             details: { entries, anchorRef: { sessionKey: anchorChunk.sessionKey, chunkId, turnId: anchorChunk.turnId, seq: anchorChunk.seq } },
           };
         }),
-      },
+      }),
       { name: "memory_timeline" },
     );
 
     // ─── Tool: memory_get ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_get",
         label: "Memory Get",
         description:
@@ -971,7 +967,7 @@ const memosLocalPlugin = {
             Type.Number({ description: `Max chars (default ${DEFAULTS.getMaxCharsDefault}, max ${DEFAULTS.getMaxCharsMax})` }),
           ),
         }),
-        execute: trackTool("memory_get", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("memory_get", async (_toolCallId: any, params: any) => {
           const { chunkId, maxChars } = params as { chunkId: string; maxChars?: number };
           const limit = Math.min(maxChars ?? DEFAULTS.getMaxCharsDefault, DEFAULTS.getMaxCharsMax);
 
@@ -997,7 +993,7 @@ const memosLocalPlugin = {
             },
           };
         }),
-      },
+      }),
       { name: "memory_get" },
     );
 
@@ -1519,7 +1515,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     const viewerPort = (pluginCfg as any).viewerPort ?? (gatewayPort + 10);
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_viewer",
         label: "Open Memory Viewer",
         description:
@@ -1527,7 +1523,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           "or access their stored memories, or asks where the memory dashboard is. " +
           "Returns the URL the user can open in their browser.",
         parameters: Type.Object({}),
-        execute: trackTool("memory_viewer", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("memory_viewer", async (_toolCallId: any, params: any) => {
           ctx.log.debug(`memory_viewer called`);
           telemetry.trackViewerOpened();
           const agentId = context?.agentId ?? context?.profileId ?? currentAgentId;
@@ -1552,7 +1548,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             details: { viewerUrl: url },
           };
         }),
-      },
+      }),
       { name: "memory_viewer" },
     );
 
@@ -1783,7 +1779,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     // ─── Tool: skill_search ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "skill_search",
         label: "Skill Search",
         description:
@@ -1793,10 +1789,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           query: Type.String({ description: "Natural language description of the needed skill" }),
           scope: Type.Optional(Type.String({ description: "Search scope: 'mix' (default), 'self', 'public', 'group', or 'all'." })),
         }),
-        execute: trackTool("skill_search", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("skill_search", async (_toolCallId: any, params: any) => {
           const { query: skillQuery, scope: rawScope } = params as { query: string; scope?: string };
           const scope = (rawScope === "self" || rawScope === "public") ? rawScope : "mix";
-          const currentOwner = getCurrentOwner();
+          const agentId = context?.agentId ?? currentAgentId;
+          const currentOwner = `agent:${agentId}`;
 
           if (rawScope === "group" || rawScope === "all") {
             const [localHits, hub] = await Promise.all([
@@ -1858,7 +1855,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             details: { query: skillQuery, scope, hits },
           };
         }),
-      },
+      }),
       { name: "skill_search" },
     );
 
@@ -2037,7 +2034,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         const skillCandidateMap = new Map<string, { name: string; description: string; skillId: string; source: string }>();
 
         try {
-          const directSkillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
+          const directSkillHits = await engine.searchSkills(query, "mix" as any, `agent:${recallAgentId}`);
           for (const sh of directSkillHits.slice(0, skillLimit + 2)) {
             if (!skillCandidateMap.has(sh.skillId)) {
               skillCandidateMap.set(sh.skillId, { name: sh.name, description: sh.description, skillId: sh.skillId, source: "query" });
