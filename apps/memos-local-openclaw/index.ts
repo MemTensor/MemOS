@@ -358,8 +358,11 @@ const memosLocalPlugin = {
           tokenBudget?: number;
           model?: string;
           prompt?: string;
+          agentId?: string;
+          profileId?: string;
         }) {
           const { messages, prompt, sessionId, sessionKey } = params;
+          const assembleAgentId = params.agentId ?? params.profileId ?? currentAgentId;
 
           if (!allowPromptInjection || !prompt || prompt.length < 3) {
             return { messages, estimatedTokens: 0 };
@@ -391,7 +394,7 @@ const memosLocalPlugin = {
 
             ctx.log.debug(`context-engine assemble: query="${query.slice(0, 80)}"`);
 
-            const recallOwner = [`agent:${currentAgentId}`, "public"];
+            const recallOwner = [`agent:${assembleAgentId}`, "public"];
             const result = await engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwner });
             const filteredHits = ceDeduplicateHits(
               result.hits.filter((h: SearchHit) => h.score >= 0.5),
@@ -1524,10 +1527,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           "or access their stored memories, or asks where the memory dashboard is. " +
           "Returns the URL the user can open in their browser.",
         parameters: Type.Object({}),
-        execute: trackTool("memory_viewer", async () => {
+        execute: trackTool("memory_viewer", async (_toolCallId: any, params: any, context?: any) => {
           ctx.log.debug(`memory_viewer called`);
           telemetry.trackViewerOpened();
-          const url = `http://127.0.0.1:${viewerPort}`;
+          const agentId = context?.agentId ?? context?.profileId ?? currentAgentId;
+          const url = `http://127.0.0.1:${viewerPort}?agentId=${encodeURIComponent(agentId)}`;
           return {
             content: [
               {
@@ -2001,7 +2005,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
 
-      const recallAgentId = hookCtx?.agentId ?? "main";
+      const recallAgentId = hookCtx?.agentId ?? (event as any)?.agentId ?? (event as any)?.profileId ?? "main";
       currentAgentId = recallAgentId;
 
       const skillAutoRecall = ctx.config.skillEvolution?.autoRecallSkills ?? DEFAULTS.skillAutoRecall;
@@ -2083,7 +2087,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       if (!event.success || !event.messages || event.messages.length === 0) return;
 
       try {
-        const captureAgentId = hookCtx?.agentId ?? "main";
+        const captureAgentId = hookCtx?.agentId ?? event?.agentId ?? event?.profileId ?? "main";
         currentAgentId = captureAgentId;
         const captureOwner = `agent:${captureAgentId}`;
         const sessionKey = hookCtx?.sessionKey ?? "default";

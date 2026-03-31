@@ -2034,6 +2034,14 @@ let memorySearchScope='local',skillSearchScope='local',taskSearchScope='local';
 let _lastMemoriesFingerprint='',_lastTasksFingerprint='',_lastSkillsFingerprint='';
 let _embeddingWarningShown=false;
 let _currentAgentOwner='agent:main';
+try {
+  const urlParams = new URLSearchParams(window.location.search);
+  const agentId = urlParams.get('agentId');
+  if (agentId) {
+    _currentAgentOwner = 'agent:' + agentId;
+  }
+} catch(e) {}
+
 
 /* ─── i18n ─── */
 const I18N={
@@ -3796,7 +3804,7 @@ function onMemoryScopeChange(){
   var ownerSel=document.getElementById('filterOwner');
   var filterBar=document.getElementById('filterBar');
   var dateFilter=document.querySelector('.date-filter');
-  if(ownerSel){ownerSel.style.display=(isHub||isLocal)?'none':'';if(isHub||isLocal)ownerSel.value='';}
+  if(ownerSel){ownerSel.style.display=isHub?'none':'';if(isHub)ownerSel.value='';}
   if(filterBar) filterBar.style.display=isHub?'none':'';
   if(dateFilter) dateFilter.style.display=isHub?'none':'';
   if(document.getElementById('searchInput').value.trim()) doSearch(document.getElementById('searchInput').value);
@@ -7738,7 +7746,7 @@ async function loadStats(ownerFilter){
     d=await r.json();
   }catch(e){ d={}; }
   if(!d||typeof d!=='object') d={};
-  if(d.currentAgentOwner) _currentAgentOwner=d.currentAgentOwner;
+  if(d.currentAgentOwner && !new URLSearchParams(window.location.search).get('agentId')) _currentAgentOwner=d.currentAgentOwner;
   const tm=d.totalMemories||0;
   const dedupB=d.dedupBreakdown||{};
   const activeCount=dedupB.active||tm;
@@ -7846,11 +7854,14 @@ function getFilterParams(){
   const sort=document.getElementById('filterSort').value;
   if(sort==='oldest') p.set('sort','oldest');
   const scope=memorySearchScope||'local';
-  if(scope==='local'){
-    p.set('owner',_currentAgentOwner);
-  }else if(scope==='allLocal'){
-  const owner=document.getElementById('filterOwner').value;
-  if(owner) p.set('owner',owner);
+  if(scope==='local' || scope==='allLocal'){
+    const owner=document.getElementById('filterOwner').value;
+    if(owner) {
+      p.set('owner',owner);
+      _currentAgentOwner = owner;
+    } else if(scope==='local') {
+      p.set('owner',_currentAgentOwner);
+    }
   }
   return p;
 }
