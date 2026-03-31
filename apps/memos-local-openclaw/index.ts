@@ -31,6 +31,18 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
+import {
+  type AgentMessage as CEAgentMessage,
+  type PendingInjection,
+  deduplicateHits as ceDeduplicateHits,
+  formatMemoryBlock,
+  appendMemoryToMessage,
+  removeExistingMemoryBlock,
+  messageHasMemoryBlock,
+  getTextFromMessage,
+  insertSyntheticAssistantEntry,
+  findTargetAssistantEntry,
+} from "./src/context-engine";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -320,6 +332,214 @@ const memosLocalPlugin = {
       api.logger.info("memos-local: allowPromptInjection=true, auto-recall enabled");
     }
 
+    // ─── Context Engine: inject memories into assistant messages ───
+    // Memories are wrapped in <relevant-memories> tags which OpenClaw's UI
+    // automatically strips from assistant messages, keeping the chat clean.
+    // Persisted to the session file so the prompt prefix stays stable for KV cache.
+
+    let pendingInjection: PendingInjection | null = null;
+
+    try {
+      api.registerContextEngine("memos-local-openclaw-plugin", () => ({
+        info: {
+          id: "memos-local-openclaw-plugin",
+          name: "MemOS Local Memory Context Engine",
+          version: "1.0.0",
+        },
+
+        async ingest() {
+          return { ingested: false };
+        },
+
+        async assemble(params: {
+          sessionId: string;
+          sessionKey?: string;
+          messages: CEAgentMessage[];
+          tokenBudget?: number;
+          model?: string;
+          prompt?: string;
+        }) {
+          const { messages, prompt, sessionId, sessionKey } = params;
+
+          if (!allowPromptInjection || !prompt || prompt.length < 3) {
+            return { messages, estimatedTokens: 0 };
+          }
+
+          const recallT0 = performance.now();
+          try {
+            let query = prompt;
+            const senderTag = "Sender (untrusted metadata):";
+            const senderPos = query.indexOf(senderTag);
+            if (senderPos !== -1) {
+              const afterSender = query.slice(senderPos);
+              const fenceStart = afterSender.indexOf("```json");
+              const fenceEnd = fenceStart >= 0 ? afterSender.indexOf("```\n", fenceStart + 7) : -1;
+              if (fenceEnd > 0) {
+                query = afterSender.slice(fenceEnd + 4).replace(/^\s*\n/, "").trim();
+              } else {
+                const firstDblNl = afterSender.indexOf("\n\n");
+                if (firstDblNl > 0) {
+                  query = afterSender.slice(firstDblNl + 2).trim();
+                }
+              }
+            }
+            query = stripInboundMetadata(query).replace(/<[^>]+>/g, "").trim();
+
+            if (query.length < 2) {
+              return { messages, estimatedTokens: 0 };
+            }
+
+            ctx.log.debug(`context-engine assemble: query="${query.slice(0, 80)}"`);
+
+            const recallOwner = [`agent:${currentAgentId}`, "public"];
+            const result = await engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwner });
+            const filteredHits = ceDeduplicateHits(
+              result.hits.filter((h: SearchHit) => h.score >= 0.5),
+            );
+
+            if (filteredHits.length === 0) {
+              ctx.log.debug("context-engine assemble: no memory hits");
+              return { messages, estimatedTokens: 0 };
+            }
+
+            const memoryBlock = formatMemoryBlock(filteredHits);
+            const cloned: CEAgentMessage[] = messages.map((m) => structuredClone(m));
+
+            let lastAssistantIdx = -1;
+            for (let i = cloned.length - 1; i >= 0; i--) {
+              if (cloned[i].role === "assistant") {
+                lastAssistantIdx = i;
+                break;
+              }
+            }
+
+            const sk = sessionKey ?? sessionId;
+
+            if (lastAssistantIdx < 0) {
+              const syntheticAssistant: CEAgentMessage = {
+                role: "assistant",
+                content: [{ type: "text", text: memoryBlock }],
+                timestamp: Date.now(),
+                stopReason: "end_turn",
+                usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+              };
+              pendingInjection = { sessionKey: sk, memoryBlock, isSynthetic: true };
+              ctx.log.info(`context-engine assemble: first turn, injecting synthetic assistant (${filteredHits.length} memories)`);
+              return { messages: [...cloned, syntheticAssistant], estimatedTokens: 0 };
+            }
+
+            removeExistingMemoryBlock(cloned[lastAssistantIdx]);
+            appendMemoryToMessage(cloned[lastAssistantIdx], memoryBlock);
+            pendingInjection = { sessionKey: sk, memoryBlock, isSynthetic: false };
+
+            const dur = performance.now() - recallT0;
+            ctx.log.info(`context-engine assemble: injected ${filteredHits.length} memories into assistant[${lastAssistantIdx}] (${dur.toFixed(0)}ms)`);
+            return { messages: cloned, estimatedTokens: 0 };
+          } catch (err) {
+            ctx.log.warn(`context-engine assemble failed: ${err}`);
+            return { messages, estimatedTokens: 0 };
+          }
+        },
+
+        async afterTurn() {},
+
+        async compact(params: any) {
+          try {
+            const { delegateCompactionToRuntime } = await import("openclaw/plugin-sdk");
+            return await delegateCompactionToRuntime(params);
+          } catch {
+            return { ok: true, compacted: false, reason: "delegateCompactionToRuntime not available" };
+          }
+        },
+
+        async maintain(params: {
+          sessionId: string;
+          sessionKey?: string;
+          sessionFile: string;
+          runtimeContext?: { rewriteTranscriptEntries?: (req: any) => Promise<any> };
+        }) {
+          const noChange = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+
+          if (!pendingInjection) return noChange;
+
+          const sk = params.sessionKey ?? params.sessionId;
+          if (pendingInjection.sessionKey !== sk) {
+            pendingInjection = null;
+            return { ...noChange, reason: "session mismatch" };
+          }
+
+          try {
+            if (pendingInjection.isSynthetic) {
+              // First turn: INSERT synthetic assistant before existing entries
+              const { SessionManager } = await import("@mariozechner/pi-coding-agent");
+              const sm = SessionManager.open(params.sessionFile);
+              const ok = insertSyntheticAssistantEntry(sm, pendingInjection.memoryBlock);
+              pendingInjection = null;
+              if (ok) {
+                ctx.log.info("context-engine maintain: persisted synthetic assistant message");
+                return { changed: true, bytesFreed: 0, rewrittenEntries: 1 };
+              }
+              return { ...noChange, reason: "empty branch, could not insert synthetic" };
+            }
+
+            // Subsequent turns: REPLACE last assistant entry with memory-injected version
+            if (!params.runtimeContext?.rewriteTranscriptEntries) {
+              pendingInjection = null;
+              return { ...noChange, reason: "rewriteTranscriptEntries not available" };
+            }
+
+            const { SessionManager } = await import("@mariozechner/pi-coding-agent");
+            const sm = SessionManager.open(params.sessionFile);
+            const branch = sm.getBranch();
+            const targetEntry = findTargetAssistantEntry(branch);
+
+            if (!targetEntry) {
+              pendingInjection = null;
+              return { ...noChange, reason: "no target assistant entry found" };
+            }
+
+            const modifiedMessage = structuredClone(targetEntry.message!);
+            removeExistingMemoryBlock(modifiedMessage as CEAgentMessage);
+            appendMemoryToMessage(modifiedMessage as CEAgentMessage, pendingInjection.memoryBlock);
+
+            const result = await params.runtimeContext.rewriteTranscriptEntries({
+              replacements: [{ entryId: targetEntry.id, message: modifiedMessage }],
+            });
+
+            ctx.log.info(`context-engine maintain: persisted memory to assistant entry ${targetEntry.id}`);
+            pendingInjection = null;
+            return result;
+          } catch (err) {
+            ctx.log.warn(`context-engine maintain failed: ${err}`);
+            pendingInjection = null;
+            return { ...noChange, reason: String(err) };
+          }
+        },
+      }));
+
+      ctx.log.info("memos-local: registered context engine 'memos-local-openclaw-plugin'");
+    } catch (err) {
+      ctx.log.warn(`memos-local: context engine registration failed (${err}), memory injection will use before_prompt_build fallback`);
+    }
+
+    // ─── Memory Prompt Section: static instructions for the LLM ───
+    try {
+      api.registerMemoryPromptSection(() => [
+        "## Memory System",
+        "",
+        "Assistant messages in this conversation may contain <relevant-memories> blocks.",
+        "These are NOT part of the assistant's original response.",
+        "They contain background knowledge and memories relevant to the next user message,",
+        "injected by the user's local memory system before each query.",
+        "Use them as context to better understand and respond to the following user message.",
+        "Do not mention, quote, or repeat these memory blocks in your replies.",
+        "",
+      ]);
+      ctx.log.info("memos-local: registered memory prompt section");
+    } catch (err) {
+      ctx.log.warn(`memos-local: registerMemoryPromptSection failed: ${err}`);
+    }
+
     const trackTool = (toolName: string, fn: (...args: any[]) => Promise<any>) =>
       async (...args: any[]) => {
         const t0 = performance.now();
@@ -340,25 +560,11 @@ const memosLocalPlugin = {
           try {
             let outputText: string;
             const det = result?.details;
-            if (det && Array.isArray(det.candidates)) {
+            if (det && (Array.isArray(det.candidates) || Array.isArray(det.filtered))) {
               outputText = JSON.stringify({
-                candidates: det.candidates,
-                filtered: det.hits ?? det.filtered ?? [],
-              });
-            } else if (det && det.local && det.hub) {
-              const localHits = det.local?.hits ?? [];
-              const hubHits = (det.hub?.hits ?? []).map((h: any) => ({
-                score: h.score ?? 0,
-                role: h.source?.role ?? h.role ?? "assistant",
-                summary: h.summary ?? "",
-                original_excerpt: h.excerpt ?? h.summary ?? "",
-                origin: "hub-remote",
-                ownerName: h.ownerName ?? "",
-                groupName: h.groupName ?? "",
-              }));
-              outputText = JSON.stringify({
-                candidates: [...localHits, ...hubHits],
-                filtered: [...localHits, ...hubHits],
+                candidates: det.candidates ?? [],
+                hubCandidates: det.hubCandidates ?? [],
+                filtered: det.filtered ?? det.hits ?? [],
               });
             } else {
               outputText = result?.content?.[0]?.text ?? JSON.stringify(result ?? "");
@@ -432,7 +638,8 @@ const memosLocalPlugin = {
           updatedAt: now,
         });
       } else if (ctx.config.sharing?.enabled && hubClient.userId) {
-        store.upsertTeamSharedChunk(chunk.id, { hubMemoryId: memoryId, visibility, groupId });
+        const conn = store.getClientHubConnection();
+        store.upsertTeamSharedChunk(chunk.id, { hubMemoryId: memoryId, visibility, groupId, hubInstanceId: conn?.hubInstanceId ?? "" });
       }
 
       return { memoryId, visibility, groupId };
@@ -474,7 +681,7 @@ const memosLocalPlugin = {
           hubAddress: Type.Optional(Type.String({ description: "Optional Hub address override for group/all search." })),
           userToken: Type.Optional(Type.String({ description: "Optional Hub bearer token override for group/all search." })),
         }),
-        execute: trackTool("memory_search", async (_toolCallId: any, params: any) => {
+        execute: trackTool("memory_search", async (_toolCallId: any, params: any, context?: any) => {
           const {
             query,
             scope: rawScope,
@@ -500,14 +707,26 @@ const memosLocalPlugin = {
           }
           const searchLimit = typeof maxResults === "number" ? Math.max(1, Math.min(20, Math.round(maxResults))) : 10;
 
-          const agentId = currentAgentId;
-          const ownerFilter = [getCurrentOwner(), "public"];
+          const agentId = context?.agentId ?? currentAgentId;
+          const ownerFilter = [`agent:${agentId}`, "public"];
           const effectiveMaxResults = searchLimit;
           ctx.log.debug(`memory_search query="${query}" maxResults=${effectiveMaxResults} minScore=${minScore ?? 0.45} role=${role ?? "all"} owner=agent:${agentId}`);
-          const result = await engine.search({ query, maxResults: effectiveMaxResults, minScore, role, ownerFilter });
-          ctx.log.debug(`memory_search raw candidates: ${result.hits.length}`);
 
-          const rawCandidates = result.hits.map((h) => ({
+          // ── Phase 1: Local search ∥ Hub search (parallel) ──
+          const localSearchP = engine.search({ query, maxResults: effectiveMaxResults, minScore, role, ownerFilter });
+          const hubSearchP = searchScope !== "local"
+            ? hubSearchMemories(store, ctx, { query, maxResults: searchLimit, scope: searchScope as any, hubAddress, userToken })
+                .catch(() => ({ hits: [] as any[], meta: { totalCandidates: 0, searchedGroups: [] as string[], includedPublic: searchScope === "all" } }))
+            : Promise.resolve(null);
+
+          const [result, hubResult] = await Promise.all([localSearchP, hubSearchP]);
+          ctx.log.debug(`memory_search raw candidates: local=${result.hits.length}, hub=${hubResult?.hits?.length ?? 0}`);
+
+          // Split local results: pure-local vs hub-memory (Hub role's hub_memories mixed in by RecallEngine)
+          const localHits = result.hits.filter((h) => h.origin !== "hub-memory");
+          const hubLocalHits = result.hits.filter((h) => h.origin === "hub-memory");
+
+          const rawLocalCandidates = localHits.map((h) => ({
             chunkId: h.ref.chunkId,
             role: h.source.role,
             score: h.score,
@@ -516,208 +735,156 @@ const memosLocalPlugin = {
             origin: h.origin || "local",
           }));
 
-          if (result.hits.length === 0 && searchScope === "local") {
+          // Hub remote candidates (from HTTP call) + hub-memory candidates (from RecallEngine for Hub role)
+          const hubRemoteHits = hubResult?.hits ?? [];
+          const rawHubCandidates = [
+            ...hubLocalHits.map((h) => ({
+              score: h.score,
+              role: h.source.role,
+              summary: h.summary,
+              original_excerpt: (h.original_excerpt ?? "").slice(0, 200),
+              origin: "hub-memory" as const,
+              ownerName: "",
+              groupName: "",
+            })),
+            ...hubRemoteHits.map((h: any) => ({
+              score: h.score ?? 0,
+              role: h.source?.role ?? h.role ?? "assistant",
+              summary: h.summary ?? "",
+              original_excerpt: (h.excerpt ?? h.summary ?? "").slice(0, 200),
+              origin: "hub-remote" as const,
+              ownerName: h.ownerName ?? "",
+              groupName: h.groupName ?? "",
+            })),
+          ];
+
+          if (localHits.length === 0 && rawHubCandidates.length === 0) {
             return {
               content: [{ type: "text", text: result.meta.note ?? "No relevant memories found." }],
-              details: { candidates: [], meta: result.meta },
+              details: { candidates: rawLocalCandidates, hubCandidates: [], filtered: [], meta: result.meta },
             };
           }
 
-          let filteredHits = result.hits;
+          // ── Phase 2: Merge all candidates → single LLM filter ──
+          const allHitsForFilter = [...localHits, ...hubLocalHits];
+          const hubRemoteForFilter = hubRemoteHits;
+          const mergedCandidates = [
+            ...allHitsForFilter.map((h, i) => ({
+              index: i + 1,
+              role: h.source.role,
+              content: (h.original_excerpt ?? "").slice(0, 300),
+              time: h.source.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
+            })),
+            ...hubRemoteForFilter.map((h: any, i: number) => ({
+              index: allHitsForFilter.length + i + 1,
+              role: (h.source?.role || "assistant") as string,
+              content: (h.summary || h.excerpt || "").slice(0, 300),
+              time: h.source?.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
+            })),
+          ];
+
+          let filteredLocalHits = allHitsForFilter;
+          let filteredHubRemoteHits = hubRemoteForFilter;
           let sufficient = false;
 
-          const candidates = result.hits.map((h, i) => ({
-            index: i + 1,
-            role: h.source.role,
-            content: (h.original_excerpt ?? "").slice(0, 300),
-            time: h.source.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
-          }));
-
-          const filterResult = await summarizer.filterRelevant(query, candidates);
-          if (filterResult !== null) {
-            sufficient = filterResult.sufficient;
-            if (filterResult.relevant.length > 0) {
-              const indexSet = new Set(filterResult.relevant);
-              filteredHits = result.hits.filter((_, i) => indexSet.has(i + 1));
-              ctx.log.debug(`memory_search LLM filter: ${result.hits.length} → ${filteredHits.length} hits, sufficient=${sufficient}`);
-            } else if (searchScope === "local") {
-              return {
-                content: [{ type: "text", text: "No relevant memories found for this query." }],
-                details: { candidates: rawCandidates, filtered: [], meta: result.meta },
-              };
-            } else {
-              filteredHits = [];
+          if (mergedCandidates.length > 0) {
+            const filterResult = await summarizer.filterRelevant(query, mergedCandidates);
+            if (filterResult !== null) {
+              sufficient = filterResult.sufficient;
+              if (filterResult.relevant.length > 0) {
+                const relevantSet = new Set(filterResult.relevant);
+                const hubStartIdx = allHitsForFilter.length + 1;
+                filteredLocalHits = allHitsForFilter.filter((_, i) => relevantSet.has(i + 1));
+                filteredHubRemoteHits = hubRemoteForFilter.filter((_: any, i: number) => relevantSet.has(hubStartIdx + i));
+                ctx.log.debug(`memory_search LLM filter: merged ${mergedCandidates.length} → local ${filteredLocalHits.length}, hub ${filteredHubRemoteHits.length}`);
+              } else {
+                filteredLocalHits = [];
+                filteredHubRemoteHits = [];
+              }
             }
           }
 
-          const beforeDedup = filteredHits.length;
-          filteredHits = deduplicateHits(filteredHits);
-          ctx.log.debug(`memory_search dedup: ${beforeDedup} → ${filteredHits.length}`);
+          const beforeDedup = filteredLocalHits.length;
+          filteredLocalHits = deduplicateHits(filteredLocalHits);
+          ctx.log.debug(`memory_search dedup: ${beforeDedup} → ${filteredLocalHits.length}`);
 
-          const localDetailsHits = filteredHits.map((h) => {
-            let effectiveTaskId = h.taskId;
-            if (effectiveTaskId) {
-              const t = store.getTask(effectiveTaskId);
-              if (t && t.status === "skipped") effectiveTaskId = null;
-            }
-            return {
-              ref: h.ref,
-              chunkId: h.ref.chunkId,
-              taskId: effectiveTaskId,
-              skillId: h.skillId,
-              role: h.source.role,
-              score: h.score,
-              summary: h.summary,
-              origin: h.origin || "local",
-            };
-          });
-
-          if (searchScope !== "local") {
-            const hub = await hubSearchMemories(store, ctx, { query, maxResults: searchLimit, scope: searchScope as any, hubAddress, userToken }).catch(() => ({ hits: [], meta: { totalCandidates: 0, searchedGroups: [], includedPublic: searchScope === "all" } }));
-
-            let filteredHubHits = hub.hits;
-            if (hub.hits.length > 0) {
-              const hubCandidates = hub.hits.map((h, i) => ({
-                index: filteredHits.length + i + 1,
-                role: (h.source?.role || "assistant") as string,
-                content: (h.summary || h.excerpt || "").slice(0, 300),
-                time: h.source?.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
-              }));
-              const localCandidatesForMerge = filteredHits.map((h, i) => ({
-                index: i + 1,
-                role: h.source.role,
-                content: (h.original_excerpt ?? "").slice(0, 300),
-                time: h.source.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
-              }));
-              const mergedCandidates = [...localCandidatesForMerge, ...hubCandidates];
-              const mergedFilter = await summarizer.filterRelevant(query, mergedCandidates);
-              if (mergedFilter !== null && mergedFilter.relevant.length > 0) {
-                const relevantSet = new Set(mergedFilter.relevant);
-                const hubStartIdx = filteredHits.length + 1;
-                filteredHits = filteredHits.filter((_, i) => relevantSet.has(i + 1));
-                filteredHubHits = hub.hits.filter((_, i) => relevantSet.has(hubStartIdx + i));
-                ctx.log.debug(`memory_search LLM filter (merged): local ${localCandidatesForMerge.length}→${filteredHits.length}, hub ${hub.hits.length}→${filteredHubHits.length}`);
-              }
-            }
-
-            const originLabel = (h: SearchHit) => {
-              if (h.origin === "hub-memory") return " [团队缓存]";
-              if (h.origin === "local-shared") return " [本机共享]";
-              return "";
-            };
-            const localText = filteredHits.length > 0
-              ? filteredHits.map((h, i) => {
-                  const excerpt = h.original_excerpt.length > 220 ? h.original_excerpt.slice(0, 217) + "..." : h.original_excerpt;
-                  return `${i + 1}. [${h.source.role}]${originLabel(h)} ${excerpt}`;
-                }).join("\n")
-              : "(none)";
-            const hubText = filteredHubHits.length > 0
-              ? filteredHubHits.map((h, i) => `${i + 1}. [${h.ownerName}] [团队] ${h.summary}${h.groupName ? ` (${h.groupName})` : ""}`).join("\n")
-              : "(none)";
-
-            const localDetailsFiltered = filteredHits.map((h) => {
-              let effectiveTaskId = h.taskId;
-              if (effectiveTaskId) {
-                const t = store.getTask(effectiveTaskId);
-                if (t && t.status === "skipped") effectiveTaskId = null;
-              }
-              return {
-                ref: h.ref,
-                chunkId: h.ref.chunkId,
-                taskId: effectiveTaskId,
-                skillId: h.skillId,
-                role: h.source.role,
-                score: h.score,
-                summary: h.summary,
-                origin: h.origin,
-              };
-            });
-
-            return {
-              content: [{
-                type: "text",
-                text: `Local results:\n${localText}\n\nHub results:\n${hubText}`,
-              }],
-              details: {
-                local: { hits: localDetailsFiltered, meta: result.meta },
-                hub: { ...hub, hits: filteredHubHits },
-              },
-            };
-          }
-
-          if (filteredHits.length === 0) {
+          if (filteredLocalHits.length === 0 && filteredHubRemoteHits.length === 0) {
             return {
               content: [{ type: "text", text: "No relevant memories found for this query." }],
-              details: { candidates: rawCandidates, filtered: [], meta: result.meta },
+              details: { candidates: rawLocalCandidates, hubCandidates: rawHubCandidates, filtered: [], meta: result.meta },
             };
           }
 
+          // ── Phase 3: Build response text ──
           const originTag = (o?: string) => {
             if (o === "local-shared") return " [本机共享]";
             if (o === "hub-memory") return " [团队缓存]";
             if (o === "hub-remote") return " [团队]";
             return "";
           };
-          const lines = filteredHits.map((h, i) => {
-            const excerpt = h.original_excerpt;
-            const parts = [`${i + 1}. [${h.source.role}]${originTag(h.origin)}`];
-            if (excerpt) parts.push(`   ${excerpt}`);
+
+          const localLines = filteredLocalHits.map((h, i) => {
+            const excerpt = h.original_excerpt.length > 220 ? h.original_excerpt.slice(0, 217) + "..." : h.original_excerpt;
+            const parts = [`${i + 1}. [${h.source.role}]${originTag(h.origin)} ${excerpt}`];
             parts.push(`   chunkId="${h.ref.chunkId}"`);
             if (h.taskId) {
               const task = store.getTask(h.taskId);
-              if (task && task.status !== "skipped") {
-                parts.push(`   task_id="${h.taskId}"`);
-              }
+              if (task && task.status !== "skipped") parts.push(`   task_id="${h.taskId}"`);
             }
             return parts.join("\n");
           });
 
+          const hubLines = filteredHubRemoteHits.map((h: any, i: number) =>
+            `${i + 1}. [${h.ownerName ?? "team"}] [团队] ${h.summary ?? ""}${h.groupName ? ` (${h.groupName})` : ""}`
+          );
+
           let tipsText = "";
           if (!sufficient) {
-            const hasTask = filteredHits.some((h) => {
+            const hasTask = filteredLocalHits.some((h) => {
               if (!h.taskId) return false;
               const t = store.getTask(h.taskId);
               return t && t.status !== "skipped";
             });
-
             const tips: string[] = [];
             if (hasTask) {
               tips.push("→ call task_summary(taskId) for full task context");
               tips.push("→ call skill_get(taskId=...) if the task has a proven experience guide");
             }
             tips.push("→ call memory_timeline(chunkId) to expand surrounding conversation");
-
-            if (tips.length > 0) {
-              tipsText = "\n\nThese memories may not be enough. You can fetch more context:\n" + tips.join("\n");
-            }
+            if (tips.length > 0) tipsText = "\n\nThese memories may not be enough. You can fetch more context:\n" + tips.join("\n");
           }
 
+          const localText = localLines.length > 0 ? localLines.join("\n\n") : "(none)";
+          const hubText = hubLines.length > 0 ? hubLines.join("\n") : "(none)";
+          const totalFiltered = filteredLocalHits.length + filteredHubRemoteHits.length;
+          const responseText = filteredHubRemoteHits.length > 0
+            ? `Found ${totalFiltered} relevant memories:\n\nLocal results:\n${localText}\n\nHub results:\n${hubText}${tipsText}`
+            : `Found ${totalFiltered} relevant memories:\n\n${localText}${tipsText}`;
+
+          const filteredDetails = [
+            ...filteredLocalHits.map((h) => {
+              let effectiveTaskId = h.taskId;
+              if (effectiveTaskId) { const t = store.getTask(effectiveTaskId); if (t && t.status === "skipped") effectiveTaskId = null; }
+              return {
+                chunkId: h.ref.chunkId, taskId: effectiveTaskId, skillId: h.skillId,
+                role: h.source.role, score: h.score, summary: h.summary,
+                original_excerpt: (h.original_excerpt ?? "").slice(0, 200), origin: h.origin || "local",
+              };
+            }),
+            ...filteredHubRemoteHits.map((h: any) => ({
+              chunkId: "", taskId: null, skillId: null,
+              role: h.source?.role ?? h.role ?? "assistant", score: h.score ?? 0,
+              summary: h.summary ?? "", original_excerpt: (h.excerpt ?? h.summary ?? "").slice(0, 200),
+              origin: "hub-remote", ownerName: h.ownerName ?? "", groupName: h.groupName ?? "",
+            })),
+          ];
+
           return {
-            content: [
-              {
-                type: "text",
-                text: `Found ${filteredHits.length} relevant memories:\n\n${lines.join("\n\n")}${tipsText}`,
-              },
-            ],
+            content: [{ type: "text", text: responseText }],
             details: {
-              candidates: rawCandidates,
-              hits: filteredHits.map((h) => {
-                let effectiveTaskId = h.taskId;
-                if (effectiveTaskId) {
-                  const t = store.getTask(effectiveTaskId);
-                  if (t && t.status === "skipped") effectiveTaskId = null;
-                }
-                return {
-                  chunkId: h.ref.chunkId,
-                  taskId: effectiveTaskId,
-                  skillId: h.skillId,
-                  role: h.source.role,
-                  score: h.score,
-                  summary: h.summary,
-                  original_excerpt: (h.original_excerpt ?? "").slice(0, 200),
-                  origin: h.origin || "local",
-                };
-              }),
+              candidates: rawLocalCandidates,
+              hubCandidates: rawHubCandidates,
+              filtered: filteredDetails,
               meta: result.meta,
             },
           };
@@ -739,14 +906,15 @@ const memosLocalPlugin = {
           chunkId: Type.String({ description: "The chunkId from a memory_search hit" }),
           window: Type.Optional(Type.Number({ description: "Context window ±N (default 2)" })),
         }),
-        execute: trackTool("memory_timeline", async (_toolCallId: any, params: any) => {
-          ctx.log.debug(`memory_timeline called (agent=${currentAgentId})`);
+        execute: trackTool("memory_timeline", async (_toolCallId: any, params: any, context?: any) => {
+          const agentId = context?.agentId ?? currentAgentId;
+          ctx.log.debug(`memory_timeline called (agent=${agentId})`);
           const { chunkId, window: win } = params as {
             chunkId: string;
             window?: number;
           };
 
-          const ownerFilter = [`agent:${currentAgentId}`, "public"];
+          const ownerFilter = [`agent:${agentId}`, "public"];
           const anchorChunk = store.getChunkForOwners(chunkId, ownerFilter);
           if (!anchorChunk) {
             return {
@@ -804,7 +972,8 @@ const memosLocalPlugin = {
           const { chunkId, maxChars } = params as { chunkId: string; maxChars?: number };
           const limit = Math.min(maxChars ?? DEFAULTS.getMaxCharsDefault, DEFAULTS.getMaxCharsMax);
 
-          const ownerFilter = [`agent:${currentAgentId}`, "public"];
+          const agentId = context?.agentId ?? currentAgentId;
+          const ownerFilter = [`agent:${agentId}`, "public"];
           const chunk = store.getChunkForOwners(chunkId, ownerFilter);
           if (!chunk) {
             return {
@@ -978,7 +1147,8 @@ const memosLocalPlugin = {
             }),
           }) as any;
 
-          store.markTaskShared(task.id, hubTaskId, chunks.length, visibility, groupId);
+          const conn = store.getClientHubConnection();
+          store.markTaskShared(task.id, hubTaskId, chunks.length, visibility, groupId, conn?.hubInstanceId ?? "");
 
           return {
             content: [{ type: "text", text: `Shared task "${task.title}" with ${chunks.length} chunks to the hub.` }],
@@ -1451,9 +1621,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         name: "memory_share",
         label: "Share Memory",
         description:
-          "Share an existing memory either with local OpenClaw agents, to the Hub team, or to both targets. " +
-          "Use this only for an existing chunkId. Use target='agents' for local multi-agent sharing, target='hub' for team sharing, or target='both' for both. " +
-          "If you need to create a brand new shared memory instead of exposing an existing one, use memory_write_public.",
+          "Share an existing stored memory (requires a real chunkId from the database) to the Hub team, or to both targets. " +
+          "If you want to share content from the conversation, please first retrieve the memories related to that content to obtain the correct chunkId(s), then proceed with the sharing. " +
+          "target='agents' (default): when retrieved memories would clearly help other agents in the same OpenClaw workspace, you may share proactively without asking the user. " +
+          "target='hub' or 'both': do not share to the team Hub without explicit user consent when the content would benefit collaborators—explain briefly, ask first, and only call hub/both after they agree (Hub must be configured). " +
+          "To create a brand-new shared note with no existing chunk, use memory_write_public.",
         parameters: Type.Object({
           chunkId: Type.String({ description: "Existing local memory chunk ID to share" }),
           target: Type.Optional(Type.String({ description: "Share target: 'agents' (default), 'hub', or 'both'" })),
@@ -1635,16 +1807,32 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
               };
             }
 
-            const localText = localHits.length > 0
-              ? localHits.map((h, i) => `${i + 1}. [${h.name}] ${h.description.slice(0, 150)}${h.visibility === "public" ? " (shared to local agents)" : ""}`).join("\n")
+            let filteredLocal = localHits;
+            let filteredHub = hub.hits;
+            if (localHits.length > 0 && hub.hits.length > 0) {
+              const allCandidates = [
+                ...localHits.map((h, i) => ({ index: i + 1, role: "skill" as const, content: `[${h.name}] ${h.description.slice(0, 200)}` })),
+                ...hub.hits.map((h, i) => ({ index: localHits.length + i + 1, role: "skill" as const, content: `[${h.name}] ${h.description.slice(0, 200)}` })),
+              ];
+              const mergedFilter = await summarizer.filterRelevant(skillQuery, allCandidates);
+              if (mergedFilter !== null && mergedFilter.relevant.length > 0) {
+                const relevantSet = new Set(mergedFilter.relevant);
+                filteredLocal = localHits.filter((_, i) => relevantSet.has(i + 1));
+                filteredHub = hub.hits.filter((_, i) => relevantSet.has(localHits.length + i + 1));
+                ctx.log.debug(`skill_search LLM filter (merged): local ${localHits.length}→${filteredLocal.length}, hub ${hub.hits.length}→${filteredHub.length}`);
+              }
+            }
+
+            const localText = filteredLocal.length > 0
+              ? filteredLocal.map((h, i) => `${i + 1}. [${h.name}] ${h.description.slice(0, 150)}${h.visibility === "public" ? " (shared to local agents)" : ""}`).join("\n")
               : "(none)";
-            const hubText = hub.hits.length > 0
-              ? hub.hits.map((h, i) => `${i + 1}. [${h.name}] ${h.description.slice(0, 150)} (${h.visibility}${h.groupName ? `:${h.groupName}` : ""}, owner=${h.ownerName})`).join("\n")
+            const hubText = filteredHub.length > 0
+              ? filteredHub.map((h, i) => `${i + 1}. [${h.name}] ${h.description.slice(0, 150)} (${h.visibility}${h.groupName ? `:${h.groupName}` : ""}, owner=${h.ownerName})`).join("\n")
               : "(none)";
 
             return {
               content: [{ type: "text", text: `Local skills:\n${localText}\n\nHub skills:\n${hubText}` }],
-              details: { query: skillQuery, scope: rawScope, local: { hits: localHits }, hub },
+              details: { query: skillQuery, scope: rawScope, local: { hits: filteredLocal }, hub: { hits: filteredHub } },
             };
           }
 
@@ -1805,7 +1993,9 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       { name: "network_skill_pull" },
     );
 
-    // ─── Auto-recall: inject relevant memories before agent starts ───
+    // ─── Skill auto-recall: inject relevant skills before agent starts ───
+    // Memory injection is handled by the Context Engine above.
+    // This hook only handles skill auto-recall via prependContext.
 
     api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
       if (!allowPromptInjection) return {};
@@ -1813,21 +2003,18 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
       const recallAgentId = hookCtx?.agentId ?? "main";
       currentAgentId = recallAgentId;
-      const recallOwnerFilter = [`agent:${recallAgentId}`, "public"];
-      ctx.log.info(`auto-recall: agentId=${recallAgentId} (from hookCtx)`);
+
+      const skillAutoRecall = ctx.config.skillEvolution?.autoRecallSkills ?? DEFAULTS.skillAutoRecall;
+      if (!skillAutoRecall) return;
 
       const recallT0 = performance.now();
-      let recallQuery = "";
 
       try {
-        const rawPrompt = event.prompt;
-        ctx.log.debug(`auto-recall: rawPrompt="${rawPrompt.slice(0, 300)}"`);
-
-        let query = rawPrompt;
+        let query = event.prompt;
         const senderTag = "Sender (untrusted metadata):";
-        const senderPos = rawPrompt.indexOf(senderTag);
+        const senderPos = query.indexOf(senderTag);
         if (senderPos !== -1) {
-          const afterSender = rawPrompt.slice(senderPos);
+          const afterSender = query.slice(senderPos);
           const fenceStart = afterSender.indexOf("```json");
           const fenceEnd = fenceStart >= 0 ? afterSender.indexOf("```\n", fenceStart + 7) : -1;
           if (fenceEnd > 0) {
@@ -1839,283 +2026,48 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             }
           }
         }
-        query = stripInboundMetadata(query);
-        query = query.replace(/<[^>]+>/g, "").trim();
-        recallQuery = query;
+        query = stripInboundMetadata(query).replace(/<[^>]+>/g, "").trim();
+        if (query.length < 2) return;
 
-        if (query.length < 2) {
-          ctx.log.debug("auto-recall: extracted query too short, skipping");
-          return;
-        }
-        ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
-
-        const result = await engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwnerFilter });
-
-        // Hub fallback helper: search team shared memories when local search has no relevant results
-        const hubFallback = async (): Promise<SearchHit[]> => {
-          if (!ctx.config?.sharing?.enabled) return [];
-          try {
-            const hubResult = await hubSearchMemories(store, ctx, { query, maxResults: 10, scope: "all" });
-            if (hubResult.hits.length === 0) return [];
-            ctx.log.debug(`auto-recall: hub fallback returned ${hubResult.hits.length} hit(s)`);
-            return hubResult.hits.map((h) => ({
-              summary: h.summary,
-              original_excerpt: h.excerpt || h.summary,
-              ref: { sessionKey: "", chunkId: h.remoteHitId, turnId: "", seq: 0 },
-              score: 0.9,
-              taskId: null,
-              skillId: null,
-              origin: "hub-remote" as const,
-              source: { ts: h.source.ts, role: h.source.role, sessionKey: "" },
-            }));
-          } catch (err) {
-            ctx.log.debug(`auto-recall: hub fallback failed (${err})`);
-            return [];
-          }
-        };
-
-        if (result.hits.length === 0) {
-          // Local found nothing — try hub before giving up
-          const hubHits = await hubFallback();
-          if (hubHits.length > 0) {
-            result.hits.push(...hubHits);
-            ctx.log.debug(`auto-recall: local empty, using ${hubHits.length} hub hit(s)`);
-          }
-        }
-        if (result.hits.length === 0) {
-          ctx.log.debug("auto-recall: no memory candidates found");
-          const dur = performance.now() - recallT0;
-          store.recordToolCall("memory_search", dur, true);
-          store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({ candidates: [], filtered: [] }), dur, true);
-
-          // Even without memory hits, try skill recall
-          const skillAutoRecallEarly = ctx.config.skillEvolution?.autoRecallSkills ?? DEFAULTS.skillAutoRecall;
-          if (skillAutoRecallEarly) {
-            try {
-              const skillLimit = ctx.config.skillEvolution?.autoRecallSkillLimit ?? DEFAULTS.skillAutoRecallLimit;
-              const skillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
-              const topSkills = skillHits.slice(0, skillLimit);
-              if (topSkills.length > 0) {
-                const skillLines = topSkills.map((sc, i) => {
-                  const manifest = skillInstaller.getCompanionManifest(sc.skillId);
-                  let badge = "";
-                  if (manifest?.installed) badge = " [installed]";
-                  else if (manifest?.installMode === "install_recommended") badge = " [has scripts, install recommended]";
-                  else if (manifest?.hasCompanionFiles) badge = " [has companion files]";
-                  return `${i + 1}. **${sc.name}**${badge} — ${sc.description.slice(0, 200)}\n   → call \`skill_get(skillId="${sc.skillId}")\` for the full guide`;
-                });
-                const skillContext = "## Relevant skills from past experience\n\n" +
-                  "No direct memory matches were found, but these skills from past tasks may help:\n\n" +
-                  skillLines.join("\n\n") +
-                  "\n\nYou SHOULD call `skill_get` to retrieve the full guide before attempting the task.";
-                ctx.log.info(`auto-recall-skill (no-memory path): injecting ${topSkills.length} skill(s)`);
-                try { store.recordApiLog("skill_search", { type: "auto_recall_skill", query }, JSON.stringify(topSkills), dur, true); } catch { /* best-effort */ }
-                return { prependContext: skillContext };
-              }
-            } catch (err) {
-              ctx.log.debug(`auto-recall-skill (no-memory path): failed: ${err}`);
-            }
-          }
-
-          if (query.length > 50) {
-            const noRecallHint =
-              "## Memory system — ACTION REQUIRED\n\n" +
-              "Auto-recall found no results for a long query. " +
-              "You MUST call `memory_search` now with a shortened query (2-5 key words) before answering. " +
-              "Do NOT skip this step. Do NOT answer without searching first.";
-            return { prependContext: noRecallHint };
-          }
-          return;
-        }
-
-        const candidates = result.hits.map((h, i) => ({
-          index: i + 1,
-          role: h.source.role,
-          content: (h.original_excerpt ?? "").slice(0, 300),
-          time: h.source.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
-        }));
-
-        let filteredHits = result.hits;
-        let sufficient = false;
-
-        const filterResult = await summarizer.filterRelevant(query, candidates);
-        if (filterResult !== null) {
-          sufficient = filterResult.sufficient;
-          if (filterResult.relevant.length > 0) {
-            const indexSet = new Set(filterResult.relevant);
-            filteredHits = result.hits.filter((_, i) => indexSet.has(i + 1));
-          } else {
-            ctx.log.debug("auto-recall: LLM filter returned no relevant local hits, trying hub fallback");
-            const hubHits = await hubFallback();
-            if (hubHits.length > 0) {
-              ctx.log.debug(`auto-recall: hub fallback provided ${hubHits.length} hit(s) after local filter yielded 0`);
-              filteredHits = hubHits;
-            } else {
-              const dur = performance.now() - recallT0;
-              store.recordToolCall("memory_search", dur, true);
-              store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
-                candidates: result.hits.map(h => ({ score: h.score, role: h.source.role, summary: h.summary, content: h.original_excerpt, origin: h.origin || "local" })),
-                filtered: []
-              }), dur, true);
-              if (query.length > 50) {
-                const noRecallHint =
-                  "## Memory system — ACTION REQUIRED\n\n" +
-                  "Auto-recall found no relevant results for a long query. " +
-                  "You MUST call `memory_search` now with a shortened query (2-5 key words) before answering. " +
-                  "Do NOT skip this step. Do NOT answer without searching first.";
-                return { prependContext: noRecallHint };
-              }
-              return;
-            }
-          }
-        }
-
-        if (!sufficient && filteredHits.length > 0 && ctx.config?.sharing?.enabled) {
-          const hubSupp = await hubFallback();
-          if (hubSupp.length > 0) {
-            ctx.log.debug(`auto-recall: local insufficient, supplementing with ${hubSupp.length} hub hit(s)`);
-            filteredHits.push(...hubSupp);
-          }
-        }
-
-        const beforeDedup = filteredHits.length;
-        filteredHits = deduplicateHits(filteredHits);
-        ctx.log.debug(`auto-recall: ${result.hits.length} → ${beforeDedup} relevant → ${filteredHits.length} after dedup, sufficient=${sufficient}`);
-
-        const lines = filteredHits.map((h, i) => {
-          const excerpt = h.original_excerpt;
-          const oTag = h.origin === "local-shared" ? " [本机共享]" : h.origin === "hub-memory" ? " [团队缓存]" : "";
-          const parts: string[] = [`${i + 1}. [${h.source.role}]${oTag}`];
-          if (excerpt) parts.push(`   ${excerpt}`);
-          parts.push(`   chunkId="${h.ref.chunkId}"`);
-          if (h.taskId) {
-            const task = store.getTask(h.taskId);
-            if (task && task.status !== "skipped") {
-              parts.push(`   task_id="${h.taskId}"`);
-            }
-          }
-          return parts.join("\n");
-        });
-
-        const hasTask = filteredHits.some((h) => {
-          if (!h.taskId) return false;
-          const t = store.getTask(h.taskId);
-          return t && t.status !== "skipped";
-        });
-        const tips: string[] = [];
-        if (hasTask) {
-          tips.push("- A hit has `task_id` → call `task_summary(taskId=\"...\")` to get the full task context (steps, code, results)");
-          tips.push("- A task may have a reusable guide → call `skill_get(taskId=\"...\")` to retrieve the experience/skill");
-        }
-        tips.push("- Need more surrounding dialogue → call `memory_timeline(chunkId=\"...\")` to expand context around a hit");
-        const tipsText = "\n\nAvailable follow-up tools:\n" + tips.join("\n");
-
-        const contextParts = [
-          "## User's conversation history (from memory system)",
-          "",
-          "IMPORTANT: The following are facts from previous conversations with this user.",
-          "You MUST treat these as established knowledge and use them directly when answering.",
-          "Do NOT say you don't know or don't have information if the answer is in these memories.",
-          "",
-          lines.join("\n\n"),
-        ];
-        if (tipsText) contextParts.push(tipsText);
-
-        // ─── Skill auto-recall ───
-        const skillAutoRecall = ctx.config.skillEvolution?.autoRecallSkills ?? DEFAULTS.skillAutoRecall;
         const skillLimit = ctx.config.skillEvolution?.autoRecallSkillLimit ?? DEFAULTS.skillAutoRecallLimit;
-        let skillSection = "";
+        const skillCandidateMap = new Map<string, { name: string; description: string; skillId: string; source: string }>();
 
-        if (skillAutoRecall) {
-          try {
-            const skillCandidateMap = new Map<string, { name: string; description: string; skillId: string; source: string }>();
-
-            // Source 1: direct skill search based on user query
-            try {
-              const directSkillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
-              for (const sh of directSkillHits.slice(0, skillLimit + 2)) {
-                if (!skillCandidateMap.has(sh.skillId)) {
-                  skillCandidateMap.set(sh.skillId, { name: sh.name, description: sh.description, skillId: sh.skillId, source: "query" });
-                }
-              }
-            } catch (err) {
-              ctx.log.debug(`auto-recall-skill: direct search failed: ${err}`);
+        try {
+          const directSkillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
+          for (const sh of directSkillHits.slice(0, skillLimit + 2)) {
+            if (!skillCandidateMap.has(sh.skillId)) {
+              skillCandidateMap.set(sh.skillId, { name: sh.name, description: sh.description, skillId: sh.skillId, source: "query" });
             }
-
-            // Source 2: skills linked to tasks from memory hits
-            const taskIds = new Set<string>();
-            for (const h of filteredHits) {
-              if (h.taskId) {
-                const t = store.getTask(h.taskId);
-                if (t && t.status !== "skipped") taskIds.add(h.taskId);
-              }
-            }
-            for (const tid of taskIds) {
-              const linked = store.getSkillsByTask(tid);
-              for (const rs of linked) {
-                if (!skillCandidateMap.has(rs.skill.id)) {
-                  skillCandidateMap.set(rs.skill.id, { name: rs.skill.name, description: rs.skill.description, skillId: rs.skill.id, source: `task:${tid}` });
-                }
-              }
-            }
-
-            const skillCandidates = [...skillCandidateMap.values()].slice(0, skillLimit);
-
-            if (skillCandidates.length > 0) {
-              const skillLines = skillCandidates.map((sc, i) => {
-                const manifest = skillInstaller.getCompanionManifest(sc.skillId);
-                let badge = "";
-                if (manifest?.installed) badge = " [installed]";
-                else if (manifest?.installMode === "install_recommended") badge = " [has scripts, install recommended]";
-                else if (manifest?.hasCompanionFiles) badge = " [has companion files]";
-                const action = `call \`skill_get(skillId="${sc.skillId}")\``;
-                return `${i + 1}. **${sc.name}**${badge} — ${sc.description.slice(0, 200)}\n   → ${action}`;
-              });
-              skillSection = "\n\n## Relevant skills from past experience\n\n" +
-                "The following skills were distilled from similar previous tasks. " +
-                "You SHOULD call `skill_get` to retrieve the full guide before attempting the task.\n\n" +
-                skillLines.join("\n\n");
-
-              ctx.log.info(`auto-recall-skill: injecting ${skillCandidates.length} skill(s): ${skillCandidates.map(s => s.name).join(", ")}`);
-              try {
-                store.recordApiLog("skill_search", { type: "auto_recall_skill", query }, JSON.stringify(skillCandidates), performance.now() - recallT0, true);
-              } catch { /* best-effort */ }
-            } else {
-              ctx.log.debug("auto-recall-skill: no matching skills found");
-            }
-          } catch (err) {
-            ctx.log.debug(`auto-recall-skill: failed: ${err}`);
           }
+        } catch (err) {
+          ctx.log.debug(`auto-recall-skill: direct search failed: ${err}`);
         }
 
-        if (skillSection) contextParts.push(skillSection);
-        const context = contextParts.join("\n");
+        const skillCandidates = [...skillCandidateMap.values()].slice(0, skillLimit);
+        if (skillCandidates.length === 0) return;
 
-        const recallDur = performance.now() - recallT0;
-        store.recordToolCall("memory_search", recallDur, true);
-        store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
-          candidates: result.hits.map(h => ({ score: h.score, role: h.source.role, summary: h.summary, content: h.original_excerpt, origin: h.origin || "local" })),
-          filtered: filteredHits.map(h => ({ score: h.score, role: h.source.role, summary: h.summary, content: h.original_excerpt, origin: h.origin || "local" }))
-        }), recallDur, true);
-        telemetry.trackAutoRecall(filteredHits.length, recallDur);
+        const skillLines = skillCandidates.map((sc, i) => {
+          const manifest = skillInstaller.getCompanionManifest(sc.skillId);
+          let badge = "";
+          if (manifest?.installed) badge = " [installed]";
+          else if (manifest?.installMode === "install_recommended") badge = " [has scripts, install recommended]";
+          else if (manifest?.hasCompanionFiles) badge = " [has companion files]";
+          const action = `call \`skill_get(skillId="${sc.skillId}")\``;
+          return `${i + 1}. **${sc.name}**${badge} — ${sc.description.slice(0, 200)}\n   → ${action}`;
+        });
+        const skillContext = "## Relevant skills from past experience\n\n" +
+          "The following skills were distilled from similar previous tasks. " +
+          "You SHOULD call `skill_get` to retrieve the full guide before attempting the task.\n\n" +
+          skillLines.join("\n\n");
 
-        ctx.log.info(`auto-recall: returning prependContext (${context.length} chars), sufficient=${sufficient}, skills=${skillSection ? "yes" : "no"}`);
+        ctx.log.info(`auto-recall-skill: injecting ${skillCandidates.length} skill(s): ${skillCandidates.map(s => s.name).join(", ")}`);
+        try {
+          store.recordApiLog("skill_search", { type: "auto_recall_skill", query }, JSON.stringify(skillCandidates), performance.now() - recallT0, true);
+        } catch { /* best-effort */ }
 
-        if (!sufficient) {
-          const searchHint =
-            "\n\nIf these memories don't fully answer the question, " +
-            "call `memory_search` with a shorter or rephrased query to find more.";
-          return { prependContext: context + searchHint };
-        }
-
-        return {
-          prependContext: context,
-        };
+        return { prependContext: skillContext };
       } catch (err) {
-        const dur = performance.now() - recallT0;
-        store.recordToolCall("memory_search", dur, false);
-        try { store.recordApiLog("memory_search", { type: "auto_recall", query: recallQuery }, `error: ${String(err)}`, dur, false); } catch (_) { /* best-effort */ }
-        ctx.log.warn(`auto-recall failed: ${String(err)}`);
+        ctx.log.warn(`auto-recall-skill failed: ${String(err)}`);
       }
     });
 
@@ -2271,6 +2223,10 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       const shared = store.listLocalSharedTasks();
       if (shared.length === 0) return;
 
+      // Only sync tasks that have a hub_task_id (actively shared to remote)
+      const conn = store.getClientHubConnection();
+      const currentHubInstanceId = conn?.hubInstanceId || "";
+
       let hubClient: { hubUrl: string; userToken: string; userId: string } | undefined;
       try {
         hubClient = await resolveHubClient(store, ctx);
@@ -2280,6 +2236,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       const { v4: uuidv4 } = require("uuid");
 
       for (const entry of shared) {
+        if (!entry.hubTaskId) continue;
+        if (currentHubInstanceId && entry.hubInstanceId && entry.hubInstanceId !== currentHubInstanceId) continue;
         const task = store.getTask(entry.taskId);
         if (!task) continue;
         const chunks = store.getChunksByTask(entry.taskId);
@@ -2317,7 +2275,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
               })),
             }),
           });
-          store.markTaskShared(entry.taskId, entry.hubTaskId, chunks.length, entry.visibility, entry.groupId);
+          store.markTaskShared(entry.taskId, entry.hubTaskId, chunks.length, entry.visibility, entry.groupId, currentHubInstanceId);
         } catch (err) {
           ctx.log.warn(`incremental sync failed for task=${entry.taskId}: ${err}`);
         }

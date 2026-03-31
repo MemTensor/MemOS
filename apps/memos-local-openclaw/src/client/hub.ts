@@ -140,6 +140,7 @@ export async function hubUpdateUsername(
   newUsername: string,
 ): Promise<{ ok: boolean; username: string; userToken: string }> {
   const client = await resolveHubClient(store, ctx);
+  const persisted = store.getClientHubConnection();
   const result = await hubRequestJson(client.hubUrl, client.userToken, "/api/v1/hub/me/update-profile", {
     method: "POST",
     body: JSON.stringify({ username: newUsername }),
@@ -152,6 +153,9 @@ export async function hubUpdateUsername(
       userToken: result.userToken,
       role: client.role as "admin" | "member",
       connectedAt: Date.now(),
+      identityKey: persisted?.identityKey || "",
+      lastKnownStatus: "active",
+      hubInstanceId: persisted?.hubInstanceId || "",
     });
   }
   return result;

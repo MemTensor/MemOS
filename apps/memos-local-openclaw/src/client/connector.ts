@@ -49,6 +49,13 @@ export async function connectToHub(store: SqliteStore, config: MemosLocalConfig,
         }) as any;
         if (result.status === "active" && result.userToken) {
           log.info(`Pending user approved! Connecting with token. userId=${persisted.userId}`);
+          let approvedHubInstanceId = persisted.hubInstanceId || "";
+          if (!approvedHubInstanceId) {
+            try {
+              const info = await hubRequestJson(hubUrl, "", "/api/v1/hub/info", { method: "GET" }) as any;
+              approvedHubInstanceId = String(info?.hubInstanceId ?? "");
+            } catch { /* best-effort */ }
+          }
           store.setClientHubConnection({
             hubUrl,
             userId: persisted.userId,
@@ -58,6 +65,7 @@ export async function connectToHub(store: SqliteStore, config: MemosLocalConfig,
             connectedAt: Date.now(),
             identityKey: persisted.identityKey || "",
             lastKnownStatus: "active",
+            hubInstanceId: approvedHubInstanceId,
           });
           return store.getClientHubConnection()!;
         }
@@ -87,7 +95,10 @@ export async function connectToHub(store: SqliteStore, config: MemosLocalConfig,
   }
 
   const hubUrl = normalizeHubUrl(hubAddress);
-  const me = await hubRequestJson(hubUrl, userToken, "/api/v1/hub/me", { method: "GET" }) as any;
+  const [me, info] = await Promise.all([
+    hubRequestJson(hubUrl, userToken, "/api/v1/hub/me", { method: "GET" }),
+    hubRequestJson(hubUrl, "", "/api/v1/hub/info", { method: "GET" }).catch(() => null),
+  ]) as [any, any];
   const persisted = store.getClientHubConnection();
   store.setClientHubConnection({
     hubUrl,
@@ -98,6 +109,7 @@ export async function connectToHub(store: SqliteStore, config: MemosLocalConfig,
     connectedAt: Date.now(),
     identityKey: persisted?.identityKey || String(me.identityKey ?? ""),
     lastKnownStatus: "active",
+    hubInstanceId: String(info?.hubInstanceId ?? persisted?.hubInstanceId ?? ""),
   });
   return store.getClientHubConnection()!;
 }
@@ -148,6 +160,7 @@ export async function getHubStatus(store: SqliteStore, config: MemosLocalConfig)
             connectedAt: Date.now(),
             identityKey: conn.identityKey || "",
             lastKnownStatus: "active",
+            hubInstanceId: conn.hubInstanceId || "",
           });
           const me = await hubRequestJson(normalizeHubUrl(hubAddress), result.userToken, "/api/v1/hub/me", { method: "GET" }) as any;
           return {
@@ -216,22 +229,28 @@ export async function getHubStatus(store: SqliteStore, config: MemosLocalConfig)
             body: JSON.stringify({ teamToken, userId: conn.userId }),
           }) as any;
           if (regResult.status === "active" && regResult.userToken) {
-            store.setClientHubConnection({
+            const updatedConn = {
               ...conn,
               hubUrl: normalizeHubUrl(hubAddress),
               userToken: regResult.userToken,
               connectedAt: Date.now(),
               lastKnownStatus: "active",
-            });
+            };
+            store.setClientHubConnection(updatedConn);
             try {
               const me = await hubRequestJson(normalizeHubUrl(hubAddress), regResult.userToken, "/api/v1/hub/me", { method: "GET" }) as any;
+              const latestUsername = String(me.username ?? "");
+              const latestRole = String(me.role ?? "member") as UserRole;
+              if (latestUsername !== conn.username || latestRole !== conn.role) {
+                store.setClientHubConnection({ ...updatedConn, username: latestUsername, role: latestRole });
+              }
               return {
                 connected: true,
                 hubUrl: normalizeHubUrl(hubAddress),
                 user: {
                   id: String(me.id),
-                  username: String(me.username ?? ""),
-                  role: String(me.role ?? "member") as UserRole,
+                  username: latestUsername,
+                  role: latestRole,
                   status: String(me.status ?? "active"),
                   groups: Array.isArray(me.groups) ? me.groups : [],
                 },
@@ -293,6 +312,12 @@ export async function autoJoinHub(
   const existingIdentityKey = persisted?.identityKey || "";
 
   log.info(`Joining Hub at ${hubUrl} as "${username}"...`);
+  let hubInstanceId = "";
+  try {
+    const info = await hubRequestJson(hubUrl, "", "/api/v1/hub/info", { method: "GET" }) as any;
+    hubInstanceId = String(info?.hubInstanceId ?? "");
+  } catch { /* best-effort */ }
+
   const result = await hubRequestJson(hubUrl, "", "/api/v1/hub/join", {
     method: "POST",
     body: JSON.stringify({ teamToken, username, deviceName: hostname, clientIp, identityKey: existingIdentityKey }),
@@ -311,6 +336,7 @@ export async function autoJoinHub(
       connectedAt: Date.now(),
       identityKey: returnedIdentityKey,
       lastKnownStatus: "pending",
+      hubInstanceId,
     });
     throw new PendingApprovalError(result.userId);
   }
@@ -337,6 +363,7 @@ export async function autoJoinHub(
     connectedAt: Date.now(),
     identityKey: returnedIdentityKey,
     lastKnownStatus: "active",
+    hubInstanceId,
   });
   return store.getClientHubConnection()!;
 }

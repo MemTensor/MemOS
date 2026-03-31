@@ -320,7 +320,8 @@ describe("Integration: v4 types and config foundation", () => {
       expect(ctx.config.sharing.enabled).toBe(true);
       expect(ctx.config.sharing.role).toBe("hub");
       expect(ctx.config.sharing.hub.teamToken).toBe("team-secret");
-      expect(ctx.config.sharing.client.userToken).toBe("user-secret");
+      // When role=hub, resolveConfig clears client fields (hub and client are mutually exclusive)
+      expect(ctx.config.sharing.client.userToken).toBe("");
       expect(ctx.config.sharing.capabilities.hostEmbedding).toBe(true);
       expect(ctx.config.sharing.capabilities.hostCompletion).toBe(true);
       expect(ctx.config.embedding?.capabilities?.hostEmbedding).toBe(true);
@@ -337,15 +338,37 @@ describe("Integration: v4 types and config foundation", () => {
   });
 
   it("should fall back safely when openclaw provider is configured without host capability flags", async () => {
-    const embedder = new Embedder({ provider: "openclaw" } as any, testLog as any);
-    const summarizer = new Summarizer({ provider: "openclaw" } as any, testLog as any);
-    const input = "OpenClaw fallback summary line stays local and safe.";
+    const prevHome = process.env.HOME;
+    const prevUserProfile = process.env.USERPROFILE;
+    const prevConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "memos-fallback-home-"));
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.OPENCLAW_STATE_DIR;
 
-    expect(embedder.provider).toBe("local");
-    expect(embedder.dimensions).toBe(384);
-    await expect(summarizer.summarize(input)).resolves.toBe(input);
-    await expect(summarizer.summarizeTask(input)).resolves.toBe(input);
-    await expect(summarizer.judgeNewTopic("current topic", "new message")).resolves.toBeNull();
+    try {
+      const embedder = new Embedder({ provider: "openclaw" } as any, testLog as any);
+      const summarizer = new Summarizer({ provider: "openclaw" } as any, testLog as any);
+      const input = "OpenClaw fallback summary line stays local and safe.";
+
+      expect(embedder.provider).toBe("local");
+      expect(embedder.dimensions).toBe(384);
+      await expect(summarizer.summarize(input)).resolves.toBe(input);
+      await expect(summarizer.summarizeTask(input)).resolves.toBe(input);
+      await expect(summarizer.judgeNewTopic("current topic", "new message")).resolves.toBeNull();
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = prevUserProfile;
+      if (prevConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
+      else process.env.OPENCLAW_CONFIG_PATH = prevConfigPath;
+      if (prevStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+    }
   });
 
   it("should apply the same capability-aware resolution in viewer config consumers", () => {

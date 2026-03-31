@@ -543,13 +543,12 @@ export class ViewerServer {
     if (chunkIds.length > 0) {
       try {
         const placeholders = chunkIds.map(() => "?").join(",");
-        const sharedRows = db.prepare(`SELECT source_chunk_id, visibility, group_id FROM hub_memories WHERE source_chunk_id IN (${placeholders})`).all(...chunkIds) as Array<{ source_chunk_id: string; visibility: string; group_id: string | null }>;
-        for (const r of sharedRows) sharingMap.set(r.source_chunk_id, r);
-        const teamMetaRows = db.prepare(`SELECT chunk_id, visibility, group_id FROM team_shared_chunks WHERE chunk_id IN (${placeholders})`).all(...chunkIds) as Array<{ chunk_id: string; visibility: string; group_id: string | null }>;
-        for (const r of teamMetaRows) {
-          if (!sharingMap.has(r.chunk_id)) {
-            sharingMap.set(r.chunk_id, { visibility: r.visibility, group_id: r.group_id });
-          }
+        if (this.sharingRole === "hub") {
+          const sharedRows = db.prepare(`SELECT source_chunk_id, visibility, group_id FROM hub_memories WHERE source_chunk_id IN (${placeholders})`).all(...chunkIds) as Array<{ source_chunk_id: string; visibility: string; group_id: string | null }>;
+          for (const r of sharedRows) sharingMap.set(r.source_chunk_id, r);
+        } else {
+          const teamMetaRows = db.prepare(`SELECT chunk_id, visibility, group_id FROM team_shared_chunks WHERE chunk_id IN (${placeholders})`).all(...chunkIds) as Array<{ chunk_id: string; visibility: string; group_id: string | null }>;
+          for (const r of teamMetaRows) sharingMap.set(r.chunk_id, { visibility: r.visibility, group_id: r.group_id });
         }
         const localRows = db.prepare(`SELECT chunk_id, original_owner, shared_at FROM local_shared_memories WHERE chunk_id IN (${placeholders})`).all(...chunkIds) as Array<{ chunk_id: string; original_owner: string; shared_at: number }>;
         for (const r of localRows) localShareMap.set(r.chunk_id, r);
@@ -616,7 +615,7 @@ export class ViewerServer {
     const db = (this.store as any).db;
     const items = tasks.map((t) => {
       const meta = db.prepare("SELECT skill_status, owner FROM tasks WHERE id = ?").get(t.id) as { skill_status: string | null; owner: string | null } | undefined;
-      const sharedTask = db.prepare("SELECT visibility FROM hub_tasks WHERE source_task_id = ? ORDER BY updated_at DESC LIMIT 1").get(t.id) as { visibility: string } | undefined;
+      const hubTask = this.getHubTaskForLocal(t.id);
       return {
         id: t.id,
         sessionKey: t.sessionKey,
@@ -628,7 +627,7 @@ export class ViewerServer {
         chunkCount: this.store.countChunksByTask(t.id),
         skillStatus: meta?.skill_status ?? null,
         owner: meta?.owner ?? "agent:main",
-        sharingVisibility: sharedTask?.visibility ?? null,
+        sharingVisibility: hubTask?.visibility ?? null,
       };
     });
 
@@ -663,7 +662,7 @@ export class ViewerServer {
     const db = (this.store as any).db;
     const meta = db.prepare("SELECT skill_status, skill_reason FROM tasks WHERE id = ?").get(taskId) as
       { skill_status: string | null; skill_reason: string | null } | undefined;
-    const sharedTask = db.prepare("SELECT visibility, group_id FROM hub_tasks WHERE source_task_id = ? ORDER BY updated_at DESC LIMIT 1").get(taskId) as { visibility: string | null; group_id: string | null } | undefined;
+    const hubTask = this.getHubTaskForLocal(taskId);
 
     this.jsonResponse(res, {
       id: task.id,
@@ -678,9 +677,9 @@ export class ViewerServer {
       skillStatus: meta?.skill_status ?? null,
       skillReason: meta?.skill_reason ?? null,
       skillLinks,
-      sharingVisibility: sharedTask?.visibility ?? null,
-      sharingGroupId: sharedTask?.group_id ?? null,
-      hubTaskId: sharedTask ? true : false,
+      sharingVisibility: hubTask?.visibility ?? null,
+      sharingGroupId: hubTask?.group_id ?? null,
+      hubTaskId: hubTask ? true : false,
     });
   }
 
@@ -870,10 +869,9 @@ export class ViewerServer {
     if (visibility) {
       skills = skills.filter(s => s.visibility === visibility);
     }
-    const db = (this.store as any).db;
     const enriched = skills.map(s => {
-      const hub = db.prepare("SELECT visibility FROM hub_skills WHERE source_skill_id = ? ORDER BY updated_at DESC LIMIT 1").get(s.id) as { visibility: string } | undefined;
-      return { ...s, sharingVisibility: hub?.visibility ?? null };
+      const hubSkill = this.getHubSkillForLocal(s.id);
+      return { ...s, sharingVisibility: hubSkill?.visibility ?? null };
     });
     this.jsonResponse(res, { skills: enriched });
   }
@@ -891,11 +889,10 @@ export class ViewerServer {
     const relatedTasks = this.store.getTasksBySkill(skillId);
     const files = fs.existsSync(skill.dirPath) ? this.walkDir(skill.dirPath, skill.dirPath) : [];
 
-    const db = (this.store as any).db;
-    const sharedSkill = db.prepare("SELECT visibility, group_id FROM hub_skills WHERE source_skill_id = ? ORDER BY updated_at DESC LIMIT 1").get(skillId) as { visibility: string | null; group_id: string | null } | undefined;
+    const hubSkill = this.getHubSkillForLocal(skillId);
 
     this.jsonResponse(res, {
-      skill: { ...skill, sharingVisibility: sharedSkill?.visibility ?? null, sharingGroupId: sharedSkill?.group_id ?? null },
+      skill: { ...skill, sharingVisibility: hubSkill?.visibility ?? null, sharingGroupId: hubSkill?.group_id ?? null },
       versions: versions.map(v => ({
         id: v.id,
         version: v.version,
@@ -1034,7 +1031,7 @@ export class ViewerServer {
                 method: "POST",
                 body: JSON.stringify({ visibility: "public", groupId: null, metadata: bundle.metadata, bundle: bundle.bundle }),
               }) as any;
-              if (hubClient.userId) {
+              if (this.sharingRole === "hub" && hubClient.userId) {
                 const existing = this.store.getHubSkillBySource(hubClient.userId, skillId);
                 this.store.upsertHubSkill({
                   id: response?.skillId ?? existing?.id ?? crypto.randomUUID(),
@@ -1044,6 +1041,14 @@ export class ViewerServer {
                   bundle: JSON.stringify(bundle.bundle), qualityScore: skill.qualityScore,
                   createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
                 });
+              } else {
+                const conn = this.store.getClientHubConnection();
+                this.store.upsertTeamSharedSkill(skillId, {
+                  hubSkillId: String(response?.skillId ?? ""),
+                  visibility: "public",
+                  groupId: null,
+                  hubInstanceId: conn?.hubInstanceId ?? "",
+                });
               }
               hubSynced = true;
               this.log.info(`Skill "${skill.name}" published to Hub`);
@@ -1052,7 +1057,8 @@ export class ViewerServer {
                 method: "POST",
                 body: JSON.stringify({ sourceSkillId: skillId }),
               });
-              if (hubClient.userId) this.store.deleteHubSkillBySource(hubClient.userId, skillId);
+              if (this.sharingRole === "hub" && hubClient.userId) this.store.deleteHubSkillBySource(hubClient.userId, skillId);
+              else this.store.deleteTeamSharedSkill(skillId);
               hubSynced = true;
               this.log.info(`Skill "${skill.name}" unpublished from Hub`);
             }
@@ -1323,7 +1329,8 @@ export class ViewerServer {
                 createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
               });
             } else if (hubClient.userId) {
-              this.store.upsertTeamSharedChunk(chunkId, { hubMemoryId: memoryId, visibility: "public", groupId: null });
+              const conn = this.store.getClientHubConnection();
+              this.store.upsertTeamSharedChunk(chunkId, { hubMemoryId: memoryId, visibility: "public", groupId: null, hubInstanceId: conn?.hubInstanceId ?? "" });
             }
             hubSynced = true;
           } else {
@@ -1336,7 +1343,7 @@ export class ViewerServer {
               await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/memories/unshare", {
                 method: "POST", body: JSON.stringify({ sourceChunkId: chunkId }),
               });
-              if (hubClient.userId) this.store.deleteHubMemoryBySource(hubClient.userId, chunkId);
+              if (this.sharingRole === "hub" && hubClient.userId) this.store.deleteHubMemoryBySource(hubClient.userId, chunkId);
               this.store.deleteTeamSharedChunk(chunkId);
               hubSynced = true;
             } catch (err) { this.log.warn(`Failed to unshare memory from team: ${err}`); }
@@ -1349,7 +1356,7 @@ export class ViewerServer {
               await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/memories/unshare", {
                 method: "POST", body: JSON.stringify({ sourceChunkId: chunkId }),
               });
-              if (hubClient.userId) this.store.deleteHubMemoryBySource(hubClient.userId, chunkId);
+              if (this.sharingRole === "hub" && hubClient.userId) this.store.deleteHubMemoryBySource(hubClient.userId, chunkId);
               this.store.deleteTeamSharedChunk(chunkId);
               hubSynced = true;
             } catch (err) { this.log.warn(`Failed to unshare memory from team: ${err}`); }
@@ -1403,21 +1410,24 @@ export class ViewerServer {
                 chunks: chunks.map((c) => ({ id: c.id, hubTaskId: refreshedTask.id, sourceTaskId: refreshedTask.id, sourceChunkId: c.id, role: c.role, content: c.content, summary: c.summary, kind: c.kind, groupId: null, visibility: "public", createdAt: c.createdAt ?? Date.now() })),
               }),
             });
-            if (hubClient.userId) {
+            const hubTaskId = String((response as any)?.taskId ?? "");
+            if (this.sharingRole === "hub" && hubClient.userId) {
               const existing = this.store.getHubTaskBySource(hubClient.userId, taskId);
               this.store.upsertHubTask({
-                id: (response as any)?.taskId ?? existing?.id ?? crypto.randomUUID(),
+                id: hubTaskId || existing?.id || crypto.randomUUID(),
                 sourceTaskId: taskId, sourceUserId: hubClient.userId, title: refreshedTask.title ?? "",
                 summary: refreshedTask.summary ?? "", groupId: null, visibility: "public",
                 createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
               });
             }
+            const conn = this.store.getClientHubConnection();
+            this.store.markTaskShared(taskId, hubTaskId, chunks.length, "public", null, conn?.hubInstanceId ?? "");
             hubSynced = true;
           }
           if (!isLocalShared) {
             const originalOwner = task.owner;
             const db = (this.store as any).db;
-            db.prepare("INSERT INTO local_shared_tasks (task_id, hub_task_id, original_owner, shared_at) VALUES (?, ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET original_owner = excluded.original_owner, shared_at = excluded.shared_at").run(taskId, "", originalOwner, Date.now());
+            db.prepare("INSERT INTO local_shared_tasks (task_id, hub_task_id, original_owner, hub_instance_id, shared_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET original_owner = excluded.original_owner, hub_instance_id = excluded.hub_instance_id, shared_at = excluded.shared_at").run(taskId, "", originalOwner, "", Date.now());
             db.prepare("UPDATE tasks SET owner = 'public' WHERE id = ?").run(taskId);
           }
         }
@@ -1437,7 +1447,8 @@ export class ViewerServer {
             await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/tasks/unshare", {
               method: "POST", body: JSON.stringify({ sourceTaskId: taskId }),
             });
-            if (hubClient.userId) this.store.deleteHubTaskBySource(hubClient.userId, taskId);
+            if (this.sharingRole === "hub" && hubClient.userId) this.store.deleteHubTaskBySource(hubClient.userId, taskId);
+            else this.store.downgradeTeamSharedTaskToLocal(taskId);
             hubSynced = true;
           } catch (err) { this.log.warn(`Failed to unshare task from team: ${err}`); }
         }
@@ -1449,7 +1460,8 @@ export class ViewerServer {
               await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/tasks/unshare", {
                 method: "POST", body: JSON.stringify({ sourceTaskId: taskId }),
               });
-              if (hubClient.userId) this.store.deleteHubTaskBySource(hubClient.userId, taskId);
+              if (this.sharingRole === "hub" && hubClient.userId) this.store.deleteHubTaskBySource(hubClient.userId, taskId);
+              else if (!isLocalShared) this.store.unmarkTaskShared(taskId);
               hubSynced = true;
             } catch (err) { this.log.warn(`Failed to unshare task from team: ${err}`); }
           }
@@ -1506,16 +1518,20 @@ export class ViewerServer {
               method: "POST",
               body: JSON.stringify({ visibility: "public", groupId: null, metadata: bundle.metadata, bundle: bundle.bundle }),
             });
-            if (hubClient.userId) {
+            const hubSkillId = String((response as any)?.skillId ?? "");
+            if (this.sharingRole === "hub" && hubClient.userId) {
               const existing = this.store.getHubSkillBySource(hubClient.userId, skillId);
               this.store.upsertHubSkill({
-                id: (response as any)?.skillId ?? existing?.id ?? crypto.randomUUID(),
+                id: hubSkillId || existing?.id || crypto.randomUUID(),
                 sourceSkillId: skillId, sourceUserId: hubClient.userId,
                 name: skill.name, description: skill.description, version: skill.version,
                 groupId: null, visibility: "public",
                 bundle: JSON.stringify(bundle.bundle), qualityScore: skill.qualityScore,
                 createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
               });
+            } else {
+              const conn = this.store.getClientHubConnection();
+              this.store.upsertTeamSharedSkill(skillId, { hubSkillId, visibility: "public", groupId: null, hubInstanceId: conn?.hubInstanceId ?? "" });
             }
             hubSynced = true;
           }
@@ -1532,7 +1548,8 @@ export class ViewerServer {
             await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/skills/unpublish", {
               method: "POST", body: JSON.stringify({ sourceSkillId: skillId }),
             });
-            if (hubClient.userId) this.store.deleteHubSkillBySource(hubClient.userId, skillId);
+            if (this.sharingRole === "hub" && hubClient.userId) this.store.deleteHubSkillBySource(hubClient.userId, skillId);
+            else this.store.deleteTeamSharedSkill(skillId);
             hubSynced = true;
           } catch (err) { this.log.warn(`Failed to unpublish skill from team: ${err}`); }
         }
@@ -1544,7 +1561,8 @@ export class ViewerServer {
               await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/skills/unpublish", {
                 method: "POST", body: JSON.stringify({ sourceSkillId: skillId }),
               });
-              if (hubClient.userId) this.store.deleteHubSkillBySource(hubClient.userId, skillId);
+              if (this.sharingRole === "hub" && hubClient.userId) this.store.deleteHubSkillBySource(hubClient.userId, skillId);
+              else this.store.deleteTeamSharedSkill(skillId);
               hubSynced = true;
             } catch (err) { this.log.warn(`Failed to unpublish skill from team: ${err}`); }
           }
@@ -1558,29 +1576,53 @@ export class ViewerServer {
     });
   }
 
+  private get sharingRole(): string | undefined {
+    return this.ctx?.config?.sharing?.role;
+  }
+
+  private isCurrentClientHubInstance(hubInstanceId?: string): boolean {
+    if (this.sharingRole !== "client") return true;
+    const scopedHubInstanceId = String(hubInstanceId ?? "");
+    if (!scopedHubInstanceId) return true;
+    const currentHubInstanceId = this.store.getClientHubConnection()?.hubInstanceId ?? "";
+    if (!currentHubInstanceId) return true;
+    return scopedHubInstanceId === currentHubInstanceId;
+  }
+
   private getHubMemoryForChunk(chunkId: string): any {
-    const db = (this.store as any).db;
-    const hub = db.prepare("SELECT * FROM hub_memories WHERE source_chunk_id = ? LIMIT 1").get(chunkId);
-    if (hub) return hub;
+    if (this.sharingRole === "hub") {
+      const db = (this.store as any).db;
+      return db.prepare("SELECT * FROM hub_memories WHERE source_chunk_id = ? LIMIT 1").get(chunkId);
+    }
     const ts = this.store.getTeamSharedChunk(chunkId);
-    if (ts) {
-      return {
-        source_chunk_id: chunkId,
-        visibility: ts.visibility,
-        group_id: ts.groupId,
-      };
+    if (ts && this.isCurrentClientHubInstance(ts.hubInstanceId)) {
+      return { source_chunk_id: chunkId, visibility: ts.visibility, group_id: ts.groupId };
     }
     return undefined;
   }
 
   private getHubTaskForLocal(taskId: string): any {
-    const db = (this.store as any).db;
-    return db.prepare("SELECT * FROM hub_tasks WHERE source_task_id = ? LIMIT 1").get(taskId);
+    if (this.sharingRole === "hub") {
+      const db = (this.store as any).db;
+      return db.prepare("SELECT * FROM hub_tasks WHERE source_task_id = ? LIMIT 1").get(taskId);
+    }
+    const shared = this.store.getLocalSharedTask(taskId);
+    if (shared && shared.hubTaskId && this.isCurrentClientHubInstance(shared.hubInstanceId)) {
+      return { source_task_id: taskId, visibility: shared.visibility, group_id: shared.groupId };
+    }
+    return undefined;
   }
 
   private getHubSkillForLocal(skillId: string): any {
-    const db = (this.store as any).db;
-    return db.prepare("SELECT * FROM hub_skills WHERE source_skill_id = ? LIMIT 1").get(skillId);
+    if (this.sharingRole === "hub") {
+      const db = (this.store as any).db;
+      return db.prepare("SELECT * FROM hub_skills WHERE source_skill_id = ? LIMIT 1").get(skillId);
+    }
+    const ts = this.store.getTeamSharedSkill(skillId);
+    if (ts && this.isCurrentClientHubInstance(ts.hubInstanceId)) {
+      return { source_skill_id: skillId, visibility: ts.visibility, group_id: ts.groupId };
+    }
+    return undefined;
   }
 
   private handleDeleteSession(res: http.ServerResponse, url: URL): void {
@@ -1873,18 +1915,25 @@ export class ViewerServer {
 
   private handleRetryJoin(req: http.IncomingMessage, res: http.ServerResponse): void {
     this.readBody(req, async (_body) => {
-      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable" });
+      if (!this.ctx) return this.jsonResponse(res, { ok: false, error: "sharing_unavailable", errorCode: "sharing_unavailable" });
       const sharing = this.ctx.config.sharing;
       if (!sharing?.enabled || sharing.role !== "client") {
-        return this.jsonResponse(res, { ok: false, error: "not_in_client_mode" });
+        return this.jsonResponse(res, { ok: false, error: "not_in_client_mode", errorCode: "not_in_client_mode" });
       }
       const hubAddress = sharing.client?.hubAddress ?? "";
       const teamToken = sharing.client?.teamToken ?? "";
       if (!hubAddress || !teamToken) {
-        return this.jsonResponse(res, { ok: false, error: "missing_hub_address_or_team_token" });
+        return this.jsonResponse(res, { ok: false, error: "missing_hub_address_or_team_token", errorCode: "missing_config" });
       }
+      const hubUrl = normalizeHubUrl(hubAddress);
+
       try {
-        const hubUrl = normalizeHubUrl(hubAddress);
+        await hubRequestJson(hubUrl, "", "/api/v1/hub/info", { method: "GET" });
+      } catch {
+        return this.jsonResponse(res, { ok: false, error: "hub_unreachable", errorCode: "hub_unreachable" });
+      }
+
+      try {
         const os = await import("os");
         const nickname = sharing.client?.nickname;
         const username = nickname || os.userInfo().username || "user";
@@ -1896,6 +1945,11 @@ export class ViewerServer {
           body: JSON.stringify({ teamToken, username, deviceName: hostname, reapply: true, identityKey: existingIdentityKey }),
         }) as any;
         const returnedIdentityKey = String(result.identityKey || existingIdentityKey || "");
+        let hubInstanceId = persisted?.hubInstanceId || "";
+        try {
+          const info = await hubRequestJson(hubUrl, "", "/api/v1/hub/info", { method: "GET" }) as any;
+          hubInstanceId = String(info?.hubInstanceId ?? hubInstanceId);
+        } catch { /* best-effort */ }
         this.store.setClientHubConnection({
           hubUrl,
           userId: String(result.userId || ""),
@@ -1905,10 +1959,21 @@ export class ViewerServer {
           connectedAt: Date.now(),
           identityKey: returnedIdentityKey,
           lastKnownStatus: result.status || "",
+          hubInstanceId,
         });
+        if (result.status === "blocked") {
+          return this.jsonResponse(res, { ok: false, error: "blocked", errorCode: "blocked" });
+        }
         this.jsonResponse(res, { ok: true, status: result.status || "pending" });
       } catch (err) {
-        this.jsonResponse(res, { ok: false, error: String(err) });
+        const errStr = String(err);
+        if (errStr.includes("(409)") || errStr.includes("username_taken")) {
+          return this.jsonResponse(res, { ok: false, error: "username_taken", errorCode: "username_taken" });
+        }
+        if (errStr.includes("(403)") || errStr.includes("invalid_team_token")) {
+          return this.jsonResponse(res, { ok: false, error: "invalid_team_token", errorCode: "invalid_team_token" });
+        }
+        this.jsonResponse(res, { ok: false, error: errStr, errorCode: "unknown" });
       }
     });
   }
@@ -2112,9 +2177,10 @@ export class ViewerServer {
           }),
         });
         const hubUserId = hubClient.userId;
-        if (hubUserId) {
+        const hubTaskId = String((response as any)?.taskId ?? task.id);
+        if (this.sharingRole === "hub" && hubUserId) {
           this.store.upsertHubTask({
-            id: task.id,
+            id: hubTaskId,
             sourceTaskId: task.id,
             sourceUserId: hubUserId,
             title: task.title,
@@ -2124,6 +2190,9 @@ export class ViewerServer {
             createdAt: task.startedAt ?? Date.now(),
             updatedAt: task.updatedAt ?? Date.now(),
           });
+        } else {
+          const conn = this.store.getClientHubConnection();
+          this.store.markTaskShared(task.id, hubTaskId, chunks.length, visibility, groupId, conn?.hubInstanceId ?? "");
         }
         this.jsonResponse(res, { ok: true, taskId, visibility, response });
       } catch (err) {
@@ -2146,7 +2215,9 @@ export class ViewerServer {
           body: JSON.stringify({ sourceTaskId: task.id }),
         });
         const hubUserId = hubClient.userId;
-        if (hubUserId) this.store.deleteHubTaskBySource(hubUserId, task.id);
+        if (this.sharingRole === "hub" && hubUserId) this.store.deleteHubTaskBySource(hubUserId, task.id);
+        else if (task.owner === "public") this.store.downgradeTeamSharedTaskToLocal(task.id);
+        else this.store.unmarkTaskShared(task.id);
         this.jsonResponse(res, { ok: true, taskId });
       } catch (err) {
         this.jsonResponse(res, { ok: false, error: String(err) });
@@ -2198,7 +2269,8 @@ export class ViewerServer {
             updatedAt: now,
           });
         } else if (hubClient.userId) {
-          this.store.upsertTeamSharedChunk(chunk.id, { hubMemoryId: mid, visibility, groupId });
+          const conn = this.store.getClientHubConnection();
+          this.store.upsertTeamSharedChunk(chunk.id, { hubMemoryId: mid, visibility, groupId, hubInstanceId: conn?.hubInstanceId ?? "" });
         }
         this.jsonResponse(res, { ok: true, chunkId, visibility, response });
       } catch (err) {
@@ -2219,8 +2291,8 @@ export class ViewerServer {
           body: JSON.stringify({ sourceChunkId: chunkId }),
         });
         const hubUserId = hubClient.userId;
-        if (hubUserId) this.store.deleteHubMemoryBySource(hubUserId, chunkId);
-        this.store.deleteTeamSharedChunk(chunkId);
+        if (this.sharingRole === "hub" && hubUserId) this.store.deleteHubMemoryBySource(hubUserId, chunkId);
+        else this.store.deleteTeamSharedChunk(chunkId);
         this.jsonResponse(res, { ok: true, chunkId });
       } catch (err) {
         this.jsonResponse(res, { ok: false, error: String(err) });
@@ -2265,7 +2337,7 @@ export class ViewerServer {
           }),
         });
         const hubUserId = hubClient.userId;
-        if (hubUserId) {
+        if (this.sharingRole === "hub" && hubUserId) {
           const existing = this.store.getHubSkillBySource(hubUserId, skillId);
           this.store.upsertHubSkill({
             id: (response as any)?.skillId ?? existing?.id ?? crypto.randomUUID(),
@@ -2280,6 +2352,14 @@ export class ViewerServer {
             qualityScore: skill.qualityScore,
             createdAt: existing?.createdAt ?? Date.now(),
             updatedAt: Date.now(),
+          });
+        } else {
+          const conn = this.store.getClientHubConnection();
+          this.store.upsertTeamSharedSkill(skillId, {
+            hubSkillId: String((response as any)?.skillId ?? ""),
+            visibility,
+            groupId,
+            hubInstanceId: conn?.hubInstanceId ?? "",
           });
         }
         this.jsonResponse(res, { ok: true, skillId, visibility, response });
@@ -2303,7 +2383,8 @@ export class ViewerServer {
           body: JSON.stringify({ sourceSkillId: skill.id }),
         });
         const hubUserId = hubClient.userId;
-        if (hubUserId) this.store.deleteHubSkillBySource(hubUserId, skill.id);
+        if (this.sharingRole === "hub" && hubUserId) this.store.deleteHubSkillBySource(hubUserId, skill.id);
+        else this.store.deleteTeamSharedSkill(skill.id);
         this.jsonResponse(res, { ok: true, skillId });
       } catch (err) {
         this.jsonResponse(res, { ok: false, error: String(err) });
@@ -2769,19 +2850,21 @@ export class ViewerServer {
           const isClient = newEnabled && newRole === "client";
           if (wasClient && !isClient) {
             await this.withdrawOrLeaveHub();
+            this.store.clearAllTeamSharingState();
             this.store.clearClientHubConnection();
-            this.log.info("Client hub connection cleared (sharing disabled or role changed)");
+            this.log.info("Client hub connection and team sharing state cleared (sharing disabled or role changed)");
           }
 
           if (wasClient && isClient) {
             const newClientAddr = String((merged.client as Record<string, unknown>)?.hubAddress || "");
             if (newClientAddr && oldClientHubAddress && normalizeHubUrl(newClientAddr) !== normalizeHubUrl(oldClientHubAddress)) {
               this.notifyHubLeave();
+              this.store.clearAllTeamSharingState();
               const oldConn = this.store.getClientHubConnection();
               if (oldConn) {
-                this.store.setClientHubConnection({ ...oldConn, hubUrl: normalizeHubUrl(newClientAddr), userToken: "", lastKnownStatus: "hub_changed" });
+                this.store.setClientHubConnection({ ...oldConn, hubUrl: normalizeHubUrl(newClientAddr), userToken: "", hubInstanceId: "", lastKnownStatus: "hub_changed" });
               }
-              this.log.info("Client hub connection token cleared (switched to different Hub), identity preserved");
+              this.log.info("Client hub connection and team sharing state cleared (switched to different Hub)");
             }
           }
 
@@ -2803,20 +2886,25 @@ export class ViewerServer {
         const nowClient = Boolean(finalSharing?.enabled) && finalSharing?.role === "client";
         const previouslyClient = oldSharingEnabled && oldSharingRole === "client";
         let joinStatus: string | undefined;
+        let joinError: string | undefined;
         if (nowClient && !previouslyClient) {
           try {
             joinStatus = await this.autoJoinOnSave(finalSharing);
           } catch (e) {
-            this.log.warn(`Auto-join on save failed: ${e}`);
+            const msg = String(e instanceof Error ? e.message : e);
+            this.log.warn(`Auto-join on save failed: ${msg}`);
+            if (msg === "hub_unreachable" || msg === "username_taken" || msg === "invalid_team_token") {
+              joinError = msg;
+            }
           }
         }
 
-        this.jsonResponse(res, { ok: true, joinStatus, restart: true });
+        if (joinError) {
+          this.jsonResponse(res, { ok: true, joinError, restart: false });
+          return;
+        }
 
-        setTimeout(() => {
-          this.log.info("config-save: triggering gateway restart via SIGUSR1...");
-          try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
-        }, 500);
+        this.jsonResponseAndRestart(res, { ok: true, joinStatus, restart: true }, "config-save");
       } catch (e) {
         this.log.warn(`handleSaveConfig error: ${e}`);
         res.writeHead(500, { "Content-Type": "application/json" });
@@ -2831,17 +2919,43 @@ export class ViewerServer {
     const teamToken = String(clientCfg?.teamToken || "");
     if (!hubAddress || !teamToken) return undefined;
     const hubUrl = normalizeHubUrl(hubAddress);
+
+    try {
+      await hubRequestJson(hubUrl, "", "/api/v1/hub/info", { method: "GET" });
+    } catch {
+      throw new Error("hub_unreachable");
+    }
+
     const os = await import("os");
     const nickname = String(clientCfg?.nickname || "");
     const username = nickname || os.userInfo().username || "user";
     const hostname = os.hostname() || "unknown";
     const persisted = this.store.getClientHubConnection();
     const existingIdentityKey = persisted?.identityKey || "";
-    const result = await hubRequestJson(hubUrl, "", "/api/v1/hub/join", {
-      method: "POST",
-      body: JSON.stringify({ teamToken, username, deviceName: hostname, identityKey: existingIdentityKey }),
-    }) as any;
+
+    let result: any;
+    try {
+      result = await hubRequestJson(hubUrl, "", "/api/v1/hub/join", {
+        method: "POST",
+        body: JSON.stringify({ teamToken, username, deviceName: hostname, identityKey: existingIdentityKey }),
+      });
+    } catch (err) {
+      const errStr = String(err);
+      if (errStr.includes("(409)") || errStr.includes("username_taken")) {
+        throw new Error("username_taken");
+      }
+      if (errStr.includes("(403)") || errStr.includes("invalid_team_token")) {
+        throw new Error("invalid_team_token");
+      }
+      throw err;
+    }
+
     const returnedIdentityKey = String(result.identityKey || existingIdentityKey || "");
+    let hubInstanceId = persisted?.hubInstanceId || "";
+    try {
+      const info = await hubRequestJson(hubUrl, "", "/api/v1/hub/info", { method: "GET" }) as any;
+      hubInstanceId = String(info?.hubInstanceId ?? hubInstanceId);
+    } catch { /* best-effort */ }
     this.store.setClientHubConnection({
       hubUrl,
       userId: String(result.userId || ""),
@@ -2851,6 +2965,7 @@ export class ViewerServer {
       connectedAt: Date.now(),
       identityKey: returnedIdentityKey,
       lastKnownStatus: result.status || "",
+      hubInstanceId,
     });
     this.log.info(`Auto-join on save: status=${result.status}, userId=${result.userId}`);
     if (result.userToken) {
@@ -2863,6 +2978,7 @@ export class ViewerServer {
     this.readBody(_req, async () => {
       try {
         await this.withdrawOrLeaveHub();
+        this.store.clearAllTeamSharingState();
         this.store.clearClientHubConnection();
 
         const configPath = this.getOpenClawConfigPath();
@@ -2881,12 +2997,7 @@ export class ViewerServer {
           }
         }
 
-        this.jsonResponse(res, { ok: true, restart: true });
-
-        setTimeout(() => {
-          this.log.info("handleLeaveTeam: triggering gateway restart via SIGUSR1...");
-          try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
-        }, 500);
+        this.jsonResponseAndRestart(res, { ok: true, restart: true }, "handleLeaveTeam");
       } catch (e) {
         this.log.warn(`handleLeaveTeam error: ${e}`);
         this.jsonResponse(res, { ok: false, error: String(e) });
@@ -3052,14 +3163,43 @@ export class ViewerServer {
             }
           }
         } catch {}
-        const url = hubUrl.replace(/\/+$/, "") + "/api/v1/hub/info";
+        const baseUrl = hubUrl.replace(/\/+$/, "");
+        const infoUrl = baseUrl + "/api/v1/hub/info";
         const ctrl = new AbortController();
         const timeout = setTimeout(() => ctrl.abort(), 8000);
         try {
-          const r = await fetch(url, { signal: ctrl.signal });
+          const r = await fetch(infoUrl, { signal: ctrl.signal });
           clearTimeout(timeout);
           if (!r.ok) { this.jsonResponse(res, { ok: false, error: `HTTP ${r.status}` }); return; }
           const info = await r.json() as Record<string, unknown>;
+
+          const { teamToken, nickname } = JSON.parse(body);
+          if (teamToken) {
+            const username = (typeof nickname === "string" && nickname.trim()) || os.userInfo().username || "user";
+            const persisted = this.store.getClientHubConnection();
+            const identityKey = persisted?.identityKey || "";
+            try {
+              const joinR = await fetch(baseUrl + "/api/v1/hub/join", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ teamToken, username, identityKey, deviceName: os.hostname(), dryRun: true }),
+              });
+              const joinData = await joinR.json() as Record<string, unknown>;
+              if (!joinR.ok && joinData.error === "username_taken") {
+                this.jsonResponse(res, { ok: false, error: "username_taken", teamName: info.teamName || "" });
+                return;
+              }
+              if (!joinR.ok && joinData.error === "invalid_team_token") {
+                this.jsonResponse(res, { ok: false, error: "invalid_team_token", teamName: info.teamName || "" });
+                return;
+              }
+              if (joinR.ok && joinData.status === "blocked") {
+                this.jsonResponse(res, { ok: false, error: "blocked", teamName: info.teamName || "" });
+                return;
+              }
+            } catch { /* join check is best-effort; connection itself is OK */ }
+          }
+
           this.jsonResponse(res, { ok: true, teamName: info.teamName || "", apiVersion: info.apiVersion || "" });
         } catch (e: unknown) {
           clearTimeout(timeout);
@@ -3118,7 +3258,8 @@ export class ViewerServer {
       const providerCfg = providerKey
         ? raw?.models?.providers?.[providerKey]
         : Object.values(raw?.models?.providers ?? {})[0] as Record<string, unknown> | undefined;
-      if (!providerCfg || !providerCfg.baseUrl || !providerCfg.apiKey) {
+      const resolvedKey = ViewerServer.resolveApiKeyValue(providerCfg?.apiKey);
+      if (!providerCfg || !providerCfg.baseUrl || !resolvedKey) {
         this.jsonResponse(res, { available: false });
         return;
       }
@@ -3126,6 +3267,17 @@ export class ViewerServer {
     } catch {
       this.jsonResponse(res, { available: false });
     }
+  }
+
+  private static resolveApiKeyValue(
+    input: unknown,
+  ): string | undefined {
+    if (!input) return undefined;
+    if (typeof input === "string") return input;
+    if (typeof input === "object" && input !== null && (input as any).source === "env") {
+      return process.env[(input as any).id];
+    }
+    return undefined;
   }
 
   private findPluginPackageJson(): string | null {
@@ -3144,26 +3296,35 @@ export class ViewerServer {
   }
 
   private async handleUpdateCheck(res: http.ServerResponse): Promise<void> {
+    const sendNoStore = (data: unknown, statusCode = 200) => {
+      res.writeHead(statusCode, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+      });
+      res.end(JSON.stringify(data));
+    };
     try {
       const pkgPath = this.findPluginPackageJson();
       if (!pkgPath) {
-        this.jsonResponse(res, { updateAvailable: false, error: "package.json not found" });
+        sendNoStore({ updateAvailable: false, error: "package.json not found" });
         return;
       }
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
       const current = pkg.version as string;
       const name = pkg.name as string;
       if (!current || !name) {
-        this.jsonResponse(res, { updateAvailable: false, current });
+        sendNoStore({ updateAvailable: false, current });
         return;
       }
       const { computeUpdateCheck } = await import("../update-check");
       const result = await computeUpdateCheck(name, current, fetch, 6_000);
       if (!result) {
-        this.jsonResponse(res, { updateAvailable: false, current, packageName: name });
+        sendNoStore({ updateAvailable: false, current, packageName: name });
         return;
       }
-      this.jsonResponse(res, {
+      sendNoStore({
         updateAvailable: result.updateAvailable,
         current: result.current,
         latest: result.latest,
@@ -3174,7 +3335,7 @@ export class ViewerServer {
       });
     } catch (e) {
       this.log.warn(`handleUpdateCheck error: ${e}`);
-      this.jsonResponse(res, { updateAvailable: false, error: String(e) });
+      sendNoStore({ updateAvailable: false, error: String(e) });
     }
   }
 
@@ -3183,13 +3344,14 @@ export class ViewerServer {
     req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
     req.on("end", () => {
       try {
-        const { packageSpec: rawSpec } = JSON.parse(body);
+        const { packageSpec: rawSpec, targetVersion: rawTargetVersion } = JSON.parse(body);
         if (!rawSpec || typeof rawSpec !== "string") {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: false, error: "Missing packageSpec" }));
           return;
         }
         const packageSpec = rawSpec.trim().replace(/^(?:npx\s+)?openclaw\s+plugins\s+install\s+/i, "");
+        const targetVersion = typeof rawTargetVersion === "string" ? rawTargetVersion.trim() : "";
         const allowed = /^@[\w-]+\/[\w.-]+(@[\w.-]+)?$/;
         this.log.info(`update-install: received packageSpec="${packageSpec}" (len=${packageSpec.length})`);
         if (!allowed.test(packageSpec)) {
@@ -3206,16 +3368,42 @@ export class ViewerServer {
         const shortName = pluginName?.replace(/^@[\w-]+\//, "") ?? "memos-local-openclaw-plugin";
         const extDir = path.join(os.homedir(), ".openclaw", "extensions", shortName);
         const tmpDir = path.join(os.tmpdir(), `openclaw-update-${Date.now()}`);
+        const backupDir = path.join(path.dirname(extDir), `${shortName}.backup-${Date.now()}`);
+        let backupReady = false;
+
+        const cleanupTmpDir = () => {
+          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+        };
+        const rollbackInstall = () => {
+          try { fs.rmSync(extDir, { recursive: true, force: true }); } catch {}
+          if (!backupReady) return;
+          try {
+            fs.renameSync(backupDir, extDir);
+            backupReady = false;
+            this.log.info(`update-install: restored previous version from ${backupDir}`);
+          } catch (restoreErr: any) {
+            this.log.warn(`update-install: failed to restore previous version: ${restoreErr?.message ?? restoreErr}`);
+          }
+        };
+        const discardBackup = () => {
+          if (!backupReady) return;
+          try {
+            fs.rmSync(backupDir, { recursive: true, force: true });
+            backupReady = false;
+          } catch (cleanupErr: any) {
+            this.log.warn(`update-install: failed to remove backup dir ${backupDir}: ${cleanupErr?.message ?? cleanupErr}`);
+          }
+        };
 
         // Download via npm pack, extract, and replace extension dir.
         // Does NOT touch openclaw.json → no config watcher SIGUSR1.
         this.log.info(`update-install: downloading ${packageSpec} via npm pack...`);
         fs.mkdirSync(tmpDir, { recursive: true });
-        exec(`npm pack ${packageSpec} --pack-destination ${tmpDir}`, { timeout: 60_000 }, (packErr, packOut) => {
+        exec(`npm pack ${packageSpec} --pack-destination ${tmpDir} --prefer-online`, { timeout: 60_000 }, (packErr, packOut) => {
           if (packErr) {
             this.log.warn(`update-install: npm pack failed: ${packErr.message}`);
             this.jsonResponse(res, { ok: false, error: `Download failed: ${packErr.message}` });
-            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+            cleanupTmpDir();
             return;
           }
           const tgzFile = packOut.trim().split("\n").pop()!;
@@ -3228,7 +3416,7 @@ export class ViewerServer {
             if (tarErr) {
               this.log.warn(`update-install: tar extract failed: ${tarErr.message}`);
               this.jsonResponse(res, { ok: false, error: `Extract failed: ${tarErr.message}` });
-              try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+              cleanupTmpDir();
               return;
             }
 
@@ -3236,23 +3424,36 @@ export class ViewerServer {
             const srcDir = path.join(extractDir, "package");
             if (!fs.existsSync(srcDir)) {
               this.jsonResponse(res, { ok: false, error: "Extracted package has no 'package' dir" });
-              try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+              cleanupTmpDir();
               return;
             }
 
             // Replace extension directory
             this.log.info(`update-install: replacing ${extDir}...`);
-            try { fs.rmSync(extDir, { recursive: true, force: true }); } catch {}
-            fs.mkdirSync(path.dirname(extDir), { recursive: true });
-            fs.renameSync(srcDir, extDir);
+            try {
+              fs.mkdirSync(path.dirname(extDir), { recursive: true });
+              try { fs.rmSync(backupDir, { recursive: true, force: true }); } catch {}
+              if (fs.existsSync(extDir)) {
+                fs.renameSync(extDir, backupDir);
+                backupReady = true;
+              }
+              fs.renameSync(srcDir, extDir);
+            } catch (replaceErr: any) {
+              this.log.warn(`update-install: replace failed: ${replaceErr?.message ?? replaceErr}`);
+              cleanupTmpDir();
+              rollbackInstall();
+              this.jsonResponse(res, { ok: false, error: `Replace failed: ${replaceErr?.message ?? replaceErr}` });
+              return;
+            }
 
             // Install dependencies
             this.log.info(`update-install: installing dependencies...`);
             const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
             execFile(npmCmd, ["install", "--omit=dev", "--ignore-scripts"], { cwd: extDir, timeout: 120_000 }, (npmErr, npmOut, npmStderr) => {
               if (npmErr) {
-                try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
                 this.log.warn(`update-install: npm install failed: ${npmErr.message}`);
+                cleanupTmpDir();
+                rollbackInstall();
                 this.jsonResponse(res, { ok: false, error: `Dependency install failed: ${npmStderr || npmErr.message}` });
                 return;
               }
@@ -3272,22 +3473,30 @@ export class ViewerServer {
                     this.log.warn(`update-install: postinstall failed: ${postErr.message}`);
                     const postStderrStr = String(postStderr || "").trim();
                     if (postStderrStr) this.log.warn(`update-install: postinstall stderr: ${postStderrStr.slice(0, 500)}`);
+                    rollbackInstall();
+                    this.jsonResponse(res, { ok: false, error: `Postinstall failed: ${postStderrStr || postErr.message}` });
+                    return;
                   }
 
-                  // Read new version
                   let newVersion = "unknown";
                   try {
                     const newPkg = JSON.parse(fs.readFileSync(path.join(extDir, "package.json"), "utf-8"));
                     newVersion = newPkg.version ?? newVersion;
                   } catch {}
 
-                  this.log.info(`update-install: success! Updated to ${newVersion}`);
-                  this.jsonResponse(res, { ok: true, version: newVersion });
+                  if (targetVersion && newVersion !== targetVersion) {
+                    this.log.warn(`update-install: version mismatch! expected=${targetVersion}, got=${newVersion} — rolling back`);
+                    rollbackInstall();
+                    this.jsonResponse(res, {
+                      ok: false,
+                      error: `Version mismatch: expected ${targetVersion} but downloaded ${newVersion}. npm cache may be stale — please try again.`,
+                    });
+                    return;
+                  }
 
-                  setTimeout(() => {
-                    this.log.info(`update-install: triggering gateway restart via SIGUSR1...`);
-                    try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
-                  }, 500);
+                  discardBackup();
+                  this.log.info(`update-install: success! Updated to ${newVersion}`);
+                  this.jsonResponseAndRestart(res, { ok: true, version: newVersion }, "update-install");
                 });
               });
             });
@@ -3872,8 +4081,8 @@ export class ViewerServer {
                   mergeCount: 0,
                   lastHitAt: null,
                   mergeHistory: "[]",
-                  createdAt: normalizeTimestamp(row.updated_at),
-                  updatedAt: normalizeTimestamp(row.updated_at),
+                  createdAt: Number(row.updated_at) < 1e12 ? Number(row.updated_at) * 1000 : Number(row.updated_at),
+                  updatedAt: Number(row.updated_at) < 1e12 ? Number(row.updated_at) * 1000 : Number(row.updated_at),
                 };
 
                 this.store.insertChunk(chunk);
@@ -4418,6 +4627,22 @@ export class ViewerServer {
     let body = "";
     req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
     req.on("end", () => cb(body));
+  }
+
+  private jsonResponseAndRestart(
+    res: http.ServerResponse,
+    data: unknown,
+    source: string,
+    delayMs = 1500,
+    statusCode = 200,
+  ): void {
+    res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify(data), () => {
+      setTimeout(() => {
+        this.log.info(`${source}: triggering gateway restart via SIGUSR1...`);
+        try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
+      }, delayMs);
+    });
   }
 
   private jsonResponse(res: http.ServerResponse, data: unknown, statusCode = 200): void {
