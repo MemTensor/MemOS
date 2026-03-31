@@ -310,6 +310,28 @@ if [[ ! -d "$EXTENSION_DIR" ]]; then
   exit 1
 fi
 
+if [[ ! -d "${EXTENSION_DIR}/node_modules" ]]; then
+  warn "node_modules missing after install (postinstall may have cleaned it), 安装后 node_modules 缺失，正在重新安装..."
+  (
+    cd "${EXTENSION_DIR}"
+    npm install --omit=dev --no-fund --no-audit --ignore-scripts --loglevel=error 2>&1
+  )
+fi
+
+if [[ ! -d "${EXTENSION_DIR}/node_modules/better-sqlite3" ]]; then
+  warn "better-sqlite3 missing, attempting rebuild, better-sqlite3 缺失，尝试重新编译..."
+  (
+    cd "${EXTENSION_DIR}"
+    npm rebuild better-sqlite3 2>&1 || true
+  )
+fi
+
+if [[ ! -d "${EXTENSION_DIR}/node_modules" ]]; then
+  error "Dependencies installation failed. Run manually: cd ${EXTENSION_DIR} && npm install --omit=dev"
+  error "依赖安装失败，请手动运行: cd ${EXTENSION_DIR} && npm install --omit=dev"
+  exit 1
+fi
+
 update_openclaw_config
 
 success "Restart OpenClaw Gateway, 重启 OpenClaw Gateway..."
