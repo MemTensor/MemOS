@@ -396,12 +396,31 @@ const memosLocalPlugin = {
 
             const recallOwner = [`agent:${assembleAgentId}`, "public"];
             const result = await engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwner });
+            const rawCandidates = result.hits.map((h: SearchHit) => ({
+              score: h.score,
+              summary: h.summary,
+              content: h.original_excerpt ?? h.summary,
+              original_excerpt: h.original_excerpt ?? "",
+              role: h.source?.role ?? "user",
+              origin: h.origin ?? "local",
+              ownerName: h.ownerName ?? "",
+            }));
             const filteredHits = ceDeduplicateHits(
               result.hits.filter((h: SearchHit) => h.score >= 0.5),
             );
 
             if (filteredHits.length === 0) {
               ctx.log.debug("context-engine assemble: no memory hits");
+              try {
+                const dur = performance.now() - recallT0;
+                store.recordApiLog(
+                  "memory_search",
+                  { type: "auto_recall", query },
+                  JSON.stringify({ candidates: rawCandidates, hubCandidates: [], filtered: [] }),
+                  dur,
+                  true,
+                );
+              } catch { /* best-effort */ }
               return { messages, estimatedTokens: 0 };
             }
 
@@ -418,6 +437,16 @@ const memosLocalPlugin = {
 
             const sk = sessionKey ?? sessionId;
 
+            const filteredCandidates = filteredHits.map((h: SearchHit) => ({
+              score: h.score,
+              summary: h.summary,
+              content: h.original_excerpt ?? h.summary,
+              original_excerpt: h.original_excerpt ?? "",
+              role: h.source?.role ?? "user",
+              origin: h.origin ?? "local",
+              ownerName: h.ownerName ?? "",
+            }));
+
             if (lastAssistantIdx < 0) {
               const syntheticAssistant: CEAgentMessage = {
                 role: "assistant",
@@ -427,7 +456,17 @@ const memosLocalPlugin = {
                 usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
               };
               pendingInjection = { sessionKey: sk, memoryBlock, isSynthetic: true };
+              const dur = performance.now() - recallT0;
               ctx.log.info(`context-engine assemble: first turn, injecting synthetic assistant (${filteredHits.length} memories)`);
+              try {
+                store.recordApiLog(
+                  "memory_search",
+                  { type: "auto_recall", query },
+                  JSON.stringify({ candidates: rawCandidates, hubCandidates: [], filtered: filteredCandidates }),
+                  dur,
+                  true,
+                );
+              } catch { /* best-effort */ }
               return { messages: [...cloned, syntheticAssistant], estimatedTokens: 0 };
             }
 
@@ -437,6 +476,15 @@ const memosLocalPlugin = {
 
             const dur = performance.now() - recallT0;
             ctx.log.info(`context-engine assemble: injected ${filteredHits.length} memories into assistant[${lastAssistantIdx}] (${dur.toFixed(0)}ms)`);
+            try {
+              store.recordApiLog(
+                "memory_search",
+                { type: "auto_recall", query },
+                JSON.stringify({ candidates: rawCandidates, hubCandidates: [], filtered: filteredCandidates }),
+                dur,
+                true,
+              );
+            } catch { /* best-effort */ }
             return { messages: cloned, estimatedTokens: 0 };
           } catch (err) {
             ctx.log.warn(`context-engine assemble failed: ${err}`);

@@ -303,6 +303,38 @@ if (-not (Test-Path $ExtensionDir)) {
   exit 1
 }
 
+$NodeModulesDir = Join-Path $ExtensionDir "node_modules"
+if (-not (Test-Path $NodeModulesDir)) {
+  Write-Warn "node_modules missing after install (postinstall may have cleaned it). Reinstalling..."
+  Push-Location $ExtensionDir
+  try {
+    & npm install --omit=dev --no-fund --no-audit --ignore-scripts --loglevel=error 2>&1
+  }
+  finally {
+    Pop-Location
+  }
+}
+
+$SqliteDir = Join-Path $ExtensionDir "node_modules\better-sqlite3"
+if (-not (Test-Path $SqliteDir)) {
+  Write-Warn "better-sqlite3 missing, attempting rebuild..."
+  Push-Location $ExtensionDir
+  try {
+    & npm rebuild better-sqlite3 2>&1
+  }
+  catch {
+    Write-Warn "better-sqlite3 rebuild returned an error. Continuing..."
+  }
+  finally {
+    Pop-Location
+  }
+}
+
+if (-not (Test-Path $NodeModulesDir)) {
+  Write-Err "Dependencies installation failed. Run manually: cd $ExtensionDir && npm install --omit=dev"
+  exit 1
+}
+
 Update-OpenClawConfig -OpenClawHome $OpenClawHome -ConfigPath $OpenClawConfigPath -PluginId $PluginId
 
 Write-Success "Restarting OpenClaw Gateway..."

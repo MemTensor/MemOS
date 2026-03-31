@@ -61,20 +61,29 @@ function cleanStaleArtifacts() {
     installedVer = pkg.version || "unknown";
   } catch { /* ignore */ }
 
-  const markerPath = path.join(pluginDir, ".installed-version");
-  let prevVer = "";
-  try { prevVer = fs.readFileSync(markerPath, "utf-8").trim(); } catch { /* first install */ }
+  const nodeMajor = process.versions.node.split(".")[0];
+  const currentFingerprint = `${installedVer}+node${nodeMajor}`;
 
-  if (prevVer === installedVer) {
-    log(`Version unchanged (${installedVer}), skipping artifact cleanup.`);
+  const markerPath = path.join(pluginDir, ".installed-version");
+  let prevFingerprint = "";
+  try { prevFingerprint = fs.readFileSync(markerPath, "utf-8").trim(); } catch { /* first install */ }
+
+  const writeMarker = () => {
+    try { fs.writeFileSync(markerPath, currentFingerprint + "\n", "utf-8"); } catch { /* ignore */ }
+  };
+
+  if (prevFingerprint === currentFingerprint) {
+    log(`Version unchanged (${currentFingerprint}), skipping artifact cleanup.`);
     return;
   }
 
-  if (prevVer) {
-    log(`Upgrade detected: ${DIM}${prevVer}${RESET} → ${GREEN}${installedVer}${RESET}`);
-  } else {
-    log(`Fresh install: ${GREEN}${installedVer}${RESET}`);
+  if (!prevFingerprint) {
+    log(`Fresh install: ${GREEN}${currentFingerprint}${RESET}`);
+    writeMarker();
+    return;
   }
+
+  log(`Environment changed: ${DIM}${prevFingerprint}${RESET} → ${GREEN}${currentFingerprint}${RESET}`);
 
   const dirsToClean = ["dist", "node_modules"];
   let cleaned = 0;
@@ -99,7 +108,7 @@ function cleanStaleArtifacts() {
     }
   }
 
-  try { fs.writeFileSync(markerPath, installedVer + "\n", "utf-8"); } catch { /* ignore */ }
+  writeMarker();
 
   if (cleaned > 0) {
     ok(`Cleaned ${cleaned} stale artifact(s). Fresh install will follow.`);
