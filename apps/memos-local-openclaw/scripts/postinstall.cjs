@@ -397,6 +397,16 @@ if (sqliteBindingsExist()) {
   warn("better-sqlite3 native bindings are missing or not loadable.");
   log(`Searched in: ${DIM}${sqliteModulePath}/build/${RESET}`);
   log("Running: npm rebuild better-sqlite3 (may take 30-60s)...");
+}
+
+const startMs = Date.now();
+
+const result = spawnSync(npmCmd, ["rebuild", "better-sqlite3"], {
+  cwd: pluginDir,
+  stdio: "pipe",
+  shell: false,
+  timeout: 180_000,
+});
 
   const startMs = Date.now();
   const result = spawnSync(npmCmd, ["rebuild", "better-sqlite3"], {

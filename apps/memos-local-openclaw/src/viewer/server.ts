@@ -3467,7 +3467,7 @@ export class ViewerServer {
 
                 this.log.info(`update-install: running postinstall...`);
                 execFile(process.execPath, ["scripts/postinstall.cjs"], { cwd: extDir, timeout: 180_000 }, (postErr, postOut, postStderr) => {
-                  cleanupTmpDir();
+                  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 
                   if (postErr) {
                     this.log.warn(`update-install: postinstall failed: ${postErr.message}`);
