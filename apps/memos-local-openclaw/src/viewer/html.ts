@@ -1251,7 +1251,6 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <option value="" data-i18n="filter.allagents">All agents</option>
         </select>
         <select id="memorySearchScope" class="filter-select" onchange="onMemoryScopeChange()" style="display:none">
-          <option value="local" data-i18n="scope.thisAgent">This Agent</option>
           <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
           <option value="hub" data-i18n="scope.hub">Team</option>
         </select>
@@ -1295,7 +1294,6 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <button class="filter-chip" data-task-status="completed" onclick="setTaskStatusFilter(this,'completed')" data-i18n="tasks.status.completed">Completed</button>
           <button class="filter-chip" data-task-status="skipped" onclick="setTaskStatusFilter(this,'skipped')" data-i18n="tasks.status.skipped">Skipped</button>
           <select id="taskSearchScope" class="scope-select" onchange="onTaskScopeChange()" style="display:none">
-            <option value="local" data-i18n="scope.thisAgent">This Agent</option>
             <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
             <option value="hub" data-i18n="scope.hub">Team</option>
           </select>
@@ -1337,7 +1335,6 @@ input,textarea,select{font-family:inherit;font-size:inherit}
         <span class="search-icon">🔍</span>
         <input type="text" id="skillSearchInput" placeholder="Search skills..." data-i18n-ph="skills.search.placeholder" oninput="debounceSkillSearch()">
         <select id="skillSearchScope" class="scope-select" onchange="onSkillScopeChange()" style="display:none">
-          <option value="local" data-i18n="scope.thisAgent">This Agent</option>
           <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
           <option value="hub" data-i18n="scope.hub">Team</option>
         </select>
@@ -2030,7 +2027,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 
 <script>
 let activeSession=null,activeRole='',editingId=null,searchTimer=null,memoryCache={},currentPage=1,totalPages=1,totalCount=0,PAGE_SIZE=40,metricsDays=30;
-let memorySearchScope='local',skillSearchScope='local',taskSearchScope='local';
+let memorySearchScope='allLocal',skillSearchScope='allLocal',taskSearchScope='allLocal';
 let _lastMemoriesFingerprint='',_lastTasksFingerprint='',_lastSkillsFingerprint='';
 let _embeddingWarningShown=false;
 let _currentAgentOwner='agent:main';
@@ -3794,13 +3791,12 @@ function switchView(view){
 }
 
 function onMemoryScopeChange(){
-  memorySearchScope=document.getElementById('memorySearchScope')?.value||'local';
+  memorySearchScope=document.getElementById('memorySearchScope')?.value||'allLocal';
   try{localStorage.setItem('memos_memorySearchScope',memorySearchScope);}catch(e){}
   currentPage=1;
   activeSession=null;activeRole='';
   _lastMemoriesFingerprint='';
   var isHub=memorySearchScope==='hub';
-  var isLocal=memorySearchScope==='local';
   var ownerSel=document.getElementById('filterOwner');
   var filterBar=document.getElementById('filterBar');
   var dateFilter=document.querySelector('.date-filter');
@@ -3811,18 +3807,18 @@ function onMemoryScopeChange(){
   else if(isHub) { document.getElementById('sharingSearchMeta').textContent=''; loadHubMemories(); }
   else {
     document.getElementById('sharingSearchMeta').textContent='';
-    var ownerArg=isLocal?_currentAgentOwner:undefined;
+    var ownerArg=undefined;
     loadStats(ownerArg); loadMemories();
   }
 }
 
 function onSkillScopeChange(){
-  skillSearchScope=document.getElementById('skillSearchScope')?.value||'local';
+  skillSearchScope=document.getElementById('skillSearchScope')?.value||'allLocal';
   loadSkills();
 }
 
 function onTaskScopeChange(){
-  taskSearchScope=document.getElementById('taskSearchScope')?.value||'local';
+  taskSearchScope=document.getElementById('taskSearchScope')?.value||'allLocal';
   tasksPage=0;
   loadTasks();
 }
@@ -5872,16 +5868,14 @@ function setTaskStatusFilter(btn,status){
 
 async function loadTasks(silent){
   const scope=document.getElementById('taskSearchScope')?document.getElementById('taskSearchScope').value:taskSearchScope;
-  taskSearchScope=scope||'local';
+  taskSearchScope=scope||'allLocal';
   if(taskSearchScope==='hub'){ return loadHubTasks(); }
   const list=document.getElementById('tasksList');
   if(!silent) list.innerHTML='<div class="spinner"></div>';
   try{
     const params=new URLSearchParams({limit:String(TASKS_PER_PAGE),offset:String(tasksPage*TASKS_PER_PAGE)});
     if(tasksStatusFilter) params.set('status',tasksStatusFilter);
-    if(taskSearchScope==='local') params.set('owner','agent:main');
     var baseP=new URLSearchParams();
-    if(taskSearchScope==='local') baseP.set('owner','agent:main');
     const [data,allD,activeD,compD,skipD]=await Promise.all([
       fetch('/api/tasks?'+params).then(r=>r.json()),
       fetch('/api/tasks?limit=1&offset=0&'+baseP).then(r=>r.json()),
@@ -6188,7 +6182,7 @@ async function loadSkills(silent){
   if(!silent) list.innerHTML='<div class="spinner"></div>';
   var hubSection=document.getElementById('hubSkillsSection');
   if(hubList){
-    if(skillSearchScope==='local'||skillSearchScope==='allLocal'){
+    if(skillSearchScope==='allLocal'){
       if(hubSection) hubSection.style.display='none';
     }else{
       if(hubSection) hubSection.style.display='block';
@@ -6198,7 +6192,7 @@ async function loadSkills(silent){
 
   const query=(document.getElementById('skillSearchInput')?.value||'').trim();
   const scope=document.getElementById('skillSearchScope') ? document.getElementById('skillSearchScope').value : skillSearchScope;
-  skillSearchScope=scope||'local';
+  skillSearchScope=scope||'allLocal';
 
   try{
     const params=new URLSearchParams();
@@ -6268,7 +6262,7 @@ async function loadSkills(silent){
 
     list.innerHTML=renderLocalCards(localSkills);
 
-    if(skillSearchScope==='local'||skillSearchScope==='allLocal'){
+    if(skillSearchScope==='allLocal'){
       if(hubSection) hubSection.style.display='none';
       document.getElementById('skillSearchMeta').textContent=query?(t('skills.search.local')+' '+localSkills.length):'';
       document.getElementById('skillsTotalCount').textContent=formatNum(localSkills.length);
@@ -7453,7 +7447,7 @@ async function _livePollTick(){
       var _searchVal=(document.getElementById('searchInput')||{}).value||'';
       if(!_searchVal.trim()){
         if(memorySearchScope==='hub') await loadHubMemories(true);
-        else{var _pollOwner=memorySearchScope==='local'?_currentAgentOwner:undefined;await loadStats(_pollOwner);await loadMemories(null,true);}
+        else{var _pollOwner=undefined;await loadStats(_pollOwner);await loadMemories(null,true);}
       }
     }
     else if(_activeView==='tasks') await loadTasks(true);
@@ -7726,7 +7720,7 @@ function stopNotifPoll(){ }
 /* ─── Data loading ─── */
 async function loadAll(){
   await loadStats();
-  var initOwner=memorySearchScope==='local'?_currentAgentOwner:undefined;
+  var initOwner=undefined;
   if(initOwner) await loadStats(initOwner);
   await Promise.all([loadMemories(),loadSharingStatus(false)]);
   checkMigrateStatus();
@@ -7853,14 +7847,12 @@ function getFilterParams(){
   if(dt) p.set('dateTo',dt);
   const sort=document.getElementById('filterSort').value;
   if(sort==='oldest') p.set('sort','oldest');
-  const scope=memorySearchScope||'local';
-  if(scope==='local' || scope==='allLocal'){
+  const scope=memorySearchScope||'allLocal';
+  if(scope==='allLocal'){
     const owner=document.getElementById('filterOwner').value;
     if(owner) {
       p.set('owner',owner);
       _currentAgentOwner = owner;
-    } else if(scope==='local') {
-      p.set('owner',_currentAgentOwner);
     }
   }
   return p;
@@ -7958,7 +7950,7 @@ async function doSearch(query){
     return;
   }
   currentPage=1;
-  var scope=document.getElementById('memorySearchScope')?.value||memorySearchScope||'local';
+  var scope=document.getElementById('memorySearchScope')?.value||memorySearchScope||'allLocal';
   var list=document.getElementById('memoryList');
   list.innerHTML='<div class="spinner"></div>';
   if(scope==='hub'){
@@ -9137,7 +9129,8 @@ async function checkForUpdate(){
 /* ─── Init ─── */
 try{
   var savedScope=localStorage.getItem('memos_memorySearchScope');
-  if(savedScope&&(savedScope==='local'||savedScope==='allLocal'||savedScope==='hub')){
+  if(savedScope==='local') savedScope='allLocal';
+  if(savedScope&&(savedScope==='allLocal'||savedScope==='hub')){
     memorySearchScope=savedScope;
     var scopeEl=document.getElementById('memorySearchScope');
     if(scopeEl) scopeEl.value=savedScope;
