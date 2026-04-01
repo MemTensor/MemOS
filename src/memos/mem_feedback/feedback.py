@@ -2,6 +2,7 @@ import concurrent.futures
 import difflib
 import json
 import re
+import uuid
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -236,6 +237,7 @@ class MemFeedback(BaseMemFeedback):
         else:
             to_add_memory = new_memory_item.model_copy(deep=True)
 
+        to_add_memory.id = str(uuid.uuid4())
         if to_add_memory.metadata.memory_type == "PreferenceMemory":
             to_add_memory.metadata.preference = new_memory_item.memory
 
@@ -243,7 +245,6 @@ class MemFeedback(BaseMemFeedback):
             datetime.now().isoformat()
         )
         to_add_memory.metadata.background = new_memory_item.metadata.background
-        to_add_memory.metadata.sources = []
 
         added_ids = self._retry_db_operation(
             lambda: self.memory_manager.add([to_add_memory], user_name=user_name, use_batch=False)
@@ -360,9 +361,14 @@ class MemFeedback(BaseMemFeedback):
         lang = detect_lang("".join(memory_item.memory))
         template = FEEDBACK_PROMPT_DICT["compare"][lang]
         if current_memories == []:
-            # retrieve
-            last_user_index = max(i for i, d in enumerate(chat_history_list) if d["role"] == "user")
-            last_qa = " ".join([item["content"] for item in chat_history_list[last_user_index:]])
+            user_indices = [i for i, d in enumerate(chat_history_list) if d["role"] == "user"]
+            if user_indices:
+                last_user_index = max(user_indices)
+                last_qa = " ".join(
+                    [item["content"] for item in chat_history_list[last_user_index:]]
+                )
+            else:
+                last_qa = " ".join([item["content"] for item in chat_history_list])
             supplementary_retrieved = self._retrieve(last_qa, info=info, user_name=user_name)
             feedback_retrieved = self._retrieve(memory_item.memory, info=info, user_name=user_name)
 

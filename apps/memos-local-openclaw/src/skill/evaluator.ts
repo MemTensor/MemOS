@@ -52,7 +52,7 @@ Task title: {TITLE}
 Task summary:
 {SUMMARY}
 
-LANGUAGE RULE: The "reason" field MUST use the SAME language as the task title/summary. Chinese input → Chinese reason. English input → English reason. "suggestedName" stays in English kebab-case.
+LANGUAGE RULE (MUST FOLLOW): Detect the language of the task title/summary. If it is Chinese, the "reason" field MUST be in Chinese. If English, reason in English. Only "suggestedName" stays in English kebab-case. 如果任务标题/摘要是中文，reason 必须用中文。
 
 Reply in JSON only, no extra text:
 {
@@ -145,7 +145,7 @@ export class SkillEvaluator {
       .replace("{SUMMARY}", task.summary.slice(0, 3000));
 
     try {
-      const raw = await callLLMWithFallback(chain, prompt, this.ctx.log, "SkillEvaluator.create");
+      const raw = await callLLMWithFallback(chain, prompt, this.ctx.log, "SkillEvaluator.create", { openclawAPI: this.ctx.openclawAPI });
       return this.parseJSON<CreateEvalResult>(raw, {
         shouldGenerate: false, reason: "parse failed", suggestedName: "", suggestedTags: [], confidence: 0,
       });
@@ -169,7 +169,7 @@ export class SkillEvaluator {
       .replace("{SUMMARY}", task.summary.slice(0, 3000));
 
     try {
-      const raw = await callLLMWithFallback(chain, prompt, this.ctx.log, "SkillEvaluator.upgrade");
+      const raw = await callLLMWithFallback(chain, prompt, this.ctx.log, "SkillEvaluator.upgrade", { openclawAPI: this.ctx.openclawAPI });
       return this.parseJSON<UpgradeEvalResult>(raw, {
         shouldUpgrade: false, upgradeType: "refine", dimensions: [], reason: "parse failed", mergeStrategy: "", confidence: 0,
       });
@@ -178,6 +178,7 @@ export class SkillEvaluator {
       return { shouldUpgrade: false, upgradeType: "refine", dimensions: [], reason: `error: ${err}`, mergeStrategy: "", confidence: 0 };
     }
   }
+
 
   private parseJSON<T>(raw: string, fallback: T): T {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);

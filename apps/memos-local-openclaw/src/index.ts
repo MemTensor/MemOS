@@ -1,12 +1,14 @@
 import { v4 as uuid } from "uuid";
 import { buildContext } from "./config";
+import { ensureSqliteBinding } from "./storage/ensure-binding";
 import { SqliteStore } from "./storage/sqlite";
 import { Embedder } from "./embedding";
 import { IngestWorker } from "./ingest/worker";
 import { RecallEngine } from "./recall/engine";
 import { captureMessages } from "./capture";
-import { createMemorySearchTool, createMemoryTimelineTool, createMemoryGetTool } from "./tools";
+import { createMemorySearchTool, createMemoryTimelineTool, createMemoryGetTool, createNetworkMemoryDetailTool } from "./tools";
 import type { MemosLocalConfig, ToolDefinition, Logger } from "./types";
+import type { HostModelsConfig } from "./openclaw-api";
 
 export interface MemosLocalPlugin {
   id: string;
@@ -22,6 +24,7 @@ export interface PluginInitOptions {
   workspaceDir?: string;
   config?: Partial<MemosLocalConfig>;
   log?: Logger;
+  hostModels?: HostModelsConfig;
 }
 
 /**
@@ -50,19 +53,24 @@ export interface PluginInitOptions {
 export function initPlugin(opts: PluginInitOptions = {}): MemosLocalPlugin {
   const stateDir = opts.stateDir ?? defaultStateDir();
   const workspaceDir = opts.workspaceDir ?? process.cwd();
-  const ctx = buildContext(stateDir, workspaceDir, opts.config, opts.log);
+  const ctx = buildContext(stateDir, workspaceDir, opts.config, opts.log, opts.hostModels);
 
   ctx.log.info("Initializing memos-local plugin...");
 
+  ensureSqliteBinding(ctx.log);
+
   const store = new SqliteStore(ctx.config.storage!.dbPath!, ctx.log);
-  const embedder = new Embedder(ctx.config.embedding, ctx.log);
+  const embedder = new Embedder(ctx.config.embedding, ctx.log, ctx.openclawAPI);
   const worker = new IngestWorker(store, embedder, ctx);
   const engine = new RecallEngine(store, embedder, ctx);
 
+  const sharedState = { lastSearchTime: 0 };
+
   const tools: ToolDefinition[] = [
-    createMemorySearchTool(engine),
+    createMemorySearchTool(engine, store, ctx, sharedState),
     createMemoryTimelineTool(store),
     createMemoryGetTool(store),
+    createNetworkMemoryDetailTool(store, ctx),
   ];
 
   ctx.log.info(`Plugin ready. DB: ${ctx.config.storage!.dbPath}, Embedding: ${embedder.provider}`);
@@ -81,7 +89,10 @@ export function initPlugin(opts: PluginInitOptions = {}): MemosLocalPlugin {
       const turnId = uuid();
       const tag = ctx.config.capture?.evidenceWrapperTag ?? "STORED_MEMORY";
 
-      const captured = captureMessages(messages, session, turnId, tag, ctx.log, owner);
+      const userSearchTime = sharedState.lastSearchTime || 0;
+      sharedState.lastSearchTime = 0;
+
+      const captured = captureMessages(messages, session, turnId, tag, ctx.log, owner, userSearchTime);
       if (captured.length > 0) {
         worker.enqueue(captured);
       }

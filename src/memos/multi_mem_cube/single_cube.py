@@ -617,7 +617,7 @@ class SingleCubeView(MemCubeView):
 
         # 3. Call LLM
         try:
-            raw = self.mem_reader.llm.generate([{"role": "user", "content": prompt}])
+            raw = self.mem_reader.general_llm.generate([{"role": "user", "content": prompt}])
             success, parsed_result = parse_keep_filter_response(raw)
 
             if not success:

@@ -1,0 +1,19 @@
+apiVersion: v2
+name: memos
+description: MemOS - AI Memory Operating System for LLM and Agent systems
+type: application
+version: 1.0.0
+appVersion: "2.0.9"
+keywords:
+  - memory
+  - llm
+  - agent
+  - ai
+  - vector-database
+  - graph-database
+home: https://memos.openmem.net
+sources:
+  - https://github.com/MemTensor/MemOS
+maintainers:
+  - name: MemTensor
+    url: https://github.com/MemTensor

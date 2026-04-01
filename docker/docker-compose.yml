@@ -26,7 +26,7 @@ services:
       - memos_network
 
   neo4j:
-    image: neo4j:5.26.4
+    image: neo4j:5.26.6
     container_name: neo4j-docker
     ports:
       - "7474:7474"   # HTTP

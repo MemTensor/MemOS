@@ -22,6 +22,8 @@ When you need to answer questions that require real-time web information
 
 **Prerequisites:**
 - Valid BochaAI API Key (set in environment variable: BOCHA_API_KEY)
+- (Optional) Valid Tavily API Key (set in environment variable: TAVILY_API_KEY)
+  - Get from https://app.tavily.com (1,000 free credits/month)
 - (Optional) Valid Google API Key and Search Engine ID for Google Custom Search
   - GOOGLE_API_KEY: Get from https://console.cloud.google.com/
   - GOOGLE_SEARCH_ENGINE_ID: Get from https://programmablesearchengine.google.com/
@@ -288,18 +290,101 @@ else:
     print("\n   Get your credentials from:")
     print("   https://developers.google.com/custom-search/v1/overview")
 
+# ============================================================================
+# Step 7: Test Tavily Search API (Optional)
+# ============================================================================
+print("\n" + "=" * 80)
+print("TAVILY SEARCH API TEST")
+print("=" * 80)
+
+tavily_api_key = os.environ.get("TAVILY_API_KEY", "")
+
+if tavily_api_key:
+    print("\n[Step 7.1] Configuring Tavily Search retriever...")
+
+    tavily_retriever_config = InternetRetrieverConfigFactory.model_validate(
+        {
+            "backend": "tavily",
+            "config": {
+                "api_key": tavily_api_key,
+                "max_results": 5,
+                "search_depth": "basic",
+                "include_answer": False,
+            },
+        }
+    )
+
+    print("  Retriever configured: tavily")
+    print(f"  Max results: {tavily_retriever_config.config.max_results}")
+
+    print("\n[Step 7.2] Creating Tavily retriever instance...")
+    tavily_retriever = InternetRetrieverFactory.from_config(tavily_retriever_config, embedder)
+    print("  Tavily retriever initialized")
+
+    print("\n[Step 7.3] Performing Tavily web search...")
+    tavily_query = "latest developments in AI 2024"
+    print(f"  Query: '{tavily_query}'")
+    print("  Searching via Tavily Search API...\n")
+
+    tavily_results = tavily_retriever.retrieve_from_internet(tavily_query)
+
+    print(f"  Tavily search completed! Retrieved {len(tavily_results)} memory items\n")
+
+    print("=" * 80)
+    print("TAVILY SEARCH RESULTS")
+    print("=" * 80)
+
+    if not tavily_results:
+        print("\n  No results found from Tavily.")
+        print("   This might indicate:")
+        print("   - Invalid Tavily API key")
+        print("   - Network connectivity issues")
+    else:
+        for idx, item in enumerate(tavily_results, 1):
+            print(f"\n[Tavily Result #{idx}]")
+            print("-" * 80)
+
+            content = item.memory
+            if len(content) > 300:
+                print(f"Content: {content[:300]}...")
+                print(f"         (... {len(content) - 300} more characters)")
+            else:
+                print(f"Content: {content}")
+
+            if hasattr(item, "metadata") and item.metadata:
+                metadata = item.metadata
+                if hasattr(metadata, "sources") and metadata.sources:
+                    print(f"Source: {metadata.sources[0] if metadata.sources else 'N/A'}")
+
+            print()
+
+    print("=" * 80)
+    print("Tavily Search Test completed!")
+    print("=" * 80)
+else:
+    print("\n  Skipping Tavily Search API test")
+    print("   To enable this test, set the following environment variable:")
+    print("   - TAVILY_API_KEY: Your Tavily API key (get from https://app.tavily.com)")
+
 print("\n" + "=" * 80)
 print("ALL TESTS COMPLETED")
 print("=" * 80)
-print("\n💡 Summary:")
-print("  ✓ Tested BochaAI web search retriever")
+print("\n Summary:")
+print("  - Tested BochaAI web search retriever")
 if google_api_key and google_search_engine_id:
-    print("  ✓ Tested Google Custom Search API")
+    print("  - Tested Google Custom Search API")
 else:
-    print("  ⏭️  Skipped Google Custom Search API (credentials not set)")
-print("\n💡 Quick Start:")
+    print("  - Skipped Google Custom Search API (credentials not set)")
+if tavily_api_key:
+    print("  - Tested Tavily Search API")
+else:
+    print("  - Skipped Tavily Search API (credentials not set)")
+print("\n Quick Start:")
 print("  # Set BochaAI API key")
 print("  export BOCHA_API_KEY='sk-your-bocha-api-key'")
+print("  ")
+print("  # Set Tavily API key (optional)")
+print("  export TAVILY_API_KEY='tvly-your-tavily-api-key'")
 print("  ")
 print("  # Set Google Custom Search credentials (optional)")
 print("  export GOOGLE_API_KEY='your-google-api-key'")

@@ -9,6 +9,7 @@ from memos.memories.textual.tree_text_memory.retrieve.bochasearch import BochaAI
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever import (
     InternetGoogleRetriever,
 )
+from memos.memories.textual.tree_text_memory.retrieve.tavilysearch import InternetTavilyRetriever
 from memos.memories.textual.tree_text_memory.retrieve.xinyusearch import XinyuSearchRetriever
 from memos.memos_tools.singleton import singleton_factory
 
@@ -21,6 +22,7 @@ class InternetRetrieverFactory:
         "bing": InternetGoogleRetriever,  # TODO: Implement BingRetriever
         "xinyu": XinyuSearchRetriever,
         "bocha": BochaAISearchRetriever,
+        "tavily": InternetTavilyRetriever,
     }
 
     @classmethod
@@ -80,6 +82,14 @@ class InternetRetrieverFactory:
                 embedder=embedder,
                 reader=MemReaderFactory.from_config(config.reader),
                 max_results=config.max_results,
+            )
+        elif backend == "tavily":
+            return retriever_class(
+                api_key=config.api_key,
+                embedder=embedder,
+                max_results=config.max_results,
+                search_depth=config.search_depth,
+                include_answer=config.include_answer,
             )
         else:
             raise ValueError(f"Unsupported backend: {backend}")

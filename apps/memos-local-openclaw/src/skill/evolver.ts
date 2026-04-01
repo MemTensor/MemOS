@@ -9,8 +9,10 @@ import { DEFAULTS } from "../types";
 import { SkillEvaluator } from "./evaluator";
 import { SkillGenerator } from "./generator";
 import { SkillUpgrader } from "./upgrader";
-import { SkillInstaller } from "./installer";
+import { SkillInstaller, type SkillInstallMode } from "./installer";
 import { buildSkillConfigChain, callLLMWithFallback } from "../shared/llm-call";
+
+export type SkillEvolvedCallback = (skillName: string, upgradeType: "created" | "upgraded") => void;
 
 export class SkillEvolver {
   private evaluator: SkillEvaluator;
@@ -19,6 +21,7 @@ export class SkillEvolver {
   private installer: SkillInstaller;
   private processing = false;
   private queue: Task[] = [];
+  onSkillEvolved: SkillEvolvedCallback | null = null;
 
   constructor(
     private store: SqliteStore,
@@ -93,10 +96,19 @@ export class SkillEvolver {
       return;
     }
 
+    const preferUpgrade = this.ctx.config.skillEvolution?.preferUpgradeExisting ?? DEFAULTS.skillPreferUpgrade;
     const relatedSkill = await this.findRelatedSkill(task);
 
     if (relatedSkill) {
       await this.handleExistingSkill(task, chunks, relatedSkill);
+    } else if (preferUpgrade) {
+      const nameCandidate = await this.findSkillByNameSimilarity(task);
+      if (nameCandidate) {
+        this.ctx.log.info(`SkillEvolver: preferUpgrade found name-similar skill "${nameCandidate.name}" for task "${task.title}"`);
+        await this.handleExistingSkill(task, chunks, nameCandidate);
+      } else {
+        await this.handleNewSkill(task, chunks);
+      }
     } else {
       await this.handleNewSkill(task, chunks);
     }
@@ -278,7 +290,12 @@ Use selectedIndex 0 when none is highly relevant.`;
 
       if (upgraded) {
         this.store.linkTaskSkill(task.id, freshSkill.id, "evolved_from", freshSkill.version + 1);
-        this.installer.syncIfInstalled(freshSkill.name);
+        if (freshSkill.installed) {
+          this.installer.syncIfInstalled(freshSkill.name);
+        } else {
+          this.autoInstallIfNeeded(freshSkill);
+        }
+        this.onSkillEvolved?.(freshSkill.name, "upgraded");
       } else {
         this.store.linkTaskSkill(task.id, freshSkill.id, "applied_to", freshSkill.version);
       }
@@ -300,6 +317,13 @@ Use selectedIndex 0 when none is highly relevant.`;
     const evalResult = await this.evaluator.evaluateCreate(task);
 
     if (evalResult.shouldGenerate && evalResult.confidence >= minConfidence) {
+      const existingByName = this.store.getSkillByName(evalResult.suggestedName);
+      if (existingByName && (existingByName.status === "active" || existingByName.status === "draft")) {
+        this.ctx.log.info(`SkillEvolver: skill "${evalResult.suggestedName}" already exists, redirecting to upgrade instead of create`);
+        await this.handleExistingSkill(task, chunks, existingByName);
+        return;
+      }
+
       this.ctx.log.info(`SkillEvolver: generating new skill "${evalResult.suggestedName}" — ${evalResult.reason}`);
       this.store.setTaskSkillMeta(task.id, { skillStatus: "generating", skillReason: evalResult.reason });
 
@@ -307,11 +331,9 @@ Use selectedIndex 0 when none is highly relevant.`;
       this.markChunksWithSkill(chunks, skill.id);
       this.store.linkTaskSkill(task.id, skill.id, "generated_from", 1);
       this.store.setTaskSkillMeta(task.id, { skillStatus: "generated", skillReason: evalResult.reason });
+      this.onSkillEvolved?.(skill.name, "created");
 
-      const autoInstall = this.ctx.config.skillEvolution?.autoInstall ?? DEFAULTS.skillAutoInstall;
-      if (autoInstall && skill.status === "active") {
-        this.installer.install(skill.id);
-      }
+      this.autoInstallIfNeeded(skill);
     } else {
       const reason = evalResult.reason || `confidence不足 (${evalResult.confidence} < ${minConfidence})`;
       this.ctx.log.debug(`SkillEvolver: task "${task.title}" not worth generating skill — ${reason}`);
@@ -324,6 +346,41 @@ Use selectedIndex 0 when none is highly relevant.`;
       this.store.setChunkSkillId(chunk.id, skillId);
     }
     this.ctx.log.debug(`SkillEvolver: marked ${chunks.length} chunks with skill_id=${skillId}`);
+  }
+
+  private async findSkillByNameSimilarity(task: Task): Promise<Skill | null> {
+    const query = task.title.slice(0, 200);
+    const owner = task.owner ?? "agent:main";
+
+    try {
+      const ftsHits = this.store.skillFtsSearch(query, 5, "mix", owner);
+      for (const hit of ftsHits) {
+        if (hit.score < 0.5) continue;
+        const skill = this.store.getSkill(hit.skillId);
+        if (skill && (skill.status === "active" || skill.status === "draft")) {
+          return skill;
+        }
+      }
+    } catch { /* best-effort */ }
+
+    return null;
+  }
+
+  private autoInstallIfNeeded(skill: Skill): void {
+    if (skill.status !== "active") return;
+
+    const explicitAutoInstall = this.ctx.config.skillEvolution?.autoInstall ?? DEFAULTS.skillAutoInstall;
+    if (explicitAutoInstall) {
+      this.installer.install(skill.id);
+      this.ctx.log.info(`SkillEvolver: auto-installed "${skill.name}" (explicit autoInstall=true)`);
+      return;
+    }
+
+    const manifest = SkillInstaller.buildManifest(skill.dirPath, !!skill.installed, skill.name);
+    if (manifest.installMode === "install_recommended") {
+      this.installer.install(skill.id);
+      this.ctx.log.info(`SkillEvolver: auto-installed "${skill.name}" (install_recommended: ${manifest.scriptsCount} scripts, ${Math.round(manifest.totalSize / 1024)}KB)`);
+    }
   }
 
   private readSkillContent(skill: Skill): string | null {

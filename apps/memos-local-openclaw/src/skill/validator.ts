@@ -31,6 +31,9 @@ export class SkillValidator {
     this.validateFormat(dirPath, result);
     if (!result.valid) return result;
 
+    this.checkCompanionConsistency(dirPath, result);
+    this.scanSecrets(dirPath, result);
+
     if (opts?.previousContent) {
       this.regressionCheck(dirPath, opts.previousContent, result);
     }
@@ -133,6 +136,82 @@ export class SkillValidator {
     }
   }
 
+  private checkCompanionConsistency(dirPath: string, result: ValidationResult): void {
+    const skillMdPath = path.join(dirPath, "SKILL.md");
+    const content = fs.readFileSync(skillMdPath, "utf-8");
+
+    const referencedScripts = [...content.matchAll(/`scripts\/([^`]+)`/g)].map(m => m[1]);
+    const referencedRefs = [...content.matchAll(/`references\/([^`]+)`/g)].map(m => m[1]);
+
+    const scriptsDir = path.join(dirPath, "scripts");
+    const refsDir = path.join(dirPath, "references");
+
+    for (const f of referencedScripts) {
+      if (!fs.existsSync(path.join(scriptsDir, f))) {
+        result.warnings.push(`SKILL.md references scripts/${f} but file does not exist`);
+      }
+    }
+    for (const f of referencedRefs) {
+      if (!fs.existsSync(path.join(refsDir, f))) {
+        result.warnings.push(`SKILL.md references references/${f} but file does not exist`);
+      }
+    }
+
+    if (fs.existsSync(scriptsDir)) {
+      try {
+        const actualScripts = fs.readdirSync(scriptsDir);
+        for (const f of actualScripts) {
+          if (!referencedScripts.includes(f)) {
+            result.warnings.push(`scripts/${f} exists but is not referenced in SKILL.md`);
+          }
+        }
+      } catch { /* best-effort */ }
+    }
+
+    const evalsPath = path.join(dirPath, "evals", "evals.json");
+    if (fs.existsSync(evalsPath)) {
+      try {
+        const evalsData = JSON.parse(fs.readFileSync(evalsPath, "utf-8"));
+        if (!Array.isArray(evalsData?.evals) && !Array.isArray(evalsData)) {
+          result.warnings.push("evals/evals.json exists but has unexpected structure");
+        }
+      } catch {
+        result.warnings.push("evals/evals.json exists but is not valid JSON");
+      }
+    }
+  }
+
+  private static readonly SECRET_PATTERNS: Array<{ label: string; regex: RegExp }> = [
+    { label: "API key (sk-...)", regex: /\bsk-[a-zA-Z0-9]{20,}\b/ },
+    { label: "Bearer token", regex: /\bBearer\s+[a-zA-Z0-9_\-.]{20,}\b/ },
+    { label: "AWS key", regex: /\bAKIA[0-9A-Z]{16}\b/ },
+    { label: "Generic secret assignment", regex: /(api[_-]?key|secret|token|password|credential)\s*[:=]\s*["'][^"']{8,}["']/i },
+    { label: "Base64 encoded secret (long)", regex: /\b[A-Za-z0-9+/]{40,}={0,2}\b/ },
+  ];
+
+  private scanSecrets(dirPath: string, result: ValidationResult): void {
+    const filesToScan = ["SKILL.md"];
+    const scriptsDir = path.join(dirPath, "scripts");
+    if (fs.existsSync(scriptsDir)) {
+      try {
+        for (const f of fs.readdirSync(scriptsDir)) filesToScan.push(path.join("scripts", f));
+      } catch { /* best-effort */ }
+    }
+
+    for (const relPath of filesToScan) {
+      const fullPath = path.join(dirPath, relPath);
+      if (!fs.existsSync(fullPath)) continue;
+      try {
+        const content = fs.readFileSync(fullPath, "utf-8");
+        for (const { label, regex } of SkillValidator.SECRET_PATTERNS) {
+          if (regex.test(content)) {
+            result.warnings.push(`Potential secret detected in ${relPath}: ${label}`);
+          }
+        }
+      } catch { /* best-effort */ }
+    }
+  }
+
   private async assessQuality(dirPath: string, result: ValidationResult): Promise<void> {
     const chain = buildSkillConfigChain(this.ctx);
     if (chain.length === 0) return;
@@ -143,7 +222,7 @@ export class SkillValidator {
     const prompt = QUALITY_PROMPT.replace("{SKILL_CONTENT}", content.slice(0, 6000));
 
     try {
-      const raw = await callLLMWithFallback(chain, prompt, this.ctx.log, "SkillValidator.quality");
+      const raw = await callLLMWithFallback(chain, prompt, this.ctx.log, "SkillValidator.quality", { openclawAPI: this.ctx.openclawAPI });
 
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
       if (!jsonMatch) return;
