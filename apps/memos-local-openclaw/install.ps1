@@ -184,6 +184,14 @@ if (!config.plugins.allow.includes(pluginId)) {
   config.plugins.allow.push(pluginId);
 }
 
+// Clean up stale contextEngine slot from previous versions
+if (config.plugins.slots && config.plugins.slots.contextEngine) {
+  delete config.plugins.slots.contextEngine;
+  if (Object.keys(config.plugins.slots).length === 0) {
+    delete config.plugins.slots;
+  }
+}
+
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 '@
   $nodeScript | & node - $ConfigPath $PluginId
@@ -291,6 +299,20 @@ try {
 finally {
   Remove-Item Env:\MEMOS_SKIP_SETUP -ErrorAction SilentlyContinue
   Pop-Location
+}
+
+$nodeModulesDir = Join-Path $ExtensionDir "node_modules"
+if (-not (Test-Path $nodeModulesDir) -or @(Get-ChildItem -Path $nodeModulesDir -ErrorAction SilentlyContinue).Count -eq 0) {
+  Write-Warn "node_modules was cleaned by postinstall (version upgrade detected), re-installing..."
+  Push-Location $ExtensionDir
+  try {
+    $env:MEMOS_SKIP_SETUP = "1"
+    & npm install --omit=dev --no-fund --no-audit --loglevel=error 2>&1
+  }
+  finally {
+    Remove-Item Env:\MEMOS_SKIP_SETUP -ErrorAction SilentlyContinue
+    Pop-Location
+  }
 }
 
 if (-not (Test-Path $ExtensionDir)) {
