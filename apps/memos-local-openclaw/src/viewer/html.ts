@@ -1257,6 +1257,11 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
           <option value="hub" data-i18n="scope.hub">Team</option>
         </select>
+        <select id="memoryPageSize" class="filter-select" onchange="onMemoryPageSizeChange()">
+          <option value="10">10 / page</option>
+          <option value="20" selected>20 / page</option>
+          <option value="40">40 / page</option>
+        </select>
       </div>
       <div class="search-meta" id="searchMeta"></div>
       <div class="search-meta" id="sharingSearchMeta"></div>
@@ -1296,6 +1301,11 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <button class="filter-chip" data-task-status="active" onclick="setTaskStatusFilter(this,'active')" data-i18n="tasks.status.active">Active</button>
           <button class="filter-chip" data-task-status="completed" onclick="setTaskStatusFilter(this,'completed')" data-i18n="tasks.status.completed">Completed</button>
           <button class="filter-chip" data-task-status="skipped" onclick="setTaskStatusFilter(this,'skipped')" data-i18n="tasks.status.skipped">Skipped</button>
+          <select id="tasksPageSize" class="filter-select" onchange="onTasksPageSizeChange()">
+            <option value="10">10 / page</option>
+            <option value="20" selected>20 / page</option>
+            <option value="40">40 / page</option>
+          </select>
           <select id="taskSearchScope" class="scope-select" onchange="onTaskScopeChange()" style="display:none">
             <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
             <option value="hub" data-i18n="scope.hub">Team</option>
@@ -1341,6 +1351,11 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
           <option value="hub" data-i18n="scope.hub">Team</option>
         </select>
+        <select id="skillsPageSize" class="filter-select" onchange="onSkillsPageSizeChange()">
+          <option value="10">10 / page</option>
+          <option value="20" selected>20 / page</option>
+          <option value="40">40 / page</option>
+        </select>
       </div>
       <div class="search-meta" id="skillSearchMeta" style="display:none"></div>
       <div class="tasks-header">
@@ -1368,6 +1383,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
         </div>
       </div>
       <div class="tasks-list" id="skillsList"><div class="spinner"></div></div>
+      <div class="pagination" id="skillsPagination"></div>
       <div id="hubSkillsSection" style="display:none;margin-top:16px">
         <div class="section-title" style="margin-bottom:12px" data-i18n="skills.hub.title">\u{1F310} Team Skills</div>
         <div class="tasks-list" id="hubSkillsList"></div>
@@ -2033,7 +2049,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 <div class="toast-container" id="toasts"></div>
 
 <script>
-let activeSession=null,activeRole='',editingId=null,searchTimer=null,memoryCache={},currentPage=1,totalPages=1,totalCount=0,PAGE_SIZE=40,metricsDays=30;
+let activeSession=null,activeRole='',editingId=null,searchTimer=null,memoryCache={},currentPage=1,totalPages=1,totalCount=0,PAGE_SIZE=20,metricsDays=30;
 let memorySearchScope='allLocal',skillSearchScope='allLocal',taskSearchScope='allLocal';
 let _lastMemoriesFingerprint='',_lastTasksFingerprint='',_lastSkillsFingerprint='';
 let _embeddingWarningShown=false;
@@ -3831,9 +3847,54 @@ function onMemoryScopeChange(){
   }
 }
 
+function normalizePageSize(value,fallback){
+  const v=Number(value);
+  return v===10||v===20||v===40?v:fallback;
+}
+
+function applyPageSizeFromSelect(selectId,storageKey,fallback,onApply){
+  const el=document.getElementById(selectId);
+  const next=normalizePageSize(el?.value,fallback);
+  onApply(next);
+  try{localStorage.setItem(storageKey,String(next));}catch(e){}
+  return next;
+}
+
+function restorePageSizeSetting(storageKey,selectId,fallback,onApply){
+  let next=fallback;
+  try{
+    const raw=localStorage.getItem(storageKey);
+    next=normalizePageSize(raw||String(fallback),fallback);
+  }catch(e){}
+  onApply(next);
+  const el=document.getElementById(selectId);
+  if(el) el.value=String(next);
+  return next;
+}
+
+function onMemoryPageSizeChange(){
+  applyPageSizeFromSelect('memoryPageSize','memos_memoryPageSize',20,function(next){PAGE_SIZE=next;});
+  currentPage=1;
+  if(memorySearchScope==='hub') loadHubMemories();
+  else loadMemories();
+}
+
 function onSkillScopeChange(){
   skillSearchScope=document.getElementById('skillSearchScope')?.value||'allLocal';
+  skillsPage=0;
   loadSkills();
+}
+
+function onSkillsPageSizeChange(){
+  applyPageSizeFromSelect('skillsPageSize','memos_skillsPageSize',20,function(next){skillsPageSize=next;});
+  skillsPage=0;
+  loadSkills();
+}
+
+function onTasksPageSizeChange(){
+  applyPageSizeFromSelect('tasksPageSize','memos_tasksPageSize',20,function(next){tasksPageSize=next;});
+  tasksPage=0;
+  loadTasks();
 }
 
 function onTaskScopeChange(){
@@ -5482,6 +5543,7 @@ function localMemoryErrorMessage(err){
 
 function debounceSkillSearch(){
   clearTimeout(skillSearchTimer);
+  skillsPage=0;
   skillSearchTimer=setTimeout(function(){loadSkills();},300);
 }
 
@@ -5875,7 +5937,7 @@ function dateLoc(){return curLang==='zh'?'zh-CN':'en-US';}
 /* ─── Tasks View Logic ─── */
 let tasksStatusFilter='';
 let tasksPage=0;
-const TASKS_PER_PAGE=20;
+let tasksPageSize=20;
 
 function setTaskStatusFilter(btn,status){
   document.querySelectorAll('.tasks-filters .filter-chip').forEach(c=>c.classList.remove('active'));
@@ -5892,7 +5954,7 @@ async function loadTasks(silent){
   const list=document.getElementById('tasksList');
   if(!silent) list.innerHTML='<div class="spinner"></div>';
   try{
-    const params=new URLSearchParams({limit:String(TASKS_PER_PAGE),offset:String(tasksPage*TASKS_PER_PAGE)});
+    const params=new URLSearchParams({limit:String(tasksPageSize),offset:String(tasksPage*tasksPageSize)});
     if(tasksStatusFilter) params.set('status',tasksStatusFilter);
     var baseP=new URLSearchParams();
     const [data,allD,activeD,compD,skipD]=await Promise.all([
@@ -5974,7 +6036,7 @@ function updateTaskCardBadge(taskId,newScope){
 
 function renderTasksPagination(total){
   const el=document.getElementById('tasksPagination');
-  const pages=Math.ceil(total/TASKS_PER_PAGE);
+  const pages=Math.ceil(total/tasksPageSize);
   if(pages<=1){el.innerHTML='';return;}
   let html='<button class="pg-btn'+(tasksPage===0?' disabled':'')+'" onclick="tasksPage=Math.max(0,tasksPage-1);loadTasks()">\\u2190</button>';
   const start=Math.max(0,tasksPage-2),end=Math.min(pages,tasksPage+3);
@@ -6171,13 +6233,17 @@ async function deleteTask(taskId){
 
 /* ─── Skills View Logic ─── */
 let skillsStatusFilter='';
+let skillsPage=0;
+let skillsPageSize=20;
 let selectedSkillIds=new Set();
 let currentLocalSkills=[];
+let skillsFilterSignature='';
 
 function setSkillStatusFilter(btn,status){
   document.querySelectorAll('.skills-view .tasks-filters .filter-chip').forEach(c=>c.classList.remove('active'));
   btn.classList.add('active');
   skillsStatusFilter=status;
+  skillsPage=0;
   loadSkills();
 }
 
@@ -6231,6 +6297,21 @@ function updateSkillCardBadge(skillId,newScope){
   }
 }
 
+function renderSkillsPagination(total){
+  const el=document.getElementById('skillsPagination');
+  if(!el) return;
+  const pages=Math.ceil(total/skillsPageSize);
+  if(pages<=1){el.innerHTML='';return;}
+  let html='<button class="pg-btn'+(skillsPage===0?' disabled':'')+'" onclick="skillsPage=Math.max(0,skillsPage-1);loadSkills()">\\u2190</button>';
+  const start=Math.max(0,skillsPage-2),end=Math.min(pages,skillsPage+3);
+  for(let i=start;i<end;i++){
+    html+='<button class="pg-btn'+(i===skillsPage?' active':'')+'" onclick="skillsPage='+i+';loadSkills()">'+(i+1)+'</button>';
+  }
+  html+='<button class="pg-btn'+(skillsPage>=pages-1?' disabled':'')+'" onclick="skillsPage=Math.min('+(pages-1)+',skillsPage+1);loadSkills()">\\u2192</button>';
+  html+='<span class="pg-info">'+total+' '+t('pagination.total')+'</span>';
+  el.innerHTML=html;
+}
+
 async function loadSkills(silent){
   const list=document.getElementById('skillsList');
   const hubList=document.getElementById('hubSkillsList');
@@ -6254,6 +6335,11 @@ async function loadSkills(silent){
     if(skillsStatusFilter) params.set('status',skillsStatusFilter);
     const visFilter=document.getElementById('skillVisibilityFilter')?.value;
     if(visFilter) params.set('visibility',visFilter);
+    const filterSignature=[query,skillSearchScope,skillsStatusFilter,visFilter||''].join('|');
+    if(!silent&&filterSignature!==skillsFilterSignature){
+      skillsPage=0;
+    }
+    skillsFilterSignature=filterSignature;
 
     const localRes=await fetch('/api/skills?'+params.toString());
     const localData=await localRes.json();
@@ -6321,7 +6407,13 @@ async function loadSkills(silent){
       }).join('');
     };
 
-    list.innerHTML=renderLocalCards(localSkills);
+    const totalLocalSkills=localSkills.length;
+    const localPages=Math.ceil(totalLocalSkills/skillsPageSize)||1;
+    if(skillsPage>=localPages) skillsPage=Math.max(0,localPages-1);
+    const startIndex=skillsPage*skillsPageSize;
+    const pageSkills=localSkills.slice(startIndex,startIndex+skillsPageSize);
+    list.innerHTML=renderLocalCards(pageSkills);
+    renderSkillsPagination(totalLocalSkills);
     updateSkillSelectionToolbar();
 
     if(skillSearchScope==='allLocal'){
@@ -6357,6 +6449,8 @@ async function loadSkills(silent){
     const localHits=(data.local&&Array.isArray(data.local.hits))?data.local.hits:[];
     const hubHits=(data.hub&&Array.isArray(data.hub.hits))?data.hub.hits:[];
 
+    const sp=document.getElementById('skillsPagination');
+    if(sp) sp.innerHTML='';
     list.innerHTML=localHits.length?localHits.map(function(skill){
       return '<div class="hub-skill-card" onclick="openSkillDetail(&quot;'+escAttr(skill.skillId)+'&quot;)">'+
         '<div class="summary">'+esc(skill.name)+'</div>'+
@@ -6391,6 +6485,8 @@ async function loadSkills(silent){
     updateSkillSelectionToolbar();
   }catch(e){
     list.innerHTML='<div style="text-align:center;padding:24px;color:var(--rose)">'+t('skills.load.error')+': '+esc(String(e))+'</div>';
+    const sp=document.getElementById('skillsPagination');
+    if(sp) sp.innerHTML='';
     if(hubList){
       hubList.innerHTML='<div style="text-align:center;padding:24px;color:var(--rose)">'+t('skills.load.error')+'</div>';
     }
@@ -6402,7 +6498,7 @@ async function loadHubTasks(){
   if(!list) return;
   list.innerHTML='<div class="spinner"></div>';
   try{
-    var r=await fetch('/api/sharing/tasks/list?limit=40');
+    var r=await fetch('/api/sharing/tasks/list?limit='+tasksPageSize);
     var d=await r.json();
     var tasks=Array.isArray(d.tasks)?d.tasks:[];
     hubTasksCache=tasks;
@@ -9225,6 +9321,9 @@ try{
     if(scopeEl) scopeEl.value=savedScope;
   }
 }catch(e){}
+restorePageSizeSetting('memos_memoryPageSize','memoryPageSize',20,function(next){PAGE_SIZE=next;});
+restorePageSizeSetting('memos_skillsPageSize','skillsPageSize',20,function(next){skillsPageSize=next;});
+restorePageSizeSetting('memos_tasksPageSize','tasksPageSize',20,function(next){tasksPageSize=next;});
 document.getElementById('modalOverlay').addEventListener('click',e=>{if(e.target.id==='modalOverlay')closeModal()});
 document.getElementById('searchInput').addEventListener('keydown',e=>{if(e.key==='Escape'){e.target.value='';currentPage=1;if(memorySearchScope==='hub')loadHubMemories();else loadMemories();}});
 applyI18n();
