@@ -317,7 +317,7 @@ const memosLocalPlugin = {
         const raw = fs.readFileSync(openclawJsonPath, "utf-8");
         const cfg = JSON.parse(raw);
         const allow: string[] | undefined = cfg?.tools?.allow;
-        if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins")) {
+        if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins") && !allow.includes("*")) {
           const lastEntry = JSON.stringify(allow[allow.length - 1]);
           const patched = raw.replace(
             new RegExp(`(${lastEntry})(\\s*\\])`),
