@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { SummarizerConfig, SummaryProvider, Logger } from "../../types";
-import { summarizeOpenAI, summarizeTaskOpenAI, generateTaskTitleOpenAI, judgeNewTopicOpenAI, filterRelevantOpenAI, judgeDedupOpenAI } from "./openai";
+import type { SummarizerConfig, SummaryProvider, Logger, OpenClawAPI } from "../../types";
+import { summarizeOpenAI, summarizeTaskOpenAI, generateTaskTitleOpenAI, judgeNewTopicOpenAI, filterRelevantOpenAI, judgeDedupOpenAI, parseFilterResult, parseDedupResult } from "./openai";
 import type { FilterResult, DedupResult } from "./openai";
 export type { FilterResult, DedupResult } from "./openai";
 import { summarizeAnthropic, summarizeTaskAnthropic, generateTaskTitleAnthropic, judgeNewTopicAnthropic, filterRelevantAnthropic, judgeDedupAnthropic } from "./anthropic";

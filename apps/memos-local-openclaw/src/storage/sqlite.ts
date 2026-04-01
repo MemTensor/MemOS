@@ -1207,7 +1207,7 @@ export class SqliteStore {
 
   // ─── Pattern Search (LIKE-based, for CJK text where FTS tokenization is weak) ───
 
-  patternSearch(patterns: string[], opts: { role?: string; limit?: number } = {}): Array<{ chunkId: string; content: string; role: string; createdAt: number }> {
+  patternSearch(patterns: string[], opts: { role?: string; limit?: number; ownerFilter?: string[] } = {}): Array<{ chunkId: string; content: string; role: string; createdAt: number }> {
     if (patterns.length === 0) return [];
     const limit = opts.limit ?? 10;
 
@@ -1216,13 +1216,21 @@ export class SqliteStore {
     const roleClause = opts.role ? " AND c.role = ?" : "";
     const params: (string | number)[] = patterns.map(p => `%${p}%`);
     if (opts.role) params.push(opts.role);
+
+    let ownerClause = "";
+    if (opts.ownerFilter && opts.ownerFilter.length > 0) {
+      const placeholders = opts.ownerFilter.map(() => "?").join(",");
+      ownerClause = ` AND c.owner IN (${placeholders})`;
+      params.push(...opts.ownerFilter);
+    }
+
     params.push(limit);
 
     try {
       const rows = this.db.prepare(`
         SELECT c.id as chunk_id, c.content, c.role, c.created_at
         FROM chunks c
-        WHERE (${whereClause})${roleClause} AND c.dedup_status = 'active'
+        WHERE (${whereClause})${roleClause}${ownerClause} AND c.dedup_status = 'active'
         ORDER BY c.created_at DESC
         LIMIT ?
       `).all(...params) as Array<{ chunk_id: string; content: string; role: string; created_at: number }>;
