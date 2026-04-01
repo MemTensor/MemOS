@@ -697,6 +697,9 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .skill-card-bottom .tag{display:flex;align-items:center;gap:4px}
 .skill-card-tags{display:flex;gap:4px;flex-wrap:wrap}
 .skill-tag{font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(139,92,246,.1);color:var(--violet);font-weight:500}
+.skill-selection-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.skill-select-box{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;border:1px solid var(--border);background:var(--bg-card);cursor:pointer;margin-right:8px;vertical-align:middle}
+.skill-select-box input{width:14px;height:14px;cursor:pointer}
 .skill-detail-desc{font-size:13px;color:var(--text-sec);line-height:1.6;margin-bottom:16px;padding:12px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius)}
 .skill-version-item{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px}
 .skill-version-header{display:flex;align-items:center;gap:10px;margin-bottom:6px}
@@ -1358,6 +1361,10 @@ input,textarea,select{font-family:inherit;font-size:inherit}
             <option value="public" data-i18n="filter.public">Public</option>
             <option value="private" data-i18n="filter.private">Private</option>
           </select>
+        </div>
+        <div class="skill-selection-toolbar">
+          <button class="btn btn-sm btn-ghost" id="skillSelectAllBtn" onclick="toggleSelectAllSkills()" data-i18n="skills.selectAll">Select All</button>
+          <button class="btn btn-sm btn-danger" id="skillBulkDeleteBtn" onclick="deleteSelectedSkills()" disabled data-i18n="skills.deleteSelected">Delete Selected</button>
         </div>
       </div>
       <div class="tasks-list" id="skillsList"><div class="spinner"></div></div>
@@ -2393,6 +2400,9 @@ const I18N={
     'skills.status.archived':'Archived',
     'skills.updated':'Updated: ',
     'skills.task.prefix':'Task: ',
+    'skills.selectAll':'Select All',
+    'skills.unselectAll':'Unselect All',
+    'skills.deleteSelected':'Delete Selected',
     'tasks.chunks.label':'chunks',
     'tasks.taskid':'Task ID: ',
     'tasks.role.user':'You',
@@ -2743,7 +2753,10 @@ const I18N={
     'skill.save':'Save',
     'skill.cancel':'Cancel',
     'skill.delete.confirm':'Are you sure you want to delete this skill? This will also remove all associated files and cannot be undone.',
+    'skill.delete.selected.confirm':'Delete {count} selected skills? This action cannot be undone.',
     'skill.delete.error':'Failed to delete skill: ',
+    'skill.delete.partial':'Deleted {ok} skills, failed {fail}.',
+    'skill.delete.success':'Deleted {count} skills.',
     'skill.save.error':'Failed to save skill: ',
     'update.available':'New version available',
     'update.run':'Run',
@@ -3137,6 +3150,9 @@ const I18N={
     'skills.status.archived':'已归档',
     'skills.updated':'更新于：',
     'skills.task.prefix':'任务：',
+    'skills.selectAll':'全选',
+    'skills.unselectAll':'取消全选',
+    'skills.deleteSelected':'删除选中',
     'tasks.chunks.label':'条记忆',
     'tasks.taskid':'任务 ID：',
     'tasks.role.user':'你',
@@ -3487,7 +3503,10 @@ const I18N={
     'skill.save':'保存',
     'skill.cancel':'取消',
     'skill.delete.confirm':'确定要删除此技能吗？关联的文件也会被删除，此操作不可撤销。',
+    'skill.delete.selected.confirm':'确定删除选中的 {count} 个技能吗？此操作不可撤销。',
     'skill.delete.error':'删除技能失败：',
+    'skill.delete.partial':'已删除 {ok} 个技能，失败 {fail} 个。',
+    'skill.delete.success':'已删除 {count} 个技能。',
     'skill.save.error':'保存技能失败：',
     'update.available':'发现新版本',
     'update.run':'执行命令',
@@ -6152,12 +6171,48 @@ async function deleteTask(taskId){
 
 /* ─── Skills View Logic ─── */
 let skillsStatusFilter='';
+let selectedSkillIds=new Set();
+let currentLocalSkills=[];
 
 function setSkillStatusFilter(btn,status){
   document.querySelectorAll('.skills-view .tasks-filters .filter-chip').forEach(c=>c.classList.remove('active'));
   btn.classList.add('active');
   skillsStatusFilter=status;
   loadSkills();
+}
+
+function updateSkillSelectionToolbar(){
+  var selectAllBtn=document.getElementById('skillSelectAllBtn');
+  var bulkDeleteBtn=document.getElementById('skillBulkDeleteBtn');
+  var total=currentLocalSkills.length;
+  var selected=selectedSkillIds.size;
+  if(selectAllBtn){
+    selectAllBtn.textContent=t(selected>0&&selected===total&&total>0?'skills.unselectAll':'skills.selectAll');
+  }
+  if(bulkDeleteBtn){
+    bulkDeleteBtn.disabled=selected===0;
+    var base=t('skills.deleteSelected');
+    bulkDeleteBtn.textContent=selected>0?(base+' ('+selected+')'):base;
+  }
+}
+
+function toggleSkillSelection(skillId,checked){
+  if(checked) selectedSkillIds.add(skillId);
+  else selectedSkillIds.delete(skillId);
+  updateSkillSelectionToolbar();
+}
+
+function toggleSelectAllSkills(){
+  var total=currentLocalSkills.length;
+  if(total===0) return;
+  if(selectedSkillIds.size===total){
+    selectedSkillIds.clear();
+  }else{
+    selectedSkillIds=new Set(currentLocalSkills.map(function(s){return s.id;}));
+  }
+  var checks=document.querySelectorAll('#skillsList .skill-select-check');
+  checks.forEach(function(cb){cb.checked=selectedSkillIds.has(cb.value);});
+  updateSkillSelectionToolbar();
 }
 
 function updateSkillCardBadge(skillId,newScope){
@@ -6203,13 +6258,17 @@ async function loadSkills(silent){
     const localRes=await fetch('/api/skills?'+params.toString());
     const localData=await localRes.json();
     let localSkills=Array.isArray(localData.skills)?localData.skills:[];
+    currentLocalSkills=localSkills.slice();
     if(query){
       const q=query.toLowerCase();
       localSkills=localSkills.filter(skill=>{
         const haystack=[skill.name,skill.description,skill.tags].filter(Boolean).join(' ').toLowerCase();
         return haystack.includes(q);
       });
+      currentLocalSkills=localSkills.slice();
     }
+    var localIdSet=new Set(localSkills.map(function(s){return s.id;}));
+    selectedSkillIds=new Set(Array.from(selectedSkillIds).filter(function(id){return localIdSet.has(id);}));
     if(silent){
       var fp=JSON.stringify(localSkills.map(function(s){return s.id+'|'+s.status+'|'+s.version+'|'+(s.visibility||'')}));
       if(fp===_lastSkillsFingerprint) return;
@@ -6233,9 +6292,10 @@ async function loadSkills(silent){
         const skillIsLocalShared=skill.visibility==='public';
         const skillIsTeamShared=!!skill.sharingVisibility;
         const skillScope=skillIsTeamShared?'team':skillIsLocalShared?'local':'private';
+        const selectedAttr=selectedSkillIds.has(skill.id)?' checked':'';
         return '<div class="skill-card '+installedClass+' '+statusClass+'" onclick="openSkillDetail(&quot;'+escAttr(skill.id)+'&quot;)">'+
           '<div class="skill-card-top">'+
-            '<div class="skill-card-name">🧠 '+esc(skill.name)+'</div>'+
+            '<div class="skill-card-name"><label class="skill-select-box" onclick="event.stopPropagation()"><input class="skill-select-check" type="checkbox" value="'+escAttr(skill.id)+'"'+selectedAttr+' onchange="event.stopPropagation();toggleSkillSelection(&quot;'+escAttr(skill.id)+'&quot;,this.checked)"></label>🧠 '+esc(skill.name)+'</div>'+
             '<div class="skill-card-badges">'+
               qsBadge+
               '<span class="skill-badge version">v'+skill.version+'</span>'+
@@ -6251,6 +6311,7 @@ async function loadSkills(silent){
             (tags.length>0?'<div class="skill-card-tags">'+tags.map(tg=>'<span class="skill-tag">'+esc(tg)+'</span>').join('')+'</div>':'')+
             '<span class="card-actions-inline" onclick="event.stopPropagation()">'+
               '<button class="btn btn-sm btn-ghost" onclick="openSkillDetail(&quot;'+escAttr(skill.id)+'&quot;)">'+t('card.expand')+'</button>'+
+              '<button class="btn btn-sm btn-danger" onclick="deleteSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skill.delete')+'</button>'+
               (skill.status==='active'
                 ?'<button class="btn btn-sm btn-ghost" onclick="openSkillScopeModalFromList(&quot;'+escAttr(skill.id)+'&quot;,&quot;'+skillScope+'&quot;)">\\u270F '+t('share.shareBtn')+'</button>'
                 :'<button class="btn btn-sm btn-ghost" style="opacity:0.45;cursor:not-allowed" onclick="toast(t(\\x27share.scope.skillNotActive\\x27),\\x27warn\\x27)">\\u270F '+t('share.shareBtn')+'</button>')+
@@ -6261,6 +6322,7 @@ async function loadSkills(silent){
     };
 
     list.innerHTML=renderLocalCards(localSkills);
+    updateSkillSelectionToolbar();
 
     if(skillSearchScope==='allLocal'){
       if(hubSection) hubSection.style.display='none';
@@ -6326,6 +6388,7 @@ async function loadSkills(silent){
     document.getElementById('skillsDraftCount').textContent='0';
     document.getElementById('skillsInstalledCount').textContent='-';
     document.getElementById('skillsPublicCount').textContent=formatNum(hubHits.filter(function(s){return s.visibility==='public';}).length);
+    updateSkillSelectionToolbar();
   }catch(e){
     list.innerHTML='<div style="text-align:center;padding:24px;color:var(--rose)">'+t('skills.load.error')+': '+esc(String(e))+'</div>';
     if(hubList){
@@ -7108,10 +7171,36 @@ async function deleteSkill(skillId){
     const r=await fetch('/api/skill/'+skillId,{method:'DELETE'});
     const d=await r.json();
     if(!r.ok) throw new Error(d.error||'unknown');
+    selectedSkillIds.delete(skillId);
+    updateSkillSelectionToolbar();
     closeSkillDetail();
     document.getElementById('skillDetailOverlay').classList.remove('show');
     loadSkills();
   }catch(e){ alert(t('skill.delete.error')+e.message); }
+}
+
+async function deleteSelectedSkills(){
+  var ids=Array.from(selectedSkillIds);
+  if(ids.length===0) return;
+  var msg=t('skill.delete.selected.confirm').replace('{count}',String(ids.length));
+  if(!(await confirmModal(msg,{danger:true}))) return;
+  var ok=0;
+  var fail=0;
+  for(var i=0;i<ids.length;i++){
+    try{
+      var r=await fetch('/api/skill/'+ids[i],{method:'DELETE'});
+      var d=await r.json();
+      if(!r.ok) throw new Error(d.error||'unknown');
+      ok++;
+    }catch(e){
+      fail++;
+    }
+  }
+  selectedSkillIds.clear();
+  updateSkillSelectionToolbar();
+  loadSkills();
+  if(fail>0) toast(t('skill.delete.partial').replace('{ok}',String(ok)).replace('{fail}',String(fail)),'warn');
+  else toast(t('skill.delete.success').replace('{count}',String(ok)),'success');
 }
 
 
