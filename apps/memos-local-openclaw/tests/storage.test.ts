@@ -98,6 +98,14 @@ describe("SqliteStore", () => {
     expect(Array.isArray(results)).toBe(true);
   });
 
+  it("should handle FTS query containing date separators", () => {
+    store.insertChunk(makeChunk({ id: "c1", content: "release date 2026-03-14", summary: "release note" }));
+
+    const results = store.ftsSearch("2026-03-14", 10);
+    expect(Array.isArray(results)).toBe(true);
+    expect(results.length).toBeGreaterThanOrEqual(1);
+  });
+
   it("should get neighbor chunks", () => {
     const now = Date.now();
     store.insertChunk(makeChunk({ id: "c1", turnId: "t1", seq: 0, createdAt: now }));
@@ -129,6 +137,359 @@ describe("SqliteStore", () => {
     const recent0 = store.getRecentEmbeddings(0);
     expect(recent0.length).toBe(1);
   });
+});
+
+describe("SqliteStore hub sharing schema", () => {
+  it("should persist a single client hub connection record", () => {
+    store.setClientHubConnection({
+      hubUrl: "http://127.0.0.1:18800",
+      userId: "user-1",
+      username: "alice",
+      userToken: "token-1",
+      role: "admin",
+      connectedAt: 123,
+    });
+
+    const saved = store.getClientHubConnection();
+    expect(saved).toMatchObject({
+      hubUrl: "http://127.0.0.1:18800",
+      userId: "user-1",
+      username: "alice",
+      userToken: "token-1",
+      role: "admin",
+      connectedAt: 123,
+    });
+
+    store.setClientHubConnection({
+      hubUrl: "http://192.168.1.8:18800",
+      userId: "user-2",
+      username: "bob",
+      userToken: "token-2",
+      role: "member",
+      connectedAt: 456,
+    });
+
+    const updated = store.getClientHubConnection();
+    expect(updated).toMatchObject({
+      hubUrl: "http://192.168.1.8:18800",
+      userId: "user-2",
+      username: "bob",
+      userToken: "token-2",
+      role: "member",
+      connectedAt: 456,
+    });
+  });
+
+  it("should store hub users, groups, and memberships", () => {
+    store.upsertHubUser({
+      id: "user-1",
+      username: "alice",
+      deviceName: "Alice Mac",
+      role: "admin",
+      status: "active",
+      tokenHash: "hash-1",
+      createdAt: 100,
+      approvedAt: 110,
+    });
+    store.upsertHubUser({
+      id: "user-2",
+      username: "bob",
+      deviceName: "Bob Mac",
+      role: "member",
+      status: "pending",
+      tokenHash: "hash-2",
+      createdAt: 200,
+      approvedAt: null,
+    });
+    store.upsertHubGroup({
+      id: "group-1",
+      name: "Backend",
+      description: "backend team",
+      createdAt: 300,
+    });
+    store.addHubGroupMember("group-1", "user-1", 400);
+
+    const pending = store.listHubUsers("pending");
+    expect(pending).toHaveLength(1);
+    expect(pending[0].username).toBe("bob");
+    expect(pending[0].groups).toEqual([]);
+
+    const groups = store.getGroupsForHubUser("user-1");
+    expect(groups).toHaveLength(1);
+    expect(groups[0].name).toBe("Backend");
+
+    const alice = store.getHubUser("user-1");
+    expect(alice).not.toBeNull();
+    expect(alice!.groups).toHaveLength(1);
+    expect(alice!.groups[0].name).toBe("Backend");
+
+    const users = store.listHubUsers();
+    const aliceFromList = users.find((user) => user.id === "user-1");
+    expect(aliceFromList).toBeDefined();
+    expect(aliceFromList!.groups).toHaveLength(1);
+    expect(aliceFromList!.groups[0].name).toBe("Backend");
+  });
+
+  it("should allow hub users without a device name", () => {
+    store.upsertHubUser({
+      id: "user-3",
+      username: "carol",
+      role: "member",
+      status: "active",
+      tokenHash: "hash-3",
+      createdAt: 300,
+      approvedAt: 310,
+      groups: [],
+    });
+
+    const user = store.getHubUser("user-3");
+    expect(user).not.toBeNull();
+    expect(user!.username).toBe("carol");
+    expect(user!.deviceName).toBeUndefined();
+  });
+
+  it("should upsert shared hub records idempotently by source ids", () => {
+    store.upsertHubTask({
+      id: "hub-task-1",
+      sourceTaskId: "task-1",
+      sourceUserId: "user-1",
+      title: "Deploy API",
+      summary: "deploy summary",
+      groupId: "group-1",
+      visibility: "group",
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    store.upsertHubChunk({
+      id: "hub-chunk-1",
+      hubTaskId: "hub-task-1",
+      sourceTaskId: "task-1",
+      sourceChunkId: "chunk-1",
+      sourceUserId: "user-1",
+      role: "assistant",
+      content: "deploy content",
+      summary: "deploy summary",
+      kind: "paragraph",
+      createdAt: 1100,
+    });
+    store.upsertHubTask({
+      id: "hub-task-2",
+      sourceTaskId: "task-1",
+      sourceUserId: "user-1",
+      title: "Deploy API v2",
+      summary: "updated summary",
+      groupId: "group-1",
+      visibility: "group",
+      createdAt: 1000,
+      updatedAt: 2000,
+    });
+
+    const task = store.getHubTaskBySource("user-1", "task-1");
+    expect(task).not.toBeNull();
+    expect(task!.id).toBe("hub-task-1");
+    expect(task!.title).toBe("Deploy API v2");
+
+    const chunk = store.getHubChunkBySource("user-1", "chunk-1");
+    expect(chunk).not.toBeNull();
+    expect(chunk!.hubTaskId).toBe("hub-task-1");
+
+    store.upsertHubChunk({
+      id: "hub-chunk-2",
+      hubTaskId: "hub-task-1",
+      sourceTaskId: "task-1",
+      sourceChunkId: "chunk-2",
+      sourceUserId: "user-1",
+      role: "assistant",
+      content: "deploy content 2",
+      summary: "deploy summary 2",
+      kind: "paragraph",
+      createdAt: 1200,
+    });
+
+    const remappedChunk = store.getHubChunkBySource("user-1", "chunk-2");
+    expect(remappedChunk).not.toBeNull();
+    expect(remappedChunk!.hubTaskId).toBe("hub-task-1");
+
+    store.upsertHubSkill({
+      id: "hub-skill-1",
+      sourceSkillId: "skill-1",
+      sourceUserId: "user-1",
+      name: "deploy-skill",
+      description: "first description",
+      version: 1,
+      groupId: null,
+      visibility: "public",
+      bundle: '{"skill_md":"# deploy"}',
+      qualityScore: 0.8,
+      createdAt: 100,
+      updatedAt: 100,
+    });
+    store.upsertHubSkillEmbedding("hub-skill-1", [0.1, 0.2, 0.3], "user-1", "skill-1");
+    store.upsertHubSkill({
+      id: "hub-skill-2",
+      sourceSkillId: "skill-1",
+      sourceUserId: "user-1",
+      name: "deploy-skill",
+      description: "updated description",
+      version: 2,
+      groupId: null,
+      visibility: "public",
+      bundle: '{"skill_md":"# deploy v2"}',
+      qualityScore: 0.9,
+      createdAt: 100,
+      updatedAt: 200,
+    });
+
+    store.upsertHubSkillEmbedding("hub-skill-1", [0.4, 0.5, 0.6], "user-1", "skill-1");
+
+    const skill = store.getHubSkillBySource("user-1", "skill-1");
+    expect(skill).not.toBeNull();
+    expect(skill!.id).toBe("hub-skill-1");
+    expect(skill!.version).toBe(2);
+    expect(skill!.description).toBe("updated description");
+    const embedding = store.getHubSkillEmbedding("hub-skill-1");
+    expect(embedding).not.toBeNull();
+    expect(embedding![0]).toBeCloseTo(0.4, 5);
+    expect(embedding![1]).toBeCloseTo(0.5, 5);
+    expect(embedding![2]).toBeCloseTo(0.6, 5);
+  });
+
+  it("should reject mismatched parent ids even when the source tuple exists", () => {
+    store.upsertHubTask({
+      id: "hub-task-alice",
+      sourceTaskId: "task-alice",
+      sourceUserId: "user-1",
+      title: "Alice task",
+      summary: "alice summary",
+      groupId: null,
+      visibility: "public",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    store.upsertHubTask({
+      id: "hub-task-bob",
+      sourceTaskId: "task-bob",
+      sourceUserId: "user-2",
+      title: "Bob task",
+      summary: "bob summary",
+      groupId: null,
+      visibility: "public",
+      createdAt: 2,
+      updatedAt: 2,
+    });
+
+    expect(() => store.upsertHubChunk({
+      id: "hub-chunk-z",
+      hubTaskId: "hub-task-bob",
+      sourceTaskId: "task-alice",
+      sourceChunkId: "chunk-alice",
+      sourceUserId: "user-1",
+      role: "assistant",
+      content: "alice chunk",
+      summary: "alice chunk",
+      kind: "paragraph",
+      createdAt: 3,
+    })).toThrow(/mismatch/i);
+
+    expect(store.getHubChunkBySource("user-1", "chunk-alice")).toBeNull();
+
+    store.upsertHubSkill({
+      id: "hub-skill-alice",
+      sourceSkillId: "skill-alice",
+      sourceUserId: "user-1",
+      name: "alice-skill",
+      description: "alice",
+      version: 1,
+      groupId: null,
+      visibility: "public",
+      bundle: '{"skill_md":"# alice"}',
+      qualityScore: 0.7,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    store.upsertHubSkill({
+      id: "hub-skill-bob",
+      sourceSkillId: "skill-bob",
+      sourceUserId: "user-2",
+      name: "bob-skill",
+      description: "bob",
+      version: 1,
+      groupId: null,
+      visibility: "public",
+      bundle: '{"skill_md":"# bob"}',
+      qualityScore: 0.6,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    expect(() => store.upsertHubSkillEmbedding("hub-skill-bob", [0.9, 0.8], "user-1", "skill-alice")).toThrow(/mismatch/i);
+    expect(store.getHubSkillEmbedding("hub-skill-alice")).toBeNull();
+    expect(store.getHubSkillEmbedding("hub-skill-bob")).toBeNull();
+  });
+
+  it("should reject child writes when the source tuple does not resolve to a parent", () => {
+    store.upsertHubTask({
+      id: "hub-task-bob-only",
+      sourceTaskId: "task-bob-only",
+      sourceUserId: "user-2",
+      title: "Bob only",
+      summary: "bob only",
+      groupId: null,
+      visibility: "public",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    expect(() => store.upsertHubChunk({
+      id: "hub-chunk-bad",
+      hubTaskId: "hub-task-bob-only",
+      sourceTaskId: "task-alice-missing",
+      sourceChunkId: "chunk-missing",
+      sourceUserId: "user-1",
+      role: "assistant",
+      content: "bad",
+      summary: "bad",
+      kind: "paragraph",
+      createdAt: 2,
+    })).toThrow(/source task/i);
+
+    store.upsertHubSkill({
+      id: "hub-skill-bob-only",
+      sourceSkillId: "skill-bob-only",
+      sourceUserId: "user-2",
+      name: "bob-only",
+      description: "bob-only",
+      version: 1,
+      groupId: null,
+      visibility: "public",
+      bundle: '{"skill_md":"# bob only"}',
+      qualityScore: 0.5,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    expect(() => store.upsertHubSkillEmbedding("hub-skill-bob-only", [0.2, 0.3], "user-1", "skill-alice-missing")).toThrow(/source skill/i);
+    expect(store.getHubChunkBySource("user-1", "chunk-missing")).toBeNull();
+    expect(store.getHubSkillEmbedding("hub-skill-bob-only")).toBeNull();
+  });
+
+  it("should require source identifiers for remap-sensitive child writes", () => {
+    expect(() => (store as any).upsertHubChunk({
+      id: "hub-chunk-x",
+      hubTaskId: "hub-task-x",
+      sourceChunkId: "chunk-x",
+      sourceUserId: "user-1",
+      role: "assistant",
+      content: "x",
+      summary: "x",
+      kind: "paragraph",
+      createdAt: 1,
+    })).toThrow(/sourceTaskId/i);
+
+    expect(() => (store as any).upsertHubSkillEmbedding("hub-skill-x", [0.1, 0.2])).toThrow(/sourceUserId and sourceSkillId/i);
+  });
+
+
 });
 
 describe("vectorSearch", () => {

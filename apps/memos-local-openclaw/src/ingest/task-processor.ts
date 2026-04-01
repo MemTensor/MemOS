@@ -39,7 +39,7 @@ export class TaskProcessor {
     private ctx: PluginContext,
   ) {
     const strongCfg = ctx.config.skillEvolution?.summarizer;
-    this.summarizer = new Summarizer(ctx.config.summarizer, ctx.log, strongCfg);
+    this.summarizer = new Summarizer(ctx.config.summarizer, ctx.log, ctx.openclawAPI, strongCfg);
   }
 
   onTaskCompleted(cb: (task: Task) => void): void {
@@ -310,9 +310,10 @@ export class TaskProcessor {
     const skipReason = this.shouldSkipSummary(chunks);
 
     if (skipReason) {
-      this.ctx.log.info(`Task ${task.id} skipped: ${skipReason} (chunks=${chunks.length}, title="${fallbackTitle}")`);
+      const skipTitle = await this.generateTitle(chunks, fallbackTitle);
+      this.ctx.log.info(`Task ${task.id} skipped: ${skipReason} (chunks=${chunks.length}, title="${skipTitle}")`);
       const reason = this.humanReadableSkipReason(skipReason, chunks);
-      this.store.updateTask(task.id, { title: fallbackTitle, summary: reason, status: "skipped", endedAt: Date.now() });
+      this.store.updateTask(task.id, { title: skipTitle, summary: reason, status: "skipped", endedAt: Date.now() });
       return;
     }
 
@@ -326,7 +327,7 @@ export class TaskProcessor {
     }
 
     const { title: llmTitle, body } = this.parseTitleFromSummary(summary);
-    const title = llmTitle || fallbackTitle;
+    const title = llmTitle || await this.generateTitle(chunks, fallbackTitle);
 
     this.store.updateTask(task.id, {
       title,
@@ -455,19 +456,39 @@ export class TaskProcessor {
   private parseTitleFromSummary(summary: string): { title: string; body: string } {
     const titleMatch = summary.match(/📌\s*(?:Title|标题)\s*\n(.+)/);
     if (titleMatch) {
-      const title = titleMatch[1].trim().slice(0, 80);
+      const title = titleMatch[1].trim();
       const body = summary.replace(/📌\s*(?:Title|标题)\s*\n.+\n?/, "").trim();
       return { title, body };
     }
     return { title: "", body: summary };
   }
 
+  private async generateTitle(chunks: Chunk[], fallback: string): Promise<string> {
+    try {
+      const userChunks = chunks.filter((c) => c.role === "user");
+      const titleInput = userChunks
+        .slice(0, 3)
+        .map((c) => c.content.trim())
+        .join("\n\n");
+      if (!titleInput) return fallback || "Untitled Task";
+      const title = await this.summarizer.generateTaskTitle(titleInput);
+      return title || fallback || "Untitled Task";
+    } catch (err) {
+      this.ctx.log.warn(`generateTitle failed: ${err}`);
+      return fallback || "Untitled Task";
+    }
+  }
+
   private extractTitle(chunks: Chunk[]): string {
-    const firstUser = chunks.find((c) => c.role === "user");
+    const firstUser = chunks.find((c) => {
+      if (c.role !== "user") return false;
+      const t = c.content.trim();
+      if (t.length > 200) return false;
+      if (/session.startup|Session Startup|\/new|\/reset/i.test(t)) return false;
+      return true;
+    });
     if (!firstUser) return "Untitled Task";
-    const text = firstUser.content.trim();
-    if (text.length <= 60) return text;
-    return text.slice(0, 57) + "...";
+    return firstUser.content.trim().slice(0, 80);
   }
 
   private humanReadableSkipReason(reason: string, chunks: Chunk[]): string {

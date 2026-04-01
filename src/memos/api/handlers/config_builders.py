@@ -39,13 +39,14 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
     graph_db_backend_map = {
         "neo4j-community": APIConfig.get_neo4j_community_config(user_id=user_id),
         "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
-        "nebular": APIConfig.get_nebular_config(user_id=user_id),
         "polardb": APIConfig.get_polardb_config(user_id=user_id),
         "postgres": APIConfig.get_postgres_config(user_id=user_id),
     }
 
     # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
-    graph_db_backend = os.getenv("GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "nebular")).lower()
+    graph_db_backend = os.getenv(
+        "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
+    ).lower()
     return GraphDBConfigFactory.model_validate(
         {
             "backend": graph_db_backend,
@@ -201,3 +202,26 @@ def build_nli_client_config() -> dict[str, Any]:
         NLI client configuration dictionary
     """
     return APIConfig.get_nli_config()
+
+
+def build_general_llm_config() -> dict[str, Any]:
+    """
+    Build general LLM configuration for non-chat/doc tasks.
+
+    Used for: hallucination filter, memory rewrite, memory merge,
+    tool trajectory extraction, skill memory extraction.
+
+    Returns:
+        Validated general LLM configuration dictionary
+    """
+    return LLMConfigFactory.model_validate(APIConfig.get_memreader_general_llm_config())
+
+
+def build_image_parser_llm_config() -> dict[str, Any]:
+    """
+    Build image parser LLM configuration (requires vision model).
+
+    Returns:
+        Validated image parser LLM configuration dictionary
+    """
+    return LLMConfigFactory.model_validate(APIConfig.get_image_parser_llm_config())

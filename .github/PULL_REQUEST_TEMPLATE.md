@@ -2,7 +2,7 @@
 
 Please include a summary of the change, the problem it solves, the implementation approach, and relevant context. List any dependencies required for this change.
 
-Related Issue (Required):  Fixes @issue_number
+Related Issue (Required):  Fixes #issue_number
 
 ## Type of change
 

@@ -1,20 +1,35 @@
 import type { SummarizerConfig, Logger } from "../../types";
 
-const SYSTEM_PROMPT = `Summarize the text in ONE concise sentence (max 120 characters). IMPORTANT: Use the SAME language as the input text — if the input is Chinese, write Chinese; if English, write English. Preserve exact names, commands, error codes. No bullet points, no preamble — output only the sentence.`;
+const SYSTEM_PROMPT = `You generate a retrieval-friendly title.
+
+Return exactly one noun phrase that names the topic AND its key details.
+
+Requirements:
+- Same language as input
+- Keep proper nouns, API/function names, specific parameters, versions, error codes
+- Include WHO/WHAT/WHERE details when present (e.g. person name + event, tool name + what it does)
+- Prefer concrete topic words over generic words
+- No verbs unless unavoidable
+- No generic endings like:
+  功能说明、使用说明、简介、介绍、用途、summary、overview、basics
+- Chinese: 10-50 characters (aim for 15-30)
+- Non-Chinese: 5-15 words (aim for 8-12)
+- Output title only`;
 
 const TASK_SUMMARY_PROMPT = `You create a DETAILED task summary from a multi-turn conversation. This summary will be the ONLY record of this conversation, so it must preserve ALL important information.
 
-CRITICAL LANGUAGE RULE: You MUST write in the SAME language as the user's messages. Chinese input → Chinese output. English input → English output. NEVER mix languages.
+## LANGUAGE RULE (HIGHEST PRIORITY)
+Detect the PRIMARY language of the user's messages. If most user messages are Chinese, ALL output (title, goal, steps, result, details) MUST be in Chinese. If English, output in English. NEVER mix. This rule overrides everything below.
 
 Output EXACTLY this structure:
 
-📌 Title
-A short, descriptive title (10-30 characters). Like a chat group name.
+📌 Title / 标题
+A short, descriptive title (10-30 characters). Same language as user messages.
 
-🎯 Goal
+🎯 Goal / 目标
 One sentence: what the user wanted to accomplish.
 
-📋 Key Steps
+📋 Key Steps / 关键步骤
 - Describe each meaningful step in detail
 - Include the ACTUAL content produced: code snippets, commands, config blocks, formulas, key paragraphs
 - For code: include the function signature and core logic (up to ~30 lines per block), use fenced code blocks
@@ -23,10 +38,10 @@ One sentence: what the user wanted to accomplish.
 - Merge only truly trivial back-and-forth (like "ok" / "sure")
 - Do NOT over-summarize: "provided a function" is BAD; show the actual function
 
-✅ Result
+✅ Result / 结果
 What was the final outcome? Include the final version of any code/config/content produced.
 
-💡 Key Details
+💡 Key Details / 关键细节
 - Decisions made, trade-offs discussed, caveats noted, alternative approaches mentioned
 - Specific values: numbers, versions, thresholds, URLs, file paths, model names
 - Omit this section only if there truly are no noteworthy details
@@ -55,7 +70,7 @@ export async function summarizeTaskOpenAI(
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
+    body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: cfg.temperature ?? 0.1,
       max_tokens: 4096,
@@ -63,13 +78,62 @@ export async function summarizeTaskOpenAI(
         { role: "system", content: TASK_SUMMARY_PROMPT },
         { role: "user", content: text },
       ],
-    }),
+    })),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
     const body = await resp.text();
     throw new Error(`OpenAI task-summarize failed (${resp.status}): ${body}`);
+  }
+
+  const json = (await resp.json()) as { choices: Array<{ message: { content: string } }> };
+  return json.choices[0]?.message?.content?.trim() ?? "";
+}
+
+const TASK_TITLE_PROMPT = `Generate a short title for a conversation task.
+
+Input: the first few user messages from a conversation.
+Output: a concise title (5-20 characters for Chinese, 3-8 words for English).
+
+Rules:
+- Same language as user messages
+- Describe WHAT the user wanted to do, not system/technical details
+- Ignore system prompts, session startup messages, or boilerplate instructions — focus on the user's actual intent
+- If the user only asked one question, use that question as the title (shortened if needed)
+- Output the title only, no quotes, no prefix, no explanation`;
+
+export async function generateTaskTitleOpenAI(
+  text: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<string> {
+  const endpoint = normalizeChatEndpoint(cfg.endpoint ?? "https://api.openai.com/v1/chat/completions");
+  const model = cfg.model ?? "gpt-4o-mini";
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${cfg.apiKey}`,
+    ...cfg.headers,
+  };
+
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(buildRequestBody(cfg, {
+      model,
+      temperature: 0,
+      max_tokens: 100,
+      messages: [
+        { role: "system", content: TASK_TITLE_PROMPT },
+        { role: "user", content: text },
+      ],
+    })),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`OpenAI task-title failed (${resp.status}): ${body}`);
   }
 
   const json = (await resp.json()) as { choices: Array<{ message: { content: string } }> };
@@ -92,14 +156,14 @@ export async function summarizeOpenAI(
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
+    body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: cfg.temperature ?? 0,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: text },
+        { role: "user", content: `[TEXT TO SUMMARIZE]\n${text}\n[/TEXT TO SUMMARIZE]` },
       ],
-    }),
+    })),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 30_000),
   });
 
@@ -114,7 +178,7 @@ export async function summarizeOpenAI(
   return json.choices[0]?.message?.content?.trim() ?? "";
 }
 
-const TOPIC_JUDGE_PROMPT = `You are a conversation topic boundary detector. Given the CURRENT task context (may include opening topic + recent exchanges) and a single NEW user message, decide if the new message belongs to the SAME task or starts a NEW one.
+const TOPIC_JUDGE_PROMPT = `You are a conversation topic boundary detector. Given the CURRENT task context and a NEW user message, decide if the new message belongs to the SAME task or starts a NEW one.
 
 Answer ONLY "NEW" or "SAME".
 
@@ -122,22 +186,21 @@ SAME — the new message:
 - Continues, follows up on, refines, or corrects the same subject/project/task
 - Asks a clarification or next-step question about what was just discussed
 - Reports a result, error, or feedback about the current task
-- Discusses different tools, methods, or approaches for the SAME goal (e.g., learning English via BBC → via ChatGPT → via AI tools = all SAME "learning English" task)
-- Mentions a related technology or platform in the context of the current goal
-- Is a short acknowledgment (ok, thanks, 好的, 嗯) in direct response to the current flow
+- Discusses different tools or approaches for the SAME goal (e.g., learning English via BBC → via ChatGPT = SAME)
+- Is a short acknowledgment (ok, thanks, 好的) in response to the current flow
 
 NEW — the new message:
-- Introduces a clearly UNRELATED subject with NO logical connection to the current task
-- The topic has ZERO overlap with any aspect of the current conversation (e.g., from "learning English" to "what's the weather tomorrow")
-- Starts a request about a completely different domain or life area
+- Introduces a subject from a DIFFERENT domain than the current task (e.g., tech → cooking, work → personal life, database → travel)
+- Has NO logical connection to what was being discussed
+- Starts a request about a different project, system, or life area
 - Begins with a new greeting/reset followed by a different topic
 
 Key principles:
-- STRONGLY lean toward SAME — only mark NEW for obvious, unambiguous topic shifts
-- Different aspects, tools, or methods related to the same overall goal are SAME
-- If the new message could reasonably be interpreted as part of the ongoing discussion, choose SAME
-- Only choose NEW when there is absolutely no thematic connection to the current task
-- Examples: "学英语" → "用AI工具学英语" = SAME; "学英语" → "明天天气" = NEW
+- If the topic domain clearly changed (e.g., server config → recipe, code review → vacation plan), choose NEW
+- Different aspects of the SAME project/system are SAME (e.g., Nginx SSL → Nginx gzip = SAME)
+- Different unrelated technologies discussed independently are NEW (e.g., Redis config → cooking recipe = NEW)
+- When unsure, lean toward SAME for closely related topics, but do NOT hesitate to mark NEW for obvious domain shifts
+- Examples: "配置Nginx" → "加gzip压缩" = SAME; "配置Nginx" → "做红烧肉" = NEW; "MySQL配置" → "K8s部署" in same infra project = SAME; "部署服务器" → "年会安排" = NEW
 
 Output exactly one word: NEW or SAME`;
 
@@ -160,7 +223,7 @@ export async function judgeNewTopicOpenAI(
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
+    body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
       max_tokens: 10,
@@ -168,7 +231,7 @@ export async function judgeNewTopicOpenAI(
         { role: "system", content: TOPIC_JUDGE_PROMPT },
         { role: "user", content: userContent },
       ],
-    }),
+    })),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
   });
 
@@ -183,27 +246,24 @@ export async function judgeNewTopicOpenAI(
   return answer.startsWith("NEW");
 }
 
-const FILTER_RELEVANT_PROMPT = `You are a memory relevance judge. Given a user's QUERY and a list of CANDIDATE memory summaries, do two things:
+const FILTER_RELEVANT_PROMPT = `You are a memory relevance judge.
 
-1. Select ALL candidates that could be useful for answering the query. When in doubt, INCLUDE the candidate.
-   - For questions about lists, history, or "what/where/who" across multiple items (e.g. "which companies did I work at"), include ALL matching items — do NOT stop at the first match.
-   - For factual lookups (e.g. "what is the SSH port"), a single direct answer is enough.
-2. Judge whether the selected memories are SUFFICIENT to fully answer the query WITHOUT fetching additional context.
+Given a QUERY and CANDIDATE memories, decide: does each candidate's content contain information that would HELP ANSWER the query?
 
-IMPORTANT for "sufficient" judgment:
-- sufficient=true ONLY when the memories contain a concrete ANSWER, fact, decision, or actionable information that directly addresses the query.
-- sufficient=false when:
-  - The memories only repeat the same question the user asked before (echo, not answer).
-  - The memories show related topics but lack the specific detail needed.
-  - The memories contain partial information that would benefit from full task context, timeline, or related skills.
+CORE QUESTION: "If I include this memory, will it help produce a better answer?"
+- YES → include
+- NO → exclude
 
-Output a JSON object with exactly two fields:
-{"relevant":[1,3,5],"sufficient":true}
+RULES:
+1. A candidate is relevant if its content provides facts, context, or data that directly supports answering the query.
+2. A candidate that merely shares the same broad topic/domain but contains NO useful information for answering is NOT relevant.
+3. If NO candidate can help answer the query, return {"relevant":[],"sufficient":false} — do NOT force-pick the "least irrelevant" one.
+4. DEDUPLICATION: When multiple candidates convey the same or very similar information, keep ONLY the most complete/detailed one and exclude the rest. Do NOT return near-duplicate snippets.
 
-- "relevant": array of candidate numbers that are useful. Empty array [] if none are relevant.
-- "sufficient": true ONLY if the memories contain a direct answer; false otherwise.
-
-Output ONLY the JSON object, nothing else.`;
+OUTPUT — JSON only:
+{"relevant":[1,3],"sufficient":true}
+- "relevant": candidate numbers whose content helps answer the query. [] if none can help. Duplicates removed — only unique information.
+- "sufficient": true only if the selected memories fully answer the query.`;
 
 export interface FilterResult {
   relevant: number[];
@@ -212,7 +272,7 @@ export interface FilterResult {
 
 export async function filterRelevantOpenAI(
   query: string,
-  candidates: Array<{ index: number; summary: string; role: string }>,
+  candidates: Array<{ index: number; role: string; content: string; time?: string }>,
   cfg: SummarizerConfig,
   log: Logger,
 ): Promise<FilterResult> {
@@ -225,13 +285,16 @@ export async function filterRelevantOpenAI(
   };
 
   const candidateText = candidates
-    .map((c) => `${c.index}. [${c.role}] ${c.summary}`)
+    .map((c) => {
+      const timeTag = c.time ? ` (${c.time})` : "";
+      return `${c.index}. [${c.role}]${timeTag}\n   ${c.content}`;
+    })
     .join("\n");
 
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
+    body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
       max_tokens: 200,
@@ -239,7 +302,7 @@ export async function filterRelevantOpenAI(
         { role: "system", content: FILTER_RELEVANT_PROMPT },
         { role: "user", content: `QUERY: ${query}\n\nCANDIDATES:\n${candidateText}` },
       ],
-    }),
+    })),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
   });
 
@@ -250,10 +313,11 @@ export async function filterRelevantOpenAI(
 
   const json = (await resp.json()) as { choices: Array<{ message: { content: string } }> };
   const raw = json.choices[0]?.message?.content?.trim() ?? "{}";
+  log.debug(`filterRelevant raw LLM response: "${raw}"`);
   return parseFilterResult(raw, log);
 }
 
-function parseFilterResult(raw: string, log: Logger): FilterResult {
+export function parseFilterResult(raw: string, log: Logger): FilterResult {
   try {
     const match = raw.match(/\{[\s\S]*\}/);
     if (match) {
@@ -322,7 +386,7 @@ export async function judgeDedupOpenAI(
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
+    body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
       max_tokens: 300,
@@ -330,7 +394,7 @@ export async function judgeDedupOpenAI(
         { role: "system", content: DEDUP_JUDGE_PROMPT },
         { role: "user", content: `NEW MEMORY:\n${newSummary}\n\nEXISTING MEMORIES:\n${candidateText}` },
       ],
-    }),
+    })),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
   });
 
@@ -368,4 +432,21 @@ function normalizeChatEndpoint(url: string): string {
   if (stripped.endsWith("/chat/completions")) return stripped;
   if (stripped.endsWith("/completions")) return stripped;
   return `${stripped}/chat/completions`;
+}
+
+/**
+ * Zhipu AI (glm-4.7, glm-5, etc.) uses reasoning tokens that consume max_tokens budget,
+ * leaving no room for actual output. This helper injects {"thinking":{"type":"disabled"}}
+ * for zhipu endpoints to disable the built-in reasoning mode.
+ */
+function isZhipuEndpoint(endpoint: string): boolean {
+  return /bigmodel\.cn|zhipuai/.test(endpoint);
+}
+
+function buildRequestBody(cfg: SummarizerConfig, body: Record<string, unknown>): Record<string, unknown> {
+  const endpoint = cfg.endpoint ?? "";
+  if (isZhipuEndpoint(endpoint)) {
+    body.thinking = { type: "disabled" };
+  }
+  return body;
 }

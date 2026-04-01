@@ -314,27 +314,128 @@ def handle_get_memories(
     return GetMemoryResponse(message="Memories retrieved successfully", data=filtered_results)
 
 
+def _build_quick_delete_constraints(delete_mem_req: DeleteMemoryRequest) -> dict[str, Any]:
+    """Build fast-delete constraints from request-level fields."""
+    constraints: dict[str, Any] = {}
+    if delete_mem_req.user_id is not None:
+        constraints["user_id"] = delete_mem_req.user_id
+    if delete_mem_req.session_id is not None:
+        constraints["session_id"] = delete_mem_req.session_id
+    return constraints
+
+
+def _merge_delete_filter(
+    base_filter: dict[str, Any] | None,
+    constraints: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge user/session constraints into an existing filter."""
+    if not constraints:
+        return base_filter or {}
+    if base_filter is None:
+        return {"and": [constraints.copy()]}
+
+    if not base_filter:
+        return {"and": [constraints.copy()]}
+
+    if "and" in base_filter:
+        and_conditions = base_filter.get("and")
+        if not isinstance(and_conditions, list):
+            raise ValueError("Invalid filter format: 'and' must be a list")
+        return {"and": [*and_conditions, constraints.copy()]}
+
+    if "or" in base_filter:
+        or_conditions = base_filter.get("or")
+        if not isinstance(or_conditions, list):
+            raise ValueError("Invalid filter format: 'or' must be a list")
+
+        merged_or_conditions: list[dict[str, Any]] = []
+        for condition in or_conditions:
+            if not isinstance(condition, dict):
+                raise ValueError("Invalid filter format: each 'or' condition must be a dict")
+            merged_condition = condition.copy()
+            for key, value in constraints.items():
+                if key in merged_condition and merged_condition[key] != value:
+                    raise ValueError(
+                        f"Conflicting filter condition for '{key}'. "
+                        "Please merge it manually into request.filter."
+                    )
+                merged_condition[key] = value
+            merged_or_conditions.append(merged_condition)
+
+        return {"or": merged_or_conditions}
+
+    # For plain dict filters, keep strict AND semantics explicitly.
+    return {"and": [base_filter.copy(), constraints.copy()]}
+
+
 def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: NaiveMemCube):
     """
     Handler for deleting memories.
     Now unified to delete from text_mem only (includes preferences).
     """
     logger.info(
-        f"[Delete memory request] writable_cube_ids: {delete_mem_req.writable_cube_ids}, memory_ids: {delete_mem_req.memory_ids}"
+        "[Delete memory request] writable_cube_ids: %s, memory_ids: %s, file_ids: %s, auto_cleanup_working: %s"
+        "has_filter: %s, user_id: %s, session_id: %s",
+        delete_mem_req.writable_cube_ids,
+        delete_mem_req.memory_ids,
+        delete_mem_req.file_ids,
+        delete_mem_req.filter is not None,
+        delete_mem_req.user_id,
+        delete_mem_req.session_id,
+        getattr(delete_mem_req, "auto_cleanup_working", False),
     )
-    # Validate that only one of memory_ids, file_ids, or filter is provided
+    quick_constraints = _build_quick_delete_constraints(delete_mem_req)
+    has_non_empty_filter = bool(delete_mem_req.filter)
+    has_filter_mode = has_non_empty_filter or bool(quick_constraints)
+
+    # Reject empty filter dict when no quick constraints are provided.
+    if delete_mem_req.filter is not None and not has_non_empty_filter and not quick_constraints:
+        return DeleteMemoryResponse(
+            message="filter cannot be empty. Provide a non-empty filter or user_id/session_id.",
+            data={"status": "failure"},
+        )
+
+    # Validate that only one mode is provided: memory_ids, file_ids, or filter-mode.
     provided_params = [
         delete_mem_req.memory_ids is not None,
         delete_mem_req.file_ids is not None,
-        delete_mem_req.filter is not None,
+        has_filter_mode,
     ]
     if sum(provided_params) != 1:
         return DeleteMemoryResponse(
-            message="Exactly one of memory_ids, file_ids, or filter must be provided",
+            message=(
+                "Exactly one delete mode must be provided: "
+                "memory_ids, file_ids, or filter/user_id/session_id."
+            ),
             data={"status": "failure"},
         )
 
     try:
+        working_ids_to_delete: set[str] = set()
+        # When deleting by explicit memory_ids and auto_cleanup_working is enabled,
+        # collect related WorkingMemory ids from working_binding
+        if delete_mem_req.memory_ids is not None and getattr(
+            delete_mem_req, "auto_cleanup_working", False
+        ):
+            try:
+                memories = naive_mem_cube.text_mem.get_by_ids(memory_ids=delete_mem_req.memory_ids)
+            except Exception as e:
+                logger.warning("Failed to fetch memories before delete for working cleanup: %s", e)
+                memories = []
+
+            if memories:
+                import re
+
+                pattern = re.compile(r"\[working_binding:([0-9a-fA-F-]{36})\]")
+                for mem in memories:
+                    metadata = mem.get("metadata") or {}
+                    bg = metadata.get("background") or ""
+                    if not isinstance(bg, str):
+                        continue
+                    match = pattern.search(bg)
+                    if match:
+                        working_ids_to_delete.add(match.group(1))
+
         if delete_mem_req.memory_ids is not None:
             # Unified deletion from text_mem (includes preferences)
             naive_mem_cube.text_mem.delete_by_memory_ids(delete_mem_req.memory_ids)
@@ -342,8 +443,25 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
             naive_mem_cube.text_mem.delete_by_filter(
                 writable_cube_ids=delete_mem_req.writable_cube_ids, file_ids=delete_mem_req.file_ids
             )
-        elif delete_mem_req.filter is not None:
-            naive_mem_cube.text_mem.delete_by_filter(filter=delete_mem_req.filter)
+        elif has_filter_mode:
+            merged_filter = _merge_delete_filter(delete_mem_req.filter, quick_constraints)
+            naive_mem_cube.text_mem.delete_by_filter(
+                writable_cube_ids=delete_mem_req.writable_cube_ids,
+                filter=merged_filter,
+            )
+            if naive_mem_cube.pref_mem is not None:
+                naive_mem_cube.pref_mem.delete_by_filter(filter=merged_filter)
+
+        # After main deletion, optionally clean up related WorkingMemory nodes.
+        if working_ids_to_delete:
+            try:
+                logger.info(
+                    "Auto-cleanup WorkingMemory nodes after delete, count=%d",
+                    len(working_ids_to_delete),
+                )
+                naive_mem_cube.text_mem.delete_by_memory_ids(list(working_ids_to_delete))
+            except Exception as e:
+                logger.warning("Failed to auto-cleanup WorkingMemory nodes: %s, Pass", e)
     except Exception as e:
         logger.error(f"Failed to delete memories: {e}", exc_info=True)
         return DeleteMemoryResponse(

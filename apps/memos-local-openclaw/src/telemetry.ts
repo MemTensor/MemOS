@@ -1,5 +1,5 @@
 /**
- * Telemetry module — anonymous usage analytics via PostHog.
+ * Telemetry module — anonymous usage analytics via Aliyun ARMS RUM.
  *
  * Privacy-first design:
  * - Enabled by default with anonymous data only; opt-out via TELEMETRY_ENABLED=false
@@ -8,7 +8,6 @@
  * - Only sends aggregate counts, tool names, latencies, and version info
  */
 
-import { PostHog } from "posthog-node";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -17,45 +16,86 @@ import type { Logger } from "./types";
 
 export interface TelemetryConfig {
   enabled?: boolean;
-  posthogApiKey?: string;
-  posthogHost?: string;
 }
 
-const DEFAULT_POSTHOG_API_KEY = "phc_7lae6UC5jyImDefX6uub7zCxWyswCGNoBifCKqjvDrI";
-const DEFAULT_POSTHOG_HOST = "https://eu.i.posthog.com";
+function loadTelemetryCredentials(pluginDir?: string): { endpoint: string; pid: string; env: string } {
+  if (process.env.MEMOS_ARMS_ENDPOINT) {
+    return {
+      endpoint: process.env.MEMOS_ARMS_ENDPOINT,
+      pid: process.env.MEMOS_ARMS_PID ?? "",
+      env: process.env.MEMOS_ARMS_ENV ?? "prod",
+    };
+  }
+  const bases = pluginDir ? [pluginDir, path.join(pluginDir, "src")] : [];
+  if (typeof __dirname === "string") bases.push(path.resolve(__dirname, ".."), __dirname);
+  const candidates = bases.map(b => path.join(b, "telemetry.credentials.json"));
+  for (const credPath of candidates) {
+    try {
+      const raw = fs.readFileSync(credPath, "utf-8");
+      const creds = JSON.parse(raw);
+      if (creds.endpoint) return { endpoint: creds.endpoint, pid: creds.pid ?? "", env: creds.env ?? "prod" };
+    } catch {}
+  }
+  return { endpoint: "", pid: "", env: "prod" };
+}
+
+const FLUSH_AT = 10;
+const FLUSH_INTERVAL_MS = 30_000;
+const SEND_TIMEOUT_MS = 30_000;
+const SESSION_TTL_MS = 30 * 60_000; // 30 min inactivity → new session
+interface ArmsEvent {
+  event_type: "custom";
+  type: string;
+  name: string;
+  group: string;
+  value: number;
+  properties: Record<string, string | number | boolean>;
+  timestamp: number;
+  event_id: string;
+  times: number;
+}
 
 export class Telemetry {
-  private client: PostHog | null = null;
   private distinctId: string;
   private enabled: boolean;
   private pluginVersion: string;
   private log: Logger;
   private dailyPingSent = false;
   private dailyPingDate = "";
+  private buffer: ArmsEvent[] = [];
+  private flushTimer: ReturnType<typeof setInterval> | null = null;
+  private sessionId: string;
+  private firstSeenDate: string;
+  private armsEndpoint: string;
+  private armsPid: string;
+  private armsEnv: string;
 
-  constructor(config: TelemetryConfig, stateDir: string, pluginVersion: string, log: Logger) {
+  constructor(config: TelemetryConfig, stateDir: string, pluginVersion: string, log: Logger, pluginDir?: string) {
     this.log = log;
     this.pluginVersion = pluginVersion;
     this.enabled = config.enabled !== false;
     this.distinctId = this.loadOrCreateAnonymousId(stateDir);
+    this.firstSeenDate = this.loadOrCreateFirstSeen(stateDir);
+    this.sessionId = this.loadOrCreateSessionId(stateDir);
 
-    if (!this.enabled) {
-      this.log.debug("Telemetry disabled (opt-out via TELEMETRY_ENABLED=false)");
+    const creds = loadTelemetryCredentials(pluginDir);
+    this.armsEndpoint = creds.endpoint;
+    this.armsPid = creds.pid;
+    this.armsEnv = creds.env;
+
+    if (!this.enabled || !this.armsEndpoint) {
+      this.enabled = false;
+      this.log.debug(
+        !this.armsEndpoint
+          ? "Telemetry disabled (no credentials configured)"
+          : "Telemetry disabled (opt-out)",
+      );
       return;
     }
 
-    const apiKey = config.posthogApiKey || DEFAULT_POSTHOG_API_KEY;
-    try {
-      this.client = new PostHog(apiKey, {
-        host: config.posthogHost || DEFAULT_POSTHOG_HOST,
-        flushAt: 10,
-        flushInterval: 30_000,
-      });
-      this.log.debug("Telemetry initialized (PostHog)");
-    } catch (err) {
-      this.log.warn(`Telemetry init failed: ${err}`);
-      this.enabled = false;
-    }
+    this.flushTimer = setInterval(() => this.flush(), FLUSH_INTERVAL_MS);
+    if (this.flushTimer.unref) this.flushTimer.unref();
+    this.log.debug("Telemetry initialized (ARMS)");
   }
 
   private loadOrCreateAnonymousId(stateDir: string): string {
@@ -81,24 +121,113 @@ export class Telemetry {
     return newId;
   }
 
+  private loadOrCreateSessionId(stateDir: string): string {
+    const filePath = path.join(stateDir, "memos-local", ".session");
+    try {
+      const raw = fs.readFileSync(filePath, "utf-8").trim();
+      const sep = raw.indexOf("|");
+      if (sep > 0) {
+        const ts = parseInt(raw.slice(0, sep), 10);
+        const id = raw.slice(sep + 1);
+        if (id.length > 10 && Date.now() - ts < SESSION_TTL_MS) {
+          this.touchSession(filePath, id);
+          return id;
+        }
+      }
+    } catch {}
+    const newId = uuidv4();
+    this.touchSession(filePath, newId);
+    return newId;
+  }
+
+  private touchSession(filePath: string, id: string): void {
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, `${Date.now()}|${id}`, "utf-8");
+    } catch {}
+  }
+
+  private loadOrCreateFirstSeen(stateDir: string): string {
+    const filePath = path.join(stateDir, "memos-local", ".first-seen");
+    try {
+      const existing = fs.readFileSync(filePath, "utf-8").trim();
+      if (existing.length === 10) return existing;
+    } catch {}
+    const today = new Date().toISOString().slice(0, 10);
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, today, "utf-8");
+    } catch {}
+    return today;
+  }
+
   private capture(event: string, properties?: Record<string, unknown>): void {
-    if (!this.enabled || !this.client) return;
+    if (!this.enabled) return;
+
+    const safeProps: Record<string, string | number | boolean> = {
+      plugin_version: this.pluginVersion,
+      os: os.platform(),
+      os_version: os.release(),
+      node_version: process.version,
+      arch: os.arch(),
+    };
+    if (properties) {
+      for (const [k, v] of Object.entries(properties)) {
+        if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+          safeProps[k] = v;
+        }
+      }
+    }
+
+    this.buffer.push({
+      event_type: "custom",
+      type: "memos_plugin",
+      name: event,
+      group: "memos_local",
+      value: 1,
+      properties: safeProps,
+      timestamp: Date.now(),
+      event_id: uuidv4(),
+      times: 1,
+    });
+
+    if (this.buffer.length >= FLUSH_AT) {
+      this.flush();
+    }
+  }
+
+  private buildPayload(events: ArmsEvent[]): Record<string, unknown> {
+    return {
+      app: {
+        id: this.armsPid,
+        env: this.armsEnv,
+        version: this.pluginVersion,
+        type: "node",
+      },
+      user: { id: this.distinctId },
+      session: { id: this.sessionId },
+      net: {},
+      view: { id: "plugin", name: "memos-local-openclaw" },
+      events,
+      _v: "1.0.0",
+    };
+  }
+
+  private async flush(): Promise<void> {
+    if (this.buffer.length === 0) return;
+    const batch = this.buffer.splice(0);
+    const payload = this.buildPayload(batch);
 
     try {
-      this.client.capture({
-        distinctId: this.distinctId,
-        event,
-        properties: {
-          plugin_version: this.pluginVersion,
-          os: os.platform(),
-          os_version: os.release(),
-          node_version: process.version,
-          arch: os.arch(),
-          ...properties,
-        },
+      const resp = await fetch(this.armsEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       });
-    } catch {
-      // best-effort, never throw
+      this.log.debug(`Telemetry flush: ${batch.length} events → ${resp.status}`);
+    } catch (err) {
+      this.log.debug(`Telemetry flush failed: ${err}`);
     }
   }
 
@@ -131,7 +260,7 @@ export class Telemetry {
     });
   }
 
-  trackSkillEvolved(skillName: string, upgradeType: string): void {
+  trackSkillEvolved(skillName: string, upgradeType: "created" | "upgraded"): void {
     this.capture("skill_evolved", {
       skill_name: skillName,
       upgrade_type: upgradeType,
@@ -150,19 +279,28 @@ export class Telemetry {
     });
   }
 
+  trackError(source: string, errorType: string): void {
+    this.capture("plugin_error", {
+      error_source: source,
+      error_type: errorType,
+    });
+  }
+
   private maybeSendDailyPing(): void {
     const today = new Date().toISOString().slice(0, 10);
     if (this.dailyPingSent && this.dailyPingDate === today) return;
     this.dailyPingSent = true;
     this.dailyPingDate = today;
-    this.capture("daily_active");
+    this.capture("daily_active", {
+      first_seen_date: this.firstSeenDate,
+    });
   }
 
   async shutdown(): Promise<void> {
-    if (this.client) {
-      try {
-        await this.client.shutdown();
-      } catch {}
+    if (this.flushTimer) {
+      clearInterval(this.flushTimer);
+      this.flushTimer = null;
     }
+    await this.flush();
   }
 }

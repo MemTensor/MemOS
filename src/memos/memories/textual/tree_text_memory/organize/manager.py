@@ -114,7 +114,6 @@ class MemoryManager:
 
         if mode == "sync":
             self._cleanup_working_memory(user_name)
-            self._refresh_memory_size(user_name=user_name)
 
         return added_ids
 
@@ -235,7 +234,6 @@ class MemoryManager:
                             exc_info=e,
                         )
 
-        _submit_batches(working_nodes, "WorkingMemory")
         _submit_batches(graph_nodes, "graph memory")
 
         if graph_node_ids and self.is_reorganize:

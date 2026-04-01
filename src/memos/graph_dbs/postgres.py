@@ -10,6 +10,7 @@ Tables:
 """
 
 import json
+import re
 import time
 
 from contextlib import suppress
@@ -437,6 +438,202 @@ class PostgresGraphDB(BaseGraphDB):
         if include_embedding and len(row) > 5:
             result["metadata"]["embedding"] = row[5]
         return result
+
+    @staticmethod
+    def _is_safe_field_name(field: str) -> bool:
+        """Validate field names used in dynamic SQL fragments."""
+        return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", field))
+
+    def _field_expr(self, key: str) -> tuple[str, str]:
+        """
+        Build text/json SQL expressions for a filter key.
+
+        Returns:
+            tuple[text_expr, json_expr]
+        """
+        direct_columns = {"id", "memory", "user_name", "created_at", "updated_at"}
+        if key in direct_columns:
+            return key, key
+
+        if key.startswith("info."):
+            sub_key = key[5:]
+            if not self._is_safe_field_name(sub_key):
+                raise ValueError(f"Invalid filter field: {key}")
+            return f"properties->'info'->>'{sub_key}'", f"properties->'info'->'{sub_key}'"
+
+        if not self._is_safe_field_name(key):
+            raise ValueError(f"Invalid filter field: {key}")
+        return f"properties->>'{key}'", f"properties->'{key}'"
+
+    def _build_single_filter_condition(
+        self, condition_dict: dict[str, Any], params: list[Any]
+    ) -> str | None:
+        """Build SQL for a single filter condition dict."""
+        if not condition_dict:
+            return None
+
+        array_fields = {"tags", "sources", "file_ids"}
+        timestamp_fields = {"created_at", "updated_at"}
+        parts: list[str] = []
+
+        for key, value in condition_dict.items():
+            text_expr, json_expr = self._field_expr(key)
+            raw_key = key[5:] if key.startswith("info.") else key
+
+            if isinstance(value, dict):
+                for op, op_value in value.items():
+                    if op in ("gt", "lt", "gte", "lte"):
+                        op_map = {"gt": ">", "lt": "<", "gte": ">=", "lte": "<="}
+                        sql_op = op_map[op]
+                        if raw_key in timestamp_fields or raw_key.endswith("_at"):
+                            parts.append(f"({text_expr})::timestamptz {sql_op} %s::timestamptz")
+                            params.append(op_value)
+                        else:
+                            parts.append(f"NULLIF({text_expr}, '')::numeric {sql_op} %s")
+                            params.append(op_value)
+                    elif op == "contains":
+                        if raw_key in array_fields:
+                            parts.append(f"{json_expr} @> %s::jsonb")
+                            params.append(json.dumps([op_value]))
+                        else:
+                            parts.append(f"{text_expr} ILIKE %s")
+                            params.append(f"%{op_value}%")
+                    elif op == "in":
+                        if not isinstance(op_value, list):
+                            raise ValueError(
+                                f"in operator expects list for '{key}', got {type(op_value).__name__}"
+                            )
+                        if raw_key in array_fields:
+                            parts.append(f"{json_expr} ?| %s")
+                            params.append([str(v) for v in op_value])
+                        else:
+                            parts.append(f"{text_expr} = ANY(%s)")
+                            params.append([str(v) for v in op_value])
+                    elif op == "like":
+                        parts.append(f"{text_expr} ILIKE %s")
+                        params.append(f"%{op_value}%")
+                    else:
+                        raise ValueError(f"Unsupported filter operator: {op}")
+            else:
+                if raw_key in array_fields:
+                    if isinstance(value, list):
+                        parts.append(f"{json_expr} @> %s::jsonb")
+                        params.append(json.dumps(value))
+                    else:
+                        parts.append(f"{json_expr} @> %s::jsonb")
+                        params.append(json.dumps([value]))
+                else:
+                    parts.append(f"{text_expr} = %s")
+                    params.append(str(value))
+
+        if not parts:
+            return None
+        return " AND ".join(parts)
+
+    def _build_filter_where_clause(self, filter_dict: dict[str, Any], params: list[Any]) -> str:
+        """Build SQL WHERE fragment from filter dict."""
+        if not filter_dict:
+            return ""
+
+        if "and" in filter_dict:
+            and_conditions = filter_dict.get("and")
+            if not isinstance(and_conditions, list):
+                raise ValueError("Invalid filter format: 'and' must be a list")
+            parts: list[str] = []
+            for cond in and_conditions:
+                if isinstance(cond, dict):
+                    cond_sql = self._build_single_filter_condition(cond, params)
+                    if cond_sql:
+                        parts.append(f"({cond_sql})")
+            return " AND ".join(parts)
+
+        if "or" in filter_dict:
+            or_conditions = filter_dict.get("or")
+            if not isinstance(or_conditions, list):
+                raise ValueError("Invalid filter format: 'or' must be a list")
+            parts: list[str] = []
+            for cond in or_conditions:
+                if isinstance(cond, dict):
+                    cond_sql = self._build_single_filter_condition(cond, params)
+                    if cond_sql:
+                        parts.append(f"({cond_sql})")
+            return f"({' OR '.join(parts)})" if parts else ""
+
+        cond_sql = self._build_single_filter_condition(filter_dict, params)
+        return cond_sql or ""
+
+    def delete_node_by_prams(
+        self,
+        writable_cube_ids: list[str] | None = None,
+        memory_ids: list[str] | None = None,
+        file_ids: list[str] | None = None,
+        filter: dict | None = None,
+    ) -> int:
+        """Delete nodes by memory_ids, file_ids, or filter."""
+        logger.info(
+            "[delete_node_by_prams] memory_ids: %s, file_ids: %s, filter: %s, writable_cube_ids: %s",
+            memory_ids,
+            file_ids,
+            filter,
+            writable_cube_ids,
+        )
+
+        where_conditions: list[str] = []
+        params: list[Any] = []
+
+        if memory_ids:
+            where_conditions.append("id = ANY(%s)")
+            params.append(memory_ids)
+
+        if file_ids:
+            file_conditions: list[str] = []
+            for file_id in file_ids:
+                file_conditions.append("properties->'file_ids' @> %s::jsonb")
+                params.append(json.dumps([file_id]))
+            if file_conditions:
+                where_conditions.append(f"({' OR '.join(file_conditions)})")
+
+        if filter:
+            filter_where = self._build_filter_where_clause(filter, params)
+            if filter_where:
+                where_conditions.append(f"({filter_where})")
+
+        if not where_conditions:
+            logger.warning(
+                "[delete_node_by_prams] No nodes to delete (no memory_ids, file_ids, or filter provided)"
+            )
+            return 0
+
+        if writable_cube_ids:
+            where_conditions.append("user_name = ANY(%s)")
+            params.append(writable_cube_ids)
+
+        where_clause = " AND ".join(where_conditions)
+
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                query = f"""
+                    WITH to_delete AS (
+                        SELECT id
+                        FROM {self.schema}.memories
+                        WHERE {where_clause}
+                    ),
+                    deleted_edges AS (
+                        DELETE FROM {self.schema}.edges e
+                        USING to_delete d
+                        WHERE e.source_id = d.id OR e.target_id = d.id
+                    )
+                    DELETE FROM {self.schema}.memories m
+                    USING to_delete d
+                    WHERE m.id = d.id
+                """
+                cur.execute(query, params)
+                deleted_count = cur.rowcount if cur.rowcount is not None else 0
+                logger.info("[delete_node_by_prams] Deleted %s nodes", deleted_count)
+                return deleted_count
+        finally:
+            self._put_conn(conn)
 
     # =========================================================================
     # Edge Management

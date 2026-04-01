@@ -55,14 +55,7 @@ export interface Task {
   updatedAt: number;
 }
 
-export type ChunkKind =
-  | "paragraph"
-  | "code_block"
-  | "error_stack"
-  | "command"
-  | "list"
-  | "mixed"
-  | "tool_result";
+export type ChunkKind = "paragraph";
 
 export interface ChunkRef {
   sessionKey: string;
@@ -73,6 +66,8 @@ export interface ChunkRef {
 
 // ─── Search / Recall ───
 
+export type SearchHitOrigin = "local" | "local-shared" | "hub-memory" | "hub-remote";
+
 export interface SearchHit {
   summary: string;
   original_excerpt: string;
@@ -81,6 +76,7 @@ export interface SearchHit {
   taskId: string | null;
   skillId: string | null;
   owner?: string;
+  origin?: SearchHitOrigin;
   source: {
     ts: number;
     role: Role;
@@ -151,7 +147,16 @@ export type SummaryProvider =
   | "anthropic"
   | "gemini"
   | "azure_openai"
-  | "bedrock";
+  | "bedrock"
+  | "zhipu"
+  | "siliconflow"
+  | "deepseek"
+  | "moonshot"
+  | "bailian"
+  | "cohere"
+  | "mistral"
+  | "voyage"
+  | "openclaw";
 
 export type EmbeddingProvider =
   | "openai"
@@ -161,7 +166,8 @@ export type EmbeddingProvider =
   | "cohere"
   | "mistral"
   | "voyage"
-  | "local";
+  | "local"
+  | "openclaw";
 
 export interface ProviderConfig {
   provider: string;
@@ -171,6 +177,7 @@ export interface ProviderConfig {
   headers?: Record<string, string>;
   timeoutMs?: number;
   temperature?: number;
+  capabilities?: SharingCapabilities;
 }
 
 export interface SummarizerConfig extends ProviderConfig {
@@ -247,13 +254,46 @@ export interface SkillEvolutionConfig {
   minConfidence?: number;
   maxSkillLines?: number;
   autoInstall?: boolean;
+  autoRecallSkills?: boolean;
+  autoRecallSkillLimit?: number;
+  preferUpgradeExisting?: boolean;
+  redactSensitiveInSkill?: boolean;
+  /** Optional independent LLM config for skill evaluation/validation. Falls back to main summarizer if not set. */
   summarizer?: SummarizerConfig;
 }
 
 export interface TelemetryConfig {
   enabled?: boolean;
-  posthogApiKey?: string;
-  posthogHost?: string;
+}
+
+export type SharingRole = "hub" | "client";
+
+export interface SharingCapabilities {
+  hostEmbedding?: boolean;
+  hostCompletion?: boolean;
+  hostSkill?: boolean;
+}
+
+export interface HubModeConfig {
+  port?: number;
+  teamName?: string;
+  teamToken?: string;
+}
+
+export interface ClientModeConfig {
+  hubAddress?: string;
+  userToken?: string;
+  teamToken?: string;
+  nickname?: string;
+  pendingUserId?: string;
+}
+
+export interface SharingConfig {
+  enabled?: boolean;
+  role?: SharingRole;
+  hub?: HubModeConfig;
+  client?: ClientModeConfig;
+  capabilities?: SharingCapabilities;
 }
 
 export interface MemosLocalConfig {
@@ -281,6 +321,7 @@ export interface MemosLocalConfig {
   };
   skillEvolution?: SkillEvolutionConfig;
   telemetry?: TelemetryConfig;
+  sharing?: SharingConfig;
 }
 
 // ─── Defaults ───
@@ -294,7 +335,7 @@ export const DEFAULTS = {
   mmrLambda: 0.7,
   recencyHalfLifeDays: 14,
   vectorSearchMaxChunks: 0,
-  dedupSimilarityThreshold: 0.60,
+  dedupSimilarityThreshold: 0.80,
   evidenceWrapperTag: "STORED_MEMORY",
   excerptMinChars: 200,
   excerptMaxChars: 500,
@@ -312,6 +353,10 @@ export const DEFAULTS = {
   skillMinConfidence: 0.7,
   skillMaxLines: 400,
   skillAutoInstall: false,
+  skillAutoRecall: true,
+  skillAutoRecallLimit: 2,
+  skillPreferUpgrade: true,
+  skillRedactSensitive: true,
 } as const;
 
 // ─── Plugin Hooks (OpenClaw integration) ───
@@ -321,6 +366,12 @@ export interface PluginContext {
   workspaceDir: string;
   config: MemosLocalConfig;
   log: Logger;
+  openclawAPI?: OpenClawAPI;
+}
+
+export interface OpenClawAPI {
+  embed(request: { texts: string[]; model?: string }): Promise<{ embeddings: number[][]; dimensions: number }>;
+  complete(request: { prompt: string; maxTokens?: number; temperature?: number; model?: string }): Promise<{ text: string }>;
 }
 
 export interface Logger {
