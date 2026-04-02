@@ -126,7 +126,8 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .main-content{display:flex;flex:1;max-width:1400px;margin:0 auto;width:100%;padding:28px 32px;gap:28px}
 
 /* ─── Sidebar ─── */
-.sidebar{width:260px;min-width:260px;flex-shrink:0}
+.sidebar{width:260px;min-width:260px;flex-shrink:0;position:sticky;top:84px;max-height:calc(100vh - 112px);display:flex;flex-direction:column}
+.sidebar > * {flex-shrink:0}
 .sidebar .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px}
 .stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:18px;transition:all .2s}
 .stat-card:hover{border-color:var(--border-glow);background:var(--bg-card-hover)}
@@ -138,7 +139,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .stat-card.rose .stat-value{color:var(--rose)}
 
 .sidebar .section-title{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin:24px 0 12px;padding:0 2px}
-.sidebar .session-list{display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto}
+.sidebar .session-list{display:flex;flex-direction:column;gap:6px;flex:1;min-height:0;overflow-y:auto;padding-right:4px;flex-shrink:1}
 .session-item{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;cursor:pointer;transition:all .15s;font-size:13px;color:var(--text)}
 .session-item:hover{border-color:var(--pri);background:var(--pri-glow)}
 .session-item.active{border-color:var(--pri);background:var(--pri-glow);font-weight:600;color:var(--pri)}
@@ -490,6 +491,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .btn-primary:hover{background:rgba(255,255,255,.14);transform:translateY(-1px);border-color:var(--pri);color:var(--pri)}
 .btn-ghost{border-color:transparent;background:transparent;color:var(--text-sec)}
 .btn-ghost:hover{background:rgba(255,255,255,.06);color:var(--text)}
+#memorySelectAllBtn,#taskSelectAllBtn,#skillSelectAllBtn{border-color:var(--border);background:var(--bg-card)}
 .btn-danger{color:var(--accent);border-color:rgba(230,57,70,.25)}
 .btn-danger:hover{background:rgba(230,57,70,.1);color:var(--accent)}
 .btn-sm{padding:5px 12px;font-size:12px}
@@ -581,7 +583,10 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .date-filter input[type="datetime-local"]:focus{border-color:var(--pri)}
 .date-filter label{font-weight:500}
 
-.pagination{display:flex;align-items:center;justify-content:center;gap:6px;padding:28px 0;flex-wrap:wrap}
+.pagination-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:8px 0 18px}
+.page-size-control{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--text-sec)}
+.page-size-control .filter-select{padding:6px 10px}
+.pagination{display:flex;align-items:center;justify-content:center;gap:6px;padding:0;flex-wrap:wrap;flex:1}
 .pagination .pg-btn{min-width:38px;height:38px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:10px;background:var(--bg-card);color:var(--text-sec);font-size:13px;font-weight:500;cursor:pointer;transition:all .15s}
 .pagination .pg-btn:hover{border-color:var(--pri);color:var(--pri)}
 .pagination .pg-btn.active{background:var(--pri);color:#000;border-color:var(--pri)}
@@ -697,9 +702,10 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .skill-card-bottom .tag{display:flex;align-items:center;gap:4px}
 .skill-card-tags{display:flex;gap:4px;flex-wrap:wrap}
 .skill-tag{font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(139,92,246,.1);color:var(--violet);font-weight:500}
-.skill-selection-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
-.skill-select-box{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;border:1px solid var(--border);background:var(--bg-card);cursor:pointer;margin-right:8px;vertical-align:middle}
-.skill-select-box input{width:14px;height:14px;cursor:pointer}
+.selection-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#memorySelectionToolbar{margin-bottom:16px}
+.item-select-box{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;border:1px solid var(--border);background:var(--bg-card);cursor:pointer;margin-right:8px;vertical-align:middle}
+.item-select-box input{width:14px;height:14px;cursor:pointer}
 .skill-detail-desc{font-size:13px;color:var(--text-sec);line-height:1.6;margin-bottom:16px;padding:12px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius)}
 .skill-version-item{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px}
 .skill-version-header{display:flex;align-items:center;gap:10px;margin-bottom:6px}
@@ -1240,8 +1246,8 @@ input,textarea,select{font-family:inherit;font-size:inherit}
         </div>
       </div>
       <div id="embeddingStatus"></div>
+      <button class="btn btn-sm btn-ghost" style="width:100%;margin:20px 0 12px;justify-content:center;color:var(--text-muted);font-size:11px" onclick="clearAll()" data-i18n="sidebar.clear">\u{1F5D1} Clear All Data</button>
       <div class="session-list" id="sessionList" style="display:none"></div>
-      <button class="btn btn-sm btn-ghost" style="width:100%;margin-top:20px;justify-content:center;color:var(--text-muted);font-size:11px" onclick="clearAll()" data-i18n="sidebar.clear">\u{1F5D1} Clear All Data</button>
     </div>
 
     <div class="view-container">
@@ -1257,11 +1263,6 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
           <option value="hub" data-i18n="scope.hub">Team</option>
         </select>
-        <select id="memoryPageSize" class="filter-select" onchange="onMemoryPageSizeChange()">
-          <option value="10">10 / page</option>
-          <option value="20" selected>20 / page</option>
-          <option value="40">40 / page</option>
-        </select>
       </div>
       <div class="search-meta" id="searchMeta"></div>
       <div class="search-meta" id="sharingSearchMeta"></div>
@@ -1274,18 +1275,28 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <option value="newest" data-i18n="filter.newest">Newest first</option>
           <option value="oldest" data-i18n="filter.oldest">Oldest first</option>
         </select>
-        <span class="filter-sep"></span>
-        <select id="filterSession" class="filter-select" onchange="filterSession(this.value||null)">
-          <option value="" data-i18n="filter.allsessions">All sessions</option>
-        </select>
       </div>
       <div class="date-filter">
         <label data-i18n="filter.from">From</label><input type="datetime-local" id="dateFrom" step="1" onchange="applyFilters()">
         <label data-i18n="filter.to">To</label><input type="datetime-local" id="dateTo" step="1" onchange="applyFilters()">
         <button class="btn btn-sm btn-text" onclick="clearDateFilter()" data-i18n="filter.clear">Clear</button>
       </div>
+      <div class="selection-toolbar" id="memorySelectionToolbar">
+        <button class="btn btn-sm btn-ghost" id="memorySelectAllBtn" onclick="toggleSelectAllMemories()" data-i18n="skills.selectAll">Select All</button>
+        <button class="btn btn-sm btn-danger" id="memoryBulkDeleteBtn" onclick="deleteSelectedMemories()" style="display:none" data-i18n="memory.deleteSelected">Delete Selected</button>
+      </div>
       <div class="memory-list" id="memoryList"><div class="spinner"></div></div>
-      <div class="pagination" id="pagination"></div>
+      <div class="pagination-row">
+        <div class="pagination" id="pagination"></div>
+        <div class="page-size-control">
+          <span data-i18n="pagination.pageSize">Items per page</span>
+          <select id="memoryPageSize" class="filter-select" onchange="onMemoryPageSizeChange()">
+            <option value="10">10 / page</option>
+            <option value="20" selected>20 / page</option>
+            <option value="40">40 / page</option>
+          </select>
+        </div>
+      </div>
     </div>
     </div>
     <div class="tasks-view vp" id="tasksView">
@@ -1301,19 +1312,28 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <button class="filter-chip" data-task-status="active" onclick="setTaskStatusFilter(this,'active')" data-i18n="tasks.status.active">Active</button>
           <button class="filter-chip" data-task-status="completed" onclick="setTaskStatusFilter(this,'completed')" data-i18n="tasks.status.completed">Completed</button>
           <button class="filter-chip" data-task-status="skipped" onclick="setTaskStatusFilter(this,'skipped')" data-i18n="tasks.status.skipped">Skipped</button>
-          <select id="tasksPageSize" class="filter-select" onchange="onTasksPageSizeChange()">
-            <option value="10">10 / page</option>
-            <option value="20" selected>20 / page</option>
-            <option value="40">40 / page</option>
-          </select>
           <select id="taskSearchScope" class="scope-select" onchange="onTaskScopeChange()" style="display:none">
             <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
             <option value="hub" data-i18n="scope.hub">Team</option>
           </select>
         </div>
+        <div class="selection-toolbar" id="taskSelectionToolbar">
+          <button class="btn btn-sm btn-ghost" id="taskSelectAllBtn" onclick="toggleSelectAllTasks()" data-i18n="skills.selectAll">Select All</button>
+          <button class="btn btn-sm btn-danger" id="taskBulkDeleteBtn" onclick="deleteSelectedTasks()" style="display:none" data-i18n="task.deleteSelected">Delete Selected</button>
+        </div>
       </div>
       <div class="tasks-list" id="tasksList"><div class="spinner"></div></div>
-      <div class="pagination" id="tasksPagination"></div>
+      <div class="pagination-row">
+        <div class="pagination" id="tasksPagination"></div>
+        <div class="page-size-control">
+          <span data-i18n="pagination.pageSize">Items per page</span>
+          <select id="tasksPageSize" class="filter-select" onchange="onTasksPageSizeChange()">
+            <option value="10">10 / page</option>
+            <option value="20" selected>20 / page</option>
+            <option value="40">40 / page</option>
+          </select>
+        </div>
+      </div>
       <div class="task-detail-overlay" id="taskDetailOverlay" onclick="closeTaskDetail(event)">
         <div class="task-detail-panel" onclick="event.stopPropagation()">
           <div class="task-detail-header">
@@ -1351,11 +1371,6 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
           <option value="hub" data-i18n="scope.hub">Team</option>
         </select>
-        <select id="skillsPageSize" class="filter-select" onchange="onSkillsPageSizeChange()">
-          <option value="10">10 / page</option>
-          <option value="20" selected>20 / page</option>
-          <option value="40">40 / page</option>
-        </select>
       </div>
       <div class="search-meta" id="skillSearchMeta" style="display:none"></div>
       <div class="tasks-header">
@@ -1371,19 +1386,30 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <button class="filter-chip" data-skill-status="active" onclick="setSkillStatusFilter(this,'active')" data-i18n="skills.filter.active">Active</button>
           <button class="filter-chip" data-skill-status="draft" onclick="setSkillStatusFilter(this,'draft')" data-i18n="skills.filter.draft">Draft</button>
           <button class="filter-chip" data-skill-status="archived" onclick="setSkillStatusFilter(this,'archived')" data-i18n="skills.filter.archived">Archived</button>
+          <span class="filter-sep"></span>
           <select id="skillVisibilityFilter" class="filter-select" onchange="loadSkills()" style="display:none">
             <option value="" data-i18n="filter.allvisibility">All visibility</option>
             <option value="public" data-i18n="filter.public">Public</option>
             <option value="private" data-i18n="filter.private">Private</option>
           </select>
         </div>
-        <div class="skill-selection-toolbar">
+        <div class="selection-toolbar">
           <button class="btn btn-sm btn-ghost" id="skillSelectAllBtn" onclick="toggleSelectAllSkills()" data-i18n="skills.selectAll">Select All</button>
-          <button class="btn btn-sm btn-danger" id="skillBulkDeleteBtn" onclick="deleteSelectedSkills()" disabled data-i18n="skills.deleteSelected">Delete Selected</button>
+          <button class="btn btn-sm btn-danger" id="skillBulkDeleteBtn" onclick="deleteSelectedSkills()" style="display:none" data-i18n="skills.deleteSelected">Delete Selected</button>
         </div>
       </div>
       <div class="tasks-list" id="skillsList"><div class="spinner"></div></div>
-      <div class="pagination" id="skillsPagination"></div>
+      <div class="pagination-row">
+        <div class="pagination" id="skillsPagination"></div>
+        <div class="page-size-control">
+          <span data-i18n="pagination.pageSize">Items per page</span>
+          <select id="skillsPageSize" class="filter-select" onchange="onSkillsPageSizeChange()">
+            <option value="10">10 / page</option>
+            <option value="20" selected>20 / page</option>
+            <option value="40">40 / page</option>
+          </select>
+        </div>
+      </div>
       <div id="hubSkillsSection" style="display:none;margin-top:16px">
         <div class="section-title" style="margin-bottom:12px" data-i18n="skills.hub.title">\u{1F310} Team Skills</div>
         <div class="tasks-list" id="hubSkillsList"></div>
@@ -2052,6 +2078,8 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 let activeSession=null,activeRole='',editingId=null,searchTimer=null,memoryCache={},currentPage=1,totalPages=1,totalCount=0,PAGE_SIZE=20,metricsDays=30;
 let memorySearchScope='allLocal',skillSearchScope='allLocal',taskSearchScope='allLocal';
 let _lastMemoriesFingerprint='',_lastTasksFingerprint='',_lastSkillsFingerprint='';
+let selectedMemoryIds=new Set(),currentMemoryIds=[];
+let selectedTaskIds=new Set(),currentTaskIds=[];
 let _embeddingWarningShown=false;
 let _currentAgentOwner='agent:main';
 try {
@@ -2207,6 +2235,7 @@ const I18N={
     'card.dedupTarget':'Target: ',
     'card.dedupReason':'Reason: ',
     'card.newSummary':'New',
+    'pagination.pageSize':'Items per page',
     'pagination.total':' total',
     'range':'Range',
     'range.days':'days',
@@ -2759,6 +2788,10 @@ const I18N={
     'task.cancel':'Cancel',
     'task.delete.confirm':'Are you sure you want to delete this task? This cannot be undone.',
     'task.delete.error':'Failed to delete task: ',
+    'task.deleteSelected':'Delete Selected',
+    'task.delete.selected.confirm':'Delete {count} selected tasks? This action cannot be undone.',
+    'task.delete.success':'Deleted {count} tasks.',
+    'task.delete.partial':'Deleted {ok} tasks, failed {fail}.',
     'task.save.error':'Failed to save task: ',
     'task.retrySkill':'Retry Skill Generation',
     'task.retrySkill.short':'Retry Skill',
@@ -2773,6 +2806,10 @@ const I18N={
     'skill.delete.error':'Failed to delete skill: ',
     'skill.delete.partial':'Deleted {ok} skills, failed {fail}.',
     'skill.delete.success':'Deleted {count} skills.',
+    'memory.deleteSelected':'Delete Selected',
+    'memory.delete.selected.confirm':'Delete {count} selected memories? This action cannot be undone.',
+    'memory.delete.success':'Deleted {count} memories.',
+    'memory.delete.partial':'Deleted {ok} memories, failed {fail}.',
     'skill.save.error':'Failed to save skill: ',
     'update.available':'New version available',
     'update.run':'Run',
@@ -2957,6 +2994,7 @@ const I18N={
     'card.dedupTarget':'关联: ',
     'card.dedupReason':'原因: ',
     'card.newSummary':'新摘要',
+    'pagination.pageSize':'每页数量',
     'pagination.total':' 条',
     'range':'范围',
     'range.days':'天',
@@ -3509,6 +3547,10 @@ const I18N={
     'task.cancel':'取消',
     'task.delete.confirm':'确定要删除此任务吗？此操作不可撤销。',
     'task.delete.error':'删除任务失败：',
+    'task.deleteSelected':'删除选中',
+    'task.delete.selected.confirm':'确定删除选中的 {count} 个任务吗？此操作不可撤销。',
+    'task.delete.success':'已删除 {count} 个任务。',
+    'task.delete.partial':'已删除 {ok} 个任务，失败 {fail} 个。',
     'task.save.error':'保存任务失败：',
     'task.retrySkill':'重新生成技能',
     'task.retrySkill.short':'重试技能',
@@ -3523,6 +3565,10 @@ const I18N={
     'skill.delete.error':'删除技能失败：',
     'skill.delete.partial':'已删除 {ok} 个技能，失败 {fail} 个。',
     'skill.delete.success':'已删除 {count} 个技能。',
+    'memory.deleteSelected':'删除选中',
+    'memory.delete.selected.confirm':'确定删除选中的 {count} 条记忆吗？此操作不可撤销。',
+    'memory.delete.success':'已删除 {count} 条记忆。',
+    'memory.delete.partial':'已删除 {ok} 条记忆，失败 {fail} 条。',
     'skill.save.error':'保存技能失败：',
     'update.available':'发现新版本',
     'update.run':'执行命令',
@@ -3807,8 +3853,11 @@ function switchView(view){
   }
   var sessionSection=document.getElementById('sidebarSessionSection');
   if(sessionSection){
-    if(view==='memories'){sessionSection.style.visibility='';sessionSection.style.pointerEvents='';}
+    if(view==='memories'||view==='tasks'||view==='skills'){sessionSection.style.visibility='';sessionSection.style.pointerEvents='';}
     else{sessionSection.style.visibility='hidden';sessionSection.style.pointerEvents='none';}
+  }
+  if(view==='memories'||view==='tasks'||view==='skills'){
+    loadStats();
   }
   if(view==='tasks') loadTasks();
   else if(view==='skills') loadSkills();
@@ -3831,6 +3880,7 @@ function onMemoryScopeChange(){
   currentPage=1;
   activeSession=null;activeRole='';
   _lastMemoriesFingerprint='';
+  if(memorySearchScope==='hub') selectedMemoryIds.clear();
   var isHub=memorySearchScope==='hub';
   var ownerSel=document.getElementById('filterOwner');
   var filterBar=document.getElementById('filterBar');
@@ -3838,6 +3888,7 @@ function onMemoryScopeChange(){
   if(ownerSel){ownerSel.style.display=isHub?'none':'';if(isHub)ownerSel.value='';}
   if(filterBar) filterBar.style.display=isHub?'none':'';
   if(dateFilter) dateFilter.style.display=isHub?'none':'';
+  updateMemorySelectionToolbar();
   if(document.getElementById('searchInput').value.trim()) doSearch(document.getElementById('searchInput').value);
   else if(isHub) { document.getElementById('sharingSearchMeta').textContent=''; loadHubMemories(); }
   else {
@@ -3899,7 +3950,9 @@ function onTasksPageSizeChange(){
 
 function onTaskScopeChange(){
   taskSearchScope=document.getElementById('taskSearchScope')?.value||'allLocal';
+  if(taskSearchScope==='hub') selectedTaskIds.clear();
   tasksPage=0;
+  updateTaskSelectionToolbar();
   loadTasks();
 }
 
@@ -5124,6 +5177,7 @@ function renderSharingMemorySearchResults(data,query){
   const list=document.getElementById('memoryList');
   const localHits=(data&&data.local&&Array.isArray(data.local.hits))?data.local.hits:[];
   const hubHits=(data&&data.hub&&Array.isArray(data.hub.hits))?data.hub.hits:[];
+  setPageSizeVisible('memoryPageSize',(localHits.length+hubHits.length)>0);
   document.getElementById('searchMeta').textContent='Search results for "'+query+'"';
   document.getElementById('sharingSearchMeta').textContent=t('scope.local')+' '+localHits.length+' · '+t('scope.hub')+' '+hubHits.length;
   document.getElementById('pagination').innerHTML='';
@@ -5912,6 +5966,11 @@ function escapeHtml(s){
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+function setPageSizeVisible(selectId,visible){
+  var sel=document.getElementById(selectId);
+  if(sel&&sel.parentElement){ sel.parentElement.style.display=visible?'inline-flex':'none'; }
+}
+
 function setMetricsDays(d){
   metricsDays=d;
   document.querySelectorAll('.metrics-toolbar .range-btn').forEach(btn=>btn.classList.toggle('active',Number(btn.dataset.days)===d));
@@ -5947,6 +6006,69 @@ function setTaskStatusFilter(btn,status){
   loadTasks();
 }
 
+function updateTaskSelectionToolbar(){
+  var toolbar=document.getElementById('taskSelectionToolbar');
+  var selectAllBtn=document.getElementById('taskSelectAllBtn');
+  var bulkDeleteBtn=document.getElementById('taskBulkDeleteBtn');
+  var isHub=taskSearchScope==='hub';
+  var total=document.querySelectorAll('#tasksList .task-select-check').length;
+  var selected=selectedTaskIds.size;
+  if(toolbar) toolbar.style.display=isHub?'none':'flex';
+  if(selectAllBtn){
+    selectAllBtn.textContent=t(selected>0&&selected===total&&total>0?'skills.unselectAll':'skills.selectAll');
+    selectAllBtn.disabled=total===0;
+    selectAllBtn.style.display=total===0?'none':'';
+  }
+  if(bulkDeleteBtn){
+    var base=t('task.deleteSelected');
+    bulkDeleteBtn.style.display=selected>0?'':'none';
+    bulkDeleteBtn.textContent=selected>0?(base+' ('+selected+')'):base;
+  }
+}
+
+function toggleTaskSelection(taskId,checked){
+  if(checked) selectedTaskIds.add(taskId);
+  else selectedTaskIds.delete(taskId);
+  updateTaskSelectionToolbar();
+}
+
+function toggleSelectAllTasks(){
+  var total=currentTaskIds.length;
+  if(total===0) return;
+  if(selectedTaskIds.size===total){
+    selectedTaskIds.clear();
+  }else{
+    selectedTaskIds=new Set(currentTaskIds);
+  }
+  var checks=document.querySelectorAll('#tasksList .task-select-check');
+  checks.forEach(function(cb){cb.checked=selectedTaskIds.has(cb.value);});
+  updateTaskSelectionToolbar();
+}
+
+async function deleteSelectedTasks(){
+  var ids=Array.from(selectedTaskIds);
+  if(ids.length===0) return;
+  var msg=t('task.delete.selected.confirm').replace('{count}',String(ids.length));
+  if(!(await confirmModal(msg,{danger:true}))) return;
+  var ok=0;
+  var fail=0;
+  for(var i=0;i<ids.length;i++){
+    try{
+      var r=await fetch('/api/task/'+ids[i],{method:'DELETE'});
+      var d=await r.json();
+      if(!r.ok) throw new Error(d.error||'unknown');
+      ok++;
+    }catch(e){
+      fail++;
+    }
+  }
+  selectedTaskIds.clear();
+  updateTaskSelectionToolbar();
+  loadTasks();
+  if(fail>0) toast(t('task.delete.partial').replace('{ok}',String(ok)).replace('{fail}',String(fail)),'warn');
+  else toast(t('task.delete.success').replace('{count}',String(ok)),'success');
+}
+
 async function loadTasks(silent){
   const scope=document.getElementById('taskSearchScope')?document.getElementById('taskSearchScope').value:taskSearchScope;
   taskSearchScope=scope||'allLocal';
@@ -5956,13 +6078,16 @@ async function loadTasks(silent){
   try{
     const params=new URLSearchParams({limit:String(tasksPageSize),offset:String(tasksPage*tasksPageSize)});
     if(tasksStatusFilter) params.set('status',tasksStatusFilter);
+    if(activeSession) params.set('session',activeSession);
     var baseP=new URLSearchParams();
+    if(activeSession) baseP.set('session',activeSession);
+    var baseQuery=baseP.toString();
     const [data,allD,activeD,compD,skipD]=await Promise.all([
       fetch('/api/tasks?'+params).then(r=>r.json()),
-      fetch('/api/tasks?limit=1&offset=0&'+baseP).then(r=>r.json()),
-      fetch('/api/tasks?status=active&limit=1&offset=0&'+baseP).then(r=>r.json()),
-      fetch('/api/tasks?status=completed&limit=1&offset=0&'+baseP).then(r=>r.json()),
-      fetch('/api/tasks?status=skipped&limit=1&offset=0&'+baseP).then(r=>r.json())
+      fetch('/api/tasks?limit=1&offset=0'+(baseQuery?'&'+baseQuery:'')).then(r=>r.json()),
+      fetch('/api/tasks?status=active&limit=1&offset=0'+(baseQuery?'&'+baseQuery:'')).then(r=>r.json()),
+      fetch('/api/tasks?status=completed&limit=1&offset=0'+(baseQuery?'&'+baseQuery:'')).then(r=>r.json()),
+      fetch('/api/tasks?status=skipped&limit=1&offset=0'+(baseQuery?'&'+baseQuery:'')) .then(r=>r.json())
     ]);
     if(silent){
       var fp=JSON.stringify((data.tasks||[]).map(function(tk){return tk.id+'|'+tk.status+'|'+(tk.updatedAt||tk.startedAt)}));
@@ -5977,9 +6102,13 @@ async function loadTasks(silent){
     document.getElementById('tasksCompletedCount').textContent=formatNum(compD.total);
     document.getElementById('tasksSkippedCount').textContent=formatNum(skipD.total);
 
+    currentTaskIds=(data.tasks||[]).map(function(task){return task.id;});
+    selectedTaskIds=new Set(Array.from(selectedTaskIds).filter(function(id){return currentTaskIds.includes(id);}));
     if(!data.tasks||data.tasks.length===0){
       list.innerHTML='<div style="text-align:center;padding:48px;color:var(--text-muted);font-size:14px" data-i18n="tasks.empty">'+t('tasks.empty')+'</div>';
       document.getElementById('tasksPagination').innerHTML='';
+      setPageSizeVisible('tasksPageSize',false);
+      updateTaskSelectionToolbar();
       return;
     }
 
@@ -5990,9 +6119,10 @@ async function loadTasks(silent){
       var taskIsLocalShared=task.owner==='public';
       var taskIsTeamShared=!!task.sharingVisibility;
       var taskScope=taskIsTeamShared?'team':taskIsLocalShared?'local':'private';
+      var selectedAttr=selectedTaskIds.has(task.id)?' checked':'';
       return '<div class="task-card status-'+task.status+'" onclick="openTaskDetail(\\''+task.id+'\\')">'+
         '<div class="task-card-top">'+
-          '<div class="task-card-title">'+esc(task.title)+'</div>'+
+          '<div class="task-card-title"><label class="item-select-box" onclick="event.stopPropagation()"><input class="task-select-check" type="checkbox" value="'+escAttr(task.id)+'"'+selectedAttr+' onchange="event.stopPropagation();toggleTaskSelection(&quot;'+escAttr(task.id)+'&quot;,this.checked)"></label>'+esc(task.title)+'</div>'+
           '<div class="task-card-badges">'+renderScopeBadge(taskScope)+'<span class="task-status-badge '+task.status+'">'+t('tasks.status.'+task.status)+'</span></div>'+
         '</div>'+
         (task.summary?'<div class="task-card-summary'+(task.status==='skipped'?' skipped-reason':'')+'">'+esc(task.summary)+'</div>':'')+
@@ -6014,8 +6144,14 @@ async function loadTasks(silent){
     }).join('');
 
     renderTasksPagination(data.total);
+    setPageSizeVisible('tasksPageSize',true);
+    updateTaskSelectionToolbar();
   }catch(e){
     console.error('loadTasks error:',e);
+    currentTaskIds=[];
+    selectedTaskIds.clear();
+    setPageSizeVisible('tasksPageSize',false);
+    updateTaskSelectionToolbar();
     list.innerHTML='<div style="text-align:center;padding:24px;color:var(--rose)">Failed to load tasks: '+String(e)+'</div>';
   }
 }
@@ -6224,6 +6360,8 @@ async function deleteTask(taskId){
     const r=await fetch('/api/task/'+taskId,{method:'DELETE'});
     const d=await r.json();
     if(!r.ok) throw new Error(d.error||'unknown');
+    selectedTaskIds.delete(taskId);
+    updateTaskSelectionToolbar();
     closeTaskDetail();
     document.getElementById('taskDetailOverlay').classList.remove('show');
     loadTasks();
@@ -6250,14 +6388,15 @@ function setSkillStatusFilter(btn,status){
 function updateSkillSelectionToolbar(){
   var selectAllBtn=document.getElementById('skillSelectAllBtn');
   var bulkDeleteBtn=document.getElementById('skillBulkDeleteBtn');
-  var total=currentLocalSkills.length;
+  var total=document.querySelectorAll('#skillsList .skill-select-check').length;
   var selected=selectedSkillIds.size;
   if(selectAllBtn){
     selectAllBtn.textContent=t(selected>0&&selected===total&&total>0?'skills.unselectAll':'skills.selectAll');
+    selectAllBtn.style.display=total===0?'none':'';
   }
   if(bulkDeleteBtn){
-    bulkDeleteBtn.disabled=selected===0;
     var base=t('skills.deleteSelected');
+    bulkDeleteBtn.style.display=selected>0?'':'none';
     bulkDeleteBtn.textContent=selected>0?(base+' ('+selected+')'):base;
   }
 }
@@ -6333,6 +6472,7 @@ async function loadSkills(silent){
   try{
     const params=new URLSearchParams();
     if(skillsStatusFilter) params.set('status',skillsStatusFilter);
+    if(activeSession) params.set('session',activeSession);
     const visFilter=document.getElementById('skillVisibilityFilter')?.value;
     if(visFilter) params.set('visibility',visFilter);
     const filterSignature=[query,skillSearchScope,skillsStatusFilter,visFilter||''].join('|');
@@ -6381,7 +6521,7 @@ async function loadSkills(silent){
         const selectedAttr=selectedSkillIds.has(skill.id)?' checked':'';
         return '<div class="skill-card '+installedClass+' '+statusClass+'" onclick="openSkillDetail(&quot;'+escAttr(skill.id)+'&quot;)">'+
           '<div class="skill-card-top">'+
-            '<div class="skill-card-name"><label class="skill-select-box" onclick="event.stopPropagation()"><input class="skill-select-check" type="checkbox" value="'+escAttr(skill.id)+'"'+selectedAttr+' onchange="event.stopPropagation();toggleSkillSelection(&quot;'+escAttr(skill.id)+'&quot;,this.checked)"></label>🧠 '+esc(skill.name)+'</div>'+
+            '<div class="skill-card-name"><label class="item-select-box" onclick="event.stopPropagation()"><input class="skill-select-check" type="checkbox" value="'+escAttr(skill.id)+'"'+selectedAttr+' onchange="event.stopPropagation();toggleSkillSelection(&quot;'+escAttr(skill.id)+'&quot;,this.checked)"></label>🧠 '+esc(skill.name)+'</div>'+
             '<div class="skill-card-badges">'+
               qsBadge+
               '<span class="skill-badge version">v'+skill.version+'</span>'+
@@ -6414,6 +6554,7 @@ async function loadSkills(silent){
     const pageSkills=localSkills.slice(startIndex,startIndex+skillsPageSize);
     list.innerHTML=renderLocalCards(pageSkills);
     renderSkillsPagination(totalLocalSkills);
+    setPageSizeVisible('skillsPageSize',totalLocalSkills>0);
     updateSkillSelectionToolbar();
 
     if(skillSearchScope==='allLocal'){
@@ -6446,7 +6587,9 @@ async function loadSkills(silent){
     sharingParams.set('maxResults','20');
     const r=await fetch('/api/sharing/search/skills?'+sharingParams.toString());
     const data=await r.json();
-    const localHits=(data.local&&Array.isArray(data.local.hits))?data.local.hits:[];
+    const localSkillIdSet=new Set(currentLocalSkills.map(function(skill){return skill.id;}));
+    const localHitsRaw=(data.local&&Array.isArray(data.local.hits))?data.local.hits:[];
+    const localHits=localHitsRaw.filter(function(skill){return localSkillIdSet.has(skill.skillId);});
     const hubHits=(data.hub&&Array.isArray(data.hub.hits))?data.hub.hits:[];
 
     const sp=document.getElementById('skillsPagination');
@@ -6482,11 +6625,13 @@ async function loadSkills(silent){
     document.getElementById('skillsDraftCount').textContent='0';
     document.getElementById('skillsInstalledCount').textContent='-';
     document.getElementById('skillsPublicCount').textContent=formatNum(hubHits.filter(function(s){return s.visibility==='public';}).length);
+    setPageSizeVisible('skillsPageSize',(localHits.length+hubHits.length)>0);
     updateSkillSelectionToolbar();
   }catch(e){
     list.innerHTML='<div style="text-align:center;padding:24px;color:var(--rose)">'+t('skills.load.error')+': '+esc(String(e))+'</div>';
     const sp=document.getElementById('skillsPagination');
     if(sp) sp.innerHTML='';
+    setPageSizeVisible('skillsPageSize',false);
     if(hubList){
       hubList.innerHTML='<div style="text-align:center;padding:24px;color:var(--rose)">'+t('skills.load.error')+'</div>';
     }
@@ -6496,11 +6641,19 @@ async function loadSkills(silent){
 async function loadHubTasks(){
   var list=document.getElementById('tasksList');
   if(!list) return;
+  currentTaskIds=[];
+  selectedTaskIds.clear();
+  updateTaskSelectionToolbar();
   list.innerHTML='<div class="spinner"></div>';
   try{
     var r=await fetch('/api/sharing/tasks/list?limit='+tasksPageSize);
     var d=await r.json();
     var tasks=Array.isArray(d.tasks)?d.tasks:[];
+    if(activeSession){
+      tasks=tasks.filter(function(task){
+        return (task.sessionKey||task.session_key||'')===activeSession;
+      });
+    }
     hubTasksCache=tasks;
     document.getElementById('tasksTotalCount').textContent=formatNum(tasks.length);
     document.getElementById('tasksActiveCount').textContent='-';
@@ -6509,6 +6662,7 @@ async function loadHubTasks(){
     if(!tasks.length){
       list.innerHTML='<div style="text-align:center;padding:48px;color:var(--text-muted);font-size:14px">'+t('tasks.empty')+'</div>';
       document.getElementById('tasksPagination').innerHTML='';
+      setPageSizeVisible('tasksPageSize',false);
       return;
     }
     list.innerHTML=tasks.map(function(task,idx){
@@ -6527,9 +6681,11 @@ async function loadHubTasks(){
       '</div>';
     }).join('');
     document.getElementById('tasksPagination').innerHTML='';
+    setPageSizeVisible('tasksPageSize',true);
   }catch(e){
     list.innerHTML='<div style="text-align:center;padding:48px;color:var(--text-muted);font-size:14px">'+t('tasks.empty')+'</div>';
     document.getElementById('tasksPagination').innerHTML='';
+    setPageSizeVisible('tasksPageSize',false);
   }
 }
 
@@ -7931,7 +8087,9 @@ async function loadStats(ownerFilter){
   const activeCount=dedupB.active||tm;
   const inactiveCount=(dedupB.duplicate||0)+(dedupB.merged||0);
   var agentCount=(d.owners&&d.owners.length)?d.owners.length:1;
-  var sfp=tm+':'+(d.totalSessions||0)+':'+(d.totalEmbeddings||0)+':'+agentCount+':'+(d.embeddingProvider||'none')+':'+(ownerFilter||'');
+  var tvc=(d.taskSessions||[]).length;
+  var svc=(d.skillSessions||[]).length;
+  var sfp=tm+':'+(d.totalSessions||0)+':'+(d.totalEmbeddings||0)+':'+agentCount+':'+(d.embeddingProvider||'none')+':'+(ownerFilter||'')+':'+(_activeView||'memories')+':'+tvc+':'+svc;
   if(sfp===_lastStatsFp) return;
   _lastStatsFp=sfp;
   document.getElementById('statTotal').textContent=tm;
@@ -7963,24 +8121,43 @@ async function loadStats(ownerFilter){
     }).catch(()=>{});
   }
 
+  const memorySessions=d.sessions||[];
+  const taskSessions=d.taskSessions||[];
+  const skillSessions=d.skillSessions||[];
+  const sessionMap={memories:memorySessions,tasks:taskSessions,skills:skillSessions};
+  function getSessionsForView(view){
+    return sessionMap[view]||memorySessions;
+  }
+  function countBadgeHtml(cnt){
+    return cnt&&cnt>0?'<span class="count">'+cnt+'</span>':'';
+  }
+
+  const sidebarSessions=getSessionsForView(_activeView);
   const sl=document.getElementById('sessionList');
-  sl.innerHTML='<div class="session-item'+(activeSession===null?' active':'')+'" onclick="filterSession(null)"><span>'+t('sidebar.allsessions')+'</span><span class="count">'+tm+'</span></div>';
-  (d.sessions||[]).forEach(s=>{
+  if(sl) sl.style.display=sidebarSessions.length>0?'':'none';
+  sl.innerHTML='<div class="session-item'+(activeSession===null?' active':'')+'" onclick="filterSession(null)"><span>'+t('sidebar.allsessions')+'</span>'+countBadgeHtml(sidebarSessions.reduce(function(sum,s){return sum+(s.count||0);},0))+'</div>';
+  sidebarSessions.forEach(s=>{
     const isActive=activeSession===s.session_key;
     const name=s.session_key.length>20?s.session_key.slice(0,8)+'...'+s.session_key.slice(-8):s.session_key;
-    sl.innerHTML+='<div class="session-item'+(isActive?' active':'')+'" onclick="filterSession(\\''+s.session_key.replace(/'/g,"\\\\'")+'\\')"><span title="'+s.session_key+'">'+name+'</span><span class="count">'+s.count+'</span></div>';
+    sl.innerHTML+='<div class="session-item'+(isActive?' active':'')+'" onclick="filterSession(\\''+s.session_key.replace(/'/g,"\\\\'")+'\\')"><span title="'+s.session_key+'">'+name+'</span>'+countBadgeHtml(s.count||0)+'</div>';
   });
 
-  const fSel=document.getElementById('filterSession');
-  if(fSel){
+  [['filterSession','memories'],['taskFilterSession','tasks'],['skillFilterSession','skills']].forEach(function(pair){
+    var selId=pair[0];
+    var viewKey=pair[1];
+    var viewSessions=getSessionsForView(viewKey);
+    const fSel=document.getElementById(selId);
+    if(!fSel) return;
     const curVal=activeSession||'';
-    var sessionCount=(d.sessions||[]).length;
+    var sessionCount=viewSessions.length;
+    fSel.style.display=sessionCount>0?'':'none';
     fSel.innerHTML='<option value="">'+t('filter.allsessions')+' ('+sessionCount+')</option>';
-    (d.sessions||[]).forEach(s=>{
+    viewSessions.forEach(s=>{
       const sName=s.session_key.length>30?s.session_key.slice(0,12)+'...'+s.session_key.slice(-10):s.session_key;
-      fSel.innerHTML+='<option value="'+s.session_key.replace(/"/g,'&quot;')+'"'+(s.session_key===curVal?' selected':'')+'>'+sName+' ('+s.count+')</option>';
+      const countLabel=(s.count&&s.count>0)?' ('+s.count+')':'';
+      fSel.innerHTML+='<option value="'+s.session_key.replace(/"/g,'&quot;')+'"'+(s.session_key===curVal?' selected':'')+'>'+sName+countLabel+'</option>';
     });
-  }
+  });
 
   const ownerSel=document.getElementById('filterOwner');
   if(ownerSel && d.owners && d.owners.length>0){
@@ -8099,6 +8276,8 @@ async function loadMemories(page,silent){
 
 async function loadHubMemories(silent){
   const list=document.getElementById('memoryList');
+  selectedMemoryIds.clear();
+  updateMemorySelectionToolbar();
   if(!silent) list.innerHTML='<div class="spinner"></div>';
   try{
     const r=await fetch('/api/sharing/memories/list?limit='+PAGE_SIZE);
@@ -8187,12 +8366,26 @@ function debounceSearch(){
 function filterSession(key){
   activeSession=key;
   currentPage=1;
-  var fSel=document.getElementById('filterSession');
-  if(fSel) fSel.value=key||'';
+  tasksPage=0;
+  skillsPage=0;
+  ['filterSession','taskFilterSession','skillFilterSession'].forEach(function(selId){
+    var fSel=document.getElementById(selId);
+    if(fSel) fSel.value=key||'';
+  });
   document.querySelectorAll('#sessionList .session-item').forEach(function(el,i){
     if(i===0) el.classList.toggle('active',!key);
     else el.classList.toggle('active',el.querySelector('span')?.title===key);
   });
+  if(_activeView==='tasks'){
+    loadStats();
+    loadTasks();
+    return;
+  }
+  if(_activeView==='skills'){
+    loadStats();
+    loadSkills();
+    return;
+  }
   loadAll();
 }
 
@@ -8219,14 +8412,88 @@ function clearDateFilter(){
   applyFilters();
 }
 
+function updateMemorySelectionToolbar(){
+  var toolbar=document.getElementById('memorySelectionToolbar');
+  var selectAllBtn=document.getElementById('memorySelectAllBtn');
+  var bulkDeleteBtn=document.getElementById('memoryBulkDeleteBtn');
+  var isHub=memorySearchScope==='hub';
+  var total=document.querySelectorAll('#memoryList .memory-select-check').length;
+  var selected=selectedMemoryIds.size;
+  if(toolbar) toolbar.style.display=isHub?'none':'flex';
+  if(selectAllBtn){
+    selectAllBtn.textContent=t(selected>0&&selected===total&&total>0?'skills.unselectAll':'skills.selectAll');
+    selectAllBtn.disabled=total===0;
+    selectAllBtn.style.display=total===0?'none':'';
+  }
+  if(bulkDeleteBtn){
+    var base=t('memory.deleteSelected');
+    bulkDeleteBtn.style.display=selected>0?'':'none';
+    bulkDeleteBtn.textContent=selected>0?(base+' ('+selected+')'):base;
+  }
+}
+
+function toggleMemorySelection(memoryId,checked){
+  if(checked) selectedMemoryIds.add(memoryId);
+  else selectedMemoryIds.delete(memoryId);
+  updateMemorySelectionToolbar();
+}
+
+function toggleSelectAllMemories(){
+  var total=currentMemoryIds.length;
+  if(total===0) return;
+  if(selectedMemoryIds.size===total){
+    selectedMemoryIds.clear();
+  }else{
+    selectedMemoryIds=new Set(currentMemoryIds);
+  }
+  var checks=document.querySelectorAll('#memoryList .memory-select-check');
+  checks.forEach(function(cb){cb.checked=selectedMemoryIds.has(cb.value);});
+  updateMemorySelectionToolbar();
+}
+
+async function deleteSelectedMemories(){
+  var ids=Array.from(selectedMemoryIds);
+  if(ids.length===0) return;
+  var msg=t('memory.delete.selected.confirm').replace('{count}',String(ids.length));
+  if(!(await confirmModal(msg,{danger:true}))) return;
+  var ok=0;
+  var fail=0;
+  for(var i=0;i<ids.length;i++){
+    try{
+      var r=await fetch('/api/memory/'+ids[i],{method:'DELETE'});
+      var d=await r.json();
+      if(!d.ok) throw new Error(d.error||'unknown');
+      ok++;
+    }catch(e){
+      fail++;
+    }
+  }
+  selectedMemoryIds.clear();
+  updateMemorySelectionToolbar();
+  if(document.getElementById('searchInput').value.trim()){
+    doSearch(document.getElementById('searchInput').value);
+  }else if(memorySearchScope==='hub'){
+    loadHubMemories();
+  }else{
+    loadMemories();
+  }
+  if(fail>0) toast(t('memory.delete.partial').replace('{ok}',String(ok)).replace('{fail}',String(fail)),'warn');
+  else toast(t('memory.delete.success').replace('{count}',String(ok)),'success');
+}
+
 /* ─── Rendering ─── */
 function renderMemories(items){
   const list=document.getElementById('memoryList');
+  setPageSizeVisible('memoryPageSize',items.length>0);
   if(!items.length){
     list.innerHTML='<div class="empty"><div class="icon">\\u{1F4ED}</div><p>'+t('empty.text')+'</p></div>';
+    currentMemoryIds=[];
+    updateMemorySelectionToolbar();
     return;
   }
   items.forEach(m=>{memoryCache[m.id]=m});
+  currentMemoryIds=items.map(function(m){return m.id;});
+  selectedMemoryIds=new Set(Array.from(selectedMemoryIds).filter(function(id){return currentMemoryIds.includes(id);}));
   list.innerHTML=items.map(m=>{
     const time=m.created_at?new Date(typeof m.created_at==='number'?m.created_at:m.created_at).toLocaleString(dateLoc()):'';
     const role=m.role||'user';
@@ -8253,6 +8520,8 @@ function renderMemories(items){
     const isHubScope=memorySearchScope==='hub';
     const memScope=memShared?'team':isPublicMem?'local':'private';
     const memScopeBadge=isHubScope?renderScopeBadge('team'):renderScopeBadge(memScope);
+    const selectedAttr=selectedMemoryIds.has(id)?' checked':'';
+    const selectBoxHtml=isHubScope?'':'<label class="item-select-box" onclick="event.stopPropagation()"><input class="memory-select-check" type="checkbox" value="'+escAttr(id)+'"'+selectedAttr+' onchange="event.stopPropagation();toggleMemorySelection(&quot;'+escAttr(id)+'&quot;,this.checked)"></label>';
     let dedupInfo='';
     if(ds==='duplicate'||ds==='merged'){
       const reason=m.dedup_reason?'<span style="font-size:11px;color:var(--text-muted)">'+t('card.dedupReason')+esc(m.dedup_reason)+'</span>':'';
@@ -8278,7 +8547,7 @@ function renderMemories(items){
     }
     return '<div class="memory-card'+(isInactive?' dedup-inactive':'')+'">'+
       '<div class="card-header"><div class="meta"><span class="role-tag '+role+'">'+role+'</span>'+memScopeBadge+importBadge+dedupBadge+mergeBadge+'</div><span class="card-time"><span class="session-tag" title="'+esc(sid)+'">'+esc(sidShort)+'</span> '+time+updatedAt+'</span></div>'+
-      '<div class="card-summary">'+cardTitle+'</div>'+
+      '<div class="card-summary">'+selectBoxHtml+cardTitle+'</div>'+
       (function(){
         if(mc<=0) return '';
         var mergeHtml='<div class="card-merged-info">';
@@ -8308,6 +8577,7 @@ function renderMemories(items){
         vscore+
       '</div></div>';
   }).join('');
+  updateMemorySelectionToolbar();
 }
 
 function updateMemoryCardBadge(chunkId,newScope){
@@ -8510,7 +8780,18 @@ async function deleteMemory(id){
   if(!(await confirmModal(t('confirm.delete'),{danger:true})))return;
   const r=await fetch('/api/memory/'+id,{method:'DELETE'});
   const d=await r.json();
-  if(d.ok){toast(t('toast.deleted'),'success');loadAll();}
+  if(d.ok){
+    selectedMemoryIds.delete(id);
+    updateMemorySelectionToolbar();
+    toast(t('toast.deleted'),'success');
+    if(document.getElementById('searchInput').value.trim()){
+      doSearch(document.getElementById('searchInput').value);
+    }else if(memorySearchScope==='hub'){
+      loadHubMemories();
+    }else{
+      loadMemories();
+    }
+  }
   else{toast(t('toast.delfail'),'error')}
 }
 

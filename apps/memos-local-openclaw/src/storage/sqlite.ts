@@ -1558,10 +1558,11 @@ export class SqliteStore {
     return rows.map(rowToChunk);
   }
 
-  listTasks(opts: { status?: string; limit?: number; offset?: number; owner?: string } = {}): { tasks: Task[]; total: number } {
+  listTasks(opts: { status?: string; limit?: number; offset?: number; owner?: string; session?: string } = {}): { tasks: Task[]; total: number } {
     const conditions: string[] = [];
     const params: unknown[] = [];
     if (opts.status) { conditions.push("status = ?"); params.push(opts.status); }
+    if (opts.session) { conditions.push("session_key = ?"); params.push(opts.session); }
     if (opts.owner) {
       conditions.push("(owner = ? OR (owner = 'public' AND id IN (SELECT task_id FROM local_shared_tasks WHERE original_owner = ?)))");
       params.push(opts.owner, opts.owner);
@@ -1683,9 +1684,20 @@ export class SqliteStore {
     this.db.prepare(`UPDATE skills SET ${sets.join(", ")} WHERE id = ?`).run(...params);
   }
 
-  listSkills(opts: { status?: string } = {}): Skill[] {
-    const cond = opts.status ? "WHERE status = ?" : "";
-    const params = opts.status ? [opts.status] : [];
+  listSkills(opts: { status?: string; session?: string } = {}): Skill[] {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (opts.status) { conditions.push("status = ?"); params.push(opts.status); }
+    if (opts.session) {
+      conditions.push(`EXISTS (
+        SELECT 1
+        FROM task_skills ts
+        JOIN tasks t ON t.id = ts.task_id
+        WHERE ts.skill_id = skills.id AND t.session_key = ?
+      )`);
+      params.push(opts.session);
+    }
+    const cond = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const rows = this.db.prepare(`SELECT * FROM skills ${cond} ORDER BY updated_at DESC`).all(...params) as SkillRow[];
     return rows.map(rowToSkill);
   }
