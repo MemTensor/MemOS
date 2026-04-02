@@ -99,4 +99,3 @@ export interface SkillBundle {
   metadata: SkillBundleMetadata;
   bundle: SkillGenerateOutput;
 }
-

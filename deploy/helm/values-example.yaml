@@ -3,7 +3,7 @@ memos:
     repository: your-registry/memos
     tag: "2.0.9"
     pullPolicy: IfNotPresent
-  
+
   env:
     TZ: "Asia/Taipei"
     MOS_CHAT_MODEL: "gpt-4o-mini"

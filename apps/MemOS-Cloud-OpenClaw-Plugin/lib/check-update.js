@@ -74,7 +74,7 @@ function compareVersions(v1, v2) {
   const split2 = v2.split("-");
   const parts1 = split1[0].split(".").map(Number);
   const parts2 = split2[0].split(".").map(Number);
-  
+
   // Compare major.minor.patch
   for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
     const p1 = parts1[i] || 0;
@@ -82,22 +82,22 @@ function compareVersions(v1, v2) {
     if (p1 > p2) return 1;
     if (p1 < p2) return -1;
   }
-  
+
   // If base versions are equal, compare pre-release tags.
   // A version WITH a pre-release tag is LOWER than a version WITHOUT one.
   // e.g. 0.1.8-beta is less than 0.1.8. 0.1.8 is the final release.
   const hasPre1 = split1.length > 1;
   const hasPre2 = split2.length > 1;
-  
+
   if (hasPre1 && !hasPre2) return -1; // v1 is a beta, v2 is a full release
   if (!hasPre1 && hasPre2) return 1;  // v1 is a full release, v2 is a beta
   if (!hasPre1 && !hasPre2) return 0; // both are full releases and equal
-  
+
   // If both are pre-releases, do a basic string compare on the tag
   // "alpha" < "beta" < "rc"
   if (split1[1] > split2[1]) return 1;
   if (split1[1] < split2[1]) return -1;
-  
+
   return 0;
 }
 
