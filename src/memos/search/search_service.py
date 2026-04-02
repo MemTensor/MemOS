@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class SearchContext:
-    target_session_id: str
+    target_session_id: str | None
     search_priority: dict[str, Any] | None
     search_filter: dict[str, Any] | None
     info: dict[str, Any]
@@ -21,17 +21,19 @@ class SearchContext:
 def build_search_context(
     search_req: APISearchRequest,
 ) -> SearchContext:
-    target_session_id = search_req.session_id or "default_session"
     search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
+    info: dict[str, Any] = {
+        "user_id": search_req.user_id,
+        "chat_history": search_req.chat_history,
+    }
+    if search_req.session_id:
+        info["session_id"] = search_req.session_id
+
     return SearchContext(
-        target_session_id=target_session_id,
+        target_session_id=search_req.session_id,
         search_priority=search_priority,
         search_filter=search_req.filter,
-        info={
-            "user_id": search_req.user_id,
-            "session_id": target_session_id,
-            "chat_history": search_req.chat_history,
-        },
+        info=info,
         plugin=bool(search_req.source is not None and search_req.source == "plugin"),
     )
 

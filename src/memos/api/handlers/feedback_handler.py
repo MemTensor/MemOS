@@ -3,6 +3,7 @@ Feeback handler for memory add/update functionality.
 """
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
+from memos.api.handlers.cube_scope import resolve_cube_ids
 from memos.api.product_models import APIFeedbackRequest, MemoryResponse
 from memos.log import get_logger
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
@@ -55,10 +56,7 @@ class FeedbackHandler(BaseHandler):
         """
         Normalize target cube ids from feedback_req.
         """
-        if feedback_req.writable_cube_ids:
-            return list(dict.fromkeys(feedback_req.writable_cube_ids))
-
-        return [feedback_req.user_id]
+        return resolve_cube_ids(feedback_req.writable_cube_ids, feedback_req.user_id)
 
     def _build_cube_view(self, feedback_req: APIFeedbackRequest) -> MemCubeView:
         cube_ids = self._resolve_cube_ids(feedback_req)

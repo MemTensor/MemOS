@@ -3,7 +3,7 @@
   "info": {
     "title": "MemOS Server REST APIs",
     "description": "A REST API for managing multiple users with MemOS Server.",
-    "version": "1.0.1"
+    "version": "2.0.12"
   },
   "paths": {
     "/product/search": {

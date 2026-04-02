@@ -22,7 +22,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
 )
 from memos.memories.textual.item import TextualMemoryItem
 from memos.multi_mem_cube.views import MemCubeView
-from memos.search import search_text_memories
+from memos.search import build_search_context, search_text_memories
 from memos.templates.mem_reader_prompts import PROMPT_MAPPING
 from memos.types.general_types import (
     FINE_STRATEGY,
@@ -95,7 +95,7 @@ class SingleCubeView(MemCubeView):
         user_context = UserContext(
             user_id=search_req.user_id,
             mem_cube_id=self.cube_id,
-            session_id=search_req.session_id or "default_session",
+            session_id=search_req.session_id,
         )
         self.logger.info(f"Search Req is: {search_req}")
 
@@ -219,14 +219,10 @@ class SingleCubeView(MemCubeView):
         search_req: APISearchRequest,
         user_context: UserContext,
     ) -> list:
-        target_session_id = search_req.session_id or "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-
-        info = {
-            "user_id": search_req.user_id,
-            "session_id": target_session_id,
-            "chat_history": search_req.chat_history,
-        }
+        search_ctx = build_search_context(search_req)
+        search_filter = dict(search_ctx.search_filter or {})
+        if search_req.session_id:
+            search_filter["session_id"] = search_req.session_id
 
         enhanced_memories = self.searcher.deep_search(
             query=search_req.query,
@@ -235,8 +231,8 @@ class SingleCubeView(MemCubeView):
             mode=SearchMode.FINE,
             manual_close_internet=not search_req.internet_search,
             moscube=search_req.moscube,
-            search_filter=search_filter,
-            info=info,
+            search_filter=search_filter or None,
+            info=search_ctx.info,
         )
         return self._postformat_memories(
             enhanced_memories,
@@ -281,15 +277,10 @@ class SingleCubeView(MemCubeView):
         elif FINE_STRATEGY == FineStrategy.AGENTIC_SEARCH:
             return self._agentic_search(search_req=search_req, user_context=user_context)
 
-        target_session_id = search_req.session_id or "default_session"
-        search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
-        search_filter = search_req.filter
-
-        info = {
-            "user_id": search_req.user_id,
-            "session_id": target_session_id,
-            "chat_history": search_req.chat_history,
-        }
+        search_ctx = build_search_context(search_req)
+        search_priority = search_ctx.search_priority
+        search_filter = search_ctx.search_filter
+        info = search_ctx.info
 
         # Fine retrieve
         raw_retrieved_memories = self.searcher.retrieve(
