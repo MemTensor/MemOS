@@ -3312,7 +3312,8 @@ export class ViewerServer {
       const providerCfg = providerKey
         ? raw?.models?.providers?.[providerKey]
         : Object.values(raw?.models?.providers ?? {})[0] as Record<string, unknown> | undefined;
-      if (!providerCfg || !providerCfg.baseUrl || !providerCfg.apiKey) {
+      const resolvedKey = ViewerServer.resolveApiKeyValue(providerCfg?.apiKey);
+      if (!providerCfg || !providerCfg.baseUrl || !resolvedKey) {
         this.jsonResponse(res, { available: false });
         return;
       }
@@ -3320,6 +3321,17 @@ export class ViewerServer {
     } catch {
       this.jsonResponse(res, { available: false });
     }
+  }
+
+  private static resolveApiKeyValue(
+    input: unknown,
+  ): string | undefined {
+    if (!input) return undefined;
+    if (typeof input === "string") return input;
+    if (typeof input === "object" && input !== null && (input as any).source === "env") {
+      return process.env[(input as any).id];
+    }
+    return undefined;
   }
 
   private findPluginPackageJson(): string | null {

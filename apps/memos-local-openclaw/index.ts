@@ -53,6 +53,45 @@ function deduplicateHits<T extends { summary: string }>(hits: T[]): T[] {
   return kept;
 }
 
+const NEW_SESSION_PROMPT_RE = /A new session was started via \/new or \/reset\./i;
+const INTERNAL_CONTEXT_RE = /OpenClaw runtime context \(internal\):[\s\S]*/i;
+const CONTINUE_PROMPT_RE = /^Continue where you left off\.[\s\S]*/i;
+
+function normalizeAutoRecallQuery(rawPrompt: string): string {
+  let query = rawPrompt.trim();
+
+  const senderTag = "Sender (untrusted metadata):";
+  const senderPos = query.indexOf(senderTag);
+  if (senderPos !== -1) {
+    const afterSender = query.slice(senderPos);
+    const fenceStart = afterSender.indexOf("```json");
+    const fenceEnd = fenceStart >= 0 ? afterSender.indexOf("```\n", fenceStart + 7) : -1;
+    if (fenceEnd > 0) {
+      query = afterSender.slice(fenceEnd + 4).replace(/^\s*\n/, "").trim();
+    } else {
+      const firstDblNl = afterSender.indexOf("\n\n");
+      if (firstDblNl > 0) {
+        query = afterSender.slice(firstDblNl + 2).trim();
+      }
+    }
+  }
+
+  query = stripInboundMetadata(query);
+  query = query.replace(/<[^>]+>/g, "").trim();
+
+  if (NEW_SESSION_PROMPT_RE.test(query)) {
+    query = query.replace(NEW_SESSION_PROMPT_RE, "").trim();
+    query = query.replace(/^(Execute|Run) your Session Startup sequence[^\n]*\n?/im, "").trim();
+    query = query.replace(/^Current time:[^\n]*(\n|$)/im, "").trim();
+  }
+
+  query = query.replace(INTERNAL_CONTEXT_RE, "").trim();
+  query = query.replace(CONTINUE_PROMPT_RE, "").trim();
+
+  return query;
+}
+
+
 const pluginConfigSchema = {
   type: "object" as const,
   additionalProperties: true,
@@ -278,7 +317,7 @@ const memosLocalPlugin = {
         const raw = fs.readFileSync(openclawJsonPath, "utf-8");
         const cfg = JSON.parse(raw);
         const allow: string[] | undefined = cfg?.tools?.allow;
-        if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins")) {
+        if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins") && !allow.includes("*")) {
           const lastEntry = JSON.stringify(allow[allow.length - 1]);
           const patched = raw.replace(
             new RegExp(`(${lastEntry})(\\s*\\])`),
@@ -307,6 +346,7 @@ const memosLocalPlugin = {
     // Current agent ID — updated by hooks, read by tools for owner isolation.
     // Falls back to "main" when no hook has fired yet (single-agent setups).
     let currentAgentId = "main";
+    const getCurrentOwner = () => `agent:${currentAgentId}`;
 
     // ─── Check allowPromptInjection policy ───
     // When allowPromptInjection=false, the prompt mutation fields (such as prependContext) in the hook return value
@@ -354,7 +394,6 @@ const memosLocalPlugin = {
         }
       };
 
-    const getCurrentOwner = () => `agent:${currentAgentId}`;
     const resolveMemorySearchScope = (scope?: string): "local" | "group" | "all" =>
       scope === "group" || scope === "all" ? scope : "local";
     const resolveMemoryShareTarget = (target?: string): "agents" | "hub" | "both" =>
@@ -445,7 +484,7 @@ const memosLocalPlugin = {
     // ─── Tool: memory_search ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_search",
         label: "Memory Search",
         description:
@@ -461,7 +500,7 @@ const memosLocalPlugin = {
           hubAddress: Type.Optional(Type.String({ description: "Optional Hub address override for group/all search." })),
           userToken: Type.Optional(Type.String({ description: "Optional Hub bearer token override for group/all search." })),
         }),
-        execute: trackTool("memory_search", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("memory_search", async (_toolCallId: any, params: any) => {
           const {
             query,
             scope: rawScope,
@@ -482,9 +521,6 @@ const memosLocalPlugin = {
           const role = rawRole === "user" || rawRole === "assistant" || rawRole === "tool" || rawRole === "system" ? rawRole : undefined;
           const minScore = typeof rawMinScore === "number" ? Math.max(0.35, Math.min(1, rawMinScore)) : undefined;
           let searchScope = resolveMemorySearchScope(rawScope);
-          if (searchScope === "local" && ctx.config?.sharing?.enabled) {
-            searchScope = "all";
-          }
           const searchLimit = typeof maxResults === "number" ? Math.max(1, Math.min(20, Math.round(maxResults))) : 10;
 
           const agentId = context?.agentId ?? currentAgentId;
@@ -504,7 +540,7 @@ const memosLocalPlugin = {
 
           // Split local results: pure-local vs hub-memory (Hub role's hub_memories mixed in by RecallEngine)
           const localHits = result.hits.filter((h) => h.origin !== "hub-memory");
-          const hubLocalHits = result.hits.filter((h) => h.origin === "hub-memory");
+          const hubLocalHits = searchScope !== "local" ? result.hits.filter((h) => h.origin === "hub-memory") : [];
 
           const rawLocalCandidates = localHits.map((h) => ({
             chunkId: h.ref.chunkId,
@@ -669,14 +705,14 @@ const memosLocalPlugin = {
             },
           };
         }),
-      },
+      }),
       { name: "memory_search" },
     );
 
     // ─── Tool: memory_timeline ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_timeline",
         label: "Memory Timeline",
         description:
@@ -686,7 +722,7 @@ const memosLocalPlugin = {
           chunkId: Type.String({ description: "The chunkId from a memory_search hit" }),
           window: Type.Optional(Type.Number({ description: "Context window ±N (default 2)" })),
         }),
-        execute: trackTool("memory_timeline", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("memory_timeline", async (_toolCallId: any, params: any) => {
           const agentId = context?.agentId ?? currentAgentId;
           ctx.log.debug(`memory_timeline called (agent=${agentId})`);
           const { chunkId, window: win } = params as {
@@ -730,14 +766,14 @@ const memosLocalPlugin = {
             details: { entries, anchorRef: { sessionKey: anchorChunk.sessionKey, chunkId, turnId: anchorChunk.turnId, seq: anchorChunk.seq } },
           };
         }),
-      },
+      }),
       { name: "memory_timeline" },
     );
 
     // ─── Tool: memory_get ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_get",
         label: "Memory Get",
         description:
@@ -748,7 +784,7 @@ const memosLocalPlugin = {
             Type.Number({ description: `Max chars (default ${DEFAULTS.getMaxCharsDefault}, max ${DEFAULTS.getMaxCharsMax})` }),
           ),
         }),
-        execute: trackTool("memory_get", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("memory_get", async (_toolCallId: any, params: any) => {
           const { chunkId, maxChars } = params as { chunkId: string; maxChars?: number };
           const limit = Math.min(maxChars ?? DEFAULTS.getMaxCharsDefault, DEFAULTS.getMaxCharsMax);
 
@@ -774,7 +810,7 @@ const memosLocalPlugin = {
             },
           };
         }),
-      },
+      }),
       { name: "memory_get" },
     );
 
@@ -1300,7 +1336,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     const viewerPort = (pluginCfg as any).viewerPort ?? (gatewayPort + 10);
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_viewer",
         label: "Open Memory Viewer",
         description:
@@ -1308,10 +1344,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           "or access their stored memories, or asks where the memory dashboard is. " +
           "Returns the URL the user can open in their browser.",
         parameters: Type.Object({}),
-        execute: trackTool("memory_viewer", async () => {
+        execute: trackTool("memory_viewer", async (_toolCallId: any, params: any) => {
           ctx.log.debug(`memory_viewer called`);
           telemetry.trackViewerOpened();
-          const url = `http://127.0.0.1:${viewerPort}`;
+          const agentId = context?.agentId ?? context?.profileId ?? currentAgentId;
+          const url = `http://127.0.0.1:${viewerPort}?agentId=${encodeURIComponent(agentId)}`;
           return {
             content: [
               {
@@ -1332,7 +1369,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             details: { viewerUrl: url },
           };
         }),
-      },
+      }),
       { name: "memory_viewer" },
     );
 
@@ -1405,9 +1442,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         name: "memory_share",
         label: "Share Memory",
         description:
-          "Share an existing memory either with local OpenClaw agents, to the Hub team, or to both targets. " +
-          "Use this only for an existing chunkId. Use target='agents' for local multi-agent sharing, target='hub' for team sharing, or target='both' for both. " +
-          "If you need to create a brand new shared memory instead of exposing an existing one, use memory_write_public.",
+          "Share an existing stored memory (requires a real chunkId from the database) to the Hub team, or to both targets. " +
+          "If you want to share content from the conversation, please first retrieve the memories related to that content to obtain the correct chunkId(s), then proceed with the sharing. " +
+          "target='agents' (default): when retrieved memories would clearly help other agents in the same OpenClaw workspace, you may share proactively without asking the user. " +
+          "target='hub' or 'both': do not share to the team Hub without explicit user consent when the content would benefit collaborators—explain briefly, ask first, and only call hub/both after they agree (Hub must be configured). " +
+          "To create a brand-new shared note with no existing chunk, use memory_write_public.",
         parameters: Type.Object({
           chunkId: Type.String({ description: "Existing local memory chunk ID to share" }),
           target: Type.Optional(Type.String({ description: "Share target: 'agents' (default), 'hub', or 'both'" })),
@@ -1561,7 +1600,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     // ─── Tool: skill_search ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "skill_search",
         label: "Skill Search",
         description:
@@ -1571,10 +1610,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           query: Type.String({ description: "Natural language description of the needed skill" }),
           scope: Type.Optional(Type.String({ description: "Search scope: 'mix' (default), 'self', 'public', 'group', or 'all'." })),
         }),
-        execute: trackTool("skill_search", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("skill_search", async (_toolCallId: any, params: any) => {
           const { query: skillQuery, scope: rawScope } = params as { query: string; scope?: string };
           const scope = (rawScope === "self" || rawScope === "public") ? rawScope : "mix";
-          const currentOwner = getCurrentOwner();
+          const agentId = context?.agentId ?? currentAgentId;
+          const currentOwner = `agent:${agentId}`;
 
           if (rawScope === "group" || rawScope === "all") {
             const [localHits, hub] = await Promise.all([
@@ -1636,7 +1676,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             details: { query: skillQuery, scope, hits },
           };
         }),
-      },
+      }),
       { name: "skill_search" },
     );
 
@@ -1781,7 +1821,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
 
-      const recallAgentId = hookCtx?.agentId ?? "main";
+      const recallAgentId = hookCtx?.agentId ?? (event as any)?.agentId ?? (event as any)?.profileId ?? "main";
       currentAgentId = recallAgentId;
       const recallOwnerFilter = [`agent:${recallAgentId}`, "public"];
       ctx.log.info(`auto-recall: agentId=${recallAgentId} (from hookCtx)`);
@@ -1793,24 +1833,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         const rawPrompt = event.prompt;
         ctx.log.debug(`auto-recall: rawPrompt="${rawPrompt.slice(0, 300)}"`);
 
-        let query = rawPrompt;
-        const senderTag = "Sender (untrusted metadata):";
-        const senderPos = rawPrompt.indexOf(senderTag);
-        if (senderPos !== -1) {
-          const afterSender = rawPrompt.slice(senderPos);
-          const fenceStart = afterSender.indexOf("```json");
-          const fenceEnd = fenceStart >= 0 ? afterSender.indexOf("```\n", fenceStart + 7) : -1;
-          if (fenceEnd > 0) {
-            query = afterSender.slice(fenceEnd + 4).replace(/^\s*\n/, "").trim();
-          } else {
-            const firstDblNl = afterSender.indexOf("\n\n");
-            if (firstDblNl > 0) {
-              query = afterSender.slice(firstDblNl + 2).trim();
-            }
-          }
-        }
-        query = stripInboundMetadata(query);
-        query = query.replace(/<[^>]+>/g, "").trim();
+        const query = normalizeAutoRecallQuery(rawPrompt);
         recallQuery = query;
 
         if (query.length < 2) {
@@ -1992,7 +2015,6 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           try {
             const skillCandidateMap = new Map<string, { name: string; description: string; skillId: string; source: string }>();
 
-            // Source 1: direct skill search based on user query
             try {
               const directSkillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
               for (const sh of directSkillHits.slice(0, skillLimit + 2)) {
@@ -2004,7 +2026,6 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
               ctx.log.debug(`auto-recall-skill: direct search failed: ${err}`);
             }
 
-            // Source 2: skills linked to tasks from memory hits
             const taskIds = new Set<string>();
             for (const h of filteredHits) {
               if (h.taskId) {
@@ -2094,7 +2115,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       if (!event.success || !event.messages || event.messages.length === 0) return;
 
       try {
-        const captureAgentId = hookCtx?.agentId ?? "main";
+        const captureAgentId = hookCtx?.agentId ?? event?.agentId ?? event?.profileId ?? "main";
         currentAgentId = captureAgentId;
         const captureOwner = `agent:${captureAgentId}`;
         const sessionKey = hookCtx?.sessionKey ?? "default";

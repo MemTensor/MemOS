@@ -704,6 +704,9 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .skill-card-bottom .tag{display:flex;align-items:center;gap:4px}
 .skill-card-tags{display:flex;gap:4px;flex-wrap:wrap}
 .skill-tag{font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(139,92,246,.1);color:var(--violet);font-weight:500}
+.skill-selection-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.skill-select-box{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;border:1px solid var(--border);background:var(--bg-card);cursor:pointer;margin-right:8px;vertical-align:middle}
+.skill-select-box input{width:14px;height:14px;cursor:pointer}
 .skill-detail-desc{font-size:13px;color:var(--text-sec);line-height:1.6;margin-bottom:16px;padding:12px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius)}
 .skill-version-item{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px}
 .skill-version-header{display:flex;align-items:center;gap:10px;margin-bottom:6px}
@@ -1258,9 +1261,13 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <option value="" data-i18n="filter.allagents">All agents</option>
         </select>
         <select id="memorySearchScope" class="filter-select" onchange="onMemoryScopeChange()" style="display:none">
-          <option value="local" data-i18n="scope.thisAgent">This Agent</option>
           <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
           <option value="hub" data-i18n="scope.hub">Team</option>
+        </select>
+        <select id="memoryPageSize" class="filter-select" onchange="onMemoryPageSizeChange()">
+          <option value="10">10 / page</option>
+          <option value="20" selected>20 / page</option>
+          <option value="40">40 / page</option>
         </select>
       </div>
       <div class="search-meta" id="searchMeta"></div>
@@ -1301,8 +1308,12 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <button class="filter-chip" data-task-status="active" onclick="setTaskStatusFilter(this,'active')" data-i18n="tasks.status.active">Active</button>
           <button class="filter-chip" data-task-status="completed" onclick="setTaskStatusFilter(this,'completed')" data-i18n="tasks.status.completed">Completed</button>
           <button class="filter-chip" data-task-status="skipped" onclick="setTaskStatusFilter(this,'skipped')" data-i18n="tasks.status.skipped">Skipped</button>
+          <select id="tasksPageSize" class="filter-select" onchange="onTasksPageSizeChange()">
+            <option value="10">10 / page</option>
+            <option value="20" selected>20 / page</option>
+            <option value="40">40 / page</option>
+          </select>
           <select id="taskSearchScope" class="scope-select" onchange="onTaskScopeChange()" style="display:none">
-            <option value="local" data-i18n="scope.thisAgent">This Agent</option>
             <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
             <option value="hub" data-i18n="scope.hub">Team</option>
           </select>
@@ -1344,9 +1355,13 @@ input,textarea,select{font-family:inherit;font-size:inherit}
         <span class="search-icon">🔍</span>
         <input type="text" id="skillSearchInput" placeholder="Search skills..." data-i18n-ph="skills.search.placeholder" oninput="debounceSkillSearch()">
         <select id="skillSearchScope" class="scope-select" onchange="onSkillScopeChange()" style="display:none">
-          <option value="local" data-i18n="scope.thisAgent">This Agent</option>
           <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
           <option value="hub" data-i18n="scope.hub">Team</option>
+        </select>
+        <select id="skillsPageSize" class="filter-select" onchange="onSkillsPageSizeChange()">
+          <option value="10">10 / page</option>
+          <option value="20" selected>20 / page</option>
+          <option value="40">40 / page</option>
         </select>
       </div>
       <div class="search-meta" id="skillSearchMeta" style="display:none"></div>
@@ -1369,8 +1384,13 @@ input,textarea,select{font-family:inherit;font-size:inherit}
             <option value="private" data-i18n="filter.private">Private</option>
           </select>
         </div>
+        <div class="skill-selection-toolbar">
+          <button class="btn btn-sm btn-ghost" id="skillSelectAllBtn" onclick="toggleSelectAllSkills()" data-i18n="skills.selectAll">Select All</button>
+          <button class="btn btn-sm btn-danger" id="skillBulkDeleteBtn" onclick="deleteSelectedSkills()" disabled data-i18n="skills.deleteSelected">Delete Selected</button>
+        </div>
       </div>
       <div class="tasks-list" id="skillsList"><div class="spinner"></div></div>
+      <div class="pagination" id="skillsPagination"></div>
       <div id="hubSkillsSection" style="display:none;margin-top:16px">
         <div class="section-title" style="margin-bottom:12px" data-i18n="skills.hub.title">\u{1F310} Team Skills</div>
         <div class="tasks-list" id="hubSkillsList"></div>
@@ -2036,11 +2056,19 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 <div class="toast-container" id="toasts"></div>
 
 <script>
-let activeSession=null,activeRole='',editingId=null,searchTimer=null,memoryCache={},currentPage=1,totalPages=1,totalCount=0,PAGE_SIZE=40,metricsDays=30;
-let memorySearchScope='local',skillSearchScope='local',taskSearchScope='local';
+let activeSession=null,activeRole='',editingId=null,searchTimer=null,memoryCache={},currentPage=1,totalPages=1,totalCount=0,PAGE_SIZE=20,metricsDays=30;
+let memorySearchScope='allLocal',skillSearchScope='allLocal',taskSearchScope='allLocal';
 let _lastMemoriesFingerprint='',_lastTasksFingerprint='',_lastSkillsFingerprint='';
 let _embeddingWarningShown=false;
 let _currentAgentOwner='agent:main';
+try {
+  const urlParams = new URLSearchParams(window.location.search);
+  const agentId = urlParams.get('agentId');
+  if (agentId) {
+    _currentAgentOwner = 'agent:' + agentId;
+  }
+} catch(e) {}
+
 
 /* ─── i18n ─── */
 const I18N={
@@ -2401,6 +2429,9 @@ const I18N={
     'skills.enable.error':'Failed to enable skill: ',
     'skills.updated':'Updated: ',
     'skills.task.prefix':'Task: ',
+    'skills.selectAll':'Select All',
+    'skills.unselectAll':'Unselect All',
+    'skills.deleteSelected':'Delete Selected',
     'tasks.chunks.label':'chunks',
     'tasks.taskid':'Task ID: ',
     'tasks.role.user':'You',
@@ -2751,7 +2782,10 @@ const I18N={
     'skill.save':'Save',
     'skill.cancel':'Cancel',
     'skill.delete.confirm':'Are you sure you want to delete this skill? This will also remove all associated files and cannot be undone.',
+    'skill.delete.selected.confirm':'Delete {count} selected skills? This action cannot be undone.',
     'skill.delete.error':'Failed to delete skill: ',
+    'skill.delete.partial':'Deleted {ok} skills, failed {fail}.',
+    'skill.delete.success':'Deleted {count} skills.',
     'skill.save.error':'Failed to save skill: ',
     'update.available':'New version available',
     'update.run':'Run',
@@ -3151,6 +3185,9 @@ const I18N={
     'skills.enable.error':'启用技能失败：',
     'skills.updated':'更新于：',
     'skills.task.prefix':'任务：',
+    'skills.selectAll':'全选',
+    'skills.unselectAll':'取消全选',
+    'skills.deleteSelected':'删除选中',
     'tasks.chunks.label':'条记忆',
     'tasks.taskid':'任务 ID：',
     'tasks.role.user':'你',
@@ -3501,7 +3538,10 @@ const I18N={
     'skill.save':'保存',
     'skill.cancel':'取消',
     'skill.delete.confirm':'确定要删除此技能吗？关联的文件也会被删除，此操作不可撤销。',
+    'skill.delete.selected.confirm':'确定删除选中的 {count} 个技能吗？此操作不可撤销。',
     'skill.delete.error':'删除技能失败：',
+    'skill.delete.partial':'已删除 {ok} 个技能，失败 {fail} 个。',
+    'skill.delete.success':'已删除 {count} 个技能。',
     'skill.save.error':'保存技能失败：',
     'update.available':'发现新版本',
     'update.run':'执行命令',
@@ -3805,35 +3845,79 @@ function switchView(view){
 }
 
 function onMemoryScopeChange(){
-  memorySearchScope=document.getElementById('memorySearchScope')?.value||'local';
+  memorySearchScope=document.getElementById('memorySearchScope')?.value||'allLocal';
   try{localStorage.setItem('memos_memorySearchScope',memorySearchScope);}catch(e){}
   currentPage=1;
   activeSession=null;activeRole='';
   _lastMemoriesFingerprint='';
   var isHub=memorySearchScope==='hub';
-  var isLocal=memorySearchScope==='local';
   var ownerSel=document.getElementById('filterOwner');
   var filterBar=document.getElementById('filterBar');
   var dateFilter=document.querySelector('.date-filter');
-  if(ownerSel){ownerSel.style.display=(isHub||isLocal)?'none':'';if(isHub||isLocal)ownerSel.value='';}
+  if(ownerSel){ownerSel.style.display=isHub?'none':'';if(isHub)ownerSel.value='';}
   if(filterBar) filterBar.style.display=isHub?'none':'';
   if(dateFilter) dateFilter.style.display=isHub?'none':'';
   if(document.getElementById('searchInput').value.trim()) doSearch(document.getElementById('searchInput').value);
   else if(isHub) { document.getElementById('sharingSearchMeta').textContent=''; loadHubMemories(); }
   else {
     document.getElementById('sharingSearchMeta').textContent='';
-    var ownerArg=isLocal?_currentAgentOwner:undefined;
+    var ownerArg=undefined;
     loadStats(ownerArg); loadMemories();
   }
 }
 
+function normalizePageSize(value,fallback){
+  const v=Number(value);
+  return v===10||v===20||v===40?v:fallback;
+}
+
+function applyPageSizeFromSelect(selectId,storageKey,fallback,onApply){
+  const el=document.getElementById(selectId);
+  const next=normalizePageSize(el?.value,fallback);
+  onApply(next);
+  try{localStorage.setItem(storageKey,String(next));}catch(e){}
+  return next;
+}
+
+function restorePageSizeSetting(storageKey,selectId,fallback,onApply){
+  let next=fallback;
+  try{
+    const raw=localStorage.getItem(storageKey);
+    next=normalizePageSize(raw||String(fallback),fallback);
+  }catch(e){}
+  onApply(next);
+  const el=document.getElementById(selectId);
+  if(el) el.value=String(next);
+  return next;
+}
+
+function onMemoryPageSizeChange(){
+  applyPageSizeFromSelect('memoryPageSize','memos_memoryPageSize',20,function(next){PAGE_SIZE=next;});
+  currentPage=1;
+  if(memorySearchScope==='hub') loadHubMemories();
+  else loadMemories();
+}
+
 function onSkillScopeChange(){
-  skillSearchScope=document.getElementById('skillSearchScope')?.value||'local';
+  skillSearchScope=document.getElementById('skillSearchScope')?.value||'allLocal';
+  skillsPage=0;
   loadSkills();
 }
 
+function onSkillsPageSizeChange(){
+  applyPageSizeFromSelect('skillsPageSize','memos_skillsPageSize',20,function(next){skillsPageSize=next;});
+  skillsPage=0;
+  loadSkills();
+}
+
+function onTasksPageSizeChange(){
+  applyPageSizeFromSelect('tasksPageSize','memos_tasksPageSize',20,function(next){tasksPageSize=next;});
+  tasksPage=0;
+  loadTasks();
+}
+
 function onTaskScopeChange(){
-  taskSearchScope=document.getElementById('taskSearchScope')?.value||'local';
+  taskSearchScope=document.getElementById('taskSearchScope')?.value||'allLocal';
   tasksPage=0;
   loadTasks();
 }
@@ -5478,6 +5562,7 @@ function localMemoryErrorMessage(err){
 
 function debounceSkillSearch(){
   clearTimeout(skillSearchTimer);
+  skillsPage=0;
   skillSearchTimer=setTimeout(function(){loadSkills();},300);
 }
 
@@ -5871,7 +5956,7 @@ function dateLoc(){return curLang==='zh'?'zh-CN':'en-US';}
 /* ─── Tasks View Logic ─── */
 let tasksStatusFilter='';
 let tasksPage=0;
-const TASKS_PER_PAGE=20;
+let tasksPageSize=20;
 
 function setTaskStatusFilter(btn,status){
   document.querySelectorAll('.tasks-filters .filter-chip').forEach(c=>c.classList.remove('active'));
@@ -5883,16 +5968,14 @@ function setTaskStatusFilter(btn,status){
 
 async function loadTasks(silent){
   const scope=document.getElementById('taskSearchScope')?document.getElementById('taskSearchScope').value:taskSearchScope;
-  taskSearchScope=scope||'local';
+  taskSearchScope=scope||'allLocal';
   if(taskSearchScope==='hub'){ return loadHubTasks(); }
   const list=document.getElementById('tasksList');
   if(!silent) list.innerHTML='<div class="spinner"></div>';
   try{
-    const params=new URLSearchParams({limit:String(TASKS_PER_PAGE),offset:String(tasksPage*TASKS_PER_PAGE)});
+    const params=new URLSearchParams({limit:String(tasksPageSize),offset:String(tasksPage*tasksPageSize)});
     if(tasksStatusFilter) params.set('status',tasksStatusFilter);
-    if(taskSearchScope==='local') params.set('owner','agent:main');
     var baseP=new URLSearchParams();
-    if(taskSearchScope==='local') baseP.set('owner','agent:main');
     const [data,allD,activeD,compD,skipD]=await Promise.all([
       fetch('/api/tasks?'+params).then(r=>r.json()),
       fetch('/api/tasks?limit=1&offset=0&'+baseP).then(r=>r.json()),
@@ -5972,7 +6055,7 @@ function updateTaskCardBadge(taskId,newScope){
 
 function renderTasksPagination(total){
   const el=document.getElementById('tasksPagination');
-  const pages=Math.ceil(total/TASKS_PER_PAGE);
+  const pages=Math.ceil(total/tasksPageSize);
   if(pages<=1){el.innerHTML='';return;}
   let html='<button class="pg-btn'+(tasksPage===0?' disabled':'')+'" onclick="tasksPage=Math.max(0,tasksPage-1);loadTasks()">\\u2190</button>';
   const start=Math.max(0,tasksPage-2),end=Math.min(pages,tasksPage+3);
@@ -6169,12 +6252,52 @@ async function deleteTask(taskId){
 
 /* ─── Skills View Logic ─── */
 let skillsStatusFilter='';
+let skillsPage=0;
+let skillsPageSize=20;
+let selectedSkillIds=new Set();
+let currentLocalSkills=[];
+let skillsFilterSignature='';
 
 function setSkillStatusFilter(btn,status){
   document.querySelectorAll('.skills-view .tasks-filters .filter-chip').forEach(c=>c.classList.remove('active'));
   btn.classList.add('active');
   skillsStatusFilter=status;
+  skillsPage=0;
   loadSkills();
+}
+
+function updateSkillSelectionToolbar(){
+  var selectAllBtn=document.getElementById('skillSelectAllBtn');
+  var bulkDeleteBtn=document.getElementById('skillBulkDeleteBtn');
+  var total=currentLocalSkills.length;
+  var selected=selectedSkillIds.size;
+  if(selectAllBtn){
+    selectAllBtn.textContent=t(selected>0&&selected===total&&total>0?'skills.unselectAll':'skills.selectAll');
+  }
+  if(bulkDeleteBtn){
+    bulkDeleteBtn.disabled=selected===0;
+    var base=t('skills.deleteSelected');
+    bulkDeleteBtn.textContent=selected>0?(base+' ('+selected+')'):base;
+  }
+}
+
+function toggleSkillSelection(skillId,checked){
+  if(checked) selectedSkillIds.add(skillId);
+  else selectedSkillIds.delete(skillId);
+  updateSkillSelectionToolbar();
+}
+
+function toggleSelectAllSkills(){
+  var total=currentLocalSkills.length;
+  if(total===0) return;
+  if(selectedSkillIds.size===total){
+    selectedSkillIds.clear();
+  }else{
+    selectedSkillIds=new Set(currentLocalSkills.map(function(s){return s.id;}));
+  }
+  var checks=document.querySelectorAll('#skillsList .skill-select-check');
+  checks.forEach(function(cb){cb.checked=selectedSkillIds.has(cb.value);});
+  updateSkillSelectionToolbar();
 }
 
 function updateSkillCardBadge(skillId,newScope){
@@ -6193,13 +6316,28 @@ function updateSkillCardBadge(skillId,newScope){
   }
 }
 
+function renderSkillsPagination(total){
+  const el=document.getElementById('skillsPagination');
+  if(!el) return;
+  const pages=Math.ceil(total/skillsPageSize);
+  if(pages<=1){el.innerHTML='';return;}
+  let html='<button class="pg-btn'+(skillsPage===0?' disabled':'')+'" onclick="skillsPage=Math.max(0,skillsPage-1);loadSkills()">\\u2190</button>';
+  const start=Math.max(0,skillsPage-2),end=Math.min(pages,skillsPage+3);
+  for(let i=start;i<end;i++){
+    html+='<button class="pg-btn'+(i===skillsPage?' active':'')+'" onclick="skillsPage='+i+';loadSkills()">'+(i+1)+'</button>';
+  }
+  html+='<button class="pg-btn'+(skillsPage>=pages-1?' disabled':'')+'" onclick="skillsPage=Math.min('+(pages-1)+',skillsPage+1);loadSkills()">\\u2192</button>';
+  html+='<span class="pg-info">'+total+' '+t('pagination.total')+'</span>';
+  el.innerHTML=html;
+}
+
 async function loadSkills(silent){
   const list=document.getElementById('skillsList');
   const hubList=document.getElementById('hubSkillsList');
   if(!silent) list.innerHTML='<div class="spinner"></div>';
   var hubSection=document.getElementById('hubSkillsSection');
   if(hubList){
-    if(skillSearchScope==='local'||skillSearchScope==='allLocal'){
+    if(skillSearchScope==='allLocal'){
       if(hubSection) hubSection.style.display='none';
     }else{
       if(hubSection) hubSection.style.display='block';
@@ -6209,24 +6347,33 @@ async function loadSkills(silent){
 
   const query=(document.getElementById('skillSearchInput')?.value||'').trim();
   const scope=document.getElementById('skillSearchScope') ? document.getElementById('skillSearchScope').value : skillSearchScope;
-  skillSearchScope=scope||'local';
+  skillSearchScope=scope||'allLocal';
 
   try{
     const params=new URLSearchParams();
     if(skillsStatusFilter) params.set('status',skillsStatusFilter);
     const visFilter=document.getElementById('skillVisibilityFilter')?.value;
     if(visFilter) params.set('visibility',visFilter);
+    const filterSignature=[query,skillSearchScope,skillsStatusFilter,visFilter||''].join('|');
+    if(!silent&&filterSignature!==skillsFilterSignature){
+      skillsPage=0;
+    }
+    skillsFilterSignature=filterSignature;
 
     const localRes=await fetch('/api/skills?'+params.toString());
     const localData=await localRes.json();
     let localSkills=Array.isArray(localData.skills)?localData.skills:[];
+    currentLocalSkills=localSkills.slice();
     if(query){
       const q=query.toLowerCase();
       localSkills=localSkills.filter(skill=>{
         const haystack=[skill.name,skill.description,skill.tags].filter(Boolean).join(' ').toLowerCase();
         return haystack.includes(q);
       });
+      currentLocalSkills=localSkills.slice();
     }
+    var localIdSet=new Set(localSkills.map(function(s){return s.id;}));
+    selectedSkillIds=new Set(Array.from(selectedSkillIds).filter(function(id){return localIdSet.has(id);}));
     if(silent){
       var fp=JSON.stringify(localSkills.map(function(s){return s.id+'|'+s.status+'|'+s.version+'|'+(s.visibility||'')}));
       if(fp===_lastSkillsFingerprint) return;
@@ -6250,9 +6397,10 @@ async function loadSkills(silent){
         const skillIsLocalShared=skill.visibility==='public';
         const skillIsTeamShared=!!skill.sharingVisibility;
         const skillScope=skillIsTeamShared?'team':skillIsLocalShared?'local':'private';
+        const selectedAttr=selectedSkillIds.has(skill.id)?' checked':'';
         return '<div class="skill-card '+installedClass+' '+statusClass+'" onclick="openSkillDetail(&quot;'+escAttr(skill.id)+'&quot;)">'+
           '<div class="skill-card-top">'+
-            '<div class="skill-card-name">🧠 '+esc(skill.name)+'</div>'+
+            '<div class="skill-card-name"><label class="skill-select-box" onclick="event.stopPropagation()"><input class="skill-select-check" type="checkbox" value="'+escAttr(skill.id)+'"'+selectedAttr+' onchange="event.stopPropagation();toggleSkillSelection(&quot;'+escAttr(skill.id)+'&quot;,this.checked)"></label>🧠 '+esc(skill.name)+'</div>'+
             '<div class="skill-card-badges">'+
               qsBadge+
               '<span class="skill-badge version">v'+skill.version+'</span>'+
@@ -6268,6 +6416,7 @@ async function loadSkills(silent){
             (tags.length>0?'<div class="skill-card-tags">'+tags.map(tg=>'<span class="skill-tag">'+esc(tg)+'</span>').join('')+'</div>':'')+
             '<span class="card-actions-inline" onclick="event.stopPropagation()">'+
               '<button class="btn btn-sm btn-ghost" onclick="openSkillDetail(&quot;'+escAttr(skill.id)+'&quot;)">'+t('card.expand')+'</button>'+
+              '<button class="btn btn-sm btn-danger" onclick="deleteSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skill.delete')+'</button>'+
               (skill.status==='active'
                 ?'<button class="btn btn-sm btn-ghost" onclick="openSkillScopeModalFromList(&quot;'+escAttr(skill.id)+'&quot;,&quot;'+skillScope+'&quot;)">\\u270F '+t('share.shareBtn')+'</button>'
                 :'<button class="btn btn-sm btn-ghost" style="opacity:0.45;cursor:not-allowed" onclick="toast(t(\\x27share.scope.skillNotActive\\x27),\\x27warn\\x27)">\\u270F '+t('share.shareBtn')+'</button>')+
@@ -6284,9 +6433,16 @@ async function loadSkills(silent){
       }).join('');
     };
 
-    list.innerHTML=renderLocalCards(localSkills);
+    const totalLocalSkills=localSkills.length;
+    const localPages=Math.ceil(totalLocalSkills/skillsPageSize)||1;
+    if(skillsPage>=localPages) skillsPage=Math.max(0,localPages-1);
+    const startIndex=skillsPage*skillsPageSize;
+    const pageSkills=localSkills.slice(startIndex,startIndex+skillsPageSize);
+    list.innerHTML=renderLocalCards(pageSkills);
+    renderSkillsPagination(totalLocalSkills);
+    updateSkillSelectionToolbar();
 
-    if(skillSearchScope==='local'||skillSearchScope==='allLocal'){
+    if(skillSearchScope==='allLocal'){
       if(hubSection) hubSection.style.display='none';
       document.getElementById('skillSearchMeta').textContent=query?(t('skills.search.local')+' '+localSkills.length):'';
       document.getElementById('skillsTotalCount').textContent=formatNum(localSkills.length);
@@ -6319,6 +6475,8 @@ async function loadSkills(silent){
     const localHits=(data.local&&Array.isArray(data.local.hits))?data.local.hits:[];
     const hubHits=(data.hub&&Array.isArray(data.hub.hits))?data.hub.hits:[];
 
+    const sp=document.getElementById('skillsPagination');
+    if(sp) sp.innerHTML='';
     list.innerHTML=localHits.length?localHits.map(function(skill){
       return '<div class="hub-skill-card" onclick="openSkillDetail(&quot;'+escAttr(skill.skillId)+'&quot;)">'+
         '<div class="summary">'+esc(skill.name)+'</div>'+
@@ -6350,8 +6508,11 @@ async function loadSkills(silent){
     document.getElementById('skillsDraftCount').textContent='0';
     document.getElementById('skillsInstalledCount').textContent='-';
     document.getElementById('skillsPublicCount').textContent=formatNum(hubHits.filter(function(s){return s.visibility==='public';}).length);
+    updateSkillSelectionToolbar();
   }catch(e){
     list.innerHTML='<div style="text-align:center;padding:24px;color:var(--rose)">'+t('skills.load.error')+': '+esc(String(e))+'</div>';
+    const sp=document.getElementById('skillsPagination');
+    if(sp) sp.innerHTML='';
     if(hubList){
       hubList.innerHTML='<div style="text-align:center;padding:24px;color:var(--rose)">'+t('skills.load.error')+'</div>';
     }
@@ -6363,7 +6524,7 @@ async function loadHubTasks(){
   if(!list) return;
   list.innerHTML='<div class="spinner"></div>';
   try{
-    var r=await fetch('/api/sharing/tasks/list?limit=40');
+    var r=await fetch('/api/sharing/tasks/list?limit='+tasksPageSize);
     var d=await r.json();
     var tasks=Array.isArray(d.tasks)?d.tasks:[];
     hubTasksCache=tasks;
@@ -7139,6 +7300,8 @@ async function deleteSkill(skillId){
     const r=await fetch('/api/skill/'+skillId,{method:'DELETE'});
     const d=await r.json();
     if(!r.ok) throw new Error(d.error||'unknown');
+    selectedSkillIds.delete(skillId);
+    updateSkillSelectionToolbar();
     closeSkillDetail();
     document.getElementById('skillDetailOverlay').classList.remove('show');
     loadSkills();
@@ -7166,6 +7329,30 @@ async function enableSkill(skillId){
     document.getElementById('skillDetailOverlay').classList.remove('show');
     loadSkills();
   }catch(e){ alert(t('skills.enable.error')+e.message); }
+}
+
+async function deleteSelectedSkills(){
+  var ids=Array.from(selectedSkillIds);
+  if(ids.length===0) return;
+  var msg=t('skill.delete.selected.confirm').replace('{count}',String(ids.length));
+  if(!(await confirmModal(msg,{danger:true}))) return;
+  var ok=0;
+  var fail=0;
+  for(var i=0;i<ids.length;i++){
+    try{
+      var r=await fetch('/api/skill/'+ids[i],{method:'DELETE'});
+      var d=await r.json();
+      if(!r.ok) throw new Error(d.error||'unknown');
+      ok++;
+    }catch(e){
+      fail++;
+    }
+  }
+  selectedSkillIds.clear();
+  updateSkillSelectionToolbar();
+  loadSkills();
+  if(fail>0) toast(t('skill.delete.partial').replace('{ok}',String(ok)).replace('{fail}',String(fail)),'warn');
+  else toast(t('skill.delete.success').replace('{count}',String(ok)),'success');
 }
 
 
@@ -7501,7 +7688,7 @@ async function _livePollTick(){
       var _searchVal=(document.getElementById('searchInput')||{}).value||'';
       if(!_searchVal.trim()){
         if(memorySearchScope==='hub') await loadHubMemories(true);
-        else{var _pollOwner=memorySearchScope==='local'?_currentAgentOwner:undefined;await loadStats(_pollOwner);await loadMemories(null,true);}
+        else{var _pollOwner=undefined;await loadStats(_pollOwner);await loadMemories(null,true);}
       }
     }
     else if(_activeView==='tasks') await loadTasks(true);
@@ -7774,7 +7961,7 @@ function stopNotifPoll(){ }
 /* ─── Data loading ─── */
 async function loadAll(){
   await loadStats();
-  var initOwner=memorySearchScope==='local'?_currentAgentOwner:undefined;
+  var initOwner=undefined;
   if(initOwner) await loadStats(initOwner);
   await Promise.all([loadMemories(),loadSharingStatus(false)]);
   checkMigrateStatus();
@@ -7794,7 +7981,7 @@ async function loadStats(ownerFilter){
     d=await r.json();
   }catch(e){ d={}; }
   if(!d||typeof d!=='object') d={};
-  if(d.currentAgentOwner) _currentAgentOwner=d.currentAgentOwner;
+  if(d.currentAgentOwner && !new URLSearchParams(window.location.search).get('agentId')) _currentAgentOwner=d.currentAgentOwner;
   const tm=d.totalMemories||0;
   const dedupB=d.dedupBreakdown||{};
   const activeCount=dedupB.active||tm;
@@ -7901,12 +8088,13 @@ function getFilterParams(){
   if(dt) p.set('dateTo',dt);
   const sort=document.getElementById('filterSort').value;
   if(sort==='oldest') p.set('sort','oldest');
-  const scope=memorySearchScope||'local';
-  if(scope==='local'){
-    p.set('owner',_currentAgentOwner);
-  }else if(scope==='allLocal'){
-  const owner=document.getElementById('filterOwner').value;
-  if(owner) p.set('owner',owner);
+  const scope=memorySearchScope||'allLocal';
+  if(scope==='allLocal'){
+    const owner=document.getElementById('filterOwner').value;
+    if(owner) {
+      p.set('owner',owner);
+      _currentAgentOwner = owner;
+    }
   }
   return p;
 }
@@ -8003,7 +8191,7 @@ async function doSearch(query){
     return;
   }
   currentPage=1;
-  var scope=document.getElementById('memorySearchScope')?.value||memorySearchScope||'local';
+  var scope=document.getElementById('memorySearchScope')?.value||memorySearchScope||'allLocal';
   var list=document.getElementById('memoryList');
   list.innerHTML='<div class="spinner"></div>';
   if(scope==='hub'){
@@ -9182,12 +9370,16 @@ async function checkForUpdate(){
 /* ─── Init ─── */
 try{
   var savedScope=localStorage.getItem('memos_memorySearchScope');
-  if(savedScope&&(savedScope==='local'||savedScope==='allLocal'||savedScope==='hub')){
+  if(savedScope==='local') savedScope='allLocal';
+  if(savedScope&&(savedScope==='allLocal'||savedScope==='hub')){
     memorySearchScope=savedScope;
     var scopeEl=document.getElementById('memorySearchScope');
     if(scopeEl) scopeEl.value=savedScope;
   }
 }catch(e){}
+restorePageSizeSetting('memos_memoryPageSize','memoryPageSize',20,function(next){PAGE_SIZE=next;});
+restorePageSizeSetting('memos_skillsPageSize','skillsPageSize',20,function(next){skillsPageSize=next;});
+restorePageSizeSetting('memos_tasksPageSize','tasksPageSize',20,function(next){tasksPageSize=next;});
 document.getElementById('modalOverlay').addEventListener('click',e=>{if(e.target.id==='modalOverlay')closeModal()});
 document.getElementById('searchInput').addEventListener('keydown',e=>{if(e.key==='Escape'){e.target.value='';currentPage=1;if(memorySearchScope==='hub')loadHubMemories();else loadMemories();}});
 applyI18n();

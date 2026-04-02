@@ -5,7 +5,12 @@ from datetime import datetime
 from typing import Any
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
-from memos.graph_dbs.neo4j import Neo4jGraphDB, _flatten_info_fields, _prepare_node_metadata
+from memos.graph_dbs.neo4j import (
+    Neo4jGraphDB,
+    _flatten_info_fields,
+    _prepare_node_metadata,
+    _sanitize_neo4j_metadata,
+)
 from memos.log import get_logger
 from memos.vec_dbs.factory import VecDBFactory
 from memos.vec_dbs.item import VecDBItem
@@ -55,40 +60,43 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         # Safely process metadata
         metadata = _prepare_node_metadata(metadata)
+        metadata = _flatten_info_fields(metadata)
+        metadata = _sanitize_neo4j_metadata(metadata)
 
         # Initialize delete_time and delete_record_id fields
         metadata.setdefault("delete_time", "")
         metadata.setdefault("delete_record_id", "")
 
         # serialization
-        if metadata["sources"]:
+        if metadata.get("sources"):
             for idx in range(len(metadata["sources"])):
                 metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
         # Extract required fields
         embedding = metadata.pop("embedding", None)
-        if embedding is None:
-            raise ValueError(f"Missing 'embedding' in metadata for node {id}")
 
         # Merge node and set metadata
         created_at = metadata.pop("created_at")
         updated_at = metadata.pop("updated_at")
-        vector_sync_status = "success"
+        vector_sync_status = "skipped"
 
-        try:
-            # Write to Vector DB
-            item = VecDBItem(
-                id=id,
-                vector=embedding,
-                payload={
-                    "memory": memory,
-                    "vector_sync": vector_sync_status,
-                    **metadata,  # unpack all metadata keys to top-level
-                },
-            )
-            self.vec_db.add([item])
-        except Exception as e:
-            logger.warning(f"[VecDB] Vector insert failed for node {id}: {e}")
-            vector_sync_status = "failed"
+        if embedding is not None:
+            vector_sync_status = "success"
+            try:
+                item = VecDBItem(
+                    id=id,
+                    vector=embedding,
+                    payload={
+                        "memory": memory,
+                        "vector_sync": vector_sync_status,
+                        **metadata,
+                    },
+                )
+                self.vec_db.add([item])
+            except Exception as e:
+                logger.warning(f"[VecDB] Vector insert failed for node {id}: {e}")
+                vector_sync_status = "failed"
+        else:
+            logger.warning(f"[add_node] No embedding for node {id}, skipping vector DB insert")
 
         metadata["vector_sync"] = vector_sync_status
         query = """
@@ -134,6 +142,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
                 metadata = _prepare_node_metadata(metadata)
                 metadata = _flatten_info_fields(metadata)
+                metadata = _sanitize_neo4j_metadata(metadata)
 
                 # Initialize delete_time and delete_record_id fields
                 metadata.setdefault("delete_time", "")
@@ -141,18 +150,21 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
                 embedding = metadata.pop("embedding", None)
 
-                vector_sync_status = "success"
-                vec_items.append(
-                    VecDBItem(
-                        id=node_id,
-                        vector=embedding,
-                        payload={
-                            "memory": memory,
-                            "vector_sync": vector_sync_status,
-                            **metadata,
-                        },
+                if embedding is not None:
+                    vector_sync_status = "success"
+                    vec_items.append(
+                        VecDBItem(
+                            id=node_id,
+                            vector=embedding,
+                            payload={
+                                "memory": memory,
+                                "vector_sync": vector_sync_status,
+                                **metadata,
+                            },
+                        )
                     )
-                )
+                else:
+                    vector_sync_status = "skipped"
 
                 created_at = metadata.pop("created_at")
                 updated_at = metadata.pop("updated_at")
@@ -889,6 +901,14 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                             if condition_str:
                                 where_clauses.append(f"({condition_str})")
                                 filter_params.update(filter_params_inner)
+                else:
+                    # Simple dict syntax: {"user_id": "...", "session_id": "..."}
+                    condition_str, filter_params_inner = build_filter_condition(
+                        filter, param_counter
+                    )
+                    if condition_str:
+                        where_clauses.append(f"({condition_str})")
+                        filter_params.update(filter_params_inner)
 
         where_str = " AND ".join(where_clauses) if where_clauses else ""
         if where_str:
@@ -919,7 +939,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
     def delete_node_by_prams(
         self,
-        writable_cube_ids: list[str],
+        writable_cube_ids: list[str] | None = None,
         memory_ids: list[str] | None = None,
         file_ids: list[str] | None = None,
         filter: dict | None = None,
@@ -928,7 +948,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         Delete nodes by memory_ids, file_ids, or filter.
 
         Args:
-            writable_cube_ids (list[str]): List of cube IDs (user_name) to filter nodes. Required parameter.
+            writable_cube_ids (list[str], optional): List of cube IDs (user_name) to scope deletion.
             memory_ids (list[str], optional): List of memory node IDs to delete.
             file_ids (list[str], optional): List of file node IDs to delete.
             filter (dict, optional): Filter dictionary to query matching nodes for deletion.
@@ -943,9 +963,9 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
         )
 
-        # Validate writable_cube_ids
-        if not writable_cube_ids or len(writable_cube_ids) == 0:
-            raise ValueError("writable_cube_ids is required and cannot be empty")
+        # file_ids deletion must be scoped by writable_cube_ids.
+        if file_ids and (not writable_cube_ids or len(writable_cube_ids) == 0):
+            raise ValueError("writable_cube_ids is required when deleting by file_ids")
 
         # Build WHERE conditions separately for memory_ids and file_ids
         where_clauses = []
@@ -953,10 +973,11 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         # Build user_name condition from writable_cube_ids (OR relationship - match any cube_id)
         user_name_conditions = []
-        for idx, cube_id in enumerate(writable_cube_ids):
-            param_name = f"cube_id_{idx}"
-            user_name_conditions.append(f"n.user_name = ${param_name}")
-            params[param_name] = cube_id
+        if writable_cube_ids:
+            for idx, cube_id in enumerate(writable_cube_ids):
+                param_name = f"cube_id_{idx}"
+                user_name_conditions.append(f"n.user_name = ${param_name}")
+                params[param_name] = cube_id
 
         # Handle memory_ids: query n.id
         if memory_ids and len(memory_ids) > 0:
@@ -1003,9 +1024,12 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # First, combine memory_ids, file_ids, and filter conditions with OR (any condition can match)
         data_conditions = " OR ".join([f"({clause})" for clause in where_clauses])
 
-        # Then, combine with user_name condition using AND (must match user_name AND one of the data conditions)
-        user_name_where = " OR ".join(user_name_conditions)
-        ids_where = f"({user_name_where}) AND ({data_conditions})"
+        # Then, combine with user_name condition using AND when scope is provided.
+        if user_name_conditions:
+            user_name_where = " OR ".join(user_name_conditions)
+            ids_where = f"({user_name_where}) AND ({data_conditions})"
+        else:
+            ids_where = data_conditions
 
         logger.info(
             f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
@@ -1138,12 +1162,12 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                 node[time_field] = node[time_field].isoformat()
         node.pop("user_name", None)
         # serialization
-        if node["sources"]:
+        if node.get("sources"):
             for idx in range(len(node["sources"])):
                 if not (
                     isinstance(node["sources"][idx], str)
                     and node["sources"][idx][0] == "{"
-                    and node["sources"][idx][0] == "}"
+                    and node["sources"][idx][-1] == "}"
                 ):
                     break
                 node["sources"][idx] = json.loads(node["sources"][idx])
@@ -1179,7 +1203,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                     if not (
                         isinstance(node["sources"][idx], str)
                         and node["sources"][idx][0] == "{"
-                        and node["sources"][idx][0] == "}"
+                        and node["sources"][idx][-1] == "}"
                     ):
                         break
                     node["sources"][idx] = json.loads(node["sources"][idx])

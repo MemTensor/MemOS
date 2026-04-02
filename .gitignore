@@ -234,6 +234,6 @@ apps/openwork-memos-integration/apps/desktop/public/assets/usecases/
 # Outputs and Evaluation Results
 outputs
 
-evaluation/data/temporal_locomo
+evaluation/data/
 test_add_pipeline.py
 test_file_pipeline.py

@@ -77,7 +77,7 @@ export class RecallEngine {
     }
     const shortTerms = [...new Set([...spaceSplit, ...cjkBigrams])];
     const patternHits = shortTerms.length > 0
-      ? this.store.patternSearch(shortTerms, { limit: candidatePool })
+      ? this.store.patternSearch(shortTerms, { limit: candidatePool, ownerFilter })
       : [];
     const patternRanked = patternHits.map((h, i) => ({
       id: h.chunkId,

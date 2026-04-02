@@ -30,6 +30,9 @@ function normalizePathForMatch(p) {
   return path.resolve(p).replace(/^\\\\\?\\/, "").replace(/\\/g, "/").toLowerCase();
 }
 
+const nodeVersion = process.version;
+const nodeMajor = parseInt(nodeVersion.slice(1).split('.')[0], 10);
+
 console.log(`
 ${CYAN}${BOLD}┌──────────────────────────────────────────────────┐
 │  MemOS Local Memory — postinstall setup          │
@@ -37,7 +40,13 @@ ${CYAN}${BOLD}┌─────────────────────
 `);
 
 log(`Plugin dir: ${DIM}${pluginDir}${RESET}`);
-log(`Node: ${process.version}  Platform: ${process.platform}-${process.arch}`);
+log(`Node: ${GREEN}${nodeVersion}${RESET}  Platform: ${process.platform}-${process.arch}`);
+
+if (nodeMajor >= 25) {
+  warn(`Node.js ${nodeVersion} detected. This version may have compatibility issues with native modules.`);
+  log(`Recommended: Use Node.js LTS (v20 or v22) for best compatibility.`);
+  log(`You can use nvm to switch versions: ${CYAN}nvm use 22${RESET}`);
+}
 
 /* ═══════════════════════════════════════════════════════════
  *  Pre-phase: Clean stale build artifacts on upgrade
@@ -61,20 +70,29 @@ function cleanStaleArtifacts() {
     installedVer = pkg.version || "unknown";
   } catch { /* ignore */ }
 
-  const markerPath = path.join(pluginDir, ".installed-version");
-  let prevVer = "";
-  try { prevVer = fs.readFileSync(markerPath, "utf-8").trim(); } catch { /* first install */ }
+  const nodeMajor = process.versions.node.split(".")[0];
+  const currentFingerprint = `${installedVer}+node${nodeMajor}`;
 
-  if (prevVer === installedVer) {
-    log(`Version unchanged (${installedVer}), skipping artifact cleanup.`);
+  const markerPath = path.join(pluginDir, ".installed-version");
+  let prevFingerprint = "";
+  try { prevFingerprint = fs.readFileSync(markerPath, "utf-8").trim(); } catch { /* first install */ }
+
+  const writeMarker = () => {
+    try { fs.writeFileSync(markerPath, currentFingerprint + "\n", "utf-8"); } catch { /* ignore */ }
+  };
+
+  if (prevFingerprint === currentFingerprint) {
+    log(`Version unchanged (${currentFingerprint}), skipping artifact cleanup.`);
     return;
   }
 
-  if (prevVer) {
-    log(`Upgrade detected: ${DIM}${prevVer}${RESET} → ${GREEN}${installedVer}${RESET}`);
-  } else {
-    log(`Fresh install: ${GREEN}${installedVer}${RESET}`);
+  if (!prevFingerprint) {
+    log(`Fresh install: ${GREEN}${currentFingerprint}${RESET}`);
+    writeMarker();
+    return;
   }
+
+  log(`Environment changed: ${DIM}${prevFingerprint}${RESET} → ${GREEN}${currentFingerprint}${RESET}`);
 
   const dirsToClean = ["dist", "node_modules"];
   let cleaned = 0;
@@ -99,7 +117,7 @@ function cleanStaleArtifacts() {
     }
   }
 
-  try { fs.writeFileSync(markerPath, installedVer + "\n", "utf-8"); } catch { /* ignore */ }
+  writeMarker();
 
   if (cleaned > 0) {
     ok(`Cleaned ${cleaned} stale artifact(s). Fresh install will follow.`);
@@ -117,7 +135,7 @@ try {
  * ═══════════════════════════════════════════════════════════ */
 
 function ensureDependencies() {
-  phase(0, "检测核心依赖 / Check core dependencies");
+  phase(0, "Check core dependencies / 检测核心依赖");
 
   const coreDeps = ["@sinclair/typebox", "uuid", "@huggingface/transformers"];
   const missing = [];
@@ -170,7 +188,7 @@ try {
  * ═══════════════════════════════════════════════════════════ */
 
 function cleanupLegacy() {
-  phase(1, "清理旧版本插件 / Clean up legacy plugins");
+  phase(1, "Clean up legacy plugins / 清理旧版本插件");
 
   const home = process.env.HOME || process.env.USERPROFILE || "";
   if (!home) { log("Cannot determine HOME directory, skipping."); return; }
@@ -281,7 +299,7 @@ try {
  * ═══════════════════════════════════════════════════════════ */
 
 function installBundledSkill() {
-  phase(2, "安装记忆技能 / Install memory skill");
+  phase(2, "Install memory skill / 安装记忆技能");
 
   const home = process.env.HOME || process.env.USERPROFILE || "";
   if (!home) { warn("Cannot determine HOME directory, skipping skill install."); return; }
@@ -347,7 +365,7 @@ try {
  *  Phase 3: Verify better-sqlite3 native module
  * ═══════════════════════════════════════════════════════════ */
 
-phase(3, "检查 better-sqlite3 原生模块 / Check native module");
+phase(3, "Check native module / 检查 better-sqlite3 原生模块");
 
 const sqliteModulePath = path.join(pluginDir, "node_modules", "better-sqlite3");
 
@@ -418,23 +436,39 @@ if (sqliteBindingsExist()) {
     else { fail(`Rebuild completed but bindings still missing (${elapsed}s).`); fail(`Looked in: ${sqliteModulePath}/build/`); }
     console.log(`
 ${YELLOW}${BOLD}  ╔══════════════════════════════════════════════════════════════╗
-  ║  ✖ better-sqlite3 native module build failed               ║
+  ║  ✖ better-sqlite3 native module build failed                 ║
   ╠══════════════════════════════════════════════════════════════╣${RESET}
-${YELLOW}  ║${RESET}                                                             ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  This plugin requires C/C++ build tools to compile         ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  the SQLite native module on first install.                ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}                                                             ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  ${BOLD}Install build tools:${RESET}                                      ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}                                                             ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  ${CYAN}macOS:${RESET}   xcode-select --install                          ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  ${CYAN}Ubuntu:${RESET}  sudo apt install build-essential python3        ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  ${CYAN}Windows:${RESET} npm install -g windows-build-tools              ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}                                                             ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  ${BOLD}Then retry:${RESET}                                                ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  This plugin requires C/C++ build tools to compile           ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  the SQLite native module on first install.                  ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${BOLD}Install build tools:${RESET}                                       ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${CYAN}macOS:${RESET}   xcode-select --install                           ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${CYAN}Ubuntu:${RESET}  sudo apt install build-essential python3         ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${CYAN}Windows:${RESET} npm install -g windows-build-tools               ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}`);
+
+if (nodeMajor >= 25) {
+  console.log(`${YELLOW}  ║${RESET}  ${BOLD}${RED}Node.js v25+ compatibility issue detected:${RESET}                ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  better-sqlite3 may not have prebuilt binaries for Node 25.   ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${BOLD}Recommended solutions:${RESET}                                     ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  1. Use Node.js LTS (v20 or v22):                             ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}     ${GREEN}nvm install 22 && nvm use 22${RESET}                            ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  2. Or use MemOS Cloud version instead:                       ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}     ${CYAN}https://github.com/MemTensor/MemOS/tree/main/apps/memos-cloud${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}`);
+}
+
+console.log(`${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${BOLD}Then retry:${RESET}                                                 ${YELLOW}║${RESET}
 ${YELLOW}  ║${RESET}  ${GREEN}cd ${pluginDir}${RESET}
-${YELLOW}  ║${RESET}  ${GREEN}npm rebuild better-sqlite3${RESET}                                ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}  ${GREEN}openclaw gateway stop && openclaw gateway start${RESET}           ${YELLOW}║${RESET}
-${YELLOW}  ║${RESET}                                                             ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${GREEN}npm rebuild better-sqlite3${RESET}                                 ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}  ${GREEN}openclaw gateway stop && openclaw gateway start${RESET}            ${YELLOW}║${RESET}
+${YELLOW}  ║${RESET}                                                              ${YELLOW}║${RESET}
 ${YELLOW}${BOLD}  ╚══════════════════════════════════════════════════════════════╝${RESET}
 `);
   }
@@ -502,43 +536,43 @@ async function setupSharingWizard() {
   const existingSharing = pluginEntry?.config?.sharing;
 
   if (existingSharing?.enabled) {
-    const roleLabel = existingSharing.role === "hub" ? "Hub (团队中心)" : "Client (团队成员)";
-    log(`已检测到共享配置: 角色 = ${BOLD}${roleLabel}${RESET}`);
+    const roleLabel = existingSharing.role === "hub" ? "Hub (Team Center)" : "Client (Team Member)";
+    log(`Sharing config detected: role = ${BOLD}${roleLabel}${RESET}`);
     const prompt = createPrompt();
-    const ans = await prompt.ask(`  是否重新配置？/ Reconfigure? (y/N) > `);
+    const ans = await prompt.ask(`  Reconfigure? / 是否重新配置？(y/N) > `);
     prompt.close();
     if (ans.toLowerCase() !== "y") {
-      ok("保留现有共享配置。");
+      ok("Keeping existing sharing config. / 保留现有共享配置。");
       return;
     }
   }
 
-  phase(3, "局域网共享设置 / LAN Sharing Setup");
+  phase(3, "LAN Sharing Setup / 局域网共享设置");
 
   const prompt = createPrompt();
 
-  const enableAns = await prompt.ask(`  是否启用局域网记忆共享？/ Enable LAN sharing? (y/N) > `);
+  const enableAns = await prompt.ask(`  Enable LAN sharing? / 是否启用局域网记忆共享？(y/N) > `);
   if (enableAns.toLowerCase() !== "y") {
     prompt.close();
-    log("未启用共享。你可以稍后在 openclaw.json 中手动配置。");
+    log("Sharing not enabled. You can configure it later in openclaw.json. / 未启用共享。");
     return;
   }
 
   console.log(`
-  ${BOLD}请选择你的角色 / Choose your role:${RESET}
-    ${GREEN}1)${RESET} 创建团队 (Hub)   — 成为团队管理员，其他人连接你
-    ${GREEN}2)${RESET} 加入团队 (Client) — 连接到已有的 Hub
+  ${BOLD}Choose your role / 请选择你的角色:${RESET}
+    ${GREEN}1)${RESET} Create Team (Hub)   — become the team admin, others connect to you / 创建团队
+    ${GREEN}2)${RESET} Join Team (Client)  — connect to an existing Hub / 加入团队
 `);
 
-  const roleAns = await prompt.ask(`  请输入 1 或 2 / Enter 1 or 2 > `);
+  const roleAns = await prompt.ask(`  Enter 1 or 2 / 请输入 1 或 2 > `);
 
   let sharingConfig;
 
   if (roleAns === "1") {
-    console.log(`\n  ${CYAN}${BOLD}── Hub 设置 / Hub Setup ──${RESET}\n`);
+    console.log(`\n  ${CYAN}${BOLD}── Hub Setup / Hub 设置 ──${RESET}\n`);
 
-    const teamName = (await prompt.ask(`  团队名称 / Team name (默认: My Team) > `)) || "My Team";
-    const portStr = (await prompt.ask(`  Hub 端口 / Hub port (默认: 18800) > `)) || "18800";
+    const teamName = (await prompt.ask(`  Team name / 团队名称 (default: My Team) > `)) || "My Team";
+    const portStr = (await prompt.ask(`  Hub port / Hub 端口 (default: 18800) > `)) || "18800";
     const port = parseInt(portStr, 10) || 18800;
     const teamToken = generateTeamToken();
 
@@ -553,46 +587,46 @@ async function setupSharingWizard() {
 
     console.log(`
 ${GREEN}${BOLD}  ┌────────────────────────────────────────────────────────────┐
-  │  ✔ Hub 配置完成！/ Hub configured!                        │
+  │  ✔ Hub configured! / Hub 配置完成！                       │
   │                                                            │
-  │  请将以下信息分享给团队成员:                                │
   │  Share this info with your team:                           │
+  │  请将以下信息分享给团队成员:                                │
   │                                                            │
-  │  ${CYAN}Hub 地址 / Address : ${displayIP}:${port}${GREEN}
+  │  ${CYAN}Address / Hub 地址 : ${displayIP}:${port}${GREEN}
   │  ${CYAN}Team Token         : ${teamToken}${GREEN}
   │                                                            │
-  │  团队成员安装插件时选择 "加入团队" 并输入以上信息。          │
+  │  Team members should choose "Join Team" during install.    │
   └────────────────────────────────────────────────────────────┘${RESET}
 `);
 
     if (localIPs.length > 1) {
-      log("检测到多个网络接口 / Multiple network interfaces:");
+      log("Multiple network interfaces detected / 检测到多个网络接口:");
       for (const ip of localIPs) {
         log(`  ${ip.name}: ${BOLD}${ip.address}:${port}${RESET}`);
       }
     }
 
   } else if (roleAns === "2") {
-    console.log(`\n  ${CYAN}${BOLD}── 加入团队 / Join Team ──${RESET}\n`);
+    console.log(`\n  ${CYAN}${BOLD}── Join Team / 加入团队 ──${RESET}\n`);
 
-    const hubAddress = await prompt.ask(`  Hub 地址 / Hub address (如 192.168.1.100:18800) > `);
+    const hubAddress = await prompt.ask(`  Hub address / Hub 地址 (e.g. 192.168.1.100:18800) > `);
     if (!hubAddress) {
       prompt.close();
-      warn("Hub 地址不能为空，跳过配置。");
+      warn("Hub address cannot be empty, skipping. / Hub 地址不能为空。");
       return;
     }
 
-    const teamToken = await prompt.ask(`  Team Token (由 Hub 创建者提供 / from Hub creator) > `);
+    const teamToken = await prompt.ask(`  Team Token (from Hub creator / 由 Hub 创建者提供) > `);
     if (!teamToken) {
       prompt.close();
-      warn("Team Token 不能为空，跳过配置。");
+      warn("Team Token cannot be empty, skipping. / Team Token 不能为空。");
       return;
     }
 
-    const username = (await prompt.ask(`  你的用户名 / Your username (默认: ${os.userInfo().username}) > `)) || os.userInfo().username;
+    const username = (await prompt.ask(`  Your username / 你的用户名 (default: ${os.userInfo().username}) > `)) || os.userInfo().username;
 
     const hubUrl = /^https?:\/\//i.test(hubAddress.trim()) ? hubAddress.trim() : `http://${hubAddress.trim()}`;
-    log(`正在加入团队 / Joining team at: ${BOLD}${hubUrl}${RESET} ...`);
+    log(`Joining team at / 正在加入团队: ${BOLD}${hubUrl}${RESET} ...`);
 
     let userToken = "";
     let joinOk = false;
@@ -626,18 +660,18 @@ ${GREEN}${BOLD}  ┌────────────────────
       if (joinResult.status === 200 && joinResult.body.userToken) {
         userToken = joinResult.body.userToken;
         joinOk = true;
-        ok(`加入成功！/ Joined successfully! 用户: ${BOLD}${username}${RESET}`);
+        ok(`Joined successfully! / 加入成功！User: ${BOLD}${username}${RESET}`);
       } else if (joinResult.status === 403) {
         prompt.close();
-        fail("Team Token 无效 / Invalid Team Token");
+        fail("Invalid Team Token / Team Token 无效");
         return;
       } else {
-        warn(`Hub 返回 / Hub responded: ${joinResult.status} ${JSON.stringify(joinResult.body)}`);
-        log("配置将被保存，gateway 启动时会用 Team Token 自动重试加入。");
+        warn(`Hub responded / Hub 返回: ${joinResult.status} ${JSON.stringify(joinResult.body)}`);
+        log("Config will be saved; gateway will auto-retry joining with Team Token on startup. / 配置将被保存，gateway 启动时会自动重试。");
       }
     } catch (e) {
-      warn(`无法连接 Hub / Cannot reach Hub: ${e.message}`);
-      log("配置将被保存，gateway 启动时会用 Team Token 自动重试加入。");
+      warn(`Cannot reach Hub / 无法连接 Hub: ${e.message}`);
+      log("Config will be saved; gateway will auto-retry joining on startup. / 配置将被保存，gateway 启动时会自动重试。");
     }
 
     sharingConfig = {
@@ -648,11 +682,11 @@ ${GREEN}${BOLD}  ┌────────────────────
     if (userToken) sharingConfig.client.userToken = userToken;
 
     const statusMsg = joinOk
-      ? `已加入团队，重启 gateway 即生效`
-      : `Hub 暂不可达，gateway 启动时会自动加入`;
+      ? `Joined team, restart gateway to take effect`
+      : `Hub unreachable, gateway will auto-join on startup`;
     console.log(`
 ${GREEN}${BOLD}  ┌────────────────────────────────────────────────────────────┐
-  │  ✔ Client 配置完成！/ Client configured!                  │
+  │  ✔ Client configured! / Client 配置完成！                 │
   │  ${CYAN}Hub: ${hubAddress}${GREEN}
   │  ${CYAN}${statusMsg}${GREEN}
   └────────────────────────────────────────────────────────────┘${RESET}
@@ -660,7 +694,7 @@ ${GREEN}${BOLD}  ┌────────────────────
 
   } else {
     prompt.close();
-    warn(`无效选择 "${roleAns}"，跳过配置。你可以稍后在 openclaw.json 中手动配置。`);
+    warn(`Invalid choice "${roleAns}", skipping. You can configure later in openclaw.json. / 无效选择，跳过配置。`);
     return;
   }
 
@@ -679,11 +713,11 @@ ${GREEN}${BOLD}  ┌────────────────────
     const backup = cfgPath + ".bak-" + Date.now();
     fs.copyFileSync(cfgPath, backup);
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n", "utf-8");
-    ok(`配置已写入 / Config saved: ${DIM}~/.openclaw/openclaw.json${RESET}`);
-    log(`备份 / Backup: ${DIM}${backup}${RESET}`);
+    ok(`Config saved / 配置已写入: ${DIM}~/.openclaw/openclaw.json${RESET}`);
+    log(`Backup / 备份: ${DIM}${backup}${RESET}`);
   } catch (e) {
-    fail(`写入配置失败 / Config write failed: ${e.message}`);
-    warn("请手动编辑 ~/.openclaw/openclaw.json 添加 sharing 配置。");
+    fail(`Config write failed / 写入配置失败: ${e.message}`);
+    warn("Please manually edit ~/.openclaw/openclaw.json to add sharing config. / 请手动编辑配置。");
   }
 }
 

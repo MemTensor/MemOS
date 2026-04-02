@@ -3,6 +3,19 @@ import * as path from "path";
 import type { SummarizerConfig, SummaryProvider, Logger, PluginContext, OpenClawAPI } from "../types";
 
 /**
+ * Resolve a SecretInput (string | SecretRef) to a plain string.
+ * Supports env-sourced SecretRef from OpenClaw's credential system.
+ */
+function resolveApiKey(
+  input: string | { source: string; provider?: string; id: string } | undefined,
+): string | undefined {
+  if (!input) return undefined;
+  if (typeof input === "string") return input;
+  if (input.source === "env") return process.env[input.id];
+  return undefined;
+}
+
+/**
  * Detect provider type from provider key name or base URL.
  */
 function detectProvider(providerKey: string | undefined, baseUrl: string): SummaryProvider {
@@ -56,7 +69,7 @@ export function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | unde
     if (!providerCfg) return undefined;
 
     const baseUrl: string | undefined = providerCfg.baseUrl;
-    const apiKey: string | undefined = providerCfg.apiKey;
+    const apiKey = resolveApiKey(providerCfg.apiKey);
     if (!baseUrl || !apiKey) return undefined;
 
     const provider = detectProvider(providerKey, baseUrl);

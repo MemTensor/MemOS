@@ -3,7 +3,7 @@
   "name": "MemOS Local Memory",
   "description": "Full-write local conversation memory with hybrid search (RRF + MMR + recency), task summarization, skill evolution, and team sharing (Hub-Client). Provides memory_search, memory_get, task_summary, skill_search, task_share, network_skill_pull, network_team_info, memory_viewer for layered retrieval and team collaboration.",
   "kind": "memory",
-  "version": "1.0.6-beta.12",
+  "version": "1.0.7-beta.2",
   "skills": [
     "skill/memos-memory-guide"
   ],
