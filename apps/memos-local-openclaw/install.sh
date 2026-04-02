@@ -246,10 +246,13 @@ if (!config.plugins.allow.includes(pluginId)) {
   config.plugins.allow.push(pluginId);
 }
 
-if (!config.plugins.slots || typeof config.plugins.slots !== 'object') {
-  config.plugins.slots = {};
+// Clean up stale contextEngine slot from previous versions
+if (config.plugins.slots && config.plugins.slots.contextEngine) {
+  delete config.plugins.slots.contextEngine;
+  if (Object.keys(config.plugins.slots).length === 0) {
+    delete config.plugins.slots;
+  }
 }
-config.plugins.slots.contextEngine = 'memos-local-openclaw-plugin';
 
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 NODE
@@ -304,6 +307,14 @@ info "Install dependencies, 安装依赖..."
   cd "${EXTENSION_DIR}"
   MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error 2>&1
 )
+
+if [[ ! -d "${EXTENSION_DIR}/node_modules" ]] || [[ -z "$(ls -A "${EXTENSION_DIR}/node_modules" 2>/dev/null)" ]]; then
+  warn "node_modules was cleaned by postinstall (version upgrade detected), re-installing..."
+  (
+    cd "${EXTENSION_DIR}"
+    MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error 2>&1
+  )
+fi
 
 if [[ ! -d "$EXTENSION_DIR" ]]; then
   error "Plugin directory not found after install, 安装后未找到插件目录: ${EXTENSION_DIR}"
