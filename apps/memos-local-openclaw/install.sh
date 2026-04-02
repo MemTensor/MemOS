@@ -360,5 +360,17 @@ fi
 
 update_openclaw_config
 
-success "Restart OpenClaw Gateway, 重启 OpenClaw Gateway..."
-exec npx openclaw gateway run --port "${PORT}" --force
+info "Install OpenClaw Gateway service, 安装 OpenClaw Gateway 服务..."
+npx openclaw gateway install --port "${PORT}" --force 2>&1 || true
+
+success "Start OpenClaw Gateway service, 启动 OpenClaw Gateway 服务..."
+npx openclaw gateway start 2>&1
+
+echo ""
+success "=========================================="
+success "  Installation complete! 安装完成!"
+success "=========================================="
+echo ""
+info "  OpenClaw Web UI:      http://localhost:${PORT}"
+info "  Memory Viewer:        http://localhost:18799"
+echo ""
