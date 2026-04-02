@@ -162,16 +162,16 @@ test("supports leading blank lines before inbound metadata", () => {
 });
 
 test("strips Feishu injected prompt", () => {
-  const input = `System: [2026-03-17 14:17:33 GMT+8] Feishu[default] DM from ou_37e8a1514c24e8afd9cfeca86f679980: 我叫什么名字 
- 
- Conversation info (untrusted metadata): 
- \`\`\`json 
- { 
-  "timestamp": "Tue 2026-03-17 14:17 GMT+8" 
- } 
- \`\`\` 
- 
- [message_id: om_x100b54bb510590dcc2998da17ca2c2b] 
+  const input = `System: [2026-03-17 14:17:33 GMT+8] Feishu[default] DM from ou_37e8a1514c24e8afd9cfeca86f679980: 我叫什么名字
+
+ Conversation info (untrusted metadata):
+ \`\`\`json
+ {
+  "timestamp": "Tue 2026-03-17 14:17 GMT+8"
+ }
+ \`\`\`
+
+ [message_id: om_x100b54bb510590dcc2998da17ca2c2b]
  ou_37e8a1514c24e8afd9cfeca86f679980: 我叫什么名字 `;
 
   assert.equal(stripOpenClawInjectedPrefix(input), "我叫什么名字");
@@ -191,7 +191,7 @@ ou_real: actual message`;
 
 test("strips Feishu prompt without system header", () => {
   const input = `
-[message_id: om_x100b54bb510590dcc2998da17ca2c2b] 
+[message_id: om_x100b54bb510590dcc2998da17ca2c2b]
 ou_37e8a1514c24e8afd9cfeca86f679980: 我叫什么名字 `;
   assert.equal(stripOpenClawInjectedPrefix(input), "我叫什么名字");
 });
