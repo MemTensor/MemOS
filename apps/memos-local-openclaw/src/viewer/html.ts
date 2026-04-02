@@ -392,6 +392,13 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .card-content pre{white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.25);padding:14px;border-radius:10px;font-size:12px;font-family:ui-monospace,monospace;margin-top:10px;border:1px solid var(--border);color:var(--text-sec)}
 .card-actions{display:flex;align-items:center;gap:8px;margin-top:14px}
 .card-actions-inline{display:inline-flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0}
+.btn-warn{color:#f59e0b !important}
+.btn-warn:hover{background:rgba(245,158,11,.15) !important}
+.btn-danger{color:#ef4444 !important}
+.btn-danger:hover{background:rgba(239,68,68,.15) !important}
+.btn-success{color:#10b981 !important}
+.btn-success:hover{background:rgba(16,185,129,.15) !important}
+.skill-card.archived{opacity:0.55;border-style:dashed}
 .vscore-badge{display:inline-flex;align-items:center;background:rgba(59,130,246,.15);color:#60a5fa;font-size:10px;font-weight:700;padding:4px 10px;border-radius:8px;margin-left:auto}
 .merge-badge{display:inline-flex;align-items:center;gap:4px;background:rgba(16,185,129,.12);color:#10b981;font-size:10px;font-weight:600;padding:3px 10px;border-radius:8px}
 .merge-history{margin-top:12px;padding:12px 14px;background:rgba(0,0,0,.15);border-radius:10px;border:1px solid var(--border);font-size:12px;line-height:1.7;color:var(--text-sec);max-height:200px;overflow-y:auto}
@@ -2385,7 +2392,13 @@ const I18N={
     'skills.nochangelog':'No changelog',
     'skills.status.active':'Active',
     'skills.status.draft':'Draft',
-    'skills.status.archived':'Archived',
+    'skills.status.archived':'Disabled',
+    'skills.action.disable':'Disable',
+    'skills.action.enable':'Enable',
+    'skills.action.delete':'Delete',
+    'skills.disable.confirm':'Are you sure you want to disable this skill? It will no longer be used in search or auto-recall, but can be re-enabled later.',
+    'skills.disable.error':'Failed to disable skill: ',
+    'skills.enable.error':'Failed to enable skill: ',
     'skills.updated':'Updated: ',
     'skills.task.prefix':'Task: ',
     'tasks.chunks.label':'chunks',
@@ -3129,7 +3142,13 @@ const I18N={
     'skills.nochangelog':'暂无变更记录',
     'skills.status.active':'生效中',
     'skills.status.draft':'草稿',
-    'skills.status.archived':'已归档',
+    'skills.status.archived':'已禁用',
+    'skills.action.disable':'禁用',
+    'skills.action.enable':'启用',
+    'skills.action.delete':'删除',
+    'skills.disable.confirm':'确定要禁用此技能吗？禁用后不再参与检索和自动召回，但可以随时重新启用。',
+    'skills.disable.error':'禁用技能失败：',
+    'skills.enable.error':'启用技能失败：',
     'skills.updated':'更新于：',
     'skills.task.prefix':'任务：',
     'tasks.chunks.label':'条记忆',
@@ -6252,6 +6271,13 @@ async function loadSkills(silent){
               (skill.status==='active'
                 ?'<button class="btn btn-sm btn-ghost" onclick="openSkillScopeModalFromList(&quot;'+escAttr(skill.id)+'&quot;,&quot;'+skillScope+'&quot;)">\\u270F '+t('share.shareBtn')+'</button>'
                 :'<button class="btn btn-sm btn-ghost" style="opacity:0.45;cursor:not-allowed" onclick="toast(t(\\x27share.scope.skillNotActive\\x27),\\x27warn\\x27)">\\u270F '+t('share.shareBtn')+'</button>')+
+              (skill.status==='active'
+                ?'<button class="btn btn-sm btn-ghost btn-warn" onclick="disableSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skills.action.disable')+'</button>'
+                :'')+
+              (skill.status==='archived'
+                ?'<button class="btn btn-sm btn-ghost btn-success" onclick="enableSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skills.action.enable')+'</button>'
+                :'')+
+              '<button class="btn btn-sm btn-ghost btn-danger" onclick="deleteSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skills.action.delete')+'</button>'+
             '</span>'+
           '</div>'+
         '</div>';
@@ -6524,7 +6550,14 @@ async function openSkillDetail(skillId){
     }
 
     window._currentSkillData=skill;
-    document.getElementById('skillDetailActions').innerHTML='';
+    var detailActionsHtml='';
+    if(skill.status==='active'){
+      detailActionsHtml+='<button class="btn btn-sm btn-warn" onclick="disableSkill(\''+escAttr(skill.id)+'\')">'+t('skills.action.disable')+'</button>';
+    }else if(skill.status==='archived'){
+      detailActionsHtml+='<button class="btn btn-sm btn-success" onclick="enableSkill(\''+escAttr(skill.id)+'\')">'+t('skills.action.enable')+'</button>';
+    }
+    detailActionsHtml+='<button class="btn btn-sm btn-danger" onclick="deleteSkill(\''+escAttr(skill.id)+'\')">'+t('skills.action.delete')+'</button>';
+    document.getElementById('skillDetailActions').innerHTML=detailActionsHtml;
 
   }catch(e){
     document.getElementById('skillDetailTitle').textContent=t('skills.error');
@@ -7110,6 +7143,29 @@ async function deleteSkill(skillId){
     document.getElementById('skillDetailOverlay').classList.remove('show');
     loadSkills();
   }catch(e){ alert(t('skill.delete.error')+e.message); }
+}
+async function disableSkill(skillId){
+  if(!(await confirmModal(t('skills.disable.confirm')))) return;
+  try{
+    const r=await fetch('/api/skill/'+skillId+'/disable',{method:'PUT'});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.error||'unknown');
+    toast(t('skills.action.disable')+' ✓','ok');
+    closeSkillDetail();
+    document.getElementById('skillDetailOverlay').classList.remove('show');
+    loadSkills();
+  }catch(e){ alert(t('skills.disable.error')+e.message); }
+}
+async function enableSkill(skillId){
+  try{
+    const r=await fetch('/api/skill/'+skillId+'/enable',{method:'PUT'});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.error||'unknown');
+    toast(t('skills.action.enable')+' ✓','ok');
+    closeSkillDetail();
+    document.getElementById('skillDetailOverlay').classList.remove('show');
+    loadSkills();
+  }catch(e){ alert(t('skills.enable.error')+e.message); }
 }
 
 

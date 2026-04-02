@@ -1115,6 +1115,10 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             };
           }
 
+          const disabledWarning = skill.status === "archived"
+            ? "\n\n> **Warning:** This skill is currently **disabled** (archived). Its content is shown for reference only — it will not be used in search or auto-recall.\n\n"
+            : "";
+
           const manifest = skillInstaller.getCompanionManifest(resolvedSkillId);
           let footer = "\n\n---\n";
 
@@ -1139,7 +1143,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           return {
             content: [{
               type: "text",
-              text: `## Skill: ${skill.name} (v${skill.version})\n\n${sv.content}${footer}`,
+              text: `## Skill: ${skill.name} (v${skill.version})${disabledWarning}\n\n${sv.content}${footer}`,
             }],
             details: {
               skillId: skill.id,

@@ -323,6 +323,8 @@ export class ViewerServer {
       else if (p.match(/^\/api\/skill\/[^/]+\/download$/) && req.method === "GET") this.serveSkillDownload(res, p);
       else if (p.match(/^\/api\/skill\/[^/]+\/files$/) && req.method === "GET") this.serveSkillFiles(res, p);
       else if (p.match(/^\/api\/skill\/[^/]+\/visibility$/) && req.method === "PUT") this.handleSkillVisibility(req, res, p);
+      else if (p.match(/^\/api\/skill\/[^/]+\/disable$/) && req.method === "PUT") this.handleSkillDisable(res, p);
+      else if (p.match(/^\/api\/skill\/[^/]+\/enable$/) && req.method === "PUT") this.handleSkillEnable(res, p);
       else if (p.startsWith("/api/skill/") && req.method === "DELETE") this.handleSkillDelete(res, p);
       else if (p.startsWith("/api/skill/") && req.method === "PUT") this.handleSkillUpdate(req, res, p);
       else if (p.startsWith("/api/skill/") && req.method === "GET") this.serveSkillDetail(res, p);
@@ -1178,6 +1180,58 @@ export class ViewerServer {
         res.end(JSON.stringify({ error: String(err) }));
       }
     });
+  }
+
+  private async handleSkillDisable(res: http.ServerResponse, urlPath: string): Promise<void> {
+    const skillId = urlPath.split("/")[3];
+    const skill = this.store.getSkill(skillId);
+    if (!skill) { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Skill not found" })); return; }
+    if (skill.status === "archived") { this.jsonResponse(res, { ok: true, skillId, message: "already disabled" }); return; }
+
+    try {
+      if (skill.visibility === "public") {
+        this.store.setSkillVisibility(skillId, "private");
+      }
+      const hub = this.resolveHubConnection();
+      if (hub) {
+        await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/skills/unpublish", {
+          method: "POST",
+          body: JSON.stringify({ sourceSkillId: skillId }),
+        }).catch(() => {});
+      }
+    } catch (_) {}
+
+    try {
+      const workspaceSkillsDir = path.join(this.dataDir, "workspace", "skills");
+      const installedDir = path.join(workspaceSkillsDir, skill.name);
+      if (fs.existsSync(installedDir)) {
+        fs.rmSync(installedDir, { recursive: true, force: true });
+      }
+    } catch (_) {}
+
+    this.store.disableSkill(skillId);
+    this.jsonResponse(res, { ok: true, skillId });
+  }
+
+  private handleSkillEnable(res: http.ServerResponse, urlPath: string): void {
+    const skillId = urlPath.split("/")[3];
+    const skill = this.store.getSkill(skillId);
+    if (!skill) { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Skill not found" })); return; }
+    if (skill.status !== "archived") { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Only disabled (archived) skills can be enabled" })); return; }
+
+    this.store.enableSkill(skillId);
+
+    if (this.embedder) {
+      const sv = this.store.getLatestSkillVersion(skillId);
+      if (sv) {
+        const text = `${skill.name}: ${skill.description}`;
+        this.embedder.embed([text]).then((vecs: number[][]) => {
+          if (vecs.length > 0) this.store.upsertSkillEmbedding(skillId, vecs[0]);
+        }).catch(() => {});
+      }
+    }
+
+    this.jsonResponse(res, { ok: true, skillId });
   }
 
   // ─── CRUD ───

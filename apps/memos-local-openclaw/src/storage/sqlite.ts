@@ -1469,6 +1469,21 @@ export class SqliteStore {
     return result.changes > 0;
   }
 
+  disableSkill(skillId: string): boolean {
+    const skill = this.getSkill(skillId);
+    if (!skill || skill.status === "archived") return false;
+    this.db.prepare("DELETE FROM skill_embeddings WHERE skill_id = ?").run(skillId);
+    this.updateSkill(skillId, { status: "archived", installed: 0 });
+    return true;
+  }
+
+  enableSkill(skillId: string): boolean {
+    const skill = this.getSkill(skillId);
+    if (!skill || skill.status !== "archived") return false;
+    this.updateSkill(skillId, { status: "active" });
+    return true;
+  }
+
   // ─── Task CRUD ───
 
   insertTask(task: Task): void {
