@@ -36,6 +36,35 @@ def build_search_context(
     )
 
 
+def resolve_filter_for_cube(
+    raw_filter: dict[str, Any] | None, cube_id: str
+) -> dict[str, Any] | None:
+    """Resolve a multi-cube filter dict into the sub-filter for a single cube.
+
+    Supported forms:
+      - None                          → None  (no filter)
+      - {"and": [...]}  / {"or": [...]}  → returned as-is (unified, all cubes share)
+      - {"cube_A": {...}, "cube_B": {...}} → return raw_filter[cube_id] or None
+    Mixed top-level (and/or + cube keys) is rejected.
+    """
+    if raw_filter is None:
+        return None
+
+    has_logic_key = "and" in raw_filter or "or" in raw_filter
+    other_keys = {k for k in raw_filter if k not in ("and", "or")}
+
+    if has_logic_key and other_keys:
+        raise ValueError(
+            "Invalid filter: top-level 'and'/'or' cannot coexist with per-cube keys "
+            f"{other_keys}. Use either a unified filter or per-cube filter, not both."
+        )
+
+    if has_logic_key:
+        return raw_filter
+
+    return raw_filter.get(cube_id)
+
+
 def search_text_memories(
     text_mem: Any,
     search_req: APISearchRequest,

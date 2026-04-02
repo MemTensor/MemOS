@@ -22,7 +22,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
 )
 from memos.memories.textual.item import TextualMemoryItem
 from memos.multi_mem_cube.views import MemCubeView
-from memos.search import search_text_memories
+from memos.search import resolve_filter_for_cube, search_text_memories
 from memos.templates.mem_reader_prompts import PROMPT_MAPPING
 from memos.types.general_types import (
     FINE_STRATEGY,
@@ -91,6 +91,13 @@ class SingleCubeView(MemCubeView):
         Unified memory search handling (text + preference memories).
         Preference memories are now searched through the same _search_text flow.
         """
+        cube_filter = resolve_filter_for_cube(search_req.filter, self.cube_id)
+        if cube_filter is not search_req.filter:
+            import copy
+
+            search_req = copy.copy(search_req)
+            search_req.filter = cube_filter
+
         # Create UserContext object
         user_context = UserContext(
             user_id=search_req.user_id,
