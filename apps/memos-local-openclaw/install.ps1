@@ -148,16 +148,21 @@ function Update-OpenClawConfig {
   param(
     [string]$OpenClawHome,
     [string]$ConfigPath,
-    [string]$PluginId
+    [string]$PluginId,
+    [string]$InstallPath,
+    [string]$Spec
   )
 
   Write-Info "Updating OpenClaw config..."
   New-Item -ItemType Directory -Path $OpenClawHome -Force | Out-Null
   $nodeScript = @'
 const fs = require("fs");
+const path = require("path");
 
 const configPath = process.argv[2];
 const pluginId = process.argv[3];
+const installPath = process.argv[4];
+const spec = process.argv[5];
 
 let config = {};
 if (fs.existsSync(configPath)) {
@@ -187,14 +192,48 @@ if (!config.plugins.allow.includes(pluginId)) {
 // Clean up stale contextEngine slot from previous versions
 if (config.plugins.slots && config.plugins.slots.contextEngine) {
   delete config.plugins.slots.contextEngine;
-  if (Object.keys(config.plugins.slots).length === 0) {
-    delete config.plugins.slots;
-  }
 }
+
+// Register plugin in memory slot
+if (!config.plugins.slots || typeof config.plugins.slots !== "object") {
+  config.plugins.slots = {};
+}
+config.plugins.slots.memory = pluginId;
+
+// Ensure plugin entry is enabled (preserve existing config if present)
+if (!config.plugins.entries || typeof config.plugins.entries !== "object") {
+  config.plugins.entries = {};
+}
+if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId] !== "object") {
+  config.plugins.entries[pluginId] = {};
+}
+config.plugins.entries[pluginId].enabled = true;
+
+// Register plugin in installs so gateway auto-loads it on restart
+if (!config.plugins.installs || typeof config.plugins.installs !== "object") {
+  config.plugins.installs = {};
+}
+const pkgJsonPath = path.join(installPath, "package.json");
+let resolvedName, resolvedVersion;
+if (fs.existsSync(pkgJsonPath)) {
+  const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf8"));
+  resolvedName = pkg.name;
+  resolvedVersion = pkg.version;
+}
+config.plugins.installs[pluginId] = {
+  source: "npm",
+  spec,
+  installPath,
+  ...(resolvedVersion ? { version: resolvedVersion } : {}),
+  ...(resolvedName ? { resolvedName } : {}),
+  ...(resolvedVersion ? { resolvedVersion } : {}),
+  ...(resolvedName && resolvedVersion ? { resolvedSpec: `${resolvedName}@${resolvedVersion}` } : {}),
+  installedAt: new Date().toISOString(),
+};
 
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 '@
-  $nodeScript | & node - $ConfigPath $PluginId
+  $nodeScript | & node - $ConfigPath $PluginId $InstallPath $Spec
   Write-Success "OpenClaw config updated: $ConfigPath"
 }
 
@@ -320,7 +359,7 @@ if (-not (Test-Path $ExtensionDir)) {
   exit 1
 }
 
-Update-OpenClawConfig -OpenClawHome $OpenClawHome -ConfigPath $OpenClawConfigPath -PluginId $PluginId
+Update-OpenClawConfig -OpenClawHome $OpenClawHome -ConfigPath $OpenClawConfigPath -PluginId $PluginId -InstallPath $ExtensionDir -Spec $PackageSpec
 
 Write-Success "Restarting OpenClaw Gateway..."
 & npx openclaw gateway run --port $Port --force
