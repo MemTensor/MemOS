@@ -451,8 +451,8 @@ class APISearchRequest(BaseRequest):
     mem_cube_id: str | None = Field(
         None,
         description=(
-            "(Deprecated) Single cube ID to search in. "
-            "Prefer `readable_cube_ids` for multi-cube search."
+            "(Deprecated) Single cube ID to write feedback into. "
+            "Prefer `writable_cube_ids` for multi-cube feedback."
         ),
     )
 
@@ -757,6 +757,17 @@ class APIFeedbackRequest(BaseRequest):
             "Prefer `readable_cube_ids` for multi-cube search."
         ),
     )
+
+    @model_validator(mode="after")
+    def _convert_deprecated_fields(self) -> "APIFeedbackRequest":
+        if self.mem_cube_id and not self.writable_cube_ids:
+            logger.warning(
+                "APIFeedbackRequest.mem_cube_id is deprecated and will be removed in a future "
+                "version. Please use `writable_cube_ids` instead."
+            )
+            self.writable_cube_ids = [self.mem_cube_id]
+
+        return self
 
 
 class APIChatCompleteRequest(BaseRequest):

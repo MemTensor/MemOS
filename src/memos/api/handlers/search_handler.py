@@ -11,6 +11,7 @@ import math
 from typing import Any
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
+from memos.api.handlers.cube_scope import resolve_cube_ids
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
 from memos.log import get_logger
@@ -794,10 +795,7 @@ class SearchHandler(BaseHandler):
         1) readable_cube_ids (deprecated mem_cube_id is converted to this in model validator)
         2) fallback to user_id
         """
-        if search_req.readable_cube_ids:
-            return list(dict.fromkeys(search_req.readable_cube_ids))
-
-        return [search_req.user_id]
+        return resolve_cube_ids(search_req.readable_cube_ids, search_req.user_id)
 
     def _build_cube_view(self, search_req: APISearchRequest, searcher=None) -> MemCubeView:
         cube_ids = self._resolve_cube_ids(search_req)

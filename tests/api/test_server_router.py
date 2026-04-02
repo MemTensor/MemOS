@@ -5,7 +5,7 @@ This module tests that the server_router endpoints correctly validate
 input request formats and return properly formatted responses.
 """
 
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 
@@ -142,6 +142,7 @@ class TestServerRouterSearch:
         assert isinstance(call_args, APISearchRequest)
         assert call_args.query == "test query"
         assert call_args.user_id == "test_user"
+        assert call_args.readable_cube_ids == ["test_cube"]
 
     def test_search_invalid_input_missing_query(self, mock_handlers, client):
         """Test search endpoint with missing required field."""
@@ -385,6 +386,45 @@ class TestServerRouterGetAll:
         assert response.status_code == 200
         # Verify subgraph handler was called
         mock_handlers["memory"].handle_get_subgraph.assert_called_once()
+
+    def test_get_all_uses_first_mem_cube_id_for_handler_scope(self, mock_handlers, client):
+        request_data = {
+            "user_id": "test_user",
+            "memory_type": "text_mem",
+            "mem_cube_ids": ["cube_alpha", "cube_beta"],
+        }
+
+        response = client.post("/product/get_all", json=request_data)
+
+        assert response.status_code == 200
+        mock_handlers["memory"].handle_get_all_memories.assert_called_once_with(
+            user_id="test_user",
+            mem_cube_id="cube_alpha",
+            memory_type="text_mem",
+            naive_mem_cube=ANY,
+        )
+
+    def test_get_all_search_query_uses_first_mem_cube_id_for_subgraph_scope(
+        self, mock_handlers, client
+    ):
+        request_data = {
+            "user_id": "test_user",
+            "memory_type": "text_mem",
+            "search_query": "important topic",
+            "mem_cube_ids": ["cube_alpha", "cube_beta"],
+        }
+
+        response = client.post("/product/get_all", json=request_data)
+
+        assert response.status_code == 200
+        mock_handlers["memory"].handle_get_subgraph.assert_called_once_with(
+            user_id="test_user",
+            mem_cube_id="cube_alpha",
+            query="important topic",
+            top_k=200,
+            naive_mem_cube=ANY,
+            search_type="fulltext",
+        )
 
     def test_get_all_invalid_input_missing_user_id(self, mock_handlers, client):
         """Test get_all endpoint with missing required field."""
