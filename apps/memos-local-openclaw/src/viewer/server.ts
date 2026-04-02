@@ -608,9 +608,10 @@ export class ViewerServer {
     this.store.recordViewerEvent("tasks_list");
     const status = url.searchParams.get("status") ?? undefined;
     const owner = url.searchParams.get("owner") ?? undefined;
+    const session = url.searchParams.get("session") ?? undefined;
     const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit")) || 50));
     const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
-    const { tasks, total } = this.store.listTasks({ status, limit, offset, owner });
+    const { tasks, total } = this.store.listTasks({ status, limit, offset, owner, session });
 
     const db = (this.store as any).db;
     const items = tasks.map((t) => {
@@ -728,6 +729,24 @@ export class ViewerServer {
       }
       const sessionList = db.prepare(sessionQuery).all(...sessionParams) as any[];
 
+      let taskSessionList: Array<{ session_key: string; count: number; earliest: number | null; latest: number | null }> = [];
+      try {
+        taskSessionList = db.prepare(
+          "SELECT session_key, COUNT(*) as count, MIN(started_at) as earliest, MAX(COALESCE(updated_at, started_at)) as latest FROM tasks GROUP BY session_key ORDER BY latest DESC",
+        ).all() as any[];
+      } catch { /* tasks table may not exist yet */ }
+
+      let skillSessionList: Array<{ session_key: string; count: number; earliest: number | null; latest: number | null }> = [];
+      try {
+        skillSessionList = db.prepare(
+          `SELECT t.session_key as session_key, COUNT(DISTINCT ts.skill_id) as count,
+                  MIN(t.started_at) as earliest, MAX(COALESCE(t.updated_at, t.started_at)) as latest
+             FROM task_skills ts JOIN tasks t ON t.id = ts.task_id
+            GROUP BY t.session_key
+            ORDER BY latest DESC`,
+        ).all() as any[];
+      } catch { /* task_skills may not exist yet */ }
+
       let skillCount = 0;
       try { skillCount = (db.prepare("SELECT COUNT(*) as count FROM skills").get() as any).count; } catch { /* table may not exist yet */ }
 
@@ -756,6 +775,8 @@ export class ViewerServer {
         dedupBreakdown,
         timeRange: { earliest: timeRange.earliest, latest: timeRange.latest },
         sessions: sessionList,
+        taskSessions: taskSessionList,
+        skillSessions: skillSessionList,
         owners,
         currentAgentOwner,
       });
@@ -865,7 +886,8 @@ export class ViewerServer {
   private serveSkills(res: http.ServerResponse, url: URL): void {
     const status = url.searchParams.get("status") ?? undefined;
     const visibility = url.searchParams.get("visibility") ?? undefined;
-    let skills = this.store.listSkills({ status });
+    const session = url.searchParams.get("session") ?? undefined;
+    let skills = this.store.listSkills({ status, session });
     if (visibility) {
       skills = skills.filter(s => s.visibility === visibility);
     }
