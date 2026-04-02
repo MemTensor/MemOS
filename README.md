@@ -65,6 +65,7 @@
 <!-- <br> -->
 
 ## 🦞 Enhanced OpenClaw with MemOS Plugin
+- [skill-taxonomy](https://github.com/SeeleAI/skill-taxonomy) - Structured taxonomy for AI agent skills: discovery, classification and routing across multi-agent workflows.
 
 ![](https://cdn.memtensor.com.cn/img/1770612303123_mnaisk_compressed.png)
 
