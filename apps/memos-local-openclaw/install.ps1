@@ -361,5 +361,18 @@ if (-not (Test-Path $ExtensionDir)) {
 
 Update-OpenClawConfig -OpenClawHome $OpenClawHome -ConfigPath $OpenClawConfigPath -PluginId $PluginId -InstallPath $ExtensionDir -Spec $PackageSpec
 
-Write-Success "Restarting OpenClaw Gateway..."
-& npx openclaw gateway run --port $Port --force
+Write-Info "Installing OpenClaw Gateway service..."
+& npx openclaw gateway install --port $Port --force 2>&1
+if (-not $?) { Write-Warn "Gateway service install returned a warning; continuing..." }
+
+Write-Success "Starting OpenClaw Gateway service..."
+& npx openclaw gateway start 2>&1
+
+Write-Host ""
+Write-Success "=========================================="
+Write-Success "  Installation complete!"
+Write-Success "=========================================="
+Write-Host ""
+Write-Info "  OpenClaw Web UI:      http://localhost:$Port"
+Write-Info "  Memory Viewer:        http://localhost:18799"
+Write-Host ""
