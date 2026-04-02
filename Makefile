@@ -35,6 +35,9 @@ format:
 pre_commit:
 	poetry run pre-commit run -a
 
+# Alias for pre_commit
+precommit: pre_commit
+
 serve:
 	poetry run uvicorn memos.api.server_api:app
 
