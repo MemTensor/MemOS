@@ -17,6 +17,7 @@ Goal:
 
 from __future__ import annotations
 
+from contextlib import suppress
 import hashlib
 import importlib
 import math
@@ -26,12 +27,14 @@ import time
 import types
 import uuid
 
-from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from fastapi.testclient import TestClient
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 def _neo4j_integration_configured() -> bool:
@@ -210,10 +213,8 @@ def integration_stack(tmp_path_factory) -> Iterator[dict[str, Any]]:
         }
     finally:
         client.close()
-        try:
+        with suppress(Exception):
             graph_db.driver.close()
-        except Exception:
-            pass
         _factory_singleton.clear_cache()
         monkeypatch.undo()
 
