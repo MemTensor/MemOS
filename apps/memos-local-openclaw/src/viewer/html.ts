@@ -1818,7 +1818,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
               </div>
               <div class="settings-field">
                 <label data-i18n="settings.taskAutoFinalize">Task Auto-Finalize (hours)</label>
-                <input type="number" id="cfgTaskAutoFinalizeHours" placeholder="4" min="0" step="1" style="max-width:120px">
+                <input type="number" id="cfgTaskAutoFinalizeHours" placeholder="4" min="0" step="1" style="max-width:120px" onkeydown="if(['-','e','E','+'].includes(event.key))event.preventDefault()" oninput="this.value=this.value.replace(/[^0-9]/g,'')">
                 <div class="field-hint" data-i18n="settings.taskAutoFinalize.hint">Active tasks with no new messages beyond this duration will be automatically summarized and completed when the Tasks page is opened. Set to 0 to disable. Default: 4 hours.</div>
               </div>
             </div>
@@ -1906,7 +1906,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <button class="btn btn-primary" onclick="migrateStart()" id="migrateStartBtn" style="display:none" data-i18n="migrate.start">Start Import</button>
           <span id="migrateConcurrencyRow" style="display:none;align-items:center;gap:6px">
             <span style="font-size:11px;color:var(--text-muted)" data-i18n="migrate.concurrency.label">Concurrent agents</span>
-            <select id="migrateConcurrency" class="filter-select" style="min-width:auto;padding:3px 10px;font-size:11px">
+            <select id="migrateConcurrency" class="filter-select" style="min-width:auto;padding:3px 28px 3px 10px;font-size:11px">
               <option value="1" selected>1</option>
               <option value="2">2</option>
               <option value="4">4</option>
@@ -1945,7 +1945,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
               <button class="btn btn-sm" id="ppStopBtn" onclick="ppStop()" style="display:none;background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.3);font-size:12px;padding:5px 16px;font-weight:600" data-i18n="migrate.stop">\u25A0 Stop</button>
               <span style="display:inline-flex;align-items:center;gap:6px">
                 <span style="font-size:11px;color:var(--text-muted)" data-i18n="pp.concurrency.label">Concurrent agents</span>
-                <select id="ppConcurrency" class="filter-select" style="min-width:auto;padding:3px 10px;font-size:11px">
+                <select id="ppConcurrency" class="filter-select" style="min-width:auto;padding:3px 28px 3px 10px;font-size:11px">
                   <option value="1" selected>1</option>
                   <option value="2">2</option>
                   <option value="4">4</option>
@@ -7414,7 +7414,7 @@ async function saveGeneralConfig(){
   const vp=document.getElementById('cfgViewerPort').value.trim();
   if(vp) cfg.viewerPort=Number(vp);
   const tafh=document.getElementById('cfgTaskAutoFinalizeHours').value.trim();
-  cfg.taskAutoFinalizeHours=tafh!==''?Number(tafh):4;
+  cfg.taskAutoFinalizeHours=tafh!==''?Math.max(0,Number(tafh)):4;
   cfg.telemetry={enabled:document.getElementById('cfgTelemetryEnabled').checked};
 
   await doSaveConfig(cfg, saveBtn, 'generalSaved');
