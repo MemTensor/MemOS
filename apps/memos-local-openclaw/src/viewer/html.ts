@@ -389,7 +389,8 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .role-tag.assistant{background:var(--accent-glow);color:var(--accent);border:1px solid rgba(230,57,70,.2)}
 .role-tag.system{background:var(--amber-bg);color:var(--amber);border:1px solid rgba(245,158,11,.2)}
 .card-time{font-size:12px;color:var(--text-sec);display:flex;align-items:center;gap:8px}
-.session-tag{font-size:11px;font-family:ui-monospace,monospace;color:var(--text-muted);background:rgba(0,0,0,.2);padding:3px 8px;border-radius:6px;cursor:default}
+.session-tag{font-size:11px;font-family:ui-monospace,monospace;color:var(--text-muted);background:rgba(0,0,0,.2);padding:3px 8px;border-radius:6px;cursor:pointer}
+.session-tag:hover{filter:brightness(1.12)}
 .owner-tag{font-size:11px;font-weight:600;color:var(--pri);background:var(--pri-glow);padding:3px 9px;border-radius:8px;border:1px solid rgba(99,102,241,.15);cursor:default;white-space:nowrap}
 .card-summary{font-size:15px;font-weight:600;color:var(--text);margin-bottom:10px;line-height:1.5;letter-spacing:-.01em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .card-content{font-size:13px;color:var(--text-sec);line-height:1.65;max-height:0;overflow:hidden;transition:max-height .3s ease}
@@ -5377,6 +5378,8 @@ function fmtSessionDisplay(sid){
     var parts=sid.split(':');
     // agent:{agentId}:import → "📥 import"
     if(parts.length===3 && parts[2]==='import') return '\\u{1F4E5} import';
+    // agent:{agentId}:{sessionKey} (exactly 3 segments) → show agent:{agentId} only (UI label; DB keeps full key)
+    if(parts.length===3) return 'agent:'+parts[1];
     // agent:{agentId}:session:{sessionId} → shortened sessionId
     if(parts.length>=4 && parts[2]==='session'){
       var sessId=parts.slice(3).join(':');
@@ -5393,6 +5396,16 @@ function fmtSessionDisplay(sid){
   }
   if(sid.length>20) return sid.slice(0,8)+'..'+sid.slice(-6);
   return sid;
+}
+
+function copySessionKeyFromEl(el){
+  var k=el&&el.getAttribute('data-session-key');
+  if(!k) return;
+  navigator.clipboard.writeText(k).then(function(){
+    toast(t('copy.done'),'success');
+  }).catch(function(){
+    toast('Copy failed','error');
+  });
 }
 
 function isImportedSession(sid){
@@ -8724,7 +8737,7 @@ function renderMemories(items){
     var ownerName=fmtAgentName(m.owner);
     var ownerBadge=ownerName?'<span class="owner-tag" title="'+esc(m.owner||'')+'">\\u{1F916} '+esc(ownerName)+'</span>':'';
     return '<div class="memory-card'+(isInactive?' dedup-inactive':'')+'">'+
-      '<div class="card-header"><div class="meta"><span class="role-tag '+role+'">'+role+'</span>'+ownerBadge+memScopeBadge+importBadge+dedupBadge+mergeBadge+'</div><span class="card-time"><span class="session-tag" title="'+esc(sid)+'">'+esc(sidShort)+'</span> '+time+updatedAt+'</span></div>'+
+      '<div class="card-header"><div class="meta"><span class="role-tag '+role+'">'+role+'</span>'+ownerBadge+memScopeBadge+importBadge+dedupBadge+mergeBadge+'</div><span class="card-time"><span class="session-tag" data-session-key="'+escAttr(sid)+'" onclick="event.stopPropagation();copySessionKeyFromEl(this)" title="'+esc(sidShort+(sid?' — '+t('copy.hint'):''))+'">'+esc(sidShort)+'</span> '+time+updatedAt+'</span></div>'+
       '<div class="card-summary">'+selectBoxHtml+cardTitle+'</div>'+
       (function(){
         if(mc<=0) return '';
