@@ -7,7 +7,17 @@ A minimal OpenClaw lifecycle plugin that **recalls** memories from MemOS Cloud b
 ## Features
 - **Recall**: `before_agent_start` → `/search/memory`
 - **Add**: `agent_end` → `/add/message`
+- **Config UI**: starting the gateway also starts a local plugin config page for editing `plugins.entries.memos-cloud-openclaw-plugin.config`
 - Uses **Token** auth (`Authorization: Token <MEMOS_API_KEY>`)
+
+## Config UI
+- On gateway start, the plugin launches a local config page and prints the URL in the terminal (default: `http://127.0.0.1:38463`).
+- The page reads and writes the host config file directly:
+  - OpenClaw: `~/.openclaw/openclaw.json`
+  - Moltbot: `~/.moltbot/moltbot.json`
+  - ClawDBot: `~/.clawdbot/clawdbot.json`
+- If the preferred UI port is already in use, the plugin automatically picks the next free port.
+- Saving changes writes `plugins.entries.memos-cloud-openclaw-plugin.config`. (Note: you may need to manually restart the gateway after saving for settings to take effect).
 
 ## Install
 
@@ -55,9 +65,8 @@ Make sure it’s enabled in `~/.openclaw/openclaw.json`:
 Restart the gateway after config changes.
 
 ## Environment Variables
-The plugin resolves runtime config in this order: **plugin config → env files → process environment**.
-Among env files, it tries them in order (**openclaw → moltbot → clawdbot**). For each key, the first file with a value wins.
-If none of these files exist (or the key is missing), it falls back to the process environment.
+The plugin resolves runtime config in this order: **plugin config → env files**. Due to strict security sandboxing, it **does not** read credentials from process environment variables.
+For env files, it tries them in order (**openclaw → moltbot → clawdbot**). For each key, the first file with a value wins.
 
 **Where to configure**
 - Files (priority order):
@@ -66,19 +75,9 @@ If none of these files exist (or the key is missing), it falls back to the proce
   - `~/.clawdbot/.env`
 - Each line is `KEY=value`
 
-**Quick setup (shell)**
+**Quick setup (shell / Windows)**
 ```bash
-echo 'export MEMOS_API_KEY="mpg-..."' >> ~/.zshrc
-source ~/.zshrc
-# or
-
-echo 'export MEMOS_API_KEY="mpg-..."' >> ~/.bashrc
-source ~/.bashrc
-```
-
-**Quick setup (Windows PowerShell)**
-```powershell
-[System.Environment]::SetEnvironmentVariable("MEMOS_API_KEY", "mpg-...", "User")
+echo 'MEMOS_API_KEY="mpg-..."' >> ~/.openclaw/.env
 ```
 
 If `MEMOS_API_KEY` is missing, the plugin will warn with setup instructions and the API key URL.
@@ -306,7 +305,7 @@ MEMOS_AGENT_OVERRIDES='{"research-agent": {"memoryLimitNumber": 12, "relativity"
 - **What it does**: when enabled, session keys like `agent:main:<provider>:direct:<peer-id>` reuse `<peer-id>` as MemOS `user_id`.
 - **What it does not do**: non-direct session keys such as `agent:main:<provider>:channel:<channel-id>` keep using the configured fallback `userId`.
 - **Request paths affected**: the same resolver is used by both `buildSearchPayload()` and `buildAddMessagePayload()`, so recall and add stay consistent.
-- **Config precedence**: runtime config still follows the same rule as the rest of the plugin - plugin config first, then `.env` files (`~/.openclaw/.env` -> `~/.moltbot/.env` -> `~/.clawdbot/.env`), then process env.
+- **Config precedence**: runtime config still follows the same rule as the rest of the plugin - plugin config first, then `.env` files (`~/.openclaw/.env` -> `~/.moltbot/.env` -> `~/.clawdbot/.env`).
 
 
 ## Notes
