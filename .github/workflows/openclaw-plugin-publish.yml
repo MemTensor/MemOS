@@ -100,7 +100,7 @@ jobs:
           MEMOS_ARMS_ENV: ${{ secrets.MEMOS_ARMS_ENV }}
 
       - name: Bump version
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: npm version ${{ inputs.version }} --no-git-tag-version
 
       - name: Publish to npm
         run: npm publish --access public --tag ${{ inputs.tag }}
@@ -113,9 +113,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add apps/memos-local-openclaw/package.json
-          if ! git diff --staged --quiet; then
-            git commit -m "release: openclaw-plugin v${{ inputs.version }}"
-          fi
+          git commit -m "release: openclaw-plugin v${{ inputs.version }}"
           git tag "openclaw-plugin-v${{ inputs.version }}"
-          # main is branch-protected on MemTensor/MemOS — push only the release tag, not HEAD
-          git push origin "refs/tags/openclaw-plugin-v${{ inputs.version }}"
+          git push origin HEAD --tags
