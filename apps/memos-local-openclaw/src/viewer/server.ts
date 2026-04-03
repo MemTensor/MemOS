@@ -4024,7 +4024,7 @@ export class ViewerServer {
       try {
         if (this.store) {
           importedSessions = this.store.getDistinctSessionKeys()
-            .filter((sk: string) => sk.startsWith("openclaw-import-") || sk.startsWith("openclaw-session-"));
+            .filter((sk: string) => sk.startsWith("openclaw-import-") || sk.startsWith("openclaw-session-") || /^agent:[^:]+:(import|session:)/.test(sk));
           if (importedSessions.length > 0) {
             const placeholders = importedSessions.map(() => "?").join(",");
             const row = (this.store as any).db.prepare(
@@ -4237,7 +4237,7 @@ export class ViewerServer {
               totalProcessed++;
 
               const contentHash = crypto.createHash("sha256").update(row.text).digest("hex");
-              if (this.store.chunkExistsByContent(`openclaw-import-${agentId}`, "assistant", row.text)) {
+              if (this.store.chunkExistsByContent(`agent:${agentId}:import`, "assistant", row.text) || this.store.chunkExistsByContent(`openclaw-import-${agentId}`, "assistant", row.text)) {
                 totalSkipped++;
                 send("item", {
                   index: i + 1,
@@ -4337,7 +4337,7 @@ export class ViewerServer {
                 const chunkId = uuid();
                 const chunk: Chunk = {
                   id: chunkId,
-                  sessionKey: `openclaw-import-${agentId}`,
+                  sessionKey: `agent:${agentId}:import`,
                   turnId: `import-${row.id}`,
                   seq: 0,
                   role: "assistant",
@@ -4492,8 +4492,8 @@ export class ViewerServer {
               const idx = incIdx();
               totalProcessed++;
 
-              const sessionKey = `openclaw-session-${sessionId}`;
-              if (this.store.chunkExistsByContent(sessionKey, msgRole, content)) {
+              const sessionKey = `agent:${agentId}:session:${sessionId}`;
+              if (this.store.chunkExistsByContent(sessionKey, msgRole, content) || this.store.chunkExistsByContent(`openclaw-session-${sessionId}`, msgRole, content)) {
                 totalSkipped++;
                 send("item", { index: idx, total: totalMsgs, status: "skipped", preview: content.slice(0, 120), source: file, agent: agentId, role: msgRole, reason: "duplicate" });
                 continue;
@@ -4744,7 +4744,7 @@ export class ViewerServer {
     const ctx = this.ctx!;
 
     const importSessions = this.store.getDistinctSessionKeys()
-      .filter((sk: string) => sk.startsWith("openclaw-import-") || sk.startsWith("openclaw-session-"));
+      .filter((sk: string) => sk.startsWith("openclaw-import-") || sk.startsWith("openclaw-session-") || /^agent:[^:]+:(import|session:)/.test(sk));
 
     type PendingItem = { sessionKey: string; action: "full" | "skill-only"; owner: string };
     const pendingItems: PendingItem[] = [];
