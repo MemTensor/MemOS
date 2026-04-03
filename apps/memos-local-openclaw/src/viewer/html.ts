@@ -44,6 +44,7 @@ html{overflow-y:scroll}
 [data-theme="light"] .auth-card{box-shadow:0 25px 50px -12px rgba(0,0,0,.08)}
 [data-theme="light"] .topbar{background:rgba(255,255,255,.92);border-bottom-color:var(--border);backdrop-filter:blur(8px)}
 [data-theme="light"] .session-item .count,[data-theme="light"] .session-tag{background:rgba(0,0,0,.05)}
+[data-theme="light"] .owner-tag{background:rgba(99,102,241,.08);border-color:rgba(99,102,241,.18)}
 [data-theme="light"] .card-content pre{background:#f3f4f6;border-color:var(--border)}
 [data-theme="light"] .vscore-badge{background:rgba(79,70,229,.06);color:#4f46e5}
 [data-theme="light"] ::-webkit-scrollbar-thumb{background:rgba(0,0,0,.15)}
@@ -389,6 +390,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .role-tag.system{background:var(--amber-bg);color:var(--amber);border:1px solid rgba(245,158,11,.2)}
 .card-time{font-size:12px;color:var(--text-sec);display:flex;align-items:center;gap:8px}
 .session-tag{font-size:11px;font-family:ui-monospace,monospace;color:var(--text-muted);background:rgba(0,0,0,.2);padding:3px 8px;border-radius:6px;cursor:default}
+.owner-tag{font-size:11px;font-weight:600;color:var(--pri);background:var(--pri-glow);padding:3px 9px;border-radius:8px;border:1px solid rgba(99,102,241,.15);cursor:default;white-space:nowrap}
 .card-summary{font-size:15px;font-weight:600;color:var(--text);margin-bottom:10px;line-height:1.5;letter-spacing:-.01em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .card-content{font-size:13px;color:var(--text-sec);line-height:1.65;max-height:0;overflow:hidden;transition:max-height .3s ease}
 .card-content.show{max-height:600px;overflow-y:auto}
@@ -5354,6 +5356,42 @@ function openHubSkillDetailFromCache(cacheKey,idx){
 
 function escAttr(s){return String(s||'').replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
+function fmtAgentName(owner){
+  if(!owner||owner==='public') return '';
+  var s=String(owner);
+  if(s.startsWith('agent:')) s=s.slice(6);
+  return s;
+}
+
+function fmtSessionDisplay(sid){
+  if(!sid) return '';
+  if(sid.startsWith('agent:')){
+    var parts=sid.split(':');
+    // agent:{agentId}:import → "📥 import"
+    if(parts.length===3 && parts[2]==='import') return '\\u{1F4E5} import';
+    // agent:{agentId}:session:{sessionId} → shortened sessionId
+    if(parts.length>=4 && parts[2]==='session'){
+      var sessId=parts.slice(3).join(':');
+      return sessId.length>12?sessId.slice(0,6)+'..'+sessId.slice(-4):sessId;
+    }
+    // agent:{agentId}:{other} → show from second part (e.g. "work:main")
+    return parts.slice(1).join(':');
+  }
+  // Legacy formats
+  if(sid.startsWith('openclaw-import-')) return '\\u{1F4E5} '+sid.slice(16);
+  if(sid.startsWith('openclaw-session-')){
+    var id=sid.slice(17);
+    return id.length>12?id.slice(0,6)+'..'+id.slice(-4):id;
+  }
+  if(sid.length>20) return sid.slice(0,8)+'..'+sid.slice(-6);
+  return sid;
+}
+
+function isImportedSession(sid){
+  if(!sid) return false;
+  return sid.startsWith('openclaw-import-')||sid.startsWith('openclaw-session-')||/^agent:[^:]+:(import|session:)/.test(sid);
+}
+
 /* ─── Unified Sharing Scope Selector ─── */
 
 function getScopeLabel(scope){
@@ -8608,7 +8646,7 @@ function renderMemories(items){
     const id=m.id;
     const vscore=m._vscore?'<span class="vscore-badge">'+Math.round(m._vscore*100)+'%</span>':'';
     const sid=m.session_key||'';
-    const sidShort=sid.length>18?sid.slice(0,6)+'..'+sid.slice(-6):sid;
+    const sidShort=fmtSessionDisplay(sid);
     const mc=m.merge_count||0;
     const cardTitle=esc(rawSummary||rawContent||'');
     const mergeBadge=mc>0?'<span class="merge-badge">\\u{1F504} '+t('card.evolved')+' '+mc+t('card.times')+'</span>':'';
@@ -8616,7 +8654,7 @@ function renderMemories(items){
     const ds=m.dedup_status||'active';
     const isInactive=ds==='merged'||ds==='duplicate';
     const dedupBadge=ds==='duplicate'?'<span class="dedup-badge duplicate">'+t('card.dedupDuplicate')+'</span>':ds==='merged'?'<span class="dedup-badge merged">'+t('card.dedupMerged')+'</span>':'';
-    const isImported=sid.startsWith('openclaw-import-')||sid.startsWith('openclaw-session-');
+    const isImported=isImportedSession(sid);
     const importBadge=isImported?'<span class="import-badge">\u{1F990} '+t('card.imported')+'</span>':'';
     const ownerVal=m.owner||'agent:main';
     const isPublicMem=ownerVal==='public';
@@ -8650,8 +8688,10 @@ function renderMemories(items){
         }
       }catch(e){}
     }
+    var ownerName=fmtAgentName(m.owner);
+    var ownerBadge=ownerName?'<span class="owner-tag" title="'+esc(m.owner||'')+'">\\u{1F916} '+esc(ownerName)+'</span>':'';
     return '<div class="memory-card'+(isInactive?' dedup-inactive':'')+'">'+
-      '<div class="card-header"><div class="meta"><span class="role-tag '+role+'">'+role+'</span>'+memScopeBadge+importBadge+dedupBadge+mergeBadge+'</div><span class="card-time"><span class="session-tag" title="'+esc(sid)+'">'+esc(sidShort)+'</span> '+time+updatedAt+'</span></div>'+
+      '<div class="card-header"><div class="meta"><span class="role-tag '+role+'">'+role+'</span>'+ownerBadge+memScopeBadge+importBadge+dedupBadge+mergeBadge+'</div><span class="card-time"><span class="session-tag" title="'+esc(sid)+'">'+esc(sidShort)+'</span> '+time+updatedAt+'</span></div>'+
       '<div class="card-summary">'+selectBoxHtml+cardTitle+'</div>'+
       (function(){
         if(mc<=0) return '';
@@ -8791,6 +8831,7 @@ async function showMemoryModal(chunkId){
       h+='<div class="mm-section"><div class="mm-section-label">'+t('admin.content')+'</div><pre class="mm-content">'+esc(m.content)+'</pre></div>';
     }
     h+='<div class="mm-meta">';
+    if(m.owner) h+='<div class="mm-meta-chip"><strong>'+t('admin.owner')+'</strong><span>\\u{1F916} '+esc(m.owner)+'</span></div>';
     if(m.session_key) h+='<div class="mm-meta-chip"><strong>'+t('admin.session')+'</strong><span>'+esc(m.session_key)+'</span></div>';
     h+='<div class="mm-meta-chip"><strong>'+t('memory.detail.created')+'</strong><span>'+fmtModalDate(m.created_at)+'</span></div>';
     if(m.updated_at) h+='<div class="mm-meta-chip"><strong>'+t('memory.detail.updated')+'</strong><span>'+fmtModalDate(m.updated_at)+'</span></div>';
