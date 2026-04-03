@@ -2329,48 +2329,54 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // ─── Service lifecycle ───
 
+    let serviceStarted = false;
+
+    const startServiceCore = async () => {
+      if (serviceStarted) return;
+      serviceStarted = true;
+
+      if (hubServer) {
+        const hubUrl = await hubServer.start();
+        api.logger.info(`memos-local: hub started at ${hubUrl}`);
+      }
+
+      if (ctx.config.sharing?.enabled && ctx.config.sharing.role === "client") {
+        try {
+          const session = await connectToHub(store, ctx.config, ctx.log);
+          api.logger.info(`memos-local: connected to Hub as "${session.username}" (${session.userId})`);
+        } catch (err) {
+          api.logger.warn(`memos-local: Hub connection failed: ${err}`);
+        }
+      }
+
+      try {
+        const viewerUrl = await viewer.start();
+        api.logger.info(`memos-local: started (embedding: ${embedder.provider})`);
+        api.logger.info(`╔══════════════════════════════════════════╗`);
+        api.logger.info(`║  MemOS Memory Viewer                     ║`);
+        api.logger.info(`║  → ${viewerUrl.padEnd(37)}║`);
+        api.logger.info(`║  Open in browser to manage memories       ║`);
+        api.logger.info(`╚══════════════════════════════════════════╝`);
+        api.logger.info(`memos-local: password reset token: ${viewer.getResetToken()}`);
+        api.logger.info(`memos-local: forgot password? Use the reset token on the login page.`);
+        skillEvolver.recoverOrphanedTasks().then((count) => {
+          if (count > 0) api.logger.info(`memos-local: recovered ${count} orphaned skill tasks`);
+        }).catch((err) => {
+          api.logger.warn(`memos-local: skill recovery failed: ${err}`);
+        });
+      } catch (err) {
+        api.logger.warn(`memos-local: viewer failed to start: ${err}`);
+        api.logger.info(`memos-local: started (embedding: ${embedder.provider})`);
+      }
+      telemetry.trackPluginStarted(
+        ctx.config.embedding?.provider ?? "local",
+        ctx.config.summarizer?.provider ?? "none",
+      );
+    };
+
     api.registerService({
       id: "memos-local-openclaw-plugin",
-      start: async () => {
-        if (hubServer) {
-          const hubUrl = await hubServer.start();
-          api.logger.info(`memos-local: hub started at ${hubUrl}`);
-        }
-
-        // Auto-connect to Hub in client mode (handles both existing token and auto-join via teamToken)
-        if (ctx.config.sharing?.enabled && ctx.config.sharing.role === "client") {
-          try {
-            const session = await connectToHub(store, ctx.config, ctx.log);
-            api.logger.info(`memos-local: connected to Hub as "${session.username}" (${session.userId})`);
-          } catch (err) {
-            api.logger.warn(`memos-local: Hub connection failed: ${err}`);
-          }
-        }
-
-        try {
-          const viewerUrl = await viewer.start();
-          api.logger.info(`memos-local: started (embedding: ${embedder.provider})`);
-          api.logger.info(`╔══════════════════════════════════════════╗`);
-          api.logger.info(`║  MemOS Memory Viewer                     ║`);
-          api.logger.info(`║  → ${viewerUrl.padEnd(37)}║`);
-          api.logger.info(`║  Open in browser to manage memories       ║`);
-          api.logger.info(`╚══════════════════════════════════════════╝`);
-          api.logger.info(`memos-local: password reset token: ${viewer.getResetToken()}`);
-          api.logger.info(`memos-local: forgot password? Use the reset token on the login page.`);
-          skillEvolver.recoverOrphanedTasks().then((count) => {
-            if (count > 0) api.logger.info(`memos-local: recovered ${count} orphaned skill tasks`);
-          }).catch((err) => {
-            api.logger.warn(`memos-local: skill recovery failed: ${err}`);
-          });
-        } catch (err) {
-          api.logger.warn(`memos-local: viewer failed to start: ${err}`);
-          api.logger.info(`memos-local: started (embedding: ${embedder.provider})`);
-        }
-        telemetry.trackPluginStarted(
-          ctx.config.embedding?.provider ?? "local",
-          ctx.config.summarizer?.provider ?? "none",
-        );
-      },
+      start: async () => { await startServiceCore(); },
       stop: async () => {
         await worker.flush();
         await telemetry.shutdown();
@@ -2380,6 +2386,19 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         api.logger.info("memos-local: stopped");
       },
     });
+
+    // Fallback: OpenClaw may load this plugin via deferred reload after
+    // startPluginServices has already run, so service.start() never fires.
+    // Self-start the viewer after a grace period if it hasn't been started.
+    const SELF_START_DELAY_MS = 3000;
+    setTimeout(() => {
+      if (!serviceStarted) {
+        api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
+        startServiceCore().catch((err) => {
+          api.logger.warn(`memos-local: self-start failed: ${err}`);
+        });
+      }
+    }, SELF_START_DELAY_MS);
   },
 };
 
