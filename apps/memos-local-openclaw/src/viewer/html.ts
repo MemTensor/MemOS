@@ -5380,10 +5380,9 @@ function fmtSessionDisplay(sid){
     if(parts.length===3 && parts[2]==='import') return '\\u{1F4E5} import';
     // agent:{agentId}:{sessionKey} (exactly 3 segments) → show agent:{agentId} only (UI label; DB keeps full key)
     if(parts.length===3) return 'agent:'+parts[1];
-    // agent:{agentId}:session:{sessionId} → shortened sessionId
+    // agent:{agentId}:session:{sessionId} → badge shows agent:{agentId} only; full key stays in data-session-key for copy
     if(parts.length>=4 && parts[2]==='session'){
-      var sessId=parts.slice(3).join(':');
-      return sessId.length>12?sessId.slice(0,6)+'..'+sessId.slice(-4):sessId;
+      return 'agent:'+parts[1];
     }
     // agent:{agentId}:{other} → show from second part (e.g. "work:main")
     return parts.slice(1).join(':');
