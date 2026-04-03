@@ -2629,7 +2629,7 @@ const I18N={
     'admin.visibility':'Visibility: ',
     'admin.session':'Session',
     'admin.content':'Content',
-    'admin.chunks':'Chunks: ',
+    'admin.chunks':'{n} memory segments',
     'admin.updated':'Updated: ',
     'admin.sharedSkills':'Shared Skills',
     'admin.noSharedSkills':'No shared skills in team.',
@@ -3398,7 +3398,7 @@ const I18N={
     'admin.visibility':'可见性：',
     'admin.session':'会话',
     'admin.content':'内容',
-    'admin.chunks':'记忆片段：',
+    'admin.chunks':'{n}段记忆片段',
     'admin.updated':'更新于：',
     'admin.sharedSkills':'共享技能',
     'admin.noSharedSkills':'团队暂无共享技能。',
@@ -4832,7 +4832,7 @@ function renderAdminTasks(tasks){
           '<div class="admin-card-tags-left">'+
             '<span class="admin-card-tag tag-owner">\u{1F464} '+fmtOwner(tk)+'</span>'+
             (tk.status?'<span class="admin-card-tag tag-status">'+esc(tk.status)+'</span>':'')+
-            (tk.chunkCount!=null?'<span class="admin-card-tag tag-kind">\u{1F4DD} '+tk.chunkCount+' '+t('admin.chunks')+'</span>':'')+
+            (tk.chunkCount!=null?'<span class="admin-card-tag tag-kind">\u{1F4DD} '+t('admin.chunks').replace('{n}',String(tk.chunkCount))+'</span>':'')+
         '</div>'+
           '<span class="admin-card-actions" onclick="event.stopPropagation()">'+
             (window._isHubAdmin?'<button class="btn btn-sm btn-ghost" onclick="adminDeleteTask(&quot;'+escAttr(tk.id)+'&quot;,&quot;'+escAttr(tk.title||tk.id)+'&quot;)" style="color:var(--rose)">'+t('admin.remove')+'</button>':'')+
