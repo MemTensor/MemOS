@@ -285,7 +285,7 @@ describe("TaskProcessor", () => {
     const now = Date.now();
     const gap = 121 * 60 * 1000;
 
-    vi.spyOn((processor as any).summarizer, "judgeNewTopic").mockResolvedValue(null);
+    vi.spyOn((processor as any).summarizer, "classifyTopic").mockResolvedValue(null);
 
     insertTestChunk({ id: "d1", sessionKey: "s1", role: "user", content: "what is my name and who am I please tell me", createdAt: now });
     insertTestChunk({ id: "d2", sessionKey: "s1", role: "assistant", content: "I do not have any information about your name or identity in my memory at this time", createdAt: now + 1 });
@@ -392,11 +392,13 @@ describe("TaskProcessor with LLM topic boundary detection", () => {
     });
   }
 
-  it("should split task when LLM judges new topic", async () => {
+  it("should split task when classifier judges NEW topic", async () => {
     const ctx = makeCtx();
     const proc = new TaskProcessor(store, ctx);
 
-    vi.spyOn(Summarizer.prototype, "judgeNewTopic").mockResolvedValue(true);
+    vi.spyOn(Summarizer.prototype, "classifyTopic").mockResolvedValue({
+      decision: "NEW", confidence: 0.9, boundaryType: "new_domain_shift", reason: "completely different domain",
+    });
 
     const now = Date.now();
     insertChunk({ id: "a1", summary: "deploy app to server", content: "deploy app to server", createdAt: now });
@@ -418,11 +420,13 @@ describe("TaskProcessor with LLM topic boundary detection", () => {
     vi.restoreAllMocks();
   });
 
-  it("should NOT split task when LLM judges same topic", async () => {
+  it("should NOT split task when classifier judges SAME topic", async () => {
     const ctx = makeCtx();
     const proc = new TaskProcessor(store, ctx);
 
-    vi.spyOn(Summarizer.prototype, "judgeNewTopic").mockResolvedValue(false);
+    vi.spyOn(Summarizer.prototype, "classifyTopic").mockResolvedValue({
+      decision: "SAME", confidence: 0.85, boundaryType: "same_direct_followup", reason: "continues deployment discussion",
+    });
 
     const now = Date.now();
     insertChunk({ id: "b1", summary: "deploy step 1", content: "deploy step 1", createdAt: now });
@@ -441,11 +445,11 @@ describe("TaskProcessor with LLM topic boundary detection", () => {
     vi.restoreAllMocks();
   });
 
-  it("should keep current task when LLM is not configured (returns null)", async () => {
+  it("should keep current task when classifier returns null (LLM not configured)", async () => {
     const ctx = makeCtx();
     const proc = new TaskProcessor(store, ctx);
 
-    vi.spyOn(Summarizer.prototype, "judgeNewTopic").mockResolvedValue(null);
+    vi.spyOn(Summarizer.prototype, "classifyTopic").mockResolvedValue(null);
 
     const now = Date.now();
     insertChunk({ id: "c1", summary: "topic A", content: "topic A", createdAt: now });
@@ -462,12 +466,68 @@ describe("TaskProcessor with LLM topic boundary detection", () => {
     vi.restoreAllMocks();
   });
 
-  it("should still split by 2-hour timeout even if LLM says same topic", async () => {
+  it("should fall back to SAME when NEW has low confidence and arbitration says SAME", async () => {
     const ctx = makeCtx();
     const proc = new TaskProcessor(store, ctx);
 
-    // LLM would say SAME, but the gap is > 2h so it should split regardless
-    vi.spyOn(Summarizer.prototype, "judgeNewTopic").mockResolvedValue(false);
+    vi.spyOn(Summarizer.prototype, "classifyTopic").mockResolvedValue({
+      decision: "NEW", confidence: 0.4, boundaryType: "new_domain_shift", reason: "possibly new topic",
+    });
+    vi.spyOn(Summarizer.prototype, "arbitrateTopicSplit").mockResolvedValue("SAME");
+
+    const now = Date.now();
+    insertChunk({ id: "e1", summary: "Hong Kong stock analysis", content: "我在调研港股的前途", createdAt: now });
+    insertChunk({ id: "e2", role: "assistant", summary: "港股分析框架", content: "港股分析需要从宏观经济...", createdAt: now + 1 });
+    await proc.onChunksIngested("s1", now + 1);
+
+    const task1Id = store.getActiveTask("s1")!.id;
+
+    insertChunk({ id: "e3", summary: "processing systems", content: "那处理系统有哪些", createdAt: now + 60000 });
+    await proc.onChunksIngested("s1", now + 60000);
+
+    const task = store.getActiveTask("s1");
+    expect(task).not.toBeNull();
+    expect(task!.id).toBe(task1Id);
+
+    vi.restoreAllMocks();
+  });
+
+  it("should split when NEW has low confidence but arbitration confirms NEW", async () => {
+    const ctx = makeCtx();
+    const proc = new TaskProcessor(store, ctx);
+
+    vi.spyOn(Summarizer.prototype, "classifyTopic").mockResolvedValue({
+      decision: "NEW", confidence: 0.5, boundaryType: "new_domain_shift", reason: "different domain",
+    });
+    vi.spyOn(Summarizer.prototype, "arbitrateTopicSplit").mockResolvedValue("NEW");
+
+    const now = Date.now();
+    insertChunk({ id: "f1", summary: "deploy app", content: "deploy the app to production", createdAt: now });
+    insertChunk({ id: "f2", role: "assistant", summary: "deployment guide", content: "Here is how to deploy...", createdAt: now + 1 });
+    await proc.onChunksIngested("s1", now + 1);
+
+    const task1Id = store.getActiveTask("s1")!.id;
+
+    insertChunk({ id: "f3", summary: "cook pasta", content: "how to make spaghetti carbonara", createdAt: now + 60000 });
+    await proc.onChunksIngested("s1", now + 60000);
+
+    const oldTask = store.getTask(task1Id);
+    expect(["completed", "skipped"]).toContain(oldTask!.status);
+
+    const newTask = store.getActiveTask("s1");
+    expect(newTask).not.toBeNull();
+    expect(newTask!.id).not.toBe(task1Id);
+
+    vi.restoreAllMocks();
+  });
+
+  it("should still split by 2-hour timeout even if classifier says SAME", async () => {
+    const ctx = makeCtx();
+    const proc = new TaskProcessor(store, ctx);
+
+    vi.spyOn(Summarizer.prototype, "classifyTopic").mockResolvedValue({
+      decision: "SAME", confidence: 0.9, boundaryType: "same_direct_followup", reason: "same topic",
+    });
 
     const now = Date.now();
     const gap = 121 * 60 * 1000; // 2h 1min

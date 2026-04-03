@@ -144,6 +144,8 @@ export class ViewerServer {
   private lastKnownNotifCount = 0;
   private hubHeartbeatTimer?: ReturnType<typeof setInterval>;
   private static readonly HUB_HEARTBEAT_INTERVAL_MS = 45_000;
+  private static readonly STALE_TASK_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+  private staleFinalizeRunning = false;
 
   constructor(opts: ViewerServerOptions) {
     this.store = opts.store;
@@ -315,6 +317,7 @@ export class ViewerServer {
       else if (p === "/api/tool-metrics") this.serveToolMetrics(res, url);
       else if (p === "/api/search") this.serveSearch(req, res, url);
       else if (p === "/api/tasks" && req.method === "GET") this.serveTasks(res, url);
+      else if (p === "/api/task-search" && req.method === "GET") this.serveTaskSearch(res, url);
       else if (p.match(/^\/api\/task\/[^/]+\/retry-skill$/) && req.method === "POST") this.handleTaskRetrySkill(req, res, p);
       else if (p.startsWith("/api/task/") && req.method === "DELETE") this.handleTaskDelete(res, p);
       else if (p.startsWith("/api/task/") && req.method === "PUT") this.handleTaskUpdate(req, res, p);
@@ -634,7 +637,118 @@ export class ViewerServer {
       };
     });
 
+    this.backfillTaskEmbeddings(items);
     this.jsonResponse(res, { tasks: items, total, limit, offset });
+    this.autoFinalizeStaleTasks();
+  }
+
+  private getTaskAutoFinalizeMs(): number {
+    const hours = this.ctx?.config?.taskAutoFinalizeHours;
+    if (hours !== undefined && hours !== null) return hours * 60 * 60 * 1000;
+    try {
+      const cfgPath = this.getOpenClawConfigPath();
+      if (fs.existsSync(cfgPath)) {
+        const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+        const entries = raw?.plugins?.entries ?? {};
+        const pluginCfg = entries["memos-local-openclaw-plugin"]?.config
+          ?? entries["memos-local"]?.config ?? {};
+        if (pluginCfg.taskAutoFinalizeHours !== undefined) return pluginCfg.taskAutoFinalizeHours * 60 * 60 * 1000;
+      }
+    } catch { /* fall through */ }
+    return ViewerServer.STALE_TASK_TIMEOUT_MS;
+  }
+
+  private autoFinalizeStaleTasks(): void {
+    if (this.staleFinalizeRunning || !this.ctx) return;
+    const thresholdMs = this.getTaskAutoFinalizeMs();
+    if (thresholdMs <= 0) return;
+    const db = (this.store as any).db;
+    const now = Date.now();
+    let staleTasks: Array<{ id: string }>;
+    try {
+      staleTasks = db.prepare(`
+        SELECT t.id
+        FROM tasks t
+        LEFT JOIN chunks c ON c.task_id = t.id
+        WHERE t.status = 'active'
+        GROUP BY t.id
+        HAVING (? - COALESCE(MAX(c.created_at), t.started_at)) > ?
+      `).all(now, thresholdMs) as Array<{ id: string }>;
+    } catch { return; }
+    if (staleTasks.length === 0) return;
+
+    this.staleFinalizeRunning = true;
+    const hours = Math.round(thresholdMs / 3600000);
+    this.log.info(`Auto-finalizing ${staleTasks.length} stale active task(s) (idle > ${hours}h)`);
+    const tp = new TaskProcessor(this.store, this.ctx);
+    (async () => {
+      for (const row of staleTasks) {
+        const task = this.store.getTask(row.id);
+        if (!task || task.status !== "active") continue;
+        try {
+          await tp.finalizeTask(task);
+          this.log.info(`Auto-finalized stale task=${task.id}`);
+        } catch (err) {
+          this.log.warn(`Failed to auto-finalize task=${task.id}: ${err}`);
+        }
+      }
+    })().catch((err) => this.log.warn(`autoFinalizeStaleTasks error: ${err}`))
+      .finally(() => { this.staleFinalizeRunning = false; });
+  }
+
+  private async serveTaskSearch(res: http.ServerResponse, url: URL): Promise<void> {
+    const q = (url.searchParams.get("q") ?? "").trim();
+    if (!q) { this.jsonResponse(res, { tasks: [], total: 0 }); return; }
+
+    const owner = url.searchParams.get("owner") ?? undefined;
+    const maxResults = Math.min(50, Math.max(1, Number(url.searchParams.get("limit")) || 20));
+
+    const scoreMap = new Map<string, number>();
+
+    if (this.embedder) {
+      try {
+        const [queryVec] = await this.embedder.embed([q]);
+        const allEmb = this.store.getTaskEmbeddings(owner);
+        for (const { taskId, vector } of allEmb) {
+          let dot = 0, normA = 0, normB = 0;
+          for (let i = 0; i < queryVec.length && i < vector.length; i++) {
+            dot += queryVec[i] * vector[i];
+            normA += queryVec[i] * queryVec[i];
+            normB += vector[i] * vector[i];
+          }
+          const sim = normA > 0 && normB > 0 ? dot / (Math.sqrt(normA) * Math.sqrt(normB)) : 0;
+          if (sim > 0.3) scoreMap.set(taskId, sim);
+        }
+      } catch { /* embedding unavailable, fall through to FTS */ }
+    }
+
+    const ftsResults = this.store.taskFtsSearch(q, maxResults, owner);
+    for (const { taskId, score } of ftsResults) {
+      const existing = scoreMap.get(taskId) ?? 0;
+      scoreMap.set(taskId, Math.max(existing, score * 0.8));
+    }
+
+    const sorted = [...scoreMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, maxResults);
+
+    const db = (this.store as any).db;
+    const tasks = sorted.map(([taskId, score]) => {
+      const t = this.store.getTask(taskId);
+      if (!t) return null;
+      const meta = db.prepare("SELECT skill_status, owner FROM tasks WHERE id = ?").get(taskId) as { skill_status: string | null; owner: string | null } | undefined;
+      return {
+        id: t.id, sessionKey: t.sessionKey, title: t.title,
+        summary: t.summary ?? "", status: t.status,
+        startedAt: t.startedAt, endedAt: t.endedAt,
+        chunkCount: this.store.countChunksByTask(t.id),
+        skillStatus: meta?.skill_status ?? null,
+        owner: meta?.owner ?? "agent:main",
+        score,
+      };
+    }).filter(Boolean);
+
+    this.jsonResponse(res, { tasks, total: tasks.length });
   }
 
   private serveTaskDetail(res: http.ServerResponse, urlPath: string): void {
@@ -688,7 +802,7 @@ export class ViewerServer {
 
   private serveStats(res: http.ServerResponse, url?: URL): void {
     const emptyStats = {
-      totalMemories: 0, totalSessions: 0, totalEmbeddings: 0, totalSkills: 0,
+      totalMemories: 0, totalSessions: 0, totalEmbeddings: 0, totalSkills: 0, totalTasks: 0,
       embeddingProvider: this.embedder?.provider ?? "none",
       dedupBreakdown: {},
       timeRange: { earliest: null, latest: null },
@@ -752,6 +866,9 @@ export class ViewerServer {
       let skillCount = 0;
       try { skillCount = (db.prepare("SELECT COUNT(*) as count FROM skills").get() as any).count; } catch { /* table may not exist yet */ }
 
+      let taskCount = 0;
+      try { taskCount = (db.prepare("SELECT COUNT(*) as count FROM tasks").get() as any).count; } catch { /* table may not exist yet */ }
+
       let dedupBreakdown: Record<string, number> = {};
       try {
         const dedupRows = db.prepare("SELECT dedup_status, COUNT(*) as count FROM chunks GROUP BY dedup_status").all() as any[];
@@ -760,7 +877,15 @@ export class ViewerServer {
 
       let owners: string[] = [];
       try {
-        const ownerRows = db.prepare("SELECT DISTINCT owner FROM chunks WHERE owner IS NOT NULL AND owner LIKE 'agent:%' ORDER BY owner").all() as any[];
+        const ownerRows = db.prepare(`
+          SELECT DISTINCT owner FROM (
+            SELECT owner FROM chunks WHERE owner IS NOT NULL AND owner LIKE 'agent:%'
+            UNION
+            SELECT owner FROM tasks WHERE owner IS NOT NULL AND owner LIKE 'agent:%'
+            UNION
+            SELECT owner FROM skills WHERE owner IS NOT NULL AND owner LIKE 'agent:%'
+          ) ORDER BY owner
+        `).all() as any[];
         owners = ownerRows.map((o: any) => o.owner);
       } catch { /* column may not exist yet */ }
 
@@ -772,7 +897,7 @@ export class ViewerServer {
 
       this.jsonResponse(res, {
         totalMemories: total.count, totalSessions: sessions.count, totalEmbeddings: embCount,
-        totalSkills: skillCount,
+        totalSkills: skillCount, totalTasks: taskCount,
         embeddingProvider: this.embedder.provider,
         dedupBreakdown,
         timeRange: { earliest: timeRange.earliest, latest: timeRange.latest },
@@ -889,7 +1014,8 @@ export class ViewerServer {
     const status = url.searchParams.get("status") ?? undefined;
     const visibility = url.searchParams.get("visibility") ?? undefined;
     const session = url.searchParams.get("session") ?? undefined;
-    let skills = this.store.listSkills({ status, session });
+    const owner = url.searchParams.get("owner") ?? undefined;
+    let skills = this.store.listSkills({ status, session, owner });
     if (visibility) {
       skills = skills.filter(s => s.visibility === visibility);
     }
@@ -1128,6 +1254,27 @@ export class ViewerServer {
     });
   }
 
+  private embedTaskInBackground(taskId: string, text: string): void {
+    if (!this.embedder || !text.trim()) return;
+    this.embedder.embed([text]).then((vecs: number[][]) => {
+      if (vecs.length > 0) this.store.upsertTaskEmbedding(taskId, vecs[0]);
+    }).catch(() => {});
+  }
+
+  private backfillTaskEmbeddings(tasks: Array<{ id: string; summary: string; title: string }>): void {
+    if (!this.embedder) return;
+    const db = (this.store as any).db;
+    for (const t of tasks) {
+      try {
+        const exists = db.prepare("SELECT 1 FROM task_embeddings WHERE task_id = ?").get(t.id);
+        if (!exists) {
+          const text = `${t.title ?? ""}: ${t.summary ?? ""}`.trim();
+          if (text.length > 1) this.embedTaskInBackground(t.id, text);
+        }
+      } catch { /* best-effort */ }
+    }
+  }
+
   private handleTaskDelete(res: http.ServerResponse, urlPath: string): void {
     const taskId = urlPath.replace("/api/task/", "");
     const deleted = this.store.deleteTask(taskId);
@@ -1142,12 +1289,15 @@ export class ViewerServer {
         const data = JSON.parse(body);
         const task = this.store.getTask(taskId);
         if (!task) { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Task not found" })); return; }
+        const newTitle = data.title ?? task.title;
+        const newSummary = data.summary ?? task.summary;
         this.store.updateTask(taskId, {
-          title: data.title ?? task.title,
-          summary: data.summary ?? task.summary,
+          title: newTitle,
+          summary: newSummary,
           status: data.status ?? task.status,
           endedAt: task.endedAt ?? undefined,
         });
+        this.embedTaskInBackground(taskId, `${newTitle ?? ""}: ${newSummary ?? ""}`);
         this.jsonResponse(res, { ok: true, taskId });
       } catch (err) {
         res.writeHead(400, { "Content-Type": "application/json" });
@@ -1390,7 +1540,7 @@ export class ViewerServer {
             const refreshedChunk = db.prepare("SELECT * FROM chunks WHERE id = ?").get(chunkId) as any;
             const response = await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/memories/share", {
               method: "POST",
-              body: JSON.stringify({ memory: { sourceChunkId: refreshedChunk.id, role: refreshedChunk.role, content: refreshedChunk.content, summary: refreshedChunk.summary, kind: refreshedChunk.kind, groupId: null, visibility: "public" } }),
+              body: JSON.stringify({ memory: { sourceChunkId: refreshedChunk.id, sourceAgent: refreshedChunk.owner || "", role: refreshedChunk.role, content: refreshedChunk.content, summary: refreshedChunk.summary, kind: refreshedChunk.kind, groupId: null, visibility: "public" } }),
             });
             if (!isLocalShared) this.store.markMemorySharedLocally(chunkId);
             const memoryId = String((response as any)?.memoryId ?? "");
@@ -1400,6 +1550,7 @@ export class ViewerServer {
               this.store.upsertHubMemory({
                 id: memoryId || existing?.id || crypto.randomUUID(),
                 sourceChunkId: chunkId, sourceUserId: hubClient.userId,
+                sourceAgent: refreshedChunk.owner || "",
                 role: refreshedChunk.role, content: refreshedChunk.content, summary: refreshedChunk.summary ?? "",
                 kind: refreshedChunk.kind, groupId: null, visibility: "public",
                 createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
@@ -2209,6 +2360,7 @@ export class ViewerServer {
       ref: { sessionKey: row.session_key, chunkId: row.id, turnId: row.turn_id, seq: row.seq },
       taskId: row.task_id ?? null,
       skillId: row.skill_id ?? null,
+      owner: row.owner || "",
     }));
     return { hits, meta: { total: hits.length, usedMaxResults: maxResults } };
   }
@@ -2318,6 +2470,7 @@ export class ViewerServer {
           body: JSON.stringify({
             memory: {
               sourceChunkId: chunk.id,
+              sourceAgent: chunk.owner || "",
               role: chunk.role,
               content: chunk.content,
               summary: chunk.summary,
@@ -2335,6 +2488,7 @@ export class ViewerServer {
             id: mid || existing?.id || crypto.randomUUID(),
             sourceChunkId: chunk.id,
             sourceUserId: hubClient.userId,
+            sourceAgent: chunk.owner || "",
             role: chunk.role,
             content: chunk.content,
             summary: chunk.summary ?? "",
@@ -2883,6 +3037,7 @@ export class ViewerServer {
         if (newCfg.summarizer) config.summarizer = newCfg.summarizer;
         if (newCfg.skillEvolution) config.skillEvolution = newCfg.skillEvolution;
         if (newCfg.viewerPort) config.viewerPort = newCfg.viewerPort;
+        if (newCfg.taskAutoFinalizeHours !== undefined) config.taskAutoFinalizeHours = newCfg.taskAutoFinalizeHours;
         if (newCfg.telemetry !== undefined) config.telemetry = newCfg.telemetry;
         if (newCfg.sharing !== undefined) {
           const existing = (config.sharing as Record<string, unknown>) || {};

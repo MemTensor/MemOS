@@ -128,21 +128,22 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 /* ─── Sidebar ─── */
 .sidebar{width:260px;min-width:260px;flex-shrink:0;position:sticky;top:84px;max-height:calc(100vh - 112px);display:flex;flex-direction:column}
 .sidebar > * {flex-shrink:0}
-.sidebar .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px}
-.stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:18px;transition:all .2s}
+.sidebar .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:20px}
+.stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;transition:all .2s;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;border-radius:3px 0 0 3px;background:var(--border)}
 .stat-card:hover{border-color:var(--border-glow);background:var(--bg-card-hover)}
-.stat-card .stat-value{font-size:22px;font-weight:700;color:var(--text);letter-spacing:-.02em}
-.stat-card .stat-label{font-size:12px;color:var(--text-sec);margin-top:4px;font-weight:500}
+.stat-card .stat-value{font-size:20px;font-weight:700;color:var(--text);letter-spacing:-.02em}
+.stat-card .stat-label{font-size:11px;color:var(--text-sec);margin-top:2px;font-weight:500}
+.stat-card.pri{border-left-color:transparent}.stat-card.pri::before{background:var(--pri)}
 .stat-card.pri .stat-value{color:var(--pri)}
+.stat-card.green{border-left-color:transparent}.stat-card.green::before{background:var(--green)}
 .stat-card.green .stat-value{color:var(--green)}
+.stat-card.amber{border-left-color:transparent}.stat-card.amber::before{background:var(--amber)}
 .stat-card.amber .stat-value{color:var(--amber)}
+.stat-card.rose{border-left-color:transparent}.stat-card.rose::before{background:var(--rose)}
 .stat-card.rose .stat-value{color:var(--rose)}
 
 .sidebar .section-title{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin:24px 0 12px;padding:0 2px}
-.sidebar .session-list{display:flex;flex-direction:column;gap:6px;flex:1;min-height:0;overflow-y:auto;padding-right:4px;flex-shrink:1}
-.session-item{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;cursor:pointer;transition:all .15s;font-size:13px;color:var(--text)}
-.session-item:hover{border-color:var(--pri);background:var(--pri-glow)}
-.session-item.active{border-color:var(--pri);background:var(--pri-glow);font-weight:600;color:var(--pri)}
 .session-item .count{color:var(--text-sec);font-size:11px;font-weight:600;background:rgba(0,0,0,.2);padding:3px 8px;border-radius:8px}
 
 .provider-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:var(--green-bg);color:var(--green);border-radius:999px;font-size:11px;font-weight:600;margin-top:10px}
@@ -150,11 +151,12 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 
 /* ─── Feed ─── */
 .feed{flex:1;min-width:0}
-.search-bar{display:flex;gap:10px;margin-bottom:16px;position:relative;align-items:center}
+.search-bar{display:flex;gap:10px;margin-bottom:14px;position:relative;align-items:center}
 .search-bar input{flex:1;padding:10px 16px 10px 40px;border:1px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:var(--bg-card);color:var(--text);transition:all .2s}
 .search-bar input::placeholder{color:var(--text-muted)}
 .search-bar input:focus{border-color:var(--pri);box-shadow:0 0 0 3px var(--pri-glow)}
 .search-bar .search-icon{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--text-muted);font-size:14px;pointer-events:none}
+.search-bar .filter-select{padding:8px 14px;padding-right:30px;border-radius:10px;font-size:13px;background:var(--bg-card);flex-shrink:0}
 .search-meta{font-size:12px;color:var(--text-sec);padding:0 2px}.search-meta:not(:empty){margin-bottom:14px}
 .scope-select{padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg-card);color:var(--text);font-size:13px;min-width:110px;outline:none}
 .sharing-inline-meta{font-size:12px;color:var(--text-muted);margin:-8px 0 14px 2px}
@@ -371,13 +373,13 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .hub-source-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;background:rgba(34,197,94,.12);color:var(--green);font-size:11px;font-weight:700;border:1px solid rgba(34,197,94,.22)}
 @media (max-width: 960px){.sharing-settings-grid{grid-template-columns:1fr}.search-bar{flex-wrap:wrap}.scope-select{width:100%}.task-detail-actions{width:100%;justify-content:flex-start}}
 
-.filter-bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
-.filter-chip{padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text-sec);font-size:12px;font-weight:500;transition:all .15s}
-.filter-chip:hover{border-color:var(--pri);color:var(--pri)}
-.filter-chip.active{background:rgba(99,102,241,.08);color:var(--pri);border-color:rgba(99,102,241,.25)}
+.filter-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
+.filter-chip{padding:5px 14px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text-sec);font-size:12px;font-weight:500;cursor:pointer;transition:all .15s}
+.filter-chip:hover{border-color:var(--pri);color:var(--pri);background:rgba(99,102,241,.04)}
+.filter-chip.active{background:rgba(99,102,241,.1);color:var(--pri);border-color:rgba(99,102,241,.3);font-weight:600}
 
-.memory-list{display:flex;flex-direction:column;gap:16px}
-.memory-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px 24px;transition:all .2s}
+.memory-list{display:flex;flex-direction:column;gap:10px}
+.memory-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;transition:all .2s}
 .memory-card:hover{border-color:var(--border-glow);background:var(--bg-card-hover)}
 .memory-card .card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px}
 .memory-card .meta{display:flex;align-items:center;gap:8px}
@@ -498,7 +500,6 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .btn-primary:hover{background:rgba(255,255,255,.14);transform:translateY(-1px);border-color:var(--pri);color:var(--pri)}
 .btn-ghost{border-color:transparent;background:transparent;color:var(--text-sec)}
 .btn-ghost:hover{background:rgba(255,255,255,.06);color:var(--text)}
-#memorySelectAllBtn,#taskSelectAllBtn,#skillSelectAllBtn{border-color:var(--border);background:var(--bg-card)}
 .btn-danger{color:var(--accent);border-color:rgba(230,57,70,.25)}
 .btn-danger:hover{background:rgba(230,57,70,.1);color:var(--accent)}
 .btn-sm{padding:5px 12px;font-size:12px}
@@ -582,35 +583,39 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.25)}
 
-.filter-sep{width:1px;height:20px;background:var(--border);margin:0 4px}
-.filter-select{padding:6px 12px;border:1px solid var(--border);border-radius:999px;background:var(--bg-card);color:var(--text-sec);font-size:13px;outline:none;cursor:pointer}
-.filter-select:focus{border-color:var(--pri)}
+.filter-sep{width:1px;height:20px;background:var(--border);margin:0 2px}
+.filter-select{padding:5px 14px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text-sec);font-size:12px;font-weight:500;outline:none;cursor:pointer;transition:all .15s;-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b7280'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
+.filter-select:hover{border-color:var(--pri);color:var(--pri)}
+.filter-select:focus{border-color:var(--pri);color:var(--pri);background-color:rgba(99,102,241,.04)}
 .date-filter{display:flex;align-items:center;gap:10px;margin-bottom:18px;font-size:13px;color:var(--text-sec)}
-.date-filter input[type="datetime-local"]{padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;outline:none;background:var(--bg-card);color:var(--text)}
+.date-filter input[type="datetime-local"]{padding:5px 12px;border:1px solid var(--border);border-radius:8px;font-size:12px;outline:none;background:transparent;color:var(--text-sec);transition:all .15s}
 .date-filter input[type="datetime-local"]:focus{border-color:var(--pri)}
 .date-filter label{font-weight:500}
+.compact-filter-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.compact-date{padding:5px 12px;border:1px solid var(--border);border-radius:8px;font-size:12px;font-weight:500;outline:none;background:transparent;color:var(--text-sec);max-width:180px;transition:all .15s}
+.compact-date:hover{border-color:var(--pri);color:var(--pri)}
+.compact-date:focus{border-color:var(--pri);color:var(--pri);background:rgba(99,102,241,.04)}
 
-.pagination-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:8px 0 18px}
-.page-size-control{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--text-sec)}
-.page-size-control .filter-select{padding:6px 10px}
-.pagination{display:flex;align-items:center;justify-content:center;gap:6px;padding:0;flex-wrap:wrap;flex:1}
-.pagination .pg-btn{min-width:38px;height:38px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:10px;background:var(--bg-card);color:var(--text-sec);font-size:13px;font-weight:500;cursor:pointer;transition:all .15s}
-.pagination .pg-btn:hover{border-color:var(--pri);color:var(--pri)}
-.pagination .pg-btn.active{background:var(--pri);color:#000;border-color:var(--pri)}
-.pagination .pg-btn.disabled{opacity:.4;pointer-events:none}
-.pagination .pg-info{font-size:12px;color:var(--text-sec);padding:0 12px}
+.pagination-row{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:16px 0 8px}
+.pagination{display:flex;align-items:center;justify-content:center;gap:4px;padding:0;flex-wrap:wrap}
+.pagination .pg-btn{min-width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--text-sec);font-size:12px;font-weight:500;cursor:pointer;transition:all .15s}
+.pagination .pg-btn:hover{background:rgba(99,102,241,.06);color:var(--pri);border-color:rgba(99,102,241,.15)}
+.pagination .pg-btn.active{background:var(--pri-grad);color:#fff;border-color:transparent;box-shadow:0 2px 8px rgba(99,102,241,.3)}
+.pagination .pg-btn.disabled{opacity:.3;pointer-events:none}
+.pagination .pg-info{font-size:11px;color:var(--text-muted);padding:0 8px}
 
 /* ─── Tasks 视图 ─── */
 .view-container{flex:1;min-width:0}
 .view-container>.vp{display:none;flex-direction:column}
 .view-container>.vp.show{display:flex}
-.tasks-view{flex:1;min-width:0;flex-direction:column;gap:16px}
-.tasks-header{display:flex;flex-direction:column;gap:14px}
-.tasks-stats{display:flex;gap:16px}
-.tasks-stat{display:flex;align-items:center;gap:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 18px;flex:1;transition:all .2s}
+.tasks-view{flex:1;min-width:0;flex-direction:column}
+.tasks-header{display:flex;flex-direction:column;gap:0}
+.tasks-stats{display:flex;gap:10px}
+.tasks-stat{display:flex;align-items:center;gap:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 16px;flex:1;transition:all .2s;position:relative;overflow:hidden}
+.tasks-stat::before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;border-radius:3px 0 0 3px}
 .tasks-stat:hover{border-color:var(--border-glow)}
-.tasks-stat-value{font-size:22px;font-weight:700;color:var(--text)}
-.tasks-stat-label{font-size:12px;color:var(--text-sec);font-weight:500}
+.tasks-stat-value{font-size:18px;font-weight:700;color:var(--text)}
+.tasks-stat-label{font-size:11px;color:var(--text-sec);font-weight:500}
 .tasks-filters{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .tasks-list{display:flex;flex-direction:column;gap:10px}
 .task-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px 20px;cursor:pointer;transition:all .25s;position:relative;overflow:hidden}
@@ -682,7 +687,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 [data-theme="light"] .tasks-stat{background:#fff}
 
 /* ─── Skills ─── */
-.skills-view{flex:1;min-width:0;flex-direction:column;gap:16px}
+.skills-view{flex:1;min-width:0;flex-direction:column}
 .skill-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px 20px;cursor:pointer;transition:all .25s;position:relative;overflow:hidden}
 .skill-card:hover{border-color:var(--border-glow);background:var(--bg-card-hover);transform:translateY(-1px);box-shadow:var(--shadow)}
 .skill-card::before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;border-radius:3px 0 0 3px;background:var(--violet)}
@@ -824,6 +829,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .recall-origin.local-shared{background:rgba(59,130,246,.12);color:#3b82f6}
 .recall-origin.hub-memory{background:rgba(139,92,246,.12);color:#8b5cf6}
 .recall-origin.hub-remote{background:rgba(139,92,246,.12);color:#8b5cf6}
+.recall-origin.agent-tag{background:rgba(20,184,166,.12);color:#14b8a6}
 .recall-summary-short{flex:1;color:var(--text-sec);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .recall-expand-icon{flex-shrink:0;font-size:10px;color:var(--text-muted);transition:transform .15s}
 .recall-item.expanded .recall-expand-icon{transform:rotate(90deg)}
@@ -1241,8 +1247,8 @@ input,textarea,select{font-family:inherit;font-size:inherit}
     <div class="sidebar" id="sidebar">
       <div class="stats-grid" id="statsGrid">
         <div class="stat-card pri"><div class="stat-value" id="statTotal">-</div><div class="stat-label" data-i18n="stat.memories">Memories</div></div>
-        <div class="stat-card green"><div class="stat-value" id="statSessions">-</div><div class="stat-label" data-i18n="stat.sessions">Sessions</div></div>
-        <div class="stat-card amber"><div class="stat-value" id="statEmbeddings">-</div><div class="stat-label" data-i18n="stat.embeddings">Embeddings</div></div>
+        <div class="stat-card green"><div class="stat-value" id="statTasks">-</div><div class="stat-label" data-i18n="stat.tasks">Tasks</div></div>
+        <div class="stat-card amber"><div class="stat-value" id="statSkills">-</div><div class="stat-label" data-i18n="stat.skills">Skills</div></div>
         <div class="stat-card rose"><div class="stat-value" id="statAgents">-</div><div class="stat-label" data-i18n="stat.agents">Agents</div></div>
       </div>
       <div id="sidebarSharingSection" style="display:none">
@@ -1254,7 +1260,6 @@ input,textarea,select{font-family:inherit;font-size:inherit}
       </div>
       <div id="embeddingStatus"></div>
       <button class="btn btn-sm btn-ghost" style="width:100%;margin:20px 0 12px;justify-content:center;color:var(--text-muted);font-size:11px" onclick="clearAll()" data-i18n="sidebar.clear">\u{1F5D1} Clear All Data</button>
-      <div class="session-list" id="sessionList" style="display:none"></div>
     </div>
 
     <div class="view-container">
@@ -1271,9 +1276,9 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <option value="hub" data-i18n="scope.hub">Team</option>
         </select>
       </div>
-      <div class="search-meta" id="searchMeta"></div>
-      <div class="search-meta" id="sharingSearchMeta"></div>
-      <div class="filter-bar" id="filterBar">
+      <div id="searchMeta" style="display:none"></div>
+      <div id="sharingSearchMeta" style="display:none"></div>
+      <div class="filter-bar compact-filter-row" id="filterBar" style="flex-wrap:nowrap">
         <button class="filter-chip active" data-role="" onclick="setRoleFilter(this,'')" data-i18n="filter.all">All</button>
         <button class="filter-chip" data-role="user" onclick="setRoleFilter(this,'user')">User</button>
         <button class="filter-chip" data-role="assistant" onclick="setRoleFilter(this,'assistant')">Assistant</button>
@@ -1282,64 +1287,47 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <option value="newest" data-i18n="filter.newest">Newest first</option>
           <option value="oldest" data-i18n="filter.oldest">Oldest first</option>
         </select>
+        <span style="flex:1"></span>
+        <button class="filter-chip" id="memorySelectAllBtn" onclick="toggleSelectAllMemories()" data-i18n="skills.selectAll">Select All</button>
+        <button class="filter-chip" id="memoryBulkDeleteBtn" onclick="deleteSelectedMemories()" style="display:none;color:#ef4444;border-color:rgba(239,68,68,.3)" data-i18n="memory.deleteSelected">Delete Selected</button>
       </div>
-      <div class="date-filter">
-        <label data-i18n="filter.from">From</label><input type="datetime-local" id="dateFrom" step="1" onchange="applyFilters()">
-        <label data-i18n="filter.to">To</label><input type="datetime-local" id="dateTo" step="1" onchange="applyFilters()">
-        <button class="btn btn-sm btn-text" onclick="clearDateFilter()" data-i18n="filter.clear">Clear</button>
-      </div>
-      <div class="selection-toolbar" id="memorySelectionToolbar">
-        <button class="btn btn-sm btn-ghost" id="memorySelectAllBtn" onclick="toggleSelectAllMemories()" data-i18n="skills.selectAll">Select All</button>
-        <button class="btn btn-sm btn-danger" id="memoryBulkDeleteBtn" onclick="deleteSelectedMemories()" style="display:none" data-i18n="memory.deleteSelected">Delete Selected</button>
+      <div class="filter-bar compact-filter-row" style="flex-wrap:nowrap;margin-bottom:12px">
+        <input type="datetime-local" id="dateFrom" step="1" onchange="applyFilters()" class="compact-date" data-i18n-ph="filter.from" placeholder="From">
+        <span style="color:var(--text-muted);font-size:12px">—</span>
+        <input type="datetime-local" id="dateTo" step="1" onchange="applyFilters()" class="compact-date" data-i18n-ph="filter.to" placeholder="To">
+        <button class="filter-chip" onclick="clearDateFilter()" data-i18n="filter.clear" style="font-size:11px;padding:4px 10px">Clear</button>
       </div>
       <div class="memory-list" id="memoryList"><div class="spinner"></div></div>
       <div class="pagination-row">
         <div class="pagination" id="pagination"></div>
-        <div class="page-size-control">
-          <span data-i18n="pagination.pageSize">Items per page</span>
-          <select id="memoryPageSize" class="filter-select" onchange="onMemoryPageSizeChange()">
-            <option value="10">10 / page</option>
-            <option value="20" selected>20 / page</option>
-            <option value="40">40 / page</option>
-          </select>
-        </div>
       </div>
     </div>
     </div>
     <div class="tasks-view vp" id="tasksView">
-      <div class="tasks-header">
-        <div class="tasks-stats">
-          <div class="tasks-stat"><span class="tasks-stat-value" id="tasksTotalCount">-</span><span class="tasks-stat-label" data-i18n="tasks.total">Total Tasks</span></div>
-          <div class="tasks-stat"><span class="tasks-stat-value" id="tasksActiveCount">-</span><span class="tasks-stat-label" data-i18n="tasks.active">Active</span></div>
-          <div class="tasks-stat"><span class="tasks-stat-value" id="tasksCompletedCount">-</span><span class="tasks-stat-label" data-i18n="tasks.completed">Completed</span></div>
-          <div class="tasks-stat"><span class="tasks-stat-value" id="tasksSkippedCount">-</span><span class="tasks-stat-label" data-i18n="tasks.status.skipped">Skipped</span></div>
-        </div>
-        <div class="tasks-filters">
-          <button class="filter-chip active" data-task-status="" onclick="setTaskStatusFilter(this,'')" data-i18n="filter.all">All</button>
-          <button class="filter-chip" data-task-status="active" onclick="setTaskStatusFilter(this,'active')" data-i18n="tasks.status.active">Active</button>
-          <button class="filter-chip" data-task-status="completed" onclick="setTaskStatusFilter(this,'completed')" data-i18n="tasks.status.completed">Completed</button>
-          <button class="filter-chip" data-task-status="skipped" onclick="setTaskStatusFilter(this,'skipped')" data-i18n="tasks.status.skipped">Skipped</button>
-          <select id="taskSearchScope" class="scope-select" onchange="onTaskScopeChange()" style="display:none">
-            <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
-            <option value="hub" data-i18n="scope.hub">Team</option>
-          </select>
-        </div>
-        <div class="selection-toolbar" id="taskSelectionToolbar">
-          <button class="btn btn-sm btn-ghost" id="taskSelectAllBtn" onclick="toggleSelectAllTasks()" data-i18n="skills.selectAll">Select All</button>
-          <button class="btn btn-sm btn-danger" id="taskBulkDeleteBtn" onclick="deleteSelectedTasks()" style="display:none" data-i18n="task.deleteSelected">Delete Selected</button>
-        </div>
+      <div class="search-bar">
+        <span class="search-icon">\u{1F50D}</span>
+        <input type="text" id="taskSearchInput" data-i18n-ph="tasks.search.placeholder" placeholder="Search tasks..." oninput="debounceTaskSearch()">
+        <select id="taskFilterOwner" class="filter-select" onchange="onOwnerFilterChange()">
+          <option value="" data-i18n="filter.allagents">All agents</option>
+        </select>
+        <select id="taskSearchScope" class="scope-select" onchange="onTaskScopeChange()" style="display:none">
+          <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
+          <option value="hub" data-i18n="scope.hub">Team</option>
+        </select>
+      </div>
+      <div id="taskSearchMeta" style="display:none"></div>
+      <div class="filter-bar compact-filter-row" style="flex-wrap:nowrap">
+        <button class="filter-chip active" data-task-status="" onclick="setTaskStatusFilter(this,'')" data-i18n="filter.all">All</button>
+        <button class="filter-chip" data-task-status="active" onclick="setTaskStatusFilter(this,'active')" data-i18n="tasks.status.active">Active</button>
+        <button class="filter-chip" data-task-status="completed" onclick="setTaskStatusFilter(this,'completed')" data-i18n="tasks.status.completed">Completed</button>
+        <button class="filter-chip" data-task-status="skipped" onclick="setTaskStatusFilter(this,'skipped')" data-i18n="tasks.status.skipped">Skipped</button>
+        <span style="flex:1"></span>
+        <button class="filter-chip" id="taskSelectAllBtn" onclick="toggleSelectAllTasks()" data-i18n="skills.selectAll">Select All</button>
+        <button class="filter-chip" id="taskBulkDeleteBtn" onclick="deleteSelectedTasks()" style="display:none;color:#ef4444;border-color:rgba(239,68,68,.3)" data-i18n="task.deleteSelected">Delete Selected</button>
       </div>
       <div class="tasks-list" id="tasksList"><div class="spinner"></div></div>
       <div class="pagination-row">
         <div class="pagination" id="tasksPagination"></div>
-        <div class="page-size-control">
-          <span data-i18n="pagination.pageSize">Items per page</span>
-          <select id="tasksPageSize" class="filter-select" onchange="onTasksPageSizeChange()">
-            <option value="10">10 / page</option>
-            <option value="20" selected>20 / page</option>
-            <option value="40">40 / page</option>
-          </select>
-        </div>
       </div>
       <div class="task-detail-overlay" id="taskDetailOverlay" onclick="closeTaskDetail(event)">
         <div class="task-detail-panel" onclick="event.stopPropagation()">
@@ -1374,48 +1362,32 @@ input,textarea,select{font-family:inherit;font-size:inherit}
       <div class="search-bar">
         <span class="search-icon">🔍</span>
         <input type="text" id="skillSearchInput" placeholder="Search skills..." data-i18n-ph="skills.search.placeholder" oninput="debounceSkillSearch()">
+        <select id="skillFilterOwner" class="filter-select" onchange="onOwnerFilterChange()">
+          <option value="" data-i18n="filter.allagents">All agents</option>
+        </select>
         <select id="skillSearchScope" class="scope-select" onchange="onSkillScopeChange()" style="display:none">
           <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
           <option value="hub" data-i18n="scope.hub">Team</option>
         </select>
       </div>
-      <div class="search-meta" id="skillSearchMeta" style="display:none"></div>
-      <div class="tasks-header">
-        <div class="tasks-stats">
-          <div class="tasks-stat"><span class="tasks-stat-value" id="skillsTotalCount">-</span><span class="tasks-stat-label" data-i18n="skills.total">Total Skills</span></div>
-          <div class="tasks-stat" style="border-left:3px solid var(--green)"><span class="tasks-stat-value" id="skillsActiveCount">-</span><span class="tasks-stat-label" data-i18n="skills.active">Active</span></div>
-          <div class="tasks-stat" style="border-left:3px solid var(--amber)"><span class="tasks-stat-value" id="skillsDraftCount">-</span><span class="tasks-stat-label" data-i18n="skills.draft">Draft</span></div>
-          <div class="tasks-stat" style="border-left:3px solid var(--violet)"><span class="tasks-stat-value" id="skillsInstalledCount">-</span><span class="tasks-stat-label" data-i18n="skills.installed">Installed</span></div>
-          <div class="tasks-stat" style="border-left:3px solid var(--cyan)"><span class="tasks-stat-value" id="skillsPublicCount">-</span><span class="tasks-stat-label" data-i18n="skills.public">Public</span></div>
-        </div>
-        <div class="tasks-filters">
-          <button class="filter-chip active" data-skill-status="" onclick="setSkillStatusFilter(this,'')" data-i18n="filter.all">All</button>
-          <button class="filter-chip" data-skill-status="active" onclick="setSkillStatusFilter(this,'active')" data-i18n="skills.filter.active">Active</button>
-          <button class="filter-chip" data-skill-status="draft" onclick="setSkillStatusFilter(this,'draft')" data-i18n="skills.filter.draft">Draft</button>
-          <button class="filter-chip" data-skill-status="archived" onclick="setSkillStatusFilter(this,'archived')" data-i18n="skills.filter.archived">Archived</button>
-          <span class="filter-sep"></span>
-          <select id="skillVisibilityFilter" class="filter-select" onchange="loadSkills()" style="display:none">
-            <option value="" data-i18n="filter.allvisibility">All visibility</option>
-            <option value="public" data-i18n="filter.public">Public</option>
-            <option value="private" data-i18n="filter.private">Private</option>
-          </select>
-        </div>
-        <div class="selection-toolbar">
-          <button class="btn btn-sm btn-ghost" id="skillSelectAllBtn" onclick="toggleSelectAllSkills()" data-i18n="skills.selectAll">Select All</button>
-          <button class="btn btn-sm btn-danger" id="skillBulkDeleteBtn" onclick="deleteSelectedSkills()" style="display:none" data-i18n="skills.deleteSelected">Delete Selected</button>
-        </div>
+      <div id="skillSearchMeta" style="display:none"></div>
+      <div class="filter-bar compact-filter-row" style="flex-wrap:nowrap">
+        <button class="filter-chip active" data-skill-status="" onclick="setSkillStatusFilter(this,'')" data-i18n="filter.all">All</button>
+        <button class="filter-chip" data-skill-status="active" onclick="setSkillStatusFilter(this,'active')" data-i18n="skills.filter.active">Active</button>
+        <button class="filter-chip" data-skill-status="draft" onclick="setSkillStatusFilter(this,'draft')" data-i18n="skills.filter.draft">Draft</button>
+        <button class="filter-chip" data-skill-status="archived" onclick="setSkillStatusFilter(this,'archived')" data-i18n="skills.filter.archived">Archived</button>
+        <select id="skillVisibilityFilter" class="filter-select" onchange="loadSkills()" style="display:none">
+          <option value="" data-i18n="filter.allvisibility">All visibility</option>
+          <option value="public" data-i18n="filter.public">Public</option>
+          <option value="private" data-i18n="filter.private">Private</option>
+        </select>
+        <span style="flex:1"></span>
+        <button class="filter-chip" id="skillSelectAllBtn" onclick="toggleSelectAllSkills()" data-i18n="skills.selectAll">Select All</button>
+        <button class="filter-chip" id="skillBulkDeleteBtn" onclick="deleteSelectedSkills()" style="display:none;color:#ef4444;border-color:rgba(239,68,68,.3)" data-i18n="skills.deleteSelected">Delete Selected</button>
       </div>
       <div class="tasks-list" id="skillsList"><div class="spinner"></div></div>
       <div class="pagination-row">
         <div class="pagination" id="skillsPagination"></div>
-        <div class="page-size-control">
-          <span data-i18n="pagination.pageSize">Items per page</span>
-          <select id="skillsPageSize" class="filter-select" onchange="onSkillsPageSizeChange()">
-            <option value="10">10 / page</option>
-            <option value="20" selected>20 / page</option>
-            <option value="40">40 / page</option>
-          </select>
-        </div>
       </div>
       <div id="hubSkillsSection" style="display:none;margin-top:16px">
         <div class="section-title" style="margin-bottom:12px" data-i18n="skills.hub.title">\u{1F310} Team Skills</div>
@@ -1844,6 +1816,11 @@ input,textarea,select{font-family:inherit;font-size:inherit}
                 <input type="number" id="cfgViewerPort" placeholder="18799">
                 <div class="field-hint" data-i18n="settings.viewerport.hint">Requires restart to take effect</div>
               </div>
+              <div class="settings-field">
+                <label data-i18n="settings.taskAutoFinalize">Task Auto-Finalize (hours)</label>
+                <input type="number" id="cfgTaskAutoFinalizeHours" placeholder="4" min="0" step="1" style="max-width:120px">
+                <div class="field-hint" data-i18n="settings.taskAutoFinalize.hint">Active tasks with no new messages beyond this duration will be automatically summarized and completed when the Tasks page is opened. Set to 0 to disable. Default: 4 hours.</div>
+              </div>
             </div>
             <div class="settings-card-divider"></div>
             <div class="settings-toggle">
@@ -2161,6 +2138,8 @@ const I18N={
     'tasks.status.active':'Active',
     'tasks.status.completed':'Completed',
     'tasks.status.skipped':'Skipped',
+    'tasks.search.placeholder':'Search tasks...',
+    'tasks.search.meta':'Found {0} tasks',
     'tasks.empty':'No tasks yet. Tasks are automatically created as you converse.',
     'tasks.loading':'Loading...',
     'tasks.untitled':'Untitled Task',
@@ -2201,8 +2180,8 @@ const I18N={
     'notif.timeAgo.hour':'{n}h ago',
     'notif.timeAgo.day':'{n}d ago',
     'stat.memories':'Memories',
-    'stat.sessions':'Sessions',
-    'stat.embeddings':'Embeddings',
+    'stat.tasks':'Tasks',
+    'stat.skills':'Skills',
     'stat.agents':'Agents',
     'stat.active':'active',
     'stat.deduped':'deduped',
@@ -2342,6 +2321,8 @@ const I18N={
     'settings.telemetry.hint':'Only collects tool names, latencies and version info. No memory content or personal data.',
     'settings.viewerport':'Viewer Port',
     'settings.viewerport.hint':'Requires restart to take effect',
+    'settings.taskAutoFinalize':'Task Auto-Finalize (hours)',
+    'settings.taskAutoFinalize.hint':'Active tasks with no new messages beyond this duration will be automatically summarized and completed when the Tasks page is opened. Set to 0 to disable. Default: 4 hours.',
     'settings.test':'Test Connection',
     'settings.test.loading':'Testing...',
     'settings.test.ok':'Connected',
@@ -2926,6 +2907,8 @@ const I18N={
     'tasks.status.active':'进行中',
     'tasks.status.completed':'已完成',
     'tasks.status.skipped':'已跳过',
+    'tasks.search.placeholder':'搜索任务...',
+    'tasks.search.meta':'找到 {0} 个任务',
     'tasks.empty':'暂无任务。任务会随着对话自动创建。',
     'tasks.loading':'加载中...',
     'tasks.untitled':'未命名任务',
@@ -2966,8 +2949,8 @@ const I18N={
     'notif.timeAgo.hour':'{n}小时前',
     'notif.timeAgo.day':'{n}天前',
     'stat.memories':'记忆',
-    'stat.sessions':'会话',
-    'stat.embeddings':'嵌入',
+    'stat.tasks':'任务',
+    'stat.skills':'技能',
     'stat.agents':'智能体',
     'stat.active':'活跃',
     'stat.deduped':'已去重',
@@ -3107,6 +3090,8 @@ const I18N={
     'settings.telemetry.hint':'仅收集工具名称、响应时间和版本号，不涉及任何记忆内容或个人数据。',
     'settings.viewerport':'Viewer 端口',
     'settings.viewerport.hint':'修改后需重启网关生效',
+    'settings.taskAutoFinalize':'任务自动完结（小时）',
+    'settings.taskAutoFinalize.hint':'处于进行中的任务如果超过设定时间没有新消息，打开任务页面时会自动生成总结并标记为已完成。设为 0 则关闭此功能。默认：4 小时。',
     'settings.test':'测试连接',
     'settings.test.loading':'测试中...',
     'settings.test.ok':'连接成功',
@@ -3982,6 +3967,11 @@ function _updateScopeSelectorsVisibility(hubAvailable){
   for(var i=0;i<ids.length;i++){
     var el=document.getElementById(ids[i]);
     if(el) el.style.display=hubAvailable?'':'none';
+  }
+  if(!hubAvailable){
+    if(memorySearchScope==='hub'){memorySearchScope='allLocal';try{localStorage.setItem('memos_memorySearchScope','allLocal');}catch(e){}}
+    if(taskSearchScope==='hub'){taskSearchScope='allLocal';try{localStorage.setItem('memos_taskSearchScope','allLocal');}catch(e){}}
+    if(skillSearchScope==='hub'){skillSearchScope='allLocal';try{localStorage.setItem('memos_skillSearchScope','allLocal');}catch(e){}}
   }
 }
 async function loadSharingStatus(forcePending){
@@ -5204,11 +5194,13 @@ function renderSharingMemorySearchResults(data,query){
     '<div class="result-section">'+
       '<div class="result-section-header"><div class="result-section-title">'+t('search.localResults')+'</div><div class="result-section-sub">'+localHits.length+' hit(s)</div></div>'+
       '<div class="search-hit-list">'+(localHits.length?localHits.map(function(hit,idx){
+        var agentName='';if(hit.owner){var ap=(hit.owner||'').split(':');agentName=ap.length>=3?ap[ap.length-1]:(ap.length>=2?ap[1]:hit.owner);}
         return '<div class="search-hit-card">'+
           '<div class="summary">'+(idx+1)+'. '+esc(hit.summary||'(no summary)')+'</div>'+
           '<div class="excerpt">'+esc(hit.excerpt||'')+'</div>'+
           '<div class="search-hit-meta">'+
             '<span class="meta-chip">role: '+esc(hit.role||'unknown')+'</span>'+
+            (agentName?'<span class="meta-chip" style="background:rgba(20,184,166,.12);color:#14b8a6">'+esc(agentName)+'</span>':'')+
             (hit.score!=null?'<span class="meta-chip">score: '+Math.round(hit.score*100)+'%</span>':'')+
             (hit.taskId?'<span class="meta-chip">task: '+esc(hit.taskId)+'</span>':'')+
           '</div>'+
@@ -5218,11 +5210,13 @@ function renderSharingMemorySearchResults(data,query){
     '<div class="result-section">'+
       '<div class="result-section-header"><div class="result-section-title">'+t('search.hubResults')+'</div><div class="result-section-sub">'+hubHits.length+' hit(s)</div></div>'+
       '<div class="search-hit-list">'+(hubHits.length?hubHits.map(function(hit,idx){
+        var hubAgentName='';if(hit.sourceAgent){var hap=(hit.sourceAgent||'').split(':');hubAgentName=hap.length>=3?hap[hap.length-1]:(hap.length>=2?hap[1]:hit.sourceAgent);}
         return '<div class="hub-hit-card">'+
           '<div class="summary">'+(idx+1)+'. '+esc(hit.summary||'(no summary)')+'</div>'+
           '<div class="excerpt">'+esc(hit.excerpt||'')+'</div>'+
           '<div class="hub-hit-meta">'+
             '<span class="meta-chip">owner: '+fmtOwner(hit)+'</span>'+
+            (hubAgentName?'<span class="meta-chip" style="background:rgba(20,184,166,.12);color:#14b8a6">'+esc(hubAgentName)+'</span>':'')+
             (hit.groupName?'<span class="meta-chip">group: '+esc(hit.groupName)+'</span>':'')+
             '<span class="meta-chip">visibility: '+esc(hit.visibility||'hub')+'</span>'+
           '</div>'+
@@ -5730,6 +5724,13 @@ function recallOriginBadge(origin){
   if(origin==='hub-remote') return '<span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>';
   return '';
 }
+function agentBadge(owner){
+  if(!owner) return '';
+  var parts=(owner||'').split(':');
+  var name=parts.length>=3?parts[parts.length-1]:(parts.length>=2?parts[1]:owner);
+  if(!name) return '';
+  return '<span class="recall-origin agent-tag">\u{1F916} '+escapeHtml(name)+'</span>';
+}
 
 function buildLogSummary(lg){
   let inputObj=null;
@@ -5756,8 +5757,9 @@ function buildLogSummary(lg){
           var shortText=escapeHtml(c.summary||c.content||c.original_excerpt||'');
           var fullText=escapeHtml(c.content||c.original_excerpt||c.summary||'');
           var oBadge=recallOriginBadge(c.origin);
+          var aBadge2=agentBadge(c.owner);
           html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
-          html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'user')+'">'+(c.role||'user')+'</span>'+oBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+          html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'user')+'">'+(c.role||'user')+'</span>'+oBadge+aBadge2+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
           html+='<div class="recall-summary-full">'+fullText+'</div>';
           html+='</div>';
         });
@@ -5772,8 +5774,9 @@ function buildLogSummary(lg){
             var shortText=escapeHtml(c.summary||c.original_excerpt||'');
             var fullText=escapeHtml(c.original_excerpt||c.summary||'');
             var owner=c.ownerName?' ['+escapeHtml(c.ownerName)+']':'';
+            var haBadge2=agentBadge(c.sourceAgent||'');
             html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
-            html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'assistant')+'">'+(c.role||'assistant')+'</span><span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>'+owner+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+            html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'assistant')+'">'+(c.role||'assistant')+'</span><span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>'+owner+haBadge2+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
             html+='<div class="recall-summary-full">'+fullText+'</div>';
             html+='</div>';
           });
@@ -5789,8 +5792,9 @@ function buildLogSummary(lg){
             var shortText=escapeHtml(f.summary||f.content||f.original_excerpt||'');
             var fullText=escapeHtml(f.content||f.original_excerpt||f.summary||'');
             var oBadge=recallOriginBadge(f.origin);
+            var faBadge2=agentBadge(f.owner);
             html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
-            html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+f.score.toFixed(2)+'</span><span class="log-msg-role '+(f.role||'user')+'">'+(f.role||'user')+'</span>'+oBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+            html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+f.score.toFixed(2)+'</span><span class="log-msg-role '+(f.role||'user')+'">'+(f.role||'user')+'</span>'+oBadge+faBadge2+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
             html+='<div class="recall-summary-full">'+fullText+'</div>';
             html+='</div>';
           });
@@ -5856,8 +5860,9 @@ function buildRecallDetailHtml(rd){
       var shortText=escapeHtml(c.summary||c.content||c.original_excerpt||'');
       var fullText=escapeHtml(c.content||c.original_excerpt||c.summary||'');
       var oBadge=recallOriginBadge(c.origin);
+      var aBadge=agentBadge(c.owner);
       html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
-      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+c.score.toFixed(3)+'</span><span class="log-msg-role '+(c.role||'user')+'">'+(c.role||'user')+'</span>'+oBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+c.score.toFixed(3)+'</span><span class="log-msg-role '+(c.role||'user')+'">'+(c.role||'user')+'</span>'+oBadge+aBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
       html+='<div class="recall-summary-full">'+fullText+'</div>';
       html+='</div>';
     });
@@ -5872,8 +5877,9 @@ function buildRecallDetailHtml(rd){
       var shortText=escapeHtml(c.summary||c.original_excerpt||'');
       var fullText=escapeHtml(c.original_excerpt||c.summary||'');
       var owner=c.ownerName?' ['+escapeHtml(c.ownerName)+']':'';
+      var haBadge=agentBadge(c.sourceAgent||'');
       html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
-      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'assistant')+'">'+(c.role||'assistant')+'</span><span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>'+owner+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'assistant')+'">'+(c.role||'assistant')+'</span><span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>'+owner+haBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
       html+='<div class="recall-summary-full">'+fullText+'</div>';
       html+='</div>';
     });
@@ -5889,8 +5895,9 @@ function buildRecallDetailHtml(rd){
       var shortText=escapeHtml(f.summary||f.content||f.original_excerpt||'');
       var fullText=escapeHtml(f.content||f.original_excerpt||f.summary||'');
       var oBadge=recallOriginBadge(f.origin);
+      var faBadge=agentBadge(f.owner);
       html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
-      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+f.score.toFixed(3)+'</span><span class="log-msg-role '+(f.role||'user')+'">'+(f.role||'user')+'</span>'+oBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+f.score.toFixed(3)+'</span><span class="log-msg-role '+(f.role||'user')+'">'+(f.role||'user')+'</span>'+oBadge+faBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
       html+='<div class="recall-summary-full">'+fullText+'</div>';
       html+='</div>';
     });
@@ -6009,6 +6016,7 @@ async function loadMetrics(){
   }catch(e){console.error('loadMetrics',e)}
 }
 
+function _st(id,v){var e=document.getElementById(id);if(e)e.textContent=v;}
 function formatNum(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n);}
 function dateLoc(){return curLang==='zh'?'zh-CN':'en-US';}
 
@@ -6018,7 +6026,7 @@ let tasksPage=0;
 let tasksPageSize=20;
 
 function setTaskStatusFilter(btn,status){
-  document.querySelectorAll('.tasks-filters .filter-chip').forEach(c=>c.classList.remove('active'));
+  document.querySelectorAll('.tasks-view .filter-bar .filter-chip[data-task-status]').forEach(c=>c.classList.remove('active'));
   btn.classList.add('active');
   tasksStatusFilter=status;
   tasksPage=0;
@@ -6088,6 +6096,57 @@ async function deleteSelectedTasks(){
   else toast(t('task.delete.success').replace('{count}',String(ok)),'success');
 }
 
+var taskSearchQuery='';
+var _taskSearchTimer=null;
+function debounceTaskSearch(){
+  clearTimeout(_taskSearchTimer);
+  _taskSearchTimer=setTimeout(function(){
+    taskSearchQuery=(document.getElementById('taskSearchInput')||{}).value||'';
+    tasksPage=0;
+    loadTasks();
+  },350);
+}
+
+function renderTaskCards(tasks,container){
+  currentTaskIds=tasks.map(function(task){return task.id;});
+  selectedTaskIds=new Set(Array.from(selectedTaskIds).filter(function(id){return currentTaskIds.includes(id);}));
+  if(!tasks||tasks.length===0){
+    container.innerHTML='<div style="text-align:center;padding:48px;color:var(--text-muted);font-size:14px" data-i18n="tasks.empty">'+t('tasks.empty')+'</div>';
+    updateTaskSelectionToolbar();
+    return;
+  }
+  container.innerHTML=tasks.map(function(task){
+    var timeStr=formatTime(task.startedAt);
+    var durationStr=task.endedAt?formatDuration(task.endedAt-task.startedAt):'';
+    var taskIsLocalShared=task.owner==='public';
+    var taskIsTeamShared=!!task.sharingVisibility;
+    var taskScope=taskIsTeamShared?'team':taskIsLocalShared?'local':'private';
+    var selectedAttr=selectedTaskIds.has(task.id)?' checked':'';
+    return '<div class="task-card status-'+task.status+'" onclick="openTaskDetail(\\''+task.id+'\\')">'+
+      '<div class="task-card-top">'+
+        '<div class="task-card-title"><label class="item-select-box" onclick="event.stopPropagation()"><input class="task-select-check" type="checkbox" value="'+escAttr(task.id)+'"'+selectedAttr+' onchange="event.stopPropagation();toggleTaskSelection(&quot;'+escAttr(task.id)+'&quot;,this.checked)"></label>'+esc(task.title)+'</div>'+
+        '<div class="task-card-badges">'+renderScopeBadge(taskScope)+'<span class="task-status-badge '+task.status+'">'+t('tasks.status.'+task.status)+'</span></div>'+
+      '</div>'+
+      (task.summary?'<div class="task-card-summary'+(task.status==='skipped'?' skipped-reason':'')+'">'+esc(task.summary)+'</div>':'')+
+      '<div class="task-card-bottom">'+
+        '<span class="tag"><span class="icon">\\u{1F4C5}</span> '+timeStr+'</span>'+
+        (durationStr?'<span class="tag"><span class="icon">\\u23F1</span> '+durationStr+'</span>':'')+
+        '<span class="tag"><span class="icon">\\u{1F4DD}</span> '+(task.chunkCount||0)+' '+t('tasks.chunks.label')+'</span>'+
+        '<span class="tag"><span class="icon">\\u{1F4C2}</span> '+(task.sessionKey||'')+'</span>'+
+      '</div>'+
+      '<div class="card-actions" onclick="event.stopPropagation()">'+
+        '<button class="btn btn-sm btn-ghost" onclick="openTaskDetail(\\''+task.id+'\\')">'+t('card.expand')+'</button>'+
+        (task.status==='completed'&&(!task.skillStatus||task.skillStatus==='not_generated'||task.skillStatus==='skipped')?'<button class="btn btn-sm btn-ghost" onclick="retrySkillGen(\\''+task.id+'\\')">'+t('task.retrySkill.short')+'</button>':'')+
+        (task.status==='completed'
+          ?'<button class="btn btn-sm btn-ghost" onclick="openTaskScopeModalFromList(\\''+task.id+'\\',\\''+taskScope+'\\')">\\u270F '+t('share.shareBtn')+'</button>'
+          :'<button class="btn btn-sm btn-ghost" style="opacity:0.45;cursor:not-allowed" onclick="toast(t(\\x27share.scope.taskNotCompleted\\x27),\\x27warn\\x27)">\\u270F '+t('share.shareBtn')+'</button>')+
+        '<button class="btn btn-sm btn-ghost" style="color:var(--accent)" onclick="deleteTask(\\''+task.id+'\\')">'+t('task.delete')+'</button>'+
+      '</div>'+
+    '</div>';
+  }).join('');
+  updateTaskSelectionToolbar();
+}
+
 async function loadTasks(silent){
   const scope=document.getElementById('taskSearchScope')?document.getElementById('taskSearchScope').value:taskSearchScope;
   taskSearchScope=scope||'allLocal';
@@ -6095,11 +6154,34 @@ async function loadTasks(silent){
   const list=document.getElementById('tasksList');
   if(!silent) list.innerHTML='<div class="spinner"></div>';
   try{
+    var ownerSel=document.getElementById('taskFilterOwner')||document.getElementById('filterOwner');
+    var ownerVal=ownerSel?ownerSel.value:'';
+
+    if(taskSearchQuery&&taskSearchQuery.trim()){
+      var sp=new URLSearchParams({q:taskSearchQuery.trim(),limit:String(tasksPageSize)});
+      if(ownerVal) sp.set('owner',ownerVal);
+      var sr=await fetch('/api/task-search?'+sp).then(function(r){return r.json()});
+      var tasks=sr.tasks||[];
+      document.getElementById('taskSearchMeta').style.display='block';
+      document.getElementById('taskSearchMeta').textContent=t('tasks.search.meta').replace('{0}',tasks.length);
+      _st('tasksTotalCount',tasks.length);
+      _st('tasksActiveCount',tasks.filter(function(tk){return tk.status==='active'}).length);
+      _st('tasksCompletedCount',tasks.filter(function(tk){return tk.status==='completed'}).length);
+      _st('tasksSkippedCount',tasks.filter(function(tk){return tk.status==='skipped'}).length);
+      if(tasksStatusFilter) tasks=tasks.filter(function(tk){return tk.status===tasksStatusFilter});
+      renderTaskCards(tasks,list);
+      document.getElementById('tasksPagination').innerHTML='';
+      return;
+    }
+    document.getElementById('taskSearchMeta').style.display='none';
+
     const params=new URLSearchParams({limit:String(tasksPageSize),offset:String(tasksPage*tasksPageSize)});
     if(tasksStatusFilter) params.set('status',tasksStatusFilter);
     if(activeSession) params.set('session',activeSession);
+    if(ownerVal) params.set('owner',ownerVal);
     var baseP=new URLSearchParams();
     if(activeSession) baseP.set('session',activeSession);
+    if(ownerVal) baseP.set('owner',ownerVal);
     var baseQuery=baseP.toString();
     const [data,allD,activeD,compD,skipD]=await Promise.all([
       fetch('/api/tasks?'+params).then(r=>r.json()),
@@ -6116,55 +6198,18 @@ async function loadTasks(silent){
     }else{
       _lastTasksFingerprint='';
     }
-    document.getElementById('tasksTotalCount').textContent=formatNum(allD.total);
-    document.getElementById('tasksActiveCount').textContent=formatNum(activeD.total);
-    document.getElementById('tasksCompletedCount').textContent=formatNum(compD.total);
-    document.getElementById('tasksSkippedCount').textContent=formatNum(skipD.total);
+    _st('tasksTotalCount',formatNum(allD.total));
+    _st('tasksActiveCount',formatNum(activeD.total));
+    _st('tasksCompletedCount',formatNum(compD.total));
+    _st('tasksSkippedCount',formatNum(skipD.total));
 
-    currentTaskIds=(data.tasks||[]).map(function(task){return task.id;});
-    selectedTaskIds=new Set(Array.from(selectedTaskIds).filter(function(id){return currentTaskIds.includes(id);}));
+    renderTaskCards(data.tasks||[],list);
+
     if(!data.tasks||data.tasks.length===0){
-      list.innerHTML='<div style="text-align:center;padding:48px;color:var(--text-muted);font-size:14px" data-i18n="tasks.empty">'+t('tasks.empty')+'</div>';
       document.getElementById('tasksPagination').innerHTML='';
-      setPageSizeVisible('tasksPageSize',false);
-      updateTaskSelectionToolbar();
-      return;
+    } else {
+      renderTasksPagination(data.total);
     }
-
-    list.innerHTML=data.tasks.map(task=>{
-      const timeStr=formatTime(task.startedAt);
-      const endStr=task.endedAt?formatTime(task.endedAt):'';
-      const durationStr=task.endedAt?formatDuration(task.endedAt-task.startedAt):'';
-      var taskIsLocalShared=task.owner==='public';
-      var taskIsTeamShared=!!task.sharingVisibility;
-      var taskScope=taskIsTeamShared?'team':taskIsLocalShared?'local':'private';
-      var selectedAttr=selectedTaskIds.has(task.id)?' checked':'';
-      return '<div class="task-card status-'+task.status+'" onclick="openTaskDetail(\\''+task.id+'\\')">'+
-        '<div class="task-card-top">'+
-          '<div class="task-card-title"><label class="item-select-box" onclick="event.stopPropagation()"><input class="task-select-check" type="checkbox" value="'+escAttr(task.id)+'"'+selectedAttr+' onchange="event.stopPropagation();toggleTaskSelection(&quot;'+escAttr(task.id)+'&quot;,this.checked)"></label>'+esc(task.title)+'</div>'+
-          '<div class="task-card-badges">'+renderScopeBadge(taskScope)+'<span class="task-status-badge '+task.status+'">'+t('tasks.status.'+task.status)+'</span></div>'+
-        '</div>'+
-        (task.summary?'<div class="task-card-summary'+(task.status==='skipped'?' skipped-reason':'')+'">'+esc(task.summary)+'</div>':'')+
-        '<div class="task-card-bottom">'+
-          '<span class="tag"><span class="icon">\\u{1F4C5}</span> '+timeStr+'</span>'+
-          (durationStr?'<span class="tag"><span class="icon">\\u23F1</span> '+durationStr+'</span>':'')+
-          '<span class="tag"><span class="icon">\\u{1F4DD}</span> '+task.chunkCount+' '+t('tasks.chunks.label')+'</span>'+
-          '<span class="tag"><span class="icon">\\u{1F4C2}</span> '+(task.sessionKey||'').slice(0,12)+'</span>'+
-        '</div>'+
-        '<div class="card-actions" onclick="event.stopPropagation()">'+
-          '<button class="btn btn-sm btn-ghost" onclick="openTaskDetail(\\''+task.id+'\\')">'+t('card.expand')+'</button>'+
-          (task.status==='completed'&&(!task.skillStatus||task.skillStatus==='not_generated'||task.skillStatus==='skipped')?'<button class="btn btn-sm btn-ghost" onclick="retrySkillGen(\\''+task.id+'\\')">'+t('task.retrySkill.short')+'</button>':'')+
-          (task.status==='completed'
-            ?'<button class="btn btn-sm btn-ghost" onclick="openTaskScopeModalFromList(\\''+task.id+'\\',\\''+taskScope+'\\')">\\u270F '+t('share.shareBtn')+'</button>'
-            :'<button class="btn btn-sm btn-ghost" style="opacity:0.45;cursor:not-allowed" onclick="toast(t(\\x27share.scope.taskNotCompleted\\x27),\\x27warn\\x27)">\\u270F '+t('share.shareBtn')+'</button>')+
-          '<button class="btn btn-sm btn-ghost" style="color:var(--accent)" onclick="deleteTask(\\''+task.id+'\\')">'+t('task.delete')+'</button>'+
-        '</div>'+
-      '</div>';
-    }).join('');
-
-    renderTasksPagination(data.total);
-    setPageSizeVisible('tasksPageSize',true);
-    updateTaskSelectionToolbar();
   }catch(e){
     console.error('loadTasks error:',e);
     currentTaskIds=[];
@@ -6397,7 +6442,7 @@ let currentLocalSkills=[];
 let skillsFilterSignature='';
 
 function setSkillStatusFilter(btn,status){
-  document.querySelectorAll('.skills-view .tasks-filters .filter-chip').forEach(c=>c.classList.remove('active'));
+  document.querySelectorAll('.skills-view .filter-bar .filter-chip[data-skill-status]').forEach(c=>c.classList.remove('active'));
   btn.classList.add('active');
   skillsStatusFilter=status;
   skillsPage=0;
@@ -6492,9 +6537,12 @@ async function loadSkills(silent){
     const params=new URLSearchParams();
     if(skillsStatusFilter) params.set('status',skillsStatusFilter);
     if(activeSession) params.set('session',activeSession);
+    var skillOwnerSel=document.getElementById('skillFilterOwner')||document.getElementById('filterOwner');
+    var skillOwnerVal=skillOwnerSel?skillOwnerSel.value:'';
+    if(skillOwnerVal) params.set('owner',skillOwnerVal);
     const visFilter=document.getElementById('skillVisibilityFilter')?.value;
     if(visFilter) params.set('visibility',visFilter);
-    const filterSignature=[query,skillSearchScope,skillsStatusFilter,visFilter||''].join('|');
+    const filterSignature=[query,skillSearchScope,skillsStatusFilter,visFilter||'',skillOwnerVal].join('|');
     if(!silent&&filterSignature!==skillsFilterSignature){
       skillsPage=0;
     }
@@ -6585,12 +6633,11 @@ async function loadSkills(silent){
 
     if(skillSearchScope==='allLocal'){
       if(hubSection) hubSection.style.display='none';
-      document.getElementById('skillSearchMeta').textContent=query?(t('skills.search.local')+' '+localSkills.length):'';
-      document.getElementById('skillsTotalCount').textContent=formatNum(localSkills.length);
-      document.getElementById('skillsActiveCount').textContent=formatNum(localSkills.filter(s=>s.status==='active').length);
-      document.getElementById('skillsDraftCount').textContent=formatNum(localSkills.filter(s=>s.status==='draft').length);
-      document.getElementById('skillsInstalledCount').textContent=formatNum(localSkills.filter(s=>s.installed).length);
-      document.getElementById('skillsPublicCount').textContent=formatNum(localSkills.filter(s=>s.visibility==='public').length);
+      _st('skillsTotalCount',formatNum(localSkills.length));
+      _st('skillsActiveCount',formatNum(localSkills.filter(s=>s.status==='active').length));
+      _st('skillsDraftCount',formatNum(localSkills.filter(s=>s.status==='draft').length));
+      _st('skillsInstalledCount',formatNum(localSkills.filter(s=>s.installed).length));
+      _st('skillsPublicCount',formatNum(localSkills.filter(s=>s.visibility==='public').length));
       return;
     }
 
@@ -6598,12 +6645,11 @@ async function loadSkills(silent){
       if(hubSection) hubSection.style.display='block';
       var localIds=new Set(localSkills.map(function(s){return s.id;}));
       if(hubList){ loadHubSkills(hubList, localIds); }
-      document.getElementById('skillSearchMeta').textContent=t('skills.search.local')+' '+localSkills.length;
-      document.getElementById('skillsTotalCount').textContent=formatNum(localSkills.length);
-      document.getElementById('skillsActiveCount').textContent=formatNum(localSkills.filter(s=>s.status==='active').length);
-      document.getElementById('skillsDraftCount').textContent=formatNum(localSkills.filter(s=>s.status==='draft').length);
-      document.getElementById('skillsInstalledCount').textContent=formatNum(localSkills.filter(s=>s.installed).length);
-      document.getElementById('skillsPublicCount').textContent=formatNum(localSkills.filter(s=>s.visibility==='public').length);
+      _st('skillsTotalCount',formatNum(localSkills.length));
+      _st('skillsActiveCount',formatNum(localSkills.filter(s=>s.status==='active').length));
+      _st('skillsDraftCount',formatNum(localSkills.filter(s=>s.status==='draft').length));
+      _st('skillsInstalledCount',formatNum(localSkills.filter(s=>s.installed).length));
+      _st('skillsPublicCount',formatNum(localSkills.filter(s=>s.visibility==='public').length));
       return;
     }
 
@@ -6645,12 +6691,11 @@ async function loadSkills(silent){
       }).join(''):'';
     }
 
-    document.getElementById('skillSearchMeta').textContent=t('skills.search.local')+' '+localHits.length+(hubHits.length?' · '+t('scope.hub')+' '+hubHits.length:'');
-    document.getElementById('skillsTotalCount').textContent=formatNum(localHits.length+hubHits.length);
-    document.getElementById('skillsActiveCount').textContent=formatNum(localHits.length);
-    document.getElementById('skillsDraftCount').textContent='0';
-    document.getElementById('skillsInstalledCount').textContent='-';
-    document.getElementById('skillsPublicCount').textContent=formatNum(hubHits.filter(function(s){return s.visibility==='public';}).length);
+    _st('skillsTotalCount',formatNum(localHits.length+hubHits.length));
+    _st('skillsActiveCount',formatNum(localHits.length));
+    _st('skillsDraftCount','0');
+    _st('skillsInstalledCount','-');
+    _st('skillsPublicCount',formatNum(hubHits.filter(function(s){return s.visibility==='public';}).length));
     setPageSizeVisible('skillsPageSize',(localHits.length+hubHits.length)>0);
     updateSkillSelectionToolbar();
   }catch(e){
@@ -6681,10 +6726,10 @@ async function loadHubTasks(){
       });
     }
     hubTasksCache=tasks;
-    document.getElementById('tasksTotalCount').textContent=formatNum(tasks.length);
-    document.getElementById('tasksActiveCount').textContent='-';
-    document.getElementById('tasksCompletedCount').textContent='-';
-    document.getElementById('tasksSkippedCount').textContent='-';
+    _st('tasksTotalCount',formatNum(tasks.length));
+    _st('tasksActiveCount','-');
+    _st('tasksCompletedCount','-');
+    _st('tasksSkippedCount','-');
     if(!tasks.length){
       list.innerHTML='<div style="text-align:center;padding:48px;color:var(--text-muted);font-size:14px">'+t('tasks.empty')+'</div>';
       document.getElementById('tasksPagination').innerHTML='';
@@ -6869,11 +6914,11 @@ async function openSkillDetail(skillId){
     window._currentSkillData=skill;
     var detailActionsHtml='';
     if(skill.status==='active'){
-      detailActionsHtml+='<button class="btn btn-sm btn-warn" onclick="disableSkill(\''+escAttr(skill.id)+'\')">'+t('skills.action.disable')+'</button>';
+      detailActionsHtml+='<button class="btn btn-sm btn-warn" onclick="disableSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skills.action.disable')+'</button>';
     }else if(skill.status==='archived'){
-      detailActionsHtml+='<button class="btn btn-sm btn-success" onclick="enableSkill(\''+escAttr(skill.id)+'\')">'+t('skills.action.enable')+'</button>';
+      detailActionsHtml+='<button class="btn btn-sm btn-success" onclick="enableSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skills.action.enable')+'</button>';
     }
-    detailActionsHtml+='<button class="btn btn-sm btn-danger" onclick="deleteSkill(\''+escAttr(skill.id)+'\')">'+t('skills.action.delete')+'</button>';
+    detailActionsHtml+='<button class="btn btn-sm btn-danger" onclick="deleteSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skills.action.delete')+'</button>';
     document.getElementById('skillDetailActions').innerHTML=detailActionsHtml;
 
   }catch(e){
@@ -7063,6 +7108,7 @@ async function loadConfig(){
     document.getElementById('cfgSkillApiKey').value=skSum.apiKey||'';
 
     document.getElementById('cfgViewerPort').value=cfg.viewerPort||'';
+    document.getElementById('cfgTaskAutoFinalizeHours').value=cfg.taskAutoFinalizeHours!=null?cfg.taskAutoFinalizeHours:'';
 
     const tel=cfg.telemetry||{};
     document.getElementById('cfgTelemetryEnabled').checked=tel.enabled!==false;
@@ -7367,6 +7413,8 @@ async function saveGeneralConfig(){
   const cfg={};
   const vp=document.getElementById('cfgViewerPort').value.trim();
   if(vp) cfg.viewerPort=Number(vp);
+  const tafh=document.getElementById('cfgTaskAutoFinalizeHours').value.trim();
+  cfg.taskAutoFinalizeHours=tafh!==''?Number(tafh):4;
   cfg.telemetry={enabled:document.getElementById('cfgTelemetryEnabled').checked};
 
   await doSaveConfig(cfg, saveBtn, 'generalSaved');
@@ -8152,8 +8200,8 @@ async function loadStats(ownerFilter){
   if(inactiveCount>0){
     document.getElementById('statTotal').title=activeCount+' '+t('stat.active')+', '+inactiveCount+' '+t('stat.deduped');
   }
-  document.getElementById('statSessions').textContent=d.totalSessions||0;
-  document.getElementById('statEmbeddings').textContent=d.totalEmbeddings||0;
+  document.getElementById('statTasks').textContent=d.totalTasks||0;
+  document.getElementById('statSkills').textContent=d.totalSkills||0;
   document.getElementById('statAgents').textContent=agentCount;
 
   const provEl=document.getElementById('embeddingStatus');
@@ -8189,14 +8237,6 @@ async function loadStats(ownerFilter){
   }
 
   const sidebarSessions=getSessionsForView(_activeView);
-  const sl=document.getElementById('sessionList');
-  if(sl) sl.style.display=sidebarSessions.length>0?'':'none';
-  sl.innerHTML='<div class="session-item'+(activeSession===null?' active':'')+'" onclick="filterSession(null)"><span>'+t('sidebar.allsessions')+'</span>'+countBadgeHtml(sidebarSessions.reduce(function(sum,s){return sum+(s.count||0);},0))+'</div>';
-  sidebarSessions.forEach(s=>{
-    const isActive=activeSession===s.session_key;
-    const name=s.session_key.length>20?s.session_key.slice(0,8)+'...'+s.session_key.slice(-8):s.session_key;
-    sl.innerHTML+='<div class="session-item'+(isActive?' active':'')+'" onclick="filterSession(\\''+s.session_key.replace(/'/g,"\\\\'")+'\\')"><span title="'+s.session_key+'">'+name+'</span>'+countBadgeHtml(s.count||0)+'</div>';
-  });
 
   [['filterSession','memories'],['taskFilterSession','tasks'],['skillFilterSession','skills']].forEach(function(pair){
     var selId=pair[0];
@@ -8215,26 +8255,37 @@ async function loadStats(ownerFilter){
     });
   });
 
-  const ownerSel=document.getElementById('filterOwner');
-  if(ownerSel && d.owners && d.owners.length>0){
-    const curVal=ownerSel.value;
+  if(d.owners && d.owners.length>0){
     var agents=d.owners.filter(function(o){return o && o.indexOf('agent:')===0;});
-    ownerSel.innerHTML='<option value="">'+t('filter.allagents')+'</option>';
-    agents.forEach(function(o){
-      var label=o.replace('agent:','');
-      ownerSel.innerHTML+='<option value="'+o+'"'+(o===curVal?' selected':'')+'>'+label+'</option>';
+    ['filterOwner','taskFilterOwner','skillFilterOwner'].forEach(function(selId){
+      var sel=document.getElementById(selId);
+      if(!sel) return;
+      var curVal=sel.value;
+      sel.innerHTML='<option value="">'+t('filter.allagents')+'</option>';
+      agents.forEach(function(o){
+        var label=o.replace('agent:','');
+        sel.innerHTML+='<option value="'+o+'"'+(o===curVal?' selected':'')+'>'+label+'</option>';
+      });
+      sel.style.display='';
     });
-    if(agents.length<=1) ownerSel.style.display='none';
-    else ownerSel.style.display='';
   }
 }
 
 function onOwnerFilterChange(){
-  var owner=document.getElementById('filterOwner').value;
+  var src=event&&event.target?event.target:document.getElementById('filterOwner');
+  var owner=src.value;
+  ['filterOwner','taskFilterOwner','skillFilterOwner'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(el&&el!==src) el.value=owner;
+  });
   activeSession=null;
   currentPage=1;
+  taskSearchQuery='';
+  var tsi=document.getElementById('taskSearchInput');if(tsi)tsi.value='';
   refreshSessionDropdown(owner);
   applyFilters();
+  loadTasks();
+  loadSkills();
 }
 
 async function refreshSessionDropdown(ownerFilter){
@@ -8427,10 +8478,6 @@ function filterSession(key){
   ['filterSession','taskFilterSession','skillFilterSession'].forEach(function(selId){
     var fSel=document.getElementById(selId);
     if(fSel) fSel.value=key||'';
-  });
-  document.querySelectorAll('#sessionList .session-item').forEach(function(el,i){
-    if(i===0) el.classList.toggle('active',!key);
-    else el.classList.toggle('active',el.querySelector('span')?.title===key);
   });
   if(_activeView==='tasks'){
     loadStats();
@@ -8742,7 +8789,7 @@ async function showMemoryModal(chunkId){
       h+='<div class="mm-section"><div class="mm-section-label">'+t('admin.content')+'</div><pre class="mm-content">'+esc(m.content)+'</pre></div>';
     }
     h+='<div class="mm-meta">';
-    if(m.session_key) h+='<div class="mm-meta-chip"><strong>'+t('admin.session')+'</strong><span>'+esc(m.session_key.slice(0,12))+'</span></div>';
+    if(m.session_key) h+='<div class="mm-meta-chip"><strong>'+t('admin.session')+'</strong><span>'+esc(m.session_key)+'</span></div>';
     h+='<div class="mm-meta-chip"><strong>'+t('memory.detail.created')+'</strong><span>'+fmtModalDate(m.created_at)+'</span></div>';
     if(m.updated_at) h+='<div class="mm-meta-chip"><strong>'+t('memory.detail.updated')+'</strong><span>'+fmtModalDate(m.updated_at)+'</span></div>';
     if(m.kind) h+='<div class="mm-meta-chip"><strong>'+t('admin.kind')+'</strong><span>'+esc(m.kind)+'</span></div>';
@@ -8887,7 +8934,13 @@ async function clearAll(){
     const r=await fetch('/api/memories',{method:'DELETE'});
     if(r.status===401){toast(t('settings.session.expired'),'error');return;}
     const d=await r.json();
-    if(d.ok){toast(t('toast.cleared'),'success');loadAll();}
+    if(d.ok){
+      toast(t('toast.cleared'),'success');
+      selectedMemoryIds.clear();selectedTaskIds.clear();selectedSkillIds.clear();
+      _lastMemoriesFingerprint='';_lastTasksFingerprint='';_lastSkillsFingerprint='';_lastStatsFp='';
+      await loadStats();
+      await Promise.all([loadMemories(),loadTasks(),loadSkills(),loadSharingStatus(false)]);
+    }
     else{toast(t('toast.clearfail'),'error')}
   }catch(e){toast('Error: '+e.message,'error')}
 }
@@ -9601,7 +9654,10 @@ function doUpdateInstall(packageSpec,btnEl,statusEl,targetVersion){
       btnEl.disabled=false;
     });
 }
+var _updateChecked=false;
 async function checkForUpdate(){
+  if(_updateChecked) return;
+  _updateChecked=true;
   try{
     const r=await fetch('/api/update-check?_t='+Date.now(),{cache:'no-store'});
     if(!r.ok)return;

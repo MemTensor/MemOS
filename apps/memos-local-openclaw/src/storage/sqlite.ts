@@ -110,9 +110,12 @@ export class SqliteStore {
     this.migrateOwnerFields();
     this.migrateSkillVisibility();
     this.migrateSkillEmbeddingsAndFts();
+    this.migrateTaskTopicColumn();
+    this.migrateTaskEmbeddingsAndFts();
     this.migrateFtsToTrigram();
     this.migrateHubTables();
     this.migrateHubFtsToTrigram();
+    this.migrateHubMemorySourceAgent();
     this.migrateLocalSharedTasksOwner();
     this.migrateHubUserIdentityFields();
     this.migrateClientHubConnectionIdentityFields();
@@ -122,6 +125,16 @@ export class SqliteStore {
 
   private migrateChunksIndexesForRecall(): void {
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_dedup_created ON chunks(dedup_status, created_at DESC)");
+  }
+
+  private migrateHubMemorySourceAgent(): void {
+    try {
+      const cols = this.db.prepare("PRAGMA table_info(hub_memories)").all() as Array<{ name: string }>;
+      if (cols.length > 0 && !cols.some((c) => c.name === "source_agent")) {
+        this.db.exec("ALTER TABLE hub_memories ADD COLUMN source_agent TEXT NOT NULL DEFAULT ''");
+        this.log.info("Migrated: added source_agent column to hub_memories");
+      }
+    } catch { /* table may not exist yet */ }
   }
 
   private migrateLocalSharedTasksOwner(): void {
@@ -286,6 +299,55 @@ export class SqliteStore {
       if (count === 0 && skillCount > 0) {
         this.db.exec("INSERT INTO skills_fts(rowid, name, description) SELECT rowid, name, description FROM skills");
         this.log.info(`Migrated: backfilled skills_fts for ${skillCount} skills`);
+      }
+    } catch { /* best-effort */ }
+  }
+
+  private migrateTaskEmbeddingsAndFts(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS task_embeddings (
+        task_id    TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        vector     BLOB NOT NULL,
+        dimensions INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+        summary,
+        topic,
+        content='tasks',
+        content_rowid='rowid',
+        tokenize='trigram'
+      );
+    `);
+
+    try {
+      this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS tasks_fts_ai AFTER INSERT ON tasks BEGIN
+          INSERT INTO tasks_fts(rowid, summary, topic)
+          VALUES (new.rowid, new.summary, COALESCE(new.topic, ''));
+        END;
+        CREATE TRIGGER IF NOT EXISTS tasks_fts_ad AFTER DELETE ON tasks BEGIN
+          INSERT INTO tasks_fts(tasks_fts, rowid, summary, topic)
+          VALUES ('delete', old.rowid, old.summary, COALESCE(old.topic, ''));
+        END;
+        CREATE TRIGGER IF NOT EXISTS tasks_fts_au AFTER UPDATE ON tasks BEGIN
+          INSERT INTO tasks_fts(tasks_fts, rowid, summary, topic)
+          VALUES ('delete', old.rowid, old.summary, COALESCE(old.topic, ''));
+          INSERT INTO tasks_fts(rowid, summary, topic)
+          VALUES (new.rowid, new.summary, COALESCE(new.topic, ''));
+        END;
+      `);
+    } catch {
+      // triggers may already exist
+    }
+
+    try {
+      const count = (this.db.prepare("SELECT COUNT(*) as c FROM tasks_fts").get() as { c: number }).c;
+      const taskCount = (this.db.prepare("SELECT COUNT(*) as c FROM tasks").get() as { c: number }).c;
+      if (count === 0 && taskCount > 0) {
+        this.db.exec("INSERT INTO tasks_fts(rowid, summary, topic) SELECT rowid, summary, COALESCE(topic, '') FROM tasks");
+        this.log.info(`Migrated: backfilled tasks_fts for ${taskCount} tasks`);
       }
     } catch { /* best-effort */ }
   }
@@ -504,6 +566,14 @@ export class SqliteStore {
     if (!versionCols.some((c) => c.name === "change_summary")) {
       this.db.exec("ALTER TABLE skill_versions ADD COLUMN change_summary TEXT NOT NULL DEFAULT ''");
       this.log.info("Migrated: added change_summary column to skill_versions");
+    }
+  }
+
+  private migrateTaskTopicColumn(): void {
+    const cols = this.db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "topic")) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN topic TEXT DEFAULT NULL");
+      this.log.info("Migrated: added topic column to tasks");
     }
   }
 
@@ -992,6 +1062,7 @@ export class SqliteStore {
         id              TEXT PRIMARY KEY,
         source_chunk_id TEXT NOT NULL,
         source_user_id  TEXT NOT NULL,
+        source_agent    TEXT NOT NULL DEFAULT '',
         role            TEXT NOT NULL,
         content         TEXT NOT NULL,
         summary         TEXT NOT NULL DEFAULT '',
@@ -1433,8 +1504,15 @@ export class SqliteStore {
 
   deleteAll(): number {
     this.db.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.db.exec("DROP TRIGGER IF EXISTS tasks_fts_ai");
+      this.db.exec("DROP TRIGGER IF EXISTS tasks_fts_ad");
+      this.db.exec("DROP TRIGGER IF EXISTS tasks_fts_au");
+      this.db.exec("DELETE FROM tasks_fts");
+    } catch (_) {}
     const tables = [
       "task_skills",
+      "task_embeddings",
       "skill_embeddings",
       "skill_versions",
       "skills",
@@ -1457,6 +1535,7 @@ export class SqliteStore {
       }
     }
     this.db.exec("PRAGMA foreign_keys = ON");
+    this.migrateTaskEmbeddingsAndFts();
     const remaining = this.countChunks();
     return remaining === 0 ? 1 : 0;
   }
@@ -1699,10 +1778,14 @@ export class SqliteStore {
     this.db.prepare(`UPDATE skills SET ${sets.join(", ")} WHERE id = ?`).run(...params);
   }
 
-  listSkills(opts: { status?: string; session?: string } = {}): Skill[] {
+  listSkills(opts: { status?: string; session?: string; owner?: string } = {}): Skill[] {
     const conditions: string[] = [];
     const params: unknown[] = [];
     if (opts.status) { conditions.push("status = ?"); params.push(opts.status); }
+    if (opts.owner) {
+      conditions.push("(owner = ? OR owner = 'public')");
+      params.push(opts.owner);
+    }
     if (opts.session) {
       conditions.push(`EXISTS (
         SELECT 1
@@ -1798,6 +1881,61 @@ export class SqliteStore {
       }));
     } catch {
       this.log.warn(`Skill FTS query failed for: "${sanitized}", returning empty`);
+      return [];
+    }
+  }
+
+  // ─── Task Embeddings & Search ───
+
+  upsertTaskEmbedding(taskId: string, vector: number[]): void {
+    const buf = Buffer.from(new Float32Array(vector).buffer);
+    this.db.prepare(`
+      INSERT OR REPLACE INTO task_embeddings (task_id, vector, dimensions, updated_at)
+      VALUES (?, ?, ?, ?)
+    `).run(taskId, buf, vector.length, Date.now());
+  }
+
+  getTaskEmbeddings(owner?: string): Array<{ taskId: string; vector: number[] }> {
+    let sql = `SELECT te.task_id, te.vector, te.dimensions
+       FROM task_embeddings te
+       JOIN tasks t ON t.id = te.task_id`;
+    const params: any[] = [];
+    if (owner) {
+      sql += ` WHERE (t.owner = ? OR t.owner = 'public')`;
+      params.push(owner);
+    }
+    const rows = this.db.prepare(sql).all(...params) as Array<{ task_id: string; vector: Buffer; dimensions: number }>;
+    return rows.map((r) => ({
+      taskId: r.task_id,
+      vector: Array.from(new Float32Array(r.vector.buffer, r.vector.byteOffset, r.dimensions)),
+    }));
+  }
+
+  taskFtsSearch(query: string, limit: number, owner?: string): Array<{ taskId: string; score: number }> {
+    const sanitized = sanitizeFtsQuery(query);
+    if (!sanitized) return [];
+    try {
+      let sql = `
+        SELECT t.id as task_id, rank
+        FROM tasks_fts f
+        JOIN tasks t ON t.rowid = f.rowid
+        WHERE tasks_fts MATCH ?`;
+      const params: any[] = [sanitized];
+      if (owner) {
+        sql += ` AND (t.owner = ? OR t.owner = 'public')`;
+        params.push(owner);
+      }
+      sql += ` ORDER BY rank LIMIT ?`;
+      params.push(limit);
+      const rows = this.db.prepare(sql).all(...params) as Array<{ task_id: string; rank: number }>;
+      if (rows.length === 0) return [];
+      const maxAbsRank = Math.max(...rows.map((r) => Math.abs(r.rank)));
+      return rows.map((r) => ({
+        taskId: r.task_id,
+        score: maxAbsRank > 0 ? Math.abs(r.rank) / maxAbsRank : 0,
+      }));
+    } catch {
+      this.log.warn(`Task FTS query failed for: "${sanitized}", returning empty`);
       return [];
     }
   }
@@ -2465,9 +2603,10 @@ export class SqliteStore {
 
   upsertHubMemory(memory: HubMemoryRecord): void {
     this.db.prepare(`
-      INSERT INTO hub_memories (id, source_chunk_id, source_user_id, role, content, summary, kind, group_id, visibility, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO hub_memories (id, source_chunk_id, source_user_id, source_agent, role, content, summary, kind, group_id, visibility, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source_user_id, source_chunk_id) DO UPDATE SET
+        source_agent = excluded.source_agent,
         role = excluded.role,
         content = excluded.content,
         summary = excluded.summary,
@@ -2476,7 +2615,7 @@ export class SqliteStore {
         visibility = excluded.visibility,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at
-    `).run(memory.id, memory.sourceChunkId, memory.sourceUserId, memory.role, memory.content, memory.summary, memory.kind, memory.groupId, memory.visibility, memory.createdAt, memory.updatedAt);
+    `).run(memory.id, memory.sourceChunkId, memory.sourceUserId, memory.sourceAgent, memory.role, memory.content, memory.summary, memory.kind, memory.groupId, memory.visibility, memory.createdAt, memory.updatedAt);
   }
 
   getHubMemoryBySource(sourceUserId: string, sourceChunkId: string): HubMemoryRecord | null {
@@ -2642,7 +2781,7 @@ export class SqliteStore {
     if (!sanitized) return [];
     const rows = this.db.prepare(`
       SELECT hm.id, hm.content, hm.summary, hm.role, hm.created_at, hm.visibility, '' as group_name, hu.username as owner_name,
-             bm25(hub_memories_fts) as rank
+             COALESCE(hm.source_agent, '') as source_agent, bm25(hub_memories_fts) as rank
       FROM hub_memories_fts f
       JOIN hub_memories hm ON hm.rowid = f.rowid
       LEFT JOIN hub_users hu ON hu.id = hm.source_user_id
@@ -2658,7 +2797,7 @@ export class SqliteStore {
   getVisibleHubSearchHitByMemoryId(memoryId: string, userId: string): HubMemorySearchRow | null {
     const row = this.db.prepare(`
       SELECT hm.id, hm.content, hm.summary, hm.role, hm.created_at, hm.visibility, '' as group_name, hu.username as owner_name,
-             0 as rank
+             COALESCE(hm.source_agent, '') as source_agent, 0 as rank
       FROM hub_memories hm
       LEFT JOIN hub_users hu ON hu.id = hm.source_user_id
       WHERE hm.id = ?
@@ -3152,6 +3291,7 @@ export interface HubMemoryRecord {
   id: string;
   sourceChunkId: string;
   sourceUserId: string;
+  sourceAgent: string;
   role: string;
   content: string;
   summary: string;
@@ -3166,6 +3306,7 @@ interface HubMemoryRow {
   id: string;
   source_chunk_id: string;
   source_user_id: string;
+  source_agent: string;
   role: string;
   content: string;
   summary: string;
@@ -3181,6 +3322,7 @@ function rowToHubMemory(row: HubMemoryRow): HubMemoryRecord {
     id: row.id,
     sourceChunkId: row.source_chunk_id,
     sourceUserId: row.source_user_id,
+    sourceAgent: row.source_agent || "",
     role: row.role,
     content: row.content,
     summary: row.summary,
@@ -3201,6 +3343,7 @@ interface HubMemorySearchRow {
   visibility: string;
   group_name: string | null;
   owner_name: string | null;
+  source_agent: string;
   rank: number;
 }
 

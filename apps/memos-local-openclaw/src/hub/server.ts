@@ -658,6 +658,7 @@ export class HubServer {
         id: memoryId,
         sourceChunkId,
         sourceUserId: auth.userId,
+        sourceAgent: String(m.sourceAgent || ""),
         role: String(m.role || "assistant"),
         content: String(m.content || ""),
         summary: String(m.summary || ""),
@@ -778,8 +779,8 @@ export class HubServer {
           this.remoteHitMap.set(remoteHitId, { chunkId: id, type: "memory", expiresAt: Date.now() + 10 * 60 * 1000, requesterUserId: auth.userId });
           return {
             remoteHitId, summary: mhit.summary, excerpt: mhit.content.slice(0, 240), hubRank: rank + 1,
-            taskTitle: null, ownerName: mhit.owner_name || "unknown", groupName: mhit.group_name,
-            visibility: mhit.visibility, source: { ts: mhit.created_at, role: mhit.role },
+            taskTitle: null, ownerName: mhit.owner_name || "unknown", sourceAgent: (mhit as any).source_agent || "",
+            groupName: mhit.group_name, visibility: mhit.visibility, source: { ts: mhit.created_at, role: mhit.role },
           };
         }
         let hit = ftsMap.get(id);
@@ -792,8 +793,8 @@ export class HubServer {
         this.remoteHitMap.set(remoteHitId, { chunkId: id, type: "chunk", expiresAt: Date.now() + 10 * 60 * 1000, requesterUserId: auth.userId });
         return {
           remoteHitId, summary: hit!.summary, excerpt: hit!.content.slice(0, 240), hubRank: rank + 1,
-          taskTitle: hit!.task_title, ownerName: hit!.owner_name || "unknown", groupName: hit!.group_name,
-          visibility: hit!.visibility, source: { ts: hit!.created_at, role: hit!.role },
+          taskTitle: hit!.task_title, ownerName: hit!.owner_name || "unknown", sourceAgent: "",
+          groupName: hit!.group_name, visibility: hit!.visibility, source: { ts: hit!.created_at, role: hit!.role },
         };
       }).filter(Boolean);
       return this.json(res, 200, { hits, meta: { totalCandidates: hits.length, searchedGroups: [], includedPublic: true } });

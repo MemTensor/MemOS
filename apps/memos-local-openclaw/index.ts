@@ -427,6 +427,7 @@ const memosLocalPlugin = {
         body: JSON.stringify({
           memory: {
             sourceChunkId: chunk.id,
+            sourceAgent: chunk.owner || "",
             role: chunk.role,
             content: chunk.content,
             summary: chunk.summary,
@@ -447,6 +448,7 @@ const memosLocalPlugin = {
           id: memoryId,
           sourceChunkId: chunk.id,
           sourceUserId: hubClient.userId,
+          sourceAgent: chunk.owner || "",
           role: chunk.role,
           content: chunk.content,
           summary: chunk.summary ?? "",
@@ -549,6 +551,7 @@ const memosLocalPlugin = {
             summary: h.summary,
             original_excerpt: (h.original_excerpt ?? "").slice(0, 200),
             origin: h.origin || "local",
+            owner: h.owner || "",
           }));
 
           // Hub remote candidates (from HTTP call) + hub-memory candidates (from RecallEngine for Hub role)
@@ -685,6 +688,7 @@ const memosLocalPlugin = {
                 chunkId: h.ref.chunkId, taskId: effectiveTaskId, skillId: h.skillId,
                 role: h.source.role, score: h.score, summary: h.summary,
                 original_excerpt: (h.original_excerpt ?? "").slice(0, 200), origin: h.origin || "local",
+                owner: h.owner || "",
               };
             }),
             ...filteredHubRemoteHits.map((h: any) => ({
@@ -692,6 +696,7 @@ const memosLocalPlugin = {
               role: h.source?.role ?? h.role ?? "assistant", score: h.score ?? 0,
               summary: h.summary ?? "", original_excerpt: (h.excerpt ?? h.summary ?? "").slice(0, 200),
               origin: "hub-remote", ownerName: h.ownerName ?? "", groupName: h.groupName ?? "",
+              sourceAgent: h.sourceAgent ?? "",
             })),
           ];
 
@@ -1872,6 +1877,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         const rawLocalCandidates = localHits.map((h) => ({
           score: h.score, role: h.source.role, summary: h.summary,
           content: (h.original_excerpt ?? "").slice(0, 200), origin: h.origin || "local",
+          owner: h.owner || "",
         }));
         const rawHubCandidates = allHubHits.map((h) => ({
           score: h.score, role: h.source.role, summary: h.summary,
@@ -2079,7 +2085,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
           candidates: rawLocalCandidates,
           hubCandidates: rawHubCandidates,
-          filtered: filteredHits.map(h => ({ score: h.score, role: h.source.role, summary: h.summary, content: h.original_excerpt, origin: h.origin || "local" })),
+          filtered: filteredHits.map(h => ({ score: h.score, role: h.source.role, summary: h.summary, content: h.original_excerpt, origin: h.origin || "local", owner: h.owner || "" })),
         }), recallDur, true);
         telemetry.trackAutoRecall(filteredHits.length, recallDur);
 

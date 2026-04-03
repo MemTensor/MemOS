@@ -150,19 +150,22 @@ SAME — the new message:
 - Reports a result, error, or feedback about the current task
 - Discusses different tools or approaches for the SAME goal (e.g., learning English via BBC → via ChatGPT = SAME)
 - Is a short acknowledgment (ok, thanks, 好的) in response to the current flow
+- Contains pronouns or references (那, 这, 它, 其中, 哪些, those, which, what about, etc.) pointing to items from the current conversation
+- Asks about a sub-topic, tool, detail, dimension, or aspect of the current discussion topic
 
 NEW — the new message:
-- Introduces a subject from a DIFFERENT domain than the current task (e.g., tech → cooking, work → personal life, database → travel)
-- Has NO logical connection to what was being discussed
+- Introduces a subject from a COMPLETELY DIFFERENT domain than the current task (e.g., tech → cooking, work → personal life, database → travel)
+- Has NO logical connection to what was being discussed — no shared entities, events, or themes
 - Starts a request about a different project, system, or life area
 - Begins with a new greeting/reset followed by a different topic
 
 Key principles:
-- If the topic domain clearly changed (e.g., server config → recipe, code review → vacation plan), choose NEW
+- Default to SAME unless the topic domain CLEARLY changed. When in doubt, choose SAME.
+- CRITICAL: Short messages (under ~30 characters) that use pronouns or ask "what about X" / "哪些" / "那XX呢" are almost always follow-ups referring to the current topic. Only mark them NEW if they explicitly name a completely unrelated domain.
 - Different aspects of the SAME project/system are SAME (e.g., Nginx SSL → Nginx gzip = SAME)
-- Different unrelated technologies discussed independently are NEW (e.g., Redis config → cooking recipe = NEW)
-- When unsure, lean toward SAME for closely related topics, but do NOT hesitate to mark NEW for obvious domain shifts
-- Examples: "配置Nginx" → "加gzip压缩" = SAME; "配置Nginx" → "做红烧肉" = NEW; "MySQL配置" → "K8s部署" in same infra project = SAME; "部署服务器" → "年会安排" = NEW
+- Asking about tools, systems, or methods for the current topic is SAME (e.g., "港股调研" → "那处理系统有哪些" = SAME; "数据分析" → "用什么工具" = SAME)
+- Different unrelated domains discussed independently are NEW (e.g., Redis config → cooking recipe = NEW)
+- Examples: "配置Nginx" → "加gzip压缩" = SAME; "配置Nginx" → "做红烧肉" = NEW; "港股调研" → "那处理系统有哪些" = SAME; "部署服务器" → "年会安排" = NEW
 
 Output exactly one word: NEW or SAME`;
 
