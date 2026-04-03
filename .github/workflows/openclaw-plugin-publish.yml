@@ -117,4 +117,5 @@ jobs:
             git commit -m "release: openclaw-plugin v${{ inputs.version }}"
           fi
           git tag "openclaw-plugin-v${{ inputs.version }}"
-          git push origin HEAD --tags
+          # main is branch-protected on MemTensor/MemOS — push only the release tag, not HEAD
+          git push origin "refs/tags/openclaw-plugin-v${{ inputs.version }}"
