@@ -9,7 +9,17 @@
 ## 功能
 - **Recall**：`before_agent_start` → `/search/memory`
 - **Add**：`agent_end` → `/add/message`
+- **Config UI**：启动 gateway 时同时启动本地插件配置页面，用来编辑 `plugins.entries.memos-cloud-openclaw-plugin.config`
 - 使用 **Token** 认证（`Authorization: Token <MEMOS_API_KEY>`）
+
+## 配置页面
+- Gateway 启动后，插件会同时拉起一个本地配置页面，并在终端输出访问地址（默认：`http://127.0.0.1:38463`）。
+- 页面会直接读取并写回当前宿主的配置文件：
+  - OpenClaw：`~/.openclaw/openclaw.json`
+  - Moltbot：`~/.moltbot/moltbot.json`
+  - ClawDBot：`~/.clawdbot/clawdbot.json`
+- 如果默认端口被占用，插件会自动顺延到下一个可用端口。
+- 页面保存后会写回 `plugins.entries.memos-cloud-openclaw-plugin.config`。（注意：保存后可能需要手动重启 Gateway 以使配置生效）
 
 ## 安装
 
@@ -57,9 +67,8 @@ openclaw gateway restart
 修改配置后需要重启 gateway。
 
 ## 环境变量
-插件运行时配置的优先级是：**插件 config → env 文件 → 进程环境变量**。
+插件运行时配置的优先级是：**插件 config → env 文件**。为符合纯粹的安全沙箱规范，插件不再支持回退到进程环境变量去读取敏感凭证。
 在 env 文件层，按顺序读取（**openclaw → moltbot → clawdbot**），每个键优先使用最先匹配到的值。
-若三个文件都不存在（或该键未找到），才会回退到进程环境变量。
 
 **配置位置**
 - 文件（优先级顺序）：
@@ -68,19 +77,9 @@ openclaw gateway restart
   - `~/.clawdbot/.env`
 - 每行格式：`KEY=value`
 
-**快速配置（Shell）**
+**快速配置（Shell / Windows）**
 ```bash
-echo 'export MEMOS_API_KEY="mpg-..."' >> ~/.zshrc
-source ~/.zshrc
-# 或者
-
-echo 'export MEMOS_API_KEY="mpg-..."' >> ~/.bashrc
-source ~/.bashrc
-```
-
-**快速配置（Windows PowerShell）**
-```powershell
-[System.Environment]::SetEnvironmentVariable("MEMOS_API_KEY", "mpg-...", "User")
+echo 'MEMOS_API_KEY="mpg-..."' >> ~/.openclaw/.env
 ```
 
 若未读取到 `MEMOS_API_KEY`，插件会提示配置方式并附 API Key 获取地址。
@@ -311,7 +310,7 @@ MEMOS_AGENT_OVERRIDES='{"research-agent": {"memoryLimitNumber": 12, "relativity"
 - **行为说明**：开启后，像 `agent:main:<provider>:direct:<peer-id>` 这样的私聊 sessionKey，会把 `<peer-id>` 当作 MemOS `user_id`。
 - **不会影响的场景**：像 `agent:main:<provider>:channel:<channel-id>` 这类非私聊 sessionKey，仍继续使用配置好的 fallback `userId`。
 - **作用范围**：同一套解析逻辑同时作用于 `buildSearchPayload()` 和 `buildAddMessagePayload()`，保证 recall 与 add 一致。
-- **配置优先级**：仍遵循插件现有规则——插件 config 优先，其次是 `.env` 文件（`~/.openclaw/.env` -> `~/.moltbot/.env` -> `~/.clawdbot/.env`），最后才回退到进程环境变量。
+- **配置优先级**：仍遵循插件现有规则——插件 config 优先，其次是 `.env` 文件（`~/.openclaw/.env` -> `~/.moltbot/.env` -> `~/.clawdbot/.env`）。
 
 
 ## 说明
