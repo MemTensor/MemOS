@@ -5384,6 +5384,8 @@ function fmtSessionDisplay(sid){
     if(parts.length>=4 && parts[2]==='session'){
       return 'agent:'+parts[1];
     }
+    // agent:{agentId}:... (5+ segments, e.g. IM: discord/slack channel peer id) → agent:{agentId} only
+    if(parts.length>=5) return 'agent:'+parts[1];
     // agent:{agentId}:{other} → show from second part (e.g. "work:main")
     return parts.slice(1).join(':');
   }
