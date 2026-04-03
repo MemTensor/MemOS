@@ -622,6 +622,7 @@ export class ViewerServer {
     const items = tasks.map((t) => {
       const meta = db.prepare("SELECT skill_status, owner FROM tasks WHERE id = ?").get(t.id) as { skill_status: string | null; owner: string | null } | undefined;
       const hubTask = this.getHubTaskForLocal(t.id);
+      const share = this.resolveTaskTeamShareForApi(t.id, hubTask);
       return {
         id: t.id,
         sessionKey: t.sessionKey,
@@ -633,7 +634,7 @@ export class ViewerServer {
         chunkCount: this.store.countChunksByTask(t.id),
         skillStatus: meta?.skill_status ?? null,
         owner: meta?.owner ?? "agent:main",
-        sharingVisibility: hubTask?.visibility ?? null,
+        sharingVisibility: share.visibility,
       };
     });
 
@@ -737,6 +738,8 @@ export class ViewerServer {
       const t = this.store.getTask(taskId);
       if (!t) return null;
       const meta = db.prepare("SELECT skill_status, owner FROM tasks WHERE id = ?").get(taskId) as { skill_status: string | null; owner: string | null } | undefined;
+      const hubTask = this.getHubTaskForLocal(taskId);
+      const ts = this.resolveTaskTeamShareForApi(taskId, hubTask);
       return {
         id: t.id, sessionKey: t.sessionKey, title: t.title,
         summary: t.summary ?? "", status: t.status,
@@ -744,6 +747,7 @@ export class ViewerServer {
         chunkCount: this.store.countChunksByTask(t.id),
         skillStatus: meta?.skill_status ?? null,
         owner: meta?.owner ?? "agent:main",
+        sharingVisibility: ts.visibility,
         score,
       };
     }).filter(Boolean);
@@ -780,6 +784,7 @@ export class ViewerServer {
     const meta = db.prepare("SELECT skill_status, skill_reason FROM tasks WHERE id = ?").get(taskId) as
       { skill_status: string | null; skill_reason: string | null } | undefined;
     const hubTask = this.getHubTaskForLocal(taskId);
+    const ts = this.resolveTaskTeamShareForApi(taskId, hubTask);
 
     this.jsonResponse(res, {
       id: task.id,
@@ -794,9 +799,9 @@ export class ViewerServer {
       skillStatus: meta?.skill_status ?? null,
       skillReason: meta?.skill_reason ?? null,
       skillLinks,
-      sharingVisibility: hubTask?.visibility ?? null,
-      sharingGroupId: hubTask?.group_id ?? null,
-      hubTaskId: hubTask ? true : false,
+      sharingVisibility: ts.visibility,
+      sharingGroupId: ts.groupId,
+      hubTaskId: ts.hasHubLink,
     });
   }
 
@@ -1616,7 +1621,8 @@ export class ViewerServer {
 
         const isLocalShared = task.owner === "public";
         const hubTask = this.getHubTaskForLocal(taskId);
-        const isTeamShared = !!hubTask;
+        const taskShareUi = this.resolveTaskTeamShareForApi(taskId, hubTask);
+        const isTeamShared = taskShareUi.hasHubLink;
         const currentScope = isTeamShared ? "team" : isLocalShared ? "local" : "private";
 
         if (scope === currentScope) {
@@ -1676,6 +1682,7 @@ export class ViewerServer {
             });
             if (this.sharingRole === "hub" && hubClient.userId) this.store.deleteHubTaskBySource(hubClient.userId, taskId);
             else this.store.downgradeTeamSharedTaskToLocal(taskId);
+            this.store.clearTeamSharedChunksForTask(taskId);
             hubSynced = true;
           } catch (err) { this.log.warn(`Failed to unshare task from team: ${err}`); }
         }
@@ -1689,6 +1696,8 @@ export class ViewerServer {
               });
               if (this.sharingRole === "hub" && hubClient.userId) this.store.deleteHubTaskBySource(hubClient.userId, taskId);
               else if (!isLocalShared) this.store.unmarkTaskShared(taskId);
+              else this.store.downgradeTeamSharedTaskToLocal(taskId);
+              this.store.clearTeamSharedChunksForTask(taskId);
               hubSynced = true;
             } catch (err) { this.log.warn(`Failed to unshare task from team: ${err}`); }
           }
@@ -1814,6 +1823,39 @@ export class ViewerServer {
     const currentHubInstanceId = this.store.getClientHubConnection()?.hubInstanceId ?? "";
     if (!currentHubInstanceId) return true;
     return scopedHubInstanceId === currentHubInstanceId;
+  }
+
+  /**
+   * Task list/detail/search: derive team-share badge when getHubTaskForLocal misses (e.g. client
+   * hub_instance_id drift, or empty hub_task_id from hub while synced_chunks was recorded).
+   */
+  private resolveTaskTeamShareForApi(taskId: string, hubTask: any): { visibility: string | null; hasHubLink: boolean; groupId: string | null } {
+    if (hubTask) {
+      return {
+        visibility: hubTask.visibility ?? null,
+        hasHubLink: true,
+        groupId: hubTask.group_id ?? null,
+      };
+    }
+    const lst = this.store.getLocalSharedTask(taskId);
+    if (lst) {
+      const hid = String(lst.hubTaskId ?? "").trim();
+      const teamLinked = hid.length > 0 || (lst.syncedChunks ?? 0) > 0;
+      if (teamLinked) return { visibility: lst.visibility || null, hasHubLink: true, groupId: lst.groupId ?? null };
+    }
+    try {
+      const db = (this.store as any).db;
+      const chunkTeam = db.prepare(`
+        SELECT t.visibility AS v, t.group_id AS g FROM team_shared_chunks t
+        INNER JOIN chunks c ON c.id = t.chunk_id
+        WHERE c.task_id = ?
+        LIMIT 1
+      `).get(taskId) as { v: string; g: string | null } | undefined;
+      if (chunkTeam) {
+        return { visibility: chunkTeam.v || null, hasHubLink: true, groupId: chunkTeam.g ?? null };
+      }
+    } catch { /* schema / db edge */ }
+    return { visibility: null, hasHubLink: false, groupId: null };
   }
 
   private getHubMemoryForChunk(chunkId: string): any {

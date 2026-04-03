@@ -1901,18 +1901,20 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           </div>
         </div>
 
-        <div id="migrateActions" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <div id="migrateActions" style="display:flex;gap:10px 16px;align-items:center;flex-wrap:wrap">
           <button class="btn" onclick="migrateScan(true)" id="migrateScanBtn" style="background:var(--bg);border:1px solid var(--border);color:var(--text);font-weight:600;padding:7px 18px;cursor:pointer" data-i18n="migrate.scan">Scan Data Sources</button>
-          <button class="btn btn-primary" onclick="migrateStart()" id="migrateStartBtn" style="display:none" data-i18n="migrate.start">Start Import</button>
-          <span id="migrateConcurrencyRow" style="display:none;align-items:center;gap:6px">
-            <span style="font-size:11px;color:var(--text-muted)" data-i18n="migrate.concurrency.label">Concurrent agents</span>
-            <select id="migrateConcurrency" class="filter-select" style="min-width:auto;padding:3px 28px 3px 10px;font-size:11px">
-              <option value="1" selected>1</option>
-              <option value="2">2</option>
-              <option value="4">4</option>
-              <option value="8">8</option>
-            </select>
-          </span>
+          <div id="migrateStartConcurrencyWrap" style="display:none;align-items:center;gap:12px;flex-wrap:wrap;flex-shrink:0">
+            <button class="btn btn-primary" onclick="migrateStart()" id="migrateStartBtn" style="display:inline-flex" data-i18n="migrate.start">Start Import</button>
+            <span id="migrateConcurrencyRow" style="display:flex;align-items:center;gap:8px;flex-shrink:0;min-width:max-content">
+              <span style="font-size:11px;color:var(--text-muted);white-space:nowrap" data-i18n="migrate.concurrency.label">Concurrent agents</span>
+              <select id="migrateConcurrency" class="filter-select" style="min-width:auto;padding:3px 28px 3px 10px;font-size:11px">
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
+                <option value="4">4</option>
+                <option value="8">8</option>
+              </select>
+            </span>
+          </div>
           <span id="migrateStatus" style="font-size:11px;color:var(--text-muted)"></span>
         </div>
         <div id="migrateConcurrencyWarn" style="display:none;margin-top:8px;padding:8px 12px;background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.2);border-radius:8px;font-size:11px;color:#f59e0b;line-height:1.5">
@@ -5494,9 +5496,9 @@ function openTaskScopeModal(){
   var isTeamShared=!!(task.sharingVisibility||task.hubTaskId);
   var cs=isTeamShared?'team':isLocalShared?'local':'private';
   openScopeSelectorModal('task',task.id,cs,function(s){
-    if(s==='team'){task.sharingVisibility='public';task.hubTaskId=task.hubTaskId||'shared';}
-    else if(s==='local'){task.sharingVisibility=null;task.owner='public';}
-    else{task.sharingVisibility=null;task.owner=task._origOwner||'agent:main';}
+    if(s==='team'){task.sharingVisibility='public';task.hubTaskId=true;}
+    else if(s==='local'){task.sharingVisibility=null;task.hubTaskId=false;task.owner='public';}
+    else{task.sharingVisibility=null;task.hubTaskId=false;task.owner=task._origOwner||'agent:main';}
     renderTaskShareActions(task);
     updateTaskCardBadge(task.id,s);
   });
@@ -5513,7 +5515,7 @@ async function shareCurrentTask(){
   try{
     const r=await fetch('/api/sharing/tasks/share',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({taskId:currentTaskDetail.id,visibility:visibility})});
     const d=await r.json();
-    if(d.ok||d.shared){toast(t('toast.taskShared'),'success');currentTaskDetail.sharingVisibility=visibility;renderTaskShareActions(currentTaskDetail);} else {toast(d.error||t('toast.taskShareFail'),'error');}
+    if(d.ok||d.shared){toast(t('toast.taskShared'),'success');currentTaskDetail.sharingVisibility=visibility;currentTaskDetail.hubTaskId=true;renderTaskShareActions(currentTaskDetail);} else {toast(d.error||t('toast.taskShareFail'),'error');}
   }catch(e){toast(t('toast.taskShareFail')+': '+e.message,'error');}
 }
 
@@ -5522,7 +5524,7 @@ async function unshareCurrentTask(){
   try{
     const r=await fetch('/api/sharing/tasks/unshare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({taskId:currentTaskDetail.id})});
     const d=await r.json();
-    if(d.ok||d.unshared){toast(t('toast.taskUnshared'),'success');currentTaskDetail.sharingVisibility=null;renderTaskShareActions(currentTaskDetail);} else {toast(d.error||t('toast.taskUnshareFail'),'error');}
+    if(d.ok||d.unshared){toast(t('toast.taskUnshared'),'success');currentTaskDetail.sharingVisibility=null;currentTaskDetail.hubTaskId=false;renderTaskShareActions(currentTaskDetail);} else {toast(d.error||t('toast.taskUnshareFail'),'error');}
   }catch(e){toast(t('toast.taskUnshareFail')+': '+e.message,'error');}
 }
 
@@ -8966,7 +8968,7 @@ async function migrateScan(showToast){
   const btn=document.getElementById('migrateScanBtn');
   btn.disabled=true;
   btn.textContent=t('migrate.scanning');
-  document.getElementById('migrateStartBtn').style.display='none';
+  document.getElementById('migrateStartConcurrencyWrap').style.display='none';
   document.getElementById('migrateScanResult').style.display='none';
   document.getElementById('migrateConfigWarn').style.display='none';
   document.getElementById('migrateProgress').style.display='none';
@@ -8999,8 +9001,7 @@ async function migrateScan(showToast){
     const remaining=Math.max(0,(d.totalItems||0)-imported);
 
     if(d.totalItems>0 && d.configReady){
-      document.getElementById('migrateStartBtn').style.display='inline-flex';
-      document.getElementById('migrateConcurrencyRow').style.display='inline-flex';
+      document.getElementById('migrateStartConcurrencyWrap').style.display='flex';
       if(d.hasImportedData){
         document.getElementById('migrateStartBtn').textContent=t('migrate.resume');
       }else{
@@ -9053,11 +9054,10 @@ async function migrateStart(){
 
   window._migrateRunning=true;
   _migrateStatusChecked=true;
-  document.getElementById('migrateStartBtn').style.display='none';
+  document.getElementById('migrateStartConcurrencyWrap').style.display='none';
   document.getElementById('migrateScanBtn').disabled=true;
   var hintEl=document.getElementById('migrateImportedHint');
   if(hintEl) hintEl.style.display='none';
-  document.getElementById('migrateConcurrencyRow').style.display='none';
   document.getElementById('migrateConcurrencyWarn').style.display='none';
   document.getElementById('migrateProgress').style.display='block';
   document.getElementById('migrateLiveLog').innerHTML='';
@@ -9142,7 +9142,7 @@ async function checkMigrateStatus(){
       const progEl=document.getElementById('migrateProgress');
       if(!progEl)return;
       progEl.style.display='block';
-      document.getElementById('migrateStartBtn').style.display='none';
+      document.getElementById('migrateStartConcurrencyWrap').style.display='none';
       document.getElementById('migrateScanBtn').disabled=true;
       document.getElementById('migrateStopBtn').disabled=false;
       const pct=s.total>0?Math.round((s.processed/s.total)*100):0;
@@ -9262,7 +9262,7 @@ function onMigrateDone(wasStopped,skipReload){
   document.getElementById('migrateStopBtn').style.display='none';
   if(wasStopped){
     document.getElementById('migrateBar').style.background='linear-gradient(90deg,#f59e0b,#fbbf24)';
-    document.getElementById('migrateStartBtn').style.display='inline-flex';
+    document.getElementById('migrateStartConcurrencyWrap').style.display='flex';
     document.getElementById('migrateStartBtn').textContent=t('migrate.resume');
     document.getElementById('migratePhaseLabel').textContent=t('migrate.phase.stopped');
   }else{
