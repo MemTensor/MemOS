@@ -322,6 +322,8 @@ export interface MemosLocalConfig {
   skillEvolution?: SkillEvolutionConfig;
   telemetry?: TelemetryConfig;
   sharing?: SharingConfig;
+  /** Hours of inactivity after which an active task is automatically finalized. 0 = disabled. Default 4. */
+  taskAutoFinalizeHours?: number;
 }
 
 // ─── Defaults ───
@@ -357,6 +359,7 @@ export const DEFAULTS = {
   skillAutoRecallLimit: 2,
   skillPreferUpgrade: true,
   skillRedactSensitive: true,
+  taskAutoFinalizeHours: 4,
 } as const;
 
 // ─── Plugin Hooks (OpenClaw integration) ───

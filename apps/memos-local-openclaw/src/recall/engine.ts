@@ -234,6 +234,7 @@ export class RecallEngine {
         score: Math.round(candidate.score * 1000) / 1000,
         taskId: chunk.taskId,
         skillId: chunk.skillId,
+        owner: chunk.owner,
         origin: chunk.owner === "public" ? "local-shared" : "local",
         source: {
           ts: chunk.createdAt,

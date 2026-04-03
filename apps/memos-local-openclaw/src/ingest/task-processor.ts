@@ -51,6 +51,9 @@ export class TaskProcessor {
    * Determines if a new task boundary was crossed and handles transition.
    */
   async onChunksIngested(sessionKey: string, latestTimestamp: number, owner?: string): Promise<void> {
+    if (sessionKey.startsWith("temp:") || sessionKey.startsWith("internal:") || sessionKey.startsWith("system:")) {
+      return;
+    }
     const resolvedOwner = owner ?? "agent:main";
     this.ctx.log.debug(`TaskProcessor.onChunksIngested called session=${sessionKey} ts=${latestTimestamp} owner=${resolvedOwner} processing=${this.processing}`);
     this.pendingEvents.push({ sessionKey, latestTimestamp, owner: resolvedOwner });
@@ -79,13 +82,19 @@ export class TaskProcessor {
     }
   }
 
+  private static extractAgentPrefix(sessionKey: string): string {
+    const parts = sessionKey.split(":");
+    return parts.length >= 3 ? parts.slice(0, 3).join(":") : sessionKey;
+  }
+
   private async detectAndProcess(sessionKey: string, latestTimestamp: number, owner: string): Promise<void> {
     this.ctx.log.debug(`TaskProcessor.detectAndProcess session=${sessionKey} owner=${owner}`);
 
+    const currentAgentPrefix = TaskProcessor.extractAgentPrefix(sessionKey);
     const allActive = this.store.getAllActiveTasks(owner);
     for (const t of allActive) {
-      if (t.sessionKey !== sessionKey) {
-        this.ctx.log.info(`Session changed: finalizing task=${t.id} from session=${t.sessionKey} (owner=${owner})`);
+      if (t.sessionKey !== sessionKey && TaskProcessor.extractAgentPrefix(t.sessionKey) === currentAgentPrefix) {
+        this.ctx.log.info(`Session changed within agent: finalizing task=${t.id} from session=${t.sessionKey} (owner=${owner})`);
         await this.finalizeTask(t);
       }
     }
@@ -179,25 +188,35 @@ export class TaskProcessor {
         continue;
       }
 
-      // LLM topic judgment — check this single user message against full task context
-      const context = this.buildContextSummary(currentTaskChunks);
+      // Structured topic classification
+      const taskState = this.buildTopicJudgeState(currentTaskChunks, userChunk);
       const newMsg = userChunk.content.slice(0, 500);
-      this.ctx.log.info(`Topic judge: "${newMsg.slice(0, 60)}" vs ${existingUserCount} user turns`);
-      const isNew = await this.summarizer.judgeNewTopic(context, newMsg);
-      this.ctx.log.info(`Topic judge result: ${isNew === null ? "null(fallback)" : isNew ? "NEW" : "SAME"}`);
+      this.ctx.log.info(`Topic classify: "${newMsg.slice(0, 60)}" vs ${existingUserCount} user turns`);
+      const result = await this.summarizer.classifyTopic(taskState, newMsg);
+      this.ctx.log.info(`Topic classify: decision=${result?.decision ?? "null"} confidence=${result?.confidence ?? "?"} type=${result?.boundaryType ?? "?"} reason=${result?.reason ?? ""}`);
 
-      if (isNew === null) {
+      if (!result || result.decision === "SAME") {
         this.assignChunksToTask(turn, currentTask.id);
         currentTaskChunks = currentTaskChunks.concat(turn);
         continue;
       }
 
-      if (isNew) {
-        this.ctx.log.info(`Task boundary at turn ${i}: LLM judged new topic. Msg: "${newMsg.slice(0, 80)}..."`);
-        await this.finalizeTask(currentTask);
-        currentTask = await this.createNewTaskReturn(sessionKey, userChunk.createdAt, owner);
-        currentTaskChunks = [];
+      // Low-confidence NEW: second-pass arbitration
+      if (result.confidence < 0.65) {
+        this.ctx.log.info(`Low confidence NEW (${result.confidence}), running second-pass arbitration...`);
+        const secondResult = await this.summarizer.arbitrateTopicSplit(taskState, newMsg);
+        this.ctx.log.info(`Second-pass result: ${secondResult ?? "null(fallback->SAME)"}`);
+        if (!secondResult || secondResult !== "NEW") {
+          this.assignChunksToTask(turn, currentTask.id);
+          currentTaskChunks = currentTaskChunks.concat(turn);
+          continue;
+        }
       }
+
+      this.ctx.log.info(`Task boundary at turn ${i}: classifier judged NEW (confidence=${result.confidence}). Msg: "${newMsg.slice(0, 80)}..."`);
+      await this.finalizeTask(currentTask);
+      currentTask = await this.createNewTaskReturn(sessionKey, userChunk.createdAt, owner);
+      currentTaskChunks = [];
 
       this.assignChunksToTask(turn, currentTask.id);
       currentTaskChunks = currentTaskChunks.concat(turn);
@@ -226,38 +245,39 @@ export class TaskProcessor {
   }
 
   /**
-   * Build context from existing task chunks for the LLM topic judge.
-   * Includes both the task's opening topic and recent exchanges,
-   * so the LLM understands both what the task was originally about
-   * and where the conversation currently is.
-   *
-   * For user messages, include full content (up to 500 chars) since
-   * they carry the topic signal. For assistant messages, use summary
-   * or truncated content since they mostly elaborate.
+   * Build compact task state for the LLM topic classifier.
+   * Includes: topic (first user msg), last 3 turn summaries,
+   * and optional assistant snippet for short/ambiguous messages.
    */
-  private buildContextSummary(chunks: Chunk[]): string {
-    const conversational = chunks.filter((c) => c.role === "user" || c.role === "assistant");
-    if (conversational.length === 0) return "";
+  private buildTopicJudgeState(chunks: Chunk[], newUserChunk: Chunk): string {
+    const conv = chunks.filter((c) => c.role === "user" || c.role === "assistant");
+    if (conv.length === 0) return "";
 
-    const formatChunk = (c: Chunk) => {
-      const label = c.role === "user" ? "User" : "Assistant";
-      const maxLen = c.role === "user" ? 500 : 200;
-      const text = c.summary || c.content.slice(0, maxLen);
-      return `[${label}]: ${text}`;
-    };
+    const firstUser = conv.find((c) => c.role === "user");
+    const topic = firstUser?.summary || firstUser?.content.slice(0, 80) || "";
 
-    if (conversational.length <= 10) {
-      return conversational.map(formatChunk).join("\n");
+    const turns: Array<{ u: string; a: string }> = [];
+    for (let j = 0; j < conv.length; j++) {
+      if (conv[j].role === "user") {
+        const u = conv[j].summary || conv[j].content.slice(0, 60);
+        const nextA = conv[j + 1]?.role === "assistant" ? conv[j + 1] : null;
+        const a = nextA ? (nextA.summary || nextA.content.slice(0, 60)) : "";
+        turns.push({ u, a });
+      }
     }
 
-    const opening = conversational.slice(0, 6).map(formatChunk);
-    const recent = conversational.slice(-4).map(formatChunk);
-    return [
-      "--- Task opening ---",
-      ...opening,
-      "--- Recent exchanges ---",
-      ...recent,
-    ].join("\n");
+    const recent = turns.slice(-3);
+    const turnLines = recent.map((t, i) => `${i + 1}. U:${t.u} A:${t.a}`);
+
+    let snippet = "";
+    if (newUserChunk.content.length < 30 || /^[那这它其还哪啥]/.test(newUserChunk.content.trim())) {
+      const lastA = [...conv].reverse().find((c) => c.role === "assistant");
+      if (lastA) snippet = lastA.content.slice(0, 200);
+    }
+
+    const parts = [`topic:${topic}`, ...turnLines];
+    if (snippet) parts.push(`lastA:${snippet}`);
+    return parts.join("\n");
   }
 
   private async createNewTaskReturn(sessionKey: string, timestamp: number, owner: string = "agent:main"): Promise<Task> {
