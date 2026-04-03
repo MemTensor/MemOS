@@ -148,6 +148,8 @@ function Update-OpenClawConfig {
   param(
     [string]$OpenClawHome,
     [string]$ConfigPath,
+    [string]$ExtensionDir,
+    [string]$PackageSpec,
     [string]$PluginId
   )
 
@@ -155,9 +157,12 @@ function Update-OpenClawConfig {
   New-Item -ItemType Directory -Path $OpenClawHome -Force | Out-Null
   $nodeScript = @'
 const fs = require("fs");
+const path = require("path");
 
 const configPath = process.argv[2];
 const pluginId = process.argv[3];
+const installPath = process.argv[4];
+const spec = process.argv[5];
 
 let config = {};
 if (fs.existsSync(configPath)) {
@@ -192,9 +197,48 @@ if (config.plugins.slots && config.plugins.slots.contextEngine) {
   }
 }
 
+// Register memory slot
+if (!config.plugins.slots || typeof config.plugins.slots !== "object") {
+  config.plugins.slots = {};
+}
+config.plugins.slots.memory = pluginId;
+
+// Register plugin entry as enabled
+if (!config.plugins.entries || typeof config.plugins.entries !== "object") {
+  config.plugins.entries = {};
+}
+if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId] !== "object") {
+  config.plugins.entries[pluginId] = {};
+}
+config.plugins.entries[pluginId].enabled = true;
+
+// Register installs entry with pinned version
+if (!config.plugins.installs || typeof config.plugins.installs !== "object") {
+  config.plugins.installs = {};
+}
+let resolvedName = "";
+let resolvedVersion = "";
+const pkgJsonPath = path.join(installPath, "package.json");
+if (fs.existsSync(pkgJsonPath)) {
+  const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf8"));
+  resolvedName = pkg.name;
+  resolvedVersion = pkg.version;
+}
+const pinnedSpec = resolvedName && resolvedVersion ? `${resolvedName}@${resolvedVersion}` : spec;
+config.plugins.installs[pluginId] = {
+  source: "npm",
+  spec: pinnedSpec,
+  installPath,
+  ...(resolvedVersion ? { version: resolvedVersion } : {}),
+  ...(resolvedName ? { resolvedName } : {}),
+  ...(resolvedVersion ? { resolvedVersion } : {}),
+  ...(resolvedName && resolvedVersion ? { resolvedSpec: pinnedSpec } : {}),
+  installedAt: new Date().toISOString(),
+};
+
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 '@
-  $nodeScript | & node - $ConfigPath $PluginId
+  $nodeScript | & node - $ConfigPath $PluginId $ExtensionDir $PackageSpec
   Write-Success "OpenClaw config updated: $ConfigPath"
 }
 
@@ -352,7 +396,17 @@ if (-not (Test-Path $NodeModulesDir)) {
   exit 1
 }
 
-Update-OpenClawConfig -OpenClawHome $OpenClawHome -ConfigPath $OpenClawConfigPath -PluginId $PluginId
+Update-OpenClawConfig -OpenClawHome $OpenClawHome -ConfigPath $OpenClawConfigPath -PluginId $PluginId -ExtensionDir $ExtensionDir -PackageSpec $PackageSpec
 
 Write-Success "Restarting OpenClaw Gateway..."
-& npx openclaw gateway run --port $Port --force
+try { & npx openclaw gateway install --port $Port --force 2>&1 } catch {}
+& npx openclaw gateway start 2>&1
+
+Write-Host ""
+Write-Host "=========================================="
+Write-Host "  Installation complete!"
+Write-Host "=========================================="
+Write-Host ""
+Write-Host "  OpenClaw Web UI:      http://localhost:${Port}"
+Write-Host "  Memory Viewer:        http://localhost:18799"
+Write-Host ""
