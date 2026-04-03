@@ -388,8 +388,18 @@ fi
 update_openclaw_config
 
 success "Restart OpenClaw Gateway, 重启 OpenClaw Gateway..."
-npx openclaw gateway install --port "${PORT}" --force 2>&1 || true
-npx openclaw gateway start 2>&1
+openclaw gateway install --port "${PORT}" --force 2>&1 || true
+openclaw gateway start 2>&1
+
+info "Starting Memory Viewer, 正在启动记忆面板..."
+for i in 1 2 3 4 5; do
+  if command -v lsof >/dev/null 2>&1 && lsof -i :18799 -t >/dev/null 2>&1; then
+    break
+  fi
+  printf "."
+  sleep 1
+done
+echo ""
 
 echo ""
 echo "=========================================="

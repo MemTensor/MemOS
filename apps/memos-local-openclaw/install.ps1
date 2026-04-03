@@ -148,9 +148,9 @@ function Update-OpenClawConfig {
   param(
     [string]$OpenClawHome,
     [string]$ConfigPath,
+    [string]$PluginId,
     [string]$ExtensionDir,
-    [string]$PackageSpec,
-    [string]$PluginId
+    [string]$PackageSpec
   )
 
   Write-Info "Updating OpenClaw config..."
@@ -399,12 +399,21 @@ if (-not (Test-Path $NodeModulesDir)) {
 Update-OpenClawConfig -OpenClawHome $OpenClawHome -ConfigPath $OpenClawConfigPath -PluginId $PluginId -ExtensionDir $ExtensionDir -PackageSpec $PackageSpec
 
 Write-Success "Restarting OpenClaw Gateway..."
-try { & npx openclaw gateway install --port $Port --force 2>&1 } catch {}
-& npx openclaw gateway start 2>&1
+& openclaw gateway install --port $Port --force 2>&1 | Out-Null
+& openclaw gateway start 2>&1
+
+Write-Info "Starting Memory Viewer, 正在启动记忆面板..."
+for ($i = 1; $i -le 5; $i++) {
+  $listening = Get-NetTCPConnection -LocalPort 18799 -State Listen -ErrorAction SilentlyContinue
+  if ($listening) { break }
+  Write-Host "." -NoNewline
+  Start-Sleep -Seconds 1
+}
+Write-Host ""
 
 Write-Host ""
 Write-Host "=========================================="
-Write-Host "  Installation complete!"
+Write-Host "  Installation complete! 安装完成!"
 Write-Host "=========================================="
 Write-Host ""
 Write-Host "  OpenClaw Web UI:      http://localhost:${Port}"
