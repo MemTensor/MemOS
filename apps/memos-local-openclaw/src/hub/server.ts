@@ -714,9 +714,14 @@ export class HubServer {
 
       // Track which IDs are memories vs chunks
       const memoryIdSet = new Set(memFtsHits.map(({ hit }) => hit.id));
+      const ftsHitIdSet = new Set<string>();
+      for (const { hit } of ftsHits) ftsHitIdSet.add(hit.id);
+      for (const { hit } of memFtsHits) ftsHitIdSet.add(hit.id);
 
       // Two-stage retrieval: FTS candidates first, then embed + cosine rerank
       let mergedIds: string[];
+      /** Vector RRF channel: require min cosine similarity unless id is already an FTS hit. */
+      const MIN_VECTOR_SIM = 0.45;
       if (this.opts.embedder) {
         try {
           const [queryVec] = await this.opts.embedder.embed([query]);
@@ -739,8 +744,9 @@ export class HubServer {
               memoryIdSet.add(e.memoryId);
             }
 
-            scored.sort((a, b) => b.score - a.score);
-            const topScored = scored.slice(0, maxResults * 2);
+            const vecCandidates = scored.filter((s) => s.score >= MIN_VECTOR_SIM || ftsHitIdSet.has(s.id));
+            vecCandidates.sort((a, b) => b.score - a.score);
+            const topScored = vecCandidates.slice(0, maxResults * 2);
 
             const K = 60;
             const rrfScores = new Map<string, number>();

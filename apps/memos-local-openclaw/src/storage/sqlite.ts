@@ -2724,6 +2724,11 @@ export class SqliteStore {
     this.db.prepare("UPDATE local_shared_tasks SET hub_task_id = '', hub_instance_id = '', visibility = 'public', group_id = NULL, synced_chunks = 0 WHERE task_id = ?").run(taskId);
   }
 
+  /** Client UI: remove team_shared_chunks rows for all chunks linked to this task (list badge chunk fallback). */
+  clearTeamSharedChunksForTask(taskId: string): void {
+    this.db.prepare("DELETE FROM team_shared_chunks WHERE chunk_id IN (SELECT id FROM chunks WHERE task_id = ?)").run(taskId);
+  }
+
   clearAllTeamSharingState(): void {
     this.clearTeamSharedChunks();
     this.clearTeamSharedSkills();
