@@ -215,11 +215,14 @@ OPENCLAW_CONFIG_PATH="${OPENCLAW_HOME}/openclaw.json"
 update_openclaw_config() {
   info "Update OpenClaw config, 更新 OpenClaw 配置..."
   mkdir -p "${OPENCLAW_HOME}"
-  node - "${OPENCLAW_CONFIG_PATH}" "${PLUGIN_ID}" <<'NODE'
+  node - "${OPENCLAW_CONFIG_PATH}" "${PLUGIN_ID}" "${EXTENSION_DIR}" "${PACKAGE_SPEC}" <<'NODE'
 const fs = require('fs');
+const path = require('path');
 
 const configPath = process.argv[2];
 const pluginId = process.argv[3];
+const installPath = process.argv[4];
+const spec = process.argv[5];
 
 let config = {};
 if (fs.existsSync(configPath)) {
@@ -253,6 +256,45 @@ if (config.plugins.slots && config.plugins.slots.contextEngine) {
     delete config.plugins.slots;
   }
 }
+
+// Register memory slot
+if (!config.plugins.slots || typeof config.plugins.slots !== 'object') {
+  config.plugins.slots = {};
+}
+config.plugins.slots.memory = pluginId;
+
+// Register plugin entry as enabled
+if (!config.plugins.entries || typeof config.plugins.entries !== 'object') {
+  config.plugins.entries = {};
+}
+if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId] !== 'object') {
+  config.plugins.entries[pluginId] = {};
+}
+config.plugins.entries[pluginId].enabled = true;
+
+// Register installs entry with pinned version
+if (!config.plugins.installs || typeof config.plugins.installs !== 'object') {
+  config.plugins.installs = {};
+}
+let resolvedName = '';
+let resolvedVersion = '';
+const pkgJsonPath = path.join(installPath, 'package.json');
+if (fs.existsSync(pkgJsonPath)) {
+  const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+  resolvedName = pkg.name;
+  resolvedVersion = pkg.version;
+}
+const pinnedSpec = resolvedName && resolvedVersion ? `${resolvedName}@${resolvedVersion}` : spec;
+config.plugins.installs[pluginId] = {
+  source: 'npm',
+  spec: pinnedSpec,
+  installPath,
+  ...(resolvedVersion ? { version: resolvedVersion } : {}),
+  ...(resolvedName ? { resolvedName } : {}),
+  ...(resolvedVersion ? { resolvedVersion } : {}),
+  ...(resolvedName && resolvedVersion ? { resolvedSpec: pinnedSpec } : {}),
+  installedAt: new Date().toISOString(),
+};
 
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 NODE
@@ -346,4 +388,14 @@ fi
 update_openclaw_config
 
 success "Restart OpenClaw Gateway, 重启 OpenClaw Gateway..."
-exec npx openclaw gateway run --port "${PORT}" --force
+npx openclaw gateway install --port "${PORT}" --force 2>&1 || true
+npx openclaw gateway start 2>&1
+
+echo ""
+echo "=========================================="
+echo "  Installation complete! 安装完成!"
+echo "=========================================="
+echo ""
+echo "  OpenClaw Web UI:      http://localhost:${PORT}"
+echo "  Memory Viewer:        http://localhost:18799"
+echo ""
