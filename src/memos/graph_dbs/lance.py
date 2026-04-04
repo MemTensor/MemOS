@@ -759,5 +759,23 @@ class LanceGraphDB(BaseGraphDB):
     def import_graph(self, data: dict[str, Any], user_name: str | None = None) -> None:
         pass
 
+    def node_not_exist(self, scope: str, user_name: str | None = None) -> bool:
+        """Check if there is NO node with the given memory_type (scope) for the user."""
+        target_user = user_name or self.user_name
+        try:
+            ds = self._get_memories_table()
+            where_clauses = []
+            if not self.config.use_multi_db and target_user:
+                where_clauses.append(f"user_name = '{target_user}'")
+            if scope:
+                where_clauses.append(f"memory_type = '{scope}'")
+
+            query_str = " AND ".join(where_clauses)
+            if query_str:
+                return len(ds.search().where(query_str).to_list()) == 0
+            return ds.count_rows() == 0
+        except Exception:
+            return True
+
     def close(self) -> None:
         pass
