@@ -1,13 +1,10 @@
 import type { SqliteStore } from "../storage/sqlite";
 import type { ToolDefinition, TimelineResult, TimelineEntry, ChunkRef } from "../types";
 import { DEFAULTS } from "../types";
+import { resolveDefaultOwner, resolveOwnerFilter } from "./resolve-owner";
 
-function resolveOwnerFilter(owner: unknown): string[] {
-  const resolvedOwner = typeof owner === "string" && owner.trim().length > 0 ? owner : "agent:main";
-  return resolvedOwner === "public" ? ["public"] : [resolvedOwner, "public"];
-}
-
-export function createMemoryTimelineTool(store: SqliteStore): ToolDefinition {
+export function createMemoryTimelineTool(store: SqliteStore, workspaceDir?: string): ToolDefinition {
+  const defaultOwner = resolveDefaultOwner(workspaceDir);
   return {
     name: "memory_timeline",
     description:
@@ -38,7 +35,7 @@ export function createMemoryTimelineTool(store: SqliteStore): ToolDefinition {
       const ref = input.ref as ChunkRef;
       const window = (input.window as number) ?? DEFAULTS.timelineWindowDefault;
 
-      const ownerFilter = resolveOwnerFilter(input.owner);
+      const ownerFilter = resolveOwnerFilter(input.owner, defaultOwner);
       const anchorChunk = store.getChunksByRef(ref, ownerFilter);
       if (!anchorChunk) {
         return { entries: [], anchorRef: ref } satisfies TimelineResult;

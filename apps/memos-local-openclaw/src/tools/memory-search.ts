@@ -3,11 +3,7 @@ import type { HubScope, HubSearchResult } from "../sharing/types";
 import type { RecallEngine } from "../recall/engine";
 import type { PluginContext, ToolDefinition } from "../types";
 import type { SqliteStore } from "../storage/sqlite";
-
-function resolveOwnerFilter(owner: unknown): string[] {
-  const resolvedOwner = typeof owner === "string" && owner.trim().length > 0 ? owner : "agent:main";
-  return resolvedOwner === "public" ? ["public"] : [resolvedOwner, "public"];
-}
+import { resolveDefaultOwner, resolveOwnerFilter } from "./resolve-owner";
 
 function resolveScope(scope: unknown): HubScope {
   return scope === "group" || scope === "all" ? scope : "local";
@@ -25,6 +21,7 @@ function emptyHubResult(scope: HubScope): HubSearchResult {
 }
 
 export function createMemorySearchTool(engine: RecallEngine, store?: SqliteStore, ctx?: PluginContext, sharedState?: { lastSearchTime: number }): ToolDefinition {
+  const defaultOwner = resolveDefaultOwner(ctx?.workspaceDir);
   return {
     name: "memory_search",
     description:
@@ -64,7 +61,7 @@ export function createMemorySearchTool(engine: RecallEngine, store?: SqliteStore
       const query = (input.query as string) ?? "";
       const maxResults = input.maxResults as number | undefined;
       const minScore = input.minScore as number | undefined;
-      const ownerFilter = resolveOwnerFilter(input.owner);
+      const ownerFilter = resolveOwnerFilter(input.owner, defaultOwner);
       const scope = resolveScope(input.scope);
 
       const localSearch = engine.search({
