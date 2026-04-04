@@ -41,6 +41,7 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
         "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
         "polardb": APIConfig.get_polardb_config(user_id=user_id),
         "postgres": APIConfig.get_postgres_config(user_id=user_id),
+        "lance": APIConfig.get_lance_graph_config(user_id=user_id),
     }
 
     # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
@@ -62,10 +63,27 @@ def build_vec_db_config() -> dict[str, Any]:
     Returns:
         Validated vector database configuration dictionary
     """
+    vec_db_backend = os.getenv("MOS_VEC_DB_BACKEND", "milvus").lower()
+
+    config = {}
+    if vec_db_backend == "milvus":
+        config = APIConfig.get_milvus_config()
+    elif vec_db_backend == "lance":
+        base_uri = os.getenv("LANCE_URI", "./data/lance_db")
+        config = {
+            "uri": base_uri,
+            "collection_name": ["memories"],
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 2048)),
+        }
+    elif vec_db_backend == "qdrant":
+        config = APIConfig.get_qdrant_config()
+    else:
+        raise ValueError(f"Unsupported vector DB backend: {vec_db_backend}")
+
     return VectorDBConfigFactory.model_validate(
         {
-            "backend": "milvus",
-            "config": APIConfig.get_milvus_config(),
+            "backend": vec_db_backend,
+            "config": config,
         }
     )
 

@@ -241,6 +241,19 @@ class PostgresGraphDBConfig(BaseConfig):
         return self
 
 
+class LanceGraphDBConfig(BaseConfig):
+    """
+    LanceDB-specific configuration.
+    """
+
+    uri: str = Field(..., description="The URI/path to the LanceDB dataset")
+    user_name: str | None = Field(
+        default=None,
+        description="Logical user or tenant ID for data isolation",
+    )
+    embedding_dimension: int = Field(default=768, description="Dimension of vector embedding")
+
+
 class GraphDBConfigFactory(BaseModel):
     backend: str = Field(..., description="Backend for graph database")
     config: dict[str, Any] = Field(..., description="Configuration for the graph database backend")
@@ -250,6 +263,7 @@ class GraphDBConfigFactory(BaseModel):
         "neo4j-community": Neo4jCommunityGraphDBConfig,
         "polardb": PolarDBGraphDBConfig,
         "postgres": PostgresGraphDBConfig,
+        "lance": LanceGraphDBConfig,
     }
 
     @field_validator("backend")
