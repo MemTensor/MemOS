@@ -6685,6 +6685,7 @@ function onProviderChange(){}
 async function loadConfig(){
   try{
     const r=await fetch('/api/config');
+    if(r.status===401){toast(t('settings.session.expired'),'error');return;}
     if(!r.ok) return;
     const cfg=await r.json();
     const emb=cfg.embedding||{};
