@@ -449,10 +449,12 @@ class LanceGraphDB(BaseGraphDB):
         target_user = user_name or self.user_name
         ds = self._get_memories_table()
 
-        conditions = [f"user_name = '{target_user}'"]
+        conditions = []
+        if getattr(self.config, "use_multi_db", False) is False and target_user:
+            conditions.append(f"user_name = '{target_user}'")
 
         # Fast scalar filtering using flattened columns
-        if scope:
+        if scope and scope != "All":
             conditions.append(f"memory_type = '{scope}'")
         if status:
             conditions.append(f"status = '{status}'")
@@ -465,15 +467,14 @@ class LanceGraphDB(BaseGraphDB):
                 else:
                     conditions.append(f"properties LIKE '%\"{k}\": {json.dumps(v)}%'")
 
-        where_clause = " AND ".join(conditions)
+        where_clause = " AND ".join(conditions) if conditions else None
 
         try:
-            df = (
-                ds.search(vector, vector_column_name="embedding")
-                .where(where_clause)
-                .limit(top_k)
-                .to_pandas()
-            )
+            query = ds.search(vector, vector_column_name="embedding")
+            if where_clause:
+                query = query.where(where_clause)
+
+            df = query.limit(top_k).to_pandas()
             results = []
 
             for _, row in df.iterrows():
@@ -568,11 +569,15 @@ class LanceGraphDB(BaseGraphDB):
         """
         target_user = kwargs.get("user_name") or self.user_name
         ds = self._get_memories_table()
-        query = " ".join(query_words)
+        query_str = " ".join(query_words)
 
         try:
             # Execute native FTS query
-            res = ds.search(query).where(f"user_name = '{target_user}'").limit(top_k).to_list()
+            query = ds.search(query_str)
+            if getattr(self.config, "use_multi_db", False) is False and target_user:
+                query = query.where(f"user_name = '{target_user}'")
+
+            res = query.limit(top_k).to_list()
             results = []
             for row in res:
                 results.append(
@@ -631,24 +636,28 @@ class LanceGraphDB(BaseGraphDB):
     def get_structure_optimization_candidates(
         self, scope: str, user_name: str | None = None, **kwargs
     ):
-        target_user = user_name or self.user_name
+        target_user = user_name or (
+            self.user_name if getattr(self, "user_name", "default") != "default" else None
+        )
         ds = self._get_memories_table()
         edges_ds = self._get_edges_table()
 
         try:
             # get all memories
-            df_memories = (
-                ds.search()
-                .where(
+            query = ds.search().where(f"memory_type = '{scope}' AND status = 'activated'")
+            if getattr(self.config, "use_multi_db", False) is False and target_user:
+                query = ds.search().where(
                     f"memory_type = '{scope}' AND status = 'activated' AND user_name = '{target_user}'"
                 )
-                .to_pandas()
-            )
+            df_memories = query.to_pandas()
             if df_memories.empty:
                 return []
 
             # get all edges to find isolated nodes
-            df_edges = edges_ds.search().where(f"user_name = '{target_user}'").to_pandas()
+            edge_query = edges_ds.search()
+            if getattr(self.config, "use_multi_db", False) is False and target_user:
+                edge_query = edge_query.where(f"user_name = '{target_user}'")
+            df_edges = edge_query.to_pandas()
             connected_nodes = set()
             if not df_edges.empty:
                 connected_nodes.update(df_edges["source_id"].tolist())
@@ -691,13 +700,11 @@ class LanceGraphDB(BaseGraphDB):
         ds = self._get_memories_table()
 
         try:
-            query = (
-                ds.search(query_type="hybrid")
-                .vector(vector)
-                .text(query_text)
-                .where(f"user_name = '{target_user}'")
-                .limit(top_k)
-            )
+            query = ds.search(query_type="hybrid").vector(vector).text(query_text)
+            if getattr(self.config, "use_multi_db", False) is False and target_user:
+                query = query.where(f"user_name = '{target_user}'")
+
+            query = query.limit(top_k)
 
             if reranker:
                 query = query.rerank(reranker=reranker)
@@ -759,13 +766,34 @@ class LanceGraphDB(BaseGraphDB):
     def import_graph(self, data: dict[str, Any], user_name: str | None = None) -> None:
         pass
 
-    def node_not_exist(self, scope: str, user_name: str | None = None) -> bool:
-        """Check if there is NO node with the given memory_type (scope) for the user."""
-        target_user = user_name or self.user_name
+    def get_memory_count(self, scope: str | None = None, user_name: str | None = None) -> int:
+        target_user = user_name or (
+            self.user_name if getattr(self, "user_name", "default") != "default" else None
+        )
         try:
             ds = self._get_memories_table()
             where_clauses = []
-            if not self.config.use_multi_db and target_user:
+            if getattr(self.config, "use_multi_db", False) is False and target_user:
+                where_clauses.append(f"user_name = '{target_user}'")
+            if scope:
+                where_clauses.append(f"memory_type = '{scope}'")
+
+            if where_clauses:
+                query_str = " AND ".join(where_clauses)
+                return len(ds.search().where(query_str).to_list())
+            return ds.count_rows()
+        except Exception:
+            return 0
+
+    def node_not_exist(self, scope: str, user_name: str | None = None) -> bool:
+        """Check if there is NO node with the given memory_type (scope) for the user."""
+        target_user = user_name or (
+            self.user_name if getattr(self, "user_name", "default") != "default" else None
+        )
+        try:
+            ds = self._get_memories_table()
+            where_clauses = []
+            if getattr(self.config, "use_multi_db", False) is False and target_user:
                 where_clauses.append(f"user_name = '{target_user}'")
             if scope:
                 where_clauses.append(f"memory_type = '{scope}'")

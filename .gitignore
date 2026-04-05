@@ -237,3 +237,8 @@ outputs
 evaluation/data/
 test_add_pipeline.py
 test_file_pipeline.py
+
+# LanceDB local storage and scripts
+data/
+inspect_lancedb.py
+memos_server.log
