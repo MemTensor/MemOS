@@ -2,32 +2,11 @@ import https from "https";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { spawn, exec } from "child_process";
 import os from "os";
-
-/**
- * Kill a spawned child process and its entire process tree.
- */
-function killProcessTree(child) {
-  try {
-    if (process.platform === "win32") {
-      exec(`taskkill /pid ${child.pid} /T /F`, () => {});
-    } else {
-      // On Unix, kill the process group
-      process.kill(-child.pid, "SIGKILL");
-    }
-  } catch (e) {
-    // Fallback: try the basic kill
-    try { child.kill("SIGKILL"); } catch (_) {}
-  }
-}
-
-let isUpdating = false;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const CHECK_INTERVAL = 12 * 60 * 60 * 1000; // 12 hours check interval
-const UPDATE_TIMEOUT = 3 * 60 * 1000; // 3 minutes timeout for the CLI update command to finish
 const PLUGIN_NAME = "@memtensor/memos-cloud-openclaw-plugin";
 const CHECK_FILE = path.join(os.tmpdir(), "memos_openclaw_update_check.json");
 
@@ -130,11 +109,6 @@ export function startUpdateChecker(log) {
   }
 
   const runCheck = async () => {
-    if (isUpdating) {
-      log.info?.(`${ANSI.YELLOW}[memos-cloud] An update sequence is currently in progress, skipping this check.${ANSI.RESET}`);
-      return;
-    }
-
     // TRULY PREVENT LOOPS: The instant we start a check, record the time BEFORE any network or processing happens.
     // This absolutely guarantees that even if the network hangs, NPM crashes, or openclaw update causes an immediate hot reload,
     // the system has already advanced the 12-hour/1-min clock and will NOT re-enter this function on boot.
@@ -158,15 +132,6 @@ export function startUpdateChecker(log) {
         return;
       }
 
-      log.info?.(`${ANSI.YELLOW}[memos-cloud] Update available: ${currentVersion} -> ${latestVersion}. Updating in background...${ANSI.RESET}`);
-
-      let dotCount = 0;
-      const progressInterval = setInterval(() => {
-        dotCount++;
-        const dots = ".".repeat(dotCount % 4);
-        log.info?.(`${ANSI.YELLOW}[memos-cloud] Update in progress for memos-cloud-openclaw-plugin${dots}${ANSI.RESET}`);
-      }, 30000); // Log every 30 seconds to show it's still alive without spamming
-
       const cliName = (() => {
         // Check the full path of the entry script (e.g., .../moltbot/bin/index.js) or the executable
         const scriptPath = process.argv[1] ? process.argv[1].toLowerCase() : "";
@@ -177,65 +142,17 @@ export function startUpdateChecker(log) {
         return "openclaw";
       })();
 
-      isUpdating = true;
-      const spawnOpts = { shell: true };
-      // On Unix, detach the process so we can kill the entire process group on timeout
-      if (process.platform !== "win32") {
-        spawnOpts.detached = true;
-      }
-      const child = spawn(cliName, ["plugins", "update", "memos-cloud-openclaw-plugin"], spawnOpts);
-
-      // Timeout mechanism: forcefully kill the update process if it hangs for more than the configured timeout
-      const updateTimeout = setTimeout(() => {
-        log.warn?.(`${ANSI.RED}[memos-cloud] Update process timed out. Please try manually running: ${cliName} plugins update memos-cloud-openclaw-plugin${ANSI.RESET}`);
-        killProcessTree(child);
-
-        // Fallback: if kill failed and the close event never fires, forcefully release the lock after 5 seconds
-        setTimeout(() => {
-          if (isUpdating) {
-            clearInterval(progressInterval);
-            isUpdating = false;
-          }
-        }, 5000);
-      }, UPDATE_TIMEOUT);
-
-      child.stdout.on("data", (data) => {
-        const outText = data.toString();
-        log.info?.(`${ANSI.CYAN}[${cliName}-cli]${ANSI.RESET}\n${outText.trim()}`);
-        
-        // Auto-reply to any [y/N] prompts from the CLI
-        if (outText.toLowerCase().includes("[y/n]")) {
-          child.stdin.write("y\n");
-        }
-      });
-
-      child.stderr.on("data", (data) => {
-        const errText = data.toString();
-        log.warn?.(`${ANSI.RED}[${cliName}-cli]${ANSI.RESET}\n${errText.trim()}`);
-        
-        // Some CLIs output interactive prompts to stderr instead of stdout
-        if (errText.toLowerCase().includes("[y/n]")) {
-          child.stdin.write("y\n");
-        }
-      });
-
-      child.on("close", (code) => {
-        clearTimeout(updateTimeout);
-        clearInterval(progressInterval);
-        isUpdating = false;
-
-        // Wait for a brief moment to let file system sync if needed
-        setTimeout(() => {
-          const postUpdateVersion = getPackageVersion();
-          const actuallyUpdated = (postUpdateVersion === latestVersion) && (postUpdateVersion !== currentVersion);
-
-          if (code !== 0 || !actuallyUpdated) {
-            log.warn?.(`${ANSI.RED}[memos-cloud] Auto-update failed or version did not change. Please refer to the CLI logs above, or run manually: ${cliName} plugins update memos-cloud-openclaw-plugin${ANSI.RESET}`);
-          } else {
-            log.info?.(`${ANSI.GREEN}[memos-cloud] Successfully updated to version ${latestVersion}. Please restart the gateway to apply changes.${ANSI.RESET}`);
-          }
-        }, 1000); // Small 1-second buffer for file systems
-      });
+      const border = "=".repeat(64);
+      log.info?.("");
+      log.info?.(`${ANSI.GREEN}${border}${ANSI.RESET}`);
+      log.info?.(`${ANSI.YELLOW}🚀 [memos-cloud] NEW VERSION AVAILABLE!${ANSI.RESET}`);
+      log.info?.(`${ANSI.CYAN}📦 Current version : ${currentVersion}${ANSI.RESET}`);
+      log.info?.(`${ANSI.GREEN}✨ Latest version  : ${latestVersion}${ANSI.RESET}`);
+      log.info?.(`${ANSI.CYAN}────────────────────────────────────────────────────────────────${ANSI.RESET}`);
+      log.info?.(`${ANSI.GREEN}Please run the following command to update manually:${ANSI.RESET}`);
+      log.info?.(`${ANSI.YELLOW}${cliName} plugins update memos-cloud-openclaw-plugin${ANSI.RESET}`);
+      log.info?.(`${ANSI.GREEN}${border}${ANSI.RESET}`);
+      log.info?.("");
 
     } catch (error) {
       log.warn?.(`${ANSI.RED}[memos-cloud] Update check failed entirely: ${error.message}${ANSI.RESET}`);
