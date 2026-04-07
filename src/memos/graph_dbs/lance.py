@@ -166,8 +166,14 @@ class LanceGraphDB(BaseGraphDB):
             return
 
         meta = node.get("metadata", {})
-        if "metadata" in fields:
-            meta.update(fields["metadata"])
+
+        # In Neo4j, fields are top-level properties. In LanceDB, most properties go into metadata.
+        # We should merge the provided fields into metadata, except for memory and embedding.
+        for k, v in fields.items():
+            if k == "metadata" and isinstance(v, dict):
+                meta.update(v)
+            elif k not in ("memory", "embedding"):
+                meta[k] = v
 
         new_mem = fields.get("memory", node.get("memory"))
         new_emb = fields.get("embedding", meta.get("embedding"))
