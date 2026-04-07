@@ -215,11 +215,14 @@ OPENCLAW_CONFIG_PATH="${OPENCLAW_HOME}/openclaw.json"
 update_openclaw_config() {
   info "Update OpenClaw config, 更新 OpenClaw 配置..."
   mkdir -p "${OPENCLAW_HOME}"
-  node - "${OPENCLAW_CONFIG_PATH}" "${PLUGIN_ID}" <<'NODE'
+  node - "${OPENCLAW_CONFIG_PATH}" "${PLUGIN_ID}" "${EXTENSION_DIR}" "${PACKAGE_SPEC}" <<'NODE'
 const fs = require('fs');
+const path = require('path');
 
 const configPath = process.argv[2];
 const pluginId = process.argv[3];
+const installPath = process.argv[4];
+const spec = process.argv[5];
 
 let config = {};
 if (fs.existsSync(configPath)) {
@@ -246,10 +249,47 @@ if (!config.plugins.allow.includes(pluginId)) {
   config.plugins.allow.push(pluginId);
 }
 
+// Clean up stale contextEngine slot from previous versions
+if (config.plugins.slots && config.plugins.slots.contextEngine) {
+  delete config.plugins.slots.contextEngine;
+}
+
+// Register plugin in memory slot
 if (!config.plugins.slots || typeof config.plugins.slots !== 'object') {
   config.plugins.slots = {};
 }
-config.plugins.slots.contextEngine = 'memos-local-openclaw-plugin';
+config.plugins.slots.memory = pluginId;
+
+// Ensure plugin entry is enabled (preserve existing config if present)
+if (!config.plugins.entries || typeof config.plugins.entries !== 'object') {
+  config.plugins.entries = {};
+}
+if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId] !== 'object') {
+  config.plugins.entries[pluginId] = {};
+}
+config.plugins.entries[pluginId].enabled = true;
+
+// Register plugin in installs so gateway auto-loads it on restart
+if (!config.plugins.installs || typeof config.plugins.installs !== 'object') {
+  config.plugins.installs = {};
+}
+const pkgJsonPath = path.join(installPath, 'package.json');
+let resolvedName, resolvedVersion;
+if (fs.existsSync(pkgJsonPath)) {
+  const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+  resolvedName = pkg.name;
+  resolvedVersion = pkg.version;
+}
+config.plugins.installs[pluginId] = {
+  source: 'npm',
+  spec,
+  installPath,
+  ...(resolvedVersion ? { version: resolvedVersion } : {}),
+  ...(resolvedName ? { resolvedName } : {}),
+  ...(resolvedVersion ? { resolvedVersion } : {}),
+  ...(resolvedName && resolvedVersion ? { resolvedSpec: `${resolvedName}@${resolvedVersion}` } : {}),
+  installedAt: new Date().toISOString(),
+};
 
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 NODE
@@ -305,6 +345,14 @@ info "Install dependencies, 安装依赖..."
   MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error 2>&1
 )
 
+if [[ ! -d "${EXTENSION_DIR}/node_modules" ]] || [[ -z "$(ls -A "${EXTENSION_DIR}/node_modules" 2>/dev/null)" ]]; then
+  warn "node_modules was cleaned by postinstall (version upgrade detected), re-installing..."
+  (
+    cd "${EXTENSION_DIR}"
+    MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error 2>&1
+  )
+fi
+
 if [[ ! -d "$EXTENSION_DIR" ]]; then
   error "Plugin directory not found after install, 安装后未找到插件目录: ${EXTENSION_DIR}"
   exit 1
@@ -312,5 +360,17 @@ fi
 
 update_openclaw_config
 
-success "Restart OpenClaw Gateway, 重启 OpenClaw Gateway..."
-exec npx openclaw gateway run --port "${PORT}" --force
+info "Install OpenClaw Gateway service, 安装 OpenClaw Gateway 服务..."
+npx openclaw gateway install --port "${PORT}" --force 2>&1 || true
+
+success "Start OpenClaw Gateway service, 启动 OpenClaw Gateway 服务..."
+npx openclaw gateway start 2>&1
+
+echo ""
+success "=========================================="
+success "  Installation complete! 安装完成!"
+success "=========================================="
+echo ""
+info "  OpenClaw Web UI:      http://localhost:${PORT}"
+info "  Memory Viewer:        http://localhost:18799"
+echo ""
