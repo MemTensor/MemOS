@@ -24,17 +24,24 @@ This Skill is special: it comes from real execution experience — every step wa
 
 ## Core principles (follow strictly but do NOT include these in output)
 
+### Assume the agent is smart
+The agent consuming this skill is an LLM — it already knows how to use git, write code, read docs, and run commands.
+- Only write what the agent CANNOT derive from the codebase or general knowledge: project-specific gotchas, non-obvious config, verified flags/versions, and real pitfalls encountered.
+- Do NOT explain basic concepts, standard tool usage, or things any competent developer already knows.
+
 ### Progressive disclosure
 - The frontmatter description (~100 words) is ALWAYS in the agent's context — it must be self-sufficient for deciding whether to use this skill.
 - The SKILL.md body loads when triggered — keep it under 400 lines, focused, no fluff.
 - If the task involved large configs/scripts, mention them but DON'T inline everything — just reference that scripts/ or references/ may contain them.
+- If the skill covers multiple variants (e.g. different OS targets, different cloud providers), put variant-specific details in references/ files. The main SKILL.md should cover the common workflow only.
 
 ### Description as trigger mechanism
-The description field decides whether the agent activates this skill. Write it "proactively":
+The description field is the SOLE input the agent uses to decide whether to activate this skill. If the description doesn't match, the body is never read — so put maximum effort here.
 - Don't just say what it does — list the situations, keywords, and phrasings that should trigger it.
 - Claude/agents tend to under-trigger skills. Counter this by being explicit about when to use it.
+- Include indirect phrasings: users often describe the goal ("make it run anywhere") rather than the tool ("Docker").
 - Bad: "How to deploy Node.js to Docker"
-- Good: "How to containerize and deploy a Node.js application using Docker. Use when the user mentions Docker deployment, Dockerfile writing, container builds, multi-stage builds, port mapping, .dockerignore, image optimization, CI/CD container pipelines, or any task involving packaging a Node/JS backend into a container — even if they don't say 'Docker' explicitly but describe wanting to 'package the app for production' or 'run it anywhere'."
+- Good: "How to containerize and deploy a Node.js application using Docker. TRIGGER when: user mentions Docker deployment, Dockerfile writing, container builds, multi-stage builds, port mapping, .dockerignore, image optimization, CI/CD container pipelines, or any task involving packaging a Node/JS backend into a container — even if they don't say 'Docker' explicitly but describe wanting to 'package the app for production' or 'run it anywhere'."
 
 ### Writing style
 - Use imperative form
@@ -42,6 +49,9 @@ The description field decides whether the agent activates this skill. Write it "
 - Seeing yourself write ALWAYS or NEVER in caps is a yellow flag — rephrase with reasoning instead
 - Generalize from the specific task so the skill works for similar future scenarios, don't over-fit to this exact project
 - Keep real commands/code/config from the task record — these are verified to work
+
+### No extra files
+- Output ONLY the SKILL.md content. Do NOT create or reference README.md, CHANGELOG.md, INSTALLATION_GUIDE.md, CONTRIBUTING.md, or similar boilerplate files. All information belongs in SKILL.md, scripts/, or references/.
 
 ### Language matching (CRITICAL)
 You MUST write the ENTIRE skill in the SAME language as the user's messages in the task record.
@@ -57,11 +67,15 @@ DO NOT default to English. Look at the task record below and match its language.
 
 Output ONLY the complete SKILL.md content. No extra text before or after.
 
+The frontmatter contains ONLY name and description. Nothing else.
+(OpenClaw metadata such as emoji is optional — if desired, add it as a \`<!-- metadata: {{"openclaw": {{"emoji": "..."}}}}} -->\` HTML comment at the very end of the file body, NOT in the frontmatter.)
+
 ---
 name: "{NAME}"
-description: "{A natural, proactive description. 60-120 words. Cover what it does + multiple phrasings/scenarios that should trigger it. Be pushy about triggering — list keywords, alternative descriptions, edge-case phrasings.}"
-metadata: {{ "openclaw": {{ "emoji": "{emoji}" }} }}
+description: "{A natural, proactive description. 60-120 words. Cover what it does + multiple phrasings/scenarios that should trigger it. Include a TRIGGER line listing keywords and indirect phrasings. Be pushy about triggering.}"
 ---
+
+Name rules: 2-4 English words, kebab-case, lowercase (e.g. "docker-node-deploy", "aws-s3-backup"). This is a machine identifier.
 
 # {Title — clear, action-oriented}
 
