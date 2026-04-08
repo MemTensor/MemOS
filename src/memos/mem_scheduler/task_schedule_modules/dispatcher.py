@@ -226,7 +226,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                     if task_item.item_id in self._running_tasks:
                         task_item.mark_completed(result)
                         del self._running_tasks[task_item.item_id]
-                logger.info(f"Task completed: {task_item.get_execution_info()}")
+                logger.debug(f"Task completed: {task_item.get_execution_info()}")
                 return result
 
             except Exception as e:
@@ -630,12 +630,12 @@ class SchedulerDispatcher(BaseSchedulerModule):
             with self._task_lock:
                 self._futures.add(future)
             future.add_done_callback(self._handle_future_result)
-            logger.info(
+            logger.debug(
                 f"Dispatch {len(msgs)} message(s) to {task_label} handler for user {user_id} and mem_cube {mem_cube_id}."
             )
         else:
             # For synchronous execution, the wrapper will run and remove the task upon completion
-            logger.info(
+            logger.debug(
                 f"Execute {len(msgs)} message(s) synchronously for {task_label} for user {user_id} and mem_cube {mem_cube_id}."
             )
             wrapped_handler(msgs)
@@ -653,6 +653,12 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
         # Group messages by user_id and mem_cube_id first
         user_cube_groups = group_messages_by_user_and_mem_cube(msg_list)
+        logger.info(
+            "Dispatcher received batch. total_messages=%s user_groups=%s unique_labels=%s",
+            len(msg_list),
+            len(user_cube_groups),
+            sorted({msg.label for msg in msg_list}),
+        )
 
         # Process each user and mem_cube combination
         for user_id, cube_groups in user_cube_groups.items():
