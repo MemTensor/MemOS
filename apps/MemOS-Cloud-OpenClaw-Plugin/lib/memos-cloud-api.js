@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
+import { CONFIG_RESOLUTION_FIELDS } from "./config-resolution-schema.js";
 
 const DEFAULT_BASE_URL = "https://memos.memtensor.cn/api/openmem/v1";
 export const USER_QUERY_MARKER = "user\u200b原\u200b始\u200bquery\u200b：\u200b\u200b\u200b\u200b";
@@ -127,7 +128,6 @@ function loadEnvVar(name) {
   loadEnvFiles();
   const fromFiles = loadEnvFromFiles(name);
   if (fromFiles !== undefined) return fromFiles;
-  if (envFileContents.size === 0) return process.env[name];
   return undefined;
 }
 
@@ -226,6 +226,10 @@ export function buildConfig(pluginConfig = {}) {
       ? parseBool(loadEnvVar("MEMOS_INCLUDE_ASSISTANT"), true)
       : cfg.includeAssistant !== false;
   const maxMessageChars = cfg.maxMessageChars ?? parseNumber(loadEnvVar("MEMOS_MAX_MESSAGE_CHARS"), 20000);
+  const rumEnabled = parseBool(
+    cfg.rumEnabled,
+    parseBool(loadEnvVar("MEMOS_RUM_ENABLED"), true),
+  );
   const useDirectSessionUserId = parseBool(
     cfg.useDirectSessionUserId,
     parseBool(loadEnvVar("MEMOS_USE_DIRECT_SESSION_USER_ID"), false),
@@ -289,8 +293,62 @@ export function buildConfig(pluginConfig = {}) {
     timeoutMs: cfg.timeoutMs ?? 5000,
     retries: cfg.retries ?? 1,
     throttleMs,
+    rumEnabled,
     _agentOverrides: cfg.agentOverrides ?? parseJsonObject(loadEnvVar("MEMOS_AGENT_OVERRIDES")) ?? {},
   };
+}
+
+function hasConfigValue(cfg, field) {
+  const configKey = field.configKey ?? field.key;
+  if (field.configMode === "truthy") return Boolean(cfg[configKey]);
+  return cfg[configKey] !== undefined && cfg[configKey] !== null;
+}
+
+function hasEnvValue(envValue, envMode) {
+  if (envMode === "truthy") return Boolean(envValue);
+  if (envMode === "defined") return envValue !== undefined;
+  return false;
+}
+
+function resolveInheritedValue(field, resolved, envRaw) {
+  if (Object.prototype.hasOwnProperty.call(field, "inheritedValue")) {
+    return field.inheritedValue;
+  }
+  if (field.inheritedFrom === "env") {
+    const envValue = field.envVar ? envRaw[field.envVar] : undefined;
+    return envValue ?? field.inheritedFallback;
+  }
+  const resolvedKey = field.resolvedKey ?? field.key;
+  return resolved[resolvedKey];
+}
+
+export function getConfigResolution(pluginConfig = {}) {
+  const cfg = pluginConfig ?? {};
+  const resolved = buildConfig(cfg);
+  const envRaw = {};
+
+  for (const field of CONFIG_RESOLUTION_FIELDS) {
+    if (!field.envVar) continue;
+    if (Object.prototype.hasOwnProperty.call(envRaw, field.envVar)) continue;
+    envRaw[field.envVar] = loadEnvVar(field.envVar);
+  }
+
+  const fieldMeta = {};
+  for (const field of CONFIG_RESOLUTION_FIELDS) {
+    const envValue = field.envVar ? envRaw[field.envVar] : undefined;
+    const source = hasConfigValue(cfg, field)
+      ? "config"
+      : hasEnvValue(envValue, field.envMode)
+        ? "env"
+        : field.fallbackSource;
+    fieldMeta[field.key] = {
+      source,
+      inheritedValue: resolveInheritedValue(field, resolved, envRaw),
+      uiDefaultValue: field.uiDefaultValue,
+    };
+  }
+
+  return { resolved, fieldMeta };
 }
 
 const AGENT_OVERRIDABLE_KEYS = [

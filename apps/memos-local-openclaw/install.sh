@@ -257,13 +257,13 @@ if (config.plugins.slots && config.plugins.slots.contextEngine) {
   }
 }
 
-// Register memory slot
+// Register plugin in memory slot
 if (!config.plugins.slots || typeof config.plugins.slots !== 'object') {
   config.plugins.slots = {};
 }
 config.plugins.slots.memory = pluginId;
 
-// Register plugin entry as enabled
+// Ensure plugin entry is enabled (preserve existing config if present)
 if (!config.plugins.entries || typeof config.plugins.entries !== 'object') {
   config.plugins.entries = {};
 }
@@ -272,7 +272,7 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
 }
 config.plugins.entries[pluginId].enabled = true;
 
-// Register installs entry with pinned version
+// Register plugin in installs so gateway auto-loads it on restart (pinned spec when package.json exists)
 if (!config.plugins.installs || typeof config.plugins.installs !== 'object') {
   config.plugins.installs = {};
 }
@@ -387,9 +387,11 @@ fi
 
 update_openclaw_config
 
-success "Restart OpenClaw Gateway, 重启 OpenClaw Gateway..."
-openclaw gateway install --port "${PORT}" --force 2>&1 || true
-openclaw gateway start 2>&1
+info "Install OpenClaw Gateway service, 安装 OpenClaw Gateway 服务..."
+npx openclaw gateway install --port "${PORT}" --force 2>&1 || true
+
+success "Start OpenClaw Gateway service, 启动 OpenClaw Gateway 服务..."
+npx openclaw gateway start 2>&1
 
 info "Starting Memory Viewer, 正在启动记忆面板..."
 for i in 1 2 3 4 5; do
@@ -402,10 +404,10 @@ done
 echo ""
 
 echo ""
-echo "=========================================="
-echo "  Installation complete! 安装完成!"
-echo "=========================================="
+success "=========================================="
+success "  Installation complete! 安装完成!"
+success "=========================================="
 echo ""
-echo "  OpenClaw Web UI:      http://localhost:${PORT}"
-echo "  Memory Viewer:        http://localhost:18799"
+info "  OpenClaw Web UI:      http://localhost:${PORT}"
+info "  Memory Viewer:        http://localhost:18799"
 echo ""

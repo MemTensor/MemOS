@@ -149,8 +149,8 @@ function Update-OpenClawConfig {
     [string]$OpenClawHome,
     [string]$ConfigPath,
     [string]$PluginId,
-    [string]$ExtensionDir,
-    [string]$PackageSpec
+    [string]$InstallPath,
+    [string]$Spec
   )
 
   Write-Info "Updating OpenClaw config..."
@@ -197,13 +197,13 @@ if (config.plugins.slots && config.plugins.slots.contextEngine) {
   }
 }
 
-// Register memory slot
+// Register plugin in memory slot
 if (!config.plugins.slots || typeof config.plugins.slots !== "object") {
   config.plugins.slots = {};
 }
 config.plugins.slots.memory = pluginId;
 
-// Register plugin entry as enabled
+// Ensure plugin entry is enabled (preserve existing config if present)
 if (!config.plugins.entries || typeof config.plugins.entries !== "object") {
   config.plugins.entries = {};
 }
@@ -212,7 +212,7 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
 }
 config.plugins.entries[pluginId].enabled = true;
 
-// Register installs entry with pinned version
+// Register plugin in installs so gateway auto-loads it on restart (pinned spec when package.json exists)
 if (!config.plugins.installs || typeof config.plugins.installs !== "object") {
   config.plugins.installs = {};
 }
@@ -238,7 +238,7 @@ config.plugins.installs[pluginId] = {
 
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 '@
-  $nodeScript | & node - $ConfigPath $PluginId $ExtensionDir $PackageSpec
+  $nodeScript | & node - $ConfigPath $PluginId $InstallPath $Spec
   Write-Success "OpenClaw config updated: $ConfigPath"
 }
 
@@ -396,11 +396,14 @@ if (-not (Test-Path $NodeModulesDir)) {
   exit 1
 }
 
-Update-OpenClawConfig -OpenClawHome $OpenClawHome -ConfigPath $OpenClawConfigPath -PluginId $PluginId -ExtensionDir $ExtensionDir -PackageSpec $PackageSpec
+Update-OpenClawConfig -OpenClawHome $OpenClawHome -ConfigPath $OpenClawConfigPath -PluginId $PluginId -InstallPath $ExtensionDir -Spec $PackageSpec
 
-Write-Success "Restarting OpenClaw Gateway..."
-& openclaw gateway install --port $Port --force 2>&1 | Out-Null
-& openclaw gateway start 2>&1
+Write-Info "Installing OpenClaw Gateway service..."
+& npx openclaw gateway install --port $Port --force 2>&1
+if (-not $?) { Write-Warn "Gateway service install returned a warning; continuing..." }
+
+Write-Success "Starting OpenClaw Gateway service..."
+& npx openclaw gateway start 2>&1
 
 Write-Info "Starting Memory Viewer, 正在启动记忆面板..."
 for ($i = 1; $i -le 5; $i++) {
@@ -412,10 +415,10 @@ for ($i = 1; $i -le 5; $i++) {
 Write-Host ""
 
 Write-Host ""
-Write-Host "=========================================="
-Write-Host "  Installation complete! 安装完成!"
-Write-Host "=========================================="
+Write-Success "=========================================="
+Write-Success "  Installation complete! 安装完成!"
+Write-Success "=========================================="
 Write-Host ""
-Write-Host "  OpenClaw Web UI:      http://localhost:${Port}"
-Write-Host "  Memory Viewer:        http://localhost:18799"
+Write-Info "  OpenClaw Web UI:      http://localhost:$Port"
+Write-Info "  Memory Viewer:        http://localhost:18799"
 Write-Host ""
