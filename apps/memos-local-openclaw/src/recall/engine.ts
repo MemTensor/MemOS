@@ -77,7 +77,7 @@ export class RecallEngine {
     }
     const shortTerms = [...new Set([...spaceSplit, ...cjkBigrams])];
     const patternHits = shortTerms.length > 0
-      ? this.store.patternSearch(shortTerms, { limit: candidatePool })
+      ? this.store.patternSearch(shortTerms, { limit: candidatePool, ownerFilter })
       : [];
     const patternRanked = patternHits.map((h, i) => ({
       id: h.chunkId,
@@ -234,6 +234,7 @@ export class RecallEngine {
         score: Math.round(candidate.score * 1000) / 1000,
         taskId: chunk.taskId,
         skillId: chunk.skillId,
+        owner: chunk.owner,
         origin: chunk.owner === "public" ? "local-shared" : "local",
         source: {
           ts: chunk.createdAt,

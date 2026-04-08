@@ -38,6 +38,7 @@ export interface HubSearchHit {
   hubRank: number;
   taskTitle: string | null;
   ownerName: string;
+  sourceAgent: string;
   groupName: string | null;
   visibility: SharedVisibility;
   source: {

@@ -191,6 +191,7 @@ describe("hub server", () => {
       id: "offline-memory-1",
       sourceChunkId: "offline-chunk-1",
       sourceUserId: offlineUserId,
+      sourceAgent: "",
       role: "assistant",
       content: "offline memory content",
       summary: "offline memory",

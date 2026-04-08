@@ -192,6 +192,9 @@ if (!config.plugins.allow.includes(pluginId)) {
 // Clean up stale contextEngine slot from previous versions
 if (config.plugins.slots && config.plugins.slots.contextEngine) {
   delete config.plugins.slots.contextEngine;
+  if (Object.keys(config.plugins.slots).length === 0) {
+    delete config.plugins.slots;
+  }
 }
 
 // Register plugin in memory slot
@@ -209,25 +212,27 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
 }
 config.plugins.entries[pluginId].enabled = true;
 
-// Register plugin in installs so gateway auto-loads it on restart
+// Register plugin in installs so gateway auto-loads it on restart (pinned spec when package.json exists)
 if (!config.plugins.installs || typeof config.plugins.installs !== "object") {
   config.plugins.installs = {};
 }
+let resolvedName = "";
+let resolvedVersion = "";
 const pkgJsonPath = path.join(installPath, "package.json");
-let resolvedName, resolvedVersion;
 if (fs.existsSync(pkgJsonPath)) {
   const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf8"));
   resolvedName = pkg.name;
   resolvedVersion = pkg.version;
 }
+const pinnedSpec = resolvedName && resolvedVersion ? `${resolvedName}@${resolvedVersion}` : spec;
 config.plugins.installs[pluginId] = {
   source: "npm",
-  spec,
+  spec: pinnedSpec,
   installPath,
   ...(resolvedVersion ? { version: resolvedVersion } : {}),
   ...(resolvedName ? { resolvedName } : {}),
   ...(resolvedVersion ? { resolvedVersion } : {}),
-  ...(resolvedName && resolvedVersion ? { resolvedSpec: `${resolvedName}@${resolvedVersion}` } : {}),
+  ...(resolvedName && resolvedVersion ? { resolvedSpec: pinnedSpec } : {}),
   installedAt: new Date().toISOString(),
 };
 
@@ -359,6 +364,38 @@ if (-not (Test-Path $ExtensionDir)) {
   exit 1
 }
 
+$NodeModulesDir = Join-Path $ExtensionDir "node_modules"
+if (-not (Test-Path $NodeModulesDir)) {
+  Write-Warn "node_modules missing after install (postinstall may have cleaned it). Reinstalling..."
+  Push-Location $ExtensionDir
+  try {
+    & npm install --omit=dev --no-fund --no-audit --ignore-scripts --loglevel=error 2>&1
+  }
+  finally {
+    Pop-Location
+  }
+}
+
+$SqliteDir = Join-Path $ExtensionDir "node_modules\better-sqlite3"
+if (-not (Test-Path $SqliteDir)) {
+  Write-Warn "better-sqlite3 missing, attempting rebuild..."
+  Push-Location $ExtensionDir
+  try {
+    & npm rebuild better-sqlite3 2>&1
+  }
+  catch {
+    Write-Warn "better-sqlite3 rebuild returned an error. Continuing..."
+  }
+  finally {
+    Pop-Location
+  }
+}
+
+if (-not (Test-Path $NodeModulesDir)) {
+  Write-Err "Dependencies installation failed. Run manually: cd $ExtensionDir && npm install --omit=dev"
+  exit 1
+}
+
 Update-OpenClawConfig -OpenClawHome $OpenClawHome -ConfigPath $OpenClawConfigPath -PluginId $PluginId -InstallPath $ExtensionDir -Spec $PackageSpec
 
 Write-Info "Installing OpenClaw Gateway service..."
@@ -368,9 +405,18 @@ if (-not $?) { Write-Warn "Gateway service install returned a warning; continuin
 Write-Success "Starting OpenClaw Gateway service..."
 & npx openclaw gateway start 2>&1
 
+Write-Info "Starting Memory Viewer, 正在启动记忆面板..."
+for ($i = 1; $i -le 5; $i++) {
+  $listening = Get-NetTCPConnection -LocalPort 18799 -State Listen -ErrorAction SilentlyContinue
+  if ($listening) { break }
+  Write-Host "." -NoNewline
+  Start-Sleep -Seconds 1
+}
+Write-Host ""
+
 Write-Host ""
 Write-Success "=========================================="
-Write-Success "  Installation complete!"
+Write-Success "  Installation complete! 安装完成!"
 Write-Success "=========================================="
 Write-Host ""
 Write-Info "  OpenClaw Web UI:      http://localhost:$Port"

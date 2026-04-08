@@ -658,6 +658,7 @@ export class HubServer {
         id: memoryId,
         sourceChunkId,
         sourceUserId: auth.userId,
+        sourceAgent: String(m.sourceAgent || ""),
         role: String(m.role || "assistant"),
         content: String(m.content || ""),
         summary: String(m.summary || ""),
@@ -713,9 +714,14 @@ export class HubServer {
 
       // Track which IDs are memories vs chunks
       const memoryIdSet = new Set(memFtsHits.map(({ hit }) => hit.id));
+      const ftsHitIdSet = new Set<string>();
+      for (const { hit } of ftsHits) ftsHitIdSet.add(hit.id);
+      for (const { hit } of memFtsHits) ftsHitIdSet.add(hit.id);
 
       // Two-stage retrieval: FTS candidates first, then embed + cosine rerank
       let mergedIds: string[];
+      /** Vector RRF channel: require min cosine similarity unless id is already an FTS hit. */
+      const MIN_VECTOR_SIM = 0.45;
       if (this.opts.embedder) {
         try {
           const [queryVec] = await this.opts.embedder.embed([query]);
@@ -738,8 +744,9 @@ export class HubServer {
               memoryIdSet.add(e.memoryId);
             }
 
-            scored.sort((a, b) => b.score - a.score);
-            const topScored = scored.slice(0, maxResults * 2);
+            const vecCandidates = scored.filter((s) => s.score >= MIN_VECTOR_SIM || ftsHitIdSet.has(s.id));
+            vecCandidates.sort((a, b) => b.score - a.score);
+            const topScored = vecCandidates.slice(0, maxResults * 2);
 
             const K = 60;
             const rrfScores = new Map<string, number>();
@@ -778,8 +785,8 @@ export class HubServer {
           this.remoteHitMap.set(remoteHitId, { chunkId: id, type: "memory", expiresAt: Date.now() + 10 * 60 * 1000, requesterUserId: auth.userId });
           return {
             remoteHitId, summary: mhit.summary, excerpt: mhit.content.slice(0, 240), hubRank: rank + 1,
-            taskTitle: null, ownerName: mhit.owner_name || "unknown", groupName: mhit.group_name,
-            visibility: mhit.visibility, source: { ts: mhit.created_at, role: mhit.role },
+            taskTitle: null, ownerName: mhit.owner_name || "unknown", sourceAgent: (mhit as any).source_agent || "",
+            groupName: mhit.group_name, visibility: mhit.visibility, source: { ts: mhit.created_at, role: mhit.role },
           };
         }
         let hit = ftsMap.get(id);
@@ -792,8 +799,8 @@ export class HubServer {
         this.remoteHitMap.set(remoteHitId, { chunkId: id, type: "chunk", expiresAt: Date.now() + 10 * 60 * 1000, requesterUserId: auth.userId });
         return {
           remoteHitId, summary: hit!.summary, excerpt: hit!.content.slice(0, 240), hubRank: rank + 1,
-          taskTitle: hit!.task_title, ownerName: hit!.owner_name || "unknown", groupName: hit!.group_name,
-          visibility: hit!.visibility, source: { ts: hit!.created_at, role: hit!.role },
+          taskTitle: hit!.task_title, ownerName: hit!.owner_name || "unknown", sourceAgent: "",
+          groupName: hit!.group_name, visibility: hit!.visibility, source: { ts: hit!.created_at, role: hit!.role },
         };
       }).filter(Boolean);
       return this.json(res, 200, { hits, meta: { totalCandidates: hits.length, searchedGroups: [], includedPublic: true } });

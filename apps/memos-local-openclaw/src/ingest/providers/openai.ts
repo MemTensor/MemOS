@@ -188,19 +188,26 @@ SAME — the new message:
 - Reports a result, error, or feedback about the current task
 - Discusses different tools or approaches for the SAME goal (e.g., learning English via BBC → via ChatGPT = SAME)
 - Is a short acknowledgment (ok, thanks, 好的) in response to the current flow
+- Is a follow-up, update, or different angle on the same news event, person, or story
+- Shares the same core entity (person, company, event) even if the specific detail or angle differs
+- Contains pronouns or references (那, 这, 它, 其中, 哪些, those, which, what about, etc.) pointing to items from the current conversation
+- Asks about a sub-topic, tool, detail, dimension, or aspect of the current discussion topic
 
 NEW — the new message:
-- Introduces a subject from a DIFFERENT domain than the current task (e.g., tech → cooking, work → personal life, database → travel)
-- Has NO logical connection to what was being discussed
+- Introduces a subject from a COMPLETELY DIFFERENT domain than the current task (e.g., tech → cooking, work → personal life, database → travel)
+- Has NO logical connection to what was being discussed — no shared entities, events, or themes
 - Starts a request about a different project, system, or life area
 - Begins with a new greeting/reset followed by a different topic
 
 Key principles:
-- If the topic domain clearly changed (e.g., server config → recipe, code review → vacation plan), choose NEW
+- Default to SAME unless the topic domain CLEARLY changed. When in doubt, choose SAME.
+- CRITICAL: Short messages (under ~30 characters) that use pronouns or ask "what about X" / "哪些" / "那XX呢" are almost always follow-ups referring to the current topic. Only mark them NEW if they explicitly name a completely unrelated domain.
+- If the new message mentions the same person, event, product, or entity as the current task, it is SAME regardless of the angle
 - Different aspects of the SAME project/system are SAME (e.g., Nginx SSL → Nginx gzip = SAME)
-- Different unrelated technologies discussed independently are NEW (e.g., Redis config → cooking recipe = NEW)
-- When unsure, lean toward SAME for closely related topics, but do NOT hesitate to mark NEW for obvious domain shifts
-- Examples: "配置Nginx" → "加gzip压缩" = SAME; "配置Nginx" → "做红烧肉" = NEW; "MySQL配置" → "K8s部署" in same infra project = SAME; "部署服务器" → "年会安排" = NEW
+- Asking about tools, systems, or methods for the current topic is SAME (e.g., "港股调研" → "那处理系统有哪些" = SAME; "数据分析" → "用什么工具" = SAME)
+- Follow-up news about the same event is SAME (e.g., "博士失联" → "博士遗体被找到" = SAME; "产品发布" → "产品销量" = SAME)
+- Different unrelated domains discussed independently are NEW (e.g., Redis config → cooking recipe = NEW)
+- Examples: "配置Nginx" → "加gzip压缩" = SAME; "配置Nginx" → "做红烧肉" = NEW; "港股调研" → "那处理系统有哪些" = SAME; "部署服务器" → "年会安排" = NEW
 
 Output exactly one word: NEW or SAME`;
 
@@ -244,6 +251,134 @@ export async function judgeNewTopicOpenAI(
   const answer = json.choices[0]?.message?.content?.trim().toUpperCase() ?? "";
   log.debug(`Topic judge result: "${answer}"`);
   return answer.startsWith("NEW");
+}
+
+// ─── Structured Topic Classifier ───
+
+export interface TopicClassifyResult {
+  decision: "NEW" | "SAME";
+  confidence: number;
+  boundaryType: string;
+  reason: string; // may be empty for compact responses
+}
+
+const TOPIC_CLASSIFIER_PROMPT = `Classify if NEW MESSAGE continues current task or starts an unrelated one.
+Output ONLY JSON: {"d":"S"|"N","c":0.0-1.0}
+d=S(same) or N(new). c=confidence. Default S. Only N if completely unrelated domain.
+Sub-questions, tools, methods, details of current topic = S.`;
+
+export async function classifyTopicOpenAI(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<TopicClassifyResult> {
+  const endpoint = normalizeChatEndpoint(cfg.endpoint ?? "https://api.openai.com/v1/chat/completions");
+  const model = cfg.model ?? "gpt-4o-mini";
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${cfg.apiKey}`,
+    ...cfg.headers,
+  };
+
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(buildRequestBody(cfg, {
+      model,
+      temperature: 0,
+      max_tokens: 60,
+      messages: [
+        { role: "system", content: TOPIC_CLASSIFIER_PROMPT },
+        { role: "user", content: userContent },
+      ],
+    })),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`OpenAI topic-classifier failed (${resp.status}): ${body}`);
+  }
+
+  const json = (await resp.json()) as { choices: Array<{ message: { content: string } }> };
+  const raw = json.choices[0]?.message?.content?.trim() ?? "";
+  log.debug(`Topic classifier raw: "${raw}"`);
+
+  return parseTopicClassifyResult(raw, log);
+}
+
+const TOPIC_ARBITRATION_PROMPT = `A classifier flagged this message as possibly new topic (low confidence). Is it truly UNRELATED, or a sub-question/follow-up?
+Tools/methods/details of current task = SAME. Shared entity/theme = SAME. Entirely different domain = NEW.
+Reply one word: NEW or SAME`;
+
+export async function arbitrateTopicSplitOpenAI(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<string> {
+  const endpoint = normalizeChatEndpoint(cfg.endpoint ?? "https://api.openai.com/v1/chat/completions");
+  const model = cfg.model ?? "gpt-4o-mini";
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${cfg.apiKey}`,
+    ...cfg.headers,
+  };
+
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(buildRequestBody(cfg, {
+      model,
+      temperature: 0,
+      max_tokens: 10,
+      messages: [
+        { role: "system", content: TOPIC_ARBITRATION_PROMPT },
+        { role: "user", content: userContent },
+      ],
+    })),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`OpenAI topic-arbitration failed (${resp.status}): ${body}`);
+  }
+
+  const json = (await resp.json()) as { choices: Array<{ message: { content: string } }> };
+  const answer = json.choices[0]?.message?.content?.trim().toUpperCase() ?? "";
+  log.debug(`Topic arbitration result: "${answer}"`);
+  return answer.startsWith("NEW") ? "NEW" : "SAME";
+}
+
+export function parseTopicClassifyResult(raw: string, log: Logger): TopicClassifyResult {
+  try {
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const p = JSON.parse(jsonMatch[0]);
+      const decision: "NEW" | "SAME" =
+        (p.d === "N" || p.decision === "NEW") ? "NEW" : "SAME";
+      const confidence: number =
+        typeof p.c === "number" ? p.c : typeof p.confidence === "number" ? p.confidence : 0.5;
+      return {
+        decision,
+        confidence,
+        boundaryType: p.boundaryType || "",
+        reason: p.reason || "",
+      };
+    }
+  } catch (err) {
+    log.debug(`Failed to parse topic classify JSON: ${err}`);
+  }
+  const upper = raw.toUpperCase();
+  if (upper.startsWith("NEW") || upper.startsWith("N"))
+    return { decision: "NEW", confidence: 0.5, boundaryType: "", reason: "parse fallback" };
+  return { decision: "SAME", confidence: 0.5, boundaryType: "", reason: "parse fallback" };
 }
 
 const FILTER_RELEVANT_PROMPT = `You are a memory relevance judge.

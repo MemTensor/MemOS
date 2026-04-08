@@ -144,6 +144,8 @@ export class ViewerServer {
   private lastKnownNotifCount = 0;
   private hubHeartbeatTimer?: ReturnType<typeof setInterval>;
   private static readonly HUB_HEARTBEAT_INTERVAL_MS = 45_000;
+  private static readonly STALE_TASK_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+  private staleFinalizeRunning = false;
 
   constructor(opts: ViewerServerOptions) {
     this.store = opts.store;
@@ -315,6 +317,7 @@ export class ViewerServer {
       else if (p === "/api/tool-metrics") this.serveToolMetrics(res, url);
       else if (p === "/api/search") this.serveSearch(req, res, url);
       else if (p === "/api/tasks" && req.method === "GET") this.serveTasks(res, url);
+      else if (p === "/api/task-search" && req.method === "GET") this.serveTaskSearch(res, url);
       else if (p.match(/^\/api\/task\/[^/]+\/retry-skill$/) && req.method === "POST") this.handleTaskRetrySkill(req, res, p);
       else if (p.startsWith("/api/task/") && req.method === "DELETE") this.handleTaskDelete(res, p);
       else if (p.startsWith("/api/task/") && req.method === "PUT") this.handleTaskUpdate(req, res, p);
@@ -323,6 +326,8 @@ export class ViewerServer {
       else if (p.match(/^\/api\/skill\/[^/]+\/download$/) && req.method === "GET") this.serveSkillDownload(res, p);
       else if (p.match(/^\/api\/skill\/[^/]+\/files$/) && req.method === "GET") this.serveSkillFiles(res, p);
       else if (p.match(/^\/api\/skill\/[^/]+\/visibility$/) && req.method === "PUT") this.handleSkillVisibility(req, res, p);
+      else if (p.match(/^\/api\/skill\/[^/]+\/disable$/) && req.method === "PUT") this.handleSkillDisable(res, p);
+      else if (p.match(/^\/api\/skill\/[^/]+\/enable$/) && req.method === "PUT") this.handleSkillEnable(res, p);
       else if (p.startsWith("/api/skill/") && req.method === "DELETE") this.handleSkillDelete(res, p);
       else if (p.startsWith("/api/skill/") && req.method === "PUT") this.handleSkillUpdate(req, res, p);
       else if (p.startsWith("/api/skill/") && req.method === "GET") this.serveSkillDetail(res, p);
@@ -608,14 +613,16 @@ export class ViewerServer {
     this.store.recordViewerEvent("tasks_list");
     const status = url.searchParams.get("status") ?? undefined;
     const owner = url.searchParams.get("owner") ?? undefined;
+    const session = url.searchParams.get("session") ?? undefined;
     const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit")) || 50));
     const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
-    const { tasks, total } = this.store.listTasks({ status, limit, offset, owner });
+    const { tasks, total } = this.store.listTasks({ status, limit, offset, owner, session });
 
     const db = (this.store as any).db;
     const items = tasks.map((t) => {
       const meta = db.prepare("SELECT skill_status, owner FROM tasks WHERE id = ?").get(t.id) as { skill_status: string | null; owner: string | null } | undefined;
       const hubTask = this.getHubTaskForLocal(t.id);
+      const share = this.resolveTaskTeamShareForApi(t.id, hubTask);
       return {
         id: t.id,
         sessionKey: t.sessionKey,
@@ -627,11 +634,125 @@ export class ViewerServer {
         chunkCount: this.store.countChunksByTask(t.id),
         skillStatus: meta?.skill_status ?? null,
         owner: meta?.owner ?? "agent:main",
-        sharingVisibility: hubTask?.visibility ?? null,
+        sharingVisibility: share.visibility,
       };
     });
 
+    this.backfillTaskEmbeddings(items);
     this.jsonResponse(res, { tasks: items, total, limit, offset });
+    this.autoFinalizeStaleTasks();
+  }
+
+  private getTaskAutoFinalizeMs(): number {
+    const hours = this.ctx?.config?.taskAutoFinalizeHours;
+    if (hours !== undefined && hours !== null) return hours * 60 * 60 * 1000;
+    try {
+      const cfgPath = this.getOpenClawConfigPath();
+      if (fs.existsSync(cfgPath)) {
+        const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+        const entries = raw?.plugins?.entries ?? {};
+        const pluginCfg = entries["memos-local-openclaw-plugin"]?.config
+          ?? entries["memos-local"]?.config ?? {};
+        if (pluginCfg.taskAutoFinalizeHours !== undefined) return pluginCfg.taskAutoFinalizeHours * 60 * 60 * 1000;
+      }
+    } catch { /* fall through */ }
+    return ViewerServer.STALE_TASK_TIMEOUT_MS;
+  }
+
+  private autoFinalizeStaleTasks(): void {
+    if (this.staleFinalizeRunning || !this.ctx) return;
+    const thresholdMs = this.getTaskAutoFinalizeMs();
+    if (thresholdMs <= 0) return;
+    const db = (this.store as any).db;
+    const now = Date.now();
+    let staleTasks: Array<{ id: string }>;
+    try {
+      staleTasks = db.prepare(`
+        SELECT t.id
+        FROM tasks t
+        LEFT JOIN chunks c ON c.task_id = t.id
+        WHERE t.status = 'active'
+        GROUP BY t.id
+        HAVING (? - COALESCE(MAX(c.created_at), t.started_at)) > ?
+      `).all(now, thresholdMs) as Array<{ id: string }>;
+    } catch { return; }
+    if (staleTasks.length === 0) return;
+
+    this.staleFinalizeRunning = true;
+    const hours = Math.round(thresholdMs / 3600000);
+    this.log.info(`Auto-finalizing ${staleTasks.length} stale active task(s) (idle > ${hours}h)`);
+    const tp = new TaskProcessor(this.store, this.ctx);
+    (async () => {
+      for (const row of staleTasks) {
+        const task = this.store.getTask(row.id);
+        if (!task || task.status !== "active") continue;
+        try {
+          await tp.finalizeTask(task);
+          this.log.info(`Auto-finalized stale task=${task.id}`);
+        } catch (err) {
+          this.log.warn(`Failed to auto-finalize task=${task.id}: ${err}`);
+        }
+      }
+    })().catch((err) => this.log.warn(`autoFinalizeStaleTasks error: ${err}`))
+      .finally(() => { this.staleFinalizeRunning = false; });
+  }
+
+  private async serveTaskSearch(res: http.ServerResponse, url: URL): Promise<void> {
+    const q = (url.searchParams.get("q") ?? "").trim();
+    if (!q) { this.jsonResponse(res, { tasks: [], total: 0 }); return; }
+
+    const owner = url.searchParams.get("owner") ?? undefined;
+    const maxResults = Math.min(50, Math.max(1, Number(url.searchParams.get("limit")) || 20));
+
+    const scoreMap = new Map<string, number>();
+
+    if (this.embedder) {
+      try {
+        const [queryVec] = await this.embedder.embed([q]);
+        const allEmb = this.store.getTaskEmbeddings(owner);
+        for (const { taskId, vector } of allEmb) {
+          let dot = 0, normA = 0, normB = 0;
+          for (let i = 0; i < queryVec.length && i < vector.length; i++) {
+            dot += queryVec[i] * vector[i];
+            normA += queryVec[i] * queryVec[i];
+            normB += vector[i] * vector[i];
+          }
+          const sim = normA > 0 && normB > 0 ? dot / (Math.sqrt(normA) * Math.sqrt(normB)) : 0;
+          if (sim > 0.3) scoreMap.set(taskId, sim);
+        }
+      } catch { /* embedding unavailable, fall through to FTS */ }
+    }
+
+    const ftsResults = this.store.taskFtsSearch(q, maxResults, owner);
+    for (const { taskId, score } of ftsResults) {
+      const existing = scoreMap.get(taskId) ?? 0;
+      scoreMap.set(taskId, Math.max(existing, score * 0.8));
+    }
+
+    const sorted = [...scoreMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, maxResults);
+
+    const db = (this.store as any).db;
+    const tasks = sorted.map(([taskId, score]) => {
+      const t = this.store.getTask(taskId);
+      if (!t) return null;
+      const meta = db.prepare("SELECT skill_status, owner FROM tasks WHERE id = ?").get(taskId) as { skill_status: string | null; owner: string | null } | undefined;
+      const hubTask = this.getHubTaskForLocal(taskId);
+      const ts = this.resolveTaskTeamShareForApi(taskId, hubTask);
+      return {
+        id: t.id, sessionKey: t.sessionKey, title: t.title,
+        summary: t.summary ?? "", status: t.status,
+        startedAt: t.startedAt, endedAt: t.endedAt,
+        chunkCount: this.store.countChunksByTask(t.id),
+        skillStatus: meta?.skill_status ?? null,
+        owner: meta?.owner ?? "agent:main",
+        sharingVisibility: ts.visibility,
+        score,
+      };
+    }).filter(Boolean);
+
+    this.jsonResponse(res, { tasks, total: tasks.length });
   }
 
   private serveTaskDetail(res: http.ServerResponse, urlPath: string): void {
@@ -663,6 +784,7 @@ export class ViewerServer {
     const meta = db.prepare("SELECT skill_status, skill_reason FROM tasks WHERE id = ?").get(taskId) as
       { skill_status: string | null; skill_reason: string | null } | undefined;
     const hubTask = this.getHubTaskForLocal(taskId);
+    const ts = this.resolveTaskTeamShareForApi(taskId, hubTask);
 
     this.jsonResponse(res, {
       id: task.id,
@@ -677,15 +799,15 @@ export class ViewerServer {
       skillStatus: meta?.skill_status ?? null,
       skillReason: meta?.skill_reason ?? null,
       skillLinks,
-      sharingVisibility: hubTask?.visibility ?? null,
-      sharingGroupId: hubTask?.group_id ?? null,
-      hubTaskId: hubTask ? true : false,
+      sharingVisibility: ts.visibility,
+      sharingGroupId: ts.groupId,
+      hubTaskId: ts.hasHubLink,
     });
   }
 
   private serveStats(res: http.ServerResponse, url?: URL): void {
     const emptyStats = {
-      totalMemories: 0, totalSessions: 0, totalEmbeddings: 0, totalSkills: 0,
+      totalMemories: 0, totalSessions: 0, totalEmbeddings: 0, totalSkills: 0, totalTasks: 0,
       embeddingProvider: this.embedder?.provider ?? "none",
       dedupBreakdown: {},
       timeRange: { earliest: null, latest: null },
@@ -728,8 +850,29 @@ export class ViewerServer {
       }
       const sessionList = db.prepare(sessionQuery).all(...sessionParams) as any[];
 
+      let taskSessionList: Array<{ session_key: string; count: number; earliest: number | null; latest: number | null }> = [];
+      try {
+        taskSessionList = db.prepare(
+          "SELECT session_key, COUNT(*) as count, MIN(started_at) as earliest, MAX(COALESCE(updated_at, started_at)) as latest FROM tasks GROUP BY session_key ORDER BY latest DESC",
+        ).all() as any[];
+      } catch { /* tasks table may not exist yet */ }
+
+      let skillSessionList: Array<{ session_key: string; count: number; earliest: number | null; latest: number | null }> = [];
+      try {
+        skillSessionList = db.prepare(
+          `SELECT t.session_key as session_key, COUNT(DISTINCT ts.skill_id) as count,
+                  MIN(t.started_at) as earliest, MAX(COALESCE(t.updated_at, t.started_at)) as latest
+             FROM task_skills ts JOIN tasks t ON t.id = ts.task_id
+            GROUP BY t.session_key
+            ORDER BY latest DESC`,
+        ).all() as any[];
+      } catch { /* task_skills may not exist yet */ }
+
       let skillCount = 0;
       try { skillCount = (db.prepare("SELECT COUNT(*) as count FROM skills").get() as any).count; } catch { /* table may not exist yet */ }
+
+      let taskCount = 0;
+      try { taskCount = (db.prepare("SELECT COUNT(*) as count FROM tasks").get() as any).count; } catch { /* table may not exist yet */ }
 
       let dedupBreakdown: Record<string, number> = {};
       try {
@@ -739,7 +882,15 @@ export class ViewerServer {
 
       let owners: string[] = [];
       try {
-        const ownerRows = db.prepare("SELECT DISTINCT owner FROM chunks WHERE owner IS NOT NULL AND owner LIKE 'agent:%' ORDER BY owner").all() as any[];
+        const ownerRows = db.prepare(`
+          SELECT DISTINCT owner FROM (
+            SELECT owner FROM chunks WHERE owner IS NOT NULL AND owner LIKE 'agent:%'
+            UNION
+            SELECT owner FROM tasks WHERE owner IS NOT NULL AND owner LIKE 'agent:%'
+            UNION
+            SELECT owner FROM skills WHERE owner IS NOT NULL AND owner LIKE 'agent:%'
+          ) ORDER BY owner
+        `).all() as any[];
         owners = ownerRows.map((o: any) => o.owner);
       } catch { /* column may not exist yet */ }
 
@@ -751,11 +902,13 @@ export class ViewerServer {
 
       this.jsonResponse(res, {
         totalMemories: total.count, totalSessions: sessions.count, totalEmbeddings: embCount,
-        totalSkills: skillCount,
+        totalSkills: skillCount, totalTasks: taskCount,
         embeddingProvider: this.embedder.provider,
         dedupBreakdown,
         timeRange: { earliest: timeRange.earliest, latest: timeRange.latest },
         sessions: sessionList,
+        taskSessions: taskSessionList,
+        skillSessions: skillSessionList,
         owners,
         currentAgentOwner,
       });
@@ -865,7 +1018,9 @@ export class ViewerServer {
   private serveSkills(res: http.ServerResponse, url: URL): void {
     const status = url.searchParams.get("status") ?? undefined;
     const visibility = url.searchParams.get("visibility") ?? undefined;
-    let skills = this.store.listSkills({ status });
+    const session = url.searchParams.get("session") ?? undefined;
+    const owner = url.searchParams.get("owner") ?? undefined;
+    let skills = this.store.listSkills({ status, session, owner });
     if (visibility) {
       skills = skills.filter(s => s.visibility === visibility);
     }
@@ -1104,6 +1259,27 @@ export class ViewerServer {
     });
   }
 
+  private embedTaskInBackground(taskId: string, text: string): void {
+    if (!this.embedder || !text.trim()) return;
+    this.embedder.embed([text]).then((vecs: number[][]) => {
+      if (vecs.length > 0) this.store.upsertTaskEmbedding(taskId, vecs[0]);
+    }).catch(() => {});
+  }
+
+  private backfillTaskEmbeddings(tasks: Array<{ id: string; summary: string; title: string }>): void {
+    if (!this.embedder) return;
+    const db = (this.store as any).db;
+    for (const t of tasks) {
+      try {
+        const exists = db.prepare("SELECT 1 FROM task_embeddings WHERE task_id = ?").get(t.id);
+        if (!exists) {
+          const text = `${t.title ?? ""}: ${t.summary ?? ""}`.trim();
+          if (text.length > 1) this.embedTaskInBackground(t.id, text);
+        }
+      } catch { /* best-effort */ }
+    }
+  }
+
   private handleTaskDelete(res: http.ServerResponse, urlPath: string): void {
     const taskId = urlPath.replace("/api/task/", "");
     const deleted = this.store.deleteTask(taskId);
@@ -1118,12 +1294,15 @@ export class ViewerServer {
         const data = JSON.parse(body);
         const task = this.store.getTask(taskId);
         if (!task) { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Task not found" })); return; }
+        const newTitle = data.title ?? task.title;
+        const newSummary = data.summary ?? task.summary;
         this.store.updateTask(taskId, {
-          title: data.title ?? task.title,
-          summary: data.summary ?? task.summary,
+          title: newTitle,
+          summary: newSummary,
           status: data.status ?? task.status,
           endedAt: task.endedAt ?? undefined,
         });
+        this.embedTaskInBackground(taskId, `${newTitle ?? ""}: ${newSummary ?? ""}`);
         this.jsonResponse(res, { ok: true, taskId });
       } catch (err) {
         res.writeHead(400, { "Content-Type": "application/json" });
@@ -1178,6 +1357,58 @@ export class ViewerServer {
         res.end(JSON.stringify({ error: String(err) }));
       }
     });
+  }
+
+  private async handleSkillDisable(res: http.ServerResponse, urlPath: string): Promise<void> {
+    const skillId = urlPath.split("/")[3];
+    const skill = this.store.getSkill(skillId);
+    if (!skill) { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Skill not found" })); return; }
+    if (skill.status === "archived") { this.jsonResponse(res, { ok: true, skillId, message: "already disabled" }); return; }
+
+    try {
+      if (skill.visibility === "public") {
+        this.store.setSkillVisibility(skillId, "private");
+      }
+      const hub = this.resolveHubConnection();
+      if (hub) {
+        await hubRequestJson(hub.hubUrl, hub.userToken, "/api/v1/hub/skills/unpublish", {
+          method: "POST",
+          body: JSON.stringify({ sourceSkillId: skillId }),
+        }).catch(() => {});
+      }
+    } catch (_) {}
+
+    try {
+      const workspaceSkillsDir = path.join(this.dataDir, "workspace", "skills");
+      const installedDir = path.join(workspaceSkillsDir, skill.name);
+      if (fs.existsSync(installedDir)) {
+        fs.rmSync(installedDir, { recursive: true, force: true });
+      }
+    } catch (_) {}
+
+    this.store.disableSkill(skillId);
+    this.jsonResponse(res, { ok: true, skillId });
+  }
+
+  private handleSkillEnable(res: http.ServerResponse, urlPath: string): void {
+    const skillId = urlPath.split("/")[3];
+    const skill = this.store.getSkill(skillId);
+    if (!skill) { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Skill not found" })); return; }
+    if (skill.status !== "archived") { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Only disabled (archived) skills can be enabled" })); return; }
+
+    this.store.enableSkill(skillId);
+
+    if (this.embedder) {
+      const sv = this.store.getLatestSkillVersion(skillId);
+      if (sv) {
+        const text = `${skill.name}: ${skill.description}`;
+        this.embedder.embed([text]).then((vecs: number[][]) => {
+          if (vecs.length > 0) this.store.upsertSkillEmbedding(skillId, vecs[0]);
+        }).catch(() => {});
+      }
+    }
+
+    this.jsonResponse(res, { ok: true, skillId });
   }
 
   // ─── CRUD ───
@@ -1314,7 +1545,7 @@ export class ViewerServer {
             const refreshedChunk = db.prepare("SELECT * FROM chunks WHERE id = ?").get(chunkId) as any;
             const response = await hubRequestJson(hubClient.hubUrl, hubClient.userToken, "/api/v1/hub/memories/share", {
               method: "POST",
-              body: JSON.stringify({ memory: { sourceChunkId: refreshedChunk.id, role: refreshedChunk.role, content: refreshedChunk.content, summary: refreshedChunk.summary, kind: refreshedChunk.kind, groupId: null, visibility: "public" } }),
+              body: JSON.stringify({ memory: { sourceChunkId: refreshedChunk.id, sourceAgent: refreshedChunk.owner || "", role: refreshedChunk.role, content: refreshedChunk.content, summary: refreshedChunk.summary, kind: refreshedChunk.kind, groupId: null, visibility: "public" } }),
             });
             if (!isLocalShared) this.store.markMemorySharedLocally(chunkId);
             const memoryId = String((response as any)?.memoryId ?? "");
@@ -1324,6 +1555,7 @@ export class ViewerServer {
               this.store.upsertHubMemory({
                 id: memoryId || existing?.id || crypto.randomUUID(),
                 sourceChunkId: chunkId, sourceUserId: hubClient.userId,
+                sourceAgent: refreshedChunk.owner || "",
                 role: refreshedChunk.role, content: refreshedChunk.content, summary: refreshedChunk.summary ?? "",
                 kind: refreshedChunk.kind, groupId: null, visibility: "public",
                 createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
@@ -1389,7 +1621,8 @@ export class ViewerServer {
 
         const isLocalShared = task.owner === "public";
         const hubTask = this.getHubTaskForLocal(taskId);
-        const isTeamShared = !!hubTask;
+        const taskShareUi = this.resolveTaskTeamShareForApi(taskId, hubTask);
+        const isTeamShared = taskShareUi.hasHubLink;
         const currentScope = isTeamShared ? "team" : isLocalShared ? "local" : "private";
 
         if (scope === currentScope) {
@@ -1449,6 +1682,7 @@ export class ViewerServer {
             });
             if (this.sharingRole === "hub" && hubClient.userId) this.store.deleteHubTaskBySource(hubClient.userId, taskId);
             else this.store.downgradeTeamSharedTaskToLocal(taskId);
+            this.store.clearTeamSharedChunksForTask(taskId);
             hubSynced = true;
           } catch (err) { this.log.warn(`Failed to unshare task from team: ${err}`); }
         }
@@ -1462,6 +1696,8 @@ export class ViewerServer {
               });
               if (this.sharingRole === "hub" && hubClient.userId) this.store.deleteHubTaskBySource(hubClient.userId, taskId);
               else if (!isLocalShared) this.store.unmarkTaskShared(taskId);
+              else this.store.downgradeTeamSharedTaskToLocal(taskId);
+              this.store.clearTeamSharedChunksForTask(taskId);
               hubSynced = true;
             } catch (err) { this.log.warn(`Failed to unshare task from team: ${err}`); }
           }
@@ -1587,6 +1823,39 @@ export class ViewerServer {
     const currentHubInstanceId = this.store.getClientHubConnection()?.hubInstanceId ?? "";
     if (!currentHubInstanceId) return true;
     return scopedHubInstanceId === currentHubInstanceId;
+  }
+
+  /**
+   * Task list/detail/search: derive team-share badge when getHubTaskForLocal misses (e.g. client
+   * hub_instance_id drift, or empty hub_task_id from hub while synced_chunks was recorded).
+   */
+  private resolveTaskTeamShareForApi(taskId: string, hubTask: any): { visibility: string | null; hasHubLink: boolean; groupId: string | null } {
+    if (hubTask) {
+      return {
+        visibility: hubTask.visibility ?? null,
+        hasHubLink: true,
+        groupId: hubTask.group_id ?? null,
+      };
+    }
+    const lst = this.store.getLocalSharedTask(taskId);
+    if (lst) {
+      const hid = String(lst.hubTaskId ?? "").trim();
+      const teamLinked = hid.length > 0 || (lst.syncedChunks ?? 0) > 0;
+      if (teamLinked) return { visibility: lst.visibility || null, hasHubLink: true, groupId: lst.groupId ?? null };
+    }
+    try {
+      const db = (this.store as any).db;
+      const chunkTeam = db.prepare(`
+        SELECT t.visibility AS v, t.group_id AS g FROM team_shared_chunks t
+        INNER JOIN chunks c ON c.id = t.chunk_id
+        WHERE c.task_id = ?
+        LIMIT 1
+      `).get(taskId) as { v: string; g: string | null } | undefined;
+      if (chunkTeam) {
+        return { visibility: chunkTeam.v || null, hasHubLink: true, groupId: chunkTeam.g ?? null };
+      }
+    } catch { /* schema / db edge */ }
+    return { visibility: null, hasHubLink: false, groupId: null };
   }
 
   private getHubMemoryForChunk(chunkId: string): any {
@@ -2133,6 +2402,7 @@ export class ViewerServer {
       ref: { sessionKey: row.session_key, chunkId: row.id, turnId: row.turn_id, seq: row.seq },
       taskId: row.task_id ?? null,
       skillId: row.skill_id ?? null,
+      owner: row.owner || "",
     }));
     return { hits, meta: { total: hits.length, usedMaxResults: maxResults } };
   }
@@ -2242,6 +2512,7 @@ export class ViewerServer {
           body: JSON.stringify({
             memory: {
               sourceChunkId: chunk.id,
+              sourceAgent: chunk.owner || "",
               role: chunk.role,
               content: chunk.content,
               summary: chunk.summary,
@@ -2259,6 +2530,7 @@ export class ViewerServer {
             id: mid || existing?.id || crypto.randomUUID(),
             sourceChunkId: chunk.id,
             sourceUserId: hubClient.userId,
+            sourceAgent: chunk.owner || "",
             role: chunk.role,
             content: chunk.content,
             summary: chunk.summary ?? "",
@@ -2807,6 +3079,7 @@ export class ViewerServer {
         if (newCfg.summarizer) config.summarizer = newCfg.summarizer;
         if (newCfg.skillEvolution) config.skillEvolution = newCfg.skillEvolution;
         if (newCfg.viewerPort) config.viewerPort = newCfg.viewerPort;
+        if (newCfg.taskAutoFinalizeHours !== undefined) config.taskAutoFinalizeHours = newCfg.taskAutoFinalizeHours;
         if (newCfg.telemetry !== undefined) config.telemetry = newCfg.telemetry;
         if (newCfg.sharing !== undefined) {
           const existing = (config.sharing as Record<string, unknown>) || {};
@@ -3467,7 +3740,7 @@ export class ViewerServer {
 
                 this.log.info(`update-install: running postinstall...`);
                 execFile(process.execPath, ["scripts/postinstall.cjs"], { cwd: extDir, timeout: 180_000 }, (postErr, postOut, postStderr) => {
-                  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+                  cleanupTmpDir();
 
                   if (postErr) {
                     this.log.warn(`update-install: postinstall failed: ${postErr.message}`);
@@ -3751,7 +4024,7 @@ export class ViewerServer {
       try {
         if (this.store) {
           importedSessions = this.store.getDistinctSessionKeys()
-            .filter((sk: string) => sk.startsWith("openclaw-import-") || sk.startsWith("openclaw-session-"));
+            .filter((sk: string) => sk.startsWith("openclaw-import-") || sk.startsWith("openclaw-session-") || /^agent:[^:]+:(import|session:)/.test(sk));
           if (importedSessions.length > 0) {
             const placeholders = importedSessions.map(() => "?").join(",");
             const row = (this.store as any).db.prepare(
@@ -3964,7 +4237,7 @@ export class ViewerServer {
               totalProcessed++;
 
               const contentHash = crypto.createHash("sha256").update(row.text).digest("hex");
-              if (this.store.chunkExistsByContent(`openclaw-import-${agentId}`, "assistant", row.text)) {
+              if (this.store.chunkExistsByContent(`agent:${agentId}:import`, "assistant", row.text) || this.store.chunkExistsByContent(`openclaw-import-${agentId}`, "assistant", row.text)) {
                 totalSkipped++;
                 send("item", {
                   index: i + 1,
@@ -4064,7 +4337,7 @@ export class ViewerServer {
                 const chunkId = uuid();
                 const chunk: Chunk = {
                   id: chunkId,
-                  sessionKey: `openclaw-import-${agentId}`,
+                  sessionKey: `agent:${agentId}:import`,
                   turnId: `import-${row.id}`,
                   seq: 0,
                   role: "assistant",
@@ -4219,8 +4492,8 @@ export class ViewerServer {
               const idx = incIdx();
               totalProcessed++;
 
-              const sessionKey = `openclaw-session-${sessionId}`;
-              if (this.store.chunkExistsByContent(sessionKey, msgRole, content)) {
+              const sessionKey = `agent:${agentId}:session:${sessionId}`;
+              if (this.store.chunkExistsByContent(sessionKey, msgRole, content) || this.store.chunkExistsByContent(`openclaw-session-${sessionId}`, msgRole, content)) {
                 totalSkipped++;
                 send("item", { index: idx, total: totalMsgs, status: "skipped", preview: content.slice(0, 120), source: file, agent: agentId, role: msgRole, reason: "duplicate" });
                 continue;
@@ -4471,7 +4744,7 @@ export class ViewerServer {
     const ctx = this.ctx!;
 
     const importSessions = this.store.getDistinctSessionKeys()
-      .filter((sk: string) => sk.startsWith("openclaw-import-") || sk.startsWith("openclaw-session-"));
+      .filter((sk: string) => sk.startsWith("openclaw-import-") || sk.startsWith("openclaw-session-") || /^agent:[^:]+:(import|session:)/.test(sk));
 
     type PendingItem = { sessionKey: string; action: "full" | "skill-only"; owner: string };
     const pendingItems: PendingItem[] = [];

@@ -177,6 +177,8 @@ function getClientIp(): string {
   return "";
 }
 
+const HUB_FETCH_TIMEOUT_MS = 25_000;
+
 export async function hubRequestJson(
   hubUrl: string,
   userToken: string,
@@ -184,8 +186,17 @@ export async function hubRequestJson(
   init: RequestInit = {},
 ): Promise<unknown> {
   const clientIp = getClientIp();
+  const timeoutSignal =
+    typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+      ? AbortSignal.timeout(HUB_FETCH_TIMEOUT_MS)
+      : undefined;
+  const mergedSignal =
+    timeoutSignal && init.signal
+      ? AbortSignal.any([timeoutSignal, init.signal])
+      : (timeoutSignal ?? init.signal);
   const res = await fetch(`${normalizeHubUrl(hubUrl)}${route}`, {
     ...init,
+    ...(mergedSignal ? { signal: mergedSignal } : {}),
     headers: {
       authorization: `Bearer ${userToken}`,
       ...(clientIp ? { "x-client-ip": clientIp } : {}),

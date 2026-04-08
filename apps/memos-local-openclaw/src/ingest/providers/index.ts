@@ -1,9 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { SummarizerConfig, SummaryProvider, Logger } from "../../types";
-import { summarizeOpenAI, summarizeTaskOpenAI, generateTaskTitleOpenAI, judgeNewTopicOpenAI, filterRelevantOpenAI, judgeDedupOpenAI } from "./openai";
-import type { FilterResult, DedupResult } from "./openai";
-export type { FilterResult, DedupResult } from "./openai";
+import type { SummarizerConfig, SummaryProvider, Logger, OpenClawAPI } from "../../types";
+import { summarizeOpenAI, summarizeTaskOpenAI, generateTaskTitleOpenAI, judgeNewTopicOpenAI, classifyTopicOpenAI, arbitrateTopicSplitOpenAI, filterRelevantOpenAI, judgeDedupOpenAI, parseFilterResult, parseDedupResult, parseTopicClassifyResult } from "./openai";
+import type { FilterResult, DedupResult, TopicClassifyResult } from "./openai";
+export type { FilterResult, DedupResult, TopicClassifyResult } from "./openai";
 import { summarizeAnthropic, summarizeTaskAnthropic, generateTaskTitleAnthropic, judgeNewTopicAnthropic, filterRelevantAnthropic, judgeDedupAnthropic } from "./anthropic";
 import { summarizeGemini, summarizeTaskGemini, generateTaskTitleGemini, judgeNewTopicGemini, filterRelevantGemini, judgeDedupGemini } from "./gemini";
 import { summarizeBedrock, summarizeTaskBedrock, generateTaskTitleBedrock, judgeNewTopicBedrock, filterRelevantBedrock, judgeDedupBedrock } from "./bedrock";
@@ -287,25 +287,30 @@ export class Summarizer {
   }
 
   async judgeNewTopic(currentContext: string, newMessage: string): Promise<boolean | null> {
-    const chain: SummarizerConfig[] = [];
-    if (this.strongCfg) chain.push(this.strongCfg);
-    if (this.fallbackCfg) chain.push(this.fallbackCfg);
-    if (chain.length === 0 && this.cfg) chain.push(this.cfg);
-    if (chain.length === 0) return null;
+    const result = await this.tryChain("judgeNewTopic", (cfg) =>
+      cfg.provider === "openclaw"
+        ? this.judgeNewTopicOpenClaw(currentContext, newMessage)
+        : callTopicJudge(cfg, currentContext, newMessage, this.log),
+    );
+    return result ?? null;
+  }
 
-    for (let i = 0; i < chain.length; i++) {
-      const modelInfo = `${chain[i].provider}/${chain[i].model ?? "?"}`;
-      try {
-        const result = await callTopicJudge(chain[i], currentContext, newMessage, this.log);
-        modelHealth.recordSuccess("judgeNewTopic", modelInfo);
-        return result;
-      } catch (err) {
-        const level = i < chain.length - 1 ? "warn" : "error";
-        this.log[level](`judgeNewTopic failed (${modelInfo}), ${i < chain.length - 1 ? "trying next" : "no more fallbacks"}: ${err}`);
-        modelHealth.recordError("judgeNewTopic", modelInfo, String(err));
-      }
-    }
-    return null;
+  async classifyTopic(taskState: string, newMessage: string): Promise<TopicClassifyResult | null> {
+    const result = await this.tryChain("classifyTopic", (cfg) =>
+      cfg.provider === "openclaw"
+        ? this.classifyTopicOpenClaw(taskState, newMessage)
+        : callTopicClassifier(cfg, taskState, newMessage, this.log),
+    );
+    return result ?? null;
+  }
+
+  async arbitrateTopicSplit(taskState: string, newMessage: string): Promise<string | null> {
+    const result = await this.tryChain("arbitrateTopicSplit", (cfg) =>
+      cfg.provider === "openclaw"
+        ? this.arbitrateTopicSplitOpenClaw(taskState, newMessage)
+        : callTopicArbitration(cfg, taskState, newMessage, this.log),
+    );
+    return result ?? null;
   }
 
   async filterRelevant(
@@ -346,7 +351,18 @@ export class Summarizer {
 
   static readonly OPENCLAW_TOPIC_JUDGE_PROMPT = `You are a conversation topic change detector.
 Given a CURRENT CONVERSATION SUMMARY and a NEW USER MESSAGE, decide: has the user started a COMPLETELY NEW topic that is unrelated to the current conversation?
+Default to SAME unless the domain clearly changed. If the new message shares the same person, event, entity, or theme with the current conversation, answer SAME.
+CRITICAL: Short messages (under ~30 characters) that use pronouns (那/这/它/哪些) or ask about tools/details/dimensions of the current topic are almost always follow-ups — answer SAME unless they explicitly name a completely unrelated domain.
 Reply with a single word: "NEW" if topic changed, "SAME" if it continues.`;
+
+  static readonly OPENCLAW_TOPIC_CLASSIFIER_PROMPT = `Classify if NEW MESSAGE continues current task or starts an unrelated one.
+Output ONLY JSON: {"d":"S"|"N","c":0.0-1.0}
+d=S(same) or N(new). c=confidence. Default S. Only N if completely unrelated domain.
+Sub-questions, tools, methods, details of current topic = S.`;
+
+  static readonly OPENCLAW_TOPIC_ARBITRATION_PROMPT = `A classifier flagged this message as possibly new topic (low confidence). Is it truly UNRELATED, or a sub-question/follow-up?
+Tools/methods/details of current task = SAME. Shared entity/theme = SAME. Entirely different domain = NEW.
+Reply one word: NEW or SAME`;
 
   static readonly OPENCLAW_FILTER_RELEVANT_PROMPT = `You are a memory relevance judge.
 Given a QUERY and CANDIDATE memories, decide: does each candidate help answer the query?
@@ -431,6 +447,45 @@ Reply with JSON: {"action":"MERGE","mergeTarget":2,"reason":"..."} or {"action":
     const answer = response.text.trim().toUpperCase();
     this.log.debug(`Topic judge result: "${answer}"`);
     return answer.startsWith("NEW");
+  }
+
+  private async classifyTopicOpenClaw(taskState: string, newMessage: string): Promise<TopicClassifyResult> {
+    this.requireOpenClawAPI();
+    const prompt = [
+      Summarizer.OPENCLAW_TOPIC_CLASSIFIER_PROMPT,
+      ``,
+      `TASK:\n${taskState}`,
+      `\nMSG:\n${newMessage}`,
+    ].join("\n");
+
+    const response = await this.openclawAPI!.complete({
+      prompt,
+      maxTokens: 60,
+      temperature: 0,
+      model: this.cfg?.model,
+    });
+
+    return parseTopicClassifyResult(response.text.trim(), this.log);
+  }
+
+  private async arbitrateTopicSplitOpenClaw(taskState: string, newMessage: string): Promise<string> {
+    this.requireOpenClawAPI();
+    const prompt = [
+      Summarizer.OPENCLAW_TOPIC_ARBITRATION_PROMPT,
+      ``,
+      `TASK:\n${taskState}`,
+      `\nMSG:\n${newMessage}`,
+    ].join("\n");
+
+    const response = await this.openclawAPI!.complete({
+      prompt,
+      maxTokens: 10,
+      temperature: 0,
+      model: this.cfg?.model,
+    });
+
+    const answer = response.text.trim().toUpperCase();
+    return answer.startsWith("NEW") ? "NEW" : "SAME";
   }
 
   private async filterRelevantOpenClaw(
@@ -638,6 +693,52 @@ function callJudgeDedup(cfg: SummarizerConfig, newSummary: string, candidates: A
       return judgeDedupGemini(newSummary, candidates, cfg, log);
     case "bedrock":
       return judgeDedupBedrock(newSummary, candidates, cfg, log);
+    default:
+      throw new Error(`Unknown summarizer provider: ${cfg.provider}`);
+  }
+}
+
+function callTopicClassifier(cfg: SummarizerConfig, taskState: string, newMessage: string, log: Logger): Promise<TopicClassifyResult> {
+  switch (cfg.provider) {
+    case "openai":
+    case "openai_compatible":
+    case "azure_openai":
+    case "zhipu":
+    case "siliconflow":
+    case "deepseek":
+    case "moonshot":
+    case "bailian":
+    case "cohere":
+    case "mistral":
+    case "voyage":
+      return classifyTopicOpenAI(taskState, newMessage, cfg, log);
+    case "anthropic":
+    case "gemini":
+    case "bedrock":
+      return classifyTopicOpenAI(taskState, newMessage, cfg, log);
+    default:
+      throw new Error(`Unknown summarizer provider: ${cfg.provider}`);
+  }
+}
+
+function callTopicArbitration(cfg: SummarizerConfig, taskState: string, newMessage: string, log: Logger): Promise<string> {
+  switch (cfg.provider) {
+    case "openai":
+    case "openai_compatible":
+    case "azure_openai":
+    case "zhipu":
+    case "siliconflow":
+    case "deepseek":
+    case "moonshot":
+    case "bailian":
+    case "cohere":
+    case "mistral":
+    case "voyage":
+      return arbitrateTopicSplitOpenAI(taskState, newMessage, cfg, log);
+    case "anthropic":
+    case "gemini":
+    case "bedrock":
+      return arbitrateTopicSplitOpenAI(taskState, newMessage, cfg, log);
     default:
       throw new Error(`Unknown summarizer provider: ${cfg.provider}`);
   }
