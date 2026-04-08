@@ -65,7 +65,13 @@ class BaseSchedulerQueueMixin:
                     logger.warning("status_tracker.task_submitted failed", exc_info=True)
 
             if self.disabled_handlers and msg.label in self.disabled_handlers:
-                logger.info("Skipping disabled handler: %s - %s", msg.label, msg.content)
+                logger.debug(
+                    "Skip disabled handler. label=%s item_id=%s user_id=%s mem_cube_id=%s",
+                    msg.label,
+                    msg.item_id,
+                    msg.user_id,
+                    msg.mem_cube_id,
+                )
                 continue
 
             task_priority = self.orchestrator.get_task_priority(task_label=msg.label)
@@ -73,6 +79,14 @@ class BaseSchedulerQueueMixin:
                 immediate_msgs.append(msg)
             else:
                 queued_msgs.append(msg)
+
+        logger.info(
+            "Submit scheduler messages summary. total=%s immediate=%s queued=%s queue_backend=%s",
+            len(messages),
+            len(immediate_msgs),
+            len(queued_msgs),
+            "redis_queue" if self.use_redis_queue else "local_queue",
+        )
 
         if immediate_msgs:
             for m in immediate_msgs:
@@ -199,6 +213,15 @@ class BaseSchedulerQueueMixin:
                             if messages:
                                 self.dispatcher.on_messages_enqueued(messages)
 
+                        if len(messages) >= self.consume_batch:
+                            unique_labels = sorted({msg.label for msg in messages})
+                            logger.debug(
+                                "Consumer dequeued batch. batch_size=%s consume_batch=%s unique_labels=%s queue_backend=%s",
+                                len(messages),
+                                self.consume_batch,
+                                unique_labels,
+                                "redis_queue" if self.use_redis_queue else "local_queue",
+                            )
                         self.dispatcher.dispatch(messages)
                     except Exception as e:
                         logger.error("Error dispatching messages: %s", e)
