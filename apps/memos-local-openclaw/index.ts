@@ -57,6 +57,43 @@ const NEW_SESSION_PROMPT_RE = /A new session was started via \/new or \/reset\./
 const INTERNAL_CONTEXT_RE = /OpenClaw runtime context \(internal\):[\s\S]*/i;
 const CONTINUE_PROMPT_RE = /^Continue where you left off\.[\s\S]*/i;
 
+const buildMemoryPromptSection = ({ availableTools, citationsMode }: {
+  availableTools: Set<string>;
+  citationsMode?: string;
+}) => {
+  const lines: string[] = [];
+  const hasMemorySearch = availableTools.has("memory_search");
+  const hasMemoryGet = availableTools.has("memory_get");
+
+  if (!hasMemorySearch && !hasMemoryGet) {
+    return lines;
+  }
+
+  lines.push("## Memory Recall");
+  lines.push(
+    "This workspace uses MemOS Local as the active memory slot. Prefer recalled memories and the memory tools before claiming prior context is unavailable.",
+  );
+
+  if (hasMemorySearch && hasMemoryGet) {
+    lines.push(
+      "Use `memory_search` to locate relevant memories, then `memory_get` or `memory_timeline` when you need the full source text or surrounding context.",
+    );
+  } else if (hasMemorySearch) {
+    lines.push("Use `memory_search` before answering questions about prior conversations, preferences, plans, or decisions.");
+  } else {
+    lines.push("Use `memory_get` or `memory_timeline` to inspect the referenced memory before answering.");
+  }
+
+  if (citationsMode === "off") {
+    lines.push("Citations are disabled, so avoid mentioning internal memory ids unless the user asks.");
+  } else {
+    lines.push("When it helps the user verify a memory-backed claim, mention the relevant memory identifier or tool result.");
+  }
+
+  lines.push("");
+  return lines;
+};
+
 function normalizeAutoRecallQuery(rawPrompt: string): string {
   let query = rawPrompt.trim();
 
@@ -123,6 +160,10 @@ const memosLocalPlugin = {
   configSchema: pluginConfigSchema,
 
   register(api: OpenClawPluginApi) {
+    api.registerMemoryCapability({
+      promptBuilder: buildMemoryPromptSection,
+    });
+
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
     const localRequire = createRequire(import.meta.url);
     const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -2399,8 +2440,10 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // Fallback: OpenClaw may load this plugin via deferred reload after
     // startPluginServices has already run, so service.start() never fires.
-    // Self-start the viewer after a grace period if it hasn't been started.
-    const SELF_START_DELAY_MS = 3000;
+    // Start on the next tick instead of waiting several seconds; the
+    // serviceStarted guard still prevents duplicate startup if the host calls
+    // service.start() immediately after registration.
+    const SELF_START_DELAY_MS = 0;
     setTimeout(() => {
       if (!serviceStarted) {
         api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
