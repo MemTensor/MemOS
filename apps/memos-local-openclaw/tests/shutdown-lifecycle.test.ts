@@ -113,6 +113,7 @@ describe("shutdown lifecycle", () => {
       resolvePath: () => "/tmp/memos-service-stop",
       logger: noopLog,
       registerTool: () => {},
+      registerMemoryCapability: () => {},
       registerService: (service: any) => { registeredService = service; },
       on: () => {},
     } as any);

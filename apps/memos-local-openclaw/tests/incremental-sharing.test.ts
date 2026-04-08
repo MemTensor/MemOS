@@ -19,9 +19,21 @@ function makeApi(stateDir: string, pluginConfig: Record<string, unknown> = {}) {
       return input === "~/.openclaw" ? stateDir : input;
     },
     logger: noopLog,
-    registerTool(def: any) {
+    registerTool(def: any, meta?: { name?: string }) {
+      if (typeof def === "function") {
+        const key = meta?.name ?? def({ agentId: "main", sessionKey: "default" }).name;
+        tools.set(key, {
+          name: key,
+          execute: (...args: any[]) => {
+            const runtimeCtx = args[2] ?? { agentId: "main", sessionKey: "default" };
+            return def(runtimeCtx).execute(...args);
+          },
+        });
+        return;
+      }
       tools.set(def.name, def);
     },
+    registerMemoryCapability() {},
     registerService(def: any) {
       service = def;
     },

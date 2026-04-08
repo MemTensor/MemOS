@@ -150,6 +150,17 @@ ensure_node22() {
   exit 1
 }
 
+resolve_openclaw_bin() {
+  if command -v openclaw >/dev/null 2>&1; then
+    command -v openclaw
+    return 0
+  fi
+
+  error "Global openclaw CLI not found, 未找到全局 openclaw 命令"
+  error "Install it first with: npm install -g openclaw@latest"
+  exit 1
+}
+
 print_banner() {
   echo -e "${BLUE}${BOLD}🧠 Memos Local OpenClaw Installer${NC}"
   echo -e "${BLUE}${DEFAULT_TAGLINE}${NC}"
@@ -207,6 +218,9 @@ if ! command -v node >/dev/null 2>&1; then
   error "node not found after setup, 环境初始化后仍未找到 node"
   exit 1
 fi
+
+OPENCLAW_BIN="$(resolve_openclaw_bin)"
+success "Using global OpenClaw CLI, 使用全局 OpenClaw CLI: ${OPENCLAW_BIN}"
 
 PACKAGE_SPEC="${PLUGIN_PACKAGE}@${PLUGIN_VERSION}"
 EXTENSION_DIR="${OPENCLAW_HOME}/extensions/${PLUGIN_ID}"
@@ -302,7 +316,7 @@ NODE
 }
 
 info "Stop OpenClaw Gateway, 停止 OpenClaw Gateway..."
-npx openclaw gateway stop >/dev/null 2>&1 || true
+"${OPENCLAW_BIN}" gateway stop >/dev/null 2>&1 || true
 
 if command -v lsof >/dev/null 2>&1; then
   PIDS="$(lsof -i :"${PORT}" -t 2>/dev/null || true)"
@@ -388,20 +402,36 @@ fi
 update_openclaw_config
 
 info "Install OpenClaw Gateway service, 安装 OpenClaw Gateway 服务..."
-npx openclaw gateway install --port "${PORT}" --force 2>&1 || true
+"${OPENCLAW_BIN}" gateway install --port "${PORT}" --force 2>&1 || true
 
 success "Start OpenClaw Gateway service, 启动 OpenClaw Gateway 服务..."
-npx openclaw gateway start 2>&1
+"${OPENCLAW_BIN}" gateway start 2>&1
 
 info "Starting Memory Viewer, 正在启动记忆面板..."
-for i in 1 2 3 4 5; do
-  if command -v lsof >/dev/null 2>&1 && lsof -i :18799 -t >/dev/null 2>&1; then
+VIEWER_URL="http://127.0.0.1:18799"
+VIEWER_WAIT_SECONDS=30
+viewer_ready=0
+for ((i=1; i<=VIEWER_WAIT_SECONDS; i++)); do
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsS --max-time 2 "${VIEWER_URL}" >/dev/null 2>&1; then
+      viewer_ready=1
+      break
+    fi
+  elif command -v lsof >/dev/null 2>&1 && lsof -i :18799 -t >/dev/null 2>&1; then
+    viewer_ready=1
     break
   fi
   printf "."
   sleep 1
 done
 echo ""
+
+if [[ "${viewer_ready}" -eq 1 ]]; then
+  success "Memory Viewer is ready, 记忆面板已就绪: ${VIEWER_URL}"
+else
+  warn "Memory Viewer not ready after ${VIEWER_WAIT_SECONDS}s, 记忆面板在 ${VIEWER_WAIT_SECONDS} 秒后仍未就绪"
+  warn "Check gateway logs if http://127.0.0.1:18799 is still unavailable."
+fi
 
 echo ""
 success "=========================================="
