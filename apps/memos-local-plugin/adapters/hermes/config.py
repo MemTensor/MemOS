@@ -54,8 +54,8 @@ def get_viewer_port() -> int:
     return VIEWER_PORT
 
 
-def _read_openclaw_model_config() -> dict:
-    """Read embedding/summarizer config from OpenClaw's openclaw.json as fallback."""
+def _read_host_model_config() -> dict:
+    """Read embedding/summarizer config from host agent's config as fallback."""
     home = os.environ.get("HOME", os.environ.get("USERPROFILE", ""))
     cfg_path = os.environ.get("OPENCLAW_CONFIG_PATH") or os.path.join(
         os.environ.get("OPENCLAW_STATE_DIR", os.path.join(home, ".openclaw")),
@@ -105,7 +105,7 @@ def get_bridge_config() -> dict:
             plugin_config["embedding"]["endpoint"] = endpoint
 
     if "embedding" not in plugin_config:
-        oc_config = _read_openclaw_model_config()
+        oc_config = _read_host_model_config()
         if oc_config.get("embedding"):
             plugin_config["embedding"] = oc_config["embedding"]
         if oc_config.get("summarizer"):

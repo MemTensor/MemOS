@@ -7,6 +7,40 @@ import { Summarizer } from "./providers";
 import { findDuplicate, findTopSimilar } from "./dedup";
 import { TaskProcessor } from "./task-processor";
 
+const TRIVIAL_CONTENT_RE = [
+  /^\s*\{["']?ok["']?\s*:\s*true\s*\}\s*$/i,
+  /^\s*\{["']?success["']?\s*:\s*true\s*\}\s*$/i,
+  /^\s*\{["']?status["']?\s*:\s*["']?ok["']?\s*\}\s*$/i,
+  /^Operation interrupted:/i,
+  /waiting for model response.*elapsed/i,
+  /^\s*$/,
+];
+const MIN_CONTENT_LENGTH = 6;
+
+function isTrivialContent(text: string): boolean {
+  if (!text || text.trim().length < MIN_CONTENT_LENGTH) return true;
+  const s = text.trim();
+  for (const re of TRIVIAL_CONTENT_RE) {
+    if (re.test(s)) return true;
+  }
+  try {
+    const obj = JSON.parse(s);
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      const keys = Object.keys(obj);
+      if (keys.length <= 2) {
+        const lowerKeys = new Set(keys.map(k => k.toLowerCase()));
+        const trivialKeys = new Set(["ok", "success", "status", "result", "error", "message"]);
+        if ([...lowerKeys].every(k => trivialKeys.has(k))) {
+          if (Object.values(obj).every((v: any) => typeof v === "boolean" || v === null || (typeof v === "string" && v.length < 20))) {
+            return true;
+          }
+        }
+      }
+    }
+  } catch { /* not JSON */ }
+  return false;
+}
+
 export class IngestWorker {
   private summarizer: Summarizer;
   private taskProcessor: TaskProcessor;
@@ -30,7 +64,14 @@ export class IngestWorker {
   }
 
   enqueue(messages: ConversationMessage[]): void {
-    const filtered = messages.filter((m) => !IngestWorker.isEphemeralSession(m.sessionKey));
+    const filtered = messages.filter((m) => {
+      if (IngestWorker.isEphemeralSession(m.sessionKey)) return false;
+      if (isTrivialContent(m.content)) {
+        this.ctx.log.debug(`Skipping trivial content: ${m.content.slice(0, 80)}`);
+        return false;
+      }
+      return true;
+    });
     if (filtered.length === 0) return;
     this.queue.push(...filtered);
     if (!this.processing) {
