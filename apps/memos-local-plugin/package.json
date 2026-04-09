@@ -1,6 +1,6 @@
 {
   "name": "@memtensor/memos-local-hermes-plugin",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.1-beta.1",
   "description": "MemTensor Local memory plugin for Hermes Agent",
   "type": "module",
   "main": "index.ts",
