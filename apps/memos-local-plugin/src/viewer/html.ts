@@ -6,7 +6,7 @@ return `<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" href="https://statics.memtensor.com.cn/logo/color-m.svg" type="image/svg+xml">
-<title>OpenClaw 记忆</title>
+<title>MemTensor Memory</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1144,7 +1144,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
     <div class="logo" style="display:flex;flex-direction:column;align-items:center;gap:10px">
       <svg width="56" height="56" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="aLG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs><path d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z" fill="url(#aLG)"/><path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#aLG)"/><path d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z" fill="url(#aLG)"/><path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round"/><path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round"/><circle cx="45" cy="35" r="6" fill="#050810"/><circle cx="75" cy="35" r="6" fill="#050810"/><circle cx="46" cy="34" r="2" fill="#00e5cc"/><circle cx="76" cy="34" r="2" fill="#00e5cc"/></svg>
     </div>
-    <h1 data-i18n="title">OpenClaw Memory</h1>
+    <h1 data-i18n="title">MemTensor Memory</h1>
     <p style="font-size:12px;color:var(--text-sec);margin-bottom:6px" data-i18n="subtitle">Powered by MemOS</p>
     <p data-i18n="setup.desc">Set a password to protect your memories</p>
     <input type="password" id="setupPw" data-i18n-ph="setup.pw" placeholder="Enter a password (4+ characters)" autofocus>
@@ -1164,7 +1164,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
     <div class="logo" style="display:flex;flex-direction:column;align-items:center;gap:10px">
       <svg width="56" height="56" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="bLG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs><path d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z" fill="url(#bLG)"/><path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#bLG)"/><path d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z" fill="url(#bLG)"/><path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round"/><path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round"/><circle cx="45" cy="35" r="6" fill="#050810"/><circle cx="75" cy="35" r="6" fill="#050810"/><circle cx="46" cy="34" r="2" fill="#00e5cc"/><circle cx="76" cy="34" r="2" fill="#00e5cc"/></svg>
     </div>
-    <h1 data-i18n="title">OpenClaw Memory</h1>
+    <h1 data-i18n="title">MemTensor Memory</h1>
     <p style="font-size:12px;color:var(--text-sec);margin-bottom:6px" data-i18n="subtitle">Powered by MemOS</p>
     <p data-i18n="login.desc">Enter your password to access memories</p>
     <div id="loginForm">
@@ -1217,7 +1217,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
   <div class="topbar-inner">
     <div class="brand">
       <span class="memos-logo"><svg width="28" height="28" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="topLG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs><path d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z" fill="url(#topLG)"/><path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#topLG)"/><path d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z" fill="url(#topLG)"/><path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round"/><path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round"/><circle cx="45" cy="35" r="6" fill="#050810"/><circle cx="75" cy="35" r="6" fill="#050810"/><circle cx="46" cy="34" r="2" fill="#00e5cc"/><circle cx="76" cy="34" r="2" fill="#00e5cc"/></svg></span>
-      <div class="brand-col"><span data-i18n="title" class="brand-title">OpenClaw 记忆</span><span data-i18n="subtitle" class="brand-powered">Powered by MemOS</span></div>${vBadge}
+      <div class="brand-col"><span data-i18n="title" class="brand-title">MemTensor Memory</span><span data-i18n="subtitle" class="brand-powered">Powered by MemOS</span></div>${vBadge}
     </div>
     <div class="topbar-center">
       <nav class="nav-tabs">
@@ -1518,7 +1518,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
                   <option value="mistral">Mistral</option>
                   <option value="voyage">Voyage</option>
                   <option value="local">Local</option>
-                  <option value="openclaw">OpenClaw Host</option>
+                  <option value="openclaw">Agent Host</option>
                 </select>
               </div>
               <div class="settings-field">
@@ -1559,7 +1559,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
                   <option value="gemini">Gemini</option>
                   <option value="azure_openai">Azure OpenAI</option>
                   <option value="bedrock">Bedrock</option>
-                  <option value="openclaw">OpenClaw Host</option>
+                  <option value="openclaw">Agent Host</option>
                 </select>
               </div>
               <div class="settings-field">
@@ -1626,7 +1626,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
                   <option value="gemini">Gemini</option>
                   <option value="azure_openai">Azure OpenAI</option>
                   <option value="bedrock">Bedrock</option>
-                  <option value="openclaw">OpenClaw Host</option>
+                  <option value="openclaw">Agent Host</option>
                 </select>
               </div>
               <div class="settings-field">
@@ -1653,7 +1653,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
               <button class="btn btn-ghost" onclick="loadConfig()" data-i18n="settings.reset">Reset</button>
               <button class="btn btn-primary" onclick="saveModelsConfig()" data-i18n="settings.save">Save Settings</button>
             </div>
-            <div style="font-size:11px;color:var(--text-muted);text-align:right;margin-top:4px" data-i18n="settings.restart.hint">Some changes require restarting the OpenClaw gateway to take effect.</div>
+            <div style="font-size:11px;color:var(--text-muted);text-align:right;margin-top:4px" data-i18n="settings.restart.hint">Changes take effect after service restart.</div>
           </div>
         </div>
 
@@ -1794,7 +1794,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
               <button class="btn btn-ghost" onclick="loadConfig()" data-i18n="settings.reset">Reset</button>
               <button class="btn btn-primary" onclick="saveHubConfig()" data-i18n="settings.save">Save Settings</button>
             </div>
-            <div style="font-size:11px;color:var(--text-muted);text-align:right;margin-top:4px" data-i18n="settings.restart.hint">Some changes require restarting the OpenClaw gateway to take effect.</div>
+            <div style="font-size:11px;color:var(--text-muted);text-align:right;margin-top:4px" data-i18n="settings.restart.hint">Changes take effect after service restart.</div>
           </div>
         </div>
 
@@ -1872,8 +1872,8 @@ input,textarea,select{font-family:inherit;font-size:inherit}
     <!-- ─── Import Page ─── -->
     <div class="migrate-view vp" id="migrateView">
       <div class="settings-section" style="border:1px solid rgba(99,102,241,.15)">
-        <h3><span class="icon">\u{1F4E5}</span> <span data-i18n="migrate.title">Import OpenClaw Memory</span></h3>
-        <p style="font-size:12px;color:var(--text-sec);margin-bottom:12px;line-height:1.6" data-i18n="migrate.desc">Migrate your existing OpenClaw built-in memories and conversation history into this plugin. The import process uses smart deduplication to avoid duplicates.</p>
+        <h3><span class="icon">\u{1F4E5}</span> <span data-i18n="migrate.title">Import Memory</span></h3>
+        <p style="font-size:12px;color:var(--text-sec);margin-bottom:12px;line-height:1.6" data-i18n="migrate.desc">Migrate your existing memories and conversation history into this plugin. The import process uses smart deduplication to avoid duplicates.</p>
 
         <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:16px;font-size:12px;line-height:1.7;color:var(--text-sec)">
           <div style="font-weight:700;color:var(--text);margin-bottom:8px" data-i18n="migrate.modes.title">Three ways to use:</div>
@@ -2083,7 +2083,7 @@ try {
 /* ─── i18n ─── */
 const I18N={
   en:{
-    'title':'OpenClaw Memory',
+    'title':'MemTensor Memory',
     'subtitle':'Powered by MemOS',
     'setup.desc':'Set a password to protect your memories',
     'setup.pw':'Enter a password (4+ characters)',
@@ -2347,13 +2347,13 @@ const I18N={
     'settings.save.emb.fail':'Embedding model test failed, cannot save',
     'settings.save.sum.fail':'Summarizer model test failed, cannot save',
     'settings.save.skill.fail':'Skill model test failed, cannot save',
-    'settings.save.sum.fallback':'Summarizer model is not configured — will use OpenClaw native model as fallback.',
-    'settings.save.skill.fallback':'Skill dedicated model is not configured — will use OpenClaw native model as fallback.',
+    'settings.save.sum.fallback':'Summarizer model is not configured — will use host native model as fallback.',
+    'settings.save.skill.fallback':'Skill dedicated model is not configured — will use host native model as fallback.',
     'settings.save.fallback.model':'Fallback model: ',
-    'settings.save.fallback.none':'Not available (no OpenClaw native model found)',
+    'settings.save.fallback.none':'Not available (no host native model found)',
     'settings.save.fallback.confirm':'Continue to save?',
-    'migrate.title':'Import OpenClaw Memory',
-    'migrate.desc':'Migrate your existing OpenClaw built-in memories and conversation history into this plugin. The import process uses smart deduplication to avoid duplicates.',
+    'migrate.title':'Import Memory',
+    'migrate.desc':'Migrate your existing memories and conversation history into this plugin. The import process uses smart deduplication to avoid duplicates.',
     'migrate.modes.title':'Three ways to use:',
     'migrate.mode1.label':'\\u2460 Import memories only (fast)',
     'migrate.mode1.desc':' — Click "Start Import" to quickly migrate all memory chunks and conversations. No task/skill generation. Suitable when you just need the raw data.',
@@ -2384,7 +2384,7 @@ const I18N={
     'migrate.phase.done':'Import completed',
     'migrate.chunks':'chunks',
     'migrate.sessions.count':'sessions, {n} messages',
-    'migrate.nodata':'No OpenClaw data found to import.',
+    'migrate.nodata':'No data found to import.',
     'migrate.running':'Import in progress...',
     'migrate.error.running':'A migration is already in progress.',
     'migrate.stop':'\\u25A0 Stop',
@@ -2416,7 +2416,7 @@ const I18N={
     'pp.info.allDone':'All sessions have been processed already. Nothing to do.',
     'pp.action.full':'Task+Skill',
     'pp.action.skillOnly':'Skill only (task exists)',
-    'card.imported':'OpenClaw Native',
+    'card.imported':'Imported',
     'skills.draft':'Draft',
     'skills.filter.active':'Active',
     'skills.filter.draft':'Draft',
@@ -2856,7 +2856,7 @@ const I18N={
     'guide.hub.btn':'\u2192 Configure Server Mode'
   },
   zh:{
-    'title':'OpenClaw 记忆',
+    'title':'MemTensor 记忆',
     'subtitle':'由 MemOS 驱动',
     'setup.desc':'设置密码以保护你的记忆数据',
     'setup.pw':'输入密码（至少4位）',
@@ -3120,13 +3120,13 @@ const I18N={
     'settings.save.emb.fail':'嵌入模型测试失败，无法保存',
     'settings.save.sum.fail':'摘要模型测试失败，无法保存',
     'settings.save.skill.fail':'技能模型测试失败，无法保存',
-    'settings.save.sum.fallback':'摘要模型未配置 — 将使用 OpenClaw 原生模型作为降级方案。',
-    'settings.save.skill.fallback':'技能专用模型未配置 — 将使用 OpenClaw 原生模型作为降级方案。',
+    'settings.save.sum.fallback':'摘要模型未配置 — 将使用宿主原生模型作为降级方案。',
+    'settings.save.skill.fallback':'技能专用模型未配置 — 将使用宿主原生模型作为降级方案。',
     'settings.save.fallback.model':'降级模型：',
-    'settings.save.fallback.none':'不可用（未检测到 OpenClaw 原生模型）',
+    'settings.save.fallback.none':'不可用（未检测到宿主原生模型）',
     'settings.save.fallback.confirm':'是否继续保存？',
-    'migrate.title':'导入 OpenClaw 记忆',
-    'migrate.desc':'将 OpenClaw 内置的记忆数据和对话历史迁移到本插件中。导入过程使用智能去重，避免重复导入。',
+    'migrate.title':'导入记忆',
+    'migrate.desc':'将已有的记忆数据和对话历史迁移到本插件中。导入过程使用智能去重，避免重复导入。',
     'migrate.modes.title':'三种使用方式：',
     'migrate.mode1.label':'\u2460 仅导入记忆（快速）',
     'migrate.mode1.desc':'——点击「开始导入」即可快速迁移所有记忆片段和对话历史，不进行任务/技能生成。适合只需要原始数据的场景。',
@@ -3157,7 +3157,7 @@ const I18N={
     'migrate.phase.done':'导入完成',
     'migrate.chunks':'条记忆',
     'migrate.sessions.count':'个会话，{n} 条消息',
-    'migrate.nodata':'未找到可导入的 OpenClaw 数据。',
+    'migrate.nodata':'未找到可导入的数据。',
     'migrate.running':'导入进行中...',
     'migrate.error.running':'已有迁移任务正在进行。',
     'migrate.stop':'\\u25A0 停止',
@@ -3189,7 +3189,7 @@ const I18N={
     'pp.info.allDone':'所有会话均已处理过，无需重复处理。',
     'pp.action.full':'任务+技能',
     'pp.action.skillOnly':'仅技能（任务已存在）',
-    'card.imported':'OpenClaw 原生记忆',
+    'card.imported':'导入记忆',
     'skills.draft':'草稿',
     'skills.filter.active':'生效中',
     'skills.filter.draft':'草稿',
@@ -3646,7 +3646,7 @@ function applyI18n(){
   });
   const step2=document.getElementById('resetStep2Desc');
   if(step2) step2.innerHTML=t('reset.step2.desc.pre')+'<span style="font-family:monospace;font-size:12px;color:var(--pri)">password reset token: <strong>a1b2c3d4e5f6...</strong></span>'+t('reset.step2.desc.post');
-  document.title=t('title')+' - OpenClaw';
+  document.title=t('title')+' - MemTensor';
   if(typeof loadStats==='function' && document.getElementById('app').style.display==='flex'){loadStats();}
   if(document.querySelector('.analytics-view.show') && typeof loadMetrics==='function'){loadMetrics();}
 }
@@ -8298,11 +8298,20 @@ async function loadStats(ownerFilter){
     provEl.innerHTML='<div class="provider-badge offline"><span>\\u26A0</span> '+t('embed.off')+'</div>';
   }
 
-  if(!_embeddingWarningShown){
-    _embeddingWarningShown=true;
-    if(!d.embeddingProvider||d.embeddingProvider==='local'||d.embeddingProvider==='none'){
+  var isLocalEmbed=!d.embeddingProvider||d.embeddingProvider==='local'||d.embeddingProvider==='none';
+  if(isLocalEmbed){
+    if(!_embeddingWarningShown){
+      _embeddingWarningShown=true;
       showEmbeddingBanner(t('embed.warn.local'),'warning');
     }
+  } else {
+    var existingBanner=document.getElementById('embBanner');
+    if(existingBanner && !existingBanner.classList.contains('error')){
+      existingBanner.remove();
+    }
+  }
+  if(!_embeddingWarningShown){
+    _embeddingWarningShown=true;
     fetch('/api/model-health').then(r=>r.json()).then(mh=>{
       var models=mh.models||[];
       var embModel=models.find(m=>m.role==='embedding');
@@ -9615,7 +9624,8 @@ function ppDone(wasStopped,wasFailed,skipReload){
 
 /* ─── Embedding Banner ─── */
 function showEmbeddingBanner(msg,type){
-  if(document.getElementById('embBanner')) return;
+  var old=document.getElementById('embBanner');
+  if(old) old.remove();
   var cls=type==='error'?'emb-banner error':'emb-banner warning';
   var icon=type==='error'?'\\u274C':'\\u26A0\\uFE0F';
   var btn='<button class="emb-banner-btn" onclick="switchView(\\'settings\\');this.parentElement.remove()">'+t('embed.banner.goto')+'</button>';

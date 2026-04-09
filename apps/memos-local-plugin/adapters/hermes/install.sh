@@ -11,7 +11,7 @@ set -euo pipefail
 #   - hermes-agent repository cloned locally
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MEMOS_OPENCLAW_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+MEMOS_PLUGIN_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # hermes-agent location: first argument or auto-detect
 # Priority: CLI arg > hermes runtime dir > repo clone
@@ -32,7 +32,7 @@ TARGET_DIR="$HERMES_REPO/plugins/memory/memtensor"
 echo "=== MemTensor Memory Plugin Installer (hermes-agent) ==="
 echo ""
 echo "Plugin source:  $SCRIPT_DIR"
-echo "OpenClaw core:  $MEMOS_OPENCLAW_DIR"
+echo "Plugin root:    $MEMOS_PLUGIN_DIR"
 echo "Hermes repo:    $HERMES_REPO"
 echo "Install target: $TARGET_DIR"
 echo ""
@@ -57,11 +57,11 @@ fi
 
 echo "✓ Node.js $(node -v)"
 
-# ─── Install memos-local-openclaw dependencies ───
+# ─── Install plugin dependencies ───
 
 echo ""
-echo "Installing memos-local-openclaw dependencies..."
-cd "$MEMOS_OPENCLAW_DIR"
+echo "Installing plugin dependencies..."
+cd "$MEMOS_PLUGIN_DIR"
 
 if command -v pnpm &>/dev/null; then
   pnpm install --frozen-lockfile 2>/dev/null || pnpm install
@@ -76,7 +76,7 @@ echo "✓ Dependencies installed"
 
 # ─── Record bridge path for runtime discovery ───
 
-BRIDGE_CTS="$MEMOS_OPENCLAW_DIR/bridge.cts"
+BRIDGE_CTS="$MEMOS_PLUGIN_DIR/bridge.cts"
 echo "$BRIDGE_CTS" > "$SCRIPT_DIR/bridge_path.txt"
 
 if [ -f "$BRIDGE_CTS" ]; then
