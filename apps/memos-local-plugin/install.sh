@@ -5,9 +5,13 @@ set -euo pipefail
 #
 # Usage (remote):
 #   curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/openclaw-local-plugin-20260408/apps/memos-local-plugin/install.sh | bash
+#   curl ... | bash -s -- --version 1.0.0-beta.1
 #
 # Usage (local, after extracting the npm package):
 #   bash install.sh
+#
+# Options:
+#   --version <ver>            - Install a specific version (default: latest from npm)
 #
 # Environment variables:
 #   MEMOS_INSTALL_DIR          - Override install directory (default: ~/.hermes/memos-plugin)
@@ -20,6 +24,21 @@ set -euo pipefail
 
 NPM_PACKAGE="@memtensor/memos-local-hermes-plugin"
 INSTALL_DIR="${MEMOS_INSTALL_DIR:-$HOME/.hermes/memos-plugin}"
+PKG_VERSION=""
+
+# ─── Parse arguments ───
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --version)
+      PKG_VERSION="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
 
 # ─── Colors ───
 
@@ -171,8 +190,22 @@ else
   trap "rm -rf '$TMP_DIR'" EXIT
 
   cd "$TMP_DIR"
-  info "Downloading from npm..."
-  npm pack "$NPM_PACKAGE" --loglevel=error 2>/dev/null
+
+  # Resolve version: use --version if given, otherwise query npm for latest
+  if [[ -z "$PKG_VERSION" ]]; then
+    PKG_VERSION=$(npm view "$NPM_PACKAGE" dist-tags.latest 2>/dev/null || true)
+    if [[ -z "$PKG_VERSION" ]]; then
+      PKG_VERSION=$(npm view "$NPM_PACKAGE" version 2>/dev/null || true)
+    fi
+    if [[ -z "$PKG_VERSION" ]]; then
+      error "Cannot determine latest version of $NPM_PACKAGE"
+      error "Use --version to specify: bash install.sh --version 1.0.0-beta.1"
+      exit 1
+    fi
+  fi
+
+  info "Downloading $NPM_PACKAGE@$PKG_VERSION from npm..."
+  npm pack "$NPM_PACKAGE@$PKG_VERSION" --loglevel=error 2>/dev/null
   TARBALL=$(ls -1 memtensor-memos-local-hermes-plugin-*.tgz 2>/dev/null | head -1)
 
   if [[ -z "$TARBALL" || ! -f "$TARBALL" ]]; then
