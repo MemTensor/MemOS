@@ -72,9 +72,9 @@ class MemOSMemoryManager(ReMeLightMemoryManager):
       - get_in_memory_memory (with as_token_counter support)
       - summary_memory (file-based with toolkit)
 
-    Overrides cloud-bound operations:
-      - memory_search  → POST /search/memory to MemOS Cloud
-      - summary_memory → parent summary + POST /add/message to MemOS Cloud
+    Overrides one method:
+      - memory_search → POST /search/memory to MemOS Cloud,
+        with automatic fallback to local ReMeLight search on failure.
 
     Configuration is read from ``running.memos_config`` in agent config,
     with env-var fallbacks: MEMOS_API_KEY, MEMOS_BASE_URL, MEMOS_USER_ID.
@@ -238,38 +238,13 @@ class MemOSMemoryManager(ReMeLightMemoryManager):
             content=[TextBlock(type="text", text=text)],
         )
 
-    # ------------------------------------------------------------------ #
-    # summary_memory  →  ReMeLight summary + upload to MemOS Cloud
-    # ------------------------------------------------------------------ #
-
-    async def summary_memory(self, messages: list[Msg], **kwargs) -> str:
-        """Run ReMeLight summary, then upload conversation to MemOS Cloud."""
-        # Delegate to parent for the actual summarisation
-        summary = await super().summary_memory(messages, **kwargs)
-
-        # Upload conversation to MemOS Cloud (best-effort)
-        if self._memos_client and messages:
-            mc = self._load_memos_config()
-            conv_msgs = []
-            for m in messages[-30:]:
-                role = getattr(m, "role", "user")
-                content = getattr(m, "content", "")
-                if isinstance(content, str) and content.strip():
-                    conv_msgs.append(
-                        {"role": role, "content": content[:20000]},
-                    )
-            if conv_msgs:
-                try:
-                    await self._memos_client.add_message(
-                        user_id=mc["user_id"],
-                        messages=conv_msgs,
-                        conversation_id=mc["conversation_id"],
-                        agent_id=self.agent_id,
-                        async_mode=mc["async_mode"],
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to upload summary to MemOS Cloud: %s", e,
-                    )
-
-        return summary
+    # summary_memory / compact_memory / compact_tool_result / check_context
+    # → fully inherited from ReMeLightMemoryManager, no override needed.
+    #
+    # MemOS Cloud "add" (uploading conversations) is intentionally NOT done
+    # here.  CoPaw's memory manager interface has no per-turn callback;
+    # summary_memory only fires during context compaction, which is too
+    # infrequent for reliable cloud sync.  A proper add flow requires
+    # CoPaw to expose a post-turn hook (similar to OpenClaw's agent_end).
+    # Until then, users can populate MemOS Cloud via the MemOS dashboard
+    # or other clients, and this plugin provides cloud-based recall.
