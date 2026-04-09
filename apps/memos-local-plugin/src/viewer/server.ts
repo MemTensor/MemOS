@@ -524,14 +524,14 @@ export class ViewerServer {
     const b = this.branding;
     if (!b) return html;
     if (b.title) {
-      html = html.replace(/'title':'OpenClaw 记忆'/g, `'title':'${b.title}'`);
-      html = html.replace(/<title>OpenClaw 记忆<\/title>/g, `<title>${b.title}</title>`);
+      html = html.replace(/'title':'MemTensor 记忆'/g, `'title':'${b.title}'`);
+      html = html.replace(/<title>MemTensor Memory<\/title>/g, `<title>${b.title}</title>`);
     }
     if (b.titleEn) {
-      html = html.replace(/'title':'OpenClaw Memory'/g, `'title':'${b.titleEn}'`);
+      html = html.replace(/'title':'MemTensor Memory'/g, `'title':'${b.titleEn}'`);
     }
     if (b.suffix) {
-      html = html.replace(/document\.title=t\('title'\)\+' - OpenClaw'/g, `document.title=t('title')+' - ${b.suffix}'`);
+      html = html.replace(/document\.title=t\('title'\)\+' - MemTensor'/g, `document.title=t('title')+' - ${b.suffix}'`);
     }
     if (b.favicon) {
       html = html.replace(
