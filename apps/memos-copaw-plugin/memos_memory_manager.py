@@ -1,39 +1,30 @@
 # -*- coding: utf-8 -*-
 """MemOS Cloud memory manager for CoPaw agents.
 
-Implements CoPaw's BaseMemoryManager interface, delegating long-term
-memory search/add to MemOS Cloud while handling context compaction locally.
+Extends ReMeLightMemoryManager — all local operations (context compaction,
+token counting, tool result truncation, in-memory memory) are delegated
+to the parent class unchanged.  Only two methods are overridden:
+
+  - memory_search  → queries MemOS Cloud instead of local vector index
+  - summary_memory → uploads conversation to MemOS Cloud after local summary
+
+This ensures full compatibility with CoPaw's MemoryCompactionHook and
+force_memory_search auto-recall mechanism.
 """
-import asyncio
 import datetime
 import logging
 import os
-from typing import TYPE_CHECKING, List, Optional
+from typing import Optional
 
-from agentscope.memory import InMemoryMemory
 from agentscope.message import Msg, TextBlock
 from agentscope.tool import ToolResponse
 
-from copaw.agents.memory.base_memory_manager import BaseMemoryManager
+from copaw.agents.memory.reme_light_memory_manager import (
+    ReMeLightMemoryManager,
+)
 from copaw.constant import EnvVarLoader
 
-if TYPE_CHECKING:
-    from copaw.config.config import AgentProfileConfig
-
 logger = logging.getLogger(__name__)
-
-# ------------------------------------------------------------------ #
-# Thin InMemoryMemory subclass with _long_term_memory attribute
-# required by CoPawAgent.reply() for force_memory_search injection.
-# ------------------------------------------------------------------ #
-
-
-class MemOSInMemoryMemory(InMemoryMemory):
-    """InMemoryMemory wrapper that carries a _long_term_memory slot."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._long_term_memory: str = ""
 
 
 # ------------------------------------------------------------------ #
@@ -42,7 +33,7 @@ class MemOSInMemoryMemory(InMemoryMemory):
 
 
 def _format_search_results(data: dict) -> str:
-    """Convert MemOS /search/memory response data into plain-text blocks."""
+    """Convert MemOS /search/memory response into plain-text blocks."""
     parts: list[str] = []
 
     for item in data.get("memory_detail_list", []):
@@ -73,28 +64,26 @@ def _format_search_results(data: dict) -> str:
 # ------------------------------------------------------------------ #
 
 
-class MemOSMemoryManager(BaseMemoryManager):
-    """Memory manager backed by MemOS Cloud.
+class MemOSMemoryManager(ReMeLightMemoryManager):
+    """Memory manager that combines ReMeLight local ops with MemOS Cloud.
 
-    Cloud-side operations:
-      - memory_search  → POST /search/memory
-      - add_message     → POST /add/message  (via summary_memory)
+    Inherits all ReMeLight capabilities:
+      - compact_memory / compact_tool_result / check_context (token-aware)
+      - get_in_memory_memory (with as_token_counter support)
+      - summary_memory (file-based with toolkit)
 
-    Local operations (no external dependency):
-      - compact_memory / compact_tool_result / check_context
-        use the agent's chat model for in-process context management.
+    Overrides cloud-bound operations:
+      - memory_search  → POST /search/memory to MemOS Cloud
+      - summary_memory → parent summary + POST /add/message to MemOS Cloud
 
-    Configuration is read from agent config ``running.memos_config``
-    with environment-variable fallbacks:
-      - MEMOS_API_KEY, MEMOS_BASE_URL, MEMOS_USER_ID
+    Configuration is read from ``running.memos_config`` in agent config,
+    with env-var fallbacks: MEMOS_API_KEY, MEMOS_BASE_URL, MEMOS_USER_ID.
     """
 
     def __init__(self, working_dir: str, agent_id: str):
         super().__init__(working_dir=working_dir, agent_id=agent_id)
-        self._client = None  # lazily created in start()
-        self._in_memory: Optional[MemOSInMemoryMemory] = None
-        self._pending_messages: list[dict] = []
-        self._config_cache: Optional[dict] = None
+        self._memos_client = None
+        self._memos_cfg: Optional[dict] = None
 
     # ------------------------------------------------------------------ #
     # Config resolution
@@ -102,11 +91,10 @@ class MemOSMemoryManager(BaseMemoryManager):
 
     def _load_memos_config(self) -> dict:
         """Resolve MemOS config: agent config > env var > default."""
-        if self._config_cache is not None:
-            return self._config_cache
+        if self._memos_cfg is not None:
+            return self._memos_cfg
 
-        # Try loading from agent config
-        cfg = {}
+        cfg: dict = {}
         try:
             from copaw.config.config import load_agent_config
 
@@ -127,9 +115,10 @@ class MemOSMemoryManager(BaseMemoryManager):
                     "async_mode": mc.async_mode,
                 }
         except Exception as e:
-            logger.debug("Could not load memos_config from agent config: %s", e)
+            logger.debug(
+                "Could not load memos_config from agent config: %s", e,
+            )
 
-        # Env-var fallbacks
         result = {
             "base_url": cfg.get("base_url")
             or EnvVarLoader.get_str(
@@ -149,18 +138,21 @@ class MemOSMemoryManager(BaseMemoryManager):
             "knowledgebase_ids": cfg.get("knowledgebase_ids", []),
             "async_mode": cfg.get("async_mode", True),
         }
-        self._config_cache = result
+        self._memos_cfg = result
         return result
 
     # ------------------------------------------------------------------ #
-    # Lifecycle
+    # Lifecycle  (extend parent)
     # ------------------------------------------------------------------ #
 
     async def start(self) -> None:
-        """Initialise the MemOS HTTP client and verify connectivity."""
-        # Lazy import to avoid top-level dependency on aiohttp
-        # when the plugin is merely discovered but not activated.
+        """Start ReMeLight, then initialise the MemOS HTTP client."""
+        # ReMeLight local memory first
+        await super().start()
+
+        # MemOS Cloud client
         import importlib.util
+
         _spec = importlib.util.spec_from_file_location(
             "memos_client",
             os.path.join(
@@ -170,59 +162,42 @@ class MemOSMemoryManager(BaseMemoryManager):
         )
         _mod = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_mod)
-        MemOSClient = _mod.MemOSClient
 
-        cfg = self._load_memos_config()
-        if not cfg["api_key"]:
+        mc = self._load_memos_config()
+        if not mc["api_key"]:
             logger.warning(
                 "MemOS API key not configured. Set MEMOS_API_KEY env var "
-                "or add memos_config.api_key to agent config."
+                "or add memos_config.api_key to agent config.",
             )
 
-        self._client = MemOSClient(
-            base_url=cfg["base_url"],
-            api_key=cfg["api_key"],
-            timeout=cfg["timeout"],
+        self._memos_client = _mod.MemOSClient(
+            base_url=mc["base_url"],
+            api_key=mc["api_key"],
+            timeout=mc["timeout"],
         )
 
-        masked_key = (
-            cfg["api_key"][:5] + "***"
-            if len(cfg["api_key"]) > 5
-            else "***"
-        )
-        ok = await self._client.ping()
+        masked = mc["api_key"][:5] + "***" if len(mc["api_key"]) > 5 else "***"
+        ok = await self._memos_client.ping()
         if ok:
             logger.info(
-                "MemOS Cloud connected: %s (key=%s)",
-                cfg["base_url"],
-                masked_key,
+                "MemOS Cloud connected: %s (key=%s)", mc["base_url"], masked,
             )
         else:
             logger.warning(
-                "MemOS Cloud unreachable at %s — memory search will "
-                "degrade gracefully.",
-                cfg["base_url"],
+                "MemOS Cloud unreachable at %s — will fall back to "
+                "local ReMeLight search.",
+                mc["base_url"],
             )
 
     async def close(self) -> bool:
-        """Flush pending messages and close the HTTP session."""
-        if self._pending_messages and self._client:
-            cfg = self._load_memos_config()
-            await self._client.add_message(
-                user_id=cfg["user_id"],
-                messages=self._pending_messages,
-                conversation_id=cfg["conversation_id"],
-                agent_id=self.agent_id,
-                async_mode=cfg["async_mode"],
-            )
-            self._pending_messages.clear()
-
-        if self._client:
-            await self._client.close()
-        return True
+        """Close MemOS client, then close ReMeLight."""
+        if self._memos_client:
+            await self._memos_client.close()
+            self._memos_client = None
+        return await super().close()
 
     # ------------------------------------------------------------------ #
-    # Memory search  (core MemOS feature)
+    # memory_search  →  MemOS Cloud (fallback: ReMeLight local)
     # ------------------------------------------------------------------ #
 
     async def memory_search(
@@ -231,199 +206,70 @@ class MemOSMemoryManager(BaseMemoryManager):
         max_results: int = 5,
         min_score: float = 0.1,
     ) -> ToolResponse:
-        """Search MemOS Cloud for relevant memories."""
-        if not self._client:
-            return ToolResponse(
-                content=[
-                    TextBlock(
-                        type="text",
-                        text="MemOS client not initialized. "
-                        "Check API key and base URL configuration.",
-                    ),
-                ],
-            )
+        """Search MemOS Cloud; fall back to local ReMeLight on failure."""
+        if not self._memos_client:
+            return await super().memory_search(query, max_results, min_score)
 
-        cfg = self._load_memos_config()
-        data = await self._client.search_memory(
-            user_id=cfg["user_id"],
+        mc = self._load_memos_config()
+        data = await self._memos_client.search_memory(
+            user_id=mc["user_id"],
             query=query,
             memory_limit_number=max_results,
-            include_preference=cfg["include_preference"],
-            preference_limit_number=cfg["preference_limit_number"],
-            relativity=max(min_score, cfg["relativity"]),
-            conversation_id=cfg["conversation_id"],
-            knowledgebase_ids=cfg["knowledgebase_ids"] or None,
+            include_preference=mc["include_preference"],
+            preference_limit_number=mc["preference_limit_number"],
+            relativity=max(min_score, mc["relativity"]),
+            conversation_id=mc["conversation_id"],
+            knowledgebase_ids=mc["knowledgebase_ids"] or None,
         )
 
+        # Fallback to local search if cloud is unreachable
         if data is None:
-            return ToolResponse(
-                content=[
-                    TextBlock(
-                        type="text",
-                        text="MemOS Cloud search returned no results "
-                        "(API may be unreachable).",
-                    ),
-                ],
+            logger.warning(
+                "MemOS Cloud search failed, falling back to local search.",
             )
+            return await super().memory_search(query, max_results, min_score)
 
         text = _format_search_results(data)
         if not text:
-            return ToolResponse(
-                content=[
-                    TextBlock(
-                        type="text",
-                        text="No relevant memories found.",
-                    ),
-                ],
-            )
+            # Cloud returned empty — try local as supplement
+            return await super().memory_search(query, max_results, min_score)
 
         return ToolResponse(
             content=[TextBlock(type="text", text=text)],
         )
 
     # ------------------------------------------------------------------ #
-    # Context compaction  (local, no cloud dependency)
+    # summary_memory  →  ReMeLight summary + upload to MemOS Cloud
     # ------------------------------------------------------------------ #
 
-    async def compact_tool_result(self, **kwargs) -> None:
-        """Truncate oversized tool outputs in-place."""
-        messages: list = kwargs.get("messages", [])
-        max_chars: int = kwargs.get("max_chars", 20000)
-        for msg in messages:
-            if hasattr(msg, "content") and isinstance(msg.content, str):
-                if len(msg.content) > max_chars:
-                    msg.content = (
-                        msg.content[:max_chars]
-                        + f"\n... [truncated, original {len(msg.content)} chars]"
-                    )
-
-    async def check_context(self, **kwargs) -> tuple:
-        """Simple context-size check based on character count.
-
-        Returns (messages_to_compact, remaining, is_valid).
-        """
-        messages: list = kwargs.get("messages", [])
-        max_chars: int = kwargs.get("max_input_length", 120000)
-        compact_ratio: float = kwargs.get("compact_ratio", 0.5)
-
-        total = sum(
-            len(getattr(m, "content", "") or "") for m in messages
-        )
-        if total <= max_chars:
-            return [], messages, True
-
-        # Keep the most recent messages within budget
-        cut = max(1, int(len(messages) * compact_ratio))
-        return messages[:cut], messages[cut:], False
-
-    async def compact_memory(
-        self,
-        messages: list[Msg],
-        previous_summary: str = "",
-        extra_instruction: str = "",
-        **kwargs,
-    ) -> str:
-        """Summarise old messages using the agent's chat model.
-
-        Also queues the summary for async upload to MemOS Cloud.
-        """
-        if not messages:
-            return previous_summary
-
-        self._prepare_model_formatter()
-        if self.chat_model is None:
-            # Fallback: concatenate content
-            lines = [
-                f"{m.role}: {getattr(m, 'content', '')[:500]}"
-                for m in messages[-20:]
-            ]
-            summary = "\n".join(lines)
-        else:
-            transcript = "\n".join(
-                f"[{m.role}] {getattr(m, 'content', '')[:2000]}"
-                for m in messages
-            )
-            prompt = (
-                "Condense the following conversation into a concise summary "
-                "that preserves all key facts, decisions, and action items. "
-                "Keep it under 800 words.\n\n"
-            )
-            if previous_summary:
-                prompt += f"Previous summary:\n{previous_summary}\n\n"
-            if extra_instruction:
-                prompt += f"Additional instruction: {extra_instruction}\n\n"
-            prompt += f"Conversation:\n{transcript}"
-
-            try:
-                response = self.chat_model(
-                    Msg(role="user", content=prompt),
-                )
-                summary = (
-                    response.content
-                    if hasattr(response, "content")
-                    else str(response)
-                )
-            except Exception as e:
-                logger.error("compact_memory LLM call failed: %s", e)
-                summary = previous_summary or ""
-
-        # Queue the summary for async upload to MemOS Cloud
-        if summary and self._client:
-            self._pending_messages.append(
-                {"role": "assistant", "content": f"[summary] {summary}"}
-            )
-
-        return summary
-
     async def summary_memory(self, messages: list[Msg], **kwargs) -> str:
-        """Summarise messages and upload to MemOS Cloud."""
-        summary = await self.compact_memory(messages, **kwargs)
+        """Run ReMeLight summary, then upload conversation to MemOS Cloud."""
+        # Delegate to parent for the actual summarisation
+        summary = await super().summary_memory(messages, **kwargs)
 
-        # Immediately upload conversation + summary
-        if self._client and messages:
-            cfg = self._load_memos_config()
+        # Upload conversation to MemOS Cloud (best-effort)
+        if self._memos_client and messages:
+            mc = self._load_memos_config()
             conv_msgs = []
             for m in messages[-30:]:
                 role = getattr(m, "role", "user")
                 content = getattr(m, "content", "")
                 if isinstance(content, str) and content.strip():
                     conv_msgs.append(
-                        {"role": role, "content": content[:20000]}
+                        {"role": role, "content": content[:20000]},
+                    )
+            if conv_msgs:
+                try:
+                    await self._memos_client.add_message(
+                        user_id=mc["user_id"],
+                        messages=conv_msgs,
+                        conversation_id=mc["conversation_id"],
+                        agent_id=self.agent_id,
+                        async_mode=mc["async_mode"],
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to upload summary to MemOS Cloud: %s", e,
                     )
 
-            if conv_msgs:
-                await self._client.add_message(
-                    user_id=cfg["user_id"],
-                    messages=conv_msgs,
-                    conversation_id=cfg["conversation_id"],
-                    agent_id=self.agent_id,
-                    async_mode=cfg["async_mode"],
-                )
-
         return summary
-
-    # ------------------------------------------------------------------ #
-    # InMemoryMemory bridge
-    # ------------------------------------------------------------------ #
-
-    def get_in_memory_memory(self, **kwargs) -> MemOSInMemoryMemory:
-        """Return an InMemoryMemory with _long_term_memory support."""
-        if self._in_memory is None:
-            self._in_memory = MemOSInMemoryMemory()
-        return self._in_memory
-
-    # ------------------------------------------------------------------ #
-    # Internal helpers
-    # ------------------------------------------------------------------ #
-
-    def _prepare_model_formatter(self) -> None:
-        """Lazily initialize chat_model and formatter if not set."""
-        if self.chat_model is None or self.formatter is None:
-            try:
-                from copaw.agents.model_factory import create_model_and_formatter
-
-                self.chat_model, self.formatter = create_model_and_formatter(
-                    self.agent_id,
-                )
-            except Exception as e:
-                logger.warning("Failed to init chat model: %s", e)
