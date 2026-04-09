@@ -56,6 +56,7 @@ class MemTensorProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread: threading.Thread | None = None
         self._sync_thread: threading.Thread | None = None
+        self._pending_ingest: tuple | None = None
 
     @property
     def name(self) -> str:
@@ -122,7 +123,11 @@ class MemTensorProvider(MemoryProvider):
         return f"## Recalled Memories\n{result}"
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
+        pending = self._pending_ingest
+        self._pending_ingest = None
+
         def _run():
+            # 1) Search FIRST — before ingesting the current turn
             try:
                 text = self._do_recall(query)
                 if text:
@@ -130,6 +135,20 @@ class MemTensorProvider(MemoryProvider):
                         self._prefetch_result = text
             except Exception as e:
                 logger.debug("MemTensor queue_prefetch failed: %s", e)
+
+            # 2) Now flush the deferred ingest so data is stored for future turns
+            if pending and self._bridge:
+                try:
+                    from config import OWNER
+                    user_content, assistant_content, sid = pending
+                    messages = [
+                        {"role": "user", "content": user_content},
+                        {"role": "assistant", "content": assistant_content},
+                    ]
+                    self._bridge.ingest(messages, session_id=sid, owner=OWNER)
+                    self._bridge.flush()
+                except Exception as e:
+                    logger.warning("MemTensor deferred sync_turn failed: %s", e)
 
         self._prefetch_thread = threading.Thread(
             target=_run, daemon=True, name="memtensor-prefetch"
@@ -172,30 +191,18 @@ class MemTensorProvider(MemoryProvider):
     def sync_turn(
         self, user_content: str, assistant_content: str, *, session_id: str = ""
     ) -> None:
+        """Queue turn data for deferred ingest.
+
+        Hermes calls sync_all() BEFORE queue_prefetch_all(), so ingesting
+        immediately would let the next prefetch retrieve the just-added turn.
+        Instead we stash the data and let queue_prefetch() flush it AFTER
+        the search completes — ensuring search results never contain the
+        current turn's content.
+        """
         if not self._bridge:
             return
-
         sid = session_id or self._session_id or "default"
-        messages = [
-            {"role": "user", "content": user_content},
-            {"role": "assistant", "content": assistant_content},
-        ]
-
-        def _sync():
-            try:
-                from config import OWNER
-                self._bridge.ingest(messages, session_id=sid, owner=OWNER)
-                self._bridge.flush()
-            except Exception as e:
-                logger.warning("MemTensor sync_turn failed: %s", e)
-
-        if self._sync_thread and self._sync_thread.is_alive():
-            self._sync_thread.join(timeout=5.0)
-
-        self._sync_thread = threading.Thread(
-            target=_sync, daemon=True, name="memtensor-sync"
-        )
-        self._sync_thread.start()
+        self._pending_ingest = (user_content, assistant_content, sid)
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return [MEMORY_SEARCH_SCHEMA]
@@ -256,6 +263,20 @@ class MemTensorProvider(MemoryProvider):
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         if not self._bridge:
             return
+        # Flush any deferred ingest that hasn't been picked up by queue_prefetch
+        pending = self._pending_ingest
+        self._pending_ingest = None
+        if pending:
+            try:
+                from config import OWNER
+                user_content, assistant_content, sid = pending
+                msgs = [
+                    {"role": "user", "content": user_content},
+                    {"role": "assistant", "content": assistant_content},
+                ]
+                self._bridge.ingest(msgs, session_id=sid, owner=OWNER)
+            except Exception as e:
+                logger.debug("MemTensor deferred ingest on session end failed: %s", e)
         try:
             self._bridge.flush()
         except Exception as e:
