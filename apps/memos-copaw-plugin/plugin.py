@@ -9,6 +9,7 @@ Installation:
 Then set ``memory_manager_backend: "memos"`` in agent config and
 provide MEMOS_API_KEY (env var or config).
 """
+
 import importlib.util
 import logging
 import os
@@ -43,8 +44,7 @@ class _MemOSPlugin:
         api.register_startup_hook(
             hook_name="memos_cloud_init",
             callback=lambda: logger.info(
-                "MemOS Cloud plugin ready. "
-                "Set memory_manager_backend='memos' to activate."
+                "MemOS Cloud plugin ready. Set memory_manager_backend='memos' to activate."
             ),
             priority=90,
         )

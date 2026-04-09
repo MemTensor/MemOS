@@ -8,6 +8,7 @@ query MemOS Cloud instead of the local vector index.
 This ensures full compatibility with CoPaw's MemoryCompactionHook and
 force_memory_search auto-recall mechanism.
 """
+
 import contextlib
 import datetime
 import logging
@@ -111,7 +112,8 @@ class MemOSMemoryManager(ReMeLightMemoryManager):
                 }
         except Exception as e:
             logger.debug(
-                "Could not load memos_config from agent config: %s", e,
+                "Could not load memos_config from agent config: %s",
+                e,
             )
 
         result = {
@@ -120,10 +122,8 @@ class MemOSMemoryManager(ReMeLightMemoryManager):
                 "MEMOS_BASE_URL",
                 "https://memos.memtensor.cn/api/openmem/v1",
             ),
-            "api_key": cfg.get("api_key")
-            or EnvVarLoader.get_str("MEMOS_API_KEY", ""),
-            "user_id": cfg.get("user_id")
-            or EnvVarLoader.get_str("MEMOS_USER_ID", "copaw-user"),
+            "api_key": cfg.get("api_key") or EnvVarLoader.get_str("MEMOS_API_KEY", ""),
+            "user_id": cfg.get("user_id") or EnvVarLoader.get_str("MEMOS_USER_ID", "copaw-user"),
             "memory_limit_number": cfg.get("memory_limit_number", 9),
             "include_preference": cfg.get("include_preference", True),
             "preference_limit_number": cfg.get("preference_limit_number", 6),
@@ -174,12 +174,13 @@ class MemOSMemoryManager(ReMeLightMemoryManager):
         ok = await self._memos_client.ping()
         if ok:
             logger.info(
-                "MemOS Cloud connected: %s (key=%s)", mc["base_url"], masked,
+                "MemOS Cloud connected: %s (key=%s)",
+                mc["base_url"],
+                masked,
             )
         else:
             logger.warning(
-                "MemOS Cloud unreachable at %s — will fall back to "
-                "local ReMeLight search.",
+                "MemOS Cloud unreachable at %s — will fall back to local ReMeLight search.",
                 mc["base_url"],
             )
 
