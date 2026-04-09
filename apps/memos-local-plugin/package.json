@@ -1,14 +1,23 @@
 {
   "name": "@memtensor/memos-local-hermes-plugin",
-  "version": "1.0.0",
+  "version": "1.0.0-beta.1",
   "description": "MemTensor Local memory plugin for Hermes Agent",
   "type": "module",
   "main": "index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MemTensor/MemOS.git",
+    "directory": "apps/memos-local-plugin"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "index.ts",
     "bridge.cts",
     "src",
     "adapters",
+    "prebuilds",
     "install.sh",
     "tsconfig.json",
     ".env.example"
@@ -16,14 +25,16 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "prepack": "rm -rf adapters/hermes/__pycache__ adapters/openharness/scripts/__pycache__ adapters/hermes/bridge_path.txt adapters/openharness/scripts/bridge_path.txt && echo 'prepack cleanup done'"
+    "prepack": "rm -rf adapters/hermes/__pycache__ adapters/openharness/scripts/__pycache__ adapters/hermes/bridge_path.txt adapters/openharness/scripts/bridge_path.txt && echo 'prepack cleanup done'",
+    "prepublishOnly": "echo 'Source + prebuilds publish — no tsc dist needed.'"
   },
   "keywords": [
     "memtensor",
     "memory",
     "memos",
     "rag",
-    "local"
+    "local",
+    "hermes"
   ],
   "license": "MIT",
   "engines": {
