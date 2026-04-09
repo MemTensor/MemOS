@@ -324,6 +324,8 @@ export interface MemosLocalConfig {
   sharing?: SharingConfig;
   /** Hours of inactivity after which an active task is automatically finalized. 0 = disabled. Default 4. */
   taskAutoFinalizeHours?: number;
+  /** Set to false to disable automatic memory recall injection into prompts (default true). */
+  allowPromptInjection?: boolean;
 }
 
 // ─── Defaults ───

@@ -16,6 +16,10 @@
       "viewerPort": {
         "type": "number",
         "description": "Memory Viewer HTTP port (default 18799)"
+      },
+      "allowPromptInjection": {
+        "type": "boolean",
+        "description": "Set to false to disable automatic memory recall injection into prompts (default true)"
       }
     }
   },

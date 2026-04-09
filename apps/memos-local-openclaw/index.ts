@@ -392,8 +392,12 @@ const memosLocalPlugin = {
     // ─── Check allowPromptInjection policy ───
     // When allowPromptInjection=false, the prompt mutation fields (such as prependContext) in the hook return value
     // will be stripped by the framework. Skip auto-recall to avoid unnecessary LLM/embedding calls.
+    // Reads from both the framework hook config (plugins.entries.<id>.hooks.allowPromptInjection)
+    // and the plugin's own config (allowPromptInjection), so users can set it in either place.
     const pluginEntry = (api.config as any)?.plugins?.entries?.[api.id];
-    const allowPromptInjection = pluginEntry?.hooks?.allowPromptInjection !== false;
+    const allowPromptInjection =
+      pluginEntry?.hooks?.allowPromptInjection !== false &&
+      ctx.config.allowPromptInjection !== false;
     if (!allowPromptInjection) {
       api.logger.info("memos-local: allowPromptInjection=false, auto-recall disabled");
     }
