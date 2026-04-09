@@ -2467,12 +2467,12 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // Fallback: OpenClaw may load this plugin via deferred reload after
     // startPluginServices has already run, so service.start() never fires.
-    // Start on the next tick instead of waiting several seconds; the
-    // serviceStarted guard still prevents duplicate startup if the host calls
-    // service.start() immediately after registration.
-    const SELF_START_DELAY_MS = 0;
+    // Start on a delay instead of next tick so the host has time to call
+    // service.start() during normal startup if this is a fresh launch.
+    const SELF_START_DELAY_MS = 2000;
     setTimeout(() => {
-      if (!serviceStarted) {
+      const isCliCommand = process.argv.some(arg => ["doctor", "plugins", "channels", "agents", "memory", "config", "tools", "setup", "onboard", "status", "logs", "wiki"].some(cmd => arg.includes(cmd)));
+      if (!serviceStarted && !isCliCommand) {
         api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
         startServiceCore().catch((err) => {
           api.logger.warn(`memos-local: self-start failed: ${err}`);
