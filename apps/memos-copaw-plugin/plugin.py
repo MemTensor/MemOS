@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """MemOS Cloud memory plugin for CoPaw.
 
 Registers MemOSMemoryManager as a pluggable memory backend so that
@@ -13,6 +12,7 @@ provide MEMOS_API_KEY (env var or config).
 import importlib.util
 import logging
 import os
+
 
 logger = logging.getLogger(__name__)
 

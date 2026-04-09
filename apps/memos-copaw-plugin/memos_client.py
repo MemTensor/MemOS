@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
 """Async HTTP client for MemOS Cloud API."""
 import asyncio
 import logging
-import time
-from typing import Any, Dict, List, Optional
+
+from typing import Any
 
 import aiohttp
+
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class MemOSClient:
         self.api_key = api_key
         self.timeout = timeout
         self.retries = retries
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -53,11 +53,11 @@ class MemOSClient:
     async def _post(
         self,
         path: str,
-        payload: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
         """POST with retry. Returns parsed JSON or None on failure."""
         url = f"{self.base_url}{path}"
-        last_err: Optional[Exception] = None
+        last_err: Exception | None = None
 
         for attempt in range(1 + self.retries):
             try:
@@ -103,14 +103,14 @@ class MemOSClient:
         include_tool_memory: bool = False,
         tool_memory_limit_number: int = 6,
         relativity: float = 0.45,
-        knowledgebase_ids: Optional[List[str]] = None,
-        filter_obj: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, Any]]:
+        knowledgebase_ids: list[str] | None = None,
+        filter_obj: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         """Call POST /search/memory.
 
         Returns the ``data`` dict from MemOS response, or *None* on failure.
         """
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "user_id": user_id,
             "query": query,
             "source": source,
@@ -140,19 +140,19 @@ class MemOSClient:
     async def add_message(
         self,
         user_id: str,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         *,
         conversation_id: str = "",
         source: str = "copaw",
         agent_id: str = "",
         async_mode: bool = True,
-        tags: Optional[List[str]] = None,
+        tags: list[str] | None = None,
     ) -> bool:
         """Call POST /add/message.
 
         Returns True on success, False on failure.
         """
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "user_id": user_id,
             "messages": messages,
             "source": source,
@@ -172,7 +172,12 @@ class MemOSClient:
     # ------------------------------------------------------------------ #
 
     async def ping(self) -> bool:
-        """Lightweight connectivity check via a minimal search call."""
+        """Lightweight connectivity check via a minimal search call.
+
+        Returns True only for 2xx responses.  401/403 (bad key) and
+        other client errors are treated as failures so that ``start()``
+        does not falsely report a healthy connection.
+        """
         try:
             session = await self._ensure_session()
             async with session.post(
@@ -180,6 +185,6 @@ class MemOSClient:
                 json={"user_id": "_ping", "query": "ping"},
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
-                return resp.status < 500
+                return 200 <= resp.status < 300
         except Exception:
             return False

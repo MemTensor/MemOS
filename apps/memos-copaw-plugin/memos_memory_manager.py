@@ -1,28 +1,25 @@
-# -*- coding: utf-8 -*-
 """MemOS Cloud memory manager for CoPaw agents.
 
 Extends ReMeLightMemoryManager — all local operations (context compaction,
 token counting, tool result truncation, in-memory memory) are delegated
-to the parent class unchanged.  Only two methods are overridden:
-
-  - memory_search  → queries MemOS Cloud instead of local vector index
-  - summary_memory → uploads conversation to MemOS Cloud after local summary
+to the parent class unchanged.  Only ``memory_search`` is overridden to
+query MemOS Cloud instead of the local vector index.
 
 This ensures full compatibility with CoPaw's MemoryCompactionHook and
 force_memory_search auto-recall mechanism.
 """
+import contextlib
 import datetime
 import logging
 import os
-from typing import Optional
 
-from agentscope.message import Msg, TextBlock
+from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
-
 from copaw.agents.memory.reme_light_memory_manager import (
     ReMeLightMemoryManager,
 )
 from copaw.constant import EnvVarLoader
+
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +37,11 @@ def _format_search_results(data: dict) -> str:
         ts = item.get("update_time") or item.get("create_time")
         date_str = ""
         if ts:
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 date_str = datetime.datetime.fromtimestamp(
                     ts,
                     tz=datetime.timezone.utc,
                 ).strftime("[%Y-%m-%d %H:%M] ")
-            except (OSError, ValueError):
-                pass
         value = (item.get("memory_value") or "")[:8000]
         rel = item.get("relativity", 0)
         parts.append(f"{date_str}{value} (score={rel:.2f})")
@@ -83,7 +78,7 @@ class MemOSMemoryManager(ReMeLightMemoryManager):
     def __init__(self, working_dir: str, agent_id: str):
         super().__init__(working_dir=working_dir, agent_id=agent_id)
         self._memos_client = None
-        self._memos_cfg: Optional[dict] = None
+        self._memos_cfg: dict | None = None
 
     # ------------------------------------------------------------------ #
     # Config resolution
@@ -112,7 +107,7 @@ class MemOSMemoryManager(ReMeLightMemoryManager):
                     "timeout": mc.timeout,
                     "conversation_id": mc.conversation_id,
                     "knowledgebase_ids": mc.knowledgebase_ids,
-                    "async_mode": mc.async_mode,
+                    # async_mode reserved for future add flow
                 }
         except Exception as e:
             logger.debug(
@@ -136,7 +131,6 @@ class MemOSMemoryManager(ReMeLightMemoryManager):
             "timeout": cfg.get("timeout", 8.0),
             "conversation_id": cfg.get("conversation_id", ""),
             "knowledgebase_ids": cfg.get("knowledgebase_ids", []),
-            "async_mode": cfg.get("async_mode", True),
         }
         self._memos_cfg = result
         return result
@@ -211,10 +205,12 @@ class MemOSMemoryManager(ReMeLightMemoryManager):
             return await super().memory_search(query, max_results, min_score)
 
         mc = self._load_memos_config()
+        # Use config default when caller doesn't override
+        limit = max(max_results, mc["memory_limit_number"])
         data = await self._memos_client.search_memory(
             user_id=mc["user_id"],
             query=query,
-            memory_limit_number=max_results,
+            memory_limit_number=limit,
             include_preference=mc["include_preference"],
             preference_limit_number=mc["preference_limit_number"],
             relativity=max(min_score, mc["relativity"]),

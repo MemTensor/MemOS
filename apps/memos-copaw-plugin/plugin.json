@@ -2,7 +2,7 @@
   "id": "memos-copaw-plugin",
   "name": "MemOS Cloud Memory",
   "version": "0.1.0",
-  "description": "MemOS Cloud memory backend for CoPaw — provides cloud-based long-term memory via MemOS API (search + add).",
+  "description": "MemOS Cloud memory backend for CoPaw — cloud-based long-term memory recall via MemOS search API.",
   "author": "MemTensor",
   "entry_point": "plugin.py",
   "dependencies": [
