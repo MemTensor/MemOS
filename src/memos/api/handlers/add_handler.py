@@ -8,6 +8,7 @@ using dependency injection for better modularity and testability.
 from pydantic import validate_call
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
+from memos.api.handlers.cube_scope import resolve_cube_ids
 from memos.api.product_models import APIADDRequest, APIFeedbackRequest, MemoryResponse
 from memos.memories.textual.item import (
     list_all_fields,
@@ -120,10 +121,7 @@ class AddHandler(BaseHandler):
         1) writable_cube_ids (deprecated mem_cube_id is converted to this in model validator)
         2) fallback to user_id
         """
-        if add_req.writable_cube_ids:
-            return list(dict.fromkeys(add_req.writable_cube_ids))
-
-        return [add_req.user_id]
+        return resolve_cube_ids(add_req.writable_cube_ids, add_req.user_id)
 
     def _build_cube_view(self, add_req: APIADDRequest) -> MemCubeView:
         cube_ids = self._resolve_cube_ids(add_req)

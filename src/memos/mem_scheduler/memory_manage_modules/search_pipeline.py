@@ -28,11 +28,8 @@ class SearchPipeline:
         try:
             if method in [TreeTextMemory_SEARCH_METHOD, TreeTextMemory_FINE_SEARCH_METHOD]:
                 assert isinstance(text_mem_base, TreeTextMemory)
-                session_id = search_args.get("session_id", "default_session")
-                target_session_id = session_id
-                search_priority = (
-                    {"session_id": target_session_id} if "session_id" in search_args else None
-                )
+                session_id = search_args.get("session_id")
+                search_priority = {"session_id": session_id} if session_id else None
                 search_filter = search_args.get("filter")
                 search_source = search_args.get("source")
                 plugin = bool(search_source is not None and search_source == "plugin")
@@ -45,14 +42,13 @@ class SearchPipeline:
                     "playground_search_goal_parser", False
                 )
 
-                info = search_args.get(
-                    "info",
-                    {
-                        "user_id": user_id,
-                        "session_id": target_session_id,
-                        "chat_history": chat_history,
-                    },
-                )
+                default_info = {
+                    "user_id": user_id,
+                    "chat_history": chat_history,
+                }
+                if session_id:
+                    default_info["session_id"] = session_id
+                info = search_args.get("info", default_info)
 
                 results_long_term = mem_cube.text_mem.search(
                     query=query,
