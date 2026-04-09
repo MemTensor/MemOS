@@ -389,6 +389,15 @@ const memosLocalPlugin = {
     let currentAgentId = "main";
     const getCurrentOwner = () => `agent:${currentAgentId}`;
 
+    // Manage global singleton instance to prevent duplicate startups
+    // during OpenClaw hot-reloads or deferred re-registrations.
+    const globalRef = globalThis as any;
+
+    if (globalRef.__memosLocalPluginActiveService) {
+      api.logger.info("memos-local: Plugin is already running. Reusing the existing backend and returning early.");
+      return;
+    }
+
     // ─── Check allowPromptInjection policy ───
     // When allowPromptInjection=false, the prompt mutation fields (such as prependContext) in the hook return value
     // will be stripped by the framework. Skip auto-recall to avoid unnecessary LLM/embedding calls.
@@ -2383,7 +2392,19 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     let serviceStarted = false;
 
     const startServiceCore = async () => {
+      if (globalRef.__memosLocalPluginStopPromise) {
+        await globalRef.__memosLocalPluginStopPromise;
+        globalRef.__memosLocalPluginStopPromise = undefined;
+      }
       if (serviceStarted) return;
+      
+      // If another registration has occurred, we are no longer the active service.
+      // Abort starting to prevent orphan instances.
+      if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
+        api.logger.info("memos-local: aborting startServiceCore because a newer plugin instance is active.");
+        return;
+      }
+
       serviceStarted = true;
 
       if (hubServer) {
@@ -2425,18 +2446,24 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       );
     };
 
-    api.registerService({
+    const service = {
       id: "memos-local-openclaw-plugin",
       start: async () => { await startServiceCore(); },
       stop: async () => {
+        await viewer.stop();
+        if (globalRef.__memosLocalPluginActiveService === service) {
+          globalRef.__memosLocalPluginActiveService = undefined;
+        }
         await worker.flush();
         await telemetry.shutdown();
         await hubServer?.stop();
-        viewer.stop();
         store.close();
         api.logger.info("memos-local: stopped");
       },
-    });
+    };
+
+    api.registerService(service);
+    globalRef.__memosLocalPluginActiveService = service;
 
     // Fallback: OpenClaw may load this plugin via deferred reload after
     // startPluginServices has already run, so service.start() never fires.

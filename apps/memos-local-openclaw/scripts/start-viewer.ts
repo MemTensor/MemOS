@@ -71,8 +71,9 @@ async function main() {
   console.log(`\x1b[90m  Reset token: ${viewer.getResetToken()}\x1b[0m`);
   console.log(`\x1b[90m  Press Ctrl+C to stop\x1b[0m`);
 
-  process.on("SIGINT", () => {
-    viewer.stop();
+  process.on("SIGINT", async () => {
+    console.log("Shutting down viewer...");
+    await viewer.stop();
     store.close();
     process.exit(0);
   });
