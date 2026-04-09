@@ -4,7 +4,7 @@ set -euo pipefail
 # ─── MemTensor Memory for Hermes Agent — One-line Installer ───
 #
 # Usage (remote):
-#   curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install-memory.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/openclaw-local-plugin-20260408/apps/memos-local-plugin/install.sh | bash
 #
 # Usage (local, after extracting the npm package):
 #   bash install.sh
