@@ -1,0 +1,7 @@
+**/__pycache__
+**/__pycache__/**
+**/*.pyc
+**/bridge_path.txt
+*.tgz
+node_modules/
+.env
