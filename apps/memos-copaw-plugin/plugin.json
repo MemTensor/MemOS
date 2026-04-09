@@ -1,0 +1,16 @@
+{
+  "id": "memos-copaw-plugin",
+  "name": "MemOS Cloud Memory",
+  "version": "0.1.0",
+  "description": "MemOS Cloud memory backend for CoPaw — provides cloud-based long-term memory via MemOS API (search + add).",
+  "author": "MemTensor",
+  "entry_point": "plugin.py",
+  "dependencies": [
+    "aiohttp>=3.9.0"
+  ],
+  "min_copaw_version": "0.1.0",
+  "meta": {
+    "api_key_url": "https://memos.memtensor.cn",
+    "api_key_hint": "Get your API key from MemOS Cloud dashboard"
+  }
+}
