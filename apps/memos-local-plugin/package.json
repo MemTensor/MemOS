@@ -20,7 +20,8 @@
     "prebuilds",
     "install.sh",
     "tsconfig.json",
-    ".env.example"
+    ".env.example",
+    "README.md"
   ],
   "scripts": {
     "build": "tsc",
