@@ -124,7 +124,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .topbar-center{flex:1;display:flex;justify-content:center}
 .topbar .actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
 
-.main-content{display:flex;flex:1;max-width:1400px;margin:0 auto;width:100%;padding:28px 32px;gap:28px}
+.main-content{display:flex;flex:1;max-width:1400px;margin:0 auto;width:100%;padding:28px 32px;gap:28px;flex-wrap:wrap}
 
 /* ─── Sidebar ─── */
 .sidebar{width:260px;min-width:260px;flex-shrink:0;position:sticky;top:84px;max-height:calc(100vh - 112px);display:flex;flex-direction:column}
@@ -1247,6 +1247,17 @@ input,textarea,select{font-family:inherit;font-size:inherit}
   </div>
 
   <div class="main-content">
+    <div id="globalConfigAlert" style="width: 100%; margin-bottom: 0; flex-shrink: 0; display: block; grid-column: 1 / -1;">
+      <div class="emb-banner warning" style="margin: 0; display: block; border-left: 4px solid #f59e0b; position: relative;">
+        <button onclick="document.getElementById('globalConfigAlert').style.display='none'" style="position: absolute; right: 12px; top: 12px; background: none; border: none; cursor: pointer; color: #d97706; font-size: 16px; opacity: 0.7;" title="Dismiss">\u2715</button>
+        <div style="font-weight: 700; margin-bottom: 8px; font-size: 14px; color: #d97706; padding-right: 24px;">\u{1F514} 模型配置重要提醒 (如果已配置请忽略)</div>
+        <ul style="margin: 0; padding-left: 20px; line-height: 1.7; color: var(--text-sec); font-size: 13px;">
+          <li><strong style="color: #ef4444;">嵌入模型 (Embedding)：</strong>插件内置模型规模较小。为获得更精准的记忆检索体验，强烈建议在「设置 -> AI Models」中配置 <code>bge-m3</code> 等专业嵌入模型。</li>
+          <li><strong style="color: #ef4444;">摘要模型 (Summarizer)：</strong>此项为<strong style="color: #ef4444;">必填项</strong>，否则无法自动提取记忆摘要。建议配置<strong style="color: #ef4444;">非思考型</strong>大模型，以保障处理速度和流畅度。</li>
+          <li><strong style="color: #ef4444;">技能模型 (Skill Evolution)：</strong>用于自动提取可复用技能。建议配置<strong style="color: #ef4444;">非思考型</strong>大模型，以获得最佳的生成效果和稳定性。</li>
+        </ul>
+      </div>
+    </div>
     <div class="sidebar" id="sidebar">
       <div class="stats-grid" id="statsGrid">
         <div class="stat-card pri"><div class="stat-value" id="statTotal">-</div><div class="stat-label" data-i18n="stat.memories">Memories</div></div>
@@ -1500,6 +1511,15 @@ input,textarea,select{font-family:inherit;font-size:inherit}
             </div>
           </div>
           <div class="settings-card-body">
+            <div class="emb-banner warning" style="margin: 0 0 24px 0; display: block; border-left: 4px solid #f59e0b;">
+              <div style="font-weight: 700; margin-bottom: 8px; font-size: 14px; color: #d97706;">\u{1F514} 模型配置重要提醒</div>
+              <ul style="margin: 0; padding-left: 20px; line-height: 1.7; color: var(--text-sec); font-size: 13px;">
+                <li><strong>嵌入模型 (Embedding)：</strong>插件内置模型规模较小。为获得更精准的记忆检索体验，强烈建议配置 <code>bge-m3</code> 等专业嵌入模型。</li>
+                <li><strong>摘要模型 (Summarizer)：</strong>此项为<strong>必填项</strong>，否则无法自动提取记忆摘要。建议配置<strong>非思考型</strong>大模型，以保障处理速度和流畅度。</li>
+                <li><strong>技能模型 (Skill Evolution)：</strong>用于自动提取可复用技能。建议配置<strong>非思考型</strong>大模型，以获得最佳的生成效果和稳定性。</li>
+              </ul>
+            </div>
+
             <!-- Embedding Model section -->
             <div class="settings-card-subtitle">\u{1F4E1} <span data-i18n="settings.embedding">Embedding Model</span></div>
             <div class="field-hint" style="margin-bottom:10px" data-i18n="settings.embedding.desc">Vector embedding model for memory search and retrieval</div>
