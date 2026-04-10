@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 import uuid
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 
@@ -35,10 +37,122 @@ class LanceGraphDB(BaseGraphDB):
         self.user_name = config.user_name or "default"
         self.dim = config.embedding_dimension
 
+        # Compaction settings
+        self.compaction_version_threshold = config.compaction_version_threshold
+        self.compaction_interval_mins = config.compaction_interval_mins
+        self.cleanup_older_than_days = config.cleanup_older_than_days
+
         self.memories_uri = os.path.join(self.uri, "memories")
         self.edges_uri = os.path.join(self.uri, "edges")
 
         self._init_schema()
+
+        # Start LanceDB background optimizer thread
+        self._last_compact_versions = {
+            "memories": self._get_memories_table().version,
+            "edges": self._get_edges_table().version,
+        }
+        self._optimizer_thread = threading.Thread(
+            target=self._db_optimizer_loop,
+            daemon=True,
+            name="lancedb-optimizer",
+        )
+        self._optimizer_thread.start()
+
+    def _db_optimizer_loop(self):
+        """Background loop to periodically trigger table optimization."""
+        import schedule
+
+        schedule.every(self.compaction_interval_mins).minutes.do(self._force_optimize)
+
+        logger.info(
+            f"Started LanceDB optimizer thread. Compaction interval: {self.compaction_interval_mins}m, "
+            f"Version threshold: {self.compaction_version_threshold}"
+        )
+
+        while True:
+            try:
+                # 1. Check version threshold
+                self._check_and_trigger_compaction()
+
+                # 2. Run scheduled fallback compaction
+                schedule.run_pending()
+            except Exception as e:
+                logger.error(f"Error in LanceDB optimizer loop: {e}", stack_info=True)
+
+            time.sleep(5)  # Avoid busy waiting
+
+    def _check_and_trigger_compaction(self):
+        """Trigger compaction if any table's version diff exceeds the threshold."""
+        try:
+            memories_ds = self._get_memories_table()
+            if (
+                memories_ds.version - self._last_compact_versions["memories"]
+                > self.compaction_version_threshold
+            ):
+                self._optimize_table("memories", memories_ds)
+
+            edges_ds = self._get_edges_table()
+            if (
+                edges_ds.version - self._last_compact_versions["edges"]
+                > self.compaction_version_threshold
+            ):
+                self._optimize_table("edges", edges_ds)
+        except Exception as e:
+            logger.error(f"Failed to check compaction versions: {e}")
+
+    def _optimize_table(self, table_name: str, ds):
+        """Helper method to optimize a specific LanceDB table."""
+        try:
+            current_version = ds.version
+            last_version = self._last_compact_versions[table_name]
+
+            if current_version > last_version:
+                logger.info(
+                    f"Triggering LanceDB optimization for '{table_name}'. "
+                    f"Current version: {current_version}, Last compacted: {last_version}"
+                )
+
+                stats = ds.optimize(cleanup_older_than=timedelta(days=self.cleanup_older_than_days))
+
+                stats_msg = ""
+                if stats:
+                    compaction = getattr(stats, "compaction", None)
+                    if compaction:
+                        stats_msg += (
+                            f" | Compaction: "
+                            f"-{getattr(compaction, 'fragments_removed', 0)}/"
+                            f"+{getattr(compaction, 'fragments_added', 0)} fragments, "
+                            f"-{getattr(compaction, 'files_removed', 0)}/"
+                            f"+{getattr(compaction, 'files_added', 0)} files"
+                        )
+
+                    prune = getattr(stats, "prune", None)
+                    if prune:
+                        stats_msg += (
+                            f" | Prune: -{getattr(prune, 'bytes_removed', 0)} bytes, "
+                            f"-{getattr(prune, 'old_versions_removed', 0)} versions"
+                        )
+
+                # Reload the table to get the updated version after optimization
+                if table_name == "memories":
+                    ds = self._get_memories_table()
+                elif table_name == "edges":
+                    ds = self._get_edges_table()
+
+                self._last_compact_versions[table_name] = ds.version
+                logger.info(
+                    f"LanceDB '{table_name}' optimization completed successfully. "
+                    f"New version: {self._last_compact_versions[table_name]}{stats_msg}"
+                )
+        except Exception as e:
+            logger.error(f"LanceDB '{table_name}' optimization failed: {e}")
+
+    def _force_optimize(self):
+        # Optimize Memories Table
+        self._optimize_table("memories", self._get_memories_table())
+        # Optimize Edges Table
+        self._optimize_table("edges", self._get_edges_table())
 
     def _init_schema(self):
         import lancedb
@@ -73,6 +187,34 @@ class LanceGraphDB(BaseGraphDB):
             empty_table = pa.Table.from_pylist([], schema=schema)
             self.db.create_table("memories", data=empty_table)
             logger.info("Created LanceDB table for memories.")
+
+            try:
+                ds = self.db.open_table("memories")
+
+                # Create vector index (aligned with memory-lancedb TS implementation)
+                import math
+
+                row_count = ds.count_rows()
+                if row_count > 256:  # LanceDB requires at least 256 rows to train vector index
+                    num_partitions = max(1, math.floor(math.sqrt(row_count)))
+                    ds.create_index(
+                        metric="cosine",
+                        vector_column_name="embedding",
+                        num_partitions=num_partitions,
+                    )
+                    logger.info(
+                        f"Created IVF_FLAT index for memories.embedding with metric=cosine, partitions={num_partitions}"
+                    )
+                else:
+                    logger.debug(
+                        f"Skipping vector index creation, not enough rows ({row_count} <= 256)"
+                    )
+
+                # Create full-text search index
+                ds.create_fts_index("memory", replace=True)
+                logger.info("Created FTS index for memories.memory")
+            except Exception as e:
+                logger.warning(f"Failed to create LanceDB indices: {e}")
 
         if "edges" not in table_names:
             edge_schema = pa.schema(

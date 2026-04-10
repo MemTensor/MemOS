@@ -129,5 +129,73 @@ def test_lance_graph_db():
         print("Test finished successfully in temporary directory!")
 
 
+def test_lance_compaction_and_fts_effectiveness():
+    """
+    Test the effectiveness of the LanceDB _optimize_table mechanism,
+    including compaction of small files and FTS index functionality.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_uri = os.path.join(tmpdir, "test_lancedb_compaction")
+        # Use a low threshold to force triggering
+        config = LanceGraphDBConfig(
+            uri=db_uri, user_name="test_user", embedding_dimension=3, compaction_version_threshold=2
+        )
+        db = LanceGraphDB(config)
+
+        # 1. Insert multiple single nodes to create small fragments
+        print("\nInserting 5 separate fragments...")
+        for i in range(5):
+            node = {
+                "id": f"node_c_{i}",
+                "memory": f"Alice went to the magical forest number {i}",
+                "metadata": {"memory_type": "LongTermMemory", "status": "activated"},
+                "embedding": [0.1 * i, 0.2 * i, 0.3 * i],
+            }
+            db.add_nodes_batch([node])
+
+        import lance
+
+        ds = lance.dataset(os.path.join(db_uri, "memories.lance"))
+        fragments_before = len(ds.get_fragments())
+        print(f"Fragments BEFORE optimize: {fragments_before}")
+
+        # 2. Test FTS before optimization
+        try:
+            res_fts_before = db.search_by_fulltext(["magical"], top_k=10)
+            print(f"FTS hits BEFORE optimize: {len(res_fts_before)}")
+        except Exception as e:
+            print(f"FTS failed before optimize: {e}")
+
+        # 3. Force the internal optimizer
+        print("Forcing LanceDB optimizer...")
+        db._force_optimize()
+
+        ds = lance.dataset(os.path.join(db_uri, "memories.lance"))
+        fragments_after = len(ds.get_fragments())
+        print(f"Fragments AFTER optimize: {fragments_after}")
+
+        # 5. Verify FTS index effectiveness after optimization
+        res_fts_after = db.search_by_fulltext(["magical"], top_k=10)
+        assert len(res_fts_after) == 5, (
+            f"FTS should recall all 5 nodes, but got {len(res_fts_after)}"
+        )
+        print(f"FTS hits AFTER optimize: {len(res_fts_after)}")
+
+        # 6. Test prune/delete
+        db.delete_node("node_c_0")
+        db._force_optimize()
+
+        res_fts_deleted = db.search_by_fulltext(["magical"], top_k=10)
+        assert len(res_fts_deleted) == 4, (
+            f"FTS should recall 4 nodes after deletion, got {len(res_fts_deleted)}"
+        )
+        print(f"FTS hits AFTER deletion and optimize: {len(res_fts_deleted)}")
+
+        db.clear()
+
+
 if __name__ == "__main__":
     test_lance_graph_db()
+    test_lance_compaction_and_fts_effectiveness()

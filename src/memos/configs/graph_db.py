@@ -252,6 +252,15 @@ class LanceGraphDBConfig(BaseConfig):
         description="Logical user or tenant ID for data isolation",
     )
     embedding_dimension: int = Field(default=768, description="Dimension of vector embedding")
+    compaction_version_threshold: int = Field(
+        default=500, description="Number of new versions to accumulate before triggering compaction"
+    )
+    compaction_interval_mins: int = Field(
+        default=30, description="Fallback interval in minutes to check and run compaction"
+    )
+    cleanup_older_than_days: int = Field(
+        default=7, description="Number of days to keep old versions before pruning"
+    )
 
 
 class GraphDBConfigFactory(BaseModel):
