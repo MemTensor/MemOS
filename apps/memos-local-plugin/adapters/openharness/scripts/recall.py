@@ -16,15 +16,17 @@ Environment:
 from __future__ import annotations
 
 import logging
-import os
 import sys
+
 from pathlib import Path
+
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from bridge_client import MemosCoreBridge
 from config import get_project_memory_dir
 from daemon_manager import ensure_daemon
+
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("memos-recall")

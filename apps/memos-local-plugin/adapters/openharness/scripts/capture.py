@@ -17,12 +17,15 @@ import json
 import logging
 import os
 import sys
+
 from pathlib import Path
+
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from bridge_client import MemosCoreBridge
 from config import get_project_session_dir
+
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("memos-capture")
@@ -85,10 +88,12 @@ def extract_messages_from_payload() -> tuple[list[dict], str]:
     if isinstance(raw_messages, list):
         for msg in raw_messages:
             if isinstance(msg, dict) and "role" in msg and "content" in msg:
-                messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"],
-                })
+                messages.append(
+                    {
+                        "role": msg["role"],
+                        "content": msg["content"],
+                    }
+                )
 
     return messages, session_id
 
