@@ -2471,8 +2471,18 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     // service.start() during normal startup if this is a fresh launch.
     const SELF_START_DELAY_MS = 2000;
     setTimeout(() => {
-      const isCliCommand = process.argv.some(arg => ["doctor", "plugins", "channels", "agents", "memory", "config", "tools", "setup", "onboard", "status", "logs", "wiki"].some(cmd => arg.includes(cmd)));
-      if (!serviceStarted && !isCliCommand) {
+      const args = process.argv.map(arg => String(arg || "").toLowerCase());
+      const gatewayIndex = args.lastIndexOf("gateway");
+      let shouldStart = false;
+
+      if (gatewayIndex !== -1) {
+        const nextArg = args[gatewayIndex + 1];
+        if (!nextArg || nextArg.startsWith("-") || nextArg === "start" || nextArg === "restart") {
+          shouldStart = true;
+        }
+      }
+
+      if (!serviceStarted && shouldStart) {
         api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
         startServiceCore().catch((err) => {
           api.logger.warn(`memos-local: self-start failed: ${err}`);
