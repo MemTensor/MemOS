@@ -9,6 +9,25 @@ import { Summarizer } from "../ingest/providers";
 
 export type SkillSearchScope = "mix" | "self" | "public";
 
+/** Race a promise against a timeout. Returns fallback value on timeout instead of throwing. */
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T, label: string, log: { warn: (msg: string, ...args: unknown[]) => void }): Promise<T> {
+  if (ms <= 0) return promise;
+  return new Promise<T>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        log.warn(`recall: ${label} timed out after ${ms}ms — returning fallback`);
+        resolve(fallback);
+      }
+    }, ms);
+    promise.then(
+      (val) => { if (!settled) { settled = true; clearTimeout(timer); resolve(val); } },
+      (err) => { if (!settled) { settled = true; clearTimeout(timer); log.warn(`recall: ${label} failed: ${err}`); resolve(fallback); } },
+    );
+  });
+}
+
 export interface RecallOptions {
   query?: string;
   maxResults?: number;
@@ -48,13 +67,24 @@ export class RecallEngine {
       : [];
 
     let vecCandidates: Array<{ chunkId: string; score: number }> = [];
+    const timeoutMs = this.ctx.config.recall!.timeoutMs ?? 10_000;
     if (query) {
       try {
-        const queryVec = await this.embedder.embedQuery(query);
-        const maxChunks = recallCfg.vectorSearchMaxChunks && recallCfg.vectorSearchMaxChunks > 0
-          ? recallCfg.vectorSearchMaxChunks
-          : undefined;
-        vecCandidates = vectorSearch(this.store, queryVec, candidatePool, maxChunks, ownerFilter);
+        const queryVec = await withTimeout(
+          this.embedder.embedQuery(query),
+          timeoutMs,
+          null,
+          "embedQuery",
+          this.ctx.log,
+        );
+        if (queryVec) {
+          const maxChunks = recallCfg.vectorSearchMaxChunks && recallCfg.vectorSearchMaxChunks > 0
+            ? recallCfg.vectorSearchMaxChunks
+            : undefined;
+          vecCandidates = vectorSearch(this.store, queryVec, candidatePool, maxChunks, ownerFilter);
+        } else {
+          this.ctx.log.warn("Vector search skipped (embedding timed out), using FTS only");
+        }
       } catch (err) {
         this.ctx.log.warn(`Vector search failed, using FTS only: ${err}`);
       }
@@ -101,7 +131,13 @@ export class RecallEngine {
       }
 
       try {
-        const qv = await this.embedder.embedQuery(query).catch(() => null);
+        const qv = await withTimeout(
+          this.embedder.embedQuery(query).catch(() => null),
+          timeoutMs,
+          null,
+          "hubMemEmbedQuery",
+          this.ctx.log,
+        );
         if (qv) {
           const memEmbs = this.store.getVisibleHubMemoryEmbeddings("__hub__");
           const scored: Array<{ id: string; score: number }> = [];
@@ -302,15 +338,24 @@ export class RecallEngine {
 
     // Vector search on description embedding
     let vecCandidates: Array<{ skillId: string; score: number }> = [];
+    const timeoutMs = this.ctx.config.recall!.timeoutMs ?? 10_000;
     try {
-      const queryVec = await this.embedder.embedQuery(query);
-      const allEmb = this.store.getSkillEmbeddings(scope, currentOwner);
-      vecCandidates = allEmb.map((row) => ({
-        skillId: row.skillId,
-        score: cosineSimilarity(queryVec, row.vector),
-      }));
-      vecCandidates.sort((a, b) => b.score - a.score);
-      vecCandidates = vecCandidates.slice(0, TOP_CANDIDATES);
+      const queryVec = await withTimeout(
+        this.embedder.embedQuery(query),
+        timeoutMs,
+        null,
+        "skillEmbedQuery",
+        this.ctx.log,
+      );
+      if (queryVec) {
+        const allEmb = this.store.getSkillEmbeddings(scope, currentOwner);
+        vecCandidates = allEmb.map((row) => ({
+          skillId: row.skillId,
+          score: cosineSimilarity(queryVec, row.vector),
+        }));
+        vecCandidates.sort((a, b) => b.score - a.score);
+        vecCandidates = vecCandidates.slice(0, TOP_CANDIDATES);
+      }
     } catch (err) {
       this.ctx.log.warn(`Skill vector search failed, using FTS only: ${err}`);
     }
@@ -336,9 +381,16 @@ export class RecallEngine {
 
     if (candidateSkills.length === 0) return [];
 
-    // LLM relevance judgment
+    // LLM relevance judgment (with timeout — fail-open returns all candidates)
     const summarizer = new Summarizer(this.ctx.config.summarizer, this.ctx.log, this.ctx.openclawAPI);
-    const relevantIndices = await this.judgeSkillRelevance(summarizer, query, candidateSkills);
+    const allIndices = candidateSkills.map((_, i) => i);
+    const relevantIndices = await withTimeout(
+      this.judgeSkillRelevance(summarizer, query, candidateSkills),
+      timeoutMs,
+      allIndices,
+      "judgeSkillRelevance",
+      this.ctx.log,
+    );
 
     return relevantIndices.map((idx) => {
       const { skill, rrfScore } = candidateSkills[idx];

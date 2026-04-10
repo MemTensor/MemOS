@@ -312,6 +312,8 @@ export interface MemosLocalConfig {
     recencyHalfLifeDays?: number;
     /** Cap vector search to this many most recent chunks. 0 = no cap (search all; may get slower with 200k+ chunks). If you set a cap for performance, use a large value (e.g. 200000–300000) so older memories are still in the window; FTS always searches all. */
     vectorSearchMaxChunks?: number;
+    /** Hard timeout in milliseconds for the entire recall search path. When exceeded, partial results (FTS-only) are returned instead of blocking. 0 = no timeout. Default 10000 (10s). */
+    timeoutMs?: number;
   };
   dedup?: {
     similarityThreshold?: number;
@@ -337,6 +339,7 @@ export const DEFAULTS = {
   mmrLambda: 0.7,
   recencyHalfLifeDays: 14,
   vectorSearchMaxChunks: 0,
+  recallTimeoutMs: 10_000,
   dedupSimilarityThreshold: 0.80,
   evidenceWrapperTag: "STORED_MEMORY",
   excerptMinChars: 200,

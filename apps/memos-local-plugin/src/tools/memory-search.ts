@@ -25,6 +25,8 @@ function emptyHubResult(scope: HubScope): HubSearchResult {
 }
 
 export function createMemorySearchTool(engine: RecallEngine, store?: SqliteStore, ctx?: PluginContext, sharedState?: { lastSearchTime: number }): ToolDefinition {
+  const EMPTY_RESULT = { hits: [], meta: { usedMinScore: 0, usedMaxResults: 0, totalCandidates: 0, timedOut: true, note: "Search timed out \u2014 returning empty results to avoid blocking the critical path." } };
+
   return {
     name: "memory_search",
     description:
@@ -66,27 +68,48 @@ export function createMemorySearchTool(engine: RecallEngine, store?: SqliteStore
       const minScore = input.minScore as number | undefined;
       const ownerFilter = resolveOwnerFilter(input.owner);
       const scope = resolveScope(input.scope);
+      const timeoutMs = ctx?.config?.recall?.timeoutMs ?? 10_000;
 
-      const localSearch = engine.search({
-        query,
-        maxResults,
-        minScore,
-        ownerFilter,
+      // Top-level timeout: never block the critical path longer than timeoutMs
+      const doSearch = async () => {
+        const localSearch = engine.search({
+          query,
+          maxResults,
+          minScore,
+          ownerFilter,
+        });
+
+        if (scope === "local" || !store || !ctx) {
+          return localSearch;
+        }
+
+        const [local, hub] = await Promise.all([
+          localSearch,
+          hubSearchMemories(store, ctx, { query, maxResults, scope, hubAddress: input.hubAddress as string | undefined, userToken: input.userToken as string | undefined }).catch((err) => {
+            ctx.log.warn(`Hub search failed, using local-only results: ${err}`);
+            return emptyHubResult(scope);
+          }),
+        ]);
+
+        return { local, hub };
+      };
+
+      if (timeoutMs <= 0) return doSearch();
+
+      return new Promise((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            ctx?.log?.warn?.(`memory_search timed out after ${timeoutMs}ms \u2014 returning empty results`);
+            resolve(EMPTY_RESULT);
+          }
+        }, timeoutMs);
+        doSearch().then(
+          (val) => { if (!settled) { settled = true; clearTimeout(timer); resolve(val); } },
+          (err) => { if (!settled) { settled = true; clearTimeout(timer); ctx?.log?.warn?.(`memory_search failed: ${err}`); resolve(EMPTY_RESULT); } },
+        );
       });
-
-      if (scope === "local" || !store || !ctx) {
-        return localSearch;
-      }
-
-      const [local, hub] = await Promise.all([
-        localSearch,
-        hubSearchMemories(store, ctx, { query, maxResults, scope, hubAddress: input.hubAddress as string | undefined, userToken: input.userToken as string | undefined }).catch((err) => {
-          ctx.log.warn(`Hub search failed, using local-only results: ${err}`);
-          return emptyHubResult(scope);
-        }),
-      ]);
-
-      return { local, hub };
     },
   };
 }
