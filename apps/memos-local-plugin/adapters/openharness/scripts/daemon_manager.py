@@ -7,6 +7,7 @@ session_start and kept alive across sessions.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -14,18 +15,19 @@ import signal
 import socket
 import subprocess
 import time
-from pathlib import Path
+
 from typing import Any
 
 from config import (
     DAEMON_PORT,
     VIEWER_PORT,
+    _get_plugin_root,
     find_bridge_script,
     get_bridge_config,
     get_daemon_dir,
     get_daemon_port,
-    _get_plugin_root,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +86,8 @@ def _cleanup_pid_files() -> None:
     for name in ("bridge.pid", "bridge.port", "viewer.url"):
         f = daemon_dir / name
         if f.exists():
-            try:
+            with contextlib.suppress(OSError):
                 f.unlink()
-            except OSError:
-                pass
 
 
 def start_daemon(
@@ -109,10 +109,8 @@ def start_daemon(
         pid = 0
         pf = daemon_dir / "bridge.pid"
         if pf.exists():
-            try:
+            with contextlib.suppress(ValueError, OSError):
                 pid = int(pf.read_text().strip())
-            except (ValueError, OSError):
-                pass
         return {
             "daemonPort": port,
             "viewerUrl": viewer_url,
@@ -128,62 +126,56 @@ def start_daemon(
     # Isolate viewer: prevent migration scan from showing OpenClaw data
     env["OPENCLAW_STATE_DIR"] = str(get_daemon_dir().parent)
 
-    # Redirect stderr to a log file so closing the pipe doesn't EPIPE the daemon
     log_dir = get_daemon_dir()
-    log_file = open(log_dir / "bridge.log", "a")
 
     logger.info("Starting daemon: %s", " ".join(bridge_cmd))
 
-    proc = subprocess.Popen(
-        bridge_cmd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=log_file,
-        env=env,
-        cwd=str(_get_plugin_root()),
-        start_new_session=True,
-    )
+    with open(log_dir / "bridge.log", "a") as log_file:
+        proc = subprocess.Popen(
+            bridge_cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=log_file,
+            env=env,
+            cwd=str(_get_plugin_root()),
+            start_new_session=True,
+        )
 
-    # Wait for the daemon to print its startup JSON line to stdout
-    deadline = time.monotonic() + timeout
-    info: dict[str, Any] = {}
+        deadline = time.monotonic() + timeout
+        info: dict[str, Any] = {}
 
-    import select
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            log_file.close()
-            # Read the log for error context
-            stderr_out = ""
-            try:
-                stderr_out = (log_dir / "bridge.log").read_text()[-2000:]
-            except OSError:
-                pass
-            raise RuntimeError(
-                f"Daemon exited immediately with code {proc.returncode}.\nlog: {stderr_out}"
-            )
+        import select
 
-        if proc.stdout and select.select([proc.stdout], [], [], 1.0)[0]:
-            line = proc.stdout.readline().decode("utf-8").strip()
-            if line:
-                try:
-                    info = json.loads(line)
-                    break
-                except json.JSONDecodeError:
-                    logger.debug("Non-JSON stdout line from daemon: %s", line)
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                stderr_out = ""
+                with contextlib.suppress(OSError):
+                    stderr_out = (log_dir / "bridge.log").read_text()[-2000:]
+                raise RuntimeError(
+                    f"Daemon exited immediately with code {proc.returncode}.\nlog: {stderr_out}"
+                )
 
-    if not info:
-        log_file.close()
-        raise RuntimeError("Daemon did not produce startup info within timeout")
+            if proc.stdout and select.select([proc.stdout], [], [], 1.0)[0]:
+                line = proc.stdout.readline().decode("utf-8").strip()
+                if line:
+                    try:
+                        info = json.loads(line)
+                        break
+                    except json.JSONDecodeError:
+                        logger.debug("Non-JSON stdout line from daemon: %s", line)
 
-    # Close our handle to stdout; stderr goes to the log file which stays open
+        if not info:
+            raise RuntimeError("Daemon did not produce startup info within timeout")
+
     if proc.stdout:
         proc.stdout.close()
-    log_file.close()
 
     info["already_running"] = False
     logger.info(
         "Daemon started: pid=%s, port=%s, viewer=%s",
-        info.get("pid"), info.get("daemonPort"), info.get("viewerUrl"),
+        info.get("pid"),
+        info.get("daemonPort"),
+        info.get("viewerUrl"),
     )
     return info
 
