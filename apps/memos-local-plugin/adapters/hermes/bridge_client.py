@@ -7,15 +7,18 @@ Supports two connection modes:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import socket
 import subprocess
 import threading
+
 from typing import Any
 
-from config import find_bridge_script, get_bridge_config, get_daemon_port, OWNER, _get_plugin_root
+from config import OWNER, _get_plugin_root, find_bridge_script, get_bridge_config, get_daemon_port
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +48,8 @@ class _TcpTransport:
 
     def close(self) -> None:
         if self._sock:
-            try:
+            with contextlib.suppress(OSError):
                 self._sock.close()
-            except OSError:
-                pass
             self._sock = None
 
 
@@ -133,20 +134,27 @@ class MemosCoreBridge:
                 raise RuntimeError(f"Bridge error: {resp['error']}")
             return resp.get("result", {})
 
-    def search(self, query: str, max_results: int = 6, min_score: float = 0.45, owner: str = OWNER) -> dict:
-        return self.call("search", {
-            "query": query,
-            "maxResults": max_results,
-            "minScore": min_score,
-            "owner": owner,
-        })
+    def search(
+        self, query: str, max_results: int = 6, min_score: float = 0.45, owner: str = OWNER
+    ) -> dict:
+        return self.call(
+            "search",
+            {
+                "query": query,
+                "maxResults": max_results,
+                "minScore": min_score,
+                "owner": owner,
+            },
+        )
 
     def ingest(self, messages: list[dict], session_id: str = "default", owner: str = OWNER) -> None:
         params: dict[str, Any] = {"messages": messages, "sessionId": session_id, "owner": owner}
         self.call("ingest", params)
 
     def build_prompt(self, query: str, max_results: int = 6, owner: str = OWNER) -> dict:
-        return self.call("build_prompt", {"query": query, "maxResults": max_results, "owner": owner})
+        return self.call(
+            "build_prompt", {"query": query, "maxResults": max_results, "owner": owner}
+        )
 
     def flush(self) -> None:
         self.call("flush")
