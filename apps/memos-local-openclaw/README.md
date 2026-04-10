@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@memtensor/memos-local-openclaw-plugin)](https://www.npmjs.com/package/@memtensor/memos-local-openclaw-plugin)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/MemTensor/MemOS/blob/main/LICENSE)
-[![Node.js >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
+[![Node.js >= 22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org/)
 [![GitHub](https://img.shields.io/badge/GitHub-Source-181717?logo=github)](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-openclaw)
 
 Persistent local conversation memory for [OpenClaw](https://github.com/nicepkg/openclaw) AI Agents. Every conversation is automatically captured, semantically indexed, and instantly recallable — with **task summarization & skill evolution**, **team sharing for memories and skills**, and **multi-agent collaborative memory**.
@@ -618,7 +618,7 @@ openclaw plugins install @memtensor/memos-local-openclaw-plugin
 
 ## Troubleshooting
 
-> 📖 **详细排查指南 / Detailed troubleshooting guide:** [docs/troubleshooting.html](https://memtensor.github.io/MemOS/apps/memos-local-openclaw/docs/troubleshooting.html) — 包含逐步排查流程、日志查看方法、完全重装步骤等。
+> 📖 **详细排查指南 / Detailed troubleshooting guide:** [Troubleshooting](https://memos-claw.openmem.net/docs/troubleshooting.html) — 包含逐步排查流程、日志查看方法、完全重装步骤等。
 >
 > 📦 **better-sqlite3 official troubleshooting:** [better-sqlite3 Troubleshooting](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md) — the upstream guide for native module build issues.
 
@@ -640,7 +640,7 @@ openclaw plugins install @memtensor/memos-local-openclaw-plugin
    Search for `memos-local`, `failed to load`, `Error`, `Cannot find module`.
 
 4. **Check environment**
-   - Node version: `node -v` (requires **>= 18**)
+   - Node version: `node -v` (requires **>= 22**)
    - Plugin directory exists: `ls ~/.openclaw/extensions/memos-local-openclaw-plugin/package.json`
    - Dependencies installed: `ls ~/.openclaw/extensions/memos-local-openclaw-plugin/node_modules/@sinclair/typebox`
      If missing: `cd ~/.openclaw/extensions/memos-local-openclaw-plugin && npm install --omit=dev`
@@ -693,7 +693,7 @@ This section is for contributors who want to develop, test, or modify the plugin
 
 ### Prerequisites
 
-- **Node.js >= 18** (`node -v`)
+- **Node.js >= 22** (`node -v`)
 - **npm >= 9** (`npm -v`)
 - **C++ build tools** (for `better-sqlite3` native module):
   - macOS: `xcode-select --install`
@@ -701,7 +701,7 @@ This section is for contributors who want to develop, test, or modify the plugin
   - Windows: usually not needed (prebuilt binaries available for LTS Node.js); if build fails, install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
 - **OpenClaw CLI** installed and available in PATH (`openclaw --version`)
 
-> **`better-sqlite3` build issues?** This is the most common installation problem on macOS and Linux. If `npm install` fails, first install the C++ build tools above, then run `npm rebuild better-sqlite3`. For detailed platform-specific solutions, see the [official better-sqlite3 troubleshooting guide](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md) and our [installation troubleshooting page](https://memtensor.github.io/MemOS/apps/memos-local-openclaw/docs/troubleshooting.html).
+> **`better-sqlite3` build issues?** This is the most common installation problem on macOS and Linux. If `npm install` fails, first install the C++ build tools above, then run `npm rebuild better-sqlite3`. For detailed platform-specific solutions, see the [official better-sqlite3 troubleshooting guide](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md) and our [installation troubleshooting page](https://memos-claw.openmem.net/docs/troubleshooting.html).
 
 ### Clone & Setup
 
@@ -761,8 +761,7 @@ apps/memos-local-openclaw/
 | `node_modules/` | npm dependencies | `npm install` |
 | `dist/` | Compiled JavaScript output | `npm run build` |
 | `package-lock.json` | Dependency lock file | `npm install` (auto-generated) |
-| `www/` | Memory Viewer static site (local preview) | Started automatically by the plugin |
-| `docs/` | Documentation HTML pages | Built from source or viewed at the hosted URL |
+| `www/` | Memory Viewer static site & documentation pages | Started automatically by the plugin |
 | `ppt/` | Presentation files (internal use) | Not needed for development |
 | `.env` | Local environment variables | Copy from `.env.example` |
 

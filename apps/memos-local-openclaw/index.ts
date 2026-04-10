@@ -2384,7 +2384,24 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     let serviceStarted = false;
 
+    function isGatewayStartCommand(): boolean {
+      const args = process.argv.map(a => String(a || "").toLowerCase());
+      const gIdx = args.lastIndexOf("gateway");
+      if (gIdx === -1) return false;
+      const next = args[gIdx + 1];
+      return !next || next.startsWith("-") || next === "start" || next === "restart";
+    }
+
     const startServiceCore = async (isHostStart = false) => {
+      if (!isGatewayStartCommand()) {
+        api.logger.info("memos-local: not a gateway start command, skipping service startup.");
+        return;
+      }
+
+      if (globalRef.__memosLocalPluginStopPromise) {
+        await globalRef.__memosLocalPluginStopPromise;
+        globalRef.__memosLocalPluginStopPromise = undefined;
+      }
       if (serviceStarted) return;
       
       if (!isHostStart) {
@@ -2477,25 +2494,15 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     // Start on a delay instead of next tick so the host has time to call
     // service.start() during normal startup if this is a fresh launch.
     const SELF_START_DELAY_MS = 2000;
-    setTimeout(() => {
-      const args = process.argv.map(arg => String(arg || "").toLowerCase());
-      const gatewayIndex = args.lastIndexOf("gateway");
-      let shouldStart = false;
-
-      if (gatewayIndex !== -1) {
-        const nextArg = args[gatewayIndex + 1];
-        if (!nextArg || nextArg.startsWith("-") || nextArg === "start" || nextArg === "restart") {
-          shouldStart = true;
-        }
-      }
-
-      if (!serviceStarted && shouldStart) {
+    const selfStartTimer = setTimeout(() => {
+      if (!serviceStarted && isGatewayStartCommand()) {
         api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
         startServiceCore().catch((err) => {
           api.logger.warn(`memos-local: self-start failed: ${err}`);
         });
       }
     }, SELF_START_DELAY_MS);
+    if (selfStartTimer.unref) selfStartTimer.unref();
   },
 };
 
