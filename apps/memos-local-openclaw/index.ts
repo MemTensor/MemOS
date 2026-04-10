@@ -389,15 +389,8 @@ const memosLocalPlugin = {
     let currentAgentId = "main";
     const getCurrentOwner = () => `agent:${currentAgentId}`;
 
-    // Manage global singleton instance to prevent duplicate startups
-    // during OpenClaw hot-reloads or deferred re-registrations.
     const globalRef = globalThis as any;
-
-    if (globalRef.__memosLocalPluginActiveService) {
-      api.logger.info("memos-local: Plugin is already running. Reusing the existing backend and returning early.");
-      return;
-    }
-
+    
     // ─── Check allowPromptInjection policy ───
     // When allowPromptInjection=false, the prompt mutation fields (such as prependContext) in the hook return value
     // will be stripped by the framework. Skip auto-recall to avoid unnecessary LLM/embedding calls.
@@ -2399,7 +2392,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       return !next || next.startsWith("-") || next === "start" || next === "restart";
     }
 
-    const startServiceCore = async () => {
+    const startServiceCore = async (isHostStart = false) => {
       if (!isGatewayStartCommand()) {
         api.logger.info("memos-local: not a gateway start command, skipping service startup.");
         return;
@@ -2411,13 +2404,25 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       }
       if (serviceStarted) return;
       
-      // If another registration has occurred, we are no longer the active service.
-      // Abort starting to prevent orphan instances.
-      if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
-        api.logger.info("memos-local: aborting startServiceCore because a newer plugin instance is active.");
-        return;
+      if (!isHostStart) {
+        if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
+          api.logger.info("memos-local: aborting startServiceCore because a newer plugin instance is active.");
+          return;
+        }
       }
 
+      if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
+        api.logger.info("memos-local: Stopping previous plugin instance due to start of new instance...");
+        const oldService = globalRef.__memosLocalPluginActiveService;
+        globalRef.__memosLocalPluginActiveService = undefined;
+        try {
+          await oldService.stop({ preserveDb: true });
+        } catch (e: any) {
+          api.logger.warn(`memos-local: Error stopping previous instance: ${e}`);
+        }
+      }
+      
+      globalRef.__memosLocalPluginActiveService = service;
       serviceStarted = true;
 
       if (hubServer) {
@@ -2461,8 +2466,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     const service = {
       id: "memos-local-openclaw-plugin",
-      start: async () => { await startServiceCore(); },
-      stop: async () => {
+      start: async () => { await startServiceCore(true); },
+      stop: async (options?: { preserveDb?: boolean }) => {
         await viewer.stop();
         if (globalRef.__memosLocalPluginActiveService === service) {
           globalRef.__memosLocalPluginActiveService = undefined;
@@ -2470,13 +2475,19 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         await worker.flush();
         await telemetry.shutdown();
         await hubServer?.stop();
-        store.close();
+        
+        // If we are hot-reloading, the new instance is already using the SAME
+        // database file on disk. Closing the sqlite store here might kill the
+        // connection for the new instance or cause locking issues depending on
+        // how the native binding manages handles.
+        if (!options?.preserveDb) {
+          store.close();
+        }
         api.logger.info("memos-local: stopped");
       },
     };
 
     api.registerService(service);
-    globalRef.__memosLocalPluginActiveService = service;
 
     // Fallback: OpenClaw may load this plugin via deferred reload after
     // startPluginServices has already run, so service.start() never fires.

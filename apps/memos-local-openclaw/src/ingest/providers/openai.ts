@@ -122,13 +122,13 @@ export async function generateTaskTitleOpenAI(
     body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
-      max_tokens: 100,
+      max_tokens: 1000,
       messages: [
         { role: "system", content: TASK_TITLE_PROMPT },
         { role: "user", content: text },
       ],
     })),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -233,13 +233,13 @@ export async function judgeNewTopicOpenAI(
     body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
-      max_tokens: 10,
+      max_tokens: 1000,
       messages: [
         { role: "system", content: TOPIC_JUDGE_PROMPT },
         { role: "user", content: userContent },
       ],
     })),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -289,13 +289,13 @@ export async function classifyTopicOpenAI(
     body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
-      max_tokens: 60,
+      max_tokens: 1000,
       messages: [
         { role: "system", content: TOPIC_CLASSIFIER_PROMPT },
         { role: "user", content: userContent },
       ],
     })),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -336,13 +336,13 @@ export async function arbitrateTopicSplitOpenAI(
     body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
-      max_tokens: 10,
+      max_tokens: 1000,
       messages: [
         { role: "system", content: TOPIC_ARBITRATION_PROMPT },
         { role: "user", content: userContent },
       ],
     })),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -432,13 +432,13 @@ export async function filterRelevantOpenAI(
     body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
-      max_tokens: 200,
+      max_tokens: 2000,
       messages: [
         { role: "system", content: FILTER_RELEVANT_PROMPT },
         { role: "user", content: `QUERY: ${query}\n\nCANDIDATES:\n${candidateText}` },
       ],
     })),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -453,8 +453,13 @@ export async function filterRelevantOpenAI(
 }
 
 export function parseFilterResult(raw: string, log: Logger): FilterResult {
+  let cleaned = raw.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  cleaned = cleaned.replace(/think>[\s\S]*?<\/think>/gi, "");
+  // Remove markdown code block markers if present (e.g. ```json ... ```)
+  cleaned = cleaned.replace(/```json\s*/gi, "").replace(/```\s*/gi, "");
+
   try {
-    const match = raw.match(/\{[\s\S]*\}/);
+    const match = cleaned.match(/\{[\s\S]*\}/);
     if (match) {
       const obj = JSON.parse(match[0]);
       if (obj && Array.isArray(obj.relevant)) {
@@ -465,6 +470,35 @@ export function parseFilterResult(raw: string, log: Logger): FilterResult {
       }
     }
   } catch {}
+
+  try {
+    // 尝试匹配可能被截断的 JSON 数组结构：`{"relevant":[` 或 `{"relevant": [1, 2`
+    const truncatedMatch = cleaned.match(/\{\s*"relevant"\s*:\s*\[([^\]]*)/);
+    if (truncatedMatch) {
+      const numbers = truncatedMatch[1]
+        .split(",")
+        .map(s => parseInt(s.trim(), 10))
+        .filter(n => !isNaN(n));
+      
+      // 如果至少成功解析出一个数字，且原字符串确实无法通过正常 JSON 解析，就当做截断处理
+      if (numbers.length > 0) {
+        log.warn(`filterRelevant: JSON truncated, extracted from partial array: ${numbers.join(", ")}`);
+        return { relevant: numbers, sufficient: cleaned.includes('"sufficient":true') || cleaned.includes('"sufficient": true') };
+      } else if (cleaned.includes('"relevant":[]') || cleaned.includes('"relevant": []')) {
+        return { relevant: [], sufficient: cleaned.includes('"sufficient":true') || cleaned.includes('"sufficient": true') };
+      }
+    }
+  } catch {}
+
+  // Regex fallback for reasoning models that fail to output JSON after thinking
+  const candidatesMatch = raw.match(/(?:candidate|候选)[\s:：]*(\d+)/gi);
+  if (candidatesMatch && candidatesMatch.length > 0) {
+    const extracted = candidatesMatch.map(m => parseInt(m.replace(/\D/g, ""), 10));
+    const unique = Array.from(new Set(extracted)).filter(n => !isNaN(n));
+    log.warn(`filterRelevant: JSON missing, fallback regex extracted: ${unique.join(", ")}`);
+    return { relevant: unique, sufficient: false };
+  }
+
   log.warn(`filterRelevant: failed to parse LLM output: "${raw}", fallback to all+insufficient`);
   return { relevant: [], sufficient: false };
 }
@@ -524,13 +558,13 @@ export async function judgeDedupOpenAI(
     body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
-      max_tokens: 300,
+      max_tokens: 2000,
       messages: [
         { role: "system", content: DEDUP_JUDGE_PROMPT },
         { role: "user", content: `NEW MEMORY:\n${newSummary}\n\nEXISTING MEMORIES:\n${candidateText}` },
       ],
     })),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -544,8 +578,13 @@ export async function judgeDedupOpenAI(
 }
 
 export function parseDedupResult(raw: string, log: Logger): DedupResult {
+  let cleaned = raw.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  cleaned = cleaned.replace(/think>[\s\S]*?<\/think>/gi, "");
+  // Remove markdown code block markers if present
+  cleaned = cleaned.replace(/```json\s*/gi, "").replace(/```\s*/gi, "");
+
   try {
-    const match = raw.match(/\{[\s\S]*\}/);
+    const match = cleaned.match(/\{[\s\S]*\}/);
     if (match) {
       const obj = JSON.parse(match[0]);
       if (obj && typeof obj.action === "string") {
@@ -558,6 +597,24 @@ export function parseDedupResult(raw: string, log: Logger): DedupResult {
       }
     }
   } catch {}
+
+  try {
+    // 处理可能的 JSON 截断：如 `{"action":"DUPLICATE","targetIndex":2`
+    const actionMatch = cleaned.match(/"action"\s*:\s*"([^"]+)"/);
+    if (actionMatch) {
+      const actionStr = actionMatch[1];
+      if (actionStr === "DUPLICATE" || actionStr === "UPDATE" || actionStr === "NEW") {
+        let targetIndex: number | undefined;
+        const targetMatch = cleaned.match(/"targetIndex"\s*:\s*(\d+)/);
+        if (targetMatch) {
+          targetIndex = parseInt(targetMatch[1], 10);
+        }
+        log.warn(`judgeDedup: JSON truncated, regex extracted action=${actionStr}, targetIndex=${targetIndex}`);
+        return { action: actionStr, targetIndex, reason: "extracted from truncated JSON" };
+      }
+    }
+  } catch {}
+
   log.warn(`judgeDedup: failed to parse LLM output: "${raw}", fallback to NEW`);
   return { action: "NEW", reason: "parse_failed" };
 }
