@@ -211,13 +211,24 @@ export class ViewerServer {
     }
   }
 
-  stop(): void {
-    this.stopHubHeartbeat();
-    this.stopNotifPoll();
-    for (const c of this.notifSSEClients) { try { c.end(); } catch {} }
-    this.notifSSEClients = [];
-    this.server?.close();
-    this.server = null;
+  stop(): Promise<void> {
+    return new Promise((resolve) => {
+      this.stopHubHeartbeat();
+      this.stopNotifPoll();
+      for (const c of this.notifSSEClients) { try { c.end(); } catch {} }
+      this.notifSSEClients = [];
+      if (this.server) {
+        if ("closeAllConnections" in this.server) {
+          (this.server as any).closeAllConnections();
+        }
+        this.server.close(() => {
+          this.server = null;
+          resolve();
+        });
+      } else {
+        resolve();
+      }
+    });
   }
 
   getResetToken(): string {
@@ -904,6 +915,9 @@ export class ViewerServer {
         totalMemories: total.count, totalSessions: sessions.count, totalEmbeddings: embCount,
         totalSkills: skillCount, totalTasks: taskCount,
         embeddingProvider: this.embedder.provider,
+        summarizerProvider: this.ctx?.config?.summarizer?.provider ?? "none",
+        skillEvolutionProvider: this.ctx?.config?.skillEvolution?.enabled ? (this.ctx?.config?.summarizer?.provider ?? "none") : "none",
+        isSummarizerDegraded: this.ctx ? !this.hasUsableSummarizerProvider(this.ctx.config) : false,
         dedupBreakdown,
         timeRange: { earliest: timeRange.earliest, latest: timeRange.latest },
         sessions: sessionList,

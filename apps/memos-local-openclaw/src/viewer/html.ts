@@ -124,7 +124,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .topbar-center{flex:1;display:flex;justify-content:center}
 .topbar .actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
 
-.main-content{display:flex;flex:1;max-width:1400px;margin:0 auto;width:100%;padding:28px 32px;gap:28px}
+.main-content{display:grid;grid-template-columns:260px 1fr;grid-template-rows:auto 1fr;flex:1;max-width:1400px;margin:0 auto;width:100%;padding:28px 32px;gap:28px}
 
 /* ─── Sidebar ─── */
 .sidebar{width:260px;min-width:260px;flex-shrink:0;position:sticky;top:84px;max-height:calc(100vh - 112px);display:flex;flex-direction:column}
@@ -1500,6 +1500,16 @@ input,textarea,select{font-family:inherit;font-size:inherit}
             </div>
           </div>
           <div class="settings-card-body">
+            <div class="emb-banner warning" id="settingsWarningBanner" style="margin: 0 0 24px 0; display: block; border-left: 4px solid #f59e0b; position: relative;">
+              <button onclick="document.getElementById('settingsWarningBanner').style.display='none'" style="position: absolute; right: 12px; top: 12px; background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 16px; opacity: 0.7; transition: opacity 0.2s;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7" title="关闭" aria-label="关闭">\u2715</button>
+              <div style="font-weight: 700; margin-bottom: 8px; font-size: 14px; color: #d97706;">\u{1F514} 模型配置重要提醒</div>
+              <ul style="margin: 0; padding-left: 20px; line-height: 1.7; color: var(--text-sec); font-size: 13px;">
+                <li><strong>嵌入模型 (Embedding)：</strong>插件内置模型规模较小。为获得更精准的记忆检索体验，强烈建议配置 <code>bge-m3</code> 等专业嵌入模型。</li>
+                <li><strong>摘要模型 (Summarizer)：</strong>此项为<strong>必填项</strong>，否则无法自动提取记忆摘要。建议配置<strong>非思考型</strong>大模型，以保障处理速度和流畅度。</li>
+                <li><strong>技能模型 (Skill Evolution)：</strong>用于自动提取可复用技能。建议配置<strong>非思考型</strong>大模型，以获得最佳的生成效果和稳定性。</li>
+              </ul>
+            </div>
+
             <!-- Embedding Model section -->
             <div class="settings-card-subtitle">\u{1F4E1} <span data-i18n="settings.embedding">Embedding Model</span></div>
             <div class="field-hint" style="margin-bottom:10px" data-i18n="settings.embedding.desc">Vector embedding model for memory search and retrieval</div>
@@ -2126,6 +2136,7 @@ const I18N={
     'skills.search.placeholder':'Search skills...',
     'skills.search.local':'Local',
     'skills.search.noresult':'No matching skills found',
+
     'skills.load.error':'Failed to load skills',
     'skills.hub.title':'\u{1F310} Team Skills',
     'skills.hub.empty':'No extra team skills to list here — either the hub has none yet, or every hub skill already appears in your local list above (same source skill).',
@@ -2273,7 +2284,10 @@ const I18N={
     'confirm.clearall2':'Are you absolutely sure?',
     'embed.on':'Embedding: ',
     'embed.off':'No embedding model',
-    'embed.warn.local':'Using built-in mini model (384d). Search quality is limited — configure an embedding model in Settings for best results.',
+    'embed.warn.local':'<strong>Embedding</strong>: Using built-in mini model (384d). Search quality is limited. It is highly recommended to configure a dedicated Embedding model (like bge-m3) in Settings for best results.',
+    'fallback.banner.sum': '<strong>Summarizer</strong>: Summarizer model is not configured, automatic memory summarization is paused. A fast, non-reasoning model is recommended for best performance.',
+    'fallback.banner.skill': '<strong>Skill Evolution</strong>: Skill Evolution model is not configured. A fast, non-reasoning model is recommended for best stability and generation quality.',
+    'fallback.banner.goto': 'Configure models',
     'embed.err.fail':'Embedding model error detected. Check Settings → Model Health.',
     'embed.banner.goto':'Go to Settings',
     'lang.switch':'中',
@@ -2899,6 +2913,7 @@ const I18N={
     'skills.search.placeholder':'搜索技能...',
     'skills.search.local':'本地',
     'skills.search.noresult':'未找到匹配的技能',
+
     'skills.load.error':'加载技能失败',
     'skills.hub.title':'\u{1F310} 团队共享技能',
     'skills.hub.empty':'下方只列出「Hub 上有、但上方本机列表尚未包含」的技能；若 Hub 条目已与本机同源同步，则只会在上方显示，此处为空属正常。',
@@ -3046,7 +3061,10 @@ const I18N={
     'confirm.clearall2':'你真的确定吗？',
     'embed.on':'嵌入模型：',
     'embed.off':'无嵌入模型',
-    'embed.warn.local':'当前使用内置迷你模型（384维），搜索效果有限。强烈建议在「设置」中配置专用 Embedding 模型以获得最佳效果。',
+    'embed.warn.local':'<strong>嵌入模型 (Embedding)</strong>：当前使用内置迷你模型（384维），搜索效果有限。强烈建议在「设置」中配置专用 Embedding 模型（如bge-m3等模型）以获得最佳效果。',
+    'fallback.banner.sum': '<strong>摘要模型 (Summarizer)</strong>：摘要模型未配置，无法自动提取记忆摘要。建议配置非思考型大模型，以保障处理速度和流畅度。',
+    'fallback.banner.skill': '<strong>技能模型 (Skill Evolution)</strong>：技能模型未配置，建议配置非思考型大模型，以获得最佳的生成效果和稳定性。',
+    'fallback.banner.goto': '前往配置',
     'embed.err.fail':'Embedding 模型调用异常，请前往「设置 → 模型健康」检查。',
     'embed.banner.goto':'前往设置',
     'lang.switch':'EN',
@@ -3647,7 +3665,15 @@ function applyI18n(){
   const step2=document.getElementById('resetStep2Desc');
   if(step2) step2.innerHTML=t('reset.step2.desc.pre')+'<span style="font-family:monospace;font-size:12px;color:var(--pri)">password reset token: <strong>a1b2c3d4e5f6...</strong></span>'+t('reset.step2.desc.post');
   document.title=t('title')+' - OpenClaw';
-  if(typeof loadStats==='function' && document.getElementById('app').style.display==='flex'){loadStats();}
+  if(typeof loadStats==='function' && document.getElementById('app').style.display==='flex'){
+    _embeddingWarningShown = false;
+    _fallbackWarningShown = false;
+    _lastStatsFp = '';
+    const embB = document.getElementById('embBanner'); if (embB) embB.remove();
+    const fSumB = document.getElementById('fallbackBannerSum'); if (fSumB) fSumB.remove();
+    const fSkillB = document.getElementById('fallbackBannerSkill'); if (fSkillB) fSkillB.remove();
+    loadStats();
+  }
   if(document.querySelector('.analytics-view.show') && typeof loadMetrics==='function'){loadMetrics();}
 }
 
@@ -8263,6 +8289,7 @@ async function loadAll(){
 }
 
 var _lastStatsFp='';
+var _fallbackWarningShown=false;
 async function loadStats(ownerFilter){
   let d;
   try{
@@ -8310,6 +8337,19 @@ async function loadStats(ownerFilter){
         showEmbeddingBanner(t('embed.err.fail'),'error');
       }
     }).catch(()=>{});
+  }
+
+  if(!_fallbackWarningShown){
+    _fallbackWarningShown=true;
+    var sumWarn = (d.summarizerProvider === 'none') ? t('fallback.banner.sum') : '';
+    var skillWarn = (d.skillEvolutionProvider === 'none') ? t('fallback.banner.skill') : '';
+    
+    if (sumWarn) {
+      showFallbackBanner('fallbackBannerSum', '<div>'+sumWarn+'</div>', 'warning');
+    }
+    if (skillWarn) {
+      showFallbackBanner('fallbackBannerSkill', '<div>'+skillWarn+'</div>', 'warning');
+    }
   }
 
   const memorySessions=d.sessions||[];
@@ -9623,7 +9663,22 @@ function showEmbeddingBanner(msg,type){
   var el=document.createElement('div');
   el.id='embBanner';
   el.className=cls;
-  el.innerHTML=icon+' <span>'+esc(msg)+'</span>'+btn+close;
+  el.innerHTML=icon+' <span>'+msg+'</span>'+btn+close;
+  var mc=document.querySelector('.main-content');
+  if(mc) mc.parentElement.insertBefore(el,mc);
+}
+
+/* ─── Fallback Banner ─── */
+function showFallbackBanner(id, msgHtml,type){
+  if(document.getElementById(id)) return;
+  var cls=type==='error'?'emb-banner error':'emb-banner warning';
+  var icon=type==='error'?'\\u274C':'\\u26A0\\uFE0F';
+  var btn='<button class="emb-banner-btn" onclick="switchView(\\'settings\\');this.parentElement.remove()" style="margin-left:auto;">'+t('fallback.banner.goto')+'</button>';
+  var close='<button class="emb-banner-close" onclick="this.parentElement.remove()">&times;</button>';
+  var el=document.createElement('div');
+  el.id=id;
+  el.className=cls;
+  el.innerHTML=icon+' <div style="line-height:1.5;flex:1;">'+msgHtml+'</div>'+btn+close;
   var mc=document.querySelector('.main-content');
   if(mc) mc.parentElement.insertBefore(el,mc);
 }
