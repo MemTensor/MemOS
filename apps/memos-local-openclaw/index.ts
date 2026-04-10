@@ -333,6 +333,86 @@ const memosLocalPlugin = {
     } catch {}
     const telemetry = new Telemetry(ctx.config.telemetry ?? {}, stateDir, pluginVersion, ctx.log, pluginDir);
 
+    api.registerMemoryRuntime({
+      async getMemorySearchManager(params: { agentId: string }) {
+        const ownerFilter = [`agent:${params.agentId}`, "public"];
+        const readCount = (sql: string) => {
+          try {
+            const db = (store as { db?: { prepare: (query: string) => { get: (...args: string[]) => { count?: number } | undefined } } }).db;
+            const row = db?.prepare(sql).get(...ownerFilter);
+            return Number(row?.count ?? 0);
+          } catch {
+            return 0;
+          }
+        };
+
+        return {
+          manager: {
+            async search(query: string, opts?: { maxResults?: number; minScore?: number }) {
+              const result = await engine.search({
+                query,
+                maxResults: opts?.maxResults,
+                minScore: opts?.minScore,
+                ownerFilter,
+              });
+              return result.hits.map((hit) => ({
+                path: `session:${hit.source.sessionKey}`,
+                startLine: 1,
+                endLine: 1,
+                score: hit.score,
+                snippet: hit.original_excerpt || hit.summary,
+                source: "sessions" as const,
+                citation: hit.ref.chunkId,
+              }));
+            },
+            async readFile(params: { relPath: string }) {
+              throw new Error(`file-backed memory read unsupported by memos-local: ${params.relPath}`);
+            },
+            status() {
+              const chunks = readCount("SELECT COUNT(*) as count FROM chunks WHERE owner IN (?, ?)");
+              const files = readCount("SELECT COUNT(DISTINCT session_key) as count FROM chunks WHERE owner IN (?, ?)");
+              const vectorCount = readCount("SELECT COUNT(*) as count FROM embeddings e JOIN chunks c ON c.id = e.chunk_id WHERE c.owner IN (?, ?)");
+              return {
+                backend: "builtin" as const,
+                provider: embedder.provider,
+                model: ctx.config.embedding?.model,
+                files,
+                chunks,
+                dirty: false,
+                workspaceDir: api.resolvePath("~/.openclaw/workspace"),
+                dbPath: ctx.config.storage?.dbPath,
+                sources: ["sessions" as const],
+                vector: {
+                  enabled: true,
+                  available: vectorCount > 0,
+                  dims: embedder.dimensions,
+                },
+                custom: {
+                  plugin: "memos-local-openclaw-plugin",
+                },
+              };
+            },
+            async probeEmbeddingAvailability() {
+              try {
+                await embedder.embedQuery("health check");
+                return { ok: true };
+              } catch (err) {
+                return { ok: false, error: err instanceof Error ? err.message : String(err) };
+              }
+            },
+            async probeVectorAvailability() {
+              return readCount("SELECT COUNT(*) as count FROM embeddings e JOIN chunks c ON c.id = e.chunk_id WHERE c.owner IN (?, ?)") > 0;
+            },
+            async close() {},
+          },
+        };
+      },
+      resolveMemoryBackendConfig() {
+        return { backend: "builtin" as const };
+      },
+      async closeAllMemorySearchManagers() {},
+    });
+
     // Install bundled memory-guide skill so OpenClaw loads it (write from embedded content so it works regardless of deploy layout)
     const workspaceSkillsDir = path.join(workspaceDir, "skills");
     const memosGuideDest = path.join(workspaceSkillsDir, "memos-memory-guide");
@@ -2380,6 +2460,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // ─── Service lifecycle ───
 
+    const registrationMode = (api as { registrationMode?: string }).registrationMode ?? "full";
+    const argv = process.argv.slice(2);
+    const isGatewayProcess = argv.includes("gateway") || process.argv.includes("gateway");
+    const shouldHostViewerService = registrationMode === "full" && isGatewayProcess;
+
     let serviceStarted = false;
 
     const startServiceCore = async () => {
@@ -2425,33 +2510,35 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       );
     };
 
-    api.registerService({
-      id: "memos-local-openclaw-plugin",
-      start: async () => { await startServiceCore(); },
-      stop: async () => {
-        await worker.flush();
-        await telemetry.shutdown();
-        await hubServer?.stop();
-        viewer.stop();
-        store.close();
-        api.logger.info("memos-local: stopped");
-      },
-    });
+    if (shouldHostViewerService) {
+      api.registerService({
+        id: "memos-local-openclaw-plugin",
+        start: async () => { await startServiceCore(); },
+        stop: async () => {
+          await worker.flush();
+          await telemetry.shutdown();
+          await hubServer?.stop();
+          viewer.stop();
+          store.close();
+          api.logger.info("memos-local: stopped");
+        },
+      });
 
-    // Fallback: OpenClaw may load this plugin via deferred reload after
-    // startPluginServices has already run, so service.start() never fires.
-    // Start on the next tick instead of waiting several seconds; the
-    // serviceStarted guard still prevents duplicate startup if the host calls
-    // service.start() immediately after registration.
-    const SELF_START_DELAY_MS = 0;
-    setTimeout(() => {
-      if (!serviceStarted) {
-        api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
-        startServiceCore().catch((err) => {
-          api.logger.warn(`memos-local: self-start failed: ${err}`);
-        });
-      }
-    }, SELF_START_DELAY_MS);
+      // Fallback: OpenClaw may load this plugin via deferred reload after
+      // startPluginServices has already run, so service.start() never fires.
+      // Self-start the viewer after a short grace period only in the gateway process.
+      const SELF_START_DELAY_MS = 3000;
+      setTimeout(() => {
+        if (!serviceStarted) {
+          api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
+          startServiceCore().catch((err) => {
+            api.logger.warn(`memos-local: self-start failed: ${err}`);
+          });
+        }
+      }, SELF_START_DELAY_MS);
+    } else {
+      api.logger.info(`memos-local: skipping viewer service registration (mode=${registrationMode}, argv=${argv.join(" ")})`);
+    }
   },
 };
 
