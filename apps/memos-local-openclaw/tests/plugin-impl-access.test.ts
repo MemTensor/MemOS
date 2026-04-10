@@ -21,9 +21,21 @@ function makeApi(stateDir: string, pluginConfig: Record<string, unknown> = {}) {
       info: () => {},
       warn: () => {},
     },
-    registerTool(def: any) {
+    registerTool(def: any, meta?: { name?: string }) {
+      if (typeof def === "function") {
+        const key = meta?.name ?? def({ agentId: "main", sessionKey: "default" }).name;
+        tools.set(key, {
+          name: key,
+          execute: (...args: any[]) => {
+            const runtimeCtx = args[2] ?? { agentId: "main", sessionKey: "default" };
+            return def(runtimeCtx).execute(...args);
+          },
+        });
+        return;
+      }
       tools.set(def.name, def);
     },
+    registerMemoryCapability() {},
     registerService(def: any) {
       service = def;
     },
@@ -219,7 +231,7 @@ describe("plugin-impl owner isolation", () => {
     const search = tools.get("memory_search");
     await waitFor(async () => {
       const result = await search.execute("call-search", { query: "alpha private marker", maxResults: 5, minScore: 0.1 }, { agentId: "alpha" });
-      return (result?.details?.hits?.length ?? 0) > 0;
+      return (result?.details?.filtered?.length ?? 0) > 0;
     });
   });
 
@@ -243,12 +255,12 @@ describe("plugin-impl owner isolation", () => {
     const beta = await search.execute("call-search", { query: "alpha private marker", maxResults: 5, minScore: 0.1 }, { agentId: "beta" });
     const publicHit = await search.execute("call-search", { query: "shared public marker", maxResults: 5, minScore: 0.1 }, { agentId: "beta" });
 
-    expect(alpha.details.hits.length).toBeGreaterThan(0);
-    const betaAlphaHits = (beta.details?.hits ?? []).filter((h: any) =>
+    expect(alpha.details.filtered.length).toBeGreaterThan(0);
+    const betaAlphaHits = (beta.details?.filtered ?? []).filter((h: any) =>
       h.original_excerpt?.includes("alpha") || h.summary?.includes("alpha"),
     );
     expect(betaAlphaHits).toHaveLength(0);
-    expect(publicHit.details.hits.length).toBeGreaterThan(0);
+    expect(publicHit.details.filtered.length).toBeGreaterThan(0);
   });
 
   it("memory_timeline should not leak another agent's private neighbors", async () => {
@@ -256,7 +268,7 @@ describe("plugin-impl owner isolation", () => {
     const timeline = tools.get("memory_timeline");
 
     const alpha = await search.execute("call-search", { query: "alpha private marker", maxResults: 5, minScore: 0.1 }, { agentId: "alpha" });
-    const chunkId = alpha.details.hits[0].chunkId;
+    const chunkId = alpha.details.filtered[0].chunkId;
     const betaTimeline = await timeline.execute("call-timeline", { chunkId }, { agentId: "beta" });
 
     expect(betaTimeline.details.entries).toEqual([]);
@@ -416,7 +428,7 @@ describe("plugin-impl owner isolation", () => {
     const getTool = tools.get("memory_get");
 
     const alpha = await search.execute("call-search", { query: "alpha private marker", maxResults: 5, minScore: 0.1 }, { agentId: "alpha" });
-    const chunkId = alpha.details.hits[0].chunkId;
+    const chunkId = alpha.details.filtered[0].chunkId;
     const betaGet = await getTool.execute("call-get", { chunkId }, { agentId: "beta" });
 
     expect(betaGet.details.error).toBe("not_found");

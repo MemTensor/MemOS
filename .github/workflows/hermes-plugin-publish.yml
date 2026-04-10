@@ -1,0 +1,113 @@
+name: Hermes Plugin — Build Prebuilds & Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 1.0.0 or 1.0.0-beta.1)"
+        required: true
+      tag:
+        description: "npm dist-tag (latest for production, beta/next/alpha for testing)"
+        required: true
+        default: "latest"
+
+defaults:
+  run:
+    working-directory: apps/memos-local-plugin
+
+permissions:
+  contents: write
+
+jobs:
+  build-prebuilds:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            platform: darwin-arm64
+          - os: macos-15
+            platform: darwin-x64
+          - os: ubuntu-latest
+            platform: linux-x64
+          - os: windows-latest
+            platform: win32-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Rebuild for x64 under Rosetta (darwin-x64 only)
+        if: matrix.platform == 'darwin-x64'
+        run: |
+          arch -x86_64 npm rebuild better-sqlite3
+
+      - name: Collect prebuild
+        shell: bash
+        run: |
+          mkdir -p prebuilds/${{ matrix.platform }}
+          cp node_modules/better-sqlite3/build/Release/better_sqlite3.node prebuilds/${{ matrix.platform }}/
+
+      - name: Upload prebuild artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuild-hermes-${{ matrix.platform }}
+          path: apps/memos-local-plugin/prebuilds/${{ matrix.platform }}/better_sqlite3.node
+
+  publish:
+    needs: build-prebuilds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Download all prebuilds
+        uses: actions/download-artifact@v4
+        with:
+          path: apps/memos-local-plugin/prebuilds
+          pattern: prebuild-hermes-*
+          merge-multiple: false
+
+      - name: Organize prebuilds
+        run: |
+          cd prebuilds
+          for dir in prebuild-hermes-*; do
+            platform="${dir#prebuild-hermes-}"
+            mkdir -p "$platform"
+            mv "$dir/better_sqlite3.node" "$platform/"
+            rmdir "$dir"
+          done
+          echo "Prebuilds collected:"
+          find . -name "*.node" -exec ls -lh {} \;
+
+      - name: Install dependencies (skip native build)
+        run: npm install --ignore-scripts
+
+      - name: Bump version
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Publish to npm
+        run: npm publish --access public --tag ${{ inputs.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create git tag and push
+        working-directory: .
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add apps/memos-local-plugin/package.json
+          if ! git diff --staged --quiet; then
+            git commit -m "release: hermes-plugin v${{ inputs.version }}"
+          fi
+          git tag "hermes-plugin-v${{ inputs.version }}"
+          git push origin HEAD --tags

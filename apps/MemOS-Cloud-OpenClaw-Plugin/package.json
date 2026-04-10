@@ -1,6 +1,6 @@
 {
   "name": "@memtensor/memos-cloud-openclaw-plugin",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "OpenClaw lifecycle plugin for MemOS Cloud (add + recall memory)",
   "scripts": {
     "sync-version": "node scripts/sync-version.js",
@@ -29,16 +29,25 @@
   "author": "MemTensor",
   "license": "MIT",
   "openclaw": {
+    "hooks": [
+      "./index.js"
+    ],
     "extensions": [
       "./index.js"
     ]
   },
   "clawdbot": {
+    "hooks": [
+      "./index.js"
+    ],
     "extensions": [
       "./index.js"
     ]
   },
   "moltbot": {
+    "hooks": [
+      "./index.js"
+    ],
     "extensions": [
       "./index.js"
     ]

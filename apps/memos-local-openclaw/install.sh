@@ -150,6 +150,17 @@ ensure_node22() {
   exit 1
 }
 
+resolve_openclaw_bin() {
+  if command -v openclaw >/dev/null 2>&1; then
+    command -v openclaw
+    return 0
+  fi
+
+  error "Global openclaw CLI not found, 未找到全局 openclaw 命令"
+  error "Install it first with: npm install -g openclaw@latest"
+  exit 1
+}
+
 print_banner() {
   echo -e "${BLUE}${BOLD}🧠 Memos Local OpenClaw Installer${NC}"
   echo -e "${BLUE}${DEFAULT_TAGLINE}${NC}"
@@ -208,6 +219,9 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+OPENCLAW_BIN="$(resolve_openclaw_bin)"
+success "Using global OpenClaw CLI, 使用全局 OpenClaw CLI: ${OPENCLAW_BIN}"
+
 PACKAGE_SPEC="${PLUGIN_PACKAGE}@${PLUGIN_VERSION}"
 EXTENSION_DIR="${OPENCLAW_HOME}/extensions/${PLUGIN_ID}"
 OPENCLAW_CONFIG_PATH="${OPENCLAW_HOME}/openclaw.json"
@@ -252,6 +266,9 @@ if (!config.plugins.allow.includes(pluginId)) {
 // Clean up stale contextEngine slot from previous versions
 if (config.plugins.slots && config.plugins.slots.contextEngine) {
   delete config.plugins.slots.contextEngine;
+  if (Object.keys(config.plugins.slots).length === 0) {
+    delete config.plugins.slots;
+  }
 }
 
 // Register plugin in memory slot
@@ -269,25 +286,27 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
 }
 config.plugins.entries[pluginId].enabled = true;
 
-// Register plugin in installs so gateway auto-loads it on restart
+// Register plugin in installs so gateway auto-loads it on restart (pinned spec when package.json exists)
 if (!config.plugins.installs || typeof config.plugins.installs !== 'object') {
   config.plugins.installs = {};
 }
+let resolvedName = '';
+let resolvedVersion = '';
 const pkgJsonPath = path.join(installPath, 'package.json');
-let resolvedName, resolvedVersion;
 if (fs.existsSync(pkgJsonPath)) {
   const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
   resolvedName = pkg.name;
   resolvedVersion = pkg.version;
 }
+const pinnedSpec = resolvedName && resolvedVersion ? `${resolvedName}@${resolvedVersion}` : spec;
 config.plugins.installs[pluginId] = {
   source: 'npm',
-  spec,
+  spec: pinnedSpec,
   installPath,
   ...(resolvedVersion ? { version: resolvedVersion } : {}),
   ...(resolvedName ? { resolvedName } : {}),
   ...(resolvedVersion ? { resolvedVersion } : {}),
-  ...(resolvedName && resolvedVersion ? { resolvedSpec: `${resolvedName}@${resolvedVersion}` } : {}),
+  ...(resolvedName && resolvedVersion ? { resolvedSpec: pinnedSpec } : {}),
   installedAt: new Date().toISOString(),
 };
 
@@ -297,7 +316,7 @@ NODE
 }
 
 info "Stop OpenClaw Gateway, 停止 OpenClaw Gateway..."
-npx openclaw gateway stop >/dev/null 2>&1 || true
+"${OPENCLAW_BIN}" gateway stop >/dev/null 2>&1 || true
 
 if command -v lsof >/dev/null 2>&1; then
   PIDS="$(lsof -i :"${PORT}" -t 2>/dev/null || true)"
@@ -358,13 +377,61 @@ if [[ ! -d "$EXTENSION_DIR" ]]; then
   exit 1
 fi
 
+if [[ ! -d "${EXTENSION_DIR}/node_modules" ]]; then
+  warn "node_modules missing after install (postinstall may have cleaned it), 安装后 node_modules 缺失，正在重新安装..."
+  (
+    cd "${EXTENSION_DIR}"
+    npm install --omit=dev --no-fund --no-audit --ignore-scripts --loglevel=error 2>&1
+  )
+fi
+
+if [[ ! -d "${EXTENSION_DIR}/node_modules/better-sqlite3" ]]; then
+  warn "better-sqlite3 missing, attempting rebuild, better-sqlite3 缺失，尝试重新编译..."
+  (
+    cd "${EXTENSION_DIR}"
+    npm rebuild better-sqlite3 2>&1 || true
+  )
+fi
+
+if [[ ! -d "${EXTENSION_DIR}/node_modules" ]]; then
+  error "Dependencies installation failed. Run manually: cd ${EXTENSION_DIR} && npm install --omit=dev"
+  error "依赖安装失败，请手动运行: cd ${EXTENSION_DIR} && npm install --omit=dev"
+  exit 1
+fi
+
 update_openclaw_config
 
 info "Install OpenClaw Gateway service, 安装 OpenClaw Gateway 服务..."
-npx openclaw gateway install --port "${PORT}" --force 2>&1 || true
+"${OPENCLAW_BIN}" gateway install --port "${PORT}" --force 2>&1 || true
 
 success "Start OpenClaw Gateway service, 启动 OpenClaw Gateway 服务..."
-npx openclaw gateway start 2>&1
+"${OPENCLAW_BIN}" gateway start 2>&1
+
+info "Starting Memory Viewer, 正在启动记忆面板..."
+VIEWER_URL="http://127.0.0.1:18799"
+VIEWER_WAIT_SECONDS=30
+viewer_ready=0
+for ((i=1; i<=VIEWER_WAIT_SECONDS; i++)); do
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsS --max-time 2 "${VIEWER_URL}" >/dev/null 2>&1; then
+      viewer_ready=1
+      break
+    fi
+  elif command -v lsof >/dev/null 2>&1 && lsof -i :18799 -t >/dev/null 2>&1; then
+    viewer_ready=1
+    break
+  fi
+  printf "."
+  sleep 1
+done
+echo ""
+
+if [[ "${viewer_ready}" -eq 1 ]]; then
+  success "Memory Viewer is ready, 记忆面板已就绪: ${VIEWER_URL}"
+else
+  warn "Memory Viewer not ready after ${VIEWER_WAIT_SECONDS}s, 记忆面板在 ${VIEWER_WAIT_SECONDS} 秒后仍未就绪"
+  warn "Check gateway logs if http://127.0.0.1:18799 is still unavailable."
+fi
 
 echo ""
 success "=========================================="

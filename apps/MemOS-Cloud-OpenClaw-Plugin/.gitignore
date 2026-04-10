@@ -4,6 +4,7 @@ node_modules
 # Environment variables
 .env
 .env.*
+.memos_arms_uid
 
 # NPM
 .npmrc
