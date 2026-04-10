@@ -133,6 +133,8 @@ export function resolveConfig(raw: Partial<MemosLocalConfig> | undefined, stateD
       } : { hubAddress: "", userToken: "", teamToken: "", pendingUserId: "", nickname: "" };
       return { enabled, role, hub, client, capabilities: sharingCapabilities };
     })(),
+    memorySearchEnabled: cfg.memorySearchEnabled ?? true,
+    memoryAddEnabled: cfg.memoryAddEnabled ?? true,
   };
 }
 

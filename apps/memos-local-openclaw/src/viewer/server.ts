@@ -3094,6 +3094,8 @@ export class ViewerServer {
         if (newCfg.skillEvolution) config.skillEvolution = newCfg.skillEvolution;
         if (newCfg.viewerPort) config.viewerPort = newCfg.viewerPort;
         if (newCfg.taskAutoFinalizeHours !== undefined) config.taskAutoFinalizeHours = newCfg.taskAutoFinalizeHours;
+        if (newCfg.memorySearchEnabled !== undefined) config.memorySearchEnabled = newCfg.memorySearchEnabled;
+        if (newCfg.memoryAddEnabled !== undefined) config.memoryAddEnabled = newCfg.memoryAddEnabled;
         if (newCfg.recall !== undefined) {
           const existing = (config.recall as Record<string, unknown>) || {};
           config.recall = { ...existing, ...newCfg.recall };

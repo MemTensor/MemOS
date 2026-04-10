@@ -1837,6 +1837,18 @@ input,textarea,select{font-family:inherit;font-size:inherit}
             </div>
             <div class="settings-card-divider"></div>
             <div class="settings-toggle">
+              <label class="toggle-switch"><input type="checkbox" id="cfgMemorySearchEnabled" checked><span class="toggle-slider"></span></label>
+              <label data-i18n="settings.memorySearch.enabled">Enable Memory Search</label>
+            </div>
+            <div class="field-hint" style="margin-top:6px" data-i18n="settings.memorySearch.hint">When enabled, the agent retrieves relevant memories for each conversation. Disabling this skips all memory retrieval — the agent will respond without any historical context.</div>
+            <div class="settings-card-divider"></div>
+            <div class="settings-toggle">
+              <label class="toggle-switch"><input type="checkbox" id="cfgMemoryAddEnabled" checked><span class="toggle-slider"></span></label>
+              <label data-i18n="settings.memoryAdd.enabled">Enable Memory Capture</label>
+            </div>
+            <div class="field-hint" style="margin-top:6px" data-i18n="settings.memoryAdd.hint">When enabled, conversations are captured and stored as memories. Disabling this stops writing new memories to the database while still allowing retrieval of existing ones.</div>
+            <div class="settings-card-divider"></div>
+            <div class="settings-toggle">
               <label class="toggle-switch"><input type="checkbox" id="cfgLlmFilterEnabled" checked><span class="toggle-slider"></span></label>
               <label data-i18n="settings.llmFilter.enabled">Enable LLM Filtering for Memory Search</label>
             </div>
@@ -2344,6 +2356,10 @@ const I18N={
     'settings.skill.model.hint':'Leave empty to reuse the Summarizer model. Set a dedicated one for higher quality.',
     'settings.optional':'Optional',
     'settings.skill.usemain':'Use Main Summarizer',
+    'settings.memorySearch.enabled':'Enable Memory Search',
+    'settings.memorySearch.hint':'When enabled, the agent retrieves relevant memories for each conversation. Disabling this skips all memory retrieval — the agent will respond without any historical context.',
+    'settings.memoryAdd.enabled':'Enable Memory Capture',
+    'settings.memoryAdd.hint':'When enabled, conversations are captured and stored as memories. Disabling this stops writing new memories to the database while still allowing retrieval of existing ones.',
     'settings.llmFilter.enabled':'Enable LLM Filtering for Memory Search',
     'settings.llmFilter.hint':'When enabled, an LLM judges the relevance of search results before returning them. Disabling this returns all candidates from the retrieval engine directly, which is faster but may include less relevant results.',
     'settings.telemetry':'Telemetry',
@@ -3123,6 +3139,10 @@ const I18N={
     'settings.skill.model.hint':'不配置则复用摘要模型。如需更高质量可单独指定。',
     'settings.optional':'可选',
     'settings.skill.usemain':'使用主摘要模型',
+    'settings.memorySearch.enabled':'启用记忆检索',
+    'settings.memorySearch.hint':'开启后，智能体在每次对话时会检索相关记忆。关闭后将跳过所有记忆检索，智能体将在没有历史上下文的情况下回复。',
+    'settings.memoryAdd.enabled':'启用记忆写入',
+    'settings.memoryAdd.hint':'开启后，对话内容会被捕获并存储为记忆。关闭后不再向数据库写入新记忆，但仍可检索已有记忆。',
     'settings.llmFilter.enabled':'启用大模型过滤（记忆搜索）',
     'settings.llmFilter.hint':'开启后，搜索结果会经大模型判断相关性后再返回。关闭后将直接返回检索引擎的所有候选结果，速度更快但可能包含不太相关的内容。',
     'settings.telemetry':'数据统计',
@@ -7233,6 +7253,9 @@ async function loadConfig(){
     document.getElementById('cfgViewerPort').value=cfg.viewerPort||'';
     document.getElementById('cfgTaskAutoFinalizeHours').value=cfg.taskAutoFinalizeHours!=null?cfg.taskAutoFinalizeHours:'';
 
+    document.getElementById('cfgMemorySearchEnabled').checked=cfg.memorySearchEnabled!==false;
+    document.getElementById('cfgMemoryAddEnabled').checked=cfg.memoryAddEnabled!==false;
+
     const recall=cfg.recall||{};
     document.getElementById('cfgLlmFilterEnabled').checked=recall.llmFilterEnabled!==false;
 
@@ -7541,6 +7564,8 @@ async function saveGeneralConfig(){
   if(vp) cfg.viewerPort=Number(vp);
   const tafh=document.getElementById('cfgTaskAutoFinalizeHours').value.trim();
   cfg.taskAutoFinalizeHours=tafh!==''?Math.max(0,Number(tafh)):4;
+  cfg.memorySearchEnabled=document.getElementById('cfgMemorySearchEnabled').checked;
+  cfg.memoryAddEnabled=document.getElementById('cfgMemoryAddEnabled').checked;
   cfg.recall={llmFilterEnabled:document.getElementById('cfgLlmFilterEnabled').checked};
   cfg.telemetry={enabled:document.getElementById('cfgTelemetryEnabled').checked};
 

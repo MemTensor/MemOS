@@ -553,6 +553,12 @@ const memosLocalPlugin = {
           userToken: Type.Optional(Type.String({ description: "Optional Hub bearer token override for group/all search." })),
         }),
         execute: trackTool("memory_search", async (_toolCallId: any, params: any) => {
+          if (ctx.config.memorySearchEnabled === false) {
+            return {
+              content: [{ type: "text", text: "Memory search is currently disabled in settings." }],
+              details: { candidates: [], hubCandidates: [], filtered: [], meta: {} },
+            };
+          }
           const {
             query,
             scope: rawScope,
@@ -1877,6 +1883,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
       if (!allowPromptInjection) return {};
+      if (ctx.config.memorySearchEnabled === false) return;
       if (!event.prompt || event.prompt.length < 3) return;
 
       const recallAgentId = hookCtx?.agentId ?? (event as any)?.agentId ?? (event as any)?.profileId ?? "main";
@@ -2176,6 +2183,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     const sessionMsgCursor = new Map<string, number>();
 
     api.on("agent_end", async (event: any, hookCtx?: { agentId?: string; sessionKey?: string; sessionId?: string }) => {
+      if (ctx.config.memoryAddEnabled === false) return;
       if (!event.success || !event.messages || event.messages.length === 0) return;
 
       try {

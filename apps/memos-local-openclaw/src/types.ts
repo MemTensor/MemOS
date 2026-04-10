@@ -326,6 +326,10 @@ export interface MemosLocalConfig {
   sharing?: SharingConfig;
   /** Hours of inactivity after which an active task is automatically finalized. 0 = disabled. Default 4. */
   taskAutoFinalizeHours?: number;
+  /** Whether memory_search and auto-recall are enabled. Default true. */
+  memorySearchEnabled?: boolean;
+  /** Whether new memories are captured and written to the database. Default true. */
+  memoryAddEnabled?: boolean;
 }
 
 // ─── Defaults ───
