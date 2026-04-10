@@ -3094,6 +3094,10 @@ export class ViewerServer {
         if (newCfg.skillEvolution) config.skillEvolution = newCfg.skillEvolution;
         if (newCfg.viewerPort) config.viewerPort = newCfg.viewerPort;
         if (newCfg.taskAutoFinalizeHours !== undefined) config.taskAutoFinalizeHours = newCfg.taskAutoFinalizeHours;
+        if (newCfg.recall !== undefined) {
+          const existing = (config.recall as Record<string, unknown>) || {};
+          config.recall = { ...existing, ...newCfg.recall };
+        }
         if (newCfg.telemetry !== undefined) config.telemetry = newCfg.telemetry;
         if (newCfg.sharing !== undefined) {
           const existing = (config.sharing as Record<string, unknown>) || {};

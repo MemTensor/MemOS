@@ -1837,6 +1837,12 @@ input,textarea,select{font-family:inherit;font-size:inherit}
             </div>
             <div class="settings-card-divider"></div>
             <div class="settings-toggle">
+              <label class="toggle-switch"><input type="checkbox" id="cfgLlmFilterEnabled" checked><span class="toggle-slider"></span></label>
+              <label data-i18n="settings.llmFilter.enabled">Enable LLM Filtering for Memory Search</label>
+            </div>
+            <div class="field-hint" style="margin-top:6px" data-i18n="settings.llmFilter.hint">When enabled, an LLM judges the relevance of search results before returning them. Disabling this returns all candidates from the retrieval engine directly, which is faster but may include less relevant results.</div>
+            <div class="settings-card-divider"></div>
+            <div class="settings-toggle">
               <label class="toggle-switch"><input type="checkbox" id="cfgTelemetryEnabled" checked><span class="toggle-slider"></span></label>
               <label data-i18n="settings.telemetry.enabled">Enable Anonymous Telemetry</label>
             </div>
@@ -2338,6 +2344,8 @@ const I18N={
     'settings.skill.model.hint':'Leave empty to reuse the Summarizer model. Set a dedicated one for higher quality.',
     'settings.optional':'Optional',
     'settings.skill.usemain':'Use Main Summarizer',
+    'settings.llmFilter.enabled':'Enable LLM Filtering for Memory Search',
+    'settings.llmFilter.hint':'When enabled, an LLM judges the relevance of search results before returning them. Disabling this returns all candidates from the retrieval engine directly, which is faster but may include less relevant results.',
     'settings.telemetry':'Telemetry',
     'settings.telemetry.enabled':'Enable Anonymous Telemetry',
     'settings.telemetry.hint':'Only collects tool names, latencies and version info. No memory content or personal data.',
@@ -3115,6 +3123,8 @@ const I18N={
     'settings.skill.model.hint':'不配置则复用摘要模型。如需更高质量可单独指定。',
     'settings.optional':'可选',
     'settings.skill.usemain':'使用主摘要模型',
+    'settings.llmFilter.enabled':'启用大模型过滤（记忆搜索）',
+    'settings.llmFilter.hint':'开启后，搜索结果会经大模型判断相关性后再返回。关闭后将直接返回检索引擎的所有候选结果，速度更快但可能包含不太相关的内容。',
     'settings.telemetry':'数据统计',
     'settings.telemetry.enabled':'启用匿名数据统计',
     'settings.telemetry.hint':'仅收集工具名称、响应时间和版本号，不涉及任何记忆内容或个人数据。',
@@ -7223,6 +7233,9 @@ async function loadConfig(){
     document.getElementById('cfgViewerPort').value=cfg.viewerPort||'';
     document.getElementById('cfgTaskAutoFinalizeHours').value=cfg.taskAutoFinalizeHours!=null?cfg.taskAutoFinalizeHours:'';
 
+    const recall=cfg.recall||{};
+    document.getElementById('cfgLlmFilterEnabled').checked=recall.llmFilterEnabled!==false;
+
     const tel=cfg.telemetry||{};
     document.getElementById('cfgTelemetryEnabled').checked=tel.enabled!==false;
 
@@ -7528,6 +7541,7 @@ async function saveGeneralConfig(){
   if(vp) cfg.viewerPort=Number(vp);
   const tafh=document.getElementById('cfgTaskAutoFinalizeHours').value.trim();
   cfg.taskAutoFinalizeHours=tafh!==''?Math.max(0,Number(tafh)):4;
+  cfg.recall={llmFilterEnabled:document.getElementById('cfgLlmFilterEnabled').checked};
   cfg.telemetry={enabled:document.getElementById('cfgTelemetryEnabled').checked};
 
   await doSaveConfig(cfg, saveBtn, 'generalSaved');

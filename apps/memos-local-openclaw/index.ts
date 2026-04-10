@@ -656,7 +656,8 @@ const memosLocalPlugin = {
           let filteredHubRemoteHits = hubRemoteForFilter;
           let sufficient = false;
 
-          if (mergedCandidates.length > 0) {
+          const llmFilterOn = ctx.config.recall?.llmFilterEnabled !== false;
+          if (llmFilterOn && mergedCandidates.length > 0) {
             const filterResult = await summarizer.filterRelevant(query, mergedCandidates);
             if (filterResult !== null) {
               sufficient = filterResult.sufficient;
@@ -671,6 +672,8 @@ const memosLocalPlugin = {
                 filteredHubRemoteHits = [];
               }
             }
+          } else if (!llmFilterOn) {
+            ctx.log.debug(`memory_search: LLM filter disabled by config, returning all ${mergedCandidates.length} candidates`);
           }
 
           const beforeDedup = filteredLocalHits.length;
@@ -1995,28 +1998,33 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         let filteredHits = allRawHits;
         let sufficient = false;
 
-        const filterResult = await summarizer.filterRelevant(query, mergedForFilter);
-        if (filterResult !== null) {
-          sufficient = filterResult.sufficient;
-          if (filterResult.relevant.length > 0) {
-            const indexSet = new Set(filterResult.relevant);
-            filteredHits = allRawHits.filter((_, i) => indexSet.has(i + 1));
-          } else {
-            const dur = performance.now() - recallT0;
-            store.recordToolCall("memory_search", dur, true);
-            store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
-              candidates: rawLocalCandidates, hubCandidates: rawHubCandidates, filtered: [],
-            }), dur, true);
-            if (query.length > 50) {
-              const noRecallHint =
-                "## Memory system — ACTION REQUIRED\n\n" +
-                "Auto-recall found no relevant results for a long query. " +
-                "You MUST call `memory_search` now with a shortened query (2-5 key words) before answering. " +
-                "Do NOT skip this step. Do NOT answer without searching first.";
-              return { prependContext: noRecallHint };
+        const autoRecallLlmFilter = ctx.config.recall?.llmFilterEnabled !== false;
+        if (autoRecallLlmFilter) {
+          const filterResult = await summarizer.filterRelevant(query, mergedForFilter);
+          if (filterResult !== null) {
+            sufficient = filterResult.sufficient;
+            if (filterResult.relevant.length > 0) {
+              const indexSet = new Set(filterResult.relevant);
+              filteredHits = allRawHits.filter((_, i) => indexSet.has(i + 1));
+            } else {
+              const dur = performance.now() - recallT0;
+              store.recordToolCall("memory_search", dur, true);
+              store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
+                candidates: rawLocalCandidates, hubCandidates: rawHubCandidates, filtered: [],
+              }), dur, true);
+              if (query.length > 50) {
+                const noRecallHint =
+                  "## Memory system — ACTION REQUIRED\n\n" +
+                  "Auto-recall found no relevant results for a long query. " +
+                  "You MUST call `memory_search` now with a shortened query (2-5 key words) before answering. " +
+                  "Do NOT skip this step. Do NOT answer without searching first.";
+                return { prependContext: noRecallHint };
+              }
+              return;
             }
-            return;
           }
+        } else {
+          ctx.log.debug("auto-recall: LLM filter disabled by config, using all candidates");
         }
 
         const beforeDedup = filteredHits.length;
