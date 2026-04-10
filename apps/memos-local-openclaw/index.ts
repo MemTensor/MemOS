@@ -391,24 +391,6 @@ const memosLocalPlugin = {
 
     const globalRef = globalThis as any;
     
-    // Fallback cleanup function for old instances
-    const cleanupOldInstance = async () => {
-      if (globalRef.__memosLocalPluginActiveService) {
-        api.logger.info("memos-local: Stopping previous plugin instance due to re-registration...");
-        const oldService = globalRef.__memosLocalPluginActiveService;
-        globalRef.__memosLocalPluginActiveService = undefined;
-        try {
-          // Tell the old instance not to close the shared database
-          await oldService.stop({ preserveDb: true });
-        } catch (e: any) {
-          api.logger.warn(`memos-local: Error stopping previous instance: ${e}`);
-        }
-      }
-    };
-    
-    // Don't await it here to avoid blocking register, but store the promise
-    globalRef.__memosLocalPluginStopPromise = cleanupOldInstance();
-
     // ─── Check allowPromptInjection policy ───
     // When allowPromptInjection=false, the prompt mutation fields (such as prependContext) in the hook return value
     // will be stripped by the framework. Skip auto-recall to avoid unnecessary LLM/embedding calls.
@@ -2402,18 +2384,28 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     let serviceStarted = false;
 
-    const startServiceCore = async () => {
-      if (globalRef.__memosLocalPluginStopPromise) {
-        await globalRef.__memosLocalPluginStopPromise;
-        globalRef.__memosLocalPluginStopPromise = undefined;
-      }
+    const startServiceCore = async (isHostStart = false) => {
       if (serviceStarted) return;
       
+      if (!isHostStart) {
+        if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
+          api.logger.info("memos-local: aborting startServiceCore because a newer plugin instance is active.");
+          return;
+        }
+      }
+
       if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
-        api.logger.info("memos-local: aborting startServiceCore because a newer plugin instance is active.");
-        return;
+        api.logger.info("memos-local: Stopping previous plugin instance due to start of new instance...");
+        const oldService = globalRef.__memosLocalPluginActiveService;
+        globalRef.__memosLocalPluginActiveService = undefined;
+        try {
+          await oldService.stop({ preserveDb: true });
+        } catch (e: any) {
+          api.logger.warn(`memos-local: Error stopping previous instance: ${e}`);
+        }
       }
       
+      globalRef.__memosLocalPluginActiveService = service;
       serviceStarted = true;
 
       if (hubServer) {
@@ -2457,7 +2449,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     const service = {
       id: "memos-local-openclaw-plugin",
-      start: async () => { await startServiceCore(); },
+      start: async () => { await startServiceCore(true); },
       stop: async (options?: { preserveDb?: boolean }) => {
         await viewer.stop();
         if (globalRef.__memosLocalPluginActiveService === service) {
@@ -2479,7 +2471,6 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     };
 
     api.registerService(service);
-    globalRef.__memosLocalPluginActiveService = service;
 
     // Fallback: OpenClaw may load this plugin via deferred reload after
     // startPluginServices has already run, so service.start() never fires.
