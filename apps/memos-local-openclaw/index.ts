@@ -33,6 +33,11 @@ import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
 
 
+// Module-level singleton tracking for viewer/hub to prevent port drift on re-registration
+let _previousViewer: ViewerServer | null = null;
+let _previousHubServer: HubServer | null = null;
+let _previousStore: import('./src/storage/sqlite').SqliteStore | null = null;
+
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
 function deduplicateHits<T extends { summary: string }>(hits: T[]): T[] {
   const kept: T[] = [];
@@ -2365,6 +2370,20 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     const derivedHubPort = gatewayPort + 11;
 
+    // Cleanup previous instances to prevent port drift (issue #1430)
+    if (_previousViewer) {
+      try { _previousViewer.stop(); } catch (e) { api.logger.warn(`memos-local: previous viewer cleanup: ${e}`); }
+      _previousViewer = null;
+    }
+    if (_previousHubServer) {
+      try { _previousHubServer.stop(); } catch (e) { api.logger.warn(`memos-local: previous hub cleanup: ${e}`); }
+      _previousHubServer = null;
+    }
+    if (_previousStore) {
+      try { _previousStore.close(); } catch (e) { api.logger.warn(`memos-local: previous store cleanup: ${e}`); }
+      _previousStore = null;
+    }
+
     const viewer = new ViewerServer({
       store,
       embedder,
@@ -2377,6 +2396,10 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     const hubServer = ctx.config.sharing?.enabled && ctx.config.sharing.role === "hub"
       ? new HubServer({ store, log: ctx.log, config: ctx.config, dataDir: stateDir, embedder, defaultHubPort: derivedHubPort })
       : null;
+
+    _previousViewer = viewer;
+    _previousHubServer = hubServer;
+    _previousStore = store;
 
     // ─── Service lifecycle ───
 

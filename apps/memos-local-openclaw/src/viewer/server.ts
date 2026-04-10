@@ -211,13 +211,18 @@ export class ViewerServer {
     }
   }
 
-  stop(): void {
+  stop(): Promise<void> {
     this.stopHubHeartbeat();
     this.stopNotifPoll();
     for (const c of this.notifSSEClients) { try { c.end(); } catch {} }
     this.notifSSEClients = [];
-    this.server?.close();
-    this.server = null;
+    if (!this.server) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.server!.close(() => {
+        this.server = null;
+        resolve();
+      });
+    });
   }
 
   getResetToken(): string {
