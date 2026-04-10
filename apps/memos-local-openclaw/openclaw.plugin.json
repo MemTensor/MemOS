@@ -20,7 +20,7 @@
     }
   },
   "requirements": {
-    "node": ">=18.0.0",
+    "node": ">=22.0.0",
     "openclaw": ">=2026.2.0"
   },
   "setup": {

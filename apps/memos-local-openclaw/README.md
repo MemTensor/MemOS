@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@memtensor/memos-local-openclaw-plugin)](https://www.npmjs.com/package/@memtensor/memos-local-openclaw-plugin)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/MemTensor/MemOS/blob/main/LICENSE)
-[![Node.js >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
+[![Node.js >= 22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org/)
 [![GitHub](https://img.shields.io/badge/GitHub-Source-181717?logo=github)](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-openclaw)
 
 Persistent local conversation memory for [OpenClaw](https://github.com/nicepkg/openclaw) AI Agents. Every conversation is automatically captured, semantically indexed, and instantly recallable — with **task summarization & skill evolution**, **team sharing for memories and skills**, and **multi-agent collaborative memory**.
@@ -640,7 +640,7 @@ openclaw plugins install @memtensor/memos-local-openclaw-plugin
    Search for `memos-local`, `failed to load`, `Error`, `Cannot find module`.
 
 4. **Check environment**
-   - Node version: `node -v` (requires **>= 18**)
+   - Node version: `node -v` (requires **>= 22**)
    - Plugin directory exists: `ls ~/.openclaw/extensions/memos-local-openclaw-plugin/package.json`
    - Dependencies installed: `ls ~/.openclaw/extensions/memos-local-openclaw-plugin/node_modules/@sinclair/typebox`
      If missing: `cd ~/.openclaw/extensions/memos-local-openclaw-plugin && npm install --omit=dev`
@@ -693,7 +693,7 @@ This section is for contributors who want to develop, test, or modify the plugin
 
 ### Prerequisites
 
-- **Node.js >= 18** (`node -v`)
+- **Node.js >= 22** (`node -v`)
 - **npm >= 9** (`npm -v`)
 - **C++ build tools** (for `better-sqlite3` native module):
   - macOS: `xcode-select --install`
