@@ -78,7 +78,7 @@ def _is_trivial(text: str) -> bool:
             if keys <= {"ok", "success", "status", "result", "error", "message"}:
                 vals = list(obj.values())
                 if all(
-                    isinstance(v, (bool, type(None))) or (isinstance(v, str) and len(v) < 20)
+                    isinstance(v, bool | type(None)) or (isinstance(v, str) and len(v) < 20)
                     for v in vals
                 ):
                     return True
