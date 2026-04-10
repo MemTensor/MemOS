@@ -126,9 +126,9 @@ export async function generateTaskTitleBedrock(
     body: JSON.stringify({
       system: [{ text: TASK_TITLE_PROMPT }],
       messages: [{ role: "user", content: [{ text }] }],
-      inferenceConfig: { temperature: 0, maxTokens: 100 },
+      inferenceConfig: { temperature: 0, maxTokens: 2000 },
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -195,9 +195,9 @@ export async function judgeNewTopicBedrock(
     body: JSON.stringify({
       system: [{ text: TOPIC_JUDGE_PROMPT }],
       messages: [{ role: "user", content: [{ text: userContent }] }],
-      inferenceConfig: { temperature: 0, maxTokens: 10 },
+      inferenceConfig: { temperature: 0, maxTokens: 2000 },
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -226,10 +226,12 @@ RULES:
 
 OUTPUT — JSON only:
 {"relevant":[1,3],"sufficient":true}
-- "relevant": candidate numbers whose content helps answer the query. [] if none can help.
-- "sufficient": true only if the selected memories fully answer the query.`;
+- "relevant": candidate numbers whose content helps answer the query. [] if none can help. Duplicates removed — only unique information.
+- "sufficient": true only if the selected memories fully answer the query.
 
-import type { FilterResult } from "./openai";
+IMPORTANT FOR REASONING MODELS: After your analysis, you MUST output a valid JSON object in this exact format. Do not output any text after the JSON object.`;
+
+import { parseFilterResult, type FilterResult } from "./openai";
 export type { FilterResult } from "./openai";
 
 export async function filterRelevantBedrock(
@@ -263,9 +265,9 @@ export async function filterRelevantBedrock(
     body: JSON.stringify({
       system: [{ text: FILTER_RELEVANT_PROMPT }],
       messages: [{ role: "user", content: [{ text: `QUERY: ${query}\n\nCANDIDATES:\n${candidateText}` }] }],
-      inferenceConfig: { temperature: 0, maxTokens: 200 },
+      inferenceConfig: { temperature: 0, maxTokens: 2000 },
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -277,23 +279,6 @@ export async function filterRelevantBedrock(
   const raw = json.output?.message?.content?.[0]?.text?.trim() ?? "{}";
   log.debug(`filterRelevant raw LLM response: "${raw}"`);
   return parseFilterResult(raw, log);
-}
-
-function parseFilterResult(raw: string, log: Logger): FilterResult {
-  try {
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (match) {
-      const obj = JSON.parse(match[0]);
-      if (obj && Array.isArray(obj.relevant)) {
-        return {
-          relevant: obj.relevant.filter((n: any) => typeof n === "number"),
-          sufficient: obj.sufficient === true,
-        };
-      }
-    }
-  } catch {}
-  log.warn(`filterRelevant: failed to parse LLM output: "${raw}", fallback to all+insufficient`);
-  return { relevant: [], sufficient: false };
 }
 
 export async function summarizeBedrock(
@@ -321,7 +306,7 @@ export async function summarizeBedrock(
       messages: [{ role: "user", content: [{ text: `[TEXT TO SUMMARIZE]\n${text}\n[/TEXT TO SUMMARIZE]` }] }],
       inferenceConfig: {
         temperature: cfg.temperature ?? 0,
-        maxTokens: 100,
+        maxTokens: 2000,
       },
     }),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 30_000),
@@ -364,9 +349,9 @@ export async function judgeDedupBedrock(
     body: JSON.stringify({
       system: [{ text: DEDUP_JUDGE_PROMPT }],
       messages: [{ role: "user", content: [{ text: `NEW MEMORY:\n${newSummary}\n\nEXISTING MEMORIES:\n${candidateText}` }] }],
-      inferenceConfig: { temperature: 0, maxTokens: 300 },
+      inferenceConfig: { temperature: 0, maxTokens: 2000 },
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {

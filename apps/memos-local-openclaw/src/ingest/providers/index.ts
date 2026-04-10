@@ -230,8 +230,13 @@ export class Summarizer {
       return ruleFallback(cleaned);
     }
 
-    const accept = (s: string | undefined): s is string =>
-      !!s && s.length > 0 && s.length < cleaned.length;
+    const accept = (s: string | undefined): s is string => {
+      if (!s || s.length === 0) return false;
+      // Allow the LLM result if it's shorter than input, or if the input is quite short itself (<= 20 chars).
+      // Summarizing a very short text (e.g. "hi there") might yield a slightly longer formal summary (e.g. "User said hi").
+      if (cleaned.length <= 20) return true;
+      return s.length < cleaned.length;
+    };
 
     let llmCalled = false;
     try {

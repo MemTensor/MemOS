@@ -121,12 +121,12 @@ export async function generateTaskTitleAnthropic(
     headers,
     body: JSON.stringify({
       model,
-      max_tokens: 100,
+      max_tokens: 2000,
       temperature: 0,
       system: TASK_TITLE_PROMPT,
       messages: [{ role: "user", content: text }],
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -189,12 +189,12 @@ export async function judgeNewTopicAnthropic(
     headers,
     body: JSON.stringify({
       model,
-      max_tokens: 10,
+      max_tokens: 2000,
       temperature: 0,
       system: TOPIC_JUDGE_PROMPT,
       messages: [{ role: "user", content: userContent }],
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -223,10 +223,12 @@ RULES:
 
 OUTPUT — JSON only:
 {"relevant":[1,3],"sufficient":true}
-- "relevant": candidate numbers whose content helps answer the query. [] if none can help.
-- "sufficient": true only if the selected memories fully answer the query.`;
+- "relevant": candidate numbers whose content helps answer the query. [] if none can help. Duplicates removed — only unique information.
+- "sufficient": true only if the selected memories fully answer the query.
 
-import type { FilterResult } from "./openai";
+IMPORTANT FOR REASONING MODELS: After your analysis, you MUST output a valid JSON object in this exact format. Do not output any text after the JSON object.`;
+
+import { parseFilterResult, type FilterResult } from "./openai";
 export type { FilterResult } from "./openai";
 
 export async function filterRelevantAnthropic(
@@ -256,12 +258,12 @@ export async function filterRelevantAnthropic(
     headers,
     body: JSON.stringify({
       model,
-      max_tokens: 200,
+      max_tokens: 2000,
       temperature: 0,
       system: FILTER_RELEVANT_PROMPT,
       messages: [{ role: "user", content: `QUERY: ${query}\n\nCANDIDATES:\n${candidateText}` }],
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -273,23 +275,6 @@ export async function filterRelevantAnthropic(
   const raw = json.content.find((c) => c.type === "text")?.text?.trim() ?? "{}";
   log.debug(`filterRelevant raw LLM response: "${raw}"`);
   return parseFilterResult(raw, log);
-}
-
-function parseFilterResult(raw: string, log: Logger): FilterResult {
-  try {
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (match) {
-      const obj = JSON.parse(match[0]);
-      if (obj && Array.isArray(obj.relevant)) {
-        return {
-          relevant: obj.relevant.filter((n: any) => typeof n === "number"),
-          sufficient: obj.sufficient === true,
-        };
-      }
-    }
-  } catch {}
-  log.warn(`filterRelevant: failed to parse LLM output: "${raw}", fallback to all+insufficient`);
-  return { relevant: [], sufficient: false };
 }
 
 export async function summarizeAnthropic(
@@ -311,7 +296,7 @@ export async function summarizeAnthropic(
     headers,
     body: JSON.stringify({
       model,
-      max_tokens: 100,
+      max_tokens: 2000,
       temperature: cfg.temperature ?? 0,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: `[TEXT TO SUMMARIZE]\n${text}\n[/TEXT TO SUMMARIZE]` }],
@@ -358,12 +343,12 @@ export async function judgeDedupAnthropic(
     headers,
     body: JSON.stringify({
       model,
-      max_tokens: 300,
+      max_tokens: 2000,
       temperature: 0,
       system: DEDUP_JUDGE_PROMPT,
       messages: [{ role: "user", content: `NEW MEMORY:\n${newSummary}\n\nEXISTING MEMORIES:\n${candidateText}` }],
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
