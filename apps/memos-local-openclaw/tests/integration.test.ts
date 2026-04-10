@@ -30,9 +30,21 @@ function makePluginApi(stateDir: string, pluginConfig: Record<string, unknown> =
       return input === "~/.openclaw" ? stateDir : input;
     },
     logger: noopLog,
-    registerTool(def: any) {
+    registerTool(def: any, meta?: { name?: string }) {
+      if (typeof def === "function") {
+        const key = meta?.name ?? def({ agentId: "main", sessionKey: "default" }).name;
+        tools.set(key, {
+          name: key,
+          execute: (...args: any[]) => {
+            const runtimeCtx = args[2] ?? { agentId: "main", sessionKey: "default" };
+            return def(runtimeCtx).execute(...args);
+          },
+        });
+        return;
+      }
       tools.set(def.name, def);
     },
+    registerMemoryCapability() {},
     registerService(def: any) {
       service = def;
     },
@@ -837,9 +849,9 @@ describe("Integration: root plugin memory_search network scope", () => {
       expect(searchTool).toBeDefined();
 
       const result = await searchTool.execute("call-root-search", { query: "rollout checklist", scope: "all", maxResults: 5 }, { agentId: "main" });
-      expect(result.details.local.hits.length).toBeGreaterThan(0);
-      expect(result.details.hub.hits.length).toBeGreaterThan(0);
-      expect(result.details.hub.hits[0].remoteHitId).toBeTruthy();
+      expect((result.details.filtered ?? []).some((hit: any) => hit.origin !== "hub-remote")).toBe(true);
+      expect((result.details.filtered ?? []).some((hit: any) => hit.origin === "hub-remote")).toBe(true);
+      expect((result.details.hubCandidates ?? []).length).toBeGreaterThan(0);
     } finally {
       await teardownRootMemorySearchHarness(harness);
     }

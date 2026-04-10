@@ -1,0 +1,62 @@
+{
+  "name": "@memtensor/memos-local-hermes-plugin",
+  "version": "1.0.2",
+  "description": "MemTensor Local memory plugin for Hermes Agent",
+  "type": "module",
+  "main": "index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MemTensor/MemOS.git",
+    "directory": "apps/memos-local-plugin"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "index.ts",
+    "bridge.cts",
+    "src",
+    "adapters",
+    "prebuilds",
+    "install.sh",
+    "tsconfig.json",
+    ".env.example",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepack": "rm -rf adapters/hermes/__pycache__ adapters/openharness/scripts/__pycache__ adapters/hermes/bridge_path.txt adapters/openharness/scripts/bridge_path.txt && echo 'prepack cleanup done'",
+    "prepublishOnly": "echo 'Source + prebuilds publish — no tsc dist needed.'"
+  },
+  "keywords": [
+    "memtensor",
+    "memory",
+    "memos",
+    "rag",
+    "local",
+    "hermes"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0 <25.0.0"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.0",
+    "@sinclair/typebox": "^0.34.48",
+    "better-sqlite3": "^12.6.3",
+    "posthog-node": "^5.28.0",
+    "puppeteer": "^24.38.0",
+    "semver": "^7.7.4",
+    "tsx": "^4.21.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "@types/semver": "^7.7.1",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

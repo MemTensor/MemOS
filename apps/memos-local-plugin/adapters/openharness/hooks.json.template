@@ -1,0 +1,16 @@
+{
+  "session_start": [
+    {
+      "type": "command",
+      "command": "python3 __PLUGIN_DIR__/scripts/recall.py",
+      "timeout_seconds": 30
+    }
+  ],
+  "session_end": [
+    {
+      "type": "command",
+      "command": "python3 __PLUGIN_DIR__/scripts/capture.py",
+      "timeout_seconds": 30
+    }
+  ]
+}

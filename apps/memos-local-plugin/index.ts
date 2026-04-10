@@ -12,7 +12,7 @@ import * as path from "path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "url";
 import { buildContext } from "./src/config";
-import type { HostModelsConfig } from "./src/openclaw-api";
+import { OpenClawAPIClient, type HostModelsConfig } from "./src/openclaw-api";
 import { ensureSqliteBinding } from "./src/storage/ensure-binding";
 import { SqliteStore } from "./src/storage/sqlite";
 import { Embedder } from "./src/embedding";
@@ -305,12 +305,16 @@ const memosLocalPlugin = {
       ? { providers: api.config.models.providers as Record<string, import("./src/openclaw-api").HostModelProvider> }
       : undefined;
 
-    const ctx = buildContext(stateDir, process.cwd(), pluginCfg as any, {
+    const logger = {
       debug: (msg: string) => api.logger.info(`[debug] ${msg}`),
       info: (msg: string) => api.logger.info(msg),
       warn: (msg: string) => api.logger.warn(msg),
       error: (msg: string) => api.logger.warn(`[error] ${msg}`),
-    }, hostModels);
+    };
+
+    const openclawAPI = hostModels ? new OpenClawAPIClient(logger, hostModels) : undefined;
+
+    const ctx = buildContext(stateDir, process.cwd(), pluginCfg as any, logger, openclawAPI);
 
     ensureSqliteBinding(ctx.log);
 
