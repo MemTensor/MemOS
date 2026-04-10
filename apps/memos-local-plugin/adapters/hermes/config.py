@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+
 from pathlib import Path
+
 
 DAEMON_PORT = 18992
 VIEWER_PORT = 18901
@@ -139,6 +141,7 @@ def _resolve_tsx(plugin_root: Path) -> str:
     if local_tsx.exists():
         return str(local_tsx)
     import shutil
+
     global_tsx = shutil.which("tsx")
     if global_tsx:
         return global_tsx
@@ -170,7 +173,7 @@ def find_bridge_script() -> list[str]:
                 return ["node", str(candidate)]
             tsx = _resolve_tsx(candidate.parent)
             if " " in tsx:
-                return tsx.split() + [str(candidate)]
+                return [*tsx.split(), str(candidate)]
             return [tsx, str(candidate)]
 
     raise FileNotFoundError(
