@@ -618,7 +618,7 @@ openclaw plugins install @memtensor/memos-local-openclaw-plugin
 
 ## Troubleshooting
 
-> 📖 **详细排查指南 / Detailed troubleshooting guide:** [docs/troubleshooting.html](https://memtensor.github.io/MemOS/apps/memos-local-openclaw/docs/troubleshooting.html) — 包含逐步排查流程、日志查看方法、完全重装步骤等。
+> 📖 **详细排查指南 / Detailed troubleshooting guide:** [Troubleshooting](https://memos-claw.openmem.net/docs/troubleshooting.html) — 包含逐步排查流程、日志查看方法、完全重装步骤等。
 >
 > 📦 **better-sqlite3 official troubleshooting:** [better-sqlite3 Troubleshooting](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md) — the upstream guide for native module build issues.
 
@@ -701,7 +701,7 @@ This section is for contributors who want to develop, test, or modify the plugin
   - Windows: usually not needed (prebuilt binaries available for LTS Node.js); if build fails, install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
 - **OpenClaw CLI** installed and available in PATH (`openclaw --version`)
 
-> **`better-sqlite3` build issues?** This is the most common installation problem on macOS and Linux. If `npm install` fails, first install the C++ build tools above, then run `npm rebuild better-sqlite3`. For detailed platform-specific solutions, see the [official better-sqlite3 troubleshooting guide](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md) and our [installation troubleshooting page](https://memtensor.github.io/MemOS/apps/memos-local-openclaw/docs/troubleshooting.html).
+> **`better-sqlite3` build issues?** This is the most common installation problem on macOS and Linux. If `npm install` fails, first install the C++ build tools above, then run `npm rebuild better-sqlite3`. For detailed platform-specific solutions, see the [official better-sqlite3 troubleshooting guide](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md) and our [installation troubleshooting page](https://memos-claw.openmem.net/docs/troubleshooting.html).
 
 ### Clone & Setup
 
@@ -761,8 +761,7 @@ apps/memos-local-openclaw/
 | `node_modules/` | npm dependencies | `npm install` |
 | `dist/` | Compiled JavaScript output | `npm run build` |
 | `package-lock.json` | Dependency lock file | `npm install` (auto-generated) |
-| `www/` | Memory Viewer static site (local preview) | Started automatically by the plugin |
-| `docs/` | Documentation HTML pages | Built from source or viewed at the hosted URL |
+| `www/` | Memory Viewer static site & documentation pages | Started automatically by the plugin |
 | `ppt/` | Presentation files (internal use) | Not needed for development |
 | `.env` | Local environment variables | Copy from `.env.example` |
 
