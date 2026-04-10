@@ -389,14 +389,25 @@ const memosLocalPlugin = {
     let currentAgentId = "main";
     const getCurrentOwner = () => `agent:${currentAgentId}`;
 
-    // Manage global singleton instance to prevent duplicate startups
-    // during OpenClaw hot-reloads or deferred re-registrations.
     const globalRef = globalThis as any;
-
-    if (globalRef.__memosLocalPluginActiveService) {
-      api.logger.info("memos-local: Plugin is already running. Reusing the existing backend and returning early.");
-      return;
-    }
+    
+    // Fallback cleanup function for old instances
+    const cleanupOldInstance = async () => {
+      if (globalRef.__memosLocalPluginActiveService) {
+        api.logger.info("memos-local: Stopping previous plugin instance due to re-registration...");
+        const oldService = globalRef.__memosLocalPluginActiveService;
+        globalRef.__memosLocalPluginActiveService = undefined;
+        try {
+          // Tell the old instance not to close the shared database
+          await oldService.stop({ preserveDb: true });
+        } catch (e: any) {
+          api.logger.warn(`memos-local: Error stopping previous instance: ${e}`);
+        }
+      }
+    };
+    
+    // Don't await it here to avoid blocking register, but store the promise
+    globalRef.__memosLocalPluginStopPromise = cleanupOldInstance();
 
     // ─── Check allowPromptInjection policy ───
     // When allowPromptInjection=false, the prompt mutation fields (such as prependContext) in the hook return value
@@ -2398,13 +2409,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       }
       if (serviceStarted) return;
       
-      // If another registration has occurred, we are no longer the active service.
-      // Abort starting to prevent orphan instances.
       if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
         api.logger.info("memos-local: aborting startServiceCore because a newer plugin instance is active.");
         return;
       }
-
+      
       serviceStarted = true;
 
       if (hubServer) {
@@ -2449,7 +2458,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     const service = {
       id: "memos-local-openclaw-plugin",
       start: async () => { await startServiceCore(); },
-      stop: async () => {
+      stop: async (options?: { preserveDb?: boolean }) => {
         await viewer.stop();
         if (globalRef.__memosLocalPluginActiveService === service) {
           globalRef.__memosLocalPluginActiveService = undefined;
@@ -2457,7 +2466,14 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         await worker.flush();
         await telemetry.shutdown();
         await hubServer?.stop();
-        store.close();
+        
+        // If we are hot-reloading, the new instance is already using the SAME
+        // database file on disk. Closing the sqlite store here might kill the
+        // connection for the new instance or cause locking issues depending on
+        // how the native binding manages handles.
+        if (!options?.preserveDb) {
+          store.close();
+        }
         api.logger.info("memos-local: stopped");
       },
     };
