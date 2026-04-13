@@ -92,6 +92,13 @@ jobs:
       - name: Install dependencies (skip native build)
         run: npm install --ignore-scripts
 
+      - name: Generate telemetry credentials
+        run: node scripts/generate-telemetry-credentials.cjs
+        env:
+          MEMOS_ARMS_ENDPOINT: ${{ secrets.MEMOS_ARMS_ENDPOINT }}
+          MEMOS_ARMS_PID: ${{ secrets.MEMOS_ARMS_PID }}
+          MEMOS_ARMS_ENV: ${{ secrets.MEMOS_ARMS_ENV }}
+
       - name: Bump version
         run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
 
