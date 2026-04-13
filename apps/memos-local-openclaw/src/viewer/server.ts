@@ -220,9 +220,20 @@ export class ViewerServer {
     const srv = this.server;
     this.server = null;
     return new Promise<void>((resolve) => {
-      srv.close(() => resolve());
-      // Force-close idle keep-alive connections so close() doesn't hang
-      srv.closeAllConnections?.();
+      const timeout = setTimeout(() => resolve(), 3000);
+      srv.close(() => { clearTimeout(timeout); resolve(); });
+      // Force-close idle keep-alive sockets. closeAllConnections is
+      // available from Node 18.2; fall back to destroying tracked sockets.
+      if (typeof srv.closeAllConnections === "function") {
+        srv.closeAllConnections();
+      } else {
+        // Older Node: close idle connections via closeIdleConnections
+        // (18.0+) or just unref so the event loop can exit.
+        if (typeof (srv as any).closeIdleConnections === "function") {
+          (srv as any).closeIdleConnections();
+        }
+        srv.unref();
+      }
     });
   }
 

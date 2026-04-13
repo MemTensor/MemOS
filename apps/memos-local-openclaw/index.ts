@@ -2424,7 +2424,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           await instanceToReplace.telemetry.shutdown().catch(() => {});
           instanceToReplace.store.close();
         } catch (err) {
-          api.logger.warn(`memos-local: previous instance cleanup error: ${err}`);
+          api.logger.warn(`memos-local: previous instance cleanup error: ${err instanceof Error ? err.message : String(err)}`);
         }
         api.logger.info("memos-local: previous instance stopped");
       }
@@ -2489,6 +2489,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     // service.start() immediately after registration.
     const SELF_START_DELAY_MS = 0;
     setTimeout(() => {
+      // Abort if this instance was already replaced by a newer register() call
+      if (activeInstances.get(stateDir)?.viewer !== viewer) return;
       if (!serviceStarted) {
         api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
         startServiceCore().catch((err) => {
