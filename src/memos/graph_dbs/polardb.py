@@ -976,15 +976,7 @@ class PolarDBGraphDB(BaseGraphDB):
                         properties["embedding"] = embedding
                     except (json.JSONDecodeError, TypeError):
                         logger.warning(f"Failed to parse embedding for node {node_id}")
-                nodes.append(
-                    self._parse_node(
-                        {
-                            "id": properties.get("id", node_id),
-                            "memory": properties.get("memory", ""),
-                            "metadata": properties,
-                        }
-                    )
-                )
+                nodes.append(self._parse_node(properties))
             return nodes
 
     @timed
@@ -1534,7 +1526,7 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name_conditions = self._build_user_name_and_kb_ids_conditions_sql(
             user_name=user_name,
             knowledgebase_ids=knowledgebase_ids,
-            default_user_name=self.config.user_name,
+            default_user_name=self._get_config_value("user_name"),
         )
 
         # Add OR condition if we have any user_name conditions
@@ -1633,7 +1625,7 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name_conditions = self._build_user_name_and_kb_ids_conditions_sql(
             user_name=user_name,
             knowledgebase_ids=knowledgebase_ids,
-            default_user_name=self.config.user_name,
+            default_user_name=self._get_config_value("user_name"),
         )
 
         # Add OR condition if we have any user_name conditions
@@ -1751,7 +1743,7 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name_conditions = self._build_user_name_and_kb_ids_conditions_sql(
             user_name=user_name,
             knowledgebase_ids=knowledgebase_ids,
-            default_user_name=self.config.user_name,
+            default_user_name=self._get_config_value("user_name"),
         )
 
         if user_name_conditions:
@@ -1873,7 +1865,7 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name_conditions = self._build_user_name_and_kb_ids_conditions_sql(
             user_name=user_name,
             knowledgebase_ids=knowledgebase_ids,
-            default_user_name=self.config.user_name,
+            default_user_name=self._get_config_value("user_name"),
         )
 
         if user_name_conditions:
