@@ -211,13 +211,19 @@ export class ViewerServer {
     }
   }
 
-  stop(): void {
+  stop(): Promise<void> {
     this.stopHubHeartbeat();
     this.stopNotifPoll();
     for (const c of this.notifSSEClients) { try { c.end(); } catch {} }
     this.notifSSEClients = [];
-    this.server?.close();
+    if (!this.server) return Promise.resolve();
+    const srv = this.server;
     this.server = null;
+    return new Promise<void>((resolve) => {
+      srv.close(() => resolve());
+      // Force-close idle keep-alive connections so close() doesn't hang
+      srv.closeAllConnections?.();
+    });
   }
 
   getResetToken(): string {
