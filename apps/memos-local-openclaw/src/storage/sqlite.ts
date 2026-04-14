@@ -5,6 +5,15 @@ import * as path from "path";
 import type { Chunk, ChunkRef, DedupStatus, Task, TaskStatus, Skill, SkillStatus, SkillVisibility, SkillVersion, TaskSkillLink, TaskSkillRelation, Logger } from "../types";
 import type { SharedVisibility, UserInfo, UserRole, UserStatus } from "../sharing/types";
 
+// sqlite-vec extension for fast vector search
+let sqliteVec: any = null;
+let vecExtensionLoaded = false;
+try {
+  sqliteVec = require("sqlite-vec");
+} catch {
+  // sqlite-vec not installed, will use brute-force fallback
+}
+
 export class SqliteStore {
   private db: Database.Database;
 
@@ -120,6 +129,7 @@ export class SqliteStore {
     this.migrateHubUserIdentityFields();
     this.migrateClientHubConnectionIdentityFields();
     this.migrateTeamSharingInstanceId();
+    this.migrateVecChunksTable(); // Add sqlite-vec virtual table for fast vector search
     this.log.debug("Database schema initialized");
   }
 
@@ -222,6 +232,71 @@ export class SqliteStore {
         shared_at       INTEGER NOT NULL
       )
     `);
+  }
+
+  // ─── sqlite-vec Migration ───
+  private migrateVecChunksTable(): void {
+    try {
+      // Load sqlite-vec extension
+      if (sqliteVec && !vecExtensionLoaded) {
+        sqliteVec.load(this.db);
+        vecExtensionLoaded = true;
+        this.log.info("sqlite-vec extension loaded successfully");
+      }
+
+      // Create vec0 virtual table for fast vector search
+      this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
+          chunk_id TEXT PRIMARY KEY,
+          embedding FLOAT[2048]
+        )
+      `);
+
+      this.log.debug("vec_chunks table initialized");
+    } catch (err) {
+      this.log.warn("Failed to initialize sqlite-vec:", err);
+      // Continue without sqlite-vec - will fallback to brute-force search
+    }
+  }
+
+  // ─── Vector Search with sqlite-vec ───
+  hasVecIndex(): boolean {
+    return vecExtensionLoaded;
+  }
+
+  searchVecChunks(
+    queryVec: number[],
+    topK: number,
+    ownerFilter?: string[]
+  ): Array<{ chunkId: string; distance: number }> {
+    if (!vecExtensionLoaded) {
+      throw new Error("sqlite-vec not loaded");
+    }
+
+    // Build the query with optional owner filter
+    let sql = `
+      SELECT v.chunk_id, v.distance
+      FROM vec_chunks v
+      JOIN chunks c ON c.id = v.chunk_id
+      WHERE v.embedding MATCH ? AND c.dedup_status = 'active'
+    `;
+    const params: any[] = [JSON.stringify(queryVec)];
+
+    if (ownerFilter && ownerFilter.length > 0) {
+      const placeholders = ownerFilter.map(() => "?").join(",");
+      sql += ` AND c.owner IN (${placeholders})`;
+      params.push(...ownerFilter);
+    }
+
+    sql += ` ORDER BY v.distance LIMIT ?`;
+    params.push(topK);
+
+    const rows = this.db.prepare(sql).all(...params) as Array<{ chunk_id: string; distance: number }>;
+
+    return rows.map((r) => ({
+      chunkId: r.chunk_id,
+      distance: r.distance,
+    }));
   }
 
   private migrateOwnerFields(): void {
@@ -1179,10 +1254,25 @@ export class SqliteStore {
 
   upsertEmbedding(chunkId: string, vector: number[]): void {
     const buf = Buffer.from(new Float32Array(vector).buffer);
+
+    // 1. Write to old embeddings table (for backward compatibility)
     this.db.prepare(`
       INSERT OR REPLACE INTO embeddings (chunk_id, vector, dimensions, updated_at)
       VALUES (?, ?, ?, ?)
     `).run(chunkId, buf, vector.length, Date.now());
+
+    // 2. Write to new vec_chunks table (sqlite-vec for fast search)
+    try {
+      if (sqliteVec && vecExtensionLoaded) {
+        this.db.prepare(`
+          INSERT OR REPLACE INTO vec_chunks (chunk_id, embedding)
+          VALUES (?, ?)
+        `).run(chunkId, JSON.stringify(vector));
+      }
+    } catch (err) {
+      // Silently fail - vec_chunks is optional
+      this.log.debug("Failed to write to vec_chunks:", err);
+    }
   }
 
   deleteEmbedding(chunkId: string): void {
