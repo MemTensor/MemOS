@@ -122,6 +122,10 @@ else
     error "需要 Node.js >= 18，当前: $(node -v)"
     exit 1
   fi
+  if [[ "$NODE_VERSION" -ge 23 ]]; then
+    info "Node.js >= 23 detected — disabling built-in TypeScript to avoid tsx conflict"
+    export NODE_OPTIONS="--no-experimental-strip-types ${NODE_OPTIONS:-}"
+  fi
   success "Node.js $(node -v)"
 fi
 
