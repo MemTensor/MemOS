@@ -75,6 +75,30 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             direct_markdown_hostnames=direct_markdown_hostnames,
         )
 
+    def _embed_memory_items(self, items: list[TextualMemoryItem]) -> None:
+        """Compute embeddings for a list of memory items in-place.
+
+        Attempts a single batch call first; falls back to per-item calls if the
+        batch fails.  Errors are logged but never raised so callers always
+        continue normally.
+        """
+        valid = [w for w in items if w and w.memory]
+        if not valid:
+            return
+        texts = [w.memory for w in valid]
+        try:
+            embeddings = self.embedder.embed(texts)
+            for w, emb in zip(valid, embeddings, strict=True):
+                w.metadata.embedding = emb
+        except Exception as e:
+            logger.error(f"[MultiModalStruct] Error batch computing embeddings: {e}")
+            logger.warning("[EMBED_FALLBACK] batch_size=%d", len(texts))
+            for w in valid:
+                try:
+                    w.metadata.embedding = self.embedder.embed([w.memory])[0]
+                except Exception as e2:
+                    logger.error(f"[MultiModalStruct] Error computing embedding for item: {e2}")
+
     def _split_large_memory_item(
         self, item: TextualMemoryItem, max_tokens: int
     ) -> list[TextualMemoryItem]:
@@ -204,15 +228,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if len(processed_items) == 1:
             single_item = processed_items[0]
             with timed_stage("add", "embedding", window_count=1):
-                if single_item and single_item.memory:
-                    try:
-                        single_item.metadata.embedding = self.embedder.embed([single_item.memory])[
-                            0
-                        ]
-                    except Exception as e:
-                        logger.error(
-                            f"[MultiModalStruct] Error computing embedding for single item: {e}"
-                        )
+                self._embed_memory_items([single_item])
             return processed_items
 
         windows = []
@@ -264,40 +280,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         # Batch compute embeddings for all windows
         with timed_stage("add", "embedding", window_count=len(windows)):
-            if windows:
-                valid_windows = [w for w in windows if w and w.memory]
-
-                if valid_windows:
-                    texts_to_embed = [w.memory for w in valid_windows]
-
-                    try:
-                        embeddings = self.embedder.embed(texts_to_embed)
-                        for window, embedding in zip(valid_windows, embeddings, strict=True):
-                            window.metadata.embedding = embedding
-                    except Exception as e:
-                        logger.error(f"[MultiModalStruct] Error batch computing embeddings: {e}")
-                        logger.warning("[EMBED_FALLBACK] batch_size=%d", len(texts_to_embed))
-                        for window in valid_windows:
-                            if window.memory:
-                                try:
-                                    window.metadata.embedding = self.embedder.embed(
-                                        [window.memory]
-                                    )[0]
-                                except Exception as e2:
-                                    logger.error(
-                                        "[MultiModalStruct] Error computing embedding"
-                                        f" for item: {e2}"
-                                    )
-
-        # [EMBED_MISSING] alert if any window has no embedding
-        null_count = sum(1 for w in windows if w and w.metadata.embedding is None)
-        if null_count > 0:
-            logger.warning(
-                "[EMBED_MISSING] window_count=%d null_count=%d ratio=%.2f",
-                len(windows),
-                null_count,
-                null_count / max(len(windows), 1),
-            )
+            self._embed_memory_items(windows)
 
         return windows
 
