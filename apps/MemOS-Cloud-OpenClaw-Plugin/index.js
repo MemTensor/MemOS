@@ -10,7 +10,9 @@ import {
   searchMemory,
   stripOpenClawInjectedPrefix,
 } from "./lib/memos-cloud-api.js";
+import { reportRumEvent } from "./lib/arms-reporter.js";
 import { startUpdateChecker } from "./lib/check-update.js";
+import { closeConfigUiService, ensureConfigUiService, waitForGatewayReady } from "./lib/config-ui-server.js";
 let lastCaptureTime = 0;
 const conversationCounters = new Map();
 const API_KEY_HELP_URL = "https://memos-dashboard.openmem.net/cn/apikeys/";
@@ -384,7 +386,7 @@ async function callRecallFilterModel(cfg, userPrompt, candidatePayload) {
   throw lastError;
 }
 
-async function maybeFilterRecallData(cfg, data, userPrompt, log) {
+async function maybeFilterRecallData(cfg, data, userPrompt, log, ctx) {
   if (!cfg.recallFilterEnabled) return data;
   if (!cfg.recallFilterBaseUrl || !cfg.recallFilterModel) {
     log.warn?.("[memos-cloud] recall filter enabled but missing recallFilterBaseUrl/recallFilterModel; skip filter");
@@ -398,6 +400,7 @@ async function maybeFilterRecallData(cfg, data, userPrompt, log) {
   if (!hasCandidates) return data;
 
   try {
+    reportRumEvent("recall_filter", { recall_filter_enable: cfg.recallFilterEnabled }, cfg, ctx, log);
     const decision = await callRecallFilterModel(cfg, userPrompt, lists.candidatePayload);
     const filtered = applyRecallDecision(data, decision, lists);
     log.info?.(
@@ -421,9 +424,17 @@ export default {
   register(api) {
     const cfg = buildConfig(api.pluginConfig);
     const log = api.logger ?? console;
+    let configUiStartupCancelled = false;
 
     // Start 12-hour background update interval
     startUpdateChecker(log);
+    void (async () => {
+      const ready = await waitForGatewayReady(api.config, log);
+      if (!ready || configUiStartupCancelled) return;
+      await ensureConfigUiService(log);
+    })().catch((error) => {
+      log.warn?.(`[memos-cloud] config UI failed to start: ${String(error)}`);
+    });
 
     if (!cfg.envFileStatus?.found) {
       const searchPaths = cfg.envFileStatus?.searchPaths?.join(", ") ?? ENV_FILE_SEARCH_HINTS.join(", ");
@@ -473,10 +484,11 @@ export default {
 
       try {
         const payload = buildSearchPayload(agentCfg, userPrompt, ctx);
+        reportRumEvent('search_memory', payload, agentCfg, ctx, log);
         const result = await searchMemory(agentCfg, payload);
         const resultData = extractResultData(result);
         if (!resultData) return;
-        const filteredData = await maybeFilterRecallData(agentCfg, resultData, userPrompt, log);
+        const filteredData = await maybeFilterRecallData(agentCfg, resultData, userPrompt, log, ctx);
         const hookResult = formatRecallHookResult({ data: filteredData }, {
           wrapTagBlocks: true,
           relativity: payload.relativity,
@@ -523,5 +535,10 @@ export default {
         log.warn?.(`[memos-cloud] add failed: ${String(err)}`);
       }
     });
+
+    return () => {
+      configUiStartupCancelled = true;
+      void closeConfigUiService();
+    };
   },
 };

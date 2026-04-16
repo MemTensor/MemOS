@@ -31,18 +31,6 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
-import {
-  type AgentMessage as CEAgentMessage,
-  type PendingInjection,
-  deduplicateHits as ceDeduplicateHits,
-  formatMemoryBlock,
-  appendMemoryToMessage,
-  removeExistingMemoryBlock,
-  messageHasMemoryBlock,
-  getTextFromMessage,
-  insertSyntheticAssistantEntry,
-  findTargetAssistantEntry,
-} from "./src/context-engine";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -64,6 +52,82 @@ function deduplicateHits<T extends { summary: string }>(hits: T[]): T[] {
   }
   return kept;
 }
+
+const NEW_SESSION_PROMPT_RE = /A new session was started via \/new or \/reset\./i;
+const INTERNAL_CONTEXT_RE = /OpenClaw runtime context \(internal\):[\s\S]*/i;
+const CONTINUE_PROMPT_RE = /^Continue where you left off\.[\s\S]*/i;
+
+const buildMemoryPromptSection = ({ availableTools, citationsMode }: {
+  availableTools: Set<string>;
+  citationsMode?: string;
+}) => {
+  const lines: string[] = [];
+  const hasMemorySearch = availableTools.has("memory_search");
+  const hasMemoryGet = availableTools.has("memory_get");
+
+  if (!hasMemorySearch && !hasMemoryGet) {
+    return lines;
+  }
+
+  lines.push("## Memory Recall");
+  lines.push(
+    "This workspace uses MemOS Local as the active memory slot. Prefer recalled memories and the memory tools before claiming prior context is unavailable.",
+  );
+
+  if (hasMemorySearch && hasMemoryGet) {
+    lines.push(
+      "Use `memory_search` to locate relevant memories, then `memory_get` or `memory_timeline` when you need the full source text or surrounding context.",
+    );
+  } else if (hasMemorySearch) {
+    lines.push("Use `memory_search` before answering questions about prior conversations, preferences, plans, or decisions.");
+  } else {
+    lines.push("Use `memory_get` or `memory_timeline` to inspect the referenced memory before answering.");
+  }
+
+  if (citationsMode === "off") {
+    lines.push("Citations are disabled, so avoid mentioning internal memory ids unless the user asks.");
+  } else {
+    lines.push("When it helps the user verify a memory-backed claim, mention the relevant memory identifier or tool result.");
+  }
+
+  lines.push("");
+  return lines;
+};
+
+function normalizeAutoRecallQuery(rawPrompt: string): string {
+  let query = rawPrompt.trim();
+
+  const senderTag = "Sender (untrusted metadata):";
+  const senderPos = query.indexOf(senderTag);
+  if (senderPos !== -1) {
+    const afterSender = query.slice(senderPos);
+    const fenceStart = afterSender.indexOf("```json");
+    const fenceEnd = fenceStart >= 0 ? afterSender.indexOf("```\n", fenceStart + 7) : -1;
+    if (fenceEnd > 0) {
+      query = afterSender.slice(fenceEnd + 4).replace(/^\s*\n/, "").trim();
+    } else {
+      const firstDblNl = afterSender.indexOf("\n\n");
+      if (firstDblNl > 0) {
+        query = afterSender.slice(firstDblNl + 2).trim();
+      }
+    }
+  }
+
+  query = stripInboundMetadata(query);
+  query = query.replace(/<[^>]+>/g, "").trim();
+
+  if (NEW_SESSION_PROMPT_RE.test(query)) {
+    query = query.replace(NEW_SESSION_PROMPT_RE, "").trim();
+    query = query.replace(/^(Execute|Run) your Session Startup sequence[^\n]*\n?/im, "").trim();
+    query = query.replace(/^Current time:[^\n]*(\n|$)/im, "").trim();
+  }
+
+  query = query.replace(INTERNAL_CONTEXT_RE, "").trim();
+  query = query.replace(CONTINUE_PROMPT_RE, "").trim();
+
+  return query;
+}
+
 
 const pluginConfigSchema = {
   type: "object" as const,
@@ -96,6 +160,10 @@ const memosLocalPlugin = {
   configSchema: pluginConfigSchema,
 
   register(api: OpenClawPluginApi) {
+    api.registerMemoryCapability({
+      promptBuilder: buildMemoryPromptSection,
+    });
+
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
     const localRequire = createRequire(import.meta.url);
     const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -290,7 +358,7 @@ const memosLocalPlugin = {
         const raw = fs.readFileSync(openclawJsonPath, "utf-8");
         const cfg = JSON.parse(raw);
         const allow: string[] | undefined = cfg?.tools?.allow;
-        if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins")) {
+        if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins") && !allow.includes("*")) {
           const lastEntry = JSON.stringify(allow[allow.length - 1]);
           const patched = raw.replace(
             new RegExp(`(${lastEntry})(\\s*\\])`),
@@ -319,7 +387,10 @@ const memosLocalPlugin = {
     // Current agent ID — updated by hooks, read by tools for owner isolation.
     // Falls back to "main" when no hook has fired yet (single-agent setups).
     let currentAgentId = "main";
+    const getCurrentOwner = () => `agent:${currentAgentId}`;
 
+    const globalRef = globalThis as any;
+    
     // ─── Check allowPromptInjection policy ───
     // When allowPromptInjection=false, the prompt mutation fields (such as prependContext) in the hook return value
     // will be stripped by the framework. Skip auto-recall to avoid unnecessary LLM/embedding calls.
@@ -330,214 +401,6 @@ const memosLocalPlugin = {
     }
     else {
       api.logger.info("memos-local: allowPromptInjection=true, auto-recall enabled");
-    }
-
-    // ─── Context Engine: inject memories into assistant messages ───
-    // Memories are wrapped in <relevant-memories> tags which OpenClaw's UI
-    // automatically strips from assistant messages, keeping the chat clean.
-    // Persisted to the session file so the prompt prefix stays stable for KV cache.
-
-    let pendingInjection: PendingInjection | null = null;
-
-    try {
-      api.registerContextEngine("memos-local-openclaw-plugin", () => ({
-        info: {
-          id: "memos-local-openclaw-plugin",
-          name: "MemOS Local Memory Context Engine",
-          version: "1.0.0",
-        },
-
-        async ingest() {
-          return { ingested: false };
-        },
-
-        async assemble(params: {
-          sessionId: string;
-          sessionKey?: string;
-          messages: CEAgentMessage[];
-          tokenBudget?: number;
-          model?: string;
-          prompt?: string;
-        }) {
-          const { messages, prompt, sessionId, sessionKey } = params;
-
-          if (!allowPromptInjection || !prompt || prompt.length < 3) {
-            return { messages, estimatedTokens: 0 };
-          }
-
-          const recallT0 = performance.now();
-          try {
-            let query = prompt;
-            const senderTag = "Sender (untrusted metadata):";
-            const senderPos = query.indexOf(senderTag);
-            if (senderPos !== -1) {
-              const afterSender = query.slice(senderPos);
-              const fenceStart = afterSender.indexOf("```json");
-              const fenceEnd = fenceStart >= 0 ? afterSender.indexOf("```\n", fenceStart + 7) : -1;
-              if (fenceEnd > 0) {
-                query = afterSender.slice(fenceEnd + 4).replace(/^\s*\n/, "").trim();
-              } else {
-                const firstDblNl = afterSender.indexOf("\n\n");
-                if (firstDblNl > 0) {
-                  query = afterSender.slice(firstDblNl + 2).trim();
-                }
-              }
-            }
-            query = stripInboundMetadata(query).replace(/<[^>]+>/g, "").trim();
-
-            if (query.length < 2) {
-              return { messages, estimatedTokens: 0 };
-            }
-
-            ctx.log.debug(`context-engine assemble: query="${query.slice(0, 80)}"`);
-
-            const recallOwner = [`agent:${currentAgentId}`, "public"];
-            const result = await engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwner });
-            const filteredHits = ceDeduplicateHits(
-              result.hits.filter((h: SearchHit) => h.score >= 0.5),
-            );
-
-            if (filteredHits.length === 0) {
-              ctx.log.debug("context-engine assemble: no memory hits");
-              return { messages, estimatedTokens: 0 };
-            }
-
-            const memoryBlock = formatMemoryBlock(filteredHits);
-            const cloned: CEAgentMessage[] = messages.map((m) => structuredClone(m));
-
-            let lastAssistantIdx = -1;
-            for (let i = cloned.length - 1; i >= 0; i--) {
-              if (cloned[i].role === "assistant") {
-                lastAssistantIdx = i;
-                break;
-              }
-            }
-
-            const sk = sessionKey ?? sessionId;
-
-            if (lastAssistantIdx < 0) {
-              const syntheticAssistant: CEAgentMessage = {
-                role: "assistant",
-                content: [{ type: "text", text: memoryBlock }],
-                timestamp: Date.now(),
-                stopReason: "end_turn",
-                usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
-              };
-              pendingInjection = { sessionKey: sk, memoryBlock, isSynthetic: true };
-              ctx.log.info(`context-engine assemble: first turn, injecting synthetic assistant (${filteredHits.length} memories)`);
-              return { messages: [...cloned, syntheticAssistant], estimatedTokens: 0 };
-            }
-
-            removeExistingMemoryBlock(cloned[lastAssistantIdx]);
-            appendMemoryToMessage(cloned[lastAssistantIdx], memoryBlock);
-            pendingInjection = { sessionKey: sk, memoryBlock, isSynthetic: false };
-
-            const dur = performance.now() - recallT0;
-            ctx.log.info(`context-engine assemble: injected ${filteredHits.length} memories into assistant[${lastAssistantIdx}] (${dur.toFixed(0)}ms)`);
-            return { messages: cloned, estimatedTokens: 0 };
-          } catch (err) {
-            ctx.log.warn(`context-engine assemble failed: ${err}`);
-            return { messages, estimatedTokens: 0 };
-          }
-        },
-
-        async afterTurn() {},
-
-        async compact(params: any) {
-          try {
-            const { delegateCompactionToRuntime } = await import("openclaw/plugin-sdk");
-            return await delegateCompactionToRuntime(params);
-          } catch {
-            return { ok: true, compacted: false, reason: "delegateCompactionToRuntime not available" };
-          }
-        },
-
-        async maintain(params: {
-          sessionId: string;
-          sessionKey?: string;
-          sessionFile: string;
-          runtimeContext?: { rewriteTranscriptEntries?: (req: any) => Promise<any> };
-        }) {
-          const noChange = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
-
-          if (!pendingInjection) return noChange;
-
-          const sk = params.sessionKey ?? params.sessionId;
-          if (pendingInjection.sessionKey !== sk) {
-            pendingInjection = null;
-            return { ...noChange, reason: "session mismatch" };
-          }
-
-          try {
-            if (pendingInjection.isSynthetic) {
-              // First turn: INSERT synthetic assistant before existing entries
-              const { SessionManager } = await import("@mariozechner/pi-coding-agent");
-              const sm = SessionManager.open(params.sessionFile);
-              const ok = insertSyntheticAssistantEntry(sm, pendingInjection.memoryBlock);
-              pendingInjection = null;
-              if (ok) {
-                ctx.log.info("context-engine maintain: persisted synthetic assistant message");
-                return { changed: true, bytesFreed: 0, rewrittenEntries: 1 };
-              }
-              return { ...noChange, reason: "empty branch, could not insert synthetic" };
-            }
-
-            // Subsequent turns: REPLACE last assistant entry with memory-injected version
-            if (!params.runtimeContext?.rewriteTranscriptEntries) {
-              pendingInjection = null;
-              return { ...noChange, reason: "rewriteTranscriptEntries not available" };
-            }
-
-            const { SessionManager } = await import("@mariozechner/pi-coding-agent");
-            const sm = SessionManager.open(params.sessionFile);
-            const branch = sm.getBranch();
-            const targetEntry = findTargetAssistantEntry(branch);
-
-            if (!targetEntry) {
-              pendingInjection = null;
-              return { ...noChange, reason: "no target assistant entry found" };
-            }
-
-            const modifiedMessage = structuredClone(targetEntry.message!);
-            removeExistingMemoryBlock(modifiedMessage as CEAgentMessage);
-            appendMemoryToMessage(modifiedMessage as CEAgentMessage, pendingInjection.memoryBlock);
-
-            const result = await params.runtimeContext.rewriteTranscriptEntries({
-              replacements: [{ entryId: targetEntry.id, message: modifiedMessage }],
-            });
-
-            ctx.log.info(`context-engine maintain: persisted memory to assistant entry ${targetEntry.id}`);
-            pendingInjection = null;
-            return result;
-          } catch (err) {
-            ctx.log.warn(`context-engine maintain failed: ${err}`);
-            pendingInjection = null;
-            return { ...noChange, reason: String(err) };
-          }
-        },
-      }));
-
-      ctx.log.info("memos-local: registered context engine 'memos-local-openclaw-plugin'");
-    } catch (err) {
-      ctx.log.warn(`memos-local: context engine registration failed (${err}), memory injection will use before_prompt_build fallback`);
-    }
-
-    // ─── Memory Prompt Section: static instructions for the LLM ───
-    try {
-      api.registerMemoryPromptSection(() => [
-        "## Memory System",
-        "",
-        "Assistant messages in this conversation may contain <relevant-memories> blocks.",
-        "These are NOT part of the assistant's original response.",
-        "They contain background knowledge and memories relevant to the next user message,",
-        "injected by the user's local memory system before each query.",
-        "Use them as context to better understand and respond to the following user message.",
-        "Do not mention, quote, or repeat these memory blocks in your replies.",
-        "",
-      ]);
-      ctx.log.info("memos-local: registered memory prompt section");
-    } catch (err) {
-      ctx.log.warn(`memos-local: registerMemoryPromptSection failed: ${err}`);
     }
 
     const trackTool = (toolName: string, fn: (...args: any[]) => Promise<any>) =>
@@ -574,7 +437,6 @@ const memosLocalPlugin = {
         }
       };
 
-    const getCurrentOwner = () => `agent:${currentAgentId}`;
     const resolveMemorySearchScope = (scope?: string): "local" | "group" | "all" =>
       scope === "group" || scope === "all" ? scope : "local";
     const resolveMemoryShareTarget = (target?: string): "agents" | "hub" | "both" =>
@@ -608,6 +470,7 @@ const memosLocalPlugin = {
         body: JSON.stringify({
           memory: {
             sourceChunkId: chunk.id,
+            sourceAgent: chunk.owner || "",
             role: chunk.role,
             content: chunk.content,
             summary: chunk.summary,
@@ -628,6 +491,7 @@ const memosLocalPlugin = {
           id: memoryId,
           sourceChunkId: chunk.id,
           sourceUserId: hubClient.userId,
+          sourceAgent: chunk.owner || "",
           role: chunk.role,
           content: chunk.content,
           summary: chunk.summary ?? "",
@@ -665,7 +529,7 @@ const memosLocalPlugin = {
     // ─── Tool: memory_search ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_search",
         label: "Memory Search",
         description:
@@ -681,7 +545,7 @@ const memosLocalPlugin = {
           hubAddress: Type.Optional(Type.String({ description: "Optional Hub address override for group/all search." })),
           userToken: Type.Optional(Type.String({ description: "Optional Hub bearer token override for group/all search." })),
         }),
-        execute: trackTool("memory_search", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("memory_search", async (_toolCallId: any, params: any) => {
           const {
             query,
             scope: rawScope,
@@ -702,9 +566,6 @@ const memosLocalPlugin = {
           const role = rawRole === "user" || rawRole === "assistant" || rawRole === "tool" || rawRole === "system" ? rawRole : undefined;
           const minScore = typeof rawMinScore === "number" ? Math.max(0.35, Math.min(1, rawMinScore)) : undefined;
           let searchScope = resolveMemorySearchScope(rawScope);
-          if (searchScope === "local" && ctx.config?.sharing?.enabled) {
-            searchScope = "all";
-          }
           const searchLimit = typeof maxResults === "number" ? Math.max(1, Math.min(20, Math.round(maxResults))) : 10;
 
           const agentId = context?.agentId ?? currentAgentId;
@@ -724,7 +585,7 @@ const memosLocalPlugin = {
 
           // Split local results: pure-local vs hub-memory (Hub role's hub_memories mixed in by RecallEngine)
           const localHits = result.hits.filter((h) => h.origin !== "hub-memory");
-          const hubLocalHits = result.hits.filter((h) => h.origin === "hub-memory");
+          const hubLocalHits = searchScope !== "local" ? result.hits.filter((h) => h.origin === "hub-memory") : [];
 
           const rawLocalCandidates = localHits.map((h) => ({
             chunkId: h.ref.chunkId,
@@ -733,6 +594,7 @@ const memosLocalPlugin = {
             summary: h.summary,
             original_excerpt: (h.original_excerpt ?? "").slice(0, 200),
             origin: h.origin || "local",
+            owner: h.owner || "",
           }));
 
           // Hub remote candidates (from HTTP call) + hub-memory candidates (from RecallEngine for Hub role)
@@ -869,6 +731,7 @@ const memosLocalPlugin = {
                 chunkId: h.ref.chunkId, taskId: effectiveTaskId, skillId: h.skillId,
                 role: h.source.role, score: h.score, summary: h.summary,
                 original_excerpt: (h.original_excerpt ?? "").slice(0, 200), origin: h.origin || "local",
+                owner: h.owner || "",
               };
             }),
             ...filteredHubRemoteHits.map((h: any) => ({
@@ -876,6 +739,7 @@ const memosLocalPlugin = {
               role: h.source?.role ?? h.role ?? "assistant", score: h.score ?? 0,
               summary: h.summary ?? "", original_excerpt: (h.excerpt ?? h.summary ?? "").slice(0, 200),
               origin: "hub-remote", ownerName: h.ownerName ?? "", groupName: h.groupName ?? "",
+              sourceAgent: h.sourceAgent ?? "",
             })),
           ];
 
@@ -889,14 +753,14 @@ const memosLocalPlugin = {
             },
           };
         }),
-      },
+      }),
       { name: "memory_search" },
     );
 
     // ─── Tool: memory_timeline ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_timeline",
         label: "Memory Timeline",
         description:
@@ -906,7 +770,7 @@ const memosLocalPlugin = {
           chunkId: Type.String({ description: "The chunkId from a memory_search hit" }),
           window: Type.Optional(Type.Number({ description: "Context window ±N (default 2)" })),
         }),
-        execute: trackTool("memory_timeline", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("memory_timeline", async (_toolCallId: any, params: any) => {
           const agentId = context?.agentId ?? currentAgentId;
           ctx.log.debug(`memory_timeline called (agent=${agentId})`);
           const { chunkId, window: win } = params as {
@@ -950,14 +814,14 @@ const memosLocalPlugin = {
             details: { entries, anchorRef: { sessionKey: anchorChunk.sessionKey, chunkId, turnId: anchorChunk.turnId, seq: anchorChunk.seq } },
           };
         }),
-      },
+      }),
       { name: "memory_timeline" },
     );
 
     // ─── Tool: memory_get ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_get",
         label: "Memory Get",
         description:
@@ -968,7 +832,7 @@ const memosLocalPlugin = {
             Type.Number({ description: `Max chars (default ${DEFAULTS.getMaxCharsDefault}, max ${DEFAULTS.getMaxCharsMax})` }),
           ),
         }),
-        execute: trackTool("memory_get", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("memory_get", async (_toolCallId: any, params: any) => {
           const { chunkId, maxChars } = params as { chunkId: string; maxChars?: number };
           const limit = Math.min(maxChars ?? DEFAULTS.getMaxCharsDefault, DEFAULTS.getMaxCharsMax);
 
@@ -994,7 +858,7 @@ const memosLocalPlugin = {
             },
           };
         }),
-      },
+      }),
       { name: "memory_get" },
     );
 
@@ -1335,6 +1199,10 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             };
           }
 
+          const disabledWarning = skill.status === "archived"
+            ? "\n\n> **Warning:** This skill is currently **disabled** (archived). Its content is shown for reference only — it will not be used in search or auto-recall.\n\n"
+            : "";
+
           const manifest = skillInstaller.getCompanionManifest(resolvedSkillId);
           let footer = "\n\n---\n";
 
@@ -1359,7 +1227,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           return {
             content: [{
               type: "text",
-              text: `## Skill: ${skill.name} (v${skill.version})\n\n${sv.content}${footer}`,
+              text: `## Skill: ${skill.name} (v${skill.version})${disabledWarning}\n\n${sv.content}${footer}`,
             }],
             details: {
               skillId: skill.id,
@@ -1516,7 +1384,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     const viewerPort = (pluginCfg as any).viewerPort ?? (gatewayPort + 10);
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_viewer",
         label: "Open Memory Viewer",
         description:
@@ -1524,10 +1392,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           "or access their stored memories, or asks where the memory dashboard is. " +
           "Returns the URL the user can open in their browser.",
         parameters: Type.Object({}),
-        execute: trackTool("memory_viewer", async () => {
+        execute: trackTool("memory_viewer", async (_toolCallId: any, params: any) => {
           ctx.log.debug(`memory_viewer called`);
           telemetry.trackViewerOpened();
-          const url = `http://127.0.0.1:${viewerPort}`;
+          const agentId = context?.agentId ?? context?.profileId ?? currentAgentId;
+          const url = `http://127.0.0.1:${viewerPort}?agentId=${encodeURIComponent(agentId)}`;
           return {
             content: [
               {
@@ -1548,7 +1417,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             details: { viewerUrl: url },
           };
         }),
-      },
+      }),
       { name: "memory_viewer" },
     );
 
@@ -1779,7 +1648,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     // ─── Tool: skill_search ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "skill_search",
         label: "Skill Search",
         description:
@@ -1789,10 +1658,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           query: Type.String({ description: "Natural language description of the needed skill" }),
           scope: Type.Optional(Type.String({ description: "Search scope: 'mix' (default), 'self', 'public', 'group', or 'all'." })),
         }),
-        execute: trackTool("skill_search", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("skill_search", async (_toolCallId: any, params: any) => {
           const { query: skillQuery, scope: rawScope } = params as { query: string; scope?: string };
           const scope = (rawScope === "self" || rawScope === "public") ? rawScope : "mix";
-          const currentOwner = getCurrentOwner();
+          const agentId = context?.agentId ?? currentAgentId;
+          const currentOwner = `agent:${agentId}`;
 
           if (rawScope === "group" || rawScope === "all") {
             const [localHits, hub] = await Promise.all([
@@ -1854,7 +1724,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             details: { query: skillQuery, scope, hits },
           };
         }),
-      },
+      }),
       { name: "skill_search" },
     );
 
@@ -1993,81 +1863,292 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       { name: "network_skill_pull" },
     );
 
-    // ─── Skill auto-recall: inject relevant skills before agent starts ───
-    // Memory injection is handled by the Context Engine above.
-    // This hook only handles skill auto-recall via prependContext.
+    // ─── Auto-recall: inject relevant memories before agent starts ───
 
     api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
 
-      const recallAgentId = hookCtx?.agentId ?? "main";
+      const recallAgentId = hookCtx?.agentId ?? (event as any)?.agentId ?? (event as any)?.profileId ?? "main";
       currentAgentId = recallAgentId;
-
-      const skillAutoRecall = ctx.config.skillEvolution?.autoRecallSkills ?? DEFAULTS.skillAutoRecall;
-      if (!skillAutoRecall) return;
+      const recallOwnerFilter = [`agent:${recallAgentId}`, "public"];
+      ctx.log.info(`auto-recall: agentId=${recallAgentId} (from hookCtx)`);
 
       const recallT0 = performance.now();
+      let recallQuery = "";
 
       try {
-        let query = event.prompt;
-        const senderTag = "Sender (untrusted metadata):";
-        const senderPos = query.indexOf(senderTag);
-        if (senderPos !== -1) {
-          const afterSender = query.slice(senderPos);
-          const fenceStart = afterSender.indexOf("```json");
-          const fenceEnd = fenceStart >= 0 ? afterSender.indexOf("```\n", fenceStart + 7) : -1;
-          if (fenceEnd > 0) {
-            query = afterSender.slice(fenceEnd + 4).replace(/^\s*\n/, "").trim();
+        const rawPrompt = event.prompt;
+        ctx.log.debug(`auto-recall: rawPrompt="${rawPrompt.slice(0, 300)}"`);
+
+        const query = normalizeAutoRecallQuery(rawPrompt);
+        recallQuery = query;
+
+        if (query.length < 2) {
+          ctx.log.debug("auto-recall: extracted query too short, skipping");
+          return;
+        }
+        ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
+
+        // ── Phase 1: Local search ∥ Hub search (parallel) ──
+        const arLocalP = engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwnerFilter });
+        const arHubP = ctx.config?.sharing?.enabled
+          ? hubSearchMemories(store, ctx, { query, maxResults: 10, scope: "all" })
+              .catch((err: any) => { ctx.log.debug(`auto-recall: hub search failed (${err})`); return { hits: [] as any[], meta: {} }; })
+          : Promise.resolve({ hits: [] as any[], meta: {} });
+
+        const [result, arHubResult] = await Promise.all([arLocalP, arHubP]);
+
+        const localHits = result.hits.filter((h) => h.origin !== "hub-memory");
+        const hubLocalHits = result.hits.filter((h) => h.origin === "hub-memory");
+        const hubRemoteHits: SearchHit[] = (arHubResult.hits ?? []).map((h: any) => ({
+          summary: h.summary,
+          original_excerpt: h.excerpt || h.summary,
+          ref: { sessionKey: "", chunkId: h.remoteHitId ?? "", turnId: "", seq: 0 },
+          score: 0.9,
+          taskId: null,
+          skillId: null,
+          origin: "hub-remote" as const,
+          source: { ts: h.source?.ts, role: h.source?.role ?? "assistant", sessionKey: "" },
+          ownerName: h.ownerName,
+          groupName: h.groupName,
+        }));
+        const allHubHits = [...hubLocalHits, ...hubRemoteHits];
+
+        ctx.log.debug(`auto-recall: local=${localHits.length}, hub-memory=${hubLocalHits.length}, hub-remote=${hubRemoteHits.length}`);
+
+        const rawLocalCandidates = localHits.map((h) => ({
+          score: h.score, role: h.source.role, summary: h.summary,
+          content: (h.original_excerpt ?? "").slice(0, 200), origin: h.origin || "local",
+          owner: h.owner || "",
+        }));
+        const rawHubCandidates = allHubHits.map((h) => ({
+          score: h.score, role: h.source.role, summary: h.summary,
+          content: (h.original_excerpt ?? "").slice(0, 200), origin: h.origin || "hub-remote",
+          ownerName: (h as any).ownerName ?? "", groupName: (h as any).groupName ?? "",
+        }));
+
+        const allRawHits = [...localHits, ...allHubHits];
+
+        if (allRawHits.length === 0) {
+          ctx.log.debug("auto-recall: no memory candidates found");
+          const dur = performance.now() - recallT0;
+          store.recordToolCall("memory_search", dur, true);
+          store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
+            candidates: rawLocalCandidates, hubCandidates: rawHubCandidates, filtered: [],
+          }), dur, true);
+
+          const skillAutoRecallEarly = ctx.config.skillEvolution?.autoRecallSkills ?? DEFAULTS.skillAutoRecall;
+          if (skillAutoRecallEarly) {
+            try {
+              const skillLimit = ctx.config.skillEvolution?.autoRecallSkillLimit ?? DEFAULTS.skillAutoRecallLimit;
+              const skillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
+              const topSkills = skillHits.slice(0, skillLimit);
+              if (topSkills.length > 0) {
+                const skillLines = topSkills.map((sc, i) => {
+                  const manifest = skillInstaller.getCompanionManifest(sc.skillId);
+                  let badge = "";
+                  if (manifest?.installed) badge = " [installed]";
+                  else if (manifest?.installMode === "install_recommended") badge = " [has scripts, install recommended]";
+                  else if (manifest?.hasCompanionFiles) badge = " [has companion files]";
+                  return `${i + 1}. **${sc.name}**${badge} — ${sc.description.slice(0, 200)}\n   → call \`skill_get(skillId="${sc.skillId}")\` for the full guide`;
+                });
+                const skillContext = "## Relevant skills from past experience\n\n" +
+                  "No direct memory matches were found, but these skills from past tasks may help:\n\n" +
+                  skillLines.join("\n\n") +
+                  "\n\nYou SHOULD call `skill_get` to retrieve the full guide before attempting the task.";
+                ctx.log.info(`auto-recall-skill (no-memory path): injecting ${topSkills.length} skill(s)`);
+                try { store.recordApiLog("skill_search", { type: "auto_recall_skill", query }, JSON.stringify(topSkills), dur, true); } catch { /* best-effort */ }
+                return { prependContext: skillContext };
+              }
+            } catch (err) {
+              ctx.log.debug(`auto-recall-skill (no-memory path): failed: ${err}`);
+            }
+          }
+
+          if (query.length > 50) {
+            const noRecallHint =
+              "## Memory system — ACTION REQUIRED\n\n" +
+              "Auto-recall found no results for a long query. " +
+              "You MUST call `memory_search` now with a shortened query (2-5 key words) before answering. " +
+              "Do NOT skip this step. Do NOT answer without searching first.";
+            return { prependContext: noRecallHint };
+          }
+          return;
+        }
+
+        // ── Phase 2: Merge all → single LLM filter ──
+        const mergedForFilter = allRawHits.map((h, i) => ({
+          index: i + 1,
+          role: h.source.role,
+          content: (h.original_excerpt ?? "").slice(0, 300),
+          time: h.source.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
+        }));
+
+        let filteredHits = allRawHits;
+        let sufficient = false;
+
+        const filterResult = await summarizer.filterRelevant(query, mergedForFilter);
+        if (filterResult !== null) {
+          sufficient = filterResult.sufficient;
+          if (filterResult.relevant.length > 0) {
+            const indexSet = new Set(filterResult.relevant);
+            filteredHits = allRawHits.filter((_, i) => indexSet.has(i + 1));
           } else {
-            const firstDblNl = afterSender.indexOf("\n\n");
-            if (firstDblNl > 0) {
-              query = afterSender.slice(firstDblNl + 2).trim();
+            const dur = performance.now() - recallT0;
+            store.recordToolCall("memory_search", dur, true);
+            store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
+              candidates: rawLocalCandidates, hubCandidates: rawHubCandidates, filtered: [],
+            }), dur, true);
+            if (query.length > 50) {
+              const noRecallHint =
+                "## Memory system — ACTION REQUIRED\n\n" +
+                "Auto-recall found no relevant results for a long query. " +
+                "You MUST call `memory_search` now with a shortened query (2-5 key words) before answering. " +
+                "Do NOT skip this step. Do NOT answer without searching first.";
+              return { prependContext: noRecallHint };
             }
+            return;
           }
         }
-        query = stripInboundMetadata(query).replace(/<[^>]+>/g, "").trim();
-        if (query.length < 2) return;
 
-        const skillLimit = ctx.config.skillEvolution?.autoRecallSkillLimit ?? DEFAULTS.skillAutoRecallLimit;
-        const skillCandidateMap = new Map<string, { name: string; description: string; skillId: string; source: string }>();
+        const beforeDedup = filteredHits.length;
+        filteredHits = deduplicateHits(filteredHits);
+        ctx.log.debug(`auto-recall: merged ${allRawHits.length} → ${beforeDedup} relevant → ${filteredHits.length} after dedup, sufficient=${sufficient}`);
 
-        try {
-          const directSkillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
-          for (const sh of directSkillHits.slice(0, skillLimit + 2)) {
-            if (!skillCandidateMap.has(sh.skillId)) {
-              skillCandidateMap.set(sh.skillId, { name: sh.name, description: sh.description, skillId: sh.skillId, source: "query" });
+        const lines = filteredHits.map((h, i) => {
+          const excerpt = h.original_excerpt;
+          const oTag = h.origin === "local-shared" ? " [本机共享]" : h.origin === "hub-memory" ? " [团队缓存]" : "";
+          const parts: string[] = [`${i + 1}. [${h.source.role}]${oTag}`];
+          if (excerpt) parts.push(`   ${excerpt}`);
+          parts.push(`   chunkId="${h.ref.chunkId}"`);
+          if (h.taskId) {
+            const task = store.getTask(h.taskId);
+            if (task && task.status !== "skipped") {
+              parts.push(`   task_id="${h.taskId}"`);
             }
           }
-        } catch (err) {
-          ctx.log.debug(`auto-recall-skill: direct search failed: ${err}`);
-        }
-
-        const skillCandidates = [...skillCandidateMap.values()].slice(0, skillLimit);
-        if (skillCandidates.length === 0) return;
-
-        const skillLines = skillCandidates.map((sc, i) => {
-          const manifest = skillInstaller.getCompanionManifest(sc.skillId);
-          let badge = "";
-          if (manifest?.installed) badge = " [installed]";
-          else if (manifest?.installMode === "install_recommended") badge = " [has scripts, install recommended]";
-          else if (manifest?.hasCompanionFiles) badge = " [has companion files]";
-          const action = `call \`skill_get(skillId="${sc.skillId}")\``;
-          return `${i + 1}. **${sc.name}**${badge} — ${sc.description.slice(0, 200)}\n   → ${action}`;
+          return parts.join("\n");
         });
-        const skillContext = "## Relevant skills from past experience\n\n" +
-          "The following skills were distilled from similar previous tasks. " +
-          "You SHOULD call `skill_get` to retrieve the full guide before attempting the task.\n\n" +
-          skillLines.join("\n\n");
 
-        ctx.log.info(`auto-recall-skill: injecting ${skillCandidates.length} skill(s): ${skillCandidates.map(s => s.name).join(", ")}`);
-        try {
-          store.recordApiLog("skill_search", { type: "auto_recall_skill", query }, JSON.stringify(skillCandidates), performance.now() - recallT0, true);
-        } catch { /* best-effort */ }
+        const hasTask = filteredHits.some((h) => {
+          if (!h.taskId) return false;
+          const t = store.getTask(h.taskId);
+          return t && t.status !== "skipped";
+        });
+        const tips: string[] = [];
+        if (hasTask) {
+          tips.push("- A hit has `task_id` → call `task_summary(taskId=\"...\")` to get the full task context (steps, code, results)");
+          tips.push("- A task may have a reusable guide → call `skill_get(taskId=\"...\")` to retrieve the experience/skill");
+        }
+        tips.push("- Need more surrounding dialogue → call `memory_timeline(chunkId=\"...\")` to expand context around a hit");
+        const tipsText = "\n\nAvailable follow-up tools:\n" + tips.join("\n");
 
-        return { prependContext: skillContext };
+        const contextParts = [
+          "## User's conversation history (from memory system)",
+          "",
+          "IMPORTANT: The following are facts from previous conversations with this user.",
+          "You MUST treat these as established knowledge and use them directly when answering.",
+          "Do NOT say you don't know or don't have information if the answer is in these memories.",
+          "",
+          lines.join("\n\n"),
+        ];
+        if (tipsText) contextParts.push(tipsText);
+
+        // ─── Skill auto-recall ───
+        const skillAutoRecall = ctx.config.skillEvolution?.autoRecallSkills ?? DEFAULTS.skillAutoRecall;
+        const skillLimit = ctx.config.skillEvolution?.autoRecallSkillLimit ?? DEFAULTS.skillAutoRecallLimit;
+        let skillSection = "";
+
+        if (skillAutoRecall) {
+          try {
+            const skillCandidateMap = new Map<string, { name: string; description: string; skillId: string; source: string }>();
+
+            try {
+              const directSkillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
+              for (const sh of directSkillHits.slice(0, skillLimit + 2)) {
+                if (!skillCandidateMap.has(sh.skillId)) {
+                  skillCandidateMap.set(sh.skillId, { name: sh.name, description: sh.description, skillId: sh.skillId, source: "query" });
+                }
+              }
+            } catch (err) {
+              ctx.log.debug(`auto-recall-skill: direct search failed: ${err}`);
+            }
+
+            const taskIds = new Set<string>();
+            for (const h of filteredHits) {
+              if (h.taskId) {
+                const t = store.getTask(h.taskId);
+                if (t && t.status !== "skipped") taskIds.add(h.taskId);
+              }
+            }
+            for (const tid of taskIds) {
+              const linked = store.getSkillsByTask(tid);
+              for (const rs of linked) {
+                if (!skillCandidateMap.has(rs.skill.id)) {
+                  skillCandidateMap.set(rs.skill.id, { name: rs.skill.name, description: rs.skill.description, skillId: rs.skill.id, source: `task:${tid}` });
+                }
+              }
+            }
+
+            const skillCandidates = [...skillCandidateMap.values()].slice(0, skillLimit);
+
+            if (skillCandidates.length > 0) {
+              const skillLines = skillCandidates.map((sc, i) => {
+                const manifest = skillInstaller.getCompanionManifest(sc.skillId);
+                let badge = "";
+                if (manifest?.installed) badge = " [installed]";
+                else if (manifest?.installMode === "install_recommended") badge = " [has scripts, install recommended]";
+                else if (manifest?.hasCompanionFiles) badge = " [has companion files]";
+                const action = `call \`skill_get(skillId="${sc.skillId}")\``;
+                return `${i + 1}. **${sc.name}**${badge} — ${sc.description.slice(0, 200)}\n   → ${action}`;
+              });
+              skillSection = "\n\n## Relevant skills from past experience\n\n" +
+                "The following skills were distilled from similar previous tasks. " +
+                "You SHOULD call `skill_get` to retrieve the full guide before attempting the task.\n\n" +
+                skillLines.join("\n\n");
+
+              ctx.log.info(`auto-recall-skill: injecting ${skillCandidates.length} skill(s): ${skillCandidates.map(s => s.name).join(", ")}`);
+              try {
+                store.recordApiLog("skill_search", { type: "auto_recall_skill", query }, JSON.stringify(skillCandidates), performance.now() - recallT0, true);
+              } catch { /* best-effort */ }
+            } else {
+              ctx.log.debug("auto-recall-skill: no matching skills found");
+            }
+          } catch (err) {
+            ctx.log.debug(`auto-recall-skill: failed: ${err}`);
+          }
+        }
+
+        if (skillSection) contextParts.push(skillSection);
+        const context = contextParts.join("\n");
+
+        const recallDur = performance.now() - recallT0;
+        store.recordToolCall("memory_search", recallDur, true);
+        store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
+          candidates: rawLocalCandidates,
+          hubCandidates: rawHubCandidates,
+          filtered: filteredHits.map(h => ({ score: h.score, role: h.source.role, summary: h.summary, content: h.original_excerpt, origin: h.origin || "local", owner: h.owner || "" })),
+        }), recallDur, true);
+        telemetry.trackAutoRecall(filteredHits.length, recallDur);
+
+        ctx.log.info(`auto-recall: returning prependContext (${context.length} chars), sufficient=${sufficient}, skills=${skillSection ? "yes" : "no"}`);
+
+        if (!sufficient) {
+          const searchHint =
+            "\n\nIf these memories don't fully answer the question, " +
+            "call `memory_search` with a shorter or rephrased query to find more.";
+          return { prependContext: context + searchHint };
+        }
+
+        return {
+          prependContext: context,
+        };
       } catch (err) {
-        ctx.log.warn(`auto-recall-skill failed: ${String(err)}`);
+        const dur = performance.now() - recallT0;
+        store.recordToolCall("memory_search", dur, false);
+        try { store.recordApiLog("memory_search", { type: "auto_recall", query: recallQuery }, `error: ${String(err)}`, dur, false); } catch (_) { /* best-effort */ }
+        ctx.log.warn(`auto-recall failed: ${String(err)}`);
       }
     });
 
@@ -2083,7 +2164,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       if (!event.success || !event.messages || event.messages.length === 0) return;
 
       try {
-        const captureAgentId = hookCtx?.agentId ?? "main";
+        const captureAgentId = hookCtx?.agentId ?? event?.agentId ?? event?.profileId ?? "main";
         currentAgentId = captureAgentId;
         const captureOwner = `agent:${captureAgentId}`;
         const sessionKey = hookCtx?.sessionKey ?? "default";
@@ -2301,57 +2382,127 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // ─── Service lifecycle ───
 
-    api.registerService({
-      id: "memos-local-openclaw-plugin",
-      start: async () => {
-        if (hubServer) {
-          const hubUrl = await hubServer.start();
-          api.logger.info(`memos-local: hub started at ${hubUrl}`);
-        }
+    let serviceStarted = false;
 
-        // Auto-connect to Hub in client mode (handles both existing token and auto-join via teamToken)
-        if (ctx.config.sharing?.enabled && ctx.config.sharing.role === "client") {
-          try {
-            const session = await connectToHub(store, ctx.config, ctx.log);
-            api.logger.info(`memos-local: connected to Hub as "${session.username}" (${session.userId})`);
-          } catch (err) {
-            api.logger.warn(`memos-local: Hub connection failed: ${err}`);
-          }
-        }
+    function isGatewayStartCommand(): boolean {
+      const args = process.argv.map(a => String(a || "").toLowerCase());
+      const gIdx = args.lastIndexOf("gateway");
+      if (gIdx === -1) return false;
+      const next = args[gIdx + 1];
+      return !next || next.startsWith("-") || next === "start" || next === "restart";
+    }
 
+    const startServiceCore = async (isHostStart = false) => {
+      if (!isGatewayStartCommand()) {
+        api.logger.info("memos-local: not a gateway start command, skipping service startup.");
+        return;
+      }
+
+      if (globalRef.__memosLocalPluginStopPromise) {
+        await globalRef.__memosLocalPluginStopPromise;
+        globalRef.__memosLocalPluginStopPromise = undefined;
+      }
+      if (serviceStarted) return;
+      
+      if (!isHostStart) {
+        if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
+          api.logger.info("memos-local: aborting startServiceCore because a newer plugin instance is active.");
+          return;
+        }
+      }
+
+      if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
+        api.logger.info("memos-local: Stopping previous plugin instance due to start of new instance...");
+        const oldService = globalRef.__memosLocalPluginActiveService;
+        globalRef.__memosLocalPluginActiveService = undefined;
         try {
-          const viewerUrl = await viewer.start();
-          api.logger.info(`memos-local: started (embedding: ${embedder.provider})`);
-          api.logger.info(`╔══════════════════════════════════════════╗`);
-          api.logger.info(`║  MemOS Memory Viewer                     ║`);
-          api.logger.info(`║  → ${viewerUrl.padEnd(37)}║`);
-          api.logger.info(`║  Open in browser to manage memories       ║`);
-          api.logger.info(`╚══════════════════════════════════════════╝`);
-          api.logger.info(`memos-local: password reset token: ${viewer.getResetToken()}`);
-          api.logger.info(`memos-local: forgot password? Use the reset token on the login page.`);
-          skillEvolver.recoverOrphanedTasks().then((count) => {
-            if (count > 0) api.logger.info(`memos-local: recovered ${count} orphaned skill tasks`);
-          }).catch((err) => {
-            api.logger.warn(`memos-local: skill recovery failed: ${err}`);
-          });
-        } catch (err) {
-          api.logger.warn(`memos-local: viewer failed to start: ${err}`);
-          api.logger.info(`memos-local: started (embedding: ${embedder.provider})`);
+          await oldService.stop({ preserveDb: true });
+        } catch (e: any) {
+          api.logger.warn(`memos-local: Error stopping previous instance: ${e}`);
         }
-        telemetry.trackPluginStarted(
-          ctx.config.embedding?.provider ?? "local",
-          ctx.config.summarizer?.provider ?? "none",
-        );
-      },
-      stop: async () => {
+      }
+      
+      globalRef.__memosLocalPluginActiveService = service;
+      serviceStarted = true;
+
+      if (hubServer) {
+        const hubUrl = await hubServer.start();
+        api.logger.info(`memos-local: hub started at ${hubUrl}`);
+      }
+
+      if (ctx.config.sharing?.enabled && ctx.config.sharing.role === "client") {
+        try {
+          const session = await connectToHub(store, ctx.config, ctx.log);
+          api.logger.info(`memos-local: connected to Hub as "${session.username}" (${session.userId})`);
+        } catch (err) {
+          api.logger.warn(`memos-local: Hub connection failed: ${err}`);
+        }
+      }
+
+      try {
+        const viewerUrl = await viewer.start();
+        api.logger.info(`memos-local: started (embedding: ${embedder.provider})`);
+        api.logger.info(`╔══════════════════════════════════════════╗`);
+        api.logger.info(`║  MemOS Memory Viewer                     ║`);
+        api.logger.info(`║  → ${viewerUrl.padEnd(37)}║`);
+        api.logger.info(`║  Open in browser to manage memories       ║`);
+        api.logger.info(`╚══════════════════════════════════════════╝`);
+        api.logger.info(`memos-local: password reset token: ${viewer.getResetToken()}`);
+        api.logger.info(`memos-local: forgot password? Use the reset token on the login page.`);
+        skillEvolver.recoverOrphanedTasks().then((count) => {
+          if (count > 0) api.logger.info(`memos-local: recovered ${count} orphaned skill tasks`);
+        }).catch((err) => {
+          api.logger.warn(`memos-local: skill recovery failed: ${err}`);
+        });
+      } catch (err) {
+        api.logger.warn(`memos-local: viewer failed to start: ${err}`);
+        api.logger.info(`memos-local: started (embedding: ${embedder.provider})`);
+      }
+      telemetry.trackPluginStarted(
+        ctx.config.embedding?.provider ?? "local",
+        ctx.config.summarizer?.provider ?? "none",
+      );
+    };
+
+    const service = {
+      id: "memos-local-openclaw-plugin",
+      start: async () => { await startServiceCore(true); },
+      stop: async (options?: { preserveDb?: boolean }) => {
+        await viewer.stop();
+        if (globalRef.__memosLocalPluginActiveService === service) {
+          globalRef.__memosLocalPluginActiveService = undefined;
+        }
         await worker.flush();
         await telemetry.shutdown();
         await hubServer?.stop();
-        viewer.stop();
-        store.close();
+        
+        // If we are hot-reloading, the new instance is already using the SAME
+        // database file on disk. Closing the sqlite store here might kill the
+        // connection for the new instance or cause locking issues depending on
+        // how the native binding manages handles.
+        if (!options?.preserveDb) {
+          store.close();
+        }
         api.logger.info("memos-local: stopped");
       },
-    });
+    };
+
+    api.registerService(service);
+
+    // Fallback: OpenClaw may load this plugin via deferred reload after
+    // startPluginServices has already run, so service.start() never fires.
+    // Start on a delay instead of next tick so the host has time to call
+    // service.start() during normal startup if this is a fresh launch.
+    const SELF_START_DELAY_MS = 2000;
+    const selfStartTimer = setTimeout(() => {
+      if (!serviceStarted && isGatewayStartCommand()) {
+        api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
+        startServiceCore().catch((err) => {
+          api.logger.warn(`memos-local: self-start failed: ${err}`);
+        });
+      }
+    }, SELF_START_DELAY_MS);
+    if (selfStartTimer.unref) selfStartTimer.unref();
   },
 };
 

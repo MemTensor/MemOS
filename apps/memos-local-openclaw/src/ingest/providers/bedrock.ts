@@ -126,9 +126,9 @@ export async function generateTaskTitleBedrock(
     body: JSON.stringify({
       system: [{ text: TASK_TITLE_PROMPT }],
       messages: [{ role: "user", content: [{ text }] }],
-      inferenceConfig: { temperature: 0, maxTokens: 100 },
+      inferenceConfig: { temperature: 0, maxTokens: 2000 },
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -150,19 +150,22 @@ SAME — the new message:
 - Reports a result, error, or feedback about the current task
 - Discusses different tools or approaches for the SAME goal (e.g., learning English via BBC → via ChatGPT = SAME)
 - Is a short acknowledgment (ok, thanks, 好的) in response to the current flow
+- Contains pronouns or references (那, 这, 它, 其中, 哪些, those, which, what about, etc.) pointing to items from the current conversation
+- Asks about a sub-topic, tool, detail, dimension, or aspect of the current discussion topic
 
 NEW — the new message:
-- Introduces a subject from a DIFFERENT domain than the current task (e.g., tech → cooking, work → personal life, database → travel)
-- Has NO logical connection to what was being discussed
+- Introduces a subject from a COMPLETELY DIFFERENT domain than the current task (e.g., tech → cooking, work → personal life, database → travel)
+- Has NO logical connection to what was being discussed — no shared entities, events, or themes
 - Starts a request about a different project, system, or life area
 - Begins with a new greeting/reset followed by a different topic
 
 Key principles:
-- If the topic domain clearly changed (e.g., server config → recipe, code review → vacation plan), choose NEW
+- Default to SAME unless the topic domain CLEARLY changed. When in doubt, choose SAME.
+- CRITICAL: Short messages (under ~30 characters) that use pronouns or ask "what about X" / "哪些" / "那XX呢" are almost always follow-ups referring to the current topic. Only mark them NEW if they explicitly name a completely unrelated domain.
 - Different aspects of the SAME project/system are SAME (e.g., Nginx SSL → Nginx gzip = SAME)
-- Different unrelated technologies discussed independently are NEW (e.g., Redis config → cooking recipe = NEW)
-- When unsure, lean toward SAME for closely related topics, but do NOT hesitate to mark NEW for obvious domain shifts
-- Examples: "配置Nginx" → "加gzip压缩" = SAME; "配置Nginx" → "做红烧肉" = NEW; "MySQL配置" → "K8s部署" in same infra project = SAME; "部署服务器" → "年会安排" = NEW
+- Asking about tools, systems, or methods for the current topic is SAME (e.g., "港股调研" → "那处理系统有哪些" = SAME; "数据分析" → "用什么工具" = SAME)
+- Different unrelated domains discussed independently are NEW (e.g., Redis config → cooking recipe = NEW)
+- Examples: "配置Nginx" → "加gzip压缩" = SAME; "配置Nginx" → "做红烧肉" = NEW; "港股调研" → "那处理系统有哪些" = SAME; "部署服务器" → "年会安排" = NEW
 
 Output exactly one word: NEW or SAME`;
 
@@ -192,9 +195,9 @@ export async function judgeNewTopicBedrock(
     body: JSON.stringify({
       system: [{ text: TOPIC_JUDGE_PROMPT }],
       messages: [{ role: "user", content: [{ text: userContent }] }],
-      inferenceConfig: { temperature: 0, maxTokens: 10 },
+      inferenceConfig: { temperature: 0, maxTokens: 2000 },
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -223,10 +226,12 @@ RULES:
 
 OUTPUT — JSON only:
 {"relevant":[1,3],"sufficient":true}
-- "relevant": candidate numbers whose content helps answer the query. [] if none can help.
-- "sufficient": true only if the selected memories fully answer the query.`;
+- "relevant": candidate numbers whose content helps answer the query. [] if none can help. Duplicates removed — only unique information.
+- "sufficient": true only if the selected memories fully answer the query.
 
-import type { FilterResult } from "./openai";
+IMPORTANT FOR REASONING MODELS: After your analysis, you MUST output a valid JSON object in this exact format. Do not output any text after the JSON object.`;
+
+import { parseFilterResult, type FilterResult } from "./openai";
 export type { FilterResult } from "./openai";
 
 export async function filterRelevantBedrock(
@@ -260,9 +265,9 @@ export async function filterRelevantBedrock(
     body: JSON.stringify({
       system: [{ text: FILTER_RELEVANT_PROMPT }],
       messages: [{ role: "user", content: [{ text: `QUERY: ${query}\n\nCANDIDATES:\n${candidateText}` }] }],
-      inferenceConfig: { temperature: 0, maxTokens: 200 },
+      inferenceConfig: { temperature: 0, maxTokens: 2000 },
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {
@@ -274,23 +279,6 @@ export async function filterRelevantBedrock(
   const raw = json.output?.message?.content?.[0]?.text?.trim() ?? "{}";
   log.debug(`filterRelevant raw LLM response: "${raw}"`);
   return parseFilterResult(raw, log);
-}
-
-function parseFilterResult(raw: string, log: Logger): FilterResult {
-  try {
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (match) {
-      const obj = JSON.parse(match[0]);
-      if (obj && Array.isArray(obj.relevant)) {
-        return {
-          relevant: obj.relevant.filter((n: any) => typeof n === "number"),
-          sufficient: obj.sufficient === true,
-        };
-      }
-    }
-  } catch {}
-  log.warn(`filterRelevant: failed to parse LLM output: "${raw}", fallback to all+insufficient`);
-  return { relevant: [], sufficient: false };
 }
 
 export async function summarizeBedrock(
@@ -318,7 +306,7 @@ export async function summarizeBedrock(
       messages: [{ role: "user", content: [{ text: `[TEXT TO SUMMARIZE]\n${text}\n[/TEXT TO SUMMARIZE]` }] }],
       inferenceConfig: {
         temperature: cfg.temperature ?? 0,
-        maxTokens: 100,
+        maxTokens: 2000,
       },
     }),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 30_000),
@@ -361,9 +349,9 @@ export async function judgeDedupBedrock(
     body: JSON.stringify({
       system: [{ text: DEDUP_JUDGE_PROMPT }],
       messages: [{ role: "user", content: [{ text: `NEW MEMORY:\n${newSummary}\n\nEXISTING MEMORIES:\n${candidateText}` }] }],
-      inferenceConfig: { temperature: 0, maxTokens: 300 },
+      inferenceConfig: { temperature: 0, maxTokens: 2000 },
     }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
   });
 
   if (!resp.ok) {

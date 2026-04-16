@@ -1,0 +1,11 @@
+{
+  "name": "memos-memory",
+  "version": "0.1.0",
+  "description": "MemTensor semantic memory for OpenHarness — auto-recall on session start, auto-capture on session end.",
+  "enabled_by_default": true,
+  "skills_dir": "skills",
+  "hooks_file": "hooks.json",
+  "author": {
+    "name": "MemTensor"
+  }
+}

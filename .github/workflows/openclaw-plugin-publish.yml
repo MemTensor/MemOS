@@ -100,7 +100,8 @@ jobs:
           MEMOS_ARMS_ENV: ${{ secrets.MEMOS_ARMS_ENV }}
 
       - name: Bump version
-        run: npm version ${{ inputs.version }} --no-git-tag-version
+        # Branch may already have this version in package.json (e.g. after a prior merge); npm errors without this flag.
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Publish to npm
         run: npm publish --access public --tag ${{ inputs.tag }}
@@ -113,6 +114,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add apps/memos-local-openclaw/package.json
-          git commit -m "release: openclaw-plugin v${{ inputs.version }}"
+          if ! git diff --staged --quiet; then
+            git commit -m "release: openclaw-plugin v${{ inputs.version }}"
+          fi
           git tag "openclaw-plugin-v${{ inputs.version }}"
           git push origin HEAD --tags

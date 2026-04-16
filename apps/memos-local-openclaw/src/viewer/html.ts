@@ -44,6 +44,7 @@ html{overflow-y:scroll}
 [data-theme="light"] .auth-card{box-shadow:0 25px 50px -12px rgba(0,0,0,.08)}
 [data-theme="light"] .topbar{background:rgba(255,255,255,.92);border-bottom-color:var(--border);backdrop-filter:blur(8px)}
 [data-theme="light"] .session-item .count,[data-theme="light"] .session-tag{background:rgba(0,0,0,.05)}
+[data-theme="light"] .owner-tag{background:rgba(99,102,241,.08);border-color:rgba(99,102,241,.18)}
 [data-theme="light"] .card-content pre{background:#f3f4f6;border-color:var(--border)}
 [data-theme="light"] .vscore-badge{background:rgba(79,70,229,.06);color:#4f46e5}
 [data-theme="light"] ::-webkit-scrollbar-thumb{background:rgba(0,0,0,.15)}
@@ -123,25 +124,27 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .topbar-center{flex:1;display:flex;justify-content:center}
 .topbar .actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
 
-.main-content{display:flex;flex:1;max-width:1400px;margin:0 auto;width:100%;padding:28px 32px;gap:28px}
+.main-content{display:grid;grid-template-columns:260px 1fr;grid-template-rows:auto 1fr;flex:1;max-width:1400px;margin:0 auto;width:100%;padding:28px 32px;gap:28px}
 
 /* ─── Sidebar ─── */
-.sidebar{width:260px;min-width:260px;flex-shrink:0}
-.sidebar .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px}
-.stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:18px;transition:all .2s}
+.sidebar{width:260px;min-width:260px;flex-shrink:0;position:sticky;top:84px;max-height:calc(100vh - 112px);display:flex;flex-direction:column}
+.sidebar > * {flex-shrink:0}
+.sidebar .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:20px}
+.stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;transition:all .2s;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;border-radius:3px 0 0 3px;background:var(--border)}
 .stat-card:hover{border-color:var(--border-glow);background:var(--bg-card-hover)}
-.stat-card .stat-value{font-size:22px;font-weight:700;color:var(--text);letter-spacing:-.02em}
-.stat-card .stat-label{font-size:12px;color:var(--text-sec);margin-top:4px;font-weight:500}
+.stat-card .stat-value{font-size:20px;font-weight:700;color:var(--text);letter-spacing:-.02em}
+.stat-card .stat-label{font-size:11px;color:var(--text-sec);margin-top:2px;font-weight:500}
+.stat-card.pri{border-left-color:transparent}.stat-card.pri::before{background:var(--pri)}
 .stat-card.pri .stat-value{color:var(--pri)}
+.stat-card.green{border-left-color:transparent}.stat-card.green::before{background:var(--green)}
 .stat-card.green .stat-value{color:var(--green)}
+.stat-card.amber{border-left-color:transparent}.stat-card.amber::before{background:var(--amber)}
 .stat-card.amber .stat-value{color:var(--amber)}
+.stat-card.rose{border-left-color:transparent}.stat-card.rose::before{background:var(--rose)}
 .stat-card.rose .stat-value{color:var(--rose)}
 
 .sidebar .section-title{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin:24px 0 12px;padding:0 2px}
-.sidebar .session-list{display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto}
-.session-item{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;cursor:pointer;transition:all .15s;font-size:13px;color:var(--text)}
-.session-item:hover{border-color:var(--pri);background:var(--pri-glow)}
-.session-item.active{border-color:var(--pri);background:var(--pri-glow);font-weight:600;color:var(--pri)}
 .session-item .count{color:var(--text-sec);font-size:11px;font-weight:600;background:rgba(0,0,0,.2);padding:3px 8px;border-radius:8px}
 
 .provider-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:var(--green-bg);color:var(--green);border-radius:999px;font-size:11px;font-weight:600;margin-top:10px}
@@ -149,11 +152,12 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 
 /* ─── Feed ─── */
 .feed{flex:1;min-width:0}
-.search-bar{display:flex;gap:10px;margin-bottom:16px;position:relative;align-items:center}
+.search-bar{display:flex;gap:10px;margin-bottom:14px;position:relative;align-items:center}
 .search-bar input{flex:1;padding:10px 16px 10px 40px;border:1px solid var(--border);border-radius:10px;font-size:14px;outline:none;background:var(--bg-card);color:var(--text);transition:all .2s}
 .search-bar input::placeholder{color:var(--text-muted)}
 .search-bar input:focus{border-color:var(--pri);box-shadow:0 0 0 3px var(--pri-glow)}
 .search-bar .search-icon{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--text-muted);font-size:14px;pointer-events:none}
+.search-bar .filter-select{padding:8px 14px;padding-right:30px;border-radius:10px;font-size:13px;background:var(--bg-card);flex-shrink:0}
 .search-meta{font-size:12px;color:var(--text-sec);padding:0 2px}.search-meta:not(:empty){margin-bottom:14px}
 .scope-select{padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg-card);color:var(--text);font-size:13px;min-width:110px;outline:none}
 .sharing-inline-meta{font-size:12px;color:var(--text-muted);margin:-8px 0 14px 2px}
@@ -370,13 +374,13 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .hub-source-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;background:rgba(34,197,94,.12);color:var(--green);font-size:11px;font-weight:700;border:1px solid rgba(34,197,94,.22)}
 @media (max-width: 960px){.sharing-settings-grid{grid-template-columns:1fr}.search-bar{flex-wrap:wrap}.scope-select{width:100%}.task-detail-actions{width:100%;justify-content:flex-start}}
 
-.filter-bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
-.filter-chip{padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text-sec);font-size:12px;font-weight:500;transition:all .15s}
-.filter-chip:hover{border-color:var(--pri);color:var(--pri)}
-.filter-chip.active{background:rgba(99,102,241,.08);color:var(--pri);border-color:rgba(99,102,241,.25)}
+.filter-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
+.filter-chip{padding:5px 14px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text-sec);font-size:12px;font-weight:500;cursor:pointer;transition:all .15s}
+.filter-chip:hover{border-color:var(--pri);color:var(--pri);background:rgba(99,102,241,.04)}
+.filter-chip.active{background:rgba(99,102,241,.1);color:var(--pri);border-color:rgba(99,102,241,.3);font-weight:600}
 
-.memory-list{display:flex;flex-direction:column;gap:16px}
-.memory-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px 24px;transition:all .2s}
+.memory-list{display:flex;flex-direction:column;gap:10px}
+.memory-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;transition:all .2s}
 .memory-card:hover{border-color:var(--border-glow);background:var(--bg-card-hover)}
 .memory-card .card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px}
 .memory-card .meta{display:flex;align-items:center;gap:8px}
@@ -385,13 +389,22 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .role-tag.assistant{background:var(--accent-glow);color:var(--accent);border:1px solid rgba(230,57,70,.2)}
 .role-tag.system{background:var(--amber-bg);color:var(--amber);border:1px solid rgba(245,158,11,.2)}
 .card-time{font-size:12px;color:var(--text-sec);display:flex;align-items:center;gap:8px}
-.session-tag{font-size:11px;font-family:ui-monospace,monospace;color:var(--text-muted);background:rgba(0,0,0,.2);padding:3px 8px;border-radius:6px;cursor:default}
+.session-tag{font-size:11px;font-family:ui-monospace,monospace;color:var(--text-muted);background:rgba(0,0,0,.2);padding:3px 8px;border-radius:6px;cursor:pointer}
+.session-tag:hover{filter:brightness(1.12)}
+.owner-tag{font-size:11px;font-weight:600;color:var(--pri);background:var(--pri-glow);padding:3px 9px;border-radius:8px;border:1px solid rgba(99,102,241,.15);cursor:default;white-space:nowrap}
 .card-summary{font-size:15px;font-weight:600;color:var(--text);margin-bottom:10px;line-height:1.5;letter-spacing:-.01em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .card-content{font-size:13px;color:var(--text-sec);line-height:1.65;max-height:0;overflow:hidden;transition:max-height .3s ease}
 .card-content.show{max-height:600px;overflow-y:auto}
 .card-content pre{white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.25);padding:14px;border-radius:10px;font-size:12px;font-family:ui-monospace,monospace;margin-top:10px;border:1px solid var(--border);color:var(--text-sec)}
 .card-actions{display:flex;align-items:center;gap:8px;margin-top:14px}
 .card-actions-inline{display:inline-flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0}
+.btn-warn{color:#f59e0b !important}
+.btn-warn:hover{background:rgba(245,158,11,.15) !important}
+.btn-danger{color:#ef4444 !important}
+.btn-danger:hover{background:rgba(239,68,68,.15) !important}
+.btn-success{color:#10b981 !important}
+.btn-success:hover{background:rgba(16,185,129,.15) !important}
+.skill-card.archived{opacity:0.55;border-style:dashed}
 .vscore-badge{display:inline-flex;align-items:center;background:rgba(59,130,246,.15);color:#60a5fa;font-size:10px;font-weight:700;padding:4px 10px;border-radius:8px;margin-left:auto}
 .merge-badge{display:inline-flex;align-items:center;gap:4px;background:rgba(16,185,129,.12);color:#10b981;font-size:10px;font-weight:600;padding:3px 10px;border-radius:8px}
 .merge-history{margin-top:12px;padding:12px 14px;background:rgba(0,0,0,.15);border-radius:10px;border:1px solid var(--border);font-size:12px;line-height:1.7;color:var(--text-sec);max-height:200px;overflow-y:auto}
@@ -573,32 +586,39 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.25)}
 
-.filter-sep{width:1px;height:20px;background:var(--border);margin:0 4px}
-.filter-select{padding:6px 12px;border:1px solid var(--border);border-radius:999px;background:var(--bg-card);color:var(--text-sec);font-size:13px;outline:none;cursor:pointer}
-.filter-select:focus{border-color:var(--pri)}
+.filter-sep{width:1px;height:20px;background:var(--border);margin:0 2px}
+.filter-select{padding:5px 14px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text-sec);font-size:12px;font-weight:500;outline:none;cursor:pointer;transition:all .15s;-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b7280'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
+.filter-select:hover{border-color:var(--pri);color:var(--pri)}
+.filter-select:focus{border-color:var(--pri);color:var(--pri);background-color:rgba(99,102,241,.04)}
 .date-filter{display:flex;align-items:center;gap:10px;margin-bottom:18px;font-size:13px;color:var(--text-sec)}
-.date-filter input[type="datetime-local"]{padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;outline:none;background:var(--bg-card);color:var(--text)}
+.date-filter input[type="datetime-local"]{padding:5px 12px;border:1px solid var(--border);border-radius:8px;font-size:12px;outline:none;background:transparent;color:var(--text-sec);transition:all .15s}
 .date-filter input[type="datetime-local"]:focus{border-color:var(--pri)}
 .date-filter label{font-weight:500}
+.compact-filter-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.compact-date{padding:5px 12px;border:1px solid var(--border);border-radius:8px;font-size:12px;font-weight:500;outline:none;background:transparent;color:var(--text-sec);max-width:180px;transition:all .15s}
+.compact-date:hover{border-color:var(--pri);color:var(--pri)}
+.compact-date:focus{border-color:var(--pri);color:var(--pri);background:rgba(99,102,241,.04)}
 
-.pagination{display:flex;align-items:center;justify-content:center;gap:6px;padding:28px 0;flex-wrap:wrap}
-.pagination .pg-btn{min-width:38px;height:38px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:10px;background:var(--bg-card);color:var(--text-sec);font-size:13px;font-weight:500;cursor:pointer;transition:all .15s}
-.pagination .pg-btn:hover{border-color:var(--pri);color:var(--pri)}
-.pagination .pg-btn.active{background:var(--pri);color:#000;border-color:var(--pri)}
-.pagination .pg-btn.disabled{opacity:.4;pointer-events:none}
-.pagination .pg-info{font-size:12px;color:var(--text-sec);padding:0 12px}
+.pagination-row{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:16px 0 8px}
+.pagination{display:flex;align-items:center;justify-content:center;gap:4px;padding:0;flex-wrap:wrap}
+.pagination .pg-btn{min-width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--text-sec);font-size:12px;font-weight:500;cursor:pointer;transition:all .15s}
+.pagination .pg-btn:hover{background:rgba(99,102,241,.06);color:var(--pri);border-color:rgba(99,102,241,.15)}
+.pagination .pg-btn.active{background:var(--pri-grad);color:#fff;border-color:transparent;box-shadow:0 2px 8px rgba(99,102,241,.3)}
+.pagination .pg-btn.disabled{opacity:.3;pointer-events:none}
+.pagination .pg-info{font-size:11px;color:var(--text-muted);padding:0 8px}
 
 /* ─── Tasks 视图 ─── */
 .view-container{flex:1;min-width:0}
 .view-container>.vp{display:none;flex-direction:column}
 .view-container>.vp.show{display:flex}
-.tasks-view{flex:1;min-width:0;flex-direction:column;gap:16px}
-.tasks-header{display:flex;flex-direction:column;gap:14px}
-.tasks-stats{display:flex;gap:16px}
-.tasks-stat{display:flex;align-items:center;gap:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 18px;flex:1;transition:all .2s}
+.tasks-view{flex:1;min-width:0;flex-direction:column}
+.tasks-header{display:flex;flex-direction:column;gap:0}
+.tasks-stats{display:flex;gap:10px}
+.tasks-stat{display:flex;align-items:center;gap:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 16px;flex:1;transition:all .2s;position:relative;overflow:hidden}
+.tasks-stat::before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;border-radius:3px 0 0 3px}
 .tasks-stat:hover{border-color:var(--border-glow)}
-.tasks-stat-value{font-size:22px;font-weight:700;color:var(--text)}
-.tasks-stat-label{font-size:12px;color:var(--text-sec);font-weight:500}
+.tasks-stat-value{font-size:18px;font-weight:700;color:var(--text)}
+.tasks-stat-label{font-size:11px;color:var(--text-sec);font-weight:500}
 .tasks-filters{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .tasks-list{display:flex;flex-direction:column;gap:10px}
 .task-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px 20px;cursor:pointer;transition:all .25s;position:relative;overflow:hidden}
@@ -631,7 +651,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .task-detail-meta{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px;font-size:12px;color:var(--text-sec)}
 .task-detail-meta .meta-item{display:flex;align-items:center;gap:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:5px 12px}
 .task-detail-summary{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:20px;font-size:13px;line-height:1.7;color:var(--text);word-break:break-word}
-.task-detail-summary:empty::after{content:'Summary not yet generated (task still active)';color:var(--text-muted);font-style:italic}
+#taskDetailSummary:empty::after{content:'Summary not yet generated (task still active)';color:var(--text-muted);font-style:italic}
 .task-detail-summary .summary-section-title{font-size:14px;font-weight:700;color:var(--text);margin:14px 0 6px 0;padding-bottom:4px;border-bottom:1px solid var(--border)}
 .task-detail-summary .summary-section-title:first-child{margin-top:0}
 .task-detail-summary ul{margin:4px 0 8px 0;padding-left:20px}
@@ -670,7 +690,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 [data-theme="light"] .tasks-stat{background:#fff}
 
 /* ─── Skills ─── */
-.skills-view{flex:1;min-width:0;flex-direction:column;gap:16px}
+.skills-view{flex:1;min-width:0;flex-direction:column}
 .skill-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px 20px;cursor:pointer;transition:all .25s;position:relative;overflow:hidden}
 .skill-card:hover{border-color:var(--border-glow);background:var(--bg-card-hover);transform:translateY(-1px);box-shadow:var(--shadow)}
 .skill-card::before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;border-radius:3px 0 0 3px;background:var(--violet)}
@@ -697,6 +717,10 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .skill-card-bottom .tag{display:flex;align-items:center;gap:4px}
 .skill-card-tags{display:flex;gap:4px;flex-wrap:wrap}
 .skill-tag{font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(139,92,246,.1);color:var(--violet);font-weight:500}
+.selection-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#memorySelectionToolbar{margin-bottom:16px}
+.item-select-box{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;border:1px solid var(--border);background:var(--bg-card);cursor:pointer;margin-right:8px;vertical-align:middle}
+.item-select-box input{width:14px;height:14px;cursor:pointer}
 .skill-detail-desc{font-size:13px;color:var(--text-sec);line-height:1.6;margin-bottom:16px;padding:12px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius)}
 .skill-version-item{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px}
 .skill-version-header{display:flex;align-items:center;gap:10px;margin-bottom:6px}
@@ -808,6 +832,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 .recall-origin.local-shared{background:rgba(59,130,246,.12);color:#3b82f6}
 .recall-origin.hub-memory{background:rgba(139,92,246,.12);color:#8b5cf6}
 .recall-origin.hub-remote{background:rgba(139,92,246,.12);color:#8b5cf6}
+.recall-origin.agent-tag{background:rgba(20,184,166,.12);color:#14b8a6}
 .recall-summary-short{flex:1;color:var(--text-sec);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .recall-expand-icon{flex-shrink:0;font-size:10px;color:var(--text-muted);transition:transform .15s}
 .recall-item.expanded .recall-expand-icon{transform:rotate(90deg)}
@@ -1225,8 +1250,8 @@ input,textarea,select{font-family:inherit;font-size:inherit}
     <div class="sidebar" id="sidebar">
       <div class="stats-grid" id="statsGrid">
         <div class="stat-card pri"><div class="stat-value" id="statTotal">-</div><div class="stat-label" data-i18n="stat.memories">Memories</div></div>
-        <div class="stat-card green"><div class="stat-value" id="statSessions">-</div><div class="stat-label" data-i18n="stat.sessions">Sessions</div></div>
-        <div class="stat-card amber"><div class="stat-value" id="statEmbeddings">-</div><div class="stat-label" data-i18n="stat.embeddings">Embeddings</div></div>
+        <div class="stat-card green"><div class="stat-value" id="statTasks">-</div><div class="stat-label" data-i18n="stat.tasks">Tasks</div></div>
+        <div class="stat-card amber"><div class="stat-value" id="statSkills">-</div><div class="stat-label" data-i18n="stat.skills">Skills</div></div>
         <div class="stat-card rose"><div class="stat-value" id="statAgents">-</div><div class="stat-label" data-i18n="stat.agents">Agents</div></div>
       </div>
       <div id="sidebarSharingSection" style="display:none">
@@ -1237,8 +1262,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
         </div>
       </div>
       <div id="embeddingStatus"></div>
-      <div class="session-list" id="sessionList" style="display:none"></div>
-      <button class="btn btn-sm btn-ghost" style="width:100%;margin-top:20px;justify-content:center;color:var(--text-muted);font-size:11px" onclick="clearAll()" data-i18n="sidebar.clear">\u{1F5D1} Clear All Data</button>
+      <button class="btn btn-sm btn-ghost" style="width:100%;margin:20px 0 12px;justify-content:center;color:var(--text-muted);font-size:11px" onclick="clearAll()" data-i18n="sidebar.clear">\u{1F5D1} Clear All Data</button>
     </div>
 
     <div class="view-container">
@@ -1251,14 +1275,13 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <option value="" data-i18n="filter.allagents">All agents</option>
         </select>
         <select id="memorySearchScope" class="filter-select" onchange="onMemoryScopeChange()" style="display:none">
-          <option value="local" data-i18n="scope.thisAgent">This Agent</option>
           <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
           <option value="hub" data-i18n="scope.hub">Team</option>
         </select>
       </div>
-      <div class="search-meta" id="searchMeta"></div>
-      <div class="search-meta" id="sharingSearchMeta"></div>
-      <div class="filter-bar" id="filterBar">
+      <div id="searchMeta" style="display:none"></div>
+      <div id="sharingSearchMeta" style="display:none"></div>
+      <div class="filter-bar compact-filter-row" id="filterBar" style="flex-wrap:nowrap">
         <button class="filter-chip active" data-role="" onclick="setRoleFilter(this,'')" data-i18n="filter.all">All</button>
         <button class="filter-chip" data-role="user" onclick="setRoleFilter(this,'user')">User</button>
         <button class="filter-chip" data-role="assistant" onclick="setRoleFilter(this,'assistant')">Assistant</button>
@@ -1267,42 +1290,48 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <option value="newest" data-i18n="filter.newest">Newest first</option>
           <option value="oldest" data-i18n="filter.oldest">Oldest first</option>
         </select>
-        <span class="filter-sep"></span>
-        <select id="filterSession" class="filter-select" onchange="filterSession(this.value||null)">
-          <option value="" data-i18n="filter.allsessions">All sessions</option>
-        </select>
+        <span style="flex:1"></span>
+        <button class="filter-chip" id="memorySelectAllBtn" onclick="toggleSelectAllMemories()" data-i18n="skills.selectAll">Select All</button>
+        <button class="filter-chip" id="memoryBulkDeleteBtn" onclick="deleteSelectedMemories()" style="display:none;color:#ef4444;border-color:rgba(239,68,68,.3)" data-i18n="memory.deleteSelected">Delete Selected</button>
       </div>
-      <div class="date-filter">
-        <label data-i18n="filter.from">From</label><input type="datetime-local" id="dateFrom" step="1" onchange="applyFilters()">
-        <label data-i18n="filter.to">To</label><input type="datetime-local" id="dateTo" step="1" onchange="applyFilters()">
-        <button class="btn btn-sm btn-text" onclick="clearDateFilter()" data-i18n="filter.clear">Clear</button>
+      <div class="filter-bar compact-filter-row" style="flex-wrap:nowrap;margin-bottom:12px">
+        <input type="datetime-local" id="dateFrom" step="1" onchange="applyFilters()" class="compact-date" data-i18n-ph="filter.from" placeholder="From">
+        <span style="color:var(--text-muted);font-size:12px">—</span>
+        <input type="datetime-local" id="dateTo" step="1" onchange="applyFilters()" class="compact-date" data-i18n-ph="filter.to" placeholder="To">
+        <button class="filter-chip" onclick="clearDateFilter()" data-i18n="filter.clear" style="font-size:11px;padding:4px 10px">Clear</button>
       </div>
       <div class="memory-list" id="memoryList"><div class="spinner"></div></div>
-      <div class="pagination" id="pagination"></div>
+      <div class="pagination-row">
+        <div class="pagination" id="pagination"></div>
+      </div>
     </div>
     </div>
     <div class="tasks-view vp" id="tasksView">
-      <div class="tasks-header">
-        <div class="tasks-stats">
-          <div class="tasks-stat"><span class="tasks-stat-value" id="tasksTotalCount">-</span><span class="tasks-stat-label" data-i18n="tasks.total">Total Tasks</span></div>
-          <div class="tasks-stat"><span class="tasks-stat-value" id="tasksActiveCount">-</span><span class="tasks-stat-label" data-i18n="tasks.active">Active</span></div>
-          <div class="tasks-stat"><span class="tasks-stat-value" id="tasksCompletedCount">-</span><span class="tasks-stat-label" data-i18n="tasks.completed">Completed</span></div>
-          <div class="tasks-stat"><span class="tasks-stat-value" id="tasksSkippedCount">-</span><span class="tasks-stat-label" data-i18n="tasks.status.skipped">Skipped</span></div>
-        </div>
-        <div class="tasks-filters">
-          <button class="filter-chip active" data-task-status="" onclick="setTaskStatusFilter(this,'')" data-i18n="filter.all">All</button>
-          <button class="filter-chip" data-task-status="active" onclick="setTaskStatusFilter(this,'active')" data-i18n="tasks.status.active">Active</button>
-          <button class="filter-chip" data-task-status="completed" onclick="setTaskStatusFilter(this,'completed')" data-i18n="tasks.status.completed">Completed</button>
-          <button class="filter-chip" data-task-status="skipped" onclick="setTaskStatusFilter(this,'skipped')" data-i18n="tasks.status.skipped">Skipped</button>
-          <select id="taskSearchScope" class="scope-select" onchange="onTaskScopeChange()" style="display:none">
-            <option value="local" data-i18n="scope.thisAgent">This Agent</option>
-            <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
-            <option value="hub" data-i18n="scope.hub">Team</option>
-          </select>
-        </div>
+      <div class="search-bar">
+        <span class="search-icon">\u{1F50D}</span>
+        <input type="text" id="taskSearchInput" data-i18n-ph="tasks.search.placeholder" placeholder="Search tasks..." oninput="debounceTaskSearch()">
+        <select id="taskFilterOwner" class="filter-select" onchange="onOwnerFilterChange()">
+          <option value="" data-i18n="filter.allagents">All agents</option>
+        </select>
+        <select id="taskSearchScope" class="scope-select" onchange="onTaskScopeChange()" style="display:none">
+          <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
+          <option value="hub" data-i18n="scope.hub">Team</option>
+        </select>
+      </div>
+      <div id="taskSearchMeta" style="display:none"></div>
+      <div class="filter-bar compact-filter-row" style="flex-wrap:nowrap">
+        <button class="filter-chip active" data-task-status="" onclick="setTaskStatusFilter(this,'')" data-i18n="filter.all">All</button>
+        <button class="filter-chip" data-task-status="active" onclick="setTaskStatusFilter(this,'active')" data-i18n="tasks.status.active">Active</button>
+        <button class="filter-chip" data-task-status="completed" onclick="setTaskStatusFilter(this,'completed')" data-i18n="tasks.status.completed">Completed</button>
+        <button class="filter-chip" data-task-status="skipped" onclick="setTaskStatusFilter(this,'skipped')" data-i18n="tasks.status.skipped">Skipped</button>
+        <span style="flex:1"></span>
+        <button class="filter-chip" id="taskSelectAllBtn" onclick="toggleSelectAllTasks()" data-i18n="skills.selectAll">Select All</button>
+        <button class="filter-chip" id="taskBulkDeleteBtn" onclick="deleteSelectedTasks()" style="display:none;color:#ef4444;border-color:rgba(239,68,68,.3)" data-i18n="task.deleteSelected">Delete Selected</button>
       </div>
       <div class="tasks-list" id="tasksList"><div class="spinner"></div></div>
-      <div class="pagination" id="tasksPagination"></div>
+      <div class="pagination-row">
+        <div class="pagination" id="tasksPagination"></div>
+      </div>
       <div class="task-detail-overlay" id="taskDetailOverlay" onclick="closeTaskDetail(event)">
         <div class="task-detail-panel" onclick="event.stopPropagation()">
           <div class="task-detail-header">
@@ -1336,34 +1365,33 @@ input,textarea,select{font-family:inherit;font-size:inherit}
       <div class="search-bar">
         <span class="search-icon">🔍</span>
         <input type="text" id="skillSearchInput" placeholder="Search skills..." data-i18n-ph="skills.search.placeholder" oninput="debounceSkillSearch()">
+        <select id="skillFilterOwner" class="filter-select" onchange="onOwnerFilterChange()">
+          <option value="" data-i18n="filter.allagents">All agents</option>
+        </select>
         <select id="skillSearchScope" class="scope-select" onchange="onSkillScopeChange()" style="display:none">
-          <option value="local" data-i18n="scope.thisAgent">This Agent</option>
           <option value="allLocal" data-i18n="scope.thisDevice">This Device</option>
           <option value="hub" data-i18n="scope.hub">Team</option>
         </select>
       </div>
-      <div class="search-meta" id="skillSearchMeta" style="display:none"></div>
-      <div class="tasks-header">
-        <div class="tasks-stats">
-          <div class="tasks-stat"><span class="tasks-stat-value" id="skillsTotalCount">-</span><span class="tasks-stat-label" data-i18n="skills.total">Total Skills</span></div>
-          <div class="tasks-stat" style="border-left:3px solid var(--green)"><span class="tasks-stat-value" id="skillsActiveCount">-</span><span class="tasks-stat-label" data-i18n="skills.active">Active</span></div>
-          <div class="tasks-stat" style="border-left:3px solid var(--amber)"><span class="tasks-stat-value" id="skillsDraftCount">-</span><span class="tasks-stat-label" data-i18n="skills.draft">Draft</span></div>
-          <div class="tasks-stat" style="border-left:3px solid var(--violet)"><span class="tasks-stat-value" id="skillsInstalledCount">-</span><span class="tasks-stat-label" data-i18n="skills.installed">Installed</span></div>
-          <div class="tasks-stat" style="border-left:3px solid var(--cyan)"><span class="tasks-stat-value" id="skillsPublicCount">-</span><span class="tasks-stat-label" data-i18n="skills.public">Public</span></div>
-        </div>
-        <div class="tasks-filters">
-          <button class="filter-chip active" data-skill-status="" onclick="setSkillStatusFilter(this,'')" data-i18n="filter.all">All</button>
-          <button class="filter-chip" data-skill-status="active" onclick="setSkillStatusFilter(this,'active')" data-i18n="skills.filter.active">Active</button>
-          <button class="filter-chip" data-skill-status="draft" onclick="setSkillStatusFilter(this,'draft')" data-i18n="skills.filter.draft">Draft</button>
-          <button class="filter-chip" data-skill-status="archived" onclick="setSkillStatusFilter(this,'archived')" data-i18n="skills.filter.archived">Archived</button>
-          <select id="skillVisibilityFilter" class="filter-select" onchange="loadSkills()" style="display:none">
-            <option value="" data-i18n="filter.allvisibility">All visibility</option>
-            <option value="public" data-i18n="filter.public">Public</option>
-            <option value="private" data-i18n="filter.private">Private</option>
-          </select>
-        </div>
+      <div id="skillSearchMeta" style="display:none"></div>
+      <div class="filter-bar compact-filter-row" style="flex-wrap:nowrap">
+        <button class="filter-chip active" data-skill-status="" onclick="setSkillStatusFilter(this,'')" data-i18n="filter.all">All</button>
+        <button class="filter-chip" data-skill-status="active" onclick="setSkillStatusFilter(this,'active')" data-i18n="skills.filter.active">Active</button>
+        <button class="filter-chip" data-skill-status="draft" onclick="setSkillStatusFilter(this,'draft')" data-i18n="skills.filter.draft">Draft</button>
+        <button class="filter-chip" data-skill-status="archived" onclick="setSkillStatusFilter(this,'archived')" data-i18n="skills.filter.archived">Archived</button>
+        <select id="skillVisibilityFilter" class="filter-select" onchange="loadSkills()" style="display:none">
+          <option value="" data-i18n="filter.allvisibility">All visibility</option>
+          <option value="public" data-i18n="filter.public">Public</option>
+          <option value="private" data-i18n="filter.private">Private</option>
+        </select>
+        <span style="flex:1"></span>
+        <button class="filter-chip" id="skillSelectAllBtn" onclick="toggleSelectAllSkills()" data-i18n="skills.selectAll">Select All</button>
+        <button class="filter-chip" id="skillBulkDeleteBtn" onclick="deleteSelectedSkills()" style="display:none;color:#ef4444;border-color:rgba(239,68,68,.3)" data-i18n="skills.deleteSelected">Delete Selected</button>
       </div>
       <div class="tasks-list" id="skillsList"><div class="spinner"></div></div>
+      <div class="pagination-row">
+        <div class="pagination" id="skillsPagination"></div>
+      </div>
       <div id="hubSkillsSection" style="display:none;margin-top:16px">
         <div class="section-title" style="margin-bottom:12px" data-i18n="skills.hub.title">\u{1F310} Team Skills</div>
         <div class="tasks-list" id="hubSkillsList"></div>
@@ -1472,6 +1500,16 @@ input,textarea,select{font-family:inherit;font-size:inherit}
             </div>
           </div>
           <div class="settings-card-body">
+            <div class="emb-banner warning" id="settingsWarningBanner" style="margin: 0 0 24px 0; display: block; border-left: 4px solid #f59e0b; position: relative;">
+              <button onclick="document.getElementById('settingsWarningBanner').style.display='none'" style="position: absolute; right: 12px; top: 12px; background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 16px; opacity: 0.7; transition: opacity 0.2s;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7" title="关闭" aria-label="关闭">\u2715</button>
+              <div style="font-weight: 700; margin-bottom: 8px; font-size: 14px; color: #d97706;" data-i18n-html="settings.warn.title">\u{1F514} 模型配置重要提醒</div>
+              <ul style="margin: 0; padding-left: 20px; line-height: 1.7; color: var(--text-sec); font-size: 13px;">
+                <li data-i18n-html="settings.warn.emb"><strong>嵌入模型 (Embedding)：</strong>插件内置模型规模较小。为获得更精准的记忆检索体验，强烈建议配置 <code>bge-m3</code> 等专业嵌入模型。</li>
+                <li data-i18n-html="settings.warn.sum"><strong>摘要模型 (Summarizer)：</strong>此项为<strong>必填项</strong>，否则无法自动提取记忆摘要。建议配置<strong>非思考型</strong>大模型，以保障处理速度和流畅度。</li>
+                <li data-i18n-html="settings.warn.skill"><strong>技能模型 (Skill Evolution)：</strong>用于自动提取可复用技能。建议配置<strong>思考型</strong>大模型，以获得最佳的生成效果和稳定性。</li>
+              </ul>
+            </div>
+
             <!-- Embedding Model section -->
             <div class="settings-card-subtitle">\u{1F4E1} <span data-i18n="settings.embedding">Embedding Model</span></div>
             <div class="field-hint" style="margin-bottom:10px" data-i18n="settings.embedding.desc">Vector embedding model for memory search and retrieval</div>
@@ -1581,7 +1619,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
             </div>
             <div style="margin-top:14px">
               <div class="settings-card-subtitle" style="margin-bottom:4px" data-i18n="settings.skill.model">Skill Dedicated Model</div>
-            <div class="field-hint" style="margin-bottom:12px" data-i18n="settings.skill.model.hint">If not configured, the main Summarizer Model above will be used for skill generation. Configure a dedicated model here for higher quality skill output.</div>
+            <div class="field-hint" style="margin-bottom:12px" data-i18n="settings.skill.model.hint">If not configured, the main Summarizer Model above will be used for skill generation. Configure a dedicated thinking model here for higher quality skill output.</div>
             <div class="settings-grid">
               <div class="settings-field">
                 <label data-i18n="settings.provider">Provider</label>
@@ -1791,6 +1829,11 @@ input,textarea,select{font-family:inherit;font-size:inherit}
                 <input type="number" id="cfgViewerPort" placeholder="18799">
                 <div class="field-hint" data-i18n="settings.viewerport.hint">Requires restart to take effect</div>
               </div>
+              <div class="settings-field">
+                <label data-i18n="settings.taskAutoFinalize">Task Auto-Finalize (hours)</label>
+                <input type="number" id="cfgTaskAutoFinalizeHours" placeholder="4" min="0" step="1" style="max-width:120px" onkeydown="if(['-','e','E','+'].includes(event.key))event.preventDefault()" oninput="this.value=this.value.replace(/[^0-9]/g,'')">
+                <div class="field-hint" data-i18n="settings.taskAutoFinalize.hint">Active tasks with no new messages beyond this duration will be automatically summarized and completed when the Tasks page is opened. Set to 0 to disable. Default: 4 hours.</div>
+              </div>
             </div>
             <div class="settings-card-divider"></div>
             <div class="settings-toggle">
@@ -1871,18 +1914,20 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           </div>
         </div>
 
-        <div id="migrateActions" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <div id="migrateActions" style="display:flex;gap:10px 16px;align-items:center;flex-wrap:wrap">
           <button class="btn" onclick="migrateScan(true)" id="migrateScanBtn" style="background:var(--bg);border:1px solid var(--border);color:var(--text);font-weight:600;padding:7px 18px;cursor:pointer" data-i18n="migrate.scan">Scan Data Sources</button>
-          <button class="btn btn-primary" onclick="migrateStart()" id="migrateStartBtn" style="display:none" data-i18n="migrate.start">Start Import</button>
-          <span id="migrateConcurrencyRow" style="display:none;align-items:center;gap:6px">
-            <span style="font-size:11px;color:var(--text-muted)" data-i18n="migrate.concurrency.label">Concurrent agents</span>
-            <select id="migrateConcurrency" class="filter-select" style="min-width:auto;padding:3px 10px;font-size:11px">
-              <option value="1" selected>1</option>
-              <option value="2">2</option>
-              <option value="4">4</option>
-              <option value="8">8</option>
-            </select>
-          </span>
+          <div id="migrateStartConcurrencyWrap" style="display:none;align-items:center;gap:12px;flex-wrap:wrap;flex-shrink:0">
+            <button class="btn btn-primary" onclick="migrateStart()" id="migrateStartBtn" style="display:inline-flex" data-i18n="migrate.start">Start Import</button>
+            <span id="migrateConcurrencyRow" style="display:flex;align-items:center;gap:8px;flex-shrink:0;min-width:max-content">
+              <span style="font-size:11px;color:var(--text-muted);white-space:nowrap" data-i18n="migrate.concurrency.label">Concurrent agents</span>
+              <select id="migrateConcurrency" class="filter-select" style="min-width:auto;padding:3px 28px 3px 10px;font-size:11px">
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
+                <option value="4">4</option>
+                <option value="8">8</option>
+              </select>
+            </span>
+          </div>
           <span id="migrateStatus" style="font-size:11px;color:var(--text-muted)"></span>
         </div>
         <div id="migrateConcurrencyWarn" style="display:none;margin-top:8px;padding:8px 12px;background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.2);border-radius:8px;font-size:11px;color:#f59e0b;line-height:1.5">
@@ -1915,7 +1960,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
               <button class="btn btn-sm" id="ppStopBtn" onclick="ppStop()" style="display:none;background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.3);font-size:12px;padding:5px 16px;font-weight:600" data-i18n="migrate.stop">\u25A0 Stop</button>
               <span style="display:inline-flex;align-items:center;gap:6px">
                 <span style="font-size:11px;color:var(--text-muted)" data-i18n="pp.concurrency.label">Concurrent agents</span>
-                <select id="ppConcurrency" class="filter-select" style="min-width:auto;padding:3px 10px;font-size:11px">
+                <select id="ppConcurrency" class="filter-select" style="min-width:auto;padding:3px 28px 3px 10px;font-size:11px">
                   <option value="1" selected>1</option>
                   <option value="2">2</option>
                   <option value="4">4</option>
@@ -2029,11 +2074,21 @@ input,textarea,select{font-family:inherit;font-size:inherit}
 <div class="toast-container" id="toasts"></div>
 
 <script>
-let activeSession=null,activeRole='',editingId=null,searchTimer=null,memoryCache={},currentPage=1,totalPages=1,totalCount=0,PAGE_SIZE=40,metricsDays=30;
-let memorySearchScope='local',skillSearchScope='local',taskSearchScope='local';
+let activeSession=null,activeRole='',editingId=null,searchTimer=null,memoryCache={},currentPage=1,totalPages=1,totalCount=0,PAGE_SIZE=20,metricsDays=30;
+let memorySearchScope='allLocal',skillSearchScope='allLocal',taskSearchScope='allLocal';
 let _lastMemoriesFingerprint='',_lastTasksFingerprint='',_lastSkillsFingerprint='';
+let selectedMemoryIds=new Set(),currentMemoryIds=[];
+let selectedTaskIds=new Set(),currentTaskIds=[];
 let _embeddingWarningShown=false;
 let _currentAgentOwner='agent:main';
+try {
+  const urlParams = new URLSearchParams(window.location.search);
+  const agentId = urlParams.get('agentId');
+  if (agentId) {
+    _currentAgentOwner = 'agent:' + agentId;
+  }
+} catch(e) {}
+
 
 /* ─── i18n ─── */
 const I18N={
@@ -2081,8 +2136,12 @@ const I18N={
     'skills.search.placeholder':'Search skills...',
     'skills.search.local':'Local',
     'skills.search.noresult':'No matching skills found',
+
     'skills.load.error':'Failed to load skills',
     'skills.hub.title':'\u{1F310} Team Skills',
+    'skills.hub.empty':'No extra team skills to list here — either the hub has none yet, or every hub skill already appears in your local list above (same source skill).',
+    'skills.hub.loadError':'Failed to load team skills',
+    'skills.hub.timeout':'Team skills request timed out. Check that the Hub is running and connected.',
     'scope.local':'Local',
     'scope.thisAgent':'This Agent Only',
     'scope.thisDevice':'All Local Agents',
@@ -2098,6 +2157,8 @@ const I18N={
     'tasks.status.active':'Active',
     'tasks.status.completed':'Completed',
     'tasks.status.skipped':'Skipped',
+    'tasks.search.placeholder':'Search tasks...',
+    'tasks.search.meta':'Found {0} tasks',
     'tasks.empty':'No tasks yet. Tasks are automatically created as you converse.',
     'tasks.loading':'Loading...',
     'tasks.untitled':'Untitled Task',
@@ -2138,8 +2199,8 @@ const I18N={
     'notif.timeAgo.hour':'{n}h ago',
     'notif.timeAgo.day':'{n}d ago',
     'stat.memories':'Memories',
-    'stat.sessions':'Sessions',
-    'stat.embeddings':'Embeddings',
+    'stat.tasks':'Tasks',
+    'stat.skills':'Skills',
     'stat.agents':'Agents',
     'stat.active':'active',
     'stat.deduped':'deduped',
@@ -2179,6 +2240,7 @@ const I18N={
     'card.dedupTarget':'Target: ',
     'card.dedupReason':'Reason: ',
     'card.newSummary':'New',
+    'pagination.pageSize':'Items per page',
     'pagination.total':' total',
     'range':'Range',
     'range.days':'days',
@@ -2222,7 +2284,10 @@ const I18N={
     'confirm.clearall2':'Are you absolutely sure?',
     'embed.on':'Embedding: ',
     'embed.off':'No embedding model',
-    'embed.warn.local':'Using built-in mini model (384d). Search quality is limited — configure an embedding model in Settings for best results.',
+    'embed.warn.local':'<strong>Embedding</strong>: Using built-in mini model (384d). Search quality is limited. It is highly recommended to configure a dedicated Embedding model (like bge-m3) in Settings for best results.',
+    'fallback.banner.sum': '<strong>Summarizer</strong>: Summarizer model is not configured, automatic memory summarization is paused. A fast, non-reasoning model is recommended for best performance.',
+    'fallback.banner.skill': '<strong>Skill Evolution</strong>: Skill Evolution model is not configured. A reasoning/thinking model is recommended for best stability and generation quality.',
+    'fallback.banner.goto': 'Configure models',
     'embed.err.fail':'Embedding model error detected. Check Settings → Model Health.',
     'embed.banner.goto':'Go to Settings',
     'lang.switch':'中',
@@ -2247,6 +2312,10 @@ const I18N={
     'tab.settings':'\u2699 Settings',
     'settings.modelconfig':'Model Configuration',
     'settings.models':'AI Models',
+    'settings.warn.title':'\u{1F514} Model Configuration Important Reminder',
+    'settings.warn.emb':'<strong>Embedding Model:</strong> The built-in model is small. For a more accurate memory retrieval experience, it is highly recommended to configure a professional embedding model such as <code>bge-m3</code>.',
+    'settings.warn.sum':'<strong>Summarizer Model:</strong> This is <strong>required</strong>, otherwise automatic memory summarization will fail. A fast, non-reasoning model is recommended for best performance.',
+    'settings.warn.skill':'<strong>Skill Evolution:</strong> Used to automatically extract reusable skills. A reasoning/thinking model is recommended for best stability and generation quality.',
     'settings.models.desc':'Configure embedding, summarizer and skill evolution models',
     'settings.modelhealth':'Model Health',
     'settings.embedding':'Embedding Model',
@@ -2270,7 +2339,7 @@ const I18N={
     'settings.skill.confidence':'Min Confidence',
     'settings.skill.minchunks':'Min Chunks',
     'settings.skill.model':'Skill Dedicated Model',
-    'settings.skill.model.hint':'Leave empty to reuse the Summarizer model. Set a dedicated one for higher quality.',
+    'settings.skill.model.hint':'Leave empty to reuse the Summarizer model. Set a dedicated thinking model for higher quality.',
     'settings.optional':'Optional',
     'settings.skill.usemain':'Use Main Summarizer',
     'settings.telemetry':'Telemetry',
@@ -2278,6 +2347,8 @@ const I18N={
     'settings.telemetry.hint':'Only collects tool names, latencies and version info. No memory content or personal data.',
     'settings.viewerport':'Viewer Port',
     'settings.viewerport.hint':'Requires restart to take effect',
+    'settings.taskAutoFinalize':'Task Auto-Finalize (hours)',
+    'settings.taskAutoFinalize.hint':'Active tasks with no new messages beyond this duration will be automatically summarized and completed when the Tasks page is opened. Set to 0 to disable. Default: 4 hours.',
     'settings.test':'Test Connection',
     'settings.test.loading':'Testing...',
     'settings.test.ok':'Connected',
@@ -2382,12 +2453,22 @@ const I18N={
     'skills.noversions':'No versions recorded',
     'skills.norelated':'No related tasks',
     'skills.nocontent':'No content available',
+    'skills.hub.markdownPending':'Full SKILL.md is not included in the team list response. Use “Pull to local”, then open the skill from your local list to view markdown, files, and versions.',
     'skills.nochangelog':'No changelog',
     'skills.status.active':'Active',
     'skills.status.draft':'Draft',
-    'skills.status.archived':'Archived',
+    'skills.status.archived':'Disabled',
+    'skills.action.disable':'Disable',
+    'skills.action.enable':'Enable',
+    'skills.action.delete':'Delete',
+    'skills.disable.confirm':'Are you sure you want to disable this skill? It will no longer be used in search or auto-recall, but can be re-enabled later.',
+    'skills.disable.error':'Failed to disable skill: ',
+    'skills.enable.error':'Failed to enable skill: ',
     'skills.updated':'Updated: ',
     'skills.task.prefix':'Task: ',
+    'skills.selectAll':'Select All',
+    'skills.unselectAll':'Unselect All',
+    'skills.deleteSelected':'Delete Selected',
     'tasks.chunks.label':'chunks',
     'tasks.taskid':'Task ID: ',
     'tasks.role.user':'You',
@@ -2573,7 +2654,7 @@ const I18N={
     'admin.visibility':'Visibility: ',
     'admin.session':'Session',
     'admin.content':'Content',
-    'admin.chunks':'Chunks: ',
+    'admin.chunks':'{n} memory segments',
     'admin.updated':'Updated: ',
     'admin.sharedSkills':'Shared Skills',
     'admin.noSharedSkills':'No shared skills in team.',
@@ -2728,6 +2809,10 @@ const I18N={
     'task.cancel':'Cancel',
     'task.delete.confirm':'Are you sure you want to delete this task? This cannot be undone.',
     'task.delete.error':'Failed to delete task: ',
+    'task.deleteSelected':'Delete Selected',
+    'task.delete.selected.confirm':'Delete {count} selected tasks? This action cannot be undone.',
+    'task.delete.success':'Deleted {count} tasks.',
+    'task.delete.partial':'Deleted {ok} tasks, failed {fail}.',
     'task.save.error':'Failed to save task: ',
     'task.retrySkill':'Retry Skill Generation',
     'task.retrySkill.short':'Retry Skill',
@@ -2738,7 +2823,14 @@ const I18N={
     'skill.save':'Save',
     'skill.cancel':'Cancel',
     'skill.delete.confirm':'Are you sure you want to delete this skill? This will also remove all associated files and cannot be undone.',
+    'skill.delete.selected.confirm':'Delete {count} selected skills? This action cannot be undone.',
     'skill.delete.error':'Failed to delete skill: ',
+    'skill.delete.partial':'Deleted {ok} skills, failed {fail}.',
+    'skill.delete.success':'Deleted {count} skills.',
+    'memory.deleteSelected':'Delete Selected',
+    'memory.delete.selected.confirm':'Delete {count} selected memories? This action cannot be undone.',
+    'memory.delete.success':'Deleted {count} memories.',
+    'memory.delete.partial':'Deleted {ok} memories, failed {fail}.',
     'skill.save.error':'Failed to save skill: ',
     'update.available':'New version available',
     'update.run':'Run',
@@ -2825,8 +2917,12 @@ const I18N={
     'skills.search.placeholder':'搜索技能...',
     'skills.search.local':'本地',
     'skills.search.noresult':'未找到匹配的技能',
+
     'skills.load.error':'加载技能失败',
     'skills.hub.title':'\u{1F310} 团队共享技能',
+    'skills.hub.empty':'下方只列出「Hub 上有、但上方本机列表尚未包含」的技能；若 Hub 条目已与本机同源同步，则只会在上方显示，此处为空属正常。',
+    'skills.hub.loadError':'加载团队技能失败',
+    'skills.hub.timeout':'加载团队技能超时，请确认团队服务已启动且已连接。',
     'scope.local':'本地',
     'scope.thisAgent':'仅本智能体',
     'scope.thisDevice':'本机所有智能体',
@@ -2842,6 +2938,8 @@ const I18N={
     'tasks.status.active':'进行中',
     'tasks.status.completed':'已完成',
     'tasks.status.skipped':'已跳过',
+    'tasks.search.placeholder':'搜索任务...',
+    'tasks.search.meta':'找到 {0} 个任务',
     'tasks.empty':'暂无任务。任务会随着对话自动创建。',
     'tasks.loading':'加载中...',
     'tasks.untitled':'未命名任务',
@@ -2882,8 +2980,8 @@ const I18N={
     'notif.timeAgo.hour':'{n}小时前',
     'notif.timeAgo.day':'{n}天前',
     'stat.memories':'记忆',
-    'stat.sessions':'会话',
-    'stat.embeddings':'嵌入',
+    'stat.tasks':'任务',
+    'stat.skills':'技能',
     'stat.agents':'智能体',
     'stat.active':'活跃',
     'stat.deduped':'已去重',
@@ -2923,6 +3021,7 @@ const I18N={
     'card.dedupTarget':'关联: ',
     'card.dedupReason':'原因: ',
     'card.newSummary':'新摘要',
+    'pagination.pageSize':'每页数量',
     'pagination.total':' 条',
     'range':'范围',
     'range.days':'天',
@@ -2966,7 +3065,10 @@ const I18N={
     'confirm.clearall2':'你真的确定吗？',
     'embed.on':'嵌入模型：',
     'embed.off':'无嵌入模型',
-    'embed.warn.local':'当前使用内置迷你模型（384维），搜索效果有限。强烈建议在「设置」中配置专用 Embedding 模型以获得最佳效果。',
+    'embed.warn.local':'<strong>嵌入模型 (Embedding)</strong>：当前使用内置迷你模型（384维），搜索效果有限。强烈建议在「设置」中配置专用 Embedding 模型（如bge-m3等模型）以获得最佳效果。',
+    'fallback.banner.sum': '<strong>摘要模型 (Summarizer)</strong>：摘要模型未配置，无法自动提取记忆摘要。建议配置非思考型大模型，以保障处理速度和流畅度。',
+    'fallback.banner.skill': '<strong>技能模型 (Skill Evolution)</strong>：技能模型未配置，建议配置思考型大模型，以获得最佳的生成效果和稳定性。',
+    'fallback.banner.goto': '前往配置',
     'embed.err.fail':'Embedding 模型调用异常，请前往「设置 → 模型健康」检查。',
     'embed.banner.goto':'前往设置',
     'lang.switch':'EN',
@@ -2991,6 +3093,10 @@ const I18N={
     'tab.settings':'\u2699 设置',
     'settings.modelconfig':'模型配置',
     'settings.models':'AI 模型',
+    'settings.warn.title':'\u{1F514} 模型配置重要提醒',
+    'settings.warn.emb':'<strong>嵌入模型 (Embedding)：</strong>插件内置模型规模较小。为获得更精准的记忆检索体验，强烈建议配置 <code>bge-m3</code> 等专业嵌入模型。',
+    'settings.warn.sum':'<strong>摘要模型 (Summarizer)：</strong>此项为<strong>必填项</strong>，否则无法自动提取记忆摘要。建议配置<strong>非思考型</strong>大模型，以保障处理速度和流畅度。',
+    'settings.warn.skill':'<strong>技能模型 (Skill Evolution)：</strong>用于自动提取可复用技能。建议配置<strong>思考型</strong>大模型，以获得最佳的生成效果和稳定性。',
     'settings.models.desc':'配置嵌入模型、摘要模型和技能进化模型',
     'settings.modelhealth':'模型健康',
     'settings.embedding':'嵌入模型',
@@ -3014,7 +3120,7 @@ const I18N={
     'settings.skill.confidence':'最低置信度',
     'settings.skill.minchunks':'最少记忆片段',
     'settings.skill.model':'技能专用模型',
-    'settings.skill.model.hint':'不配置则复用摘要模型。如需更高质量可单独指定。',
+    'settings.skill.model.hint':'不配置则复用摘要模型。如需更高质量可单独指定思考模型。',
     'settings.optional':'可选',
     'settings.skill.usemain':'使用主摘要模型',
     'settings.telemetry':'数据统计',
@@ -3022,6 +3128,8 @@ const I18N={
     'settings.telemetry.hint':'仅收集工具名称、响应时间和版本号，不涉及任何记忆内容或个人数据。',
     'settings.viewerport':'Viewer 端口',
     'settings.viewerport.hint':'修改后需重启网关生效',
+    'settings.taskAutoFinalize':'任务自动完结（小时）',
+    'settings.taskAutoFinalize.hint':'处于进行中的任务如果超过设定时间没有新消息，打开任务页面时会自动生成总结并标记为已完成。设为 0 则关闭此功能。默认：4 小时。',
     'settings.test':'测试连接',
     'settings.test.loading':'测试中...',
     'settings.test.ok':'连接成功',
@@ -3126,12 +3234,22 @@ const I18N={
     'skills.noversions':'暂无版本记录',
     'skills.norelated':'暂无关联任务',
     'skills.nocontent':'暂无内容',
+    'skills.hub.markdownPending':'团队列表未返回完整 SKILL.md 正文。请先「拉取到本地」，再在本机技能里打开该技能即可查看正文、文件与版本。',
     'skills.nochangelog':'暂无变更记录',
     'skills.status.active':'生效中',
     'skills.status.draft':'草稿',
-    'skills.status.archived':'已归档',
+    'skills.status.archived':'已禁用',
+    'skills.action.disable':'禁用',
+    'skills.action.enable':'启用',
+    'skills.action.delete':'删除',
+    'skills.disable.confirm':'确定要禁用此技能吗？禁用后不再参与检索和自动召回，但可以随时重新启用。',
+    'skills.disable.error':'禁用技能失败：',
+    'skills.enable.error':'启用技能失败：',
     'skills.updated':'更新于：',
     'skills.task.prefix':'任务：',
+    'skills.selectAll':'全选',
+    'skills.unselectAll':'取消全选',
+    'skills.deleteSelected':'删除选中',
     'tasks.chunks.label':'条记忆',
     'tasks.taskid':'任务 ID：',
     'tasks.role.user':'你',
@@ -3317,7 +3435,7 @@ const I18N={
     'admin.visibility':'可见性：',
     'admin.session':'会话',
     'admin.content':'内容',
-    'admin.chunks':'记忆片段：',
+    'admin.chunks':'{n}段记忆片段',
     'admin.updated':'更新于：',
     'admin.sharedSkills':'共享技能',
     'admin.noSharedSkills':'团队暂无共享技能。',
@@ -3472,6 +3590,10 @@ const I18N={
     'task.cancel':'取消',
     'task.delete.confirm':'确定要删除此任务吗？此操作不可撤销。',
     'task.delete.error':'删除任务失败：',
+    'task.deleteSelected':'删除选中',
+    'task.delete.selected.confirm':'确定删除选中的 {count} 个任务吗？此操作不可撤销。',
+    'task.delete.success':'已删除 {count} 个任务。',
+    'task.delete.partial':'已删除 {ok} 个任务，失败 {fail} 个。',
     'task.save.error':'保存任务失败：',
     'task.retrySkill':'重新生成技能',
     'task.retrySkill.short':'重试技能',
@@ -3482,7 +3604,14 @@ const I18N={
     'skill.save':'保存',
     'skill.cancel':'取消',
     'skill.delete.confirm':'确定要删除此技能吗？关联的文件也会被删除，此操作不可撤销。',
+    'skill.delete.selected.confirm':'确定删除选中的 {count} 个技能吗？此操作不可撤销。',
     'skill.delete.error':'删除技能失败：',
+    'skill.delete.partial':'已删除 {ok} 个技能，失败 {fail} 个。',
+    'skill.delete.success':'已删除 {count} 个技能。',
+    'memory.deleteSelected':'删除选中',
+    'memory.delete.selected.confirm':'确定删除选中的 {count} 条记忆吗？此操作不可撤销。',
+    'memory.delete.success':'已删除 {count} 条记忆。',
+    'memory.delete.partial':'已删除 {ok} 条记忆，失败 {fail} 条。',
     'skill.save.error':'保存技能失败：',
     'update.available':'发现新版本',
     'update.run':'执行命令',
@@ -3537,6 +3666,10 @@ function applyI18n(){
     const key=el.getAttribute('data-i18n');
     if(key) el.textContent=t(key);
   });
+  document.querySelectorAll('[data-i18n-html]').forEach(el=>{
+    const key=el.getAttribute('data-i18n-html');
+    if(key) el.innerHTML=t(key);
+  });
   document.querySelectorAll('[data-i18n-ph]').forEach(el=>{
     const key=el.getAttribute('data-i18n-ph');
     if(key) el.placeholder=t(key);
@@ -3544,7 +3677,15 @@ function applyI18n(){
   const step2=document.getElementById('resetStep2Desc');
   if(step2) step2.innerHTML=t('reset.step2.desc.pre')+'<span style="font-family:monospace;font-size:12px;color:var(--pri)">password reset token: <strong>a1b2c3d4e5f6...</strong></span>'+t('reset.step2.desc.post');
   document.title=t('title')+' - OpenClaw';
-  if(typeof loadStats==='function' && document.getElementById('app').style.display==='flex'){loadStats();}
+  if(typeof loadStats==='function' && document.getElementById('app').style.display==='flex'){
+    _embeddingWarningShown = false;
+    _fallbackWarningShown = false;
+    _lastStatsFp = '';
+    const embB = document.getElementById('embBanner'); if (embB) embB.remove();
+    const fSumB = document.getElementById('fallbackBannerSum'); if (fSumB) fSumB.remove();
+    const fSkillB = document.getElementById('fallbackBannerSkill'); if (fSkillB) fSkillB.remove();
+    loadStats();
+  }
   if(document.querySelector('.analytics-view.show') && typeof loadMetrics==='function'){loadMetrics();}
 }
 
@@ -3767,8 +3908,11 @@ function switchView(view){
   }
   var sessionSection=document.getElementById('sidebarSessionSection');
   if(sessionSection){
-    if(view==='memories'){sessionSection.style.visibility='';sessionSection.style.pointerEvents='';}
+    if(view==='memories'||view==='tasks'||view==='skills'){sessionSection.style.visibility='';sessionSection.style.pointerEvents='';}
     else{sessionSection.style.visibility='hidden';sessionSection.style.pointerEvents='none';}
+  }
+  if(view==='memories'||view==='tasks'||view==='skills'){
+    loadStats();
   }
   if(view==='tasks') loadTasks();
   else if(view==='skills') loadSkills();
@@ -3786,36 +3930,84 @@ function switchView(view){
 }
 
 function onMemoryScopeChange(){
-  memorySearchScope=document.getElementById('memorySearchScope')?.value||'local';
+  memorySearchScope=document.getElementById('memorySearchScope')?.value||'allLocal';
   try{localStorage.setItem('memos_memorySearchScope',memorySearchScope);}catch(e){}
   currentPage=1;
   activeSession=null;activeRole='';
   _lastMemoriesFingerprint='';
+  if(memorySearchScope==='hub') selectedMemoryIds.clear();
   var isHub=memorySearchScope==='hub';
-  var isLocal=memorySearchScope==='local';
   var ownerSel=document.getElementById('filterOwner');
   var filterBar=document.getElementById('filterBar');
   var dateFilter=document.querySelector('.date-filter');
-  if(ownerSel){ownerSel.style.display=(isHub||isLocal)?'none':'';if(isHub||isLocal)ownerSel.value='';}
+  if(ownerSel){ownerSel.style.display=isHub?'none':'';if(isHub)ownerSel.value='';}
   if(filterBar) filterBar.style.display=isHub?'none':'';
   if(dateFilter) dateFilter.style.display=isHub?'none':'';
+  updateMemorySelectionToolbar();
   if(document.getElementById('searchInput').value.trim()) doSearch(document.getElementById('searchInput').value);
   else if(isHub) { document.getElementById('sharingSearchMeta').textContent=''; loadHubMemories(); }
   else {
     document.getElementById('sharingSearchMeta').textContent='';
-    var ownerArg=isLocal?_currentAgentOwner:undefined;
+    var ownerArg=undefined;
     loadStats(ownerArg); loadMemories();
   }
 }
 
+function normalizePageSize(value,fallback){
+  const v=Number(value);
+  return v===10||v===20||v===40?v:fallback;
+}
+
+function applyPageSizeFromSelect(selectId,storageKey,fallback,onApply){
+  const el=document.getElementById(selectId);
+  const next=normalizePageSize(el?.value,fallback);
+  onApply(next);
+  try{localStorage.setItem(storageKey,String(next));}catch(e){}
+  return next;
+}
+
+function restorePageSizeSetting(storageKey,selectId,fallback,onApply){
+  let next=fallback;
+  try{
+    const raw=localStorage.getItem(storageKey);
+    next=normalizePageSize(raw||String(fallback),fallback);
+  }catch(e){}
+  onApply(next);
+  const el=document.getElementById(selectId);
+  if(el) el.value=String(next);
+  return next;
+}
+
+function onMemoryPageSizeChange(){
+  applyPageSizeFromSelect('memoryPageSize','memos_memoryPageSize',20,function(next){PAGE_SIZE=next;});
+  currentPage=1;
+  if(memorySearchScope==='hub') loadHubMemories();
+  else loadMemories();
+}
+
 function onSkillScopeChange(){
-  skillSearchScope=document.getElementById('skillSearchScope')?.value||'local';
+  skillSearchScope=document.getElementById('skillSearchScope')?.value||'allLocal';
+  skillsPage=0;
   loadSkills();
 }
 
-function onTaskScopeChange(){
-  taskSearchScope=document.getElementById('taskSearchScope')?.value||'local';
+function onSkillsPageSizeChange(){
+  applyPageSizeFromSelect('skillsPageSize','memos_skillsPageSize',20,function(next){skillsPageSize=next;});
+  skillsPage=0;
+  loadSkills();
+}
+
+function onTasksPageSizeChange(){
+  applyPageSizeFromSelect('tasksPageSize','memos_tasksPageSize',20,function(next){tasksPageSize=next;});
   tasksPage=0;
+  loadTasks();
+}
+
+function onTaskScopeChange(){
+  taskSearchScope=document.getElementById('taskSearchScope')?.value||'allLocal';
+  if(taskSearchScope==='hub') selectedTaskIds.clear();
+  tasksPage=0;
+  updateTaskSelectionToolbar();
   loadTasks();
 }
 
@@ -3826,6 +4018,11 @@ function _updateScopeSelectorsVisibility(hubAvailable){
   for(var i=0;i<ids.length;i++){
     var el=document.getElementById(ids[i]);
     if(el) el.style.display=hubAvailable?'':'none';
+  }
+  if(!hubAvailable){
+    if(memorySearchScope==='hub'){memorySearchScope='allLocal';try{localStorage.setItem('memos_memorySearchScope','allLocal');}catch(e){}}
+    if(taskSearchScope==='hub'){taskSearchScope='allLocal';try{localStorage.setItem('memos_taskSearchScope','allLocal');}catch(e){}}
+    if(skillSearchScope==='hub'){skillSearchScope='allLocal';try{localStorage.setItem('memos_skillSearchScope','allLocal');}catch(e){}}
   }
 }
 async function loadSharingStatus(forcePending){
@@ -4684,7 +4881,7 @@ function renderAdminTasks(tasks){
           '<div class="admin-card-tags-left">'+
             '<span class="admin-card-tag tag-owner">\u{1F464} '+fmtOwner(tk)+'</span>'+
             (tk.status?'<span class="admin-card-tag tag-status">'+esc(tk.status)+'</span>':'')+
-            (tk.chunkCount!=null?'<span class="admin-card-tag tag-kind">\u{1F4DD} '+tk.chunkCount+' '+t('admin.chunks')+'</span>':'')+
+            (tk.chunkCount!=null?'<span class="admin-card-tag tag-kind">\u{1F4DD} '+t('admin.chunks').replace('{n}',String(tk.chunkCount))+'</span>':'')+
         '</div>'+
           '<span class="admin-card-actions" onclick="event.stopPropagation()">'+
             (window._isHubAdmin?'<button class="btn btn-sm btn-ghost" onclick="adminDeleteTask(&quot;'+escAttr(tk.id)+'&quot;,&quot;'+escAttr(tk.title||tk.id)+'&quot;)" style="color:var(--rose)">'+t('admin.remove')+'</button>':'')+
@@ -5005,7 +5202,7 @@ async function toggleAdminSkillCard(cardId,idx){
   if(files.length>0){
     var fileIcons={'skill':'\u{1F4D6}','script':'\u{2699}','reference':'\u{1F4CE}','file':'\u{1F4C4}'};
     filesHtml='<div class="admin-card-detail-section"><div class="detail-label" style="display:flex;align-items:center;justify-content:space-between">'+t('skills.files')+
-      '<button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();window.open(\\x27/api/skill/'+encodeURIComponent(localSkillId)+'/download\\x27,\\x27_blank\\x27)" style="font-size:11px">\u2B07 '+t('skills.download')+'</button>'+
+      '<button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();window.open(\\x27/api/skill/'+encodeURIComponent(localSkillId)+'/download\\x27,\\x27_blank\\x27)" style="font-size:11px">'+t('skills.download')+'</button>'+
       '</div><div class="skill-files-list">'+
       files.map(function(f){return '<div class="skill-file-item">'+
         '<span class="skill-file-icon">'+(fileIcons[f.type]||'\u{1F4C4}')+'</span>'+
@@ -5040,6 +5237,7 @@ function renderSharingMemorySearchResults(data,query){
   const list=document.getElementById('memoryList');
   const localHits=(data&&data.local&&Array.isArray(data.local.hits))?data.local.hits:[];
   const hubHits=(data&&data.hub&&Array.isArray(data.hub.hits))?data.hub.hits:[];
+  setPageSizeVisible('memoryPageSize',(localHits.length+hubHits.length)>0);
   document.getElementById('searchMeta').textContent='Search results for "'+query+'"';
   document.getElementById('sharingSearchMeta').textContent=t('scope.local')+' '+localHits.length+' · '+t('scope.hub')+' '+hubHits.length;
   document.getElementById('pagination').innerHTML='';
@@ -5047,11 +5245,13 @@ function renderSharingMemorySearchResults(data,query){
     '<div class="result-section">'+
       '<div class="result-section-header"><div class="result-section-title">'+t('search.localResults')+'</div><div class="result-section-sub">'+localHits.length+' hit(s)</div></div>'+
       '<div class="search-hit-list">'+(localHits.length?localHits.map(function(hit,idx){
+        var agentName='';if(hit.owner){var ap=(hit.owner||'').split(':');agentName=ap.length>=3?ap[ap.length-1]:(ap.length>=2?ap[1]:hit.owner);}
         return '<div class="search-hit-card">'+
           '<div class="summary">'+(idx+1)+'. '+esc(hit.summary||'(no summary)')+'</div>'+
           '<div class="excerpt">'+esc(hit.excerpt||'')+'</div>'+
           '<div class="search-hit-meta">'+
             '<span class="meta-chip">role: '+esc(hit.role||'unknown')+'</span>'+
+            (agentName?'<span class="meta-chip" style="background:rgba(20,184,166,.12);color:#14b8a6">'+esc(agentName)+'</span>':'')+
             (hit.score!=null?'<span class="meta-chip">score: '+Math.round(hit.score*100)+'%</span>':'')+
             (hit.taskId?'<span class="meta-chip">task: '+esc(hit.taskId)+'</span>':'')+
           '</div>'+
@@ -5061,11 +5261,13 @@ function renderSharingMemorySearchResults(data,query){
     '<div class="result-section">'+
       '<div class="result-section-header"><div class="result-section-title">'+t('search.hubResults')+'</div><div class="result-section-sub">'+hubHits.length+' hit(s)</div></div>'+
       '<div class="search-hit-list">'+(hubHits.length?hubHits.map(function(hit,idx){
+        var hubAgentName='';if(hit.sourceAgent){var hap=(hit.sourceAgent||'').split(':');hubAgentName=hap.length>=3?hap[hap.length-1]:(hap.length>=2?hap[1]:hit.sourceAgent);}
         return '<div class="hub-hit-card">'+
           '<div class="summary">'+(idx+1)+'. '+esc(hit.summary||'(no summary)')+'</div>'+
           '<div class="excerpt">'+esc(hit.excerpt||'')+'</div>'+
           '<div class="hub-hit-meta">'+
             '<span class="meta-chip">owner: '+fmtOwner(hit)+'</span>'+
+            (hubAgentName?'<span class="meta-chip" style="background:rgba(20,184,166,.12);color:#14b8a6">'+esc(hubAgentName)+'</span>':'')+
             (hit.groupName?'<span class="meta-chip">group: '+esc(hit.groupName)+'</span>':'')+
             '<span class="meta-chip">visibility: '+esc(hit.visibility||'hub')+'</span>'+
           '</div>'+
@@ -5188,7 +5390,7 @@ function openHubSkillDetailFromCache(cacheKey,idx){
   document.getElementById('skillDetailMeta').innerHTML=meta.join('');
   document.getElementById('skillDetailDesc').textContent=skill.description||'';
   document.getElementById('skillFilesList').innerHTML='';
-  document.getElementById('skillDetailContent').innerHTML=skill.content?renderSkillMarkdown(skill.content):'';
+  document.getElementById('skillDetailContent').innerHTML=skill.content?renderSkillMarkdown(skill.content):('<span style="color:var(--text-muted);font-size:13px;line-height:1.6">'+t('skills.hub.markdownPending')+'</span>');
   document.getElementById('skillVersionsList').innerHTML='';
   document.getElementById('skillRelatedTasks').innerHTML='';
   var visBtn=document.getElementById('skillVisibilityBtn');
@@ -5200,6 +5402,55 @@ function openHubSkillDetailFromCache(cacheKey,idx){
 }
 
 function escAttr(s){return String(s||'').replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function fmtAgentName(owner){
+  if(!owner||owner==='public') return '';
+  var s=String(owner);
+  if(s.startsWith('agent:')) s=s.slice(6);
+  return s;
+}
+
+function fmtSessionDisplay(sid){
+  if(!sid) return '';
+  if(sid.startsWith('agent:')){
+    var parts=sid.split(':');
+    // agent:{agentId}:import → "📥 import"
+    if(parts.length===3 && parts[2]==='import') return '\\u{1F4E5} import';
+    // agent:{agentId}:{sessionKey} (exactly 3 segments) → show agent:{agentId} only (UI label; DB keeps full key)
+    if(parts.length===3) return 'agent:'+parts[1];
+    // agent:{agentId}:session:{sessionId} → badge shows agent:{agentId} only; full key stays in data-session-key for copy
+    if(parts.length>=4 && parts[2]==='session'){
+      return 'agent:'+parts[1];
+    }
+    // agent:{agentId}:... (5+ segments, e.g. IM: discord/slack channel peer id) → agent:{agentId} only
+    if(parts.length>=5) return 'agent:'+parts[1];
+    // agent:{agentId}:{other} → show from second part (e.g. "work:main")
+    return parts.slice(1).join(':');
+  }
+  // Legacy formats
+  if(sid.startsWith('openclaw-import-')) return '\\u{1F4E5} '+sid.slice(16);
+  if(sid.startsWith('openclaw-session-')){
+    var id=sid.slice(17);
+    return id.length>12?id.slice(0,6)+'..'+id.slice(-4):id;
+  }
+  if(sid.length>20) return sid.slice(0,8)+'..'+sid.slice(-6);
+  return sid;
+}
+
+function copySessionKeyFromEl(el){
+  var k=el&&el.getAttribute('data-session-key');
+  if(!k) return;
+  navigator.clipboard.writeText(k).then(function(){
+    toast(t('copy.done'),'success');
+  }).catch(function(){
+    toast('Copy failed','error');
+  });
+}
+
+function isImportedSession(sid){
+  if(!sid) return false;
+  return sid.startsWith('openclaw-import-')||sid.startsWith('openclaw-session-')||/^agent:[^:]+:(import|session:)/.test(sid);
+}
 
 /* ─── Unified Sharing Scope Selector ─── */
 
@@ -5343,9 +5594,9 @@ function openTaskScopeModal(){
   var isTeamShared=!!(task.sharingVisibility||task.hubTaskId);
   var cs=isTeamShared?'team':isLocalShared?'local':'private';
   openScopeSelectorModal('task',task.id,cs,function(s){
-    if(s==='team'){task.sharingVisibility='public';task.hubTaskId=task.hubTaskId||'shared';}
-    else if(s==='local'){task.sharingVisibility=null;task.owner='public';}
-    else{task.sharingVisibility=null;task.owner=task._origOwner||'agent:main';}
+    if(s==='team'){task.sharingVisibility='public';task.hubTaskId=true;}
+    else if(s==='local'){task.sharingVisibility=null;task.hubTaskId=false;task.owner='public';}
+    else{task.sharingVisibility=null;task.hubTaskId=false;task.owner=task._origOwner||'agent:main';}
     renderTaskShareActions(task);
     updateTaskCardBadge(task.id,s);
   });
@@ -5362,7 +5613,7 @@ async function shareCurrentTask(){
   try{
     const r=await fetch('/api/sharing/tasks/share',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({taskId:currentTaskDetail.id,visibility:visibility})});
     const d=await r.json();
-    if(d.ok||d.shared){toast(t('toast.taskShared'),'success');currentTaskDetail.sharingVisibility=visibility;renderTaskShareActions(currentTaskDetail);} else {toast(d.error||t('toast.taskShareFail'),'error');}
+    if(d.ok||d.shared){toast(t('toast.taskShared'),'success');currentTaskDetail.sharingVisibility=visibility;currentTaskDetail.hubTaskId=true;renderTaskShareActions(currentTaskDetail);} else {toast(d.error||t('toast.taskShareFail'),'error');}
   }catch(e){toast(t('toast.taskShareFail')+': '+e.message,'error');}
 }
 
@@ -5371,7 +5622,7 @@ async function unshareCurrentTask(){
   try{
     const r=await fetch('/api/sharing/tasks/unshare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({taskId:currentTaskDetail.id})});
     const d=await r.json();
-    if(d.ok||d.unshared){toast(t('toast.taskUnshared'),'success');currentTaskDetail.sharingVisibility=null;renderTaskShareActions(currentTaskDetail);} else {toast(d.error||t('toast.taskUnshareFail'),'error');}
+    if(d.ok||d.unshared){toast(t('toast.taskUnshared'),'success');currentTaskDetail.sharingVisibility=null;currentTaskDetail.hubTaskId=false;renderTaskShareActions(currentTaskDetail);} else {toast(d.error||t('toast.taskUnshareFail'),'error');}
   }catch(e){toast(t('toast.taskUnshareFail')+': '+e.message,'error');}
 }
 
@@ -5386,6 +5637,10 @@ function renderSkillShareActions(skill){
 }
 function openSkillScopeModal(){
   if(!currentSkillDetail) return;
+  if(currentSkillDetail.status!=='active'){
+    toast(t('share.scope.skillNotActive'),'warn');
+    return;
+  }
   var skill=currentSkillDetail;
   var isLocalShared=skill.visibility==='public';
   var isTeamShared=!!skill.sharingVisibility;
@@ -5459,6 +5714,7 @@ function localMemoryErrorMessage(err){
 
 function debounceSkillSearch(){
   clearTimeout(skillSearchTimer);
+  skillsPage=0;
   skillSearchTimer=setTimeout(function(){loadSkills();},300);
 }
 
@@ -5572,6 +5828,13 @@ function recallOriginBadge(origin){
   if(origin==='hub-remote') return '<span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>';
   return '';
 }
+function agentBadge(owner){
+  if(!owner) return '';
+  var parts=(owner||'').split(':');
+  var name=parts.length>=3?parts[parts.length-1]:(parts.length>=2?parts[1]:owner);
+  if(!name) return '';
+  return '<span class="recall-origin agent-tag">\u{1F916} '+escapeHtml(name)+'</span>';
+}
 
 function buildLogSummary(lg){
   let inputObj=null;
@@ -5598,8 +5861,9 @@ function buildLogSummary(lg){
           var shortText=escapeHtml(c.summary||c.content||c.original_excerpt||'');
           var fullText=escapeHtml(c.content||c.original_excerpt||c.summary||'');
           var oBadge=recallOriginBadge(c.origin);
+          var aBadge2=agentBadge(c.owner);
           html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
-          html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'user')+'">'+(c.role||'user')+'</span>'+oBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+          html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'user')+'">'+(c.role||'user')+'</span>'+oBadge+aBadge2+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
           html+='<div class="recall-summary-full">'+fullText+'</div>';
           html+='</div>';
         });
@@ -5614,8 +5878,9 @@ function buildLogSummary(lg){
             var shortText=escapeHtml(c.summary||c.original_excerpt||'');
             var fullText=escapeHtml(c.original_excerpt||c.summary||'');
             var owner=c.ownerName?' ['+escapeHtml(c.ownerName)+']':'';
+            var haBadge2=agentBadge(c.sourceAgent||'');
             html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
-            html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'assistant')+'">'+(c.role||'assistant')+'</span><span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>'+owner+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+            html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'assistant')+'">'+(c.role||'assistant')+'</span><span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>'+owner+haBadge2+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
             html+='<div class="recall-summary-full">'+fullText+'</div>';
             html+='</div>';
           });
@@ -5631,8 +5896,9 @@ function buildLogSummary(lg){
             var shortText=escapeHtml(f.summary||f.content||f.original_excerpt||'');
             var fullText=escapeHtml(f.content||f.original_excerpt||f.summary||'');
             var oBadge=recallOriginBadge(f.origin);
+            var faBadge2=agentBadge(f.owner);
             html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
-            html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+f.score.toFixed(2)+'</span><span class="log-msg-role '+(f.role||'user')+'">'+(f.role||'user')+'</span>'+oBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+            html+='<div class="recall-item-head"><span class="recall-score '+scoreClass+'">'+f.score.toFixed(2)+'</span><span class="log-msg-role '+(f.role||'user')+'">'+(f.role||'user')+'</span>'+oBadge+faBadge2+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
             html+='<div class="recall-summary-full">'+fullText+'</div>';
             html+='</div>';
           });
@@ -5698,8 +5964,9 @@ function buildRecallDetailHtml(rd){
       var shortText=escapeHtml(c.summary||c.content||c.original_excerpt||'');
       var fullText=escapeHtml(c.content||c.original_excerpt||c.summary||'');
       var oBadge=recallOriginBadge(c.origin);
+      var aBadge=agentBadge(c.owner);
       html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
-      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+c.score.toFixed(3)+'</span><span class="log-msg-role '+(c.role||'user')+'">'+(c.role||'user')+'</span>'+oBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+c.score.toFixed(3)+'</span><span class="log-msg-role '+(c.role||'user')+'">'+(c.role||'user')+'</span>'+oBadge+aBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
       html+='<div class="recall-summary-full">'+fullText+'</div>';
       html+='</div>';
     });
@@ -5714,8 +5981,9 @@ function buildRecallDetailHtml(rd){
       var shortText=escapeHtml(c.summary||c.original_excerpt||'');
       var fullText=escapeHtml(c.original_excerpt||c.summary||'');
       var owner=c.ownerName?' ['+escapeHtml(c.ownerName)+']':'';
+      var haBadge=agentBadge(c.sourceAgent||'');
       html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
-      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'assistant')+'">'+(c.role||'assistant')+'</span><span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>'+owner+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+c.score.toFixed(2)+'</span><span class="log-msg-role '+(c.role||'assistant')+'">'+(c.role||'assistant')+'</span><span class="recall-origin hub-remote">'+t('recall.origin.hubRemote')+'</span>'+owner+haBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
       html+='<div class="recall-summary-full">'+fullText+'</div>';
       html+='</div>';
     });
@@ -5731,8 +5999,9 @@ function buildRecallDetailHtml(rd){
       var shortText=escapeHtml(f.summary||f.content||f.original_excerpt||'');
       var fullText=escapeHtml(f.content||f.original_excerpt||f.summary||'');
       var oBadge=recallOriginBadge(f.origin);
+      var faBadge=agentBadge(f.owner);
       html+='<div class="recall-item" onclick="event.stopPropagation();this.classList.toggle(\\\'expanded\\\')">';
-      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+f.score.toFixed(3)+'</span><span class="log-msg-role '+(f.role||'user')+'">'+(f.role||'user')+'</span>'+oBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
+      html+='<div class="recall-item-head"><span class="recall-idx">'+(i+1)+'</span><span class="recall-score '+scoreClass+'">'+f.score.toFixed(3)+'</span><span class="log-msg-role '+(f.role||'user')+'">'+(f.role||'user')+'</span>'+oBadge+faBadge+'<span class="recall-summary-short">'+shortText+'</span><span class="recall-expand-icon">\u25B6</span></div>';
       html+='<div class="recall-summary-full">'+fullText+'</div>';
       html+='</div>';
     });
@@ -5827,6 +6096,11 @@ function escapeHtml(s){
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+function setPageSizeVisible(selectId,visible){
+  var sel=document.getElementById(selectId);
+  if(sel&&sel.parentElement){ sel.parentElement.style.display=visible?'inline-flex':'none'; }
+}
+
 function setMetricsDays(d){
   metricsDays=d;
   document.querySelectorAll('.metrics-toolbar .range-btn').forEach(btn=>btn.classList.toggle('active',Number(btn.dataset.days)===d));
@@ -5846,40 +6120,179 @@ async function loadMetrics(){
   }catch(e){console.error('loadMetrics',e)}
 }
 
+function _st(id,v){var e=document.getElementById(id);if(e)e.textContent=v;}
 function formatNum(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n);}
 function dateLoc(){return curLang==='zh'?'zh-CN':'en-US';}
 
 /* ─── Tasks View Logic ─── */
 let tasksStatusFilter='';
 let tasksPage=0;
-const TASKS_PER_PAGE=20;
+let tasksPageSize=20;
 
 function setTaskStatusFilter(btn,status){
-  document.querySelectorAll('.tasks-filters .filter-chip').forEach(c=>c.classList.remove('active'));
+  document.querySelectorAll('.tasks-view .filter-bar .filter-chip[data-task-status]').forEach(c=>c.classList.remove('active'));
   btn.classList.add('active');
   tasksStatusFilter=status;
   tasksPage=0;
   loadTasks();
 }
 
+function updateTaskSelectionToolbar(){
+  var toolbar=document.getElementById('taskSelectionToolbar');
+  var selectAllBtn=document.getElementById('taskSelectAllBtn');
+  var bulkDeleteBtn=document.getElementById('taskBulkDeleteBtn');
+  var isHub=taskSearchScope==='hub';
+  var total=document.querySelectorAll('#tasksList .task-select-check').length;
+  var selected=selectedTaskIds.size;
+  if(toolbar) toolbar.style.display=isHub?'none':'flex';
+  if(selectAllBtn){
+    selectAllBtn.textContent=t(selected>0&&selected===total&&total>0?'skills.unselectAll':'skills.selectAll');
+    selectAllBtn.disabled=total===0;
+    selectAllBtn.style.display=total===0?'none':'';
+  }
+  if(bulkDeleteBtn){
+    var base=t('task.deleteSelected');
+    bulkDeleteBtn.style.display=selected>0?'':'none';
+    bulkDeleteBtn.textContent=selected>0?(base+' ('+selected+')'):base;
+  }
+}
+
+function toggleTaskSelection(taskId,checked){
+  if(checked) selectedTaskIds.add(taskId);
+  else selectedTaskIds.delete(taskId);
+  updateTaskSelectionToolbar();
+}
+
+function toggleSelectAllTasks(){
+  var total=currentTaskIds.length;
+  if(total===0) return;
+  if(selectedTaskIds.size===total){
+    selectedTaskIds.clear();
+  }else{
+    selectedTaskIds=new Set(currentTaskIds);
+  }
+  var checks=document.querySelectorAll('#tasksList .task-select-check');
+  checks.forEach(function(cb){cb.checked=selectedTaskIds.has(cb.value);});
+  updateTaskSelectionToolbar();
+}
+
+async function deleteSelectedTasks(){
+  var ids=Array.from(selectedTaskIds);
+  if(ids.length===0) return;
+  var msg=t('task.delete.selected.confirm').replace('{count}',String(ids.length));
+  if(!(await confirmModal(msg,{danger:true}))) return;
+  var ok=0;
+  var fail=0;
+  for(var i=0;i<ids.length;i++){
+    try{
+      var r=await fetch('/api/task/'+ids[i],{method:'DELETE'});
+      var d=await r.json();
+      if(!r.ok) throw new Error(d.error||'unknown');
+      ok++;
+    }catch(e){
+      fail++;
+    }
+  }
+  selectedTaskIds.clear();
+  updateTaskSelectionToolbar();
+  loadTasks();
+  if(fail>0) toast(t('task.delete.partial').replace('{ok}',String(ok)).replace('{fail}',String(fail)),'warn');
+  else toast(t('task.delete.success').replace('{count}',String(ok)),'success');
+}
+
+var taskSearchQuery='';
+var _taskSearchTimer=null;
+function debounceTaskSearch(){
+  clearTimeout(_taskSearchTimer);
+  _taskSearchTimer=setTimeout(function(){
+    taskSearchQuery=(document.getElementById('taskSearchInput')||{}).value||'';
+    tasksPage=0;
+    loadTasks();
+  },350);
+}
+
+function renderTaskCards(tasks,container){
+  currentTaskIds=tasks.map(function(task){return task.id;});
+  selectedTaskIds=new Set(Array.from(selectedTaskIds).filter(function(id){return currentTaskIds.includes(id);}));
+  if(!tasks||tasks.length===0){
+    container.innerHTML='<div style="text-align:center;padding:48px;color:var(--text-muted);font-size:14px" data-i18n="tasks.empty">'+t('tasks.empty')+'</div>';
+    updateTaskSelectionToolbar();
+    return;
+  }
+  container.innerHTML=tasks.map(function(task){
+    var timeStr=formatTime(task.startedAt);
+    var durationStr=task.endedAt?formatDuration(task.endedAt-task.startedAt):'';
+    var taskIsLocalShared=task.owner==='public';
+    var taskIsTeamShared=!!task.sharingVisibility;
+    var taskScope=taskIsTeamShared?'team':taskIsLocalShared?'local':'private';
+    var selectedAttr=selectedTaskIds.has(task.id)?' checked':'';
+    return '<div class="task-card status-'+task.status+'" onclick="openTaskDetail(\\''+task.id+'\\')">'+
+      '<div class="task-card-top">'+
+        '<div class="task-card-title"><label class="item-select-box" onclick="event.stopPropagation()"><input class="task-select-check" type="checkbox" value="'+escAttr(task.id)+'"'+selectedAttr+' onchange="event.stopPropagation();toggleTaskSelection(&quot;'+escAttr(task.id)+'&quot;,this.checked)"></label>'+esc(task.title)+'</div>'+
+        '<div class="task-card-badges">'+renderScopeBadge(taskScope)+'<span class="task-status-badge '+task.status+'">'+t('tasks.status.'+task.status)+'</span></div>'+
+      '</div>'+
+      (task.summary?'<div class="task-card-summary'+(task.status==='skipped'?' skipped-reason':'')+'">'+esc(task.summary)+'</div>':'')+
+      '<div class="task-card-bottom">'+
+        '<span class="tag"><span class="icon">\\u{1F4C5}</span> '+timeStr+'</span>'+
+        (durationStr?'<span class="tag"><span class="icon">\\u23F1</span> '+durationStr+'</span>':'')+
+        '<span class="tag"><span class="icon">\\u{1F4DD}</span> '+(task.chunkCount||0)+' '+t('tasks.chunks.label')+'</span>'+
+        '<span class="tag"><span class="icon">\\u{1F4C2}</span> '+(task.sessionKey||'')+'</span>'+
+      '</div>'+
+      '<div class="card-actions" onclick="event.stopPropagation()">'+
+        '<button class="btn btn-sm btn-ghost" onclick="openTaskDetail(\\''+task.id+'\\')">'+t('card.expand')+'</button>'+
+        (task.status==='completed'&&(!task.skillStatus||task.skillStatus==='not_generated'||task.skillStatus==='skipped')?'<button class="btn btn-sm btn-ghost" onclick="retrySkillGen(\\''+task.id+'\\')">'+t('task.retrySkill.short')+'</button>':'')+
+        (task.status==='completed'
+          ?'<button class="btn btn-sm btn-ghost" onclick="openTaskScopeModalFromList(\\''+task.id+'\\',\\''+taskScope+'\\')">\\u270F '+t('share.shareBtn')+'</button>'
+          :'<button class="btn btn-sm btn-ghost" style="opacity:0.45;cursor:not-allowed" onclick="toast(t(\\x27share.scope.taskNotCompleted\\x27),\\x27warn\\x27)">\\u270F '+t('share.shareBtn')+'</button>')+
+        '<button class="btn btn-sm btn-ghost" style="color:var(--accent)" onclick="deleteTask(\\''+task.id+'\\')">'+t('task.delete')+'</button>'+
+      '</div>'+
+    '</div>';
+  }).join('');
+  updateTaskSelectionToolbar();
+}
+
 async function loadTasks(silent){
   const scope=document.getElementById('taskSearchScope')?document.getElementById('taskSearchScope').value:taskSearchScope;
-  taskSearchScope=scope||'local';
+  taskSearchScope=scope||'allLocal';
   if(taskSearchScope==='hub'){ return loadHubTasks(); }
   const list=document.getElementById('tasksList');
   if(!silent) list.innerHTML='<div class="spinner"></div>';
   try{
-    const params=new URLSearchParams({limit:String(TASKS_PER_PAGE),offset:String(tasksPage*TASKS_PER_PAGE)});
+    var ownerSel=document.getElementById('taskFilterOwner')||document.getElementById('filterOwner');
+    var ownerVal=ownerSel?ownerSel.value:'';
+
+    if(taskSearchQuery&&taskSearchQuery.trim()){
+      var sp=new URLSearchParams({q:taskSearchQuery.trim(),limit:String(tasksPageSize)});
+      if(ownerVal) sp.set('owner',ownerVal);
+      var sr=await fetch('/api/task-search?'+sp).then(function(r){return r.json()});
+      var tasks=sr.tasks||[];
+      document.getElementById('taskSearchMeta').style.display='block';
+      document.getElementById('taskSearchMeta').textContent=t('tasks.search.meta').replace('{0}',tasks.length);
+      _st('tasksTotalCount',tasks.length);
+      _st('tasksActiveCount',tasks.filter(function(tk){return tk.status==='active'}).length);
+      _st('tasksCompletedCount',tasks.filter(function(tk){return tk.status==='completed'}).length);
+      _st('tasksSkippedCount',tasks.filter(function(tk){return tk.status==='skipped'}).length);
+      if(tasksStatusFilter) tasks=tasks.filter(function(tk){return tk.status===tasksStatusFilter});
+      renderTaskCards(tasks,list);
+      document.getElementById('tasksPagination').innerHTML='';
+      return;
+    }
+    document.getElementById('taskSearchMeta').style.display='none';
+
+    const params=new URLSearchParams({limit:String(tasksPageSize),offset:String(tasksPage*tasksPageSize)});
     if(tasksStatusFilter) params.set('status',tasksStatusFilter);
-    if(taskSearchScope==='local') params.set('owner','agent:main');
+    if(activeSession) params.set('session',activeSession);
+    if(ownerVal) params.set('owner',ownerVal);
     var baseP=new URLSearchParams();
-    if(taskSearchScope==='local') baseP.set('owner','agent:main');
+    if(activeSession) baseP.set('session',activeSession);
+    if(ownerVal) baseP.set('owner',ownerVal);
+    var baseQuery=baseP.toString();
     const [data,allD,activeD,compD,skipD]=await Promise.all([
       fetch('/api/tasks?'+params).then(r=>r.json()),
-      fetch('/api/tasks?limit=1&offset=0&'+baseP).then(r=>r.json()),
-      fetch('/api/tasks?status=active&limit=1&offset=0&'+baseP).then(r=>r.json()),
-      fetch('/api/tasks?status=completed&limit=1&offset=0&'+baseP).then(r=>r.json()),
-      fetch('/api/tasks?status=skipped&limit=1&offset=0&'+baseP).then(r=>r.json())
+      fetch('/api/tasks?limit=1&offset=0'+(baseQuery?'&'+baseQuery:'')).then(r=>r.json()),
+      fetch('/api/tasks?status=active&limit=1&offset=0'+(baseQuery?'&'+baseQuery:'')).then(r=>r.json()),
+      fetch('/api/tasks?status=completed&limit=1&offset=0'+(baseQuery?'&'+baseQuery:'')).then(r=>r.json()),
+      fetch('/api/tasks?status=skipped&limit=1&offset=0'+(baseQuery?'&'+baseQuery:'')) .then(r=>r.json())
     ]);
     if(silent){
       var fp=JSON.stringify((data.tasks||[]).map(function(tk){return tk.id+'|'+tk.status+'|'+(tk.updatedAt||tk.startedAt)}));
@@ -5889,50 +6302,24 @@ async function loadTasks(silent){
     }else{
       _lastTasksFingerprint='';
     }
-    document.getElementById('tasksTotalCount').textContent=formatNum(allD.total);
-    document.getElementById('tasksActiveCount').textContent=formatNum(activeD.total);
-    document.getElementById('tasksCompletedCount').textContent=formatNum(compD.total);
-    document.getElementById('tasksSkippedCount').textContent=formatNum(skipD.total);
+    _st('tasksTotalCount',formatNum(allD.total));
+    _st('tasksActiveCount',formatNum(activeD.total));
+    _st('tasksCompletedCount',formatNum(compD.total));
+    _st('tasksSkippedCount',formatNum(skipD.total));
+
+    renderTaskCards(data.tasks||[],list);
 
     if(!data.tasks||data.tasks.length===0){
-      list.innerHTML='<div style="text-align:center;padding:48px;color:var(--text-muted);font-size:14px" data-i18n="tasks.empty">'+t('tasks.empty')+'</div>';
       document.getElementById('tasksPagination').innerHTML='';
-      return;
+    } else {
+      renderTasksPagination(data.total);
     }
-
-    list.innerHTML=data.tasks.map(task=>{
-      const timeStr=formatTime(task.startedAt);
-      const endStr=task.endedAt?formatTime(task.endedAt):'';
-      const durationStr=task.endedAt?formatDuration(task.endedAt-task.startedAt):'';
-      var taskIsLocalShared=task.owner==='public';
-      var taskIsTeamShared=!!task.sharingVisibility;
-      var taskScope=taskIsTeamShared?'team':taskIsLocalShared?'local':'private';
-      return '<div class="task-card status-'+task.status+'" onclick="openTaskDetail(\\''+task.id+'\\')">'+
-        '<div class="task-card-top">'+
-          '<div class="task-card-title">'+esc(task.title)+'</div>'+
-          '<div class="task-card-badges">'+renderScopeBadge(taskScope)+'<span class="task-status-badge '+task.status+'">'+t('tasks.status.'+task.status)+'</span></div>'+
-        '</div>'+
-        (task.summary?'<div class="task-card-summary'+(task.status==='skipped'?' skipped-reason':'')+'">'+esc(task.summary)+'</div>':'')+
-        '<div class="task-card-bottom">'+
-          '<span class="tag"><span class="icon">\\u{1F4C5}</span> '+timeStr+'</span>'+
-          (durationStr?'<span class="tag"><span class="icon">\\u23F1</span> '+durationStr+'</span>':'')+
-          '<span class="tag"><span class="icon">\\u{1F4DD}</span> '+task.chunkCount+' '+t('tasks.chunks.label')+'</span>'+
-          '<span class="tag"><span class="icon">\\u{1F4C2}</span> '+(task.sessionKey||'').slice(0,12)+'</span>'+
-        '</div>'+
-        '<div class="card-actions" onclick="event.stopPropagation()">'+
-          '<button class="btn btn-sm btn-ghost" onclick="openTaskDetail(\\''+task.id+'\\')">'+t('card.expand')+'</button>'+
-          (task.status==='completed'&&(!task.skillStatus||task.skillStatus==='not_generated'||task.skillStatus==='skipped')?'<button class="btn btn-sm btn-ghost" onclick="retrySkillGen(\\''+task.id+'\\')">'+t('task.retrySkill.short')+'</button>':'')+
-          (task.status==='completed'
-            ?'<button class="btn btn-sm btn-ghost" onclick="openTaskScopeModalFromList(\\''+task.id+'\\',\\''+taskScope+'\\')">\\u270F '+t('share.shareBtn')+'</button>'
-            :'<button class="btn btn-sm btn-ghost" style="opacity:0.45;cursor:not-allowed" onclick="toast(t(\\x27share.scope.taskNotCompleted\\x27),\\x27warn\\x27)">\\u270F '+t('share.shareBtn')+'</button>')+
-          '<button class="btn btn-sm btn-ghost" style="color:var(--accent)" onclick="deleteTask(\\''+task.id+'\\')">'+t('task.delete')+'</button>'+
-        '</div>'+
-      '</div>';
-    }).join('');
-
-    renderTasksPagination(data.total);
   }catch(e){
     console.error('loadTasks error:',e);
+    currentTaskIds=[];
+    selectedTaskIds.clear();
+    setPageSizeVisible('tasksPageSize',false);
+    updateTaskSelectionToolbar();
     list.innerHTML='<div style="text-align:center;padding:24px;color:var(--rose)">Failed to load tasks: '+String(e)+'</div>';
   }
 }
@@ -5953,7 +6340,7 @@ function updateTaskCardBadge(taskId,newScope){
 
 function renderTasksPagination(total){
   const el=document.getElementById('tasksPagination');
-  const pages=Math.ceil(total/TASKS_PER_PAGE);
+  const pages=Math.ceil(total/tasksPageSize);
   if(pages<=1){el.innerHTML='';return;}
   let html='<button class="pg-btn'+(tasksPage===0?' disabled':'')+'" onclick="tasksPage=Math.max(0,tasksPage-1);loadTasks()">\\u2190</button>';
   const start=Math.max(0,tasksPage-2),end=Math.min(pages,tasksPage+3);
@@ -6141,6 +6528,8 @@ async function deleteTask(taskId){
     const r=await fetch('/api/task/'+taskId,{method:'DELETE'});
     const d=await r.json();
     if(!r.ok) throw new Error(d.error||'unknown');
+    selectedTaskIds.delete(taskId);
+    updateTaskSelectionToolbar();
     closeTaskDetail();
     document.getElementById('taskDetailOverlay').classList.remove('show');
     loadTasks();
@@ -6150,12 +6539,53 @@ async function deleteTask(taskId){
 
 /* ─── Skills View Logic ─── */
 let skillsStatusFilter='';
+let skillsPage=0;
+let skillsPageSize=20;
+let selectedSkillIds=new Set();
+let currentLocalSkills=[];
+let skillsFilterSignature='';
 
 function setSkillStatusFilter(btn,status){
-  document.querySelectorAll('.skills-view .tasks-filters .filter-chip').forEach(c=>c.classList.remove('active'));
+  document.querySelectorAll('.skills-view .filter-bar .filter-chip[data-skill-status]').forEach(c=>c.classList.remove('active'));
   btn.classList.add('active');
   skillsStatusFilter=status;
+  skillsPage=0;
   loadSkills();
+}
+
+function updateSkillSelectionToolbar(){
+  var selectAllBtn=document.getElementById('skillSelectAllBtn');
+  var bulkDeleteBtn=document.getElementById('skillBulkDeleteBtn');
+  var total=document.querySelectorAll('#skillsList .skill-select-check').length;
+  var selected=selectedSkillIds.size;
+  if(selectAllBtn){
+    selectAllBtn.textContent=t(selected>0&&selected===total&&total>0?'skills.unselectAll':'skills.selectAll');
+    selectAllBtn.style.display=total===0?'none':'';
+  }
+  if(bulkDeleteBtn){
+    var base=t('skills.deleteSelected');
+    bulkDeleteBtn.style.display=selected>0?'':'none';
+    bulkDeleteBtn.textContent=selected>0?(base+' ('+selected+')'):base;
+  }
+}
+
+function toggleSkillSelection(skillId,checked){
+  if(checked) selectedSkillIds.add(skillId);
+  else selectedSkillIds.delete(skillId);
+  updateSkillSelectionToolbar();
+}
+
+function toggleSelectAllSkills(){
+  var total=currentLocalSkills.length;
+  if(total===0) return;
+  if(selectedSkillIds.size===total){
+    selectedSkillIds.clear();
+  }else{
+    selectedSkillIds=new Set(currentLocalSkills.map(function(s){return s.id;}));
+  }
+  var checks=document.querySelectorAll('#skillsList .skill-select-check');
+  checks.forEach(function(cb){cb.checked=selectedSkillIds.has(cb.value);});
+  updateSkillSelectionToolbar();
 }
 
 function updateSkillCardBadge(skillId,newScope){
@@ -6174,13 +6604,28 @@ function updateSkillCardBadge(skillId,newScope){
   }
 }
 
+function renderSkillsPagination(total){
+  const el=document.getElementById('skillsPagination');
+  if(!el) return;
+  const pages=Math.ceil(total/skillsPageSize);
+  if(pages<=1){el.innerHTML='';return;}
+  let html='<button class="pg-btn'+(skillsPage===0?' disabled':'')+'" onclick="skillsPage=Math.max(0,skillsPage-1);loadSkills()">\\u2190</button>';
+  const start=Math.max(0,skillsPage-2),end=Math.min(pages,skillsPage+3);
+  for(let i=start;i<end;i++){
+    html+='<button class="pg-btn'+(i===skillsPage?' active':'')+'" onclick="skillsPage='+i+';loadSkills()">'+(i+1)+'</button>';
+  }
+  html+='<button class="pg-btn'+(skillsPage>=pages-1?' disabled':'')+'" onclick="skillsPage=Math.min('+(pages-1)+',skillsPage+1);loadSkills()">\\u2192</button>';
+  html+='<span class="pg-info">'+total+' '+t('pagination.total')+'</span>';
+  el.innerHTML=html;
+}
+
 async function loadSkills(silent){
   const list=document.getElementById('skillsList');
   const hubList=document.getElementById('hubSkillsList');
   if(!silent) list.innerHTML='<div class="spinner"></div>';
   var hubSection=document.getElementById('hubSkillsSection');
   if(hubList){
-    if(skillSearchScope==='local'||skillSearchScope==='allLocal'){
+    if(skillSearchScope==='allLocal'){
       if(hubSection) hubSection.style.display='none';
     }else{
       if(hubSection) hubSection.style.display='block';
@@ -6190,24 +6635,37 @@ async function loadSkills(silent){
 
   const query=(document.getElementById('skillSearchInput')?.value||'').trim();
   const scope=document.getElementById('skillSearchScope') ? document.getElementById('skillSearchScope').value : skillSearchScope;
-  skillSearchScope=scope||'local';
+  skillSearchScope=scope||'allLocal';
 
   try{
     const params=new URLSearchParams();
     if(skillsStatusFilter) params.set('status',skillsStatusFilter);
+    if(activeSession) params.set('session',activeSession);
+    var skillOwnerSel=document.getElementById('skillFilterOwner')||document.getElementById('filterOwner');
+    var skillOwnerVal=skillOwnerSel?skillOwnerSel.value:'';
+    if(skillOwnerVal) params.set('owner',skillOwnerVal);
     const visFilter=document.getElementById('skillVisibilityFilter')?.value;
     if(visFilter) params.set('visibility',visFilter);
+    const filterSignature=[query,skillSearchScope,skillsStatusFilter,visFilter||'',skillOwnerVal].join('|');
+    if(!silent&&filterSignature!==skillsFilterSignature){
+      skillsPage=0;
+    }
+    skillsFilterSignature=filterSignature;
 
     const localRes=await fetch('/api/skills?'+params.toString());
     const localData=await localRes.json();
     let localSkills=Array.isArray(localData.skills)?localData.skills:[];
+    currentLocalSkills=localSkills.slice();
     if(query){
       const q=query.toLowerCase();
       localSkills=localSkills.filter(skill=>{
         const haystack=[skill.name,skill.description,skill.tags].filter(Boolean).join(' ').toLowerCase();
         return haystack.includes(q);
       });
+      currentLocalSkills=localSkills.slice();
     }
+    var localIdSet=new Set(localSkills.map(function(s){return s.id;}));
+    selectedSkillIds=new Set(Array.from(selectedSkillIds).filter(function(id){return localIdSet.has(id);}));
     if(silent){
       var fp=JSON.stringify(localSkills.map(function(s){return s.id+'|'+s.status+'|'+s.version+'|'+(s.visibility||'')}));
       if(fp===_lastSkillsFingerprint) return;
@@ -6231,9 +6689,10 @@ async function loadSkills(silent){
         const skillIsLocalShared=skill.visibility==='public';
         const skillIsTeamShared=!!skill.sharingVisibility;
         const skillScope=skillIsTeamShared?'team':skillIsLocalShared?'local':'private';
+        const selectedAttr=selectedSkillIds.has(skill.id)?' checked':'';
         return '<div class="skill-card '+installedClass+' '+statusClass+'" onclick="openSkillDetail(&quot;'+escAttr(skill.id)+'&quot;)">'+
           '<div class="skill-card-top">'+
-            '<div class="skill-card-name">🧠 '+esc(skill.name)+'</div>'+
+            '<div class="skill-card-name"><label class="item-select-box" onclick="event.stopPropagation()"><input class="skill-select-check" type="checkbox" value="'+escAttr(skill.id)+'"'+selectedAttr+' onchange="event.stopPropagation();toggleSkillSelection(&quot;'+escAttr(skill.id)+'&quot;,this.checked)"></label>🧠 '+esc(skill.name)+'</div>'+
             '<div class="skill-card-badges">'+
               qsBadge+
               '<span class="skill-badge version">v'+skill.version+'</span>'+
@@ -6252,35 +6711,48 @@ async function loadSkills(silent){
               (skill.status==='active'
                 ?'<button class="btn btn-sm btn-ghost" onclick="openSkillScopeModalFromList(&quot;'+escAttr(skill.id)+'&quot;,&quot;'+skillScope+'&quot;)">\\u270F '+t('share.shareBtn')+'</button>'
                 :'<button class="btn btn-sm btn-ghost" style="opacity:0.45;cursor:not-allowed" onclick="toast(t(\\x27share.scope.skillNotActive\\x27),\\x27warn\\x27)">\\u270F '+t('share.shareBtn')+'</button>')+
+              (skill.status==='active'
+                ?'<button class="btn btn-sm btn-ghost btn-warn" onclick="disableSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skills.action.disable')+'</button>'
+                :'')+
+              (skill.status==='archived'
+                ?'<button class="btn btn-sm btn-ghost btn-success" onclick="enableSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skills.action.enable')+'</button>'
+                :'')+
+              '<button class="btn btn-sm btn-ghost btn-danger" onclick="deleteSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skills.action.delete')+'</button>'+
             '</span>'+
           '</div>'+
         '</div>';
       }).join('');
     };
 
-    list.innerHTML=renderLocalCards(localSkills);
+    const totalLocalSkills=localSkills.length;
+    const localPages=Math.ceil(totalLocalSkills/skillsPageSize)||1;
+    if(skillsPage>=localPages) skillsPage=Math.max(0,localPages-1);
+    const startIndex=skillsPage*skillsPageSize;
+    const pageSkills=localSkills.slice(startIndex,startIndex+skillsPageSize);
+    list.innerHTML=renderLocalCards(pageSkills);
+    renderSkillsPagination(totalLocalSkills);
+    setPageSizeVisible('skillsPageSize',totalLocalSkills>0);
+    updateSkillSelectionToolbar();
 
-    if(skillSearchScope==='local'||skillSearchScope==='allLocal'){
+    if(skillSearchScope==='allLocal'){
       if(hubSection) hubSection.style.display='none';
-      document.getElementById('skillSearchMeta').textContent=query?(t('skills.search.local')+' '+localSkills.length):'';
-      document.getElementById('skillsTotalCount').textContent=formatNum(localSkills.length);
-      document.getElementById('skillsActiveCount').textContent=formatNum(localSkills.filter(s=>s.status==='active').length);
-      document.getElementById('skillsDraftCount').textContent=formatNum(localSkills.filter(s=>s.status==='draft').length);
-      document.getElementById('skillsInstalledCount').textContent=formatNum(localSkills.filter(s=>s.installed).length);
-      document.getElementById('skillsPublicCount').textContent=formatNum(localSkills.filter(s=>s.visibility==='public').length);
+      _st('skillsTotalCount',formatNum(localSkills.length));
+      _st('skillsActiveCount',formatNum(localSkills.filter(s=>s.status==='active').length));
+      _st('skillsDraftCount',formatNum(localSkills.filter(s=>s.status==='draft').length));
+      _st('skillsInstalledCount',formatNum(localSkills.filter(s=>s.installed).length));
+      _st('skillsPublicCount',formatNum(localSkills.filter(s=>s.visibility==='public').length));
       return;
     }
 
     if(!query){
       if(hubSection) hubSection.style.display='block';
       var localIds=new Set(localSkills.map(function(s){return s.id;}));
-      if(hubList){ loadHubSkills(hubList, localIds); }
-      document.getElementById('skillSearchMeta').textContent=t('skills.search.local')+' '+localSkills.length;
-      document.getElementById('skillsTotalCount').textContent=formatNum(localSkills.length);
-      document.getElementById('skillsActiveCount').textContent=formatNum(localSkills.filter(s=>s.status==='active').length);
-      document.getElementById('skillsDraftCount').textContent=formatNum(localSkills.filter(s=>s.status==='draft').length);
-      document.getElementById('skillsInstalledCount').textContent=formatNum(localSkills.filter(s=>s.installed).length);
-      document.getElementById('skillsPublicCount').textContent=formatNum(localSkills.filter(s=>s.visibility==='public').length);
+      if(hubList){ await loadHubSkills(hubList, localIds); }
+      _st('skillsTotalCount',formatNum(localSkills.length));
+      _st('skillsActiveCount',formatNum(localSkills.filter(s=>s.status==='active').length));
+      _st('skillsDraftCount',formatNum(localSkills.filter(s=>s.status==='draft').length));
+      _st('skillsInstalledCount',formatNum(localSkills.filter(s=>s.installed).length));
+      _st('skillsPublicCount',formatNum(localSkills.filter(s=>s.visibility==='public').length));
       return;
     }
 
@@ -6290,9 +6762,13 @@ async function loadSkills(silent){
     sharingParams.set('maxResults','20');
     const r=await fetch('/api/sharing/search/skills?'+sharingParams.toString());
     const data=await r.json();
-    const localHits=(data.local&&Array.isArray(data.local.hits))?data.local.hits:[];
+    const localSkillIdSet=new Set(currentLocalSkills.map(function(skill){return skill.id;}));
+    const localHitsRaw=(data.local&&Array.isArray(data.local.hits))?data.local.hits:[];
+    const localHits=localHitsRaw.filter(function(skill){return localSkillIdSet.has(skill.skillId);});
     const hubHits=(data.hub&&Array.isArray(data.hub.hits))?data.hub.hits:[];
 
+    const sp=document.getElementById('skillsPagination');
+    if(sp) sp.innerHTML='';
     list.innerHTML=localHits.length?localHits.map(function(skill){
       return '<div class="hub-skill-card" onclick="openSkillDetail(&quot;'+escAttr(skill.skillId)+'&quot;)">'+
         '<div class="summary">'+esc(skill.name)+'</div>'+
@@ -6318,14 +6794,18 @@ async function loadSkills(silent){
       }).join(''):'';
     }
 
-    document.getElementById('skillSearchMeta').textContent=t('skills.search.local')+' '+localHits.length+(hubHits.length?' · '+t('scope.hub')+' '+hubHits.length:'');
-    document.getElementById('skillsTotalCount').textContent=formatNum(localHits.length+hubHits.length);
-    document.getElementById('skillsActiveCount').textContent=formatNum(localHits.length);
-    document.getElementById('skillsDraftCount').textContent='0';
-    document.getElementById('skillsInstalledCount').textContent='-';
-    document.getElementById('skillsPublicCount').textContent=formatNum(hubHits.filter(function(s){return s.visibility==='public';}).length);
+    _st('skillsTotalCount',formatNum(localHits.length+hubHits.length));
+    _st('skillsActiveCount',formatNum(localHits.length));
+    _st('skillsDraftCount','0');
+    _st('skillsInstalledCount','-');
+    _st('skillsPublicCount',formatNum(hubHits.filter(function(s){return s.visibility==='public';}).length));
+    setPageSizeVisible('skillsPageSize',(localHits.length+hubHits.length)>0);
+    updateSkillSelectionToolbar();
   }catch(e){
     list.innerHTML='<div style="text-align:center;padding:24px;color:var(--rose)">'+t('skills.load.error')+': '+esc(String(e))+'</div>';
+    const sp=document.getElementById('skillsPagination');
+    if(sp) sp.innerHTML='';
+    setPageSizeVisible('skillsPageSize',false);
     if(hubList){
       hubList.innerHTML='<div style="text-align:center;padding:24px;color:var(--rose)">'+t('skills.load.error')+'</div>';
     }
@@ -6335,19 +6815,28 @@ async function loadSkills(silent){
 async function loadHubTasks(){
   var list=document.getElementById('tasksList');
   if(!list) return;
+  currentTaskIds=[];
+  selectedTaskIds.clear();
+  updateTaskSelectionToolbar();
   list.innerHTML='<div class="spinner"></div>';
   try{
-    var r=await fetch('/api/sharing/tasks/list?limit=40');
+    var r=await fetch('/api/sharing/tasks/list?limit='+tasksPageSize);
     var d=await r.json();
     var tasks=Array.isArray(d.tasks)?d.tasks:[];
+    if(activeSession){
+      tasks=tasks.filter(function(task){
+        return (task.sessionKey||task.session_key||'')===activeSession;
+      });
+    }
     hubTasksCache=tasks;
-    document.getElementById('tasksTotalCount').textContent=formatNum(tasks.length);
-    document.getElementById('tasksActiveCount').textContent='-';
-    document.getElementById('tasksCompletedCount').textContent='-';
-    document.getElementById('tasksSkippedCount').textContent='-';
+    _st('tasksTotalCount',formatNum(tasks.length));
+    _st('tasksActiveCount','-');
+    _st('tasksCompletedCount','-');
+    _st('tasksSkippedCount','-');
     if(!tasks.length){
       list.innerHTML='<div style="text-align:center;padding:48px;color:var(--text-muted);font-size:14px">'+t('tasks.empty')+'</div>';
       document.getElementById('tasksPagination').innerHTML='';
+      setPageSizeVisible('tasksPageSize',false);
       return;
     }
     list.innerHTML=tasks.map(function(task,idx){
@@ -6366,9 +6855,11 @@ async function loadHubTasks(){
       '</div>';
     }).join('');
     document.getElementById('tasksPagination').innerHTML='';
+    setPageSizeVisible('tasksPageSize',true);
   }catch(e){
     list.innerHTML='<div style="text-align:center;padding:48px;color:var(--text-muted);font-size:14px">'+t('tasks.empty')+'</div>';
     document.getElementById('tasksPagination').innerHTML='';
+    setPageSizeVisible('tasksPageSize',false);
   }
 }
 
@@ -6377,19 +6868,31 @@ async function loadHubSkills(hubList, localIds){
   if(!hubList) return;
   var hubSection=document.getElementById('hubSkillsSection');
   hubList.innerHTML='<div class="spinner"></div>';
+  if(hubSection) hubSection.style.display='block';
   try{
-    const r=await fetch('/api/sharing/skills/list?limit=40');
+    var ctrl=new AbortController();
+    var to=setTimeout(function(){try{ctrl.abort();}catch(x){}},25000);
+    var r;
+    try{
+      r=await fetch('/api/sharing/skills/list?limit=40',{signal:ctrl.signal});
+    }finally{
+      clearTimeout(to);
+    }
+    if(!r.ok){
+      var errBody='';
+      try{errBody=await r.text();}catch(x2){errBody=r.statusText;}
+      throw new Error(errBody||String(r.status));
+    }
     const d=await r.json();
     var allSkills=Array.isArray(d.skills)?d.skills:[];
     const skills=localIds?allSkills.filter(function(s){return !localIds.has(s.sourceSkillId);}):allSkills;
     hubSkillsCache=skills;
     if(!skills.length){
-      if(hubSection) hubSection.style.display='none';
+      hubList.innerHTML='<div style="text-align:center;padding:32px;color:var(--text-muted);font-size:14px">'+t('skills.hub.empty')+'</div>';
       return;
     }
-    if(hubSection) hubSection.style.display='block';
     hubList.innerHTML=skills.map(function(skill,idx){
-      return '<div class="hub-skill-card" onclick="openHubSkillDetailFromCache(\\\'hub\\\',' +idx+')" style="cursor:pointer">'+
+      return '<div class="hub-skill-card" onclick="openHubSkillDetailFromCache(\\x27hub\\x27,'+idx+')" style="cursor:pointer">'+
         '<div class="summary">'+esc(skill.name)+'</div>'+
         '<div class="excerpt">'+esc(skill.description||'')+'</div>'+
         '<div class="hub-skill-meta">'+
@@ -6402,8 +6905,8 @@ async function loadHubSkills(hubList, localIds){
       '</div>';
     }).join('');
   }catch(e){
-    if(hubSection) hubSection.style.display='none';
-    hubList.innerHTML='';
+    var msg=String((e&&e.name==='AbortError')?t('skills.hub.timeout'):(e&&e.message)||e);
+    hubList.innerHTML='<div style="text-align:center;padding:32px;color:var(--rose);font-size:13px">'+esc(t('skills.hub.loadError')+': '+msg)+'</div>';
   }
 }
 
@@ -6468,7 +6971,17 @@ async function openSkillDetail(skillId){
     visBtn.className='skill-vis-btn';
     visBtn.textContent='\\u270F '+t('share.shareBtn');
     visBtn.dataset.vis=detailSkillScope;
-    visBtn.onclick=function(){openSkillScopeModal();};
+    visBtn.style.opacity='';
+    visBtn.style.cursor='';
+    visBtn.style.pointerEvents='';
+    if(skill.status==='active'){
+      visBtn.onclick=function(){openSkillScopeModal();};
+    }else{
+      visBtn.style.opacity='0.45';
+      visBtn.style.cursor='not-allowed';
+      visBtn.style.pointerEvents='auto';
+      visBtn.onclick=function(e){e.stopPropagation();toast(t('share.scope.skillNotActive'),'warn');};
+    }
 
     document.getElementById('skillDetailDesc').textContent=skill.description;
     currentSkillDetail=skill;
@@ -6524,7 +7037,14 @@ async function openSkillDetail(skillId){
     }
 
     window._currentSkillData=skill;
-    document.getElementById('skillDetailActions').innerHTML='';
+    var detailActionsHtml='';
+    if(skill.status==='active'){
+      detailActionsHtml+='<button class="btn btn-sm btn-warn" onclick="disableSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skills.action.disable')+'</button>';
+    }else if(skill.status==='archived'){
+      detailActionsHtml+='<button class="btn btn-sm btn-success" onclick="enableSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skills.action.enable')+'</button>';
+    }
+    detailActionsHtml+='<button class="btn btn-sm btn-danger" onclick="deleteSkill(&quot;'+escAttr(skill.id)+'&quot;)">'+t('skills.action.delete')+'</button>';
+    document.getElementById('skillDetailActions').innerHTML=detailActionsHtml;
 
   }catch(e){
     document.getElementById('skillDetailTitle').textContent=t('skills.error');
@@ -6714,6 +7234,7 @@ async function loadConfig(){
     document.getElementById('cfgSkillApiKey').value=skSum.apiKey||'';
 
     document.getElementById('cfgViewerPort').value=cfg.viewerPort||'';
+    document.getElementById('cfgTaskAutoFinalizeHours').value=cfg.taskAutoFinalizeHours!=null?cfg.taskAutoFinalizeHours:'';
 
     const tel=cfg.telemetry||{};
     document.getElementById('cfgTelemetryEnabled').checked=tel.enabled!==false;
@@ -7018,6 +7539,8 @@ async function saveGeneralConfig(){
   const cfg={};
   const vp=document.getElementById('cfgViewerPort').value.trim();
   if(vp) cfg.viewerPort=Number(vp);
+  const tafh=document.getElementById('cfgTaskAutoFinalizeHours').value.trim();
+  cfg.taskAutoFinalizeHours=tafh!==''?Math.max(0,Number(tafh)):4;
   cfg.telemetry={enabled:document.getElementById('cfgTelemetryEnabled').checked};
 
   await doSaveConfig(cfg, saveBtn, 'generalSaved');
@@ -7107,10 +7630,59 @@ async function deleteSkill(skillId){
     const r=await fetch('/api/skill/'+skillId,{method:'DELETE'});
     const d=await r.json();
     if(!r.ok) throw new Error(d.error||'unknown');
+    selectedSkillIds.delete(skillId);
+    updateSkillSelectionToolbar();
     closeSkillDetail();
     document.getElementById('skillDetailOverlay').classList.remove('show');
     loadSkills();
   }catch(e){ alert(t('skill.delete.error')+e.message); }
+}
+async function disableSkill(skillId){
+  if(!(await confirmModal(t('skills.disable.confirm')))) return;
+  try{
+    const r=await fetch('/api/skill/'+skillId+'/disable',{method:'PUT'});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.error||'unknown');
+    toast(t('skills.action.disable')+' ✓','ok');
+    closeSkillDetail();
+    document.getElementById('skillDetailOverlay').classList.remove('show');
+    loadSkills();
+  }catch(e){ alert(t('skills.disable.error')+e.message); }
+}
+async function enableSkill(skillId){
+  try{
+    const r=await fetch('/api/skill/'+skillId+'/enable',{method:'PUT'});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.error||'unknown');
+    toast(t('skills.action.enable')+' ✓','ok');
+    closeSkillDetail();
+    document.getElementById('skillDetailOverlay').classList.remove('show');
+    loadSkills();
+  }catch(e){ alert(t('skills.enable.error')+e.message); }
+}
+
+async function deleteSelectedSkills(){
+  var ids=Array.from(selectedSkillIds);
+  if(ids.length===0) return;
+  var msg=t('skill.delete.selected.confirm').replace('{count}',String(ids.length));
+  if(!(await confirmModal(msg,{danger:true}))) return;
+  var ok=0;
+  var fail=0;
+  for(var i=0;i<ids.length;i++){
+    try{
+      var r=await fetch('/api/skill/'+ids[i],{method:'DELETE'});
+      var d=await r.json();
+      if(!r.ok) throw new Error(d.error||'unknown');
+      ok++;
+    }catch(e){
+      fail++;
+    }
+  }
+  selectedSkillIds.clear();
+  updateSkillSelectionToolbar();
+  loadSkills();
+  if(fail>0) toast(t('skill.delete.partial').replace('{ok}',String(ok)).replace('{fail}',String(fail)),'warn');
+  else toast(t('skill.delete.success').replace('{count}',String(ok)),'success');
 }
 
 
@@ -7446,7 +8018,7 @@ async function _livePollTick(){
       var _searchVal=(document.getElementById('searchInput')||{}).value||'';
       if(!_searchVal.trim()){
         if(memorySearchScope==='hub') await loadHubMemories(true);
-        else{var _pollOwner=memorySearchScope==='local'?_currentAgentOwner:undefined;await loadStats(_pollOwner);await loadMemories(null,true);}
+        else{var _pollOwner=undefined;await loadStats(_pollOwner);await loadMemories(null,true);}
       }
     }
     else if(_activeView==='tasks') await loadTasks(true);
@@ -7719,7 +8291,7 @@ function stopNotifPoll(){ }
 /* ─── Data loading ─── */
 async function loadAll(){
   await loadStats();
-  var initOwner=memorySearchScope==='local'?_currentAgentOwner:undefined;
+  var initOwner=undefined;
   if(initOwner) await loadStats(initOwner);
   await Promise.all([loadMemories(),loadSharingStatus(false)]);
   checkMigrateStatus();
@@ -7730,6 +8302,7 @@ async function loadAll(){
 }
 
 var _lastStatsFp='';
+var _fallbackWarningShown=false;
 async function loadStats(ownerFilter){
   let d;
   try{
@@ -7739,21 +8312,23 @@ async function loadStats(ownerFilter){
     d=await r.json();
   }catch(e){ d={}; }
   if(!d||typeof d!=='object') d={};
-  if(d.currentAgentOwner) _currentAgentOwner=d.currentAgentOwner;
+  if(d.currentAgentOwner && !new URLSearchParams(window.location.search).get('agentId')) _currentAgentOwner=d.currentAgentOwner;
   const tm=d.totalMemories||0;
   const dedupB=d.dedupBreakdown||{};
   const activeCount=dedupB.active||tm;
   const inactiveCount=(dedupB.duplicate||0)+(dedupB.merged||0);
   var agentCount=(d.owners&&d.owners.length)?d.owners.length:1;
-  var sfp=tm+':'+(d.totalSessions||0)+':'+(d.totalEmbeddings||0)+':'+agentCount+':'+(d.embeddingProvider||'none')+':'+(ownerFilter||'');
+  var tvc=(d.taskSessions||[]).length;
+  var svc=(d.skillSessions||[]).length;
+  var sfp=tm+':'+(d.totalSessions||0)+':'+(d.totalEmbeddings||0)+':'+agentCount+':'+(d.embeddingProvider||'none')+':'+(ownerFilter||'')+':'+(_activeView||'memories')+':'+tvc+':'+svc;
   if(sfp===_lastStatsFp) return;
   _lastStatsFp=sfp;
   document.getElementById('statTotal').textContent=tm;
   if(inactiveCount>0){
     document.getElementById('statTotal').title=activeCount+' '+t('stat.active')+', '+inactiveCount+' '+t('stat.deduped');
   }
-  document.getElementById('statSessions').textContent=d.totalSessions||0;
-  document.getElementById('statEmbeddings').textContent=d.totalEmbeddings||0;
+  document.getElementById('statTasks').textContent=d.totalTasks||0;
+  document.getElementById('statSkills').textContent=d.totalSkills||0;
   document.getElementById('statAgents').textContent=agentCount;
 
   const provEl=document.getElementById('embeddingStatus');
@@ -7777,45 +8352,80 @@ async function loadStats(ownerFilter){
     }).catch(()=>{});
   }
 
-  const sl=document.getElementById('sessionList');
-  sl.innerHTML='<div class="session-item'+(activeSession===null?' active':'')+'" onclick="filterSession(null)"><span>'+t('sidebar.allsessions')+'</span><span class="count">'+tm+'</span></div>';
-  (d.sessions||[]).forEach(s=>{
-    const isActive=activeSession===s.session_key;
-    const name=s.session_key.length>20?s.session_key.slice(0,8)+'...'+s.session_key.slice(-8):s.session_key;
-    sl.innerHTML+='<div class="session-item'+(isActive?' active':'')+'" onclick="filterSession(\\''+s.session_key.replace(/'/g,"\\\\'")+'\\')"><span title="'+s.session_key+'">'+name+'</span><span class="count">'+s.count+'</span></div>';
-  });
-
-  const fSel=document.getElementById('filterSession');
-  if(fSel){
-    const curVal=activeSession||'';
-    var sessionCount=(d.sessions||[]).length;
-    fSel.innerHTML='<option value="">'+t('filter.allsessions')+' ('+sessionCount+')</option>';
-    (d.sessions||[]).forEach(s=>{
-      const sName=s.session_key.length>30?s.session_key.slice(0,12)+'...'+s.session_key.slice(-10):s.session_key;
-      fSel.innerHTML+='<option value="'+s.session_key.replace(/"/g,'&quot;')+'"'+(s.session_key===curVal?' selected':'')+'>'+sName+' ('+s.count+')</option>';
-    });
+  if(!_fallbackWarningShown){
+    _fallbackWarningShown=true;
+    var sumWarn = (d.summarizerProvider === 'none') ? t('fallback.banner.sum') : '';
+    var skillWarn = (d.skillEvolutionProvider === 'none') ? t('fallback.banner.skill') : '';
+    
+    if (sumWarn) {
+      showFallbackBanner('fallbackBannerSum', '<div>'+sumWarn+'</div>', 'warning');
+    }
+    if (skillWarn) {
+      showFallbackBanner('fallbackBannerSkill', '<div>'+skillWarn+'</div>', 'warning');
+    }
   }
 
-  const ownerSel=document.getElementById('filterOwner');
-  if(ownerSel && d.owners && d.owners.length>0){
-    const curVal=ownerSel.value;
-    var agents=d.owners.filter(function(o){return o && o.indexOf('agent:')===0;});
-    ownerSel.innerHTML='<option value="">'+t('filter.allagents')+'</option>';
-    agents.forEach(function(o){
-      var label=o.replace('agent:','');
-      ownerSel.innerHTML+='<option value="'+o+'"'+(o===curVal?' selected':'')+'>'+label+'</option>';
+  const memorySessions=d.sessions||[];
+  const taskSessions=d.taskSessions||[];
+  const skillSessions=d.skillSessions||[];
+  const sessionMap={memories:memorySessions,tasks:taskSessions,skills:skillSessions};
+  function getSessionsForView(view){
+    return sessionMap[view]||memorySessions;
+  }
+  function countBadgeHtml(cnt){
+    return cnt&&cnt>0?'<span class="count">'+cnt+'</span>':'';
+  }
+
+  const sidebarSessions=getSessionsForView(_activeView);
+
+  [['filterSession','memories'],['taskFilterSession','tasks'],['skillFilterSession','skills']].forEach(function(pair){
+    var selId=pair[0];
+    var viewKey=pair[1];
+    var viewSessions=getSessionsForView(viewKey);
+    const fSel=document.getElementById(selId);
+    if(!fSel) return;
+    const curVal=activeSession||'';
+    var sessionCount=viewSessions.length;
+    fSel.style.display=sessionCount>0?'':'none';
+    fSel.innerHTML='<option value="">'+t('filter.allsessions')+' ('+sessionCount+')</option>';
+    viewSessions.forEach(s=>{
+      const sName=s.session_key.length>30?s.session_key.slice(0,12)+'...'+s.session_key.slice(-10):s.session_key;
+      const countLabel=(s.count&&s.count>0)?' ('+s.count+')':'';
+      fSel.innerHTML+='<option value="'+s.session_key.replace(/"/g,'&quot;')+'"'+(s.session_key===curVal?' selected':'')+'>'+sName+countLabel+'</option>';
     });
-    if(agents.length<=1) ownerSel.style.display='none';
-    else ownerSel.style.display='';
+  });
+
+  if(d.owners && d.owners.length>0){
+    var agents=d.owners.filter(function(o){return o && o.indexOf('agent:')===0;});
+    ['filterOwner','taskFilterOwner','skillFilterOwner'].forEach(function(selId){
+      var sel=document.getElementById(selId);
+      if(!sel) return;
+      var curVal=sel.value;
+      sel.innerHTML='<option value="">'+t('filter.allagents')+'</option>';
+      agents.forEach(function(o){
+        var label=o.replace('agent:','');
+        sel.innerHTML+='<option value="'+o+'"'+(o===curVal?' selected':'')+'>'+label+'</option>';
+      });
+      sel.style.display='';
+    });
   }
 }
 
 function onOwnerFilterChange(){
-  var owner=document.getElementById('filterOwner').value;
+  var src=event&&event.target?event.target:document.getElementById('filterOwner');
+  var owner=src.value;
+  ['filterOwner','taskFilterOwner','skillFilterOwner'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(el&&el!==src) el.value=owner;
+  });
   activeSession=null;
   currentPage=1;
+  taskSearchQuery='';
+  var tsi=document.getElementById('taskSearchInput');if(tsi)tsi.value='';
   refreshSessionDropdown(owner);
   applyFilters();
+  loadTasks();
+  loadSkills();
 }
 
 async function refreshSessionDropdown(ownerFilter){
@@ -7846,12 +8456,13 @@ function getFilterParams(){
   if(dt) p.set('dateTo',dt);
   const sort=document.getElementById('filterSort').value;
   if(sort==='oldest') p.set('sort','oldest');
-  const scope=memorySearchScope||'local';
-  if(scope==='local'){
-    p.set('owner',_currentAgentOwner);
-  }else if(scope==='allLocal'){
-  const owner=document.getElementById('filterOwner').value;
-  if(owner) p.set('owner',owner);
+  const scope=memorySearchScope||'allLocal';
+  if(scope==='allLocal'){
+    const owner=document.getElementById('filterOwner').value;
+    if(owner) {
+      p.set('owner',owner);
+      _currentAgentOwner = owner;
+    }
   }
   return p;
 }
@@ -7912,6 +8523,8 @@ async function loadMemories(page,silent){
 
 async function loadHubMemories(silent){
   const list=document.getElementById('memoryList');
+  selectedMemoryIds.clear();
+  updateMemorySelectionToolbar();
   if(!silent) list.innerHTML='<div class="spinner"></div>';
   try{
     const r=await fetch('/api/sharing/memories/list?limit='+PAGE_SIZE);
@@ -7948,7 +8561,7 @@ async function doSearch(query){
     return;
   }
   currentPage=1;
-  var scope=document.getElementById('memorySearchScope')?.value||memorySearchScope||'local';
+  var scope=document.getElementById('memorySearchScope')?.value||memorySearchScope||'allLocal';
   var list=document.getElementById('memoryList');
   list.innerHTML='<div class="spinner"></div>';
   if(scope==='hub'){
@@ -8000,12 +8613,22 @@ function debounceSearch(){
 function filterSession(key){
   activeSession=key;
   currentPage=1;
-  var fSel=document.getElementById('filterSession');
-  if(fSel) fSel.value=key||'';
-  document.querySelectorAll('#sessionList .session-item').forEach(function(el,i){
-    if(i===0) el.classList.toggle('active',!key);
-    else el.classList.toggle('active',el.querySelector('span')?.title===key);
+  tasksPage=0;
+  skillsPage=0;
+  ['filterSession','taskFilterSession','skillFilterSession'].forEach(function(selId){
+    var fSel=document.getElementById(selId);
+    if(fSel) fSel.value=key||'';
   });
+  if(_activeView==='tasks'){
+    loadStats();
+    loadTasks();
+    return;
+  }
+  if(_activeView==='skills'){
+    loadStats();
+    loadSkills();
+    return;
+  }
   loadAll();
 }
 
@@ -8032,14 +8655,88 @@ function clearDateFilter(){
   applyFilters();
 }
 
+function updateMemorySelectionToolbar(){
+  var toolbar=document.getElementById('memorySelectionToolbar');
+  var selectAllBtn=document.getElementById('memorySelectAllBtn');
+  var bulkDeleteBtn=document.getElementById('memoryBulkDeleteBtn');
+  var isHub=memorySearchScope==='hub';
+  var total=document.querySelectorAll('#memoryList .memory-select-check').length;
+  var selected=selectedMemoryIds.size;
+  if(toolbar) toolbar.style.display=isHub?'none':'flex';
+  if(selectAllBtn){
+    selectAllBtn.textContent=t(selected>0&&selected===total&&total>0?'skills.unselectAll':'skills.selectAll');
+    selectAllBtn.disabled=total===0;
+    selectAllBtn.style.display=total===0?'none':'';
+  }
+  if(bulkDeleteBtn){
+    var base=t('memory.deleteSelected');
+    bulkDeleteBtn.style.display=selected>0?'':'none';
+    bulkDeleteBtn.textContent=selected>0?(base+' ('+selected+')'):base;
+  }
+}
+
+function toggleMemorySelection(memoryId,checked){
+  if(checked) selectedMemoryIds.add(memoryId);
+  else selectedMemoryIds.delete(memoryId);
+  updateMemorySelectionToolbar();
+}
+
+function toggleSelectAllMemories(){
+  var total=currentMemoryIds.length;
+  if(total===0) return;
+  if(selectedMemoryIds.size===total){
+    selectedMemoryIds.clear();
+  }else{
+    selectedMemoryIds=new Set(currentMemoryIds);
+  }
+  var checks=document.querySelectorAll('#memoryList .memory-select-check');
+  checks.forEach(function(cb){cb.checked=selectedMemoryIds.has(cb.value);});
+  updateMemorySelectionToolbar();
+}
+
+async function deleteSelectedMemories(){
+  var ids=Array.from(selectedMemoryIds);
+  if(ids.length===0) return;
+  var msg=t('memory.delete.selected.confirm').replace('{count}',String(ids.length));
+  if(!(await confirmModal(msg,{danger:true}))) return;
+  var ok=0;
+  var fail=0;
+  for(var i=0;i<ids.length;i++){
+    try{
+      var r=await fetch('/api/memory/'+ids[i],{method:'DELETE'});
+      var d=await r.json();
+      if(!d.ok) throw new Error(d.error||'unknown');
+      ok++;
+    }catch(e){
+      fail++;
+    }
+  }
+  selectedMemoryIds.clear();
+  updateMemorySelectionToolbar();
+  if(document.getElementById('searchInput').value.trim()){
+    doSearch(document.getElementById('searchInput').value);
+  }else if(memorySearchScope==='hub'){
+    loadHubMemories();
+  }else{
+    loadMemories();
+  }
+  if(fail>0) toast(t('memory.delete.partial').replace('{ok}',String(ok)).replace('{fail}',String(fail)),'warn');
+  else toast(t('memory.delete.success').replace('{count}',String(ok)),'success');
+}
+
 /* ─── Rendering ─── */
 function renderMemories(items){
   const list=document.getElementById('memoryList');
+  setPageSizeVisible('memoryPageSize',items.length>0);
   if(!items.length){
     list.innerHTML='<div class="empty"><div class="icon">\\u{1F4ED}</div><p>'+t('empty.text')+'</p></div>';
+    currentMemoryIds=[];
+    updateMemorySelectionToolbar();
     return;
   }
   items.forEach(m=>{memoryCache[m.id]=m});
+  currentMemoryIds=items.map(function(m){return m.id;});
+  selectedMemoryIds=new Set(Array.from(selectedMemoryIds).filter(function(id){return currentMemoryIds.includes(id);}));
   list.innerHTML=items.map(m=>{
     const time=m.created_at?new Date(typeof m.created_at==='number'?m.created_at:m.created_at).toLocaleString(dateLoc()):'';
     const role=m.role||'user';
@@ -8049,7 +8746,7 @@ function renderMemories(items){
     const id=m.id;
     const vscore=m._vscore?'<span class="vscore-badge">'+Math.round(m._vscore*100)+'%</span>':'';
     const sid=m.session_key||'';
-    const sidShort=sid.length>18?sid.slice(0,6)+'..'+sid.slice(-6):sid;
+    const sidShort=fmtSessionDisplay(sid);
     const mc=m.merge_count||0;
     const cardTitle=esc(rawSummary||rawContent||'');
     const mergeBadge=mc>0?'<span class="merge-badge">\\u{1F504} '+t('card.evolved')+' '+mc+t('card.times')+'</span>':'';
@@ -8057,7 +8754,7 @@ function renderMemories(items){
     const ds=m.dedup_status||'active';
     const isInactive=ds==='merged'||ds==='duplicate';
     const dedupBadge=ds==='duplicate'?'<span class="dedup-badge duplicate">'+t('card.dedupDuplicate')+'</span>':ds==='merged'?'<span class="dedup-badge merged">'+t('card.dedupMerged')+'</span>':'';
-    const isImported=sid.startsWith('openclaw-import-')||sid.startsWith('openclaw-session-');
+    const isImported=isImportedSession(sid);
     const importBadge=isImported?'<span class="import-badge">\u{1F990} '+t('card.imported')+'</span>':'';
     const ownerVal=m.owner||'agent:main';
     const isPublicMem=ownerVal==='public';
@@ -8066,6 +8763,8 @@ function renderMemories(items){
     const isHubScope=memorySearchScope==='hub';
     const memScope=memShared?'team':isPublicMem?'local':'private';
     const memScopeBadge=isHubScope?renderScopeBadge('team'):renderScopeBadge(memScope);
+    const selectedAttr=selectedMemoryIds.has(id)?' checked':'';
+    const selectBoxHtml=isHubScope?'':'<label class="item-select-box" onclick="event.stopPropagation()"><input class="memory-select-check" type="checkbox" value="'+escAttr(id)+'"'+selectedAttr+' onchange="event.stopPropagation();toggleMemorySelection(&quot;'+escAttr(id)+'&quot;,this.checked)"></label>';
     let dedupInfo='';
     if(ds==='duplicate'||ds==='merged'){
       const reason=m.dedup_reason?'<span style="font-size:11px;color:var(--text-muted)">'+t('card.dedupReason')+esc(m.dedup_reason)+'</span>':'';
@@ -8089,9 +8788,11 @@ function renderMemories(items){
         }
       }catch(e){}
     }
+    var ownerName=fmtAgentName(m.owner);
+    var ownerBadge=ownerName?'<span class="owner-tag" title="'+esc(m.owner||'')+'">\\u{1F916} '+esc(ownerName)+'</span>':'';
     return '<div class="memory-card'+(isInactive?' dedup-inactive':'')+'">'+
-      '<div class="card-header"><div class="meta"><span class="role-tag '+role+'">'+role+'</span>'+memScopeBadge+importBadge+dedupBadge+mergeBadge+'</div><span class="card-time"><span class="session-tag" title="'+esc(sid)+'">'+esc(sidShort)+'</span> '+time+updatedAt+'</span></div>'+
-      '<div class="card-summary">'+cardTitle+'</div>'+
+      '<div class="card-header"><div class="meta"><span class="role-tag '+role+'">'+role+'</span>'+ownerBadge+memScopeBadge+importBadge+dedupBadge+mergeBadge+'</div><span class="card-time"><span class="session-tag" data-session-key="'+escAttr(sid)+'" onclick="event.stopPropagation();copySessionKeyFromEl(this)" title="'+esc(sidShort+(sid?' — '+t('copy.hint'):''))+'">'+esc(sidShort)+'</span> '+time+updatedAt+'</span></div>'+
+      '<div class="card-summary">'+selectBoxHtml+cardTitle+'</div>'+
       (function(){
         if(mc<=0) return '';
         var mergeHtml='<div class="card-merged-info">';
@@ -8121,6 +8822,7 @@ function renderMemories(items){
         vscore+
       '</div></div>';
   }).join('');
+  updateMemorySelectionToolbar();
 }
 
 function updateMemoryCardBadge(chunkId,newScope){
@@ -8229,7 +8931,8 @@ async function showMemoryModal(chunkId){
       h+='<div class="mm-section"><div class="mm-section-label">'+t('admin.content')+'</div><pre class="mm-content">'+esc(m.content)+'</pre></div>';
     }
     h+='<div class="mm-meta">';
-    if(m.session_key) h+='<div class="mm-meta-chip"><strong>'+t('admin.session')+'</strong><span>'+esc(m.session_key.slice(0,12))+'</span></div>';
+    if(m.owner) h+='<div class="mm-meta-chip"><strong>'+t('admin.owner')+'</strong><span>\\u{1F916} '+esc(m.owner)+'</span></div>';
+    if(m.session_key) h+='<div class="mm-meta-chip"><strong>'+t('admin.session')+'</strong><span>'+esc(m.session_key)+'</span></div>';
     h+='<div class="mm-meta-chip"><strong>'+t('memory.detail.created')+'</strong><span>'+fmtModalDate(m.created_at)+'</span></div>';
     if(m.updated_at) h+='<div class="mm-meta-chip"><strong>'+t('memory.detail.updated')+'</strong><span>'+fmtModalDate(m.updated_at)+'</span></div>';
     if(m.kind) h+='<div class="mm-meta-chip"><strong>'+t('admin.kind')+'</strong><span>'+esc(m.kind)+'</span></div>';
@@ -8323,7 +9026,18 @@ async function deleteMemory(id){
   if(!(await confirmModal(t('confirm.delete'),{danger:true})))return;
   const r=await fetch('/api/memory/'+id,{method:'DELETE'});
   const d=await r.json();
-  if(d.ok){toast(t('toast.deleted'),'success');loadAll();}
+  if(d.ok){
+    selectedMemoryIds.delete(id);
+    updateMemorySelectionToolbar();
+    toast(t('toast.deleted'),'success');
+    if(document.getElementById('searchInput').value.trim()){
+      doSearch(document.getElementById('searchInput').value);
+    }else if(memorySearchScope==='hub'){
+      loadHubMemories();
+    }else{
+      loadMemories();
+    }
+  }
   else{toast(t('toast.delfail'),'error')}
 }
 
@@ -8363,7 +9077,13 @@ async function clearAll(){
     const r=await fetch('/api/memories',{method:'DELETE'});
     if(r.status===401){toast(t('settings.session.expired'),'error');return;}
     const d=await r.json();
-    if(d.ok){toast(t('toast.cleared'),'success');loadAll();}
+    if(d.ok){
+      toast(t('toast.cleared'),'success');
+      selectedMemoryIds.clear();selectedTaskIds.clear();selectedSkillIds.clear();
+      _lastMemoriesFingerprint='';_lastTasksFingerprint='';_lastSkillsFingerprint='';_lastStatsFp='';
+      await loadStats();
+      await Promise.all([loadMemories(),loadTasks(),loadSkills(),loadSharingStatus(false)]);
+    }
     else{toast(t('toast.clearfail'),'error')}
   }catch(e){toast('Error: '+e.message,'error')}
 }
@@ -8389,7 +9109,7 @@ async function migrateScan(showToast){
   const btn=document.getElementById('migrateScanBtn');
   btn.disabled=true;
   btn.textContent=t('migrate.scanning');
-  document.getElementById('migrateStartBtn').style.display='none';
+  document.getElementById('migrateStartConcurrencyWrap').style.display='none';
   document.getElementById('migrateScanResult').style.display='none';
   document.getElementById('migrateConfigWarn').style.display='none';
   document.getElementById('migrateProgress').style.display='none';
@@ -8422,8 +9142,7 @@ async function migrateScan(showToast){
     const remaining=Math.max(0,(d.totalItems||0)-imported);
 
     if(d.totalItems>0 && d.configReady){
-      document.getElementById('migrateStartBtn').style.display='inline-flex';
-      document.getElementById('migrateConcurrencyRow').style.display='inline-flex';
+      document.getElementById('migrateStartConcurrencyWrap').style.display='flex';
       if(d.hasImportedData){
         document.getElementById('migrateStartBtn').textContent=t('migrate.resume');
       }else{
@@ -8476,11 +9195,10 @@ async function migrateStart(){
 
   window._migrateRunning=true;
   _migrateStatusChecked=true;
-  document.getElementById('migrateStartBtn').style.display='none';
+  document.getElementById('migrateStartConcurrencyWrap').style.display='none';
   document.getElementById('migrateScanBtn').disabled=true;
   var hintEl=document.getElementById('migrateImportedHint');
   if(hintEl) hintEl.style.display='none';
-  document.getElementById('migrateConcurrencyRow').style.display='none';
   document.getElementById('migrateConcurrencyWarn').style.display='none';
   document.getElementById('migrateProgress').style.display='block';
   document.getElementById('migrateLiveLog').innerHTML='';
@@ -8565,7 +9283,7 @@ async function checkMigrateStatus(){
       const progEl=document.getElementById('migrateProgress');
       if(!progEl)return;
       progEl.style.display='block';
-      document.getElementById('migrateStartBtn').style.display='none';
+      document.getElementById('migrateStartConcurrencyWrap').style.display='none';
       document.getElementById('migrateScanBtn').disabled=true;
       document.getElementById('migrateStopBtn').disabled=false;
       const pct=s.total>0?Math.round((s.processed/s.total)*100):0;
@@ -8685,7 +9403,7 @@ function onMigrateDone(wasStopped,skipReload){
   document.getElementById('migrateStopBtn').style.display='none';
   if(wasStopped){
     document.getElementById('migrateBar').style.background='linear-gradient(90deg,#f59e0b,#fbbf24)';
-    document.getElementById('migrateStartBtn').style.display='inline-flex';
+    document.getElementById('migrateStartConcurrencyWrap').style.display='flex';
     document.getElementById('migrateStartBtn').textContent=t('migrate.resume');
     document.getElementById('migratePhaseLabel').textContent=t('migrate.phase.stopped');
   }else{
@@ -8958,7 +9676,22 @@ function showEmbeddingBanner(msg,type){
   var el=document.createElement('div');
   el.id='embBanner';
   el.className=cls;
-  el.innerHTML=icon+' <span>'+esc(msg)+'</span>'+btn+close;
+  el.innerHTML=icon+' <span>'+msg+'</span>'+btn+close;
+  var mc=document.querySelector('.main-content');
+  if(mc) mc.parentElement.insertBefore(el,mc);
+}
+
+/* ─── Fallback Banner ─── */
+function showFallbackBanner(id, msgHtml,type){
+  if(document.getElementById(id)) return;
+  var cls=type==='error'?'emb-banner error':'emb-banner warning';
+  var icon=type==='error'?'\\u274C':'\\u26A0\\uFE0F';
+  var btn='<button class="emb-banner-btn" onclick="switchView(\\'settings\\');this.parentElement.remove()" style="margin-left:auto;">'+t('fallback.banner.goto')+'</button>';
+  var close='<button class="emb-banner-close" onclick="this.parentElement.remove()">&times;</button>';
+  var el=document.createElement('div');
+  el.id=id;
+  el.className=cls;
+  el.innerHTML=icon+' <div style="line-height:1.5;flex:1;">'+msgHtml+'</div>'+btn+close;
   var mc=document.querySelector('.main-content');
   if(mc) mc.parentElement.insertBefore(el,mc);
 }
@@ -9077,7 +9810,10 @@ function doUpdateInstall(packageSpec,btnEl,statusEl,targetVersion){
       btnEl.disabled=false;
     });
 }
+var _updateChecked=false;
 async function checkForUpdate(){
+  if(_updateChecked) return;
+  _updateChecked=true;
   try{
     const r=await fetch('/api/update-check?_t='+Date.now(),{cache:'no-store'});
     if(!r.ok)return;
@@ -9127,12 +9863,16 @@ async function checkForUpdate(){
 /* ─── Init ─── */
 try{
   var savedScope=localStorage.getItem('memos_memorySearchScope');
-  if(savedScope&&(savedScope==='local'||savedScope==='allLocal'||savedScope==='hub')){
+  if(savedScope==='local') savedScope='allLocal';
+  if(savedScope&&(savedScope==='allLocal'||savedScope==='hub')){
     memorySearchScope=savedScope;
     var scopeEl=document.getElementById('memorySearchScope');
     if(scopeEl) scopeEl.value=savedScope;
   }
 }catch(e){}
+restorePageSizeSetting('memos_memoryPageSize','memoryPageSize',20,function(next){PAGE_SIZE=next;});
+restorePageSizeSetting('memos_skillsPageSize','skillsPageSize',20,function(next){skillsPageSize=next;});
+restorePageSizeSetting('memos_tasksPageSize','tasksPageSize',20,function(next){tasksPageSize=next;});
 document.getElementById('modalOverlay').addEventListener('click',e=>{if(e.target.id==='modalOverlay')closeModal()});
 document.getElementById('searchInput').addEventListener('keydown',e=>{if(e.key==='Escape'){e.target.value='';currentPage=1;if(memorySearchScope==='hub')loadHubMemories();else loadMemories();}});
 applyI18n();
