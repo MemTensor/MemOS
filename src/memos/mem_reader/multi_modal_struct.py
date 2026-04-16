@@ -139,10 +139,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             return [item]
 
     def _concat_multi_modal_memories(
-        self,
-        all_memory_items: list[TextualMemoryItem],
-        max_tokens=None,
-        overlap=200,
+        self, all_memory_items: list[TextualMemoryItem], max_tokens=None, overlap=200
     ) -> list[TextualMemoryItem]:
         """
         Aggregates memory items using sliding window logic similar to
