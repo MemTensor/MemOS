@@ -50,7 +50,8 @@ class SentenceChunker(BaseChunker):
         for c in chonkie_chunks:
             chunk = Chunk(text=c.text, token_count=c.token_count, sentences=c.sentences)
             chunk = self.restore_urls(chunk.text, url_map)
-
             chunks.append(chunk)
+
+        logger.debug(f"Generated {len(chunks)} chunks from input text")
 
         return chunks

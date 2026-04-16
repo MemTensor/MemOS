@@ -131,7 +131,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     if split_item is not None:
                         split_items.append(split_item)
 
-            logger.info(f"[split_large] → split_items={len(split_items)}")
             return split_items if split_items else [item]
         except Exception as e:
             logger.warning(
@@ -170,8 +169,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 # Create a list to hold futures with their original index
                 futures = []
                 for idx, item in enumerate(all_memory_items):
-                    token_count = self._count_tokens(item.memory)
-                    logger.info(f"[token_count]: {token_count}, [max_tokens]: {max_tokens}")
                     if (item.memory or "") and self._count_tokens(item.memory) > max_tokens:
                         future = executor.submit(self._split_large_memory_item, item, max_tokens)
                         futures.append(
