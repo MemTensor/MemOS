@@ -74,6 +74,7 @@ export function resolveConfig(raw: Partial<MemosLocalConfig> | undefined, stateD
     },
     telemetry: {
       enabled: telemetryEnabled,
+      platform: cfg.telemetry?.platform,
     },
     summarizer: (() => {
       const summarizerConfig = resolveProviderFallback<SummarizerConfig>(

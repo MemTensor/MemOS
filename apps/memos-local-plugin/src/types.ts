@@ -264,6 +264,7 @@ export interface SkillEvolutionConfig {
 
 export interface TelemetryConfig {
   enabled?: boolean;
+  platform?: string;
 }
 
 export type SharingRole = "hub" | "client";

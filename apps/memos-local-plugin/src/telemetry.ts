@@ -188,7 +188,7 @@ export class Telemetry {
       event_type: "custom",
       type: "memos_plugin",
       name: event,
-      group: "memos_local",
+      group: `memos_local_${this.platform}`,
       value: 1,
       properties: safeProps,
       timestamp: Date.now(),

@@ -389,6 +389,8 @@ const memosLocalPlugin = {
     let currentAgentId = "main";
     const getCurrentOwner = () => `agent:${currentAgentId}`;
 
+    const globalRef = globalThis as any;
+    
     // ─── Check allowPromptInjection policy ───
     // When allowPromptInjection=false, the prompt mutation fields (such as prependContext) in the hook return value
     // will be stripped by the framework. Skip auto-recall to avoid unnecessary LLM/embedding calls.
@@ -2382,8 +2384,45 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     let serviceStarted = false;
 
-    const startServiceCore = async () => {
+    function isGatewayStartCommand(): boolean {
+      const args = process.argv.map(a => String(a || "").toLowerCase());
+      const gIdx = args.lastIndexOf("gateway");
+      if (gIdx === -1) return false;
+      const next = args[gIdx + 1];
+      return !next || next.startsWith("-") || next === "start" || next === "restart";
+    }
+
+    const startServiceCore = async (isHostStart = false) => {
+      if (!isGatewayStartCommand()) {
+        api.logger.info("memos-local: not a gateway start command, skipping service startup.");
+        return;
+      }
+
+      if (globalRef.__memosLocalPluginStopPromise) {
+        await globalRef.__memosLocalPluginStopPromise;
+        globalRef.__memosLocalPluginStopPromise = undefined;
+      }
       if (serviceStarted) return;
+      
+      if (!isHostStart) {
+        if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
+          api.logger.info("memos-local: aborting startServiceCore because a newer plugin instance is active.");
+          return;
+        }
+      }
+
+      if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
+        api.logger.info("memos-local: Stopping previous plugin instance due to start of new instance...");
+        const oldService = globalRef.__memosLocalPluginActiveService;
+        globalRef.__memosLocalPluginActiveService = undefined;
+        try {
+          await oldService.stop({ preserveDb: true });
+        } catch (e: any) {
+          api.logger.warn(`memos-local: Error stopping previous instance: ${e}`);
+        }
+      }
+      
+      globalRef.__memosLocalPluginActiveService = service;
       serviceStarted = true;
 
       if (hubServer) {
@@ -2425,33 +2464,45 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       );
     };
 
-    api.registerService({
+    const service = {
       id: "memos-local-openclaw-plugin",
-      start: async () => { await startServiceCore(); },
-      stop: async () => {
+      start: async () => { await startServiceCore(true); },
+      stop: async (options?: { preserveDb?: boolean }) => {
+        await viewer.stop();
+        if (globalRef.__memosLocalPluginActiveService === service) {
+          globalRef.__memosLocalPluginActiveService = undefined;
+        }
         await worker.flush();
         await telemetry.shutdown();
         await hubServer?.stop();
-        viewer.stop();
-        store.close();
+        
+        // If we are hot-reloading, the new instance is already using the SAME
+        // database file on disk. Closing the sqlite store here might kill the
+        // connection for the new instance or cause locking issues depending on
+        // how the native binding manages handles.
+        if (!options?.preserveDb) {
+          store.close();
+        }
         api.logger.info("memos-local: stopped");
       },
-    });
+    };
+
+    api.registerService(service);
 
     // Fallback: OpenClaw may load this plugin via deferred reload after
     // startPluginServices has already run, so service.start() never fires.
-    // Start on the next tick instead of waiting several seconds; the
-    // serviceStarted guard still prevents duplicate startup if the host calls
-    // service.start() immediately after registration.
-    const SELF_START_DELAY_MS = 0;
-    setTimeout(() => {
-      if (!serviceStarted) {
+    // Start on a delay instead of next tick so the host has time to call
+    // service.start() during normal startup if this is a fresh launch.
+    const SELF_START_DELAY_MS = 2000;
+    const selfStartTimer = setTimeout(() => {
+      if (!serviceStarted && isGatewayStartCommand()) {
         api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
         startServiceCore().catch((err) => {
           api.logger.warn(`memos-local: self-start failed: ${err}`);
         });
       }
     }, SELF_START_DELAY_MS);
+    if (selfStartTimer.unref) selfStartTimer.unref();
   },
 };
 

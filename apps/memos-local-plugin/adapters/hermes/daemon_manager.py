@@ -123,6 +123,20 @@ def start_daemon(
     env["MEMOS_BRIDGE_CONFIG"] = json.dumps(get_bridge_config())
     env["OPENCLAW_STATE_DIR"] = str(get_daemon_dir().parent)
 
+    # Node.js v23.6+ enables --experimental-strip-types by default, which
+    # causes its native .cts handler to take precedence over tsx.  The native
+    # handler only strips types without transforming ESM imports to require(),
+    # breaking bridge.cts.  Disable it so tsx handles the compilation.
+    try:
+        node_ver = subprocess.check_output(["node", "-v"], text=True).strip()
+        major = int(node_ver.lstrip("v").split(".")[0])
+        if major >= 23:
+            existing = env.get("NODE_OPTIONS", "")
+            if "--no-experimental-strip-types" not in existing:
+                env["NODE_OPTIONS"] = f"--no-experimental-strip-types {existing}".strip()
+    except (subprocess.CalledProcessError, ValueError, FileNotFoundError):
+        pass
+
     log_dir = get_daemon_dir()
 
     logger.info("Starting daemon: %s", " ".join(bridge_cmd))
