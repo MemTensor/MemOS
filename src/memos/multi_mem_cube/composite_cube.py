@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.multi_mem_cube.views import MemCubeView
+from memos.utils import timed_stage
 
 
 if TYPE_CHECKING:
@@ -27,13 +28,18 @@ class CompositeCubeView(MemCubeView):
 
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         all_results: list[dict[str, Any]] = []
+        cube_count = len(self.cube_views)
 
-        # fast mode: for each cube view, add memories
-        # maybe add more strategies in add_req.async_mode
-        for view in self.cube_views:
-            self.logger.info(f"[CompositeCubeView] fan-out add to cube={view.cube_id}")
-            results = view.add_memories(add_req)
-            all_results.extend(results)
+        with timed_stage("add", "multi_cube", cube_count=cube_count):
+            for idx, view in enumerate(self.cube_views):
+                self.logger.info(
+                    "[CompositeCubeView] fan-out add to cube=%s (%d/%d)",
+                    view.cube_id,
+                    idx + 1,
+                    cube_count,
+                )
+                results = view.add_memories(add_req)
+                all_results.extend(results)
 
         return all_results
 
