@@ -18,7 +18,7 @@ from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemory
 from memos.templates.mem_reader_prompts import MEMORY_MERGE_PROMPT_EN, MEMORY_MERGE_PROMPT_ZH
 from memos.templates.tool_mem_prompts import TOOL_TRAJECTORY_PROMPT_EN, TOOL_TRAJECTORY_PROMPT_ZH
 from memos.types import MessagesType
-from memos.utils import timed
+from memos.utils import timed, timed_stage
 
 
 if TYPE_CHECKING:
@@ -74,6 +74,30 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             parser=None,
             direct_markdown_hostnames=direct_markdown_hostnames,
         )
+
+    def _embed_memory_items(self, items: list[TextualMemoryItem]) -> None:
+        """Compute embeddings for a list of memory items in-place.
+
+        Attempts a single batch call first; falls back to per-item calls if the
+        batch fails.  Errors are logged but never raised so callers always
+        continue normally.
+        """
+        valid = [w for w in items if w and w.memory]
+        if not valid:
+            return
+        texts = [w.memory for w in valid]
+        try:
+            embeddings = self.embedder.embed(texts)
+            for w, emb in zip(valid, embeddings, strict=True):
+                w.metadata.embedding = emb
+        except Exception as e:
+            logger.error(f"[MultiModalStruct] Error batch computing embeddings: {e}")
+            logger.warning("[EMBED_FALLBACK] batch_size=%d", len(texts))
+            for w in valid:
+                try:
+                    w.metadata.embedding = self.embedder.embed([w.memory])[0]
+                except Exception as e2:
+                    logger.error(f"[MultiModalStruct] Error computing embedding for item: {e2}")
 
     def _split_large_memory_item(
         self, item: TextualMemoryItem, max_tokens: int
@@ -203,13 +227,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # If only one item after processing, compute embedding and return
         if len(processed_items) == 1:
             single_item = processed_items[0]
-            if single_item and single_item.memory:
-                try:
-                    single_item.metadata.embedding = self.embedder.embed([single_item.memory])[0]
-                except Exception as e:
-                    logger.error(
-                        f"[MultiModalStruct] Error computing embedding for single item: {e}"
-                    )
+            with timed_stage("add", "embedding", window_count=1):
+                self._embed_memory_items([single_item])
             return processed_items
 
         windows = []
@@ -260,31 +279,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 windows.append(window)
 
         # Batch compute embeddings for all windows
-        if windows:
-            # Collect all valid windows that need embedding
-            valid_windows = [w for w in windows if w and w.memory]
-
-            if valid_windows:
-                # Collect all texts that need embedding
-                texts_to_embed = [w.memory for w in valid_windows]
-
-                # Batch compute all embeddings at once
-                try:
-                    embeddings = self.embedder.embed(texts_to_embed)
-                    # Fill embeddings back into memory items
-                    for window, embedding in zip(valid_windows, embeddings, strict=True):
-                        window.metadata.embedding = embedding
-                except Exception as e:
-                    logger.error(f"[MultiModalStruct] Error batch computing embeddings: {e}")
-                    # Fallback: compute embeddings individually
-                    for window in valid_windows:
-                        if window.memory:
-                            try:
-                                window.metadata.embedding = self.embedder.embed([window.memory])[0]
-                            except Exception as e2:
-                                logger.error(
-                                    f"[MultiModalStruct] Error computing embedding for item: {e2}"
-                                )
+        with timed_stage("add", "embedding", window_count=len(windows)):
+            self._embed_memory_items(windows)
 
         return windows
 
@@ -984,49 +980,49 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # must pop here, avoid add to info, only used in sync fine mode
         custom_tags = info.pop("custom_tags", None) if isinstance(info, dict) else None
 
-        # Use MultiModalParser to parse the scene data
-        # If it's a list, parse each item; otherwise parse as single message
-        if isinstance(scene_data_info, list):
-            # Pre-expand multimodal messages
-            expanded_messages = self._expand_multimodal_messages(scene_data_info)
+        # Stage: parse — parallel message parsing + sliding-window aggregation
+        with timed_stage("add", "parse") as ts_parse:
+            if isinstance(scene_data_info, list):
+                expanded_messages = self._expand_multimodal_messages(scene_data_info)
+                ts_parse.set(msg_count=len(expanded_messages))
 
-            # Parse each message in the list
-            all_memory_items = []
-            # Use thread pool to parse each message in parallel, but keep the original order
-            with ContextThreadPoolExecutor(max_workers=30) as executor:
-                # submit tasks and keep the original order
-                futures = [
-                    executor.submit(
-                        self.multi_modal_parser.parse,
-                        msg,
-                        info,
-                        mode="fast",
-                        need_emb=False,
-                        **kwargs,
-                    )
-                    for msg in expanded_messages
-                ]
-                # collect results in original order
-                for future in futures:
-                    try:
-                        items = future.result()
-                        all_memory_items.extend(items)
-                    except Exception as e:
-                        logger.error(f"[MultiModalFine] Error in parallel parsing: {e}")
-        else:
-            # Parse as single message
-            all_memory_items = self.multi_modal_parser.parse(
-                scene_data_info, info, mode="fast", need_emb=False, **kwargs
-            )
-        fast_memory_items = self._concat_multi_modal_memories(all_memory_items)
+                all_memory_items = []
+                with ContextThreadPoolExecutor(max_workers=30) as executor:
+                    futures = [
+                        executor.submit(
+                            self.multi_modal_parser.parse,
+                            msg,
+                            info,
+                            mode="fast",
+                            need_emb=False,
+                            **kwargs,
+                        )
+                        for msg in expanded_messages
+                    ]
+                    for future in futures:
+                        try:
+                            items = future.result()
+                            all_memory_items.extend(items)
+                        except Exception as e:
+                            logger.error(f"[MultiModalFine] Error in parallel parsing: {e}")
+            else:
+                ts_parse.set(msg_count=1)
+                all_memory_items = self.multi_modal_parser.parse(
+                    scene_data_info, info, mode="fast", need_emb=False, **kwargs
+                )
+
+            fast_memory_items = self._concat_multi_modal_memories(all_memory_items)
+            ts_parse.set(window_count=len(fast_memory_items))
+
         if mode == "fast":
             return fast_memory_items
-        else:
-            non_file_url_fast_items = [
-                item for item in fast_memory_items if not self._is_file_url_only_item(item)
-            ]
 
-            # Part A: call llm in parallel using thread pool
+        # Stage: llm_extract — fine mode 4-way parallel LLM + per-source serial
+        non_file_url_fast_items = [
+            item for item in fast_memory_items if not self._is_file_url_only_item(item)
+        ]
+
+        with timed_stage("add", "llm_extract") as ts_llm:
             fine_memory_items = []
 
             with ContextThreadPoolExecutor(max_workers=4) as executor:
@@ -1057,7 +1053,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     **kwargs,
                 )
 
-                # Collect results
                 fine_memory_items_string_parser = future_string.result()
                 fine_memory_items_tool_trajectory_parser = future_tool.result()
                 fine_memory_items_skill_memory_parser = future_skill.result()
@@ -1068,21 +1063,25 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             fine_memory_items.extend(fine_memory_items_skill_memory_parser)
             fine_memory_items.extend(fine_memory_items_pref_parser)
 
-            # Part B: get fine multimodal items
-            for fast_item in fast_memory_items:
-                sources = fast_item.metadata.sources
-                for source in sources:
-                    lang = getattr(source, "lang", "en")
-                    items = self.multi_modal_parser.process_transfer(
-                        source,
-                        context_items=[fast_item],
-                        custom_tags=custom_tags,
-                        info=info,
-                        lang=lang,
-                        user_context=kwargs.get("user_context"),
-                    )
-                    fine_memory_items.extend(items)
-            return fine_memory_items
+            # Part B: per-source serial processing
+            with timed_stage("add", "per_source") as ts_ps:
+                for fast_item in fast_memory_items:
+                    sources = fast_item.metadata.sources
+                    for source in sources:
+                        lang = getattr(source, "lang", "en")
+                        items = self.multi_modal_parser.process_transfer(
+                            source,
+                            context_items=[fast_item],
+                            custom_tags=custom_tags,
+                            info=info,
+                            lang=lang,
+                            user_context=kwargs.get("user_context"),
+                        )
+                        fine_memory_items.extend(items)
+
+            ts_llm.set(fine_memory_count=len(fine_memory_items), per_source_ms=ts_ps.duration_ms)
+
+        return fine_memory_items
 
     @timed
     def _process_transfer_multi_modal_data(

@@ -31,7 +31,7 @@ from memos.types.general_types import (
     SearchMode,
     UserContext,
 )
-from memos.utils import timed
+from memos.utils import timed, timed_stage
 
 
 logger = get_logger(__name__)
@@ -692,25 +692,25 @@ class SingleCubeView(MemCubeView):
             extract_mode,
             add_req.mode,
         )
-        init_time = time.time()
-        # Extract memories
-        memories_local = self.mem_reader.get_memory(
-            [add_req.messages],
-            type="chat",
-            info={
-                **(add_req.info or {}),
-                "custom_tags": add_req.custom_tags,
-                "user_id": add_req.user_id,
-                "session_id": target_session_id,
-            },
-            mode=extract_mode,
-            user_name=user_context.mem_cube_id,
-            chat_history=add_req.chat_history,
-            user_context=user_context,
-        )
-        self.logger.info(
-            f"Time for get_memory in extract mode {extract_mode}: {time.time() - init_time}"
-        )
+        process_start = time.perf_counter()
+
+        # Stage 1+2: parse + embedding (logged inside get_memory via timed_stage)
+        with timed_stage("add", "get_memory", cube_id=self.cube_id) as ts_gm:
+            memories_local = self.mem_reader.get_memory(
+                [add_req.messages],
+                type="chat",
+                info={
+                    **(add_req.info or {}),
+                    "custom_tags": add_req.custom_tags,
+                    "user_id": add_req.user_id,
+                    "session_id": target_session_id,
+                },
+                mode=extract_mode,
+                user_name=user_context.mem_cube_id,
+                chat_history=add_req.chat_history,
+                user_context=user_context,
+            )
+        get_memory_ms = ts_gm.duration_ms
         flattened_local = [mm for m in memories_local for mm in m]
 
         # Explicitly set source_doc_id to metadata if present in info
@@ -719,73 +719,105 @@ class SingleCubeView(MemCubeView):
             for memory in flattened_local:
                 memory.metadata.source_doc_id = source_doc_id
 
-        self.logger.info(f"Memory extraction completed for user {add_req.user_id}")
-
         # Add memories to text_mem
         mem_group = [
             memory for memory in flattened_local if memory.metadata.memory_type != "RawFileMemory"
         ]
-        mem_ids_local: list[str] = self.naive_mem_cube.text_mem.add(
-            mem_group,
-            user_name=user_context.mem_cube_id,
-        )
 
-        self.logger.info(
-            f"Added {len(mem_ids_local)} memories for user {add_req.user_id} "
-            f"in session {add_req.session_id}: {mem_ids_local}"
-        )
-
-        # Add raw file nodes and edges
-        if self.mem_reader.save_rawfile and extract_mode == "fine":
-            raw_file_mem_group = [
-                memory
-                for memory in flattened_local
-                if memory.metadata.memory_type == "RawFileMemory"
-            ]
-            self.naive_mem_cube.text_mem.add_rawfile_nodes_n_edges(
-                raw_file_mem_group,
-                mem_ids_local,
-                user_id=add_req.user_id,
+        # Stage 3: write_db
+        with timed_stage("add", "write_db", cube_id=self.cube_id) as ts_db:
+            mem_ids_local: list[str] = self.naive_mem_cube.text_mem.add(
+                mem_group,
                 user_name=user_context.mem_cube_id,
             )
 
-        # Schedule async/sync tasks: async process raw chunk memory | sync only send messages
-        self._schedule_memory_tasks(
-            add_req=add_req,
-            user_context=user_context,
-            mem_ids=mem_ids_local,
-            sync_mode=sync_mode,
-        )
+            self.logger.info(
+                f"Added {len(mem_ids_local)} memories for user {add_req.user_id} "
+                f"in session {add_req.session_id}: {mem_ids_local}"
+            )
 
-        # Mark merged_from memories as archived when provided in add_req.info
-        if sync_mode == "sync" and extract_mode == "fine":
-            for memory in flattened_local:
-                merged_from = (memory.metadata.info or {}).get("merged_from")
-                if merged_from:
-                    old_ids = (
-                        merged_from
-                        if isinstance(merged_from, (list | tuple | set))
-                        else [merged_from]
-                    )
-                    if self.mem_reader and self.mem_reader.graph_db:
-                        for old_id in old_ids:
-                            try:
-                                self.mem_reader.graph_db.update_node(
-                                    str(old_id),
-                                    {"status": "archived"},
-                                    user_name=user_context.mem_cube_id,
-                                )
-                                self.logger.info(
-                                    f"[SingleCubeView] Archived merged_from memory: {old_id}"
-                                )
-                            except Exception as e:
-                                self.logger.warning(
-                                    f"[SingleCubeView] Failed to archive merged_from memory {old_id}: {e}"
-                                )
-                    else:
-                        self.logger.warning(
-                            "[SingleCubeView] merged_from provided but graph_db is unavailable; skip archiving."
+            # Add raw file nodes and edges
+            if self.mem_reader.save_rawfile and extract_mode == "fine":
+                raw_file_mem_group = [
+                    memory
+                    for memory in flattened_local
+                    if memory.metadata.memory_type == "RawFileMemory"
+                ]
+                self.naive_mem_cube.text_mem.add_rawfile_nodes_n_edges(
+                    raw_file_mem_group,
+                    mem_ids_local,
+                    user_id=add_req.user_id,
+                    user_name=user_context.mem_cube_id,
+                )
+            ts_db.set(memory_count=len(mem_ids_local))
+        write_db_ms = ts_db.duration_ms
+
+        # Stage 4: schedule
+        with timed_stage("add", "schedule", cube_id=self.cube_id) as ts_sched:
+            self._schedule_memory_tasks(
+                add_req=add_req,
+                user_context=user_context,
+                mem_ids=mem_ids_local,
+                sync_mode=sync_mode,
+            )
+
+            # Mark merged_from memories as archived when provided in add_req.info
+            if sync_mode == "sync" and extract_mode == "fine":
+                for memory in flattened_local:
+                    merged_from = (memory.metadata.info or {}).get("merged_from")
+                    if merged_from:
+                        old_ids = (
+                            merged_from
+                            if isinstance(merged_from, (list | tuple | set))
+                            else [merged_from]
                         )
+                        if self.mem_reader and self.mem_reader.graph_db:
+                            for old_id in old_ids:
+                                try:
+                                    self.mem_reader.graph_db.update_node(
+                                        str(old_id),
+                                        {"status": "archived"},
+                                        user_name=user_context.mem_cube_id,
+                                    )
+                                    self.logger.info(
+                                        f"[SingleCubeView] Archived merged_from memory: {old_id}"
+                                    )
+                                except Exception as e:
+                                    self.logger.warning(
+                                        f"[SingleCubeView] Failed to archive merged_from memory {old_id}: {e}"
+                                    )
+                        else:
+                            self.logger.warning(
+                                "[SingleCubeView] merged_from provided but graph_db is unavailable; skip archiving."
+                            )
+        schedule_ms = ts_sched.duration_ms
+
+        # Summary rollup — total_ms is the outer wall-clock, not a new stage
+        total_ms = int((time.perf_counter() - process_start) * 1000)
+        input_msg_count = len(add_req.messages) if add_req.messages else 0
+        memory_count = len(mem_ids_local)
+        est_input_tokens = (
+            sum(
+                len(str(m.get("content", ""))) if isinstance(m, dict) else len(str(m))
+                for m in (add_req.messages or [])
+            )
+            // 4
+        )
+        timed_stage.emit_now(
+            "add",
+            "summary",
+            cube_id=self.cube_id,
+            sync_mode=sync_mode,
+            extract_mode=extract_mode,
+            input_msg_count=input_msg_count,
+            est_input_tokens=est_input_tokens,
+            memory_count=memory_count,
+            get_memory_ms=get_memory_ms,
+            write_db_ms=write_db_ms,
+            schedule_ms=schedule_ms,
+            total_ms=total_ms,
+            per_item_ms=total_ms // max(memory_count, 1),
+        )
 
         # Format results uniformly
         text_memories = [
