@@ -899,13 +899,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     logger.info(
                         f" polardb [get_node] get_node completed time in {elapsed_time:.2f}s"
                     )
-                    return self._parse_node(
-                        {
-                            "id": id,
-                            "memory": properties.get("memory", ""),
-                            **properties,
-                        }
-                    )
+                    return self._parse_node(properties)
                 return None
 
         except Exception as e:
