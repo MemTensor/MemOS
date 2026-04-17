@@ -83,7 +83,7 @@ describe("shutdown lifecycle", () => {
 
     class MockViewer {
       async start(): Promise<string> { return "http://127.0.0.1:18799"; }
-      stop(): void { events.push("viewer-stop"); }
+      async stop(): Promise<void> { events.push("viewer-stop"); }
       getResetToken(): string { return "token"; }
     }
 

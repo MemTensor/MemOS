@@ -150,6 +150,19 @@ const pluginConfigSchema = {
   },
 };
 
+// ─── Module-level singleton guard ───
+// Prevents duplicate viewers/stores when OpenClaw calls register() multiple
+// times for the SAME stateDir (e.g. deferred reload, gateway restart).
+// Keyed by stateDir so that truly independent instances (different data dirs,
+// as in tests) are not accidentally torn down.
+const activeInstances = new Map<string, {
+  viewer: InstanceType<typeof ViewerServer>;
+  hubServer: InstanceType<typeof HubServer> | null;
+  worker: InstanceType<typeof IngestWorker>;
+  store: InstanceType<typeof SqliteStore>;
+  telemetry: InstanceType<typeof Telemetry>;
+}>();
+
 const memosLocalPlugin = {
   id: "memos-local-openclaw-plugin",
   name: "MemOS Local Memory",
@@ -160,6 +173,19 @@ const memosLocalPlugin = {
   configSchema: pluginConfigSchema,
 
   register(api: OpenClawPluginApi) {
+    // Resolve stateDir early so we can check for a duplicate instance with the
+    // same data directory (deferred reload / gateway restart scenario).
+    const stateDir = process.env.OPENCLAW_STATE_DIR || api.resolvePath("~/.openclaw");
+
+    // Snapshot the previous instance for this stateDir so startServiceCore()
+    // can tear it down asynchronously (awaiting port release) before starting
+    // the new viewer.  Instances with a different stateDir are left untouched.
+    const instanceToReplace = activeInstances.get(stateDir) ?? null;
+    activeInstances.delete(stateDir);
+    if (instanceToReplace) {
+      api.logger.info("memos-local: previous instance detected, will stop before starting new viewer");
+    }
+
     api.registerMemoryCapability({
       promptBuilder: buildMemoryPromptSection,
     });
@@ -286,7 +312,6 @@ const memosLocalPlugin = {
     }
 
     let pluginCfg = (api.pluginConfig ?? {}) as Record<string, unknown>;
-    const stateDir = process.env.OPENCLAW_STATE_DIR || api.resolvePath("~/.openclaw");
 
     // Fallback: read config from file if not provided by OpenClaw
     const configPath = path.join(stateDir, "state", "memos-local", "config.json");
@@ -2378,6 +2403,9 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       ? new HubServer({ store, log: ctx.log, config: ctx.config, dataDir: stateDir, embedder, defaultHubPort: derivedHubPort })
       : null;
 
+    // Track this instance so the next register() with the same stateDir can tear it down
+    activeInstances.set(stateDir, { viewer, hubServer, worker, store, telemetry });
+
     // ─── Service lifecycle ───
 
     let serviceStarted = false;
@@ -2385,6 +2413,21 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     const startServiceCore = async () => {
       if (serviceStarted) return;
       serviceStarted = true;
+
+      // Gracefully shut down the previous instance before binding new ports
+      if (instanceToReplace) {
+        api.logger.info("memos-local: stopping previous instance...");
+        try {
+          await instanceToReplace.viewer.stop();
+          await instanceToReplace.hubServer?.stop();
+          await instanceToReplace.worker.flush().catch(() => {});
+          await instanceToReplace.telemetry.shutdown().catch(() => {});
+          instanceToReplace.store.close();
+        } catch (err) {
+          api.logger.warn(`memos-local: previous instance cleanup error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        api.logger.info("memos-local: previous instance stopped");
+      }
 
       if (hubServer) {
         const hubUrl = await hubServer.start();
@@ -2429,10 +2472,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       id: "memos-local-openclaw-plugin",
       start: async () => { await startServiceCore(); },
       stop: async () => {
+        activeInstances.delete(stateDir);
         await worker.flush();
         await telemetry.shutdown();
         await hubServer?.stop();
-        viewer.stop();
+        await viewer.stop();
         store.close();
         api.logger.info("memos-local: stopped");
       },
@@ -2445,6 +2489,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     // service.start() immediately after registration.
     const SELF_START_DELAY_MS = 0;
     setTimeout(() => {
+      // Abort if this instance was already replaced by a newer register() call
+      if (activeInstances.get(stateDir)?.viewer !== viewer) return;
       if (!serviceStarted) {
         api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
         startServiceCore().catch((err) => {

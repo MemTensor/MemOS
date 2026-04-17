@@ -211,13 +211,30 @@ export class ViewerServer {
     }
   }
 
-  stop(): void {
+  stop(): Promise<void> {
     this.stopHubHeartbeat();
     this.stopNotifPoll();
     for (const c of this.notifSSEClients) { try { c.end(); } catch {} }
     this.notifSSEClients = [];
-    this.server?.close();
+    if (!this.server) return Promise.resolve();
+    const srv = this.server;
     this.server = null;
+    return new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => resolve(), 3000);
+      srv.close(() => { clearTimeout(timeout); resolve(); });
+      // Force-close idle keep-alive sockets. closeAllConnections is
+      // available from Node 18.2; fall back to destroying tracked sockets.
+      if (typeof srv.closeAllConnections === "function") {
+        srv.closeAllConnections();
+      } else {
+        // Older Node: close idle connections via closeIdleConnections
+        // (18.0+) or just unref so the event loop can exit.
+        if (typeof (srv as any).closeIdleConnections === "function") {
+          (srv as any).closeIdleConnections();
+        }
+        srv.unref();
+      }
+    });
   }
 
   getResetToken(): string {
