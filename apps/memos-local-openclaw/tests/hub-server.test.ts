@@ -498,3 +498,36 @@ describe("hub skill pipeline", () => {
     expect(store.getHubSkillBySource(userId, "skill-source-1")).toBeNull();
   });
 });
+
+describe("hub server remote hit cleanup", () => {
+  it("should clean up expired remote hits", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memos-hub-cleanup-"));
+    dirs.push(dir);
+    const dbPath = path.join(dir, "test.db");
+    const store = new SqliteStore(dbPath, noopLog);
+    stores.push(store);
+    const server = new HubServer({
+      store,
+      log: noopLog,
+      config: { sharing: { enabled: true, role: "hub", hub: { port: 18919, teamName: "Cleanup", teamToken: "cleanup-token" } } },
+      dataDir: dir,
+    } as any);
+    servers.push(server);
+    await server.start();
+
+    const map = (server as any).remoteHitMap as Map<string, any>;
+    const hitId = "test-hit-1";
+    map.set(hitId, {
+      chunkId: "chunk-1",
+      type: "chunk",
+      expiresAt: Date.now() - 1000, // Already expired
+      requesterUserId: "user-1",
+    });
+    expect(map.size).toBe(1);
+
+    (server as any).cleanExpiredRemoteHits();
+
+    expect(map.size).toBe(0);
+    expect(map.get(hitId)).toBeUndefined();
+  });
+});
