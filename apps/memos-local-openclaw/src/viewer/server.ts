@@ -3031,6 +3031,28 @@ export class ViewerServer {
     res.end(JSON.stringify({ ips }));
   }
 
+  /**
+   * Recursively resolve environment variable references in config values.
+   * OpenClaw stores env refs as { source: "env", id: "VAR_NAME" }.
+   */
+  private static resolveEnvVars(obj: unknown): unknown {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj === "string") return obj;
+    if (Array.isArray(obj)) return obj.map(item => ViewerServer.resolveEnvVars(item));
+    if (typeof obj === "object") {
+      const entry = obj as Record<string, unknown>;
+      if (entry.source === "env" && typeof entry.id === "string") {
+        return process.env[entry.id] ?? "";
+      }
+      const result: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(entry)) {
+        result[key] = ViewerServer.resolveEnvVars(value);
+      }
+      return result;
+    }
+    return obj;
+  }
+
   private serveConfig(res: http.ServerResponse): void {
     try {
       const cfgPath = this.getOpenClawConfigPath();
@@ -3045,7 +3067,7 @@ export class ViewerServer {
         ?? entries["memos-lite-openclaw-plugin"]?.config
         ?? entries["memos-lite"]?.config
         ?? {};
-      const result: Record<string, unknown> = { ...pluginEntry };
+      const result: Record<string, unknown> = ViewerServer.resolveEnvVars(pluginEntry) as Record<string, unknown>;
       const topEntry = entries["memos-local-openclaw-plugin"]
         ?? entries["memos-local"]
         ?? entries["memos-lite-openclaw-plugin"]
