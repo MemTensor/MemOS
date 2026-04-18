@@ -1,0 +1,311 @@
+{
+  "id": "memos-cloud-openclaw-plugin",
+  "name": "MemOS Cloud OpenClaw Plugin",
+  "description": "MemOS Cloud recall + add memory via lifecycle hooks",
+  "version": "0.1.12",
+  "kind": "lifecycle",
+  "main": "./index.js",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "MemOS Cloud base URL"
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "MemOS API Key (Token auth; supports ~/.openclaw/.env, ~/.moltbot/.env, ~/.clawdbot/.env; falls back to process env)"
+      },
+      "userId": {
+        "type": "string",
+        "description": "MemOS user_id (default: openclaw-user)"
+      },
+      "conversationId": {
+        "type": "string",
+        "description": "Override conversation_id"
+      },
+      "conversationIdPrefix": {
+        "type": "string",
+        "description": "conversation_id prefix"
+      },
+      "conversationIdSuffix": {
+        "type": "string",
+        "description": "conversation_id suffix"
+      },
+      "conversationSuffixMode": {
+        "type": "string",
+        "enum": [
+          "none",
+          "counter"
+        ]
+      },
+      "useDirectSessionUserId": {
+        "type": "boolean",
+        "description": "When enabled, direct-session keys like agent:main:<provider>:direct:<id> use the direct id as MemOS user_id instead of the default configured userId."
+      },
+      "resetOnNew": {
+        "type": "boolean"
+      },
+      "queryPrefix": {
+        "type": "string",
+        "description": "Prefix added to search queries"
+      },
+      "maxQueryChars": {
+        "type": "integer",
+        "description": "Max chars for search query"
+      },
+      "recallEnabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "recallGlobal": {
+        "type": "boolean"
+      },
+      "recallFilterEnabled": {
+        "type": "boolean"
+      },
+      "recallFilterBaseUrl": {
+        "type": "string",
+        "description": "OpenAI-compatible base URL for recall filter model"
+      },
+      "recallFilterApiKey": {
+        "type": "string",
+        "description": "API key for recall filter model endpoint"
+      },
+      "recallFilterModel": {
+        "type": "string",
+        "description": "Model name used to filter recall candidates"
+      },
+      "recallFilterTimeoutMs": {
+        "type": "integer"
+      },
+      "recallFilterRetries": {
+        "type": "integer"
+      },
+      "recallFilterCandidateLimit": {
+        "type": "integer"
+      },
+      "recallFilterMaxItemChars": {
+        "type": "integer"
+      },
+      "recallFilterFailOpen": {
+        "type": "boolean"
+      },
+      "addEnabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "captureStrategy": {
+        "type": "string",
+        "enum": [
+          "last_turn",
+          "full_session"
+        ]
+      },
+      "maxMessageChars": {
+        "type": "integer",
+        "description": "Max chars per message when adding"
+      },
+      "maxItemChars": {
+        "type": "integer",
+        "description": "Max chars per memory item when injecting prompt",
+        "default": 8000
+      },
+      "includeAssistant": {
+        "type": "boolean"
+      },
+      "memoryLimitNumber": {
+        "type": "integer",
+        "default": 9
+      },
+      "preferenceLimitNumber": {
+        "type": "integer",
+        "default": 6
+      },
+      "includePreference": {
+        "type": "boolean",
+        "default": true
+      },
+      "includeToolMemory": {
+        "type": "boolean",
+        "default": false
+      },
+      "toolMemoryLimitNumber": {
+        "type": "integer",
+        "default": 6
+      },
+      "relativity": {
+        "type": "number",
+        "description": "Minimum relativity score required before a recalled item is injected"
+      },
+      "filter": {
+        "type": "object",
+        "description": "MemOS search filter",
+        "additionalProperties": true
+      },
+      "knowledgebaseIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "tags": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "info": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "agentId": {
+        "type": "string"
+      },
+      "multiAgentMode": {
+        "type": "boolean"
+      },
+      "allowedAgents": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "When multiAgentMode is true, only these agent IDs will activate the memory plugin. Comma-separated in env var MEMOS_ALLOWED_AGENTS. Empty list means all agents are allowed."
+      },
+      "appId": {
+        "type": "string"
+      },
+      "allowPublic": {
+        "type": "boolean",
+        "default": false
+      },
+      "allowKnowledgebaseIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "asyncMode": {
+        "type": "boolean"
+      },
+      "rumEnabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "default": 5000
+      },
+      "retries": {
+        "type": "integer",
+        "default": 1
+      },
+      "throttleMs": {
+        "type": "integer"
+      },
+      "agentOverrides": {
+        "type": "object",
+        "description": "Per-agent config overrides. Keys are agent IDs, values override global defaults for that agent.",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "knowledgebaseIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "memoryLimitNumber": {
+              "type": "integer"
+            },
+            "preferenceLimitNumber": {
+              "type": "integer"
+            },
+            "includePreference": {
+              "type": "boolean"
+            },
+            "includeToolMemory": {
+              "type": "boolean"
+            },
+            "toolMemoryLimitNumber": {
+              "type": "integer"
+            },
+            "includeSkill": {
+              "type": "boolean"
+            },
+            "skillLimitNumber": {
+              "type": "integer"
+            },
+            "relativity": {
+              "type": "number"
+            },
+            "filter": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "recallEnabled": {
+              "type": "boolean"
+            },
+            "addEnabled": {
+              "type": "boolean"
+            },
+            "captureStrategy": {
+              "type": "string",
+              "enum": [
+                "last_turn",
+                "full_session"
+              ]
+            },
+            "queryPrefix": {
+              "type": "string"
+            },
+            "maxQueryChars": {
+              "type": "integer"
+            },
+            "maxItemChars": {
+              "type": "integer"
+            },
+            "maxMessageChars": {
+              "type": "integer"
+            },
+            "includeAssistant": {
+              "type": "boolean"
+            },
+            "recallGlobal": {
+              "type": "boolean"
+            },
+            "recallFilterEnabled": {
+              "type": "boolean"
+            },
+            "recallFilterModel": {
+              "type": "string"
+            },
+            "recallFilterBaseUrl": {
+              "type": "string"
+            },
+            "recallFilterApiKey": {
+              "type": "string"
+            },
+            "allowKnowledgebaseIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "throttleMs": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "additionalProperties": false
+  }
+}

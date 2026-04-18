@@ -434,7 +434,7 @@ class APISearchRequest(BaseRequest):
     # Internal field for search memory type
     search_memory_type: str = Field(
         "All",
-        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory, SkillMemory",
+        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory, SkillMemory, PreferenceMemory",
     )
 
     # ==== Context ====
@@ -854,10 +854,38 @@ class GetMemoryDashboardRequest(GetMemoryRequest):
 class DeleteMemoryRequest(BaseRequest):
     """Request model for deleting memories."""
 
-    writable_cube_ids: list[str] = Field(None, description="Writable cube IDs")
+    writable_cube_ids: list[str] | None = Field(None, description="Writable cube IDs")
     memory_ids: list[str] | None = Field(None, description="Memory IDs")
     file_ids: list[str] | None = Field(None, description="File IDs")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    user_id: str | None = Field(
+        None,
+        description="Quick delete condition: remove memories for this user_id.",
+    )
+    session_id: str | None = Field(
+        None,
+        description="Quick delete condition: remove memories for this session_id.",
+    )
+    conversation_id: str | None = Field(
+        None,
+        description="Alias of session_id for backward compatibility.",
+    )
+    auto_cleanup_working: bool | None = Field(
+        False,
+        description=(
+            "(Internal) Whether to automatically delete related WorkingMemory nodes "
+            "based on working_binding metadata when deleting by memory_ids."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def normalize_session_alias(self) -> "DeleteMemoryRequest":
+        """Normalize conversation_id to session_id."""
+        if self.conversation_id and self.session_id and self.conversation_id != self.session_id:
+            raise ValueError("conversation_id and session_id must be the same when both are set")
+        if self.session_id is None and self.conversation_id is not None:
+            self.session_id = self.conversation_id
+        return self
 
 
 class SuggestionRequest(BaseRequest):

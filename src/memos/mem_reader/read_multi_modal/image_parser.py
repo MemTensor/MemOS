@@ -51,15 +51,23 @@ class ImageParser(BaseMessageParser):
             if isinstance(image_url, dict):
                 url = image_url.get("url", "")
                 detail = image_url.get("detail", "auto")
+                image_info = image_url
+                return SourceMessage(
+                    type="image",
+                    content=url,
+                    url=url,
+                    detail=detail,
+                    image_info=image_info,
+                )
             else:
                 url = str(image_url)
                 detail = "auto"
-            return SourceMessage(
-                type="image",
-                content=url,
-                url=url,
-                detail=detail,
-            )
+                return SourceMessage(
+                    type="image",
+                    content=url,
+                    url=url,
+                    detail=detail,
+                )
         return SourceMessage(type="image", content=str(message))
 
     def rebuild_from_source(
@@ -74,11 +82,16 @@ class ImageParser(BaseMessageParser):
             or (source.content or "").replace("[image_url]: ", "")
         )
         detail = getattr(source, "detail", "auto")
+        image_id = ""
+        image_info = source.image_info
+        if image_info and isinstance(image_info, dict):
+            image_id = image_info.get("image_id")
         return {
             "type": "image_url",
             "image_url": {
                 "url": url,
                 "detail": detail,
+                "image_id": str(image_id),
             },
         }
 
@@ -137,13 +150,14 @@ class ImageParser(BaseMessageParser):
         # Get context items if available
         context_items = kwargs.get("context_items")
 
-        # Determine language: prioritize lang from source (passed via kwargs),
-        # fallback to detecting from context_items if lang not provided
+        # Determine language: prioritize lang from context_items,
+        # fallback to kwargs
         lang = kwargs.get("lang")
-        if lang is None and context_items:
+        if context_items:
             for item in context_items:
                 if hasattr(item, "memory") and item.memory:
                     lang = detect_lang(item.memory)
+                    source.lang = lang
                     break
         if not lang:
             lang = "en"

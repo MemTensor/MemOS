@@ -23,7 +23,7 @@ def add_memory(memory_content: str, user_id: str, cube_id: str | None = None):
     """Add memory using the Server API."""
     payload = {
         "user_id": user_id,
-        "messages": memory_content,
+        "messages": [{"role": "user", "content": memory_content}],
         "writable_cube_ids": [cube_id] if cube_id else None,
     }
     try:

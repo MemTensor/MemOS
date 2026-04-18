@@ -1,18 +1,9 @@
-import json
 import os
+import pprint
 import uuid
 
 from memos.configs.memory import MemoryConfigFactory
 from memos.memories.factory import MemoryFactory
-
-
-def print_result(title, result):
-    """Helper function: Pretty print the result."""
-    print(f"\n{'=' * 10} {title} {'=' * 10}")
-    if isinstance(result, list | dict):
-        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
-    else:
-        print(result)
 
 
 # Configure memory backend with OpenAI extractor
@@ -38,39 +29,55 @@ config = MemoryConfigFactory(
 # Create memory instance
 m = MemoryFactory.from_config(config)
 
+example_memories = [
+    {
+        "memory": "I'm a RUCer, I'm happy.",
+        "metadata": {
+            "type": "event",
+        },
+    },
+    {
+        "memory": "MemOS is awesome!",
+        "metadata": {
+            "type": "opinion",
+        },
+    },
+]
 
-# Extract memories from a simulated conversation
-memories = m.extract(
+example_id = str(uuid.uuid4())
+
+print("==== Add memories ====")
+# Add example memories to the memory store
+m.add(example_memories)
+# Manually create a memory item and add it
+m.add(
     [
-        {"role": "user", "content": "I love tomatoes."},
-        {"role": "assistant", "content": "Great! Tomatoes are delicious."},
+        {
+            "id": example_id,
+            "memory": "User is Chinese.",
+            "metadata": {"type": "opinion"},
+        }
     ]
 )
-print_result("Extract memories", memories)
+print("All memories after addition:")
+pprint.pprint(m.get_all())
+print()
 
-
-# Add the extracted memories to storage
-m.add(memories)
-
-# Manually create a memory item and add it
-example_id = str(uuid.uuid4())
-manual_memory = [{"id": example_id, "memory": "User is Chinese.", "metadata": {"type": "opinion"}}]
-m.add(manual_memory)
-
-# Print all current memories
-print_result("Add memories (Check all after adding)", m.get_all())
-
-
-# Search for relevant memories based on the query
+print("==== Search memories ====")
+# Search for memories related to a query
 search_results = m.search("Tell me more about the user", top_k=2)
-print_result("Search memories", search_results)
+pprint.pprint(search_results)
+print()
 
-
+print("==== Get memories ====")
 # Get specific memory item by ID
-memory_item = m.get(example_id)
-print_result("Get memory", memory_item)
+print(f"Memory with ID {example_id}:")
+pprint.pprint(m.get(example_id))
+print(f"Memories by IDs [{example_id}]:")
+pprint.pprint(m.get_by_ids([example_id]))
+print()
 
-
+print("==== Update memories ====")
 # Update the memory content for the specified ID
 m.update(
     example_id,
@@ -80,9 +87,9 @@ m.update(
         "metadata": {"type": "opinion", "confidence": 85},
     },
 )
-updated_memory = m.get(example_id)
-print_result("Update memory", updated_memory)
-
+print(f"Memory after update (ID {example_id}):")
+pprint.pprint(m.get(example_id))
+print()
 
 print("==== Dump memory ====")
 # Dump the current state of memory to a file
@@ -90,12 +97,16 @@ m.dump("tmp/naive_mem")
 print("Memory dumped to 'tmp/naive_mem'.")
 print()
 
-
+print("==== Delete memories ====")
 # Delete memory with the specified ID
 m.delete([example_id])
-print_result("Delete memory (Check all after deleting)", m.get_all())
+print("All memories after deletion:")
+pprint.pprint(m.get_all())
+print()
 
-
+print("==== Delete all memories ====")
 # Delete all memories in storage
 m.delete_all()
-print_result("Delete all", m.get_all())
+print("All memories after delete_all:")
+pprint.pprint(m.get_all())
+print()

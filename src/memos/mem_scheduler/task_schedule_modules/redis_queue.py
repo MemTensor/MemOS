@@ -384,7 +384,16 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         if len(self.message_pack_cache) == 0:
             return []
         else:
-            return self.message_pack_cache.popleft()
+            batch = self.message_pack_cache.popleft()
+            if len(batch) >= batch_size:
+                logger.debug(
+                    "[REDIS_QUEUE] Dequeued batch. batch_size=%s requested_batch_size=%s cache_packs_remaining=%s stream_count=%s",
+                    len(batch),
+                    batch_size,
+                    len(self.message_pack_cache),
+                    len(self.get_stream_keys()),
+                )
+            return batch
 
     def _ensure_consumer_group(self, stream_key) -> None:
         """Ensure the consumer group exists for the stream."""
@@ -449,9 +458,13 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             message_id = self._redis_conn.xadd(
                 stream_key, message_data, maxlen=self.max_len, approximate=True
             )
-
-            logger.info(
-                f"Added message {message_id} to Redis stream: {message.label} - {message.content[:100]}..."
+            logger.debug(
+                "[REDIS_QUEUE] Enqueued message. message_id=%s stream=%s label=%s item_id=%s stream_cache_size=%s",
+                message_id,
+                stream_key,
+                message.label,
+                message.item_id,
+                len(self._stream_keys_cache),
             )
 
         except Exception as e:
@@ -494,7 +507,11 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             # Optionally delete the message from the stream to keep it clean
             try:
                 self._redis_conn.xdel(stream_key, redis_message_id)
-                logger.info(f"Successfully delete acknowledged message {redis_message_id}")
+                logger.debug(
+                    "[REDIS_QUEUE] Ack/delete message. redis_message_id=%s stream=%s",
+                    redis_message_id,
+                    stream_key,
+                )
             except Exception as e:
                 logger.warning(f"Failed to delete acknowledged message {redis_message_id}: {e}")
 
@@ -989,7 +1006,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         )
         stream_keys = self.get_stream_keys(stream_key_prefix=effective_prefix)
         if not stream_keys:
-            logger.info(f"No Redis streams found for the configured prefix: {effective_prefix}")
+            logger.debug(f"No Redis streams found for the configured prefix: {effective_prefix}")
             return {}
 
         grouped: dict[str, dict[str, int]] = {}
@@ -1157,7 +1174,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 self._redis_conn.ping()
                 self._is_connected = True
                 self._check_xautoclaim_support()
-                logger.debug("Redis connection established successfully")
+                logger.info("Redis connection established successfully")
                 # Start stream keys refresher when connected
                 self._start_stream_keys_refresh_thread()
             except Exception as e:
@@ -1174,7 +1191,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         self._stop_stream_keys_refresh_thread()
         if self._is_listening:
             self.stop_listening()
-        logger.debug("Disconnected from Redis")
+        logger.info("Disconnected from Redis")
 
     def __enter__(self):
         """Context manager entry."""
@@ -1379,7 +1396,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             self._stream_keys_cache = active_stream_keys
             self._stream_keys_last_refresh = time.time()
             cache_count = len(self._stream_keys_cache)
-        logger.info(
+        logger.debug(
             f"Refreshed stream keys cache: {cache_count} active keys, "
             f"{deleted_count} deleted, {len(candidate_keys)} candidates examined."
         )

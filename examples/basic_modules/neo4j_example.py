@@ -2,6 +2,8 @@ import os
 
 from datetime import datetime
 
+from dotenv import load_dotenv
+
 from memos.configs.embedder import EmbedderConfigFactory
 from memos.configs.graph_db import GraphDBConfigFactory
 from memos.embedders.factory import EmbedderFactory
@@ -9,14 +11,27 @@ from memos.graph_dbs.factory import GraphStoreFactory
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 
 
+load_dotenv()
+
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "12345678")
+NEO4J_DB_NAME = os.getenv("NEO4J_DB_NAME", "neo4j")
+EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "3072"))
+
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
+
 embedder_config = EmbedderConfigFactory.model_validate(
     {
-        "backend": "universal_api",
+        "backend": os.getenv("MOS_EMBEDDER_BACKEND", "universal_api"),
         "config": {
-            "provider": "openai",
-            "api_key": os.getenv("OPENAI_API_KEY", "sk-xxxxx"),
-            "model_name_or_path": "text-embedding-3-large",
-            "base_url": os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+            "provider": os.getenv("MOS_EMBEDDER_PROVIDER", "openai"),
+            "api_key": os.getenv("MOS_EMBEDDER_API_KEY", os.getenv("OPENAI_API_KEY", "")),
+            "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
+            "base_url": os.getenv(
+                "MOS_EMBEDDER_API_BASE", os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+            ),
         },
     }
 )
@@ -31,12 +46,12 @@ def get_neo4j_graph(db_name: str = "paper"):
     config = GraphDBConfigFactory(
         backend="neo4j",
         config={
-            "uri": "bolt://xxxx:7687",
-            "user": "neo4j",
-            "password": "xxxx",
+            "uri": NEO4J_URI,
+            "user": NEO4J_USER,
+            "password": NEO4J_PASSWORD,
             "db_name": db_name,
             "auto_create": True,
-            "embedding_dimension": 3072,
+            "embedding_dimension": EMBEDDING_DIMENSION,
             "use_multi_db": True,
         },
     )
@@ -49,12 +64,12 @@ def example_multi_db(db_name: str = "paper"):
     config = GraphDBConfigFactory(
         backend="neo4j",
         config={
-            "uri": "bolt://localhost:7687",
-            "user": "neo4j",
-            "password": "12345678",
+            "uri": NEO4J_URI,
+            "user": NEO4J_USER,
+            "password": NEO4J_PASSWORD,
             "db_name": db_name,
             "auto_create": True,
-            "embedding_dimension": 3072,
+            "embedding_dimension": EMBEDDING_DIMENSION,
             "use_multi_db": True,
         },
     )
@@ -288,14 +303,14 @@ def example_shared_db(db_name: str = "shared-traval-group"):
         config = GraphDBConfigFactory(
             backend="neo4j",
             config={
-                "uri": "bolt://localhost:7687",
-                "user": "neo4j",
-                "password": "12345678",
+                "uri": NEO4J_URI,
+                "user": NEO4J_USER,
+                "password": NEO4J_PASSWORD,
                 "db_name": db_name,
                 "user_name": user_name,
                 "use_multi_db": False,
                 "auto_create": True,
-                "embedding_dimension": 3072,
+                "embedding_dimension": EMBEDDING_DIMENSION,
             },
         )
         # Step 2: Instantiate graph store
@@ -353,12 +368,12 @@ def example_shared_db(db_name: str = "shared-traval-group"):
     config_alice = GraphDBConfigFactory(
         backend="neo4j",
         config={
-            "uri": "bolt://localhost:7687",
-            "user": "neo4j",
-            "password": "12345678",
+            "uri": NEO4J_URI,
+            "user": NEO4J_USER,
+            "password": NEO4J_PASSWORD,
             "db_name": db_name,
             "user_name": user_list[0],
-            "embedding_dimension": 3072,
+            "embedding_dimension": EMBEDDING_DIMENSION,
         },
     )
     graph_alice = GraphStoreFactory.from_config(config_alice)
@@ -382,24 +397,22 @@ def run_user_session(
         config = GraphDBConfigFactory(
             backend="neo4j-community",
             config={
-                "uri": "bolt://localhost:7687",
-                "user": "neo4j",
-                "password": "12345678",
+                "uri": NEO4J_URI,
+                "user": NEO4J_USER,
+                "password": NEO4J_PASSWORD,
                 "db_name": db_name,
                 "user_name": user_name,
                 "use_multi_db": False,
-                "auto_create": False,  # Neo4j Community does not allow auto DB creation
-                "embedding_dimension": 3072,
+                "auto_create": False,
+                "embedding_dimension": EMBEDDING_DIMENSION,
                 "vec_config": {
-                    # Pass nested config to initialize external vector DB
-                    # If you use qdrant, please use Server instead of local mode.
                     "backend": "qdrant",
                     "config": {
                         "collection_name": "neo4j_vec_db",
-                        "vector_dimension": 3072,
+                        "vector_dimension": EMBEDDING_DIMENSION,
                         "distance_metric": "cosine",
-                        "host": "localhost",
-                        "port": 6333,
+                        "host": QDRANT_HOST,
+                        "port": QDRANT_PORT,
                     },
                 },
             },
@@ -408,14 +421,14 @@ def run_user_session(
         config = GraphDBConfigFactory(
             backend="neo4j",
             config={
-                "uri": "bolt://localhost:7687",
-                "user": "neo4j",
-                "password": "12345678",
+                "uri": NEO4J_URI,
+                "user": NEO4J_USER,
+                "password": NEO4J_PASSWORD,
                 "db_name": db_name,
                 "user_name": user_name,
                 "use_multi_db": False,
                 "auto_create": True,
-                "embedding_dimension": 3072,
+                "embedding_dimension": EMBEDDING_DIMENSION,
             },
         )
     graph = GraphStoreFactory.from_config(config)

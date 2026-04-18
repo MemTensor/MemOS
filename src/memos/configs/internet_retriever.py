@@ -67,6 +67,19 @@ class BochaSearchConfig(BaseInternetRetrieverConfig):
     )
 
 
+class TavilySearchConfig(BaseInternetRetrieverConfig):
+    """Configuration class for Tavily Search API."""
+
+    search_engine_id: str | None = Field(
+        None, description="Not used for Tavily Search (kept for compatibility)"
+    )
+    max_results: int = Field(default=10, description="Maximum number of results to retrieve")
+    search_depth: str = Field(default="basic", description="Search depth: 'basic' or 'advanced'")
+    include_answer: bool = Field(
+        default=False, description="Whether to include an AI-generated answer"
+    )
+
+
 class InternetRetrieverConfigFactory(BaseConfig):
     """Factory class for creating internet retriever configurations."""
 
@@ -82,6 +95,7 @@ class InternetRetrieverConfigFactory(BaseConfig):
         "bing": BingSearchConfig,
         "xinyu": XinyuSearchConfig,
         "bocha": BochaSearchConfig,
+        "tavily": TavilySearchConfig,
     }
 
     @field_validator("backend")

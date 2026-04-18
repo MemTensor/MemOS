@@ -1,0 +1,4 @@
+name: memtensor
+version: 0.1.0
+description: "MemTensor semantic memory — persistent recall across sessions with hybrid search (vector + FTS + recency)."
+author: MemTensor
