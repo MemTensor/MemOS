@@ -1,6 +1,6 @@
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, SerializeAsAny, field_serializer, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
 from memos.configs.vec_db import VectorDBConfigFactory
@@ -243,7 +243,9 @@ class PostgresGraphDBConfig(BaseConfig):
 
 class GraphDBConfigFactory(BaseModel):
     backend: str = Field(..., description="Backend for graph database")
-    config: dict[str, Any] = Field(..., description="Configuration for the graph database backend")
+    config: SerializeAsAny[BaseConfig | dict[str, Any]] = Field(
+        ..., description="Configuration for the graph database backend"
+    )
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "neo4j": Neo4jGraphDBConfig,
@@ -262,5 +264,12 @@ class GraphDBConfigFactory(BaseModel):
     @model_validator(mode="after")
     def instantiate_config(self):
         config_class = self.backend_to_class[self.backend]
-        self.config = config_class(**self.config)
+        if isinstance(self.config, dict):
+            self.config = config_class(**self.config)
         return self
+
+    @field_serializer("config", mode="plain")
+    def serialize_config(self, value):
+        if isinstance(value, BaseConfig):
+            return value.model_dump(mode="python")
+        return value

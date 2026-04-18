@@ -2,7 +2,7 @@
 
 from typing import Any, ClassVar
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SerializeAsAny, field_serializer, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
 from memos.exceptions import ConfigurationError
@@ -86,7 +86,7 @@ class InternetRetrieverConfigFactory(BaseConfig):
     backend: str | None = Field(
         None, description="Backend for internet retriever (google, bing, etc.)"
     )
-    config: dict[str, Any] | None = Field(
+    config: SerializeAsAny[BaseConfig | dict[str, Any] | None] = Field(
         None, description="Configuration for the internet retriever backend"
     )
 
@@ -108,7 +108,13 @@ class InternetRetrieverConfigFactory(BaseConfig):
 
     @model_validator(mode="after")
     def create_config(self) -> "InternetRetrieverConfigFactory":
-        if self.backend is not None:
+        if self.backend is not None and isinstance(self.config, dict):
             config_class = self.backend_to_class[self.backend]
             self.config = config_class(**self.config)
         return self
+
+    @field_serializer("config", mode="plain")
+    def serialize_config(self, value):
+        if isinstance(value, BaseConfig):
+            return value.model_dump(mode="python")
+        return value

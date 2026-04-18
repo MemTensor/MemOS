@@ -1,6 +1,6 @@
 from typing import Any, ClassVar, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SerializeAsAny, field_serializer, field_validator, model_validator
 
 from memos import settings
 from memos.configs.base import BaseConfig
@@ -58,7 +58,9 @@ class VectorDBConfigFactory(BaseConfig):
     """Factory class for creating vector database configurations."""
 
     backend: str = Field(..., description="Backend for vector database")
-    config: dict[str, Any] = Field(..., description="Configuration for the vector database backend")
+    config: SerializeAsAny[BaseConfig | dict[str, Any]] = Field(
+        ..., description="Configuration for the vector database backend"
+    )
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "qdrant": QdrantVecDBConfig,
@@ -76,5 +78,12 @@ class VectorDBConfigFactory(BaseConfig):
     @model_validator(mode="after")
     def create_config(self) -> "VectorDBConfigFactory":
         config_class = self.backend_to_class[self.backend]
-        self.config = config_class(**self.config)
+        if isinstance(self.config, dict):
+            self.config = config_class(**self.config)
         return self
+
+    @field_serializer("config", mode="plain")
+    def serialize_config(self, value):
+        if isinstance(value, BaseConfig):
+            return value.model_dump(mode="python")
+        return value
