@@ -7,11 +7,15 @@ using dependency injection for better modularity and testability.
 
 import copy
 import math
+import os
 
 from typing import Any
 
+from fastapi import HTTPException
+
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
+from memos.api.middleware.agent_auth import get_authenticated_user
 from memos.api.product_models import APISearchRequest, SearchResponse
 from memos.log import get_logger
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
@@ -59,12 +63,32 @@ class SearchHandler(BaseHandler):
         """
         self.logger.info(f"[SearchHandler] Search Req is: {search_req}")
 
+        # Auth spoof check: if a key was presented, user_id must match what the key says
+        authenticated = get_authenticated_user()
+        if authenticated is not None and authenticated != search_req.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Key authenticated as '{authenticated}' but request claims user_id='{search_req.user_id}'. Spoofing not allowed."
+            )
+
+        # Cube isolation: verify user has access to all requested cubes
+        user_manager = getattr(self.deps, "user_manager", None)
+        if user_manager:
+            cube_ids = self._resolve_cube_ids(search_req)
+            for cube_id in cube_ids:
+                if not user_manager.validate_user_cube_access(search_req.user_id, cube_id):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Access denied: user '{search_req.user_id}' cannot read cube '{cube_id}'"
+                    )
+
         # Use deepcopy to avoid modifying the original request object
         search_req_local = copy.deepcopy(search_req)
 
-        # Expand top_k for deduplication (5x to ensure enough candidates)
+        # Expand top_k for deduplication (env-configurable, default 5x)
+        _top_k_factor = int(os.getenv("MOS_SEARCH_TOP_K_FACTOR", "5"))
         if search_req_local.dedup in ("sim", "mmr"):
-            search_req_local.top_k = search_req_local.top_k * 3
+            search_req_local.top_k = search_req_local.top_k * _top_k_factor
 
         # Search and deduplicate
         cube_view = self._build_cube_view(search_req_local)
@@ -297,8 +321,9 @@ class SearchHandler(BaseHandler):
                 continue
 
             # Skip if highly similar (Dice + TF-IDF + 2-gram combined, with embedding filter)
+            _mmr_text_threshold = float(os.getenv("MOS_MMR_TEXT_THRESHOLD", "0.85"))
             if SearchHandler._is_text_highly_similar_optimized(
-                idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.92
+                idx, mem_text, selected_global, similarity_matrix, flat, threshold=_mmr_text_threshold
             ):
                 continue
 
@@ -314,7 +339,7 @@ class SearchHandler(BaseHandler):
 
         # Phase 2: MMR selection for remaining slots
         lambda_relevance = 0.8
-        similarity_threshold = 0.9  # Start exponential penalty from 0.9 (lowered from 0.9)
+        similarity_threshold = float(os.getenv("MOS_MMR_PENALTY_THRESHOLD", "0.7"))  # Exponential penalty start
         alpha_exponential = 10.0  # Exponential penalty coefficient
         remaining = set(range(len(flat))) - set(selected_global)
 
@@ -341,7 +366,7 @@ class SearchHandler(BaseHandler):
 
                 # Skip if highly similar (Dice + TF-IDF + 2-gram combined, with embedding filter)
                 if SearchHandler._is_text_highly_similar_optimized(
-                    idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.92
+                    idx, mem_text, selected_global, similarity_matrix, flat, threshold=_mmr_text_threshold
                 ):
                     continue  # Skip highly similar text, don't participate in MMR competition
 

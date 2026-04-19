@@ -7,7 +7,10 @@ from fastapi.exceptions import RequestValidationError
 from starlette.staticfiles import StaticFiles
 
 from memos.api.exceptions import APIExceptionHandler
+from memos.api.middleware.agent_auth import AgentAuthMiddleware
+from memos.api.middleware.rate_limit import RateLimitMiddleware
 from memos.api.middleware.request_context import RequestContextMiddleware
+from memos.api.routers.admin_router import router as admin_router
 from memos.api.routers.server_router import router as server_router
 
 
@@ -25,9 +28,16 @@ app = FastAPI(
 
 app.mount("/download", StaticFiles(directory=os.getenv("FILE_LOCAL_PATH")), name="static_mapping")
 
+# Middleware execution order (outermost first):
+# 1. RateLimitMiddleware — reject excessive requests before any processing
+# 2. AgentAuthMiddleware — validate per-agent API keys, bind user_id to context
+# 3. RequestContextMiddleware — inject trace_id, log request metadata
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(AgentAuthMiddleware)
 app.add_middleware(RequestContextMiddleware, source="server_api")
 # Include routers
 app.include_router(server_router)
+app.include_router(admin_router)
 
 
 @app.get("/health")
@@ -59,4 +69,5 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
-    uvicorn.run("memos.api.server_api:app", host="0.0.0.0", port=args.port, workers=args.workers)
+    bind_host = os.getenv("MEMOS_BIND_HOST", "127.0.0.1")
+    uvicorn.run("memos.api.server_api:app", host=bind_host, port=args.port, workers=args.workers)

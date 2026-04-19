@@ -15,9 +15,10 @@ import os
 import random as _random
 import socket
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from memos.api import handlers
+from memos.api.middleware.agent_auth import get_authenticated_user
 from memos.api.handlers.add_handler import AddHandler
 from memos.api.handlers.base_handler import HandlerDependencies
 from memos.api.handlers.chat_handler import ChatHandler
@@ -60,7 +61,20 @@ from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/product", tags=["Server API"])
+
+def _require_auth():
+    """Router-level dependency: reject all unauthenticated requests when MEMOS_AUTH_REQUIRED=true."""
+    if os.getenv("MEMOS_AUTH_REQUIRED", "false").lower() != "true":
+        return  # Auth not enforced — passthrough
+    authenticated = get_authenticated_user()
+    if authenticated is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization required. Include header: Authorization: Bearer <agent-key>",
+        )
+
+
+router = APIRouter(prefix="/product", tags=["Server API"], dependencies=[Depends(_require_auth)])
 
 # Instance ID for identifying this server instance in logs and responses
 INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}:{_random.randint(1000, 9999)}"
@@ -94,6 +108,22 @@ naive_mem_cube = components["naive_mem_cube"]
 redis_client = components["redis_client"]
 status_tracker = TaskStatusTracker(redis_client=redis_client)
 graph_db = components["graph_db"]
+user_manager = components.get("user_manager")
+
+
+def _enforce_cube_access(user_id: str, cube_id: str) -> None:
+    """Verify authenticated caller matches user_id and has cube access. Raises 403 on violation."""
+    authenticated = get_authenticated_user()
+    if authenticated is not None and authenticated != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Key authenticated as '{authenticated}' but request claims user_id='{user_id}'.",
+        )
+    if user_manager and not user_manager.validate_user_cube_access(user_id, cube_id):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied: user '{user_id}' cannot access cube '{cube_id}'",
+        )
 
 
 # =============================================================================
@@ -173,6 +203,9 @@ def scheduler_task_queue_status(
     )
 
 
+_MAX_WAIT_TIMEOUT = 300.0  # 5 minutes max for scheduler wait endpoints
+
+
 @router.post("/scheduler/wait", summary="Wait until scheduler is idle for a specific user")
 def scheduler_wait(
     user_name: str,
@@ -180,6 +213,11 @@ def scheduler_wait(
     poll_interval: float = 0.5,
 ):
     """Wait until scheduler is idle for a specific user."""
+    authenticated = get_authenticated_user()
+    if authenticated and authenticated != user_name:
+        raise HTTPException(status_code=403, detail=f"Cannot wait on scheduler for user '{user_name}'")
+    timeout_seconds = min(timeout_seconds, _MAX_WAIT_TIMEOUT)
+    poll_interval = max(poll_interval, 0.25)
     return handlers.scheduler_handler.handle_scheduler_wait(
         user_name=user_name,
         status_tracker=status_tracker,
@@ -195,6 +233,11 @@ def scheduler_wait_stream(
     poll_interval: float = 0.5,
 ):
     """Stream scheduler progress via Server-Sent Events (SSE)."""
+    authenticated = get_authenticated_user()
+    if authenticated and authenticated != user_name:
+        raise HTTPException(status_code=403, detail=f"Cannot stream scheduler for user '{user_name}'")
+    timeout_seconds = min(timeout_seconds, _MAX_WAIT_TIMEOUT)
+    poll_interval = max(poll_interval, 0.25)
     return handlers.scheduler_handler.handle_scheduler_wait_stream(
         user_name=user_name,
         status_tracker=status_tracker,
@@ -287,6 +330,8 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
     If search_query is provided, returns a subgraph based on the query.
     Otherwise, returns all memories of the specified type.
     """
+    target_cube = memory_req.mem_cube_ids[0] if memory_req.mem_cube_ids else memory_req.user_id
+    _enforce_cube_access(memory_req.user_id, target_cube)
     if memory_req.search_query:
         return handlers.memory_handler.handle_get_subgraph(
             user_id=memory_req.user_id,
@@ -311,6 +356,7 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
 
 @router.post("/get_memory", summary="Get memories for user", response_model=GetMemoryResponse)
 def get_memories(memory_req: GetMemoryRequest):
+    _enforce_cube_access(memory_req.user_id or memory_req.mem_cube_id, memory_req.mem_cube_id)
     return handlers.memory_handler.handle_get_memories(
         get_mem_req=memory_req,
         naive_mem_cube=naive_mem_cube,
@@ -319,6 +365,16 @@ def get_memories(memory_req: GetMemoryRequest):
 
 @router.get("/get_memory/{memory_id}", summary="Get memory by id", response_model=GetMemoryResponse)
 def get_memory_by_id(memory_id: str):
+    # Look up the memory's owning cube and verify access
+    authenticated = get_authenticated_user()
+    if authenticated and user_manager:
+        owner_map = graph_db.get_user_names_by_memory_ids(memory_ids=[memory_id])
+        owner = owner_map.get(memory_id)
+        if owner and not user_manager.validate_user_cube_access(authenticated, owner):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied: user '{authenticated}' cannot read memory owned by '{owner}'",
+            )
     return handlers.memory_handler.handle_get_memory(
         memory_id=memory_id,
         naive_mem_cube=naive_mem_cube,
@@ -327,6 +383,19 @@ def get_memory_by_id(memory_id: str):
 
 @router.post("/get_memory_by_ids", summary="Get memory by ids", response_model=GetMemoryResponse)
 def get_memory_by_ids(memory_ids: list[str]):
+    # Filter out memories the caller cannot access
+    authenticated = get_authenticated_user()
+    if authenticated and user_manager and memory_ids:
+        owner_map = graph_db.get_user_names_by_memory_ids(memory_ids=memory_ids)
+        forbidden = [
+            mid for mid, owner in owner_map.items()
+            if owner and not user_manager.validate_user_cube_access(authenticated, owner)
+        ]
+        if forbidden:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied: cannot read {len(forbidden)} memory ID(s) owned by other cubes",
+            )
     return handlers.memory_handler.handle_get_memory_by_ids(
         memory_ids=memory_ids,
         naive_mem_cube=naive_mem_cube,
@@ -337,6 +406,11 @@ def get_memory_by_ids(memory_ids: list[str]):
     "/delete_memory", summary="Delete memories for user", response_model=DeleteMemoryResponse
 )
 def delete_memories(memory_req: DeleteMemoryRequest):
+    authenticated = get_authenticated_user()
+    # Check cube access for each writable cube
+    cube_ids = memory_req.writable_cube_ids or ([memory_req.user_id] if memory_req.user_id else [])
+    for cube_id in cube_ids:
+        _enforce_cube_access(authenticated or cube_id, cube_id)
     return handlers.memory_handler.handle_delete_memories(
         delete_mem_req=memory_req, naive_mem_cube=naive_mem_cube
     )
@@ -354,6 +428,9 @@ def feedback_memories(feedback_req: APIFeedbackRequest):
 
     This endpoint uses the class-based FeedbackHandler for better code organization.
     """
+    cube_ids = feedback_req.writable_cube_ids or [feedback_req.user_id]
+    for cube_id in cube_ids:
+        _enforce_cube_access(feedback_req.user_id, cube_id)
     return feedback_handler.handle_feedback_memories(feedback_req)
 
 
@@ -369,7 +446,14 @@ def feedback_memories(feedback_req: APIFeedbackRequest):
 )
 def get_user_names_by_memory_ids(request: GetUserNamesByMemoryIdsRequest):
     """Get user names by memory ids. Now unified to query from graph_db only."""
+    authenticated = get_authenticated_user()
     result = graph_db.get_user_names_by_memory_ids(memory_ids=request.memory_ids)
+    # Filter results: only return mappings for cubes the caller can access
+    if authenticated and user_manager:
+        result = {
+            mid: uname for mid, uname in result.items()
+            if uname is None or user_manager.validate_user_cube_access(authenticated, uname)
+        }
 
     return GetUserNamesByMemoryIdsResponse(
         code=200,
@@ -384,11 +468,17 @@ def get_user_names_by_memory_ids(request: GetUserNamesByMemoryIdsRequest):
     response_model=ExistMemCubeIdResponse,
 )
 def exist_mem_cube_id(request: ExistMemCubeIdRequest):
-    """(inner) Check if mem cube id exists."""
+    """(inner) Check if mem cube id exists. Only returns True if caller has access."""
+    authenticated = get_authenticated_user()
+    exists = graph_db.exist_user_name(user_name=request.mem_cube_id)
+    # Only reveal existence if the caller has access to that cube
+    if exists and authenticated and user_manager:
+        if not user_manager.validate_user_cube_access(authenticated, request.mem_cube_id):
+            exists = False  # Hide existence from unauthorized callers
     return ExistMemCubeIdResponse(
         code=200,
         message="Successfully",
-        data=graph_db.exist_user_name(user_name=request.mem_cube_id),
+        data=exists,
     )
 
 
@@ -410,6 +500,8 @@ def chat_stream_business_user(chat_req: ChatBusinessRequest):
 )
 def delete_memory_by_record_id(memory_req: DeleteMemoryByRecordIdRequest):
     """(inner) Delete memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set."""
+    authenticated = get_authenticated_user()
+    _enforce_cube_access(authenticated or memory_req.mem_cube_id, memory_req.mem_cube_id)
     graph_db.delete_node_by_mem_cube_id(
         mem_cube_id=memory_req.mem_cube_id,
         delete_record_id=memory_req.record_id,
@@ -430,6 +522,8 @@ def delete_memory_by_record_id(memory_req: DeleteMemoryByRecordIdRequest):
 )
 def recover_memory_by_record_id(memory_req: RecoverMemoryByRecordIdRequest):
     """(inner) Recover memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set."""
+    authenticated = get_authenticated_user()
+    _enforce_cube_access(authenticated or memory_req.mem_cube_id, memory_req.mem_cube_id)
     graph_db.recover_memory_by_mem_cube_id(
         mem_cube_id=memory_req.mem_cube_id,
         delete_record_id=memory_req.delete_record_id,
@@ -446,6 +540,8 @@ def recover_memory_by_record_id(memory_req: RecoverMemoryByRecordIdRequest):
     "/get_memory_dashboard", summary="Get memories for dashboard", response_model=GetMemoryResponse
 )
 def get_memories_dashboard(memory_req: GetMemoryDashboardRequest):
+    if memory_req.mem_cube_id:
+        _enforce_cube_access(memory_req.user_id or memory_req.mem_cube_id, memory_req.mem_cube_id)
     return handlers.memory_handler.handle_get_memories_dashboard(
         get_mem_req=memory_req,
         naive_mem_cube=naive_mem_cube,

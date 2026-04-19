@@ -305,9 +305,12 @@ class UserManager:
     def validate_user_cube_access(self, user_id: str, cube_id: str) -> bool:
         """Validate if a user has access to a cube.
 
+        The cube_id parameter may be a cube_id, cube_name, or the owner's
+        user_id (MemOS agents address cubes by user_id, not cube_id).
+
         Args:
-            user_id (str): The user ID.
-            cube_id (str): The cube ID.
+            user_id (str): The user ID requesting access.
+            cube_id (str): The cube identifier (cube_id, cube_name, or owner user_id).
 
         Returns:
             bool: True if user has access to cube, False otherwise.
@@ -319,8 +322,13 @@ class UserManager:
             if not user:
                 return False
 
-            # Check if cube exists and is active
+            # Look up cube by cube_id first, then by cube_name, then by owner_id
             cube = session.query(Cube).filter(Cube.cube_id == cube_id, Cube.is_active).first()
+            if not cube:
+                cube = session.query(Cube).filter(Cube.cube_name == cube_id, Cube.is_active).first()
+            if not cube:
+                # MemOS agents use user_id as cube address — find the cube owned by that user
+                cube = session.query(Cube).filter(Cube.owner_id == cube_id, Cube.is_active).first()
             if not cube:
                 return False
 

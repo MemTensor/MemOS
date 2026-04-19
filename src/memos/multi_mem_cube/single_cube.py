@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import traceback
 
@@ -22,7 +23,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
 )
 from memos.memories.textual.item import TextualMemoryItem
 from memos.multi_mem_cube.views import MemCubeView
-from memos.search import resolve_filter_for_cube, search_text_memories
+from memos.search import search_text_memories
 from memos.templates.mem_reader_prompts import PROMPT_MAPPING
 from memos.types.general_types import (
     FINE_STRATEGY,
@@ -91,13 +92,6 @@ class SingleCubeView(MemCubeView):
         Unified memory search handling (text + preference memories).
         Preference memories are now searched through the same _search_text flow.
         """
-        cube_filter = resolve_filter_for_cube(search_req.filter, self.cube_id)
-        if cube_filter is not search_req.filter:
-            import copy
-
-            search_req = copy.copy(search_req)
-            search_req.filter = cube_filter
-
         # Create UserContext object
         user_context = UserContext(
             user_id=search_req.user_id,
@@ -725,6 +719,43 @@ class SingleCubeView(MemCubeView):
         mem_group = [
             memory for memory in flattened_local if memory.metadata.memory_type != "RawFileMemory"
         ]
+
+        # ── Write-time dedup: skip memories that are near-duplicates of existing ones ──
+        DEDUP_SIMILARITY_THRESHOLD = float(os.getenv("MOS_DEDUP_THRESHOLD", "0.90"))
+        deduped_mem_group = []
+        graph_store = getattr(self.naive_mem_cube.text_mem, "graph_store", None)
+        logger.info(f"[DEDUP] Starting write-time dedup for {len(mem_group)} memories, graph_store={graph_store is not None}")
+        for memory in mem_group:
+            embedding = getattr(memory.metadata, "embedding", None)
+            if embedding and graph_store:
+                try:
+                    similar = graph_store.search_by_embedding(
+                        vector=embedding,
+                        top_k=1,
+                        status="activated",
+                        threshold=DEDUP_SIMILARITY_THRESHOLD,
+                        user_name=user_context.mem_cube_id,
+                    )
+                    if similar:
+                        best = similar[0]
+                        score = best.get('score', 0)
+                        logger.warning(
+                            f"[DEDUP] Skipping near-duplicate memory (score={score:.4f}): "
+                            f"'{memory.memory[:80]}...' matches existing id={best.get('id', '?')[:8]}"
+                        )
+                        continue
+                except Exception as e:
+                    logger.warning(f"[DEDUP] Vector search failed, keeping memory: {e}")
+            deduped_mem_group.append(memory)
+
+        if len(deduped_mem_group) < len(mem_group):
+            logger.warning(
+                f"[DEDUP] Filtered {len(mem_group) - len(deduped_mem_group)} duplicate(s) "
+                f"out of {len(mem_group)} candidate memories"
+            )
+        mem_group = deduped_mem_group
+        # ── End write-time dedup ──
+
         mem_ids_local: list[str] = self.naive_mem_cube.text_mem.add(
             mem_group,
             user_name=user_context.mem_cube_id,

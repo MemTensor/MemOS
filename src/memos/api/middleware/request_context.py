@@ -67,9 +67,11 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         )
         set_request_context(context)
 
+        # Log request start without sensitive headers (Authorization, cookies)
+        safe_headers = {k: v for k, v in request.headers.items() if k.lower() not in ("authorization", "cookie")}
         logger.info(
             f"Request started, source: {self.source}, method: {request.method}, path: {request.url.path}, "
-            f"headers: {request.headers}"
+            f"headers: {safe_headers}"
         )
 
         response = await call_next(request)

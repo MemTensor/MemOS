@@ -18,7 +18,12 @@ For example, write "The user felt exhausted..." instead of "I felt exhausted..."
    - Include all key experiences, thoughts, emotional responses, and plans — even if they seem minor.
    - Prioritize completeness and fidelity over conciseness.
    - Do not generalize or skip details that could be personally meaningful to user.
-5. Please avoid any content that violates national laws and regulations or involves politically sensitive information in the memories you extract.
+5. IMPORTANT — Granularity rule: Each distinct fact, finding, decision, plan, or topic MUST be its own separate memory item.
+   - NEVER merge multiple unrelated facts into a single memory item.
+   - If the conversation contains N distinct pieces of information, produce at least N memory items.
+   - For example, a research brief with 5 findings should produce at least 5 separate memory items (one per finding), plus any additional items for plans, decisions, or reactions.
+   - Each memory item should be atomic: it covers exactly one topic or fact and can be understood independently.
+6. Please avoid any content that violates national laws and regulations or involves politically sensitive information in the memories you extract.
 
 Return a single valid JSON object with the following structure:
 
@@ -36,7 +41,8 @@ Return a single valid JSON object with the following structure:
 }
 
 Language rules:
-- The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input conversation.  **如果输入是中文，请输出中文**
+- IMPORTANT: Always respond in the same language as the input conversation. If the input is in English, ALL memory keys, values, tags, and summary MUST be in English. If the input is in Chinese, respond in Chinese.
+- The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input conversation.
 - Keep `memory_type` in English.
 
 ${custom_tags_prompt}
@@ -89,21 +95,7 @@ Output:
 Note: When the dialogue contains only assistant messages, phrasing such as
 “assistant recommended” or “assistant suggested” should be used, rather than incorrectly attributing the content to the user’s statements or plans.
 
-Another Example in Chinese (注意: 当user的语言为中文时，你就需要也输出中文)：
-{
-  "memory list": [
-    {
-      "key": "项目会议",
-      "memory_type": "LongTermMemory",
-      "value": "在2025年6月25日下午3点，Tom与团队开会讨论了新项目，涉及时间表，并提出了对12月15日截止日期可行性的担忧。",
-      "tags": ["项目", "时间表", "会议", "截止日期"]
-    },
-    ...
-  ],
-  "summary": "Tom 目前专注于管理一个进度紧张的新项目..."
-}
-
-Always respond in the same language as the conversation.
+IMPORTANT REMINDER: Your output language MUST match the input conversation language. For English input, output everything in English.
 
 Conversation:
 ${conversation}
@@ -133,7 +125,13 @@ SIMPLE_STRUCT_MEM_READER_PROMPT_ZH = """您是记忆提取专家。
    - 优先考虑完整性和保真度，而非简洁性。
    - 不要泛化或跳过对用户具有个人意义的细节。
 
-5. 请避免在提取的记忆中包含违反国家法律法规或涉及政治敏感的信息。
+5. 重要——粒度规则：每个不同的事实、发现、决定、计划或主题必须作为单独的记忆项。
+   - 绝不将多个不相关的事实合并为一个记忆项。
+   - 如果对话包含N条不同的信息，至少生成N个记忆项。
+   - 例如，包含5项发现的研究报告应至少生成5个独立的记忆项（每项发现一个），再加上任何关于计划、决定或反应的额外项。
+   - 每个记忆项应是原子性的：只涵盖一个主题或事实，并且可以独立理解。
+
+6. 请避免在提取的记忆中包含违反国家法律法规或涉及政治敏感的信息。
 
 返回一个有效的JSON对象，结构如下：
 

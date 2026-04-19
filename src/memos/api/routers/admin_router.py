@@ -1,55 +1,105 @@
 """
-Admin Router for API Key Management.
+Admin Router for Agent Key Management.
 
-Protected by master key or admin scope.
+Manages agent API keys via the agents-auth.json file that AgentAuthMiddleware reads.
+Protected by a dedicated admin key (MEMOS_ADMIN_KEY env var).
+
+Produces v2 hashed entries (bcrypt) compatible with AgentAuthMiddleware.
 """
 
+import json
 import os
+import secrets
+from datetime import datetime
+from pathlib import Path
 
-from typing import Any
-
-from fastapi import APIRouter, Depends, HTTPException
+import bcrypt
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-import memos.log
-
-from memos.api.middleware.auth import require_scope, verify_api_key
-from memos.api.utils.api_keys import (
-    create_api_key_in_db,
-    generate_master_key,
-    list_api_keys,
-    revoke_api_key,
-)
+from memos.log import get_logger
 
 
-logger = memos.log.get_logger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
-
-# Request/Response models
-class CreateKeyRequest(BaseModel):
-    user_name: str = Field(..., min_length=1, max_length=255)
-    scopes: list[str] = Field(default=["read"])
-    description: str | None = Field(default=None, max_length=500)
-    expires_in_days: int | None = Field(default=None, ge=1, le=365)
+# Admin auth: a separate env-var key that only the operator knows.
+_ADMIN_KEY = os.getenv("MEMOS_ADMIN_KEY", "")
 
 
-class CreateKeyResponse(BaseModel):
+def _require_admin(request: Request):
+    """Dependency: reject requests without a valid admin key."""
+    if not _ADMIN_KEY:
+        raise HTTPException(status_code=503, detail="Admin API not configured (MEMOS_ADMIN_KEY not set)")
+    auth = request.headers.get("Authorization", "").strip()
+    if not auth:
+        raise HTTPException(status_code=401, detail="Admin key required: Authorization: Bearer <admin-key>")
+    parts = auth.split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or parts[1].strip() != _ADMIN_KEY:
+        raise HTTPException(status_code=401, detail="Invalid admin key")
+
+
+def _get_config_path() -> str:
+    path = os.getenv("MEMOS_AGENT_AUTH_CONFIG", "")
+    if not path:
+        raise HTTPException(status_code=503, detail="MEMOS_AGENT_AUTH_CONFIG not set")
+    return path
+
+
+def _read_config(path: str) -> dict:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"version": 2, "agents": []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read config: {e}")
+
+
+def _write_config(path: str, data: dict) -> None:
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+
+
+def _hash_key(raw_key: str) -> str:
+    """Bcrypt-hash a raw API key."""
+    return bcrypt.hashpw(raw_key.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+# --- Request / Response models ---
+
+class CreateAgentKeyRequest(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=255)
+    description: str = Field("", max_length=500)
+
+
+class CreateAgentKeyResponse(BaseModel):
     message: str
-    key: str  # Only returned once!
+    key: str
+    user_id: str
+    description: str
+
+
+class AgentKeyInfo(BaseModel):
+    user_id: str
     key_prefix: str
-    user_name: str
-    scopes: list[str]
+    description: str
 
 
-class KeyListResponse(BaseModel):
+class ListKeysResponse(BaseModel):
     message: str
-    keys: list[dict[str, Any]]
+    agents: list[AgentKeyInfo]
 
 
 class RevokeKeyRequest(BaseModel):
-    key_id: str
+    user_id: str = Field(..., description="user_id of the agent whose key to revoke")
 
 
 class SimpleResponse(BaseModel):
@@ -57,159 +107,137 @@ class SimpleResponse(BaseModel):
     success: bool = True
 
 
-def _get_db_connection():
-    """Get database connection for admin operations."""
-    import psycopg2
+class RotateKeyResponse(BaseModel):
+    message: str
+    key: str
+    user_id: str
 
-    return psycopg2.connect(
-        host=os.getenv("POSTGRES_HOST", "postgres"),
-        port=int(os.getenv("POSTGRES_PORT", "5432")),
-        user=os.getenv("POSTGRES_USER", "memos"),
-        password=os.getenv("POSTGRES_PASSWORD", ""),
-        dbname=os.getenv("POSTGRES_DB", "memos"),
-    )
 
+# --- Endpoints ---
 
 @router.post(
     "/keys",
-    response_model=CreateKeyResponse,
-    summary="Create a new API key",
-    dependencies=[Depends(require_scope("admin"))],
+    response_model=CreateAgentKeyResponse,
+    summary="Create a new agent key",
+    dependencies=[Depends(_require_admin)],
 )
-def create_key(
-    request: CreateKeyRequest,
-    auth: dict = Depends(verify_api_key),  # noqa: B008
-):
-    """
-    Create a new API key for a user.
+def create_key(request: Request, body: CreateAgentKeyRequest):
+    """Create a new agent API key. The key is only returned once — store it securely."""
+    path = _get_config_path()
+    config = _read_config(path)
+    config.setdefault("version", 2)
+    agents = config.get("agents", [])
 
-    Requires admin scope or master key.
+    if any(a["user_id"] == body.user_id for a in agents):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Agent key for user_id '{body.user_id}' already exists. Use /admin/keys/rotate to replace it.",
+        )
 
-    **WARNING**: The API key is only returned once. Store it securely!
-    """
-    try:
-        conn = _get_db_connection()
-        try:
-            api_key = create_api_key_in_db(
-                conn=conn,
-                user_name=request.user_name,
-                scopes=request.scopes,
-                description=request.description,
-                expires_in_days=request.expires_in_days,
-                created_by=auth.get("user_name", "unknown"),
-            )
+    new_key = f"ak_{secrets.token_hex(16)}"
+    agents.append({
+        "key_hash": _hash_key(new_key),
+        "key_prefix": new_key[:12],
+        "user_id": body.user_id,
+        "description": body.description or f"Agent {body.user_id}",
+        "created_at": datetime.utcnow().isoformat(),
+    })
+    config["agents"] = agents
+    _write_config(path, config)
 
-            logger.info(
-                f"API key created for user '{request.user_name}' by '{auth.get('user_name')}'"
-            )
-
-            return CreateKeyResponse(
-                message="API key created successfully. Store this key securely - it won't be shown again!",
-                key=api_key.key,
-                key_prefix=api_key.key_prefix,
-                user_name=request.user_name,
-                scopes=request.scopes,
-            )
-        finally:
-            conn.close()
-    except Exception as e:
-        logger.error(f"Failed to create API key: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create API key") from e
+    logger.info(f"[Admin] Created agent key for user_id='{body.user_id}'")
+    return CreateAgentKeyResponse(
+        message="Agent key created. Store it securely — it won't be shown again.",
+        key=new_key,
+        user_id=body.user_id,
+        description=body.description,
+    )
 
 
 @router.get(
     "/keys",
-    response_model=KeyListResponse,
-    summary="List API keys",
-    dependencies=[Depends(require_scope("admin"))],
+    response_model=ListKeysResponse,
+    summary="List all agent keys",
+    dependencies=[Depends(_require_admin)],
 )
-def list_keys(
-    user_name: str | None = None,
-    auth: dict = Depends(verify_api_key),  # noqa: B008
-):
-    """
-    List all API keys (admin) or keys for a specific user.
+def list_keys():
+    """List all agent keys (prefixes only — full keys are never returned)."""
+    path = _get_config_path()
+    config = _read_config(path)
+    agents = config.get("agents", [])
 
-    Note: Actual key values are never returned, only prefixes.
-    """
-    try:
-        conn = _get_db_connection()
-        try:
-            keys = list_api_keys(conn, user_name=user_name)
-            return KeyListResponse(
-                message=f"Found {len(keys)} key(s)",
-                keys=keys,
+    return ListKeysResponse(
+        message=f"Found {len(agents)} agent key(s)",
+        agents=[
+            AgentKeyInfo(
+                user_id=a["user_id"],
+                key_prefix=a.get("key_prefix", "???") + "...",
+                description=a.get("description", ""),
             )
-        finally:
-            conn.close()
-    except Exception as e:
-        logger.error(f"Failed to list API keys: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list API keys") from e
+            for a in agents
+        ],
+    )
 
 
 @router.delete(
-    "/keys/{key_id}",
+    "/keys",
     response_model=SimpleResponse,
-    summary="Revoke an API key",
-    dependencies=[Depends(require_scope("admin"))],
+    summary="Revoke an agent key",
+    dependencies=[Depends(_require_admin)],
 )
-def revoke_key(
-    key_id: str,
-    auth: dict = Depends(verify_api_key),  # noqa: B008
-):
-    """
-    Revoke an API key by ID.
+def revoke_key(request: Request, body: RevokeKeyRequest):
+    """Revoke an agent key by user_id. The agent will lose API access immediately."""
+    path = _get_config_path()
+    config = _read_config(path)
+    agents = config.get("agents", [])
 
-    The key will be deactivated but not deleted (for audit purposes).
-    """
-    try:
-        conn = _get_db_connection()
-        try:
-            success = revoke_api_key(conn, key_id)
-            if success:
-                logger.info(f"API key {key_id} revoked by '{auth.get('user_name')}'")
-                return SimpleResponse(message="API key revoked successfully")
-            else:
-                raise HTTPException(status_code=404, detail="API key not found or already revoked")
-        finally:
-            conn.close()
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to revoke API key: {e}")
-        raise HTTPException(status_code=500, detail="Failed to revoke API key") from e
+    original_count = len(agents)
+    agents = [a for a in agents if a["user_id"] != body.user_id]
+
+    if len(agents) == original_count:
+        raise HTTPException(status_code=404, detail=f"No agent key found for user_id '{body.user_id}'")
+
+    config["agents"] = agents
+    _write_config(path, config)
+
+    logger.info(f"[Admin] Revoked agent key for user_id='{body.user_id}'")
+    return SimpleResponse(message=f"Agent key for '{body.user_id}' revoked")
 
 
 @router.post(
-    "/generate-master-key",
-    response_model=dict,
-    summary="Generate a new master key",
-    dependencies=[Depends(require_scope("admin"))],
+    "/keys/rotate",
+    response_model=RotateKeyResponse,
+    summary="Rotate an agent key",
+    dependencies=[Depends(_require_admin)],
 )
-def generate_new_master_key(
-    auth: dict = Depends(verify_api_key),  # noqa: B008
-):
-    """
-    Generate a new master key.
+def rotate_key(request: Request, body: RevokeKeyRequest):
+    """Replace an agent's key with a new one. The old key stops working immediately."""
+    path = _get_config_path()
+    config = _read_config(path)
+    agents = config.get("agents", [])
 
-    **WARNING**: Store the key securely! Add MASTER_KEY_HASH to your .env file.
-    """
-    if not auth.get("is_master_key"):
-        raise HTTPException(
-            status_code=403,
-            detail="Only master key can generate new master keys",
-        )
+    found = False
+    new_key = f"ak_{secrets.token_hex(16)}"
+    for agent in agents:
+        if agent["user_id"] == body.user_id:
+            agent["key_hash"] = _hash_key(new_key)
+            agent["key_prefix"] = new_key[:12]
+            agent.pop("key", None)  # Remove any plaintext key from previous rotation
+            agent["rotated_at"] = datetime.utcnow().isoformat()
+            found = True
+            break
 
-    key, key_hash = generate_master_key()
+    if not found:
+        raise HTTPException(status_code=404, detail=f"No agent key found for user_id '{body.user_id}'")
 
-    logger.warning("New master key generated - update MASTER_KEY_HASH in .env")
+    _write_config(path, config)
 
-    return {
-        "message": "Master key generated. Add MASTER_KEY_HASH to your .env file!",
-        "key": key,
-        "key_hash": key_hash,
-        "env_line": f"MASTER_KEY_HASH={key_hash}",
-    }
+    logger.info(f"[Admin] Rotated agent key for user_id='{body.user_id}'")
+    return RotateKeyResponse(
+        message="Agent key rotated. Store the new key securely — it won't be shown again.",
+        key=new_key,
+        user_id=body.user_id,
+    )
 
 
 @router.get(
@@ -218,11 +246,12 @@ def generate_new_master_key(
 )
 def admin_health():
     """Health check for admin endpoints."""
-    auth_enabled = os.getenv("AUTH_ENABLED", "false").lower() == "true"
-    master_key_configured = bool(os.getenv("MASTER_KEY_HASH"))
+    config_path = os.getenv("MEMOS_AGENT_AUTH_CONFIG", "")
+    config_exists = bool(config_path) and Path(config_path).exists()
 
     return {
         "status": "ok",
-        "auth_enabled": auth_enabled,
-        "master_key_configured": master_key_configured,
+        "admin_key_configured": bool(_ADMIN_KEY),
+        "auth_config_exists": config_exists,
+        "auth_config_path": config_path if config_exists else None,
     }

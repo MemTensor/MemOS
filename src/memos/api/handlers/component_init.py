@@ -28,6 +28,7 @@ from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.mem_cube.navie import NaiveMemCube
 from memos.mem_feedback.simple_feedback import SimpleMemFeedback
+from memos.mem_user.user_manager import UserManager
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.orm_modules.base_model import BaseDBManager
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
@@ -305,4 +306,5 @@ def init_server() -> dict[str, Any]:
         "deepsearch_agent": deepsearch_agent,
         "nli_client": nli_client,
         "memory_history_manager": memory_history_manager,
+        "user_manager": UserManager(),
     }

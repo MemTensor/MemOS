@@ -34,8 +34,6 @@ class QdrantVecDB(BaseVecDB):
         client_kwargs: dict[str, Any] = {}
         if self.config.url:
             client_kwargs["url"] = self.config.url
-            if self.config.api_key:
-                client_kwargs["api_key"] = self.config.api_key
         else:
             client_kwargs.update(
                 {
@@ -44,6 +42,12 @@ class QdrantVecDB(BaseVecDB):
                     "path": self.config.path,
                 }
             )
+        # Pass API key regardless of connection mode (url or host+port)
+        if self.config.api_key:
+            client_kwargs["api_key"] = self.config.api_key
+            # When using host+port (not url), force HTTP to avoid SSL errors on localhost
+            if "url" not in client_kwargs:
+                client_kwargs["https"] = False
 
             # If both host and port are None, we are running in local/embedded mode
             if self.config.host is None and self.config.port is None:

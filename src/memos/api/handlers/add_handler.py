@@ -7,7 +7,10 @@ using dependency injection for better modularity and testability.
 
 from pydantic import validate_call
 
+from fastapi import HTTPException
+
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
+from memos.api.middleware.agent_auth import get_authenticated_user
 from memos.api.product_models import APIADDRequest, APIFeedbackRequest, MemoryResponse
 from memos.memories.textual.item import (
     list_all_fields,
@@ -51,8 +54,38 @@ class AddHandler(BaseHandler):
             MemoryResponse with added memory information
         """
         self.logger.info(
-            f"[DIAGNOSTIC] server_router -> add_handler.handle_add_memories called (Modified at 2025-11-29 18:46). Full request: {add_req.model_dump_json(indent=2)}"
+            f"[AddHandler] add_memories called: user_id={add_req.user_id}, cubes={add_req.writable_cube_ids}, async_mode={add_req.async_mode}"
         )
+
+        # Auth spoof check: if a key was presented, user_id must match what the key says
+        authenticated = get_authenticated_user()
+        if authenticated is not None and authenticated != add_req.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Key authenticated as '{authenticated}' but request claims user_id='{add_req.user_id}'. Spoofing not allowed."
+            )
+
+        # Cube isolation: verify user has write access to all requested cubes
+        user_manager = getattr(self.deps, "user_manager", None)
+        if user_manager:
+            cube_ids = self._resolve_cube_ids(add_req)
+            for cube_id in cube_ids:
+                if not user_manager.validate_user_cube_access(add_req.user_id, cube_id):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Access denied: user '{add_req.user_id}' cannot write to cube '{cube_id}'"
+                    )
+
+        # Reject empty or whitespace-only content early
+        if add_req.messages is not None:
+            all_empty = all(
+                not str(msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")).strip()
+                for msg in add_req.messages
+            )
+            if all_empty:
+                raise HTTPException(status_code=400, detail="Message content must not be empty.")
+        elif add_req.memory_content is not None and not str(add_req.memory_content).strip():
+            raise HTTPException(status_code=400, detail="memory_content must not be empty.")
 
         if add_req.info:
             exclude_fields = list_all_fields()
