@@ -7,7 +7,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
-      - "8000:8000"
+      # Bind to localhost only — use a reverse proxy to expose externally
+      - "127.0.0.1:8000:8000"
     env_file:
       - ../.env
     depends_on:
@@ -18,7 +19,9 @@ services:
       - HF_ENDPOINT=https://hf-mirror.com
       - QDRANT_HOST=qdrant-docker
       - QDRANT_PORT=6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
       - NEO4J_URI=bolt://neo4j-docker:7687
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
     volumes:
       - ../src:/app/src
       - .:/app/docker
@@ -29,8 +32,9 @@ services:
     image: neo4j:5.26.6
     container_name: neo4j-docker
     ports:
-      - "7474:7474"   # HTTP
-      - "7687:7687"   # Bolt
+      # Bind to localhost only
+      - "127.0.0.1:7474:7474"   # HTTP
+      - "127.0.0.1:7687:7687"   # Bolt
     healthcheck:
       test: wget http://localhost:7474 || exit 1
       interval: 1s
@@ -39,7 +43,9 @@ services:
       start_period: 3s
     environment:
       NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
-      NEO4J_AUTH: "neo4j/12345678"
+      # Require NEO4J_PASSWORD in env (no default). Keep strong — this is the
+      # graph layer of all agent memories.
+      NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:?NEO4J_PASSWORD must be set}"
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
@@ -50,13 +56,17 @@ services:
     image: qdrant/qdrant:v1.15.3
     container_name: qdrant-docker
     ports:
-      - "6333:6333"  # REST API
-      - "6334:6334"  # gRPC API
+      # Bind to localhost only
+      - "127.0.0.1:6333:6333"  # REST API
+      - "127.0.0.1:6334:6334"  # gRPC API
     volumes:
       - qdrant_data:/qdrant/storage
     environment:
       QDRANT__SERVICE__GRPC_PORT: 6334
       QDRANT__SERVICE__HTTP_PORT: 6333
+      # Require QDRANT_API_KEY in env. Without it, anyone who reaches the
+      # port can read/delete all vectors.
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set}
     restart: unless-stopped
     networks:
       - memos_network
