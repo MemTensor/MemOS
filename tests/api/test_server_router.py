@@ -15,6 +15,7 @@ from memos.api.product_models import (
     APIADDRequest,
     APIChatCompleteRequest,
     APISearchRequest,
+    DeleteMemoryResponse,
     MemoryResponse,
     SearchResponse,
     SuggestionResponse,
@@ -415,3 +416,192 @@ class TestServerRouterGetAll:
         data = response.json()
         assert data["message"] == "Memories retrieved successfully"
         assert isinstance(data["data"], list)
+
+
+class TestServerRouterDeleteMemory:
+    """Tests for DELETE/POST /product/delete_memory status-code and param-alias behavior."""
+
+    @pytest.fixture
+    def delete_setup(self, mock_handlers):
+        """Patch graph_db + user_manager at the router module, re-enable the existing handler."""
+        delete_response = DeleteMemoryResponse(
+            message="Memories deleted successfully", data={"status": "success"}
+        )
+        mock_handlers["memory"].handle_delete_memories.return_value = delete_response
+
+        with (
+            patch("memos.api.routers.server_router.graph_db") as mock_graph_db,
+            patch("memos.api.routers.server_router.user_manager") as mock_user_manager,
+        ):
+            mock_user_manager.validate_user_cube_access.return_value = True
+            yield {
+                "graph_db": mock_graph_db,
+                "user_manager": mock_user_manager,
+                "memory": mock_handlers["memory"],
+            }
+
+    def test_legacy_plural_form_still_works(self, delete_setup, client):
+        """Existing callers using writable_cube_ids + memory_ids must keep working."""
+        delete_setup["graph_db"].get_user_names_by_memory_ids.return_value = {
+            "mem-1": "cube-a"
+        }
+
+        response = client.request(
+            "POST",
+            "/product/delete_memory",
+            json={
+                "user_id": "user-a",
+                "writable_cube_ids": ["cube-a"],
+                "memory_ids": ["mem-1"],
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["data"]["deleted"] == ["mem-1"]
+        assert body["data"]["not_found"] == []
+        delete_setup["memory"].handle_delete_memories.assert_called_once()
+
+    def test_singular_form_accepted_via_delete_method(self, delete_setup, client):
+        """New callers using singular mem_cube_id + memory_id over HTTP DELETE."""
+        delete_setup["graph_db"].get_user_names_by_memory_ids.return_value = {
+            "mem-1": "cube-a"
+        }
+
+        response = client.request(
+            "DELETE",
+            "/product/delete_memory",
+            json={
+                "user_id": "user-a",
+                "mem_cube_id": "cube-a",
+                "memory_id": "mem-1",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["data"]["deleted"] == ["mem-1"]
+
+    def test_nonexistent_memory_returns_404(self, delete_setup, client):
+        delete_setup["graph_db"].get_user_names_by_memory_ids.return_value = {
+            "does-not-exist": None
+        }
+
+        response = client.request(
+            "DELETE",
+            "/product/delete_memory",
+            json={
+                "user_id": "user-a",
+                "mem_cube_id": "cube-a",
+                "memory_id": "does-not-exist",
+            },
+        )
+
+        assert response.status_code == 404
+        body = response.json()
+        assert body["data"]["not_found"] == ["does-not-exist"]
+        assert body["data"]["deleted"] == []
+        delete_setup["memory"].handle_delete_memories.assert_not_called()
+
+    def test_memory_in_different_cube_returns_404(self, delete_setup, client):
+        """Requesting cube A but memory lives in cube B (user-perspective 404, not 403)."""
+        delete_setup["graph_db"].get_user_names_by_memory_ids.return_value = {
+            "mem-1": "cube-b"
+        }
+
+        response = client.request(
+            "DELETE",
+            "/product/delete_memory",
+            json={
+                "user_id": "user-a",
+                "mem_cube_id": "cube-a",
+                "memory_id": "mem-1",
+            },
+        )
+
+        assert response.status_code == 404
+
+    def test_forbidden_cube_returns_403(self, delete_setup, client):
+        """User targets a cube they have no access to → 403 (not 404)."""
+        delete_setup["user_manager"].validate_user_cube_access.return_value = False
+
+        response = client.request(
+            "DELETE",
+            "/product/delete_memory",
+            json={
+                "user_id": "user-a",
+                "mem_cube_id": "cube-not-mine",
+                "memory_id": "mem-1",
+            },
+        )
+
+        assert response.status_code == 403
+        delete_setup["graph_db"].get_user_names_by_memory_ids.assert_not_called()
+
+    def test_partial_delete_returns_200_with_split(self, delete_setup, client):
+        """3 ids where 2 exist + 1 doesn't → 200 with deleted/not_found split."""
+        delete_setup["graph_db"].get_user_names_by_memory_ids.return_value = {
+            "mem-1": "cube-a",
+            "mem-2": "cube-a",
+            "mem-missing": None,
+        }
+
+        response = client.request(
+            "DELETE",
+            "/product/delete_memory",
+            json={
+                "user_id": "user-a",
+                "mem_cube_id": "cube-a",
+                "memory_ids": ["mem-1", "mem-2", "mem-missing"],
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert sorted(body["data"]["deleted"]) == ["mem-1", "mem-2"]
+        assert body["data"]["not_found"] == ["mem-missing"]
+        assert body["data"]["status"] == "partial"
+
+        # Handler should be called with filtered ids only.
+        call_kwargs = delete_setup["memory"].handle_delete_memories.call_args.kwargs
+        assert call_kwargs["delete_mem_req"].memory_ids == ["mem-1", "mem-2"]
+
+    def test_empty_body_returns_400(self, delete_setup, client):
+        """No cube, no memory, no filter/user_id/session_id → 400."""
+        response = client.request("DELETE", "/product/delete_memory", json={})
+
+        assert response.status_code == 400
+        delete_setup["memory"].handle_delete_memories.assert_not_called()
+
+    def test_memory_only_without_cube_returns_400(self, delete_setup, client):
+        """memory_id provided but no cube targeting info → 400."""
+        response = client.request(
+            "DELETE",
+            "/product/delete_memory",
+            json={"memory_id": "mem-1"},
+        )
+
+        assert response.status_code == 400
+
+    def test_cube_only_without_memory_returns_400(self, delete_setup, client):
+        """mem_cube_id provided but no memory ids → 400 (prevents accidental bulk wipe)."""
+        response = client.request(
+            "DELETE",
+            "/product/delete_memory",
+            json={"mem_cube_id": "cube-a"},
+        )
+
+        assert response.status_code == 400
+
+    def test_filter_mode_unchanged(self, delete_setup, client):
+        """Filter/user_id quick-delete mode bypasses the 400 cube+memory requirement."""
+        response = client.request(
+            "POST",
+            "/product/delete_memory",
+            json={"user_id": "user-a", "session_id": "s1"},
+        )
+
+        assert response.status_code == 200
+        delete_setup["memory"].handle_delete_memories.assert_called_once()
+        # Owner lookup must not happen in filter mode.
+        delete_setup["graph_db"].get_user_names_by_memory_ids.assert_not_called()
