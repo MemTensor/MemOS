@@ -16,6 +16,7 @@ import random as _random
 import socket
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 from memos.api import handlers
 from memos.api.middleware.agent_auth import get_authenticated_user
@@ -402,18 +403,101 @@ def get_memory_by_ids(memory_ids: list[str]):
     )
 
 
-@router.post(
-    "/delete_memory", summary="Delete memories for user", response_model=DeleteMemoryResponse
+@router.api_route(
+    "/delete_memory",
+    methods=["POST", "DELETE"],
+    summary="Delete memories for user",
+    response_model=DeleteMemoryResponse,
 )
 def delete_memories(memory_req: DeleteMemoryRequest):
+    """Delete memories. Supports both singular (`mem_cube_id`, `memory_id`) and plural aliases.
+
+    Returns distinct status codes:
+    - 400: memory-id mode chosen but cube or memory id(s) missing.
+    - 403: caller lacks access to a requested cube (enforced by `_enforce_cube_access`).
+    - 404: memory-id mode where every id is missing from the targeted cube(s).
+    - 200: success — body carries `deleted`/`not_found` for partial results.
+    """
     authenticated = get_authenticated_user()
-    # Check cube access for each writable cube
-    cube_ids = memory_req.writable_cube_ids or ([memory_req.user_id] if memory_req.user_id else [])
+
+    cube_ids = memory_req.writable_cube_ids or []
+    mem_ids = memory_req.memory_ids or []
+
+    has_file_ids = bool(memory_req.file_ids)
+    # Memory-id mode wins when memory_ids is present; otherwise we fall back to file-id
+    # or filter/user_id/session_id mode. (user_id alone, without memory_ids, still means
+    # "delete everything for this user" — preserved for legacy callers.)
+    memory_id_mode = bool(mem_ids) or (
+        not has_file_ids
+        and not memory_req.filter
+        and not memory_req.user_id
+        and not memory_req.session_id
+    )
+
+    if memory_id_mode and (not cube_ids or not mem_ids):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Provide both a cube (mem_cube_id or writable_cube_ids) and "
+                "a memory id (memory_id or memory_ids), or use file_ids / filter mode."
+            ),
+        )
+
+    # 403 on any cube the caller cannot access.
     for cube_id in cube_ids:
         _enforce_cube_access(authenticated or cube_id, cube_id)
-    return handlers.memory_handler.handle_delete_memories(
-        delete_mem_req=memory_req, naive_mem_cube=naive_mem_cube
+
+    if not memory_id_mode:
+        return handlers.memory_handler.handle_delete_memories(
+            delete_mem_req=memory_req, naive_mem_cube=naive_mem_cube
+        )
+
+    # Memory-id mode: split existing vs missing before delegating to handler.
+    try:
+        owner_map = graph_db.get_user_names_by_memory_ids(memory_ids=mem_ids)
+    except Exception:
+        logger.error("Failed to look up memory owners before delete", exc_info=True)
+        owner_map = {}
+
+    allowed_cubes = set(cube_ids)
+    deleted_ids: list[str] = []
+    not_found_ids: list[str] = []
+    for mid in mem_ids:
+        owner = owner_map.get(mid)
+        if owner and owner in allowed_cubes:
+            deleted_ids.append(mid)
+        else:
+            # Memory either does not exist at all, or belongs to a cube the
+            # caller did not target. From the caller's perspective it is not found.
+            not_found_ids.append(mid)
+
+    if not deleted_ids:
+        # Return envelope directly so {deleted, not_found} survives the global HTTP
+        # exception handler, which would otherwise stringify structured `detail`.
+        return JSONResponse(
+            status_code=404,
+            content={
+                "code": 404,
+                "message": "No matching memories found in the targeted cube(s).",
+                "data": {"deleted": [], "not_found": not_found_ids},
+            },
+        )
+
+    filtered_req = memory_req.model_copy(update={"memory_ids": deleted_ids})
+    resp = handlers.memory_handler.handle_delete_memories(
+        delete_mem_req=filtered_req, naive_mem_cube=naive_mem_cube
     )
+    data = dict(resp.data or {})
+    data["deleted"] = deleted_ids
+    data["not_found"] = not_found_ids
+    if not_found_ids and data.get("status") == "success":
+        data["status"] = "partial"
+    message = (
+        "Memories deleted successfully"
+        if not not_found_ids
+        else f"Deleted {len(deleted_ids)} memory(ies); {len(not_found_ids)} not found."
+    )
+    return DeleteMemoryResponse(code=200, message=message, data=data)
 
 
 # =============================================================================
