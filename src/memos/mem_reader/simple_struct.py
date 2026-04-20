@@ -85,6 +85,32 @@ SceneDataInput: TypeAlias = (
 
 
 logger = log.get_logger(__name__)
+
+
+def _merge_custom_tags(
+    base_tags: list[str] | None, custom_tags: list[str] | None
+) -> list[str]:
+    """Merge user-supplied custom_tags with the system-generated tags.
+
+    Preserves order (system tags first, custom next) and deduplicates while
+    being tolerant of None / non-list inputs.
+    """
+    merged: list[str] = []
+    for source in (base_tags, custom_tags):
+        if not source:
+            continue
+        if not isinstance(source, list):
+            continue
+        for tag in source:
+            if tag is None:
+                continue
+            tag_str = str(tag)
+            if tag_str and tag_str not in merged:
+                merged.append(tag_str)
+    return merged
+
+
+
 PROMPT_DICT = {
     "chat": {
         "en": SIMPLE_STRUCT_MEM_READER_PROMPT,
@@ -101,7 +127,16 @@ PROMPT_DICT = {
 }
 
 
-def _build_node(idx, message, info, source_info, llm, parse_json_result, embedder):
+def _build_node(
+    idx,
+    message,
+    info,
+    source_info,
+    llm,
+    parse_json_result,
+    embedder,
+    custom_tags: list[str] | None = None,
+):
     # generate
     try:
         raw = llm.generate(message)
@@ -131,6 +166,7 @@ def _build_node(idx, message, info, source_info, llm, parse_json_result, embedde
         tags = chunk_res.get("tags", [])
         if not isinstance(tags, list):
             tags = []
+        tags = _merge_custom_tags(tags, custom_tags)
 
         key = chunk_res.get("key", None)
 
@@ -356,7 +392,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 text = w["text"]
                 roles = {s.get("role", "") for s in w["sources"] if s.get("role")}
                 mem_type = "UserMemory" if roles == {"user"} else "LongTermMemory"
-                tags = ["mode:fast"]
+                # Preserve the mode tag (downstream scheduler/feedback code filters on
+                # "mode:fast") and append user-supplied custom_tags without clobbering.
+                tags = _merge_custom_tags(["mode:fast"], custom_tags)
                 return self._make_memory_item(
                     value=text,
                     info=info,
@@ -391,11 +429,14 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                             .replace("长期记忆", "LongTermMemory")
                             .replace("用户记忆", "UserMemory")
                         )
+                        # The LLM prompt already encourages applying custom_tags, but
+                        # compliance is not guaranteed — enforce the merge so the
+                        # request-level custom_tags always survive.
                         node = self._make_memory_item(
                             value=m.get("value", ""),
                             info=info,
                             memory_type=memory_type,
-                            tags=m.get("tags", []),
+                            tags=_merge_custom_tags(m.get("tags", []), custom_tags),
                             key=m.get("key", ""),
                             sources=w["sources"],
                             background=resp.get("summary", ""),
@@ -932,6 +973,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     self.llm,
                     parse_json_result,
                     self.embedder,
+                    custom_tags,
                 ): idx
                 for idx, msg in enumerate(messages)
             }

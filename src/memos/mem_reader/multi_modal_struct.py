@@ -12,7 +12,11 @@ from memos.mem_reader.read_multi_modal import MultiModalParser, detect_lang
 from memos.mem_reader.read_multi_modal.base import _derive_key
 from memos.mem_reader.read_pref_memory.process_preference_memory import process_preference_fine
 from memos.mem_reader.read_skill_memory.process_skill_memory import process_skill_memory_fine
-from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
+from memos.mem_reader.simple_struct import (
+    PROMPT_DICT,
+    SimpleStructMemReader,
+    _merge_custom_tags,
+)
 from memos.mem_reader.utils import parse_json_result
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.templates.mem_reader_prompts import MEMORY_MERGE_PROMPT_EN, MEMORY_MERGE_PROMPT_ZH
@@ -749,7 +753,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                             value=m_maybe_merged.get("value", ""),
                             info=info_per_item,
                             memory_type=memory_type,
-                            tags=m_maybe_merged.get("tags", []),
+                            tags=_merge_custom_tags(
+                                m_maybe_merged.get("tags", []), custom_tags
+                            ),
                             key=m_maybe_merged.get("key", ""),
                             sources=sources,  # Preserve sources from fast item
                             background=resp.get("summary", ""),
@@ -776,7 +782,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         value=resp_maybe_merged.get("value", "").strip(),
                         info=info_per_item,
                         memory_type="LongTermMemory",
-                        tags=resp_maybe_merged.get("tags", []),
+                        tags=_merge_custom_tags(
+                            resp_maybe_merged.get("tags", []), custom_tags
+                        ),
                         key=resp_maybe_merged.get("key", None),
                         sources=sources,  # Preserve sources from fast item
                         background=resp.get("summary", ""),
@@ -1019,6 +1027,14 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 scene_data_info, info, mode="fast", need_emb=False, **kwargs
             )
         fast_memory_items = self._concat_multi_modal_memories(all_memory_items)
+        # Merge custom_tags into fast items' tags. Sub-parsers (string/user/assistant/
+        # file/tool/etc.) build items with a fixed ["mode:fast"] tag, so we enrich
+        # here rather than threading custom_tags through every parser.
+        if custom_tags:
+            for item in fast_memory_items:
+                if item is None or item.metadata is None:
+                    continue
+                item.metadata.tags = _merge_custom_tags(item.metadata.tags, custom_tags)
         if mode == "fast":
             return fast_memory_items
         else:

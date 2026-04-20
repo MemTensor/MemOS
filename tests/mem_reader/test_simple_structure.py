@@ -6,9 +6,32 @@ from memos.chunkers import ChunkerFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
-from memos.mem_reader.simple_struct import SimpleStructMemReader
+from memos.mem_reader.simple_struct import SimpleStructMemReader, _merge_custom_tags
 from memos.mem_reader.utils import parse_json_result
 from memos.memories.textual.item import TextualMemoryItem
+
+
+class TestMergeCustomTags(unittest.TestCase):
+    def test_appends_custom_tags_preserving_mode_tag(self):
+        self.assertEqual(
+            _merge_custom_tags(["mode:fast"], ["finance", "quarterly"]),
+            ["mode:fast", "finance", "quarterly"],
+        )
+
+    def test_deduplicates_overlap(self):
+        self.assertEqual(
+            _merge_custom_tags(["mode:fast", "finance"], ["finance", "quarterly"]),
+            ["mode:fast", "finance", "quarterly"],
+        )
+
+    def test_no_custom_tags_is_noop(self):
+        self.assertEqual(_merge_custom_tags(["mode:fast"], None), ["mode:fast"])
+        self.assertEqual(_merge_custom_tags(["mode:fast"], []), ["mode:fast"])
+
+    def test_tolerates_none_and_non_list(self):
+        self.assertEqual(_merge_custom_tags(None, ["x", "y"]), ["x", "y"])
+        self.assertEqual(_merge_custom_tags("not-a-list", ["a"]), ["a"])
+        self.assertEqual(_merge_custom_tags(None, None), [])
 
 
 class TestSimpleStructMemReader(unittest.TestCase):
@@ -68,6 +91,66 @@ class TestSimpleStructMemReader(unittest.TestCase):
             result[0].memory, "Tom planned to suggest in a meeting on June 27, 2025 at 9:30 AM"
         )
         self.assertEqual(result[0].metadata.user_id, "user1")
+
+    def test_process_chat_data_fast_mode_merges_custom_tags(self):
+        """Fast mode should keep ``mode:fast`` AND append user-supplied custom_tags."""
+        scene_data_info = [
+            {"role": "user", "content": "Q1 revenue was up 12 percent"},
+        ]
+        info = {
+            "user_id": "user1",
+            "session_id": "session1",
+            "source_type": "web",
+            "custom_tags": ["finance", "quarterly"],
+        }
+        # Stub the embedder so _make_memory_item doesn't need a real model.
+        self.reader.embedder.embed.return_value = [[0.0]]
+
+        result = self.reader._process_chat_data(scene_data_info, info, mode="fast")
+
+        self.assertEqual(len(result), 1)
+        tags = result[0].metadata.tags
+        self.assertIn("mode:fast", tags)
+        self.assertIn("finance", tags)
+        self.assertIn("quarterly", tags)
+        # User-supplied info keys outside reserved set should survive.
+        self.assertEqual(result[0].metadata.info.get("source_type"), "web")
+        # custom_tags itself is popped off info before storage.
+        self.assertNotIn("custom_tags", result[0].metadata.info)
+
+    def test_process_chat_data_fast_mode_without_custom_tags(self):
+        """Baseline: without custom_tags the behavior is unchanged."""
+        scene_data_info = [{"role": "user", "content": "hello"}]
+        info = {"user_id": "u", "session_id": "s"}
+        self.reader.embedder.embed.return_value = [[0.0]]
+
+        result = self.reader._process_chat_data(scene_data_info, info, mode="fast")
+
+        self.assertEqual(result[0].metadata.tags, ["mode:fast"])
+
+    def test_process_chat_data_fine_mode_merges_custom_tags(self):
+        """Fine mode should enforce the custom_tags merge even if the LLM skips them."""
+        scene_data_info = [{"role": "user", "content": "Q1 revenue was up 12 percent"}]
+        info = {
+            "user_id": "user1",
+            "session_id": "session1",
+            "custom_tags": ["finance", "quarterly"],
+        }
+        # LLM returns tags that do NOT include the user-supplied custom_tags.
+        self.reader.llm.generate.return_value = (
+            '{"memory list": [{"key": "Q1 revenue", "memory_type": "LongTermMemory", '
+            '"value": "Q1 revenue was up 12 percent", "tags": ["revenue"]}], '
+            '"summary": ""}'
+        )
+        self.reader.embedder.embed.return_value = [[0.0]]
+
+        result = self.reader._process_chat_data(scene_data_info, info, mode="fine")
+
+        self.assertEqual(len(result), 1)
+        tags = result[0].metadata.tags
+        self.assertIn("revenue", tags)
+        self.assertIn("finance", tags)
+        self.assertIn("quarterly", tags)
 
     def test_get_scene_data_info_with_chat(self):
         """Test extracting chat info from scene data."""

@@ -12,13 +12,39 @@ from fastapi import HTTPException
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.middleware.agent_auth import get_authenticated_user
 from memos.api.product_models import APIADDRequest, APIFeedbackRequest, MemoryResponse
-from memos.memories.textual.item import (
-    list_all_fields,
-)
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
 from memos.types import MessageList
+
+
+# Keys MemOS internals write into metadata.info. User-supplied values for
+# these keys are preserved under a "user:<key>" namespace so internal
+# bookkeeping (e.g. scheduler merge tracking) is never clobbered.
+_RESERVED_INFO_KEYS = frozenset({"merged_from"})
+
+
+def _namespace_user_info(
+    info: dict | None,
+) -> tuple[dict, dict[str, str]]:
+    """Return a copy of ``info`` with reserved keys renamed to ``user:<key>``.
+
+    Returns:
+        (preserved_info, renamed_map) — renamed_map is {original_key: new_key}
+        for any collisions that were rewritten (empty when there were none).
+    """
+    if not info:
+        return {}, {}
+    preserved: dict = {}
+    renamed: dict[str, str] = {}
+    for k, v in info.items():
+        if k in _RESERVED_INFO_KEYS:
+            new_key = f"user:{k}"
+            preserved[new_key] = v
+            renamed[k] = new_key
+        else:
+            preserved[k] = v
+    return preserved, renamed
 
 
 class AddHandler(BaseHandler):
@@ -88,11 +114,16 @@ class AddHandler(BaseHandler):
             raise HTTPException(status_code=400, detail="memory_content must not be empty.")
 
         if add_req.info:
-            exclude_fields = list_all_fields()
-            info_len = len(add_req.info)
-            add_req.info = {k: v for k, v in add_req.info.items() if k not in exclude_fields}
-            if len(add_req.info) < info_len:
-                self.logger.warning(f"[AddHandler] info fields can not contain {exclude_fields}.")
+            # metadata.info is a free-form dict. Only reserved keys written by MemOS
+            # internals (see _RESERVED_INFO_KEYS) need collision handling — the prior
+            # implementation over-filtered against top-level metadata field names, which
+            # dropped legitimate user keys like `source_type` / `topic`.
+            add_req.info, renamed = _namespace_user_info(add_req.info)
+            if renamed:
+                self.logger.warning(
+                    f"[AddHandler] Reserved info keys renamed to preserve internal "
+                    f"bookkeeping: {renamed}"
+                )
 
         cube_view = self._build_cube_view(add_req)
 
