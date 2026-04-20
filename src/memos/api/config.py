@@ -585,6 +585,20 @@ class APIConfig:
                     ),
                 },
             }
+        elif embedder_backend == "sentence_transformer":
+            # Local sentence-transformers embedder (no external API). Used by
+            # Hermes to avoid MiniMax embedding rate limits and cloud dependency.
+            return {
+                "backend": "sentence_transformer",
+                "config": {
+                    "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "all-MiniLM-L6-v2"),
+                    "embedding_dims": int(os.getenv("MOS_EMBEDDER_DIMS", "384")),
+                    "trust_remote_code": os.getenv(
+                        "MOS_EMBEDDER_TRUST_REMOTE_CODE", "true"
+                    ).lower()
+                    == "true",
+                },
+            }
         else:  # ollama
             return {
                 "backend": "ollama",
