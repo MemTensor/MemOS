@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from memos.types.general_types import UserContext
 from memos.mem_reader.read_multi_modal import coerce_scene_data, detect_lang
 from memos.mem_reader.utils import (
+    chunk_text_by_tokens,
     count_tokens_text,
     derive_key,
     parse_json_result,
@@ -388,6 +389,43 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         if mode == "fast":
             logger.debug("Using unified Fast Mode")
 
+            # Fast-mode sub-chunking: a single very long user message would
+            # otherwise become one giant embedding, washing out late content
+            # in semantic search. We split each window into ~chunk_tokens
+            # slices with overlap whenever the window exceeds the threshold.
+            #
+            # Timestamp prefix policy: when a window is sub-chunked, the
+            # `user: [chat_time]: ` prefix that _iter_chat_windows prepended
+            # naturally lands on the FIRST sub-chunk only. Subsequent
+            # sub-chunks are mid-message slices, so they carry no prefix.
+            chunk_tokens = int(os.getenv("MOS_FAST_CHUNK_TOKENS", "500"))
+            overlap_tokens = int(os.getenv("MOS_FAST_CHUNK_OVERLAP_TOKENS", "50"))
+            chunk_threshold = max(chunk_tokens * 2, chunk_tokens + 1)
+
+            expanded: list[dict[str, Any]] = []
+            for w in windows:
+                text = w["text"]
+                if self._count_tokens(text) <= chunk_threshold:
+                    expanded.append({**w, "chunk_index": 0, "chunk_total": 1})
+                    continue
+                sub_chunks = chunk_text_by_tokens(
+                    text,
+                    max_tokens=chunk_tokens,
+                    overlap_tokens=overlap_tokens,
+                    count_tokens=self._count_tokens,
+                )
+                total = len(sub_chunks)
+                for idx, sub_text in enumerate(sub_chunks):
+                    expanded.append(
+                        {
+                            "text": sub_text,
+                            "sources": w["sources"],
+                            "start_idx": w["start_idx"],
+                            "chunk_index": idx,
+                            "chunk_total": total,
+                        }
+                    )
+
             def _build_fast_node(w):
                 text = w["text"]
                 roles = {s.get("role", "") for s in w["sources"] if s.get("role")}
@@ -395,9 +433,13 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 # Preserve the mode tag (downstream scheduler/feedback code filters on
                 # "mode:fast") and append user-supplied custom_tags without clobbering.
                 tags = _merge_custom_tags(["mode:fast"], custom_tags)
+                node_info = dict(info)
+                if w.get("chunk_total", 1) > 1:
+                    node_info["chunk_index"] = w["chunk_index"]
+                    node_info["chunk_total"] = w["chunk_total"]
                 return self._make_memory_item(
                     value=text,
-                    info=info,
+                    info=node_info,
                     memory_type=mem_type,
                     tags=tags,
                     sources=w["sources"],
@@ -405,7 +447,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 )
 
             with ContextThreadPoolExecutor(max_workers=8) as ex:
-                futures = {ex.submit(_build_fast_node, w): i for i, w in enumerate(windows)}
+                futures = {ex.submit(_build_fast_node, w): i for i, w in enumerate(expanded)}
                 results = [None] * len(futures)
                 for fut in concurrent.futures.as_completed(futures):
                     i = futures[fut]
