@@ -255,6 +255,12 @@ class SearchHandler(BaseHandler):
 
         lambda_relevance = float(os.getenv("MOS_MMR_LAMBDA", "0.7"))
         penalty_threshold = float(os.getenv("MOS_MMR_PENALTY_THRESHOLD", "0.7"))
+        # Stop when the best remaining candidate's MMR score falls at or below
+        # this value — i.e. the penalty outweighs the relevance contribution.
+        # Needed to make MMR materially differ from raw top-K in practice:
+        # otherwise the loop keeps filling bucket capacity with near-dupes at
+        # deeply negative scores.
+        stop_score = float(os.getenv("MOS_MMR_STOP_SCORE", "0.0"))
         alpha_exponential = 10.0
 
         def bucket_has_capacity(mem_type: str, bucket_idx: int) -> bool:
@@ -305,6 +311,11 @@ class SearchHandler(BaseHandler):
                     best_relevance = relevance
 
             if best_idx is None:
+                break
+            # Early-stop: the best remaining candidate can't improve the set.
+            # Exception: always keep at least one pick so that sufficiently
+            # relevant items aren't rejected on an empty selection.
+            if selected_global and best_mmr is not None and best_mmr <= stop_score:
                 break
 
             mem_type, bucket_idx, _, _ = flat[best_idx]
