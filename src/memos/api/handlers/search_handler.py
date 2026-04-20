@@ -98,7 +98,9 @@ class SearchHandler(BaseHandler):
         self.logger.info(f"[SearchHandler] Relativity filter: {search_req_local.relativity}")
         results = self._apply_relativity_threshold(results, search_req_local.relativity)
 
-        if search_req_local.dedup == "sim":
+        if search_req_local.dedup == "no":
+            self._strip_embeddings(results)
+        elif search_req_local.dedup == "sim":
             results = self._dedup_text_memories(results, search_req.top_k)
             self._strip_embeddings(results)
         elif search_req_local.dedup == "mmr":
@@ -111,7 +113,7 @@ class SearchHandler(BaseHandler):
             self.reranker,
             query=search_req.query,
             text_mem=text_mem,
-            top_k=search_req_local.top_k,
+            top_k=search_req.top_k,
             file_mem_proportion=0.5,
         )
 
