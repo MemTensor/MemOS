@@ -214,39 +214,28 @@ class SearchHandler(BaseHandler):
         self, results: dict[str, Any], text_top_k: int, pref_top_k: int = 6
     ) -> dict[str, Any]:
         """
-        MMR-based deduplication with progressive penalty for high similarity.
+        MMR-based deduplication across text_mem and pref_mem buckets.
 
-        Performs deduplication on both text_mem and preference memories together.
-        Other memory types (tool_mem, etc.) are not modified.
-
-        Args:
-            results: Search results containing text_mem and preference buckets
-            text_top_k: Target number of text memories to return per bucket
-            pref_top_k: Target number of preference memories to return per bucket
-
-        Algorithm:
-        1. Prefill top 5 by relevance
-        2. MMR selection: balance relevance vs diversity
-        3. Re-sort by original relevance for better generation quality
+        Score each candidate as:
+            mmr = λ * relevance − (1 − λ) * diversity
+        where diversity = max_sim to selected, inflated by an exponential
+        penalty when max_sim > MOS_MMR_PENALTY_THRESHOLD. Tiebreak on
+        (relevance desc, idx asc) for determinism.
         """
         text_buckets = results.get("text_mem", [])
         pref_buckets = results.get("pref_mem", [])
 
-        # Early return if no memories to deduplicate
         if not text_buckets and not pref_buckets:
             return results
 
-        # Flatten all memories with their type and scores
         # flat structure: (memory_type, bucket_idx, mem, score)
         flat: list[tuple[str, int, dict[str, Any], float]] = []
 
-        # Flatten text memories
         for bucket_idx, bucket in enumerate(text_buckets):
             for mem in bucket.get("memories", []):
                 score = mem.get("metadata", {}).get("relativity", 0.0)
                 flat.append(("text", bucket_idx, mem, float(score) if score is not None else 0.0))
 
-        # Flatten preference memories
         for bucket_idx, bucket in enumerate(pref_buckets):
             for mem in bucket.get("memories", []):
                 meta = mem.get("metadata", {})
@@ -261,182 +250,79 @@ class SearchHandler(BaseHandler):
         if len(flat) <= 1:
             return results
 
-        total_by_type: dict[str, int] = {"text": 0, "preference": 0}
-        existing_by_type: dict[str, int] = {"text": 0, "preference": 0}
-        missing_by_type: dict[str, int] = {"text": 0, "preference": 0}
-        missing_indices: list[int] = []
-        for idx, (mem_type, _, mem, _) in enumerate(flat):
-            if mem_type not in total_by_type:
-                total_by_type[mem_type] = 0
-                existing_by_type[mem_type] = 0
-                missing_by_type[mem_type] = 0
-            total_by_type[mem_type] += 1
-
-            embedding = mem.get("metadata", {}).get("embedding")
-            if embedding:
-                existing_by_type[mem_type] += 1
-            else:
-                missing_by_type[mem_type] += 1
-                missing_indices.append(idx)
-
-        self.logger.info(
-            "[SearchHandler] MMR embedding metadata scan: total=%s total_by_type=%s existing_by_type=%s missing_by_type=%s",
-            len(flat),
-            total_by_type,
-            existing_by_type,
-            missing_by_type,
-        )
-        if missing_indices:
-            self.logger.warning(
-                "[SearchHandler] MMR embedding metadata missing; will compute missing embeddings: missing_total=%s",
-                len(missing_indices),
-            )
-
-        # Get or compute embeddings
         embeddings = self._extract_embeddings([mem for _, _, mem, _ in flat])
-
-        # Compute similarity matrix using NumPy-optimized method
-        # Returns numpy array but compatible with list[i][j] indexing
         similarity_matrix = cosine_similarity_matrix(embeddings)
 
-        # Initialize selection tracking for both text and preference
-        text_indices_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(text_buckets))}
-        pref_indices_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(pref_buckets))}
+        lambda_relevance = float(os.getenv("MOS_MMR_LAMBDA", "0.7"))
+        penalty_threshold = float(os.getenv("MOS_MMR_PENALTY_THRESHOLD", "0.7"))
+        alpha_exponential = 10.0
 
-        for flat_index, (mem_type, bucket_idx, _, _) in enumerate(flat):
+        def bucket_has_capacity(mem_type: str, bucket_idx: int) -> bool:
             if mem_type == "text":
-                text_indices_by_bucket[bucket_idx].append(flat_index)
-            elif mem_type == "preference":
-                pref_indices_by_bucket[bucket_idx].append(flat_index)
+                return len(text_selected_by_bucket[bucket_idx]) < text_top_k
+            if mem_type == "preference":
+                return len(pref_selected_by_bucket[bucket_idx]) < pref_top_k
+            return False
 
-        selected_global: list[int] = []
         text_selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(text_buckets))}
         pref_selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(pref_buckets))}
-        selected_texts: set[str] = set()  # Track exact text content to avoid duplicates
-
-        # Phase 1: Prefill top N by relevance
-        # Use the smaller of text_top_k and pref_top_k for prefill count
-        prefill_top_n = min(2, text_top_k, pref_top_k) if pref_buckets else min(2, text_top_k)
-        ordered_by_relevance = sorted(range(len(flat)), key=lambda idx: flat[idx][3], reverse=True)
-        for idx in ordered_by_relevance[: len(flat)]:
-            if len(selected_global) >= prefill_top_n:
-                break
-            mem_type, bucket_idx, mem, _ = flat[idx]
-
-            # Skip if exact text already exists in selected set
-            mem_text = mem.get("memory", "").strip()
-            if mem_text in selected_texts:
-                continue
-
-            # Skip if highly similar (Dice + TF-IDF + 2-gram combined, with embedding filter)
-            _mmr_text_threshold = float(os.getenv("MOS_MMR_TEXT_THRESHOLD", "0.85"))
-            if SearchHandler._is_text_highly_similar_optimized(
-                idx, mem_text, selected_global, similarity_matrix, flat, threshold=_mmr_text_threshold
-            ):
-                continue
-
-            # Check bucket capacity with correct top_k for each type
-            if mem_type == "text" and len(text_selected_by_bucket[bucket_idx]) < text_top_k:
-                selected_global.append(idx)
-                text_selected_by_bucket[bucket_idx].append(idx)
-                selected_texts.add(mem_text)
-            elif mem_type == "preference" and len(pref_selected_by_bucket[bucket_idx]) < pref_top_k:
-                selected_global.append(idx)
-                pref_selected_by_bucket[bucket_idx].append(idx)
-                selected_texts.add(mem_text)
-
-        # Phase 2: MMR selection for remaining slots
-        lambda_relevance = 0.8
-        similarity_threshold = float(os.getenv("MOS_MMR_PENALTY_THRESHOLD", "0.7"))  # Exponential penalty start
-        alpha_exponential = 10.0  # Exponential penalty coefficient
-        remaining = set(range(len(flat))) - set(selected_global)
+        selected_global: list[int] = []
+        remaining = sorted(range(len(flat)))
 
         while remaining:
             best_idx: int | None = None
             best_mmr: float | None = None
+            best_relevance: float | None = None
 
             for idx in remaining:
-                mem_type, bucket_idx, mem, _ = flat[idx]
-
-                # Check bucket capacity with correct top_k for each type
-                if (
-                    mem_type == "text" and len(text_selected_by_bucket[bucket_idx]) >= text_top_k
-                ) or (
-                    mem_type == "preference"
-                    and len(pref_selected_by_bucket[bucket_idx]) >= pref_top_k
-                ):
+                mem_type, bucket_idx, _, relevance = flat[idx]
+                if not bucket_has_capacity(mem_type, bucket_idx):
                     continue
 
-                # Check if exact text already exists - if so, skip this candidate entirely
-                mem_text = mem.get("memory", "").strip()
-                if mem_text in selected_texts:
-                    continue  # Skip duplicate text, don't participate in MMR competition
+                if not selected_global:
+                    max_sim = 0.0
+                else:
+                    max_sim = max(similarity_matrix[idx][j] for j in selected_global)
 
-                # Skip if highly similar (Dice + TF-IDF + 2-gram combined, with embedding filter)
-                if SearchHandler._is_text_highly_similar_optimized(
-                    idx, mem_text, selected_global, similarity_matrix, flat, threshold=_mmr_text_threshold
-                ):
-                    continue  # Skip highly similar text, don't participate in MMR competition
-
-                relevance = flat[idx][3]
-                max_sim = (
-                    0.0
-                    if not selected_global
-                    else max(similarity_matrix[idx][j] for j in selected_global)
-                )
-
-                # Exponential penalty for similarity > 0.80
-                if max_sim > similarity_threshold:
-                    penalty_multiplier = math.exp(
-                        alpha_exponential * (max_sim - similarity_threshold)
+                if max_sim > penalty_threshold:
+                    diversity = max_sim * math.exp(
+                        alpha_exponential * (max_sim - penalty_threshold)
                     )
-                    diversity = max_sim * penalty_multiplier
                 else:
                     diversity = max_sim
 
                 mmr_score = lambda_relevance * relevance - (1.0 - lambda_relevance) * diversity
 
-                if best_mmr is None or mmr_score > best_mmr:
+                # Deterministic tiebreak: relevance desc, then idx asc.
+                # (remaining is already sorted by idx, so the first winner wins ties on idx.)
+                if (
+                    best_mmr is None
+                    or mmr_score > best_mmr
+                    or (mmr_score == best_mmr and relevance > (best_relevance or 0.0))
+                ):
                     best_mmr = mmr_score
                     best_idx = idx
+                    best_relevance = relevance
 
             if best_idx is None:
                 break
 
-            mem_type, bucket_idx, mem, _ = flat[best_idx]
-
-            # Add to selected set and track text
-            mem_text = mem.get("memory", "").strip()
+            mem_type, bucket_idx, _, _ = flat[best_idx]
             selected_global.append(best_idx)
-            selected_texts.add(mem_text)
-
             if mem_type == "text":
                 text_selected_by_bucket[bucket_idx].append(best_idx)
             elif mem_type == "preference":
                 pref_selected_by_bucket[bucket_idx].append(best_idx)
             remaining.remove(best_idx)
 
-            # Early termination: all buckets are full
-            text_all_full = all(
-                len(text_selected_by_bucket[b_idx]) >= min(text_top_k, len(bucket_indices))
-                for b_idx, bucket_indices in text_indices_by_bucket.items()
-            )
-            pref_all_full = all(
-                len(pref_selected_by_bucket[b_idx]) >= min(pref_top_k, len(bucket_indices))
-                for b_idx, bucket_indices in pref_indices_by_bucket.items()
-            )
-            if text_all_full and pref_all_full:
-                break
-
-        # Phase 3: Re-sort by original relevance and fill back to buckets
         for bucket_idx, bucket in enumerate(text_buckets):
             selected_indices = text_selected_by_bucket.get(bucket_idx, [])
-            selected_indices = sorted(selected_indices, key=lambda i: flat[i][3], reverse=True)
+            selected_indices = sorted(selected_indices, key=lambda i: (-flat[i][3], i))
             bucket["memories"] = [flat[i][2] for i in selected_indices]
 
         for bucket_idx, bucket in enumerate(pref_buckets):
             selected_indices = pref_selected_by_bucket.get(bucket_idx, [])
-            selected_indices = sorted(selected_indices, key=lambda i: flat[i][3], reverse=True)
+            selected_indices = sorted(selected_indices, key=lambda i: (-flat[i][3], i))
             bucket["memories"] = [flat[i][2] for i in selected_indices]
 
         return results
