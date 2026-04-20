@@ -33,10 +33,11 @@ Env vars:
                              but cannot spoof an authenticated user
 """
 
+import hashlib
 import json
 import os
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from contextvars import ContextVar
 
 import bcrypt
@@ -76,6 +77,10 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
     RATE_LIMIT_MAX_FAILURES = 10
     RATE_LIMIT_WINDOW_SECONDS = 60
 
+    # Verified-key cache (skip bcrypt on repeat keys). Bounded FIFO; small because
+    # we only have a handful of agents. Values are user_ids, never bcrypt hashes.
+    VERIFY_CACHE_MAX = 64
+
     def __init__(self, app, config_path: str | None = None):
         super().__init__(app)
         self.config_path = config_path or os.getenv("MEMOS_AGENT_AUTH_CONFIG", "")
@@ -85,6 +90,8 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
         self.auth_required = os.getenv("MEMOS_AUTH_REQUIRED", "false").lower() == "true"
         self._config_mtime: float = 0.0
         self._fail_tracker: dict[str, list[float]] = defaultdict(list)
+        # sha256(raw_key) -> user_id. Only populated on successful bcrypt verify.
+        self._verify_cache: OrderedDict[str, str] = OrderedDict()
         self._load_config()
 
     def _load_config(self) -> None:
@@ -141,6 +148,7 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
                 logger.info("[AgentAuth] Config file changed on disk — reloading.")
                 self._agents = []
                 self._keys = {}
+                self._verify_cache.clear()
                 self._load_config()
         except OSError:
             pass
@@ -149,6 +157,7 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
         """Hot-reload key registry without restarting the server."""
         self._agents = []
         self._keys.clear()
+        self._verify_cache.clear()
         self._load_config()
 
     def _should_skip(self, path: str) -> bool:
@@ -174,11 +183,26 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
         self._fail_tracker.pop(client_ip, None)
 
     def _authenticate_key(self, key: str) -> str | None:
-        """Validate an API key. Returns user_id on success, None on failure."""
+        """Validate an API key. Returns user_id on success, None on failure.
+
+        Hashed (v2) path is cached: a sha256 of the raw key maps to the verified
+        user_id, so repeat requests skip the ~200ms bcrypt round per agent.
+        Failures are never cached (would let an attacker probe the cache).
+        """
         if self._is_hashed:
             key_bytes = key.encode("utf-8")
+            cache_key = hashlib.sha256(key_bytes).hexdigest()
+            cached = self._verify_cache.get(cache_key)
+            if cached is not None:
+                # Refresh recency
+                self._verify_cache.move_to_end(cache_key)
+                return cached
             for agent in self._agents:
                 if bcrypt.checkpw(key_bytes, agent["key_hash"]):
+                    self._verify_cache[cache_key] = agent["user_id"]
+                    self._verify_cache.move_to_end(cache_key)
+                    if len(self._verify_cache) > self.VERIFY_CACHE_MAX:
+                        self._verify_cache.popitem(last=False)
                     return agent["user_id"]
             return None
         else:
