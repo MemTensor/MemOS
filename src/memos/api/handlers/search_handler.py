@@ -161,46 +161,52 @@ class SearchHandler(BaseHandler):
         return results
 
     def _dedup_text_memories(self, results: dict[str, Any], target_top_k: int) -> dict[str, Any]:
+        """
+        Similarity-based dedup: pairwise cosine filter.
+
+        Iterate candidates in (relativity desc, idx asc) order; skip any whose
+        cosine similarity >= MOS_MMR_TEXT_THRESHOLD to an already-selected
+        candidate. Cap each bucket at target_top_k.
+        """
         buckets = results.get("text_mem", [])
         if not buckets:
             return results
+
+        threshold = float(os.getenv("MOS_MMR_TEXT_THRESHOLD", "0.85"))
 
         flat: list[tuple[int, dict[str, Any], float]] = []
         for bucket_idx, bucket in enumerate(buckets):
             for mem in bucket.get("memories", []):
                 score = mem.get("metadata", {}).get("relativity", 0.0)
-                flat.append((bucket_idx, mem, score))
+                try:
+                    score_val = float(score) if score is not None else 0.0
+                except (TypeError, ValueError):
+                    score_val = 0.0
+                flat.append((bucket_idx, mem, score_val))
 
         if len(flat) <= 1:
             return results
 
         embeddings = self._extract_embeddings([mem for _, mem, _ in flat])
-
         similarity_matrix = cosine_similarity_matrix(embeddings)
 
-        indices_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(buckets))}
-        for flat_index, (bucket_idx, _, _) in enumerate(flat):
-            indices_by_bucket[bucket_idx].append(flat_index)
+        ordered_indices = sorted(range(len(flat)), key=lambda idx: (-flat[idx][2], idx))
 
         selected_global: list[int] = []
         selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(buckets))}
 
-        ordered_indices = sorted(range(len(flat)), key=lambda idx: flat[idx][2], reverse=True)
         for idx in ordered_indices:
             bucket_idx = flat[idx][0]
             if len(selected_by_bucket[bucket_idx]) >= target_top_k:
                 continue
-            # Use 0.92 threshold strictly
-            if self._is_unrelated(idx, selected_global, similarity_matrix, 0.92):
-                selected_by_bucket[bucket_idx].append(idx)
-                selected_global.append(idx)
-
-        # Removed the 'filling' logic that was pulling back similar items.
-        # Now it will only return items that truly pass the 0.92 threshold,
-        # up to target_top_k.
+            if any(similarity_matrix[idx][j] >= threshold for j in selected_global):
+                continue
+            selected_by_bucket[bucket_idx].append(idx)
+            selected_global.append(idx)
 
         for bucket_idx, bucket in enumerate(buckets):
             selected_indices = selected_by_bucket.get(bucket_idx, [])
+            selected_indices = sorted(selected_indices, key=lambda i: (-flat[i][2], i))
             bucket["memories"] = [flat[i][1] for i in selected_indices]
         return results
 
