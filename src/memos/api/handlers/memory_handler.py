@@ -386,26 +386,36 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
     )
     quick_constraints = _build_quick_delete_constraints(delete_mem_req)
     has_non_empty_filter = bool(delete_mem_req.filter)
-    has_filter_mode = has_non_empty_filter or bool(quick_constraints)
+    # Explicit id modes take precedence over filter/user_id/session_id, which then act as
+    # identity context rather than extra scope. This lets callers send user_id alongside
+    # memory_ids without hitting the "multiple modes" rejection.
+    has_explicit_id_mode = (
+        delete_mem_req.memory_ids is not None or delete_mem_req.file_ids is not None
+    )
+    has_filter_mode = not has_explicit_id_mode and (has_non_empty_filter or bool(quick_constraints))
 
     # Reject empty filter dict when no quick constraints are provided.
-    if delete_mem_req.filter is not None and not has_non_empty_filter and not quick_constraints:
+    if (
+        delete_mem_req.filter is not None
+        and not has_non_empty_filter
+        and not quick_constraints
+        and not has_explicit_id_mode
+    ):
         return DeleteMemoryResponse(
             message="filter cannot be empty. Provide a non-empty filter or user_id/session_id.",
             data={"status": "failure"},
         )
 
-    # Validate that only one mode is provided: memory_ids, file_ids, or filter-mode.
-    provided_params = [
-        delete_mem_req.memory_ids is not None,
-        delete_mem_req.file_ids is not None,
-        has_filter_mode,
-    ]
-    if sum(provided_params) != 1:
+    # memory_ids and file_ids are mutually exclusive; beyond that, require at least one mode.
+    if delete_mem_req.memory_ids is not None and delete_mem_req.file_ids is not None:
+        return DeleteMemoryResponse(
+            message="memory_ids and file_ids cannot be used together.",
+            data={"status": "failure"},
+        )
+    if not has_explicit_id_mode and not has_filter_mode:
         return DeleteMemoryResponse(
             message=(
-                "Exactly one delete mode must be provided: "
-                "memory_ids, file_ids, or filter/user_id/session_id."
+                "No delete mode provided: supply memory_ids, file_ids, or filter/user_id/session_id."
             ),
             data={"status": "failure"},
         )

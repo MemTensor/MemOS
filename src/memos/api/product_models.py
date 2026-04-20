@@ -855,7 +855,21 @@ class DeleteMemoryRequest(BaseRequest):
     """Request model for deleting memories."""
 
     writable_cube_ids: list[str] | None = Field(None, description="Writable cube IDs")
+    mem_cube_id: str | None = Field(
+        None,
+        description=(
+            "Singular alias for writable_cube_ids. If writable_cube_ids is omitted, "
+            "mem_cube_id is wrapped into a single-element list."
+        ),
+    )
     memory_ids: list[str] | None = Field(None, description="Memory IDs")
+    memory_id: str | None = Field(
+        None,
+        description=(
+            "Singular alias for memory_ids. If memory_ids is omitted, "
+            "memory_id is wrapped into a single-element list."
+        ),
+    )
     file_ids: list[str] | None = Field(None, description="File IDs")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
     user_id: str | None = Field(
@@ -880,11 +894,23 @@ class DeleteMemoryRequest(BaseRequest):
 
     @model_validator(mode="after")
     def normalize_session_alias(self) -> "DeleteMemoryRequest":
-        """Normalize conversation_id to session_id."""
+        """Normalize singular/plural aliases.
+
+        Rules:
+        - conversation_id aliases session_id (legacy).
+        - mem_cube_id (singular) coerces into writable_cube_ids when the plural is absent;
+          plural wins if both are provided.
+        - memory_id (singular) coerces into memory_ids under the same rule.
+        """
         if self.conversation_id and self.session_id and self.conversation_id != self.session_id:
             raise ValueError("conversation_id and session_id must be the same when both are set")
         if self.session_id is None and self.conversation_id is not None:
             self.session_id = self.conversation_id
+
+        if self.writable_cube_ids is None and self.mem_cube_id:
+            self.writable_cube_ids = [self.mem_cube_id]
+        if self.memory_ids is None and self.memory_id:
+            self.memory_ids = [self.memory_id]
         return self
 
 

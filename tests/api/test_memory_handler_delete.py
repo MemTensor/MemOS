@@ -104,16 +104,28 @@ def test_delete_memories_filter_or_with_distribution():
     )
 
 
-def test_delete_memories_reject_multiple_modes():
+def test_delete_memories_memory_ids_wins_over_user_id_scope():
+    """memory_ids + user_id must use memory-id mode; user_id is identity context only."""
     naive_mem_cube = _build_naive_mem_cube()
     req = DeleteMemoryRequest(memory_ids=["m_1"], user_id="u_1")
 
     resp = handle_delete_memories(req, naive_mem_cube)
 
-    assert resp.data["status"] == "failure"
-    assert "Exactly one delete mode must be provided" in resp.message
+    assert resp.data["status"] == "success"
+    naive_mem_cube.text_mem.delete_by_memory_ids.assert_called_once_with(["m_1"])
     naive_mem_cube.text_mem.delete_by_filter.assert_not_called()
+
+
+def test_delete_memories_reject_memory_ids_and_file_ids_together():
+    naive_mem_cube = _build_naive_mem_cube()
+    req = DeleteMemoryRequest(memory_ids=["m_1"], file_ids=["f_1"])
+
+    resp = handle_delete_memories(req, naive_mem_cube)
+
+    assert resp.data["status"] == "failure"
+    assert "cannot be used together" in resp.message
     naive_mem_cube.text_mem.delete_by_memory_ids.assert_not_called()
+    naive_mem_cube.text_mem.delete_by_filter.assert_not_called()
 
 
 def test_delete_memories_reject_empty_filter():
@@ -140,3 +152,39 @@ def test_delete_memories_with_pref_mem_disabled():
         writable_cube_ids=None,
         filter={"and": [{"user_id": "u_1"}]},
     )
+
+
+# -----------------------------------------------------------------------------
+# Singular/plural normalization (fix/delete-api)
+# -----------------------------------------------------------------------------
+
+
+def test_singular_mem_cube_id_coerces_to_writable_cube_ids():
+    req = DeleteMemoryRequest(mem_cube_id="cube-a", memory_id="mem-1")
+
+    assert req.writable_cube_ids == ["cube-a"]
+    assert req.memory_ids == ["mem-1"]
+
+
+def test_plural_wins_when_both_cube_forms_given():
+    req = DeleteMemoryRequest(
+        writable_cube_ids=["cube-a", "cube-b"],
+        mem_cube_id="cube-ignored",
+        memory_ids=["m1", "m2"],
+        memory_id="m-ignored",
+    )
+
+    assert req.writable_cube_ids == ["cube-a", "cube-b"]
+    assert req.memory_ids == ["m1", "m2"]
+
+
+def test_delete_memories_routes_singular_memory_id_through_memory_ids_path():
+    """Coerced singular memory_id must drive the memory_ids delete branch, not filter mode."""
+    naive_mem_cube = _build_naive_mem_cube()
+    req = DeleteMemoryRequest(mem_cube_id="cube-a", memory_id="mem-1")
+
+    resp = handle_delete_memories(req, naive_mem_cube)
+
+    assert resp.data["status"] == "success"
+    naive_mem_cube.text_mem.delete_by_memory_ids.assert_called_once_with(["mem-1"])
+    naive_mem_cube.text_mem.delete_by_filter.assert_not_called()
