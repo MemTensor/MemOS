@@ -241,6 +241,56 @@ class PostgresGraphDBConfig(BaseConfig):
         return self
 
 
+class ByteHouseGraphDBConfig(BaseConfig):
+    """
+    ByteHouse configuration for MemOS.
+
+    Schema:
+    - memos_memories: Main table for memory nodes (id, memory, properties JSONB, embedding vector)
+    - memos_edges: Edge table for relationships (source_id, target_id, type)
+
+    Example:
+    ---
+    host = "bytehouse"
+    port = 9000
+    user = "n8n"
+    password = "secret"
+    db_name = "n8n"
+    user_name = "default"
+    """
+
+    host: str = Field(..., description="Database host")
+    port: int = Field(default=9000, description="Database port")
+    user: str = Field(..., description="Database user")
+    password: str = Field(..., description="Database password")
+    db_name: str = Field(..., description="Database name")
+    user_name: str = Field(
+        default="bytehouse",
+        description="Logical user/tenant ID for data isolation",
+    )
+    use_multi_db: bool = Field(
+        default=False,
+        description="If False: use single database with logical isolation by user_name",
+    )
+    auto_create: bool = Field(
+        default=False,
+        description="Whether to auto-create the database if it does not exist",
+    )
+    embedding_dimension: int = Field(
+        default=1024,
+        description="Dimension of vector embedding (1024 for all-MiniLM-L6-v2)",
+    )
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        """Validate config."""
+        if not self.db_name:
+            raise ValueError("`db_name` must be provided")
+        if not self.use_multi_db and not self.user_name:
+            raise ValueError("In single-database mode, `user_name` must be provided")
+        return self
+
+
 class GraphDBConfigFactory(BaseModel):
     backend: str = Field(..., description="Backend for graph database")
     config: dict[str, Any] = Field(..., description="Configuration for the graph database backend")
@@ -250,6 +300,7 @@ class GraphDBConfigFactory(BaseModel):
         "neo4j-community": Neo4jCommunityGraphDBConfig,
         "polardb": PolarDBGraphDBConfig,
         "postgres": PostgresGraphDBConfig,
+        "bytehouse": ByteHouseGraphDBConfig,
     }
 
     @field_validator("backend")

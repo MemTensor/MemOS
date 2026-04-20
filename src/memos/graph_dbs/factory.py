@@ -6,6 +6,7 @@ from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.graph_dbs.neo4j_community import Neo4jCommunityGraphDB
 from memos.graph_dbs.polardb import PolarDBGraphDB
 from memos.graph_dbs.postgres import PostgresGraphDB
+from memos.graph_dbs.bytehouse import ByteHouseGraphDB
 
 
 class GraphStoreFactory(BaseGraphDB):
@@ -16,6 +17,7 @@ class GraphStoreFactory(BaseGraphDB):
         "neo4j-community": Neo4jCommunityGraphDB,
         "polardb": PolarDBGraphDB,
         "postgres": PostgresGraphDB,
+        "bytehouse": ByteHouseGraphDB,
     }
 
     @classmethod

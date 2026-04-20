@@ -41,6 +41,7 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
         "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
         "polardb": APIConfig.get_polardb_config(user_id=user_id),
         "postgres": APIConfig.get_postgres_config(user_id=user_id),
+        "bytehouse": APIConfig.get_bytehouse_config(user_id=user_id),
     }
 
     # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars

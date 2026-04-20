@@ -861,6 +861,31 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_bytehouse_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get ByteHouse configuration."""
+        use_multi_db = os.getenv("BYTEHOUSE_USE_MULTI_DB", "false").lower() == "true"
+
+        if use_multi_db:
+            db_name = f"memos{user_id.replace('-', '')}" if user_id else "memos_default"
+        else:
+            db_name = os.getenv("BYTEHOUSE_DB_NAME", "shared_memos_db")
+            user_name = (
+                f"memos{user_id.replace('-', '')}" if user_id else "memos_default"
+            )
+
+        return {
+            "host": os.getenv("BYTEHOUSE_HOST", "localhost"),
+            "port": int(os.getenv("BYTEHOUSE_PORT", "9000")),
+            "user": os.getenv("BYTEHOUSE_USER", "default"),
+            "password": os.getenv("BYTEHOUSE_PASSWORD", ""),
+            "db_name": db_name,
+            "user_name": user_name,
+            "use_multi_db": use_multi_db,
+            "auto_create": True,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
+        }
+
+    @staticmethod
     def get_scheduler_config() -> dict[str, Any]:
         """Get scheduler configuration."""
         return {
@@ -1132,11 +1157,13 @@ class APIConfig:
             else None
         )
         postgres_config = APIConfig.get_postgres_config(user_id=user_id)
+        bytehouse_config = APIConfig.get_bytehouse_config(user_id=user_id)
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "polardb": polardb_config,
             "postgres": postgres_config,
+            "bytehouse": bytehouse_config,
         }
         # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
         graph_db_backend = os.getenv(
@@ -1210,11 +1237,14 @@ class APIConfig:
         neo4j_config = APIConfig.get_neo4j_config(user_id="default")
         polardb_config = APIConfig.get_polardb_config(user_id="default")
         postgres_config = APIConfig.get_postgres_config(user_id="default")
+        bytehouse_config = APIConfig.get_bytehouse_config(user_id="default")
+
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "polardb": polardb_config,
             "postgres": postgres_config,
+            "bytehouse": bytehouse_config,
         }
         internet_config = (
             APIConfig.get_internet_config()
