@@ -529,10 +529,7 @@ class SingleCubeView(MemCubeView):
                     content=json.dumps(mem_ids),
                     timestamp=datetime.utcnow(),
                     user_name=self.cube_id,
-                    info={
-                        **(add_req.info or {}),
-                        "is_upload_skill": getattr(add_req, "is_upload_skill", False),
-                    },
+                    info=add_req.info,
                     chat_history=add_req.chat_history,
                     user_context=user_context,
                 )
@@ -712,7 +709,6 @@ class SingleCubeView(MemCubeView):
                 user_name=user_context.mem_cube_id,
                 chat_history=add_req.chat_history,
                 user_context=user_context,
-                is_upload_skill=getattr(add_req, "is_upload_skill", False),
             )
         get_memory_ms = ts_gm.duration_ms
         flattened_local = [mm for m in memories_local for mm in m]
