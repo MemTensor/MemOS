@@ -116,9 +116,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         self.seen_streams = set()
 
         # Task Orchestrator — cap in-memory cache to avoid unbounded growth
-        self._cache_max_packs = int(
-            os.getenv("MEMSCHEDULER_REDIS_CACHE_MAX_PACKS", "50") or 50
-        )
+        self._cache_max_packs = int(os.getenv("MEMSCHEDULER_REDIS_CACHE_MAX_PACKS", "50") or 50)
         self.message_pack_cache: deque[list[ScheduleMessageItem]] = deque(
             maxlen=self._cache_max_packs
         )
@@ -401,7 +399,10 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
     def get_messages(self, batch_size: int) -> list[ScheduleMessageItem]:
         if self.message_pack_cache:
-            if len(self.message_pack_cache) < self.task_broker_flush_bar and self._is_refill_thread_available():
+            if (
+                len(self.message_pack_cache) < self.task_broker_flush_bar
+                and self._is_refill_thread_available()
+            ):
                 logger.debug(
                     f"Triggering async cache refill: cache size {len(self.message_pack_cache)} < {self.task_broker_flush_bar}"
                 )
@@ -1456,7 +1457,9 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             for k in orphaned:
                 del self._empty_stream_seen_times[k]
             if orphaned:
-                logger.debug(f"Pruned {len(orphaned)} orphaned entries from _empty_stream_seen_times")
+                logger.debug(
+                    f"Pruned {len(orphaned)} orphaned entries from _empty_stream_seen_times"
+                )
 
         logger.debug(
             f"Refreshed stream keys cache: {cache_count} active keys, "
