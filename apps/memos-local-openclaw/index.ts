@@ -2386,10 +2386,27 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     function isGatewayStartCommand(): boolean {
       const args = process.argv.map(a => String(a || "").toLowerCase());
-      const gIdx = args.lastIndexOf("gateway");
-      if (gIdx === -1) return false;
-      const next = args[gIdx + 1];
-      return !next || next.startsWith("-") || next === "start" || next === "restart";
+      
+      // 1. Match dev environment scripts (pnpm dev / start / watch usually call these mjs files)
+      if (args.some(a => a.includes("run-node.mjs") || a.includes("watch-node.mjs"))) {
+        return true;
+      }
+
+      // 2. Match formal CLI commands (gateway or daemon)
+      const targetIdx = Math.max(args.lastIndexOf("gateway"), args.lastIndexOf("daemon"));
+      if (targetIdx !== -1) {
+        const next = args[targetIdx + 1];
+        
+        // Match:
+        // - No subcommand, only gateway config (e.g. openclaw gateway)
+        // - Followed by parameter (e.g. openclaw gateway --port 8080)
+        // - Specific start action (start, restart, run, install)
+        if (!next || next.startsWith("-") || ["start", "restart", "run", "install"].includes(next)) {
+          return true;
+        }
+      }
+
+      return false;
     }
 
     const startServiceCore = async (isHostStart = false) => {
