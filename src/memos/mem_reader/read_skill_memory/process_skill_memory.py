@@ -252,36 +252,6 @@ def _batch_generate_skill_details(
     return [item[0] for item in raw_skills_data]
 
 
-def add_id_to_mysql(memory_id: str, mem_cube_id: str):
-    """Add id to mysql, will deprecate this function in the future"""
-    # TODO: tmp function, deprecate soon
-    import requests
-
-    skill_mysql_url = os.getenv("SKILLS_MYSQL_URL", "")
-    skill_mysql_bearer = os.getenv("SKILLS_MYSQL_BEARER", "")
-
-    if not skill_mysql_url or not skill_mysql_bearer:
-        logger.warning("[PROCESS_SKILLS] SKILLS_MYSQL_URL or SKILLS_MYSQL_BEARER is not set")
-        return None
-    headers = {"Authorization": skill_mysql_bearer, "Content-Type": "application/json"}
-    data = {"memCubeId": mem_cube_id, "skillId": memory_id}
-    try:
-        response = requests.post(skill_mysql_url, headers=headers, json=data)
-
-        logger.info(f"[PROCESS_SKILLS] response: \n\n{response.json()}")
-        logger.info(f"[PROCESS_SKILLS] memory_id: \n\n{memory_id}")
-        logger.info(f"[PROCESS_SKILLS] mem_cube_id: \n\n{mem_cube_id}")
-        logger.info(f"[PROCESS_SKILLS] skill_mysql_url: \n\n{skill_mysql_url}")
-        logger.info(f"[PROCESS_SKILLS] skill_mysql_bearer: \n\n{skill_mysql_bearer}")
-        logger.info(f"[PROCESS_SKILLS] headers: \n\n{headers}")
-        logger.info(f"[PROCESS_SKILLS] data: \n\n{data}")
-
-        return response.json()
-    except Exception as e:
-        logger.warning(f"[PROCESS_SKILLS] Error adding id to mysql: {e}")
-        return None
-
-
 @require_python_package(
     import_name="alibabacloud_oss_v2",
     install_command="pip install alibabacloud-oss-v2",
@@ -948,6 +918,7 @@ def create_skill_memory_item(
         scripts=skill_memory.get("scripts"),
         others=skill_memory.get("others"),
         url=skill_memory.get("url", ""),
+        skill_source=skill_memory.get("skill_source"),
         manager_user_id=manager_user_id,
         project_id=project_id,
     )
@@ -1024,6 +995,21 @@ def process_skill_memory_fine(
     complete_skill_memory: bool = True,
     **kwargs,
 ) -> list[TextualMemoryItem]:
+    is_upload_skill = kwargs.pop("is_upload_skill", False)
+    if is_upload_skill:
+        from memos.mem_reader.read_skill_memory.upload_skill_memory import (
+            process_upload_skill_memory,
+        )
+
+        return process_upload_skill_memory(
+            fast_memory_items=fast_memory_items,
+            info=info,
+            embedder=embedder,
+            oss_config=oss_config,
+            skills_dir_config=skills_dir_config,
+            **kwargs,
+        )
+
     skills_repo_backend = _get_skill_file_storage_location()
     oss_client, _missing_keys, flag = _skill_init(
         skills_repo_backend, oss_config, skills_dir_config
@@ -1253,6 +1239,7 @@ def process_skill_memory_fine(
                     if source:
                         skill_sources.append(source)
 
+            skill_memory["skill_source"] = "auto_create"
             memory_item = create_skill_memory_item(
                 skill_memory, info, embedder, sources=skill_sources, **kwargs
             )
@@ -1261,12 +1248,4 @@ def process_skill_memory_fine(
             logger.warning(f"[PROCESS_SKILLS] Error creating skill memory item: {e}")
             continue
 
-    # TODO: deprecate this funtion and call
-    for skill_memory, skill_memory_item in zip(skill_memories, skill_memory_items, strict=False):
-        if skill_memory.get("update", False) and skill_memory.get("old_memory_id", ""):
-            continue
-        add_id_to_mysql(
-            memory_id=skill_memory_item.id,
-            mem_cube_id=kwargs.get("user_name", info.get("user_id", "")),
-        )
     return skill_memory_items
