@@ -1,0 +1,36 @@
+# memos-local-plugin — OpenClaw runtime configuration
+#
+# Keep this file short. Most plugin behavior is controlled by sensible
+# defaults baked into the code; only the fields below are likely to change
+# per user. If you need to tune an advanced option (algorithm thresholds,
+# log rotation, retrieval budgets, etc.) see docs/CONFIG-ADVANCED.md —
+# any field there can be added to this file and will take effect on reload.
+#
+# Sensitive fields (apiKey, teamToken, userToken) live HERE — there is no
+# .env file. install.sh sets this file's mode to 600.
+
+version: 1
+
+viewer:
+  port: 18799
+
+embedding:
+  provider: local         # local | openai_compatible | gemini | cohere | voyage | mistral
+  apiKey: ""              # required for cloud providers
+
+llm:
+  provider: host          # host | local_only | openai_compatible | anthropic | gemini | bedrock
+  apiKey: ""              # required except for provider=host | local_only
+  model: ""               # blank = let the provider pick its default
+
+hub:
+  enabled: false
+  address: ""             # e.g. http://10.0.0.12:18912  (required when enabled=true and role=client)
+  teamToken: ""
+  userToken: ""
+
+telemetry:
+  enabled: true           # anonymous usage events; opt-out any time
+
+logging:
+  level: info             # trace | debug | info | warn | error | fatal

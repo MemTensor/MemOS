@@ -1,0 +1,42 @@
+-- Migration 011 — add `agent_thinking` column to `traces`.
+--
+-- What
+-- ────
+-- A new TEXT column (nullable) on `traces` that carries the raw
+-- LLM-produced "thinking" for a step — e.g. Claude extended-thinking
+-- blocks or pi-ai `ThinkingContent` emitted in assistant messages.
+--
+-- Why
+-- ───
+-- V7 §0.1 says the conversation log should show the user↔agent
+-- exchange (prompt, tool calls, tool results, assistant reply, plus
+-- any LLM-native thinking the model itself surfaced). Previous
+-- iterations conflated that with the plugin's own post-hoc
+-- `reflection` field, which is strictly an internal scoring signal
+-- fed into α + backpropagation — it MUST NOT appear in the
+-- conversation log. Splitting the two concerns into separate columns
+-- lets the viewer render them unambiguously and keeps L1 trace
+-- capture honest.
+--
+-- Shape
+-- ─────
+-- The column stores the concatenated text of every thinking block the
+-- model emitted this turn (joined with `\n\n`). Nullable (defaults to
+-- NULL) because not every provider / every turn produces thinking.
+-- Older rows written before this migration stay NULL and the viewer
+-- simply hides the thinking bubble for them.
+--
+-- Indexing
+-- ────────
+-- Not indexed. `agent_thinking` is only read alongside the full row
+-- (getById / list / timeline) — never used as a search key.
+--
+-- FTS integration
+-- ───────────────
+-- We do NOT add `agent_thinking` to `traces_fts` in this migration.
+-- Thinking text is noisy (first-person stream of consciousness) and
+-- would bloat the FTS index without adding query signal. If a future
+-- iteration wants to search within thinking, it can add a column via
+-- a follow-up migration.
+
+ALTER TABLE traces ADD COLUMN agent_thinking TEXT;
