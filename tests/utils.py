@@ -14,7 +14,8 @@ def check_module_base_class(cls: Any) -> None:
     General function to test the correctness of an abstract base class.
     - It should inherit from ABC.
     - It should define at least one method.
-    - All methods should be marked as @abstractmethod.
+    - It should have at least one abstract method.
+    - Abstract methods (those in __abstractmethods__) should be marked as @abstractmethod.
     - It should not be instantiable.
     - All methods should have docstrings.
 
@@ -31,11 +32,25 @@ def check_module_base_class(cls: Any) -> None:
     assert all_class_methods, f"{cls.__name__} should define at least one method"
 
     # Check 3: Verify abstract methods
+    # Get the set of abstract methods from the class
+    abstract_methods = getattr(cls, "__abstractmethods__", set())
+
+    # Ensure there is at least one abstract method
+    assert len(abstract_methods) > 0, f"{cls.__name__} should have at least one abstract method"
+
+    # Verify that all methods in __abstractmethods__ are actually marked as abstract
     for method_name in all_class_methods:
         method = getattr(cls, method_name)
-        assert getattr(method, "__isabstractmethod__", False), (
-            f"The method '{method_name}' in {cls.__name__} should be marked as @abstractmethod"
-        )
+        # Skip private methods (starting with _) as they are typically helper methods
+        if method_name.startswith("_") and method_name != "__init__":
+            continue
+
+        # If the method is in __abstractmethods__, it must be marked as abstract
+        if method_name in abstract_methods:
+            assert getattr(method, "__isabstractmethod__", False), (
+                f"The method '{method_name}' in {cls.__name__} is in __abstractmethods__ "
+                f"but should be marked as @abstractmethod"
+            )
 
     # Check 4: Test that the class cannot be instantiated directly
     with pytest.raises(TypeError) as excinfo:

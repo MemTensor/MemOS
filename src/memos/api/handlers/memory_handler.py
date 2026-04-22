@@ -1,0 +1,646 @@
+"""
+Memory handler for retrieving and managing memories.
+
+This module handles retrieving all memories or specific subgraphs based on queries.
+"""
+
+from typing import Any, Literal
+
+from memos.api.product_models import (
+    DeleteMemoryRequest,
+    DeleteMemoryResponse,
+    GetMemoryDashboardRequest,
+    GetMemoryRequest,
+    GetMemoryResponse,
+    MemoryResponse,
+)
+from memos.log import get_logger
+from memos.mem_cube.navie import NaiveMemCube
+from memos.mem_os.utils.format_utils import (
+    convert_graph_to_tree_forworkmem,
+    ensure_unique_tree_ids,
+    filter_nodes_by_tree_ids,
+    remove_embedding_recursive,
+    sort_children_by_memory_type,
+)
+
+
+logger = get_logger(__name__)
+
+
+def handle_get_all_memories(
+    user_id: str,
+    mem_cube_id: str,
+    memory_type: Literal["text_mem", "act_mem", "param_mem", "para_mem"],
+    naive_mem_cube: Any,
+) -> MemoryResponse:
+    """
+    Main handler for getting all memories.
+
+    Retrieves all memories of specified type for a user and formats them appropriately.
+
+    Args:
+        user_id: User ID
+        mem_cube_id: Memory cube ID
+        memory_type: Type of memory to retrieve
+        naive_mem_cube: Memory cube instance
+
+    Returns:
+        MemoryResponse with formatted memory data
+    """
+    try:
+        reformat_memory_list = []
+
+        if memory_type == "text_mem":
+            # Get all text memories from the graph database
+            memories = naive_mem_cube.text_mem.get_all(user_name=mem_cube_id)
+
+            # Format and convert to tree structure
+            memories_cleaned = remove_embedding_recursive(memories)
+            custom_type_ratios = {
+                "WorkingMemory": 0.20,
+                "LongTermMemory": 0.40,
+                "UserMemory": 0.40,
+            }
+            tree_result, node_type_count = convert_graph_to_tree_forworkmem(
+                memories_cleaned, target_node_count=200, type_ratios=custom_type_ratios
+            )
+            # Ensure all node IDs are unique in the tree structure
+            tree_result = ensure_unique_tree_ids(tree_result)
+            memories_filtered = filter_nodes_by_tree_ids(tree_result, memories_cleaned)
+            children = tree_result["children"]
+            children_sort = sort_children_by_memory_type(children)
+            tree_result["children"] = children_sort
+            memories_filtered["tree_structure"] = tree_result
+
+            reformat_memory_list.append(
+                {
+                    "cube_id": mem_cube_id,
+                    "memories": [memories_filtered],
+                    "memory_statistics": node_type_count,
+                }
+            )
+
+        elif memory_type == "act_mem":
+            logger.warning("Activity memory retrieval not implemented yet.")
+        elif memory_type == "para_mem":
+            logger.warning("Parameter memory retrieval not implemented yet.")
+        return MemoryResponse(
+            message="Memories retrieved successfully",
+            data=reformat_memory_list,
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to get all memories: {e}", exc_info=True)
+        raise
+
+
+def handle_get_subgraph(
+    user_id: str,
+    mem_cube_id: str,
+    query: str,
+    top_k: int,
+    naive_mem_cube: Any,
+    search_type: Literal["embedding", "fulltext"],
+) -> MemoryResponse:
+    """
+    Main handler for getting memory subgraph based on query.
+
+    Retrieves relevant memory subgraph and formats it as a tree structure.
+
+    Args:
+        user_id: User ID
+        mem_cube_id: Memory cube ID
+        query: Search query
+        top_k: Number of top results to return
+        naive_mem_cube: Memory cube instance
+
+    Returns:
+        MemoryResponse with formatted subgraph data
+    """
+    try:
+        # Get relevant subgraph from text memory
+        memories = naive_mem_cube.text_mem.get_relevant_subgraph(
+            query, top_k=top_k, user_name=mem_cube_id, search_type=search_type
+        )
+
+        # Format and convert to tree structure
+        memories_cleaned = remove_embedding_recursive(memories)
+        custom_type_ratios = {
+            "WorkingMemory": 0.20,
+            "LongTermMemory": 0.40,
+            "UserMemory": 0.40,
+        }
+        tree_result, node_type_count = convert_graph_to_tree_forworkmem(
+            memories_cleaned, target_node_count=200, type_ratios=custom_type_ratios
+        )
+        # Ensure all node IDs are unique in the tree structure
+        tree_result = ensure_unique_tree_ids(tree_result)
+        memories_filtered = filter_nodes_by_tree_ids(tree_result, memories_cleaned)
+        children = tree_result["children"]
+        children_sort = sort_children_by_memory_type(children)
+        tree_result["children"] = children_sort
+        memories_filtered["tree_structure"] = tree_result
+
+        reformat_memory_list = [
+            {
+                "cube_id": mem_cube_id,
+                "memories": [memories_filtered],
+                "memory_statistics": node_type_count,
+            }
+        ]
+
+        return MemoryResponse(
+            message="Memories retrieved successfully",
+            data=reformat_memory_list,
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to get subgraph: {e}", exc_info=True)
+        raise
+
+
+def handle_get_memory(memory_id: str, naive_mem_cube: NaiveMemCube) -> GetMemoryResponse:
+    """
+    Handler for getting a single memory by its ID.
+    Now unified to retrieve from text_mem only (includes preferences).
+
+    Args:
+        memory_id: The ID of the memory to retrieve
+        naive_mem_cube: Memory cube instance
+
+    Returns:
+        GetMemoryResponse with the memory data
+    """
+
+    try:
+        memory = naive_mem_cube.text_mem.get(memory_id)
+    except Exception as e:
+        logger.error(f"Failed to get memory {memory_id}: {e}")
+        memory = None
+
+    # Get the data
+    data = memory.model_dump() if memory else None
+
+    return GetMemoryResponse(
+        message="Memory retrieved successfully"
+        if data
+        else f"Memory with ID {memory_id} not found",
+        code=200,
+        data=data,
+    )
+
+
+def handle_get_memory_by_ids(
+    memory_ids: list[str], naive_mem_cube: NaiveMemCube
+) -> GetMemoryResponse:
+    """
+    Handler for getting multiple memories by their IDs.
+    Now unified to retrieve from text_mem only (includes preferences).
+
+    Retrieves multiple memories and formats them as a list of dictionaries.
+    """
+    try:
+        memories = naive_mem_cube.text_mem.get_by_ids(memory_ids=memory_ids)
+    except Exception as e:
+        logger.error(f"Failed to get memories: {e}")
+        memories = []
+
+    # Ensure memories is not None
+    if memories is None:
+        memories = []
+
+    return GetMemoryResponse(
+        message="Memories retrieved successfully", code=200, data={"memories": memories}
+    )
+
+
+def handle_get_memories(
+    get_mem_req: GetMemoryRequest, naive_mem_cube: NaiveMemCube
+) -> GetMemoryResponse:
+    results: dict[str, Any] = {"text_mem": [], "pref_mem": [], "tool_mem": [], "skill_mem": []}
+    text_memory_type = ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
+    text_memories_info = naive_mem_cube.text_mem.get_all(
+        user_name=get_mem_req.mem_cube_id,
+        user_id=get_mem_req.user_id,
+        page=get_mem_req.page,
+        page_size=get_mem_req.page_size,
+        filter=get_mem_req.filter,
+        memory_type=text_memory_type,
+    )
+    text_memories, total_text_nodes = text_memories_info["nodes"], text_memories_info["total_nodes"]
+    results["text_mem"] = [
+        {
+            "cube_id": get_mem_req.mem_cube_id,
+            "memories": text_memories,
+            "total_nodes": total_text_nodes,
+        }
+    ]
+
+    if get_mem_req.include_tool_memory:
+        tool_memories_info = naive_mem_cube.text_mem.get_all(
+            user_name=get_mem_req.mem_cube_id,
+            user_id=get_mem_req.user_id,
+            page=get_mem_req.page,
+            page_size=get_mem_req.page_size,
+            filter=get_mem_req.filter,
+            memory_type=["ToolSchemaMemory", "ToolTrajectoryMemory"],
+        )
+        tool_memories, total_tool_nodes = (
+            tool_memories_info["nodes"],
+            tool_memories_info["total_nodes"],
+        )
+
+        results["tool_mem"] = [
+            {
+                "cube_id": get_mem_req.mem_cube_id,
+                "memories": tool_memories,
+                "total_nodes": total_tool_nodes,
+            }
+        ]
+    if get_mem_req.include_skill_memory:
+        skill_memories_info = naive_mem_cube.text_mem.get_all(
+            user_name=get_mem_req.mem_cube_id,
+            user_id=get_mem_req.user_id,
+            page=get_mem_req.page,
+            page_size=get_mem_req.page_size,
+            filter=get_mem_req.filter,
+            memory_type=["SkillMemory"],
+        )
+        skill_memories, total_skill_nodes = (
+            skill_memories_info["nodes"],
+            skill_memories_info["total_nodes"],
+        )
+
+        results["skill_mem"] = [
+            {
+                "cube_id": get_mem_req.mem_cube_id,
+                "memories": skill_memories,
+                "total_nodes": total_skill_nodes,
+            }
+        ]
+
+    # Get preference memories (same pattern as other memory types)
+    if get_mem_req.include_preference:
+        pref_memories_info = naive_mem_cube.text_mem.get_all(
+            user_name=get_mem_req.mem_cube_id,
+            user_id=get_mem_req.user_id,
+            page=get_mem_req.page,
+            page_size=get_mem_req.page_size,
+            filter=get_mem_req.filter,
+            memory_type=["PreferenceMemory"],
+        )
+        pref_memories, total_pref_nodes = (
+            pref_memories_info["nodes"],
+            pref_memories_info["total_nodes"],
+        )
+
+        results["pref_mem"] = [
+            {
+                "cube_id": get_mem_req.mem_cube_id,
+                "memories": pref_memories,
+                "total_nodes": total_pref_nodes,
+            }
+        ]
+
+    # Filter to only keep text_mem, pref_mem, tool_mem, skill_mem
+    filtered_results = {
+        "text_mem": results.get("text_mem", []),
+        "pref_mem": results.get("pref_mem", []),
+        "tool_mem": results.get("tool_mem", []),
+        "skill_mem": results.get("skill_mem", []),
+    }
+
+    return GetMemoryResponse(message="Memories retrieved successfully", data=filtered_results)
+
+
+def _build_quick_delete_constraints(delete_mem_req: DeleteMemoryRequest) -> dict[str, Any]:
+    """Build fast-delete constraints from request-level fields."""
+    constraints: dict[str, Any] = {}
+    if delete_mem_req.user_id is not None:
+        constraints["user_id"] = delete_mem_req.user_id
+    if delete_mem_req.session_id is not None:
+        constraints["session_id"] = delete_mem_req.session_id
+    return constraints
+
+
+def _merge_delete_filter(
+    base_filter: dict[str, Any] | None,
+    constraints: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge user/session constraints into an existing filter."""
+    if not constraints:
+        return base_filter or {}
+    if base_filter is None:
+        return {"and": [constraints.copy()]}
+
+    if not base_filter:
+        return {"and": [constraints.copy()]}
+
+    if "and" in base_filter:
+        and_conditions = base_filter.get("and")
+        if not isinstance(and_conditions, list):
+            raise ValueError("Invalid filter format: 'and' must be a list")
+        return {"and": [*and_conditions, constraints.copy()]}
+
+    if "or" in base_filter:
+        or_conditions = base_filter.get("or")
+        if not isinstance(or_conditions, list):
+            raise ValueError("Invalid filter format: 'or' must be a list")
+
+        merged_or_conditions: list[dict[str, Any]] = []
+        for condition in or_conditions:
+            if not isinstance(condition, dict):
+                raise ValueError("Invalid filter format: each 'or' condition must be a dict")
+            merged_condition = condition.copy()
+            for key, value in constraints.items():
+                if key in merged_condition and merged_condition[key] != value:
+                    raise ValueError(
+                        f"Conflicting filter condition for '{key}'. "
+                        "Please merge it manually into request.filter."
+                    )
+                merged_condition[key] = value
+            merged_or_conditions.append(merged_condition)
+
+        return {"or": merged_or_conditions}
+
+    # For plain dict filters, keep strict AND semantics explicitly.
+    return {"and": [base_filter.copy(), constraints.copy()]}
+
+
+def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: NaiveMemCube):
+    """
+    Handler for deleting memories.
+    Now unified to delete from text_mem only (includes preferences).
+    """
+    logger.info(
+        "[Delete memory request] writable_cube_ids: %s, memory_ids: %s, file_ids: %s, auto_cleanup_working: %s"
+        "has_filter: %s, user_id: %s, session_id: %s",
+        delete_mem_req.writable_cube_ids,
+        delete_mem_req.memory_ids,
+        delete_mem_req.file_ids,
+        delete_mem_req.filter is not None,
+        delete_mem_req.user_id,
+        delete_mem_req.session_id,
+        getattr(delete_mem_req, "auto_cleanup_working", False),
+    )
+    quick_constraints = _build_quick_delete_constraints(delete_mem_req)
+    has_non_empty_filter = bool(delete_mem_req.filter)
+    has_filter_mode = has_non_empty_filter or bool(quick_constraints)
+
+    # Reject empty filter dict when no quick constraints are provided.
+    if delete_mem_req.filter is not None and not has_non_empty_filter and not quick_constraints:
+        return DeleteMemoryResponse(
+            message="filter cannot be empty. Provide a non-empty filter or user_id/session_id.",
+            data={"status": "failure"},
+        )
+
+    # Validate that only one mode is provided: memory_ids, file_ids, or filter-mode.
+    provided_params = [
+        delete_mem_req.memory_ids is not None,
+        delete_mem_req.file_ids is not None,
+        has_filter_mode,
+    ]
+    if sum(provided_params) != 1:
+        return DeleteMemoryResponse(
+            message=(
+                "Exactly one delete mode must be provided: "
+                "memory_ids, file_ids, or filter/user_id/session_id."
+            ),
+            data={"status": "failure"},
+        )
+
+    try:
+        working_ids_to_delete: set[str] = set()
+        # When deleting by explicit memory_ids and auto_cleanup_working is enabled,
+        # collect related WorkingMemory ids from working_binding
+        if delete_mem_req.memory_ids is not None and getattr(
+            delete_mem_req, "auto_cleanup_working", False
+        ):
+            try:
+                memories = naive_mem_cube.text_mem.get_by_ids(memory_ids=delete_mem_req.memory_ids)
+            except Exception as e:
+                logger.warning("Failed to fetch memories before delete for working cleanup: %s", e)
+                memories = []
+
+            if memories:
+                import re
+
+                pattern = re.compile(r"\[working_binding:([0-9a-fA-F-]{36})\]")
+                for mem in memories:
+                    metadata = mem.get("metadata") or {}
+                    bg = metadata.get("background") or ""
+                    if not isinstance(bg, str):
+                        continue
+                    match = pattern.search(bg)
+                    if match:
+                        working_ids_to_delete.add(match.group(1))
+
+        if delete_mem_req.memory_ids is not None:
+            # Unified deletion from text_mem (includes preferences)
+            naive_mem_cube.text_mem.delete_by_memory_ids(delete_mem_req.memory_ids)
+        elif delete_mem_req.file_ids is not None:
+            naive_mem_cube.text_mem.delete_by_filter(
+                writable_cube_ids=delete_mem_req.writable_cube_ids, file_ids=delete_mem_req.file_ids
+            )
+        elif has_filter_mode:
+            merged_filter = _merge_delete_filter(delete_mem_req.filter, quick_constraints)
+            naive_mem_cube.text_mem.delete_by_filter(
+                writable_cube_ids=delete_mem_req.writable_cube_ids,
+                filter=merged_filter,
+            )
+            if naive_mem_cube.pref_mem is not None:
+                naive_mem_cube.pref_mem.delete_by_filter(filter=merged_filter)
+
+        # After main deletion, optionally clean up related WorkingMemory nodes.
+        if working_ids_to_delete:
+            try:
+                logger.info(
+                    "Auto-cleanup WorkingMemory nodes after delete, count=%d",
+                    len(working_ids_to_delete),
+                )
+                naive_mem_cube.text_mem.delete_by_memory_ids(list(working_ids_to_delete))
+            except Exception as e:
+                logger.warning("Failed to auto-cleanup WorkingMemory nodes: %s, Pass", e)
+    except Exception as e:
+        logger.error(f"Failed to delete memories: {e}", exc_info=True)
+        return DeleteMemoryResponse(
+            message="Failed to delete memories",
+            data={"status": "failure"},
+        )
+    return DeleteMemoryResponse(
+        message="Memories deleted successfully",
+        data={"status": "success"},
+    )
+
+
+# =============================================================================
+# Other handler functions Endpoints (for internal use)
+# =============================================================================
+
+
+def handle_get_memories_dashboard(
+    get_mem_req: GetMemoryDashboardRequest, naive_mem_cube: NaiveMemCube
+) -> GetMemoryResponse:
+    results: dict[str, Any] = {"text_mem": [], "pref_mem": [], "tool_mem": [], "skill_mem": []}
+    # for statistics
+    total_text_nodes, total_tool_nodes, total_skill_nodes, total_preference_nodes = 0, 0, 0, 0
+    total_tool_nodes = 0
+    total_skill_nodes = 0
+    total_preference_nodes = 0
+
+    text_memory_type = ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
+    text_memories_info = naive_mem_cube.text_mem.get_all(
+        user_name=get_mem_req.mem_cube_id,
+        user_id=get_mem_req.user_id,
+        page=get_mem_req.page,
+        page_size=get_mem_req.page_size,
+        filter=get_mem_req.filter,
+        memory_type=text_memory_type,
+    )
+    text_memories, total_text_nodes = text_memories_info["nodes"], text_memories_info["total_nodes"]
+
+    # Group text memories by cube_id from metadata.user_name
+    text_mem_by_cube: dict[str, list] = {}
+    for memory in text_memories:
+        cube_id = memory.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
+        if cube_id not in text_mem_by_cube:
+            text_mem_by_cube[cube_id] = []
+        text_mem_by_cube[cube_id].append(memory)
+
+    # If no memories found, create a default entry with the requested cube_id
+    if not text_mem_by_cube and get_mem_req.mem_cube_id:
+        text_mem_by_cube[get_mem_req.mem_cube_id] = []
+
+    results["text_mem"] = [
+        {
+            "cube_id": cube_id,
+            "memories": memories,
+            "total_nodes": len(memories),
+        }
+        for cube_id, memories in text_mem_by_cube.items()
+    ]
+
+    if get_mem_req.include_tool_memory:
+        tool_memories_info = naive_mem_cube.text_mem.get_all(
+            user_name=get_mem_req.mem_cube_id,
+            user_id=get_mem_req.user_id,
+            page=get_mem_req.page,
+            page_size=get_mem_req.page_size,
+            filter=get_mem_req.filter,
+            memory_type=["ToolSchemaMemory", "ToolTrajectoryMemory"],
+        )
+        tool_memories, total_tool_nodes = (
+            tool_memories_info["nodes"],
+            tool_memories_info["total_nodes"],
+        )
+
+        # Group tool memories by cube_id from metadata.user_name
+        tool_mem_by_cube: dict[str, list] = {}
+        for memory in tool_memories:
+            cube_id = memory.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
+            if cube_id not in tool_mem_by_cube:
+                tool_mem_by_cube[cube_id] = []
+            tool_mem_by_cube[cube_id].append(memory)
+
+        # If no memories found, create a default entry with the requested cube_id
+        if not tool_mem_by_cube and get_mem_req.mem_cube_id:
+            tool_mem_by_cube[get_mem_req.mem_cube_id] = []
+
+        results["tool_mem"] = [
+            {
+                "cube_id": cube_id,
+                "memories": memories,
+                "total_nodes": len(memories),
+            }
+            for cube_id, memories in tool_mem_by_cube.items()
+        ]
+
+    if get_mem_req.include_skill_memory:
+        skill_memories_info = naive_mem_cube.text_mem.get_all(
+            user_name=get_mem_req.mem_cube_id,
+            user_id=get_mem_req.user_id,
+            page=get_mem_req.page,
+            page_size=get_mem_req.page_size,
+            filter=get_mem_req.filter,
+            memory_type=["SkillMemory"],
+        )
+        skill_memories, total_skill_nodes = (
+            skill_memories_info["nodes"],
+            skill_memories_info["total_nodes"],
+        )
+
+        # Group skill memories by cube_id from metadata.user_name
+        skill_mem_by_cube: dict[str, list] = {}
+        for memory in skill_memories:
+            cube_id = memory.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
+            if cube_id not in skill_mem_by_cube:
+                skill_mem_by_cube[cube_id] = []
+            skill_mem_by_cube[cube_id].append(memory)
+
+        # If no memories found, create a default entry with the requested cube_id
+        if not skill_mem_by_cube and get_mem_req.mem_cube_id:
+            skill_mem_by_cube[get_mem_req.mem_cube_id] = []
+
+        results["skill_mem"] = [
+            {
+                "cube_id": cube_id,
+                "memories": memories,
+                "total_nodes": len(memories),
+            }
+            for cube_id, memories in skill_mem_by_cube.items()
+        ]
+
+    if get_mem_req.include_preference:
+        pref_memories_info = naive_mem_cube.text_mem.get_all(
+            user_name=get_mem_req.mem_cube_id,
+            user_id=get_mem_req.user_id,
+            page=get_mem_req.page,
+            page_size=get_mem_req.page_size,
+            filter=get_mem_req.filter,
+            memory_type=["PreferenceMemory"],
+        )
+        pref_memories, total_preference_nodes = (
+            pref_memories_info["nodes"],
+            pref_memories_info["total_nodes"],
+        )
+
+        # Group preference memories by cube_id from metadata.user_name
+        pref_mem_by_cube: dict[str, list] = {}
+        for memory in pref_memories:
+            cube_id = memory.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
+            if cube_id not in pref_mem_by_cube:
+                pref_mem_by_cube[cube_id] = []
+            pref_mem_by_cube[cube_id].append(memory)
+
+        # If no memories found, create a default entry with the requested cube_id
+        if not pref_mem_by_cube and get_mem_req.mem_cube_id:
+            pref_mem_by_cube[get_mem_req.mem_cube_id] = []
+
+        results["pref_mem"] = [
+            {
+                "cube_id": cube_id,
+                "memories": memories,
+                "total_nodes": len(memories),
+            }
+            for cube_id, memories in pref_mem_by_cube.items()
+        ]
+
+    # Filter to only keep text_mem, pref_mem, tool_mem, skill_mem
+    filtered_results = {
+        "text_mem": results.get("text_mem", []),
+        "pref_mem": results.get("pref_mem", []),
+        "tool_mem": results.get("tool_mem", []),
+        "skill_mem": results.get("skill_mem", []),
+    }
+
+    # statistics
+    statistics = {
+        "total_text_nodes": total_text_nodes,
+        "total_tool_nodes": total_tool_nodes,
+        "total_skill_nodes": total_skill_nodes,
+        "total_preference_nodes": total_preference_nodes,
+    }
+    filtered_results["statistics"] = statistics
+
+    return GetMemoryResponse(message="Memories retrieved successfully", data=filtered_results)

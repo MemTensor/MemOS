@@ -10,6 +10,7 @@ import requests
 
 from memos.log import get_logger
 from memos.reranker.strategies import RerankerStrategyFactory
+from memos.utils import timed
 
 from .base import BaseReranker
 
@@ -79,6 +80,8 @@ class HTTPBGERerankerStrategy(BaseReranker):
         token: str = "",
         model: str = "bge-reranker-v2-m3",
         timeout: int = 10,
+        max_query_tokens: int | None = None,
+        concate_len: int | None = None,
         headers_extra: dict | None = None,
         rerank_source: str | None = None,
         boost_weights: dict[str, float] | None = None,
@@ -107,6 +110,8 @@ class HTTPBGERerankerStrategy(BaseReranker):
         self.token = token or ""
         self.model = model
         self.timeout = timeout
+        self.max_query_tokens = max_query_tokens
+        self.concate_len = concate_len
         self.headers_extra = headers_extra or {}
 
         self.boost_weights = (
@@ -119,6 +124,7 @@ class HTTPBGERerankerStrategy(BaseReranker):
         self._warned_missing_keys: set[str] = set()
         self.reranker_strategy = RerankerStrategyFactory.from_config(reranker_strategy)
 
+    @timed(log=True, log_prefix="RerankerStrategy")
     def rerank(
         self,
         query: str,
@@ -147,6 +153,10 @@ class HTTPBGERerankerStrategy(BaseReranker):
         list[tuple[TextualMemoryItem, float]]
             Re-ranked items with scores, sorted descending by score.
         """
+        if self.max_query_tokens and len(query) > self.max_query_tokens:
+            single_concate_len = self.concate_len // 2
+            query = query[:single_concate_len] + "\n" + query[-single_concate_len:]
+
         if not graph_results:
             return []
 

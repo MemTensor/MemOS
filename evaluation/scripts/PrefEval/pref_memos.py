@@ -21,7 +21,6 @@ EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
 
-
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_BASE_URL")
@@ -30,8 +29,8 @@ tokenizer = tiktoken.get_encoding("cl100k_base")
 
 
 def add_memory_for_line(
-    line_data: tuple, mem_client, num_irrelevant_turns: int, lib: str, version: str
-) -> dict:
+    line_data, mem_client, num_irrelevant_turns, lib, version, success_records, f
+):
     """
     Adds conversation memory for a single line of data to MemOS and returns the data with a persistent user_id.
     """
@@ -47,15 +46,22 @@ def add_memory_for_line(
         elif num_irrelevant_turns == 300:
             conversation = conversation + irre_300
 
-        turns_add = 5
         start_time_add = time.monotonic()
-        if conversation:
-            if os.getenv("PRE_SPLIT_CHUNK", "false").lower() == "true":
-                for chunk_start in range(0, len(conversation), turns_add * 2):
-                    chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                    mem_client.add(messages=chunk, user_id=user_id, conv_id=None)
-            else:
-                mem_client.add(messages=conversation, user_id=user_id, conv_id=None)
+
+        for idx, _ in enumerate(conversation[::2]):
+            msg_idx = idx * 2
+            record_id = f"{lib}_user_pref_eval_{i}_{version}_{msg_idx!s}"
+
+            if record_id not in success_records:
+                mem_client.add(
+                    messages=conversation[msg_idx : msg_idx + 2],
+                    user_id=user_id,
+                    conv_id=None,
+                    batch_size=2,
+                )
+                f.write(f"{record_id}\n")
+                f.flush()
+
         end_time_add = time.monotonic()
         add_duration = end_time_add - start_time_add
 
@@ -68,7 +74,7 @@ def add_memory_for_line(
         return None
 
 
-def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> dict:
+def search_memory_for_line(line_data, mem_client, top_k_value):
     """
     Processes a single line of data, searching memory based on the question.
     """
@@ -98,7 +104,7 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
                 f"- {entry.get('memory', '')}"
                 for entry in relevant_memories["text_mem"][0]["memories"]
             )
-            + f"\n{relevant_memories['pref_mem']}"
+            + f"\n{relevant_memories.get('pref_string', '')}"
         )
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
@@ -120,7 +126,7 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
         return None
 
 
-def generate_response_for_line(line_data: tuple, openai_client: OpenAI, lib: str) -> dict:
+def generate_response_for_line(line_data, openai_client, lib):
     """
     Generates a response for a single line of data using pre-fetched memories.
     """
@@ -195,7 +201,7 @@ def main():
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["memos-api", "memos-local"],
+        choices=["memos-api", "memos-api-online"],
         default="memos-api",
         help="Which MemOS library to use (used in 'add' mode).",
     )
@@ -218,9 +224,22 @@ def main():
         print(f"Error: Input file '{args.input}' not found")
         return
 
-    from utils.client import MemosApiClient
+    from utils.client import MemosApiClient, MemosApiOnlineClient
 
-    mem_client = MemosApiClient()
+    if args.lib == "memos-api":
+        mem_client = MemosApiClient()
+    elif args.lib == "memos-api-online":
+        mem_client = MemosApiOnlineClient()
+
+    os.makedirs(f"results/prefeval/{args.lib}_{args.version}", exist_ok=True)
+    success_records = set()
+    record_file = f"results/prefeval/{args.lib}_{args.version}/success_records.txt"
+    if os.path.exists(record_file):
+        print(f"Loading existing success records from {record_file}...")
+        with open(record_file, encoding="utf-8") as f:
+            for i in f.readlines():
+                success_records.add(i.strip())
+        print(f"Loaded {len(success_records)} records.")
 
     if args.mode == "add":
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")
@@ -229,6 +248,7 @@ def main():
         with (
             open(args.output, "w", encoding="utf-8") as outfile,
             concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor,
+            open(record_file, "a+", encoding="utf-8") as record_f,
         ):
             futures = [
                 executor.submit(
@@ -238,6 +258,8 @@ def main():
                     args.add_turn,
                     args.lib,
                     args.version,
+                    success_records,
+                    record_f,
                 )
                 for i, line in enumerate(lines)
             ]

@@ -40,7 +40,15 @@ def test_qdrant_vec_db_config():
         required_fields=[
             "collection_name",
         ],
-        optional_fields=["vector_dimension", "distance_metric", "host", "port", "path"],
+        optional_fields=[
+            "vector_dimension",
+            "distance_metric",
+            "host",
+            "port",
+            "path",
+            "url",
+            "api_key",
+        ],
     )
 
     check_config_instantiation_valid(
@@ -50,6 +58,17 @@ def test_qdrant_vec_db_config():
             "vector_dimension": 768,
             "distance_metric": "cosine",
             "path": "/custom/path",
+        },
+    )
+
+    check_config_instantiation_valid(
+        QdrantVecDBConfig,
+        {
+            "collection_name": "test_collection",
+            "vector_dimension": 768,
+            "distance_metric": "cosine",
+            "url": "https://cloud.qdrant.example",
+            "api_key": "dummy",
         },
     )
 

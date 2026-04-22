@@ -1,0 +1,801 @@
+from __future__ import annotations
+
+import json
+import time
+import traceback
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from memos.api.handlers.formatters_handler import (
+    format_memory_item,
+    post_process_textual_mem,
+)
+from memos.log import get_logger
+from memos.mem_reader.utils import parse_keep_filter_response
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    ADD_TASK_LABEL,
+    MEM_FEEDBACK_TASK_LABEL,
+    MEM_READ_TASK_LABEL,
+)
+from memos.memories.textual.item import TextualMemoryItem
+from memos.multi_mem_cube.views import MemCubeView
+from memos.search import resolve_filter_for_cube, search_text_memories
+from memos.templates.mem_reader_prompts import PROMPT_MAPPING
+from memos.types.general_types import (
+    FINE_STRATEGY,
+    FineStrategy,
+    MOSSearchResult,
+    SearchMode,
+    UserContext,
+)
+from memos.utils import timed
+
+
+logger = get_logger(__name__)
+
+
+if TYPE_CHECKING:
+    from memos.api.product_models import APIADDRequest, APIFeedbackRequest, APISearchRequest
+    from memos.mem_cube.navie import NaiveMemCube
+    from memos.mem_reader.simple_struct import SimpleStructMemReader
+    from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
+
+
+@dataclass
+class SingleCubeView(MemCubeView):
+    cube_id: str
+    naive_mem_cube: NaiveMemCube
+    mem_reader: SimpleStructMemReader
+    mem_scheduler: OptimizedScheduler
+    logger: Any
+    searcher: Any
+    feedback_server: Any | None = None
+    deepsearch_agent: Any | None = None
+
+    @timed
+    def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
+        """
+        This is basically your current handle_add_memories logic,
+        but scoped to a single cube_id.
+        """
+        sync_mode = add_req.async_mode or self._get_sync_mode()
+        self.logger.info(
+            f"[DIAGNOSTIC] single_cube.add_memories called for cube_id: {self.cube_id}. sync_mode: {sync_mode}. Request: {add_req.model_dump_json(indent=2)}"
+        )
+        user_context = UserContext(
+            user_id=add_req.user_id,
+            mem_cube_id=self.cube_id,
+            session_id=add_req.session_id or "default_session",
+            manager_user_id=add_req.manager_user_id,
+            project_id=add_req.project_id,
+        )
+
+        target_session_id = add_req.session_id or "default_session"
+        self.logger.info(
+            f"[SingleCubeView] cube={self.cube_id} "
+            f"Processing add with mode={sync_mode}, session={target_session_id}"
+        )
+
+        all_memories = self._process_text_mem(add_req, user_context, sync_mode)
+
+        self.logger.info(f"[SingleCubeView] cube={self.cube_id} total_results={len(all_memories)}")
+
+        return all_memories
+
+    @timed
+    def search_memories(self, search_req: APISearchRequest) -> dict[str, Any]:
+        """
+        Unified memory search handling (text + preference memories).
+        Preference memories are now searched through the same _search_text flow.
+        """
+        cube_filter = resolve_filter_for_cube(search_req.filter, self.cube_id)
+        if cube_filter is not search_req.filter:
+            import copy
+
+            search_req = copy.copy(search_req)
+            search_req.filter = cube_filter
+
+        # Create UserContext object
+        user_context = UserContext(
+            user_id=search_req.user_id,
+            mem_cube_id=self.cube_id,
+            session_id=search_req.session_id or "default_session",
+        )
+        self.logger.info(f"Search Req is: {search_req}")
+
+        memories_result: MOSSearchResult = {
+            "text_mem": [],
+            "act_mem": [],
+            "para_mem": [],
+            "pref_mem": [],
+            "pref_note": "",
+            "tool_mem": [],
+            "skill_mem": [],
+        }
+
+        # Determine search mode
+        search_mode = self._get_search_mode(search_req.mode)
+
+        # Unified search through _search_text (includes all memory types)
+        all_formatted_memories = self._search_text(search_req, user_context, search_mode)
+
+        # Build result with unified processing
+        memories_result = post_process_textual_mem(
+            memories_result,
+            all_formatted_memories,
+            self.cube_id,
+        )
+
+        self.logger.info(f"Search memories result: {memories_result}")
+        self.logger.info(f"Search {len(memories_result)} memories.")
+        return memories_result
+
+    @timed
+    def feedback_memories(self, feedback_req: APIFeedbackRequest) -> dict[str, Any]:
+        target_session_id = feedback_req.session_id or "default_session"
+        if feedback_req.async_mode == "async":
+            try:
+                feedback_req_str = json.dumps(feedback_req.model_dump())
+                message_item_feedback = ScheduleMessageItem(
+                    user_id=feedback_req.user_id,
+                    task_id=feedback_req.task_id,
+                    session_id=target_session_id,
+                    mem_cube_id=self.cube_id,
+                    mem_cube=self.naive_mem_cube,
+                    label=MEM_FEEDBACK_TASK_LABEL,
+                    content=feedback_req_str,
+                    timestamp=datetime.utcnow(),
+                )
+                # Use scheduler submission to ensure tracking and metrics
+                self.mem_scheduler.submit_messages(messages=[message_item_feedback])
+                self.logger.info(f"[SingleCubeView] cube={self.cube_id} Submitted FEEDBACK async")
+            except Exception as e:
+                self.logger.error(
+                    f"[SingleCubeView] cube={self.cube_id} Failed to submit FEEDBACK: {e}",
+                    exc_info=True,
+                )
+            return []
+        else:
+            feedback_result = self.feedback_server.process_feedback(
+                user_id=feedback_req.user_id,
+                user_name=self.cube_id,
+                session_id=feedback_req.session_id,
+                chat_history=feedback_req.history,
+                retrieved_memory_ids=feedback_req.retrieved_memory_ids,
+                feedback_content=feedback_req.feedback_content,
+                feedback_time=feedback_req.feedback_time,
+                async_mode=feedback_req.async_mode,
+                corrected_answer=feedback_req.corrected_answer,
+                task_id=feedback_req.task_id,
+                info=feedback_req.info,
+            )
+            self.logger.info(f"[Feedback memories result:] {feedback_result}")
+        return feedback_result
+
+    def _get_search_mode(self, mode: str) -> str:
+        """
+        Get search mode with environment variable fallback.
+
+        Args:
+            mode: Requested search mode
+
+        Returns:
+            Search mode string
+        """
+        return mode
+
+    @timed
+    def _search_text(
+        self,
+        search_req: APISearchRequest,
+        user_context: UserContext,
+        search_mode: str,
+    ) -> list[dict[str, Any]]:
+        """
+        Search text memories based on mode.
+
+        Args:
+            search_req: Search request
+            user_context: User context
+            search_mode: Search mode (fast, fine, or mixture)
+
+        Returns:
+            List of formatted memory items
+        """
+        try:
+            if search_mode == SearchMode.FAST:
+                text_memories = self._fast_search(search_req, user_context)
+            elif search_mode == SearchMode.FINE:
+                text_memories = self._fine_search(search_req, user_context)
+            elif search_mode == SearchMode.MIXTURE:
+                text_memories = self._mix_search(search_req, user_context)
+            else:
+                self.logger.error(f"Unsupported search mode: {search_mode}")
+                return []
+            return text_memories
+
+        except Exception as e:
+            self.logger.error("Error in search_text: %s; traceback: %s", e, traceback.format_exc())
+            return []
+
+    def _deep_search(
+        self,
+        search_req: APISearchRequest,
+        user_context: UserContext,
+    ) -> list:
+        target_session_id = search_req.session_id or "default_session"
+        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
+
+        info = {
+            "user_id": search_req.user_id,
+            "session_id": target_session_id,
+            "chat_history": search_req.chat_history,
+        }
+
+        enhanced_memories = self.searcher.deep_search(
+            query=search_req.query,
+            user_name=user_context.mem_cube_id,
+            top_k=search_req.top_k,
+            mode=SearchMode.FINE,
+            manual_close_internet=not search_req.internet_search,
+            moscube=search_req.moscube,
+            search_filter=search_filter,
+            info=info,
+        )
+        return self._postformat_memories(
+            enhanced_memories,
+            user_context.mem_cube_id,
+            include_embedding=search_req.dedup == "sim",
+            neighbor_discovery=search_req.neighbor_discovery,
+        )
+
+    def _agentic_search(
+        self, search_req: APISearchRequest, user_context: UserContext, max_thinking_depth: int
+    ) -> list:
+        deepsearch_results = self.deepsearch_agent.run(
+            search_req.query, user_id=user_context.mem_cube_id
+        )
+        return self._postformat_memories(
+            deepsearch_results,
+            user_context.mem_cube_id,
+            include_embedding=search_req.dedup == "sim",
+            neighbor_discovery=search_req.neighbor_discovery,
+        )
+
+    def _fine_search(
+        self,
+        search_req: APISearchRequest,
+        user_context: UserContext,
+    ) -> list:
+        """
+        Fine-grained search with query enhancement.
+
+        Args:
+            search_req: Search request
+            user_context: User context
+
+        Returns:
+            List of enhanced search results
+        """
+        # TODO: support tool memory search in future
+
+        logger.info(f"Fine strategy: {FINE_STRATEGY}")
+        if FINE_STRATEGY == FineStrategy.DEEP_SEARCH:
+            return self._deep_search(search_req=search_req, user_context=user_context)
+        elif FINE_STRATEGY == FineStrategy.AGENTIC_SEARCH:
+            return self._agentic_search(search_req=search_req, user_context=user_context)
+
+        target_session_id = search_req.session_id or "default_session"
+        search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_filter = search_req.filter
+
+        info = {
+            "user_id": search_req.user_id,
+            "session_id": target_session_id,
+            "chat_history": search_req.chat_history,
+        }
+
+        # Fine retrieve
+        raw_retrieved_memories = self.searcher.retrieve(
+            query=search_req.query,
+            user_name=user_context.mem_cube_id,
+            top_k=search_req.top_k,
+            mode=SearchMode.FINE,
+            memory_type=search_req.search_memory_type,
+            manual_close_internet=not search_req.internet_search,
+            moscube=search_req.moscube,
+            search_filter=search_filter,
+            search_priority=search_priority,
+            info=info,
+        )
+
+        # Post retrieve
+        raw_memories = self.searcher.post_retrieve(
+            retrieved_results=raw_retrieved_memories,
+            top_k=search_req.top_k,
+            user_name=user_context.mem_cube_id,
+            info=info,
+            dedup=search_req.dedup,
+        )
+
+        # Enhance with query
+        enhanced_memories, _ = self.mem_scheduler.retriever.enhance_memories_with_query(
+            query_history=[search_req.query],
+            memories=raw_memories,
+        )
+
+        if len(enhanced_memories) < len(raw_memories):
+            logger.info(
+                f"Enhanced memories ({len(enhanced_memories)}) are less than raw memories ({len(raw_memories)}). Recalling for more."
+            )
+            missing_info_hint, trigger = self.mem_scheduler.retriever.recall_for_missing_memories(
+                query=search_req.query,
+                memories=[mem.memory for mem in enhanced_memories],
+            )
+            retrieval_size = len(raw_memories) - len(enhanced_memories)
+            logger.info(f"Retrieval size: {retrieval_size}")
+            if trigger:
+                logger.info(f"Triggering additional search with hint: {missing_info_hint}")
+                additional_memories = self.searcher.search(
+                    query=missing_info_hint,
+                    user_name=user_context.mem_cube_id,
+                    top_k=retrieval_size,
+                    mode=SearchMode.FAST,
+                    memory_type=search_req.search_memory_type,
+                    search_priority=search_priority,
+                    search_filter=search_filter,
+                    info=info,
+                )
+            else:
+                logger.info("Not triggering additional search, using fast memories.")
+                additional_memories = raw_memories[:retrieval_size]
+
+            enhanced_memories += additional_memories
+            logger.info(
+                f"Added {len(additional_memories)} more memories. Total enhanced memories: {len(enhanced_memories)}"
+            )
+
+        def _dedup_by_content(memories: list) -> list:
+            seen = set()
+            unique_memories = []
+            for mem in memories:
+                key = " ".join(mem.memory.split())
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique_memories.append(mem)
+            return unique_memories
+
+        deduped_memories = (
+            enhanced_memories if search_req.dedup == "no" else _dedup_by_content(enhanced_memories)
+        )
+        formatted_memories = self._postformat_memories(
+            deduped_memories,
+            user_context.mem_cube_id,
+            include_embedding=search_req.dedup == "sim",
+            neighbor_discovery=search_req.neighbor_discovery,
+        )
+
+        logger.info(f"Found {len(formatted_memories)} memories for user {search_req.user_id}")
+
+        return formatted_memories
+
+    def _fast_search(
+        self,
+        search_req: APISearchRequest,
+        user_context: UserContext,
+    ) -> list:
+        """
+        Fast search using vector database.
+
+        Args:
+            search_req: Search request
+            user_context: User context
+
+        Returns:
+            List of search results
+        """
+        search_results = search_text_memories(
+            text_mem=self.naive_mem_cube.text_mem,
+            search_req=search_req,
+            user_context=user_context,
+            mode=SearchMode.FAST,
+            include_embedding=(search_req.dedup in ("mmr", "sim")),
+        )
+
+        return self._postformat_memories(
+            search_results,
+            user_context.mem_cube_id,
+            include_embedding=(search_req.dedup in ("mmr", "sim")),
+            neighbor_discovery=search_req.neighbor_discovery,
+        )
+
+    def _postformat_memories(
+        self,
+        search_results: list,
+        user_name: str,
+        include_embedding: bool = False,
+        neighbor_discovery: bool = False,
+    ) -> list:
+        """
+        Postprocess search results.
+        """
+
+        def extract_edge_info(edges_info: list[dict], neighbor_relativity: float):
+            edge_mems = []
+            for edge in edges_info:
+                chunk_target_id = edge.get("to")
+                edge_type = edge.get("type")
+                item_neighbor = self.searcher.graph_store.get_node(chunk_target_id)
+                if item_neighbor:
+                    item_neighbor_mem = TextualMemoryItem(**item_neighbor)
+                    item_neighbor_mem.metadata.relativity = neighbor_relativity
+                    edge_mems.append(item_neighbor_mem)
+                    item_neighbor_id = item_neighbor.get("id", "None")
+                    self.logger.info(
+                        f"Add neighbor chunk: {item_neighbor_id}, edge_type: {edge_type} for {item.id}"
+                    )
+            return edge_mems
+
+        final_items = []
+        if neighbor_discovery:
+            for item in search_results:
+                if item.metadata.memory_type == "RawFileMemory":
+                    neighbor_relativity = item.metadata.relativity * 0.8
+                    preceding_info = self.searcher.graph_store.get_edges(
+                        item.id, type="PRECEDING", direction="OUTGOING", user_name=user_name
+                    )
+                    final_items.extend(extract_edge_info(preceding_info, neighbor_relativity))
+
+                    final_items.append(item)
+
+                    following_info = self.searcher.graph_store.get_edges(
+                        item.id, type="FOLLOWING", direction="OUTGOING", user_name=user_name
+                    )
+                    final_items.extend(extract_edge_info(following_info, neighbor_relativity))
+
+                else:
+                    final_items.append(item)
+        else:
+            final_items = search_results
+
+        return [
+            format_memory_item(data, include_embedding=include_embedding) for data in final_items
+        ]
+
+    def _mix_search(
+        self,
+        search_req: APISearchRequest,
+        user_context: UserContext,
+    ) -> list:
+        """
+        Mix search combining fast and fine-grained approaches.
+
+        Args:
+            search_req: Search request
+            user_context: User context
+
+        Returns:
+            List of formatted search results
+        """
+        return self.mem_scheduler.mix_search_memories(
+            search_req=search_req,
+            user_context=user_context,
+        )
+
+    def _get_sync_mode(self) -> str:
+        """
+        Get synchronization mode from memory cube.
+
+        Returns:
+            Sync mode string ("sync" or "async")
+        """
+        try:
+            return getattr(self.naive_mem_cube.text_mem, "mode", "sync")
+        except Exception:
+            return "sync"
+
+    def _schedule_memory_tasks(
+        self,
+        add_req: APIADDRequest,
+        user_context: UserContext,
+        mem_ids: list[str],
+        sync_mode: str,
+    ) -> None:
+        """
+        Schedule memory processing tasks based on sync mode.
+
+        Args:
+            add_req: Add memory request
+            user_context: User context
+            mem_ids: List of memory IDs
+            sync_mode: Synchronization mode
+        """
+        target_session_id = add_req.session_id or "default_session"
+
+        if sync_mode == "async":
+            # Async mode: submit MEM_READ_LABEL task
+            try:
+                message_item_read = ScheduleMessageItem(
+                    user_id=add_req.user_id,
+                    task_id=add_req.task_id,
+                    session_id=target_session_id,
+                    mem_cube_id=self.cube_id,
+                    mem_cube=self.naive_mem_cube,
+                    label=MEM_READ_TASK_LABEL,
+                    content=json.dumps(mem_ids),
+                    timestamp=datetime.utcnow(),
+                    user_name=self.cube_id,
+                    info=add_req.info,
+                    chat_history=add_req.chat_history,
+                    user_context=user_context,
+                )
+                self.mem_scheduler.submit_messages(messages=[message_item_read])
+                self.logger.info(
+                    f"[SingleCubeView] cube={self.cube_id} Submitted async MEM_READ: {json.dumps(mem_ids)}"
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"[SingleCubeView] cube={self.cube_id} Failed to submit async memory tasks: {e}",
+                    exc_info=True,
+                )
+        else:
+            message_item_add = ScheduleMessageItem(
+                user_id=add_req.user_id,
+                task_id=add_req.task_id,
+                session_id=target_session_id,
+                mem_cube_id=self.cube_id,
+                mem_cube=self.naive_mem_cube,
+                label=ADD_TASK_LABEL,
+                content=json.dumps(mem_ids),
+                timestamp=datetime.utcnow(),
+                user_name=self.cube_id,
+            )
+            self.mem_scheduler.submit_messages(messages=[message_item_add])
+
+    def add_before_search(
+        self,
+        messages: list[dict],
+        memory_list: list[TextualMemoryItem],
+        user_name: str,
+        info: dict[str, Any],
+    ) -> list[TextualMemoryItem]:
+        # Build input objects with memory text and metadata (timestamps, sources, etc.)
+        template = PROMPT_MAPPING["add_before_search"]
+
+        if not self.searcher:
+            self.logger.warning("[add_before_search] Searcher is not initialized, skipping check.")
+            return memory_list
+
+        # 1. Gather candidates and search for related memories
+        candidates_data = []
+        for idx, mem in enumerate(memory_list):
+            try:
+                related_memories = self.searcher.search(
+                    query=mem.memory, top_k=3, mode="fast", user_name=user_name, info=info
+                )
+                related_text = "None"
+                if related_memories:
+                    related_text = "\n".join([f"- {r.memory}" for r in related_memories])
+
+                candidates_data.append(
+                    {"idx": idx, "new_memory": mem.memory, "related_memories": related_text}
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"[add_before_search] Search error for memory '{mem.memory}': {e}"
+                )
+                # If search fails, we can either skip this check or treat related as empty
+                candidates_data.append(
+                    {
+                        "idx": idx,
+                        "new_memory": mem.memory,
+                        "related_memories": "None (Search Failed)",
+                    }
+                )
+
+        if not candidates_data:
+            return memory_list
+
+        # 2. Build Prompt
+        messages_inline = "\n".join(
+            [
+                f"- [{message.get('role', 'unknown')}]: {message.get('content', '')}"
+                for message in messages
+            ]
+        )
+
+        candidates_inline_dict = {
+            str(item["idx"]): {
+                "new_memory": item["new_memory"],
+                "related_memories": item["related_memories"],
+            }
+            for item in candidates_data
+        }
+
+        candidates_inline = json.dumps(candidates_inline_dict, ensure_ascii=False, indent=2)
+
+        prompt = template.format(
+            messages_inline=messages_inline, candidates_inline=candidates_inline
+        )
+
+        # 3. Call LLM
+        try:
+            raw = self.mem_reader.general_llm.generate([{"role": "user", "content": prompt}])
+            success, parsed_result = parse_keep_filter_response(raw)
+
+            if not success:
+                self.logger.warning(
+                    "[add_before_search] Failed to parse LLM response, keeping all."
+                )
+                return memory_list
+
+            # 4. Filter
+            filtered_list = []
+            for idx, mem in enumerate(memory_list):
+                res = parsed_result.get(idx)
+                if not res:
+                    filtered_list.append(mem)
+                    continue
+
+                if res.get("keep", True):
+                    filtered_list.append(mem)
+                else:
+                    self.logger.info(
+                        f"[add_before_search] Dropping memory: '{mem.memory}', reason: '{res.get('reason')}'"
+                    )
+
+            return filtered_list
+
+        except Exception as e:
+            self.logger.error(f"[add_before_search] LLM execution error: {e}")
+            return memory_list
+
+    @timed
+    def _process_text_mem(
+        self,
+        add_req: APIADDRequest,
+        user_context: UserContext,
+        sync_mode: str,
+    ) -> list[dict[str, Any]]:
+        """
+        Process and add text memories (including preference memories).
+
+        Extracts memories from messages and adds them to the text memory system.
+        Handles both sync and async modes.
+
+        Args:
+            add_req: Add memory request
+            user_context: User context with IDs
+
+        Returns:
+            List of formatted memory responses
+        """
+        target_session_id = add_req.session_id or "default_session"
+
+        # Decide extraction mode:
+        # - async: always fast (ignore add_req.mode)
+        # - sync: use add_req.mode == "fast" to switch to fast pipeline, otherwise fine
+        if sync_mode == "async":
+            extract_mode = "fast"
+        else:  # sync
+            extract_mode = "fast" if add_req.mode == "fast" else "fine"
+
+        self.logger.info(
+            "[SingleCubeView] cube=%s Processing text memory "
+            "with sync_mode=%s, extract_mode=%s, add_mode=%s",
+            user_context.mem_cube_id,
+            sync_mode,
+            extract_mode,
+            add_req.mode,
+        )
+        init_time = time.time()
+        # Extract memories
+        memories_local = self.mem_reader.get_memory(
+            [add_req.messages],
+            type="chat",
+            info={
+                **(add_req.info or {}),
+                "custom_tags": add_req.custom_tags,
+                "user_id": add_req.user_id,
+                "session_id": target_session_id,
+            },
+            mode=extract_mode,
+            user_name=user_context.mem_cube_id,
+            chat_history=add_req.chat_history,
+            user_context=user_context,
+        )
+        self.logger.info(
+            f"Time for get_memory in extract mode {extract_mode}: {time.time() - init_time}"
+        )
+        flattened_local = [mm for m in memories_local for mm in m]
+
+        # Explicitly set source_doc_id to metadata if present in info
+        source_doc_id = (add_req.info or {}).get("source_doc_id")
+        if source_doc_id:
+            for memory in flattened_local:
+                memory.metadata.source_doc_id = source_doc_id
+
+        self.logger.info(f"Memory extraction completed for user {add_req.user_id}")
+
+        # Add memories to text_mem
+        mem_group = [
+            memory for memory in flattened_local if memory.metadata.memory_type != "RawFileMemory"
+        ]
+        mem_ids_local: list[str] = self.naive_mem_cube.text_mem.add(
+            mem_group,
+            user_name=user_context.mem_cube_id,
+        )
+
+        self.logger.info(
+            f"Added {len(mem_ids_local)} memories for user {add_req.user_id} "
+            f"in session {add_req.session_id}: {mem_ids_local}"
+        )
+
+        # Add raw file nodes and edges
+        if self.mem_reader.save_rawfile and extract_mode == "fine":
+            raw_file_mem_group = [
+                memory
+                for memory in flattened_local
+                if memory.metadata.memory_type == "RawFileMemory"
+            ]
+            self.naive_mem_cube.text_mem.add_rawfile_nodes_n_edges(
+                raw_file_mem_group,
+                mem_ids_local,
+                user_id=add_req.user_id,
+                user_name=user_context.mem_cube_id,
+            )
+
+        # Schedule async/sync tasks: async process raw chunk memory | sync only send messages
+        self._schedule_memory_tasks(
+            add_req=add_req,
+            user_context=user_context,
+            mem_ids=mem_ids_local,
+            sync_mode=sync_mode,
+        )
+
+        # Mark merged_from memories as archived when provided in add_req.info
+        if sync_mode == "sync" and extract_mode == "fine":
+            for memory in flattened_local:
+                merged_from = (memory.metadata.info or {}).get("merged_from")
+                if merged_from:
+                    old_ids = (
+                        merged_from
+                        if isinstance(merged_from, (list | tuple | set))
+                        else [merged_from]
+                    )
+                    if self.mem_reader and self.mem_reader.graph_db:
+                        for old_id in old_ids:
+                            try:
+                                self.mem_reader.graph_db.update_node(
+                                    str(old_id),
+                                    {"status": "archived"},
+                                    user_name=user_context.mem_cube_id,
+                                )
+                                self.logger.info(
+                                    f"[SingleCubeView] Archived merged_from memory: {old_id}"
+                                )
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"[SingleCubeView] Failed to archive merged_from memory {old_id}: {e}"
+                                )
+                    else:
+                        self.logger.warning(
+                            "[SingleCubeView] merged_from provided but graph_db is unavailable; skip archiving."
+                        )
+
+        # Format results uniformly
+        text_memories = [
+            {
+                "memory": memory.memory,
+                "memory_id": memory_id,
+                "memory_type": memory.metadata.memory_type,
+                "cube_id": self.cube_id,
+            }
+            for memory_id, memory in zip(mem_ids_local, mem_group, strict=False)
+        ]
+
+        return text_memories

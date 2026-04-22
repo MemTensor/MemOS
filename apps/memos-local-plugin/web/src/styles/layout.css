@@ -1,0 +1,406 @@
+/*
+ * Layout — top bar + sidebar + content shell.
+ *
+ * Grid:
+ *   ┌──────────────────────────────────────────┐
+ *   │                topbar                     │
+ *   ├───────┬───────────────────────────────────┤
+ *   │ side  │           main                    │
+ *   │ bar   │                                   │
+ *   └───────┴───────────────────────────────────┘
+ *
+ * At ≤ 960 px the sidebar collapses to an icon rail; at ≤ 720 px it
+ * disappears behind a hamburger panel (not implemented — viewer is
+ * a desktop tool).
+ */
+
+/* ── Reset ──────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  line-height: var(--lh-normal);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color var(--dur-sm) var(--ease-out);
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+
+/* scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid var(--bg);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-dim);
+}
+
+/* ── Shell ──────────────────────────────────────────────────────── */
+
+.shell {
+  display: grid;
+  grid-template-rows: var(--topbar-h) 1fr;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-areas:
+    "topbar topbar"
+    "sidebar main";
+  min-height: 100vh;
+}
+
+@media (max-width: 960px) {
+  .shell {
+    grid-template-columns: 72px 1fr;
+  }
+}
+
+.topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-6);
+  background: var(--glass-bg);
+  backdrop-filter: saturate(180%) blur(14px);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  border-bottom: 1px solid var(--glass-border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.topbar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  color: var(--fg);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.015em;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.topbar__brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: linear-gradient(135deg, var(--color-indigo-500), var(--color-indigo-700));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    0 4px 12px -4px rgba(99, 102, 241, 0.4);
+}
+
+.topbar__brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+.topbar__brand-title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semi);
+  color: var(--fg);
+}
+.topbar__brand-sub {
+  font-size: var(--fs-2xs);
+  color: var(--fg-dim);
+  font-weight: var(--fw-med);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.sidebar__version {
+  position: sticky;
+  bottom: 0;
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-3) var(--sp-3) var(--sp-2);
+  border-top: 1px solid var(--border);
+  background: var(--bg-sidebar);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-dim);
+  font-size: var(--fs-2xs);
+  font-family: var(--font-mono);
+  font-weight: var(--fw-med);
+}
+.sidebar__version-text { white-space: nowrap; }
+@media (max-width: 960px) {
+  .sidebar__version-text { display: none; }
+  .sidebar__version { justify-content: center; }
+}
+
+.topbar__center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 0 var(--sp-8);
+}
+
+.topbar__search-form {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+}
+
+.topbar__search {
+  position: relative;
+  display: block;
+  max-width: 420px;
+  width: 100%;
+}
+.topbar__search input {
+  width: 100%;
+  height: 36px;
+  padding: 0 var(--sp-4) 0 40px;
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-sm);
+  transition: border-color var(--dur-xs), box-shadow var(--dur-xs);
+}
+.topbar__search input::placeholder {
+  color: var(--fg-dim);
+}
+.topbar__search input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-focus);
+}
+.topbar__search-icon {
+  position: absolute;
+  left: 12px;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-dim);
+  pointer-events: none;
+}
+/* Inline SVGs sit on a text baseline and pick up extra space below the
+ * glyph; `top: 50%` + translate then looks vertically “high”. */
+.topbar__search-icon .icon {
+  display: block;
+  /* Lucide “search” mass sits slightly above the 24×24 optical center. */
+  transform: translateY(1px);
+}
+
+.topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+
+/* Theme + language toggles when rendered inside the topbar (vs. as
+   the sidebar footer). Compact horizontal layout — no sticky offsets,
+   no top border. */
+.theme-lang--inline {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* ── Sidebar ────────────────────────────────────────────────────── */
+
+.sidebar {
+  grid-area: sidebar;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: var(--sp-5) var(--sp-3);
+  /*
+   * Stick the sidebar below the sticky topbar so it stays visible as
+   * the user scrolls long lists (Memories / Logs / etc.). `align-self:
+   * start` prevents the grid cell from stretching to 100% height and
+   * killing sticky; `height` caps us at one viewport minus the topbar
+   * so internal overflow scrolls within the sidebar, not with the
+   * page.
+   */
+  position: sticky;
+  top: var(--topbar-h);
+  align-self: start;
+  height: calc(100vh - var(--topbar-h));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sidebar__section {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-2xs);
+  color: var(--fg-dim);
+  font-weight: var(--fw-semi);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: var(--sp-4);
+}
+.sidebar__section:first-child {
+  margin-top: 0;
+}
+
+.sidebar__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 8px var(--sp-3);
+  border-radius: var(--radius-md);
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-med);
+  line-height: 1.2;
+  transition: all var(--dur-xs) var(--ease-out);
+  position: relative;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.sidebar__item .icon {
+  color: var(--fg-dim);
+  transition: color var(--dur-xs);
+  flex-shrink: 0;
+}
+.sidebar__item:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.sidebar__item:hover .icon {
+  color: var(--fg-muted);
+}
+.sidebar__item[aria-current="page"] {
+  color: var(--fg);
+  background: var(--bg-elev-1);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+}
+.sidebar__item[aria-current="page"] .icon {
+  color: var(--accent);
+}
+.sidebar__item[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.sidebar__item .badge {
+  margin-left: auto;
+  padding: 1px 6px;
+  background: var(--danger);
+  color: #fff;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-bold);
+}
+
+@media (max-width: 960px) {
+  .sidebar {
+    padding: var(--sp-4) var(--sp-2);
+  }
+  .sidebar__section,
+  .sidebar__item-label {
+    display: none;
+  }
+  .sidebar__item {
+    justify-content: center;
+    padding: 10px;
+  }
+}
+
+/* Sidebar footer (theme + lang toggles) */
+.sidebar__footer {
+  position: sticky;
+  bottom: 0;
+  padding: var(--sp-4) var(--sp-3) var(--sp-2);
+  margin-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-sidebar);
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+/* ── Main ───────────────────────────────────────────────────────── */
+
+.main {
+  grid-area: main;
+  padding: var(--sp-6) var(--sp-8) var(--sp-12);
+  overflow-x: hidden;
+  min-width: 0;
+}
+@media (max-width: 960px) {
+  .main {
+    padding: var(--sp-5);
+  }
+}
+
+.view-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-6);
+  flex-wrap: wrap;
+}
+.view-header__title {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.view-header__title h1 {
+  margin: 0;
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.view-header__title p {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--fs-md);
+  max-width: 560px;
+}
+.view-header__actions {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  flex-wrap: wrap;
+}

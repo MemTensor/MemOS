@@ -79,13 +79,13 @@ class Splitter:
         adjacent chunk with low duplicate rate"""
         chunks = []
         chunk = []
-        for item in data:
+        for i, item in enumerate(data):
             chunk.append(item)
             # 5 turns (Q + A = 10) each chunk
             if len(chunk) >= 10:
                 chunks.append(chunk)
                 # overlap 1 turns (Q + A = 2)
-                context = copy.deepcopy(chunk[-2:])
+                context = copy.deepcopy(chunk[-2:]) if i + 1 < len(data) else []
                 chunk = context
         if chunk:
             chunks.append(chunk)

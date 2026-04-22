@@ -392,9 +392,7 @@ async def main(concurrency_limit: int, input_file: str, output_file: str, output
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate assistant responses from a JSONL file.")
 
-    parser.add_argument(
-        "--input", type=str, required=True, help="Path to the input JSONL file from pref_memos.py."
-    )
+    parser.add_argument("--input", type=str, required=True, help="Path to the input JSONL file.")
 
     parser.add_argument(
         "--concurrency-limit",
@@ -402,13 +400,31 @@ if __name__ == "__main__":
         default=10,
         help="The maximum number of concurrent API calls.",
     )
+
+    parser.add_argument(
+        "--lib",
+        type=str,
+        choices=[
+            "memos-api-online",
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memobase",
+            "memu",
+            "supermemory",
+            "zep",
+        ],
+        default="memos-api",
+        help="Which library to use (used in 'add' mode).",
+    )
+
     args = parser.parse_args()
 
     input_path = args.input
     output_dir = os.path.dirname(input_path)
 
-    output_jsonl_path = os.path.join(output_dir, "eval_pref_memos.jsonl")
-    output_excel_path = os.path.join(output_dir, "eval_pref_memos_summary.xlsx")
+    output_jsonl_path = os.path.join(output_dir, f"eval_pref_{args.lib}.jsonl")
+    output_excel_path = os.path.join(output_dir, f"eval_pref_{args.lib}_summary.xlsx")
 
     asyncio.run(
         main(

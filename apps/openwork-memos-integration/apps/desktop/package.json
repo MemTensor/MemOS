@@ -1,0 +1,178 @@
+{
+  "name": "@accomplish/desktop",
+  "version": "0.2.3",
+  "private": true,
+  "type": "module",
+  "description": "Accomplish Desktop App",
+  "main": "dist-electron/main/index.js",
+  "scripts": {
+    "postinstall": "electron-rebuild && npm --prefix skills/dev-browser install && npm --prefix skills/file-permission install && npm --prefix skills/ask-user-question install",
+    "dev": "node scripts/patch-electron-name.cjs && rm -rf dist-electron && vite",
+    "dev:clean": "CLEAN_START=1 vite",
+    "build": "tsc && vite build && npm --prefix skills/dev-browser install --omit=dev && npm --prefix skills/file-permission install --omit=dev && npm --prefix skills/ask-user-question install --omit=dev",
+    "build:electron": "tsc && vite build && node scripts/package.cjs",
+    "build:unpack": "tsc && vite build && node scripts/package.cjs --dir",
+    "package": "pnpm build && node scripts/package.cjs --mac --publish never",
+    "package:mac": "pnpm build && node scripts/package.cjs --mac --publish never",
+    "release": "pnpm build && node scripts/package.cjs --mac --publish always",
+    "release:mac": "pnpm build && node scripts/package.cjs --mac --publish always",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist dist-electron release",
+    "download:nodejs": "node scripts/download-nodejs.cjs",
+    "test": "vitest run",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest watch",
+    "test:e2e": "docker compose -f e2e/docker/docker-compose.yml up --build --abort-on-container-exit --exit-code-from e2e-tests",
+    "test:e2e:build": "docker compose -f e2e/docker/docker-compose.yml build",
+    "test:e2e:clean": "docker compose -f e2e/docker/docker-compose.yml down --rmi local -v",
+    "test:e2e:report": "playwright show-report e2e/html-report",
+    "test:e2e:native": "playwright test --config=e2e/playwright.config.ts",
+    "test:e2e:native:ui": "playwright test --config=e2e/playwright.config.ts --ui",
+    "test:e2e:native:debug": "playwright test --config=e2e/playwright.config.ts --debug",
+    "test:e2e:native:fast": "playwright test --config=e2e/playwright.config.ts --project=electron-fast",
+    "test:e2e:native:integration": "playwright test --config=e2e/playwright.config.ts --project=electron-integration"
+  },
+  "dependencies": {
+    "@accomplish/shared": "workspace:*",
+    "@aws-sdk/client-bedrock": "^3.971.0",
+    "@aws-sdk/credential-providers": "^3.971.0",
+    "@radix-ui/react-avatar": "^1.1.2",
+    "@radix-ui/react-dialog": "^1.1.4",
+    "@radix-ui/react-dropdown-menu": "^2.1.4",
+    "@radix-ui/react-label": "^2.1.1",
+    "@radix-ui/react-popover": "^1.1.4",
+    "@radix-ui/react-select": "^2.1.4",
+    "@radix-ui/react-separator": "^1.1.1",
+    "@radix-ui/react-slot": "^1.1.1",
+    "@radix-ui/react-tooltip": "^1.1.6",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "dotenv": "^17.2.3",
+    "electron-store": "^8.2.0",
+    "framer-motion": "^12.26.2",
+    "lucide-react": "^0.454.0",
+    "node-pty": "^1.1.0",
+    "opencode-ai": "1.1.16",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^9.0.1",
+    "react-router-dom": "^7.1.1",
+    "tailwind-merge": "^3.3.1",
+    "zod": "^3.24.1",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.2",
+    "@playwright/test": "^1.57.0",
+    "@tailwindcss/typography": "^0.5.15",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "^16.3.1",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/coverage-v8": "^4.0.17",
+    "autoprefixer": "^10.4.20",
+    "electron": "^35.2.1",
+    "electron-builder": "^25.1.8",
+    "happy-dom": "^20.1.0",
+    "jsdom": "^27.4.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "tailwindcss-animate": "^1.0.7",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.6",
+    "vite-plugin-electron": "^0.28.8",
+    "vitest": "^4.0.17"
+  },
+  "build": {
+    "appId": "ai.accomplish.desktop",
+    "productName": "Openwork",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "node_modules/opencode-ai/**",
+      "node_modules/node-pty/**",
+      "node_modules/electron-store/**",
+      "node_modules/conf/**",
+      "node_modules/env-paths/**",
+      "node_modules/json-schema-typed/**",
+      "node_modules/atomically/**",
+      "node_modules/debounce-fn/**",
+      "!node_modules/@accomplish/**",
+      "!node_modules/opencode-darwin-*/**",
+      "!node_modules/opencode-linux-*/**",
+      "!node_modules/opencode-win32-*/**"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/opencode-ai/bin/opencode",
+      "node_modules/opencode-ai/package.json",
+      "node_modules/node-pty/build/**/*.node",
+      "node_modules/node-pty/package.json",
+      "dist-electron/main/mcp/*.js"
+    ],
+    "afterPack": "./scripts/after-pack.cjs",
+    "extraResources": [
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "skills",
+        "to": "skills",
+        "filter": [
+          "**/*",
+          "!**/profiles/**",
+          "!**/tmp/**",
+          "!**/.git/**",
+          "!**/.browser-data/**",
+          "!**/bun.lock",
+          "!**/*.test.ts",
+          "!**/vitest.config.ts"
+        ]
+      }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "accomplish-ai",
+      "repo": "openwork"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
+      "icon": "resources/icon.png",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  }
+}

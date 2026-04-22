@@ -1,40 +1,63 @@
 {
   "extractor_llm": {
-    "backend": "ollama",
+    "backend": "openai",
     "config": {
-      "model_name_or_path": "qwen3:0.6b",
-      "temperature": 0.0,
-      "remove_think_prefix": true,
-      "max_tokens": 8192
+      "model_name_or_path": "gpt-4o",
+      "temperature": 0.8,
+      "max_tokens": 1024,
+      "top_p": 0.9,
+      "top_k": 50,
+      "api_key": "sk-xxx",
+      "api_base": "http://"
     }
   },
   "dispatcher_llm": {
-    "backend": "ollama",
+    "backend": "openai",
     "config": {
-      "model_name_or_path": "qwen3:0.6b",
-      "temperature": 0.0,
-      "remove_think_prefix": true,
-      "max_tokens": 8192
+      "model_name_or_path": "gpt-4o",
+      "temperature": 0.8,
+      "max_tokens": 1024,
+      "top_p": 0.9,
+      "top_k": 50,
+      "api_key": "sk-xxx",
+      "api_base": "http://"
     }
   },
   "embedder": {
-    "backend": "ollama",
+    "backend": "universal_api",
     "config": {
-      "model_name_or_path": "nomic-embed-text:latest"
+      "provider": "openai",
+      "api_key": "EMPTY",
+      "model_name_or_path": "bge-m3",
+      "base_url": "http://"
+    }
+  },
+  "reranker": {
+    "backend": "http_bge",
+    "config": {
+      "url": "http://",
+      "model": "bge-reranker-v2-m3",
+      "timeout": 10
     }
   },
   "graph_db": {
     "backend": "neo4j",
     "config": {
-      "uri": "bolt://localhost:7687",
+      "uri": "neo4j://127.0.0.1:7687",
       "user": "neo4j",
       "password": "12345678",
-      "db_name": "shared-tree-textual-memory",
-      "user_name": "alice",
+      "db_name": "neo4j",
+      "user_name": "xxx",
       "auto_create": true,
-      "use_multi_db": false,
-      "embedding_dimension": 768
+      "use_multi_db": true,
+      "embedding_dimension": 1024
     }
   },
-  "reorganize": true
+  "reorganize": false,
+  "memory_size": {
+    "WorkingMemory": 200,
+    "LongTermMemory": 20000,
+    "UserMemory": 30000
+  },
+  "memory_filename": "tree_textual_memories.json"
 }

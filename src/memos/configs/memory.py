@@ -7,6 +7,7 @@ from memos.configs.embedder import EmbedderConfigFactory
 from memos.configs.graph_db import GraphDBConfigFactory
 from memos.configs.internet_retriever import InternetRetrieverConfigFactory
 from memos.configs.llm import LLMConfigFactory
+from memos.configs.mem_reader import MemReaderConfigFactory
 from memos.configs.reranker import RerankerConfigFactory
 from memos.configs.vec_db import VectorDBConfigFactory
 from memos.exceptions import ConfigurationError
@@ -184,9 +185,20 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
         ),
     )
 
+    search_strategy: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            'Set search strategy for this memory configuration.{"bm25": true, "cot": false}'
+        ),
+    )
+
     mode: str | None = Field(
         default="sync",
         description=("whether use asynchronous mode in memory add"),
+    )
+    include_embedding: bool | None = Field(
+        default=False,
+        description="Whether to include embedding in the memory retrieval",
     )
 
 
@@ -233,6 +245,48 @@ class PreferenceTextMemoryConfig(BaseTextMemoryConfig):
     )
 
 
+class MemFeedbackConfig(BaseMemoryConfig):
+    """Memory feedback configuration class."""
+
+    extractor_llm: LLMConfigFactory = Field(
+        ...,
+        default_factory=LLMConfigFactory,
+        description="LLM configuration for the memory extractor",
+    )
+    embedder: EmbedderConfigFactory = Field(
+        ...,
+        default_factory=EmbedderConfigFactory,
+        description="Embedder configuration for the memory embedding",
+    )
+    reranker: RerankerConfigFactory | None = Field(
+        None,
+        description="Reranker configuration (optional).",
+    )
+    graph_db: GraphDBConfigFactory = Field(
+        ...,
+        default_factory=GraphDBConfigFactory,
+        description="Graph database configuration for the tree-memory storage",
+    )
+    reorganize: bool | None = Field(
+        False,
+        description="Optional description for this memory configuration.",
+    )
+
+    memory_size: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Maximum item counts per memory bucket, e.g.: "
+            '{"WorkingMemory": 20, "LongTermMemory": 10000, "UserMemory": 10000}'
+        ),
+    )
+
+    mem_reader: MemReaderConfigFactory = Field(
+        ...,
+        default_factory=MemReaderConfigFactory,
+        description="MemReader configuration for the Feedback",
+    )
+
+
 # ─── 3. Global Memory Config Factory ──────────────────────────────────────────
 
 
@@ -252,6 +306,7 @@ class MemoryConfigFactory(BaseConfig):
         "vllm_kv_cache": KVCacheMemoryConfig,  # Use same config as kv_cache
         "lora": LoRAMemoryConfig,
         "uninitialized": UninitializedMemoryConfig,
+        "mem_feedback": MemFeedbackConfig,
     }
 
     @field_validator("backend")

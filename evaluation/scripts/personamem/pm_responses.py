@@ -188,17 +188,26 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        choices=[
+            "memos-api-online",
+            "zep",
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
         default="memos-api",
     )
     parser.add_argument(
-        "--version", type=str, default="0925", help="Version of the evaluation framework."
+        "--version", type=str, default="default", help="Version of the evaluation framework."
     )
     parser.add_argument(
         "--num_runs", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation."
     )
     parser.add_argument(
-        "--workers", type=int, default=3, help="Number of worker threads to use for processing."
+        "--workers", type=int, default=10, help="Number of worker threads to use for processing."
     )
 
     args = parser.parse_args()

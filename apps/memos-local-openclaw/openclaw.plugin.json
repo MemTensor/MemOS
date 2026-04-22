@@ -1,0 +1,37 @@
+{
+  "id": "memos-local-openclaw-plugin",
+  "name": "MemOS Local Memory",
+  "description": "Full-write local conversation memory with hybrid search (RRF + MMR + recency), task summarization, skill evolution, and team sharing (Hub-Client). Provides memory_search, memory_get, task_summary, skill_search, task_share, network_skill_pull, network_team_info, memory_viewer for layered retrieval and team collaboration.",
+  "kind": "memory",
+  "version": "1.0.8",
+  "skills": [
+    "skill/memos-memory-guide"
+  ],
+  "homepage": "https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-openclaw",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "description": "Configuration for MemOS Local Memory. Use Raw mode to edit embedding/summarizer settings.",
+    "properties": {
+      "viewerPort": {
+        "type": "number",
+        "description": "Memory Viewer HTTP port (default 18799)"
+      }
+    }
+  },
+  "requirements": {
+    "node": ">=18.0.0",
+    "openclaw": ">=2026.2.0"
+  },
+  "setup": {
+    "postInstall": "node scripts/postinstall.cjs",
+    "notes": [
+      "After install, add to ~/.openclaw/openclaw.json: plugins.slots.memory = \"memos-local-openclaw-plugin\"",
+      "Set agents.defaults.memorySearch.enabled = false to disable OpenClaw's built-in memory",
+      "Restart the gateway: openclaw gateway stop && openclaw gateway start",
+      "Memory Viewer will be available at http://127.0.0.1:18799",
+      "If better-sqlite3 fails to build, ensure you have C++ build tools: xcode-select --install (macOS) or build-essential (Linux)"
+    ]
+  },
+  "extensions": ["./index.ts"]
+}

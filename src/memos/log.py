@@ -14,7 +14,13 @@ import requests
 from dotenv import load_dotenv
 
 from memos import settings
-from memos.context.context import get_current_api_path, get_current_trace_id
+from memos.context.context import (
+    get_current_api_path,
+    get_current_env,
+    get_current_trace_id,
+    get_current_user_name,
+    get_current_user_type,
+)
 
 
 # Load environment variables
@@ -31,18 +37,27 @@ def _setup_logfile() -> Path:
     logfile = Path(settings.MEMOS_DIR / "logs" / "memos.log")
     logfile.parent.mkdir(parents=True, exist_ok=True)
     logfile.touch(exist_ok=True)
+
     return logfile
 
 
-class TraceIDFilter(logging.Filter):
-    """add trace_id to the log record"""
+class ContextFilter(logging.Filter):
+    """add context to the log record"""
 
     def filter(self, record):
         try:
             trace_id = get_current_trace_id()
             record.trace_id = trace_id if trace_id else "trace-id"
+            record.env = get_current_env()
+            record.user_type = get_current_user_type()
+            record.user_name = get_current_user_name()
+            record.api_path = get_current_api_path()
         except Exception:
+            record.api_path = "unknown"
             record.trace_id = "trace-id"
+            record.env = "prod"
+            record.user_type = "normal"
+            record.user_name = "unknown"
         return True
 
 
@@ -86,13 +101,24 @@ class CustomLoggerRequestHandler(logging.Handler):
         try:
             trace_id = get_current_trace_id() or "trace-id"
             api_path = get_current_api_path()
+            env = get_current_env()
+            user_type = get_current_user_type()
+            user_name = get_current_user_name()
             if api_path is not None:
-                self._executor.submit(self._send_log_sync, record.getMessage(), trace_id, api_path)
+                self._executor.submit(
+                    self._send_log_sync,
+                    record.getMessage(),
+                    trace_id,
+                    api_path,
+                    env,
+                    user_type,
+                    user_name,
+                )
         except Exception as e:
             if not self._is_shutting_down.is_set():
                 print(f"Error sending log: {e}")
 
-    def _send_log_sync(self, message, trace_id, api_path):
+    def _send_log_sync(self, message, trace_id, api_path, env, user_type, user_name):
         """Send log message synchronously in a separate thread"""
         try:
             logger_url = os.getenv("CUSTOM_LOGGER_URL")
@@ -104,6 +130,9 @@ class CustomLoggerRequestHandler(logging.Handler):
                 "trace_id": trace_id,
                 "action": api_path,
                 "current_time": round(time.time(), 3),
+                "env": env,
+                "user_type": user_type,
+                "user_name": user_name,
             }
 
             # Add auth token if exists
@@ -145,18 +174,18 @@ LOGGING_CONFIG = {
     "disable_existing_loggers": False,
     "formatters": {
         "standard": {
-            "format": "%(asctime)s [%(trace_id)s] - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
+            "format": "%(asctime)s | %(trace_id)s | path=%(api_path)s | env=%(env)s | user_type=%(user_type)s | user_name=%(user_name)s | %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
         },
         "no_datetime": {
-            "format": "[%(trace_id)s] - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
+            "format": "%(trace_id)s | path=%(api_path)s | %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
         },
         "simplified": {
-            "format": "%(asctime)s | %(trace_id)s | %(levelname)s | %(filename)s:%(lineno)d: %(funcName)s | %(message)s"
+            "format": "%(asctime)s | %(trace_id)s | path=%(api_path)s | % %(levelname)s | %(filename)s:%(lineno)d: %(funcName)s | %(message)s"
         },
     },
     "filters": {
         "package_tree_filter": {"()": "logging.Filter", "name": settings.LOG_FILTER_TREE_PREFIX},
-        "trace_id_filter": {"()": "memos.log.TraceIDFilter"},
+        "context_filter": {"()": "memos.log.ContextFilter"},
     },
     "handlers": {
         "console": {
@@ -164,16 +193,17 @@ LOGGING_CONFIG = {
             "class": "logging.StreamHandler",
             "stream": stdout,
             "formatter": "no_datetime",
-            "filters": ["package_tree_filter", "trace_id_filter"],
+            "filters": ["package_tree_filter", "context_filter"],
         },
         "file": {
-            "level": "DEBUG",
-            "class": "logging.handlers.RotatingFileHandler",
+            "level": "INFO",
+            "class": "concurrent_log_handler.ConcurrentTimedRotatingFileHandler",
+            "when": "midnight",
+            "interval": 1,
+            "backupCount": 3,
             "filename": _setup_logfile(),
-            "maxBytes": 1024**2 * 10,
-            "backupCount": 10,
             "formatter": "standard",
-            "filters": ["trace_id_filter"],
+            "filters": ["context_filter"],
         },
         "custom_logger": {
             "level": "INFO",

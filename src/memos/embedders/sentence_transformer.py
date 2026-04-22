@@ -42,5 +42,8 @@ class SenTranEmbedder(BaseEmbedder):
         Returns:
             List of embeddings, each represented as a list of floats.
         """
+        # Truncate texts if max_tokens is configured
+        texts = self._truncate_texts(texts)
+
         embeddings = self.model.encode(texts, convert_to_numpy=True)
         return embeddings.tolist()

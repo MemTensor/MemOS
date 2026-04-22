@@ -6,6 +6,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 from transformers import DynamicCache
 
+from memos.mem_scheduler.utils.db_utils import get_utc_now
+
 
 class ActivationMemoryItem(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -23,7 +25,7 @@ class KVCacheRecords(BaseModel):
         description="Single string combining all text_memories using assembly template",
     )
     timestamp: datetime = Field(
-        default_factory=datetime.utcnow, description="submit time for schedule_messages"
+        default_factory=get_utc_now, description="submit time for schedule_messages"
     )
 
 

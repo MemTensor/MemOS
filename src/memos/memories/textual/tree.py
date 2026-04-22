@@ -1,25 +1,34 @@
+import concurrent.futures
 import json
 import os
 import shutil
 import tempfile
+import time
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from memos.configs.memory import TreeTextMemoryConfig
 from memos.configs.reranker import RerankerConfigFactory
+from memos.context.context import ContextThreadPoolExecutor
+from memos.dependency import require_python_package
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, Neo4jGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
+from memos.mem_reader.read_multi_modal.utils import detect_lang
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+from memos.memories.textual.tree_text_memory.retrieve.advanced_searcher import (
+    AdvancedSearcher as Searcher,
+)
+from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
 )
-from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import StopwordManager
 from memos.reranker.factory import RerankerFactory
 from memos.types import MessageList
 
@@ -34,6 +43,8 @@ class TreeTextMemory(BaseTextMemory):
         """Initialize memory with the given configuration."""
         # Set mode from class default or override if needed
         self.mode = config.mode
+        logger.info(f"Tree mode is {self.mode}")
+
         self.config: TreeTextMemoryConfig = config
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.extractor_llm
@@ -43,6 +54,12 @@ class TreeTextMemory(BaseTextMemory):
         )
         self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
         self.graph_store: Neo4jGraphDB = GraphStoreFactory.from_config(config.graph_db)
+
+        self.search_strategy = config.search_strategy
+        self.bm25_retriever = (
+            EnhancedBM25() if self.search_strategy and self.search_strategy["bm25"] else None
+        )
+
         if config.reranker is None:
             default_cfg = RerankerConfigFactory.model_validate(
                 {
@@ -80,19 +97,31 @@ class TreeTextMemory(BaseTextMemory):
             )
         else:
             logger.info("No internet retriever configured")
+        self.tokenizer = None
+        self.include_embedding = config.include_embedding or False
 
-    def add(self, memories: list[TextualMemoryItem | dict[str, Any]], **kwargs) -> list[str]:
+    def add(
+        self,
+        memories: list[TextualMemoryItem | dict[str, Any]],
+        user_name: str | None = None,
+        **kwargs,
+    ) -> list[str]:
         """Add memories.
         Args:
             memories: List of TextualMemoryItem objects or dictionaries to add.
+            user_name: optional user_name
         """
-        return self.memory_manager.add(memories, mode=self.mode)
+        return self.memory_manager.add(memories, user_name=user_name, mode=self.mode)
 
-    def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
-        self.memory_manager.replace_working_memory(memories)
+    def replace_working_memory(
+        self, memories: list[TextualMemoryItem], user_name: str | None = None
+    ) -> None:
+        self.memory_manager.replace_working_memory(memories, user_name=user_name)
 
-    def get_working_memory(self) -> list[TextualMemoryItem]:
-        working_memories = self.graph_store.get_all_memory_items(scope="WorkingMemory")
+    def get_working_memory(self, user_name: str | None = None) -> list[TextualMemoryItem]:
+        working_memories = self.graph_store.get_all_memory_items(
+            scope="WorkingMemory", user_name=user_name
+        )
         items = [TextualMemoryItem.from_dict(record) for record in (working_memories)]
         # Sort by updated_at in descending order
         sorted_items = sorted(
@@ -100,12 +129,30 @@ class TreeTextMemory(BaseTextMemory):
         )
         return sorted_items
 
-    def get_current_memory_size(self) -> dict[str, int]:
+    def get_current_memory_size(self, user_name: str | None = None) -> dict[str, int]:
         """
         Get the current size of each memory type.
         This delegates to the MemoryManager.
         """
-        return self.memory_manager.get_current_memory_size()
+        return self.memory_manager.get_current_memory_size(user_name=user_name)
+
+    def get_searcher(
+        self, manual_close_internet: bool = False, moscube: bool = False, process_llm=None
+    ):
+        searcher = Searcher(
+            self.dispatcher_llm,
+            self.graph_store,
+            self.embedder,
+            self.reranker,
+            bm25_retriever=self.bm25_retriever,
+            internet_retriever=None,
+            search_strategy=self.search_strategy,
+            manual_close_internet=manual_close_internet,
+            process_llm=process_llm,
+            tokenizer=self.tokenizer,
+            include_embedding=self.include_embedding,
+        )
+        return searcher
 
     def search(
         self,
@@ -114,9 +161,19 @@ class TreeTextMemory(BaseTextMemory):
         info=None,
         mode: str = "fast",
         memory_type: str = "All",
-        manual_close_internet: bool = False,
-        moscube: bool = False,
+        manual_close_internet: bool = True,
+        search_priority: dict | None = None,
         search_filter: dict | None = None,
+        user_name: str | None = None,
+        search_tool_memory: bool = False,
+        tool_mem_top_k: int = 6,
+        include_skill_memory: bool = False,
+        skill_mem_top_k: int = 3,
+        include_preference_memory: bool = False,
+        pref_mem_top_k: int = 6,
+        dedup: str | None = None,
+        include_embedding: bool | None = None,
+        **kwargs,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         User query -> TaskGoalParser -> MemoryPathResolver ->
@@ -131,7 +188,6 @@ class TreeTextMemory(BaseTextMemory):
             memory_type (str): Type restriction for search.
             ['All', 'WorkingMemory', 'LongTermMemory', 'UserMemory']
             manual_close_internet (bool): If True, the internet retriever will be closed by this search, it high priority than config.
-            moscube (bool): whether you use moscube to answer questions
             search_filter (dict, optional): Optional metadata filters for search results.
                 - Keys correspond to memory metadata fields (e.g., "user_id", "session_id").
                 - Values are exact-match conditions.
@@ -140,31 +196,48 @@ class TreeTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
-        if (self.internet_retriever is not None) and manual_close_internet:
-            logger.warning(
-                "Internet retriever is init by config , but  this search set manual_close_internet is True  and will close it"
-            )
-            searcher = Searcher(
-                self.dispatcher_llm,
-                self.graph_store,
-                self.embedder,
-                self.reranker,
-                internet_retriever=None,
-                moscube=moscube,
-            )
-        else:
-            searcher = Searcher(
-                self.dispatcher_llm,
-                self.graph_store,
-                self.embedder,
-                self.reranker,
-                internet_retriever=self.internet_retriever,
-                moscube=moscube,
-            )
-        return searcher.search(query, top_k, info, mode, memory_type, search_filter)
+        # Use parameter if provided, otherwise fall back to instance attribute
+        include_emb = include_embedding if include_embedding is not None else self.include_embedding
+
+        searcher = Searcher(
+            self.dispatcher_llm,
+            self.graph_store,
+            self.embedder,
+            self.reranker,
+            bm25_retriever=self.bm25_retriever,
+            internet_retriever=self.internet_retriever,
+            search_strategy=self.search_strategy,
+            manual_close_internet=manual_close_internet,
+            tokenizer=self.tokenizer,
+            include_embedding=include_emb,
+        )
+        return searcher.search(
+            query,
+            top_k,
+            info,
+            mode,
+            memory_type,
+            search_filter,
+            search_priority,
+            user_name=user_name,
+            search_tool_memory=search_tool_memory,
+            tool_mem_top_k=tool_mem_top_k,
+            include_skill_memory=include_skill_memory,
+            skill_mem_top_k=skill_mem_top_k,
+            include_preference_memory=include_preference_memory,
+            pref_mem_top_k=pref_mem_top_k,
+            dedup=dedup,
+            **kwargs,
+        )
 
     def get_relevant_subgraph(
-        self, query: str, top_k: int = 5, depth: int = 2, center_status: str = "activated"
+        self,
+        query: str,
+        top_k: int = 20,
+        depth: int = 2,
+        center_status: str = "activated",
+        user_name: str | None = None,
+        search_type: Literal["embedding", "fulltext"] = "fulltext",
     ) -> dict[str, Any]:
         """
         Find and merge the local neighborhood sub-graphs of the top-k
@@ -191,11 +264,40 @@ class TreeTextMemory(BaseTextMemory):
                  - 'nodes': List of unique nodes (core + neighbors) in the merged subgraph.
                  - 'edges': List of unique edges (as dicts with 'from', 'to', 'type') in the merged subgraph.
         """
-        # Step 1: Embed query
-        query_embedding = self.embedder.embed([query])[0]
+        if search_type == "embedding":
+            # Step 1: Embed query
+            query_embedding = self.embedder.embed([query])[0]
 
-        # Step 2: Get top-1 similar node
-        similar_nodes = self.graph_store.search_by_embedding(query_embedding, top_k=top_k)
+            # Step 2: Get top-1 similar node
+            similar_nodes = self.graph_store.search_by_embedding(
+                query_embedding, top_k=top_k, user_name=user_name
+            )
+
+        elif search_type == "fulltext":
+
+            @require_python_package(
+                import_name="jieba",
+                install_command="pip install jieba",
+                install_link="https://github.com/fxsjy/jieba",
+            )
+            def _tokenize_chinese(text):
+                """split zh jieba"""
+                import jieba
+
+                stopword_manager = StopwordManager()
+                tokens = jieba.lcut(text)
+                tokens = [token.strip() for token in tokens if token.strip()]
+                return stopword_manager.filter_words(tokens)
+
+            lang = detect_lang(query)
+            queries = _tokenize_chinese(query) if lang == "zh" else query.split()
+
+            similar_nodes = self.graph_store.search_by_fulltext(
+                query_words=queries,
+                top_k=top_k,
+                user_name=user_name,
+            )
+
         if not similar_nodes:
             logger.info("No similar nodes found for query embedding.")
             return {"core_id": None, "nodes": [], "edges": []}
@@ -210,19 +312,20 @@ class TreeTextMemory(BaseTextMemory):
             score = node["score"]
 
             subgraph = self.graph_store.get_subgraph(
-                center_id=core_id, depth=depth, center_status=center_status
+                center_id=core_id, depth=depth, center_status=center_status, user_name=user_name
             )
 
-            if not subgraph["core_node"]:
-                logger.info(f"Skipping node {core_id} (inactive or not found).")
-                continue
+            if subgraph is None or not subgraph["core_node"]:
+                node = self.graph_store.get_node(core_id, user_name=user_name)
+                subgraph["neighbors"] = [node]
 
             core_node = subgraph["core_node"]
             neighbors = subgraph["neighbors"]
             edges = subgraph["edges"]
 
             # Collect nodes
-            all_nodes[core_node["id"]] = core_node
+            if core_node:
+                all_nodes[core_node["id"]] = core_node
             for n in neighbors:
                 all_nodes[n["id"]] = n
 
@@ -234,9 +337,9 @@ class TreeTextMemory(BaseTextMemory):
                 {"id": core_id, "score": score, "core_node": core_node, "neighbors": neighbors}
             )
 
-        top_core = cores[0]
+        top_core = cores[0] if cores else None
         return {
-            "core_id": top_core["id"],
+            "core_id": top_core["id"] if top_core else None,
             "nodes": list(all_nodes.values()),
             "edges": [{"source": f, "target": t, "type": ty} for (f, t, ty) in all_edges],
         }
@@ -247,9 +350,9 @@ class TreeTextMemory(BaseTextMemory):
     def update(self, memory_id: str, new_memory: TextualMemoryItem | dict[str, Any]) -> None:
         raise NotImplementedError
 
-    def get(self, memory_id: str) -> TextualMemoryItem:
+    def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
         """Get a memory by its ID."""
-        result = self.graph_store.get_node(memory_id)
+        result = self.graph_store.get_node(memory_id, user_name=user_name)
         if result is None:
             raise ValueError(f"Memory with ID {memory_id} not found")
         metadata_dict = result.get("metadata", {})
@@ -259,37 +362,73 @@ class TreeTextMemory(BaseTextMemory):
             metadata=TreeNodeTextualMemoryMetadata(**metadata_dict),
         )
 
-    def get_by_ids(self, memory_ids: list[str]) -> list[TextualMemoryItem]:
-        raise NotImplementedError
+    def get_by_ids(
+        self, memory_ids: list[str], user_name: str | None = None
+    ) -> list[TextualMemoryItem]:
+        graph_output = self.graph_store.get_nodes(ids=memory_ids, user_name=user_name)
+        return graph_output
 
-    def get_all(self) -> dict:
+    def get_all(
+        self,
+        user_name: str | None = None,
+        user_id: str | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+        filter: dict | None = None,
+        memory_type: list[str] | None = None,
+    ) -> dict:
         """Get all memories.
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
-        all_items = self.graph_store.export_graph()
-        return all_items
+        graph_output = self.graph_store.export_graph(
+            user_name=user_name,
+            user_id=user_id,
+            page=page,
+            page_size=page_size,
+            filter=filter,
+            memory_type=memory_type,
+        )
+        return graph_output
 
-    def delete(self, memory_ids: list[str]) -> None:
+    def delete(self, memory_ids: list[str], user_name: str | None = None) -> None:
         """Hard delete: permanently remove nodes and their edges from the graph."""
         if not memory_ids:
             return
         for mid in memory_ids:
             try:
-                self.graph_store.delete_node(mid)
+                self.graph_store.delete_node(mid, user_name=user_name)
             except Exception as e:
                 logger.warning(f"TreeTextMemory.delete_hard: failed to delete {mid}: {e}")
 
-    def delete_all(self) -> None:
+    def delete_by_memory_ids(self, memory_ids: list[str]) -> None:
+        """Delete memories by memory_ids."""
+        try:
+            self.graph_store.delete_node_by_prams(memory_ids=memory_ids)
+        except Exception as e:
+            logger.error(f"An error occurred while deleting memories by memory_ids: {e}")
+
+    def delete_all(self, user_name: str | None = None) -> None:
         """Delete all memories and their relationships from the graph store."""
         try:
-            self.graph_store.clear()
+            self.graph_store.clear(user_name=user_name)
             logger.info("All memories and edges have been deleted from the graph.")
         except Exception as e:
             logger.error(f"An error occurred while deleting all memories: {e}")
             raise
 
-    def load(self, dir: str) -> None:
+    def delete_by_filter(
+        self,
+        writable_cube_ids: list[str] | None = None,
+        file_ids: list[str] | None = None,
+        filter: dict | None = None,
+    ) -> None:
+        """Delete memories by filter."""
+        self.graph_store.delete_node_by_prams(
+            writable_cube_ids=writable_cube_ids, file_ids=file_ids, filter=filter
+        )
+
+    def load(self, dir: str, user_name: str | None = None) -> None:
         try:
             memory_file = os.path.join(dir, self.config.memory_filename)
 
@@ -300,7 +439,7 @@ class TreeTextMemory(BaseTextMemory):
             with open(memory_file, encoding="utf-8") as f:
                 memories = json.load(f)
 
-            self.graph_store.import_graph(memories)
+            self.graph_store.import_graph(memories, user_name=user_name)
             logger.info(f"Loaded {len(memories)} memories from {memory_file}")
 
         except FileNotFoundError:
@@ -310,10 +449,12 @@ class TreeTextMemory(BaseTextMemory):
         except Exception as e:
             logger.error(f"An error occurred while loading memories: {e}")
 
-    def dump(self, dir: str, include_embedding: bool = False) -> None:
+    def dump(self, dir: str, include_embedding: bool = False, user_name: str | None = None) -> None:
         """Dump memories to os.path.join(dir, self.config.memory_filename)"""
         try:
-            json_memories = self.graph_store.export_graph(include_embedding=include_embedding)
+            json_memories = self.graph_store.export_graph(
+                include_embedding=include_embedding, user_name=user_name
+            )
 
             os.makedirs(dir, exist_ok=True)
             memory_file = os.path.join(dir, self.config.memory_filename)
@@ -371,3 +512,100 @@ class TreeTextMemory(BaseTextMemory):
                 logger.info(f"Deleted old backup directory: {old_dir}")
             except Exception as e:
                 logger.warning(f"Failed to delete backup {old_dir}: {e}")
+
+    def add_rawfile_nodes_n_edges(
+        self,
+        raw_file_mem_group: list[TextualMemoryItem],
+        mem_ids: list[str],
+        user_id: str | None = None,
+        user_name: str | None = None,
+    ) -> None:
+        """
+        Add raw file nodes and edges to the graph. Edges are between raw file ids and mem_ids.
+        Args:
+            raw_file_mem_group: List of raw file memory items.
+            mem_ids: List of memory IDs.
+            user_name: cube id.
+        """
+        rawfile_ids_local: list[str] = self.add(
+            raw_file_mem_group,
+            user_name=user_name,
+        )
+
+        from_ids = []
+        to_ids = []
+        types = []
+
+        for raw_file_mem in raw_file_mem_group:
+            # Add SUMMARY edge: memory -> raw file; raw file -> memory
+            if hasattr(raw_file_mem.metadata, "summary_ids") and raw_file_mem.metadata.summary_ids:
+                summary_ids = raw_file_mem.metadata.summary_ids
+                for summary_id in summary_ids:
+                    if summary_id in mem_ids:
+                        from_ids.append(summary_id)
+                        to_ids.append(raw_file_mem.id)
+                        types.append("MATERIAL")
+
+                        from_ids.append(raw_file_mem.id)
+                        to_ids.append(summary_id)
+                        types.append("SUMMARY")
+
+            # Add FOLLOWING edge: current chunk -> next chunk
+            if (
+                hasattr(raw_file_mem.metadata, "following_id")
+                and raw_file_mem.metadata.following_id
+            ):
+                following_id = raw_file_mem.metadata.following_id
+                if following_id in rawfile_ids_local:
+                    from_ids.append(raw_file_mem.id)
+                    to_ids.append(following_id)
+                    types.append("FOLLOWING")
+
+            # Add PRECEDING edge: previous chunk -> current chunk
+            if (
+                hasattr(raw_file_mem.metadata, "preceding_id")
+                and raw_file_mem.metadata.preceding_id
+            ):
+                preceding_id = raw_file_mem.metadata.preceding_id
+                if preceding_id in rawfile_ids_local:
+                    from_ids.append(raw_file_mem.id)
+                    to_ids.append(preceding_id)
+                    types.append("PRECEDING")
+
+        start_time = time.time()
+        self.add_graph_edges(
+            from_ids,
+            to_ids,
+            types,
+            user_name=user_name,
+        )
+        end_time = time.time()
+        logger.info(f"[RawFile] Added {len(rawfile_ids_local)} chunks for user {user_id}")
+        logger.info(
+            f"[RawFile] Time taken to add edges: {end_time - start_time} seconds for {len(from_ids)} edges"
+        )
+
+    def add_graph_edges(
+        self, from_ids: list[str], to_ids: list[str], types: list[str], user_name: str | None = None
+    ) -> None:
+        """
+        Add edges to the graph.
+        Args:
+            from_ids: List of source node IDs.
+            to_ids: List of target node IDs.
+            types: List of edge types.
+            user_name: Optional user name.
+        """
+        with ContextThreadPoolExecutor(max_workers=20) as executor:
+            futures = {
+                executor.submit(
+                    self.graph_store.add_edge, from_id, to_id, edge_type, user_name=user_name
+                )
+                for from_id, to_id, edge_type in zip(from_ids, to_ids, types, strict=False)
+            }
+
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.exception("Add edge error: ", exc_info=e)

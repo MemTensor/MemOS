@@ -1,0 +1,34 @@
+memos:
+  image:
+    repository: your-registry/memos
+    tag: "2.0.9"
+    pullPolicy: IfNotPresent
+  
+  env:
+    TZ: "Asia/Taipei"
+    MOS_CHAT_MODEL: "gpt-4o-mini"
+    MOS_CHAT_MODEL_PROVIDER: "openai"
+    OPENAI_API_KEY: "sk-your-openai-key"
+    OPENAI_API_BASE: "https://api.openai.com/v1"
+    MEMRADER_MODEL: "gpt-4o-mini"
+    MEMRADER_API_KEY: "sk-your-openai-key"
+    MEMRADER_API_BASE: "https://api.openai.com/v1"
+    EMBEDDING_DIMENSION: "1024"
+    MOS_EMBEDDER_BACKEND: "universal_api"
+    MOS_EMBEDDER_PROVIDER: "openai"
+    MOS_EMBEDDER_MODEL: "text-embedding-3-small"
+    MOS_EMBEDDER_API_BASE: "https://api.openai.com/v1"
+    MOS_EMBEDDER_API_KEY: "sk-your-openai-key"
+
+neo4j:
+  auth:
+    password: "change-this-password"
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: memos.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix

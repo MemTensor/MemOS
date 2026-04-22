@@ -5,6 +5,7 @@ from collections.abc import Callable
 from concurrent.futures import as_completed
 from typing import Any, TypeVar
 
+from memos.context.context import ContextThread
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 
@@ -89,7 +90,7 @@ class ThreadManager(BaseSchedulerModule):
 
     def run_multiple_tasks(
         self,
-        tasks: dict[str, tuple[Callable, tuple, dict]],
+        tasks: dict[str, tuple[Callable, tuple]],
         use_thread_pool: bool = False,
         timeout: float | None = None,
     ) -> dict[str, Any]:
@@ -97,7 +98,7 @@ class ThreadManager(BaseSchedulerModule):
         Run multiple tasks concurrently and return all results.
 
         Args:
-            tasks: Dictionary mapping task names to (function, args, kwargs) tuples
+            tasks: Dictionary mapping task names to (task_execution_function, task_execution_parameters) tuples
             use_thread_pool: Whether to use ThreadPoolExecutor (True) or regular threads (False)
             timeout: Maximum time to wait for all tasks to complete (in seconds). None for infinite timeout.
 
@@ -115,17 +116,21 @@ class ThreadManager(BaseSchedulerModule):
         start_time = time.time()
 
         if use_thread_pool:
-            return self.run_with_thread_pool(tasks, timeout)
+            # Convert tasks format for thread pool compatibility
+            thread_pool_tasks = {}
+            for task_name, (func, args) in tasks.items():
+                thread_pool_tasks[task_name] = (func, args, {})
+            return self.run_with_thread_pool(thread_pool_tasks, timeout)
         else:
             # Use regular threads
             threads = {}
             thread_results = {}
             exceptions = {}
 
-            def worker(task_name: str, func: Callable, args: tuple, kwargs: dict):
+            def worker(task_name: str, func: Callable, args: tuple):
                 """Worker function for regular threads"""
                 try:
-                    result = func(*args, **kwargs)
+                    result = func(*args)
                     thread_results[task_name] = result
                     logger.debug(f"Task '{task_name}' completed successfully")
                 except Exception as e:
@@ -133,9 +138,9 @@ class ThreadManager(BaseSchedulerModule):
                     logger.error(f"Task '{task_name}' failed with error: {e}")
 
             # Start all threads
-            for task_name, (func, args, kwargs) in tasks.items():
-                thread = threading.Thread(
-                    target=worker, args=(task_name, func, args, kwargs), name=f"task-{task_name}"
+            for task_name, (func, args) in tasks.items():
+                thread = ContextThread(
+                    target=worker, args=(task_name, func, args), name=f"task-{task_name}"
                 )
                 threads[task_name] = thread
                 thread.start()
@@ -197,44 +202,60 @@ class ThreadManager(BaseSchedulerModule):
         results = {}
         start_time = time.time()
 
-        # Use ThreadPoolExecutor for better resource management
-        with self.thread_pool_executor as executor:
-            # Submit all tasks
-            future_to_name = {}
-            for task_name, (func, args, kwargs) in tasks.items():
+        # Check if executor is shutdown before using it
+        if self.thread_pool_executor._shutdown:
+            logger.error("ThreadPoolExecutor is already shutdown, cannot submit new tasks")
+            raise RuntimeError("ThreadPoolExecutor is already shutdown")
+
+        # Use ThreadPoolExecutor directly without context manager
+        # The executor lifecycle is managed by the parent SchedulerDispatcher
+        executor = self.thread_pool_executor
+
+        # Submit all tasks
+        future_to_name = {}
+        for task_name, (func, args, kwargs) in tasks.items():
+            try:
                 future = executor.submit(func, *args, **kwargs)
                 future_to_name[future] = task_name
                 logger.debug(f"Submitted task '{task_name}' to thread pool")
+            except RuntimeError as e:
+                if "cannot schedule new futures after shutdown" in str(e):
+                    logger.error(
+                        f"Cannot submit task '{task_name}': ThreadPoolExecutor is shutdown"
+                    )
+                    results[task_name] = None
+                else:
+                    raise
 
-            # Collect results as they complete
-            try:
-                # Handle infinite timeout case
-                timeout_param = None if timeout is None else timeout
-                for future in as_completed(future_to_name, timeout=timeout_param):
+        # Collect results as they complete
+        try:
+            # Handle infinite timeout case
+            timeout_param = None if timeout is None else timeout
+            for future in as_completed(future_to_name, timeout=timeout_param):
+                task_name = future_to_name[future]
+                try:
+                    result = future.result()
+                    results[task_name] = result
+                    logger.debug(f"Task '{task_name}' completed successfully")
+                except Exception as e:
+                    logger.error(f"Task '{task_name}' failed with error: {e}")
+                    results[task_name] = None
+
+        except Exception:
+            elapsed_time = time.time() - start_time
+            timeout_msg = "infinite" if timeout is None else f"{timeout}s"
+            logger.error(
+                f"Tasks execution timed out after {elapsed_time:.2f} seconds (timeout: {timeout_msg})"
+            )
+            # Cancel remaining futures
+            for future in future_to_name:
+                if not future.done():
+                    future.cancel()
                     task_name = future_to_name[future]
-                    try:
-                        result = future.result()
-                        results[task_name] = result
-                        logger.debug(f"Task '{task_name}' completed successfully")
-                    except Exception as e:
-                        logger.error(f"Task '{task_name}' failed with error: {e}")
-                        results[task_name] = None
-
-            except Exception:
-                elapsed_time = time.time() - start_time
-                timeout_msg = "infinite" if timeout is None else f"{timeout}s"
-                logger.error(
-                    f"Tasks execution timed out after {elapsed_time:.2f} seconds (timeout: {timeout_msg})"
-                )
-                # Cancel remaining futures
-                for future in future_to_name:
-                    if not future.done():
-                        future.cancel()
-                        task_name = future_to_name[future]
-                        logger.warning(f"Cancelled task '{task_name}' due to timeout")
-                        results[task_name] = None
-                timeout_seconds = "infinite" if timeout is None else timeout
-                logger.error(f"Tasks execution timed out after {timeout_seconds} seconds")
+                    logger.warning(f"Cancelled task '{task_name}' due to timeout")
+                    results[task_name] = None
+            timeout_seconds = "infinite" if timeout is None else timeout
+            logger.error(f"Tasks execution timed out after {timeout_seconds} seconds")
 
         return results
 
@@ -263,7 +284,7 @@ class ThreadManager(BaseSchedulerModule):
 
         # Create and start threads for each task
         for task_name, task_func in tasks.items():
-            thread = threading.Thread(
+            thread = ContextThread(
                 target=self.worker, args=(task_func, task_name), name=f"race-{task_name}"
             )
             self.threads[task_name] = thread

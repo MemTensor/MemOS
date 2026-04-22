@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from .concat_background import ConcatBackgroundStrategy
+from .concat_docsource import ConcatDocSourceStrategy
 from .single_turn import SingleTurnStrategy
 from .singleturn_outmem import SingleTurnOutMemStrategy
 
@@ -19,6 +20,7 @@ class RerankerStrategyFactory:
         "single_turn": SingleTurnStrategy,
         "concat_background": ConcatBackgroundStrategy,
         "singleturn_outmem": SingleTurnOutMemStrategy,
+        "concat_docsource": ConcatDocSourceStrategy,
     }
 
     @classmethod

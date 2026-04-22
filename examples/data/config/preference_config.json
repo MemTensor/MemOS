@@ -1,0 +1,53 @@
+{
+  "extractor_llm": {
+    "backend": "ollama",
+    "config": {
+      "model_name_or_path": "qwen3:0.6b",
+      "temperature": 0.0,
+      "remove_think_prefix": true,
+      "max_tokens": 8192
+    }
+  },
+  "vector_db": {
+    "backend": "milvus",
+    "config": {
+      "collection_name": [
+        "explicit_preference",
+        "implicit_preference"
+      ],
+      "vector_dimension": 768,
+      "distance_metric": "cosine",
+      "uri": "./milvus_demo.db"
+    }
+  },
+  "embedder": {
+    "backend": "ollama",
+    "config": {
+      "model_name_or_path": "nomic-embed-text:latest"
+    }
+  },
+  "reranker": {
+    "backend": "cosine_local",
+    "config": {
+      "level_weights": {
+        "topic": 1.0,
+        "concept": 1.0,
+        "fact": 1.0
+      },
+      "level_field": "background"
+    }
+  },
+  "extractor": {
+    "backend": "naive",
+    "config": {}
+  },
+  "adder": {
+    "backend": "naive",
+    "config": {}
+  },
+  "retriever": {
+    "backend": "naive",
+    "config": {}
+  },
+  "memory_filename": "preference_textual_memories.json"
+}

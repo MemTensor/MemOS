@@ -1,11 +1,34 @@
+import re
+
 from abc import ABC, abstractmethod
 from typing import Any, Literal
+
+
+# Pattern for valid field names: alphanumeric and underscores, must start with letter or underscore
+_VALID_FIELD_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 class BaseGraphDB(ABC):
     """
     Abstract base class for a graph database interface used in a memory-augmented RAG system.
     """
+
+    @staticmethod
+    def _validate_return_fields(return_fields: list[str] | None) -> list[str]:
+        """Validate and sanitize return_fields to prevent query injection.
+
+        Only allows alphanumeric characters and underscores in field names.
+        Silently drops invalid field names.
+
+        Args:
+            return_fields: List of field names to validate.
+
+        Returns:
+            List of valid field names.
+        """
+        if not return_fields:
+            return []
+        return [f for f in return_fields if _VALID_FIELD_NAME_RE.match(f)]
 
     # Node (Memory) Management
     @abstractmethod
@@ -19,12 +42,13 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def update_node(self, id: str, fields: dict[str, Any]) -> None:
+    def update_node(self, id: str, fields: dict[str, Any], user_name: str | None = None) -> None:
         """
         Update attributes of an existing node.
         Args:
             id: Node identifier to be updated.
             fields: Dictionary of fields to update.
+            user_name: given user_name
         """
 
     @abstractmethod
@@ -82,7 +106,7 @@ class BaseGraphDB(ABC):
 
     @abstractmethod
     def get_nodes(
-        self, id: str, include_embedding: bool = False, **kwargs
+        self, ids: list, include_embedding: bool = False, **kwargs
     ) -> dict[str, Any] | None:
         """
         Retrieve the metadata and memory of a list of nodes.
@@ -143,16 +167,23 @@ class BaseGraphDB(ABC):
 
     # Search / recall operations
     @abstractmethod
-    def search_by_embedding(self, vector: list[float], top_k: int = 5, **kwargs) -> list[dict]:
+    def search_by_embedding(
+        self, vector: list[float], top_k: int = 5, return_fields: list[str] | None = None, **kwargs
+    ) -> list[dict]:
         """
         Retrieve node IDs based on vector similarity.
 
         Args:
             vector (list[float]): The embedding vector representing query semantics.
             top_k (int): Number of top similar nodes to retrieve.
+            return_fields (list[str], optional): Additional node fields to include in results
+                (e.g., ["memory", "status", "tags"]). When provided, each result dict will
+                contain these fields in addition to 'id' and 'score'.
+                Defaults to None (only 'id' and 'score' are returned).
 
         Returns:
             list[dict]: A list of dicts with 'id' and 'score', ordered by similarity.
+                If return_fields is specified, each dict also includes the requested fields.
 
         Notes:
             - This method may internally call a VecDB (e.g., Qdrant) or store embeddings in the graph DB itself.
@@ -160,13 +191,17 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def get_by_metadata(self, filters: list[dict[str, Any]]) -> list[str]:
+    def get_by_metadata(
+        self, filters: list[dict[str, Any]], status: str | None = None
+    ) -> list[str]:
         """
         Retrieve node IDs that match given metadata filters.
 
         Args:
             filters (dict[str, Any]): A dictionary of attribute-value filters.
                 Example: {"topic": "psychology", "importance": 2}
+            status (str, optional): Filter by status (e.g., 'activated', 'archived').
+                If None, no status filter is applied.
 
         Returns:
             list[str]: Node IDs whose metadata match the filter conditions.
@@ -239,14 +274,31 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def get_all_memory_items(self, scope: str, include_embedding: bool = False) -> list[dict]:
+    def get_all_memory_items(
+        self, scope: str, include_embedding: bool = False, status: str | None = None
+    ) -> list[dict]:
         """
         Retrieve all memory items of a specific memory_type.
 
         Args:
             scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
             include_embedding: with/without embedding
+            status (str, optional): Filter by status (e.g., 'activated', 'archived').
+                If None, no status filter is applied.
 
         Returns:
             list[dict]: Full list of memory items under this scope.
+        """
+
+    @abstractmethod
+    def add_nodes_batch(self, nodes: list[dict[str, Any]], user_name: str | None = None) -> None:
+        """
+        Batch add multiple memory nodes to the graph.
+
+        Args:
+            nodes: List of node dictionaries, each containing:
+                - id: str - Node ID
+                - memory: str - Memory content
+                - metadata: dict[str, Any] - Node metadata
+            user_name: Optional user name (will use config default if not provided)
         """

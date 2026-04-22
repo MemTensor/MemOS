@@ -1,6 +1,7 @@
 """Defines memory item types for textual memory."""
 
 import json
+import logging
 import uuid
 
 from datetime import datetime
@@ -23,10 +24,11 @@ class SourceMessage(BaseModel):
         - type: Source kind (e.g., "chat", "doc", "web", "file", "system", ...).
             If not provided, upstream logic may infer it:
             presence of `role` ⇒ "chat"; otherwise ⇒ "doc".
-        - role: Conversation role ("user" | "assistant" | "system") when the
+        - role: Conversation role ("user" | "assistant" | "system" | "tool") when the
             source is a chat turn.
         - content: Minimal reproducible snippet from the source. If omitted,
             upstream may fall back to `doc_path` / `url` / `message_id`.
+        - file_info: File information for file source.
         - chat_time / message_id / doc_path: Locators for precisely pointing back
             to the original record (timestamp, message id, document path).
         - Extra fields: Allowed (`model_config.extra="allow"`) to carry arbitrary
@@ -34,18 +36,56 @@ class SourceMessage(BaseModel):
     """
 
     type: str | None = "chat"
-    role: Literal["user", "assistant", "system"] | None = None
+    role: Literal["user", "assistant", "system", "tool"] | None = None
     chat_time: str | None = None
     message_id: str | None = None
     content: str | None = None
     doc_path: str | None = None
-
+    file_info: dict | None = None
+    image_info: dict | None = None
     model_config = ConfigDict(extra="allow")
 
     @property
     def content_safe(self) -> str:
         """Always return a string, fallback to '' if content is None."""
         return self.content or ""
+
+
+class ArchivedTextualMemory(BaseModel):
+    """
+    This is a light-weighted class for storing archived versions of memories.
+
+    When an existing memory item needs to be updated due to conflict/duplicate with new memory contents,
+    its previous contents will be preserved, in 2 places:
+    1. ArchivedTextualMemory, which only contains minimal information, like memory content and create time,
+    stored in the 'history' field of the original node.
+    2. A new memory node, storing full original information including sources and embedding,
+    and referenced by 'archived_memory_id'.
+    """
+
+    version: int = Field(
+        default=1,
+        description="The version of the archived memory content. Will be compared to the version of the active memory item(in Metadata)",
+    )
+    is_fast: bool = Field(
+        default=False,
+        description="Whether this archived memory was created in fast mode, thus raw.",
+    )
+    memory: str | None = Field(
+        default_factory=lambda: "", description="The content of the archived version of the memory."
+    )
+    update_type: Literal["conflict", "duplicate", "extract", "unrelated"] = Field(
+        default="unrelated",
+        description="The type of the memory (e.g., `conflict`, `duplicate`, `extract`, `unrelated`).",
+    )
+    archived_memory_id: str | None = Field(
+        default=None,
+        description="Link to a memory node with status='archived', storing full original information, including sources and embedding.",
+    )
+    created_at: str | None = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="The time the memory was created.",
+    )
 
 
 class TextualMemoryMetadata(BaseModel):
@@ -63,9 +103,29 @@ class TextualMemoryMetadata(BaseModel):
         default=None,
         description="The ID of the session during which the memory was created. Useful for tracking context in conversations.",
     )
-    status: Literal["activated", "archived", "deleted"] | None = Field(
+    status: Literal["activated", "resolving", "archived", "deleted"] | None = Field(
         default="activated",
-        description="The status of the memory, e.g., 'activated', 'archived', 'deleted'.",
+        description="The status of the memory, e.g., 'activated', 'resolving'(updating with conflicting/duplicating new memories), 'archived', 'deleted'.",
+    )
+    is_fast: bool | None = Field(
+        default=None,
+        description="Whether or not the memory was created in fast mode, carrying raw memory contents that haven't been edited by llms yet.",
+    )
+    evolve_to: list[str] | None = Field(
+        default_factory=list,
+        description="Only valid if a node was once a (raw)fast node. Recording which new memory nodes it 'evolves' to after llm extraction.",
+    )
+    version: int | None = Field(
+        default=None,
+        description="The version of the memory. Will be incremented when the memory is updated.",
+    )
+    history: list[ArchivedTextualMemory] | None = Field(
+        default_factory=list,
+        description="Storing the archived versions of the memory. Only preserving core information of each version.",
+    )
+    working_binding: str | None = Field(
+        default=None,
+        description="The working memory id binding of the (fast) memory.",
     )
     type: str | None = Field(default=None)
     key: str | None = Field(default=None, description="Memory key or title.")
@@ -87,8 +147,17 @@ class TextualMemoryMetadata(BaseModel):
         default_factory=lambda: datetime.now().isoformat(),
         description="The timestamp of the last modification to the memory. Useful for tracking memory freshness or change history. Format: ISO 8601.",
     )
+    info: dict | None = Field(
+        default=None,
+        description="Arbitrary key-value pairs for additional metadata.",
+    )
 
     model_config = ConfigDict(extra="allow")
+
+    covered_history: Any | None = Field(
+        default=None,
+        description="Record the memory id covered by the update",
+    )
 
     def __str__(self) -> str:
         """Pretty string representation of the metadata."""
@@ -99,9 +168,17 @@ class TextualMemoryMetadata(BaseModel):
 class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
     """Extended metadata for structured memory, layered retrieval, and lifecycle tracking."""
 
-    memory_type: Literal["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"] = Field(
-        default="WorkingMemory", description="Memory lifecycle type."
-    )
+    memory_type: Literal[
+        "WorkingMemory",
+        "LongTermMemory",
+        "UserMemory",
+        "OuterMemory",
+        "ToolSchemaMemory",
+        "ToolTrajectoryMemory",
+        "RawFileMemory",
+        "SkillMemory",
+        "PreferenceMemory",
+    ] = Field(default="WorkingMemory", description="Memory lifecycle type.")
     sources: list[SourceMessage] | None = Field(
         default=None, description="Multiple origins of the memory (e.g., URLs, notes)."
     )
@@ -123,11 +200,35 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
         description="background of this node",
     )
 
+    file_ids: list[str] | None = Field(
+        default_factory=list,
+        description="The ids of the files associated with the memory.",
+    )
+
     @field_validator("sources", mode="before")
     @classmethod
     def coerce_sources(cls, v):
         if v is None:
             return v
+            # Handle string representation of sources (e.g., from PostgreSQL array or malformed data)
+        if isinstance(v, str):
+            logging.info(f"[coerce_sources] v: {v} type: {type(v)}")
+            # If it's a string that looks like a list representation, try to parse it
+            # This handles cases like: "[uuid1, uuid2, uuid3]" or "[item1, item2]"
+            v_stripped = v.strip()
+            if v_stripped.startswith("[") and v_stripped.endswith("]"):
+                # Remove brackets and split by comma
+                content = v_stripped[1:-1].strip()
+                if content:
+                    # Split by comma and clean up each item
+                    items = [item.strip() for item in content.split(",")]
+                    # Convert to list of strings
+                    v = items
+                else:
+                    v = []
+            else:
+                # Single string, wrap in list
+                v = [v]
         if not isinstance(v, list):
             raise TypeError("sources must be a list")
         out = []
@@ -179,11 +280,12 @@ class PreferenceTextualMemoryMetadata(TextualMemoryMetadata):
         default="explicit_preference", description="Type of preference."
     )
     dialog_id: str | None = Field(default=None, description="ID of the dialog.")
-    dialog_str: str | None = Field(default=None, description="String of the dialog.")
+    original_text: str | None = Field(default=None, description="String of the dialog.")
     embedding: list[float] | None = Field(default=None, description="Vector of the dialog.")
-    explicit_preference: str | None = Field(default=None, description="Explicit preference.")
+    preference: str | None = Field(default=None, description="Preference.")
     created_at: str | None = Field(default=None, description="Timestamp of the dialog.")
-    implicit_preference: str | None = Field(default=None, description="Implicit preference.")
+    mem_cube_id: str | None = Field(default=None, description="ID of the MemCube.")
+    score: float | None = Field(default=None, description="Score of the retrieval result.")
 
 
 class TextualMemoryItem(BaseModel):
@@ -242,8 +344,6 @@ class TextualMemoryItem(BaseModel):
 
             if v.get("relativity") is not None:
                 return SearchedTreeNodeTextualMemoryMetadata(**v)
-            if v.get("preference_type") is not None:
-                return PreferenceTextualMemoryMetadata(**v)
             if any(k in v for k in ("sources", "memory_type", "embedding", "background", "usage")):
                 return TreeNodeTextualMemoryMetadata(**v)
             return TextualMemoryMetadata(**v)
@@ -252,3 +352,17 @@ class TextualMemoryItem(BaseModel):
     def __str__(self) -> str:
         """Pretty string representation of the memory item."""
         return f"<ID: {self.id} | Memory: {self.memory} | Metadata: {self.metadata!s}>"
+
+
+def list_all_fields() -> list[str]:
+    """List all possible fields of the TextualMemoryItem model."""
+    top = list(TextualMemoryItem.model_fields.keys())
+    meta_models = [
+        TextualMemoryMetadata,
+        TreeNodeTextualMemoryMetadata,
+        SearchedTreeNodeTextualMemoryMetadata,
+        PreferenceTextualMemoryMetadata,
+    ]
+    meta_all = sorted(set().union(*[set(m.model_fields.keys()) for m in meta_models]))
+
+    return top + meta_all

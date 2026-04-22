@@ -20,8 +20,6 @@ from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
     MONITOR_ACTIVATION_MEMORY_TYPE,
     MONITOR_WORKING_MEMORY_TYPE,
-    MemCubeID,
-    UserID,
 )
 from memos.mem_scheduler.schemas.monitor_schemas import (
     MemoryMonitorItem,
@@ -29,8 +27,9 @@ from memos.mem_scheduler.schemas.monitor_schemas import (
     QueryMonitorQueue,
 )
 from memos.mem_scheduler.utils.db_utils import get_utc_now
-from memos.mem_scheduler.utils.misc_utils import extract_json_dict
+from memos.mem_scheduler.utils.misc_utils import extract_json_obj
 from memos.memories.textual.tree import TreeTextMemory
+from memos.types import MemCubeID, UserID
 
 
 logger = get_logger(__name__)
@@ -76,8 +75,8 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
         ] = {}
 
         # Lifecycle monitor
-        self.last_activation_mem_update_time = datetime.min
-        self.last_query_consume_time = datetime.min
+        self.last_activation_mem_update_time = get_utc_now()
+        self.last_query_consume_time = get_utc_now()
 
         self._register_lock = Lock()
         self._process_llm = process_llm
@@ -92,7 +91,7 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
         llm_response = self._process_llm.generate([{"role": "user", "content": prompt}])
         try:
             # Parse JSON output from LLM response
-            keywords = extract_json_dict(llm_response)
+            keywords = extract_json_obj(llm_response)
             assert isinstance(keywords, list)
         except Exception as e:
             logger.error(
@@ -201,15 +200,19 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
         mem_cube_id: str,
         mem_cube: GeneralMemCube,
     ):
-        text_mem_base: TreeTextMemory = mem_cube.text_mem
-        assert isinstance(text_mem_base, TreeTextMemory)
-        self.working_mem_monitor_capacity = min(
-            DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
-            (
-                text_mem_base.memory_manager.memory_size["WorkingMemory"]
-                + self.partial_retention_number
-            ),
-        )
+        text_mem_base = mem_cube.text_mem
+
+        if isinstance(text_mem_base, TreeTextMemory):
+            self.working_mem_monitor_capacity = min(
+                DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
+                (
+                    int(text_mem_base.memory_manager.memory_size["WorkingMemory"])
+                    + self.partial_retention_number
+                ),
+            )
+        else:
+            # Fallback for NaiveTextMemory and others
+            self.working_mem_monitor_capacity = DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT
 
         # register monitors
         self.register_memory_manager_if_not_exists(
@@ -353,7 +356,7 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
         )
         response = self._process_llm.generate([{"role": "user", "content": prompt}])
         try:
-            response = extract_json_dict(response)
+            response = extract_json_obj(response)
             assert ("trigger_retrieval" in response) and ("missing_evidences" in response)
         except Exception:
             logger.error(f"Fail to extract json dict from response: {response}")

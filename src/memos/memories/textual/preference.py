@@ -1,6 +1,7 @@
 import json
 import os
 
+from datetime import datetime
 from typing import Any
 
 from memos.configs.memory import PreferenceTextMemoryConfig
@@ -66,17 +67,20 @@ class PreferenceTextMemory(BaseTextMemory):
         )
 
     def get_memory(
-        self, messages: list[MessageList], type: str, info: dict[str, Any]
+        self, messages: list[MessageList], type: str, info: dict[str, Any], **kwargs
     ) -> list[TextualMemoryItem]:
         """Get memory based on the messages.
         Args:
             messages (list[MessageList]): The messages to get memory from.
             type (str): The type of memory to get.
             info (dict[str, Any]): The info to get memory.
+            **kwargs: Additional keyword arguments to pass to the extractor.
         """
-        return self.extractor.extract(messages, type, info)
+        return self.extractor.extract(messages, type, info, **kwargs)
 
-    def search(self, query: str, top_k: int, info=None, **kwargs) -> list[TextualMemoryItem]:
+    def search(
+        self, query: str, top_k: int, info=None, search_filter=None, **kwargs
+    ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         Args:
             query (str): The query to search for.
@@ -85,7 +89,10 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
-        return self.retriever.retrieve(query, top_k, info)
+        if not isinstance(search_filter, dict):
+            search_filter = {}
+        search_filter.update({"status": "activated"})
+        return self.retriever.retrieve(query, top_k, info, search_filter)
 
     def load(self, dir: str) -> None:
         """Load memories from the specified directory.
@@ -165,7 +172,7 @@ class PreferenceTextMemory(BaseTextMemory):
         """Update a memory by memory_id."""
         raise NotImplementedError
 
-    def get(self, memory_id: str) -> TextualMemoryItem:
+    def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
         """Get a memory by its ID.
         Args:
             memory_id (str): The ID of the memory to retrieve.
@@ -190,7 +197,7 @@ class PreferenceTextMemory(BaseTextMemory):
                 return None
             return TextualMemoryItem(
                 id=res.id,
-                memory=res.payload.get("dialog_str", ""),
+                memory=res.memory,
                 metadata=PreferenceTextualMemoryMetadata(**res.payload),
             )
         except Exception as e:
@@ -225,7 +232,7 @@ class PreferenceTextMemory(BaseTextMemory):
             return [
                 TextualMemoryItem(
                     id=memo.id,
-                    memory=memo.payload.get("dialog_str", ""),
+                    memory=memo.memory,
                     metadata=PreferenceTextualMemoryMetadata(**memo.payload),
                 )
                 for memo in res
@@ -241,26 +248,80 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
-        all_collections = self.vector_db.list_collections()
+        all_collections = ["explicit_preference", "implicit_preference"]
         all_memories = {}
         for collection_name in all_collections:
             items = self.vector_db.get_all(collection_name)
             all_memories[collection_name] = [
                 TextualMemoryItem(
                     id=memo.id,
-                    memory=memo.payload.get("dialog_str", ""),
+                    memory=memo.memory,
                     metadata=PreferenceTextualMemoryMetadata(**memo.payload),
                 )
                 for memo in items
             ]
         return all_memories
 
+    def get_memory_by_filter(
+        self,
+        filter: dict[str, Any] | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+    ):
+        """Get memories by filter.
+        Args:
+            filter (dict[str, Any]): Filter criteria.
+        Returns:
+            list[TextualMemoryItem]: List of memories that match the filter.
+        """
+        collection_list = self.vector_db.config.collection_name
+
+        memories = []
+        for collection_name in collection_list:
+            db_items = self.vector_db.get_by_filter(collection_name=collection_name, filter=filter)
+            db_items_memory = [
+                TextualMemoryItem(
+                    id=memo.id,
+                    memory=memo.memory,
+                    metadata=PreferenceTextualMemoryMetadata(**memo.payload),
+                )
+                for memo in db_items
+            ]
+            memories.extend(db_items_memory)
+
+        # sort
+        sorted_memories = sorted(
+            memories,
+            key=lambda item: datetime.fromisoformat(item.metadata.created_at),
+            reverse=True,
+        )
+        if page and page_size:
+            if page < 1:
+                page = 1
+            if page_size < 1:
+                page_size = 10
+            pick_memories = sorted_memories[(page - 1) * page_size : page * page_size]
+            return pick_memories, len(sorted_memories)
+
+        return sorted_memories, len(sorted_memories)
+
     def delete(self, memory_ids: list[str]) -> None:
         """Delete memories.
         Args:
             memory_ids (list[str]): List of memory IDs to delete.
         """
-        raise NotImplementedError
+        collection_list = self.vector_db.config.collection_name
+        for collection_name in collection_list:
+            self.vector_db.delete(collection_name, memory_ids)
+
+    def delete_by_filter(self, filter: dict[str, Any]) -> None:
+        """Delete memories by filter.
+        Args:
+            filter (dict[str, Any]): Filter criteria.
+        """
+        collection_list = self.vector_db.config.collection_name
+        for collection_name in collection_list:
+            self.vector_db.delete_by_filter(collection_name=collection_name, filter=filter)
 
     def delete_with_collection_name(self, collection_name: str, memory_ids: list[str]) -> None:
         """Delete memories by their IDs and collection name.
