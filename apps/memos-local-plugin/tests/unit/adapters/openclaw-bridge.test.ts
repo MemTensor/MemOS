@@ -180,6 +180,41 @@ describe("flattenMessages", () => {
     expect(flat[3].content).toBe("file.txt");
   });
 
+  it("does NOT double-emit tool calls when content[] and top-level tool_calls coexist (pi-ai + OpenAI bundle)", () => {
+    // Regression for the "tool call rows duplicated 2x" bug. OpenAI
+    // messages plumbed through pi-ai carry the canonical pi-ai
+    // `content[{type:"toolCall"}]` shape AND the legacy OpenAI
+    // `tool_calls` top-level array. Pre-fix, flattenMessages emitted
+    // BOTH, which made extractTurn's `pendingCalls.set(key, …)`
+    // overwrite the first stub (with its `thinkingBefore`) with an
+    // empty second stub — so `thinkingBefore` silently went missing
+    // AND the trace ended up with 2× rows per tool.
+    const flat = flattenMessages([
+      { role: "user", content: "deploy" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "running" },
+          { type: "toolCall", id: "call_X", name: "sh", arguments: { cmd: "deploy" } },
+        ],
+        tool_calls: [
+          {
+            id: "call_X",
+            function: { name: "sh", arguments: JSON.stringify({ cmd: "deploy" }) },
+          },
+        ],
+      },
+    ]);
+    const toolCallEntries = flat.filter((m) => m.role === "tool_call");
+    expect(toolCallEntries).toHaveLength(1);
+    expect(toolCallEntries[0].toolName).toBe("sh");
+    expect(toolCallEntries[0].toolCallId).toBe("call_X");
+    // Ensure the assistant text emitted for the SAME message is
+    // preserved — it's the `thinkingBefore` source for this call.
+    const assistantText = flat.find((m) => m.role === "assistant");
+    expect(assistantText?.content).toBe("running");
+  });
+
   it("does NOT coerce unknown roles into 'user' (the bug that captured tool stdout as user input)", () => {
     const flat = flattenMessages([
       { role: "user", content: "real user input" },
@@ -257,18 +292,15 @@ describe("extractTurn", () => {
     const turn = extractTurn(flat, 1_700_000_000_000);
     expect(turn).not.toBeNull();
     expect(turn!.userText).toBe("how many files?");
-    expect(turn!.agentText).toContain("2 files");
+    expect(turn!.agentText).toBe("2 files");
     expect(turn!.toolCalls).toHaveLength(1);
     expect(turn!.toolCalls[0].name).toBe("sh");
     expect(turn!.toolCalls[0].input).toEqual({ cmd: "ls" });
     expect(turn!.toolCalls[0].output).toContain("a.txt");
+    expect(turn!.toolCalls[0].thinkingBefore).toBe("running ls");
   });
 
   it("captures sysctl-style exec invocation: tool stdout lands in tool output, NOT in userText", () => {
-    // Regression for the user's bug: an exec tool with a complex
-    // command + multi-line stdout used to be parsed as a fresh user
-    // turn whose content was the stdout. Lock down that pi-ai's
-    // toolResult shape now keeps the boundaries straight.
     const flat = flattenMessages([
       { role: "user", content: "帮我看下当前运行的系统是几个核心多少内存" },
       {
@@ -304,12 +336,11 @@ describe("extractTurn", () => {
     expect(turn!.userText).toBe("帮我看下当前运行的系统是几个核心多少内存");
     expect(turn!.userText).not.toContain("17179869184");
     expect(turn!.userText).not.toContain("Hardware:");
-    // Both assistant texts are kept in chronological order — the
-    // lead-in ("I'll check the system.") and the final answer
-    // ("10 核 / 16 GB"). What we explicitly forbid is tool stdout
-    // leaking back into agentText.
-    expect(turn!.agentText).toContain("I'll check the system.");
-    expect(turn!.agentText).toContain("10 核 / 16 GB");
+    // "I'll check the system." is the model's pre-tool reasoning and
+    // is captured in the tool's thinkingBefore. The final reply after
+    // the tool result is agentText.
+    expect(turn!.toolCalls[0].thinkingBefore).toBe("I'll check the system.");
+    expect(turn!.agentText).toBe("10 核 / 16 GB");
     expect(turn!.agentText).not.toContain("17179869184");
     expect(turn!.agentText).not.toContain("Hardware:");
     expect(turn!.toolCalls).toHaveLength(1);
@@ -336,6 +367,173 @@ describe("extractTurn", () => {
     expect(turn!.agentText).toBe("I read the issue. Next: triage.");
     expect(turn!.agentText).not.toContain("Let me read");
     expect(turn!.agentThinking).toBe("Let me read the issue first.");
+  });
+
+  it("assigns interleaved thinking to each tool call's thinkingBefore", () => {
+    // OpenClaw's PI agent alternates: think → tool → result → think → tool.
+    // Both thinking blocks and regular text before a tool call are
+    // captured in thinkingBefore.
+    const flat = flattenMessages([
+      { role: "user", content: "fix the build" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Let me check the error log first." },
+          { type: "text", text: "checking" },
+          { type: "toolCall", id: "c1", name: "sh", arguments: { cmd: "cat error.log" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "sh",
+        content: "pg_config not found",
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "The error says pg_config is missing. I need to install libpq-dev.",
+          },
+          { type: "toolCall", id: "c2", name: "sh", arguments: { cmd: "apt-get install libpq-dev" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c2",
+        toolName: "sh",
+        content: "ok",
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Good, now let me retry the build." },
+          { type: "toolCall", id: "c3", name: "sh", arguments: { cmd: "make build" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c3",
+        toolName: "sh",
+        content: "BUILD SUCCESSFUL",
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Fixed — the build passes now." }],
+      },
+    ]);
+    const turn = extractTurn(flat, 0);
+    expect(turn).not.toBeNull();
+    expect(turn!.toolCalls).toHaveLength(3);
+    // First tool: thinking + text merged into thinkingBefore
+    expect(turn!.toolCalls[0].thinkingBefore).toBe(
+      "Let me check the error log first.\n\nchecking",
+    );
+    expect(turn!.toolCalls[1].thinkingBefore).toBe(
+      "The error says pg_config is missing. I need to install libpq-dev.",
+    );
+    expect(turn!.toolCalls[2].thinkingBefore).toBe("Good, now let me retry the build.");
+    // All thinking was flushed into tool calls; none left over
+    expect(turn!.agentThinking).toBeUndefined();
+    expect(turn!.agentText).toBe("Fixed — the build passes now.");
+  });
+
+  it("tool call has no thinkingBefore when model goes directly to the tool", () => {
+    const flat = flattenMessages([
+      { role: "user", content: "list files" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "c1", name: "sh", arguments: { cmd: "ls" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "sh",
+        content: "a.txt",
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "found a.txt" }],
+      },
+    ]);
+    const turn = extractTurn(flat, 0);
+    expect(turn!.toolCalls[0].thinkingBefore).toBeUndefined();
+    expect(turn!.agentText).toBe("found a.txt");
+  });
+
+  it("captures regular assistant text between tool calls as thinkingBefore (most models)", () => {
+    // Most models (non-Claude, or Claude without extended thinking)
+    // produce regular text between tool calls, not ThinkingContent.
+    // This text is the model's reasoning and must be captured.
+    const flat = flattenMessages([
+      { role: "user", content: "帮我查下当前系统有几个cpu有多少g内存" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me check the CPU count first." },
+          { type: "toolCall", id: "c1", name: "exec", arguments: { command: "sysctl -n hw.ncpu" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "exec",
+        content: "10",
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "OK, 10 CPUs. Now let me check the memory." },
+          { type: "toolCall", id: "c2", name: "exec", arguments: { command: "sysctl -n hw.memsize" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c2",
+        toolName: "exec",
+        content: "17179869184",
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Now let me check disk space." },
+          { type: "toolCall", id: "c3", name: "exec", arguments: { command: "df -h /" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c3",
+        toolName: "exec",
+        content: "/dev/disk1s1 466Gi 200Gi 266Gi 43% /",
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Your system has 10 CPUs, 16 GB RAM, and 266 GB free disk space." },
+        ],
+      },
+    ]);
+    const turn = extractTurn(flat, 0);
+    expect(turn).not.toBeNull();
+    expect(turn!.toolCalls).toHaveLength(3);
+    expect(turn!.toolCalls[0].thinkingBefore).toBe("Let me check the CPU count first.");
+    expect(turn!.toolCalls[1].thinkingBefore).toBe("OK, 10 CPUs. Now let me check the memory.");
+    expect(turn!.toolCalls[2].thinkingBefore).toBe("Now let me check disk space.");
+    expect(turn!.agentText).toBe(
+      "Your system has 10 CPUs, 16 GB RAM, and 266 GB free disk space.",
+    );
+    // No thinking blocks used, so agentThinking is empty
+    expect(turn!.agentThinking).toBeUndefined();
   });
 
   it("falls back gracefully when assistant.toolCall has no matching toolResult", () => {

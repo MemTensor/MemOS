@@ -213,9 +213,26 @@ export interface RetrievalConfig {
   skillEtaBlend?: number;
   /**
    * Smart MMR seeding — only seed a tier if its best candidate clears
-   * `topRelevance · relativeThresholdFloor`. Default true.
+   * `topRelevance · smartSeedRatio` (see below). Default true.
+   * `smartSeed: false` restores the legacy "seed best of every non-empty
+   * tier" behaviour regardless of relevance.
    */
   smartSeed?: boolean;
+  /**
+   * When `smartSeed` is on, only seed a tier whose best candidate's
+   * relevance is ≥ `poolTopRelevance · smartSeedRatio`. Default 0.7.
+   * Independent of `relativeThresholdFloor` so the seed gate can be
+   * stricter than the generic drop floor.
+   */
+  smartSeedRatio?: number;
+  /**
+   * If a candidate is surfaced by ≥ 2 channels, bypass the relative
+   * threshold (it still participates in MMR). This compensates for
+   * the ranker's base formula being "max channel score + additive
+   * boosts" — a two-channel agreement is a strong signal even when
+   * the absolute score falls below the drop floor. Default true.
+   */
+  multiChannelBypass?: boolean;
 
   /**
    * V7 §2.6 Tier-1 rendering mode.
@@ -254,8 +271,16 @@ export interface RetrievalConfig {
   llmFilterEnabled: boolean;
   /** Keep at most N candidates after the LLM filter. */
   llmFilterMaxKeep: number;
-  /** Skip the filter entirely when the ranked list has ≤ this many items. */
+  /** Skip the filter entirely when the ranked list has fewer than this many items. */
   llmFilterMinCandidates: number;
+  /**
+   * Max chars of body text to show the LLM filter for each candidate.
+   * Higher = more context for precise judgement, at the cost of more
+   * tokens per round-trip. Default 500 (openclaw uses 300 without
+   * tags/channels; we include richer metadata so a slightly bigger
+   * window pays for itself).
+   */
+  llmFilterCandidateBodyChars?: number;
 }
 
 /**
@@ -514,6 +539,44 @@ export interface RetrievalStats {
   queryTokens: number;
   queryTags: string[];
   emptyPacket: boolean;
+  /**
+   * Observability breakdown — populated so the Logs page (and
+   * api_logs) can show "how many candidates survived each stage" and
+   * operators can spot "this stage is the lossy one" at a glance.
+   * All fields are optional so legacy callers / older RetrievalStats
+   * consumers keep compiling.
+   */
+  rawCandidateCount?: number;
+  droppedByThresholdCount?: number;
+  thresholdFloor?: number;
+  topRelevance?: number;
+  rankedCount?: number;
+  llmFilterOutcome?:
+    | "disabled"
+    | "no_llm"
+    | "below_threshold"
+    | "empty_query"
+    | "llm_kept_all"
+    | "llm_filtered"
+    | "llm_failed_safe_cutoff";
+  llmFilterSufficient?: boolean;
+  llmFilterKept?: number;
+  llmFilterDropped?: number;
+  /**
+   * Channel hit counts across all tiers, e.g.
+   * `{ vec_summary: 12, fts: 7, pattern: 3, structural: 0 }`. Helps
+   * identify queries that got hits only through one channel (likely
+   * fragile).
+   */
+  channelHits?: Partial<Record<
+    | "vec_summary"
+    | "vec_action"
+    | "vec"
+    | "fts"
+    | "pattern"
+    | "structural",
+    number
+  >>;
 }
 
 /** Discriminated context union — one per entry point in `retrieve.ts`. */

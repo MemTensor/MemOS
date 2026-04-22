@@ -264,6 +264,8 @@ async function runAll(
     const tier3LatencyMs = plan.wantTier3 ? Date.now() - tier3Start : 0;
 
     const fuseStart = Date.now();
+    const rawCandidateCount =
+      tier1.length + tier2.traces.length + tier2.episodes.length + tier3.length;
     const ranked = rank({
       tier1,
       tier2Traces: tier2.traces,
@@ -281,7 +283,8 @@ async function runAll(
     // items that share surface keywords with the query but aren't
     // actually relevant. Fails open — on any error we keep the
     // mechanical ranking.
-    const queryText = (ctx as { userText?: string }).userText ?? compiled.text ?? "";
+    const queryText =
+      (ctx as { userText?: string }).userText ?? compiled.text ?? "";
     const filtered = await llmFilterCandidates(
       { query: queryText, ranked: ranked.ranked },
       {
@@ -292,9 +295,15 @@ async function runAll(
     );
     log.debug("llm_filter.done", {
       outcome: filtered.outcome,
-      before: ranked.ranked.length,
+      sufficient: filtered.sufficient,
+      raw: rawCandidateCount,
+      afterThreshold: ranked.ranked.length,
+      droppedByThreshold: ranked.droppedByThreshold,
+      thresholdFloor: round(ranked.thresholdFloor, 3),
+      topRelevance: round(ranked.topRelevance, 3),
       kept: filtered.kept.length,
       dropped: filtered.dropped.length,
+      channels: ranked.channelHits,
     });
 
     const { packet } = toPacket({
@@ -342,6 +351,16 @@ async function runAll(
       queryTokens: approxTokens(compiled.text),
       queryTags: compiled.tags,
       emptyPacket: packet.snippets.length === 0,
+      rawCandidateCount,
+      droppedByThresholdCount: ranked.droppedByThreshold,
+      thresholdFloor: ranked.thresholdFloor,
+      topRelevance: ranked.topRelevance,
+      rankedCount: ranked.ranked.length,
+      llmFilterOutcome: filtered.outcome,
+      llmFilterSufficient: filtered.sufficient ?? undefined,
+      llmFilterKept: filtered.kept.length,
+      llmFilterDropped: filtered.dropped.length,
+      channelHits: ranked.channelHits,
     };
 
     log.info("done", {
@@ -430,6 +449,12 @@ function emptyResult(
 function approxTokens(s: string): number {
   if (!s) return 0;
   return Math.ceil(s.length / 4);
+}
+
+function round(n: number, d: number): number {
+  if (!Number.isFinite(n)) return n;
+  const f = 10 ** d;
+  return Math.round(n * f) / f;
 }
 
 /** Thin façade so pipelines can `new Retriever(deps)` if they prefer OO. */

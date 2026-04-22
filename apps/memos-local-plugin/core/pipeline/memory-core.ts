@@ -824,6 +824,22 @@ export function createMemoryCore(
       snippet: string;
     }> = [];
     let filtered: typeof candidates = [];
+    let retrievalStats: {
+      raw?: number;
+      ranked?: number;
+      droppedByThreshold?: number;
+      thresholdFloor?: number;
+      topRelevance?: number;
+      llmFilter?: {
+        outcome?: string;
+        kept?: number;
+        dropped?: number;
+        sufficient?: boolean | null;
+      };
+      channelHits?: Record<string, number>;
+      queryTokens?: number;
+      queryTags?: string[];
+    } | undefined;
     try {
       const result = await turnStartRetrieve(deps, {
         reason: "turn_start",
@@ -857,6 +873,29 @@ export function createMemoryCore(
         snippet: h.snippet,
       }));
       filtered = candidates; // post-filter is what we return → same list.
+
+      // Three-stage observability — surfaced verbatim so the viewer's
+      // Logs page can render "raw → threshold → ranked → LLM filter"
+      // funnels. All fields are optional on the producer side so older
+      // consumers keep working.
+      const s = result.stats;
+      retrievalStats = {
+        raw: s.rawCandidateCount,
+        ranked: s.rankedCount,
+        droppedByThreshold: s.droppedByThresholdCount,
+        thresholdFloor: s.thresholdFloor,
+        topRelevance: s.topRelevance,
+        llmFilter: {
+          outcome: s.llmFilterOutcome,
+          kept: s.llmFilterKept,
+          dropped: s.llmFilterDropped,
+          sufficient: s.llmFilterSufficient ?? null,
+        },
+        channelHits: s.channelHits as Record<string, number> | undefined,
+        queryTokens: s.queryTokens,
+        queryTags: s.queryTags,
+      };
+
       return {
         query,
         hits,
@@ -883,6 +922,7 @@ export function createMemoryCore(
                 candidates,
                 hubCandidates: [] as unknown[],
                 filtered,
+                stats: retrievalStats,
               }
             : { error: "retrieval_failed" },
           durationMs: Date.now() - startedAt,

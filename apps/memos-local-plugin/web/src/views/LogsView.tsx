@@ -354,7 +354,24 @@ interface SearchOutput {
   hubCandidates?: SearchCandidate[];
   filtered?: SearchCandidate[];
   droppedByLlm?: SearchCandidate[];
+  stats?: RetrievalStatsPayload;
   error?: string;
+}
+interface RetrievalStatsPayload {
+  raw?: number;
+  ranked?: number;
+  droppedByThreshold?: number;
+  thresholdFloor?: number;
+  topRelevance?: number;
+  llmFilter?: {
+    outcome?: string;
+    kept?: number;
+    dropped?: number;
+    sufficient?: boolean | null;
+  };
+  channelHits?: Record<string, number>;
+  queryTokens?: number;
+  queryTags?: string[];
 }
 interface SearchCandidate {
   tier?: number;
@@ -404,6 +421,7 @@ function MemorySearchDetail({
         </section>
       ) : (
         <>
+          {out.stats && <RetrievalFunnel stats={out.stats} />}
           <CandidateSection
             title={t("logs.search.initial")}
             count={candidates.length}
@@ -439,6 +457,63 @@ function MemorySearchDetail({
         </>
       )}
     </div>
+  );
+}
+
+function RetrievalFunnel({ stats }: { stats: RetrievalStatsPayload }) {
+  const raw = stats.raw ?? 0;
+  const ranked = stats.ranked ?? 0;
+  const dropped = stats.droppedByThreshold ?? 0;
+  const lf = stats.llmFilter ?? {};
+  const kept = lf.kept;
+  const outcome = lf.outcome ?? "unknown";
+  const fmtNum = (n: number | undefined, digits = 3) =>
+    typeof n === "number" && Number.isFinite(n) ? n.toFixed(digits) : "—";
+  const channelEntries = Object.entries(stats.channelHits ?? {}).filter(
+    ([, v]) => typeof v === "number" && v > 0,
+  );
+  return (
+    <section class="card card--flat">
+      <div class="hstack" style="margin-bottom:var(--sp-2)">
+        <span style="font-size:var(--fs-sm);font-weight:var(--fw-semi)">
+          {t("logs.search.funnel")}
+        </span>
+      </div>
+      <div
+        class="hstack"
+        style="gap:var(--sp-3);flex-wrap:wrap;font-size:var(--fs-xs)"
+      >
+        <span class="pill pill--info">raw {raw}</span>
+        <span class="pill pill--info">ranked {ranked}</span>
+        {dropped > 0 && (
+          <span class="pill pill--failed">dropped≥floor {dropped}</span>
+        )}
+        {typeof kept === "number" && (
+          <span class="pill pill--active">llm kept {kept}</span>
+        )}
+        <span class="pill">outcome {outcome}</span>
+        {lf.sufficient !== null && lf.sufficient !== undefined && (
+          <span class={`pill ${lf.sufficient ? "pill--active" : "pill--failed"}`}>
+            sufficient {String(lf.sufficient)}
+          </span>
+        )}
+        <span class="muted">
+          floor {fmtNum(stats.thresholdFloor)} · top {fmtNum(stats.topRelevance)}
+        </span>
+      </div>
+      {channelEntries.length > 0 && (
+        <div
+          class="hstack"
+          style="gap:var(--sp-2);flex-wrap:wrap;font-size:var(--fs-xs);margin-top:var(--sp-2)"
+        >
+          {channelEntries.map(([ch, n]) => (
+            <span key={ch} class="pill">
+              {ch} · {n}
+            </span>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

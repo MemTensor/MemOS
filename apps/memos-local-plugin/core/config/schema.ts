@@ -322,8 +322,14 @@ const AlgorithmSchema = Type.Object({
      * `minTraceSim` — when the best hit is weak, we keep more (lower
      * absolute floor); when there's a clear winner, we drop noise.
      * Set to 0 to disable the relative cutoff entirely.
+     *
+     * Default lowered to 0.2 with the 2026 ranker overhaul: the new
+     * base formula already weighs channel-rank evidence (so a raw
+     * FTS-only hit lands in a comparable range to a cosine-0.8 hit),
+     * and the old 0.4 floor was over-pruning keyword matches with
+     * modest V·decay.
      */
-    relativeThresholdFloor: NumberInRange(0.4, 0, 1),
+    relativeThresholdFloor: NumberInRange(0.2, 0, 1),
     /**
      * Tier-1 skill relevance blend weight for `η` (skill reliability).
      * Old default `0.4` made well-trodden skills outrank obviously-more-
@@ -333,12 +339,28 @@ const AlgorithmSchema = Type.Object({
     skillEtaBlend: NumberInRange(0.15, 0, 1),
     /**
      * MMR Phase-A seed-by-tier policy. When `true`, only seed a tier
-     * if its best candidate's relevance ≥ `relativeThresholdFloor *
-     * topRelevance`. This prevents the ranker from force-injecting a
-     * stale Tier-1 skill / Tier-3 world-model just because it cleared
-     * the absolute floors.
+     * if its best candidate's relevance ≥ `poolTopRelevance *
+     * smartSeedRatio` (see below). This prevents the ranker from
+     * force-injecting a stale Tier-1 skill / Tier-3 world-model just
+     * because it cleared the absolute floors.
      */
     smartSeed: Bool(true),
+    /**
+     * Seed cutoff for smart-seed MMR — tier is seeded iff its best
+     * candidate's relevance ≥ `poolTopRelevance * smartSeedRatio`.
+     * Independent of `relativeThresholdFloor` so the seed gate can be
+     * stricter than the generic drop floor (0.7 is "within 30% of the
+     * best available candidate anywhere in the pool").
+     */
+    smartSeedRatio: NumberInRange(0.7, 0, 1),
+    /**
+     * When a candidate is surfaced by ≥ 2 retrieval channels (e.g.
+     * both vec and fts hit the same trace), bypass the relative
+     * threshold. Multi-channel agreement is a strong signal, and
+     * without this keyword-only matches with modest V·decay often
+     * get dropped by a noisy `topRelevance`.
+     */
+    multiChannelBypass: Bool(true),
     /**
      * How Tier-1 skills are surfaced in the injected prompt:
      *   - "summary" (default): inject only `name + η + 1-line summary +
@@ -368,10 +390,21 @@ const AlgorithmSchema = Type.Object({
     /** Keep at most this many candidates after the LLM filter. */
     llmFilterMaxKeep: NumberInRange(5, 1, 30),
     /**
-     * Skip the filter when the ranked list already has ≤ this many
-     * items — no point paying an LLM round-trip to prune 3 candidates.
+     * Skip the filter when the ranked list has fewer than this many
+     * items. Default 1 — even a single candidate gets a precision
+     * pass, matching `memos-local-openclaw`'s tool-level filter and
+     * preventing a lone off-topic memory from sneaking through
+     * unchecked.
      */
-    llmFilterMinCandidates: NumberInRange(4, 1, 50),
+    llmFilterMinCandidates: NumberInRange(1, 1, 50),
+    /**
+     * Body-text budget per candidate when building the LLM filter
+     * prompt. Higher = more context for precise judgement, at the
+     * cost of more tokens per round-trip. Default 500 (openclaw uses
+     * 300 without tags/channels; we include richer metadata, so a
+     * slightly larger window pays for itself).
+     */
+    llmFilterCandidateBodyChars: NumberInRange(500, 120, 2000),
   }, { default: {} }),
 }, { default: {} });
 

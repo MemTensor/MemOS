@@ -687,6 +687,11 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           errorCode: tc.errorCode,
           startedAt: tc.startedAt,
           endedAt: tc.endedAt,
+          // V7 §0.1: preserve the model's "Thought for X" narration that
+          // precedes this call so `step-extractor` can re-attach it to
+          // the captured ToolCallDTO. Without this, chained tool calls
+          // lose the natural-language bridge between steps.
+          thinkingBefore: tc.thinkingBefore,
         },
       });
     }

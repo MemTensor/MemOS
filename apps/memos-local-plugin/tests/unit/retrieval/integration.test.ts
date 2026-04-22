@@ -148,6 +148,9 @@ function makeDeps(handle: TmpDbHandle): RetrievalDeps {
       minTraceSim: 0.3,
       tagFilter: "auto",
       decayHalfLifeDays: 30,
+      llmFilterEnabled: false,
+      llmFilterMaxKeep: 4,
+      llmFilterMinCandidates: 1,
     },
     now: () => NOW as never,
   };
