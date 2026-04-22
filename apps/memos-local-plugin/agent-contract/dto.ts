@@ -40,6 +40,16 @@ export interface ToolCallDTO {
   errorCode?: string;
   startedAt: EpochMs;
   endedAt: EpochMs;
+  /**
+   * LLM-native thinking emitted *before* the model decided to invoke this
+   * tool — e.g. "I got an error from tool_1, let me try a different
+   * approach". Populated by the adapter when the model interleaves
+   * thinking blocks between tool calls. `undefined` for legacy data or
+   * when no thinking preceded this particular call.
+   *
+   * Stored inside `tool_calls_json` (no schema migration needed).
+   */
+  thinkingBefore?: string;
 }
 
 export interface TurnInputDTO {

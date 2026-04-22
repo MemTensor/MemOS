@@ -175,7 +175,11 @@ function segmentToSteps(
     out.push({
       key: `${episode.id}:${ts}:tool:${i}`,
       ts,
-      userText,
+      // Only the first sub-step carries the user query; subsequent
+      // sub-steps leave `userText` empty so the viewer's flattenChat
+      // doesn't render the same user bubble N times. The turn's
+      // provenance (episodeId) still links them together.
+      userText: i === 0 ? userText : "",
       agentText: "",
       agentThinking: i === 0 ? fullThinking : null,
       toolCalls: [tc],
@@ -232,6 +236,7 @@ function toolCallFromTurn(turn: EpisodeTurn): ToolCallDTO | null {
   const endedAt = typeof meta.endedAt === "number" ? meta.endedAt : turn.ts;
   const input = meta.input ?? meta.args ?? undefined;
   const errorCode = typeof meta.errorCode === "string" ? meta.errorCode : undefined;
+  const thinkingBefore = typeof meta.thinkingBefore === "string" ? meta.thinkingBefore : undefined;
   return {
     name,
     input,
@@ -239,6 +244,7 @@ function toolCallFromTurn(turn: EpisodeTurn): ToolCallDTO | null {
     errorCode,
     startedAt,
     endedAt,
+    thinkingBefore,
   };
 }
 
@@ -264,7 +270,8 @@ function coerceToolCall(raw: unknown): ToolCallDTO | null {
   const startedAt =
     typeof r.startedAt === "number" ? r.startedAt : Date.now();
   const endedAt = typeof r.endedAt === "number" ? r.endedAt : startedAt;
-  return { name, input, output, errorCode, startedAt, endedAt };
+  const thinkingBefore = typeof r.thinkingBefore === "string" ? r.thinkingBefore : undefined;
+  return { name, input, output, errorCode, startedAt, endedAt, thinkingBefore };
 }
 
 function depthFromMeta(meta: Record<string, unknown>): number {

@@ -36,15 +36,25 @@ export function normalizeSteps(
       continue;
     }
 
-    const last = out[out.length - 1];
-    if (
-      last &&
-      last.agentText === agentText &&
-      last.userText === userText &&
-      sameToolCalls(last.toolCalls, toolCalls)
-    ) {
-      log.debug("normalize.skip_duplicate", { key: step.key });
-      continue;
+    // Sub-steps produced by the per-tool-call extractor (V7 §0.1) have
+    // intentionally-identical userText="" / agentText="" and carry only
+    // a single tool call each — but two different tools can still share
+    // a short input fingerprint, which the generic dedup path below
+    // would incorrectly collapse. Skip dedup for sub-steps; the key
+    // uniqueness guarantees they can't be genuine duplicates.
+    const isSubStep = (step.meta as Record<string, unknown> | undefined)?.subStep === true;
+
+    if (!isSubStep) {
+      const last = out[out.length - 1];
+      if (
+        last &&
+        last.agentText === agentText &&
+        last.userText === userText &&
+        sameToolCalls(last.toolCalls, toolCalls)
+      ) {
+        log.debug("normalize.skip_duplicate", { key: step.key });
+        continue;
+      }
     }
 
     out.push({

@@ -15,6 +15,7 @@ export interface TimelineToolCall {
   errorCode?: string;
   startedAt?: number;
   endedAt?: number;
+  thinkingBefore?: string | null;
 }
 
 export interface TimelineTrace {
@@ -71,13 +72,10 @@ const TOOL_OUTPUT_PREVIEW_CHARS = 1_600;
  * recognise, in pi-ai's natural emission order:
  *
  *   1. `user`       — the user query that opened the step (if non-empty).
- *   2. `thinking`   — LLM-native thinking blocks the model emitted
- *                     before its visible reply (Claude extended,
- *                     pi-ai `ThinkingContent`). Sourced from
- *                     `trace.agentThinking`. Never from `reflection`.
- *   3. `tool` × N   — every tool call the assistant made, sorted by
- *                     `startedAt` so the chain reads chronologically.
- *   4. `assistant`  — the assistant's final text reply (if non-empty).
+ *   2. Interleaved `thinking` + `tool` blocks — each tool call's
+ *      `thinkingBefore` is rendered as a thinking bubble directly
+ *      before its tool, faithfully mirroring the model's think→act loop.
+ *   3. `assistant`  — the assistant's final text reply (if non-empty).
  *
  * `trace.reflection` is **deliberately not** turned into a chat bubble.
  * Reflection is the MemOS plugin's own post-hoc note used to compute
@@ -104,21 +102,38 @@ export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
       });
     }
 
-    const thinking = (tr.agentThinking ?? "").trim();
-    if (thinking) {
-      out.push({
-        role: "thinking",
-        text: thinking,
-        ts: tr.ts,
-        key: `${tr.id}:thinking`,
-        traceId: tr.id,
-      });
-    }
-
     const tools = [...(tr.toolCalls ?? [])].sort(
       (a, b) => (a.startedAt ?? tr.ts) - (b.startedAt ?? tr.ts),
     );
+
+    // When there are no tool calls, agentThinking (if present) appears
+    // as a standalone thinking bubble. When tools exist, the per-tool
+    // `thinkingBefore` fields carry the interleaved reasoning instead.
+    if (tools.length === 0) {
+      const thinking = (tr.agentThinking ?? "").trim();
+      if (thinking) {
+        out.push({
+          role: "thinking",
+          text: thinking,
+          ts: tr.ts,
+          key: `${tr.id}:thinking`,
+          traceId: tr.id,
+        });
+      }
+    }
+
     tools.forEach((tc, idx) => {
+      const tb = (tc.thinkingBefore ?? "").trim();
+      if (tb) {
+        out.push({
+          role: "thinking",
+          text: tb,
+          ts: tc.startedAt ?? tr.ts,
+          key: `${tr.id}:thinking:${idx}`,
+          traceId: tr.id,
+        });
+      }
+
       const inputStr = serializeToolPayload(tc.input);
       const outputStr = serializeToolPayload(tc.output);
       const dur =

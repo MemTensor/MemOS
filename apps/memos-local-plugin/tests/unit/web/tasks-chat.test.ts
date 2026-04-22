@@ -31,14 +31,11 @@ function trace(part: Partial<TimelineTrace>): TimelineTrace {
 }
 
 describe("flattenChat", () => {
-  it("emits user → thinking → tools → assistant in that order; reflection is dropped", () => {
+  it("emits user → [thinking+tool pairs] → assistant; reflection is dropped", () => {
     const t = trace({
       id: "tr1",
       userText: "go fix the deploy",
       agentText: "done — see PR #42",
-      // LLM-native thinking — must surface as a chat bubble.
-      agentThinking: "Looking at the error chain, pg_config is missing.",
-      // Plugin-internal reflection — must NEVER appear in the chat log.
       reflection:
         "INTERNAL: scoring note — α should be high because this step pinpointed the root cause.",
       toolCalls: [
@@ -49,6 +46,7 @@ describe("flattenChat", () => {
           startedAt: T0 + 10,
           endedAt: T0 + 200,
           errorCode: "EXIT_1",
+          thinkingBefore: "Looking at the error chain, pg_config is missing.",
         },
         {
           name: "bash",
@@ -67,20 +65,15 @@ describe("flattenChat", () => {
       "tool",
       "assistant",
     ]);
-    // The thinking bubble is the model's NATIVE reasoning, NOT
-    // reflection (which is the plugin's scoring scratchpad).
     expect(msgs[1]!.text).toContain("pg_config is missing");
     expect(msgs[1]!.text).not.toContain("INTERNAL: scoring note");
-    // Both tools point back at the same trace and carry their full payload.
     expect(msgs[2]!.traceId).toBe("tr1");
     expect(msgs[2]!.toolName).toBe("bash");
     expect(msgs[2]!.toolInput).toContain("pip install psycopg2");
     expect(msgs[2]!.toolOutput).toContain("pg_config not found");
     expect(msgs[2]!.errorCode).toBe("EXIT_1");
     expect(msgs[2]!.toolDurationMs).toBe(190);
-    // Assistant is the agent text.
     expect(msgs[4]!.text).toBe("done — see PR #42");
-    // No bubble's text leaks the reflection content anywhere.
     for (const m of msgs) {
       expect(m.text).not.toContain("INTERNAL: scoring note");
     }
@@ -208,6 +201,107 @@ describe("flattenChat", () => {
       "thinking 2",
       "ok 2",
     ]);
+  });
+
+  it("interleaves per-tool thinking when thinkingBefore is present", () => {
+    const t = trace({
+      id: "tr_interleave",
+      userText: "fix the build",
+      agentText: "Fixed — build passes now.",
+      agentThinking: "Check error log.\n\nNeed libpq-dev.\n\nRetry the build.",
+      toolCalls: [
+        {
+          name: "sh",
+          input: "cat error.log",
+          output: "pg_config not found",
+          startedAt: T0 + 10,
+          endedAt: T0 + 200,
+          thinkingBefore: "Check error log.",
+        },
+        {
+          name: "sh",
+          input: "apt-get install libpq-dev",
+          output: "ok",
+          startedAt: T0 + 300,
+          endedAt: T0 + 800,
+          thinkingBefore: "Need libpq-dev.",
+        },
+        {
+          name: "sh",
+          input: "make build",
+          output: "BUILD SUCCESSFUL",
+          startedAt: T0 + 900,
+          endedAt: T0 + 1500,
+          thinkingBefore: "Retry the build.",
+        },
+      ],
+    });
+    const msgs = flattenChat([t]);
+    expect(msgs.map((m) => m.role)).toEqual([
+      "user",
+      "thinking",   // before tool 0
+      "tool",
+      "thinking",   // before tool 1
+      "tool",
+      "thinking",   // before tool 2
+      "tool",
+      "assistant",
+    ]);
+    expect(msgs[1]!.text).toBe("Check error log.");
+    expect(msgs[3]!.text).toBe("Need libpq-dev.");
+    expect(msgs[5]!.text).toBe("Retry the build.");
+  });
+
+  it("no thinking bubbles when tools lack thinkingBefore (agentThinking only shown for no-tool turns)", () => {
+    const t = trace({
+      id: "tr_no_tb",
+      userText: "go",
+      agentText: "done",
+      agentThinking: "Some thinking.",
+      toolCalls: [
+        { name: "tool_a", startedAt: T0 + 10, endedAt: T0 + 100 },
+        { name: "tool_b", startedAt: T0 + 200, endedAt: T0 + 300 },
+      ],
+    });
+    const msgs = flattenChat([t]);
+    expect(msgs.map((m) => m.role)).toEqual([
+      "user",
+      "tool",
+      "tool",
+      "assistant",
+    ]);
+  });
+
+  it("only some tools have thinkingBefore — those without get no bubble", () => {
+    const t = trace({
+      id: "tr_partial",
+      userText: "go",
+      agentText: "done",
+      agentThinking: "initial\n\nsecond thought",
+      toolCalls: [
+        {
+          name: "tool_a",
+          startedAt: T0 + 10,
+          endedAt: T0 + 100,
+          thinkingBefore: "initial",
+        },
+        {
+          name: "tool_b",
+          startedAt: T0 + 200,
+          endedAt: T0 + 300,
+          // no thinkingBefore — model went straight to the next tool
+        },
+      ],
+    });
+    const msgs = flattenChat([t]);
+    expect(msgs.map((m) => m.role)).toEqual([
+      "user",
+      "thinking",   // before tool_a
+      "tool",
+      "tool",       // no thinking before tool_b
+      "assistant",
+    ]);
+    expect(msgs[1]!.text).toBe("initial");
   });
 
   it("returns empty array for empty input", () => {

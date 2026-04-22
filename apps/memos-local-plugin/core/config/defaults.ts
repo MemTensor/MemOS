@@ -157,21 +157,27 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       episodeGoalMinSim: 0.45,
       tagFilter: "auto",
       keywordTopK: 20,
-      relativeThresholdFloor: 0.4,
+      // Lowered from 0.4 → 0.2 with the 2026 ranker overhaul: the new
+      // base relevance already uses channel rank as a first-class
+      // signal, so the old 0.4 floor was over-pruning keyword hits
+      // with modest V·decay.
+      relativeThresholdFloor: 0.2,
       skillEtaBlend: 0.15,
       smartSeed: true,
+      smartSeedRatio: 0.7,
+      multiChannelBypass: true,
       skillInjectionMode: "summary",
       skillSummaryChars: 200,
       llmFilterEnabled: true,
       // Tighter than the legacy default (5) so the LLM filter has a
-      // budget that forces "drop, don't pad". Combined with the
-      // few-shot prompt this dramatically improves precision.
+      // small budget; combined with the richer prompt (v3) this keeps
+      // packets concise without over-dropping.
       llmFilterMaxKeep: 4,
-      // Lowered from 3 → 2: small packets (e.g. just a Tier-1 skill +
-      // a Tier-2 trace) used to skip the LLM filter entirely and ship
-      // both items even when one was tangential. Now anything > 1
-      // candidate gets a precision pass.
-      llmFilterMinCandidates: 2,
+      // Lowered from 2 → 1: even a single candidate gets a precision
+      // pass. Mirrors `memos-local-openclaw`'s tool-level filter and
+      // prevents a lone off-topic memory from sneaking through unchecked.
+      llmFilterMinCandidates: 1,
+      llmFilterCandidateBodyChars: 500,
     },
   },
   hub: {

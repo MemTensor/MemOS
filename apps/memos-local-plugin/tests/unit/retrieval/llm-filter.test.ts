@@ -9,16 +9,17 @@ import type {
 
 const cfg: Pick<
   RetrievalConfig,
-  "llmFilterEnabled" | "llmFilterMaxKeep" | "llmFilterMinCandidates"
+  | "llmFilterEnabled"
+  | "llmFilterMaxKeep"
+  | "llmFilterMinCandidates"
+  | "llmFilterCandidateBodyChars"
 > = {
   llmFilterEnabled: true,
   llmFilterMaxKeep: 4,
-  llmFilterMinCandidates: 2,
+  llmFilterMinCandidates: 1,
+  llmFilterCandidateBodyChars: 500,
 };
 
-// Minimal Logger stub — `llm-filter` only calls `.warn`, `.debug`, `.info`.
-// We use `as any` rather than implementing the full `Logger` interface,
-// since the missing methods are never invoked in this filter path.
 const log = {
   trace: vi.fn(),
   debug: vi.fn(),
@@ -33,18 +34,19 @@ function trace(id: string, score: number): RankedCandidate {
     refKind: "trace",
     refId: id as never,
     cosine: score,
-    ts: 1 as never,
+    ts: 1_700_000_000_000 as never,
     vec: null,
     value: 0.5 as never,
     priority: 0.5 as never,
     episodeId: "e1" as never,
     sessionId: "s1" as never,
     vecKind: "summary",
-    userText: "u",
-    agentText: "a",
-    summary: "summary text",
+    userText: `user ${id}`,
+    agentText: `agent ${id}`,
+    summary: `summary ${id}`,
     reflection: null,
-    tags: [],
+    tags: ["sample"],
+    channels: [{ channel: "vec_summary", rank: 0, score }],
   };
   return {
     candidate: cand,
@@ -56,28 +58,46 @@ function trace(id: string, score: number): RankedCandidate {
 }
 
 describe("retrieval/llm-filter", () => {
-  it("disabled → passthrough", async () => {
+  it("disabled → passthrough with null sufficient", async () => {
     const result = await llmFilterCandidates(
       { query: "anything", ranked: [trace("a", 0.9), trace("b", 0.5)] },
       { llm: null, log, config: { ...cfg, llmFilterEnabled: false } },
     );
     expect(result.outcome).toBe("disabled");
     expect(result.kept.length).toBe(2);
+    expect(result.sufficient).toBeNull();
   });
 
-  it("below threshold → passthrough", async () => {
+  it("below threshold → passthrough (minCandidates can lift the gate)", async () => {
     const result = await llmFilterCandidates(
       { query: "x", ranked: [trace("only", 0.9)] },
-      { llm: null, log, config: cfg },
+      { llm: null, log, config: { ...cfg, llmFilterMinCandidates: 5 } },
     );
     expect(result.outcome).toBe("below_threshold");
     expect(result.kept.length).toBe(1);
+    expect(result.sufficient).toBeNull();
   });
 
-  it("LLM returns selected indices → filters precisely", async () => {
+  it("single candidate → filter still runs at minCandidates=1 default", async () => {
     const llm: any = {
       completeJson: vi.fn().mockResolvedValue({
-        value: { selected: [1, 3] },
+        value: { selected: [1], sufficient: true },
+        servedBy: "fake",
+      }),
+    };
+    const result = await llmFilterCandidates(
+      { query: "q", ranked: [trace("solo", 0.9)] },
+      { llm, log, config: cfg },
+    );
+    expect(result.outcome).toBe("llm_kept_all");
+    expect(result.kept.map((r) => String(r.candidate.refId))).toEqual(["solo"]);
+    expect(result.sufficient).toBe(true);
+  });
+
+  it("LLM returns selected indices → filters precisely and surfaces sufficient", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { selected: [1, 3], sufficient: false },
         servedBy: "fake",
       }),
     };
@@ -89,12 +109,13 @@ describe("retrieval/llm-filter", () => {
     expect(result.outcome).toBe("llm_filtered");
     expect(result.kept.map((r) => String(r.candidate.refId))).toEqual(["a", "c"]);
     expect(result.dropped.map((r) => String(r.candidate.refId))).toEqual(["b"]);
+    expect(result.sufficient).toBe(false);
   });
 
-  it("LLM returns empty selection → keeps nothing (drops the whole packet)", async () => {
+  it("LLM returns empty selection → drops everything and marks insufficient", async () => {
     const llm: any = {
       completeJson: vi.fn().mockResolvedValue({
-        value: { selected: [] },
+        value: { selected: [], sufficient: false },
         servedBy: "fake",
       }),
     };
@@ -106,6 +127,21 @@ describe("retrieval/llm-filter", () => {
     expect(result.outcome).toBe("llm_filtered");
     expect(result.kept.length).toBe(0);
     expect(result.dropped.length).toBe(2);
+    expect(result.sufficient).toBe(false);
+  });
+
+  it("coerces string / number `sufficient` fields sent by lax models", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { selected: [1], sufficient: "yes" },
+        servedBy: "fake",
+      }),
+    };
+    const result = await llmFilterCandidates(
+      { query: "q", ranked: [trace("a", 0.9)] },
+      { llm, log, config: cfg },
+    );
+    expect(result.sufficient).toBe(true);
   });
 
   it("LLM throws → mechanical safe cutoff (NOT passthrough)", async () => {
@@ -115,16 +151,16 @@ describe("retrieval/llm-filter", () => {
     const ranked = [
       trace("strong", 0.9),
       trace("middle", 0.6),
-      trace("weak", 0.05), // far below 0.7·top → cut by safeCutoff
+      trace("weak", 0.05),
     ];
     const result = await llmFilterCandidates(
       { query: "q", ranked },
       { llm, log, config: cfg },
     );
     expect(result.outcome).toBe("llm_failed_safe_cutoff");
+    expect(result.sufficient).toBeNull();
     const ids = result.kept.map((r) => String(r.candidate.refId));
     expect(ids).toContain("strong");
-    // weak is far below the relative cutoff → dropped
     expect(ids).not.toContain("weak");
   });
 
@@ -132,16 +168,11 @@ describe("retrieval/llm-filter", () => {
     const llm: any = {
       completeJson: vi.fn().mockRejectedValue(new Error("boom")),
     };
-    const ranked = [trace("only", 0.05)];
-    // Below threshold gates the LLM call entirely, so this exercises
-    // the safeCutoff path indirectly by raising the cutoff via cfg
-    // override:
     const result = await llmFilterCandidates(
       { query: "q", ranked: [trace("a", 0.5), trace("b", 0.49)] },
       { llm, log, config: cfg },
     );
     expect(result.outcome).toBe("llm_failed_safe_cutoff");
-    // both are above 0.7 · 0.5 = 0.35, so both kept
     expect(result.kept.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -149,14 +180,13 @@ describe("retrieval/llm-filter", () => {
     const llm: any = {
       completeJson: vi.fn().mockRejectedValue(new Error("boom")),
     };
-    // 6 candidates all above threshold, llmFilterMaxKeep=2 → kept ≤ 2.
     const ranked = [
       trace("a", 0.95),
       trace("b", 0.94),
       trace("c", 0.93),
       trace("d", 0.92),
       trace("e", 0.91),
-      trace("f", 0.90),
+      trace("f", 0.9),
     ];
     const result = await llmFilterCandidates(
       { query: "q", ranked },
@@ -168,10 +198,32 @@ describe("retrieval/llm-filter", () => {
 
   it("no LLM at all → passthrough (not safe-cutoff, since the call never happens)", async () => {
     const result = await llmFilterCandidates(
-      { query: "q", ranked: [trace("a", 0.9), trace("b", 0.8), trace("c", 0.7)] },
+      {
+        query: "q",
+        ranked: [trace("a", 0.9), trace("b", 0.8), trace("c", 0.7)],
+      },
       { llm: null, log, config: cfg },
     );
     expect(result.outcome).toBe("no_llm");
     expect(result.kept.length).toBe(3);
+    expect(result.sufficient).toBeNull();
+  });
+
+  it("candidate description includes time / tags / channels / score metadata", async () => {
+    const seen: string[] = [];
+    const llm: any = {
+      completeJson: vi.fn().mockImplementation(async (messages: any[]) => {
+        seen.push(messages[1].content);
+        return { value: { selected: [1], sufficient: true }, servedBy: "fake" };
+      }),
+    };
+    await llmFilterCandidates(
+      { query: "q", ranked: [trace("a", 0.9)] },
+      { llm, log, config: cfg },
+    );
+    expect(seen[0]).toContain("time=");
+    expect(seen[0]).toContain("tags=[sample]");
+    expect(seen[0]).toContain("via=vec_summary");
+    expect(seen[0]).toContain("score=");
   });
 });

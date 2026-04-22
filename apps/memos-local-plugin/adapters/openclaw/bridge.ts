@@ -189,10 +189,15 @@ export function flattenMessages(input: unknown[] | undefined): FlatMessage[] {
       }
       for (const tc of inlineToolCalls) out.push(tc);
 
-      // OpenAI legacy: assistant has a top-level `tool_calls` array
-      // (separate from content). Fold these in after pi-ai inline
-      // tool calls so order is preserved when both shapes coexist.
-      if (Array.isArray(m.tool_calls)) {
+      // OpenAI-legacy fallback only: when the message has NO pi-ai
+      // inline tool calls but does have a top-level `tool_calls` array
+      // (pure OpenAI Function-Calling shape). When both shapes coexist
+      // (as OpenClaw's pi-ai bundled OpenAI adapter does), pi-ai
+      // already populated `content[].toolCall`, so re-reading the
+      // top-level field would emit each call twice — which in turn
+      // causes `extractTurn`'s `pendingCalls.set(key, …)` to clobber
+      // the first stub's `thinkingBefore` with an empty second stub.
+      if (inlineToolCalls.length === 0 && Array.isArray(m.tool_calls)) {
         for (const tc of m.tool_calls as Array<Record<string, unknown>>) {
           const fn = tc.function as Record<string, unknown> | undefined;
           if (!fn) continue;
@@ -476,35 +481,51 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
   const userText = messages[lastUserIdx].content.trim();
   const tail = messages.slice(lastUserIdx + 1);
 
-  const assistantParts: string[] = [];
-  const thinkingParts: string[] = [];
   const pendingCalls = new Map<string, Partial<ToolCallDTO> & { _id?: string }>();
   const toolCalls: ToolCallDTO[] = [];
 
+  // Two separate buffers accumulate content not yet assigned to a tool.
+  //
+  // `pendingThinking`: Claude extended-thinking blocks (`ThinkingContent`)
+  // `pendingAssistant`: regular model text (`TextContent`)
+  //
+  // When a `tool_call` arrives, BOTH buffers are flushed together into
+  // that tool's `thinkingBefore` — this is the reasoning (structured OR
+  // natural language) the model did before deciding to invoke the tool.
+  //
+  // After all messages are processed, whatever remains in the buffers
+  // forms the final output: `pendingAssistant` → `agentText` (the
+  // reply) and `pendingThinking` → `agentThinking` (model reasoning
+  // shown in a dedicated bubble for non-tool turns).
+  let pendingThinking: string[] = [];
+  let pendingAssistant: string[] = [];
+
   for (const m of tail) {
     if (m.role === "assistant") {
-      if (m.content) assistantParts.push(m.content);
+      if (m.content) pendingAssistant.push(m.content);
       continue;
     }
     if (m.role === "thinking") {
-      if (m.content) thinkingParts.push(m.content);
+      if (m.content) pendingThinking.push(m.content);
       continue;
     }
     if (m.role === "tool_call" && m.toolName) {
-      // Assistant decided to call a tool. Stash until the matching
-      // tool_result lands so we can stitch the full ToolCallDTO.
+      const parts = [...pendingThinking, ...pendingAssistant];
+      const thinkingBefore = parts.join("\n\n").trim() || undefined;
+      pendingThinking = [];
+      pendingAssistant = [];
+
       const key = m.toolCallId ?? m.toolName;
       pendingCalls.set(key, {
         _id: m.toolCallId,
         name: m.toolName,
         input: m.toolInput,
         startedAt: m.ts ?? now,
+        thinkingBefore,
       });
       continue;
     }
     if (m.role === "tool_result") {
-      // Pair by id (preferred — works even when two parallel calls hit
-      // the same tool name) or fall back to toolName.
       const key = m.toolCallId ?? m.toolName ?? "";
       const stub = pendingCalls.get(key);
       const errorCode = stub
@@ -517,16 +538,13 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
         errorCode,
         startedAt: stub?.startedAt ?? (m.ts ?? now),
         endedAt: m.ts ?? now,
+        thinkingBefore: stub?.thinkingBefore,
       });
       if (key) pendingCalls.delete(key);
       continue;
     }
-    // system / unknown: ignore for the purpose of extractTurn.
   }
 
-  // Any tool call that never received a paired tool_result still lands
-  // in the trace (with `output: undefined`) so the viewer can show
-  // "tool was invoked but produced no result".
   for (const stub of pendingCalls.values()) {
     if (!stub.name) continue;
     toolCalls.push({
@@ -535,14 +553,15 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
       output: undefined,
       startedAt: stub.startedAt ?? now,
       endedAt: now,
+      thinkingBefore: stub.thinkingBefore,
     });
   }
 
-  const agentThinking = thinkingParts.join("\n\n").trim();
+  const agentThinking = pendingThinking.join("\n\n").trim();
   return {
     userText,
-    agentText: assistantParts.join("\n\n").trim(),
-    agentThinking: agentThinking ? agentThinking : undefined,
+    agentText: pendingAssistant.join("\n\n").trim(),
+    agentThinking: agentThinking || undefined,
     toolCalls,
   };
 }
@@ -795,6 +814,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       messageCount: allMessages.length,
       hasError: !!event.error,
     });
+
 
     try {
       // Legacy adapter parity: even when `success === false` we still
