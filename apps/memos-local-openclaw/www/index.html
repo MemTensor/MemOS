@@ -312,6 +312,67 @@ body.lang-zh .lang-en{display:none !important}
 .demo-mock-bar span{width:4px;height:4px;border-radius:50%}
 .demo-mock-content{background:rgba(10,14,28,.7);border:1px solid var(--border);border-radius:0 0 8px 8px;padding:10px;min-height:80px}
 
+/* ── Ecosystem Section ── */
+.eco-wrap{display:flex;flex-direction:column;gap:18px}
+.eco-top-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+.eco-main-card{display:block;background:linear-gradient(180deg,rgba(10,18,40,.94),rgba(13,24,55,.92));border:1px solid rgba(99,140,255,.28);border-radius:20px;padding:28px;transition:all .3s;position:relative;overflow:hidden}
+.eco-main-card:hover{border-color:rgba(99,140,255,.55);transform:translateY(-4px);box-shadow:0 20px 56px rgba(0,0,0,.35),0 0 26px rgba(0,229,255,.1)}
+.eco-main-icon{width:64px;height:64px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#fff;margin-bottom:20px;overflow:hidden}
+.eco-main-icon.clawforce{background:rgba(241,98,61,.2);color:#f1623d}
+.eco-main-icon.minddock{background:rgba(99,102,241,.2);color:#818cf8}
+.eco-main-icon img{display:block;object-fit:contain}
+.eco-main-icon .icon-clawforce{width:40px;height:40px}
+.eco-main-icon .icon-minddock{width:44px;height:40px}
+.eco-main-title{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:24px;font-weight:800;color:#f8faff}
+.eco-main-badge{padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;line-height:1.4}
+.eco-main-badge.enterprise{color:#f1623d;background:rgba(241,98,61,.2)}
+.eco-main-badge.personal{color:#818cf8;background:rgba(99,102,241,.2)}
+.eco-main-desc{font-size:15px;font-weight:600;margin-bottom:8px}
+.eco-main-desc.clawforce{color:#f1623d}
+.eco-main-desc.minddock{color:#818cf8}
+.eco-main-content{font-size:13px;color:var(--text-sec);line-height:1.85}
+.eco-mid-line{display:flex;align-items:center;gap:12px}
+.eco-mid-line .line{height:1px;flex:1}
+.eco-mid-line .line.l{background:linear-gradient(90deg,rgba(0,194,255,0),rgba(0,194,255,.42))}
+.eco-mid-line .line.r{background:linear-gradient(90deg,rgba(0,194,255,.42),rgba(0,194,255,0))}
+.eco-mid-line .label{font-size:15px;font-weight:700;white-space:nowrap;background:linear-gradient(270deg,#1D4ED8 15%,#01C6FA 118%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.eco-platform{position:relative;border:2px solid transparent;border-radius:20px;padding:28px;background:linear-gradient(#080F21,#080F21) padding-box,linear-gradient(180deg,rgba(133,166,220,.8) 0%,rgba(29,78,216,.8) 30%,rgba(1,198,250,.8) 67%,rgba(29,78,216,.8) 100%) border-box;box-shadow:0 -12px 10px rgba(50,106,255,.06);overflow: hidden;}
+.eco-platform::after{content:'';position:absolute;right:0;top:-12px;width:280px;height:220px;pointer-events:none;background:radial-gradient(66% 66% at 80% 10%,rgba(59,130,246,.18) 0%,rgba(59,130,246,0) 100%)}
+.eco-platform > *{position:relative;z-index:1}
+.eco-platform-bg-image{position:absolute;top:2px;right:0;width:162px;height:162px;object-fit:contain;opacity:.6;transform:rotate(-8.79deg);z-index:0;pointer-events:none}
+.eco-platform-head{display:flex;align-items:center;gap:14px;margin-bottom:20px;position:relative;z-index:1}
+.eco-platform-logo{width:66px;height:66px;border-radius:18px;display:flex;align-items:center;justify-content:center;background:linear-gradient(270deg,#1D4ED8 15%,#01C6FA 118%);font-size:24px;font-weight:900}
+.eco-platform-logo img{width:75%;height:75%;object-fit:contain;display:block}
+.eco-platform-title{font-size:30px;font-weight:900;letter-spacing:-.02em;line-height:1;color:#f8faff}
+.eco-platform-sub{font-size:14px;color:var(--text-sec);margin-top:5px}
+.eco-upper-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.eco-sub-card{display:block;padding:22px;border-radius:16px;background:rgba(10,19,45,.8);border:1px solid rgba(255,255,255,.1);transition:all .25s}
+.eco-sub-card:hover{border-color:rgba(99,140,255,.5);background:rgba(13,27,63,.95)}
+.eco-sub-card .name{font-size:20px;font-weight:700;color:#f8faff;margin-bottom:8px}
+.eco-sub-card .desc{font-size:14px;line-height:1.7}
+.eco-sub-card .desc .prefix{color:#c5d2ff}
+.eco-sub-card .desc .highlight.cloud{color:#3B82F6}
+.eco-sub-card .desc .highlight.local{color:#14B8A6}
+.eco-bridge{margin:10px 0 12px;display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.eco-bridge-item{display:flex;align-items:center;gap:8px}
+.eco-bridge-item .line{height:1px;flex:1}
+.eco-bridge-item .text{font-size:12px;font-weight:700;white-space:nowrap}
+.eco-bridge-item.cloud .line.l{background:linear-gradient(90deg,rgba(0,194,255,0),#3B82F6)}
+.eco-bridge-item.cloud .line.r{background:linear-gradient(90deg,#3B82F6,rgba(0,194,255,0))}
+.eco-bridge-item.cloud .text{color:#3B82F6}
+.eco-bridge-item.lite .line.l{background:linear-gradient(90deg,rgba(0,194,255,0),#14B8A6)}
+.eco-bridge-item.lite .line.r{background:linear-gradient(90deg,#14B8A6,rgba(0,194,255,0))}
+.eco-bridge-item.lite .text{color:#14B8A6}
+.eco-lower-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.eco-mini-card{display:block;padding:16px;border-radius:14px;background:rgba(10,19,45,.8);border:1px solid rgba(255,255,255,.1);transition:all .25s}
+.eco-mini-card:hover{border-color:rgba(99,140,255,.5);background:rgba(13,27,63,.95)}
+.eco-mini-card .name{font-size:22px;font-weight:700;color:#f8faff;line-height:1.2}
+.eco-mini-card .line1{margin-top:6px;font-size:16px;line-height:1.5}
+.eco-mini-card .line1.cloud{color:#3B82F6}
+.eco-mini-card .line1.lite{color:#14B8A6}
+.eco-mini-card .line1.official{color:#6366F1}
+.eco-mini-card .line2{margin-top:4px;font-size:14px;color:var(--text-sec);line-height:1.55}
+
 /* ── Responsive ── */
 @media(max-width:900px){
   .value-grid{grid-template-columns:1fr}
@@ -321,12 +382,20 @@ body.lang-zh .lang-en{display:none !important}
   .arch-svg-wrap svg{min-width:680px}
   .mig-features{grid-template-columns:repeat(2,1fr)}
   .demo-grid{grid-template-columns:1fr}
+  .eco-top-grid{grid-template-columns:1fr}
+  .eco-upper-grid{grid-template-columns:1fr}
+  .eco-lower-grid{grid-template-columns:1fr}
+  .eco-bridge{grid-template-columns:1fr;gap:8px}
 }
 @media(max-width:600px){
   nav .links a:not(.btn-nav):not(.lang-switch){display:none}
   .hero{padding:120px 0 50px}
   .tool-grid{grid-template-columns:1fr}
   .mig-features{grid-template-columns:1fr}
+  .eco-main-card{padding:22px}
+  .eco-platform{padding:20px}
+  .eco-platform-title{font-size:24px}
+  .eco-platform-sub{font-size:13px}
 }
 </style>
 </head>
@@ -348,6 +417,7 @@ body.lang-zh .lang-en{display:none !important}
     <a href="#team-sharing" class="lang-zh">团队共享</a><a href="#team-sharing" class="lang-en">Team Sharing</a>
     <a href="#migration" class="lang-zh">记忆迁移</a><a href="#migration" class="lang-en">Migration</a>
     <a href="./docs/index.html" class="btn-nav lang-zh">文档</a><a href="./docs/index.html" class="btn-nav lang-en">Docs</a>
+    <a href="#ecoSystem" class="btn-nav lang-zh">相关产品</a><a href="#ecoSystem" class="btn-nav lang-en">Related</a>
     <span class="lang-switch"><button type="button" class="lang-btn active" data-lang="zh">中</button><button type="button" class="lang-btn" data-lang="en">EN</button></span>
   </div>
 </div>
@@ -1173,7 +1243,105 @@ body.lang-zh .lang-en{display:none !important}
 </section>
 
 <div class="glow-line"></div>
+<!-- ════════ eco system ════════ -->
+<section class="section" id="ecoSystem">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">相关<span class="hl">产品生态</span></span><span class="lang-en">Related Product Ecosystem</span></h2>
+    <p class="section-desc"><span class="lang-zh">从企业到个人，提供完整的 AI 记忆能力栈</span><span class="lang-en">A complete AI memory stack from enterprise to personal use</span></p>
+  </div>
 
+  <div class="eco-wrap">
+    <div class="eco-top-grid">
+      <a href="https://clawforce.memtensor.cn/#home" target="_blank" rel="noopener" class="eco-main-card">
+        <div class="eco-main-icon clawforce"><img src="https://cdn.memtensor.com.cn/img/clawforce_logo_compressed.webp" alt="ClawForce" class="icon-clawforce" /></div>
+        <div class="eco-main-title">
+          <span>ClawForce</span>
+          <span class="eco-main-badge enterprise"><span class="lang-zh">企业</span><span class="lang-en">Enterprise</span></span>
+        </div>
+        <p class="eco-main-desc clawforce"><span class="lang-zh">企业级 OpenClaw 智能体平台</span><span class="lang-en">Enterprise OpenClaw agent platform</span></p>
+        <p class="eco-main-content"><span class="lang-zh">Skill 引擎自动沉淀团队经验，企业级管控 + 云电脑沙箱，让 Agent 稳定落地</span><span class="lang-en">Skill engine captures team knowledge with enterprise governance and cloud sandbox delivery</span></p>
+      </a>
+
+      <a href="https://chromewebstore.google.com/detail/memos-minddock/jfijhogdailnomegmlopeijjehccfibp?hl=zh-CN&authuser=2&utm_source=ext_sidebar" target="_blank" rel="noopener" class="eco-main-card">
+        <div class="eco-main-icon minddock"><img src="https://statics.memtensor.com.cn/logo/color-m.svg" alt="MindDock" class="icon-minddock" /></div>
+        <div class="eco-main-title">
+          <span>MindDock</span>
+          <span class="eco-main-badge personal"><span class="lang-zh">个人</span><span class="lang-en">Personal</span></span>
+        </div>
+        <p class="eco-main-desc minddock"><span class="lang-zh">个人记忆助手，支持长期会话记忆</span><span class="lang-en">Personal memory assistant with long-term conversation memory</span></p>
+        <p class="eco-main-content"><span class="lang-zh">跨 session 持久化记忆，让所有 AI 应用都能记住你的偏好，越用越懂你</span><span class="lang-en">Cross-session persistent memory lets every AI app remember your preferences over time</span></p>
+      </a>
+    </div>
+
+    <div class="eco-mid-line">
+      <span class="line l"></span>
+      <span class="label"><span class="lang-zh">↑ 基于 MemOS 构建 ↑</span><span class="lang-en">^ Built on MemOS ^</span></span>
+      <span class="line r"></span>
+    </div>
+
+    <div class="eco-platform">
+      <img src="https://cdn.memtensor.com.cn/img/ecosystem-transparent-bg_compressed.webp" alt="" class="eco-platform-bg-image" aria-hidden="true" />
+      <div class="eco-platform-head">
+        <div class="eco-platform-logo"><img src="https://cdn.memtensor.com.cn/img/memos-logo-white_compressed.webp" alt="MemOS logo" /></div>
+        <div>
+          <div class="eco-platform-title">MemOS</div>
+          <div class="eco-platform-sub"><span class="lang-zh">面向 AI 应用的记忆管理操作系统</span><span class="lang-en">A memory management operating system for AI applications</span></div>
+        </div>
+      </div>
+
+      <div class="eco-upper-grid">
+        <a href="https://memos-docs.openmem.net/cn/openclaw/guide" target="_blank" rel="noopener" class="eco-sub-card">
+          <p class="name"><span class="lang-zh">OpenClaw 云插件</span><span class="lang-en">OpenClaw Cloud Plugin</span></p>
+          <p class="desc">
+            <span class="prefix"><span class="lang-zh">为 OpenClaw 注入云端持久记忆，</span><span class="lang-en">Inject cloud persistent memory into OpenClaw, </span></span>
+            <span class="highlight cloud"><span class="lang-zh">降低 Token 消耗</span><span class="lang-en">reduce Token usage</span></span>
+          </p>
+        </a>
+        <a href="https://memos-claw.openmem.net/" target="_blank" rel="noopener" class="eco-sub-card">
+          <p class="name"><span class="lang-zh">OpenClaw 本地插件</span><span class="lang-en">OpenClaw Local Plugin</span></p>
+          <p class="desc">
+            <span class="prefix"><span class="lang-zh">持久记忆 + 技能自进化，</span><span class="lang-en">Persistent memory plus skill evolution, </span></span>
+            <span class="highlight local"><span class="lang-zh">降低 Token · 完全本地</span><span class="lang-en">lower Token · fully local</span></span>
+          </p>
+        </a>
+      </div>
+
+      <div class="eco-bridge">
+        <div class="eco-bridge-item cloud">
+          <span class="line l"></span>
+          <span class="text"><span class="lang-zh">↑ 基于 MemOS Cloud ↑</span><span class="lang-en">^ Built on MemOS Cloud ^</span></span>
+          <span class="line r"></span>
+        </div>
+        <div class="eco-bridge-item lite">
+          <span class="line l"></span>
+          <span class="text"><span class="lang-zh">↑ 基于 MemOS Lite ↑</span><span class="lang-en">^ Built on MemOS Lite ^</span></span>
+          <span class="line r"></span>
+        </div>
+      </div>
+
+      <div class="eco-lower-grid">
+        <a href="https://memos.openmem.net/cn/" target="_blank" rel="noopener" class="eco-mini-card">
+          <p class="name">MemOS Cloud</p>
+          <p class="line1 cloud"><span class="lang-zh">开箱即用的云端记忆服务</span><span class="lang-en">Ready-to-use cloud memory service</span></p>
+          <p class="line2"><span class="lang-zh">5 分钟接入，毫秒级响应</span><span class="lang-en">5-minute integration, millisecond response</span></p>
+        </a>
+        <a href="https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-openclaw" target="_blank" rel="noopener" class="eco-mini-card">
+          <p class="name">MemOS Lite</p>
+          <p class="line1 lite"><span class="lang-zh">专为本地场景的轻量记忆服务</span><span class="lang-en">Lightweight memory service for local-first scenarios</span></p>
+          <p class="line2"><span class="lang-zh">零云依赖，本地全量运行，专为 Agent 设计</span><span class="lang-en">Zero cloud dependency, fully local runtime, designed for Agent workflows</span></p>
+        </a>
+        <a href="https://github.com/MemTensor/MemOS" target="_blank" rel="noopener" class="eco-mini-card">
+          <p class="name"><span class="lang-zh">MemOS 正式版开源</span><span class="lang-en">MemOS Official Open Source</span></p>
+          <p class="line1 official"><span class="lang-zh">MemOS 正式版开源</span><span class="lang-en">MemOS Official Open Source</span></p>
+          <p class="line2"><span class="lang-zh">记忆管理 API 开箱可用，支持深度定制与二次开发</span><span class="lang-en">Memory APIs are ready to use, with deep customization and secondary development support</span></p>
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+<div class="glow-line"></div>
 <!-- ════════ CTA ════════ -->
 <section class="cta-section">
 <div class="container">
