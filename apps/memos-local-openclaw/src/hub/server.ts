@@ -38,7 +38,9 @@ export class HubServer {
 
   private static readonly OFFLINE_THRESHOLD_MS = 2 * 60 * 1000;
   private static readonly OFFLINE_CHECK_INTERVAL_MS = 30 * 1000;
+  private static readonly REMOTE_HIT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
   private offlineCheckTimer?: ReturnType<typeof setInterval>;
+  private remoteHitCleanupTimer?: ReturnType<typeof setInterval>;
   private knownOnlineUsers = new Set<string>();
 
   constructor(private opts: HubServerOptions) {
@@ -123,6 +125,7 @@ export class HubServer {
 
     this.initOnlineTracking();
     this.offlineCheckTimer = setInterval(() => this.checkOfflineUsers(), HubServer.OFFLINE_CHECK_INTERVAL_MS);
+    this.remoteHitCleanupTimer = setInterval(() => this.cleanExpiredRemoteHits(), HubServer.REMOTE_HIT_CLEANUP_INTERVAL_MS);
 
     this.backfillMemoryEmbeddings();
 
@@ -131,6 +134,7 @@ export class HubServer {
 
   async stop(): Promise<void> {
     if (this.offlineCheckTimer) { clearInterval(this.offlineCheckTimer); this.offlineCheckTimer = undefined; }
+    if (this.remoteHitCleanupTimer) { clearInterval(this.remoteHitCleanupTimer); this.remoteHitCleanupTimer = undefined; }
     if (!this.server) return;
 
     try {
@@ -1131,6 +1135,15 @@ export class HubServer {
       }
       this.knownOnlineUsers = currentlyOnline;
     } catch { /* best-effort */ }
+  }
+
+  private cleanExpiredRemoteHits(): void {
+    const now = Date.now();
+    let removed = 0;
+    for (const [key, hit] of this.remoteHitMap) {
+      if (hit.expiresAt < now) { this.remoteHitMap.delete(key); removed++; }
+    }
+    if (removed > 0) this.opts.log.debug(`Hub: cleaned ${removed} expired remote hit(s) (remaining=${this.remoteHitMap.size})`);
   }
 
   private authenticate(req: http.IncomingMessage) {
