@@ -53,7 +53,8 @@ import threading
 import time
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any
+
 
 # Add our own directory to sys.path so the submodule imports below work
 # whether hermes-agent loaded us bundled or via the user-plugin namespace.
@@ -63,6 +64,7 @@ if str(_PLUGIN_DIR) not in sys.path:
 
 from bridge_client import MemosBridgeClient  # noqa: E402
 from daemon_manager import ensure_bridge_running, shutdown_bridge  # noqa: E402
+
 
 try:  # pragma: no cover — host-provided base class, absent in unit tests
     from agent.memory_provider import MemoryProvider  # type: ignore
@@ -210,11 +212,7 @@ class MemTensorProvider(MemoryProvider):
 
         def _run() -> None:
             try:
-                result = (
-                    self._turn_start(query, session_id=session_id)
-                    if self._bridge
-                    else ""
-                )
+                result = self._turn_start(query, session_id=session_id) if self._bridge else ""
                 if result:
                     with self._prefetch_lock:
                         self._prefetch_result = result
@@ -287,7 +285,7 @@ class MemTensorProvider(MemoryProvider):
                 },
             )
 
-    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:  # type: ignore[override]
+    def on_pre_compress(self, messages: list[dict[str, Any]]) -> str:  # type: ignore[override]
         """Extract a compression-time memory summary.
 
         Hermes calls this right before discarding old messages; we
@@ -304,7 +302,7 @@ class MemTensorProvider(MemoryProvider):
 
     # ─── Tool surface ─────────────────────────────────────────────────────
 
-    def get_tool_schemas(self) -> List[Dict[str, Any]]:  # type: ignore[override]
+    def get_tool_schemas(self) -> list[dict[str, Any]]:  # type: ignore[override]
         return [
             {
                 "name": "memory_search",
@@ -343,7 +341,7 @@ class MemTensorProvider(MemoryProvider):
             },
         ]
 
-    def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **_kwargs: Any) -> str:  # type: ignore[override]
+    def handle_tool_call(self, tool_name: str, args: dict[str, Any], **_kwargs: Any) -> str:  # type: ignore[override]
         if not self._bridge:
             return json.dumps({"error": "bridge not connected"})
         try:
@@ -380,7 +378,7 @@ class MemTensorProvider(MemoryProvider):
 
     # ─── Config schema (for `hermes memory setup`) ────────────────────────
 
-    def get_config_schema(self) -> List[Dict[str, Any]]:  # type: ignore[override]
+    def get_config_schema(self) -> list[dict[str, Any]]:  # type: ignore[override]
         """Fields the host's `hermes memory setup` wizard will collect.
 
         Secrets go to .env; everything else to the provider config file
@@ -423,7 +421,7 @@ class MemTensorProvider(MemoryProvider):
             },
         ]
 
-    def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:  # type: ignore[override]
+    def save_config(self, values: dict[str, Any], hermes_home: str) -> None:  # type: ignore[override]
         """Write non-secret config to `<hermes_home>/memos-plugin/config.yaml`."""
         if not hermes_home:
             return
@@ -433,11 +431,11 @@ class MemTensorProvider(MemoryProvider):
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / "config.yaml"
 
-        payload: Dict[str, Any] = {"version": 1}
+        payload: dict[str, Any] = {"version": 1}
         if "viewer_port" in values:
             payload["viewer"] = {"port": int(values["viewer_port"])}
         if "llm_provider" in values:
-            llm: Dict[str, Any] = {"provider": values["llm_provider"]}
+            llm: dict[str, Any] = {"provider": values["llm_provider"]}
             if values.get("llm_provider") != "local_only":
                 llm["apiKey"] = ""
             payload["llm"] = llm
@@ -449,7 +447,7 @@ class MemTensorProvider(MemoryProvider):
 
     # ─── Session-end ──────────────────────────────────────────────────────
 
-    def on_session_end(self, messages: List[Dict[str, Any]]) -> None:  # type: ignore[override]
+    def on_session_end(self, messages: list[dict[str, Any]]) -> None:  # type: ignore[override]
         if not self._bridge:
             return
         pending = self._pending_turn
@@ -494,7 +492,7 @@ class MemTensorProvider(MemoryProvider):
         self,
         user_content: str,
         assistant_content: str,
-        tool_calls: List[Dict[str, Any]],
+        tool_calls: list[dict[str, Any]],
         ts_ms: int,
     ) -> None:
         if not self._bridge:
@@ -515,6 +513,7 @@ class MemTensorProvider(MemoryProvider):
 
 # ─── Discovery entry points ───────────────────────────────────────────────
 
+
 # Pattern 1: `register(ctx)` — preferred by `plugins/memory/__init__.py`.
 def register(ctx: Any) -> None:
     """hermes-agent plugin entry point."""
@@ -522,4 +521,4 @@ def register(ctx: Any) -> None:
 
 
 # Pattern 2: exported class — fallback via `issubclass(MemoryProvider)`.
-__all__ = ["MemTensorProvider", "register", "PLUGIN_ID", "PLUGIN_VERSION"]
+__all__ = ["PLUGIN_ID", "PLUGIN_VERSION", "MemTensorProvider", "register"]

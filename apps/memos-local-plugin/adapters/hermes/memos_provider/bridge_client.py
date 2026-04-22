@@ -11,16 +11,21 @@ should wrap requests in a thread pool.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import shutil
 import subprocess
-import sys
 import threading
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 
 logger = logging.getLogger(__name__)
 
@@ -78,18 +83,26 @@ class MemosBridgeClient:
             env=env,
         )
         self._reader = threading.Thread(
-            target=self._read_loop, daemon=True, name="memos-bridge-reader",
+            target=self._read_loop,
+            daemon=True,
+            name="memos-bridge-reader",
         )
         self._reader.start()
         self._stderr_reader = threading.Thread(
-            target=self._stderr_loop, daemon=True, name="memos-bridge-stderr",
+            target=self._stderr_loop,
+            daemon=True,
+            name="memos-bridge-stderr",
         )
         self._stderr_reader.start()
 
     # ─── Public API ──
 
     def request(
-        self, method: str, params: Any = None, *, timeout: float = 30.0,
+        self,
+        method: str,
+        params: Any = None,
+        *,
+        timeout: float = 30.0,
     ) -> dict[str, Any]:
         if self._closed:
             raise BridgeError("transport_closed", "bridge client is closed")
@@ -144,10 +157,8 @@ class MemosBridgeClient:
         if self._closed:
             return
         self._closed = True
-        try:
+        with contextlib.suppress(Exception):
             self._proc.stdin.close()
-        except Exception:
-            pass
         try:
             self._proc.wait(timeout=5.0)
         except subprocess.TimeoutExpired:

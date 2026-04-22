@@ -15,6 +15,7 @@ import json
 import sys
 import threading
 import unittest
+
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,6 +27,7 @@ for _p in (_ADAPTER_ROOT, _PLUGIN_DIR):
         sys.path.insert(0, str(_p))
 
 import bridge_client as bridge_client_mod  # noqa: E402
+
 from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
 
 
@@ -54,7 +56,7 @@ class FakePopen:
         self.stdin.write = _write  # type: ignore[assignment]
 
     # The client just needs wait/kill to exist; they are no-ops here.
-    def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+    def wait(self, timeout: float | None = None) -> int:
         return 0
 
     def kill(self) -> None:
@@ -83,30 +85,38 @@ class _ServerStream(io.StringIO):
         if rpc_id is None:
             return  # notification
         if method == "core.health":
-            self._enqueue({"jsonrpc": "2.0", "id": rpc_id, "result": {"ok": True, "version": "test"}})
+            self._enqueue(
+                {"jsonrpc": "2.0", "id": rpc_id, "result": {"ok": True, "version": "test"}}
+            )
         elif method == "memory.search":
             q = (req.get("params") or {}).get("query", "")
-            self._enqueue({
-                "jsonrpc": "2.0",
-                "id": rpc_id,
-                "result": {"hits": [{"id": "t1", "excerpt": f"hit for {q}"}]},
-            })
+            self._enqueue(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "result": {"hits": [{"id": "t1", "excerpt": f"hit for {q}"}]},
+                }
+            )
         elif method == "session.open":
-            self._enqueue({
-                "jsonrpc": "2.0",
-                "id": rpc_id,
-                "result": {"sessionId": "hermes:session:1"},
-            })
+            self._enqueue(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "result": {"sessionId": "hermes:session:1"},
+                }
+            )
         elif method == "boom":
-            self._enqueue({
-                "jsonrpc": "2.0",
-                "id": rpc_id,
-                "error": {
-                    "code": -32000,
-                    "message": "boom",
-                    "data": {"code": "internal", "message": "boom"},
-                },
-            })
+            self._enqueue(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "error": {
+                        "code": -32000,
+                        "message": "boom",
+                        "data": {"code": "internal", "message": "boom"},
+                    },
+                }
+            )
 
     def _enqueue(self, msg: dict) -> None:
         self.write(json.dumps(msg) + "\n")
@@ -116,7 +126,7 @@ class _ServerStream(io.StringIO):
         while True:
             val = self.getvalue()
             if self._pos < len(val):
-                remainder = val[self._pos:]
+                remainder = val[self._pos :]
                 if "\n" in remainder:
                     line, _, _ = remainder.partition("\n")
                     self._pos += len(line) + 1
@@ -124,10 +134,8 @@ class _ServerStream(io.StringIO):
                     continue
             self._event.wait(timeout=0.05)
             self._event.clear()
-            if self._pos >= len(self.getvalue()):
-                # sleep briefly, allow the test to finish
-                if hasattr(self, "_done") and self._done:
-                    return
+            if self._pos >= len(self.getvalue()) and hasattr(self, "_done") and self._done:
+                return
 
 
 class BridgeClientTests(unittest.TestCase):
@@ -139,7 +147,9 @@ class BridgeClientTests(unittest.TestCase):
             return self._fake
 
         self._popen_patch = patch.object(bridge_client_mod.subprocess, "Popen", _factory)
-        self._which_patch = patch.object(bridge_client_mod.shutil, "which", return_value="/usr/bin/node")
+        self._which_patch = patch.object(
+            bridge_client_mod.shutil, "which", return_value="/usr/bin/node"
+        )
         self._popen_patch.start()
         self._which_patch.start()
 
@@ -188,7 +198,8 @@ class MemTensorProviderTests(unittest.TestCase):
     def setUp(self) -> None:
         # Stub ensure_bridge_running so provider instantiation doesn't
         # spawn a real subprocess.
-        import memos_provider  # noqa: F401 — import after path adjust
+        import memos_provider
+
         self._provider_mod = memos_provider
 
         self._patches = [
@@ -253,6 +264,7 @@ class MemTensorProviderTests(unittest.TestCase):
 
     def test_save_config_writes_yaml_with_correct_mode(self) -> None:
         import tempfile
+
         import yaml
 
         p = self._provider_mod.MemTensorProvider()
