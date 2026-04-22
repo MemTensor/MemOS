@@ -49,11 +49,15 @@ UPDATE skills
 -- ─── 2. Swap CHECK constraints in sqlite_master ───────────────────────
 PRAGMA writable_schema = 1;
 
+-- Note: SQLite treats double-quoted strings as identifiers in strict /
+-- modern builds (it's also what `better-sqlite3` ≥ v11 enforces). All
+-- string literals below use single quotes with inner quotes doubled
+-- (standard SQL escape).
 UPDATE sqlite_master
    SET sql = replace(
        sql,
-       "CHECK (status IN ('candidate','active','retired'))",
-       "CHECK (status IN ('candidate','active','archived'))"
+       'CHECK (status IN (''candidate'',''active'',''retired''))',
+       'CHECK (status IN (''candidate'',''active'',''archived''))'
    )
  WHERE type = 'table'
    AND name = 'policies';
@@ -61,8 +65,8 @@ UPDATE sqlite_master
 UPDATE sqlite_master
    SET sql = replace(
        sql,
-       "CHECK (status IN ('probationary','active','retired'))",
-       "CHECK (status IN ('candidate','active','archived'))"
+       'CHECK (status IN (''probationary'',''active'',''retired''))',
+       'CHECK (status IN (''candidate'',''active'',''archived''))'
    )
  WHERE type = 'table'
    AND name = 'skills';
@@ -70,7 +74,7 @@ UPDATE sqlite_master
 -- Update default values so future INSERTs without a `status` land on
 -- `candidate` (skills used to default to `'probationary'`).
 UPDATE sqlite_master
-   SET sql = replace(sql, "DEFAULT 'probationary'", "DEFAULT 'candidate'")
+   SET sql = replace(sql, 'DEFAULT ''probationary''', 'DEFAULT ''candidate''')
  WHERE type = 'table'
    AND name = 'skills';
 

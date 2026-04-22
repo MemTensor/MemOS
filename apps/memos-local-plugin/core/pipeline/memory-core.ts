@@ -1708,6 +1708,7 @@ export function createMemoryCore(
           tags: [],
           vecSummary: null,
           vecAction: null,
+          turnId: dto.turnId ?? null,
           schemaVersion: 1,
         } as TraceRow);
         imported++;
@@ -2083,6 +2084,7 @@ function traceRowToDTO(row: TraceRow): TraceDTO {
     alpha: row.alpha,
     rHuman: row.rHuman ?? undefined,
     priority: row.priority,
+    turnId: row.turnId ?? null,
   };
 }
 

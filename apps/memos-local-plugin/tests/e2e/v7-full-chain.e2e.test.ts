@@ -189,7 +189,7 @@ function buildFullChainLlm(): LlmClient {
       }),
 
       // L2 induction — distills a policy from ≥2 similar traces.
-      "l2.l2.induction.v1": (input) => {
+      "l2.l2.induction.v2": (input) => {
         const text = lastUserMessage(input);
         const isPython = /python|pip|\.py\b/i.test(text);
         return {
@@ -211,7 +211,7 @@ function buildFullChainLlm(): LlmClient {
       },
 
       // L3 abstraction — environment model across L2 policies.
-      "l3.abstraction.v1": () => ({
+      "l3.abstraction.v2": () => ({
         title: "Python 开发辅助环境认知",
         domain_tags: ["python", "coding-assist"],
         environment: [

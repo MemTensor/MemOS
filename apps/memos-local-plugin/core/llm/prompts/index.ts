@@ -37,3 +37,48 @@ export function languageSteeringLine(lang: "auto" | "zh" | "en"): string {
       return "Answer in the same natural language the user used. Do not mix languages.";
   }
 }
+
+/**
+ * Detect the dominant natural language of a set of text samples.
+ *
+ * Used by knowledge-generation callers (skill crystallization, L2
+ * induction, L3 abstraction, reflection synthesis) to decide whether to
+ * emit the generated knowledge in Chinese or English, matching the
+ * user's original query/evidence language.
+ *
+ * Heuristic:
+ *   - Count CJK Unified Ideographs (U+4E00..U+9FFF) as `zh`.
+ *   - Count ASCII letters A-Z/a-z as `en`.
+ *   - If total signal is too small (< `minSignal`), fall back to
+ *     "auto" — caller will emit a neutral "match user language"
+ *     directive.
+ *   - Otherwise if ≥ 20% of the counted signal is CJK, pick "zh"
+ *     (Chinese is very information-dense per character and tends to
+ *     be interleaved with ASCII tokens like filenames/commands).
+ *   - Else if ≥ 70% is ASCII letters, pick "en".
+ *   - Otherwise "auto".
+ *
+ * Deliberately small and allocation-free — this runs on every
+ * knowledge-generation LLM call.
+ */
+export function detectDominantLanguage(
+  samples: ReadonlyArray<string | null | undefined>,
+  opts: { minSignal?: number } = {},
+): "auto" | "zh" | "en" {
+  const minSignal = opts.minSignal ?? 8;
+  let zh = 0;
+  let en = 0;
+  for (const s of samples) {
+    if (!s) continue;
+    for (let i = 0; i < s.length; i++) {
+      const code = s.charCodeAt(i);
+      if (code >= 0x4e00 && code <= 0x9fff) zh++;
+      else if ((code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a)) en++;
+    }
+  }
+  const total = zh + en;
+  if (total < minSignal) return "auto";
+  if (zh / total >= 0.2) return "zh";
+  if (en / total >= 0.7) return "en";
+  return "auto";
+}

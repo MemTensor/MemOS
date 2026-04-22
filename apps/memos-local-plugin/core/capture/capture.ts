@@ -534,6 +534,12 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       }),
       vecSummary: t.vecSummary,
       vecAction: t.vecAction,
+      // step-extractor stamps every sub-step that came from the same
+      // user message with a stable `turnId` (= the user turn's ts).
+      // The viewer collapses rows with identical (episodeId, turnId)
+      // into a single "one round = one memory" card; algorithm-side
+      // machinery ignores the field.
+      turnId: pickTurnId(t.meta, t.ts),
       schemaVersion: 1,
     }));
   }
@@ -797,4 +803,15 @@ function errDetail(err: unknown): Record<string, unknown> {
   if (err instanceof MemosError) return { code: err.code, message: err.message, ...(err.details ?? {}) };
   if (err instanceof Error) return { name: err.name, message: err.message };
   return { value: String(err) };
+}
+
+/**
+ * Pull the `turnId` stamped by `step-extractor` out of the
+ * `StepCandidate.meta` blob. Falls back to the trace's own `ts` so
+ * old fixtures that pre-date the field still group as a singleton
+ * (one row → one card). Always returns a finite number.
+ */
+function pickTurnId(meta: Record<string, unknown> | undefined, fallbackTs: number): number {
+  const raw = (meta as Record<string, unknown> | undefined)?.turnId;
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : fallbackTs;
 }

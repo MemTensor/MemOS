@@ -26,8 +26,8 @@
  *   - `capture.alpha.reflection.score.v1`— α scoring
  *   - `capture.summarize`                — trace-level summaries
  *   - `reward.reward.r_human.v3`         — R_human axis scoring
- *   - `l2.l2.induction.v1`               — L2 policy induction
- *   - `l3.abstraction.v1`                — L3 world-model abstraction
+ *   - `l2.l2.induction.v2`               — L2 policy induction
+ *   - `l3.abstraction.v2`                — L3 world-model abstraction
  *   - `skill.crystallize`                — skill draft
  *
  * Each scripted response looks only at the `NEW_USER_MESSAGE:` chunk
@@ -234,7 +234,7 @@ function buildLlm(): LlmClient {
         reason: "concrete root-cause reflection",
       }),
 
-      "l2.l2.induction.v1": (input) => {
+      "l2.l2.induction.v2": (input) => {
         const evidence = (input as { evidenceTraces?: Array<{ id: string }> })
           ?.evidenceTraces ?? [];
         return {
@@ -256,7 +256,7 @@ function buildLlm(): LlmClient {
         };
       },
 
-      "l3.abstraction.v1": () => ({
+      "l3.abstraction.v2": () => ({
         title: "Python 开发环境认知 (pip + 标准库)",
         domain_tags: ["python", "pip", "coding-assist"],
         environment: [

@@ -256,19 +256,23 @@ function renderWorldModel(c: WorldModelCandidate): InjectionSnippet {
  * adapter so downstream prompts see the same shape):
  *
  * ```
- * ## User's conversation history (from memory system)
+ * # User's conversation history (from memory system)
  *
  * IMPORTANT: The following are facts from previous conversations with
  * this user. You MUST treat these as established knowledge and use them
  * directly when answering. Do NOT say you don't know if the answer is
  * in these memories.
  *
+ * ## Memories
+ *
  * 1. [Trace · 2026-03-05 10:12]
  *    [user] 我喜欢的运动是游泳
  *    [assistant] 记住了。
  *    refId="trace_xyz"
  *
- * 2. [Skill · Python dependency fix] (η=0.82)
+ * ## Skills
+ *
+ * 1. [Skill · Python dependency fix] (η=0.82)
  *    When container pip fails, install -dev OS lib first …
  *    refId="skill_abc"
  *
@@ -302,10 +306,10 @@ function renderWholePacket(
       // call". The bodies already carry the per-skill `skill_get(...)`
       // hint, so the agent knows how to expand them on demand.
       parts.push(
-        "# Candidate skills (call `skill_get` to load any you decide to use)\n",
+        "## Candidate skills (call `skill_get` to load any you decide to use)\n",
       );
     } else {
-      parts.push("# Skills\n");
+      parts.push("## Skills\n");
     }
     skills.forEach((s, i) => {
       parts.push(renderNumberedSnippet(s, i + 1));
@@ -313,14 +317,14 @@ function renderWholePacket(
   }
 
   if (traces.length > 0) {
-    parts.push("# Memories\n");
+    parts.push("## Memories\n");
     traces.forEach((s, i) => {
       parts.push(renderNumberedSnippet(s, i + 1));
     });
   }
 
   if (worlds.length > 0) {
-    parts.push("# Environment Knowledge\n");
+    parts.push("## Environment Knowledge\n");
     worlds.forEach((s, i) => {
       parts.push(renderNumberedSnippet(s, i + 1));
     });
@@ -340,21 +344,21 @@ function renderNumberedSnippet(s: InjectionSnippet, n: number): string {
 
 const HEADER_BY_REASON: Record<RetrievalReason, string> = {
   turn_start:
-    "## User's conversation history (from memory system)\n\n" +
+    "# User's conversation history (from memory system)\n\n" +
     "IMPORTANT: The following are facts from previous conversations with this user.\n" +
     "You MUST treat these as established knowledge and use them directly when answering.\n" +
     "Do NOT say you don't know or don't have information if the answer is in these memories.",
   tool_driven:
-    "## Memory search results\n\n" +
+    "# Memory search results\n\n" +
     "The memory tool returned the following hits. They are ranked by relevance.",
   skill_invoke:
-    "## Invoked skill\n\n" +
+    "# Invoked skill\n\n" +
     "Follow the procedure below; the verification step tells you when you're done.",
   sub_agent:
-    "## Parent-agent context\n\n" +
+    "# Parent-agent context\n\n" +
     "Relevant memory surfaced for this sub-agent's mission.",
   decision_repair:
-    "## Decision repair — please read before your next action\n\n" +
+    "# Decision repair — please read before your next action\n\n" +
     "You have failed this tool multiple times in a row. Below are preferred / avoided actions\n" +
     "distilled from similar past situations. Please adapt your plan accordingly.",
 };

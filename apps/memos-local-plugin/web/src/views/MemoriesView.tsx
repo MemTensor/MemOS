@@ -1,6 +1,24 @@
 /**
  * Memories view — paginated (prev/next), drawer-driven detail.
  *
+ * Display granularity: **one user↔agent turn = one card**.
+ *
+ * The capture pipeline writes L1 traces at the step level (V7 §0.1
+ * — one tool call → one trace, plus one trace for the final reply)
+ * because every algorithm consumer (R_human backprop, L2 incremental
+ * association, Tier-2 retrieval, Decision Repair) needs that step
+ * granularity. The viewer collapses sibling sub-steps back into a
+ * single card by grouping on `(episodeId, turnId)` — `turnId` is the
+ * stable group key `step-extractor` stamps onto every trace produced
+ * from the same user message.
+ *
+ * Bulk actions (select / delete / share / export) operate on whole
+ * cards: the card-level checkbox toggles the full set of member trace
+ * ids, the delete button removes every member, and so on. The drawer
+ * lays out each member step as its own collapsible section so users
+ * can still inspect per-tool value / reflection without leaving the
+ * "one round = one memory" mental model.
+ *
  * Layout (matches TasksView so all three data browsers feel alike):
  *
  *   ╭─ view-header ─────────────────────────────────────────╮
@@ -12,12 +30,12 @@
  *   ╭─ toolbar: filter chips (own row) ──────────────────────╮
  *   │  [All][User][Assistant][Tool]                          │
  *   ╰────────────────────────────────────────────────────────╯
- *   ╭─ batch-bar (shows when any row is selected) ──────────╮
+ *   ╭─ batch-bar (shows when any card is selected) ─────────╮
  *   │  Selected N   [Select page] [Copy] [Delete] [Deselect]│
  *   ╰────────────────────────────────────────────────────────╯
- *   ┌─ row (clickable → opens drawer) ──────────────────────┐
+ *   ┌─ card (one turn; clickable → opens drawer) ───────────┐
  *   │ ☐   summary line …                                      │
- *   │     · role · [scope] · date · V/α · tools               │
+ *   │     · role · [scope] · date · V/α · tools · steps      │
  *   └──────────────────────────────────────────────────────────┘
  *   ╭─ pager ───────────────────────────────────────────────╮
  *   │  [prev]   N / total   [next]                           │
@@ -46,6 +64,30 @@ interface ListResponse {
   total?: number;
 }
 
+/**
+ * One displayable card in the Memories list — a "user message + every
+ * sub-step it produced" unit. `traces` are the raw L1 rows the
+ * pipeline wrote (tool steps + final reply); `head` is the row that
+ * carries the user query. `turnKey` is what the page groups on:
+ * `${episodeId}:${turnId}` (or `${episodeId}:${trace.id}` for legacy
+ * rows that pre-date migration 013 and have NULL `turnId`).
+ */
+interface MemoryGroup {
+  turnKey: string;
+  episodeId: string | null;
+  ts: number;
+  head: TraceDTO;
+  traces: TraceDTO[];
+  ids: string[];
+  toolCount: number;
+  toolNames: string[];
+  aggValue: number;
+  aggAlpha: number;
+  hasReflection: boolean;
+  scope: "private" | "public" | "hub";
+  shared: boolean;
+}
+
 const PAGE_SIZE = 25;
 
 export function MemoriesView() {
@@ -58,7 +100,7 @@ export function MemoriesView() {
   const [traces, setTraces] = useState<TraceDTO[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [detail, setDetail] = useState<TraceDTO | null>(null);
+  const [detail, setDetail] = useState<MemoryGroup | null>(null);
   const [toast, setToast] = useState<{ msg: string; kind: "info" | "success" | "error" } | null>(null);
 
   const showToast = (msg: string, kind: "info" | "success" | "error" = "success") => {
@@ -104,20 +146,38 @@ export function MemoriesView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.value.params.q]);
 
-  const filtered = useMemo(() => {
-    if (!role) return traces;
-    return traces.filter((tr) => detectRole(tr) === role);
+  /**
+   * Bucket the page's traces by `(episodeId, turnId)` so each "user
+   * message + every sub-step it produced" collapses into one card.
+   * Then drop groups whose role doesn't match the chip filter.
+   */
+  const groups = useMemo<MemoryGroup[]>(() => {
+    const all = buildGroups(traces);
+    if (!role) return all;
+    return all.filter((g) => detectGroupRole(g) === role);
   }, [traces, role]);
 
-  const toggleSel = (id: string) => {
+  /**
+   * A card is "selected" when every member trace id is in the
+   * `selected` set — the per-trace store keeps the existing
+   * bulk-action APIs (bulkDelete / bulkShare) unchanged.
+   */
+  const isGroupSelected = (g: MemoryGroup): boolean =>
+    g.ids.length > 0 && g.ids.every((id) => selected.has(id));
+
+  const toggleGroupSel = (g: MemoryGroup) => {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const allIn = g.ids.every((id) => next.has(id));
+      for (const id of g.ids) {
+        if (allIn) next.delete(id);
+        else next.add(id);
+      }
       return next;
     });
   };
-  const selectPage = () => setSelected(new Set(filtered.map((t) => t.id)));
+  const selectPage = () =>
+    setSelected(new Set(groups.flatMap((g) => g.ids)));
   const deselectAll = () => setSelected(new Set());
 
   const bulkDelete = async () => {
@@ -163,12 +223,15 @@ export function MemoriesView() {
   const bulkExport = () => {
     if (selected.size === 0) return;
     const lines: string[] = [];
-    for (const tr of filtered) {
-      if (!selected.has(tr.id)) continue;
-      const head = tr.summary || tr.userText || "(empty)";
+    for (const g of groups) {
+      if (!isGroupSelected(g)) continue;
+      const head = pickSummary(g.head);
       lines.push(`# ${head}`);
-      if (tr.userText) lines.push(`[user] ${tr.userText}`);
-      if (tr.agentText) lines.push(`[assistant] ${tr.agentText}`);
+      for (const tr of g.traces) {
+        if (tr.userText) lines.push(`[user] ${tr.userText}`);
+        for (const tc of tr.toolCalls ?? []) lines.push(`[tool:${tc.name}] ${truncateForExport(tc)}`);
+        if (tr.agentText) lines.push(`[assistant] ${tr.agentText}`);
+      }
       lines.push("");
     }
     const txt = lines.join("\n");
@@ -182,23 +245,39 @@ export function MemoriesView() {
     }
   };
 
-  const deleteOne = async (tr: TraceDTO) => {
+  /**
+   * Delete a whole displayed card — i.e. every L1 trace produced by
+   * the same user message. We POST the full id list to the bulk
+   * endpoint so partial failures don't leave an orphan group on
+   * screen.
+   */
+  const deleteGroup = async (g: MemoryGroup) => {
     if (!confirm(t("memories.delete.confirm"))) return;
     try {
-      await api.del(`/api/v1/traces/${encodeURIComponent(tr.id)}`);
+      if (g.ids.length === 1) {
+        await api.del(`/api/v1/traces/${encodeURIComponent(g.ids[0]!)}`);
+      } else {
+        await api.post<{ deleted: number }>(`/api/v1/traces/delete`, { ids: g.ids });
+      }
       await loadPage({ q: query.trim(), page });
       setSelected((prev) => {
         const n = new Set(prev);
-        n.delete(tr.id);
+        for (const id of g.ids) n.delete(id);
         return n;
       });
-      if (detail?.id === tr.id) setDetail(null);
+      if (detail?.turnKey === g.turnKey) setDetail(null);
       showToast(t("memories.delete.done"));
     } catch {
       showToast("Failed", "error");
     }
   };
 
+  /**
+   * The edit modal targets the **head trace** of the group — that's
+   * the only row that carries `userText` / `summary` / tags (sub-steps
+   * have empty user text by construction, see `step-extractor`).
+   * Tool inputs / outputs are immutable.
+   */
   const saveEdit = async (
     id: string,
     patch: {
@@ -214,21 +293,41 @@ export function MemoriesView() {
         patch,
       );
       setTraces((prev) => prev.map((x) => (x.id === id ? updated : x)));
-      setDetail(updated);
+      setDetail((prev) =>
+        prev ? rebuildGroupAfterTracePatch(prev, updated) : prev,
+      );
       showToast(t("memories.edit.saved"));
     } catch {
       showToast("Failed", "error");
     }
   };
 
-  const applyShare = async (id: string, scope: "private" | "public" | "hub" | null) => {
+  /**
+   * Share applies to every trace in the group — they belong to the
+   * same user turn and should always be public/private together.
+   */
+  const applyShareGroup = async (
+    g: MemoryGroup,
+    scope: "private" | "public" | "hub" | null,
+  ) => {
     try {
-      const updated = await api.post<TraceDTO>(
-        `/api/v1/traces/${encodeURIComponent(id)}/share`,
-        { scope },
+      const updates = await Promise.all(
+        g.ids.map((id) =>
+          api
+            .post<TraceDTO>(`/api/v1/traces/${encodeURIComponent(id)}/share`, { scope })
+            .catch(() => null),
+        ),
       );
-      setTraces((prev) => prev.map((x) => (x.id === id ? updated : x)));
-      setDetail(updated);
+      const next = traces.map((x) => {
+        const replacement = updates.find((u) => u && u.id === x.id);
+        return replacement ?? x;
+      });
+      setTraces(next);
+      setDetail((prev) => {
+        if (!prev || prev.turnKey !== g.turnKey) return prev;
+        const fresh = buildGroups(next).find((x) => x.turnKey === g.turnKey);
+        return fresh ?? prev;
+      });
       showToast(scope ? t("memories.share.done") : t("memories.share.removed"));
     } catch {
       showToast("Failed", "error");
@@ -332,7 +431,7 @@ export function MemoriesView() {
         </div>
       )}
 
-      {loading && filtered.length === 0 && (
+      {loading && groups.length === 0 && (
         <div class="list">
           {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} class="skeleton" style="height:82px" />
@@ -340,7 +439,7 @@ export function MemoriesView() {
         </div>
       )}
 
-      {!loading && filtered.length === 0 && (
+      {!loading && groups.length === 0 && (
         <div class="empty">
           <div class="empty__icon">
             <Icon name="brain-circuit" size={22} />
@@ -350,24 +449,28 @@ export function MemoriesView() {
         </div>
       )}
 
-      {filtered.length > 0 && (
+      {groups.length > 0 && (
         <div class="list">
-          {filtered.map((trace) => {
-            const isSel = selected.has(trace.id);
-            const line = pickSummary(trace);
-            const roleKey = detectRole(trace);
-            const scope: "private" | "public" | "hub" = trace.share?.scope ?? "private";
+          {groups.map((g) => {
+            const isSel = isGroupSelected(g);
+            const line = pickSummary(g.head);
+            const roleKey = detectGroupRole(g);
+            const scope = g.scope;
+            const stepLabel =
+              g.traces.length > 1
+                ? t("memories.card.steps", { n: g.traces.length })
+                : null;
             return (
               <div
-                key={trace.id}
+                key={g.turnKey}
                 class={`mem-card${isSel ? " mem-card--selected" : ""}`}
                 role="button"
                 tabIndex={0}
-                onClick={() => setDetail(trace)}
+                onClick={() => setDetail(g)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    setDetail(trace);
+                    setDetail(g);
                   }
                 }}
               >
@@ -379,7 +482,7 @@ export function MemoriesView() {
                     type="checkbox"
                     class="mem-card__check"
                     checked={isSel}
-                    onChange={() => toggleSel(trace.id)}
+                    onChange={() => toggleGroupSel(g)}
                     aria-label="select"
                   />
                 </label>
@@ -394,23 +497,24 @@ export function MemoriesView() {
                     <span class={`pill pill--share-${scope}`}>
                       {t(`memories.share.scope.${scope}` as never).split(" (")[0]}
                     </span>
-                    <span>{formatTs(trace.ts)}</span>
+                    <span>{formatTs(g.ts)}</span>
                     <span class="mono">
-                      V {trace.value.toFixed(2)} · α {trace.alpha.toFixed(2)}
+                      V {g.aggValue.toFixed(2)} · α {g.aggAlpha.toFixed(2)}
                     </span>
-                    {(trace.toolCalls?.length ?? 0) > 0 && (
-                      <span
-                        class="pill pill--info"
-                        title={trace.toolCalls
-                          .map((tc) => tc.name)
-                          .join(", ")}
-                      >
+                    {g.toolCount > 0 && (
+                      <span class="pill pill--info" title={g.toolNames.join(", ")}>
                         <Icon name="cable" size={12} />
-                        {summarizeToolNames(trace.toolCalls)}
+                        {summarizeToolNames(g.head.toolCalls?.length ? g.head.toolCalls : flattenToolCallList(g))}
                       </span>
                     )}
-                    {trace.reflection && (
-                      <span class="pill pill--thinking" title={trace.reflection}>
+                    {stepLabel && (
+                      <span class="pill pill--info" title={stepLabel}>
+                        <Icon name="layers" size={12} />
+                        {stepLabel}
+                      </span>
+                    )}
+                    {g.hasReflection && (
+                      <span class="pill pill--thinking">
                         <Icon name="sparkles" size={12} />
                         {t("memories.card.reflection")}
                       </span>
@@ -453,11 +557,11 @@ export function MemoriesView() {
 
       {detail && (
         <TraceDrawer
-          trace={detail}
+          group={detail}
           onClose={() => setDetail(null)}
           onSave={saveEdit}
-          onShare={applyShare}
-          onDelete={deleteOne}
+          onShare={(scope) => applyShareGroup(detail, scope)}
+          onDelete={() => deleteGroup(detail)}
         />
       )}
 
@@ -607,6 +711,103 @@ function detectRole(trace: TraceDTO): "user" | "assistant" | "tool" | "" {
   return "";
 }
 
+/**
+ * Bucket the page's traces by `(episodeId, turnId)`. Within each
+ * bucket, sort sub-steps by `ts ascending` and pick the first row
+ * with a non-empty `userText` as the head — the `step-extractor`
+ * guarantees this is the first sub-step (`subStepIdx === 0`), but we
+ * fall back to "earliest by ts" so legacy rows still group cleanly.
+ *
+ * Aggregates exposed on the card:
+ *   - `aggValue` / `aggAlpha`: arithmetic mean across members. Plain
+ *     mean keeps the card honest about "how was the whole turn?";
+ *     per-step values are still visible in the drawer.
+ *   - `toolCount` / `toolNames`: union of every member's `toolCalls`.
+ *   - `scope`: take the head's share state (siblings always share the
+ *     same scope thanks to `applyShareGroup`).
+ */
+function buildGroups(traces: readonly TraceDTO[]): MemoryGroup[] {
+  const buckets = new Map<string, TraceDTO[]>();
+  const order: string[] = [];
+  for (const tr of traces) {
+    const key = groupKey(tr);
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = [];
+      buckets.set(key, bucket);
+      order.push(key);
+    }
+    bucket.push(tr);
+  }
+  return order.map((key) => {
+    const bucket = buckets.get(key)!;
+    bucket.sort((a, b) => a.ts - b.ts);
+    const head =
+      bucket.find((t) => (t.userText ?? "").trim().length > 0) ?? bucket[0]!;
+    const tools = bucket.flatMap((t) => t.toolCalls ?? []);
+    const ids = bucket.map((t) => t.id);
+    const sumV = bucket.reduce((acc, t) => acc + (t.value ?? 0), 0);
+    const sumA = bucket.reduce((acc, t) => acc + (t.alpha ?? 0), 0);
+    const scope: "private" | "public" | "hub" = head.share?.scope ?? "private";
+    return {
+      turnKey: key,
+      episodeId: head.episodeId ?? null,
+      ts: bucket[0]!.ts,
+      head,
+      traces: bucket,
+      ids,
+      toolCount: tools.length,
+      toolNames: Array.from(new Set(tools.map((tc) => tc.name))),
+      aggValue: bucket.length === 0 ? 0 : sumV / bucket.length,
+      aggAlpha: bucket.length === 0 ? 0 : sumA / bucket.length,
+      hasReflection: bucket.some((t) => Boolean((t.reflection ?? "").trim())),
+      scope,
+      shared: scope !== "private",
+    };
+  });
+}
+
+function groupKey(tr: TraceDTO): string {
+  // `turnId` is the stable key stamped by `step-extractor`. Falls back
+  // to the trace id so legacy rows (NULL turn_id) stand on their own.
+  const turn = (tr as TraceDTO & { turnId?: number | null }).turnId;
+  if (typeof turn === "number") return `${tr.episodeId ?? "_"}:${turn}`;
+  return `${tr.episodeId ?? "_"}:${tr.id}`;
+}
+
+function detectGroupRole(g: MemoryGroup): "user" | "assistant" | "tool" | "" {
+  if (g.toolCount > 0) return "tool";
+  return detectRole(g.head);
+}
+
+function flattenToolCallList(g: MemoryGroup): { name: string }[] {
+  return g.traces.flatMap((t) => t.toolCalls ?? []);
+}
+
+function truncateForExport(tc: { input?: unknown; output?: unknown; errorCode?: string }): string {
+  if (tc.errorCode) return `ERROR[${tc.errorCode}]`;
+  const out = tc.output;
+  if (out == null) return "(no output)";
+  if (typeof out === "string") return out.slice(0, 200);
+  try {
+    return JSON.stringify(out).slice(0, 200);
+  } catch {
+    return String(out).slice(0, 200);
+  }
+}
+
+/**
+ * After the edit modal patches the head trace, rebuild the open
+ * group so the drawer reflects the new userText / summary / tags
+ * without a round-trip refetch.
+ */
+function rebuildGroupAfterTracePatch(prev: MemoryGroup, updated: TraceDTO): MemoryGroup {
+  const traces = prev.traces.map((t) => (t.id === updated.id ? updated : t));
+  const head =
+    traces.find((t) => (t.userText ?? "").trim().length > 0) ?? traces[0]!;
+  return { ...prev, traces, head };
+}
+
 function formatTs(ts: number): string {
   if (!ts) return "—";
   try {
@@ -618,23 +819,37 @@ function formatTs(ts: number): string {
 
 // ─── Right-side drawer ───────────────────────────────────────────────────
 
-interface TimelineRow {
-  id: string;
-  ts: number;
-  userText: string;
-  agentText: string;
-  summary?: string | null;
-  value: number;
-}
-
+/**
+ * Right-side drawer for one **MemoryGroup** (= one user turn).
+ *
+ * The drawer's job is two-fold:
+ *   1. Show the user-facing meta the card already hinted at (timestamp,
+ *      aggregate V/α, share state, optional tags) plus the head's
+ *      summary + user query, so the row → detail transition feels
+ *      continuous.
+ *   2. Surface the full step list — every L1 trace produced from this
+ *      turn — as collapsible sections so users can drill into per-step
+ *      value/α/reflection without leaving the "one round = one memory"
+ *      mental model. The first step (head) is expanded by default.
+ *
+ * Edit and share intentionally diverge in scope:
+ *   - **Edit** patches the head trace only — that's the row that
+ *     carries `userText` / `summary` / `tags`. Sub-steps have empty
+ *     user text by construction (`step-extractor` only stamps the
+ *     query onto the first sub-step) and their tool inputs/outputs
+ *     are immutable.
+ *   - **Share** flips every member of the group to the same scope so
+ *     "this turn is public" stays a coherent mental model.
+ *   - **Delete** wipes every member id so the card never half-disappears.
+ */
 function TraceDrawer({
-  trace,
+  group,
   onClose,
   onSave,
   onShare,
   onDelete,
 }: {
-  trace: TraceDTO;
+  group: MemoryGroup;
   onClose: () => void;
   onSave: (
     id: string,
@@ -645,47 +860,31 @@ function TraceDrawer({
       tags?: string[];
     },
   ) => Promise<void> | void;
-  onShare: (id: string, scope: "private" | "public" | "hub" | null) => Promise<void> | void;
-  onDelete: (tr: TraceDTO) => Promise<void> | void;
+  onShare: (scope: "private" | "public" | "hub" | null) => Promise<void> | void;
+  onDelete: () => Promise<void> | void;
 }) {
+  const head = group.head;
   const [mode, setMode] = useState<"view" | "edit" | "share">("view");
-  const [summary, setSummary] = useState(trace.summary ?? "");
-  const [userText, setUserText] = useState(trace.userText ?? "");
-  const [agentText, setAgentText] = useState(trace.agentText ?? "");
-  const [tags, setTags] = useState((trace.tags ?? []).join(", "));
+  const [summary, setSummary] = useState(head.summary ?? "");
+  const [userText, setUserText] = useState(head.userText ?? "");
+  const [agentText, setAgentText] = useState(head.agentText ?? "");
+  const [tags, setTags] = useState((head.tags ?? []).join(", "));
   const [scope, setScope] = useState<"private" | "public" | "hub">(
-    trace.share?.scope ?? "public",
+    head.share?.scope ?? "public",
   );
-  const [timeline, setTimeline] = useState<TimelineRow[] | null>(null);
 
   useEffect(() => {
-    setSummary(trace.summary ?? "");
-    setUserText(trace.userText ?? "");
-    setAgentText(trace.agentText ?? "");
-    setTags((trace.tags ?? []).join(", "));
-    setScope(trace.share?.scope ?? "public");
-  }, [trace]);
+    setSummary(head.summary ?? "");
+    setUserText(head.userText ?? "");
+    setAgentText(head.agentText ?? "");
+    setTags((head.tags ?? []).join(", "));
+    setScope(head.share?.scope ?? "public");
+  }, [head]);
 
-  useEffect(() => {
-    if (!trace.episodeId) {
-      setTimeline([]);
-      return;
-    }
-    const ctrl = new AbortController();
-    api
-      .get<{ traces: TimelineRow[] }>(
-        `/api/v1/episodes/${encodeURIComponent(trace.episodeId)}/timeline`,
-        { signal: ctrl.signal },
-      )
-      .then((r) => setTimeline(r.traces ?? []))
-      .catch(() => setTimeline([]));
-    return () => ctrl.abort();
-  }, [trace.episodeId]);
-
-  const title = pickSummary(trace).slice(0, 100) || t("memories.detail.fallbackTitle");
+  const title = pickSummary(head).slice(0, 100) || t("memories.detail.fallbackTitle");
 
   const submitEdit = () => {
-    void onSave(trace.id, {
+    void onSave(head.id, {
       summary: summary.trim() ? summary.trim() : null,
       userText,
       agentText,
@@ -698,7 +897,7 @@ function TraceDrawer({
   };
 
   const submitShare = (s: "private" | "public" | "hub" | null) => {
-    void onShare(trace.id, s);
+    void onShare(s);
     setMode("view");
   };
 
@@ -708,8 +907,8 @@ function TraceDrawer({
         <header class="drawer__header">
           <div style="min-width:0">
             <div class="muted" style="font-size:var(--fs-xs);margin-bottom:2px">
-              {trace.episodeId
-                ? t("memories.detail.fromTask", { id: trace.episodeId.slice(0, 10) })
+              {group.episodeId
+                ? t("memories.detail.fromTask", { id: group.episodeId.slice(0, 10) })
                 : t("memories.detail.oneMemory")}
             </div>
             <h2 class="drawer__title truncate">{title}</h2>
@@ -728,30 +927,28 @@ function TraceDrawer({
                 </h3>
                 <dl style="display:grid;grid-template-columns:160px 1fr;gap:6px 16px;margin:0;font-size:var(--fs-sm)">
                   <dt class="muted">{t("memories.field.ts")}</dt>
-                  <dd>{trace.ts ? new Date(trace.ts).toLocaleString() : "—"}</dd>
+                  <dd>{group.ts ? new Date(group.ts).toLocaleString() : "—"}</dd>
                   <dt class="muted">{t("memories.field.value")}</dt>
-                  <dd>{trace.value.toFixed(3)}</dd>
+                  <dd>{group.aggValue.toFixed(3)}</dd>
                   <dt class="muted">{t("memories.field.alpha")}</dt>
-                  <dd>{trace.alpha.toFixed(3)}</dd>
-                  {trace.rHuman != null && (
+                  <dd>{group.aggAlpha.toFixed(3)}</dd>
+                  {head.rHuman != null && (
                     <>
                       <dt class="muted">{t("memories.field.rHuman")}</dt>
-                      <dd>{trace.rHuman.toFixed(3)}</dd>
+                      <dd>{head.rHuman.toFixed(3)}</dd>
                     </>
                   )}
                   <dt class="muted">{t("memories.field.priority")}</dt>
-                  <dd>{trace.priority.toFixed(3)}</dd>
+                  <dd>{head.priority.toFixed(3)}</dd>
                   <dt class="muted">{t("memories.field.share")}</dt>
                   <dd>
-                    <span class={`pill pill--share-${trace.share?.scope ?? "private"}`}>
-                      {trace.share?.scope ?? "private"}
-                    </span>
+                    <span class={`pill pill--share-${group.scope}`}>{group.scope}</span>
                   </dd>
-                  {trace.tags && trace.tags.length > 0 && (
+                  {head.tags && head.tags.length > 0 && (
                     <>
                       <dt class="muted">tags</dt>
                       <dd>
-                        {trace.tags.map((tg) => (
+                        {head.tags.map((tg) => (
                           <span key={tg} class="pill pill--info" style="margin-right:4px">
                             {tg}
                           </span>
@@ -762,86 +959,27 @@ function TraceDrawer({
                 </dl>
               </section>
 
-              {trace.summary && (
+              {head.summary && (
                 <section class="card card--flat">
                   <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                     {t("memories.field.summary")}
                   </div>
-                  <div style="font-size:var(--fs-sm);line-height:1.55">{trace.summary}</div>
+                  <div style="font-size:var(--fs-sm);line-height:1.55">{head.summary}</div>
                 </section>
               )}
 
-              {trace.userText && (
+              {head.userText && (
                 <section class="card card--flat">
                   <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                     {t("memories.field.user")}
                   </div>
                   <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
-                    {trace.userText}
+                    {head.userText}
                   </pre>
                 </section>
               )}
 
-              {trace.agentText && (
-                <section class="card card--flat">
-                  <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
-                    {t("memories.field.assistant")}
-                  </div>
-                  <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
-                    {trace.agentText}
-                  </pre>
-                </section>
-              )}
-
-              {trace.reflection && (
-                <section class="card card--flat">
-                  <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
-                    {t("memories.field.takeaway")}
-                  </div>
-                  <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
-                    {trace.reflection}
-                  </pre>
-                </section>
-              )}
-
-              {trace.toolCalls && trace.toolCalls.length > 0 && (
-                <section class="card card--flat">
-                  <h3 class="card__title" style="font-size:var(--fs-md);margin-bottom:var(--sp-3)">
-                    {t("memories.field.toolCalls")}
-                  </h3>
-                  <div class="vstack" style="gap:var(--sp-3)">
-                    {trace.toolCalls.map((tc, i) => (
-                      <ToolCallCard key={i} call={tc} />
-                    ))}
-                  </div>
-                </section>
-              )}
-
-              {timeline && timeline.length > 1 && (
-                <section class="card card--flat">
-                  <h3 class="card__title" style="font-size:var(--fs-md);margin-bottom:var(--sp-3)">
-                    {t("memories.field.episodeTimeline")} ({timeline.length})
-                  </h3>
-                  <div class="list">
-                    {timeline.map((tr) => (
-                      <div key={tr.id} class="row" style="cursor:default">
-                        <div class="row__body">
-                          <div class="row__title truncate">
-                            {tr.summary?.slice(0, 100) ||
-                              tr.userText?.slice(0, 100) ||
-                              tr.agentText?.slice(0, 100) ||
-                              "(step)"}
-                          </div>
-                          <div class="row__meta">
-                            <span>V {tr.value.toFixed(2)}</span>
-                            <span>{new Date(tr.ts).toLocaleTimeString()}</span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )}
+              <StepList traces={group.traces} />
             </>
           )}
 
@@ -923,14 +1061,14 @@ function TraceDrawer({
         <footer class="drawer__footer">
           {mode === "view" && (
             <>
-              <button class="btn btn--danger btn--sm" onClick={() => onDelete(trace)}>
+              <button class="btn btn--danger btn--sm" onClick={() => onDelete()}>
                 <Icon name="trash-2" size={14} />
                 {t("memories.act.delete")}
               </button>
               <div class="batch-bar__spacer" />
               <button class="btn btn--sm" onClick={() => setMode("share")}>
                 <Icon name="share" size={14} />
-                {trace.share ? t("memories.act.unshare") : t("memories.act.share")}
+                {group.shared ? t("memories.act.unshare") : t("memories.act.share")}
               </button>
               <button class="btn btn--primary btn--sm" onClick={() => setMode("edit")}>
                 <Icon name="pencil" size={14} />
@@ -952,7 +1090,7 @@ function TraceDrawer({
           )}
           {mode === "share" && (
             <>
-              {trace.share && (
+              {group.shared && (
                 <button
                   class="btn btn--danger btn--sm"
                   onClick={() => submitShare(null)}
@@ -975,4 +1113,110 @@ function TraceDrawer({
       </aside>
     </div>
   );
+}
+
+/**
+ * Renders every L1 trace in a group as a vertical list of
+ * `<details>` blocks. Each block:
+ *   - heading: step number, role pill (tool / assistant), per-step
+ *     V/α (so the user can audit credit assignment)
+ *   - body: the step's `agentThinking`, `agentText`, `reflection`,
+ *     and any `toolCalls` rendered through the existing
+ *     `ToolCallCard`. Empty fields collapse silently.
+ *
+ * The first step is open by default; the rest start collapsed so the
+ * drawer doesn't drown the user when a turn fired a dozen tools.
+ */
+function StepList({ traces }: { traces: readonly TraceDTO[] }) {
+  return (
+    <section class="card card--flat">
+      <h3 class="card__title" style="font-size:var(--fs-md);margin-bottom:var(--sp-3)">
+        {t("memories.field.steps", { n: traces.length })}
+      </h3>
+      <div class="vstack" style="gap:var(--sp-2)">
+        {traces.map((tr, idx) => {
+          const tools = tr.toolCalls ?? [];
+          const role = tools.length > 0 ? "tool" : "assistant";
+          const roleLabel = t(`memories.filter.role.${role}` as never);
+          const summary = stepHeadline(tr);
+          return (
+            <details
+              key={tr.id}
+              open={idx === 0}
+              class="card card--flat"
+              style="padding:var(--sp-2) var(--sp-3)"
+            >
+              <summary
+                class="hstack"
+                style="cursor:pointer;gap:var(--sp-2);align-items:center;flex-wrap:wrap"
+              >
+                <span class="muted mono" style="font-size:var(--fs-xs)">
+                  #{idx + 1}
+                </span>
+                <span class={`pill pill--role-${role}`}>{roleLabel}</span>
+                <span class="mono muted" style="font-size:var(--fs-xs)">
+                  {new Date(tr.ts).toLocaleTimeString()}
+                </span>
+                <span class="mono muted" style="font-size:var(--fs-xs)">
+                  V {tr.value.toFixed(2)} · α {tr.alpha.toFixed(2)}
+                </span>
+                <span class="truncate" style="flex:1;min-width:0;font-size:var(--fs-sm)">
+                  {summary}
+                </span>
+              </summary>
+              <div class="vstack" style="gap:var(--sp-3);margin-top:var(--sp-3)">
+                {tr.agentThinking && (
+                  <div>
+                    <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
+                      {t("tasks.chat.role.thinking")}
+                    </div>
+                    <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
+                      {tr.agentThinking}
+                    </pre>
+                  </div>
+                )}
+                {tools.length > 0 && (
+                  <div class="vstack" style="gap:var(--sp-2)">
+                    {tools.map((tc, i) => (
+                      <ToolCallCard key={i} call={tc} />
+                    ))}
+                  </div>
+                )}
+                {tr.agentText && (
+                  <div>
+                    <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
+                      {t("memories.field.assistant")}
+                    </div>
+                    <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
+                      {tr.agentText}
+                    </pre>
+                  </div>
+                )}
+                {tr.reflection && (
+                  <div>
+                    <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
+                      {t("memories.field.takeaway")}
+                    </div>
+                    <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
+                      {tr.reflection}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function stepHeadline(tr: TraceDTO): string {
+  const tools = tr.toolCalls ?? [];
+  if (tools.length > 0) return tools.map((tc) => tc.name).join(" · ");
+  const a = (tr.agentText ?? "").trim().replace(/\s+/g, " ");
+  if (a) return a.length > 80 ? a.slice(0, 77) + "…" : a;
+  const u = (tr.userText ?? "").trim().replace(/\s+/g, " ");
+  if (u) return u.length > 80 ? u.slice(0, 77) + "…" : u;
+  return "(empty step)";
 }

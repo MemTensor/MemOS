@@ -125,6 +125,19 @@ export interface TraceRow {
   errorSignatures?: string[];
   vecSummary: EmbeddingVector | null;
   vecAction: EmbeddingVector | null;
+  /**
+   * Stable group key shared by every L1 trace that came from the same
+   * user message. `step-extractor` fills it with the user turn's `ts`
+   * (epoch ms); the viewer collapses traces with identical
+   * `(episodeId, turnId)` into a single "one round = one memory"
+   * card. Algorithm-side machinery (V/α/L2/Tier 2) ignores this
+   * field — it is purely a UI grouping anchor.
+   *
+   * Optional on the read side: rows written before migration 013
+   * (`013-trace-turn-id`) are NULL and the viewer falls back to
+   * per-row rendering for them.
+   */
+  turnId?: EpochMs | null;
   /** Schema version that wrote this row (helps with migrations). */
   schemaVersion: number;
 }

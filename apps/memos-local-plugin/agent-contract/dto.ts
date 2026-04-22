@@ -143,6 +143,17 @@ export interface TraceDTO {
   rHuman?: Reward;
   /** Cached priority used for L2 candidate selection. */
   priority: number;
+  /**
+   * Stable group key shared by every L1 trace produced from the same
+   * user message. Equal to the user turn's `ts` (epoch ms). The
+   * viewer collapses rows with identical `(episodeId, turnId)` into
+   * a single "one round = one memory" card; algorithm-side machinery
+   * (V/α/L2/Tier 2/Decision Repair) ignores the field.
+   *
+   * Optional because rows written before migration 013 have NULL
+   * `turn_id`; the viewer falls back to per-row rendering for them.
+   */
+  turnId?: EpochMs | null;
 }
 
 /**

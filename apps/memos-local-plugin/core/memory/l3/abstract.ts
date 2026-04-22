@@ -7,6 +7,10 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
+import {
+  detectDominantLanguage,
+  languageSteeringLine,
+} from "../../llm/prompts/index.js";
 import { L3_ABSTRACTION_PROMPT } from "../../llm/prompts/l3-abstraction.js";
 import type { LlmClient } from "../../llm/index.js";
 import type { Logger } from "../../logger/types.js";
@@ -55,10 +59,24 @@ export async function abstractDraft(
 
   const userPayload = packPrompt(input, config);
 
+  // Pick the world-model's rendering language from the underlying
+  // policies + trace evidence. A Chinese user generating "docker alpine
+  // 依赖" policies should see the environment/inference/constraint bullets
+  // written in Chinese; an English user should see them in English.
+  const langSamples: Array<string | null | undefined> = [];
+  for (const p of input.cluster.policies) {
+    langSamples.push(p.title, p.trigger, p.procedure, p.boundary, p.verification);
+  }
+  for (const traces of input.evidenceByPolicy.values()) {
+    for (const t of traces) langSamples.push(t.userText, t.agentText, t.reflection);
+  }
+  const evidenceLang = detectDominantLanguage(langSamples);
+
   try {
     const rsp = await llm.completeJson<Record<string, unknown>>(
       [
         { role: "system", content: L3_ABSTRACTION_PROMPT.system },
+        { role: "system", content: languageSteeringLine(evidenceLang) },
         { role: "user", content: userPayload },
       ],
       {
