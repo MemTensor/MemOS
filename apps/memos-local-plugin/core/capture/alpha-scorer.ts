@@ -17,6 +17,10 @@
 
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type { LlmClient } from "../llm/index.js";
+import {
+  detectDominantLanguage,
+  languageSteeringLine,
+} from "../llm/prompts/index.js";
 import { REFLECTION_SCORE_PROMPT } from "../llm/prompts/reflection.js";
 import { rootLogger } from "../logger/index.js";
 import type { NormalizedStep, ReflectionScore } from "./types.js";
@@ -69,6 +73,15 @@ export async function scoreReflection(
     .filter(Boolean)
     .join("\n");
 
+  // Match the `reason` string's language to the step's own language so
+  // the Memories viewer doesn't mix 中文 + English per row.
+  const stepLang = detectDominantLanguage([
+    input.step.userText,
+    input.step.agentText,
+    input.step.agentThinking,
+    input.reflectionText,
+  ]);
+
   const rsp = await llm.completeJson<{
     alpha: unknown;
     usable: unknown;
@@ -76,6 +89,7 @@ export async function scoreReflection(
   }>(
     [
       { role: "system", content: REFLECTION_SCORE_PROMPT.system },
+      { role: "system", content: languageSteeringLine(stepLang) },
       { role: "user", content: userPayload },
     ],
     {

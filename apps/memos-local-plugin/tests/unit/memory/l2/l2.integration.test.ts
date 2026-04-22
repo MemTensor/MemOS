@@ -109,7 +109,7 @@ describe("memory/l2/integration", () => {
 
     const llm = fakeLlm({
       completeJson: {
-        "l2.l2.induction.v1": {
+        "l2.l2.induction.v2": {
           title: "install missing system libs in container",
           trigger: "pip install fails in container with MODULE_NOT_FOUND due to missing system lib",
           procedure: "1. detect lib 2. use distro pkg manager 3. retry pip",
@@ -220,7 +220,7 @@ describe("memory/l2/integration", () => {
 
     const llm = fakeLlm({
       completeJson: {
-        "l2.l2.induction.v1": {
+        "l2.l2.induction.v2": {
           title: "t",
           trigger: "tr",
           procedure: "pr",

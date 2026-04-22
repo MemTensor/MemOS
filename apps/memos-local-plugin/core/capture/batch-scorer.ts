@@ -30,6 +30,10 @@
 
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type { LlmClient } from "../llm/index.js";
+import {
+  detectDominantLanguage,
+  languageSteeringLine,
+} from "../llm/prompts/index.js";
 import { BATCH_REFLECTION_PROMPT } from "../llm/prompts/reflection.js";
 import { rootLogger } from "../logger/index.js";
 import type { NormalizedStep, ReflectionScore } from "./types.js";
@@ -131,9 +135,23 @@ export async function batchScoreReflections(
     })),
   };
 
+  // Reflections are first-person narrations — written in the same
+  // language the user + agent were speaking so the Memories panel
+  // stays coherent. Detect once per batch from the aggregate turn
+  // texts; all steps in one episode share a language in practice.
+  const reflectionLang = detectDominantLanguage(
+    inputs.flatMap((i) => [
+      i.step.userText,
+      i.step.agentText,
+      i.step.agentThinking,
+      i.existingReflection,
+    ]),
+  );
+
   const rsp = await llm.completeJson<BatchPayload>(
     [
       { role: "system", content: BATCH_REFLECTION_PROMPT.system },
+      { role: "system", content: languageSteeringLine(reflectionLang) },
       { role: "user", content: JSON.stringify(payload) },
     ],
     {

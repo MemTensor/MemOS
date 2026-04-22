@@ -200,7 +200,9 @@ describe("retrieval/injector", () => {
     expect(skillSnippet.body).not.toContain("skill_get(id=");
     // The footer should not surface the skill call hints in full mode.
     expect(packet.rendered).not.toContain("`skill_get(id)`");
-    expect(packet.rendered).toContain("# Skills");
+    // Subsection headings are level-2 Markdown, nested under the packet's
+    // level-1 "User's conversation history" header.
+    expect(packet.rendered).toContain("## Skills");
   });
 
   it("empty ranked list produces empty rendered string", () => {

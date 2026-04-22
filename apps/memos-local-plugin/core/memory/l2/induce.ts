@@ -11,6 +11,10 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
+import {
+  detectDominantLanguage,
+  languageSteeringLine,
+} from "../../llm/prompts/index.js";
 import { L2_INDUCTION_PROMPT } from "../../llm/prompts/l2-induction.js";
 import type { LlmClient } from "../../llm/index.js";
 import type { Logger } from "../../logger/types.js";
@@ -58,6 +62,13 @@ export async function induceDraft(
 
   const userPayload = packTraces(input.evidenceTraces, input.charCap, input.signatureLabel);
 
+  // Match the induced policy's title/trigger/action/rationale to the
+  // dominant language of the evidence bucket — Chinese users expect
+  // their own L2 memories in 中文, English users expect English.
+  const evidenceLang = detectDominantLanguage(
+    input.evidenceTraces.flatMap((t) => [t.userText, t.agentText, t.reflection]),
+  );
+
   try {
     const rsp = await llm.completeJson<{
       title: unknown;
@@ -72,6 +83,7 @@ export async function induceDraft(
     }>(
       [
         { role: "system", content: L2_INDUCTION_PROMPT.system },
+        { role: "system", content: languageSteeringLine(evidenceLang) },
         { role: "user", content: userPayload },
       ],
       {

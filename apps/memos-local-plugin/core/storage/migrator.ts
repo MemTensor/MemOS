@@ -89,27 +89,43 @@ export function runMigrations(db: StorageDb, dir: string = defaultMigrationsDir(
   const applied: MigrationsResult["applied"] = [];
   let skipped = 0;
 
-  for (const file of allFiles) {
-    if (appliedVersions.has(file.version)) {
-      skipped++;
-      continue;
+  // better-sqlite3 ≥ v11 enables SQLITE_DBCONFIG_DEFENSIVE by default, which
+  // blocks writes to `sqlite_master` even when `PRAGMA writable_schema=ON`.
+  // A handful of migrations need that (e.g. 012 swaps CHECK constraints
+  // in-place). Migration files are shipped with the plugin and never user
+  // input, so turning unsafe mode on for the migration phase is safe.
+  // `.unsafeMode()` may not be toggled inside a transaction, so we flip it
+  // at the outer boundary.
+  const needsUnsafe = allFiles.some(
+    (f) => !appliedVersions.has(f.version) && migrationNeedsUnsafeMode(f.fullPath),
+  );
+  if (needsUnsafe) db.raw.unsafeMode(true);
+
+  try {
+    for (const file of allFiles) {
+      if (appliedVersions.has(file.version)) {
+        skipped++;
+        continue;
+      }
+      const sql = fs.readFileSync(file.fullPath, "utf8");
+      const t0 = now();
+      db.tx(() => {
+        db.exec(sql);
+        db.prepare(
+          `INSERT INTO schema_migrations (version, name, applied_at) VALUES (@version, @name, @applied_at)`,
+        ).run({ version: file.version, name: file.name, applied_at: now() });
+      });
+      const durationMs = now() - t0;
+      applied.push({ version: file.version, name: file.name, durationMs });
+      log.info("migration.applied", {
+        version: file.version,
+        name: file.name,
+        durationMs,
+        file: path.basename(file.fullPath),
+      });
     }
-    const sql = fs.readFileSync(file.fullPath, "utf8");
-    const t0 = now();
-    db.tx(() => {
-      db.exec(sql);
-      db.prepare(
-        `INSERT INTO schema_migrations (version, name, applied_at) VALUES (@version, @name, @applied_at)`,
-      ).run({ version: file.version, name: file.name, applied_at: now() });
-    });
-    const durationMs = now() - t0;
-    applied.push({ version: file.version, name: file.name, durationMs });
-    log.info("migration.applied", {
-      version: file.version,
-      name: file.name,
-      durationMs,
-      file: path.basename(file.fullPath),
-    });
+  } finally {
+    if (needsUnsafe) db.raw.unsafeMode(false);
   }
 
   markReady(db);
@@ -121,6 +137,16 @@ export function runMigrations(db: StorageDb, dir: string = defaultMigrationsDir(
   });
 
   return { applied, skipped, total: allFiles.length };
+}
+
+/**
+ * Detect migrations that need `SQLITE_DBCONFIG_DEFENSIVE` relaxed. We
+ * look for the `writable_schema` pragma (the only legitimate reason to
+ * poke `sqlite_master` from SQL).
+ */
+function migrationNeedsUnsafeMode(fullPath: string): boolean {
+  const sql = fs.readFileSync(fullPath, "utf8");
+  return /PRAGMA\s+writable_schema/i.test(sql);
 }
 
 function ensureSchemaMigrationsTable(db: StorageDb): void {

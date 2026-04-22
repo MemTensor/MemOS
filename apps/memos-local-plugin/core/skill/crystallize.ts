@@ -10,6 +10,10 @@
  */
 
 import type { LlmClient } from "../llm/types.js";
+import {
+  detectDominantLanguage,
+  languageSteeringLine,
+} from "../llm/prompts/index.js";
 import { SKILL_CRYSTALLIZE_PROMPT } from "../llm/prompts/skill-crystallize.js";
 import type { Logger } from "../logger/types.js";
 import type { PolicyRow, SkillRow, TraceRow } from "../types.js";
@@ -64,10 +68,22 @@ export async function crystallizeDraft(
 
   const userPayload = packPrompt(input, config);
 
+  // Detect the language of the evidence so the crystallised skill's
+  // human-facing fields (display_title, summary, preconditions, steps,
+  // examples) come out in the same language the user was using. The
+  // `name` slug stays snake_case regardless — enforced by `sanitiseName`.
+  const evidenceLang = detectDominantLanguage([
+    input.policy.title,
+    input.policy.trigger,
+    input.policy.procedure,
+    ...input.evidence.flatMap((t) => [t.userText, t.agentText, t.reflection]),
+  ]);
+
   try {
     const rsp = await llm.completeJson<Record<string, unknown>>(
       [
         { role: "system", content: SKILL_CRYSTALLIZE_PROMPT.system },
+        { role: "system", content: languageSteeringLine(evidenceLang) },
         { role: "user", content: userPayload },
       ],
       {

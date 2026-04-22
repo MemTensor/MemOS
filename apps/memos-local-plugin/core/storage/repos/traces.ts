@@ -35,6 +35,7 @@ const COLUMNS = [
   "share_scope",
   "share_target",
   "shared_at",
+  "turn_id",
   "schema_version",
 ];
 
@@ -475,6 +476,7 @@ interface RawTraceRow {
   share_scope: string | null;
   share_target: string | null;
   shared_at: number | null;
+  turn_id: number | null;
   schema_version: number;
 }
 
@@ -524,6 +526,7 @@ function rowToParams(row: TraceRow): Record<string, unknown> {
     share_scope: row.share?.scope ?? null,
     share_target: row.share?.target ?? null,
     shared_at: row.share?.sharedAt ?? null,
+    turn_id: row.turnId ?? null,
     schema_version: row.schemaVersion,
   };
 }
@@ -556,6 +559,7 @@ function mapRow(r: RawTraceRow): TraceRow {
             sharedAt: r.shared_at,
           }
         : null,
+    turnId: r.turn_id,
     schemaVersion: r.schema_version,
   };
 }
