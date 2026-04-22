@@ -102,6 +102,15 @@ print("\n[Step 3] Initializing LLM for relation detection...")
 llm_config = LLMConfigFactory.model_validate(config_data["extractor_llm"])
 llm = LLMFactory.from_config(llm_config)
 
+print(f"✓ LLM initialized: {llm_config.backend}")
+
+# ============================================================================
+# Step 4: Create Mock Memory Nodes
+# ============================================================================
+print("\n[Step 4] Creating mock memory nodes...")
+print("  Building a scenario about Caroline's stress and support journey...\n")
+
+# Node A: Caroline's work stress
 node_a = GraphDBNode(
     id=str(uuid.uuid4()),
     memory="Caroline faced increased workload stress during the project deadline.",
@@ -116,7 +125,7 @@ node_a = GraphDBNode(
         updated_at="2024-06-28T09:00:00Z",
     ),
 )
-
+# Node B: Improved mental health after joining support group
 node_b = GraphDBNode(
     id=str(uuid.uuid4()),
     memory="After joining the support group, Caroline reported improved mental health.",
@@ -131,7 +140,9 @@ node_b = GraphDBNode(
         updated_at="2024-07-10T12:00:00Z",
     ),
 )
+print("  ✓ Node B: Improved mental health")
 
+# Node C: General research about support groups
 node_c = GraphDBNode(
     id=str(uuid.uuid4()),
     memory="Peer support groups are effective in reducing stress for LGBTQ individuals.",
@@ -146,8 +157,9 @@ node_c = GraphDBNode(
         updated_at="2024-06-29T14:00:00Z",
     ),
 )
+print("  ✓ Node C: Support group benefits")
 
-# === D: Work pressure ➜ stress ===
+# Node D: Work pressure → stress (causal chain element)
 node_d = GraphDBNode(
     id=str(uuid.uuid4()),
     memory="Excessive work pressure increases stress levels among employees.",
@@ -162,6 +174,7 @@ node_d = GraphDBNode(
         updated_at="2024-06-15T08:00:00Z",
     ),
 )
+print("  ✓ Node D: Work pressure → stress")
 
 # Node E: Stress → poor sleep (causal chain element)
 node_e = GraphDBNode(
@@ -178,6 +191,7 @@ node_e = GraphDBNode(
         updated_at="2024-06-18T10:00:00Z",
     ),
 )
+print("  ✓ Node E: Stress → poor sleep")
 
 # Node F: Poor sleep → low performance (causal chain element)
 node_f = GraphDBNode(
@@ -214,7 +228,12 @@ node = GraphDBNode(
         updated_at="2024-07-01T10:00:00Z",
     ),
 )
+print("  ✓ Main Node: Caroline's support group action\n")
 
+# ============================================================================
+# Step 5: Insert Nodes into Graph Store
+# ============================================================================
+print("[Step 5] Inserting all nodes into graph database...")
 
 all_nodes = [node, node_a, node_b, node_c, node_d, node_e, node_f]
 for n in all_nodes:
