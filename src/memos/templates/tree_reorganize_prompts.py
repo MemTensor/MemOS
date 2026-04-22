@@ -1,4 +1,4 @@
-REORGANIZE_PROMPT = """YYou are a memory consolidation and summarization expert.
+REORGANIZE_PROMPT = """You are a memory consolidation and summarization expert.
 
 You will receive a set of child memories that have already been clustered together. These child memories all belong to the same ongoing life thread for the user — the same situation, goal, or period of focus.
 

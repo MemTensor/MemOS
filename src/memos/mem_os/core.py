@@ -709,12 +709,8 @@ class MOSCore:
             f"time add: get mem_cube_id time user_id: {target_user_id} time is: {time.time() - time_start}"
         )
 
-        time_start_0 = time.time()
         if mem_cube_id not in self.mem_cubes:
             raise ValueError(f"MemCube '{mem_cube_id}' is not loaded. Please register.")
-        logger.info(
-            f"time add: get mem_cube_id check in mem_cubes time user_id: {target_user_id} time is: {time.time() - time_start_0}"
-        )
         sync_mode = self.mem_cubes[mem_cube_id].text_mem.mode
         if sync_mode == "async":
             assert self.mem_scheduler is not None, (
