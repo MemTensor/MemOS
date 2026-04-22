@@ -53,6 +53,11 @@ def timed_with_status(
                 if fallback is not None and callable(fallback):
                     result = fallback(e, *args, **kwargs)
                     return result
+                # No fallback configured -> re-raise so callers see the failure
+                # instead of receiving an implicit None. Otherwise downstream
+                # parsers (e.g. clean_json_response) crash with confusing
+                # AttributeErrors that hide the real LLM/HTTP error.
+                raise
             finally:
                 elapsed_ms = (time.perf_counter() - start) * 1000.0
 
