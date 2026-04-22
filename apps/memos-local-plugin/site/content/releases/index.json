@@ -1,0 +1,18 @@
+[
+  {
+    "version": "2.0.0-beta.1",
+    "date": "2026-04-17",
+    "title": "Full Reflect2Evolve algorithm + OpenClaw & Hermes adapters + viewer",
+    "highlight": "Complete end-to-end implementation: L1/L2/L3/Skill layers, three-tier retrieval, decision repair, crystallization, dual adapters, HTTP/SSE server, Vite viewer & product site.",
+    "kind": "beta",
+    "filename": "2.0.0-beta.1.md"
+  },
+  {
+    "version": "2.0.0-alpha.1",
+    "date": "2026-04-17",
+    "title": "Initial scaffolding for Reflect2Evolve",
+    "highlight": "Project skeleton, agent-contract layer, install.sh entrypoint, viewer/site directory layout.",
+    "kind": "alpha",
+    "filename": "2.0.0-alpha.1.md"
+  }
+]
