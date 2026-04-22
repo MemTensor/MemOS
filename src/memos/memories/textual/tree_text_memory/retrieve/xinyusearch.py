@@ -12,7 +12,11 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.log import get_logger
 from memos.mem_reader.base import BaseMemReader
-from memos.memories.textual.item import SourceMessage, TextualMemoryItem
+from memos.memories.textual.item import (
+    SearchedTreeNodeTextualMemoryMetadata,
+    SourceMessage,
+    TextualMemoryItem,
+)
 
 
 logger = get_logger(__name__)
@@ -132,7 +136,7 @@ class XinyuSearchRetriever:
         self.reader = reader
 
     def retrieve_from_internet(
-        self, query: str, top_k: int = 10, parsed_goal=None, info=None
+        self, query: str, top_k: int = 10, parsed_goal=None, info=None, mode="fast"
     ) -> list[TextualMemoryItem]:
         """
         Retrieve information from Xinyu search and convert to TextualMemoryItem format
@@ -153,7 +157,7 @@ class XinyuSearchRetriever:
 
         with ContextThreadPoolExecutor(max_workers=8) as executor:
             futures = [
-                executor.submit(self._process_result, result, query, parsed_goal, info)
+                executor.submit(self._process_result, result, query, parsed_goal, info, mode=mode)
                 for result in search_results
             ]
             for future in as_completed(futures):
@@ -303,7 +307,7 @@ class XinyuSearchRetriever:
         return list(set(tags))[:15]  # Limit to 15 tags
 
     def _process_result(
-        self, result: dict, query: str, parsed_goal: str, info: None
+        self, result: dict, query: str, parsed_goal: str, info: None, mode="fast"
     ) -> list[TextualMemoryItem]:
         if not info:
             info = {"user_id": "", "session_id": ""}
@@ -323,18 +327,61 @@ class XinyuSearchRetriever:
         else:
             publish_time = datetime.now().strftime("%Y-%m-%d")
 
-        read_items = self.reader.get_memory([content], type="doc", info=info)
+        if mode == "fast":
+            info_ = info.copy()
+            user_id = info_.pop("user_id", "")
+            session_id = info_.pop("session_id", "")
+            return [
+                TextualMemoryItem(
+                    memory=(
+                        f"[Outer internet view] Title: {title}\nNewsTime:"
+                        f" {publish_time}\nSummary:"
+                        f" {summary}\n"
+                    ),
+                    metadata=SearchedTreeNodeTextualMemoryMetadata(
+                        user_id=user_id,
+                        session_id=session_id,
+                        memory_type="OuterMemory",
+                        status="activated",
+                        type="fact",
+                        source="web",
+                        sources=[SourceMessage(type="web", url=url)] if url else [],
+                        visibility="public",
+                        tags=self._extract_tags(title, content, summary),
+                        key=title,
+                        info=info_,
+                        background="",
+                        confidence=0.99,
+                        usage=[],
+                        embedding=self.embedder.embed([content])[0],
+                        internet_info={
+                            "title": title,
+                            "url": url,
+                            "summary": summary,
+                            "content": content,
+                        },
+                    ),
+                )
+            ]
+        else:
+            read_items = self.reader.get_memory([content], type="doc", info=info)
 
-        memory_items = []
-        for read_item_i in read_items[0]:
-            read_item_i.memory = (
-                f"Title: {title}\nNewsTime: {publish_time}\nSummary: {summary}\n"
-                f"Content: {read_item_i.memory}"
-            )
-            read_item_i.metadata.source = "web"
-            read_item_i.metadata.memory_type = "OuterMemory"
-            read_item_i.metadata.sources = [SourceMessage(type="web", url=url)] if url else []
-            read_item_i.metadata.visibility = "public"
+            memory_items = []
+            for read_item_i in read_items[0]:
+                read_item_i.memory = (
+                    f"Title: {title}\nNewsTime: {publish_time}\nSummary: {summary}\n"
+                    f"Content: {read_item_i.memory}"
+                )
+                read_item_i.metadata.source = "web"
+                read_item_i.metadata.memory_type = "OuterMemory"
+                read_item_i.metadata.sources = [SourceMessage(type="web", url=url)] if url else []
+                read_item_i.metadata.visibility = "public"
+                read_item_i.metadata.internet_info = {
+                    "title": title,
+                    "url": url,
+                    "summary": summary,
+                    "content": content,
+                }
 
-            memory_items.append(read_item_i)
-        return memory_items
+                memory_items.append(read_item_i)
+            return memory_items

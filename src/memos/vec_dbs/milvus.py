@@ -34,17 +34,35 @@ class MilvusVecDB(BaseVecDB):
 
     def create_schema(self):
         """Create schema for the milvus collection."""
-        from pymilvus import DataType
+        from pymilvus import DataType, Function, FunctionType
 
         schema = self.client.create_schema(auto_id=False, enable_dynamic_field=True)
         schema.add_field(
             field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True
         )
-        schema.add_field(field_name="memory", datatype=DataType.VARCHAR, max_length=65535)
+        analyzer_params = {"tokenizer": "standard", "filter": ["lowercase"]}
+        schema.add_field(
+            field_name="memory",
+            datatype=DataType.VARCHAR,
+            max_length=65535,
+            analyzer_params=analyzer_params,
+            enable_match=True,
+            enable_analyzer=True,
+        )
+        schema.add_field(field_name="original_text", datatype=DataType.VARCHAR, max_length=65535)
         schema.add_field(
             field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self.config.vector_dimension
         )
         schema.add_field(field_name="payload", datatype=DataType.JSON)
+
+        schema.add_field(field_name="sparse_vector", datatype=DataType.SPARSE_FLOAT_VECTOR)
+        bm25_function = Function(
+            name="bm25",
+            function_type=FunctionType.BM25,
+            input_field_names=["memory"],
+            output_field_names="sparse_vector",
+        )
+        schema.add_function(bm25_function)
 
         return schema
 
@@ -53,6 +71,11 @@ class MilvusVecDB(BaseVecDB):
         index_params = self.client.prepare_index_params()
         index_params.add_index(
             field_name="vector", index_type="FLAT", metric_type=self._get_metric_type()
+        )
+        index_params.add_index(
+            field_name="sparse_vector",
+            index_type="SPARSE_INVERTED_INDEX",
+            metric_type="BM25",
         )
 
         return index_params
@@ -102,12 +125,96 @@ class MilvusVecDB(BaseVecDB):
         """Check if a collection exists."""
         return self.client.has_collection(collection_name=name)
 
+    def _dense_search(
+        self,
+        collection_name: str,
+        query_vector: list[float],
+        top_k: int,
+        filter: str = "",
+        **kwargs: Any,
+    ) -> list[list[dict]]:
+        """Dense search for similar items in the database."""
+        results = self.client.search(
+            collection_name=collection_name,
+            data=[query_vector],
+            limit=top_k,
+            filter=filter,
+            output_fields=["*"],
+            anns_field="vector",
+        )
+        return results
+
+    def _sparse_search(
+        self,
+        collection_name: str,
+        query: str,
+        top_k: int,
+        filter: str = "",
+        **kwargs: Any,
+    ) -> list[list[dict]]:
+        """Sparse search for similar items in the database."""
+        results = self.client.search(
+            collection_name=collection_name,
+            data=[query],
+            limit=top_k,
+            filter=filter,
+            output_fields=["*"],
+            anns_field="sparse_vector",
+        )
+        return results
+
+    def _hybrid_search(
+        self,
+        collection_name: str,
+        query_vector: list[float],
+        query: str,
+        top_k: int,
+        filter: str | None = None,
+        ranker_type: str = "rrf",  # rrf, weighted
+        sparse_weight=1.0,
+        dense_weight=1.0,
+        **kwargs: Any,
+    ) -> list[list[dict]]:
+        """Hybrid search for similar items in the database."""
+        from pymilvus import AnnSearchRequest, RRFRanker, WeightedRanker
+
+        # Set up BM25 search request
+        expr = filter if filter else None
+        sparse_request = AnnSearchRequest(
+            data=[query],
+            anns_field="sparse_vector",
+            param={"metric_type": "BM25"},
+            limit=top_k,
+            expr=expr,
+        )
+        # Set up dense vector search request
+        dense_request = AnnSearchRequest(
+            data=[query_vector],
+            anns_field="vector",
+            param={"metric_type": self._get_metric_type()},
+            limit=top_k,
+            expr=expr,
+        )
+        ranker = (
+            RRFRanker() if ranker_type == "rrf" else WeightedRanker(sparse_weight, dense_weight)
+        )
+        results = self.client.hybrid_search(
+            collection_name=collection_name,
+            reqs=[sparse_request, dense_request],
+            ranker=ranker,
+            limit=top_k,
+            output_fields=["*"],
+        )
+        return results
+
     def search(
         self,
         query_vector: list[float],
+        query: str,
         collection_name: str,
         top_k: int,
         filter: dict[str, Any] | None = None,
+        search_type: str = "dense",  # dense, sparse, hybrid
     ) -> list[MilvusVecDBItem]:
         """
         Search for similar items in the database.
@@ -122,54 +229,245 @@ class MilvusVecDB(BaseVecDB):
             List of search results with distance scores and payloads.
         """
         # Convert filter to Milvus expression
+        logger.info(f"filter for milvus: {filter}")
         expr = self._dict_to_expr(filter) if filter else ""
 
-        results = self.client.search(
-            collection_name=collection_name,
-            data=[query_vector],
-            limit=top_k,
-            filter=expr,
-            output_fields=["*"],  # Return all fields
-        )
-
-        items = []
-        for hit in results[0]:
-            entity = hit.get("entity", {})
-
-            items.append(
-                MilvusVecDBItem(
-                    id=str(entity.get("id")),
-                    memory=entity.get("memory"),
-                    vector=entity.get("vector"),
-                    payload=entity.get("payload", {}),
-                    score=1 - float(hit["distance"]),
-                )
+        search_func_map = {
+            "dense": self._dense_search,
+            "sparse": self._sparse_search,
+            "hybrid": self._hybrid_search,
+        }
+        try:
+            results = search_func_map[search_type](
+                collection_name=collection_name,
+                query_vector=query_vector,
+                query=query,
+                top_k=top_k,
+                filter=expr,
             )
+
+            items = []
+            for hit in results[0]:
+                entity = hit.get("entity", {})
+
+                items.append(
+                    MilvusVecDBItem(
+                        id=str(entity.get("id")),
+                        memory=entity.get("memory"),
+                        original_text=entity.get("original_text"),
+                        vector=entity.get("vector"),
+                        payload=entity.get("payload", {}),
+                        score=1 - float(hit["distance"]),
+                    )
+                )
+        except Exception as e:
+            logger.error("Error in _%s_search: %s", search_type, e)
+            return []
 
         logger.info(f"Milvus search completed with {len(items)} results.")
         return items
 
     def _dict_to_expr(self, filter_dict: dict[str, Any]) -> str:
-        """Convert a dictionary filter to a Milvus expression string."""
+        """Convert a dictionary filter to a Milvus expression string.
+
+        Supports complex query syntax with logical operators, comparison operators,
+        arithmetic operators, array operators, and string pattern matching.
+
+        Args:
+            filter_dict: Dictionary containing filter conditions
+
+        Returns:
+            Milvus expression string
+        """
         if not filter_dict:
             return ""
 
+        return self._build_expression(filter_dict)
+
+    def _build_expression(self, condition: Any) -> str:
+        """Build expression from condition dict or value."""
+        if isinstance(condition, dict):
+            conditions = []
+
+            # Handle logical operators
+            if "and" in condition:
+                and_expr = self._handle_logical_and(condition["and"])
+                if and_expr:
+                    conditions.append(and_expr)
+            if "or" in condition:
+                or_expr = self._handle_logical_or(condition["or"])
+                if or_expr:
+                    conditions.append(or_expr)
+            if "not" in condition:
+                not_expr = self._handle_logical_not(condition["not"])
+                if not_expr:
+                    conditions.append(not_expr)
+
+            # Handle field conditions (keys that are not logical operators)
+            field_dict = {k: v for k, v in condition.items() if k not in ["and", "or", "not"]}
+            if field_dict:
+                field_expr = self._handle_field_conditions(field_dict)
+                if field_expr:
+                    conditions.append(field_expr)
+
+            # Combine all conditions with AND
+            if not conditions:
+                return ""
+            return " and ".join(conditions)
+        else:
+            # Simple value comparison
+            return f"{condition}"
+
+    def _handle_logical_and(self, conditions: list) -> str:
+        """Handle AND logical operator."""
+        if not conditions:
+            return ""
+        expressions = [self._build_expression(cond) for cond in conditions if cond is not None]
+        expressions = [expr for expr in expressions if expr]
+        if not expressions:
+            return ""
+        return f"({' and '.join(expressions)})"
+
+    def _handle_logical_or(self, conditions: list) -> str:
+        """Handle OR logical operator."""
+        if not conditions:
+            return ""
+        expressions = [self._build_expression(cond) for cond in conditions if cond is not None]
+        expressions = [expr for expr in expressions if expr]
+        if not expressions:
+            return ""
+        return f"({' or '.join(expressions)})"
+
+    def _handle_logical_not(self, condition: Any) -> str:
+        """Handle NOT logical operator."""
+        expr = self._build_expression(condition)
+        if not expr:
+            return ""
+        return f"(not {expr})"
+
+    def _handle_field_conditions(self, condition_dict: dict[str, Any]) -> str:
+        """Handle field-specific conditions."""
         conditions = []
-        for field, value in filter_dict.items():
-            # Skip None values as they cause Milvus query syntax errors
+
+        for field, value in condition_dict.items():
             if value is None:
                 continue
-            # For JSON fields, we need to use payload["field"] syntax
-            elif isinstance(value, str):
-                conditions.append(f"payload['{field}'] == '{value}'")
-            elif isinstance(value, list) and len(value) == 0:
-                # Skip empty lists as they cause Milvus query syntax errors
-                continue
-            elif isinstance(value, list) and len(value) > 0:
-                conditions.append(f"payload['{field}'] in {value}")
-            else:
-                conditions.append(f"payload['{field}'] == '{value}'")
+
+            field_expr = self._build_field_expression(field, value)
+            if field_expr:
+                conditions.append(field_expr)
+
+        if not conditions:
+            return ""
         return " and ".join(conditions)
+
+    def _build_field_expression(self, field: str, value: Any) -> str:
+        """Build expression for a single field."""
+        # Convert date-time format from 'YYYY-MM-DD HH:MM:SS' to 'YYYY-MM-DDTHH:MM:SS' for comparison
+        if (field == "created_at" or field == "updated_at") and isinstance(value, str):
+            # Replace space with 'T' to match ISO 8601 format
+            value = value.replace(" ", "T")
+        elif (field == "created_at" or field == "updated_at") and isinstance(value, dict):
+            # Handle dict case (e.g., {"gte": "2026-02-09 15:43:12"})
+            for op, operand in value.items():
+                if isinstance(operand, str):
+                    value[op] = operand.replace(" ", "T")
+
+        # Handle comparison operators
+        if isinstance(value, dict):
+            if len(value) == 1:
+                op, operand = next(iter(value.items()))
+                op_lower = op.lower()
+
+                if op_lower == "in":
+                    return self._handle_in_operator(field, operand)
+                elif op_lower == "contains":
+                    return self._handle_contains_operator(field, operand, case_sensitive=True)
+                elif op_lower == "icontains":
+                    return self._handle_contains_operator(field, operand, case_sensitive=False)
+                elif op_lower == "like":
+                    return self._handle_like_operator(field, operand)
+                elif op_lower in ["gte", "lte", "gt", "lt", "ne"]:
+                    return self._handle_comparison_operator(field, op_lower, operand)
+                else:
+                    # Unknown operator, treat as equality
+                    return f"payload['{field}'] == {self._format_value(operand)}"
+            else:
+                # Multiple operators, handle each one
+                sub_conditions = []
+                for op, operand in value.items():
+                    op_lower = op.lower()
+                    if op_lower in [
+                        "gte",
+                        "lte",
+                        "gt",
+                        "lt",
+                        "ne",
+                        "in",
+                        "contains",
+                        "icontains",
+                        "like",
+                    ]:
+                        sub_expr = self._build_field_expression(field, {op: operand})
+                        if sub_expr:
+                            sub_conditions.append(sub_expr)
+
+                if sub_conditions:
+                    return f"({' and '.join(sub_conditions)})"
+                return ""
+        else:
+            # Simple equality
+            return f"payload['{field}'] == {self._format_value(value)}"
+
+    def _handle_in_operator(self, field: str, values: list) -> str:
+        """Handle IN operator for arrays."""
+        if not isinstance(values, list) or not values:
+            return ""
+
+        formatted_values = [self._format_value(v) for v in values]
+        return f"payload['{field}'] in [{', '.join(formatted_values)}]"
+
+    def _handle_contains_operator(self, field: str, value: Any, case_sensitive: bool = True) -> str:
+        """Handle CONTAINS/ICONTAINS operator."""
+        formatted_value = self._format_value(value)
+        if case_sensitive:
+            return f"json_contains(payload['{field}'], {formatted_value})"
+        else:
+            # For case-insensitive contains, we need to use LIKE with lower case
+            return f"(not json_contains(payload['{field}'], {formatted_value}))"
+
+    def _handle_like_operator(self, field: str, pattern: str) -> str:
+        """Handle LIKE operator for string pattern matching."""
+        # Convert SQL-like pattern to Milvus-like pattern
+        return f"payload['{field}'] like '{pattern}'"
+
+    def _handle_comparison_operator(self, field: str, operator: str, value: Any) -> str:
+        """Handle comparison operators (gte, lte, gt, lt, ne)."""
+        milvus_op = {"gte": ">=", "lte": "<=", "gt": ">", "lt": "<", "ne": "!="}.get(operator, "==")
+
+        # Convert date-time format from 'YYYY-MM-DD HH:MM:SS' to 'YYYY-MM-DDTHH:MM:SS' for comparison
+        if (field == "created_at" or field == "updated_at") and isinstance(value, str):
+            # Replace space with 'T' to match ISO 8601 format
+            value = value.replace(" ", "T")
+
+        formatted_value = self._format_value(value)
+        return f"payload['{field}'] {milvus_op} {formatted_value}"
+
+    def _format_value(self, value: Any) -> str:
+        """Format value for Milvus expression."""
+        if isinstance(value, str):
+            return f"'{value}'"
+        elif isinstance(value, int | float):
+            return str(value)
+        elif isinstance(value, bool):
+            return str(value).lower()
+        elif isinstance(value, list):
+            formatted_items = [self._format_value(item) for item in value]
+            return f"[{', '.join(formatted_items)}]"
+        elif value is None:
+            return "null"
+        else:
+            return f"'{value!s}'"
 
     def _get_metric_type(self) -> str:
         """Get the metric type for search."""
@@ -191,13 +489,13 @@ class MilvusVecDB(BaseVecDB):
             return None
 
         entity = results[0]
-        payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
 
         return MilvusVecDBItem(
             id=entity["id"],
             memory=entity.get("memory"),
+            original_text=entity.get("original_text"),
             vector=entity.get("vector"),
-            payload=payload,
+            payload=entity.get("payload", {}),
         )
 
     def get_by_ids(self, collection_name: str, ids: list[str]) -> list[MilvusVecDBItem]:
@@ -212,13 +510,13 @@ class MilvusVecDB(BaseVecDB):
 
         items = []
         for entity in results:
-            payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
             items.append(
                 MilvusVecDBItem(
                     id=entity["id"],
                     memory=entity.get("memory"),
+                    original_text=entity.get("original_text"),
                     vector=entity.get("vector"),
-                    payload=payload,
+                    payload=entity.get("payload", {}),
                 )
             )
 
@@ -237,7 +535,9 @@ class MilvusVecDB(BaseVecDB):
         Returns:
             List of items including vectors and payload that match the filter
         """
+        logger.info(f"filter for milvus: {filter}")
         expr = self._dict_to_expr(filter) if filter else ""
+        logger.info(f"filter expr for milvus: {expr}")
         all_items = []
 
         # Use query_iterator for efficient pagination
@@ -264,6 +564,7 @@ class MilvusVecDB(BaseVecDB):
                         MilvusVecDBItem(
                             id=entity["id"],
                             memory=entity.get("memory"),
+                            original_text=entity.get("original_text"),
                             vector=entity.get("vector"),
                             payload=payload,
                         )
@@ -319,8 +620,9 @@ class MilvusVecDB(BaseVecDB):
 
             # Prepare entity data
             entity = {
-                "id": item.id,
-                "memory": item.memory,
+                "id": item.id[:65000],
+                "memory": item.memory[:65000],
+                "original_text": item.original_text[:65000],
                 "vector": item.vector,
                 "payload": item.payload if item.payload else {},
             }
@@ -375,4 +677,12 @@ class MilvusVecDB(BaseVecDB):
         self.client.delete(
             collection_name=collection_name,
             ids=ids,
+        )
+
+    def delete_by_filter(self, collection_name: str, filter: dict[str, Any]) -> None:
+        """Delete items from the vector database by filter."""
+        expr = self._dict_to_expr(filter) if filter else ""
+        self.client.delete(
+            collection_name=collection_name,
+            filter=expr,
         )

@@ -1,4 +1,5 @@
 import json
+import time
 import traceback
 
 from collections import defaultdict
@@ -9,7 +10,7 @@ import numpy as np
 from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
 from memos.embedders.factory import OllamaEmbedder
-from memos.graph_dbs.item import GraphDBNode
+from memos.graph_dbs.item import GraphDBEdge, GraphDBNode
 from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
@@ -37,6 +38,32 @@ def build_summary_parent_node(cluster_nodes):
         )
         normalized_sources.append(sm)
     return normalized_sources
+
+
+class QueueMessage:
+    def __init__(
+        self,
+        op,  # `str` for node and edge IDs, `GraphDBNode` and `GraphDBEdge`
+        # for actual objects
+        before_node: list[str] | list[GraphDBNode] | None = None,
+        before_edge: list[str] | list[GraphDBEdge] | None = None,
+        after_node: list[str] | list[GraphDBNode] | None = None,
+        after_edge: list[str] | list[GraphDBEdge] | None = None,
+        user_name: str | None = None,
+    ):
+        self.op = op
+        self.before_node = before_node
+        self.before_edge = before_edge
+        self.after_node = after_node
+        self.after_edge = after_edge
+        self.user_name = user_name
+
+    def __str__(self) -> str:
+        return f"QueueMessage(op={self.op}, before_node={self.before_node if self.before_node is None else len(self.before_node)}, after_node={self.after_node if self.after_node is None else len(self.after_node)})"
+
+    def __lt__(self, other: "QueueMessage") -> bool:
+        op_priority = {"add": 2, "remove": 2, "merge": 1, "end": 0}
+        return op_priority[self.op] < op_priority[other.op]
 
 
 def extract_first_to_last_brace(text: str):
@@ -146,7 +173,6 @@ class GraphStructureReorganizer:
         3. Create parent nodes and build local PARENT trees.
         """
         # --- Total time watch dog: check functions ---
-        import time
 
         start_ts = time.time()
 

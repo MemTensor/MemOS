@@ -84,7 +84,7 @@ def memos_search(client, user_id, query, top_k):
     results = client.search(query=query, user_id=user_id, top_k=top_k)
     search_memories = (
         "\n".join(item["memory"] for cube in results["text_mem"] for item in cube["memories"])
-        + f"\n{results['pref_mem']}"
+        + f"\n{results.get('pref_string', '')}"
     )
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
@@ -226,6 +226,18 @@ def process_user(row_data, conv_idx, frame, version, top_k=20):
         client = MemuClient()
         print("🔌 Using memu client for search...")
         context, duration_ms = memu_search(client, question, user_id, top_k)
+    elif frame == "memobase":
+        from utils.client import MemobaseClient
+
+        client = MemobaseClient()
+        print("🔌 Using Memobase client for search...")
+        context, duration_ms = memobase_search(client, question, user_id, top_k)
+    elif frame == "memos-api-online":
+        from utils.client import MemosApiOnlineClient
+
+        client = MemosApiOnlineClient()
+        print("🔌 Using memos-api-online client for search...")
+        context, duration_ms = memos_search(client, question, user_id, top_k)
 
     search_results[user_id].append(
         {
@@ -327,7 +339,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        choices=[
+            "memos-api-online",
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
         default="memos-api",
     )
     parser.add_argument(

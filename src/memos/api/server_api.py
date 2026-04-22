@@ -1,28 +1,52 @@
 import logging
+import os
 
-from fastapi import FastAPI
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
+from starlette.staticfiles import StaticFiles
 
 from memos.api.exceptions import APIExceptionHandler
 from memos.api.middleware.request_context import RequestContextMiddleware
 from memos.api.routers.server_router import router as server_router
 
 
+load_dotenv()
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="MemOS Product REST APIs",
-    description="A REST API for managing multiple users with MemOS Product.",
+    title="MemOS Server REST APIs",
+    description="A REST API for managing multiple users with MemOS Server.",
     version="1.0.1",
 )
 
-app.add_middleware(RequestContextMiddleware)
+app.mount("/download", StaticFiles(directory=os.getenv("FILE_LOCAL_PATH")), name="static_mapping")
+
+app.add_middleware(RequestContextMiddleware, source="server_api")
 # Include routers
 app.include_router(server_router)
 
-# Exception handlers
+
+@app.get("/health")
+def health_check():
+    """Container and load balancer health endpoint."""
+    return {
+        "status": "healthy",
+        "service": "memos",
+        "version": app.version,
+    }
+
+
+# Request validation failed
+app.exception_handler(RequestValidationError)(APIExceptionHandler.validation_error_handler)
+# Invalid business code parameters
 app.exception_handler(ValueError)(APIExceptionHandler.value_error_handler)
+# Business layer manual exception
+app.exception_handler(HTTPException)(APIExceptionHandler.http_error_handler)
+# Fallback for unknown errors
 app.exception_handler(Exception)(APIExceptionHandler.global_exception_handler)
 
 

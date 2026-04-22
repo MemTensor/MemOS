@@ -5,6 +5,10 @@ from memos.llms.ollama import OllamaLLM
 
 # Scenario 1: Using LLMFactory with Ollama Backend
 # This is the most recommended way! 🌟
+# Prerequisites:
+# 1. Install Ollama: https://ollama.com/
+# 2. Start Ollama server: `ollama serve`
+# 3. Need python ollama package(>=0.5.0,<0.6.0)
 
 config = LLMConfigFactory.model_validate(
     {
@@ -46,6 +50,10 @@ print("==" * 20)
 
 
 # Scenario 3: Using LLMFactory with OpenAI Backend
+# Prerequisites:
+# 1. You need a valid OpenAI API key to run this scenario.
+# 2. Replace 'sk-xxxx' with your actual API key below.
+
 
 config = LLMConfigFactory.model_validate(
     {
@@ -156,7 +164,37 @@ resp = llm.generate(messages)
 print("Scenario 6:", resp)
 
 
-# Scenario 7: Using LLMFactory with Deepseek-chat + reasoning + CoT + streaming
+# Scenario 7: Using LLMFactory with MiniMax (OpenAI-compatible API)
+# Prerequisites:
+# 1. Get your API key from the MiniMax platform.
+# 2. Available models: MiniMax-M2.7 (flagship), MiniMax-M2.7-highspeed (low-latency),
+#    MiniMax-M2.5, MiniMax-M2.5-highspeed.
+
+cfg_mm = LLMConfigFactory.model_validate(
+    {
+        "backend": "minimax",
+        "config": {
+            "model_name_or_path": "MiniMax-M2.7",
+            "api_key": "your-minimax-api-key",
+            "api_base": "https://api.minimax.io/v1",
+            "temperature": 0.7,
+            "max_tokens": 1024,
+        },
+    }
+)
+llm = LLMFactory.from_config(cfg_mm)
+messages = [{"role": "user", "content": "Hello, who are you"}]
+resp = llm.generate(messages)
+print("Scenario 7:", resp)
+print("==" * 20)
+
+print("Scenario 7 (streaming):\n")
+for chunk in llm.generate_stream(messages):
+    print(chunk, end="")
+print("\n" + "==" * 20)
+
+
+# Scenario 8: Using LLMFactory with DeepSeek-chat + reasoning + CoT + streaming
 
 cfg2 = LLMConfigFactory.model_validate(
     {
@@ -178,7 +216,7 @@ messages = [
         "content": "Explain how to solve this problem step-by-step. Be explicit in your thinking process. Question: If a train travels from city A to city B at 60 mph and returns at 40 mph, what is its average speed for the entire trip? Let's think step by step.",
     },
 ]
-print("Scenario 7:\n")
+print("Scenario 8:\n")
 for chunk in llm.generate_stream(messages):
     print(chunk, end="")
 print("==" * 20)

@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any
 import requests
 
 from memos.log import get_logger
+from memos.utils import timed_with_status
 
 from .base import BaseReranker
 from .concat import concat_original_source
-from memos.utils import timed
 
 
 logger = get_logger(__name__)
@@ -80,6 +80,8 @@ class HTTPBGEReranker(BaseReranker):
         token: str = "",
         model: str = "bge-reranker-v2-m3",
         timeout: int = 10,
+        max_query_tokens: int | None = None,
+        concate_len: int | None = None,
         headers_extra: dict | None = None,
         rerank_source: str | None = None,
         boost_weights: dict[str, float] | None = None,
@@ -107,6 +109,8 @@ class HTTPBGEReranker(BaseReranker):
         self.token = token or ""
         self.model = model
         self.timeout = timeout
+        self.max_query_tokens = max_query_tokens
+        self.concate_len = concate_len
         self.headers_extra = headers_extra or {}
         self.rerank_source = rerank_source
 
@@ -119,13 +123,19 @@ class HTTPBGEReranker(BaseReranker):
         self.warn_unknown_filter_keys = bool(warn_unknown_filter_keys)
         self._warned_missing_keys: set[str] = set()
 
-    @timed
+    @timed_with_status(
+        log_prefix="model_timed_rerank",
+        log_extra_args={"model_name_or_path": "reranker"},
+        fallback=lambda exc, self, query, graph_results, top_k, *a, **kw: [
+            (item, 0.0) for item in graph_results[:top_k]
+        ],
+    )
     def rerank(
         self,
         query: str,
-        graph_results: list[TextualMemoryItem],
+        graph_results: list[TextualMemoryItem] | list[dict[str, Any]],
         top_k: int,
-        search_filter: dict | None = None,
+        search_priority: dict | None = None,
         **kwargs,
     ) -> list[tuple[TextualMemoryItem, float]]:
         """
@@ -140,7 +150,7 @@ class HTTPBGEReranker(BaseReranker):
             `.memory` str field; non-strings are ignored.
         top_k : int
             Return at most this many items.
-        search_filter : dict | None
+        search_priority : dict | None, optional
             Currently unused. Present to keep signature compatible.
 
         Returns
@@ -148,6 +158,11 @@ class HTTPBGEReranker(BaseReranker):
         list[tuple[TextualMemoryItem, float]]
             Re-ranked items with scores, sorted descending by score.
         """
+
+        if self.max_query_tokens and len(query) > self.max_query_tokens:
+            single_concate_len = self.concate_len // 2
+            query = query[:single_concate_len] + "\n" + query[-single_concate_len:]
+
         if not graph_results:
             return []
 
@@ -157,11 +172,15 @@ class HTTPBGEReranker(BaseReranker):
         if self.rerank_source:
             documents = concat_original_source(graph_results, self.rerank_source)
         else:
-            documents = [
-                (_TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m)
-                for item in graph_results
-            ]
-            documents = [d for d in documents if isinstance(d, str) and d]
+            documents = []
+            filtered_graph_results = []
+            for item in graph_results:
+                m = item.get("memory") if isinstance(item, dict) else getattr(item, "memory", None)
+
+                if isinstance(m, str) and m:
+                    documents.append(_TAG1.sub("", m))
+                    filtered_graph_results.append(item)
+            graph_results = filtered_graph_results
 
         logger.info(f"[HTTPBGERerankerSample] query: {query} , documents: {documents[:5]}...")
 
@@ -171,63 +190,54 @@ class HTTPBGEReranker(BaseReranker):
         headers = {"Content-Type": "application/json", **self.headers_extra}
         payload = {"model": self.model, "query": query, "documents": documents}
 
-        try:
-            # Make the HTTP request to the reranker service
-            resp = requests.post(
-                self.reranker_url, headers=headers, json=payload, timeout=self.timeout
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        # Make the HTTP request to the reranker service
+        resp = requests.post(self.reranker_url, headers=headers, json=payload, timeout=self.timeout)
+        resp.raise_for_status()
+        data = resp.json()
 
-            scored_items: list[tuple[TextualMemoryItem, float]] = []
+        scored_items: list[tuple[TextualMemoryItem, float]] = []
 
-            if "results" in data:
-                # Format:
-                # dict("results": [{"index": int, "relevance_score": float},
-                # ...])
-                rows = data.get("results", [])
-                for r in rows:
-                    idx = r.get("index")
-                    # The returned index refers to 'documents' (i.e., our 'pairs' order),
-                    # so we must map it back to the original graph_results index.
-                    if isinstance(idx, int) and 0 <= idx < len(graph_results):
-                        raw_score = float(r.get("relevance_score", r.get("score", 0.0)))
-                        item = graph_results[idx]
-                        # generic boost
-                        score = self._apply_boost_generic(item, raw_score, search_filter)
-                        scored_items.append((item, score))
-
-                scored_items.sort(key=lambda x: x[1], reverse=True)
-                return scored_items[: min(top_k, len(scored_items))]
-
-            elif "data" in data:
-                # Format: {"data": [{"score": float}, ...]} aligned by list order
-                rows = data.get("data", [])
-                # Build a list of scores aligned with our 'documents' (pairs)
-                score_list = [float(r.get("score", 0.0)) for r in rows]
-
-                if len(score_list) < len(graph_results):
-                    score_list += [0.0] * (len(graph_results) - len(score_list))
-                elif len(score_list) > len(graph_results):
-                    score_list = score_list[: len(graph_results)]
-
-                scored_items = []
-                for item, raw_score in zip(graph_results, score_list, strict=False):
-                    score = self._apply_boost_generic(item, raw_score, search_filter)
+        if "results" in data:
+            # Format:
+            # dict("results": [{"index": int, "relevance_score": float},
+            # ...])
+            rows = data.get("results", [])
+            for r in rows:
+                idx = r.get("index")
+                # The returned index refers to 'documents' (i.e., our 'pairs' order),
+                # so we must map it back to the original graph_results index.
+                if isinstance(idx, int) and 0 <= idx < len(graph_results):
+                    raw_score = float(r.get("relevance_score", r.get("score", 0.0)))
+                    item = graph_results[idx]
+                    # generic boost
+                    score = self._apply_boost_generic(item, raw_score, search_priority)
                     scored_items.append((item, score))
 
-                scored_items.sort(key=lambda x: x[1], reverse=True)
-                return scored_items[: min(top_k, len(scored_items))]
+            scored_items.sort(key=lambda x: x[1], reverse=True)
+            return scored_items[: min(top_k, len(scored_items))]
 
-            else:
-                # Unexpected response schema: return a 0.0-scored fallback of the first top_k valid docs
-                # Note: we use 'pairs' to keep alignment with valid (string) docs.
-                return [(item, 0.0) for item in graph_results[:top_k]]
+        elif "data" in data:
+            # Format: {"data": [{"score": float}, ...]} aligned by list order
+            rows = data.get("data", [])
+            # Build a list of scores aligned with our 'documents' (pairs)
+            score_list = [float(r.get("score", 0.0)) for r in rows]
 
-        except Exception as e:
-            # Network error, timeout, JSON decode error, etc.
-            # Degrade gracefully by returning first top_k valid docs with 0.0 score.
-            logger.error(f"[HTTPBGEReranker] request failed: {e}")
+            if len(score_list) < len(graph_results):
+                score_list += [0.0] * (len(graph_results) - len(score_list))
+            elif len(score_list) > len(graph_results):
+                score_list = score_list[: len(graph_results)]
+
+            scored_items = []
+            for item, raw_score in zip(graph_results, score_list, strict=False):
+                score = self._apply_boost_generic(item, raw_score, search_priority)
+                scored_items.append((item, score))
+
+            scored_items.sort(key=lambda x: x[1], reverse=True)
+            return scored_items[: min(top_k, len(scored_items))]
+
+        else:
+            # Unexpected response schema: return a 0.0-scored fallback of the first top_k valid docs
+            # Note: we use 'pairs' to keep alignment with valid (string) docs.
             return [(item, 0.0) for item in graph_results[:top_k]]
 
     def _get_attr_or_key(self, obj: Any, key: str) -> Any:

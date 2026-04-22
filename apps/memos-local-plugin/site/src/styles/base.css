@@ -1,0 +1,78 @@
+/*
+ * Base reset + typography for the product site.
+ *
+ * Kept ahead of theme.css so theme overrides cascade correctly.
+ */
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--site-bg);
+  color: var(--site-fg);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  accent-color: var(--site-accent);
+  scroll-behavior: smooth;
+}
+
+h1, h2, h3, h4 {
+  font-family: "Inter", sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+h1 { font-size: clamp(2.2rem, 1.4rem + 3vw, 3.8rem); }
+h2 { font-size: clamp(1.6rem, 1.1rem + 2vw, 2.4rem); margin-top: 0; }
+h3 { font-size: 1.25rem; }
+
+p, ul, ol {
+  margin: 0 0 1rem 0;
+}
+
+a {
+  color: var(--site-accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 160ms ease-out, color 160ms ease-out;
+}
+a:hover {
+  border-bottom-color: var(--site-accent);
+}
+
+code, kbd, samp, pre {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+code {
+  background: var(--site-code-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+pre {
+  background: var(--site-code-bg);
+  padding: 14px 16px;
+  border-radius: 10px;
+  overflow-x: auto;
+  line-height: 1.5;
+  border: 1px solid var(--site-border);
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--site-border);
+  margin: 2rem 0;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--site-accent) 35%, transparent);
+}

@@ -2,21 +2,11 @@
 
 # Common parameters for all scripts
 LIB="memos-api"
-VERSION="072202"
+VERSION="default"
 WORKERS=10
 TOPK=20
 
-if [ "$LIB" = "mirix" ]; then
-    echo "Running pm_mirix.py 100 times..."
-    for i in {1..100}; do
-        echo "Iteration $i/100"
-        CUDA_VISIBLE_DEVICES=0 python scripts/personamem/pm_mirix.py --version $VERSION --workers 1
-        if [ $? -ne 0 ]; then
-            echo "Error running xx.py on iteration $i"
-            exit 1
-        fi
-    done
-elif ["$LIB" = "zep"]; then
+if ["$LIB" = "zep"]; then
     CUDA_VISIBLE_DEVICES=0 python scripts/personamem/pm_ingestion_zep.py --version $VERSION --workers $WORKERS
     CUDA_VISIBLE_DEVICES=0 python scripts/personamem/pm_search_zep.py --version $VERSION --top_k $TOPK --workers $WORKERS
     echo "Running pm_responses.py..."

@@ -4,9 +4,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from memos.log import get_logger
+from memos.utils import timed
 
 from .base import BaseReranker
-from memos.utils import timed
 
 
 if TYPE_CHECKING:

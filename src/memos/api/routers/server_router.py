@@ -1,660 +1,452 @@
-import json
+"""
+Server API Router for MemOS (Class-based handlers version).
+
+This router demonstrates the improved architecture using class-based handlers
+with dependency injection, providing better modularity and maintainability.
+
+Comparison with function-based approach:
+- Cleaner code: No need to pass dependencies in every endpoint
+- Better testability: Easy to mock handler dependencies
+- Improved extensibility: Add new handlers or modify existing ones easily
+- Clear separation of concerns: Router focuses on routing, handlers handle business logic
+"""
+
 import os
-import traceback
+import random as _random
+import socket
 
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from fastapi import APIRouter, HTTPException, Query
 
-from fastapi import APIRouter, HTTPException
-
-from memos.api.config import APIConfig
+from memos.api import handlers
+from memos.api.handlers.add_handler import AddHandler
+from memos.api.handlers.base_handler import HandlerDependencies
+from memos.api.handlers.chat_handler import ChatHandler
+from memos.api.handlers.feedback_handler import FeedbackHandler
+from memos.api.handlers.search_handler import SearchHandler
 from memos.api.product_models import (
+    AllStatusResponse,
     APIADDRequest,
     APIChatCompleteRequest,
+    APIFeedbackRequest,
     APISearchRequest,
+    ChatBusinessRequest,
+    ChatPlaygroundRequest,
+    ChatRequest,
+    DeleteMemoryByRecordIdRequest,
+    DeleteMemoryByRecordIdResponse,
+    DeleteMemoryRequest,
+    DeleteMemoryResponse,
+    ExistMemCubeIdRequest,
+    ExistMemCubeIdResponse,
+    GetMemoryDashboardRequest,
+    GetMemoryPlaygroundRequest,
+    GetMemoryRequest,
+    GetMemoryResponse,
+    GetUserNamesByMemoryIdsRequest,
+    GetUserNamesByMemoryIdsResponse,
     MemoryResponse,
+    RecoverMemoryByRecordIdRequest,
+    RecoverMemoryByRecordIdResponse,
     SearchResponse,
+    StatusResponse,
+    SuggestionRequest,
+    SuggestionResponse,
+    TaskQueueResponse,
 )
-from memos.configs.embedder import EmbedderConfigFactory
-from memos.configs.graph_db import GraphDBConfigFactory
-from memos.configs.internet_retriever import InternetRetrieverConfigFactory
-from memos.configs.llm import LLMConfigFactory
-from memos.configs.mem_reader import MemReaderConfigFactory
-from memos.configs.mem_scheduler import SchedulerConfigFactory
-from memos.configs.reranker import RerankerConfigFactory
-from memos.configs.vec_db import VectorDBConfigFactory
-from memos.embedders.factory import EmbedderFactory
-from memos.graph_dbs.factory import GraphStoreFactory
-from memos.llms.factory import LLMFactory
 from memos.log import get_logger
-from memos.mem_cube.navie import NaiveMemCube
-from memos.mem_os.product_server import MOSServer
-from memos.mem_reader.factory import MemReaderFactory
-from memos.mem_scheduler.orm_modules.base_model import BaseDBManager
-from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.mem_scheduler.schemas.general_schemas import (
-    API_MIX_SEARCH_LABEL,
-    SearchMode,
-)
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
-from memos.mem_scheduler.utils.db_utils import get_utc_now
-from memos.memories.textual.prefer_text_memory.config import (
-    AdderConfigFactory,
-    ExtractorConfigFactory,
-    RetrieverConfigFactory,
-)
-from memos.memories.textual.prefer_text_memory.factory import (
-    AdderFactory,
-    ExtractorFactory,
-    RetrieverFactory,
-)
-from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
-from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
-    InternetRetrieverFactory,
-)
-from memos.reranker.factory import RerankerFactory
-from memos.templates.instruction_completion import instruct_completion
-from memos.types import MOSSearchResult, UserContext
-from memos.vec_dbs.factory import VecDBFactory
+from memos.mem_scheduler.base_scheduler import BaseScheduler
+from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/product", tags=["Server API"])
 
+# Instance ID for identifying this server instance in logs and responses
+INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}:{_random.randint(1000, 9999)}"
 
-def _build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
-    """Build graph database configuration."""
-    graph_db_backend_map = {
-        "neo4j-community": APIConfig.get_neo4j_community_config(user_id=user_id),
-        "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
-        "nebular": APIConfig.get_nebular_config(user_id=user_id),
-        "polardb": APIConfig.get_polardb_config(user_id=user_id),
-    }
+# Initialize all server components
+components = handlers.init_server()
 
-    graph_db_backend = os.getenv("NEO4J_BACKEND", "nebular").lower()
-    return GraphDBConfigFactory.model_validate(
-        {
-            "backend": graph_db_backend,
-            "config": graph_db_backend_map[graph_db_backend],
-        }
+# Create dependency container
+dependencies = HandlerDependencies.from_init_server(components)
+
+# Initialize all handlers with dependency injection
+search_handler = SearchHandler(dependencies)
+add_handler = AddHandler(dependencies)
+chat_handler = (
+    ChatHandler(
+        dependencies,
+        components["chat_llms"],
+        search_handler,
+        add_handler,
+        online_bot=components.get("online_bot"),
     )
+    if os.getenv("ENABLE_CHAT_API", "false") == "true"
+    else None
+)
+feedback_handler = FeedbackHandler(dependencies)
+# Extract commonly used components for function-based handlers
+# (These can be accessed from the components dict without unpacking all of them)
+mem_scheduler: BaseScheduler = components["mem_scheduler"]
+llm = components["llm"]
+naive_mem_cube = components["naive_mem_cube"]
+redis_client = components["redis_client"]
+status_tracker = TaskStatusTracker(redis_client=redis_client)
+graph_db = components["graph_db"]
 
 
-def _build_vec_db_config() -> dict[str, Any]:
-    """Build vector database configuration."""
-    return VectorDBConfigFactory.model_validate(
-        {
-            "backend": "milvus",
-            "config": APIConfig.get_milvus_config(),
-        }
-    )
-
-
-def _build_llm_config() -> dict[str, Any]:
-    """Build LLM configuration."""
-    return LLMConfigFactory.model_validate(
-        {
-            "backend": "openai",
-            "config": APIConfig.get_openai_config(),
-        }
-    )
-
-
-def _build_embedder_config() -> dict[str, Any]:
-    """Build embedder configuration."""
-    return EmbedderConfigFactory.model_validate(APIConfig.get_embedder_config())
-
-
-def _build_mem_reader_config() -> dict[str, Any]:
-    """Build memory reader configuration."""
-    return MemReaderConfigFactory.model_validate(
-        APIConfig.get_product_default_config()["mem_reader"]
-    )
-
-
-def _build_reranker_config() -> dict[str, Any]:
-    """Build reranker configuration."""
-    return RerankerConfigFactory.model_validate(APIConfig.get_reranker_config())
-
-
-def _build_internet_retriever_config() -> dict[str, Any]:
-    """Build internet retriever configuration."""
-    return InternetRetrieverConfigFactory.model_validate(APIConfig.get_internet_config())
-
-
-def _build_pref_extractor_config() -> dict[str, Any]:
-    """Build extractor configuration."""
-    return ExtractorConfigFactory.model_validate({"backend": "naive", "config": {}})
-
-
-def _build_pref_adder_config() -> dict[str, Any]:
-    """Build adder configuration."""
-    return AdderConfigFactory.model_validate({"backend": "naive", "config": {}})
-
-
-def _build_pref_retriever_config() -> dict[str, Any]:
-    """Build retriever configuration."""
-    return RetrieverConfigFactory.model_validate({"backend": "naive", "config": {}})
-
-
-def _get_default_memory_size(cube_config) -> dict[str, int]:
-    """Get default memory size configuration."""
-    return getattr(cube_config.text_mem.config, "memory_size", None) or {
-        "WorkingMemory": 20,
-        "LongTermMemory": 1500,
-        "UserMemory": 480,
-    }
-
-
-def init_server():
-    """Initialize server components and configurations."""
-    # Get default cube configuration
-    default_cube_config = APIConfig.get_default_cube_config()
-
-    # Build component configurations
-    graph_db_config = _build_graph_db_config()
-    print(graph_db_config)
-    llm_config = _build_llm_config()
-    embedder_config = _build_embedder_config()
-    mem_reader_config = _build_mem_reader_config()
-    reranker_config = _build_reranker_config()
-    internet_retriever_config = _build_internet_retriever_config()
-    vector_db_config = _build_vec_db_config()
-    pref_extractor_config = _build_pref_extractor_config()
-    pref_adder_config = _build_pref_adder_config()
-    pref_retriever_config = _build_pref_retriever_config()
-
-    # Create component instances
-    graph_db = GraphStoreFactory.from_config(graph_db_config)
-    vector_db = VecDBFactory.from_config(vector_db_config)
-    llm = LLMFactory.from_config(llm_config)
-    embedder = EmbedderFactory.from_config(embedder_config)
-    mem_reader = MemReaderFactory.from_config(mem_reader_config)
-    reranker = RerankerFactory.from_config(reranker_config)
-    internet_retriever = InternetRetrieverFactory.from_config(
-        internet_retriever_config, embedder=embedder
-    )
-    pref_extractor = ExtractorFactory.from_config(
-        config_factory=pref_extractor_config,
-        llm_provider=llm,
-        embedder=embedder,
-        vector_db=vector_db,
-    )
-    pref_adder = AdderFactory.from_config(
-        config_factory=pref_adder_config,
-        llm_provider=llm,
-        embedder=embedder,
-        vector_db=vector_db,
-    )
-    pref_retriever = RetrieverFactory.from_config(
-        config_factory=pref_retriever_config,
-        llm_provider=llm,
-        embedder=embedder,
-        reranker=reranker,
-        vector_db=vector_db,
-    )
-
-    # Initialize memory manager
-    memory_manager = MemoryManager(
-        graph_db,
-        embedder,
-        llm,
-        memory_size=_get_default_memory_size(default_cube_config),
-        is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
-    )
-    mos_server = MOSServer(
-        mem_reader=mem_reader,
-        llm=llm,
-        online_bot=False,
-    )
-
-    # Initialize Scheduler
-    scheduler_config_dict = APIConfig.get_scheduler_config()
-    scheduler_config = SchedulerConfigFactory(
-        backend="optimized_scheduler", config=scheduler_config_dict
-    )
-    mem_scheduler = SchedulerFactory.from_config(scheduler_config)
-    mem_scheduler.initialize_modules(
-        chat_llm=llm,
-        process_llm=mem_reader.llm,
-        db_engine=BaseDBManager.create_default_sqlite_engine(),
-    )
-    mem_scheduler.start()
-
-    # Initialize SchedulerAPIModule
-    api_module = mem_scheduler.api_module
-
-    naive_mem_cube = NaiveMemCube(
-        llm=llm,
-        embedder=embedder,
-        mem_reader=mem_reader,
-        graph_db=graph_db,
-        reranker=reranker,
-        internet_retriever=internet_retriever,
-        memory_manager=memory_manager,
-        default_cube_config=default_cube_config,
-        vector_db=vector_db,
-        pref_extractor=pref_extractor,
-        pref_adder=pref_adder,
-        pref_retriever=pref_retriever,
-    )
-
-    return (
-        graph_db,
-        mem_reader,
-        llm,
-        embedder,
-        reranker,
-        internet_retriever,
-        memory_manager,
-        default_cube_config,
-        mos_server,
-        mem_scheduler,
-        naive_mem_cube,
-        api_module,
-        vector_db,
-        pref_extractor,
-        pref_adder,
-        pref_retriever,
-    )
-
-
-# Initialize global components
-(
-    graph_db,
-    mem_reader,
-    llm,
-    embedder,
-    reranker,
-    internet_retriever,
-    memory_manager,
-    default_cube_config,
-    mos_server,
-    mem_scheduler,
-    naive_mem_cube,
-    api_module,
-    vector_db,
-    pref_extractor,
-    pref_adder,
-    pref_retriever,
-) = init_server()
-
-
-def _format_memory_item(memory_data: Any) -> dict[str, Any]:
-    """Format a single memory item for API response."""
-    memory = memory_data.model_dump()
-    memory_id = memory["id"]
-    ref_id = f"[{memory_id.split('-')[0]}]"
-
-    memory["ref_id"] = ref_id
-    memory["metadata"]["embedding"] = []
-    memory["metadata"]["sources"] = []
-    memory["metadata"]["ref_id"] = ref_id
-    memory["metadata"]["id"] = memory_id
-    memory["metadata"]["memory"] = memory["memory"]
-
-    return memory
-
-
-def _post_process_pref_mem(
-    memories_result: list[dict[str, Any]],
-    pref_formatted_mem: list[dict[str, Any]],
-    mem_cube_id: str,
-    handle_pref_mem: bool,
-):
-    if os.getenv("RETURN_ORIGINAL_PREF_MEM", "false").lower() == "true" and pref_formatted_mem:
-        memories_result["prefs"] = []
-        memories_result["prefs"].append(
-            {
-                "cube_id": mem_cube_id,
-                "memories": pref_formatted_mem,
-            }
-        )
-
-    if handle_pref_mem:
-        pref_instruction: str = instruct_completion(pref_formatted_mem)
-        memories_result["pref_mem"] = pref_instruction
-
-    return memories_result
+# =============================================================================
+# Search API Endpoints
+# =============================================================================
 
 
 @router.post("/search", summary="Search memories", response_model=SearchResponse)
 def search_memories(search_req: APISearchRequest):
-    """Search memories for a specific user."""
-    # Create UserContext object - how to assign values
-    user_context = UserContext(
-        user_id=search_req.user_id,
-        mem_cube_id=search_req.mem_cube_id,
-        session_id=search_req.session_id or "default_session",
-    )
-    logger.info(f"Search user_id is: {user_context.mem_cube_id}")
-    memories_result: MOSSearchResult = {
-        "text_mem": [],
-        "act_mem": [],
-        "para_mem": [],
-        "pref_mem": "",
-    }
-
-    search_mode = search_req.mode
-
-    def _search_text():
-        if search_mode == SearchMode.FAST:
-            formatted_memories = fast_search_memories(
-                search_req=search_req, user_context=user_context
-            )
-        elif search_mode == SearchMode.FINE:
-            formatted_memories = fine_search_memories(
-                search_req=search_req, user_context=user_context
-            )
-        elif search_mode == SearchMode.MIXTURE:
-            formatted_memories = mix_search_memories(
-                search_req=search_req, user_context=user_context
-            )
-        else:
-            logger.error(f"Unsupported search mode: {search_mode}")
-            raise HTTPException(status_code=400, detail=f"Unsupported search mode: {search_mode}")
-        return formatted_memories
-
-    def _search_pref():
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
-            return []
-        results = naive_mem_cube.pref_mem.search(
-            query=search_req.query,
-            top_k=search_req.top_k,
-            info={
-                "user_id": search_req.user_id,
-                "session_id": search_req.session_id,
-                "chat_history": search_req.chat_history,
-            },
-        )
-        return [_format_memory_item(data) for data in results]
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        text_future = executor.submit(_search_text)
-        pref_future = executor.submit(_search_pref)
-        text_formatted_memories = text_future.result()
-        pref_formatted_memories = pref_future.result()
-
-    memories_result["text_mem"].append(
-        {
-            "cube_id": search_req.mem_cube_id,
-            "memories": text_formatted_memories,
-        }
-    )
-
-    memories_result = _post_process_pref_mem(
-        memories_result, pref_formatted_memories, search_req.mem_cube_id, search_req.handle_pref_mem
-    )
-
-    return SearchResponse(
-        message="Search completed successfully",
-        data=memories_result,
-    )
-
-
-def mix_search_memories(
-    search_req: APISearchRequest,
-    user_context: UserContext,
-):
     """
-    Mix search memories: fast search + async fine search
+    Search memories for a specific user.
+
+    This endpoint uses the class-based SearchHandler for better code organization.
     """
-    # Get fast memories first
-    fast_memories = fast_search_memories(search_req, user_context)
-
-    # Check if scheduler and dispatcher are available for async execution
-    if mem_scheduler and hasattr(mem_scheduler, "dispatcher") and mem_scheduler.dispatcher:
-        try:
-            # Create message for async fine search
-            message_content = {
-                "search_req": {
-                    "query": search_req.query,
-                    "user_id": search_req.user_id,
-                    "session_id": search_req.session_id,
-                    "top_k": search_req.top_k,
-                    "internet_search": search_req.internet_search,
-                    "moscube": search_req.moscube,
-                    "chat_history": search_req.chat_history,
-                },
-                "user_context": {"mem_cube_id": user_context.mem_cube_id},
-            }
-
-            message = ScheduleMessageItem(
-                item_id=f"mix_search_{search_req.user_id}_{get_utc_now().timestamp()}",
-                user_id=search_req.user_id,
-                mem_cube_id=user_context.mem_cube_id,
-                label=API_MIX_SEARCH_LABEL,
-                mem_cube=naive_mem_cube,
-                content=json.dumps(message_content),
-                timestamp=get_utc_now(),
-            )
-
-            # Submit async task
-            mem_scheduler.dispatcher.submit_message(message)
-            logger.info(f"Submitted async fine search task for user {search_req.user_id}")
-
-            # Try to get pre-computed fine memories if available
-            try:
-                pre_fine_memories = api_module.get_pre_fine_memories(
-                    user_id=search_req.user_id, mem_cube_id=user_context.mem_cube_id
-                )
-                if pre_fine_memories:
-                    # Merge fast and pre-computed fine memories
-                    all_memories = fast_memories + pre_fine_memories
-                    # Remove duplicates based on content
-                    seen_contents = set()
-                    unique_memories = []
-                    for memory in all_memories:
-                        content_key = memory.get("content", "")
-                        if content_key not in seen_contents:
-                            seen_contents.add(content_key)
-                            unique_memories.append(memory)
-                    return unique_memories
-            except Exception as e:
-                logger.warning(f"Failed to get pre-computed fine memories: {e}")
-
-        except Exception as e:
-            logger.error(f"Failed to submit async fine search task: {e}")
-            # Fall back to synchronous execution
-
-    # Fallback: synchronous fine search
-    try:
-        fine_memories = fine_search_memories(search_req, user_context)
-
-        # Merge fast and fine memories
-        all_memories = fast_memories + fine_memories
-
-        # Remove duplicates based on content
-        seen_contents = set()
-        unique_memories = []
-        for memory in all_memories:
-            content_key = memory.get("content", "")
-            if content_key not in seen_contents:
-                seen_contents.add(content_key)
-                unique_memories.append(memory)
-
-        # Sync search data to Redis
-        try:
-            api_module.sync_search_data(
-                user_id=search_req.user_id,
-                mem_cube_id=user_context.mem_cube_id,
-                query=search_req.query,
-                formatted_memories=unique_memories,
-            )
-        except Exception as e:
-            logger.error(f"Failed to sync search data: {e}")
-
-        return unique_memories
-
-    except Exception as e:
-        logger.error(f"Fine search failed: {e}")
-        return fast_memories
+    search_results = search_handler.handle_search_memories(search_req)
+    return search_results
 
 
-def fine_search_memories(
-    search_req: APISearchRequest,
-    user_context: UserContext,
-):
-    target_session_id = search_req.session_id
-    if not target_session_id:
-        target_session_id = "default_session"
-    search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-
-    # Create MemCube and perform search
-    search_results = naive_mem_cube.text_mem.search(
-        query=search_req.query,
-        user_name=user_context.mem_cube_id,
-        top_k=search_req.top_k,
-        mode=SearchMode.FINE,
-        manual_close_internet=not search_req.internet_search,
-        moscube=search_req.moscube,
-        search_filter=search_filter,
-        info={
-            "user_id": search_req.user_id,
-            "session_id": target_session_id,
-            "chat_history": search_req.chat_history,
-        },
-    )
-    formatted_memories = [_format_memory_item(data) for data in search_results]
-
-    return formatted_memories
-
-
-def fast_search_memories(
-    search_req: APISearchRequest,
-    user_context: UserContext,
-):
-    target_session_id = search_req.session_id
-    if not target_session_id:
-        target_session_id = "default_session"
-    search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-
-    # Create MemCube and perform search
-    search_results = naive_mem_cube.text_mem.search(
-        query=search_req.query,
-        user_name=user_context.mem_cube_id,
-        top_k=search_req.top_k,
-        mode=SearchMode.FAST,
-        manual_close_internet=not search_req.internet_search,
-        moscube=search_req.moscube,
-        search_filter=search_filter,
-        info={
-            "user_id": search_req.user_id,
-            "session_id": target_session_id,
-            "chat_history": search_req.chat_history,
-        },
-    )
-    formatted_memories = [_format_memory_item(data) for data in search_results]
-
-    return formatted_memories
+# =============================================================================
+# Add API Endpoints
+# =============================================================================
 
 
 @router.post("/add", summary="Add memories", response_model=MemoryResponse)
 def add_memories(add_req: APIADDRequest):
-    """Add memories for a specific user."""
-    # Create UserContext object - how to assign values
-    user_context = UserContext(
-        user_id=add_req.user_id,
-        mem_cube_id=add_req.mem_cube_id,
-        session_id=add_req.session_id or "default_session",
+    """
+    Add memories for a specific user.
+
+    This endpoint uses the class-based AddHandler for better code organization.
+    """
+    return add_handler.handle_add_memories(add_req)
+
+
+# =============================================================================
+# Scheduler API Endpoints
+# =============================================================================
+
+
+@router.get(  # Changed from post to get
+    "/scheduler/allstatus",
+    summary="Get detailed scheduler status",
+    response_model=AllStatusResponse,
+)
+def scheduler_allstatus():
+    """Get detailed scheduler status including running tasks and queue metrics."""
+    return handlers.scheduler_handler.handle_scheduler_allstatus(
+        mem_scheduler=mem_scheduler, status_tracker=status_tracker
     )
-    target_session_id = add_req.session_id
-    if not target_session_id:
-        target_session_id = "default_session"
 
-    def _process_text_mem() -> list[dict[str, str]]:
-        memories_local = mem_reader.get_memory(
-            [add_req.messages],
-            type="chat",
-            info={
-                "user_id": add_req.user_id,
-                "session_id": target_session_id,
-            },
-        )
-        flattened_local = [mm for m in memories_local for mm in m]
-        logger.info(f"Memory extraction completed for user {add_req.user_id}")
-        mem_ids_local: list[str] = naive_mem_cube.text_mem.add(
-            flattened_local,
-            user_name=user_context.mem_cube_id,
-        )
-        logger.info(
-            f"Added {len(mem_ids_local)} memories for user {add_req.user_id} "
-            f"in session {add_req.session_id}: {mem_ids_local}"
-        )
-        return [
-            {
-                "memory": memory.memory,
-                "memory_id": memory_id,
-                "memory_type": memory.metadata.memory_type,
-            }
-            for memory_id, memory in zip(mem_ids_local, flattened_local, strict=False)
-        ]
 
-    def _process_pref_mem() -> list[dict[str, str]]:
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
-            return []
-        pref_memories_local = naive_mem_cube.pref_mem.get_memory(
-            [add_req.messages],
-            type="chat",
-            info={
-                "user_id": add_req.user_id,
-                "session_id": target_session_id,
-            },
-        )
-        pref_ids_local: list[str] = naive_mem_cube.pref_mem.add(pref_memories_local)
-        logger.info(
-            f"Added {len(pref_ids_local)} preferences for user {add_req.user_id} "
-            f"in session {add_req.session_id}: {pref_ids_local}"
-        )
-        return [
-            {
-                "memory": memory.memory,
-                "memory_id": memory_id,
-                "memory_type": memory.metadata.preference_type,
-            }
-            for memory_id, memory in zip(pref_ids_local, pref_memories_local, strict=False)
-        ]
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        text_future = executor.submit(_process_text_mem)
-        pref_future = executor.submit(_process_pref_mem)
-        text_response_data = text_future.result()
-        pref_response_data = pref_future.result()
-
-    return MemoryResponse(
-        message="Memory added successfully",
-        data=text_response_data + pref_response_data,
+@router.get(  # Changed from post to get
+    "/scheduler/status", summary="Get scheduler running status", response_model=StatusResponse
+)
+def scheduler_status(
+    user_id: str = Query(..., description="User ID"),
+    task_id: str | None = Query(None, description="Optional Task ID to query a specific task"),
+):
+    """Get scheduler running status."""
+    return handlers.scheduler_handler.handle_scheduler_status(
+        user_id=user_id,
+        task_id=task_id,
+        status_tracker=status_tracker,
     )
+
+
+@router.get(  # Changed from post to get
+    "/scheduler/task_queue_status",
+    summary="Get scheduler task queue status",
+    response_model=TaskQueueResponse,
+)
+def scheduler_task_queue_status(
+    user_id: str = Query(..., description="User ID whose queue status is requested"),
+):
+    """Get scheduler task queue backlog/pending status for a user."""
+    return handlers.scheduler_handler.handle_task_queue_status(
+        user_id=user_id, mem_scheduler=mem_scheduler
+    )
+
+
+@router.post("/scheduler/wait", summary="Wait until scheduler is idle for a specific user")
+def scheduler_wait(
+    user_name: str,
+    timeout_seconds: float = 120.0,
+    poll_interval: float = 0.5,
+):
+    """Wait until scheduler is idle for a specific user."""
+    return handlers.scheduler_handler.handle_scheduler_wait(
+        user_name=user_name,
+        status_tracker=status_tracker,
+        timeout_seconds=timeout_seconds,
+        poll_interval=poll_interval,
+    )
+
+
+@router.get("/scheduler/wait/stream", summary="Stream scheduler progress for a user")
+def scheduler_wait_stream(
+    user_name: str,
+    timeout_seconds: float = 120.0,
+    poll_interval: float = 0.5,
+):
+    """Stream scheduler progress via Server-Sent Events (SSE)."""
+    return handlers.scheduler_handler.handle_scheduler_wait_stream(
+        user_name=user_name,
+        status_tracker=status_tracker,
+        timeout_seconds=timeout_seconds,
+        poll_interval=poll_interval,
+        instance_id=INSTANCE_ID,
+    )
+
+
+# =============================================================================
+# Chat API Endpoints
+# =============================================================================
 
 
 @router.post("/chat/complete", summary="Chat with MemOS (Complete Response)")
 def chat_complete(chat_req: APIChatCompleteRequest):
-    """Chat with MemOS for a specific user. Returns complete response (non-streaming)."""
-    try:
-        # Collect all responses from the generator
-        content, references = mos_server.chat(
-            query=chat_req.query,
-            user_id=chat_req.user_id,
-            cube_id=chat_req.mem_cube_id,
-            mem_cube=naive_mem_cube,
-            history=chat_req.history,
-            internet_search=chat_req.internet_search,
-            moscube=chat_req.moscube,
-            base_prompt=chat_req.base_prompt,
-            top_k=chat_req.top_k,
-            threshold=chat_req.threshold,
-            session_id=chat_req.session_id,
+    """
+    Chat with MemOS for a specific user. Returns complete response (non-streaming).
+
+    This endpoint uses the class-based ChatHandler.
+    """
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
+    return chat_handler.handle_chat_complete(chat_req)
+
+
+@router.post("/chat/stream", summary="Chat with MemOS")
+def chat_stream(chat_req: ChatRequest):
+    """
+    Chat with MemOS for a specific user. Returns SSE stream.
+
+    This endpoint uses the class-based ChatHandler which internally
+    composes SearchHandler and AddHandler for a clean architecture.
+    """
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
+    return chat_handler.handle_chat_stream(chat_req)
+
+
+@router.post("/chat/stream/playground", summary="Chat with MemOS playground")
+def chat_stream_playground(chat_req: ChatPlaygroundRequest):
+    """
+    Chat with MemOS for a specific user. Returns SSE stream.
+
+    This endpoint uses the class-based ChatHandler which internally
+    composes SearchHandler and AddHandler for a clean architecture.
+    """
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
+    return chat_handler.handle_chat_stream_playground(chat_req)
+
+
+# =============================================================================
+# Suggestion API Endpoints
+# =============================================================================
+
+
+@router.post(
+    "/suggestions",
+    summary="Get suggestion queries",
+    response_model=SuggestionResponse,
+)
+def get_suggestion_queries(suggestion_req: SuggestionRequest):
+    """Get suggestion queries for a specific user with language preference."""
+    return handlers.suggestion_handler.handle_get_suggestion_queries(
+        user_id=suggestion_req.mem_cube_id,
+        language=suggestion_req.language,
+        message=suggestion_req.message,
+        llm=llm,
+        naive_mem_cube=naive_mem_cube,
+    )
+
+
+# =============================================================================
+# Memory Retrieval Delete API Endpoints
+# =============================================================================
+
+
+@router.post("/get_all", summary="Get all memories for user", response_model=MemoryResponse)
+def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
+    """
+    Get all memories or subgraph for a specific user.
+
+    If search_query is provided, returns a subgraph based on the query.
+    Otherwise, returns all memories of the specified type.
+    """
+    if memory_req.search_query:
+        return handlers.memory_handler.handle_get_subgraph(
+            user_id=memory_req.user_id,
+            mem_cube_id=(
+                memory_req.mem_cube_ids[0] if memory_req.mem_cube_ids else memory_req.user_id
+            ),
+            query=memory_req.search_query,
+            top_k=200,
+            naive_mem_cube=naive_mem_cube,
+            search_type=memory_req.search_type,
+        )
+    else:
+        return handlers.memory_handler.handle_get_all_memories(
+            user_id=memory_req.user_id,
+            mem_cube_id=(
+                memory_req.mem_cube_ids[0] if memory_req.mem_cube_ids else memory_req.user_id
+            ),
+            memory_type=memory_req.memory_type or "text_mem",
+            naive_mem_cube=naive_mem_cube,
         )
 
-        # Return the complete response
-        return {
-            "message": "Chat completed successfully",
-            "data": {"response": content, "references": references},
-        }
 
-    except ValueError as err:
-        raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
-    except Exception as err:
-        logger.error(f"Failed to start chat: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
+@router.post("/get_memory", summary="Get memories for user", response_model=GetMemoryResponse)
+def get_memories(memory_req: GetMemoryRequest):
+    return handlers.memory_handler.handle_get_memories(
+        get_mem_req=memory_req,
+        naive_mem_cube=naive_mem_cube,
+    )
+
+
+@router.get("/get_memory/{memory_id}", summary="Get memory by id", response_model=GetMemoryResponse)
+def get_memory_by_id(memory_id: str):
+    return handlers.memory_handler.handle_get_memory(
+        memory_id=memory_id,
+        naive_mem_cube=naive_mem_cube,
+    )
+
+
+@router.post("/get_memory_by_ids", summary="Get memory by ids", response_model=GetMemoryResponse)
+def get_memory_by_ids(memory_ids: list[str]):
+    return handlers.memory_handler.handle_get_memory_by_ids(
+        memory_ids=memory_ids,
+        naive_mem_cube=naive_mem_cube,
+    )
+
+
+@router.post(
+    "/delete_memory", summary="Delete memories for user", response_model=DeleteMemoryResponse
+)
+def delete_memories(memory_req: DeleteMemoryRequest):
+    return handlers.memory_handler.handle_delete_memories(
+        delete_mem_req=memory_req, naive_mem_cube=naive_mem_cube
+    )
+
+
+# =============================================================================
+# Feedback API Endpoints
+# =============================================================================
+
+
+@router.post("/feedback", summary="Feedback memories", response_model=MemoryResponse)
+def feedback_memories(feedback_req: APIFeedbackRequest):
+    """
+    Feedback memories for a specific user.
+
+    This endpoint uses the class-based FeedbackHandler for better code organization.
+    """
+    return feedback_handler.handle_feedback_memories(feedback_req)
+
+
+# =============================================================================
+# Other API Endpoints (for internal use)
+# =============================================================================
+
+
+@router.post(
+    "/get_user_names_by_memory_ids",
+    summary="Get user names by memory ids",
+    response_model=GetUserNamesByMemoryIdsResponse,
+)
+def get_user_names_by_memory_ids(request: GetUserNamesByMemoryIdsRequest):
+    """Get user names by memory ids. Now unified to query from graph_db only."""
+    result = graph_db.get_user_names_by_memory_ids(memory_ids=request.memory_ids)
+
+    return GetUserNamesByMemoryIdsResponse(
+        code=200,
+        message="Successfully",
+        data=result,
+    )
+
+
+@router.post(
+    "/exist_mem_cube_id",
+    summary="Check if mem cube id exists",
+    response_model=ExistMemCubeIdResponse,
+)
+def exist_mem_cube_id(request: ExistMemCubeIdRequest):
+    """(inner) Check if mem cube id exists."""
+    return ExistMemCubeIdResponse(
+        code=200,
+        message="Successfully",
+        data=graph_db.exist_user_name(user_name=request.mem_cube_id),
+    )
+
+
+@router.post("/chat/stream/business_user", summary="Chat with MemOS for business user")
+def chat_stream_business_user(chat_req: ChatBusinessRequest):
+    """(inner) Chat with MemOS for a specific business user. Returns SSE stream."""
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
+
+    return chat_handler.handle_chat_stream_for_business_user(chat_req)
+
+
+@router.post(
+    "/delete_memory_by_record_id",
+    summary="Delete memory by record id",
+    response_model=DeleteMemoryByRecordIdResponse,
+)
+def delete_memory_by_record_id(memory_req: DeleteMemoryByRecordIdRequest):
+    """(inner) Delete memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set."""
+    graph_db.delete_node_by_mem_cube_id(
+        mem_cube_id=memory_req.mem_cube_id,
+        delete_record_id=memory_req.record_id,
+        hard_delete=memory_req.hard_delete,
+    )
+
+    return DeleteMemoryByRecordIdResponse(
+        code=200,
+        message="Called Successfully",
+        data={"status": "success"},
+    )
+
+
+@router.post(
+    "/recover_memory_by_record_id",
+    summary="Recover memory by record id",
+    response_model=RecoverMemoryByRecordIdResponse,
+)
+def recover_memory_by_record_id(memory_req: RecoverMemoryByRecordIdRequest):
+    """(inner) Recover memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set."""
+    graph_db.recover_memory_by_mem_cube_id(
+        mem_cube_id=memory_req.mem_cube_id,
+        delete_record_id=memory_req.delete_record_id,
+    )
+
+    return RecoverMemoryByRecordIdResponse(
+        code=200,
+        message="Called Successfully",
+        data={"status": "success"},
+    )
+
+
+@router.post(
+    "/get_memory_dashboard", summary="Get memories for dashboard", response_model=GetMemoryResponse
+)
+def get_memories_dashboard(memory_req: GetMemoryDashboardRequest):
+    return handlers.memory_handler.handle_get_memories_dashboard(
+        get_mem_req=memory_req,
+        naive_mem_cube=naive_mem_cube,
+    )

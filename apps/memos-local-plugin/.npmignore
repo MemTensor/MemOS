@@ -1,0 +1,17 @@
+node_modules/
+coverage/
+tests/
+.vitest/
+*.tsbuildinfo
+
+# Source-only docs (kept out of the npm tarball)
+.notes/
+TODO.local.md
+
+# Site is local-only; never publish dist
+site/dist/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/

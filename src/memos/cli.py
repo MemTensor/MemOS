@@ -11,9 +11,16 @@ import zipfile
 from io import BytesIO
 
 
+def get_openapi_app():
+    """Return the FastAPI app used for OpenAPI export."""
+    from memos.api.server_api import app
+
+    return app
+
+
 def export_openapi(output: str) -> bool:
     """Export OpenAPI schema to JSON file."""
-    from memos.api.start_api import app
+    app = get_openapi_app()
 
     # Create directory if it doesn't exist
     if os.path.dirname(output):

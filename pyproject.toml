@@ -4,7 +4,7 @@
 ##############################################################################
 
 name = "MemoryOS"
-version = "1.1.2"
+version = "2.0.13"
 description = "Intelligence Begins with Memory"
 license = {text = "Apache-2.0"}
 readme = "README.md"
@@ -37,7 +37,7 @@ classifiers = [
 ]
 dependencies = [
     "openai (>=1.77.0,<2.0.0)",
-    "ollama (>=0.4.8,<0.5.0)",
+    "ollama (>=0.5.0,<0.5.1)",
     "transformers (>=4.51.3,<5.0.0)",
     "tenacity (>=9.1.2,<10.0.0)",  # Error handling and retrying library
     "fastapi[all] (>=0.115.12,<0.116.0)",  # Web framework for building APIs
@@ -46,6 +46,8 @@ dependencies = [
     "scikit-learn (>=1.7.0,<2.0.0)",  # Machine learning
     "fastmcp (>=2.10.5,<3.0.0)",
     "python-dateutil (>=2.9.0.post0,<3.0.0)",
+    "prometheus-client (>=0.23.1,<0.24.0)",
+    "concurrent-log-handler (>=0.9.28,<1.0.0)",  # Process-safe rotating file handler
 ]
 
 [project.urls]
@@ -86,12 +88,23 @@ mem-user = [
 mem-reader = [
     "chonkie (>=1.0.7,<2.0.0)",  # Sentence chunking library
     "markitdown[docx,pdf,pptx,xls,xlsx] (>=0.1.1,<0.2.0)",  # Markdown parser for various file formats
+    "langchain-text-splitters (>=1.0.0,<2.0.0)", # markdown chunk for langchain
 ]
 
 # PreferenceTextMemory
 pref-mem = [
-    "pymilvus (>=2.6.1,<3.0.0)",  # Milvus Vector DB
+    "pymilvus (>=2.5.12,<3.0.0)",  # Milvus Vector DB
     "datasketch (>=1.6.5,<2.0.0)",  # MinHash library
+]
+
+# SkillMemory
+skill-mem = [
+    "alibabacloud-oss-v2 (>=1.2.2,<1.2.3)",
+]
+
+# Tavily Search
+tavily = [
+    "tavily-python (>=0.5.0,<1.0.0)",
 ]
 
 # All optional dependencies
@@ -104,17 +117,24 @@ all = [
     "pika (>=1.3.2,<2.0.0)",
     "pymysql (>=1.1.0,<2.0.0)",
     "chonkie (>=1.0.7,<2.0.0)",
+    "langchain-text-splitters (>=1.0.0,<2.0.0)",
     "markitdown[docx,pdf,pptx,xls,xlsx] (>=0.1.1,<0.2.0)",
     "pymilvus (>=2.6.1,<3.0.0)",
     "datasketch (>=1.6.5,<2.0.0)",
-
+    "jieba (>=0.38.1,<0.42.1)",
+    "rank-bm25 (>=0.2.2)",
+    "cachetools (>=6.0.0)",
     # NOT exist in the above optional groups
     # Because they are either huge-size dependencies or infrequently used dependencies.
     # We kindof don't want users to install them.
     "torch (>=2.7.1,<3.0.0)",
     "sentence-transformers (>=4.1.0,<5.0.0)",
-    "qdrant-client (>=1.14.2,<2.0.0)",
+    "qdrant-client (>=1.16.0,<2.0.0)",
     "volcengine-python-sdk (>=4.0.4,<5.0.0)",
+    "nltk (>=3.9.1,<4.0.0)",
+    "rake-nltk (>=1.0.6,<1.1.0)",
+    "alibabacloud-oss-v2 (>=1.2.2,<1.2.3)",
+    "tavily-python (>=0.5.0,<1.0.0)",
 
     # Uncategorized dependencies
 ]
@@ -156,6 +176,8 @@ optional = true
 [tool.poetry.group.test.dependencies]
 pytest = "^8.3.5"
 pytest-asyncio = "^0.23.5"
+pytest-cov = "^6.1"
+pytest-html = "^4.2"
 ruff = "^0.11.8"
 
 [tool.poetry.group.eval]
@@ -171,7 +193,6 @@ bert-score = "^0.3.13"
 scipy = "^1.10.1"
 python-dotenv = "^1.1.1"
 langgraph = "^0.5.1"
-langmem = "^0.0.27"
 
 
 [tool.poetry.group.mem-user.dependencies]
@@ -193,6 +214,23 @@ pythonpath = "src"
 filterwarnings = [
     "ignore::DeprecationWarning:qdrant_client.*",
 ]
+
+
+[tool.coverage.run]
+source = ["src/memos"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+]
+
+[tool.coverage.html]
+directory = "cov-report"
 
 
 [tool.ruff]

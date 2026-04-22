@@ -1,0 +1,21 @@
+user_id: "user_test"
+cube_id: "user_test/mem_cube_naive"
+text_mem:
+  backend: "naive_text"
+  config:
+    extractor_llm:
+      backend: "huggingface_singleton"
+      config:
+        model_name_or_path: "Qwen/Qwen3-0.6B"
+        temperature: 0.1
+        max_tokens: 1024
+act_mem:
+  backend: "kv_cache"
+  config:
+    memory_filename: "activation_memory.pickle"
+    extractor_llm:
+      backend: "huggingface_singleton"
+      config:
+        model_name_or_path: "Qwen/Qwen3-0.6B"
+        temperature: 0.8
+        max_tokens: 1024

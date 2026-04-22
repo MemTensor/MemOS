@@ -70,13 +70,25 @@ def test_add_and_get_by_id(vec_db):
 
 def test_search(vec_db):
     id = str(uuid.uuid4())
-    vec_db.client.search.return_value = [
-        type(
-            "obj",
-            (object,),
-            {"id": id, "vector": [0.1, 0.2, 0.3], "payload": {"tag": "search"}, "score": 0.9},
-        )
-    ]
+    mock_response = type(
+        "QueryResponse",
+        (object,),
+        {
+            "points": [
+                type(
+                    "obj",
+                    (object,),
+                    {
+                        "id": id,
+                        "vector": [0.1, 0.2, 0.3],
+                        "payload": {"tag": "search"},
+                        "score": 0.9,
+                    },
+                )
+            ]
+        },
+    )()
+    vec_db.client.query_points.return_value = mock_response
     results = vec_db.search([0.1, 0.2, 0.3], top_k=1)
     assert len(results) == 1
     assert isinstance(results[0], VecDBItem)
@@ -113,3 +125,26 @@ def test_get_all(vec_db):
     results = vec_db.get_all()
     assert len(results) == 1
     assert isinstance(results[0], VecDBItem)
+
+
+def test_qdrant_client_cloud_init():
+    config = VectorDBConfigFactory.model_validate(
+        {
+            "backend": "qdrant",
+            "config": {
+                "collection_name": "cloud_collection",
+                "vector_dimension": 3,
+                "distance_metric": "cosine",
+                "url": "https://cloud.qdrant.example",
+                "api_key": "secret-key",
+            },
+        }
+    )
+
+    with patch("qdrant_client.QdrantClient") as mockclient:
+        mock_instance = mockclient.return_value
+        mock_instance.get_collection.side_effect = Exception("Not found")
+
+        VecDBFactory.from_config(config)
+
+        mockclient.assert_called_once_with(url="https://cloud.qdrant.example", api_key="secret-key")

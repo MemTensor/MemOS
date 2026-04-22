@@ -2,13 +2,7 @@ from collections.abc import Generator
 from typing import Any
 
 from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
     DynamicCache,
-    LogitsProcessorList,
-    TemperatureLogitsWarper,
-    TopKLogitsWarper,
-    TopPLogitsWarper,
 )
 
 from memos.configs.llm import HFLLMConfig
@@ -30,6 +24,17 @@ class HFLLM(BaseLLM):
         """
         Initialize the HFLLM model and tokenizer, and set up logits processors for sampling.
         """
+        import torch
+
+        from transformers import (
+            AutoModelForCausalLM,
+            AutoTokenizer,
+            LogitsProcessorList,
+            TemperatureLogitsWarper,
+            TopKLogitsWarper,
+            TopPLogitsWarper,
+        )
+
         self.config = config
 
         # Default model if not specified
@@ -37,11 +42,16 @@ class HFLLM(BaseLLM):
             self.config.model_name_or_path = "Qwen/Qwen3-1.7B"
 
         # Initialize hf model
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.config.model_name_or_path, torch_dtype="auto", device_map="auto"
-        )
+        if torch.backends.mps.is_available():
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.config.model_name_or_path, torch_dtype="auto"
+            ).to("mps")
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.config.model_name_or_path, torch_dtype="auto", device_map="auto"
+            )
         self.tokenizer = AutoTokenizer.from_pretrained(
-            self.config.model_name_or_path, use_fast=True
+            self.config.model_name_or_path, use_fast=True, force_download=True
         )
 
         # Logits processors for sampling
@@ -54,7 +64,9 @@ class HFLLM(BaseLLM):
             processors.append(TopPLogitsWarper(self.config.top_p))
         self.logits_processors = LogitsProcessorList(processors)
 
-    def generate(self, messages: MessageList, past_key_values: DynamicCache | None = None):
+    def generate(
+        self, messages: MessageList, past_key_values: DynamicCache | None = None, **kwargs
+    ):
         """
         Generate a response from the model. If past_key_values is provided, use cache-augmented generation.
         Args:
@@ -68,12 +80,12 @@ class HFLLM(BaseLLM):
         )
         logger.info(f"HFLLM prompt: {prompt}")
         if past_key_values is None:
-            return self._generate_full(prompt)
+            return self._generate_full(prompt, **kwargs)
         else:
-            return self._generate_with_cache(prompt, past_key_values)
+            return self._generate_with_cache(prompt, past_key_values, **kwargs)
 
     def generate_stream(
-        self, messages: MessageList, past_key_values: DynamicCache | None = None
+        self, messages: MessageList, past_key_values: DynamicCache | None = None, **kwargs
     ) -> Generator[str, None, None]:
         """
         Generate a streaming response from the model.
@@ -92,7 +104,7 @@ class HFLLM(BaseLLM):
         else:
             yield from self._generate_with_cache_stream(prompt, past_key_values)
 
-    def _generate_full(self, prompt: str) -> str:
+    def _generate_full(self, prompt: str, **kwargs) -> str:
         """
         Generate output from scratch using the full prompt.
         Args:
@@ -102,13 +114,13 @@ class HFLLM(BaseLLM):
         """
         inputs = self.tokenizer([prompt], return_tensors="pt").to(self.model.device)
         gen_kwargs = {
-            "max_new_tokens": getattr(self.config, "max_tokens", 128),
+            "max_new_tokens": kwargs.get("max_tokens", self.config.max_tokens),
             "do_sample": getattr(self.config, "do_sample", True),
         }
         if self.config.do_sample:
-            gen_kwargs["temperature"] = self.config.temperature
-            gen_kwargs["top_k"] = self.config.top_k
-            gen_kwargs["top_p"] = self.config.top_p
+            gen_kwargs["temperature"] = kwargs.get("temperature", self.config.temperature)
+            gen_kwargs["top_k"] = kwargs.get("top_k", self.config.top_k)
+            gen_kwargs["top_p"] = kwargs.get("top_p", self.config.top_p)
         gen_ids = self.model.generate(
             **inputs,
             **gen_kwargs,
@@ -125,7 +137,7 @@ class HFLLM(BaseLLM):
             else response
         )
 
-    def _generate_full_stream(self, prompt: str) -> Generator[str, None, None]:
+    def _generate_full_stream(self, prompt: str, **kwargs) -> Generator[str, None, None]:
         """
         Generate output from scratch using the full prompt with streaming.
         Args:
@@ -138,7 +150,7 @@ class HFLLM(BaseLLM):
         inputs = self.tokenizer([prompt], return_tensors="pt").to(self.model.device)
 
         # Get generation parameters
-        max_new_tokens = getattr(self.config, "max_tokens", 128)
+        max_new_tokens = kwargs.get("max_tokens", self.config.max_tokens)
         remove_think_prefix = getattr(self.config, "remove_think_prefix", False)
 
         # Manual streaming generation
@@ -192,7 +204,7 @@ class HFLLM(BaseLLM):
                 else:
                     yield new_token_text
 
-    def _generate_with_cache(self, query: str, kv: DynamicCache) -> str:
+    def _generate_with_cache(self, query: str, kv: DynamicCache, **kwargs) -> str:
         """
         Generate output incrementally using an existing KV cache.
         Args:
@@ -209,7 +221,7 @@ class HFLLM(BaseLLM):
         logits, kv = self._prefill(query_ids, kv)
         next_token = self._select_next_token(logits)
         generated = [next_token]
-        for _ in range(getattr(self.config, "max_tokens", 128) - 1):
+        for _ in range(kwargs.get("max_tokens", self.config.max_tokens) - 1):
             if self._should_stop(next_token):
                 break
             logits, kv = self._prefill(next_token, kv)
@@ -228,7 +240,7 @@ class HFLLM(BaseLLM):
         )
 
     def _generate_with_cache_stream(
-        self, query: str, kv: DynamicCache
+        self, query: str, kv: DynamicCache, **kwargs
     ) -> Generator[str, None, None]:
         """
         Generate output incrementally using an existing KV cache with streaming.
@@ -242,7 +254,7 @@ class HFLLM(BaseLLM):
             query, return_tensors="pt", add_special_tokens=False
         ).input_ids.to(self.model.device)
 
-        max_new_tokens = getattr(self.config, "max_tokens", 128)
+        max_new_tokens = kwargs.get("max_tokens", self.config.max_tokens)
         remove_think_prefix = getattr(self.config, "remove_think_prefix", False)
 
         # Initial forward pass
@@ -353,6 +365,7 @@ class HFLLM(BaseLLM):
             DynamicCache: The constructed KV cache object.
         """
         import torch
+        import transformers
 
         # Accept multiple input types and convert to standard chat messages
         if isinstance(messages, str):
@@ -389,7 +402,7 @@ class HFLLM(BaseLLM):
 
             # Convert from legacy tuple format to DynamicCache if needed
             if isinstance(kv, tuple):
-                kv = DynamicCache.from_legacy_cache(kv)
+                kv = transformers.DynamicCache.from_legacy_cache(kv)
 
             # Handle compatibility between old and new transformers versions
             # In newer versions, DynamicCache uses 'layers' attribute

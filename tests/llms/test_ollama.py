@@ -1,5 +1,6 @@
 import unittest
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from memos.configs.llm import LLMConfigFactory, OllamaLLMConfig
@@ -12,15 +13,15 @@ class TestOllamaLLM(unittest.TestCase):
         """Test LLMFactory with mocked Ollama backend."""
         mock_chat = MagicMock()
         mock_response = MagicMock()
-        mock_response.model_dump_json.return_value = '{"model":"qwen3:0.6b","created_at":"2025-05-13T18:07:04.508998134Z","done":true,"done_reason":"stop","total_duration":348924420,"load_duration":14321072,"prompt_eval_count":16,"prompt_eval_duration":16770943,"eval_count":21,"eval_duration":317395459,"message":{"role":"assistant","content":"Hello! How are you? I\'m here to help and smile!","images":null,"tool_calls":null}}'
-        mock_response.__getitem__.side_effect = lambda key: {
-            "message": {
-                "role": "assistant",
-                "content": "Hello! How are you? I'm here to help and smile!",
-                "images": None,
-                "tool_calls": None,
-            }
-        }[key]
+        mock_response.model_dump_json.return_value = '{"model":"qwen3:0.6b","created_at":"2025-05-13T18:07:04.508998134Z","done":true,"done_reason":"stop","total_duration":348924420,"load_duration":14321072,"prompt_eval_count":16,"prompt_eval_duration":16770943,"eval_count":21,"eval_duration":317395459,"message":{"role":"assistant","content":"Hello! How are you? I\'m here to help and smile!", "thinking":"Analyzing your request...","images":null,"tool_calls":null}}'
+
+        mock_response.message = SimpleNamespace(
+            role="assistant",
+            content="Hello! How are you? I'm here to help and smile!",
+            thinking="Analyzing your request...",
+            images=None,
+            tool_calls=None,
+        )
         mock_chat.return_value = mock_response
 
         config = LLMConfigFactory.model_validate(
@@ -32,6 +33,7 @@ class TestOllamaLLM(unittest.TestCase):
                     "max_tokens": 1024,
                     "top_p": 0.9,
                     "top_k": 50,
+                    "enable_thinking": True,
                 },
             }
         )
@@ -42,21 +44,23 @@ class TestOllamaLLM(unittest.TestCase):
         ]
         response = llm.generate(messages)
 
-        self.assertEqual(response, "Hello! How are you? I'm here to help and smile!")
+        self.assertEqual(
+            response,
+            "<think>Analyzing your request...</think>Hello! How are you? I'm here to help and smile!",
+        )
 
     def test_ollama_llm_with_mocked_backend(self):
         """Test OllamaLLM with mocked backend."""
         mock_chat = MagicMock()
         mock_response = MagicMock()
-        mock_response.model_dump_json.return_value = '{"model":"qwen3:0.6b","created_at":"2025-05-13T18:07:04.508998134Z","done":true,"done_reason":"stop","total_duration":348924420,"load_duration":14321072,"prompt_eval_count":16,"prompt_eval_duration":16770943,"eval_count":21,"eval_duration":317395459,"message":{"role":"assistant","content":"Hello! How are you? I\'m here to help and smile!","images":null,"tool_calls":null}}'
-        mock_response.__getitem__.side_effect = lambda key: {
-            "message": {
-                "role": "assistant",
-                "content": "Hello! How are you? I'm here to help and smile!",
-                "images": None,
-                "tool_calls": None,
-            }
-        }[key]
+        mock_response.model_dump_json.return_value = '{"model":"qwen3:0.6b","created_at":"2025-05-13T18:07:04.508998134Z","done":true,"done_reason":"stop","total_duration":348924420,"load_duration":14321072,"prompt_eval_count":16,"prompt_eval_duration":16770943,"eval_count":21,"eval_duration":317395459,"message":{"role":"assistant","content":"Hello! How are you? I\'m here to help and smile!","thinking":"Analyzing your request...","images":null,"tool_calls":null}}'
+        mock_response.message = SimpleNamespace(
+            role="assistant",
+            content="Hello! How are you? I'm here to help and smile!",
+            thinking="Analyzing your request...",
+            images=None,
+            tool_calls=None,
+        )
         mock_chat.return_value = mock_response
 
         config = OllamaLLMConfig(
@@ -73,4 +77,7 @@ class TestOllamaLLM(unittest.TestCase):
         ]
         response = ollama.generate(messages)
 
-        self.assertEqual(response, "Hello! How are you? I'm here to help and smile!")
+        self.assertEqual(
+            response,
+            "<think>Analyzing your request...</think>Hello! How are you? I'm here to help and smile!",
+        )

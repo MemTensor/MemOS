@@ -12,9 +12,13 @@ from memos.mem_scheduler.schemas.general_schemas import (
     BASE_DIR,
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT,
+    DEFAULT_CONSUME_BATCH,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
     DEFAULT_CONTEXT_WINDOW_SIZE,
     DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE,
+    DEFAULT_MULTI_TASK_RUNNING_TIMEOUT,
+    DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
+    DEFAULT_SCHEDULER_RETRIEVER_RETRIES,
     DEFAULT_THREAD_POOL_MAX_WORKERS,
     DEFAULT_TOP_K,
     DEFAULT_USE_REDIS_QUEUE,
@@ -42,6 +46,11 @@ class BaseSchedulerConfig(BaseConfig):
         gt=0,
         description=f"Interval for consuming messages from queue in seconds (default: {DEFAULT_CONSUME_INTERVAL_SECONDS})",
     )
+    consume_batch: int = Field(
+        default=DEFAULT_CONSUME_BATCH,
+        gt=0,
+        description=f"Number of messages to consume in each batch (default: {DEFAULT_CONSUME_BATCH})",
+    )
     auth_config_path: str | None = Field(
         default=None,
         description="Path to the authentication configuration file containing private credentials",
@@ -58,6 +67,10 @@ class BaseSchedulerConfig(BaseConfig):
     max_internal_message_queue_size: int = Field(
         default=DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE,
         description="Maximum size of internal message queue when not using Redis",
+    )
+    multi_task_running_timeout: int = Field(
+        default=DEFAULT_MULTI_TASK_RUNNING_TIMEOUT,
+        description="Default timeout for multi-task running operations in seconds",
     )
 
 
@@ -84,6 +97,17 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
     activation_mem_monitor_capacity: int = Field(
         default=DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT,
         description="Capacity of the activation memory monitor",
+    )
+
+    # Memory enhancement concurrency & retries configuration
+    enhance_batch_size: int | None = Field(
+        default=DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
+        description="Batch size for concurrent memory enhancement; None or <=1 disables batching",
+    )
+    enhance_retries: int = Field(
+        default=DEFAULT_SCHEDULER_RETRIEVER_RETRIES,
+        ge=0,
+        description="Number of retry attempts per enhancement batch",
     )
 
     # Database configuration for ORM persistence
@@ -131,7 +155,10 @@ class SchedulerConfigFactory(BaseConfig):
     @model_validator(mode="after")
     def create_config(self) -> "SchedulerConfigFactory":
         config_class = self.backend_to_class[self.backend]
-        self.config = config_class(**self.config)
+        raw = self.config
+        if isinstance(raw, dict) and "config" in raw and "use_redis_queue" not in raw:
+            raw = raw["config"]
+        self.config = config_class(**raw)
         return self
 
 
@@ -153,6 +180,13 @@ class RabbitMQConfig(
         description="Port number for RabbitMQ instance access",
         ge=1,  # Port must be >= 1
         le=65535,  # Port must be <= 65535
+    )
+    exchange_name: str = Field(
+        default="memos-fanout",
+        description="Exchange name for RabbitMQ (e.g., memos-fanout, memos-memory-change)",
+    )
+    exchange_type: str = Field(
+        default="fanout", description="Exchange type for RabbitMQ (fanout or direct)"
     )
 
 
@@ -219,8 +253,12 @@ class AuthConfig(BaseConfig, DictConversionMixin):
                 "All configuration components are None. This may indicate missing environment variables or configuration files."
             )
         elif failed_components:
-            logger.warning(
-                f"Failed to initialize components: {', '.join(failed_components)}. Successfully initialized: {', '.join(initialized_components)}"
+            # Use info level: individual from_local_env() methods already log
+            # warnings for actual initialization failures. Components that are
+            # simply not configured (no env vars) are not errors.
+            logger.info(
+                f"Components not configured: {', '.join(failed_components)}. "
+                f"Successfully initialized: {', '.join(initialized_components)}"
             )
 
         return self

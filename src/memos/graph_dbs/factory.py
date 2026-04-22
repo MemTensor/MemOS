@@ -2,10 +2,10 @@ from typing import Any, ClassVar
 
 from memos.configs.graph_db import GraphDBConfigFactory
 from memos.graph_dbs.base import BaseGraphDB
-from memos.graph_dbs.nebular import NebulaGraphDB
 from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.graph_dbs.neo4j_community import Neo4jCommunityGraphDB
 from memos.graph_dbs.polardb import PolarDBGraphDB
+from memos.graph_dbs.postgres import PostgresGraphDB
 
 
 class GraphStoreFactory(BaseGraphDB):
@@ -14,8 +14,8 @@ class GraphStoreFactory(BaseGraphDB):
     backend_to_class: ClassVar[dict[str, Any]] = {
         "neo4j": Neo4jGraphDB,
         "neo4j-community": Neo4jCommunityGraphDB,
-        "nebular": NebulaGraphDB,
         "polardb": PolarDBGraphDB,
+        "postgres": PostgresGraphDB,
     }
 
     @classmethod

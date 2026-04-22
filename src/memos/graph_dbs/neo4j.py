@@ -39,14 +39,68 @@ def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         metadata["embedding"] = [float(x) for x in embedding]
 
     # serialization
-    if metadata["sources"]:
+    if metadata.get("sources"):
         for idx in range(len(metadata["sources"])):
             metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
     return metadata
 
 
+def _flatten_info_fields(metadata: dict[str, Any]) -> dict[str, Any]:
+    """
+    Flatten the 'info' field in metadata to the top level.
+
+    If metadata contains an 'info' field that is a dictionary, all its key-value pairs
+    will be moved to the top level of metadata, and the 'info' field will be removed.
+
+    Args:
+        metadata: Dictionary that may contain an 'info' field
+
+    Returns:
+        Dictionary with 'info' fields flattened to top level
+
+    Example:
+        Input:  {"user_id": "xxx", "info": {"A": "value1", "B": "value2"}}
+        Output: {"user_id": "xxx", "A": "value1", "B": "value2"}
+    """
+    if "info" in metadata and isinstance(metadata["info"], dict):
+        # Copy info fields to top level
+        info_dict = metadata.pop("info")
+        for key, value in info_dict.items():
+            # Only add if key doesn't already exist at top level (to avoid overwriting)
+            if key not in metadata:
+                metadata[key] = value
+    return metadata
+
+
+def _sanitize_neo4j_value(value: Any) -> Any:
+    """Convert values unsupported by Neo4j properties into safe serializations."""
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+
+    if isinstance(value, list):
+        if all(item is None or isinstance(item, str | int | float | bool) for item in value):
+            return value
+        return [
+            json.dumps(item, ensure_ascii=False) if isinstance(item, dict | list) else str(item)
+            for item in value
+        ]
+
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+    return str(value)
+
+
+def _sanitize_neo4j_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Ensure all metadata values are valid Neo4j property types."""
+    return {key: _sanitize_neo4j_value(value) for key, value in metadata.items()}
+
+
 class Neo4jGraphDB(BaseGraphDB):
-    """Neo4j-based implementation of a graph memory store."""
+    """Neo4j-based implementation of a graph memory store.
+
+    Requires Neo4j >= 5.18 for vector.similarity.cosine() pre-filtering support.
+    """
 
     @require_python_package(
         import_name="neo4j",
@@ -149,6 +203,7 @@ class Neo4jGraphDB(BaseGraphDB):
         Args:
             memory_type (str): Memory type (e.g., 'WorkingMemory', 'LongTermMemory').
             keep_latest (int): Number of latest WorkingMemory entries to keep.
+            user_name(str): optional user_name.
         """
         user_name = user_name if user_name else self.config.user_name
         query = f"""
@@ -169,12 +224,24 @@ class Neo4jGraphDB(BaseGraphDB):
     def add_node(
         self, id: str, memory: str, metadata: dict[str, Any], user_name: str | None = None
     ) -> None:
+        logger.info(f"[add_node] metadata: {metadata},info: {metadata.get('info')}")
+
         user_name = user_name if user_name else self.config.user_name
         if not self.config.use_multi_db and (self.config.user_name or user_name):
             metadata["user_name"] = user_name
 
         # Safely process metadata
         metadata = _prepare_node_metadata(metadata)
+
+        # Flatten info fields to top level (for Neo4j flat structure)
+        metadata = _flatten_info_fields(metadata)
+
+        # Ensure Neo4j property compatibility (no nested map/list-of-map values)
+        metadata = _sanitize_neo4j_metadata(metadata)
+
+        # Initialize delete_time and delete_record_id fields
+        metadata.setdefault("delete_time", "")
+        metadata.setdefault("delete_record_id", "")
 
         # Merge node and set metadata
         created_at = metadata.pop("created_at")
@@ -189,7 +256,7 @@ class Neo4jGraphDB(BaseGraphDB):
         """
 
         # serialization
-        if metadata["sources"]:
+        if metadata.get("sources"):
             for idx in range(len(metadata["sources"])):
                 metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
 
@@ -202,6 +269,115 @@ class Neo4jGraphDB(BaseGraphDB):
                 updated_at=updated_at,
                 metadata=metadata,
             )
+
+    def add_nodes_batch(
+        self,
+        nodes: list[dict[str, Any]],
+        user_name: str | None = None,
+    ) -> None:
+        """
+        Batch add multiple memory nodes to the graph.
+
+        Args:
+            nodes: List of node dictionaries, each containing:
+                - id: str - Node ID
+                - memory: str - Memory content
+                - metadata: dict[str, Any] - Node metadata
+            user_name: Optional user name (will use config default if not provided)
+        """
+        logger.info("neo4j [add_nodes_batch] staring")
+        if not nodes:
+            logger.warning("[add_nodes_batch] Empty nodes list, skipping")
+            return
+
+        logger.info(f"[add_nodes_batch] Adding {len(nodes)} nodes")
+
+        # user_name comes from parameter; fallback to config if missing
+        effective_user_name = user_name if user_name else self.config.user_name
+
+        # Prepare all nodes
+        prepared_nodes = []
+        for node_data in nodes:
+            try:
+                id = node_data["id"]
+                memory = node_data["memory"]
+                metadata = node_data.get("metadata", {})
+
+                logger.debug(f"[add_nodes_batch] Processing node id: {id}")
+
+                # Set user_name in metadata if needed
+                if not self.config.use_multi_db and (self.config.user_name or effective_user_name):
+                    metadata["user_name"] = effective_user_name
+
+                # Safely process metadata
+                metadata = _prepare_node_metadata(metadata)
+
+                # Flatten info fields to top level (for Neo4j flat structure)
+                metadata = _flatten_info_fields(metadata)
+
+                # Initialize delete_time and delete_record_id fields
+                metadata.setdefault("delete_time", "")
+                metadata.setdefault("delete_record_id", "")
+
+                # Merge node and set metadata
+                created_at = metadata.pop("created_at")
+                updated_at = metadata.pop("updated_at")
+
+                # Serialization for sources
+                if metadata.get("sources"):
+                    for idx in range(len(metadata["sources"])):
+                        metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
+
+                prepared_nodes.append(
+                    {
+                        "id": id,
+                        "memory": memory,
+                        "created_at": created_at,
+                        "updated_at": updated_at,
+                        "metadata": metadata,
+                    }
+                )
+            except Exception as e:
+                logger.error(
+                    f"[add_nodes_batch] Failed to prepare node {node_data.get('id', 'unknown')}: {e}",
+                    exc_info=True,
+                )
+                # Continue with other nodes
+                continue
+
+        if not prepared_nodes:
+            logger.warning("[add_nodes_batch] No valid nodes to insert after preparation")
+            return
+
+        # Batch insert using Neo4j UNWIND for better performance
+        query = """
+            UNWIND $nodes AS node
+            MERGE (n:Memory {id: node.id})
+            SET n.memory = node.memory,
+                n.created_at = datetime(node.created_at),
+                n.updated_at = datetime(node.updated_at),
+                n += node.metadata
+        """
+
+        # Prepare nodes data for UNWIND
+        nodes_data = [
+            {
+                "id": node["id"],
+                "memory": node["memory"],
+                "created_at": node["created_at"],
+                "updated_at": node["updated_at"],
+                "metadata": node["metadata"],
+            }
+            for node in prepared_nodes
+        ]
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                session.run(query, nodes=nodes_data)
+                logger.info(f"[add_nodes_batch] Successfully inserted {len(prepared_nodes)} nodes")
+        except Exception as e:
+            logger.error(f"[add_nodes_batch] Failed to add nodes: {e}", exc_info=True)
+            raise
 
     def update_node(self, id: str, fields: dict[str, Any], user_name: str | None = None) -> None:
         """
@@ -356,7 +532,7 @@ class Neo4jGraphDB(BaseGraphDB):
             return result.single() is not None
 
     # Graph Query & Reasoning
-    def get_node(self, id: str, **kwargs) -> dict[str, Any] | None:
+    def get_node(self, id: str, include_embedding: bool = False, **kwargs) -> dict[str, Any] | None:
         """
         Retrieve the metadata and memory of a node.
         Args:
@@ -364,18 +540,28 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             Dictionary of node fields, or None if not found.
         """
-        user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
+        logger.info(f"[get_node] id: {id}")
+        user_name = kwargs.get("user_name")
         where_user = ""
         params = {"id": id}
-        if not self.config.use_multi_db and (self.config.user_name or user_name):
+        if user_name is not None:
             where_user = " AND n.user_name = $user_name"
             params["user_name"] = user_name
 
         query = f"MATCH (n:Memory) WHERE n.id = $id {where_user} RETURN n"
+        logger.info(f"[get_node] query: {query}")
 
         with self.driver.session(database=self.db_name) as session:
             record = session.run(query, params).single()
-            return self._parse_node(dict(record["n"])) if record else None
+            if not record:
+                return None
+
+            node_dict = dict(record["n"])
+            if include_embedding is False:
+                for key in ("embedding", "embedding_1024", "embedding_3072", "embedding_768"):
+                    node_dict.pop(key, None)
+
+            return self._parse_node(node_dict)
 
     def get_nodes(self, ids: list[str], **kwargs) -> list[dict[str, Any]]:
         """
@@ -660,6 +846,9 @@ class Neo4jGraphDB(BaseGraphDB):
         threshold: float | None = None,
         search_filter: dict | None = None,
         user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        return_fields: list[str] | None = None,
         **kwargs,
     ) -> list[dict]:
         """
@@ -674,18 +863,24 @@ class Neo4jGraphDB(BaseGraphDB):
             threshold (float, optional): Minimum similarity score threshold (0 ~ 1).
             search_filter (dict, optional): Additional metadata filters for search results.
                             Keys should match node properties, values are the expected values.
+            return_fields (list[str], optional): Additional node fields to include in results
+                            (e.g., ["memory", "status", "tags"]). When provided, each result
+                            dict will contain these fields in addition to 'id' and 'score'.
+                            Defaults to None (only 'id' and 'score' are returned).
 
         Returns:
             list[dict]: A list of dicts with 'id' and 'score', ordered by similarity.
+                If return_fields is specified, each dict also includes the requested fields.
 
         Notes:
-            - This method uses Neo4j native vector indexing to search for similar nodes.
-            - If scope is provided, it restricts results to nodes with matching memory_type.
-            - If 'status' is provided, only nodes with the matching status will be returned.
+            - When filters are present (scope, status, user_name, etc.), this method uses
+              Neo4j 5.18+ pre-filtering: MATCH + WHERE narrows candidates first, then
+              vector.similarity.cosine() computes similarity only on the filtered set.
+              This avoids the post-filter problem where queryNodes' global top-k excludes
+              the target user's nodes in a multi-tenant shared database.
+            - When no filters are present, the ANN vector index (db.index.vector.queryNodes)
+              is used for maximum efficiency.
             - If threshold is provided, only results with score >= threshold will be returned.
-            - If search_filter is provided, additional WHERE clauses will be added for metadata filtering.
-            - Typical use case: restrict to 'status = activated' to avoid
-            matching archived or merged nodes.
         """
         user_name = user_name if user_name else self.config.user_name
         # Build WHERE clause dynamically
@@ -694,8 +889,21 @@ class Neo4jGraphDB(BaseGraphDB):
             where_clauses.append("node.memory_type = $scope")
         if status:
             where_clauses.append("node.status = $status")
-        if not self.config.use_multi_db and (self.config.user_name or user_name):
-            where_clauses.append("node.user_name = $user_name")
+
+        # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
+        user_name_conditions, user_name_params = self._build_user_name_and_kb_ids_conditions_cypher(
+            user_name=user_name,
+            knowledgebase_ids=knowledgebase_ids,
+            default_user_name=self.config.user_name,
+            node_alias="node",
+        )
+
+        # Add user_name WHERE clause
+        if user_name_conditions:
+            if len(user_name_conditions) == 1:
+                where_clauses.append(user_name_conditions[0])
+            else:
+                where_clauses.append(f"({' OR '.join(user_name_conditions)})")
 
         # Add search_filter conditions
         if search_filter:
@@ -703,38 +911,84 @@ class Neo4jGraphDB(BaseGraphDB):
                 param_name = f"filter_{key}"
                 where_clauses.append(f"node.{key} = ${param_name}")
 
+        # Build filter conditions using common method
+        filter_conditions, filter_params = self._build_filter_conditions_cypher(
+            filter=filter,
+            param_counter_start=0,
+            node_alias="node",
+        )
+        where_clauses.extend(filter_conditions)
+
         where_clause = ""
         if where_clauses:
             where_clause = "WHERE " + " AND ".join(where_clauses)
 
-        query = f"""
-            CALL db.index.vector.queryNodes('memory_vector_index', $k, $embedding)
-            YIELD node, score
-            {where_clause}
-            RETURN node.id AS id, score
-        """
+        return_clause = "RETURN node.id AS id, score"
+        if return_fields:
+            validated_fields = self._validate_return_fields(return_fields)
+            extra_fields = ", ".join(
+                f"node.{field} AS {field}" for field in validated_fields if field != "id"
+            )
+            if extra_fields:
+                return_clause = f"RETURN node.id AS id, score, {extra_fields}"
 
-        parameters = {"embedding": vector, "k": top_k}
+        if where_clause:
+            # Pre-filtering (Neo4j 5.18+): filter nodes first, then compute similarity.
+            # This avoids the post-filter problem where relevant nodes are excluded
+            # from the global top-k returned by queryNodes.
+            where_clause += " AND node.embedding IS NOT NULL"
+            query = f"""
+                MATCH (node:Memory)
+                {where_clause}
+                WITH node, vector.similarity.cosine(node.embedding, $embedding) AS score
+                {return_clause}
+                ORDER BY score DESC
+                LIMIT $top_k
+            """
+            parameters = {"embedding": vector, "top_k": top_k}
+        else:
+            # No filter: use ANN vector index for efficiency.
+            query = f"""
+                CALL db.index.vector.queryNodes('memory_vector_index', $top_k, $embedding)
+                YIELD node, score
+                {return_clause}
+            """
+            parameters = {"embedding": vector, "top_k": top_k}
 
         if scope:
             parameters["scope"] = scope
         if status:
             parameters["status"] = status
-        if not self.config.use_multi_db and (self.config.user_name or user_name):
-            if kwargs.get("cube_name"):
-                parameters["user_name"] = kwargs["cube_name"]
-            else:
-                parameters["user_name"] = user_name
 
-        # Add search_filter parameters
+        # Add user_name and knowledgebase_ids parameters using common method
+        parameters.update(user_name_params)
+
+        # Handle cube_name override for user_name
+        if kwargs.get("cube_name"):
+            parameters["user_name"] = kwargs["cube_name"]
+
         if search_filter:
             for key, value in search_filter.items():
                 param_name = f"filter_{key}"
                 parameters[param_name] = value
 
+        # Add filter parameters
+        if filter_params:
+            parameters.update(filter_params)
+
+        logger.info(f"[search_by_embedding] query: {query},parameters: {parameters}")
+        print(f"[search_by_embedding] query: {query},parameters: {parameters}")
         with self.driver.session(database=self.db_name) as session:
             result = session.run(query, parameters)
-            records = [{"id": record["id"], "score": record["score"]} for record in result]
+            records = []
+            for record in result:
+                item = {"id": record["id"], "score": record["score"]}
+                if return_fields:
+                    record_keys = record.keys()
+                    for field in return_fields:
+                        if field != "id" and field in record_keys:
+                            item[field] = record[field]
+                records.append(item)
 
         # Threshold filtering after retrieval
         if threshold is not None:
@@ -742,8 +996,34 @@ class Neo4jGraphDB(BaseGraphDB):
 
         return records
 
+    def search_by_fulltext(
+        self,
+        query_words: list[str],
+        top_k: int = 10,
+        scope: str | None = None,
+        status: str | None = None,
+        threshold: float | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        tsquery_config: str | None = None,
+        **kwargs,
+    ) -> list[dict]:
+        """
+        TODO: Implement fulltext search for Neo4j to be compatible with TreeTextMemory's keyword/fulltext recall path.
+        Currently, return an empty list to avoid runtime errors due to missing methods when switching to Neo4j.
+        """
+        return []
+
     def get_by_metadata(
-        self, filters: list[dict[str, Any]], user_name: str | None = None
+        self,
+        filters: list[dict[str, Any]],
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        user_name_flag: bool = True,
+        status: str | None = None,
     ) -> list[str]:
         """
         TODO:
@@ -761,6 +1041,8 @@ class Neo4jGraphDB(BaseGraphDB):
                 {"field": "tags", "op": "contains", "value": "AI"},
                 ...
             ]
+        status (str, optional): Filter by status (e.g., 'activated', 'archived').
+            If None, no status filter is applied.
 
         Returns:
             list[str]: Node IDs whose metadata match the filter conditions. (AND logic).
@@ -769,9 +1051,20 @@ class Neo4jGraphDB(BaseGraphDB):
             - Supports structured querying such as tag/category/importance/time filtering.
             - Can be used for faceted recall or prefiltering before embedding rerank.
         """
+        logger.info(
+            f"[get_by_metadata] filters: {filters},user_name: {user_name},filter: {filter},knowledgebase_ids: {knowledgebase_ids},status: {status}"
+        )
+        print(
+            f"[get_by_metadata] filters: {filters},user_name: {user_name},filter: {filter},knowledgebase_ids: {knowledgebase_ids},status: {status}"
+        )
         user_name = user_name if user_name else self.config.user_name
         where_clauses = []
         params = {}
+
+        # Add status filter if provided
+        if status:
+            where_clauses.append("n.status = $status")
+            params["status"] = status
 
         for i, f in enumerate(filters):
             field = f["field"]
@@ -801,12 +1094,51 @@ class Neo4jGraphDB(BaseGraphDB):
             else:
                 raise ValueError(f"Unsupported operator: {op}")
 
-        if not self.config.use_multi_db and (self.config.user_name or user_name):
-            where_clauses.append("n.user_name = $user_name")
-            params["user_name"] = user_name
+        # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
+        user_name_conditions = []
+        user_name_params = {}
+        if user_name_flag:
+            user_name_conditions, user_name_params = (
+                self._build_user_name_and_kb_ids_conditions_cypher(
+                    user_name=user_name,
+                    knowledgebase_ids=knowledgebase_ids,
+                    default_user_name=self.config.user_name,
+                    node_alias="n",
+                )
+            )
+        print(
+            f"[get_by_metadata] user_name_conditions: {user_name_conditions},user_name_params: {user_name_params}"
+        )
 
-        where_str = " AND ".join(where_clauses)
-        query = f"MATCH (n:Memory) WHERE {where_str} RETURN n.id AS id"
+        # Add user_name WHERE clause
+        if user_name_conditions:
+            if len(user_name_conditions) == 1:
+                where_clauses.append(user_name_conditions[0])
+            else:
+                where_clauses.append(f"({' OR '.join(user_name_conditions)})")
+
+        # Build filter conditions using common method
+        filter_conditions, filter_params = self._build_filter_conditions_cypher(
+            filter=filter,
+            param_counter_start=len(filters),  # Start from len(filters) to avoid conflicts
+            node_alias="n",
+        )
+        where_clauses.extend(filter_conditions)
+
+        where_str = " AND ".join(where_clauses) if where_clauses else ""
+        if where_str:
+            query = f"MATCH (n:Memory) WHERE {where_str} RETURN n.id AS id"
+        else:
+            query = "MATCH (n:Memory) RETURN n.id AS id"
+
+        # Add user_name and knowledgebase_ids parameters using common method
+        params.update(user_name_params)
+
+        # Merge filter parameters
+        if filter_params:
+            params.update(filter_params)
+        logger.info(f"[get_by_metadata] query: {query},params: {params}")
+        print(f"[get_by_metadata] query: {query},params: {params}")
 
         with self.driver.session(database=self.db_name) as session:
             result = session.run(query, params)
@@ -915,41 +1247,163 @@ class Neo4jGraphDB(BaseGraphDB):
             logger.error(f"[ERROR] Failed to clear database '{self.db_name}': {e}")
             raise
 
-    def export_graph(self, **kwargs) -> dict[str, Any]:
+    def export_graph(
+        self,
+        page: int | None = None,
+        page_size: int | None = None,
+        memory_type: list[str] | None = None,
+        status: list[str] | None = None,
+        filter: dict | None = None,
+        include_embedding: bool = False,
+        **kwargs,
+    ) -> dict[str, Any]:
         """
         Export all graph nodes and edges in a structured form.
+
+        Args:
+            page (int, optional): Page number (starts from 1). If None, exports all data without pagination.
+            page_size (int, optional): Number of items per page. If None, exports all data without pagination.
+            memory_type (list[str], optional): List of memory_type values to filter by. If provided, only nodes/edges
+                with memory_type in this list will be exported.
+            status (list[str], optional): If not provided, only nodes/edges with status != 'deleted' are exported.
+                If provided (non-empty list), only nodes/edges with status in this list are exported.
+            filter (dict, optional): Filter conditions with 'and' or 'or' logic. Same as get_all_memory_items.
+                Example: {"and": [{"id": "xxx"}, {"A": "yyy"}]} or {"or": [{"id": "xxx"}, {"A": "yyy"}]}
+            include_embedding (bool): Whether to include embedding fields in node metadata. Default False (same as get_node).
+            **kwargs: Additional keyword arguments, including:
+                - user_name (str, optional): User name for filtering in non-multi-db mode
 
         Returns:
             {
                 "nodes": [ { "id": ..., "memory": ..., "metadata": {...} }, ... ],
-                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ]
+                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ],
+                "total_nodes": int,  # Total number of nodes matching the filter criteria
+                "total_edges": int,   # Total number of edges matching the filter criteria
             }
         """
+        logger.info(
+            f" export_graph include_embedding: {include_embedding}, kwargs: {kwargs}, page: {page}, page_size: {page_size}, filter: {filter}, memory_type: {memory_type}, status: {status}"
+        )
         user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
+
+        # Initialize total counts
+        total_nodes = 0
+        total_edges = 0
+
+        # Determine if pagination is needed
+        use_pagination = page is not None and page_size is not None
+
+        # Validate pagination parameters if pagination is enabled
+        if use_pagination:
+            if page < 1:
+                page = 1
+            if page_size < 1:
+                page_size = 10
+            skip = (page - 1) * page_size
+
         with self.driver.session(database=self.db_name) as session:
-            # Export nodes
-            node_query = "MATCH (n:Memory)"
-            edge_query = "MATCH (a:Memory)-[r]->(b:Memory)"
-            params = {}
+            # Build WHERE conditions for nodes
+            node_where_clauses = []
+            params: dict[str, Any] = {}
 
             if not self.config.use_multi_db and (self.config.user_name or user_name):
-                node_query += " WHERE n.user_name = $user_name"
-                edge_query += " WHERE a.user_name = $user_name AND b.user_name = $user_name"
+                node_where_clauses.append("n.user_name = $user_name")
                 params["user_name"] = user_name
 
-            node_result = session.run(f"{node_query} RETURN n", params)
-            nodes = [self._parse_node(dict(record["n"])) for record in node_result]
+            if memory_type and isinstance(memory_type, list) and len(memory_type) > 0:
+                node_where_clauses.append("n.memory_type IN $memory_type")
+                params["memory_type"] = memory_type
 
-            # Export edges
-            edge_result = session.run(
-                f"{edge_query} RETURN a.id AS source, b.id AS target, type(r) AS type", params
+            if status is None:
+                node_where_clauses.append("n.status <> 'deleted'")
+            elif isinstance(status, list) and len(status) > 0:
+                node_where_clauses.append("n.status IN $status")
+                params["status"] = status
+
+            # Build filter conditions using common method (same as get_all_memory_items)
+            filter_conditions, filter_params = self._build_filter_conditions_cypher(
+                filter=filter,
+                param_counter_start=0,
+                node_alias="n",
             )
+            logger.info(f"export_graph filter_conditions: {filter_conditions}")
+            node_where_clauses.extend(filter_conditions)
+            if filter_params:
+                params.update(filter_params)
+
+            node_base_query = "MATCH (n:Memory)"
+            if node_where_clauses:
+                node_base_query += " WHERE " + " AND ".join(node_where_clauses)
+            logger.info(f"export_graph node_base_query: {node_base_query}")
+
+            # Build WHERE conditions for edges (a and b must match same filters)
+            edge_where_clauses = []
+            if not self.config.use_multi_db and (self.config.user_name or user_name):
+                edge_where_clauses.append("a.user_name = $user_name AND b.user_name = $user_name")
+            if memory_type and isinstance(memory_type, list) and len(memory_type) > 0:
+                edge_where_clauses.append(
+                    "a.memory_type IN $memory_type AND b.memory_type IN $memory_type"
+                )
+            if status is None:
+                edge_where_clauses.append("a.status <> 'deleted' AND b.status <> 'deleted'")
+            elif isinstance(status, list) and len(status) > 0:
+                edge_where_clauses.append("a.status IN $status AND b.status IN $status")
+            # Apply same filter to both endpoints of the edge
+            if filter_conditions:
+                filter_a = [c.replace("n.", "a.") for c in filter_conditions]
+                filter_b = [c.replace("n.", "b.") for c in filter_conditions]
+                edge_where_clauses.append(
+                    f"({' AND '.join(filter_a)}) AND ({' AND '.join(filter_b)})"
+                )
+
+            edge_base_query = "MATCH (a:Memory)-[r]->(b:Memory)"
+            if edge_where_clauses:
+                edge_base_query += " WHERE " + " AND ".join(edge_where_clauses)
+
+            # Get total count of nodes before pagination
+            count_node_query = node_base_query + " RETURN COUNT(n) AS count"
+            count_node_result = session.run(count_node_query, params)
+            total_nodes = count_node_result.single()["count"]
+
+            # Export nodes with ORDER BY created_at DESC
+            node_query = node_base_query + " RETURN n ORDER BY n.created_at DESC, n.id DESC"
+            if use_pagination:
+                node_query += f" SKIP {skip} LIMIT {page_size}"
+
+            node_result = session.run(node_query, params)
+            nodes = []
+            for record in node_result:
+                node_dict = dict(record["n"])
+                if not include_embedding:
+                    for key in ("embedding", "embedding_1024", "embedding_3072", "embedding_768"):
+                        node_dict.pop(key, None)
+                nodes.append(self._parse_node(node_dict))
+
+            # Get total count of edges before pagination
+            count_edge_query = edge_base_query + " RETURN COUNT(r) AS count"
+            count_edge_result = session.run(count_edge_query, params)
+            total_edges = count_edge_result.single()["count"]
+
+            # Export edges with ORDER BY created_at DESC
+            edge_query = (
+                edge_base_query
+                + " RETURN a.id AS source, b.id AS target, type(r) AS type ORDER BY a.created_at DESC, b.created_at DESC, a.id DESC, b.id DESC"
+            )
+            if use_pagination:
+                edge_query += f" SKIP {skip} LIMIT {page_size}"
+            logger.info(f"export_graph edge_query: {edge_query},params:{params}")
+            edge_result = session.run(edge_query, params)
             edges = [
                 {"source": record["source"], "target": record["target"], "type": record["type"]}
                 for record in edge_result
             ]
 
-            return {"nodes": nodes, "edges": edges}
+            return {
+                "nodes": nodes,
+                "edges": edges,
+                "total_nodes": total_nodes,
+                "total_edges": total_edges,
+            }
 
     def import_graph(self, data: dict[str, Any], user_name: str | None = None) -> None:
         """
@@ -998,37 +1452,94 @@ class Neo4jGraphDB(BaseGraphDB):
                     target_id=edge["target"],
                 )
 
-    def get_all_memory_items(self, scope: str, **kwargs) -> list[dict]:
+    def get_all_memory_items(
+        self,
+        scope: str,
+        include_embedding: bool = False,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        status: str | None = None,
+        **kwargs,
+    ) -> list[dict]:
         """
         Retrieve all memory items of a specific memory_type.
 
         Args:
             scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
-        Returns:
+            include_embedding (bool): Whether to include embedding in results.
+            filter (dict, optional): Filter conditions with 'and' or 'or' logic for search results.
+                Example: {"and": [{"id": "xxx"}, {"A": "yyy"}]} or {"or": [{"id": "xxx"}, {"A": "yyy"}]}
+            knowledgebase_ids (list[str], optional): List of knowledgebase IDs to filter by.
+            status (str, optional): Filter by status (e.g., 'activated', 'archived').
+                If None, no status filter is applied.
 
         Returns:
             list[dict]: Full list of memory items under this scope.
         """
+        logger.info(
+            f"[get_all_memory_items] scope: {scope},filter: {filter},knowledgebase_ids: {knowledgebase_ids},status: {status}"
+        )
         user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
         if scope not in {"WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"}:
             raise ValueError(f"Unsupported memory type scope: {scope}")
 
-        where_clause = "WHERE n.memory_type = $scope"
+        where_clauses = ["n.memory_type = $scope"]
         params = {"scope": scope}
 
-        if not self.config.use_multi_db and (self.config.user_name or user_name):
-            where_clause += " AND n.user_name = $user_name"
-            params["user_name"] = user_name
+        # Add status filter if provided
+        if status:
+            where_clauses.append("n.status = $status")
+            params["status"] = status
+
+        # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
+        user_name_conditions, user_name_params = self._build_user_name_and_kb_ids_conditions_cypher(
+            user_name=user_name,
+            knowledgebase_ids=knowledgebase_ids,
+            default_user_name=self.config.user_name,
+            node_alias="n",
+        )
+
+        # Add user_name WHERE clause
+        if user_name_conditions:
+            if len(user_name_conditions) == 1:
+                where_clauses.append(user_name_conditions[0])
+            else:
+                where_clauses.append(f"({' OR '.join(user_name_conditions)})")
+
+        # Build filter conditions using common method
+        filter_conditions, filter_params = self._build_filter_conditions_cypher(
+            filter=filter,
+            param_counter_start=0,
+            node_alias="n",
+        )
+        where_clauses.extend(filter_conditions)
+
+        where_clause = "WHERE " + " AND ".join(where_clauses)
+
+        # Add user_name and knowledgebase_ids parameters using common method
+        params.update(user_name_params)
+
+        # Add filter parameters
+        if filter_params:
+            params.update(filter_params)
 
         query = f"""
             MATCH (n:Memory)
             {where_clause}
             RETURN n
             """
+        logger.info(f"[get_all_memory_items] query: {query},params: {params}")
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
-            return [self._parse_node(dict(record["n"])) for record in results]
+            nodes = []
+            for record in results:
+                node_dict = dict(record["n"])
+                if not include_embedding:
+                    for key in ("embedding", "embedding_1024", "embedding_3072", "embedding_768"):
+                        node_dict.pop(key, None)
+                nodes.append(self._parse_node(node_dict))
+            return nodes
 
     def get_structure_optimization_candidates(self, scope: str, **kwargs) -> list[dict]:
         """
@@ -1071,7 +1582,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
             with self.driver.session(database=self.system_db_name) as session:
                 session.run(f"DROP DATABASE {self.db_name} IF EXISTS")
-                print(f"Database '{self.db_name}' has been dropped.")
+                logger.info(f"Database '{self.db_name}' has been dropped.")
         else:
             raise ValueError(
                 f"Refusing to drop protected database: {self.db_name} in "
@@ -1085,6 +1596,15 @@ class Neo4jGraphDB(BaseGraphDB):
             with self.driver.session(database="system") as session:
                 session.run(f"CREATE DATABASE `{self.db_name}` IF NOT EXISTS")
         except ClientError as e:
+            if "Unsupported administration command" in str(
+                e
+            ) or "Unsupported administration" in str(e):
+                logger.warning(
+                    f"Could not create database '{self.db_name}' because this Neo4j instance "
+                    "(likely Community Edition) does not support administrative commands. "
+                    "Please ensure the database exists manually or use the default 'neo4j' database."
+                )
+                return
             if "ExistingDatabaseFound" in str(e):
                 pass  # Ignore, database already exists
             else:
@@ -1182,6 +1702,176 @@ class Neo4jGraphDB(BaseGraphDB):
                     return True
         return False
 
+    def _build_user_name_and_kb_ids_conditions_cypher(
+        self,
+        user_name: str | None,
+        knowledgebase_ids: list[str] | None,
+        default_user_name: str | None = None,
+        node_alias: str = "node",
+    ) -> tuple[list[str], dict[str, Any]]:
+        """
+        Build user_name and knowledgebase_ids conditions for Cypher queries.
+
+        Args:
+            user_name: User name for filtering
+            knowledgebase_ids: List of knowledgebase IDs
+            default_user_name: Default user name from config if user_name is None
+            node_alias: Node alias in Cypher query (default: "node" or "n")
+
+        Returns:
+            Tuple of (condition_strings_list, parameters_dict)
+        """
+        user_name_conditions = []
+        params = {}
+        effective_user_name = user_name if user_name else default_user_name
+
+        # Only add user_name condition if not using multi-db mode
+        if not self.config.use_multi_db and (self.config.user_name or effective_user_name):
+            user_name_conditions.append(f"{node_alias}.user_name = $user_name")
+            params["user_name"] = effective_user_name
+
+        # Add knowledgebase_ids conditions (checking user_name field in the data)
+        if knowledgebase_ids and isinstance(knowledgebase_ids, list) and len(knowledgebase_ids) > 0:
+            for idx, kb_id in enumerate(knowledgebase_ids):
+                if isinstance(kb_id, str):
+                    param_name = f"kb_id_{idx}"
+                    user_name_conditions.append(f"{node_alias}.user_name = ${param_name}")
+                    params[param_name] = kb_id
+
+        return user_name_conditions, params
+
+    def _build_filter_conditions_cypher(
+        self,
+        filter: dict | None,
+        param_counter_start: int = 0,
+        node_alias: str = "node",
+    ) -> tuple[list[str], dict[str, Any]]:
+        """
+        Build filter conditions for Cypher queries.
+
+        Args:
+            filter: Filter dictionary with "or" or "and" logic
+            param_counter_start: Starting value for parameter counter (to avoid conflicts)
+            node_alias: Node alias in Cypher query (default: "node" or "n")
+
+        Returns:
+            Tuple of (condition_strings_list, parameters_dict)
+        """
+        filter_conditions = []
+        filter_params = {}
+
+        if not filter:
+            return filter_conditions, filter_params
+
+        def build_filter_condition(condition_dict: dict, param_counter: list) -> tuple[str, dict]:
+            """Build a WHERE condition for a single filter item.
+
+            Args:
+                condition_dict: A dict like {"id": "xxx"} or {"A": "xxx"} or {"created_at": {"gt": "2025-11-01"}}
+                param_counter: List to track parameter counter for unique param names
+
+            Returns:
+                Tuple of (condition_string, parameters_dict)
+            """
+            condition_parts = []
+            params = {}
+
+            for key, value in condition_dict.items():
+                # Check if value is a dict with comparison operators (gt, lt, gte, lte, contains, in, like)
+                if isinstance(value, dict):
+                    # Handle comparison operators: gt, lt, gte, lte, contains, in, like
+                    for op, op_value in value.items():
+                        if op in ("gt", "lt", "gte", "lte"):
+                            # Map operator to Cypher operator
+                            cypher_op_map = {"gt": ">", "lt": "<", "gte": ">=", "lte": "<="}
+                            cypher_op = cypher_op_map[op]
+
+                            # All fields are stored as flat properties in Neo4j
+                            param_name = f"filter_{key}_{op}_{param_counter[0]}"
+                            param_counter[0] += 1
+                            params[param_name] = op_value
+
+                            # Check if field is a date field (created_at, updated_at, etc.)
+                            # Use datetime() function for date comparisons
+                            if key in ("created_at", "updated_at") or key.endswith("_at"):
+                                condition_parts.append(
+                                    f"datetime({node_alias}.{key}) {cypher_op} datetime(${param_name})"
+                                )
+                            else:
+                                condition_parts.append(
+                                    f"{node_alias}.{key} {cypher_op} ${param_name}"
+                                )
+                        elif op == "contains":
+                            # Handle contains operator
+                            # For arrays: use IN to check if array contains value (value IN array_field)
+                            # For strings: also use IN syntax to check if string value is in array field
+                            # Note: In Neo4j, for array fields, we use "value IN field" syntax
+                            param_name = f"filter_{key}_{op}_{param_counter[0]}"
+                            param_counter[0] += 1
+                            params[param_name] = op_value
+                            # Use IN syntax: value IN array_field (works for both string and array values)
+                            condition_parts.append(f"${param_name} IN {node_alias}.{key}")
+                        elif op == "in":
+                            # Handle in operator (for checking if field value is in a list)
+                            # Supports array format: {"field": {"in": ["value1", "value2"]}}
+                            if not isinstance(op_value, list):
+                                raise ValueError(
+                                    f"in operator only supports array format. "
+                                    f"Use {{'{key}': {{'in': ['{op_value}']}}}} instead of {{'{key}': {{'in': '{op_value}'}}}}"
+                                )
+                            # Build IN clause
+                            param_name = f"filter_{key}_{op}_{param_counter[0]}"
+                            param_counter[0] += 1
+                            params[param_name] = op_value
+                            condition_parts.append(f"{node_alias}.{key} IN ${param_name}")
+                        elif op == "like":
+                            # Handle like operator (for fuzzy matching, similar to SQL LIKE '%value%')
+                            # Neo4j uses CONTAINS for string matching
+                            param_name = f"filter_{key}_{op}_{param_counter[0]}"
+                            param_counter[0] += 1
+                            params[param_name] = op_value
+                            condition_parts.append(f"{node_alias}.{key} CONTAINS ${param_name}")
+                else:
+                    # All fields are stored as flat properties in Neo4j (simple equality)
+                    param_name = f"filter_{key}_{param_counter[0]}"
+                    param_counter[0] += 1
+                    params[param_name] = value
+                    condition_parts.append(f"{node_alias}.{key} = ${param_name}")
+
+            return " AND ".join(condition_parts), params
+
+        param_counter = [param_counter_start]
+
+        if isinstance(filter, dict):
+            if "or" in filter:
+                # OR logic: at least one condition must match
+                or_conditions = []
+                for condition in filter["or"]:
+                    if isinstance(condition, dict):
+                        condition_str, params = build_filter_condition(condition, param_counter)
+                        if condition_str:
+                            or_conditions.append(f"({condition_str})")
+                            filter_params.update(params)
+                if or_conditions:
+                    filter_conditions.append(f"({' OR '.join(or_conditions)})")
+
+            elif "and" in filter:
+                # AND logic: all conditions must match
+                for condition in filter["and"]:
+                    if isinstance(condition, dict):
+                        condition_str, params = build_filter_condition(condition, param_counter)
+                        if condition_str:
+                            filter_conditions.append(f"({condition_str})")
+                            filter_params.update(params)
+            else:
+                # Handle simple dict without "and" or "or" (e.g., {"id": "xxx"})
+                condition_str, params = build_filter_condition(filter, param_counter)
+                if condition_str:
+                    filter_conditions.append(condition_str)
+                    filter_params.update(params)
+
+        return filter_conditions, filter_params
+
     def _parse_node(self, node_data: dict[str, Any]) -> dict[str, Any]:
         node = node_data.copy()
 
@@ -1192,13 +1882,362 @@ class Neo4jGraphDB(BaseGraphDB):
         node.pop("user_name", None)
 
         # serialization
-        if node["sources"]:
+        if node.get("sources"):
             for idx in range(len(node["sources"])):
                 if not (
                     isinstance(node["sources"][idx], str)
                     and node["sources"][idx][0] == "{"
-                    and node["sources"][idx][0] == "}"
+                    and node["sources"][idx][-1] == "}"
                 ):
                     break
                 node["sources"][idx] = json.loads(node["sources"][idx])
         return {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
+
+    def delete_node_by_prams(
+        self,
+        writable_cube_ids: list[str] | None = None,
+        memory_ids: list[str] | None = None,
+        file_ids: list[str] | None = None,
+        filter: dict | None = None,
+    ) -> int:
+        """
+        Delete nodes by memory_ids, file_ids, or filter.
+        Supports three scenarios:
+        1. Delete by memory_ids (standalone)
+        2. Delete by writable_cube_ids + file_ids (combined)
+        3. Delete by filter (standalone, no writable_cube_ids needed)
+
+        Args:
+            writable_cube_ids (list[str], optional): List of cube IDs (user_name) to filter nodes.
+                Only used with file_ids scenario. If not provided, no user_name filter will be applied.
+            memory_ids (list[str], optional): List of memory node IDs to delete.
+            file_ids (list[str], optional): List of file node IDs to delete. Must be used with writable_cube_ids.
+            filter (dict, optional): Filter dictionary for metadata filtering.
+                Filter conditions are directly used in DELETE WHERE clause without pre-querying.
+                Does not require writable_cube_ids.
+
+        Returns:
+            int: Number of nodes deleted.
+        """
+        batch_start_time = time.time()
+        logger.info(
+            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
+        )
+
+        # Build user_name condition from writable_cube_ids (OR relationship - match any cube_id)
+        # Only add user_name filter if writable_cube_ids is provided (for file_ids scenario)
+        user_name_conditions = []
+        params = {}
+        if writable_cube_ids and len(writable_cube_ids) > 0:
+            for idx, cube_id in enumerate(writable_cube_ids):
+                param_name = f"cube_id_{idx}"
+                user_name_conditions.append(f"n.user_name = ${param_name}")
+                params[param_name] = cube_id
+
+        # Build filter conditions using common method (no query, direct use in WHERE clause)
+        filter_conditions = []
+        filter_params = {}
+        if filter:
+            filter_conditions, filter_params = self._build_filter_conditions_cypher(
+                filter, param_counter_start=0, node_alias="n"
+            )
+            logger.info(f"[delete_node_by_prams] filter_conditions: {filter_conditions}")
+            params.update(filter_params)
+
+        # If no conditions to delete, return 0
+        if not memory_ids and not file_ids and not filter_conditions:
+            logger.warning(
+                "[delete_node_by_prams] No nodes to delete (no memory_ids, file_ids, or filter provided)"
+            )
+            return 0
+
+        # Build WHERE conditions list
+        where_clauses = []
+
+        # Scenario 1: memory_ids (standalone)
+        if memory_ids:
+            logger.info(f"[delete_node_by_prams] Processing {len(memory_ids)} memory_ids")
+            where_clauses.append("n.id IN $memory_ids")
+            params["memory_ids"] = memory_ids
+
+        # Scenario 2: file_ids + writable_cube_ids (combined)
+        if file_ids:
+            logger.info(f"[delete_node_by_prams] Processing {len(file_ids)} file_ids")
+            file_id_conditions = []
+            for idx, file_id in enumerate(file_ids):
+                param_name = f"file_id_{idx}"
+                params[param_name] = file_id
+                # Check if this file_id is in the file_ids array field
+                file_id_conditions.append(f"${param_name} IN n.file_ids")
+            if file_id_conditions:
+                where_clauses.append(f"({' OR '.join(file_id_conditions)})")
+
+        # Scenario 3: filter (standalone, no writable_cube_ids needed)
+        if filter_conditions:
+            logger.info("[delete_node_by_prams] Processing filter conditions")
+            # Combine filter conditions with AND
+            filter_where = " AND ".join(filter_conditions)
+            where_clauses.append(f"({filter_where})")
+
+        # Build final WHERE clause
+        if not where_clauses:
+            logger.warning("[delete_node_by_prams] No WHERE conditions to delete")
+            return 0
+
+        # Combine all conditions with AND
+        data_conditions = " AND ".join([f"({clause})" for clause in where_clauses])
+
+        # Add user_name filter if provided (for file_ids scenario)
+        if user_name_conditions:
+            user_name_where = " OR ".join(user_name_conditions)
+            final_where = f"({user_name_where}) AND ({data_conditions})"
+        else:
+            final_where = data_conditions
+
+        # Delete directly without pre-counting
+        delete_query = f"MATCH (n:Memory) WHERE {final_where} DETACH DELETE n"
+        logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
+
+        deleted_count = 0
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                # Execute delete query
+                result = session.run(delete_query, **params)
+                # Consume the result to ensure deletion completes and get the summary
+                summary = result.consume()
+                # Get the count from the result summary
+                deleted_count = summary.counters.nodes_deleted if summary.counters else 0
+
+                elapsed_time = time.time() - batch_start_time
+                logger.info(
+                    f"[delete_node_by_prams] Deletion completed successfully in {elapsed_time:.2f}s, total deleted {deleted_count} nodes"
+                )
+        except Exception as e:
+            logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
+            raise
+
+        logger.info(f"[delete_node_by_prams] Successfully deleted {deleted_count} nodes")
+        return deleted_count
+
+    def get_user_names_by_memory_ids(self, memory_ids: list[str]) -> dict[str, str | None]:
+        """Get user names by memory ids.
+
+        Args:
+            memory_ids: List of memory node IDs to query.
+
+        Returns:
+            dict[str, str | None]: Dictionary mapping memory_id to user_name.
+                - Key: memory_id
+                - Value: user_name if exists, None if memory_id does not exist
+                Example: {"4918d700-6f01-4f4c-a076-75cc7b0e1a7c": "zhangsan", "2222222": None}
+        """
+        if not memory_ids:
+            return {}
+
+        logger.info(f"[get_user_names_by_memory_ids] Querying memory_ids {memory_ids}")
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                # Query to get memory_id and user_name pairs
+                query = """
+                    MATCH (n:Memory)
+                    WHERE n.id IN $memory_ids
+                    RETURN n.id AS memory_id, n.user_name AS user_name
+                """
+                logger.info(f"[get_user_names_by_memory_ids] query: {query}")
+
+                result = session.run(query, memory_ids=memory_ids)
+                result_dict = {}
+
+                # Build result dictionary from query results
+                for record in result:
+                    memory_id = record["memory_id"]
+                    user_name = record["user_name"]
+                    result_dict[memory_id] = user_name if user_name else None
+
+                # Set None for memory_ids that were not found
+                for mid in memory_ids:
+                    if mid not in result_dict:
+                        result_dict[mid] = None
+
+                logger.info(
+                    f"[get_user_names_by_memory_ids] Found {len([v for v in result_dict.values() if v is not None])} memory_ids with user_names, "
+                    f"{len([v for v in result_dict.values() if v is None])} memory_ids without user_names"
+                )
+
+                return result_dict
+        except Exception as e:
+            logger.error(
+                f"[get_user_names_by_memory_ids] Failed to get user names: {e}", exc_info=True
+            )
+            raise
+
+    def exist_user_name(self, user_name: str) -> dict[str, bool]:
+        """Check if user name exists in the graph.
+
+        Args:
+            user_name: User name to check.
+
+        Returns:
+            dict[str, bool]: Dictionary with user_name as key and bool as value indicating existence.
+        """
+        logger.info(f"[exist_user_name] Querying user_name {user_name}")
+        if not user_name:
+            return {user_name: False}
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                # Query to check if user_name exists
+                query = """
+                    MATCH (n:Memory)
+                    WHERE n.user_name = $user_name
+                    RETURN COUNT(n) AS count
+                """
+                logger.info(f"[exist_user_name] query: {query}")
+
+                result = session.run(query, user_name=user_name)
+                count = result.single()["count"]
+                result_dict = {user_name: count > 0}
+
+                logger.info(
+                    f"[exist_user_name] user_name {user_name} exists: {result_dict[user_name]}"
+                )
+                return result_dict
+        except Exception as e:
+            logger.error(
+                f"[exist_user_name] Failed to check user_name existence: {e}", exc_info=True
+            )
+            raise
+
+    def delete_node_by_mem_cube_id(
+        self,
+        mem_cube_id: str | None = None,
+        delete_record_id: str | None = None,
+        hard_delete: bool = False,
+    ) -> int:
+        logger.info(
+            f"delete_node_by_mem_cube_id mem_cube_id:{mem_cube_id}, "
+            f"delete_record_id:{delete_record_id}, hard_delete:{hard_delete}"
+        )
+
+        if not mem_cube_id:
+            logger.warning("[delete_node_by_mem_cube_id] mem_cube_id is required but not provided")
+            return 0
+
+        if not delete_record_id:
+            logger.warning(
+                "[delete_node_by_mem_cube_id] delete_record_id is required but not provided"
+            )
+            return 0
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                if hard_delete:
+                    query = """
+                        MATCH (n:Memory)
+                        WHERE n.user_name = $mem_cube_id AND n.delete_record_id = $delete_record_id
+                        DETACH DELETE n
+                    """
+                    logger.info(f"[delete_node_by_mem_cube_id] Hard delete query: {query}")
+
+                    result = session.run(
+                        query, mem_cube_id=mem_cube_id, delete_record_id=delete_record_id
+                    )
+                    summary = result.consume()
+                    deleted_count = summary.counters.nodes_deleted if summary.counters else 0
+
+                    logger.info(f"[delete_node_by_mem_cube_id] Hard deleted {deleted_count} nodes")
+                    return deleted_count
+                else:
+                    current_time = datetime.utcnow().isoformat()
+
+                    query = """
+                        MATCH (n:Memory)
+                        WHERE n.user_name = $mem_cube_id
+                            AND (n.delete_time IS NULL OR n.delete_time = "")
+                            AND (n.delete_record_id IS NULL OR n.delete_record_id = "")
+                        SET n.status = $status,
+                            n.delete_record_id = $delete_record_id,
+                            n.delete_time = $delete_time
+                        RETURN count(n) AS updated_count
+                    """
+                    logger.info(f"[delete_node_by_mem_cube_id] Soft delete query: {query}")
+
+                    result = session.run(
+                        query,
+                        mem_cube_id=mem_cube_id,
+                        status="deleted",
+                        delete_record_id=delete_record_id,
+                        delete_time=current_time,
+                    )
+                    record = result.single()
+                    updated_count = record["updated_count"] if record else 0
+
+                    logger.info(
+                        f"delete_node_by_mem_cube_id Soft deleted (updated) {updated_count} nodes"
+                    )
+                    return updated_count
+
+        except Exception as e:
+            logger.error(
+                f"[delete_node_by_mem_cube_id] Failed to delete/update nodes: {e}", exc_info=True
+            )
+            raise
+
+    def recover_memory_by_mem_cube_id(
+        self,
+        mem_cube_id: str | None = None,
+        delete_record_id: str | None = None,
+    ) -> int:
+        logger.info(
+            f"recover_memory_by_mem_cube_id mem_cube_id:{mem_cube_id},delete_record_id:{delete_record_id}"
+        )
+        # Validate required parameters
+        if not mem_cube_id:
+            logger.warning("recover_memory_by_mem_cube_id mem_cube_id is required but not provided")
+            return 0
+
+        if not delete_record_id:
+            logger.warning(
+                "recover_memory_by_mem_cube_id delete_record_id is required but not provided"
+            )
+            return 0
+
+        logger.info(
+            f"recover_memory_by_mem_cube_id mem_cube_id={mem_cube_id}, "
+            f"delete_record_id={delete_record_id}"
+        )
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                query = """
+                    MATCH (n:Memory)
+                    WHERE n.user_name = $mem_cube_id AND n.delete_record_id = $delete_record_id
+                    SET n.status = $status,
+                        n.delete_record_id = $delete_record_id_empty,
+                        n.delete_time = $delete_time_empty
+                    RETURN count(n) AS updated_count
+                """
+                logger.info(f"[recover_memory_by_mem_cube_id] Update query: {query}")
+
+                result = session.run(
+                    query,
+                    mem_cube_id=mem_cube_id,
+                    delete_record_id=delete_record_id,
+                    status="activated",
+                    delete_record_id_empty="",
+                    delete_time_empty="",
+                )
+                record = result.single()
+                updated_count = record["updated_count"] if record else 0
+
+                logger.info(
+                    f"[recover_memory_by_mem_cube_id] Recovered (updated) {updated_count} nodes"
+                )
+                return updated_count
+
+        except Exception as e:
+            logger.error(
+                f"[recover_memory_by_mem_cube_id] Failed to recover nodes: {e}", exc_info=True
+            )
+            raise

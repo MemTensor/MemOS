@@ -27,10 +27,13 @@ class QdrantVecDBConfig(BaseVecDBConfig):
     host: str | None = Field(default=None, description="Host for Qdrant")
     port: int | None = Field(default=None, description="Port for Qdrant")
     path: str | None = Field(default=None, description="Path for Qdrant")
+    url: str | None = Field(default=None, description="Qdrant Cloud/remote endpoint URL")
+    api_key: str | None = Field(default=None, description="Qdrant Cloud API key")
 
     @model_validator(mode="after")
     def set_default_path(self):
-        if all(x is None for x in (self.host, self.port, self.path)):
+        # Only fall back to embedded/local path when no remote host/port/path/url is provided.
+        if all(x is None for x in (self.host, self.port, self.path, self.url)):
             logger.warning(
                 "No host, port, or path provided for Qdrant. Defaulting to local path: %s",
                 settings.MEMOS_DIR / "qdrant",

@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>MemOS Local — 安装排查指南</title>
+<link rel="icon" href="https://statics.memtensor.com.cn/logo/color-m.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#06080f;--bg-card:rgba(14,18,32,.85);--bg-alt:rgba(20,26,48,.7);
+  --border:rgba(99,140,255,.1);--border-glow:rgba(99,140,255,.25);
+  --text:#eef1ff;--text-sec:rgba(200,210,255,.55);--text-thr:rgba(160,175,220,.3);
+  --accent:#00e5ff;--accent-light:#638cff;
+  --blue:#638cff;--green:#00e676;--amber:#ffca28;--rose:#ff3cac;--purple:#b16cff;
+  --code-bg:rgba(10,14,28,.9);--code-text:rgba(200,210,255,.75);
+  --radius:10px;
+  --font:'Inter',system-ui,-apple-system,sans-serif;
+  --mono:'JetBrains Mono','SF Mono',ui-monospace,monospace;
+}
+html{scroll-behavior:smooth}
+body{font-family:var(--font);background:var(--bg);color:var(--text);line-height:1.7;min-height:100vh}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+.container{max-width:860px;margin:0 auto;padding:32px 24px 80px}
+
+header{text-align:center;padding:48px 0 32px;border-bottom:1px solid var(--border);margin-bottom:40px}
+header h1{font-size:2rem;font-weight:800;background:linear-gradient(135deg,#00e5ff,#638cff,#b16cff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:8px}
+header p{color:var(--text-sec);font-size:1rem}
+
+h2{font-size:1.4rem;font-weight:700;color:var(--accent);margin:40px 0 16px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+h3{font-size:1.1rem;font-weight:600;color:var(--blue);margin:24px 0 12px}
+
+p,li{color:var(--text-sec);margin-bottom:8px}
+ul,ol{padding-left:24px;margin-bottom:16px}
+li{margin-bottom:6px}
+strong{color:var(--text);font-weight:600}
+
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;overflow-x:auto;margin:12px 0 20px;font-family:var(--mono);font-size:.875rem;line-height:1.6;color:var(--code-text)}
+code{font-family:var(--mono);font-size:.875rem;background:rgba(99,140,255,.08);padding:2px 6px;border-radius:4px;color:var(--accent)}
+
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:20px 24px;margin:16px 0}
+.card-warn{border-color:rgba(255,202,40,.3);background:rgba(255,202,40,.04)}
+.card-error{border-color:rgba(255,60,60,.3);background:rgba(255,60,60,.04)}
+.card-success{border-color:rgba(0,230,118,.3);background:rgba(0,230,118,.04)}
+.card-info{border-color:rgba(99,140,255,.3);background:rgba(99,140,255,.04)}
+
+.badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:.75rem;font-weight:600;margin-right:6px}
+.badge-phase{background:rgba(99,140,255,.15);color:var(--blue)}
+.badge-cmd{background:rgba(0,229,255,.12);color:var(--accent)}
+
+.toc{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:20px 24px;margin-bottom:32px}
+.toc h3{margin:0 0 12px;color:var(--text)}
+.toc ol{margin:0;padding-left:20px}
+.toc li{margin-bottom:4px}
+.toc a{color:var(--accent-light)}
+
+.step-num{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#00e5ff,#638cff);color:#06080f;font-weight:700;font-size:.85rem;margin-right:10px;flex-shrink:0}
+
+.flow{display:flex;flex-direction:column;gap:16px;margin:16px 0}
+.flow-step{display:flex;align-items:flex-start;gap:12px}
+.flow-step .content{flex:1}
+.flow-step .content p{margin:0}
+
+footer{text-align:center;padding:40px 0 20px;border-top:1px solid var(--border);margin-top:60px;color:var(--text-thr);font-size:.85rem}
+
+@media(max-width:640px){
+  .container{padding:16px 16px 60px}
+  header h1{font-size:1.6rem}
+  pre{font-size:.8rem;padding:12px 14px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>MemOS Local — 安装排查指南</h1>
+  <p>遇到安装问题？按以下步骤逐一排查</p>
+  <p style="margin-top:12px;font-size:.9rem">📦 <a href="https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md" target="_blank" style="color:var(--accent)">better-sqlite3 官方排查文档</a> &nbsp;|&nbsp; <a href="https://github.com/MemTensor/MemOS/issues" target="_blank" style="color:var(--accent)">GitHub Issues</a></p>
+</header>
+
+<nav class="toc">
+  <h3>目录</h3>
+  <ol>
+    <li><a href="#quick">快速诊断命令</a></li>
+    <li><a href="#postinstall">运行 postinstall 脚本</a></li>
+    <li><a href="#sqlite">better-sqlite3 编译失败</a></li>
+    <li><a href="#id-mismatch">Plugin ID Mismatch 警告</a></li>
+    <li><a href="#register-fail">插件加载失败 (register error)</a></li>
+    <li><a href="#viewer-error">Memory Viewer 页面报错</a></li>
+    <li><a href="#upgrade">升级问题</a></li>
+    <li><a href="#logs">查看日志</a></li>
+    <li><a href="#reinstall">完全重装</a></li>
+    <li><a href="#faq">常见问题</a></li>
+  </ol>
+</nav>
+
+<!-- ────────────────────────────────────── -->
+<h2 id="quick">1. 快速诊断命令</h2>
+
+<p>在终端依次运行以下命令，快速判断问题所在：</p>
+
+<pre><span style="color:#00e676"># 1) 插件目录是否存在</span>
+ls ~/.openclaw/extensions/memos-local-openclaw-plugin/
+
+<span style="color:#00e676"># 2) better-sqlite3 原生模块是否可用</span>
+cd ~/.openclaw/extensions/memos-local-openclaw-plugin
+node -e "require('better-sqlite3'); console.log('✔ better-sqlite3 OK')"
+
+<span style="color:#00e676"># 3) 核心依赖是否完整</span>
+node -e "['@sinclair/typebox','uuid','posthog-node'].forEach(d=>{try{require.resolve(d);console.log('✔',d)}catch{console.log('✖',d)}})"
+
+<span style="color:#00e676"># 4) 运行 postinstall 脚本查看完整诊断</span>
+node scripts/postinstall.cjs
+
+<span style="color:#00e676"># 5) 查看 gateway 日志中的插件相关信息</span>
+grep -i "memos\|plugin.*error\|plugin.*fail" /tmp/openclaw/openclaw-$(date +%Y-%m-%d).log</pre>
+
+<!-- ────────────────────────────────────── -->
+<h2 id="postinstall">2. 运行 postinstall 脚本</h2>
+
+<p>postinstall 脚本会自动检测并修复常见问题。进入插件目录后运行：</p>
+
+<pre>cd ~/.openclaw/extensions/memos-local-openclaw-plugin
+node scripts/postinstall.cjs</pre>
+
+<p>正常输出应该包含三个阶段，每个都显示 <code>✔</code>：</p>
+
+<pre><span style="color:#00e5ff">─── Phase 0: 检测核心依赖 / Check core dependencies ───</span>
+  @sinclair/typebox <span style="color:#00e676">✔</span>
+  uuid <span style="color:#00e676">✔</span>
+  posthog-node <span style="color:#00e676">✔</span>
+  @huggingface/transformers <span style="color:#00e676">✔</span>
+<span style="color:#00e676">✔</span> All core dependencies present.
+
+<span style="color:#00e5ff">─── Phase 1: 清理旧版本插件 / Clean up legacy plugins ───</span>
+<span style="color:#00e676">✔</span> No legacy plugin directories found. Clean.
+
+<span style="color:#00e5ff">─── Phase 2: 检查 better-sqlite3 原生模块 / Check native module ───</span>
+<span style="color:#00e676">✔</span> better-sqlite3 is ready.
+
+<span style="color:#00e676">✔ Setup complete!</span></pre>
+
+<div class="card card-warn">
+  <strong>⚠ 如果 Phase 0 失败</strong>
+  <p>缺少依赖通常是网络问题。手动安装：</p>
+  <pre>cd ~/.openclaw/extensions/memos-local-openclaw-plugin
+npm install --omit=dev</pre>
+</div>
+
+<div class="card card-warn">
+  <strong>⚠ 如果 Phase 2 失败</strong>
+  <p>better-sqlite3 编译失败，参见下一节。</p>
+</div>
+
+<!-- ────────────────────────────────────── -->
+<h2 id="sqlite">3. better-sqlite3 编译失败</h2>
+
+<p>这是最常见的安装问题。<code>better-sqlite3</code> 是一个需要 C/C++ 编译的原生 Node.js 模块。如果以下步骤无法解决你的问题，请参考 <a href="https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md" target="_blank">better-sqlite3 官方排查文档</a> 获取更多平台特定的解决方案。</p>
+
+<h3>错误表现</h3>
+<pre><span style="color:#ff3cac">Error: Could not locate the bindings file. Tried:</span>
+ → .../node_modules/better-sqlite3/build/better_sqlite3.node
+ → .../node_modules/better-sqlite3/build/Release/better_sqlite3.node
+ ...</pre>
+
+<h3>解决步骤</h3>
+
+<div class="flow">
+  <div class="flow-step">
+    <span class="step-num">1</span>
+    <div class="content">
+      <p><strong>安装 C/C++ 编译工具</strong></p>
+    </div>
+  </div>
+</div>
+
+<pre><span style="color:#00e676"># macOS</span>
+xcode-select --install
+
+<span style="color:#00e676"># Ubuntu / Debian</span>
+sudo apt install build-essential python3
+
+<span style="color:#00e676"># Windows — 通常不需要！</span>
+<span style="color:#00e676"># better-sqlite3 对 Windows + Node.js LTS 提供预编译二进制文件，</span>
+<span style="color:#00e676"># 大部分情况下可直接安装成功。</span>
+<span style="color:#00e676"># 如果仍然失败，安装 Visual Studio Build Tools:</span>
+<span style="color:#00e676"># https://visualstudio.microsoft.com/visual-cpp-build-tools/</span>
+<span style="color:#00e676"># 安装时勾选 "C++ build tools" 工作负载</span></pre>
+
+<div class="flow">
+  <div class="flow-step">
+    <span class="step-num">2</span>
+    <div class="content">
+      <p><strong>重新编译 better-sqlite3</strong></p>
+    </div>
+  </div>
+</div>
+
+<pre>cd ~/.openclaw/extensions/memos-local-openclaw-plugin
+npm rebuild better-sqlite3</pre>
+
+<div class="flow">
+  <div class="flow-step">
+    <span class="step-num">3</span>
+    <div class="content">
+      <p><strong>验证是否成功</strong></p>
+    </div>
+  </div>
+</div>
+
+<pre>node -e "require('better-sqlite3'); console.log('✔ OK')"</pre>
+
+<div class="flow">
+  <div class="flow-step">
+    <span class="step-num">4</span>
+    <div class="content">
+      <p><strong>重启 gateway</strong></p>
+    </div>
+  </div>
+</div>
+
+<pre>openclaw gateway stop && openclaw gateway start</pre>
+
+<div class="card card-info">
+  <strong>💡 Node.js 版本说明</strong>
+  <p>如果使用非 LTS 版本的 Node.js（如 v25.x），<code>better-sqlite3</code> 可能没有预编译的二进制文件，必须从源码编译。确保已安装上述编译工具。</p>
+  <p style="margin-top:8px">推荐使用 Node.js LTS 版本（v18.x 或 v20.x），这些版本有预编译的二进制文件，通常不需要本地编译。</p>
+</div>
+
+<div class="card card-info">
+  <strong>💡 更多排查资源</strong>
+  <p>如果上述方法均无法解决，请查看以下资源：</p>
+  <ul style="margin-top:8px">
+    <li><a href="https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md" target="_blank">better-sqlite3 官方排查指南</a> — 包含所有平台的详细编译问题解决方案</li>
+    <li><a href="https://github.com/WiseLibs/better-sqlite3/issues" target="_blank">better-sqlite3 Issues</a> — 搜索你的具体错误信息</li>
+    <li><a href="https://github.com/MemTensor/MemOS/issues" target="_blank">MemOS GitHub Issues</a> — 提交问题或搜索已知问题</li>
+  </ul>
+</div>
+
+<!-- ────────────────────────────────────── -->
+<h2 id="id-mismatch">4. Plugin ID Mismatch 警告</h2>
+
+<h3>错误表现</h3>
+<pre><span style="color:#ffca28">warn</span> plugin id mismatch (manifest uses "memos-local-openclaw-plugin",
+     entry hints "memos-lite-openclaw-plugin")</pre>
+
+<h3>原因</h3>
+<p>旧版本插件（<code>memos-lite-*</code>）的残留目录或配置未清理。</p>
+
+<h3>解决方法</h3>
+<pre><span style="color:#00e676"># 运行 postinstall 脚本自动清理（推荐）</span>
+cd ~/.openclaw/extensions/memos-local-openclaw-plugin
+node scripts/postinstall.cjs
+
+<span style="color:#00e676"># 或手动清理旧目录</span>
+rm -rf ~/.openclaw/extensions/memos-lite
+rm -rf ~/.openclaw/extensions/memos-lite-openclaw-plugin</pre>
+
+<p>然后检查配置文件中是否有旧条目：</p>
+<pre>cat ~/.openclaw/openclaw.json | grep -i "memos-lite"</pre>
+
+<p>如果有，删除对应的配置条目，或直接运行 postinstall 脚本自动迁移。</p>
+
+<!-- ────────────────────────────────────── -->
+<h2 id="register-fail">5. 插件加载失败 (register error)</h2>
+
+<h3>错误表现</h3>
+<pre><span style="color:#ff3cac">error</span> [plugins] memos-local-openclaw-plugin failed during register:
+Error: Could not locate the bindings file.</pre>
+
+<h3>解决方法</h3>
+<p>这几乎都是 <code>better-sqlite3</code> 的问题，按照<a href="#sqlite">第 3 节</a>的步骤修复即可。</p>
+
+<p>插件内置了自愈机制——启动时会自动尝试 <code>npm rebuild better-sqlite3</code>，但如果系统没有编译工具，自愈也会失败。</p>
+
+<!-- ────────────────────────────────────── -->
+<h2 id="viewer-error">6. Memory Viewer 页面报错</h2>
+
+<h3>Scan failed: Cannot read properties of undefined</h3>
+<p>通常是新安装时数据库为空或 store 未初始化。升级到最新版本即可解决：</p>
+<pre>openclaw plugins update memos-local-openclaw-plugin</pre>
+
+<h3>页面显示 undefined 或数据为空</h3>
+<p>尝试强制刷新浏览器缓存：<code>Ctrl+Shift+R</code>（macOS: <code>Cmd+Shift+R</code>）</p>
+
+<!-- ────────────────────────────────────── -->
+<h2 id="upgrade">7. 升级问题</h2>
+
+<h3>升级命令（推荐）</h3>
+<pre>openclaw plugins update memos-local-openclaw-plugin</pre>
+
+<p>升级过程会自动运行 postinstall 脚本，处理依赖安装、旧版清理和原生模块编译。</p>
+
+<h3>如果 update 不可用，重新安装</h3>
+<pre><span style="color:#00e676"># 必须先删除旧目录，否则 install 会报 "plugin already exists"</span>
+rm -rf ~/.openclaw/extensions/memos-local-openclaw-plugin
+openclaw plugins install @memtensor/memos-local-openclaw-plugin</pre>
+
+<div class="card card-info">
+  <strong>💡 为什么要先删除？</strong>
+  <p>OpenClaw 的 <code>plugins install</code> 命令检测到目标目录已存在时会直接拒绝安装，不会运行任何脚本。这是 OpenClaw 框架的安全机制，插件自身无法绕过。</p>
+</div>
+
+<div class="card card-success">
+  <strong>✔ 数据安全</strong>
+  <p>升级不会删除已有的记忆数据。数据库位于 <code>~/.openclaw/memos-local/memos.db</code>，独立于插件目录。</p>
+</div>
+
+<h3>升级后 gateway 未加载新版本</h3>
+<pre>openclaw gateway stop && openclaw gateway start</pre>
+
+<!-- ────────────────────────────────────── -->
+<h2 id="logs">8. 查看日志</h2>
+
+<h3>Gateway 运行日志</h3>
+<pre><span style="color:#00e676"># 查看当天完整日志</span>
+cat /tmp/openclaw/openclaw-$(date +%Y-%m-%d).log
+
+<span style="color:#00e676"># 只看插件相关</span>
+grep -i "memos" /tmp/openclaw/openclaw-$(date +%Y-%m-%d).log
+
+<span style="color:#00e676"># 只看错误</span>
+grep -i "error\|fail\|warn" /tmp/openclaw/openclaw-$(date +%Y-%m-%d).log | grep -i "memos\|plugin"
+
+<span style="color:#00e676"># 实时追踪（debug 用）</span>
+tail -f /tmp/openclaw/openclaw-$(date +%Y-%m-%d).log | grep -i "memos"</pre>
+
+<h3>重新启动并捕获完整启动日志</h3>
+<pre>openclaw gateway stop
+openclaw gateway start 2>&amp;1 | tee /tmp/gateway-debug.log</pre>
+<p>然后将 <code>/tmp/gateway-debug.log</code> 发给开发者排查。</p>
+
+<h3>postinstall 诊断日志</h3>
+<pre>cd ~/.openclaw/extensions/memos-local-openclaw-plugin
+node scripts/postinstall.cjs 2>&amp;1 | tee /tmp/postinstall-debug.log</pre>
+
+<!-- ────────────────────────────────────── -->
+<h2 id="reinstall">9. 完全重装</h2>
+
+<p>如果以上方法都无法解决，可以完全重装（<strong>不会丢失记忆数据</strong>）：</p>
+
+<pre><span style="color:#00e676"># 1) 卸载</span>
+openclaw plugins uninstall memos-local-openclaw-plugin
+
+<span style="color:#00e676"># 2) 确认旧目录已删除</span>
+rm -rf ~/.openclaw/extensions/memos-local-openclaw-plugin
+rm -rf ~/.openclaw/extensions/memos-lite
+rm -rf ~/.openclaw/extensions/memos-lite-openclaw-plugin
+
+<span style="color:#00e676"># 3) 重新安装</span>
+openclaw plugins install @memtensor/memos-local-openclaw-plugin
+
+<span style="color:#00e676"># 4) 重启 gateway</span>
+openclaw gateway stop && openclaw gateway start</pre>
+
+<div class="card card-success">
+  <strong>✔ 数据保留</strong>
+  <p>记忆数据存储在 <code>~/.openclaw/memos-local/memos.db</code>，不在插件目录内，重装不会影响。</p>
+</div>
+
+<!-- ────────────────────────────────────── -->
+<h2 id="faq">10. 常见问题</h2>
+
+<div class="card">
+  <h3>Q: 安装时一直卡在 "Installing plugin dependencies..." 不动</h3>
+  <p>这通常是 <code>better-sqlite3</code> 正在编译。首次编译可能需要 30-60 秒，取决于网络和机器性能。如果超过 2 分钟，按 <code>Ctrl+C</code> 中断，然后手动运行：</p>
+  <pre>cd ~/.openclaw/extensions/memos-local-openclaw-plugin
+npm install --omit=dev
+npm rebuild better-sqlite3</pre>
+</div>
+
+<div class="card">
+  <h3>Q: macOS 提示 "xcrun: error: invalid active developer path"</h3>
+  <p>需要安装 Xcode 命令行工具：</p>
+  <pre>xcode-select --install</pre>
+  <p>安装完成后重新运行 <code>npm rebuild better-sqlite3</code>。</p>
+</div>
+
+<div class="card">
+  <h3>Q: 升级后 Memory Viewer 显示异常</h3>
+  <p>浏览器缓存了旧版本页面。强制刷新：<code>Ctrl+Shift+R</code>（macOS: <code>Cmd+Shift+R</code>）。</p>
+</div>
+
+<div class="card">
+  <h3>Q: 我的数据在哪？安全吗？</h3>
+  <p>所有记忆数据存储在 <code>~/.openclaw/memos-local/memos.db</code>（SQLite 文件），独立于插件安装目录。升级、重装插件都不会影响数据。</p>
+  <p>建议定期备份：</p>
+  <pre>cp ~/.openclaw/memos-local/memos.db ~/memos-backup-$(date +%Y%m%d).db</pre>
+</div>
+
+<div class="card">
+  <h3>Q: 如何确认插件版本？</h3>
+  <pre>cat ~/.openclaw/extensions/memos-local-openclaw-plugin/package.json | grep version</pre>
+</div>
+
+<div class="card">
+  <h3>Q: 任务摘要/技能生成/去重 LLM 调用失败</h3>
+  <p>所有 LLM 调用使用三级自动降级链：<code>skillSummarizer</code> → <code>summarizer</code> → OpenClaw 原生模型。</p>
+  <ul>
+    <li>检查 gateway 日志中的 <code>failed</code> 和 <code>trying next</code> 信息</li>
+    <li>确认 API Key 和 Endpoint 配置正确</li>
+    <li>如果所有模型都失败，功能会降级为规则方法或跳过</li>
+    <li>可通过 Viewer → Settings 在线修改模型配置，保存后立即生效</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Q: 任务划分不准确（过度切分或不切分）</h3>
+  <p>任务边界检测使用逐轮 LLM 话题判断：</p>
+  <ul>
+    <li>确认 <code>summarizer</code> 模型已正确配置且可用</li>
+    <li>更强的 LLM 模型（如 GPT-4、Claude）会有更好的话题判断效果</li>
+    <li>如果判断效果不理想，可尝试配置 <code>skillSummarizer</code> 使用更强的模型</li>
+    <li>查看 gateway 日志中的 <code>Topic judge</code> 日志确认 LLM 是否被正确调用</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Q: duplicate plugin id detected 警告</h3>
+  <p>同一个 plugin ID 被多个目录加载。检查是否有重复的插件目录：</p>
+  <pre>ls ~/.openclaw/extensions/ | grep memos</pre>
+  <p>只保留 <code>memos-local-openclaw-plugin</code>，删除其他的：</p>
+  <pre>rm -rf ~/.openclaw/extensions/memos-local  <span style="color:#00e676"># 如果存在</span></pre>
+</div>
+
+<footer>
+  <p>MemOS Local Memory Plugin · <a href="https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-openclaw">GitHub</a> · <a href="index.html">返回文档首页</a></p>
+</footer>
+
+</div>
+</body>
+</html>
