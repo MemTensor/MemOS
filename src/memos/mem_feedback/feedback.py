@@ -561,8 +561,21 @@ class MemFeedback(BaseMemFeedback):
                         exc_info=True,
                     )
         if update_results and getattr(self.mem_reader, "memory_version_switch", "off") != "on":
-            updated_ids = [item["archived_id"] for item in update_results]
-            self._del_working_binding(updated_ids, user_name)
+            archived_ids = [item["archived_id"] for item in update_results]
+            archived_items = []
+            for aid in archived_ids:
+                try:
+                    node = self.graph_store.get_node(aid, user_name=user_name)
+                    if node:
+                        archived_items.append(TextualMemoryItem(**node))
+                except Exception as e:
+                    logger.warning(
+                        "[Memory Feedback] Failed to fetch archived item %s for working_binding cleanup: %s",
+                        aid,
+                        e,
+                    )
+            if archived_items:
+                self._del_working_binding(user_name, archived_items)
 
         return {"record": {"add": add_results, "update": update_results}}
 
