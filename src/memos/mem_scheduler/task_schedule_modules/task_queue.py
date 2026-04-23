@@ -48,6 +48,12 @@ class ScheduleTaskQueue:
             self.memos_message_queue = SchedulerLocalQueue(maxsize=self.maxsize)
 
         self.disabled_handlers = disabled_handlers
+        logger.info(
+            "[SCHEDULE_TASK_QUEUE] Initialized queue wrapper. use_redis_queue=%s, queue_type=%s, stream_prefix=%s",
+            self.use_redis_queue,
+            type(self.memos_message_queue).__name__,
+            getattr(self.memos_message_queue, "stream_key_prefix", None),
+        )
 
     def set_status_tracker(self, status_tracker: TaskStatusTracker) -> None:
         """

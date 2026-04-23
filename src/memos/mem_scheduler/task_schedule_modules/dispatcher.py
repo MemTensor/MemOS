@@ -548,6 +548,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
             running = 0
         try:
             with self._task_lock:
+                done = {f for f in self._futures if f.done()}
+                if done:
+                    self._futures -= done
                 inflight = len(self._futures)
         except Exception:
             inflight = 0

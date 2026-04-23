@@ -67,6 +67,8 @@ report/
 cov-report/
 .tox/
 .nox/
+report/
+cov-report/
 .coverage
 .coverage.*
 .cache
