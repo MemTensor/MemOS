@@ -146,6 +146,10 @@ class TextualMemoryMetadata(BaseModel):
         default=None,
         description="Arbitrary key-value pairs for additional metadata.",
     )
+    internal_info: dict | None = Field(
+        default=None,
+        description="Internal algorithm metadata reserved for system use.",
+    )
 
     model_config = ConfigDict(extra="allow")
 
