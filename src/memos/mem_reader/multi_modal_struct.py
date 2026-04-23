@@ -15,6 +15,8 @@ from memos.mem_reader.read_skill_memory.process_skill_memory import process_skil
 from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
 from memos.mem_reader.utils import parse_json_result
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.plugins.hook_defs import H
+from memos.plugins.hooks import trigger_single_hook
 from memos.templates.mem_reader_prompts import MEMORY_MERGE_PROMPT_EN, MEMORY_MERGE_PROMPT_ZH
 from memos.templates.tool_mem_prompts import TOOL_TRAJECTORY_PROMPT_EN, TOOL_TRAJECTORY_PROMPT_ZH
 from memos.types import MessagesType
@@ -57,6 +59,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         simple_config = SimpleStructMemReaderConfig(**config_dict)
         super().__init__(simple_config)
+
+        self.memory_version_switch = getattr(config, "memory_version_switch", "off")
 
         # Image parser LLM (requires vision model)
         # Falls back to general_llm if not configured (general_llm itself falls back to main llm)
@@ -458,6 +462,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         if self.config.remove_prompt_example and examples:
             prompt = prompt.replace(examples, "")
+
+        logger.info(f"[MultiModalParser] Process String Fine Prompt: {prompt}")
+
         messages = [{"role": "user", "content": prompt}]
         try:
             response_text = self.llm.generate(messages)
@@ -506,6 +513,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         sources: list,
         **kwargs,
     ) -> dict:
+        # TODO: delete this function
         """
         Check if extracted memory should be merged with similar existing memories.
         If merge is needed, return merged memory dict with merged_from field.
@@ -520,102 +528,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         Returns:
             Memory dict (possibly merged) with merged_from field if merged
         """
-        # If no graph_db or user_name, return original
-        if not self.graph_db or "user_name" not in kwargs:
-            return extracted_memory_dict
-        user_name = kwargs.get("user_name")
-
-        # Detect language
-        lang = "en"
-        if sources:
-            for source in sources:
-                if hasattr(source, "lang") and source.lang:
-                    lang = source.lang
-                    break
-                elif isinstance(source, dict) and source.get("lang"):
-                    lang = source.get("lang")
-                    break
-        if lang is None:
-            lang = detect_lang(mem_text)
-
-        # Search for similar memories
-        merge_threshold = kwargs.get("merge_similarity_threshold", 0.3)
-
-        try:
-            search_results = self.graph_db.search_by_embedding(
-                vector=self.embedder.embed(mem_text)[0],
-                top_k=20,
-                status="activated",
-                threshold=merge_threshold,
-                user_name=user_name,
-            )
-
-            if not search_results:
-                return extracted_memory_dict
-
-            # Get full memory details
-            similar_memory_ids = [r["id"] for r in search_results if r.get("id")]
-            similar_memories_list = [
-                self.graph_db.get_node(mem_id, include_embedding=False, user_name=user_name)
-                for mem_id in similar_memory_ids
-            ]
-
-            # Filter out None and mode:fast memories
-            filtered_similar = []
-            for mem in similar_memories_list:
-                if not mem:
-                    continue
-                mem_metadata = mem.get("metadata", {})
-                tags = mem_metadata.get("tags", [])
-                if isinstance(tags, list) and "mode:fast" in tags:
-                    continue
-                filtered_similar.append(
-                    {
-                        "id": mem.get("id"),
-                        "memory": mem.get("memory", ""),
-                    }
-                )
-            logger.info(
-                f"Valid similar memories for {mem_text} is "
-                f"{len(filtered_similar)}: {filtered_similar}"
-            )
-
-            if not filtered_similar:
-                return extracted_memory_dict
-
-            # Create a temporary TextualMemoryItem for merge check
-            temp_memory_item = TextualMemoryItem(
-                memory=mem_text,
-                metadata=TreeNodeTextualMemoryMetadata(
-                    user_id="",
-                    session_id="",
-                    memory_type=extracted_memory_dict.get("memory_type", "LongTermMemory"),
-                    status="activated",
-                    tags=extracted_memory_dict.get("tags", []),
-                    key=extracted_memory_dict.get("key", ""),
-                ),
-            )
-
-            # Try to merge with LLM
-            merge_result = self._merge_memories_with_llm(
-                temp_memory_item, filtered_similar, lang=lang
-            )
-
-            if merge_result:
-                # Return merged memory dict
-                merged_dict = extracted_memory_dict.copy()
-                merged_content = merge_result.get("value", mem_text)
-                merged_dict["value"] = merged_content
-                merged_from_ids = merge_result.get("merged_from", [])
-                merged_dict["merged_from"] = merged_from_ids
-                return merged_dict
-            else:
-                return extracted_memory_dict
-
-        except Exception as e:
-            logger.error(f"[MultiModalFine] Error in get_maybe_merged_memory: {e}")
-            # On error, return original
-            return extracted_memory_dict
+        return extracted_memory_dict
 
     def _merge_memories_with_llm(
         self,
@@ -717,6 +630,35 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # Determine prompt type based on sources
             prompt_type = self._determine_prompt_type(sources)
 
+            # ========== Stage 0: Memory version async extraction/update pipeline ==========
+            if getattr(self, "memory_version_switch", "off") == "on":
+                try:
+                    user_name = kwargs.get("user_name")
+                    should_use_version_pipeline = trigger_single_hook(
+                        H.MEMORY_VERSION_PREPARE_UPDATES,
+                        item=fast_item,
+                        user_name=user_name,
+                        judge_llm=self.general_llm,
+                    )
+                    if should_use_version_pipeline:
+                        lang = detect_lang(kwargs.get("chat_history") or mem_str)
+                        custom_tags_prompt_template = PROMPT_DICT["custom_tags"][lang]
+                        new_items = trigger_single_hook(
+                            H.MEMORY_VERSION_APPLY_UPDATES,
+                            item=fast_item,
+                            user_name=user_name,
+                            version_llm=self.qwen_llm,
+                            merge_llm=self.general_llm,
+                            custom_tags=custom_tags,
+                            custom_tags_prompt_template=custom_tags_prompt_template,
+                            timeout_sec=30,
+                        )
+                        return new_items
+                except RuntimeError as ex:
+                    logger.warning(f"[MultiModalFine] Memory version hook unavailable: {ex}")
+                except Exception as ex:
+                    logger.warning(f"[MultiModalFine] Fine memory version pipeline failed: {ex}")
+
             # ========== Stage 1: Normal extraction (without reference) ==========
             try:
                 resp = self._get_llm_response(mem_str, custom_tags, sources, prompt_type)
@@ -727,14 +669,15 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if resp.get("memory list", []):
                 for m in resp.get("memory list", []):
                     try:
-                        # Check and merge with similar memories if needed
-                        m_maybe_merged = self._get_maybe_merged_memory(
-                            extracted_memory_dict=m,
-                            mem_text=m.get("value", ""),
-                            sources=sources,
-                            original_query=mem_str,
-                            **kwargs,
-                        )
+                        m_maybe_merged = m
+                        if getattr(self, "memory_version_switch", "off") != "on":
+                            m_maybe_merged = self._get_maybe_merged_memory(
+                                extracted_memory_dict=m,
+                                mem_text=m.get("value", ""),
+                                sources=sources,
+                                original_query=mem_str,
+                                **kwargs,
+                            )
                         # Normalize memory_type (same as simple_struct)
                         memory_type = (
                             m_maybe_merged.get("memory_type", "LongTermMemory")
@@ -752,8 +695,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                             background=resp.get("summary", ""),
                             **extra_kwargs,
                         )
-                        # Add merged_from to info if present
-                        if "merged_from" in m_maybe_merged:
+                        if (
+                            getattr(self, "memory_version_switch", "off") != "on"
+                            and "merged_from" in m_maybe_merged
+                        ):
                             node.metadata.info = node.metadata.info or {}
                             node.metadata.info["merged_from"] = m_maybe_merged["merged_from"]
                         fine_items.append(node)
@@ -762,13 +707,15 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             elif resp.get("value") and resp.get("key"):
                 try:
                     # Check and merge with similar memories if needed
-                    resp_maybe_merged = self._get_maybe_merged_memory(
-                        extracted_memory_dict=resp,
-                        mem_text=resp.get("value", "").strip(),
-                        sources=sources,
-                        original_query=mem_str,
-                        **kwargs,
-                    )
+                    resp_maybe_merged = resp
+                    if getattr(self, "memory_version_switch", "off") != "on":
+                        resp_maybe_merged = self._get_maybe_merged_memory(
+                            extracted_memory_dict=resp,
+                            mem_text=resp.get("value", "").strip(),
+                            sources=sources,
+                            original_query=mem_str,
+                            **kwargs,
+                        )
                     node = self._make_memory_item(
                         value=resp_maybe_merged.get("value", "").strip(),
                         info=info_per_item,
@@ -779,8 +726,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         background=resp.get("summary", ""),
                         **extra_kwargs,
                     )
-                    # Add merged_from to info if present
-                    if "merged_from" in resp_maybe_merged:
+                    if (
+                        getattr(self, "memory_version_switch", "off") != "on"
+                        and "merged_from" in resp_maybe_merged
+                    ):
                         node.metadata.info = node.metadata.info or {}
                         node.metadata.info["merged_from"] = resp_maybe_merged["merged_from"]
                     fine_items.append(node)

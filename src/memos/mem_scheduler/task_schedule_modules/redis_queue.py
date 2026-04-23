@@ -19,9 +19,9 @@ from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
     DEFAULT_STREAM_INACTIVITY_DELETE_SECONDS,
-    DEFAULT_STREAM_KEY_PREFIX,
     DEFAULT_STREAM_KEYS_REFRESH_INTERVAL_SEC,
     DEFAULT_STREAM_RECENT_ACTIVE_SECONDS,
+    get_stream_key_prefix,
 )
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
@@ -45,10 +45,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
     def __init__(
         self,
-        stream_key_prefix: str = os.getenv(
-            "MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX",
-            DEFAULT_STREAM_KEY_PREFIX,
-        ),
+        stream_key_prefix: str | None = None,
         orchestrator: SchedulerOrchestrator | None = None,
         consumer_group: str = "scheduler_group",
         consumer_name: str | None = "scheduler_consumer",
@@ -68,8 +65,12 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             auto_delete_acked: Whether to automatically delete acknowledged messages from stream
         """
         super().__init__()
+        resolved_stream_key_prefix = stream_key_prefix or os.getenv(
+            "MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX",
+            get_stream_key_prefix(),
+        )
         # Stream configuration
-        self.stream_key_prefix = stream_key_prefix
+        self.stream_key_prefix = resolved_stream_key_prefix
         # Precompile regex for prefix filtering to reduce repeated compilation overhead
         self.stream_prefix_regex_pattern = re.compile(f"^{re.escape(self.stream_key_prefix)}:")
         self.consumer_group = consumer_group
@@ -104,8 +105,15 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         self._empty_stream_seen_lock = threading.Lock()
 
         logger.info(
-            f"[REDIS_QUEUE] Initialized with stream_prefix='{self.stream_key_prefix}', "
-            f"consumer_group='{self.consumer_group}', consumer_name='{self.consumer_name}'"
+            "[REDIS_QUEUE] Initialized with stream_prefix='%s', "
+            "consumer_group='%s', consumer_name='%s', "
+            "env_MEMSCHEDULER_STREAM_KEY_PREFIX='%s', "
+            "env_MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX='%s'",
+            self.stream_key_prefix,
+            self.consumer_group,
+            self.consumer_name,
+            os.getenv("MEMSCHEDULER_STREAM_KEY_PREFIX"),
+            os.getenv("MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX"),
         )
 
         # Auto-initialize Redis connection

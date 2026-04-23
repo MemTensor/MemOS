@@ -762,7 +762,14 @@ class SingleCubeView(MemCubeView):
             )
 
             # Mark merged_from memories as archived when provided in add_req.info
-            if sync_mode == "sync" and extract_mode == "fine":
+            if (
+                sync_mode == "sync"
+                and extract_mode == "fine"
+                and (
+                    not hasattr(self.mem_reader, "memory_version_switch")
+                    or self.mem_reader.memory_version_switch != "on"
+                )
+            ):
                 for memory in flattened_local:
                     merged_from = (memory.metadata.info or {}).get("merged_from")
                     if merged_from:
