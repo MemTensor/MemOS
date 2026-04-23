@@ -66,6 +66,8 @@ export function resolveConfig(raw: Partial<MemosLocalConfig> | undefined, stateD
       mmrLambda: cfg.recall?.mmrLambda ?? DEFAULTS.mmrLambda,
       recencyHalfLifeDays: cfg.recall?.recencyHalfLifeDays ?? DEFAULTS.recencyHalfLifeDays,
       vectorSearchMaxChunks: cfg.recall?.vectorSearchMaxChunks ?? DEFAULTS.vectorSearchMaxChunks,
+      autoRecallMaxResults: cfg.recall?.autoRecallMaxResults ?? DEFAULTS.autoRecallMaxResults,
+      autoRecallMinScore: cfg.recall?.autoRecallMinScore ?? DEFAULTS.autoRecallMinScore,
     },
     dedup: {
       similarityThreshold: cfg.dedup?.similarityThreshold ?? DEFAULTS.dedupSimilarityThreshold,
