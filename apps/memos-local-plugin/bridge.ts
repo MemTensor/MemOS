@@ -22,7 +22,6 @@ import { ensureSqliteBinding } from "./src/storage/ensure-binding";
 import { SqliteStore } from "./src/storage/sqlite";
 import { Embedder } from "./src/embedding";
 import { ViewerServer } from "./src/viewer/server";
-import { Telemetry } from "./src/telemetry";
 
 // ─── Types ───
 
@@ -43,31 +42,6 @@ function createLogger() {
   };
 }
 
-function detectPluginDir(): string {
-  let cur = __dirname;
-  for (let i = 0; i < 6; i++) {
-    if (fs.existsSync(path.join(cur, "package.json"))) return cur;
-    const parent = path.dirname(cur);
-    if (parent === cur) break;
-    cur = parent;
-  }
-  return __dirname;
-}
-
-function readPluginVersion(dir: string): string {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf-8")).version ?? "0.0.0";
-  } catch { return "0.0.0"; }
-}
-
-const TRACKED_METHODS = new Set(["search", "recent", "timeline", "get"]);
-const METHOD_EVENT_NAME: Record<string, string> = {
-  search: "memory_search",
-  recent: "memory_recent",
-  timeline: "memory_timeline",
-  get: "memory_get",
-};
-
 function parseConfig(): PluginInitOptions & { branding?: Record<string, string> } {
   const raw = process.env.MEMOS_BRIDGE_CONFIG;
   if (!raw) return {};
@@ -77,40 +51,6 @@ function parseConfig(): PluginInitOptions & { branding?: Record<string, string> 
     process.stderr.write(`[warn] Failed to parse MEMOS_BRIDGE_CONFIG, using defaults\n`);
     return {};
   }
-}
-
-/**
- * Read embedding config from the openclaw.json config file(s).
- * Checks the memos state dir first (where the viewer saves), then ~/.openclaw.
- */
-function readEmbeddingConfigFromFile(
-  stateDir: string,
-  log: ReturnType<typeof createLogger>,
-): Record<string, unknown> | undefined {
-  const home = process.env.HOME || process.env.USERPROFILE || "";
-  const candidates = [
-    process.env.OPENCLAW_CONFIG_PATH,
-    process.env.OPENCLAW_STATE_DIR ? path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json") : undefined,
-    path.join(stateDir, "openclaw.json"),
-    path.join(home, ".openclaw", "openclaw.json"),
-  ].filter(Boolean) as string[];
-
-  for (const cfgPath of candidates) {
-    try {
-      if (!fs.existsSync(cfgPath)) continue;
-      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-      const entries = raw?.plugins?.entries ?? {};
-      for (const [name, entry] of Object.entries(entries)) {
-        if (!name.toLowerCase().includes("memos")) continue;
-        const cfg = (entry as any)?.config ?? {};
-        if (cfg.embedding?.provider) {
-          log.info(`Read embedding config from ${cfgPath}: provider=${cfg.embedding.provider}`);
-          return cfg.embedding;
-        }
-      }
-    } catch { /* skip unreadable files */ }
-  }
-  return undefined;
 }
 
 function buildPromptSection(hits: Array<{ summary: string; original_excerpt?: string; score: number }>): string {
@@ -146,23 +86,14 @@ async function handleRequest(plugin: MemosLocalPlugin, method: string, params: R
           const sr = searchResult as any;
           const hits: any[] = sr?.hits ?? sr?.local?.hits ?? [];
           const hubHits: any[] = sr?.hub?.hits ?? [];
-
-          const mapHit = (h: any) => ({
+          const candidates = hits.map((h: any) => ({
             score: h.score ?? 0,
             role: h.source?.role ?? h.role ?? "user",
             summary: h.summary ?? "",
-            content: (h.original_excerpt ?? h.content ?? h.summary ?? "").slice(0, 200),
+            content: (h.original_excerpt ?? h.summary ?? "").slice(0, 200),
             origin: h.origin ?? "local",
             owner: h.owner ?? "",
-          });
-
-          const candidates = sr?.details?.candidates
-            ? (sr.details.candidates as any[]).map(mapHit)
-            : hits.map(mapHit);
-          const filtered = sr?.details?.filtered
-            ? (sr.details.filtered as any[]).map(mapHit)
-            : hits.map(mapHit);
-
+          }));
           const hubCandidates = hubHits.map((h: any) => ({
             score: h.score ?? 0,
             role: h.source?.role ?? h.role ?? "assistant",
@@ -172,10 +103,12 @@ async function handleRequest(plugin: MemosLocalPlugin, method: string, params: R
             ownerName: h.ownerName ?? "",
             sourceAgent: h.sourceAgent ?? "",
           }));
+          const detailsCandidates = sr?.details?.candidates;
+          const detailsFiltered = sr?.details?.filtered;
           const logOutput = JSON.stringify({
-            candidates,
+            candidates: Array.isArray(detailsCandidates) ? detailsCandidates : candidates,
             hubCandidates,
-            filtered,
+            filtered: Array.isArray(detailsFiltered) ? detailsFiltered : candidates,
           });
           store.recordApiLog("memory_search", params, logOutput, Date.now() - t0, true);
         }
@@ -272,13 +205,6 @@ async function runStdio(): Promise<void> {
     process.exit(1);
   }
 
-  const stateDir = configOpts.stateDir ?? `${process.env.HOME}/.openharness/memos-state`;
-  const pluginDir = detectPluginDir();
-  const pluginVersion = readPluginVersion(pluginDir);
-  const ctx = buildContext(stateDir, process.cwd(), configOpts.config, log);
-  const telemetry = new Telemetry(ctx.config.telemetry ?? {}, stateDir, pluginVersion, log, pluginDir);
-  telemetry.trackPluginStarted(ctx.config.embedding?.provider ?? "local", ctx.config.summarizer?.provider ?? "none");
-
   const rl = readline.createInterface({ input: process.stdin });
 
   rl.on("line", async (line: string) => {
@@ -289,26 +215,15 @@ async function runStdio(): Promise<void> {
       process.stderr.write(`[warn] Invalid JSON: ${line}\n`);
       return;
     }
-    const t0 = Date.now();
     try {
       if (req.method === "shutdown") {
-        await telemetry.shutdown();
         await plugin.shutdown();
         process.stdout.write(JSON.stringify({ id: req.id, result: { ok: true } }) + "\n");
         process.exit(0);
       }
       const result = await handleRequest(plugin, req.method, req.params);
-      const evtName = METHOD_EVENT_NAME[req.method];
-      if (evtName) telemetry.trackToolCalled(evtName, Date.now() - t0, true);
-      if (req.method === "ingest") telemetry.trackMemoryIngested((req.params?.messages as any[])?.length ?? 0);
-      if (req.method === "build_prompt") telemetry.trackAutoRecall((result as any)?.hitCount ?? 0, Date.now() - t0);
       process.stdout.write(JSON.stringify({ id: req.id, result: result ?? { ok: true } }) + "\n");
     } catch (err: unknown) {
-      const evtName = METHOD_EVENT_NAME[req.method];
-      if (evtName) {
-        telemetry.trackToolCalled(evtName, Date.now() - t0, false);
-        telemetry.trackError(evtName, (err as Error)?.name ?? "unknown");
-      }
       const message = err instanceof Error ? err.message : String(err);
       process.stdout.write(JSON.stringify({ id: req.id, error: message }) + "\n");
     }
@@ -316,7 +231,6 @@ async function runStdio(): Promise<void> {
 
   rl.on("close", async () => {
     log.info("Bridge: stdin closed, shutting down");
-    await telemetry.shutdown();
     await plugin.shutdown();
     process.exit(0);
   });
@@ -345,30 +259,16 @@ async function runDaemon(tcpPort: number, viewerPort: number): Promise<void> {
     process.exit(1);
   }
 
-  const pluginDir = detectPluginDir();
-  const pluginVersion = readPluginVersion(pluginDir);
-  const ctx = buildContext(stateDir, process.cwd(), configOpts.config, log);
-  const telemetry = new Telemetry(ctx.config.telemetry ?? {}, stateDir, pluginVersion, log, pluginDir);
-  telemetry.trackPluginStarted(ctx.config.embedding?.provider ?? "local", ctx.config.summarizer?.provider ?? "none");
-
   // Start viewer
   let viewerUrl = "";
-  let viewer: ViewerServer | null = null;
   try {
+    const ctx = buildContext(stateDir, process.cwd(), configOpts.config, log);
     ensureSqliteBinding(log);
     const store = new SqliteStore(ctx.config.storage!.dbPath!, log);
     const embedder = new Embedder(ctx.config.embedding, log);
-    viewer = new ViewerServer({ store, embedder, port: viewerPort, log, dataDir: stateDir, ctx, branding: configOpts.branding });
+    const viewer = new ViewerServer({ store, embedder, port: viewerPort, log, dataDir: stateDir, ctx, branding: configOpts.branding });
     viewerUrl = await viewer.start();
     log.info(`Viewer started at ${viewerUrl}`);
-    const httpSrv = (viewer as any).server;
-    if (httpSrv) {
-      httpSrv.on("request", (req: any) => {
-        if (req.method === "GET" && (req.url === "/" || req.url?.startsWith("/?"))) {
-          telemetry.trackViewerOpened();
-        }
-      });
-    }
   } catch (err) {
     log.warn(`Viewer failed to start: ${err}`);
   }
@@ -383,31 +283,20 @@ async function runDaemon(tcpPort: number, viewerPort: number): Promise<void> {
       } catch {
         return;
       }
-      const t0 = Date.now();
       try {
         if (req.method === "get_viewer_url") {
           socket.write(JSON.stringify({ id: req.id, result: { url: viewerUrl } }) + "\n");
           return;
         }
         if (req.method === "shutdown_daemon") {
-          await telemetry.shutdown();
           await plugin.shutdown();
           socket.write(JSON.stringify({ id: req.id, result: { ok: true } }) + "\n");
           server.close();
           process.exit(0);
         }
         const result = await handleRequest(plugin, req.method, req.params);
-        const evtName = METHOD_EVENT_NAME[req.method];
-        if (evtName) telemetry.trackToolCalled(evtName, Date.now() - t0, true);
-        if (req.method === "ingest") telemetry.trackMemoryIngested((req.params?.messages as any[])?.length ?? 0);
-        if (req.method === "build_prompt") telemetry.trackAutoRecall((result as any)?.hitCount ?? 0, Date.now() - t0);
         socket.write(JSON.stringify({ id: req.id, result: result ?? { ok: true } }) + "\n");
       } catch (err: unknown) {
-        const evtName = METHOD_EVENT_NAME[req.method];
-        if (evtName) {
-          telemetry.trackToolCalled(evtName, Date.now() - t0, false);
-          telemetry.trackError(evtName, (err as Error)?.name ?? "unknown");
-        }
         const message = err instanceof Error ? err.message : String(err);
         socket.write(JSON.stringify({ id: req.id, error: message }) + "\n");
       }
@@ -434,30 +323,8 @@ async function runDaemon(tcpPort: number, viewerPort: number): Promise<void> {
   process.stdout?.on("error", () => {});
   process.stderr?.on("error", () => {});
 
-  // Hot-reload config on SIGUSR1 (used by viewer after saving settings).
-  // In Node.js, SIGUSR1 normally starts the debugger — we override it to
-  // re-read the config file and swap in an updated Embedder so changes
-  // take effect without a full daemon restart.
-  process.on("SIGUSR1", () => {
-    log.info("SIGUSR1 received — hot-reloading config from file...");
-    try {
-      const embeddingCfg = readEmbeddingConfigFromFile(stateDir, log);
-      if (embeddingCfg && viewer) {
-        const resolvedCfg = buildContext(stateDir, process.cwd(), { embedding: embeddingCfg }, log);
-        const newEmbedder = new Embedder(resolvedCfg.config.embedding, log);
-        viewer.updateEmbedder(newEmbedder);
-        log.info(`Config hot-reloaded: embedding provider=${newEmbedder.provider}`);
-      } else {
-        log.info("No embedding config change detected or viewer not available");
-      }
-    } catch (err) {
-      log.warn(`SIGUSR1 config hot-reload failed: ${err}`);
-    }
-  });
-
   // Cleanup on exit
   const cleanup = () => {
-    void telemetry.shutdown();
     const pidDir = path.join(stateDir, "daemon");
     try { fs.unlinkSync(path.join(pidDir, "bridge.pid")); } catch {}
     try { fs.unlinkSync(path.join(pidDir, "bridge.port")); } catch {}
