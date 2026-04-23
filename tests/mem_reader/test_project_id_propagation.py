@@ -216,6 +216,8 @@ class TestMultiModalProjectIdPropagation(unittest.TestCase):
         self.reader.graph_db = MagicMock()
         self.reader.oss_config = None
         self.reader.skills_dir_config = None
+        self.reader.memory_version_switch = "off"
+        self.reader.qwen_llm = MagicMock()
 
     # -- _build_window_from_items --------------------------------------------
     def test_build_window_propagates_project_id(self):

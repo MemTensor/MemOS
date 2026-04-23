@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -76,6 +76,13 @@ class MultiModalStructMemReaderConfig(BaseMemReaderConfig):
         default=None,
         description="Skills directory for the MemReader",
     )
+    memory_version_switch: Literal["on", "off"] = Field(
+        default="off",
+        description="Turn on memory version or off",
+    )
+
+    # Allow passing additional fields without raising validation errors
+    model_config = ConfigDict(extra="allow", strict=True)
 
 
 class StrategyStructMemReaderConfig(BaseMemReaderConfig):

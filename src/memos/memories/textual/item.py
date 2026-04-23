@@ -69,9 +69,9 @@ class ArchivedTextualMemory(BaseModel):
     memory: str | None = Field(
         default_factory=lambda: "", description="The content of the archived version of the memory."
     )
-    update_type: Literal["conflict", "duplicate", "extract", "unrelated"] = Field(
+    update_type: Literal["conflict", "duplicate", "extract", "unrelated", "feedback"] = Field(
         default="unrelated",
-        description="The type of the memory (e.g., `conflict`, `duplicate`, `extract`, `unrelated`).",
+        description="The type of the memory (e.g., `conflict`, `duplicate`, `extract`, `unrelated`, `feedback`).",
     )
     archived_memory_id: str | None = Field(
         default=None,
@@ -106,15 +106,15 @@ class TextualMemoryMetadata(BaseModel):
         default=None,
         description="Whether or not the memory was created in fast mode, carrying raw memory contents that haven't been edited by llms yet.",
     )
-    evolve_to: list[str] | None = Field(
+    evolve_to: list[str] = Field(
         default_factory=list,
-        description="Only valid if a node was once a (raw)fast node. Recording which new memory nodes it 'evolves' to after llm extraction.",
+        description="Recording which new memory nodes it 'evolves' to after llm extraction.",
     )
-    version: int | None = Field(
-        default=None,
+    version: int = Field(
+        default=1,
         description="The version of the memory. Will be incremented when the memory is updated.",
     )
-    history: list[ArchivedTextualMemory] | None = Field(
+    history: list[ArchivedTextualMemory] = Field(
         default_factory=list,
         description="Storing the archived versions of the memory. Only preserving core information of each version.",
     )

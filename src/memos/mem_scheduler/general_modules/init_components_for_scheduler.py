@@ -24,6 +24,8 @@ from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory
     InternetRetrieverFactory,
 )
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
+from memos.plugins.component_bootstrap import build_plugin_context
+from memos.plugins.manager import plugin_manager
 
 
 if TYPE_CHECKING:
@@ -171,6 +173,16 @@ def build_internet_retriever_config() -> dict[str, Any]:
     return InternetRetrieverConfigFactory.model_validate(APIConfig.get_internet_config())
 
 
+def build_nli_client_config() -> dict[str, Any]:
+    """
+    Build NLI client configuration.
+
+    Returns:
+        NLI client configuration dictionary
+    """
+    return APIConfig.get_nli_config()
+
+
 def _get_default_memory_size(cube_config: Any) -> dict[str, int]:
     """
     Get default memory size configuration.
@@ -246,6 +258,7 @@ def init_components() -> dict[str, Any]:
     graph_db_config = build_graph_db_config()
     llm_config = build_llm_config()
     embedder_config = build_embedder_config()
+    nli_client_config = build_nli_client_config()
     mem_reader_config = build_mem_reader_config()
     reranker_config = build_reranker_config()
     feedback_reranker_config = build_feedback_reranker_config()
@@ -257,8 +270,25 @@ def init_components() -> dict[str, Any]:
     graph_db = GraphStoreFactory.from_config(graph_db_config)
     llm = LLMFactory.from_config(llm_config)
     embedder = EmbedderFactory.from_config(embedder_config)
+
+    plugin_manager.discover()
+    plugin_context = build_plugin_context(
+        graph_db=graph_db,
+        embedder=embedder,
+        default_cube_config=default_cube_config,
+        nli_client_config=nli_client_config,
+        mem_reader_config=mem_reader_config,
+        reranker_config=reranker_config,
+        feedback_reranker_config=feedback_reranker_config,
+        internet_retriever_config=internet_retriever_config,
+    )
+    plugin_manager.init_components(plugin_context)
+
     # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
-    mem_reader = MemReaderFactory.from_config(mem_reader_config, graph_db=graph_db)
+    mem_reader = MemReaderFactory.from_config(
+        mem_reader_config,
+        graph_db=graph_db,
+    )
     reranker = RerankerFactory.from_config(reranker_config)
     feedback_reranker = RerankerFactory.from_config(feedback_reranker_config)
     internet_retriever = InternetRetrieverFactory.from_config(

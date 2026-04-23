@@ -15,10 +15,12 @@ from memos.mem_reader.read_skill_memory.process_skill_memory import process_skil
 from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
 from memos.mem_reader.utils import parse_json_result
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.plugins.hook_defs import H
+from memos.plugins.hooks import trigger_single_hook
 from memos.templates.mem_reader_prompts import MEMORY_MERGE_PROMPT_EN, MEMORY_MERGE_PROMPT_ZH
 from memos.templates.tool_mem_prompts import TOOL_TRAJECTORY_PROMPT_EN, TOOL_TRAJECTORY_PROMPT_ZH
 from memos.types import MessagesType
-from memos.utils import timed
+from memos.utils import timed, timed_stage
 
 
 if TYPE_CHECKING:
@@ -58,6 +60,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         simple_config = SimpleStructMemReaderConfig(**config_dict)
         super().__init__(simple_config)
 
+        self.memory_version_switch = getattr(config, "memory_version_switch", "off")
+
         # Image parser LLM (requires vision model)
         # Falls back to general_llm if not configured (general_llm itself falls back to main llm)
         self.image_parser_llm = (
@@ -74,6 +78,30 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             parser=None,
             direct_markdown_hostnames=direct_markdown_hostnames,
         )
+
+    def _embed_memory_items(self, items: list[TextualMemoryItem]) -> None:
+        """Compute embeddings for a list of memory items in-place.
+
+        Attempts a single batch call first; falls back to per-item calls if the
+        batch fails.  Errors are logged but never raised so callers always
+        continue normally.
+        """
+        valid = [w for w in items if w and w.memory]
+        if not valid:
+            return
+        texts = [w.memory for w in valid]
+        try:
+            embeddings = self.embedder.embed(texts)
+            for w, emb in zip(valid, embeddings, strict=True):
+                w.metadata.embedding = emb
+        except Exception as e:
+            logger.error(f"[MultiModalStruct] Error batch computing embeddings: {e}")
+            logger.warning("[EMBED_FALLBACK] batch_size=%d", len(texts))
+            for w in valid:
+                try:
+                    w.metadata.embedding = self.embedder.embed([w.memory])[0]
+                except Exception as e2:
+                    logger.error(f"[MultiModalStruct] Error computing embedding for item: {e2}")
 
     def _split_large_memory_item(
         self, item: TextualMemoryItem, max_tokens: int
@@ -102,8 +130,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             split_items = []
 
             def _create_chunk_item(chunk):
-                # Chunk objects have a 'text' attribute
-                chunk_text = chunk.text
+                # Different chunkers are not fully consistent:
+                # some return Chunk-like objects with `.text`, while others return raw strings.
+                chunk_text = chunk.text if hasattr(chunk, "text") else chunk
                 if not chunk_text or not chunk_text.strip():
                     return None
                 # Create a new memory item for each chunk, preserving original metadata
@@ -203,13 +232,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # If only one item after processing, compute embedding and return
         if len(processed_items) == 1:
             single_item = processed_items[0]
-            if single_item and single_item.memory:
-                try:
-                    single_item.metadata.embedding = self.embedder.embed([single_item.memory])[0]
-                except Exception as e:
-                    logger.error(
-                        f"[MultiModalStruct] Error computing embedding for single item: {e}"
-                    )
+            with timed_stage("add", "embedding", window_count=1):
+                self._embed_memory_items([single_item])
             return processed_items
 
         windows = []
@@ -260,31 +284,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 windows.append(window)
 
         # Batch compute embeddings for all windows
-        if windows:
-            # Collect all valid windows that need embedding
-            valid_windows = [w for w in windows if w and w.memory]
-
-            if valid_windows:
-                # Collect all texts that need embedding
-                texts_to_embed = [w.memory for w in valid_windows]
-
-                # Batch compute all embeddings at once
-                try:
-                    embeddings = self.embedder.embed(texts_to_embed)
-                    # Fill embeddings back into memory items
-                    for window, embedding in zip(valid_windows, embeddings, strict=True):
-                        window.metadata.embedding = embedding
-                except Exception as e:
-                    logger.error(f"[MultiModalStruct] Error batch computing embeddings: {e}")
-                    # Fallback: compute embeddings individually
-                    for window in valid_windows:
-                        if window.memory:
-                            try:
-                                window.metadata.embedding = self.embedder.embed([window.memory])[0]
-                            except Exception as e2:
-                                logger.error(
-                                    f"[MultiModalStruct] Error computing embedding for item: {e2}"
-                                )
+        with timed_stage("add", "embedding", window_count=len(windows)):
+            self._embed_memory_items(windows)
 
         return windows
 
@@ -461,6 +462,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         if self.config.remove_prompt_example and examples:
             prompt = prompt.replace(examples, "")
+
+        logger.info(f"[MultiModalParser] Process String Fine Prompt: {prompt}")
+
         messages = [{"role": "user", "content": prompt}]
         try:
             response_text = self.llm.generate(messages)
@@ -509,6 +513,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         sources: list,
         **kwargs,
     ) -> dict:
+        # TODO: delete this function
         """
         Check if extracted memory should be merged with similar existing memories.
         If merge is needed, return merged memory dict with merged_from field.
@@ -523,102 +528,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         Returns:
             Memory dict (possibly merged) with merged_from field if merged
         """
-        # If no graph_db or user_name, return original
-        if not self.graph_db or "user_name" not in kwargs:
-            return extracted_memory_dict
-        user_name = kwargs.get("user_name")
-
-        # Detect language
-        lang = "en"
-        if sources:
-            for source in sources:
-                if hasattr(source, "lang") and source.lang:
-                    lang = source.lang
-                    break
-                elif isinstance(source, dict) and source.get("lang"):
-                    lang = source.get("lang")
-                    break
-        if lang is None:
-            lang = detect_lang(mem_text)
-
-        # Search for similar memories
-        merge_threshold = kwargs.get("merge_similarity_threshold", 0.3)
-
-        try:
-            search_results = self.graph_db.search_by_embedding(
-                vector=self.embedder.embed(mem_text)[0],
-                top_k=20,
-                status="activated",
-                threshold=merge_threshold,
-                user_name=user_name,
-            )
-
-            if not search_results:
-                return extracted_memory_dict
-
-            # Get full memory details
-            similar_memory_ids = [r["id"] for r in search_results if r.get("id")]
-            similar_memories_list = [
-                self.graph_db.get_node(mem_id, include_embedding=False, user_name=user_name)
-                for mem_id in similar_memory_ids
-            ]
-
-            # Filter out None and mode:fast memories
-            filtered_similar = []
-            for mem in similar_memories_list:
-                if not mem:
-                    continue
-                mem_metadata = mem.get("metadata", {})
-                tags = mem_metadata.get("tags", [])
-                if isinstance(tags, list) and "mode:fast" in tags:
-                    continue
-                filtered_similar.append(
-                    {
-                        "id": mem.get("id"),
-                        "memory": mem.get("memory", ""),
-                    }
-                )
-            logger.info(
-                f"Valid similar memories for {mem_text} is "
-                f"{len(filtered_similar)}: {filtered_similar}"
-            )
-
-            if not filtered_similar:
-                return extracted_memory_dict
-
-            # Create a temporary TextualMemoryItem for merge check
-            temp_memory_item = TextualMemoryItem(
-                memory=mem_text,
-                metadata=TreeNodeTextualMemoryMetadata(
-                    user_id="",
-                    session_id="",
-                    memory_type=extracted_memory_dict.get("memory_type", "LongTermMemory"),
-                    status="activated",
-                    tags=extracted_memory_dict.get("tags", []),
-                    key=extracted_memory_dict.get("key", ""),
-                ),
-            )
-
-            # Try to merge with LLM
-            merge_result = self._merge_memories_with_llm(
-                temp_memory_item, filtered_similar, lang=lang
-            )
-
-            if merge_result:
-                # Return merged memory dict
-                merged_dict = extracted_memory_dict.copy()
-                merged_content = merge_result.get("value", mem_text)
-                merged_dict["value"] = merged_content
-                merged_from_ids = merge_result.get("merged_from", [])
-                merged_dict["merged_from"] = merged_from_ids
-                return merged_dict
-            else:
-                return extracted_memory_dict
-
-        except Exception as e:
-            logger.error(f"[MultiModalFine] Error in get_maybe_merged_memory: {e}")
-            # On error, return original
-            return extracted_memory_dict
+        return extracted_memory_dict
 
     def _merge_memories_with_llm(
         self,
@@ -720,6 +630,35 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # Determine prompt type based on sources
             prompt_type = self._determine_prompt_type(sources)
 
+            # ========== Stage 0: Memory version async extraction/update pipeline ==========
+            if getattr(self, "memory_version_switch", "off") == "on":
+                try:
+                    user_name = kwargs.get("user_name")
+                    should_use_version_pipeline = trigger_single_hook(
+                        H.MEMORY_VERSION_PREPARE_UPDATES,
+                        item=fast_item,
+                        user_name=user_name,
+                        judge_llm=self.general_llm,
+                    )
+                    if should_use_version_pipeline:
+                        lang = detect_lang(kwargs.get("chat_history") or mem_str)
+                        custom_tags_prompt_template = PROMPT_DICT["custom_tags"][lang]
+                        new_items = trigger_single_hook(
+                            H.MEMORY_VERSION_APPLY_UPDATES,
+                            item=fast_item,
+                            user_name=user_name,
+                            version_llm=self.qwen_llm,
+                            merge_llm=self.general_llm,
+                            custom_tags=custom_tags,
+                            custom_tags_prompt_template=custom_tags_prompt_template,
+                            timeout_sec=30,
+                        )
+                        return new_items
+                except RuntimeError as ex:
+                    logger.warning(f"[MultiModalFine] Memory version hook unavailable: {ex}")
+                except Exception as ex:
+                    logger.warning(f"[MultiModalFine] Fine memory version pipeline failed: {ex}")
+
             # ========== Stage 1: Normal extraction (without reference) ==========
             try:
                 resp = self._get_llm_response(mem_str, custom_tags, sources, prompt_type)
@@ -730,14 +669,15 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if resp.get("memory list", []):
                 for m in resp.get("memory list", []):
                     try:
-                        # Check and merge with similar memories if needed
-                        m_maybe_merged = self._get_maybe_merged_memory(
-                            extracted_memory_dict=m,
-                            mem_text=m.get("value", ""),
-                            sources=sources,
-                            original_query=mem_str,
-                            **kwargs,
-                        )
+                        m_maybe_merged = m
+                        if getattr(self, "memory_version_switch", "off") != "on":
+                            m_maybe_merged = self._get_maybe_merged_memory(
+                                extracted_memory_dict=m,
+                                mem_text=m.get("value", ""),
+                                sources=sources,
+                                original_query=mem_str,
+                                **kwargs,
+                            )
                         # Normalize memory_type (same as simple_struct)
                         memory_type = (
                             m_maybe_merged.get("memory_type", "LongTermMemory")
@@ -755,8 +695,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                             background=resp.get("summary", ""),
                             **extra_kwargs,
                         )
-                        # Add merged_from to info if present
-                        if "merged_from" in m_maybe_merged:
+                        if (
+                            getattr(self, "memory_version_switch", "off") != "on"
+                            and "merged_from" in m_maybe_merged
+                        ):
                             node.metadata.info = node.metadata.info or {}
                             node.metadata.info["merged_from"] = m_maybe_merged["merged_from"]
                         fine_items.append(node)
@@ -765,13 +707,15 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             elif resp.get("value") and resp.get("key"):
                 try:
                     # Check and merge with similar memories if needed
-                    resp_maybe_merged = self._get_maybe_merged_memory(
-                        extracted_memory_dict=resp,
-                        mem_text=resp.get("value", "").strip(),
-                        sources=sources,
-                        original_query=mem_str,
-                        **kwargs,
-                    )
+                    resp_maybe_merged = resp
+                    if getattr(self, "memory_version_switch", "off") != "on":
+                        resp_maybe_merged = self._get_maybe_merged_memory(
+                            extracted_memory_dict=resp,
+                            mem_text=resp.get("value", "").strip(),
+                            sources=sources,
+                            original_query=mem_str,
+                            **kwargs,
+                        )
                     node = self._make_memory_item(
                         value=resp_maybe_merged.get("value", "").strip(),
                         info=info_per_item,
@@ -782,8 +726,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         background=resp.get("summary", ""),
                         **extra_kwargs,
                     )
-                    # Add merged_from to info if present
-                    if "merged_from" in resp_maybe_merged:
+                    if (
+                        getattr(self, "memory_version_switch", "off") != "on"
+                        and "merged_from" in resp_maybe_merged
+                    ):
                         node.metadata.info = node.metadata.info or {}
                         node.metadata.info["merged_from"] = resp_maybe_merged["merged_from"]
                     fine_items.append(node)
@@ -984,49 +930,49 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # must pop here, avoid add to info, only used in sync fine mode
         custom_tags = info.pop("custom_tags", None) if isinstance(info, dict) else None
 
-        # Use MultiModalParser to parse the scene data
-        # If it's a list, parse each item; otherwise parse as single message
-        if isinstance(scene_data_info, list):
-            # Pre-expand multimodal messages
-            expanded_messages = self._expand_multimodal_messages(scene_data_info)
+        # Stage: parse — parallel message parsing + sliding-window aggregation
+        with timed_stage("add", "parse") as ts_parse:
+            if isinstance(scene_data_info, list):
+                expanded_messages = self._expand_multimodal_messages(scene_data_info)
+                ts_parse.set(msg_count=len(expanded_messages))
 
-            # Parse each message in the list
-            all_memory_items = []
-            # Use thread pool to parse each message in parallel, but keep the original order
-            with ContextThreadPoolExecutor(max_workers=30) as executor:
-                # submit tasks and keep the original order
-                futures = [
-                    executor.submit(
-                        self.multi_modal_parser.parse,
-                        msg,
-                        info,
-                        mode="fast",
-                        need_emb=False,
-                        **kwargs,
-                    )
-                    for msg in expanded_messages
-                ]
-                # collect results in original order
-                for future in futures:
-                    try:
-                        items = future.result()
-                        all_memory_items.extend(items)
-                    except Exception as e:
-                        logger.error(f"[MultiModalFine] Error in parallel parsing: {e}")
-        else:
-            # Parse as single message
-            all_memory_items = self.multi_modal_parser.parse(
-                scene_data_info, info, mode="fast", need_emb=False, **kwargs
-            )
-        fast_memory_items = self._concat_multi_modal_memories(all_memory_items)
+                all_memory_items = []
+                with ContextThreadPoolExecutor(max_workers=30) as executor:
+                    futures = [
+                        executor.submit(
+                            self.multi_modal_parser.parse,
+                            msg,
+                            info,
+                            mode="fast",
+                            need_emb=False,
+                            **kwargs,
+                        )
+                        for msg in expanded_messages
+                    ]
+                    for future in futures:
+                        try:
+                            items = future.result()
+                            all_memory_items.extend(items)
+                        except Exception as e:
+                            logger.error(f"[MultiModalFine] Error in parallel parsing: {e}")
+            else:
+                ts_parse.set(msg_count=1)
+                all_memory_items = self.multi_modal_parser.parse(
+                    scene_data_info, info, mode="fast", need_emb=False, **kwargs
+                )
+
+            fast_memory_items = self._concat_multi_modal_memories(all_memory_items)
+            ts_parse.set(window_count=len(fast_memory_items))
+
         if mode == "fast":
             return fast_memory_items
-        else:
-            non_file_url_fast_items = [
-                item for item in fast_memory_items if not self._is_file_url_only_item(item)
-            ]
 
-            # Part A: call llm in parallel using thread pool
+        # Stage: llm_extract — fine mode 4-way parallel LLM + per-source serial
+        non_file_url_fast_items = [
+            item for item in fast_memory_items if not self._is_file_url_only_item(item)
+        ]
+
+        with timed_stage("add", "llm_extract") as ts_llm:
             fine_memory_items = []
 
             with ContextThreadPoolExecutor(max_workers=4) as executor:
@@ -1057,7 +1003,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     **kwargs,
                 )
 
-                # Collect results
                 fine_memory_items_string_parser = future_string.result()
                 fine_memory_items_tool_trajectory_parser = future_tool.result()
                 fine_memory_items_skill_memory_parser = future_skill.result()
@@ -1068,21 +1013,25 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             fine_memory_items.extend(fine_memory_items_skill_memory_parser)
             fine_memory_items.extend(fine_memory_items_pref_parser)
 
-            # Part B: get fine multimodal items
-            for fast_item in fast_memory_items:
-                sources = fast_item.metadata.sources
-                for source in sources:
-                    lang = getattr(source, "lang", "en")
-                    items = self.multi_modal_parser.process_transfer(
-                        source,
-                        context_items=[fast_item],
-                        custom_tags=custom_tags,
-                        info=info,
-                        lang=lang,
-                        user_context=kwargs.get("user_context"),
-                    )
-                    fine_memory_items.extend(items)
-            return fine_memory_items
+            # Part B: per-source serial processing
+            with timed_stage("add", "per_source") as ts_ps:
+                for fast_item in fast_memory_items:
+                    sources = fast_item.metadata.sources
+                    for source in sources:
+                        lang = getattr(source, "lang", "en")
+                        items = self.multi_modal_parser.process_transfer(
+                            source,
+                            context_items=[fast_item],
+                            custom_tags=custom_tags,
+                            info=info,
+                            lang=lang,
+                            user_context=kwargs.get("user_context"),
+                        )
+                        fine_memory_items.extend(items)
+
+            ts_llm.set(fine_memory_count=len(fine_memory_items), per_source_ms=ts_ps.duration_ms)
+
+        return fine_memory_items
 
     @timed
     def _process_transfer_multi_modal_data(

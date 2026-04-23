@@ -75,9 +75,28 @@ DEFAULT_STREAM_INACTIVITY_DELETE_SECONDS = 7_200.0
 
 
 # task queue
-DEFAULT_STREAM_KEY_PREFIX = os.getenv(
-    "MEMSCHEDULER_STREAM_KEY_PREFIX", "scheduler:messages:stream:v2.0"
+DEFAULT_STREAM_KEY_PREFIX = "scheduler:messages:stream:v2.0"
+
+logger.info(
+    "[TASK_SCHEMAS] Module imported. env_MEMSCHEDULER_STREAM_KEY_PREFIX=%s, default_stream_prefix=%s",
+    os.getenv("MEMSCHEDULER_STREAM_KEY_PREFIX"),
+    DEFAULT_STREAM_KEY_PREFIX,
 )
+
+
+def get_stream_key_prefix() -> str:
+    """Resolve the scheduler stream prefix at runtime.
+
+    This must not be evaluated at import time because some server entrypoints
+    load `.env` after importing router/handler modules.
+    """
+    resolved = os.getenv("MEMSCHEDULER_STREAM_KEY_PREFIX", DEFAULT_STREAM_KEY_PREFIX)
+    logger.info(
+        "[TASK_SCHEMAS] Resolved stream prefix at runtime. env_MEMSCHEDULER_STREAM_KEY_PREFIX=%s, resolved_stream_prefix=%s",
+        os.getenv("MEMSCHEDULER_STREAM_KEY_PREFIX"),
+        resolved,
+    )
+    return resolved
 
 
 # ============== Running Tasks ==============
