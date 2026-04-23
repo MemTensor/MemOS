@@ -2,6 +2,7 @@ import concurrent.futures
 import json
 import re
 import traceback
+import uuid
 
 from typing import TYPE_CHECKING, Any
 
@@ -128,21 +129,32 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         try:
             chunks = self.chunker.chunk(item_text)
             split_items = []
+            source_info = dict(item.metadata.info or {})
+            source_internal_info = dict(item.metadata.internal_info or {})
+            ingest_batch_id = str(source_internal_info.get("ingest_batch_id") or uuid.uuid4())
+            chunk_total = len(chunks)
 
-            def _create_chunk_item(chunk):
+            def _create_chunk_item(chunk_idx: int, chunk):
                 # Different chunkers are not fully consistent:
                 # some return Chunk-like objects with `.text`, while others return raw strings.
                 chunk_text = chunk.text if hasattr(chunk, "text") else chunk
                 if not chunk_text or not chunk_text.strip():
                     return None
+                chunk_info = {
+                    "user_id": item.metadata.user_id,
+                    "session_id": item.metadata.session_id,
+                    **source_info,
+                }
+                chunk_internal_info = {
+                    **source_internal_info,
+                    "ingest_batch_id": ingest_batch_id,
+                    "chunk_index": chunk_idx,
+                    "chunk_total": chunk_total,
+                }
                 # Create a new memory item for each chunk, preserving original metadata
                 split_item = self._make_memory_item(
                     value=chunk_text,
-                    info={
-                        "user_id": item.metadata.user_id,
-                        "session_id": item.metadata.session_id,
-                        **(item.metadata.info or {}),
-                    },
+                    info=chunk_info,
                     memory_type=item.metadata.memory_type,
                     tags=item.metadata.tags or [],
                     key=item.metadata.key,
@@ -150,11 +162,15 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     background=item.metadata.background or "",
                     need_embed=False,
                 )
+                split_item.metadata.internal_info = chunk_internal_info
                 return split_item
 
             # Use thread pool to parallel process chunks, but keep the original order
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                futures = [executor.submit(_create_chunk_item, chunk) for chunk in chunks]
+                futures = [
+                    executor.submit(_create_chunk_item, chunk_idx, chunk)
+                    for chunk_idx, chunk in enumerate(chunks)
+                ]
                 for future in futures:
                     split_item = future.result()
                     if split_item is not None:
@@ -310,6 +326,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         all_sources = []
         roles = set()
         aggregated_file_ids: list[str] = []
+        ingest_batch_ids: set[str] = set()
 
         for item in items:
             if item.memory:
@@ -338,6 +355,11 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     for fid in item_file_ids:
                         if fid and fid not in aggregated_file_ids:
                             aggregated_file_ids.append(fid)
+                item_internal_info = getattr(metadata, "internal_info", None)
+                if isinstance(item_internal_info, dict):
+                    batch_id = item_internal_info.get("ingest_batch_id")
+                    if batch_id:
+                        ingest_batch_ids.add(str(batch_id))
 
         # Determine memory_type based on roles (same logic as simple_struct)
         # UserMemory if only user role, else LongTermMemory
@@ -372,7 +394,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
-
         # Create memory item without embedding (set to None, will be filled in batch)
         aggregated_item = TextualMemoryItem(
             memory=merged_text,
@@ -393,6 +414,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 **extra_kwargs,
             ),
         )
+        if len(ingest_batch_ids) == 1:
+            aggregated_item.metadata.internal_info = {
+                "ingest_batch_id": next(iter(ingest_batch_ids))
+            }
 
         return aggregated_item
 
