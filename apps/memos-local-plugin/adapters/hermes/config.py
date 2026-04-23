@@ -56,13 +56,8 @@ def get_viewer_port() -> int:
     return VIEWER_PORT
 
 
-def _read_host_model_config() -> dict:
-    """Read embedding/summarizer config from host agent's config as fallback."""
-    home = os.environ.get("HOME", os.environ.get("USERPROFILE", ""))
-    cfg_path = os.environ.get("OPENCLAW_CONFIG_PATH") or os.path.join(
-        os.environ.get("OPENCLAW_STATE_DIR", os.path.join(home, ".openclaw")),
-        "openclaw.json",
-    )
+def _extract_memos_model_config(cfg_path: str) -> dict:
+    """Extract embedding/summarizer config from an openclaw.json file."""
     try:
         with open(cfg_path) as f:
             raw = json.load(f)
@@ -80,6 +75,36 @@ def _read_host_model_config() -> dict:
                 result["summarizer"] = cfg["summarizer"]
             if result:
                 return result
+    return {}
+
+
+def _read_host_model_config() -> dict:
+    """Read embedding/summarizer config from config files.
+
+    Checks multiple locations in priority order:
+      1. OPENCLAW_CONFIG_PATH env var
+      2. OPENCLAW_STATE_DIR/openclaw.json
+      3. Viewer-saved config at <memos-state>/openclaw.json
+      4. Default ~/.openclaw/openclaw.json
+    """
+    home = os.environ.get("HOME", os.environ.get("USERPROFILE", ""))
+    candidates: list[str] = []
+
+    env_path = os.environ.get("OPENCLAW_CONFIG_PATH")
+    if env_path:
+        candidates.append(env_path)
+
+    oc_state = os.environ.get("OPENCLAW_STATE_DIR")
+    if oc_state:
+        candidates.append(os.path.join(oc_state, "openclaw.json"))
+
+    candidates.append(os.path.join(str(get_memos_state_dir()), "openclaw.json"))
+    candidates.append(os.path.join(home, ".openclaw", "openclaw.json"))
+
+    for cfg_path in candidates:
+        result = _extract_memos_model_config(cfg_path)
+        if result:
+            return result
     return {}
 
 

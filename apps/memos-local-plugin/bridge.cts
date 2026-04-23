@@ -79,6 +79,40 @@ function parseConfig(): PluginInitOptions & { branding?: Record<string, string> 
   }
 }
 
+/**
+ * Read embedding config from the openclaw.json config file(s).
+ * Checks the memos state dir first (where the viewer saves), then ~/.openclaw.
+ */
+function readEmbeddingConfigFromFile(
+  stateDir: string,
+  log: ReturnType<typeof createLogger>,
+): Record<string, unknown> | undefined {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const candidates = [
+    process.env.OPENCLAW_CONFIG_PATH,
+    process.env.OPENCLAW_STATE_DIR ? path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json") : undefined,
+    path.join(stateDir, "openclaw.json"),
+    path.join(home, ".openclaw", "openclaw.json"),
+  ].filter(Boolean) as string[];
+
+  for (const cfgPath of candidates) {
+    try {
+      if (!fs.existsSync(cfgPath)) continue;
+      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+      const entries = raw?.plugins?.entries ?? {};
+      for (const [name, entry] of Object.entries(entries)) {
+        if (!name.toLowerCase().includes("memos")) continue;
+        const cfg = (entry as any)?.config ?? {};
+        if (cfg.embedding?.provider) {
+          log.info(`Read embedding config from ${cfgPath}: provider=${cfg.embedding.provider}`);
+          return cfg.embedding;
+        }
+      }
+    } catch { /* skip unreadable files */ }
+  }
+  return undefined;
+}
+
 function buildPromptSection(hits: Array<{ summary: string; original_excerpt?: string; score: number }>): string {
   if (!hits || hits.length === 0) return "";
   const lines: string[] = ["<recalled_memories>"];
@@ -327,11 +361,12 @@ async function runDaemon(tcpPort: number, viewerPort: number): Promise<void> {
 
   // Start viewer
   let viewerUrl = "";
+  let viewer: ViewerServer | null = null;
   try {
     ensureSqliteBinding(log);
     const store = new SqliteStore(ctx.config.storage!.dbPath!, log);
     const embedder = new Embedder(ctx.config.embedding, log);
-    const viewer = new ViewerServer({ store, embedder, port: viewerPort, log, dataDir: stateDir, ctx, branding: configOpts.branding });
+    viewer = new ViewerServer({ store, embedder, port: viewerPort, log, dataDir: stateDir, ctx, branding: configOpts.branding });
     viewerUrl = await viewer.start();
     log.info(`Viewer started at ${viewerUrl}`);
     const httpSrv = (viewer as any).server;
@@ -406,6 +441,27 @@ async function runDaemon(tcpPort: number, viewerPort: number): Promise<void> {
   // Prevent EPIPE crashes when launcher closes stdout/stderr pipes
   process.stdout?.on("error", () => {});
   process.stderr?.on("error", () => {});
+
+  // Hot-reload config on SIGUSR1 (used by viewer after saving settings).
+  // In Node.js, SIGUSR1 normally starts the debugger — we override it to
+  // re-read the config file and swap in an updated Embedder so changes
+  // take effect without a full daemon restart.
+  process.on("SIGUSR1", () => {
+    log.info("SIGUSR1 received — hot-reloading config from file...");
+    try {
+      const embeddingCfg = readEmbeddingConfigFromFile(stateDir, log);
+      if (embeddingCfg && viewer) {
+        const resolvedCfg = buildContext(stateDir, process.cwd(), { embedding: embeddingCfg }, log);
+        const newEmbedder = new Embedder(resolvedCfg.config.embedding, log);
+        viewer.updateEmbedder(newEmbedder);
+        log.info(`Config hot-reloaded: embedding provider=${newEmbedder.provider}`);
+      } else {
+        log.info("No embedding config change detected or viewer not available");
+      }
+    } catch (err) {
+      log.warn(`SIGUSR1 config hot-reload failed: ${err}`);
+    }
+  });
 
   // Cleanup on exit
   const cleanup = () => {

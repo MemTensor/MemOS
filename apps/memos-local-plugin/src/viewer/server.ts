@@ -118,7 +118,7 @@ interface AuthState {
 export class ViewerServer {
   private server: http.Server | null = null;
   private readonly store: SqliteStore;
-  private readonly embedder: Embedder;
+  private embedder: Embedder;
   private readonly port: number;
   private readonly log: Logger;
   private readonly dataDir: string;
@@ -574,6 +574,12 @@ export class ViewerServer {
   private serveViewer(res: http.ServerResponse): void {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache", "Expires": "0" });
     res.end(this.applyBranding(viewerHTML(ViewerServer.PLUGIN_VERSION)));
+  }
+
+  /** Replace the embedder instance (used for hot-reload on config change). */
+  updateEmbedder(newEmbedder: Embedder): void {
+    this.embedder = newEmbedder;
+    this.log.info(`Embedder hot-reloaded: provider=${newEmbedder.provider}`);
   }
 
   // ─── Data APIs ───
