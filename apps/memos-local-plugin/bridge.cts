@@ -112,14 +112,23 @@ async function handleRequest(plugin: MemosLocalPlugin, method: string, params: R
           const sr = searchResult as any;
           const hits: any[] = sr?.hits ?? sr?.local?.hits ?? [];
           const hubHits: any[] = sr?.hub?.hits ?? [];
-          const candidates = hits.map((h: any) => ({
+
+          const mapHit = (h: any) => ({
             score: h.score ?? 0,
             role: h.source?.role ?? h.role ?? "user",
             summary: h.summary ?? "",
-            content: (h.original_excerpt ?? h.summary ?? "").slice(0, 200),
+            content: (h.original_excerpt ?? h.content ?? h.summary ?? "").slice(0, 200),
             origin: h.origin ?? "local",
             owner: h.owner ?? "",
-          }));
+          });
+
+          const candidates = sr?.details?.candidates
+            ? (sr.details.candidates as any[]).map(mapHit)
+            : hits.map(mapHit);
+          const filtered = sr?.details?.filtered
+            ? (sr.details.filtered as any[]).map(mapHit)
+            : hits.map(mapHit);
+
           const hubCandidates = hubHits.map((h: any) => ({
             score: h.score ?? 0,
             role: h.source?.role ?? h.role ?? "assistant",
@@ -132,7 +141,7 @@ async function handleRequest(plugin: MemosLocalPlugin, method: string, params: R
           const logOutput = JSON.stringify({
             candidates,
             hubCandidates,
-            filtered: candidates,
+            filtered,
           });
           store.recordApiLog("memory_search", params, logOutput, Date.now() - t0, true);
         }
