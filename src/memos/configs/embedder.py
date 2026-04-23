@@ -1,6 +1,6 @@
 from typing import Any, ClassVar
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SerializeAsAny, field_serializer, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
 
@@ -81,7 +81,9 @@ class EmbedderConfigFactory(BaseConfig):
     """Factory class for creating embedder configurations."""
 
     backend: str = Field(..., description="Backend for embedding model")
-    config: dict[str, Any] = Field(..., description="Configuration for the embedding model backend")
+    config: SerializeAsAny[BaseConfig | dict[str, Any]] = Field(
+        ..., description="Configuration for the embedding model backend"
+    )
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "ollama": OllamaEmbedderConfig,
@@ -101,5 +103,12 @@ class EmbedderConfigFactory(BaseConfig):
     @model_validator(mode="after")
     def create_config(self) -> "EmbedderConfigFactory":
         config_class = self.backend_to_class[self.backend]
-        self.config = config_class(**self.config)
+        if isinstance(self.config, dict):
+            self.config = config_class(**self.config)
         return self
+
+    @field_serializer("config", mode="plain")
+    def serialize_config(self, value):
+        if isinstance(value, BaseConfig):
+            return value.model_dump(mode="python")
+        return value
