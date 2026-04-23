@@ -7,6 +7,7 @@ import { IngestWorker } from "./ingest/worker";
 import { RecallEngine } from "./recall/engine";
 import { captureMessages } from "./capture";
 import { createMemorySearchTool, createMemoryTimelineTool, createMemoryGetTool, createNetworkMemoryDetailTool } from "./tools";
+import { Summarizer } from "./ingest/providers";
 import type { MemosLocalConfig, ToolDefinition, Logger, OpenClawAPI } from "./types";
 
 export interface MemosLocalPlugin {
@@ -66,10 +67,11 @@ export function initPlugin(opts: PluginInitOptions = {}): MemosLocalPlugin {
   const worker = new IngestWorker(store, embedder, ctx);
   const engine = new RecallEngine(store, embedder, ctx);
 
+  const summarizer = new Summarizer(ctx.config.summarizer, ctx.log, ctx.openclawAPI);
   const sharedState = { lastSearchTime: 0 };
 
   const tools: ToolDefinition[] = [
-    createMemorySearchTool(engine, store, ctx, sharedState),
+    createMemorySearchTool(engine, store, ctx, sharedState, summarizer),
     createMemoryTimelineTool(store),
     createMemoryGetTool(store),
     createNetworkMemoryDetailTool(store, ctx),

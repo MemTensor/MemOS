@@ -93,8 +93,6 @@ class MemTensorProvider(MemoryProvider):
     def __init__(self) -> None:
         self._bridge = None
         self._session_id = ""
-        self._prefetch_result = ""
-        self._prefetch_lock = threading.Lock()
         self._prefetch_thread: threading.Thread | None = None
         self._sync_thread: threading.Thread | None = None
         self._pending_ingest: tuple | None = None
@@ -146,59 +144,54 @@ class MemTensorProvider(MemoryProvider):
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        if self._prefetch_thread and self._prefetch_thread.is_alive():
-            self._prefetch_thread.join(timeout=5.0)
+        """Synchronously retrieve memories for the current user query.
 
-        with self._prefetch_lock:
-            result = self._prefetch_result
-            self._prefetch_result = ""
-
-        if not result:
-            if not self._bridge:
-                return ""
-            try:
-                result = self._do_recall(query)
-            except Exception as e:
-                logger.debug("MemTensor prefetch fallback failed: %s", e)
-                return ""
+        This ensures recalled memories are available in the same turn they
+        are requested, rather than being deferred to the next turn.
+        """
+        if not self._bridge:
+            return ""
+        try:
+            result = self._do_recall(query)
+        except Exception as e:
+            logger.debug("MemTensor prefetch failed: %s", e)
+            return ""
 
         if not result:
             return ""
         return f"## Recalled Memories\n{result}"
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
+        """Flush deferred ingest in the background.
+
+        Memory retrieval is now handled synchronously in prefetch(), so this
+        method only takes care of writing the previous turn's data into the
+        store — ensuring it doesn't pollute the current turn's search results.
+        """
         pending = self._pending_ingest
         self._pending_ingest = None
 
+        if not pending or not self._bridge:
+            return
+
         def _run():
-            # 1) Search FIRST — before ingesting the current turn
             try:
-                text = self._do_recall(query)
-                if text:
-                    with self._prefetch_lock:
-                        self._prefetch_result = text
+                from config import OWNER
+
+                user_content, assistant_content, sid = pending
+                messages = []
+                if user_content:
+                    messages.append({"role": "user", "content": user_content})
+                if assistant_content:
+                    messages.append({"role": "assistant", "content": assistant_content})
+                if messages:
+                    self._bridge.ingest(messages, session_id=sid, owner=OWNER)
+                    self._bridge.flush()
             except Exception as e:
-                logger.debug("MemTensor queue_prefetch failed: %s", e)
-
-            # 2) Now flush the deferred ingest so data is stored for future turns
-            if pending and self._bridge:
-                try:
-                    from config import OWNER
-
-                    user_content, assistant_content, sid = pending
-                    messages = []
-                    if user_content:
-                        messages.append({"role": "user", "content": user_content})
-                    if assistant_content:
-                        messages.append({"role": "assistant", "content": assistant_content})
-                    if messages:
-                        self._bridge.ingest(messages, session_id=sid, owner=OWNER)
-                        self._bridge.flush()
-                except Exception as e:
-                    logger.warning("MemTensor deferred sync_turn failed: %s", e)
+                logger.warning("MemTensor deferred sync_turn failed: %s", e)
 
         self._prefetch_thread = threading.Thread(
-            target=_run, daemon=True, name="memtensor-prefetch"
+            target=_run, daemon=True, name="memtensor-ingest"
         )
         self._prefetch_thread.start()
 
