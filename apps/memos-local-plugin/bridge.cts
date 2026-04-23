@@ -1,354 +1,168 @@
 /**
- * memos-core-bridge: stdio JSON-RPC entry point.
+ * Bridge entry point (CommonJS).
  *
- * Two modes:
- *   1. Default (stdin pipe): short-lived, reads JSON-RPC from stdin, responds on stdout.
- *      MEMOS_BRIDGE_CONFIG='...' npx tsx bridge.cts
+ * Started by non-TypeScript hosts (e.g. the Hermes Python client) via
+ * one of:
  *
- *   2. Daemon (--daemon): long-running, listens on a TCP port for JSON-RPC,
- *      also starts the memory viewer HTTP server.
- *      MEMOS_BRIDGE_CONFIG='...' npx tsx bridge.cts --daemon [--port 18990] [--viewer-port 18899]
+ *   node --experimental-strip-types bridge.cts                (default: stdio)
+ *   node --experimental-strip-types bridge.cts --daemon       (stdio)
+ *   node --experimental-strip-types bridge.cts --daemon --tcp=18911
  *
- * The Python adapter-openharness uses daemon mode for persistent operation.
+ * The `.cts` extension is intentional: it lets the file be required
+ * from CommonJS environments that spawn Node with `require("...")`
+ * semantics. Internally we re-export the ESM implementation via
+ * `import()`.
  */
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const path = require("node:path") as typeof import("node:path");
 
-import * as readline from "readline";
-import * as net from "net";
-import * as fs from "fs";
-import * as path from "path";
-import { initPlugin, type PluginInitOptions, type MemosLocalPlugin } from "./src/index";
-import { buildContext } from "./src/config";
-import { ensureSqliteBinding } from "./src/storage/ensure-binding";
-import { SqliteStore } from "./src/storage/sqlite";
-import { Embedder } from "./src/embedding";
-import { ViewerServer } from "./src/viewer/server";
-
-// ─── Types ───
-
-interface JsonRpcRequest {
-  id: number;
-  method: string;
-  params: Record<string, unknown>;
+interface BridgeArgs {
+  daemon: boolean;
+  tcpPort?: number;
+  agent: "openclaw" | "hermes";
 }
 
-// ─── Shared logic ───
-
-function createLogger() {
-  return {
-    debug: (msg: string, ..._args: unknown[]) => process.stderr.write(`[debug] ${msg}\n`),
-    info: (msg: string, ..._args: unknown[]) => process.stderr.write(`[info] ${msg}\n`),
-    warn: (msg: string, ..._args: unknown[]) => process.stderr.write(`[warn] ${msg}\n`),
-    error: (msg: string, ..._args: unknown[]) => process.stderr.write(`[error] ${msg}\n`),
-  };
+function parseArgs(argv: readonly string[]): BridgeArgs {
+  const args: BridgeArgs = { daemon: false, agent: "openclaw" };
+  for (const raw of argv) {
+    if (raw === "--daemon") args.daemon = true;
+    else if (raw.startsWith("--tcp=")) args.tcpPort = Number(raw.slice(6));
+    else if (raw === "--agent=hermes") args.agent = "hermes";
+    else if (raw === "--agent=openclaw") args.agent = "openclaw";
+  }
+  return args;
 }
 
-function parseConfig(): PluginInitOptions & { branding?: Record<string, string> } {
-  const raw = process.env.MEMOS_BRIDGE_CONFIG;
-  if (!raw) return {};
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+
+  // Lazy-import ESM core. Using dynamic import so this file remains
+  // CommonJS and stays `require`-able.
+  const { bootstrapMemoryCoreFull } = (await import(
+    pathToEsmUrl(path.resolve(__dirname, "core/pipeline/index.ts"))
+  )) as typeof import("./core/pipeline/index.js");
+  const { startStdioServer, waitForShutdown } = (await import(
+    pathToEsmUrl(path.resolve(__dirname, "bridge/stdio.ts"))
+  )) as typeof import("./bridge/stdio.js");
+  const { startHttpServer } = (await import(
+    pathToEsmUrl(path.resolve(__dirname, "server/index.ts"))
+  )) as typeof import("./server/index.js");
+  const { memoryBuffer } = (await import(
+    pathToEsmUrl(path.resolve(__dirname, "core/logger/index.ts"))
+  )) as typeof import("./core/logger/index.js");
+
+  const { core, config, home } = await bootstrapMemoryCoreFull({
+    agent: args.agent,
+    pkgVersion: "2.0.0-alpha.1",
+  });
+  await core.init();
+
+  // Default transport: stdio. Daemon + TCP support arrives in V1.1.
+  const stdio = startStdioServer({ core });
+
+  // Boot a viewer too — hermes needs its own HTTP surface for the
+  // Memory Viewer, and it discovers the openclaw hub (if any) so
+  // both agents are reachable at `127.0.0.1:18799/<agent>/`.
+  const viewerStaticRoot = path.resolve(__dirname, "web/dist");
+  let viewer: Awaited<ReturnType<typeof startHttpServer>> | null = null;
   try {
-    return JSON.parse(raw);
-  } catch {
-    process.stderr.write(`[warn] Failed to parse MEMOS_BRIDGE_CONFIG, using defaults\n`);
-    return {};
-  }
-}
-
-function buildPromptSection(hits: Array<{ summary: string; original_excerpt?: string; score: number }>): string {
-  if (!hits || hits.length === 0) return "";
-  const lines: string[] = ["<recalled_memories>"];
-  for (const hit of hits) {
-    lines.push(`- [score=${hit.score.toFixed(2)}] ${hit.summary}`);
-    if (hit.original_excerpt) {
-      lines.push(`  > ${hit.original_excerpt.slice(0, 300)}`);
+    viewer = await startHttpServer(
+      {
+        core,
+        home,
+        logTail: () => memoryBuffer().tail({ limit: 200 }),
+      },
+      {
+        port: config.viewer.port,
+        host: config.viewer.bindHost,
+        staticRoot: viewerStaticRoot,
+        agent: args.agent,
+      },
+    );
+    process.stderr.write(`bridge: viewer → ${viewer.url}\n`);
+    if (viewer.port !== config.viewer.port) {
+      // We bound a fallback port — tell the hub where we live.
+      await tryHubRegister({
+        hubPort: config.viewer.port,
+        selfPort: viewer.port,
+        selfAgent: args.agent,
+      });
     }
-  }
-  lines.push("</recalled_memories>");
-  return lines.join("\n");
-}
-
-function getStore(plugin: MemosLocalPlugin): any {
-  return plugin._store;
-}
-
-async function handleRequest(plugin: MemosLocalPlugin, method: string, params: Record<string, unknown>): Promise<unknown> {
-  const searchTool = plugin.tools.find((t) => t.name === "memory_search");
-  const timelineTool = plugin.tools.find((t) => t.name === "memory_timeline");
-  const getTool = plugin.tools.find((t) => t.name === "memory_get");
-
-  switch (method) {
-    case "search": {
-      if (!searchTool) throw new Error("memory_search tool not available");
-      const t0 = Date.now();
-      const searchResult = await searchTool.handler(params);
-      try {
-        const store = getStore(plugin);
-        if (store && store.recordApiLog) {
-          const sr = searchResult as any;
-          const hits: any[] = sr?.hits ?? sr?.local?.hits ?? [];
-          const hubHits: any[] = sr?.hub?.hits ?? [];
-          const candidates = hits.map((h: any) => ({
-            score: h.score ?? 0,
-            role: h.source?.role ?? h.role ?? "user",
-            summary: h.summary ?? "",
-            content: (h.original_excerpt ?? h.summary ?? "").slice(0, 200),
-            origin: h.origin ?? "local",
-            owner: h.owner ?? "",
-          }));
-          const hubCandidates = hubHits.map((h: any) => ({
-            score: h.score ?? 0,
-            role: h.source?.role ?? h.role ?? "assistant",
-            summary: h.summary ?? (h.excerpt ?? "").slice(0, 200),
-            content: (h.excerpt ?? h.summary ?? "").slice(0, 200),
-            origin: "hub-remote",
-            ownerName: h.ownerName ?? "",
-            sourceAgent: h.sourceAgent ?? "",
-          }));
-          const logOutput = JSON.stringify({
-            candidates,
-            hubCandidates,
-            filtered: candidates,
-          });
-          store.recordApiLog("memory_search", params, logOutput, Date.now() - t0, true);
-        }
-      } catch (_) { /* non-fatal */ }
-      return searchResult;
-    }
-    case "recent": {
-      const limit = (params.limit as number) ?? 20;
-      const ownerFilter = params.owner ? [params.owner as string, "public"] : undefined;
-      const store = getStore(plugin);
-      let sql = `SELECT id, summary, content, role, session_key, created_at, owner
-                 FROM chunks WHERE dedup_status = 'active'`;
-      const sqlParams: unknown[] = [];
-      if (ownerFilter) {
-        sql += ` AND owner IN (${ownerFilter.map(() => "?").join(",")})`;
-        sqlParams.push(...ownerFilter);
-      }
-      sql += ` ORDER BY created_at DESC LIMIT ?`;
-      sqlParams.push(limit);
-      const rows = (store as any).db.prepare(sql).all(...sqlParams) as Array<{
-        id: string; summary: string; content: string; role: string;
-        session_key: string; created_at: number; owner: string;
-      }>;
-      return {
-        memories: rows.map(r => ({
-          id: r.id,
-          summary: r.summary || r.content?.slice(0, 200),
-          content: r.content,
-          role: r.role,
-          sessionKey: r.session_key,
-          createdAt: r.created_at,
-          owner: r.owner,
-        })),
-        total: rows.length,
-      };
-    }
-    case "ingest": {
-      const messages = (params.messages ?? []) as Array<{ role: string; content: string }>;
-      const sessionKey = (params.sessionId as string) ?? "default";
-      const owner = (params.owner as string) ?? undefined;
-      const t0 = Date.now();
-      plugin.onConversationTurn(messages, sessionKey, owner);
-      try {
-        const store = getStore(plugin);
-        if (store && store.recordApiLog) {
-          const details = messages.map(m => ({ role: m.role, content: (m.content || "").slice(0, 200) }));
-          store.recordApiLog("memory_add", { session: sessionKey, messages: messages.length, details, owner }, JSON.stringify({ ok: true }), Date.now() - t0, true);
-        }
-      } catch (_) { /* non-fatal */ }
-      return { ok: true };
-    }
-    case "build_prompt": {
-      if (!searchTool) throw new Error("memory_search tool not available");
-      const result = (await searchTool.handler(params)) as { hits?: Array<{ summary: string; original_excerpt?: string; score: number }> };
-      const hits = result.hits ?? [];
-      const section = buildPromptSection(hits);
-      return { section, hitCount: hits.length };
-    }
-    case "timeline": {
-      if (!timelineTool) throw new Error("memory_timeline tool not available");
-      return await timelineTool.handler(params);
-    }
-    case "get": {
-      if (!getTool) throw new Error("memory_get tool not available");
-      return await getTool.handler(params);
-    }
-    case "flush": {
-      await plugin.flush();
-      return { ok: true };
-    }
-    case "ping": {
-      return { pong: true };
-    }
-    case "shutdown": {
-      await plugin.shutdown();
-      return { ok: true };
-    }
-    default:
-      throw new Error(`unknown method: ${method}`);
-  }
-}
-
-// ─── Stdio mode (original) ───
-
-async function runStdio(): Promise<void> {
-  const configOpts = parseConfig();
-  const log = createLogger();
-
-  const opts: PluginInitOptions = {
-    stateDir: configOpts.stateDir,
-    workspaceDir: configOpts.workspaceDir ?? process.cwd(),
-    config: configOpts.config,
-    log,
-  };
-
-  let plugin: MemosLocalPlugin;
-  try {
-    plugin = initPlugin(opts);
-    log.info("Bridge: plugin initialized (stdio mode)");
   } catch (err) {
-    process.stderr.write(`[fatal] Failed to initialize plugin: ${err}\n`);
-    process.exit(1);
+    process.stderr.write(
+      `bridge: viewer failed to start: ${(err as Error).message}\n`,
+    );
   }
 
-  const rl = readline.createInterface({ input: process.stdin });
-
-  rl.on("line", async (line: string) => {
-    let req: JsonRpcRequest;
+  const shutdown = async (sig: string) => {
+    process.stderr.write(`bridge: received ${sig}, shutting down\n`);
     try {
-      req = JSON.parse(line);
+      if (viewer) await viewer.close();
     } catch {
-      process.stderr.write(`[warn] Invalid JSON: ${line}\n`);
-      return;
+      /* best-effort */
     }
-    try {
-      if (req.method === "shutdown") {
-        await plugin.shutdown();
-        process.stdout.write(JSON.stringify({ id: req.id, result: { ok: true } }) + "\n");
-        process.exit(0);
-      }
-      const result = await handleRequest(plugin, req.method, req.params);
-      process.stdout.write(JSON.stringify({ id: req.id, result: result ?? { ok: true } }) + "\n");
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      process.stdout.write(JSON.stringify({ id: req.id, error: message }) + "\n");
-    }
-  });
-
-  rl.on("close", async () => {
-    log.info("Bridge: stdin closed, shutting down");
-    await plugin.shutdown();
+    await waitForShutdown(core, stdio);
     process.exit(0);
-  });
-}
-
-// ─── Daemon mode (TCP + Viewer) ───
-
-async function runDaemon(tcpPort: number, viewerPort: number): Promise<void> {
-  const configOpts = parseConfig();
-  const log = createLogger();
-  const stateDir = configOpts.stateDir ?? `${process.env.HOME}/.openharness/memos-state`;
-
-  const opts: PluginInitOptions = {
-    stateDir,
-    workspaceDir: configOpts.workspaceDir ?? process.cwd(),
-    config: configOpts.config,
-    log,
   };
 
-  let plugin: MemosLocalPlugin;
-  try {
-    plugin = initPlugin(opts);
-    log.info("Bridge: plugin initialized (daemon mode)");
-  } catch (err) {
-    process.stderr.write(`[fatal] Failed to initialize plugin: ${err}\n`);
-    process.exit(1);
-  }
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-  // Start viewer
-  let viewerUrl = "";
+  // Keep the process alive until stdin ends.
+  await stdio.done;
   try {
-    const ctx = buildContext(stateDir, process.cwd(), configOpts.config, log);
-    ensureSqliteBinding(log);
-    const store = new SqliteStore(ctx.config.storage!.dbPath!, log);
-    const embedder = new Embedder(ctx.config.embedding, log);
-    const viewer = new ViewerServer({ store, embedder, port: viewerPort, log, dataDir: stateDir, ctx, branding: configOpts.branding });
-    viewerUrl = await viewer.start();
-    log.info(`Viewer started at ${viewerUrl}`);
-  } catch (err) {
-    log.warn(`Viewer failed to start: ${err}`);
+    if (viewer) await viewer.close();
+  } catch {
+    /* best-effort */
   }
+  await core.shutdown();
+  process.exit(0);
+}
 
-  // Start TCP JSON-RPC server
-  const server = net.createServer((socket) => {
-    const rl = readline.createInterface({ input: socket });
-    rl.on("line", async (line: string) => {
-      let req: JsonRpcRequest;
-      try {
-        req = JSON.parse(line);
-      } catch {
+async function tryHubRegister(opts: {
+  hubPort: number;
+  selfPort: number;
+  selfAgent: "openclaw" | "hermes";
+}): Promise<void> {
+  const body = JSON.stringify({
+    agent: opts.selfAgent,
+    port: opts.selfPort,
+    version: "2.0.0-alpha.1",
+  });
+  for (let i = 0; i < 6; i++) {
+    try {
+      const r = await fetch(
+        `http://127.0.0.1:${opts.hubPort}/api/v1/hub/register`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        },
+      );
+      if (r.ok) {
+        process.stderr.write(
+          `bridge: registered with hub @ :${opts.hubPort} as ${opts.selfAgent} (self port ${opts.selfPort})\n`,
+        );
         return;
       }
-      try {
-        if (req.method === "get_viewer_url") {
-          socket.write(JSON.stringify({ id: req.id, result: { url: viewerUrl } }) + "\n");
-          return;
-        }
-        if (req.method === "shutdown_daemon") {
-          await plugin.shutdown();
-          socket.write(JSON.stringify({ id: req.id, result: { ok: true } }) + "\n");
-          server.close();
-          process.exit(0);
-        }
-        const result = await handleRequest(plugin, req.method, req.params);
-        socket.write(JSON.stringify({ id: req.id, result: result ?? { ok: true } }) + "\n");
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        socket.write(JSON.stringify({ id: req.id, error: message }) + "\n");
-      }
-    });
-  });
-
-  server.listen(tcpPort, "127.0.0.1", () => {
-    log.info(`Bridge daemon listening on 127.0.0.1:${tcpPort}`);
-
-    // Write PID file for management
-    const pidDir = path.join(stateDir, "daemon");
-    fs.mkdirSync(pidDir, { recursive: true });
-    fs.writeFileSync(path.join(pidDir, "bridge.pid"), String(process.pid));
-    fs.writeFileSync(path.join(pidDir, "bridge.port"), String(tcpPort));
-    if (viewerUrl) {
-      fs.writeFileSync(path.join(pidDir, "viewer.url"), viewerUrl);
+    } catch {
+      /* ignore — retry */
     }
-
-    // Output the info line to stdout for the launcher to capture
-    process.stdout.write(JSON.stringify({ daemonPort: tcpPort, viewerUrl, pid: process.pid }) + "\n");
-  });
-
-  // Prevent EPIPE crashes when launcher closes stdout/stderr pipes
-  process.stdout?.on("error", () => {});
-  process.stderr?.on("error", () => {});
-
-  // Cleanup on exit
-  const cleanup = () => {
-    const pidDir = path.join(stateDir, "daemon");
-    try { fs.unlinkSync(path.join(pidDir, "bridge.pid")); } catch {}
-    try { fs.unlinkSync(path.join(pidDir, "bridge.port")); } catch {}
-    try { fs.unlinkSync(path.join(pidDir, "viewer.url")); } catch {}
-  };
-  process.on("SIGINT", () => { cleanup(); process.exit(0); });
-  process.on("SIGTERM", () => { cleanup(); process.exit(0); });
+    await new Promise((r) => setTimeout(r, 2_000 * (i + 1)));
+  }
+  process.stderr.write(
+    `bridge: could not register with hub @ :${opts.hubPort} — /${opts.selfAgent}/ on hub port will not route\n`,
+  );
 }
 
-// ─── Entry ───
-
-const args = process.argv.slice(2);
-if (args.includes("--daemon")) {
-  const portIdx = args.indexOf("--port");
-  const viewerPortIdx = args.indexOf("--viewer-port");
-  const tcpPort = portIdx >= 0 ? parseInt(args[portIdx + 1], 10) : 18990;
-  const viewerPort = viewerPortIdx >= 0 ? parseInt(args[viewerPortIdx + 1], 10) : 18899;
-  runDaemon(tcpPort, viewerPort);
-} else {
-  runStdio();
+function pathToEsmUrl(abs: string): string {
+  const u = abs.startsWith("/") ? `file://${abs}` : `file:///${abs}`;
+  return u;
 }
+
+void main().catch((err) => {
+  process.stderr.write(
+    `bridge: fatal: ${err instanceof Error ? err.message : String(err)}\n`,
+  );
+  process.exit(1);
+});
