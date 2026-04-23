@@ -15,6 +15,7 @@ import re
 import sys
 import threading
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,29 @@ _TRIVIAL_PATTERNS = [
 _MIN_CONTENT_LENGTH = 6
 
 
+_ROLE_LABEL = {"user": "User", "assistant": "Assistant", "system": "System", "tool": "Tool"}
+
+
+def _format_ts(ts: int | float | None) -> str:
+    """Convert a millisecond-epoch timestamp to a readable local-time string."""
+    if not ts:
+        return ""
+    try:
+        dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).astimezone()
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (OSError, ValueError, OverflowError):
+        return ""
+
+
+def _format_memory_entry(text: str, role: str = "", ts: int | float | None = None, max_len: int = 500) -> str:
+    """Build a single formatted memory line with role and time metadata."""
+    role_label = _ROLE_LABEL.get(role, "")
+    time_label = _format_ts(ts)
+    meta_parts = [p for p in (role_label, time_label) if p]
+    prefix = f"[{' | '.join(meta_parts)}] " if meta_parts else ""
+    return f"- {prefix}{text[:max_len]}"
+
+
 def _is_trivial(text: str) -> bool:
     """Return True if *text* carries no meaningful information for long-term memory."""
     if not text or len(text.strip()) < _MIN_CONTENT_LENGTH:
@@ -93,8 +117,6 @@ class MemTensorProvider(MemoryProvider):
     def __init__(self) -> None:
         self._bridge = None
         self._session_id = ""
-        self._prefetch_result = ""
-        self._prefetch_lock = threading.Lock()
         self._prefetch_thread: threading.Thread | None = None
         self._sync_thread: threading.Thread | None = None
         self._pending_ingest: tuple | None = None
@@ -146,59 +168,54 @@ class MemTensorProvider(MemoryProvider):
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        if self._prefetch_thread and self._prefetch_thread.is_alive():
-            self._prefetch_thread.join(timeout=5.0)
+        """Synchronously retrieve memories for the current user query.
 
-        with self._prefetch_lock:
-            result = self._prefetch_result
-            self._prefetch_result = ""
-
-        if not result:
-            if not self._bridge:
-                return ""
-            try:
-                result = self._do_recall(query)
-            except Exception as e:
-                logger.debug("MemTensor prefetch fallback failed: %s", e)
-                return ""
+        This ensures recalled memories are available in the same turn they
+        are requested, rather than being deferred to the next turn.
+        """
+        if not self._bridge:
+            return ""
+        try:
+            result = self._do_recall(query)
+        except Exception as e:
+            logger.debug("MemTensor prefetch failed: %s", e)
+            return ""
 
         if not result:
             return ""
         return f"## Recalled Memories\n{result}"
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
+        """Flush deferred ingest in the background.
+
+        Memory retrieval is now handled synchronously in prefetch(), so this
+        method only takes care of writing the previous turn's data into the
+        store — ensuring it doesn't pollute the current turn's search results.
+        """
         pending = self._pending_ingest
         self._pending_ingest = None
 
+        if not pending or not self._bridge:
+            return
+
         def _run():
-            # 1) Search FIRST — before ingesting the current turn
             try:
-                text = self._do_recall(query)
-                if text:
-                    with self._prefetch_lock:
-                        self._prefetch_result = text
+                from config import OWNER
+
+                user_content, assistant_content, sid = pending
+                messages = []
+                if user_content:
+                    messages.append({"role": "user", "content": user_content})
+                if assistant_content:
+                    messages.append({"role": "assistant", "content": assistant_content})
+                if messages:
+                    self._bridge.ingest(messages, session_id=sid, owner=OWNER)
+                    self._bridge.flush()
             except Exception as e:
-                logger.debug("MemTensor queue_prefetch failed: %s", e)
-
-            # 2) Now flush the deferred ingest so data is stored for future turns
-            if pending and self._bridge:
-                try:
-                    from config import OWNER
-
-                    user_content, assistant_content, sid = pending
-                    messages = []
-                    if user_content:
-                        messages.append({"role": "user", "content": user_content})
-                    if assistant_content:
-                        messages.append({"role": "assistant", "content": assistant_content})
-                    if messages:
-                        self._bridge.ingest(messages, session_id=sid, owner=OWNER)
-                        self._bridge.flush()
-                except Exception as e:
-                    logger.warning("MemTensor deferred sync_turn failed: %s", e)
+                logger.warning("MemTensor deferred sync_turn failed: %s", e)
 
         self._prefetch_thread = threading.Thread(
-            target=_run, daemon=True, name="memtensor-prefetch"
+            target=_run, daemon=True, name="memtensor-ingest"
         )
         self._prefetch_thread.start()
 
@@ -215,8 +232,12 @@ class MemTensorProvider(MemoryProvider):
             hits = search_resp.get("hits") or search_resp.get("memories") or []
             for h in hits:
                 text = h.get("original_excerpt") or h.get("content") or h.get("summary", "")
-                if text:
-                    parts.append(f"- {text[:500]}")
+                if not text:
+                    continue
+                source = h.get("source") or {}
+                role = source.get("role") or h.get("role", "")
+                ts = source.get("ts") or h.get("createdAt")
+                parts.append(_format_memory_entry(text, role=role, ts=ts))
         except Exception as e:
             logger.debug("MemTensor search in prefetch failed: %s", e)
 
@@ -226,8 +247,11 @@ class MemTensorProvider(MemoryProvider):
                 memories = recent_resp.get("memories") or []
                 for m in memories:
                     text = m.get("content") or m.get("summary", "")
-                    if text:
-                        parts.append(f"- {text[:500]}")
+                    if not text:
+                        continue
+                    role = m.get("role", "")
+                    ts = m.get("createdAt")
+                    parts.append(_format_memory_entry(text, role=role, ts=ts))
             except Exception as e:
                 logger.debug("MemTensor recent in prefetch failed: %s", e)
 
@@ -282,7 +306,14 @@ class MemTensorProvider(MemoryProvider):
             lines = []
             for i, h in enumerate(hits, 1):
                 text = h.get("original_excerpt") or h.get("content") or h.get("summary", "")
-                lines.append(f"{i}. {text[:500]}")
+                source = h.get("source") or {}
+                role = source.get("role") or h.get("role", "")
+                ts = source.get("ts") or h.get("createdAt")
+                role_label = _ROLE_LABEL.get(role, "")
+                time_label = _format_ts(ts)
+                meta_parts = [p for p in (role_label, time_label) if p]
+                meta = f" [{' | '.join(meta_parts)}]" if meta_parts else ""
+                lines.append(f"{i}.{meta} {text[:500]}")
             return json.dumps({"result": "\n".join(lines)})
         except Exception as e:
             logger.warning("memory_search failed: %s", e)
