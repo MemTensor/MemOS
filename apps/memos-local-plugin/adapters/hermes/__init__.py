@@ -15,6 +15,7 @@ import re
 import sys
 import threading
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,29 @@ _TRIVIAL_PATTERNS = [
 ]
 
 _MIN_CONTENT_LENGTH = 6
+
+
+_ROLE_LABEL = {"user": "User", "assistant": "Assistant", "system": "System", "tool": "Tool"}
+
+
+def _format_ts(ts: int | float | None) -> str:
+    """Convert a millisecond-epoch timestamp to a readable local-time string."""
+    if not ts:
+        return ""
+    try:
+        dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).astimezone()
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (OSError, ValueError, OverflowError):
+        return ""
+
+
+def _format_memory_entry(text: str, role: str = "", ts: int | float | None = None, max_len: int = 500) -> str:
+    """Build a single formatted memory line with role and time metadata."""
+    role_label = _ROLE_LABEL.get(role, "")
+    time_label = _format_ts(ts)
+    meta_parts = [p for p in (role_label, time_label) if p]
+    prefix = f"[{' | '.join(meta_parts)}] " if meta_parts else ""
+    return f"- {prefix}{text[:max_len]}"
 
 
 def _is_trivial(text: str) -> bool:
@@ -208,8 +232,12 @@ class MemTensorProvider(MemoryProvider):
             hits = search_resp.get("hits") or search_resp.get("memories") or []
             for h in hits:
                 text = h.get("original_excerpt") or h.get("content") or h.get("summary", "")
-                if text:
-                    parts.append(f"- {text[:500]}")
+                if not text:
+                    continue
+                source = h.get("source") or {}
+                role = source.get("role") or h.get("role", "")
+                ts = source.get("ts") or h.get("createdAt")
+                parts.append(_format_memory_entry(text, role=role, ts=ts))
         except Exception as e:
             logger.debug("MemTensor search in prefetch failed: %s", e)
 
@@ -219,8 +247,11 @@ class MemTensorProvider(MemoryProvider):
                 memories = recent_resp.get("memories") or []
                 for m in memories:
                     text = m.get("content") or m.get("summary", "")
-                    if text:
-                        parts.append(f"- {text[:500]}")
+                    if not text:
+                        continue
+                    role = m.get("role", "")
+                    ts = m.get("createdAt")
+                    parts.append(_format_memory_entry(text, role=role, ts=ts))
             except Exception as e:
                 logger.debug("MemTensor recent in prefetch failed: %s", e)
 
@@ -275,7 +306,14 @@ class MemTensorProvider(MemoryProvider):
             lines = []
             for i, h in enumerate(hits, 1):
                 text = h.get("original_excerpt") or h.get("content") or h.get("summary", "")
-                lines.append(f"{i}. {text[:500]}")
+                source = h.get("source") or {}
+                role = source.get("role") or h.get("role", "")
+                ts = source.get("ts") or h.get("createdAt")
+                role_label = _ROLE_LABEL.get(role, "")
+                time_label = _format_ts(ts)
+                meta_parts = [p for p in (role_label, time_label) if p]
+                meta = f" [{' | '.join(meta_parts)}]" if meta_parts else ""
+                lines.append(f"{i}.{meta} {text[:500]}")
             return json.dumps({"result": "\n".join(lines)})
         except Exception as e:
             logger.warning("memory_search failed: %s", e)
