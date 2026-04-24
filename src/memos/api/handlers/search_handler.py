@@ -10,6 +10,8 @@ import math
 
 from typing import Any
 
+_EMBED_BATCH_SIZE = 16  # max documents per embedder call to avoid API batch-size limits
+
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
@@ -446,7 +448,12 @@ class SearchHandler(BaseHandler):
             missing_documents.append(mem.get("memory", ""))
 
         if missing_indices:
-            computed = self.searcher.embedder.embed(missing_documents)
+            computed: list[list[float]] = []
+            for i in range(0, len(missing_documents), _EMBED_BATCH_SIZE):
+                batch = missing_documents[i : i + _EMBED_BATCH_SIZE]
+                batch_result = self.searcher.embedder.embed(batch)
+                if batch_result:
+                    computed.extend(batch_result)
             for idx, embedding in zip(missing_indices, computed, strict=False):
                 embeddings[idx] = embedding
                 memories[idx]["metadata"]["embedding"] = embedding
