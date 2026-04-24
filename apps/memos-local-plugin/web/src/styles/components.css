@@ -1,0 +1,1325 @@
+/*
+ * Component styles.
+ *
+ * Grouped by primitive (button / input / card / pill / dropdown / …).
+ * Variants follow a `.component--modifier` BEM flavour so compound
+ * selectors stay cheap to scan.
+ */
+
+/* ── Buttons ───────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  height: 34px;
+  padding: 0 var(--sp-4);
+  border: 1px solid var(--border);
+  background: var(--bg-elev-1);
+  color: var(--fg);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-med);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-xs) var(--ease-out),
+    border-color var(--dur-xs),
+    transform var(--dur-xs),
+    box-shadow var(--dur-xs);
+}
+.btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.btn[aria-disabled="true"],
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* variants */
+.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+.btn--primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-muted);
+}
+.btn--ghost:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.btn--danger {
+  color: var(--danger);
+  border-color: rgba(244, 63, 94, 0.3);
+}
+.btn--danger:hover {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+.btn--sm {
+  height: 28px;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-xs);
+}
+.btn--icon {
+  width: 34px;
+  padding: 0;
+  color: var(--fg-muted);
+}
+.btn--icon.btn--sm {
+  width: 28px;
+}
+.btn--icon .icon {
+  flex-shrink: 0;
+}
+
+/* Segmented control — e.g. theme / lang toggles */
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  gap: 2px;
+}
+.segmented__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-med);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background var(--dur-xs);
+}
+.segmented__item:hover {
+  color: var(--fg);
+}
+.segmented__item[aria-pressed="true"] {
+  background: var(--bg-elev-1);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Inputs ─────────────────────────────────────────────────────── */
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--sp-3);
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-sm);
+  transition: border-color var(--dur-xs), box-shadow var(--dur-xs);
+}
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--fg-dim);
+}
+.input:hover,
+.select:hover,
+.textarea:hover {
+  border-color: var(--border-strong);
+}
+.input:focus,
+.select:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-focus);
+}
+.textarea {
+  height: auto;
+  padding: 10px var(--sp-3);
+  min-height: 80px;
+  resize: vertical;
+}
+
+/* ── Search input with leading icon ─────────────────────────────── */
+
+.input--search {
+  padding-left: 38px;
+}
+.input-search {
+  position: relative;
+  flex: 1;
+  min-width: 220px;
+}
+.input-search .icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--fg-dim);
+  pointer-events: none;
+}
+
+/* ── Toolbar ────────────────────────────────────────────────────── */
+
+.toolbar {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-4);
+}
+.toolbar__group {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.toolbar__spacer {
+  flex: 1;
+}
+
+/* ── Chips (filter pills) ──────────────────────────────────────── */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 12px;
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-med);
+  cursor: pointer;
+  transition: all var(--dur-xs);
+}
+.chip:hover {
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+.chip[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.chip--danger {
+  color: var(--danger);
+  border-color: rgba(244, 63, 94, 0.3);
+}
+.chip--danger:hover {
+  background: var(--danger-soft);
+}
+
+/* ── Cards ──────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-5);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--dur-sm);
+}
+.card--flat {
+  box-shadow: none;
+}
+.card--hover {
+  cursor: pointer;
+}
+.card--hover:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+.card__title {
+  margin: 0 0 var(--sp-1) 0;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semi);
+  letter-spacing: -0.01em;
+}
+.card__subtitle {
+  margin: 0 0 var(--sp-4) 0;
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+}
+.card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+.card__actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+
+/* ── Metric tile ────────────────────────────────────────────────── */
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-6);
+}
+.metric {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-5);
+  position: relative;
+  overflow: hidden;
+}
+.metric::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 80% at 20% 0%, var(--accent-soft), transparent 60%);
+  opacity: 0;
+  transition: opacity var(--dur-md);
+  pointer-events: none;
+}
+.metric:hover::before {
+  opacity: 1;
+}
+/*
+ * Clickable variant — the Overview cards double as nav shortcuts.
+ * Render as `<button>` underneath but inherit the card look, plus a
+ * small lift on hover so users can tell it's interactive.
+ */
+.metric--clickable {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: transform var(--dur-xs), border-color var(--dur-xs), box-shadow var(--dur-xs);
+}
+.metric--clickable:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+.metric--clickable:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+.metric__label {
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+  font-weight: var(--fw-med);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin-bottom: var(--sp-2);
+}
+.metric__value {
+  font-size: var(--fs-3xl);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--fg);
+}
+.metric__delta {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+
+/*
+ * Status dot used on Overview model cards + future status surfaces.
+ * Size matches the label baseline; colours pulled from the shared
+ * success / error / muted tokens so themes stay consistent.
+ */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot--ok   { background: var(--green); box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18); }
+.status-dot--err  { background: var(--red);   box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.20); }
+.status-dot--idle { background: var(--fg-dim); opacity: 0.6; }
+.status-dot--off  { background: transparent; border: 1px dashed var(--fg-dim); }
+
+/* ── Pills (status badges) ──────────────────────────────────────── */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semi);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+/* Unified lifecycle colours — candidate (amber) / active (green) / archived (muted). */
+.pill--active     { background: var(--success-soft); color: var(--success); }
+.pill--candidate  { background: var(--warning-soft); color: var(--warning); }
+.pill--archived   { background: var(--bg-hover); color: var(--fg-muted); }
+.pill--draft      { background: var(--info-soft); color: var(--info); }
+.pill--completed  { background: var(--success-soft); color: var(--success); }
+.pill--skipped    { background: var(--bg-hover); color: var(--fg-muted); }
+.pill--failed     { background: var(--danger-soft); color: var(--danger); }
+.pill--running    { background: var(--info-soft); color: var(--info); }
+.pill--info       { background: var(--info-soft); color: var(--info); }
+.pill--subtle     { background: var(--bg-hover); color: var(--fg-muted); }
+.pill--link       {
+  background: var(--info-soft);
+  color: var(--info);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: var(--fw-med);
+}
+.pill--link:hover { filter: brightness(1.1); }
+
+.pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+/* ── List rows ──────────────────────────────────────────────────── */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: background var(--dur-xs), border-color var(--dur-xs);
+  cursor: pointer;
+}
+.row:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.row__body {
+  flex: 1;
+  min-width: 0;
+}
+.row__title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semi);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  margin-top: 2px;
+}
+.row__meta > * + * {
+  padding-left: var(--sp-2);
+  border-left: 1px solid var(--border);
+}
+.row__tail {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* ── Notifications popover ─────────────────────────────────────── */
+
+.popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 320px;
+  max-width: 92vw;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  z-index: 50;
+  overflow: hidden;
+}
+.popover__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+}
+.popover__body {
+  max-height: 380px;
+  overflow-y: auto;
+}
+.popover__empty {
+  padding: var(--sp-6) var(--sp-4);
+  text-align: center;
+  color: var(--fg-dim);
+  font-size: var(--fs-sm);
+}
+
+/* ── Empty / loading ────────────────────────────────────────────── */
+
+.empty {
+  padding: var(--sp-12) var(--sp-4);
+  text-align: center;
+}
+.empty__icon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto var(--sp-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-dim);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.empty__title {
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semi);
+  color: var(--fg);
+  margin-bottom: var(--sp-1);
+}
+.empty__hint {
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.skeleton {
+  height: 16px;
+  background: var(--bg-canvas);
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--bg-hover), transparent);
+  animation: skeleton-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* ── Drawer (detail panel) ─────────────────────────────────────── */
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 9, 11, 0.4);
+  backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 40;
+  animation: drawer-backdrop-in var(--dur-md) var(--ease-out);
+}
+@keyframes drawer-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.drawer {
+  width: min(720px, 94vw);
+  height: 100%;
+  background: var(--bg-elev-1);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: drawer-in var(--dur-md) var(--ease-out);
+}
+@keyframes drawer-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+.drawer__header {
+  position: sticky;
+  top: 0;
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  padding: var(--sp-4) var(--sp-5);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-3);
+  z-index: 1;
+}
+.drawer__title {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.01em;
+}
+.drawer__body {
+  padding: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+.drawer__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5);
+  border-top: 1px solid var(--border);
+  background: var(--bg-canvas);
+  flex-shrink: 0;
+}
+
+/* ── Pagination ─────────────────────────────────────────────────── */
+
+.pager {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: center;
+  margin-top: var(--sp-5);
+}
+.pager__info {
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+}
+
+/* ── Event / log stream (monospace) ────────────────────────────── */
+
+.stream {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  background: var(--bg-canvas);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.stream__line {
+  display: grid;
+  /* Middle column must not be a fixed narrow width — types like
+   * `episode.closed` are longer than ~80px and were painting on top of
+   * the JSON payload. `auto` sizes to the widest label; `minmax(0,1fr)`
+   * lets the body shrink and wrap instead of overlapping. */
+  grid-template-columns: 72px auto minmax(0, 1fr);
+  gap: var(--sp-3);
+  align-items: start;
+  color: var(--fg-muted);
+  padding: 3px var(--sp-1);
+  border-radius: 4px;
+}
+.stream__line:hover {
+  background: var(--bg-hover);
+}
+.stream__time  { color: var(--fg-dim); }
+.stream__level {
+  font-weight: var(--fw-semi);
+  white-space: nowrap;
+}
+.stream__level--info  { color: var(--info); }
+.stream__level--warn  { color: var(--warning); }
+.stream__level--error { color: var(--danger); }
+.stream__level--debug { color: var(--fg-dim); }
+.stream__body {
+  color: var(--fg);
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* ── Toasts ─────────────────────────────────────────────────────── */
+
+.toast-stack {
+  position: fixed;
+  top: calc(var(--topbar-h, 48px) + var(--sp-3));
+  right: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  z-index: 100;
+  pointer-events: none;
+}
+.toast-stack > * { pointer-events: auto; }
+.toast {
+  display: flex;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  animation: toast-in var(--dur-md) var(--ease-out);
+}
+@keyframes toast-in {
+  from { transform: translateY(-8px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+.toast--success { border-left: 3px solid var(--success); }
+.toast--error   { border-left: 3px solid var(--danger); }
+.toast--info    { border-left: 3px solid var(--info); }
+
+/* ── Utility ────────────────────────────────────────────────────── */
+
+.hstack {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.vstack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.grow { flex: 1 1 auto; min-width: 0; }
+.muted { color: var(--fg-muted); }
+.dim   { color: var(--fg-dim); }
+.mono  { font-family: var(--font-mono); }
+.truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.spin { animation: icon-spin 1s linear infinite; }
+@keyframes icon-spin {
+  to { transform: rotate(360deg); }
+}
+
+.divider {
+  height: 1px;
+  background: var(--border);
+  border: none;
+  margin: var(--sp-4) 0;
+}
+
+/* Tiny helper so we don't repeat `display: none` / attributes. */
+[hidden] {
+  display: none !important;
+}
+
+/* ── Modal (edit / share dialogs) ─────────────────────────────── */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+}
+.modal {
+  width: 100%;
+  max-width: 560px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - var(--sp-8));
+  overflow: hidden;
+}
+.modal--wide {
+  max-width: 720px;
+}
+.modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+.modal__title {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semi);
+}
+.modal__body {
+  padding: var(--sp-5);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.modal__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5);
+  border-top: 1px solid var(--border);
+  background: var(--bg-canvas);
+}
+.modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.modal__field label {
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+  font-weight: var(--fw-med);
+}
+
+/* ── Batch-action bar (sticky at bottom of Memories page) ─────── */
+
+/*
+ * Floating action bar — pinned to the bottom of the viewport so
+ * bulk actions stay reachable regardless of how far the user has
+ * scrolled through the list. Centered within the main content
+ * column (offset by the sidebar width) so it never covers the nav.
+ */
+.batch-bar {
+  /*
+   * Full-width status-bar style: glued to the bottom of the viewport,
+   * stretching from the edge of the sidebar to the right edge of the
+   * screen, no border-radius, no outer gap. Feels like a persistent
+   * action bar rather than a floating pill.
+   */
+  position: fixed;
+  bottom: 0;
+  left: var(--sidebar-w);
+  right: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--bg-elev-1);
+  border-top: 1px solid var(--border-strong);
+  box-shadow: 0 -4px 12px -4px rgba(0, 0, 0, 0.12);
+  animation: batch-bar-in var(--dur-md) var(--ease-out);
+}
+@keyframes batch-bar-in {
+  from { transform: translateY(100%); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+@media (max-width: 900px) {
+  .batch-bar {
+    left: 0;
+  }
+}
+.batch-bar__count {
+  color: var(--accent);
+  font-weight: var(--fw-semi);
+  font-size: var(--fs-sm);
+}
+.batch-bar__spacer {
+  flex: 1;
+}
+
+/* ── Memory row (v2-style card) ───────────────────────────────── */
+
+.mem-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--sp-3);
+  align-items: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--sp-4);
+  cursor: pointer;
+  transition: background var(--dur-xs), border-color var(--dur-xs);
+}
+.mem-card:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-hover);
+}
+.mem-card:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+.mem-card--selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.mem-card__tail {
+  color: var(--fg-dim);
+  display: flex;
+  align-items: center;
+}
+.mem-card__check {
+  /*
+   * Visible checkbox stays at the browser-default small size so it
+   * does not dominate the row. The oversized hit area lives on the
+   * surrounding `.mem-card__check-wrap` label instead.
+   */
+  accent-color: var(--accent);
+  margin: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  pointer-events: none; /* label handles clicks; avoids double-fire */
+}
+/*
+ * Invisible padded wrapper around the checkbox. Clicks anywhere in
+ * this ~44×44 box toggle the checkbox — users no longer have to
+ * hit the ~14 px native checkbox exactly and accidentally open the
+ * row detail drawer. Intentionally has no hover background so the
+ * checkbox doesn't flash with a halo on every row hover.
+ */
+.mem-card__check-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  margin: -12px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.mem-card__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mem-card__title {
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--fg);
+  font-weight: var(--fw-med);
+  overflow-wrap: break-word;
+}
+.mem-card__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+}
+.mem-card__content {
+  display: none;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-3);
+  margin-top: var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  max-height: 360px;
+  overflow-y: auto;
+  color: var(--fg);
+}
+.mem-card--expanded .mem-card__content {
+  display: block;
+}
+
+.mem-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: flex-start;
+}
+.mem-act {
+  height: 26px;
+  padding: 0 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-med);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all var(--dur-xs);
+}
+.mem-act:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border-color: var(--border-hover);
+}
+.mem-act.danger {
+  color: var(--red);
+  border-color: rgba(248, 113, 113, 0.25);
+}
+.mem-act.danger:hover {
+  background: var(--red-bg);
+  border-color: var(--red);
+}
+.mem-act.primary {
+  color: var(--accent);
+  border-color: rgba(124, 140, 245, 0.35);
+}
+.mem-act.primary:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* Shared-scope pill colors */
+.pill--share-public { background: var(--green-bg); color: var(--green); }
+.pill--share-hub    { background: var(--violet-bg); color: var(--violet); }
+.pill--share-private { background: rgba(255,255,255,.06); color: var(--fg-muted); }
+
+/* Role pills */
+.pill--role-user      { background: var(--cyan-bg); color: var(--cyan); }
+.pill--role-assistant { background: var(--pri-dim); color: var(--pri); }
+.pill--role-tool      { background: var(--amber-bg); color: var(--amber); }
+.pill--role-system    { background: rgba(255,255,255,.06); color: var(--fg-muted); }
+.pill--role-other     { background: rgba(255,255,255,.06); color: var(--fg-muted); }
+
+/* Skill pipeline status pills — shown on Task rows. Mirrors
+   `tasks.skill_status` from the legacy plugin. */
+.pill--skill-queued        { background: rgba(255,255,255,.06); color: var(--fg-muted); }
+.pill--skill-generating    { background: var(--pri-dim); color: var(--pri); }
+.pill--skill-generated     { background: var(--green-bg); color: var(--green); }
+.pill--skill-upgraded      { background: var(--violet-bg); color: var(--violet); }
+.pill--skill-not_generated { background: var(--red-bg); color: var(--red); }
+.pill--skill-skipped       { background: var(--amber-bg); color: var(--amber); }
+
+/* Agent pills — show which agent this viewer serves */
+.pill--agent                { font-family: var(--font-mono); text-transform: lowercase; }
+.pill--agent-openclaw       { background: var(--cyan-bg); color: var(--cyan); }
+.pill--agent-hermes         { background: var(--violet-bg); color: var(--violet); }
+.pill--agent-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  font-size: var(--fs-2xs);
+  font-family: var(--font-mono);
+  text-decoration: none;
+  color: var(--fg-muted);
+  background: rgba(255,255,255,.04);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  transition: all var(--dur-xs);
+}
+.pill--agent-link:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Tool name pills — used on the Logs page */
+.pill--tool                      { background: rgba(255,255,255,.05); color: var(--fg); font-family: var(--font-mono); font-size: var(--fs-xs); }
+.pill--tool-memory_search        { background: var(--cyan-bg); color: var(--cyan); }
+.pill--tool-memory_add           { background: var(--green-bg); color: var(--green); }
+.pill--tool-skill_generate       { background: var(--violet-bg); color: var(--violet); }
+.pill--tool-skill_evolve         { background: var(--violet-bg); color: var(--violet); opacity:.85; }
+.pill--tool-policy_generate      { background: var(--amber-bg); color: var(--amber); }
+.pill--tool-policy_evolve        { background: var(--amber-bg); color: var(--amber); opacity:.85; }
+.pill--tool-world_model_generate { background: var(--rose-bg); color: var(--rose); }
+.pill--tool-world_model_evolve   { background: var(--rose-bg); color: var(--rose); opacity:.85; }
+.pill--tool-task_done            { background: var(--green-bg); color: var(--green); }
+.pill--tool-task_failed          { background: var(--red-bg); color: var(--red); }
+
+/* memory_add action pills */
+.pill--action              { font-size: var(--fs-2xs); font-family: var(--font-mono); }
+.pill--action-stored       { background: var(--green-bg); color: var(--green); }
+.pill--action-dedup        { background: var(--amber-bg); color: var(--amber); }
+.pill--action-exact-dup    { background: var(--amber-bg); color: var(--amber); }
+.pill--action-merged       { background: var(--violet-bg); color: var(--violet); }
+.pill--action-error        { background: var(--red-bg); color: var(--red); }
+
+/* ── Logs page — structured log cards ─────────────────────────── */
+
+.log-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.log-card--expanded {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-sm);
+}
+.log-card__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 10px 14px;
+  cursor: pointer;
+  min-height: 44px;
+}
+.log-card__header:hover {
+  background: var(--bg-card-hover);
+}
+.log-card__status {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--fg-dim);
+}
+.log-card__status--ok   { background: var(--green); }
+.log-card__status--fail { background: var(--red); }
+.log-card__summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-card__body {
+  padding: var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-canvas);
+}
+
+.log-score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semi);
+  flex-shrink: 0;
+}
+.log-score--high { background: var(--green-bg); color: var(--green); }
+.log-score--mid  { background: var(--amber-bg); color: var(--amber); }
+.log-score--low  { background: rgba(255,255,255,.05); color: var(--fg-muted); }
+
+/* ── Chat log (task drawer) ───────────────────────────────────── */
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.chat-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.chat-item--user {
+  flex-direction: row-reverse;
+}
+.chat-item__avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: var(--fw-bold);
+  color: #fff;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, var(--pri), var(--pri-dark));
+}
+.chat-item--assistant .chat-item__avatar {
+  background: linear-gradient(135deg, var(--green), #059669);
+}
+.chat-item--tool .chat-item__avatar {
+  background: linear-gradient(135deg, var(--amber), #d97706);
+}
+.chat-item--thinking .chat-item__avatar {
+  background: linear-gradient(135deg, #8b5cf6, #6d28d9); /* indigo */
+}
+.chat-item__body {
+  flex: 1;
+  min-width: 0;
+  max-width: 85%;
+}
+.chat-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.chat-item--user .chat-item__meta {
+  justify-content: flex-end;
+}
+.chat-item__role {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  color: var(--fg);
+}
+.chat-item--assistant .chat-item__role { color: var(--green); }
+.chat-item--tool      .chat-item__role { color: var(--amber); }
+.chat-item--user      .chat-item__role { color: var(--pri); }
+.chat-item--thinking  .chat-item__role { color: #a78bfa; }
+.chat-item__time {
+  font-size: var(--fs-2xs);
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+}
+.chat-item__bubble {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  padding: 10px 14px;
+  border-radius: 12px 12px 12px 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-item--user .chat-item__bubble {
+  background: linear-gradient(135deg, rgba(124, 140, 245, 0.14), rgba(124, 140, 245, 0.07));
+  border-color: rgba(124, 140, 245, 0.25);
+  color: var(--fg);
+  border-radius: 12px 12px 4px 12px;
+}
+.chat-item--tool .chat-item__bubble {
+  background: var(--amber-bg);
+  border-color: var(--amber);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.chat-item__bubble--tool {
+  white-space: normal;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/*
+ * Cursor-style thinking bubble — indigo, italic, slightly transparent
+ * so the agent's "I was trying to do X" reads visibly different from a
+ * normal assistant turn.
+ */
+.chat-item__bubble--thinking {
+  background: rgba(139, 92, 246, 0.10);
+  border-color: rgba(139, 92, 246, 0.35);
+  color: var(--fg);
+  font-style: italic;
+  border-radius: 12px 12px 12px 4px;
+}
+
+.chat-item__tool-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--amber);
+  margin-bottom: 2px;
+}
+.chat-item__tool-name {
+  font-weight: var(--fw-semi);
+  color: var(--fg);
+}
+.chat-item__tool-section {
+  margin: 0;
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 6px;
+  padding: 0;
+}
+.chat-item__tool-summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+.chat-item__tool-summary::-webkit-details-marker {
+  display: none;
+}
+.chat-item__tool-section[open] > .chat-item__tool-summary > svg {
+  transform: rotate(90deg);
+}
+.chat-item__tool-summary > svg {
+  transition: transform 120ms ease;
+  color: var(--fg-dim);
+}
+.chat-item__tool-label {
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semi);
+  color: var(--amber);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.chat-item__tool-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  padding: 6px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  max-height: 280px;
+  overflow-y: auto;
+}
+.chat-item__tool-empty {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  font-style: italic;
+}
+.chat-item__bubble--error {
+  background: var(--red-bg);
+  border-color: var(--red);
+}
+.chat-item__bubble--error .chat-item__tool-header {
+  color: var(--red);
+}
+
+/* "Thinking" pill on memory cards — same indigo as the chat bubble. */
+.pill--thinking {
+  background: rgba(139, 92, 246, 0.10);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.35);
+}

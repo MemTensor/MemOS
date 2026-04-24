@@ -32,14 +32,14 @@ from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.orm_modules.base_model import BaseDBManager
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
-from memos.memories.textual.tree_text_memory.organize.history_manager import MemoryHistoryManager
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
+from memos.plugins.component_bootstrap import build_plugin_context
+from memos.plugins.manager import plugin_manager
 
 
 if TYPE_CHECKING:
     from memos.memories.textual.tree import TreeTextMemory
-from memos.extras.nli_model.client import NLIClient
 from memos.mem_agent.deepsearch_agent import DeepSearchMemAgent
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
@@ -122,6 +122,12 @@ def init_server() -> dict[str, Any]:
         existing code that uses the components.
     """
     logger.info("Initializing MemOS server components...")
+    logger.info(
+        "[INIT_SERVER] env_MEMSCHEDULER_STREAM_KEY_PREFIX=%s, env_MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX=%s, env_POLAR_DB_DB_NAME=%s",
+        os.getenv("MEMSCHEDULER_STREAM_KEY_PREFIX"),
+        os.getenv("MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX"),
+        os.getenv("POLAR_DB_DB_NAME"),
+    )
 
     # Initialize Redis client first as it is a core dependency for features like scheduler status tracking
     if os.getenv("MEMSCHEDULER_USE_REDIS_QUEUE", "False").lower() == "true":
@@ -169,10 +175,25 @@ def init_server() -> dict[str, Any]:
         else None
     )
     embedder = EmbedderFactory.from_config(embedder_config)
-    nli_client = NLIClient(base_url=nli_client_config["base_url"])
-    memory_history_manager = MemoryHistoryManager(nli_client=nli_client, graph_db=graph_db)
+
+    plugin_context = build_plugin_context(
+        graph_db=graph_db,
+        embedder=embedder,
+        default_cube_config=default_cube_config,
+        nli_client_config=nli_client_config,
+        mem_reader_config=mem_reader_config,
+        reranker_config=reranker_config,
+        feedback_reranker_config=feedback_reranker_config,
+        internet_retriever_config=internet_retriever_config,
+    )
+    plugin_manager.discover()
+    plugin_manager.init_components(plugin_context)
+
     # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
-    mem_reader = MemReaderFactory.from_config(mem_reader_config, graph_db=graph_db)
+    mem_reader = MemReaderFactory.from_config(
+        mem_reader_config,
+        graph_db=graph_db,
+    )
     reranker = RerankerFactory.from_config(reranker_config)
     feedback_reranker = RerankerFactory.from_config(feedback_reranker_config)
     internet_retriever = InternetRetrieverFactory.from_config(
@@ -303,6 +324,4 @@ def init_server() -> dict[str, Any]:
         "feedback_server": feedback_server,
         "redis_client": redis_client,
         "deepsearch_agent": deepsearch_agent,
-        "nli_client": nli_client,
-        "memory_history_manager": memory_history_manager,
     }
