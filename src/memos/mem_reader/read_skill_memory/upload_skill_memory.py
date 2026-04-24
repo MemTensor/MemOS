@@ -5,6 +5,7 @@ import zipfile
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import requests
@@ -41,12 +42,10 @@ def _extract_zip_url_from_items(items: list[TextualMemoryItem]) -> str | None:
             if not isinstance(file_info, dict):
                 continue
             file_data = file_info.get("file_data", "")
-            if (
-                isinstance(file_data, str)
-                and file_data.startswith(("http://", "https://"))
-                and file_data.lower().endswith(".zip")
-            ):
-                return file_data
+            if isinstance(file_data, str) and file_data.startswith(("http://", "https://")):
+                url_path = urlparse(file_data).path
+                if url_path.lower().endswith(".zip"):
+                    return file_data
     return None
 
 
