@@ -55,6 +55,7 @@ function mkPolicy(partial: Partial<PolicyRow> & { id: PolicyId }): PolicyRow {
     status: partial.status ?? "active",
     sourceEpisodeIds: partial.sourceEpisodeIds ?? [],
     inducedBy: partial.inducedBy ?? "test",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: partial.vec ?? vec([1, 0, 0]),
     createdAt: NOW,
     updatedAt: NOW,
@@ -170,6 +171,7 @@ describe("memory/l3/abstract", () => {
       cluster,
       episodeIds: ["ep_a", "ep_b", "ep_a"] as EpisodeId[],
       inducedBy: OP,
+      decisionGuidance: { preference: [], antiPattern: [] },
       now: NOW,
       id: "wm_test" as Parameters<typeof buildWorldModelRow>[0]["id"],
     });

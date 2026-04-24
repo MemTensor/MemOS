@@ -58,6 +58,29 @@ export interface ChatMsg {
   toolOutput?: string;
   toolDurationMs?: number;
   errorCode?: string;
+  /**
+   * V7 §0.1 / pi-agent-core "parallel" tool execution mode — when the
+   * model emits ≥2 toolCalls in a single assistant message, the
+   * executor fires them concurrently. The viewer wraps such siblings
+   * in a single "并行批" card so users can tell parallel from serial
+   * apart at a glance.
+   *
+   * Set on every member of a parallel batch (size ≥ 2). Single-tool
+   * "batches" leave these fields undefined so the renderer skips the
+   * wrapper. Computed by `assignParallelBatches` after `flattenChat`.
+   *
+   * The key is shared across all siblings (= `batch:${first.key}`)
+   * so the renderer can `groupBy(key)` and emit one wrapper per run.
+   */
+  parallelBatchKey?: string;
+  /** Number of tools in the batch this message belongs to (≥ 2). */
+  parallelBatchSize?: number;
+  /**
+   * Wall-clock span of the batch in ms = `max(endedAt) - min(startedAt)`.
+   * Surfaced in the batch header so users can see the parallelism
+   * payoff: "3 个工具 · 总耗时 24ms" beats "12+8+24 = 44ms 串行".
+   */
+  parallelBatchTotalMs?: number;
 }
 
 // ─── flattenChat: trace[] → ChatMsg[] ────────────────────────────────────
@@ -165,7 +188,92 @@ export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
       });
     }
   }
+  // Walk the flattened list in a second pass and stamp parallel-batch
+  // metadata onto runs of consecutive `tool` messages. Done after the
+  // whole list is built so the heuristic can compare each tool to its
+  // visible neighbour, regardless of which trace it came from.
+  assignParallelBatches(out);
   return out;
+}
+
+// ─── assignParallelBatches: detect parallel tool batches ────────────────
+
+/**
+ * Threshold for "two tool calls came from the same assistant LLM message".
+ *
+ * pi-agent-core's parallel executor fires preflight serially then
+ * launches all eligible tools via `runnableCalls.map(...)` (no await),
+ * so siblings start within a few ms of each other in practice. A
+ * sequential pair, by contrast, requires a full LLM round-trip
+ * (typically 500ms — many seconds) between the previous tool's
+ * completion and the next tool's start.
+ *
+ * 500ms gives generous headroom for the parallel side (slow preflight
+ * with user-grant prompts can take ~100-200ms) while still being
+ * far short of a real LLM round-trip on any provider we support.
+ */
+const PARALLEL_BATCH_GAP_MS = 500;
+
+/**
+ * Detect runs of consecutive `tool` messages that came from the same
+ * assistant LLM message and stamp `parallelBatch*` metadata on every
+ * member. Runs of size 1 are left untouched so the renderer doesn't
+ * wrap solo tools.
+ *
+ * Detection rule (paired-comparison, walks the flattened list):
+ *
+ *   - `messages[i]` and `messages[i+1]` are both `tool` (no `thinking`
+ *     or `assistant` text between them — those break the run because
+ *     a thinkingBefore implies the model spoke up between the two
+ *     tools, which can only happen in a new LLM turn).
+ *   - `messages[i+1].ts - messages[i].ts < PARALLEL_BATCH_GAP_MS`
+ *     (the spread between start times stays inside the parallel
+ *     dispatch window).
+ *
+ * Mutates `messages` in place — cheap and avoids an extra allocation
+ * pass since the function is called from `flattenChat` which already
+ * owns the array.
+ */
+export function assignParallelBatches(messages: ChatMsg[]): void {
+  let i = 0;
+  while (i < messages.length) {
+    if (messages[i]!.role !== "tool") {
+      i++;
+      continue;
+    }
+    // Find the longest run [i..j] of consecutive tool entries that
+    // satisfy the start-spread test.
+    let j = i;
+    while (
+      j + 1 < messages.length &&
+      messages[j + 1]!.role === "tool" &&
+      messages[j + 1]!.ts - messages[j]!.ts < PARALLEL_BATCH_GAP_MS
+    ) {
+      j++;
+    }
+    if (j > i) markBatch(messages, i, j);
+    i = j + 1;
+  }
+}
+
+function markBatch(messages: ChatMsg[], from: number, to: number): void {
+  const size = to - from + 1;
+  if (size < 2) return;
+  const key = `batch:${messages[from]!.key}`;
+  let minStart = Infinity;
+  let maxEnd = -Infinity;
+  for (let k = from; k <= to; k++) {
+    const m = messages[k]!;
+    minStart = Math.min(minStart, m.ts);
+    maxEnd = Math.max(maxEnd, m.ts + (m.toolDurationMs ?? 0));
+  }
+  const totalMs = Math.max(0, maxEnd - minStart);
+  for (let k = from; k <= to; k++) {
+    const m = messages[k]!;
+    m.parallelBatchKey = key;
+    m.parallelBatchSize = size;
+    m.parallelBatchTotalMs = totalMs;
+  }
 }
 
 function serializeToolPayload(v: unknown): string {

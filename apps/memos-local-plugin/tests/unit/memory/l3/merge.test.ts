@@ -41,6 +41,7 @@ function mkWorldModel(partial: Partial<WorldModelRow> & { id: WorldModelId }): W
     policyIds: partial.policyIds ?? [],
     sourceEpisodeIds: partial.sourceEpisodeIds ?? [],
     inducedBy: partial.inducedBy ?? "",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: partial.vec ?? vec([1, 0, 0]),
     createdAt: NOW,
     updatedAt: NOW,
@@ -55,6 +56,13 @@ function mkCluster(partial: Partial<PolicyCluster> = {}): PolicyCluster {
     domainTags: partial.domainTags ?? ["docker", "alpine"],
     centroidVec: partial.centroidVec ?? vec([1, 0, 0]),
     avgGain: partial.avgGain ?? 0.3,
+    // Default to a tight `strict` admission with full cohesion so the
+    // existing merge-tests (which predate the two-stage admission
+    // change in cluster.ts) keep their original semantics. Tests that
+    // specifically want to exercise the loose / low-cohesion branch
+    // can pass them in `partial`.
+    cohesion: partial.cohesion ?? 1.0,
+    admission: partial.admission ?? "strict",
   };
 }
 

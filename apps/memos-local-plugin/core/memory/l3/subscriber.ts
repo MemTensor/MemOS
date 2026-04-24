@@ -39,6 +39,8 @@ export interface L3SubscriberDeps {
 
 export interface L3SubscriberHandle {
   detach(): void;
+  /** Wait for an in-flight L3 abstraction run to finish. */
+  drain(): Promise<void>;
   runOnce(
     opts?: Partial<Pick<L3ProcessInput, "trigger" | "domainTagsFilter" | "sessionId" | "episodeId">>,
   ): Promise<L3ProcessResult>;
@@ -146,6 +148,15 @@ export function attachL3Subscriber(deps: L3SubscriberDeps): L3SubscriberHandle {
     detach(): void {
       closed = true;
       off();
+    },
+    async drain(): Promise<void> {
+      // Wait for any in-flight L3 abstraction (LLM call, may take
+      // several seconds) to settle. Called from the pipeline's
+      // `flush()` so single-shot adapters (Hermes' `chat -q`) don't
+      // exit before L3 finishes.
+      while (inflight) {
+        await inflight;
+      }
     },
     async runOnce(opts): Promise<L3ProcessResult> {
       const result = await triggerRun(opts?.trigger ?? "manual", {

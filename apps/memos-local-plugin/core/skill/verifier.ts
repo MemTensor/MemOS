@@ -145,11 +145,23 @@ function computeResonance(
 
 function tokensOf(s: string): Set<string> {
   const out = new Set<string>();
-  const matches = s.match(/[a-z0-9_][a-z0-9_./-]{3,}/g) ?? [];
-  for (const m of matches) {
+  // ASCII identifier-ish tokens (length ≥ 4 incl. leading char).
+  const asciiMatches = s.match(/[a-z0-9_][a-z0-9_./-]{3,}/g) ?? [];
+  for (const m of asciiMatches) {
     const tok = m.toLowerCase();
     if (STOPWORDS.has(tok)) continue;
     out.add(tok);
+  }
+  // CJK support: Chinese / Japanese / Korean text isn't whitespace-separated,
+  // so the ASCII-only tokenizer above produces an empty set on Chinese
+  // evidence and the resonance check rejects every skill (the famous
+  // "resonance=0.00<0.5" failure). Add character bigrams from any CJK runs
+  // to give the verifier a reasonable signal in non-Latin contexts.
+  const cjkRuns = s.match(/[\u4e00-\u9fff\u3040-\u30ff\u3400-\u4dbf]{2,}/g) ?? [];
+  for (const run of cjkRuns) {
+    for (let i = 0; i + 1 < run.length; i++) {
+      out.add(run.slice(i, i + 2));
+    }
   }
   return out;
 }

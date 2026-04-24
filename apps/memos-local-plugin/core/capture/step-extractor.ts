@@ -143,7 +143,7 @@ function segmentToSteps(
   // ever saw so downstream group_by still has something stable.
   const segTurnId: EpochMs = (turnId ?? turns[0]!.ts);
 
-  // ─── No tool calls → single step (backward compatible) ────────
+  // ─── No tool calls → single step ──────────────────────────────
   if (toolTurns.length === 0) {
     const assistantTexts = turns
       .filter((t) => t.role === "assistant")

@@ -12,6 +12,9 @@
 version: 1
 
 viewer:
+  # OpenClaw owns :18799. Hermes (if installed) runs its viewer on
+  # :18800. Each agent serves its own panel from its own process —
+  # there is no port sharing or read-only "peer" view.
   port: 18799
 
 embedding:

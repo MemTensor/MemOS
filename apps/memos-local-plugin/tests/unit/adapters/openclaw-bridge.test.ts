@@ -562,6 +562,121 @@ describe("extractTurn", () => {
   });
 });
 
+/**
+ * V7 — OpenClaw side-channel "user" injections (heartbeat, async exec
+ * completion, cron, system events, current-time footer) are NOT user
+ * input. They must drop out of capture entirely so the Memories panel
+ * doesn't fill up with phantom "未命名任务" rows whose userText is
+ * actually `"An async command you ran earlier has completed…"` /
+ * `"System (untrusted): [ts] Exec completed…"` / etc.
+ *
+ * These tests mirror the literal strings OpenClaw emits in
+ * `infra/heartbeat-events-filter.ts` + `auto-reply/reply/session-system-events.ts`.
+ * If you change one, change the other in lockstep.
+ */
+describe("OpenClaw side-channel user injections", () => {
+  it("drops the async-exec-completion wakeup prompt as bootstrap (no captured turn)", () => {
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "An async command you ran earlier has completed. The result is shown in the system messages above. " +
+          "Handle the result internally. Do not relay it to the user unless explicitly requested.\n" +
+          "Current time: Thursday, April 23rd, 2026 - 10:45 AM (Asia/Shanghai)",
+      },
+      { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+    ]);
+    const turn = extractTurn(flat, 0);
+    // After the line-level stripper removes "Current time: …" the
+    // remaining text starts with "An async command…", which the
+    // bootstrap detector recognises and the bridge's handleAgentEnd
+    // skips. extractTurn returns userText that *contains* the
+    // signature; the bridge then calls isOpenClawBootstrapMessage on
+    // it and bails. We assert that string surface here.
+    expect(turn?.userText.startsWith("An async command you ran earlier has completed")).toBe(true);
+  });
+
+  it("drops the cron heartbeat wakeup prompt as bootstrap", () => {
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "A scheduled reminder has been triggered. The reminder content is:\n\n" +
+          "[cron:abc] do the thing\n\n" +
+          "Please relay this reminder to the user in a helpful and friendly way.",
+      },
+    ]);
+    const turn = extractTurn(flat, 0);
+    expect(turn?.userText.startsWith("A scheduled reminder has been triggered")).toBe(true);
+  });
+
+  it("drops the heartbeat periodic-tasks wakeup prompt as bootstrap", () => {
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "Run the following periodic tasks (only those due based on their intervals):\n\n" +
+          "- summary: write a daily summary\n\n" +
+          "After completing all due tasks, reply HEARTBEAT_OK.",
+      },
+    ]);
+    const turn = extractTurn(flat, 0);
+    expect(turn?.userText.startsWith("Run the following periodic tasks")).toBe(true);
+  });
+
+  it("strips System (untrusted) lines + Current time footer when wrapping a bootstrap prompt", () => {
+    // Pure system-event payload — every line is a side-channel
+    // injection. After stripping the user text is empty; the bridge's
+    // `if (!turn.userText)` guard then skips the whole turn.
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "System (untrusted): [2026-04-23 10:44:37 GMT+8] Exec completed (wild-kel, code 0) :: pkg-1 pkg-2 pkg-3\n" +
+          "System (untrusted): [2026-04-23 10:44:38 GMT+8] Exec completed (wild-kel, code 0) :: more-output\n" +
+          "Current time: Thursday, April 23rd, 2026 - 10:45 AM (Asia/Shanghai) / 2026-04-23 02:45 UTC",
+      },
+    ]);
+    const turn = extractTurn(flat, 0);
+    expect(turn?.userText).toBe("");
+  });
+
+  it("preserves the real user query when System (untrusted) lines are layered on top", () => {
+    // Real user said "帮我查 cpu"; OpenClaw prepended a stale exec
+    // completion event and appended a Current time footer. The
+    // stripper must drop the noise but keep the actual query intact.
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "System (untrusted): [2026-04-23 10:44:37 GMT+8] Exec completed (foo, code 0) :: build done\n" +
+          "\n" +
+          "帮我查下当前系统有几个 cpu\n" +
+          "Current time: Thursday, April 23rd, 2026 - 10:45 AM (Asia/Shanghai)",
+      },
+      { role: "assistant", content: [{ type: "text", text: "好的，我来查一下" }] },
+    ]);
+    const turn = extractTurn(flat, 0);
+    expect(turn?.userText).toBe("帮我查下当前系统有几个 cpu");
+    expect(turn?.agentText).toBe("好的，我来查一下");
+  });
+
+  it("strips the standalone HEARTBEAT.md workspace hint to empty (caught by bridge's empty-text guard)", () => {
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "When reading HEARTBEAT.md, use workspace file /Users/jiang/proj/HEARTBEAT.md (exact case). " +
+          "Do not read docs/heartbeat.md.",
+      },
+    ]);
+    const turn = extractTurn(flat, 0);
+    // Line-level stripper drops the whole line. handleAgentEnd's
+    // `if (!turn.userText) return;` then short-circuits.
+    expect(turn?.userText).toBe("");
+  });
+});
+
 describe("renderContextBlock", () => {
   it("wraps packet context in memos_context tags", () => {
     const block = renderContextBlock({

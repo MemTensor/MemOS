@@ -63,6 +63,7 @@ function seedTrace(handle: TmpDbHandle, id: string, ep: string): TraceRow {
     tags: ["docker", "pip"],
     vecSummary: vec([1, 0, 0]),
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
   };
   handle.repos.traces.insert(row);

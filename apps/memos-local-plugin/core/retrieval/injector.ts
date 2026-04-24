@@ -20,6 +20,7 @@ import type {
   SessionId,
 } from "../../agent-contract/dto.js";
 import { ids } from "../id.js";
+import type { CollectedGuidance } from "./decision-guidance.js";
 import type { RankedCandidate } from "./ranker.js";
 import type {
   EpisodeCandidate,
@@ -56,6 +57,14 @@ export interface InjectorInput {
   skillInjectionMode?: SkillInjectionMode;
   /** Per-skill summary char cap when `skillInjectionMode === "summary"`. */
   skillSummaryChars?: number;
+  /**
+   * V7 §2.4.6 — preference / anti-pattern collected from policies that
+   * share evidence with the retrieved traces / skills. Rendered as a
+   * dedicated "Decision guidance" section so the agent reads it BEFORE
+   * choosing its next action. Empty (default) means no guidance was
+   * found for the current retrieval — the section is then omitted.
+   */
+  decisionGuidance?: CollectedGuidance;
 }
 
 export interface InjectorResult {
@@ -85,7 +94,10 @@ export function toPacket(input: InjectorInput): InjectorResult {
     });
   }
   const snippets = mapping.map((m) => m.snippet);
-  const rendered = renderWholePacket(snippets, input.reason, { skillMode });
+  const rendered = renderWholePacket(snippets, input.reason, {
+    skillMode,
+    decisionGuidance: input.decisionGuidance,
+  });
 
   const packet: InjectionPacket = {
     reason: input.reason,
@@ -201,12 +213,11 @@ function firstLineSummary(guide: string, maxChars: number): string {
 }
 
 function renderTrace(c: TraceCandidate): InjectionSnippet {
-  // LLM-focused shape. When we have an LLM-generated summary (the
-  // common case since migration 005), lead with it — the summary was
-  // deliberately compressed to "the fact worth remembering", so it's
-  // the most prompt-budget-efficient form. Then attach the raw turn
-  // text as backup so the model can disambiguate pronouns, names, and
-  // anything the summary elided.
+  // LLM-focused shape. When we have an LLM-generated summary, lead
+  // with it — the summary was deliberately compressed to "the fact
+  // worth remembering", so it's the most prompt-budget-efficient
+  // form. Then attach the raw turn text as backup so the model can
+  // disambiguate pronouns, names, and anything the summary elided.
   const parts: string[] = [];
   const summaryLine = c.summary?.trim();
   if (summaryLine) parts.push(summaryLine);
@@ -287,9 +298,10 @@ function renderWorldModel(c: WorldModelCandidate): InjectionSnippet {
 function renderWholePacket(
   snippets: readonly InjectionSnippet[],
   reason: RetrievalReason,
-  opts: { skillMode: SkillInjectionMode },
+  opts: { skillMode: SkillInjectionMode; decisionGuidance?: CollectedGuidance },
 ): string {
-  if (snippets.length === 0) return "";
+  const guidanceBlock = renderDecisionGuidance(opts.decisionGuidance);
+  if (snippets.length === 0 && !guidanceBlock) return "";
 
   const header = HEADER_BY_REASON[reason] ?? HEADER_BY_REASON.turn_start;
   const parts: string[] = [header];
@@ -330,8 +342,49 @@ function renderWholePacket(
     });
   }
 
+  // V7 §2.4.6 — surface decision guidance LAST so it sits immediately
+  // before the available-tools footer. The agent has already read the
+  // facts (Memories, Skills, Environment); now we prime it with
+  // "preferred / avoided" lines distilled from past failures + fixes.
+  if (guidanceBlock) parts.push(guidanceBlock);
+
   parts.push(footerFor(opts.skillMode, skills.length > 0));
   return parts.join("\n\n");
+}
+
+/**
+ * Render the V7 §2.4.6 "Decision guidance" section. Returns `null` when
+ * no preference / anti-pattern lines were collected — the caller skips
+ * the heading entirely so prompts stay tidy.
+ *
+ * Format mirrors the surrounding sections (Markdown heading + numbered
+ * list) so the agent perceives it as part of the same memory packet,
+ * not a foreign block.
+ */
+function renderDecisionGuidance(g: CollectedGuidance | undefined): string | null {
+  if (!g) return null;
+  if (g.preference.length === 0 && g.antiPattern.length === 0) return null;
+
+  const lines: string[] = [
+    "## Decision guidance (distilled from past similar situations)",
+    "",
+    "Apply these BEFORE choosing your next action. Each line was learned",
+    "from one or more past episodes where the user told us what to prefer",
+    "or avoid in this kind of context.",
+  ];
+  if (g.preference.length > 0) {
+    lines.push("", "**Prefer**");
+    g.preference.forEach((p, i) => {
+      lines.push(`  ${i + 1}. ${p.text}`);
+    });
+  }
+  if (g.antiPattern.length > 0) {
+    lines.push("", "**Avoid**");
+    g.antiPattern.forEach((a, i) => {
+      lines.push(`  ${i + 1}. ${a.text}`);
+    });
+  }
+  return lines.join("\n");
 }
 
 function renderNumberedSnippet(s: InjectionSnippet, n: number): string {

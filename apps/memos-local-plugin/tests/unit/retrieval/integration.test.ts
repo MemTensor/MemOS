@@ -67,6 +67,7 @@ function seed(handle: TmpDbHandle) {
       tags,
       vecSummary: vec(v),
       vecAction: null,
+      turnId: 0 as never,
       schemaVersion: 1,
     });
   };
@@ -87,6 +88,7 @@ function seed(handle: TmpDbHandle) {
     trialsPassed: 4,
     sourcePolicyIds: [],
     sourceWorldModelIds: [],
+    evidenceAnchors: [],
     vec: vec([1, 0, 0]),
     createdAt: NOW as never,
     updatedAt: NOW as never,
@@ -104,6 +106,7 @@ function seed(handle: TmpDbHandle) {
     trialsPassed: 0,
     sourcePolicyIds: [],
     sourceWorldModelIds: [],
+    evidenceAnchors: [],
     vec: vec([1, 0, 0]),
     createdAt: NOW as never,
     updatedAt: NOW as never,
@@ -119,6 +122,7 @@ function seed(handle: TmpDbHandle) {
     policyIds: [],
     sourceEpisodeIds: [],
     inducedBy: "",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: vec([1, 0, 0]),
     createdAt: NOW as never,
     updatedAt: NOW as never,
@@ -263,6 +267,7 @@ describe("retrieval/integration", () => {
       tags: ["docker"],
       vecSummary: vec([1, 0, 0]),
       vecAction: null,
+      turnId: 0 as never,
       schemaVersion: 1,
     });
 

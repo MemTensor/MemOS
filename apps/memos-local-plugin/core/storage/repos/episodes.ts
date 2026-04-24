@@ -140,6 +140,24 @@ export function makeEpisodesRepo(db: StorageDb) {
       const sql = `SELECT ${COLUMNS.join(", ")} FROM episodes ${where} ${page}`;
       return db.prepare<typeof params, RawEpisodeRow>(sql).all(params).map(mapRow);
     },
+
+    count(filter: Omit<EpisodeListFilter, "limit" | "offset"> = {}): number {
+      const tr = timeRangeWhere(filter, "started_at");
+      const fragments: string[] = [];
+      const params: Record<string, unknown> = { ...tr.params };
+      if (filter.sessionId) {
+        fragments.push(`session_id = @session_id`);
+        params.session_id = filter.sessionId;
+      }
+      if (filter.status) {
+        fragments.push(`status = @status`);
+        params.status = filter.status;
+      }
+      if (tr.sql) fragments.push(tr.sql);
+      const where = joinWhere(fragments);
+      const sql = `SELECT COUNT(*) AS n FROM episodes ${where}`;
+      return db.prepare<typeof params, { n: number }>(sql).get(params)?.n ?? 0;
+    },
   };
 }
 

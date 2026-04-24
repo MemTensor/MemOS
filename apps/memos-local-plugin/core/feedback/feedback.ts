@@ -340,19 +340,19 @@ export function attachRepairToPolicies(
 }
 
 /**
- * Policies don't currently carry a structured `decisionGuidance` column —
- * we stash the pair as a JSON blob under the kv-like `raw` meta field on
- * the policy's `boundary` string, prefixed so the skill crystallizer can
- * pick it up. Skills also carry the same guidance via `procedureJson`,
- * which the packager fills in automatically on the next crystallize run.
+ * Update a policy's structured `decisionGuidance` column with the new
+ * preference / anti-pattern lines from a repair draft. Returns `null`
+ * when the merge would be a no-op (every line already present), which
+ * lets the caller skip the write entirely.
+ *
+ * Stored in `policies.decision_guidance_json` (migration 001) — no more
+ * regex-parsing the boundary text.
  */
 function mergePolicyGuidance(
   policy: PolicyRow,
   draft: DecisionRepairDraft,
 ): PolicyRow | null {
-  const tag = "@repair";
-  const existing = policy.boundary ?? "";
-  const current = parseGuidanceBlock(existing);
+  const current = policy.decisionGuidance;
   const nextPref = dedupeKeep(current.preference.concat(draft.preference));
   const nextAvoid = dedupeKeep(current.antiPattern.concat(draft.antiPattern));
   if (
@@ -361,52 +361,11 @@ function mergePolicyGuidance(
   ) {
     return null;
   }
-  const without = stripGuidanceBlock(existing, tag);
-  const nextBoundary = [without.trim(), renderGuidanceBlock(tag, nextPref, nextAvoid)]
-    .filter(Boolean)
-    .join("\n\n");
   return {
     ...policy,
-    boundary: nextBoundary,
+    decisionGuidance: { preference: nextPref, antiPattern: nextAvoid },
     updatedAt: nowMs() as PolicyRow["updatedAt"],
   };
-}
-
-interface GuidanceBlock {
-  preference: string[];
-  antiPattern: string[];
-}
-
-function parseGuidanceBlock(raw: string): GuidanceBlock {
-  const match = raw.match(/^@repair\s*(\{[\s\S]*?\})/m);
-  if (!match) return { preference: [], antiPattern: [] };
-  try {
-    const parsed = JSON.parse(match[1]!) as Partial<GuidanceBlock>;
-    return {
-      preference: Array.isArray(parsed.preference)
-        ? parsed.preference.map(String)
-        : [],
-      antiPattern: Array.isArray(parsed.antiPattern)
-        ? parsed.antiPattern.map(String)
-        : [],
-    };
-  } catch {
-    return { preference: [], antiPattern: [] };
-  }
-}
-
-function stripGuidanceBlock(raw: string, tag: string): string {
-  const re = new RegExp(`^${tag}\\s*\\{[\\s\\S]*?\\}`, "m");
-  return raw.replace(re, "");
-}
-
-function renderGuidanceBlock(
-  tag: string,
-  preference: readonly string[],
-  antiPattern: readonly string[],
-): string {
-  const payload = JSON.stringify({ preference, antiPattern });
-  return `${tag} ${payload}`;
 }
 
 function dedupeKeep(xs: readonly string[]): string[] {

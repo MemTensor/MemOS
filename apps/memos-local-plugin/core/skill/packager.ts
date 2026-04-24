@@ -22,6 +22,7 @@ import type {
   PolicyRow,
   SkillId,
   SkillRow,
+  TraceId,
   WorldModelId,
 } from "../types.js";
 import type {
@@ -34,10 +35,24 @@ export interface PackagerInput {
   draft: SkillCrystallizationDraft;
   policy: PolicyRow;
   evidenceEpisodeIds: EpisodeId[];
+  /**
+   * V7 §2.1 `evidence_anchors` — the L1 trace ids that justified this
+   * skill at crystallisation time. Persisted onto the skill so the
+   * viewer can render click-through chips back to MemoriesView and
+   * future audits don't have to re-run `gatherEvidence()`.
+   *
+   * Best-first ordering (matches `gatherEvidence` output). Capped to
+   * `EVIDENCE_ANCHORS_CAP` ids in the packager — keeps the column
+   * small and the JSON roundtrip cheap.
+   */
+  evidenceTraceIds?: TraceId[];
   worldModelIds?: WorldModelId[];
   /** When rebuilding, we keep the existing skill id + accumulated trials. */
   existing?: SkillRow | null;
 }
+
+/** Hard cap on `SkillRow.evidenceAnchors` so the JSON column stays small. */
+const EVIDENCE_ANCHORS_CAP = 10;
 
 export interface PackagerDeps {
   embedder: Embedder | null;
@@ -73,6 +88,15 @@ export async function buildSkillRow(
   const vecSource = buildVecSource(draft, policy);
   const vec = await tryEmbed(deps, vecSource);
 
+  // Merge new evidence with whatever the previous skill version had,
+  // keeping new (fresher / better-scoring) ids first and dropping
+  // duplicates. Capped at EVIDENCE_ANCHORS_CAP so a long-lived skill
+  // doesn't grow an unbounded list across many rebuilds.
+  const evidenceAnchors = dedupe<TraceId>([
+    ...(input.evidenceTraceIds ?? []),
+    ...(existing?.evidenceAnchors ?? []),
+  ]).slice(0, EVIDENCE_ANCHORS_CAP);
+
   const row: SkillRow = {
     id,
     name: draft.name,
@@ -89,6 +113,7 @@ export async function buildSkillRow(
       ...(existing?.sourceWorldModelIds ?? []),
       ...(input.worldModelIds ?? []),
     ]),
+    evidenceAnchors,
     vec,
     createdAt: (existing?.createdAt ?? (now as SkillRow["createdAt"])),
     updatedAt: now as SkillRow["updatedAt"],
@@ -108,7 +133,11 @@ function buildProcedure(draft: SkillCrystallizationDraft): SkillProcedure {
     preconditions: draft.preconditions,
     steps: draft.steps,
     examples: draft.examples,
-    decisionGuidance: { preference: [], antiPattern: [] },
+    // V7 §2.4.6 — `decisionGuidance` now flows from the LLM draft
+    // (which folded in the policy's `@repair` block + V-contrast
+    // signals). Older code path used to hard-code `[] / []` here,
+    // dropping every prefer / avoid line on the floor.
+    decisionGuidance: draft.decisionGuidance ?? { preference: [], antiPattern: [] },
     tags: draft.tags,
   };
 }
@@ -152,6 +181,19 @@ function renderInvocationGuide(
     for (const e of draft.examples) {
       lines.push(`- Input: \`${e.input}\``);
       lines.push(`  Expected: ${e.expected}`);
+    }
+    lines.push("");
+  }
+  const dg = draft.decisionGuidance;
+  if (dg && (dg.preference.length > 0 || dg.antiPattern.length > 0)) {
+    lines.push(`**Decision guidance**`);
+    if (dg.preference.length > 0) {
+      lines.push("Prefer:");
+      for (const p of dg.preference) lines.push(`- ${p}`);
+    }
+    if (dg.antiPattern.length > 0) {
+      lines.push("Avoid:");
+      for (const a of dg.antiPattern) lines.push(`- ${a}`);
     }
     lines.push("");
   }

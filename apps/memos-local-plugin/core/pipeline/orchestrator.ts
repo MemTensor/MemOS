@@ -794,21 +794,29 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // ─── flush / shutdown ───────────────────────────────────────────────────
 
   async function flush(): Promise<void> {
-    // Order matters: we want capture to finish first (it writes traces),
-    // then reward (which reads them), then L2/L3/skills (which cascade).
-    // None of the downstream subscribers expose a waiter today because
-    // each one schedules work via `void processReward(...)` — so we
-    // drain the microtask queue between layers to give schedulers a
-    // chance to complete. A fixed tick count is cheap and deterministic.
+    // Order matters: capture writes traces, reward reads them and
+    // emits `reward.updated` → L2 induces policies & emits
+    // `l2.policy.induced` → L3 abstracts world models → skills
+    // crystallize. Each layer is its own subscriber, so we walk the
+    // chain explicitly. A few ticks between waits let scheduled
+    // `void run(...)` promises register in their owners' inflight
+    // sets before we ask each one to drain.
     const nextTick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
     await subs.subscriptions.capture.drain();
     await nextTick();
     await subs.subscriptions.reward.drain();
     await nextTick();
-    // L2 + L3 + skills subscribers do fire-and-forget; run a few ticks
-    // to let their chained `void` promises settle.
-    for (let i = 0; i < 4; i++) await nextTick();
+    // L2 receives `reward.updated` and runs the induce/associate
+    // pipeline (LLM call, ~5s). Without draining it here, single-
+    // shot adapters (Hermes' `chat -q`) reap the bridge before L2
+    // finishes — the candidate pool fills up but no policy is ever
+    // induced.
+    await subs.l2.drain();
+    await nextTick();
+    // L3 reacts to `l2.policy.induced`. Same problem, same fix.
+    await subs.l3.drain();
+    await nextTick();
     await subs.skills.flush();
     await subs.feedback.flush();
   }

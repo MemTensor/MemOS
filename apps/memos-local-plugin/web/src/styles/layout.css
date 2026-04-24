@@ -67,10 +67,17 @@ body {
 
 .shell {
   display: grid;
-  grid-template-rows: var(--topbar-h) 1fr;
+  /*
+   * Three rows: topbar (fixed) / banner (auto, may be 0) / main (fills).
+   * The banner row collapses cleanly when ModelSetupBanner returns
+   * null, so users with all model slots configured see the original
+   * two-row layout.
+   */
+  grid-template-rows: var(--topbar-h) auto 1fr;
   grid-template-columns: var(--sidebar-w) 1fr;
   grid-template-areas:
-    "topbar topbar"
+    "topbar  topbar"
+    "banner  banner"
     "sidebar main";
   min-height: 100vh;
 }

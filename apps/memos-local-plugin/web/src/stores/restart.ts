@@ -1,111 +1,88 @@
 /**
- * Global restart-coordinator — signal-based so any view can trigger a
- * graceful reload.
+ * Lightweight "config saved" banner state.
  *
- * Workflow:
- *   1. `triggerRestart()` sets `restarting.value = { phase: 'down' }`
- *   2. App-shell renders a full-screen overlay driven by the signal.
- *   3. We POST `/api/v1/admin/restart` — the server flushes the
- *      response, closes the HTTP server, and `process.exit(0)`s.
- *   4. We poll `GET /api/v1/health` every 1.5s. First transition
- *      "ok → fail" flips phase to `up`; first "fail → ok" transition
- *      during phase=up flips to `done` and reloads the page.
+ * Why this is no longer a real restart coordinator
+ * ================================================
+ * Earlier versions of this file POSTed `/api/v1/admin/restart`,
+ * which made the plugin call `process.exit(0)` on the assumption
+ * that the host (OpenClaw gateway / Hermes Python) would respawn
+ * the viewer process. That assumption is wrong:
  *
- * If the server doesn't come back within `MAX_ATTEMPTS * POLL_MS`
- * (~90s), we surface a hard-error message and stop polling.
+ *   - OpenClaw's plugin runs *inside* the `openclaw-gateway` process,
+ *     so `process.exit(0)` kills the whole gateway. macOS launchd
+ *     re-bootstraps the LaunchAgent eventually, but easily later
+ *     than the 90 s health-poll deadline.
+ *   - Hermes' bridge is spawned via Python `subprocess.Popen` on
+ *     demand; once the bridge exits, hermes doesn't try to bring it
+ *     back until the next `hermes chat` invocation.
+ *
+ * Result: the overlay almost always ended in
+ *   "Restart didn't complete — service didn't come back in time"
+ * even though the config patch on disk had succeeded. Confusing.
+ *
+ * The honest behaviour is much simpler:
+ *
+ *   1. The PATCH `/api/v1/config` request already wrote the new
+ *      values to `~/.<agent>/memos-plugin/config.yaml`.
+ *   2. Show a short "Saved — restart <agent> to apply" toast for a
+ *      few seconds. No process exit, no polling, no overlay.
+ *   3. The user runs `openclaw gateway stop && start` or relaunches
+ *      `hermes chat`; the new bridge picks up the YAML on boot.
  */
 import { signal } from "@preact/signals";
-import { withAgentPrefix } from "../api/client";
 
-export type RestartPhase = "idle" | "down" | "up" | "done" | "failed";
+export type RestartPhase = "idle" | "saved" | "cleared";
 
 export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
 });
 
-const POLL_MS = 1500;
-const MAX_ATTEMPTS = 60;
+const TOAST_DISMISS_MS = 8_000;
 
-async function probe(): Promise<boolean> {
-  try {
-    const r = await fetch(withAgentPrefix("/api/v1/health"), { cache: "no-store" });
-    if (!r.ok) return false;
-    const body = (await r.json()) as { ok?: boolean };
-    return !!body?.ok;
-  } catch {
-    return false;
-  }
+let dismissTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleDismiss(): void {
+  if (dismissTimer) clearTimeout(dismissTimer);
+  dismissTimer = setTimeout(() => {
+    restartState.value = { phase: "idle" };
+    dismissTimer = null;
+  }, TOAST_DISMISS_MS);
 }
 
 export interface TriggerRestartOptions {
-  /**
-   * What kicks the server into exiting. Defaults to hitting
-   * `POST /api/v1/admin/restart`; callers that already fired a different
-   * endpoint (e.g. "Clear all data", which the server handles by
-   * wiping SQLite + `process.exit(0)`) should pass `"skip"` so we don't
-   * double-trigger.
-   */
+  /** Kept for back-compat; ignored. */
   kick?: "restart-endpoint" | "skip";
 }
 
+/**
+ * Show the "config saved, restart agent to apply" banner.
+ *
+ * Used by Settings → 保存; the upstream `PATCH /api/v1/config` call
+ * has already persisted the YAML before we get here.
+ */
 export async function triggerRestart(
-  opts: TriggerRestartOptions = {},
+  _opts: TriggerRestartOptions = {},
 ): Promise<void> {
-  restartState.value = { phase: "down" };
-
-  if ((opts.kick ?? "restart-endpoint") === "restart-endpoint") {
-    try {
-      await fetch(withAgentPrefix("/api/v1/admin/restart"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-    } catch {
-      // That's expected — the server may have closed the socket as it
-      // shut down. Continue to the poll loop.
-    }
-  }
-
-  // Phase 1 — wait for the server to go offline so we know the
-  // restart request actually took effect.
-  let wentDown = false;
-  for (let i = 0; i < 20; i++) {
-    await sleep(POLL_MS / 3);
-    const alive = await probe();
-    if (!alive) {
-      wentDown = true;
-      break;
-    }
-  }
-  if (!wentDown) {
-    // Config was patched but the server never restarted — most likely
-    // dev mode without a supervisor. Force a reload so the viewer
-    // picks up the new config via the normal REST path.
-    restartState.value = { phase: "done" };
-    location.reload();
-    return;
-  }
-
-  restartState.value = { phase: "up" };
-
-  // Phase 2 — wait for the server to come back.
-  for (let i = 0; i < MAX_ATTEMPTS; i++) {
-    await sleep(POLL_MS);
-    const alive = await probe();
-    if (alive) {
-      restartState.value = { phase: "done" };
-      location.reload();
-      return;
-    }
-  }
-
-  restartState.value = {
-    phase: "failed",
-    message:
-      "Service didn't come back in time. The plugin host may need a manual restart.",
-  };
+  restartState.value = { phase: "saved" };
+  scheduleDismiss();
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Show the "data cleared, restart agent to start fresh" banner.
+ *
+ * Used by Settings → 危险区 → 清空所有数据. The server has wiped the
+ * SQLite file; the next agent boot will recreate an empty DB.
+ */
+export function triggerCleared(): void {
+  restartState.value = { phase: "cleared" };
+  scheduleDismiss();
+}
+
+/** Dismiss the banner immediately (e.g. user clicked the close button). */
+export function dismissRestartBanner(): void {
+  if (dismissTimer) {
+    clearTimeout(dismissTimer);
+    dismissTimer = null;
+  }
+  restartState.value = { phase: "idle" };
 }

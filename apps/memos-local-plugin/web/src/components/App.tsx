@@ -8,6 +8,7 @@
  * once per page load.
  */
 import { Header } from "./Header";
+import { ModelSetupBanner } from "./ModelSetupBanner";
 import { Sidebar } from "./Sidebar";
 import { ContentRouter } from "./ContentRouter";
 import { AuthGate } from "./AuthGate";
@@ -24,6 +25,14 @@ export function App() {
     <AuthGate>
       <div class="shell">
         <Header />
+        {/*
+         * Banner row sits between the topbar and the sidebar/main row
+         * (see `.shell` grid in `styles/layout.css`). The banner
+         * collapses to zero height when the operator has dismissed it
+         * or when all model slots are healthy, so the row simply
+         * disappears with no layout shift.
+         */}
+        <ModelSetupBanner />
         <Sidebar />
         <main class="main">
           <ContentRouter />

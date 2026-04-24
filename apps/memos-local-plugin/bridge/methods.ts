@@ -126,7 +126,9 @@ export function makeDispatcher(
         const sessionId = requireString(p, "sessionId", method) as SessionId;
         const episodeId =
           typeof p.episodeId === "string" ? (p.episodeId as EpisodeId) : undefined;
-        const out = await core.openEpisode({ sessionId, episodeId });
+        const userMessage =
+          typeof p.userMessage === "string" ? p.userMessage : undefined;
+        const out = await core.openEpisode({ sessionId, episodeId, userMessage });
         return { episodeId: out };
       }
       case RPC_METHODS.EPISODE_CLOSE: {

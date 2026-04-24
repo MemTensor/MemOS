@@ -138,6 +138,22 @@ export function buildWorldModelRow(args: {
     args.draft.domainTags.length > 0 ? args.draft.domainTags : args.cluster.domainTags,
   ).slice(0, 6);
 
+  // Cohesion-aware confidence shaping. The LLM proposes a `draft.confidence`
+  // based on how well its three facets (ℰ / ℐ / 𝒞) cover the evidence; we
+  // additionally dampen `loose` clusters proportionally to how spread out
+  // their members are in embedding space. Two policies that ended up in the
+  // same domain bucket but pull in opposite directions (cohesion ≈ 0.2)
+  // shouldn't claim the same retrieval-time confidence as a tight cluster
+  // (cohesion ≈ 0.9). The shrinkage is intentionally gentle (down to 0.6×
+  // for cohesion=0) so we still surface loose-but-real clusters in
+  // Tier-3, just below tighter ones.
+  const baseConfidence = clamp01(args.draft.confidence ?? 0.5);
+  const cohesionFactor =
+    args.cluster.admission === "loose"
+      ? 0.6 + 0.4 * clamp01(args.cluster.cohesion)
+      : 1.0;
+  const confidence = clamp01(baseConfidence * cohesionFactor);
+
   return {
     id: (args.id ?? (ids.world() as WorldModelId)),
     title: args.draft.title.slice(0, 160),
@@ -148,7 +164,7 @@ export function buildWorldModelRow(args: {
       constraints: args.draft.constraints,
     },
     domainTags,
-    confidence: clamp01(args.draft.confidence ?? 0.5),
+    confidence,
     policyIds: args.cluster.policies.map((p) => p.id),
     sourceEpisodeIds: Array.from(new Set(args.episodeIds)),
     inducedBy: args.inducedBy,
@@ -166,8 +182,18 @@ function packPrompt(
   cfg: AbstractDeps["config"],
 ): string {
   const { cluster, evidenceByPolicy } = input;
+  // ADMISSION:
+  //   strict = every member is within `clusterMinSimilarity` of the centroid.
+  //            The world model can confidently describe a single coherent
+  //            sub-problem family.
+  //   loose  = members share a domain key but their titles/triggers spread
+  //            wider in embedding space. The world model should describe the
+  //            shared *project / environment*, not a single sub-problem;
+  //            facets (ℰ/ℐ/𝒞) should be broader and less prescriptive.
+  const cohesionStr = cluster.cohesion.toFixed(2);
   const header = [
     `CLUSTER_KEY: ${cluster.key}`,
+    `ADMISSION: ${cluster.admission} (cohesion=${cohesionStr})`,
     `DOMAIN_TAGS: ${cluster.domainTags.join(", ") || "-"}`,
     `POLICIES (${cluster.policies.length}):`,
   ].join("\n");

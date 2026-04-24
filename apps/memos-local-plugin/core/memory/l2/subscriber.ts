@@ -37,6 +37,15 @@ export interface L2SubscriberHandle {
   detach(): void;
   /** Force-run L2 for a given episode id (used by tests and the viewer). */
   runOnce(episodeId: EpisodeId, opts?: { trigger?: "manual" | "rebuild" }): Promise<void>;
+  /**
+   * Wait for every in-flight L2 run to complete. Called from the
+   * pipeline's `flush()` so that adapters whose process exits right
+   * after `episode.close` (e.g. Hermes' single-shot `chat -q`) don't
+   * lose the induction step. Without this, `runL2` (which may take
+   * 5–10s for the LLM `l2.induction` call) gets reaped mid-flight,
+   * leaving the candidate pool full but no policies ever induced.
+   */
+  drain(): Promise<void>;
 }
 
 export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
@@ -45,6 +54,7 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
 
   let active = 0;
   let closed = false;
+  const inflight = new Set<Promise<unknown>>();
 
   async function processReward(result: RewardResult): Promise<void> {
     if (closed) return;
@@ -95,14 +105,25 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
 
   const off = rewardBus.on("reward.updated", (evt) => {
     if (evt.kind !== "reward.updated") return;
-    // Fire-and-forget; reward subscriber's completion doesn't block on us.
-    void processReward(evt.result);
+    // Fire-and-forget for the producer (reward subscriber must not
+    // block on us), but track the promise so `drain()` can wait
+    // for the L2 induction to actually finish before the process
+    // shuts down.
+    const p: Promise<unknown> = processReward(evt.result).finally(() => {
+      inflight.delete(p);
+    });
+    inflight.add(p);
   });
 
   return {
     detach(): void {
       closed = true;
       off();
+    },
+    async drain(): Promise<void> {
+      while (inflight.size > 0) {
+        await Promise.all(Array.from(inflight));
+      }
     },
     async runOnce(episodeId, opts): Promise<void> {
       const ep = deps.repos.traces; // just to silence TS unused check

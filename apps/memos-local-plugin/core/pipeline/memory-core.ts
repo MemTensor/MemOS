@@ -630,6 +630,22 @@ export function createMemoryCore(
     }
     if (snap.status === "closed") return;
     handle.sessionManager.finalizeEpisode(episodeId);
+    // For adapters whose process exits right after `episode.close`
+    // (e.g. Hermes' single-shot `hermes chat -q ...` mode), the
+    // background reflect → reward → L2 / L3 / Skill chain wouldn't
+    // get a chance to run before the process is reaped. Block the RPC
+    // here so the caller can be sure the full chain has flushed by
+    // the time `episode.close` returns. The cost is a few seconds of
+    // extra latency on the close call — but the chat is already done
+    // at this point, so the user doesn't wait on it.
+    try {
+      await handle.flush();
+    } catch (err) {
+      log.warn("closeEpisode.flush_failed", {
+        episodeId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   // ─── Pipeline (per turn) ──
@@ -1029,6 +1045,26 @@ export function createMemoryCore(
     return filtered.slice(offset, offset + limit).map(policyRowToDTO);
   }
 
+  async function countPolicies(input?: {
+    status?: PolicyDTO["status"];
+    q?: string;
+  }): Promise<number> {
+    ensureLive();
+    const needle = (input?.q ?? "").trim().toLowerCase();
+    if (!needle) {
+      return handle.repos.policies.count({ status: input?.status });
+    }
+    // q is a client-side substring match; mirror `listPolicies` and
+    // walk the full filtered result. Caller passes no limit/offset
+    // so the natural list pages through everything.
+    const rows = handle.repos.policies.list({ status: input?.status });
+    return rows.filter((r) =>
+      (r.title + "\n" + r.trigger + "\n" + r.procedure)
+        .toLowerCase()
+        .includes(needle),
+    ).length;
+  }
+
   async function setPolicyStatus(
     id: string,
     status: PolicyDTO["status"],
@@ -1056,7 +1092,7 @@ export function createMemoryCore(
     ensureLive();
     const existing = handle.repos.policies.getById(id);
     if (!existing) return null;
-    const current = parsePolicyGuidanceBlock(existing.boundary);
+    const current = existing.decisionGuidance;
     const nextPref = dedupeStrings([
       ...current.preference,
       ...(patch.preference ?? []),
@@ -1071,17 +1107,9 @@ export function createMemoryCore(
     ) {
       return policyRowToDTO(existing);
     }
-    const stripped = stripPolicyGuidanceBlock(existing.boundary).trim();
-    const serialised = JSON.stringify({
-      preference: nextPref,
-      antiPattern: nextAvoid,
-    });
-    const nextBoundary = [stripped, `@repair ${serialised}`]
-      .filter(Boolean)
-      .join("\n\n");
     handle.repos.policies.upsert({
       ...existing,
-      boundary: nextBoundary,
+      decisionGuidance: { preference: nextPref, antiPattern: nextAvoid },
       updatedAt: Date.now(),
     });
     const updated = handle.repos.policies.getById(id);
@@ -1092,6 +1120,16 @@ export function createMemoryCore(
     ensureLive();
     const row = handle.repos.worldModel.getById(id);
     return row ? worldModelRowToDTO(row) : null;
+  }
+
+  async function countWorldModels(input?: { q?: string }): Promise<number> {
+    ensureLive();
+    const needle = (input?.q ?? "").trim().toLowerCase();
+    if (!needle) return handle.repos.worldModel.count();
+    const rows = handle.repos.worldModel.list({});
+    return rows.filter((r) =>
+      (r.title + "\n" + r.body).toLowerCase().includes(needle),
+    ).length;
   }
 
   async function listWorldModels(input?: {
@@ -1227,6 +1265,13 @@ export function createMemoryCore(
       offset: input.offset ?? 0,
     });
     return rows.map((r: EpisodeRow) => r.id as EpisodeId);
+  }
+
+  async function countEpisodes(input?: {
+    sessionId?: SessionId;
+  }): Promise<number> {
+    ensureLive();
+    return handle.repos.episodes.count({ sessionId: input?.sessionId });
   }
 
   async function listEpisodeRows(input?: {
@@ -1367,6 +1412,24 @@ export function createMemoryCore(
     };
   }
 
+  async function countTraces(input?: {
+    sessionId?: SessionId;
+    q?: string;
+  }): Promise<number> {
+    ensureLive();
+    const needle = (input?.q ?? "").trim().toLowerCase();
+    if (!needle) {
+      return handle.repos.traces.count({ sessionId: input?.sessionId });
+    }
+    // q substring scan — mirror `listTraces`. Walk all matching
+    // traces from the repo (no limit) and apply the same filter.
+    const rows = handle.repos.traces.list({ sessionId: input?.sessionId });
+    return rows.filter((r) => {
+      const hay = ((r.summary ?? "") + "\n" + r.userText + "\n" + r.agentText).toLowerCase();
+      return hay.includes(needle);
+    }).length;
+  }
+
   async function listTraces(input?: {
     limit?: number;
     offset?: number;
@@ -1411,6 +1474,13 @@ export function createMemoryCore(
       limit: input?.limit ?? 50,
     });
     return rows.map(skillRowToDTO);
+  }
+
+  async function countSkills(input?: {
+    status?: SkillDTO["status"];
+  }): Promise<number> {
+    ensureLive();
+    return handle.repos.skills.count({ status: input?.status });
   }
 
   async function getSkill(id: SkillId): Promise<SkillDTO | null> {
@@ -1708,7 +1778,7 @@ export function createMemoryCore(
           tags: [],
           vecSummary: null,
           vecAction: null,
-          turnId: dto.turnId ?? null,
+          turnId: dto.turnId,
           schemaVersion: 1,
         } as TraceRow);
         imported++;
@@ -1959,11 +2029,13 @@ export function createMemoryCore(
     shareTrace,
     getPolicy,
     listPolicies,
+    countPolicies,
     setPolicyStatus,
     deletePolicy,
     editPolicyGuidance,
     getWorldModel,
     listWorldModels,
+    countWorldModels,
     deleteWorldModel,
     sharePolicy,
     shareWorldModel,
@@ -1973,10 +2045,13 @@ export function createMemoryCore(
     unarchiveWorldModel,
     listEpisodes,
     listEpisodeRows,
+    countEpisodes,
     timeline,
     listTraces,
+    countTraces,
     listApiLogs,
     listSkills,
+    countSkills,
     getSkill,
     archiveSkill,
     deleteSkill,
@@ -2066,7 +2141,7 @@ function stripEmptySecrets(patch: Record<string, unknown>): Record<string, unkno
 
 // ─── Row → DTO mappers ───────────────────────────────────────────────────────
 
-function traceRowToDTO(row: TraceRow): TraceDTO {
+export function traceRowToDTO(row: TraceRow): TraceDTO {
   return {
     id: row.id,
     episodeId: row.episodeId,
@@ -2084,71 +2159,33 @@ function traceRowToDTO(row: TraceRow): TraceDTO {
     alpha: row.alpha,
     rHuman: row.rHuman ?? undefined,
     priority: row.priority,
-    turnId: row.turnId ?? null,
+    turnId: row.turnId,
   };
 }
 
-function policyRowToDTO(row: PolicyRow): PolicyDTO {
-  const guidance = parsePolicyGuidanceBlock(row.boundary);
+export function policyRowToDTO(row: PolicyRow): PolicyDTO {
   return {
     id: row.id,
     title: row.title,
     trigger: row.trigger,
     procedure: row.procedure,
     verification: row.verification,
-    // Strip the `@repair` sentinel block from `boundary` when returning
-    // to the viewer — the structured `preference / antiPattern` fields
-    // below carry the same information in a human-readable form, and
-    // exposing the raw JSON blob to end users reads like a bug.
-    boundary: stripPolicyGuidanceBlock(row.boundary).trim(),
+    boundary: row.boundary,
     support: row.support,
     gain: row.gain,
     status: row.status,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    preference: guidance.preference,
-    antiPattern: guidance.antiPattern,
+    // PolicyDTO surface keeps the flat shape the viewer's PoliciesView
+    // already renders. The structured `decisionGuidance` lives on the
+    // storage row (column `decision_guidance_json`); we just unpack it
+    // here so the DTO doesn't change.
+    preference: row.decisionGuidance.preference,
+    antiPattern: row.decisionGuidance.antiPattern,
     sourceEpisodeIds: [...(row.sourceEpisodeIds ?? [])],
     share: row.share ?? null,
     editedAt: row.editedAt ?? undefined,
   };
-}
-
-/**
- * Parse the `@repair { ... JSON ... }` block the feedback pipeline
- * appends to a policy's `boundary` text. See
- * `core/feedback/feedback.ts::renderGuidanceBlock`. Returns empty
- * arrays when the block is absent or malformed — defensive parse
- * because the block is user-visible prose on disk.
- */
-function parsePolicyGuidanceBlock(boundary: string): {
-  preference: string[];
-  antiPattern: string[];
-} {
-  if (!boundary) return { preference: [], antiPattern: [] };
-  const match = boundary.match(/^@repair\s*(\{[\s\S]*?\})\s*$/m);
-  if (!match) return { preference: [], antiPattern: [] };
-  try {
-    const parsed = JSON.parse(match[1]!) as {
-      preference?: unknown;
-      antiPattern?: unknown;
-    };
-    return {
-      preference: Array.isArray(parsed.preference)
-        ? parsed.preference.map(String).filter((s) => s.trim().length > 0)
-        : [],
-      antiPattern: Array.isArray(parsed.antiPattern)
-        ? parsed.antiPattern.map(String).filter((s) => s.trim().length > 0)
-        : [],
-    };
-  } catch {
-    return { preference: [], antiPattern: [] };
-  }
-}
-
-function stripPolicyGuidanceBlock(boundary: string): string {
-  if (!boundary) return "";
-  return boundary.replace(/^@repair\s*\{[\s\S]*?\}\s*$/m, "");
 }
 
 function dedupeStrings(lines: readonly string[]): string[] {
@@ -2163,11 +2200,23 @@ function dedupeStrings(lines: readonly string[]): string[] {
   return out;
 }
 
-function worldModelRowToDTO(row: WorldModelRow): WorldModelDTO {
+export function worldModelRowToDTO(row: WorldModelRow): WorldModelDTO {
+  // Surface the structured (ℰ, ℐ, 𝒞) triple so the viewer can render
+  // entry-level evidence chips (V7 §1.1). `body` stays as the rendered
+  // markdown summary used by retrieval injection and the embedder, so
+  // both pathways stay coherent. Each facet defaults to `[]` because
+  // a world model is allowed to populate only some facets (e.g. only
+  // constraints) — the empty slots aren't an error.
+  const s = row.structure;
   return {
     id: row.id,
     title: row.title,
     body: row.body,
+    structure: {
+      environment: s.environment ?? [],
+      inference: s.inference ?? [],
+      constraints: s.constraints ?? [],
+    },
     policyIds: row.policyIds,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -2177,12 +2226,33 @@ function worldModelRowToDTO(row: WorldModelRow): WorldModelDTO {
   };
 }
 
-function skillRowToDTO(row: SkillRow): SkillDTO {
+export function skillRowToDTO(row: SkillRow): SkillDTO {
+  // Surface `procedureJson.decisionGuidance` as a top-level DTO field
+  // so the viewer doesn't have to reach into the structured procedure
+  // blob. The shape is fixed by `SkillProcedure`, but the JSON column
+  // is `unknown` to repos so we coerce defensively here — protects
+  // against a malformed LLM draft, NOT against missing legacy data.
+  const proc = (row.procedureJson ?? {}) as {
+    decisionGuidance?: { preference?: unknown; antiPattern?: unknown };
+  };
+  const dg = proc.decisionGuidance;
+  const decisionGuidance = {
+    preference:
+      dg && Array.isArray(dg.preference)
+        ? (dg.preference as unknown[]).map((s) => String(s)).filter(Boolean)
+        : [],
+    antiPattern:
+      dg && Array.isArray(dg.antiPattern)
+        ? (dg.antiPattern as unknown[]).map((s) => String(s)).filter(Boolean)
+        : [],
+  };
   return {
     id: row.id,
     name: row.name,
     status: row.status,
     invocationGuide: row.invocationGuide,
+    decisionGuidance,
+    evidenceAnchors: row.evidenceAnchors,
     eta: row.eta,
     support: row.support,
     gain: row.gain,
@@ -2210,7 +2280,7 @@ function toFeedbackDTO(row: FeedbackRow): FeedbackDTO {
   };
 }
 
-function inferTier(
+export function inferTier(
   kind:
     | "skill"
     | "trace"
@@ -2371,7 +2441,7 @@ function writeApiLog(
  *   - Open episodes with no traces yet get at least 1 (user sent).
  *   - This way `turnCount < 2` correctly means "no assistant reply yet".
  */
-function deriveTurnCount(r: EpisodeRow): number {
+export function deriveTurnCount(r: EpisodeRow): number {
   if (r.traceIds.length > 0) return r.traceIds.length * 2;
   return r.status === "open" ? 1 : 0;
 }
@@ -2391,10 +2461,10 @@ function deriveTurnCount(r: EpisodeRow): number {
 // action, damage) surface as 反例; mild negative judgments fall into
 // the softer "below threshold" bucket and the user doesn't get
 // shouted at.
-const R_NEGATIVE_FLOOR = -0.5;
-const R_BELOW_THRESHOLD = 0.15; // aligned with `algorithm.skill.minGain`
+export const R_NEGATIVE_FLOOR = -0.5;
+export const R_BELOW_THRESHOLD = 0.15; // aligned with `algorithm.skill.minGain`
 
-function deriveSkillStatus(
+export function deriveSkillStatus(
   ep: EpisodeRow,
   relatedPolicies: readonly PolicyRow[],
   skillsByPolicy: ReadonlyMap<string, readonly SkillRow[]>,

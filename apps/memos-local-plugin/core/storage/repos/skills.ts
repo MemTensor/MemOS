@@ -32,6 +32,7 @@ const COLUMNS = [
   "share_target",
   "shared_at",
   "edited_at",
+  "evidence_anchors_json",
 ];
 
 export interface SkillSearchMeta {
@@ -120,6 +121,22 @@ export function makeSkillsRepo(db: StorageDb) {
       const page = buildPageClauses(filter, "updated_at");
       const sql = `SELECT ${COLUMNS.join(", ")} FROM skills ${where} ${page}`;
       return db.prepare<typeof params, RawSkillRow>(sql).all(params).map(mapRow);
+    },
+
+    count(filter: Omit<SkillListFilter, "limit" | "offset"> = {}): number {
+      const fragments: string[] = [];
+      const params: Record<string, unknown> = {};
+      if (filter.status) {
+        fragments.push(`status = @status`);
+        params.status = filter.status;
+      }
+      if (filter.minEta !== undefined) {
+        fragments.push(`eta >= @min_eta`);
+        params.min_eta = filter.minEta;
+      }
+      const where = joinWhere(fragments);
+      const sql = `SELECT COUNT(*) AS n FROM skills ${where}`;
+      return db.prepare<typeof params, { n: number }>(sql).get(params)?.n ?? 0;
     },
 
     searchByVector(
@@ -327,6 +344,7 @@ interface RawSkillRow {
   share_target: string | null;
   shared_at: number | null;
   edited_at: number | null;
+  evidence_anchors_json: string;
 }
 
 function rowToParams(row: SkillRow): Record<string, unknown> {
@@ -351,6 +369,7 @@ function rowToParams(row: SkillRow): Record<string, unknown> {
     share_target: row.share?.target ?? null,
     shared_at: row.share?.sharedAt ?? null,
     edited_at: row.editedAt ?? null,
+    evidence_anchors_json: toJsonText(row.evidenceAnchors),
   };
 }
 
@@ -368,6 +387,7 @@ function mapRow(r: RawSkillRow): SkillRow {
     trialsPassed: r.trials_passed,
     sourcePolicyIds: fromJsonText(r.source_policies_json, []),
     sourceWorldModelIds: fromJsonText(r.source_world_json, []),
+    evidenceAnchors: fromJsonText(r.evidence_anchors_json, []),
     vec: fromBlob(r.vec),
     createdAt: r.created_at,
     updatedAt: r.updated_at,

@@ -316,7 +316,7 @@ describe("feedback/runRepair (integration)", () => {
     expect(after.boundary).toBe("original");
   });
 
-  it("attachToPolicy=true appends an @repair block to the policy boundary", async () => {
+  it("attachToPolicy=true populates the structured decisionGuidance column", async () => {
     handle = makeTmpDb();
     const h = handle;
     const { episodeId } = seedPipInstallScenario(h);
@@ -336,20 +336,25 @@ describe("feedback/runRepair (integration)", () => {
       baseDeps(h),
     );
     const after = h.repos.policies.getById(policy.id)!;
-    expect(after.boundary).toContain("@repair");
-    expect(after.boundary).toContain("preference");
-    expect(after.boundary).toContain("antiPattern");
-    expect(after.boundary.startsWith("alpine musl")).toBe(true);
+    // Boundary stays the human-readable scope text; the repair lines
+    // now live on the structured decisionGuidance column.
+    expect(after.boundary).toBe("alpine musl");
+    expect(after.decisionGuidance.preference.length).toBeGreaterThan(0);
+    expect(after.decisionGuidance.antiPattern.length).toBeGreaterThan(0);
   });
 
-  it("attachRepairToPolicies dedupes and skips unchanged guidance blocks", async () => {
+  it("attachRepairToPolicies dedupes and skips unchanged guidance", async () => {
     handle = makeTmpDb();
     const h = handle;
     seedPipInstallScenario(h);
     const policyId = "po_dedup" as PolicyId;
     seedPolicy(h, {
       id: policyId,
-      boundary: '@repair {"preference":["Prefer: do X"],"antiPattern":["Avoid: do Y"]}',
+      boundary: "scope text",
+      decisionGuidance: {
+        preference: ["Prefer: do X"],
+        antiPattern: ["Avoid: do Y"],
+      },
     });
 
     const updated = attachRepairToPolicies(
@@ -382,11 +387,12 @@ describe("feedback/runRepair (integration)", () => {
     );
     expect(updated2).toEqual([policyId]);
     const p = h.repos.policies.getById(policyId)!;
-    expect(p.boundary).toContain("Prefer: do Z");
-    expect(p.boundary).toContain("Avoid: do W");
-    // Old keys preserved
-    expect(p.boundary).toContain("Prefer: do X");
-    expect(p.boundary).toContain("Avoid: do Y");
+    // Boundary text untouched; new + old guidance both present.
+    expect(p.boundary).toBe("scope text");
+    expect(p.decisionGuidance.preference).toContain("Prefer: do Z");
+    expect(p.decisionGuidance.antiPattern).toContain("Avoid: do W");
+    expect(p.decisionGuidance.preference).toContain("Prefer: do X");
+    expect(p.decisionGuidance.antiPattern).toContain("Avoid: do Y");
   });
 
   it("contextHash flows through persist + cooldown consistently", async () => {

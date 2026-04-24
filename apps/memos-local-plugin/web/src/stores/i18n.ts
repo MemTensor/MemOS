@@ -87,6 +87,8 @@ const en = {
   "common.bulkDelete": "Delete selected",
   "common.bulkDelete.confirm": "Delete {n} selected items? This cannot be undone.",
   "pager.page": "Page {n}",
+  "pager.pageOfAtLeast": "Page {n} / {total}+",
+  "pager.pageOfTotal": "Page {n} / {total}",
 
   // Settings extensions.
   "settings.test": "Test",
@@ -148,13 +150,14 @@ const en = {
   "analytics.tools.subtitle":
     "Per-tool response time and failure counts over the selected time range.",
 
-  "restart.down": "Restarting viewer…",
-  "restart.up": "Waiting for service to come back…",
-  "restart.done": "Reloading…",
-  "restart.failed": "Restart didn't complete",
-  "restart.subtitle":
-    "Your changes have been saved. The page will reload automatically.",
-  "restart.reload": "Reload page",
+  "restart.saved": "Settings saved",
+  "restart.cleared": "All data cleared",
+  "restart.hint.openclaw":
+    "Restart OpenClaw to apply: openclaw gateway stop && openclaw gateway start",
+  "restart.hint.hermes":
+    "Restart Hermes to apply: stop and rerun `hermes chat`",
+  "restart.hint.generic":
+    "Restart this agent's process to load the new configuration.",
   "common.selectAll": "Select all",
   "common.deleteSelected": "Delete selected",
 
@@ -346,6 +349,10 @@ const en = {
   "worldModels.empty.hint":
     "Environment knowledge builds up once several experiences share the same structure.",
   "worldModels.col.body": "Description",
+  "worldModels.structure.title": "Structured cognition (with evidence)",
+  "worldModels.structure.environment": "Environment topology (ℰ)",
+  "worldModels.structure.inference": "Inference rules (ℐ)",
+  "worldModels.structure.constraints": "Constraints (𝒞)",
   "worldModels.col.policies": "Related experiences",
   "worldModels.delete.confirm": "Delete this entry? This cannot be undone.",
   "worldModels.edit.title": "Title",
@@ -374,6 +381,8 @@ const en = {
   "tasks.chat.tool.output": "Output",
   "tasks.chat.tool.ok": "ok",
   "tasks.chat.tool.noPayload": "(no input or output recorded)",
+  "tasks.chat.tool.parallelBatch": "⚡ {n} tools in parallel · {ms}ms wall-clock",
+  "tasks.chat.tool.parallelBatch.savings": "(would have been {sum}ms in series)",
   "tasks.skipped.default":
     "This conversation was too brief to generate a summary or score — the task won't appear in search results.",
   "tasks.failed.default":
@@ -420,6 +429,10 @@ const en = {
   "skills.detail.version": "Version",
   "skills.detail.lastUpdated": "Updated {at}",
   "skills.detail.evolution": "Evolution timeline",
+  "skills.detail.decisionGuidance": "Decision guidance (prefer / avoid)",
+  "skills.detail.decisionGuidance.prefer": "Prefer",
+  "skills.detail.decisionGuidance.avoid": "Avoid",
+  "skills.detail.evidenceAnchors": "Evidence anchors ({n} traces)",
   "skills.detail.evolution.empty":
     "No evolution events recorded yet — the timeline fills in as the skill is crystallised, rebuilt, or archived.",
   "skills.act.delete.confirm": "Permanently delete skill \"{name}\"? This cannot be undone.",
@@ -608,6 +621,14 @@ const en = {
   // Errors / empty states.
   "error.generic": "Something went wrong.",
   "error.loadFailed": "Couldn't load data.",
+
+  // Model-setup banner — one-time onboarding nudge, dismissed via ✕.
+  "banner.modelSetup.aria": "Model configuration reminder",
+  "banner.modelSetup.title": "Model setup reminder",
+  "banner.modelSetup.msg":
+    "Make sure the three model slots — Embedding, Summarizer, and Skill evolver — are configured. Without them memory recall, summarisation and skill crystallization will not work.",
+  "banner.modelSetup.cta": "Open Settings → AI Models",
+  "banner.modelSetup.dismiss": "Dismiss",
 } as const;
 
 type TranslationKey = keyof typeof en;
@@ -675,6 +696,8 @@ const zh: Record<TranslationKey, string> = {
   "common.bulkDelete": "批量删除",
   "common.bulkDelete.confirm": "确认删除 {n} 项？此操作不可撤销。",
   "pager.page": "第 {n} 页",
+  "pager.pageOfAtLeast": "第 {n} 页 / 共 {total}+ 页",
+  "pager.pageOfTotal": "第 {n} 页 / 共 {total} 页",
 
   "settings.test": "测试",
   "settings.hub.admin": "团队成员",
@@ -729,12 +752,13 @@ const zh: Record<TranslationKey, string> = {
   "analytics.tools.title": "工具响应耗时",
   "analytics.tools.subtitle": "所选时间窗口内，各工具的延迟和失败次数。来源：最近的记忆行。",
 
-  "restart.down": "正在重启记忆面板…",
-  "restart.up": "等待服务恢复…",
-  "restart.done": "正在刷新…",
-  "restart.failed": "重启未完成",
-  "restart.subtitle": "设置已保存，页面将自动刷新。",
-  "restart.reload": "刷新页面",
+  "restart.saved": "设置已保存",
+  "restart.cleared": "所有数据已清空",
+  "restart.hint.openclaw":
+    "请重启 OpenClaw 后生效：openclaw gateway stop && openclaw gateway start",
+  "restart.hint.hermes":
+    "请重启 Hermes 后生效：停止后重新执行 `hermes chat`",
+  "restart.hint.generic": "请重启该 agent 进程以加载新配置。",
   "common.selectAll": "全选",
   "common.deleteSelected": "删除所选",
 
@@ -910,6 +934,10 @@ const zh: Record<TranslationKey, string> = {
   "worldModels.empty": "暂无环境认知。",
   "worldModels.empty.hint": "当多条经验展现出相同的规律时，会自动凝聚成这里的环境认知。",
   "worldModels.col.body": "内容",
+  "worldModels.structure.title": "结构化认知（带证据锚点）",
+  "worldModels.structure.environment": "环境拓扑（ℰ）",
+  "worldModels.structure.inference": "行为规律（ℐ）",
+  "worldModels.structure.constraints": "约束禁忌（𝒞）",
   "worldModels.col.policies": "关联经验",
   "worldModels.delete.confirm": "删除这条环境认知？该操作不可撤销。",
   "worldModels.edit.title": "标题",
@@ -937,6 +965,8 @@ const zh: Record<TranslationKey, string> = {
   "tasks.chat.tool.output": "输出",
   "tasks.chat.tool.ok": "成功",
   "tasks.chat.tool.noPayload": "（未记录输入或输出）",
+  "tasks.chat.tool.parallelBatch": "⚡ {n} 个工具并行 · 实际耗时 {ms}ms",
+  "tasks.chat.tool.parallelBatch.savings": "（串行需 {sum}ms）",
   "tasks.skipped.default": "对话内容过少，未生成摘要，该任务不会出现在检索结果中。",
   "tasks.failed.default": "任务评分 R={rTask}，被视为失败交互，未来相似任务的检索权重会被下调。",
   "tasks.skip.reason.tooFewTurns": "对话轮次不足，需要至少 2 轮完整的问答交互才能生成摘要。",
@@ -974,6 +1004,10 @@ const zh: Record<TranslationKey, string> = {
   "skills.detail.version": "当前版本",
   "skills.detail.lastUpdated": "{at} 更新",
   "skills.detail.evolution": "进化时间线",
+  "skills.detail.decisionGuidance": "决策指引（偏好 / 反模式）",
+  "skills.detail.decisionGuidance.prefer": "偏好",
+  "skills.detail.decisionGuidance.avoid": "避免",
+  "skills.detail.evidenceAnchors": "证据锚点（{n} 条记忆）",
   "skills.detail.evolution.empty":
     "尚无进化事件——当技能被结晶、重建或归档后，这里会自动出现。",
 
@@ -1147,6 +1181,13 @@ const zh: Record<TranslationKey, string> = {
 
   "error.generic": "发生了错误。",
   "error.loadFailed": "数据加载失败。",
+
+  "banner.modelSetup.aria": "模型配置提示",
+  "banner.modelSetup.title": "请检查模型配置",
+  "banner.modelSetup.msg":
+    "请确认已配置三个模型：嵌入模型、摘要模型、技能进化模型。未配置时记忆召回、摘要、技能结晶等核心能力都无法工作。",
+  "banner.modelSetup.cta": "前往设置 → AI 模型",
+  "banner.modelSetup.dismiss": "关闭",
 };
 
 // ─── Store ──────────────────────────────────────────────────────────────

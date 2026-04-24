@@ -27,6 +27,7 @@ function mkPolicy(): PolicyRow {
     status: "active",
     sourceEpisodeIds: [],
     inducedBy: "l2.l2.induction.v1",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: vec([1, 0, 0]),
     createdAt: NOW,
     updatedAt: NOW,
@@ -50,6 +51,7 @@ function mkTrace(id: string, userText: string): TraceRow {
     tags: ["alpine", "pip"],
     vecSummary: vec([1, 0, 0]),
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
   };
 }

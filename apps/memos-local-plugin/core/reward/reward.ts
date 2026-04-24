@@ -324,14 +324,50 @@ const TRIVIAL_PATTERNS = [
   /^[\s\p{P}\p{S}]*$/u,
 ];
 
+/**
+ * Decide whether `text` is dominated by trivial filler ("ok", "thx",
+ * "test"…). The earlier implementation walked lines and treated any
+ * line shorter than 5 chars as trivial — which mis-fires on long
+ * markdown / code outputs whose 70 %+ of "lines" are structural
+ * (`#`, `-`, `}`, blank-after-trim) rather than filler. That made
+ * the reward gate skip every Hermes turn that included a code block
+ * or a bulleted answer, so the entire L2 / Skill chain starved.
+ *
+ * New rule: weight by *characters*, and only count a line as trivial
+ * when it actually matches `TRIVIAL_PATTERNS`. Short structural lines
+ * are simply ignored. The total non-trivial text must be at least
+ * `MIN_NON_TRIVIAL_CHARS` for the input to pass.
+ */
+const MIN_NON_TRIVIAL_CHARS = 30;
+
 function looksLikeTrivialContent(text: string): boolean {
-  const lines = text.toLowerCase().split(/\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = text
+    .toLowerCase()
+    .split(/\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
   if (lines.length === 0) return true;
-  const trivialCount = lines.filter((line) => {
-    if (line.length < 5) return true;
-    return TRIVIAL_PATTERNS.some((p) => p.test(line));
-  }).length;
-  return trivialCount / lines.length > 0.7;
+
+  let trivialChars = 0;
+  let nonTrivialChars = 0;
+  for (const line of lines) {
+    if (TRIVIAL_PATTERNS.some((p) => p.test(line))) {
+      trivialChars += line.length;
+    } else {
+      nonTrivialChars += line.length;
+    }
+  }
+
+  // Two-stage check:
+  //   - If there's enough genuinely non-trivial text, pass regardless
+  //     of how many short structural lines there are.
+  //   - Otherwise fall back to the old "trivial-dominated" rule, but
+  //     measured in characters (not lines) so a long answer with a
+  //     few "ok"s sprinkled in doesn't get rejected.
+  if (nonTrivialChars >= MIN_NON_TRIVIAL_CHARS) return false;
+  const total = trivialChars + nonTrivialChars;
+  if (total === 0) return true;
+  return trivialChars / total > 0.7;
 }
 
 function decideSkipReason(
@@ -398,13 +434,17 @@ function decideSkipReason(
     return "该任务没有用户消息，仅包含系统或工具自动生成的内容。";
   }
 
-  // 3. Total content too short. CJK carries more info per char.
-  const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(
-    userContents[0] ?? "",
-  );
+  // 3. Total content too short. CJK packs ~2× the info per char vs
+  // ASCII, so we double the bar for ASCII-only conversations — but
+  // capped at 2× the user-configured min, never an absolute 200
+  // (that hardcoded floor used to make `minContentCharsForCompletion`
+  // settings below 100 silently ineffective).
+  const allText = (userContents.join("") + assistantContents.join(""))
+    .slice(0, 4_000);
+  const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(allText);
   const minContentLen = hasCJK
     ? cfg.minContentCharsForCompletion
-    : Math.max(cfg.minContentCharsForCompletion, 200);
+    : cfg.minContentCharsForCompletion * 2;
   if (contentChars < minContentLen) {
     return (
       `对话内容过短（${contentChars} 字符），信息量不足以生成有意义的摘要。`
@@ -425,12 +465,23 @@ function decideSkipReason(
     return "对话内容（用户和助手双方）为简单问候或测试数据，无需生成摘要。";
   }
 
-  // 6. Almost all messages are tool results with minimal user interaction
+  // 6. Almost all messages are tool results with minimal user
+  // interaction AND no real assistant explanation. Single-shot
+  // agent runs (`hermes chat -q "do X"` → write_file + terminal +
+  // brief confirmation) are a legitimate work pattern, not
+  // "missing user interaction". Only skip when the assistant
+  // response is itself trivially short, indicating the turn is
+  // almost pure tool noise.
+  const assistantContentChars = assistantContents.reduce(
+    (sum, c) => sum + c.length,
+    0,
+  );
   if (
     toolTurns > 0 &&
     totalTurns > 0 &&
     toolTurns >= totalTurns * 0.7 &&
-    userTurns <= 1
+    userTurns <= 1 &&
+    assistantContentChars < 80
   ) {
     return `该任务主要由工具执行结果组成（${toolTurns}/${totalTurns} 条），缺少足够的用户交互内容。`;
   }

@@ -71,14 +71,29 @@ const FOLLOW_PATTERNS = [
 ];
 
 const NEW_TASK_PATTERNS = [
+  // Strict variant kept for backward compatibility.
+  /换个(话题|问题|任务|主题|场景)/i,
+  // Relaxed: allow 1–5 chars between "换个" and the topic noun, so
+  // natural phrasings like "换个新任务", "换个下一个话题",
+  // "换个完全不同的问题" all fire the strong heuristic without
+  // bouncing through the LLM (which often overrules them as
+  // follow_up when the new task shares a project / domain).
+  /换个[^\s。,，！!?？]{1,6}(话题|问题|任务|主题|场景)/i,
+  // "换下一个 / 换下个 ..." family.
+  /换下(一)?个[^\s。,，！!?？]{0,6}(话题|问题|任务|主题|场景)?/i,
+  // "下一个任务 / 下一个话题 ..." prefix family — matches when the
+  // user opens a brand-new turn with an explicit ordinal cue.
+  /^\s*下一?个(\S{0,5})?(话题|问题|任务|主题|场景)/i,
+  // Other explicit Chinese cues.
   /现在(帮我)?处理另一个/i,
-  /换个(话题|问题|任务)/i,
   /先放下/i,
   /忘掉之前/i,
-  /\bnew (task|question|topic)\b/i,
+  // English cues.
+  /\bnew (task|question|topic|subject)\b/i,
   /\bforget (that|about it)\b/i,
-  /\bchange (of )?(topic|subject)\b/i,
+  /\bchange (of )?(topic|subject|task)\b/i,
   /\bmoving on\b/i,
+  /\bnext (task|topic|question)\b/i,
 ];
 
 // Short message with pronoun reference — almost always a follow-up to the

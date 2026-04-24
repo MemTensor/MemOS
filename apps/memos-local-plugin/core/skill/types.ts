@@ -59,6 +59,12 @@ export interface SkillProcedure {
 /**
  * Crystallization draft produced by the LLM + normaliser. Ready to be
  * converted into a `SkillRow` via `packager.buildSkillRow`.
+ *
+ * `decisionGuidance` is **V7 §2.4.6** — preference / anti-pattern lines
+ * synthesised by the crystallizer prompt from a combination of:
+ *   - the policy's existing `@repair` block (parsed from `policy.boundary`)
+ *   - high-V vs low-V evidence contrasts
+ * Empty arrays are valid — they just mean "nothing useful to say yet".
  */
 export interface SkillCrystallizationDraft {
   name: string;
@@ -69,6 +75,7 @@ export interface SkillCrystallizationDraft {
   steps: SkillStepDraft[];
   examples: SkillExampleDraft[];
   tags: string[];
+  decisionGuidance: { preference: string[]; antiPattern: string[] };
 }
 
 /**
@@ -80,7 +87,7 @@ export interface SkillConfig {
   /**
    * Number of trials a skill must accumulate while in `candidate`
    * status before it can graduate to `active` (or be archived for
-   * insufficient η). Previously named `probationaryTrials`.
+   * insufficient η).
    */
   candidateTrials: number;
   /**

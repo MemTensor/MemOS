@@ -33,6 +33,7 @@ interface ListResponse {
   limit: number;
   offset: number;
   nextOffset?: number;
+  total?: number;
 }
 
 export function PoliciesView() {
@@ -42,6 +43,7 @@ export function PoliciesView() {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [detail, setDetail] = useState<PolicyDTO | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -65,10 +67,12 @@ export function PoliciesView() {
       const res = await api.get<ListResponse>(`/api/v1/policies?${qs.toString()}`);
       setRows(res.policies);
       setHasMore(res.nextOffset != null);
+      setTotal(res.total ?? 0);
       setPage(opts.page);
     } catch {
       setRows([]);
       setHasMore(false);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -283,7 +287,12 @@ export function PoliciesView() {
             <Icon name="chevron-left" size={14} />
             {t("common.prev")}
           </button>
-          <span class="pager__info">{t("pager.page", { n: page + 1 })}</span>
+          <span class="pager__info">
+            {t("pager.pageOfTotal", {
+              n: page + 1,
+              total: Math.max(1, Math.ceil(total / PAGE_SIZE)),
+            })}
+          </span>
           <button
             class="btn btn--ghost btn--sm"
             disabled={!hasMore || loading}

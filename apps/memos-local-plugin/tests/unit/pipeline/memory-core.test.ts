@@ -221,4 +221,96 @@ describe("bootstrapMemoryCore", () => {
     expect(h2.paths.home).toBe(home!.home.root);
     expect(h2.paths.db).toBe(home!.home.dbFile);
   });
+
+  it("init() recovers orphaned open episodes left behind by a previous crash", async () => {
+    // When the host (OpenClaw / Hermes / a daemon) is hard-killed
+    // mid-conversation, no `session.end` event is fired and the open
+    // episode rows in SQLite never get closed. Without recovery, those
+    // rows show "激活" forever in the viewer even though no one is
+    // working on them. `core.init()` sweeps the open set on boot and:
+    //
+    //   - Already-rewarded rows (`r_task != null`) → close + stamp
+    //     `closeReason="finalized"` (the chain ran to completion before
+    //     the crash; only the final status flip was lost).
+    //   - Un-scored rows → close + stamp
+    //     `closeReason="abandoned"` with a clear human-readable
+    //     `abandonReason` ("插件上次未正常退出，启动时自动关闭未完成的任务").
+    home = await makeTmpHome({ agent: "openclaw" });
+
+    // First bootstrap: lets migrations run + schema exists. Shut it
+    // down cleanly so we can seed orphans into the DB without holding
+    // a write lock.
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "orphan-test-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    // Seed two open episodes directly via SQLite — one that has been
+    // partially scored (rTask set) and one that hasn't.
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const orphanOldTs = Date.now() - 60 * 60 * 1000; // 1h ago
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_orphan", "openclaw", orphanOldTs, orphanOldTs, "{}");
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, NULL, '[]', NULL, 'open', '{}')`,
+      )
+      .run("ep_orphan_unscored", "se_orphan", orphanOldTs);
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, NULL, '[]', ?, 'open', '{}')`,
+      )
+      .run("ep_orphan_scored", "se_orphan", orphanOldTs, 0.7);
+    writeDb.close();
+
+    // Second bootstrap + init — recovery fires inside init().
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "orphan-test-recover",
+    });
+    await core.init();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const unscored = readDb
+      .prepare("SELECT status, meta_json FROM episodes WHERE id = ?")
+      .get("ep_orphan_unscored") as
+      | { status: string; meta_json: string }
+      | undefined;
+    const scored = readDb
+      .prepare("SELECT status, meta_json FROM episodes WHERE id = ?")
+      .get("ep_orphan_scored") as
+      | { status: string; meta_json: string }
+      | undefined;
+    readDb.close();
+
+    expect(unscored).toBeDefined();
+    expect(unscored!.status).toBe("closed");
+    const unscoredMeta = JSON.parse(unscored!.meta_json) as {
+      closeReason?: string;
+      abandonReason?: string;
+    };
+    expect(unscoredMeta.closeReason).toBe("abandoned");
+    expect(unscoredMeta.abandonReason).toContain("插件上次未正常退出");
+
+    expect(scored).toBeDefined();
+    expect(scored!.status).toBe("closed");
+    const scoredMeta = JSON.parse(scored!.meta_json) as {
+      closeReason?: string;
+      abandonReason?: string;
+    };
+    // Already-scored rows become "finalized" (the chain ran), so the
+    // viewer can show them as "已完成" instead of "已跳过".
+    expect(scoredMeta.closeReason).toBe("finalized");
+    expect(scoredMeta.abandonReason).toBeFalsy();
+  });
 });

@@ -120,8 +120,8 @@ export interface TraceCandidate extends TierCandidateBase {
   agentText: string;
   /**
    * LLM-generated summary line (same string stored in
-   * `traces.summary`). `null` for rows written before migration 005.
-   * When present, renderers prefer it over `userText` — keeps the
+   * `traces.summary`). `null` when the summarizer failed open. When
+   * present, renderers prefer it over `userText` — keeps the
    * injection block skim-able.
    */
   summary: string | null;
@@ -418,8 +418,8 @@ export interface RetrievalRepos {
       userText: string;
       agentText: string;
       /**
-       * Optional LLM-generated summary for this trace. Nullable for
-       * rows written before migration 005.
+       * Optional LLM-generated summary for this trace. Nullable when
+       * the summarizer failed open at capture time.
        */
       summary?: string | null;
       reflection: string | null;
@@ -491,6 +491,38 @@ export interface RetrievalRepos {
       title: string;
       body: string;
       policyIds: string[];
+    } | null;
+  };
+
+  /**
+   * V7 §2.4.6 — minimal slice of the `policies` repo used to surface
+   * `decision_guidance` (preference / anti-pattern). Policies aren't
+   * directly tier-ranked; we look them up to attach guidance to the
+   * traces / skills already chosen by tiers 1 + 2.
+   *
+   * `list({status: "active"})` is called once per retrieval pass and
+   * the result is filtered in JS by `sourceEpisodeIds` / id matching.
+   * Active policy sets are bounded (typically < 200 per install) so
+   * the full scan is cheap and avoids a per-trace round-trip.
+   *
+   * Optional so unit-test fakes that don't care about guidance can
+   * skip wiring it. When undefined, retrieval simply emits no
+   * decision-guidance section.
+   */
+  policies?: {
+    list: (filter?: {
+      status?: "candidate" | "active" | "archived";
+    }) => Array<{
+      id: string;
+      title: string;
+      sourceEpisodeIds: EpisodeId[];
+      decisionGuidance: { preference: string[]; antiPattern: string[] };
+    }>;
+    getById: (id: string) => {
+      id: string;
+      title: string;
+      sourceEpisodeIds: EpisodeId[];
+      decisionGuidance: { preference: string[]; antiPattern: string[] };
     } | null;
   };
 }

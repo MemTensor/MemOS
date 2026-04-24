@@ -18,10 +18,19 @@ We only consider L2s that meet *all* of:
 * `gain ≥ algorithm.l3Abstraction.minPolicyGain`.
 * `support ≥ algorithm.l3Abstraction.minPolicySupport`.
 
-The gain / support floors are deliberately low by default (`0.1` / `1`).
-They exist to keep scratch-pad policies out of the world-model picture,
-not as a primary gate — the primary gate is the LLM itself, which can
-return `confidence = 0` and be filtered out.
+The gain / support floors are deliberately low by default
+(`minPolicyGain = 0.02`, `minPolicySupport = 1`,
+`minPolicies = 2`). They exist to keep scratch-pad policies out of the
+world-model picture, not as a primary gate — the primary gate is the
+LLM itself, which can return `confidence = 0` and be filtered out.
+
+> Default-tuning history: prior to 2026-04 these floors were `0.1` /
+> `1` / `3` and the L3 layer effectively never fired in real usage
+> because the original V7 contrast-only gain formula evaluates to ≈ 0
+> on single-success-path corpora. The new shrinkage-anchored gain
+> formula (see `core/memory/l2/gain.ts`) lifts genuinely-useful
+> policies to the 0.05–0.2 band, so a 0.02 floor cleanly separates them
+> from net-neutral noise.
 
 ---
 
@@ -54,34 +63,64 @@ similarity.
 ## 3. Clustering
 
 Spec (§2.4.1) expects a clustering step on "compatible sub-problems".
-We implement a **two-stage bucket-then-split** algorithm:
+We implement a **two-stage bucket + two-mode admission** algorithm:
 
 ```
 Stage 1 — bucket by domain key
     byKey: Map<string, PolicyWithMeta[]>
 
-Stage 2 — centroid split inside each bucket
+Stage 2 — admit a cohort from each bucket
     center = centroid(vectors_in_bucket)         // null if no vecs
+    strict = []
+    cohesion = mean cosine(member.vec, center) over the bucket
     for each member:
-        if cosine(member.vec, center) ≥ θ_sim:    // config.clusterMinSimilarity
-            kept.push(member)
-        else:
-            drop as outlier  // will be retried next run
+        if cosine(member.vec, center) ≥ θ_sim:   // config.clusterMinSimilarity
+            strict.push(member)
 
-    if |kept| ≥ θ_min:                            // config.minPolicies
-        emit cluster(kept)
+    // Two-mode admission
+    if |strict| ≥ θ_min:                          // config.minPolicies
+        cohort     = strict
+        admission  = "strict"
+    elif |bucket| ≥ θ_min:
+        cohort     = bucket          // fallback — domain key is enough
+        admission  = "loose"
+    else:
+        skip
+
+    emit cluster(cohort, admission, cohesion)
 ```
 
 Rationale:
 
 * Buckets give us **cheap, interpretable** groupings that match the way
   humans read the policies ("all the pip-on-alpine stuff").
-* Centroid cutoff inside the bucket prevents two unrelated flavours of
-  the same keyword (e.g. `python|pip` for data-sci vs `python|pip` for
+* The strict centroid cutoff prevents two unrelated flavours of the
+  same keyword (e.g. `python|pip` for data-sci vs `python|pip` for
   web-scraping) from being over-fused.
+* The **loose fallback** (added 2026-04) recognises that real LLM-
+  generated policy titles often drift in embedding space even when
+  they belong to the same project / sub-problem family — e.g. one
+  policy is "validate python syntax" and another is "register CLI
+  subcommand", both legitimately under `python|_`. Without the
+  fallback, every demo / short-window usage would discard the bucket
+  outright; with it, we still surface a world model and let
+  `abstract.ts` dampen confidence based on the reported `cohesion`
+  score.
 
 `avgGain` on each cluster is the mean `gain` of its surviving members.
-It seeds ranking in the UI and can feed a future priority queue.
+`cohesion ∈ [0, 1]` is the mean cosine of the bucket against the
+centroid (computed before admission, so it reflects raw bucket spread).
+Final ordering combines both: `avgGain × (0.5 + 0.5 · cohesion)` so
+strict, high-gain clusters surface first.
+
+`abstract.ts` uses `admission` + `cohesion` to:
+
+* dampen the persisted `confidence` of `loose` clusters (down to 0.6×
+  for cohesion = 0; pass-through for `strict`),
+* expose them in the LLM prompt header as
+  `ADMISSION: <strict|loose> (cohesion=<n>)` so the model can widen
+  the world model's `environment` / `inference` scope when the cluster
+  is loose rather than over-fitting to a single policy's wording.
 
 ---
 

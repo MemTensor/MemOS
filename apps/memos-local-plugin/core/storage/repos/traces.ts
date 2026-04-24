@@ -124,6 +124,33 @@ export function makeTracesRepo(db: StorageDb) {
     },
 
     /**
+     * Total row count matching the same filter (no limit/offset).
+     * Used by list endpoints so the viewer can show "Page N of M".
+     */
+    count(filter: Omit<TraceListFilter, "limit" | "offset"> = {}): number {
+      const tr = timeRangeWhere(filter, "ts");
+      const fragments: string[] = [];
+      const params: Record<string, unknown> = { ...tr.params };
+      if (filter.sessionId) {
+        fragments.push(`session_id = @session_id`);
+        params.session_id = filter.sessionId;
+      }
+      if (filter.episodeId) {
+        fragments.push(`episode_id = @episode_id`);
+        params.episode_id = filter.episodeId;
+      }
+      if (filter.minAbsValue !== undefined) {
+        fragments.push(`abs(value) >= @min_abs_value`);
+        params.min_abs_value = filter.minAbsValue;
+      }
+      if (tr.sql) fragments.push(tr.sql);
+      const where = joinWhere(fragments);
+      const sql = `SELECT COUNT(*) AS n FROM traces ${where}`;
+      const row = db.prepare<typeof params, { n: number }>(sql).get(params);
+      return row?.n ?? 0;
+    },
+
+    /**
      * Vector top-K over `vec_summary` (or `vec_action` if `kind='action'`).
      * The caller passes any extra SQL filter (e.g. same-episode only).
      */
@@ -476,7 +503,7 @@ interface RawTraceRow {
   share_scope: string | null;
   share_target: string | null;
   shared_at: number | null;
-  turn_id: number | null;
+  turn_id: number;
   schema_version: number;
 }
 

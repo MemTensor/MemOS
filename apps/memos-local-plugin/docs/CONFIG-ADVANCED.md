@@ -51,6 +51,26 @@ llm:
 Direct mapping to the V7 spec (γ, support, gain, top-K, etc.). Change only
 if you know what you're doing — defaults are calibrated for the paper.
 
+> **2026-04 default-tuning note** — the L2/L3/Skill thresholds shipped in
+> the V7 paper (`minGain=0.1`, `minPolicies=3`, `candidateTrials=5`)
+> turned out to be too strict for normal interactive usage: real users
+> almost never produce explicit failure cohorts, so the V7 contrast-only
+> gain formula `G = mean(V_with) − mean(V_without)` collapses to ≈ 0 and
+> nothing ever crystallises. Two coordinated changes ship together:
+>
+> 1. `core/memory/l2/gain.ts` now anchors the without-set against a
+>    neutral 0.5 prior (Beta-binomial shrinkage, pseudocount 5). Useful
+>    policies on a single-success path now score G ≈ 0.05–0.20 instead
+>    of ≈ 0; net-neutral / harmful policies stay at ≤ 0 and are
+>    archived as before.
+> 2. The L3 / Skill floors below were lowered to match the new gain
+>    distribution: `minGain` 0.1 → 0.02, `minPolicies` 3 → 2,
+>    `candidateTrials` 5 → 3, `minTraceValue` 0.05 → 0.01.
+>
+> Together these let a focused user reach an L3 world model + first
+> graduated Skill within ~1 week of normal usage instead of essentially
+> never.
+
 ```yaml
 algorithm:
   capture:
@@ -70,16 +90,16 @@ algorithm:
     summaryMaxChars: 2000     # cap on the task summary handed to the scorer LLM
     llmConcurrency: 2         # parallel R_human LLM calls
   l2Induction:
-    minSimilarity: 0.72            # cosine floor for trace→policy association
+    minSimilarity: 0.65            # cosine floor for trace→policy association
     candidateTtlDays: 30           # TTL for unpromoted rows in l2_candidate_pool
     minEpisodesForInduction: 2     # min distinct episodes to mint a new policy
-    minTraceValue: 0.1             # ignore traces whose V < this after backprop
+    minTraceValue: 0.01            # ignore traces whose V < this after backprop
     useLlm: true                   # false = collect candidates but never call l2.induction
     traceCharCap: 3000             # chars per trace handed to the induction prompt
-    retireGain: -0.05              # active policies dipping below this → retired
+    archiveGain: -0.05             # active policies dipping below this → archived
   l3Abstraction:
-    minPolicies: 3                 # min compatible L2s to trigger abstraction
-    minPolicyGain: 0.1             # eligible L2 gain floor
+    minPolicies: 2                 # min compatible L2s to trigger abstraction
+    minPolicyGain: 0.02            # eligible L2 gain floor (paired with shrinkage-anchored gain)
     minPolicySupport: 1            # eligible L2 support floor
     clusterMinSimilarity: 0.6      # cosine cutoff for cluster-and-merge decisions
     policyCharCap: 800             # chars per policy in the prompt
@@ -90,15 +110,15 @@ algorithm:
     confidenceDelta: 0.05          # confidence step per merge / human thumb
     minConfidenceForRetrieval: 0.2 # Tier-3 hides WMs below this
   skill:
-    minSupport: 3                  # min distinct-episode support to crystallize
-    minGain: 0.15                  # min policy gain to crystallize
-    probationaryTrials: 5          # trials to transition out of probationary
+    minSupport: 2                  # min distinct-episode support to crystallize
+    minGain: 0.02                  # min policy gain to crystallize (with the new shrinkage-anchored formula)
+    candidateTrials: 3             # trials to transition out of `candidate` (legacy docs called this `probationaryTrials`)
     cooldownMs: 60000              # debounce between crystallize runs for a policy
     traceCharCap: 600              # chars per evidence trace in the crystallize prompt
     evidenceLimit: 4               # max evidence traces per crystallize call
     useLlm: true                   # false = schedule runs but skip LLM crystallization
     etaDelta: 0.1                  # η step per user.positive/user.negative thumbs
-    retireEta: 0.25                # η floor; crossing retires
+    archiveEta: 0.25               # η floor; crossing archives
     minEtaForRetrieval: 0.5        # η gate for Tier-1 retrieval + auto-promotion
   feedback:
     failureThreshold: 3            # failures in `failureWindow` that trigger a burst (V7 §6.3)
@@ -157,14 +177,15 @@ algorithm:
 | L2 induction fires on single-episode loops (noisy)   | Raise `l2Induction.minEpisodesForInduction` (e.g. 3).        |
 | Useful L2 policies never get promoted to `active`    | Lower `algorithm.skill.minGain` or `minSupport`.             |
 | LLM costs too high during heavy on-ramp              | Set `l2Induction.useLlm: false` — candidates still collect.  |
-| Active policies churn between `active` ↔ `retired`   | Lower `l2Induction.retireGain` (-0.10 for a wider dead-zone).|
-| L3 world models never get created                    | Lower `l3Abstraction.minPolicies` (e.g. 2) or `clusterMinSimilarity` (e.g. 0.55). |
+| Active policies churn between `active` ↔ `archived`  | Lower `l2Induction.archiveGain` (-0.10 for a wider dead-zone).|
+| L3 world models never get created                    | Confirm at least 2 policies are `active` and share a domain key; lower `l3Abstraction.clusterMinSimilarity` (0.5–0.55) if the domain is heterogeneous. |
 | Too many near-duplicate world models                 | Raise `l3Abstraction.clusterMinSimilarity` (0.65–0.7).         |
 | Low-confidence world models leak into retrieval      | Raise `l3Abstraction.minConfidenceForRetrieval`.                |
-| Skills never graduate from `probationary`            | Lower `skill.probationaryTrials` (e.g. 3) or `minEtaForRetrieval` (e.g. 0.4). |
-| Skills churn between `active` ↔ `retired`            | Lower `skill.retireEta` (0.15) or raise `etaDelta` damping.     |
+| Skills never graduate from `candidate`               | Lower `skill.candidateTrials` (e.g. 2) or `minEtaForRetrieval` (e.g. 0.4). |
+| Skills churn between `active` ↔ `archived`           | Lower `skill.archiveEta` (0.15) or raise `etaDelta` damping.    |
 | Verifier rejects most drafts with "coverage-low"     | Raise `skill.traceCharCap`/`evidenceLimit` so more evidence reaches the verifier. |
-| Too few skills surface — retrieval empty             | Lower `skill.minSupport` (2) or `minGain` (0.05).               |
+| Verifier rejects drafts with "resonance-low"         | Confirm CJK tokenization is enabled (verifier supports CJK bigrams since 2026-04); otherwise lower the implicit minResonance. |
+| Too few skills surface — retrieval empty             | Lower `skill.minSupport` (1) or `minGain` (0.0).                |
 | Agent ignores obvious failure loops (≥3 tries)       | Lower `feedback.failureThreshold` (2) or `failureWindow` (3).   |
 | "value-delta-low" keeps skipping valid repairs       | Lower `feedback.valueDelta` (0.3) — it's the §2.4.6 δ floor.    |
 | Decision-repair table fills with near-duplicates     | Raise `feedback.cooldownMs` (e.g. 300000 = 5 min).              |

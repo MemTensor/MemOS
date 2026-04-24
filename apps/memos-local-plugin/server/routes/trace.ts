@@ -39,10 +39,15 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       sessionId: sessionId as SessionId | undefined,
       q,
     });
+    const total = await deps.core.countTraces({
+      sessionId: sessionId as SessionId | undefined,
+      q,
+    });
     return {
       traces,
       limit,
       offset,
+      total,
       nextOffset: traces.length === limit ? offset + limit : undefined,
     };
   });

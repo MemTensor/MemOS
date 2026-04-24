@@ -1,8 +1,8 @@
 /**
- * `GET /api/v1/api-logs` — paged listing of the structured api_logs
- * table (see `core/storage/migrations/007-api-logs.sql`). Fuels the
- * viewer's Logs page which renders rich per-tool templates for
- * `memory_search` and `memory_add`.
+ * `GET /api/v1/api-logs` — paged listing of the structured `api_logs`
+ * table (defined in the squashed initial schema). Fuels the viewer's
+ * Logs page which renders rich per-tool templates for `memory_search`
+ * and `memory_add`.
  *
  * Query parameters:
  *   - `tool`    optional tool-name filter (e.g. `memory_search`)

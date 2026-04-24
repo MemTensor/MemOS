@@ -56,6 +56,7 @@ describe("storage/end-to-end", () => {
           tags: ["memory"],
           vecSummary: vec([1, 0, 0]),
           vecAction: null,
+          turnId: 0 as never,
           schemaVersion: 1,
         });
         repos.episodes.appendTrace("e-1", ["t-1"]);
@@ -71,6 +72,7 @@ describe("storage/end-to-end", () => {
           status: "candidate",
           sourceEpisodeIds: ["e-1"],
           inducedBy: "l2.incremental",
+          decisionGuidance: { preference: [], antiPattern: [] },
           vec: vec([1, 0, 0]),
           createdAt: 101,
           updatedAt: 101,
@@ -88,6 +90,7 @@ describe("storage/end-to-end", () => {
           trialsPassed: 0,
           sourcePolicyIds: ["p-1"],
           sourceWorldModelIds: [],
+          evidenceAnchors: [],
           vec: vec([1, 0, 0]),
           createdAt: 101,
           updatedAt: 101,

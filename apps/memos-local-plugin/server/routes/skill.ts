@@ -21,10 +21,12 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
     const all = await deps.core.listSkills({ status, limit: pageSize + offset + 1 });
     const page = all.slice(offset, offset + pageSize);
     const hasMore = all.length > offset + pageSize;
+    const total = await deps.core.countSkills({ status });
     return {
       skills: page,
       limit: pageSize,
       offset,
+      total,
       nextOffset: hasMore ? offset + pageSize : undefined,
     };
   });

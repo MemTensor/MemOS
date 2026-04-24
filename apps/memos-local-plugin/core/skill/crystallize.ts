@@ -28,6 +28,14 @@ import type {
 export interface CrystallizeInput {
   policy: PolicyRow;
   evidence: TraceRow[];
+  /**
+   * Optional negative evidence: traces from the same context that scored
+   * V < 0. Surfaced to the LLM as `counter_examples` so it can write
+   * concrete `decision_guidance.anti_pattern` lines (V7 §2.4.6 step ⑤
+   * "对比 V 分布生成动作偏好"). Caller decides how to mine these — see
+   * `core/skill/skill.ts` for the live wiring.
+   */
+  counterExamples?: TraceRow[];
   /** Names of *non-archived* skills, so the LLM can avoid collisions. */
   namingSpace: string[];
 }
@@ -88,7 +96,7 @@ export async function crystallizeDraft(
       ],
       {
         op: "skill.crystallize",
-        schemaHint: "skill-crystallize.v1",
+        schemaHint: "skill-crystallize.v2",
       },
     );
     const draft = normaliseDraft(rsp.value, input);
@@ -103,8 +111,19 @@ export async function crystallizeDraft(
 
 /**
  * Produce a deterministic JSON payload for the LLM.
+ *
+ * V7 §2.4.6: surface the policy's structured `decisionGuidance` as a
+ * separate `repair_hints` field so the prompt schema is unambiguous —
+ * the LLM never sees our internal storage shape, and the boundary text
+ * stays a clean human-readable scope description.
+ *
+ * `counter_examples` are evidence rows with V < 0 — caller-provided
+ * (see `core/skill/skill.ts::gatherCounterExamples`); the prompt
+ * marks them optional so it's fine to omit.
  */
 function packPrompt(input: CrystallizeInput, config: SkillConfig): string {
+  const repairHints = input.policy.decisionGuidance;
+
   const policy = {
     id: input.policy.id,
     title: input.policy.title,
@@ -127,11 +146,33 @@ function packPrompt(input: CrystallizeInput, config: SkillConfig): string {
     tags: t.tags,
   }));
 
-  const payload = {
+  const counterExamples = (input.counterExamples ?? [])
+    .slice(0, Math.max(0, config.evidenceLimit))
+    .map((t) => ({
+      id: t.id,
+      episodeId: t.episodeId,
+      reflection: t.reflection,
+      user: capString(t.userText, config.traceCharCap),
+      agent: capString(t.agentText, config.traceCharCap),
+      value: Number.isFinite(t.value) ? t.value : 0,
+      tags: t.tags,
+    }));
+
+  const payload: Record<string, unknown> = {
     policy,
     evidence,
     naming_space: input.namingSpace,
   };
+  if (counterExamples.length > 0) payload.counter_examples = counterExamples;
+  if (
+    repairHints.preference.length > 0 ||
+    repairHints.antiPattern.length > 0
+  ) {
+    payload.repair_hints = {
+      preference: repairHints.preference,
+      antiPattern: repairHints.antiPattern,
+    };
+  }
   return JSON.stringify(payload);
 }
 
@@ -156,6 +197,10 @@ function normaliseDraft(
   const steps = asArray(raw.steps).map(coerceStep).filter(Boolean) as SkillStepDraft[];
   const examples = asArray(raw.examples).map(coerceExample).filter(Boolean) as SkillExampleDraft[];
   const tags = dedupeLc(asStringArray(raw.tags));
+  // V7 §2.4.6 — coerce both `decision_guidance` (preferred LLM key)
+  // and `decisionGuidance` (camelCase fallback). Caps at 5 entries each
+  // to keep the skill body skim-able and the prompt budget bounded.
+  const decisionGuidance = coerceDecisionGuidance(raw.decision_guidance ?? raw.decisionGuidance);
 
   return {
     name,
@@ -166,7 +211,23 @@ function normaliseDraft(
     steps,
     examples,
     tags,
+    decisionGuidance,
   };
+}
+
+function coerceDecisionGuidance(raw: unknown): {
+  preference: string[];
+  antiPattern: string[];
+} {
+  if (!raw || typeof raw !== "object") {
+    return { preference: [], antiPattern: [] };
+  }
+  const o = raw as Record<string, unknown>;
+  const pref = dedupeLc(asStringArray(o.preference)).slice(0, 5);
+  const anti = dedupeLc(
+    asStringArray(o.anti_pattern ?? o.antiPattern),
+  ).slice(0, 5);
+  return { preference: pref, antiPattern: anti };
 }
 
 function sanitiseName(raw: string): string {

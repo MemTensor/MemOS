@@ -18,6 +18,7 @@ function mkSkill(partial: Partial<SkillRow> = {}): SkillRow {
     trialsPassed: partial.trialsPassed ?? 0,
     sourcePolicyIds: partial.sourcePolicyIds ?? [],
     sourceWorldModelIds: [],
+    evidenceAnchors: [],
     vec: null,
     createdAt: partial.createdAt ?? NOW,
     updatedAt: partial.updatedAt ?? NOW,

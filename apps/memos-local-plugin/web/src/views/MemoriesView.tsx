@@ -69,8 +69,7 @@ interface ListResponse {
  * sub-step it produced" unit. `traces` are the raw L1 rows the
  * pipeline wrote (tool steps + final reply); `head` is the row that
  * carries the user query. `turnKey` is what the page groups on:
- * `${episodeId}:${turnId}` (or `${episodeId}:${trace.id}` for legacy
- * rows that pre-date migration 013 and have NULL `turnId`).
+ * `${episodeId}:${turnId}`.
  */
 interface MemoryGroup {
   turnKey: string;
@@ -99,6 +98,7 @@ export function MemoriesView() {
   const [loading, setLoading] = useState(false);
   const [traces, setTraces] = useState<TraceDTO[]>([]);
   const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<MemoryGroup | null>(null);
   const [toast, setToast] = useState<{ msg: string; kind: "info" | "success" | "error" } | null>(null);
@@ -118,10 +118,12 @@ export function MemoriesView() {
       const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`);
       setTraces(res.traces);
       setHasMore(res.nextOffset != null);
+      setTotal(res.total ?? 0);
       setPage(opts.page);
     } catch {
       setTraces([]);
       setHasMore(false);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -542,7 +544,10 @@ export function MemoriesView() {
             {t("common.prev")}
           </button>
           <span class="pager__info">
-            {t("pager.page", { n: page + 1 })}
+            {t("pager.pageOfTotal", {
+              n: page + 1,
+              total: Math.max(1, Math.ceil(total / PAGE_SIZE)),
+            })}
           </span>
           <button
             class="btn btn--ghost btn--sm"
@@ -768,11 +773,10 @@ function buildGroups(traces: readonly TraceDTO[]): MemoryGroup[] {
 }
 
 function groupKey(tr: TraceDTO): string {
-  // `turnId` is the stable key stamped by `step-extractor`. Falls back
-  // to the trace id so legacy rows (NULL turn_id) stand on their own.
-  const turn = (tr as TraceDTO & { turnId?: number | null }).turnId;
-  if (typeof turn === "number") return `${tr.episodeId ?? "_"}:${turn}`;
-  return `${tr.episodeId ?? "_"}:${tr.id}`;
+  // `turnId` is the stable key stamped by `step-extractor` — every
+  // sub-step from the same user message shares it. Pair with episodeId
+  // because turnId is just a ts (could repeat across episodes).
+  return `${tr.episodeId ?? "_"}:${tr.turnId}`;
 }
 
 function detectGroupRole(g: MemoryGroup): "user" | "assistant" | "tool" | "" {

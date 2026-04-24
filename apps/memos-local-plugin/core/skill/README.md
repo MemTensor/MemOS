@@ -199,8 +199,8 @@ See `algorithm.skill` in
 | Key                         | Default | Purpose                                               |
 | --------------------------- | ------- | ----------------------------------------------------- |
 | `minSupport`                | `2`     | Min distinct-episode support to crystallize.          |
-| `minGain`                   | `0.1`   | Min policy gain required.                             |
-| `probationaryTrials`        | `3`     | Trials required to transition out of `probationary`.  |
+| `minGain`                   | `0.02`  | Min policy gain required (paired with the new shrinkage-anchored gain in `core/memory/l2/gain.ts`). |
+| `candidateTrials`           | `3`     | Trials required to transition out of `candidate`. NOTE: legacy docs called this `probationaryTrials`; the schema field is `candidateTrials`. |
 | `cooldownMs`                | `60000` | Debounce between runs triggered by the same policy.   |
 | `traceCharCap`              | `600`   | Char cap per evidence trace in the crystallize prompt.|
 | `evidenceLimit`             | `4`     | Max evidence traces per crystallize call.             |

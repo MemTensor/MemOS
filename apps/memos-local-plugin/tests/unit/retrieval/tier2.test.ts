@@ -68,6 +68,7 @@ function seed(handle: TmpDbHandle) {
       tags,
       vecSummary: vec(v),
       vecAction: null,
+      turnId: 0 as never,
       schemaVersion: 1,
     });
   };

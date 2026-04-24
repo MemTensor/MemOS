@@ -71,6 +71,7 @@ function mkTrace(partial: TraceOverrides): TraceRow {
     tags: partial.tags ?? [],
     vecSummary: partial.vecSummary ?? null,
     vecAction: partial.vecAction ?? null,
+    turnId: 0 as never,
     schemaVersion: 1,
   };
 }

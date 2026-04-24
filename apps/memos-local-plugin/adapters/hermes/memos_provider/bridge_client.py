@@ -69,18 +69,38 @@ class MemosBridgeClient:
         self._closed = False
 
         node = node_binary or shutil.which("node") or "node"
-        script = bridge_path or str(
-            Path(__file__).resolve().parent.parent.parent.parent / "bridge.cts"
-        )
+        plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+        script = bridge_path or str(plugin_root / "bridge.cts")
         env = {**os.environ, **(extra_env or {})}
+
+        # The plugin ships raw TypeScript (no precompiled `dist/`). Node's
+        # own `--experimental-strip-types` strips type annotations but does
+        # not rewrite `.js` import specifiers to the corresponding `.ts`
+        # files on disk — and the source tree uses `.js` extensions in
+        # every import per the TSC / bundler convention. We therefore
+        # launch the bridge via the bundled `tsx` binary, which handles
+        # both jobs (strip types + extension rewrite). `tsx` is declared
+        # as a production dependency in package.json so it's always present
+        # under node_modules/.bin after `npm install`.
+        tsx_bin = plugin_root / "node_modules" / ".bin" / "tsx"
+        if tsx_bin.exists():
+            cmd = [str(tsx_bin), script, f"--agent={agent}"]
+        else:
+            # Fallback path: `node --import tsx` reproduces the same loader
+            # inline. Requires tsx to be resolvable as a package from the
+            # plugin root — true whenever node_modules exists. If tsx is
+            # genuinely missing the child will fail fast with a loader
+            # error the stderr reader will surface.
+            cmd = [node, "--import", "tsx", script, f"--agent={agent}"]
         self._proc = subprocess.Popen(
-            [node, "--experimental-strip-types", script, f"--agent={agent}"],
+            cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
             env=env,
+            cwd=str(plugin_root),
         )
         self._reader = threading.Thread(
             target=self._read_loop,
@@ -159,10 +179,11 @@ class MemosBridgeClient:
         self._closed = True
         with contextlib.suppress(Exception):
             self._proc.stdin.close()
-        try:
-            self._proc.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            self._proc.kill()
+        # DON'T wait() or kill() the bridge process. If it has an
+        # active viewer (HTTP server), it will stay alive as a daemon
+        # so the memory panel remains accessible between `hermes chat`
+        # sessions. If it's headless (viewer port was taken), it will
+        # notice stdin EOF and exit on its own.
         # unblock any pending waiters
         with self._lock:
             for entry in list(self._pending.values()):

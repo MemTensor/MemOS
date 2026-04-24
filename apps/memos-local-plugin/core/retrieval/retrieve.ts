@@ -28,6 +28,7 @@ import type {
 import { ERROR_CODES } from "../../agent-contract/errors.js";
 import { ids } from "../id.js";
 import { rootLogger } from "../logger/index.js";
+import { collectDecisionGuidance } from "./decision-guidance.js";
 import { buildQuery, type CompiledQuery } from "./query-builder.js";
 import type { RetrievalEventBus } from "./events.js";
 import { toPacket, renderSnippetForDebug } from "./injector.js";
@@ -306,6 +307,25 @@ async function runAll(
       channels: ranked.channelHits,
     });
 
+    // V7 §2.4.6 — gather preference / anti-pattern from policies that
+    // share evidence with what we just retrieved. Cheap (one bounded
+    // scan of active policies) and produces nothing when there's
+    // nothing to say, so it's safe to call unconditionally here.
+    const decisionGuidance = collectDecisionGuidance({
+      ranked: filtered.kept,
+      repos: deps.repos,
+    });
+    if (
+      decisionGuidance.preference.length > 0 ||
+      decisionGuidance.antiPattern.length > 0
+    ) {
+      log.debug("decision_guidance.collected", {
+        preference: decisionGuidance.preference.length,
+        antiPattern: decisionGuidance.antiPattern.length,
+        policyIdsTouched: decisionGuidance.policyIdsTouched.length,
+      });
+    }
+
     const { packet } = toPacket({
       ranked: filtered.kept,
       reason: ctx.reason,
@@ -327,6 +347,7 @@ async function runAll(
       // this to "full" via `algorithm.retrieval.skillInjectionMode`.
       skillInjectionMode: deps.config.skillInjectionMode,
       skillSummaryChars: deps.config.skillSummaryChars,
+      decisionGuidance,
     });
     // Surface the dropped-by-LLM candidates so the Logs page can show
     // "initial N → kept M" without the viewer having to re-run the

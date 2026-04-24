@@ -24,6 +24,7 @@ const COLUMNS = [
   "status",
   "source_episodes_json",
   "induced_by",
+  "decision_guidance_json",
   "vec",
   "created_at",
   "updated_at",
@@ -105,6 +106,24 @@ export function makePoliciesRepo(db: StorageDb) {
       const page = buildPageClauses(filter, "updated_at");
       const sql = `SELECT ${COLUMNS.join(", ")} FROM policies ${where} ${page}`;
       return db.prepare<typeof params, RawPolicyRow>(sql).all(params).map(mapRow);
+    },
+
+    count(filter: Omit<PolicyListFilter, "limit" | "offset"> = {}): number {
+      const tr = timeRangeWhere(filter, "updated_at");
+      const fragments: string[] = [];
+      const params: Record<string, unknown> = { ...tr.params };
+      if (filter.status) {
+        fragments.push(`status = @status`);
+        params.status = filter.status;
+      }
+      if (filter.minSupport !== undefined) {
+        fragments.push(`support >= @min_support`);
+        params.min_support = filter.minSupport;
+      }
+      if (tr.sql) fragments.push(tr.sql);
+      const where = joinWhere(fragments);
+      const sql = `SELECT COUNT(*) AS n FROM policies ${where}`;
+      return db.prepare<typeof params, { n: number }>(sql).get(params)?.n ?? 0;
     },
 
     searchByVector(
@@ -227,6 +246,7 @@ interface RawPolicyRow {
   status: "candidate" | "active" | "archived";
   source_episodes_json: string;
   induced_by: string;
+  decision_guidance_json: string;
   vec: Buffer | null;
   created_at: number;
   updated_at: number;
@@ -235,6 +255,11 @@ interface RawPolicyRow {
   shared_at: number | null;
   edited_at: number | null;
 }
+
+const EMPTY_GUIDANCE: PolicyRow["decisionGuidance"] = Object.freeze({
+  preference: [] as string[],
+  antiPattern: [] as string[],
+});
 
 function rowToParams(row: PolicyRow): Record<string, unknown> {
   return {
@@ -249,6 +274,10 @@ function rowToParams(row: PolicyRow): Record<string, unknown> {
     status: row.status,
     source_episodes_json: toJsonText(row.sourceEpisodeIds),
     induced_by: row.inducedBy,
+    decision_guidance_json: toJsonText({
+      preference: row.decisionGuidance.preference,
+      antiPattern: row.decisionGuidance.antiPattern,
+    }),
     vec: toBlob(row.vec),
     created_at: row.createdAt,
     updated_at: row.updatedAt,
@@ -272,6 +301,7 @@ function mapRow(r: RawPolicyRow): PolicyRow {
     status: r.status,
     sourceEpisodeIds: fromJsonText(r.source_episodes_json, []),
     inducedBy: r.induced_by,
+    decisionGuidance: parseGuidance(r.decision_guidance_json),
     vec: fromBlob(r.vec),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -285,4 +315,29 @@ function mapRow(r: RawPolicyRow): PolicyRow {
         : null,
     editedAt: r.edited_at,
   };
+}
+
+/**
+ * Deserialise the `decision_guidance_json` column into the typed
+ * `{ preference, antiPattern }` shape. Defensively guards against
+ * malformed JSON (returns the empty pair) since the column carries
+ * LLM-derived content that may someday surprise us. Both arrays are
+ * coerced to `string[]` to keep the read side honest even if a
+ * future writer puts non-strings in there.
+ */
+function parseGuidance(raw: string): PolicyRow["decisionGuidance"] {
+  if (!raw) return { ...EMPTY_GUIDANCE };
+  try {
+    const parsed = JSON.parse(raw) as Partial<PolicyRow["decisionGuidance"]>;
+    return {
+      preference: Array.isArray(parsed.preference)
+        ? parsed.preference.map((s) => String(s))
+        : [],
+      antiPattern: Array.isArray(parsed.antiPattern)
+        ? parsed.antiPattern.map((s) => String(s))
+        : [],
+    };
+  } catch {
+    return { ...EMPTY_GUIDANCE };
+  }
 }

@@ -167,7 +167,7 @@ const AlgorithmSchema = Type.Object({
     /** Min distinct episodes in a candidate bucket before we run induction. */
     minEpisodesForInduction: NumberInRange(2, 2, 20),
     /** Ignore traces whose V is below this floor (prevents noise-driven L2). */
-    minTraceValue: NumberInRange(0.1, -1, 1),
+    minTraceValue: NumberInRange(0.01, -1, 1),
     /** When true, call the LLM to induce policies; else collect candidates only. */
     useLlm: Bool(true),
     /** Character cap for traces handed into the `l2.induction` prompt. */
@@ -177,9 +177,9 @@ const AlgorithmSchema = Type.Object({
   }, { default: {} }),
   l3Abstraction: Type.Object({
     /** Minimum number of compatible active L2 policies to trigger an L3 abstraction. */
-    minPolicies: NumberInRange(3, 2, 50),
+    minPolicies: NumberInRange(2, 2, 50),
     /** Hard minimum gain for an L2 to be eligible as abstraction evidence. */
-    minPolicyGain: NumberInRange(0.1, -1, 1),
+    minPolicyGain: NumberInRange(0.02, -1, 1),
     /** Hard minimum support for an L2 to be eligible as abstraction evidence. */
     minPolicySupport: NumberInRange(1, 1),
     /**
@@ -207,10 +207,17 @@ const AlgorithmSchema = Type.Object({
     minConfidenceForRetrieval: NumberInRange(0.2, 0, 1),
   }, { default: {} }),
   skill: Type.Object({
-    minSupport: NumberInRange(3, 1),
-    minGain: NumberInRange(0.15, 0, 1),
+    minSupport: NumberInRange(2, 1),
+    // V7 §2.5 graduation floor. The schema allows negative values so
+    // demo / single-success-line scenarios (where with-without ≈ 0 by
+    // construction even after Bayesian shrinkage) can still force-
+    // graduate candidate policies into active. Production default is
+    // 0.02 — see `core/config/defaults.ts` for rationale and
+    // `core/memory/l2/gain.ts` for how gain is now anchored to a
+    // neutral 0.5 baseline so this floor is reachable on real data.
+    minGain: NumberInRange(0.02, -1, 1),
     /** Trials a skill must accumulate in `candidate` before it can graduate. */
-    candidateTrials: NumberInRange(5, 1),
+    candidateTrials: NumberInRange(3, 1),
     /** Back-off before we retry a failed-to-verify policy. */
     cooldownMs: NumberInRange(6 * 60 * 60 * 1000, 0, 30 * 24 * 60 * 60 * 1000),
     /** Chars per evidence trace fed into the crystallize prompt. */

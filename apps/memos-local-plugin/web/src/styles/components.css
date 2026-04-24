@@ -1235,6 +1235,50 @@
 }
 
 /*
+ * Parallel-batch wrapper — visual signal that the inner tool bubbles
+ * came from a single LLM message and ran concurrently. The amber
+ * accent matches `.chat-item__tool-header` so the connection to "this
+ * is tool territory" stays obvious. Sequential tools intentionally
+ * have no wrapper at all so the contrast is one-glance legible.
+ */
+.chat-item__tool-batch {
+  position: relative;
+  border: 1px dashed rgba(245, 158, 11, 0.4);
+  border-radius: 12px;
+  padding: var(--sp-3) var(--sp-3) var(--sp-2) var(--sp-3);
+  margin-left: 36px; /* align under avatar+gap of nested chat-item */
+  background: rgba(245, 158, 11, 0.04);
+}
+.chat-item__tool-batch-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--amber);
+  margin-bottom: var(--sp-2);
+  letter-spacing: 0.02em;
+}
+.chat-item__tool-batch-hint {
+  margin-left: auto;
+  font-style: italic;
+  font-size: var(--fs-2xs);
+}
+.chat-item__tool-batch-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+/*
+ * Inside the batch wrapper each child is a full `.chat-item` (with its
+ * own avatar). Trim the avatar off here so the nested rows don't double
+ * the indent inside the already-indented batch card.
+ */
+.chat-item__tool-batch-body .chat-item {
+  margin-left: -36px;
+}
+
+/*
  * Cursor-style thinking bubble — indigo, italic, slightly transparent
  * so the agent's "I was trying to do X" reads visibly different from a
  * normal assistant turn.
@@ -1322,4 +1366,99 @@
   background: rgba(139, 92, 246, 0.10);
   color: #a78bfa;
   border: 1px solid rgba(139, 92, 246, 0.35);
+}
+
+/* ── Model-setup banner ────────────────────────────────────────────
+ *
+ * Sticky amber strip mounted by `<ModelSetupBanner />` in the second
+ * row of the shell grid (between topbar and sidebar/main). Reuses the
+ * existing `--amber` / `--amber-bg` tokens so it sits visually next
+ * to the rest of the warning-tinted UI elements (warning pills,
+ * skipped-skill badges, etc.).
+ */
+.model-setup-banner {
+  grid-area: banner;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-6);
+  background: var(--amber-bg);
+  border-bottom: 1px solid var(--amber);
+  color: var(--fg);
+  font-size: var(--fs-sm);
+  /* Hover-state colour shifts trigger from the inner button only. */
+}
+.model-setup-banner__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--amber);
+}
+.model-setup-banner__body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.model-setup-banner__title {
+  color: var(--amber);
+  font-weight: var(--fw-semi);
+}
+.model-setup-banner__msg {
+  color: var(--fg);
+  opacity: 0.92;
+}
+.model-setup-banner__slots {
+  font-weight: var(--fw-med);
+  color: var(--amber);
+}
+.model-setup-banner__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: var(--sp-2);
+  color: var(--pri);
+  text-decoration: none;
+  font-weight: var(--fw-med);
+  white-space: nowrap;
+}
+.model-setup-banner__cta:hover {
+  text-decoration: underline;
+}
+.model-setup-banner__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--amber);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-xs) var(--ease-out),
+    border-color var(--dur-xs);
+}
+.model-setup-banner__close:hover {
+  background: rgba(251, 191, 36, 0.18);
+  border-color: var(--amber);
+}
+.model-setup-banner__close:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 1px;
+}
+@media (max-width: 640px) {
+  .model-setup-banner {
+    padding: var(--sp-2) var(--sp-3);
+    gap: var(--sp-2);
+  }
+  .model-setup-banner__cta {
+    margin-left: 0;
+  }
 }

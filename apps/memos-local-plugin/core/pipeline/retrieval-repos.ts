@@ -84,5 +84,32 @@ export function wrapRetrievalRepos(repos: Repos): RetrievalRepos {
         };
       },
     },
+
+    // V7 §2.4.6 — expose just enough of the policies repo for retrieval
+    // to look up `decisionGuidance` (preference / anti-pattern) attached
+    // to traces / skills already chosen by tiers 1 + 2.
+    policies: {
+      list(filter) {
+        const rows = repos.policies.list(
+          filter && filter.status ? { status: filter.status } : {},
+        );
+        return rows.map((r) => ({
+          id: r.id,
+          title: r.title,
+          sourceEpisodeIds: r.sourceEpisodeIds,
+          decisionGuidance: r.decisionGuidance,
+        }));
+      },
+      getById(id) {
+        const row = repos.policies.getById(id);
+        if (!row) return null;
+        return {
+          id: row.id,
+          title: row.title,
+          sourceEpisodeIds: row.sourceEpisodeIds,
+          decisionGuidance: row.decisionGuidance,
+        };
+      },
+    },
   };
 }

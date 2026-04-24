@@ -18,7 +18,7 @@ import { t, locale, setLocale } from "../stores/i18n";
 import { theme, setTheme } from "../stores/theme";
 import { Icon } from "../components/Icon";
 import { HubAdminPanel } from "../components/HubAdminPanel";
-import { triggerRestart } from "../stores/restart";
+import { triggerRestart, triggerCleared } from "../stores/restart";
 
 type Tab = "models" | "hub" | "general";
 
@@ -823,17 +823,14 @@ function DangerZoneSection() {
   const clearAllData = async () => {
     setClearing(true);
     try {
-      // The server handles "clear data" by wiping SQLite + calling
-      // `process.exit(0)` itself, so we don't need to also POST to
-      // `/admin/restart`. Hand off to the shared restart overlay so
-      // the user sees the same spinner + subtitle they get when
-      // changing config — instead of a blank `location.reload()` that
-      // probes against the still-dying HTTP server.
+      // The server wipes SQLite + cleanly tears down its core; the
+      // next agent boot will recreate an empty DB. We don't try to
+      // restart the agent process from here — the toast tells the
+      // user to do it manually (see `stores/restart.ts` for why).
       await api.post("/api/v1/admin/clear-data", {});
       setConfirming(false);
-      // Fire-and-forget: the overlay keeps itself on screen until the
-      // health poll succeeds, then reloads the page.
-      void triggerRestart({ kick: "skip" });
+      setClearing(false);
+      triggerCleared();
     } catch {
       setClearing(false);
       setConfirming(false);

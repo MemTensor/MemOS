@@ -38,6 +38,7 @@ export function SkillsView() {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const toggleSel = (id: string) => {
     setSelected((prev) => {
@@ -55,15 +56,17 @@ export function SkillsView() {
       qs.set("limit", String(PAGE_SIZE));
       qs.set("offset", String(nextPage * PAGE_SIZE));
       if (status) qs.set("status", status);
-      const r = await api.get<{ skills: SkillDTO[]; nextOffset?: number }>(
+      const r = await api.get<{ skills: SkillDTO[]; nextOffset?: number; total?: number }>(
         `/api/v1/skills?${qs.toString()}`,
       );
       setSkills(r.skills ?? []);
       setHasMore(r.nextOffset != null);
+      setTotal(r.total ?? 0);
       setPage(nextPage);
     } catch {
       setSkills([]);
       setHasMore(false);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -242,7 +245,12 @@ export function SkillsView() {
             <Icon name="chevron-left" size={14} />
             {t("common.prev")}
           </button>
-          <span class="pager__info">{t("pager.page", { n: page + 1 })}</span>
+          <span class="pager__info">
+            {t("pager.pageOfTotal", {
+              n: page + 1,
+              total: Math.max(1, Math.ceil(total / PAGE_SIZE)),
+            })}
+          </span>
           <button
             class="btn btn--ghost btn--sm"
             disabled={!hasMore || loading}
@@ -540,6 +548,78 @@ function SkillDrawer({
                     title={w.id}
                   >
                     {w.title ?? w.id.slice(0, 10)}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/*
+           * V7 §2.4.6 — decision guidance distilled by the crystallizer
+           * from past failures + user feedback. Empty arrays mean
+           * "nothing was learned yet"; we hide the section in that case
+           * so the drawer stays uncluttered.
+           */}
+          {(skill.decisionGuidance.preference.length > 0 ||
+            skill.decisionGuidance.antiPattern.length > 0) && (
+            <section class="card card--flat">
+              <h3 class="card__title" style="font-size:var(--fs-md);margin-bottom:var(--sp-3)">
+                {t("skills.detail.decisionGuidance")}
+              </h3>
+              {skill.decisionGuidance.preference.length > 0 && (
+                <div style="margin-bottom:var(--sp-3)">
+                  <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
+                    {t("skills.detail.decisionGuidance.prefer")}
+                  </div>
+                  <ul style="margin:0;padding-left:18px;font-size:var(--fs-sm);line-height:1.55">
+                    {skill.decisionGuidance.preference.map((p, i) => (
+                      <li key={`p-${i}`}>{p}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {skill.decisionGuidance.antiPattern.length > 0 && (
+                <div>
+                  <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
+                    {t("skills.detail.decisionGuidance.avoid")}
+                  </div>
+                  <ul style="margin:0;padding-left:18px;font-size:var(--fs-sm);line-height:1.55">
+                    {skill.decisionGuidance.antiPattern.map((a, i) => (
+                      <li key={`a-${i}`}>{a}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/*
+           * V7 §2.1 evidence_anchors — direct trace-level provenance.
+           * Click-through chips deep-link into MemoriesView so the user
+           * can audit "which memories justified this skill?".
+           */}
+          {skill.evidenceAnchors.length > 0 && (
+            <section class="card card--flat">
+              <h3 class="card__title" style="font-size:var(--fs-md);margin-bottom:var(--sp-3)">
+                {t("skills.detail.evidenceAnchors", {
+                  n: skill.evidenceAnchors.length,
+                })}
+              </h3>
+              <div class="hstack" style="flex-wrap:wrap;gap:var(--sp-2)">
+                {skill.evidenceAnchors.map((traceId) => (
+                  <button
+                    key={traceId}
+                    class="pill pill--link mono"
+                    style="cursor:pointer;border:0;font-family:var(--font-mono);font-size:var(--fs-xs)"
+                    // Trace ids open the Memories tab — traces surface
+                    // there one-row-per-step (collapsed by turnId into
+                    // memory cards). The cross-link store doesn't have
+                    // a "trace" entity kind because the user-facing
+                    // unit is "memory", not "trace".
+                    onClick={() => linkTo("memory", traceId)}
+                    title={traceId}
+                  >
+                    {traceId.slice(0, 12)}
                   </button>
                 ))}
               </div>

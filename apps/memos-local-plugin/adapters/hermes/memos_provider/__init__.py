@@ -108,9 +108,10 @@ class MemTensorProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_result: str = ""
         self._prefetch_thread: threading.Thread | None = None
-        # Deferred turn-end payload set by `sync_turn`, flushed by
-        # `queue_prefetch` / `on_session_end`.
-        self._pending_turn: tuple[str, str, list[dict[str, Any]], int] | None = None
+        # Tool calls accumulated via the Hermes `post_tool_call` plugin
+        # hook — flushed alongside user/assistant text in `sync_turn`.
+        self._tool_calls: list[dict[str, Any]] = []
+        self._hook_registered = False
 
     # ─── Identity ─────────────────────────────────────────────────────────
 
@@ -132,6 +133,11 @@ class MemTensorProvider(MemoryProvider):
         kwargs always include ``hermes_home`` and ``platform``. We stash
         them so the bridge can resolve the right `~/.hermes/memos-plugin/`
         and log the originating channel.
+
+        We open the session here but NOT the episode — episode creation
+        is deferred to ``_ensure_episode()`` (called from the first
+        ``on_turn_start``), so the actual user message can be passed as
+        the episode's initial text instead of a generic placeholder.
         """
         self._hermes_home = str(kwargs.get("hermes_home") or "")
         self._platform = str(kwargs.get("platform") or "cli")
@@ -156,17 +162,20 @@ class MemTensorProvider(MemoryProvider):
                 },
             )
             self._session_id = resp.get("sessionId") or session_id
-            ep = self._bridge.request("episode.open", {"sessionId": self._session_id})
-            self._episode_id = ep.get("episodeId", "")
             logger.info(
-                "MemOS: bridge ready session=%s episode=%s platform=%s",
+                "MemOS: bridge ready session=%s platform=%s (episode deferred)",
                 self._session_id,
-                self._episode_id,
                 self._platform,
             )
         except Exception as err:
             logger.warning("MemOS: bridge init failed — %s", err)
             self._bridge = None
+        # Register a Hermes plugin hook to capture tool calls as they
+        # happen. The `post_tool_call` hook fires after every tool
+        # dispatch (write_file, terminal, search_files, etc.) with the
+        # tool name, arguments, and result. We accumulate them and
+        # flush in `sync_turn`.
+        self._register_tool_call_hook()
 
     def system_prompt_block(self) -> str:  # type: ignore[override]
         return (
@@ -176,6 +185,53 @@ class MemTensorProvider(MemoryProvider):
             "episode. Relevant memories are automatically injected at the "
             "start of every turn."
         )
+
+    # ─── Episode tracking ─────────────────────────────────────────────────
+    #
+    # We DON'T call `episode.open` ourselves. The core's `onTurnStart`
+    # (RPC `turn.start`) automatically opens / reopens / boundary-cuts
+    # an episode based on V7 §0.1 relation classification. Calling
+    # `episode.open` from the adapter creates an orphan episode that
+    # never receives any traces — and our `episode.close` then closes
+    # that empty orphan, leaving the *real* episode (the one the
+    # pipeline auto-created) without the close trigger that fires
+    # reflect → reward → L2 / L3 / Skill.
+    #
+    # The real episode id surfaces in the `turn.start` response's
+    # `query.episodeId` field; we stash it here so `on_session_end`
+    # can close the right one.
+
+    # ─── Tool call capture via Hermes plugin hook ──────────────────────────
+
+    def _register_tool_call_hook(self) -> None:
+        if self._hook_registered:
+            return
+        try:
+            from hermes_cli.plugins import get_plugin_manager
+            mgr = get_plugin_manager()
+            mgr._hooks.setdefault("post_tool_call", []).append(
+                self._on_post_tool_call
+            )
+            self._hook_registered = True
+            logger.debug("MemOS: registered post_tool_call hook")
+        except Exception as err:
+            logger.debug("MemOS: could not register tool hook — %s", err)
+
+    def _on_post_tool_call(
+        self,
+        *,
+        tool_name: str = "",
+        args: dict | None = None,
+        result: str = "",
+        tool_call_id: str = "",
+        **_kw: Any,
+    ) -> None:
+        """Accumulate a tool call record for the current turn."""
+        self._tool_calls.append({
+            "name": tool_name,
+            "input": json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args or ""),
+            "output": (result or "")[:4000],
+        })
 
     # ─── Turn-level hooks ─────────────────────────────────────────────────
 
@@ -206,28 +262,17 @@ class MemTensorProvider(MemoryProvider):
             return ""
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:  # type: ignore[override]
-        """Background prefetch + flush the previous turn's pending write."""
-        pending = self._pending_turn
-        self._pending_turn = None
+        """No-op for MemOS.
 
-        def _run() -> None:
-            try:
-                result = self._turn_start(query, session_id=session_id) if self._bridge else ""
-                if result:
-                    with self._prefetch_lock:
-                        self._prefetch_result = result
-            except Exception as err:
-                logger.debug("MemOS: queue_prefetch failed — %s", err)
-
-            if pending and self._bridge:
-                try:
-                    self._turn_end(*pending)
-                except Exception as err:
-                    logger.warning("MemOS: deferred turn.end failed — %s", err)
-
-        t = threading.Thread(target=_run, daemon=True, name="memos-prefetch")
-        self._prefetch_thread = t
-        t.start()
+        Hermes calls this AFTER ``sync_turn`` to warm the cache for a
+        hypothetical next turn. In the V7 architecture each ``turn.end``
+        triggers async capture / reward / induction work — running another
+        ``turn.start`` against the same (already-closed) episode just
+        races and produces ``episode already closed`` noise in the
+        viewer's logs page. ``prefetch()`` (called BEFORE the next
+        turn's LLM call) handles real retrieval; this hook is moot.
+        """
+        return
 
     def sync_turn(
         self,
@@ -236,23 +281,27 @@ class MemTensorProvider(MemoryProvider):
         *,
         session_id: str = "",
     ) -> None:  # type: ignore[override]
-        """Persist a completed turn.
+        """Persist a completed turn immediately.
 
-        Hermes' base class only passes text. Tool calls are **not** in
-        this signature — we extract them from the bridge's own
-        ``on_delegation`` pipeline or from the assistant text when it
-        embeds JSON blocks. To avoid blocking the agent loop we defer
-        the ``turn.end`` RPC to the next prefetch cycle.
+        Tool calls are captured via the Hermes ``post_tool_call``
+        plugin hook (registered in ``initialize``). By the time
+        ``sync_turn`` is called the full list of tool calls for this
+        turn has already been accumulated in ``self._tool_calls``.
         """
         if not self._bridge:
             return
-        self._pending_turn = (
-            user_content or self._last_user_text,
-            assistant_content or "",
-            [],  # tool_calls — filled by on_delegation or via bridge hooks
-            int(time.time() * 1000),
+        user = user_content or self._last_user_text
+        assistant = assistant_content or ""
+        tool_calls = self._tool_calls
+        self._tool_calls = []
+        logger.info(
+            "MemOS: sync_turn user=%d assistant=%d tools=%d",
+            len(user), len(assistant), len(tool_calls),
         )
-        # Update last_user_text for the next turn.
+        try:
+            self._turn_end(user, assistant, tool_calls, int(time.time() * 1000))
+        except Exception as err:
+            logger.warning("MemOS: sync_turn turn.end failed — %s", err)
         if user_content:
             self._last_user_text = user_content
 
@@ -450,11 +499,8 @@ class MemTensorProvider(MemoryProvider):
     def on_session_end(self, messages: list[dict[str, Any]]) -> None:  # type: ignore[override]
         if not self._bridge:
             return
-        pending = self._pending_turn
-        self._pending_turn = None
-        if pending:
-            with contextlib.suppress(Exception):
-                self._turn_end(*pending)
+        # `sync_turn` already flushed the turn data synchronously.
+        # Just close the episode and session.
         with contextlib.suppress(Exception):
             self._bridge.request("episode.close", {"episodeId": self._episode_id})
         with contextlib.suppress(Exception):
@@ -467,8 +513,9 @@ class MemTensorProvider(MemoryProvider):
             with contextlib.suppress(Exception):
                 self._bridge.close()
             self._bridge = None
-        with contextlib.suppress(Exception):
-            shutdown_bridge()
+        # DON'T call shutdown_bridge() — the bridge process stays alive
+        # as a daemon if its viewer is running, so the memory panel
+        # remains accessible between `hermes chat` sessions.
 
     # ─── Internals ────────────────────────────────────────────────────────
 
@@ -483,6 +530,14 @@ class MemTensorProvider(MemoryProvider):
                 "ts": int(time.time() * 1000),
             },
         )
+        # Stash the real episode id the pipeline auto-created (V7
+        # §0.1 may have boundary-cut the previous episode and started
+        # a new one). `on_session_end` uses it to close the right
+        # episode — see the "Episode tracking" comment block above.
+        new_eid = ((resp or {}).get("query") or {}).get("episodeId") or ""
+        if new_eid and new_eid != self._episode_id:
+            self._episode_id = new_eid
+            logger.debug("MemOS: stashed episode %s from turn.start", new_eid)
         context = (resp or {}).get("injectedContext") or ""
         if not context:
             return ""

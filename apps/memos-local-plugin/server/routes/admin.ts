@@ -1,18 +1,24 @@
 /**
- * Admin / lifecycle endpoints — restart + runtime reload.
+ * Admin / lifecycle endpoints.
+ *
+ *   POST /api/v1/admin/clear-data
+ *       Wipe the SQLite DB (file + WAL/SHM sidecars) and exit. The
+ *       host (OpenClaw gateway / Hermes Python) doesn't reliably
+ *       respawn us in-process, so the next agent boot recreates a
+ *       fresh DB. The viewer surfaces a "data cleared, restart agent"
+ *       toast so the user knows what to do next.
  *
  *   POST /api/v1/admin/restart
- *       Trigger a viewer restart. We do NOT kill the whole OpenClaw
- *       gateway from here — that would abort the in-flight request.
- *       Instead we schedule `process.exit(0)` on a short timeout
- *       AFTER we flush the response, and rely on OpenClaw's plugin
- *       host to re-spawn the viewer process (it does; that's how
- *       `install.sh` can drop a new tarball without tearing the
- *       gateway down).
- *
- *       In standalone dev mode (`npm run dev`) the process will just
- *       exit; the viewer tab's `waitForHealth` poll will surface the
- *       outage as a toast. Acceptable — dev mode doesn't self-heal.
+ *       LEGACY no-op kept for back-compat with older viewer bundles.
+ *       Earlier this endpoint called `process.exit(0)` on the
+ *       assumption that the host would respawn the plugin process —
+ *       but neither OpenClaw nor Hermes does that automatically, so
+ *       the viewer just sat in a "waiting for service to come back"
+ *       overlay until it timed out. Modern viewers don't call this;
+ *       they just rely on `PATCH /api/v1/config` having persisted
+ *       the new YAML to disk and prompt the user to restart their
+ *       agent process manually. The endpoint still answers OK so
+ *       any older bundle in the wild doesn't error out.
  */
 import type { ServerDeps } from "../types.js";
 import type { Routes } from "./registry.js";
@@ -31,35 +37,15 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps): void {
     for (const suffix of ["", "-wal", "-shm"]) {
       try { await fs.unlink(dbFile + suffix); } catch { /* may not exist */ }
     }
-    // Schedule restart so the plugin re-creates a fresh DB on boot.
+    // Exit so the next agent boot creates a clean DB. The viewer
+    // toast advises the user to restart the agent manually.
     setTimeout(() => process.exit(0), 300);
     return { ok: true, restarting: true };
   });
 
-  routes.set("POST /api/v1/admin/restart", async (ctx) => {
-    // Respond first, exit second. We give the TCP layer ~250ms to
-    // flush the response, then schedule a graceful shutdown. The HTTP
-    // server's keep-alive socket pool is force-closed so the viewer's
-    // reconnect loop kicks in immediately.
-    //
-    // NOTE: We intentionally use `process.exit(0)` rather than
-    // `server.close()` because the plugin host relies on the process
-    // lifecycle to decide whether to respawn us.
-    setTimeout(() => {
-      try {
-        // Close the HTTP server first so the response flushes, then
-        // exit. Wrapped in try/catch because `ctx.res.socket.server`
-        // isn't always reachable in every Node environment.
-        const srv: { close?: () => void } | undefined = (
-          ctx.res.socket as unknown as { server?: { close?: () => void } } | null
-        )?.server ?? undefined;
-        srv?.close?.();
-      } catch {
-        /* ignore — we're about to exit anyway */
-      }
-      // One more tick for close() to drain, then hard-exit.
-      setTimeout(() => process.exit(0), 150);
-    }, 250);
-    return { ok: true, restarting: true };
+  routes.set("POST /api/v1/admin/restart", async (_ctx) => {
+    // No-op (see header comment). Kept for back-compat — older viewer
+    // bundles still POST here after saving config; we just ack.
+    return { ok: true, restarting: false, note: "config persisted; restart the agent process to apply" };
   });
 }

@@ -22,6 +22,7 @@ function trace(id: string, userText: string, agentText: string): TraceRow {
     tags: [],
     vecSummary: vec([1, 0, 0]),
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
   };
 }

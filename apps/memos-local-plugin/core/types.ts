@@ -65,16 +65,15 @@ export interface TraceRow {
   /**
    * Short LLM-generated summary of this trace — the form the Memories
    * viewer surfaces (and the form retrieval embeddings index, when
-   * present). Falls back to `userText` in both places when null
-   * (backwards compat for rows written before migration 005).
+   * present). Falls back to `userText` in both places when null (the
+   * summarizer occasionally fails open; rendering side handles that).
    */
   summary?: string | null;
   /**
-   * Sharing state (migration 006). `null` = private/not-shared.
-   * `share.scope` mirrors the old viewer's `private | public | hub`
-   * tri-state. Nothing in the pipeline depends on this — it exists
-   * purely so the viewer can annotate rows and make the Hub sync
-   * round-trippable.
+   * Sharing state. `null` = private / not-shared. `share.scope`
+   * mirrors the viewer's `private | public | hub` tri-state. Nothing
+   * in the pipeline depends on this — it exists purely so the viewer
+   * can annotate rows and make the Hub sync round-trippable.
    */
   share?: {
     scope: "private" | "public" | "hub";
@@ -87,10 +86,7 @@ export interface TraceRow {
    * message (Claude extended-thinking / pi-ai `ThinkingContent`). Part
    * of the conversation log surfaced in the viewer. NEVER conflated
    * with `reflection`, which is the MemOS plugin's own scoring signal.
-   *
-   * Optional on the write side (rows written before migration 011 are
-   * nullable; legacy fixtures may omit it). Always read back as
-   * `string | null` from `mapRow`.
+   * Nullable because not every provider / every turn produces thinking.
    */
   agentThinking?: string | null;
   /**
@@ -132,12 +128,8 @@ export interface TraceRow {
    * `(episodeId, turnId)` into a single "one round = one memory"
    * card. Algorithm-side machinery (V/α/L2/Tier 2) ignores this
    * field — it is purely a UI grouping anchor.
-   *
-   * Optional on the read side: rows written before migration 013
-   * (`013-trace-turn-id`) are NULL and the viewer falls back to
-   * per-row rendering for them.
    */
-  turnId?: EpochMs | null;
+  turnId: EpochMs;
   /** Schema version that wrote this row (helps with migrations). */
   schemaVersion: number;
 }
@@ -156,6 +148,14 @@ export interface PolicyRow {
   sourceEpisodeIds: EpisodeId[];
   /** Inducer prompt id, helpful for re-running with newer prompts. */
   inducedBy: string;
+  /**
+   * V7 §2.4.6 — preference / anti-pattern lines distilled by the
+   * decision-repair pipeline. Stored in its own column
+   * (`decision_guidance_json`) since migration 001; the repo
+   * deserialises directly into this shape, no ad-hoc parsing needed.
+   * Empty arrays mean "no guidance learned yet".
+   */
+  decisionGuidance: { preference: string[]; antiPattern: string[] };
   vec: EmbeddingVector | null;
   createdAt: EpochMs;
   updatedAt: EpochMs;
@@ -243,6 +243,13 @@ export interface SkillRow {
   trialsPassed: number;
   sourcePolicyIds: PolicyId[];
   sourceWorldModelIds: WorldModelId[];
+  /**
+   * V7 §2.1 `evidence_anchors` — the L1 traces that justified this
+   * skill at crystallisation time. Best-first ordering (matches what
+   * `gatherEvidence()` returned). Persisted in `evidence_anchors_json`
+   * (migration 014). Always present (default `[]`).
+   */
+  evidenceAnchors: TraceId[];
   vec: EmbeddingVector | null;
   createdAt: EpochMs;
   updatedAt: EpochMs;

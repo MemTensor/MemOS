@@ -78,6 +78,7 @@ export function seedPolicy(handle: TmpDbHandle, args: SeedPolicyArgs = {}): Poli
     status: args.status ?? "active",
     sourceEpisodeIds: [...(args.sourceEpisodeIds ?? [])],
     inducedBy: "l2.l2.induction.v1",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: args.vec ?? vec([1, 0, 0]),
     createdAt: now,
     updatedAt: now,
@@ -119,6 +120,7 @@ export function seedTrace(handle: TmpDbHandle, args: SeedTraceArgs): TraceRow {
     tags: args.tags ?? [],
     vecSummary: args.vec ?? vec([1, 0, 0]),
     vecAction: null,
+    turnId: NOW,
     schemaVersion: 1,
   };
   handle.repos.traces.insert(row);
@@ -160,6 +162,7 @@ export function seedSkill(handle: TmpDbHandle, args: SeedSkillArgs = {}): SkillR
     trialsPassed: args.trialsPassed ?? 0,
     sourcePolicyIds: [...(args.sourcePolicyIds ?? [])],
     sourceWorldModelIds: [],
+    evidenceAnchors: [],
     vec: args.vec ?? vec([1, 0, 0]),
     createdAt: (args.updatedAt ?? NOW) as SkillRow["createdAt"],
     updatedAt: (args.updatedAt ?? NOW) as SkillRow["updatedAt"],
@@ -191,6 +194,7 @@ export function makeDraft(
       { input: "pip install cryptography", expected: "cryptography installs without errors" },
     ],
     tags: ["pip", "alpine"],
+    decisionGuidance: { preference: [], antiPattern: [] },
     ...overrides,
   };
 }

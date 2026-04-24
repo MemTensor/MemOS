@@ -84,6 +84,8 @@ export function Header() {
                 key={p.port}
                 class="pill pill--agent-link"
                 href={p.url}
+                target="_blank"
+                rel="noopener"
                 title={`${p.agent} @ ${p.url}`}
               >
                 <Icon name="arrow-up-right" size={10} />

@@ -34,6 +34,7 @@ interface ListResponse {
   limit: number;
   offset: number;
   nextOffset?: number;
+  total?: number;
 }
 
 export function WorldModelsView() {
@@ -42,6 +43,7 @@ export function WorldModelsView() {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [detail, setDetail] = useState<WorldModelDTO | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -64,10 +66,12 @@ export function WorldModelsView() {
       const res = await api.get<ListResponse>(`/api/v1/world-models?${qs.toString()}`);
       setRows(res.worldModels);
       setHasMore(res.nextOffset != null);
+      setTotal(res.total ?? 0);
       setPage(opts.page);
     } catch {
       setRows([]);
       setHasMore(false);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -222,7 +226,12 @@ export function WorldModelsView() {
             <Icon name="chevron-left" size={14} />
             {t("common.prev")}
           </button>
-          <span class="pager__info">{t("pager.page", { n: page + 1 })}</span>
+          <span class="pager__info">
+            {t("pager.pageOfTotal", {
+              n: page + 1,
+              total: Math.max(1, Math.ceil(total / PAGE_SIZE)),
+            })}
+          </span>
           <button
             class="btn btn--ghost btn--sm"
             disabled={!hasMore || loading}
@@ -445,6 +454,17 @@ function WorldModelDrawer({
               </pre>
             </section>
           )}
+
+          {/*
+           * V7 §1.1 — render the structured (ℰ, ℐ, 𝒞) triple with
+           * per-entry evidence chips. The body above is the rendered
+           * markdown form (used by retrieval / embedder); this section
+           * exposes the underlying provenance — which trace / policy
+           * justified each label, click-through into MemoriesView /
+           * PoliciesView. The component itself returns null when all
+           * three facets are empty so we always-render unconditionally.
+           */}
+          <StructureSection structure={worldModel.structure} />
           {worldModel.policyIds.length > 0 && (
             <section class="card card--flat">
               <h3
@@ -620,5 +640,93 @@ function WorldModelDrawer({
         </footer>
       </aside>
     </div>
+  );
+}
+
+// ─── Structure section (V7 §1.1 ℰ / ℐ / 𝒞 with evidence chips) ─────────
+
+interface StructureEntry {
+  label: string;
+  description: string;
+  evidenceIds?: string[];
+}
+
+interface StructureProp {
+  environment: StructureEntry[];
+  inference: StructureEntry[];
+  constraints: StructureEntry[];
+}
+
+/**
+ * Render the (ℰ topology / ℐ inference rules / 𝒞 constraints) triple
+ * as three sub-cards. Each entry shows its label + description + a
+ * row of evidence chips that deep-link back to MemoriesView (for
+ * `tr_*` ids) or PoliciesView (for `po_*` ids).
+ *
+ * Sections with zero entries collapse silently — V7 says environment
+ * cognition is allowed to be partial (e.g. only constraints, no
+ * inference rules) so we don't force the user to see empty headings.
+ */
+function StructureSection({ structure }: { structure: StructureProp }) {
+  const sections: Array<{
+    titleKey:
+      | "worldModels.structure.environment"
+      | "worldModels.structure.inference"
+      | "worldModels.structure.constraints";
+    entries: StructureEntry[];
+  }> = [
+    { titleKey: "worldModels.structure.environment", entries: structure.environment },
+    { titleKey: "worldModels.structure.inference", entries: structure.inference },
+    { titleKey: "worldModels.structure.constraints", entries: structure.constraints },
+  ];
+  const visible = sections.filter((s) => s.entries.length > 0);
+  if (visible.length === 0) return null;
+  return (
+    <section class="card card--flat">
+      <h3
+        class="card__title"
+        style="font-size:var(--fs-md);margin-bottom:var(--sp-3)"
+      >
+        {t("worldModels.structure.title")}
+      </h3>
+      <div class="vstack" style="gap:var(--sp-3)">
+        {visible.map((s) => (
+          <div key={s.titleKey}>
+            <div class="muted" style="font-size:var(--fs-xs);margin-bottom:6px">
+              {t(s.titleKey)}
+            </div>
+            <ul style="margin:0;padding-left:18px;font-size:var(--fs-sm);line-height:1.55">
+              {s.entries.map((e, i) => (
+                <li key={`${s.titleKey}-${i}`} style="margin-bottom:6px">
+                  <strong>{e.label}</strong>
+                  {e.description ? ` — ${e.description}` : null}
+                  {e.evidenceIds && e.evidenceIds.length > 0 && (
+                    <div
+                      class="hstack"
+                      style="flex-wrap:wrap;gap:4px;margin-top:4px"
+                    >
+                      {e.evidenceIds.map((id) => {
+                        const kind = id.startsWith("po_") ? "policy" : "memory";
+                        return (
+                          <button
+                            key={id}
+                            class="pill pill--link mono"
+                            style="cursor:pointer;border:0;font-family:var(--font-mono);font-size:var(--fs-2xs)"
+                            onClick={() => linkTo(kind, id)}
+                            title={id}
+                          >
+                            {id.slice(0, 12)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

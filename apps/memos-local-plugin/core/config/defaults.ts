@@ -9,6 +9,11 @@ import type { ResolvedConfig } from "./schema.js";
 export const DEFAULT_CONFIG: ResolvedConfig = {
   version: 1,
   viewer: {
+    // Per-agent default lives in `templates/config.<agent>.yaml`:
+    //   - openclaw → 18799
+    //   - hermes   → 18800
+    // The fallback here only matters when neither config file exists
+    // (early bootstrap, tests, etc.).
     port: 18799,
     bindHost: "127.0.0.1",
     openOnFirstTurn: false,
@@ -98,14 +103,30 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       minSimilarity: 0.65,
       candidateTtlDays: 30,
       minEpisodesForInduction: 2,
-      minTraceValue: 0.05,
+      // Lowered from 0.05 → 0.01. Reward backprop V values for typical
+      // multi-step turns (5-15 steps) are clustered around 0.02-0.5 even
+      // for successful episodes; the old 0.05 floor was throwing away
+      // most of the signal before induction could see it. Negative-V
+      // traces are still excluded (they'd never count as "with-set"
+      // evidence anyway).
+      minTraceValue: 0.01,
       useLlm: true,
       traceCharCap: 3_000,
       archiveGain: -0.05,
     },
     l3Abstraction: {
-      minPolicies: 3,
-      minPolicyGain: 0.1,
+      // Lowered from 3 → 2. The original threshold required THREE
+      // distinct active policies in the same domain cluster before any
+      // world model could form, which in real usage takes weeks to
+      // accumulate even for a focused user. Two compatible active
+      // policies is the smallest meaningful cluster.
+      minPolicies: 2,
+      // Lowered from 0.1 → 0.02. With the Bayesian-shrinkage gain
+      // formula (see core/memory/l2/gain.ts), a genuinely useful policy
+      // that fires on a single-success path now scores around 0.05-0.20
+      // (proportional to V_with - 0.5). 0.02 is well below that floor
+      // but still cleanly rejects net-neutral noise.
+      minPolicyGain: 0.02,
       minPolicySupport: 1,
       clusterMinSimilarity: 0.6,
       policyCharCap: 800,
@@ -118,8 +139,18 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     },
     skill: {
       minSupport: 2,
-      minGain: 0.1,
-      candidateTrials: 5,
+      // Lowered from 0.1 → 0.02. Same rationale as l3.minPolicyGain:
+      // the new shrinkage-anchored gain formula gives positive scores
+      // proportional to V_with − 0.5, so 0.1 was unreachable for any
+      // policy that didn't have an explicit failure-cohort contrast.
+      // 0.02 is enough to filter neutral-noise policies while still
+      // letting genuinely-useful patterns crystallize.
+      minGain: 0.02,
+      // Lowered from 5 → 3. Demanding 5 trials in `candidate` before a
+      // skill can graduate effectively meant most skills never made it
+      // out of probation in real usage; 3 is the smallest number that
+      // still gives the lifecycle a meaningful trial window.
+      candidateTrials: 3,
       cooldownMs: 6 * 60 * 60 * 1000,
       traceCharCap: 500,
       evidenceLimit: 6,

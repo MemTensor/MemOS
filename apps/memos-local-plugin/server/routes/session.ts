@@ -65,12 +65,14 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
     // session id / status / turn count / preview. The old `ids`-only
     // variant is still available under the `episode.list` JSON-RPC
     // method and via `?shape=ids`.
+    const total = await deps.core.countEpisodes({ sessionId });
     if (ctx.url.searchParams.get("shape") === "ids") {
       const episodeIds = await deps.core.listEpisodes({ sessionId, limit, offset });
       return {
         episodeIds,
         limit,
         offset,
+        total,
         nextOffset: episodeIds.length === limit ? offset + limit : undefined,
       };
     }
@@ -79,6 +81,7 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
       episodes,
       limit,
       offset,
+      total,
       nextOffset: episodes.length === limit ? offset + limit : undefined,
     };
   });

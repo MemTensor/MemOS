@@ -44,7 +44,6 @@ import { registerAdminRoutes } from "./admin.js";
 import { registerModelsRoutes } from "./models.js";
 import { registerApiLogsRoutes } from "./api-logs.js";
 import { registerDiagRoutes } from "./diag.js";
-import { registerHubRoutes } from "./hub.js";
 
 export interface RouteContext {
   req: IncomingMessage;
@@ -179,7 +178,6 @@ export function buildRoutes(
   registerAdminRoutes(routes, deps);
   registerModelsRoutes(routes, deps);
   registerApiLogsRoutes(routes, deps);
-  registerHubRoutes(routes, deps);
   registerDiagRoutes(routes, deps);
   return routes;
 }

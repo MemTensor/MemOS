@@ -89,6 +89,11 @@ export function registerMigrateRoutes(routes: Routes, deps: ServerDeps): void {
           name: s.name || s.id,
           status: legacySkillStatus(s.status),
           invocationGuide: s.description ?? "",
+          // Imported skills don't carry decision guidance / evidence
+          // anchors — those live on the rows produced by the live
+          // crystallizer, not in legacy SQLite dumps.
+          decisionGuidance: { preference: [], antiPattern: [] },
+          evidenceAnchors: [],
           eta: 0 as never,
           support: 0,
           gain: 0,
@@ -273,6 +278,10 @@ function buildTracesFromChunks(chunks: LegacyChunk[]): TraceDTO[] {
       value: 0 as never,
       alpha: 0 as never,
       priority: 0,
+      // Legacy chunks predate the turn-id concept — anchor each row
+      // on its own `ts` so the viewer's group-by-(episodeId, turnId)
+      // surface still treats every imported chunk as its own card.
+      turnId: ts as never,
     });
   }
   return out;

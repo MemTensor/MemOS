@@ -13,33 +13,18 @@ const DEFAULT_HEADERS: Record<string, string> = {
 };
 
 /**
- * URL-path prefix for this viewer — `"/openclaw"` or `"/hermes"` when
- * the hub is serving multiple agents on the same port, `""` when
- * the viewer is mounted at root (legacy single-agent install).
- *
- * Computed once at module load by looking at the first path segment.
- * Route hashes (`#/memories`) are irrelevant — we care only about
- * the real HTTP path the hub routes on.
+ * Historical no-op: the viewer used to be served under
+ * `/openclaw/...` / `/hermes/...` prefixes when both agents shared a
+ * single port. Each agent now owns its own well-known port and the
+ * SPA is mounted at root, so the prefix is always empty. Kept as an
+ * exported constant so older code paths and tests don't break.
  */
-export const AGENT_PREFIX: string = detectAgentPrefix();
-
-function detectAgentPrefix(): string {
-  if (typeof location === "undefined") return "";
-  const seg = location.pathname.split("/").filter(Boolean)[0];
-  return seg === "openclaw" || seg === "hermes" ? `/${seg}` : "";
-}
+export const AGENT_PREFIX: string = "";
 
 /**
- * Prepend the agent prefix to any API path that starts with
- * `/api/v1`. Leaves other paths untouched so callers can still pass
- * absolute URLs (e.g. the `/api/v1/hub/register` ping which is
- * always hub-scoped).
+ * No-op pass-through. See `AGENT_PREFIX` above for context.
  */
 export function withAgentPrefix(path: string): string {
-  if (!AGENT_PREFIX) return path;
-  if (/^https?:\/\//i.test(path)) return path;
-  if (path.startsWith(AGENT_PREFIX + "/")) return path;
-  if (path.startsWith("/api/")) return AGENT_PREFIX + path;
   return path;
 }
 

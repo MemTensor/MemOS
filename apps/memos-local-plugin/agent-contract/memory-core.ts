@@ -156,6 +156,11 @@ export interface MemoryCore {
     offset?: number;
     q?: string;
   }): Promise<PolicyDTO[]>;
+  /** Total policy rows matching the same filter (no limit/offset). */
+  countPolicies(input?: {
+    status?: PolicyDTO["status"];
+    q?: string;
+  }): Promise<number>;
   /**
    * List L3 world models ("世界环境知识") — newest-first.
    */
@@ -164,6 +169,8 @@ export interface MemoryCore {
     offset?: number;
     q?: string;
   }): Promise<WorldModelDTO[]>;
+  /** Total world-model rows matching the same filter. */
+  countWorldModels(input?: { q?: string }): Promise<number>;
   /** Transition a policy through candidate → active → archived. */
   setPolicyStatus(
     id: string,
@@ -249,6 +256,8 @@ export interface MemoryCore {
     limit?: number;
     offset?: number;
   }): Promise<EpisodeListItemDTO[]>;
+  /** Total episode rows matching the same filter (no limit/offset). */
+  countEpisodes(input?: { sessionId?: SessionId }): Promise<number>;
   timeline(input: { episodeId: EpisodeId }): Promise<TraceDTO[]>;
   /**
    * Reverse-chronological trace listing for the Memories viewer.
@@ -271,6 +280,8 @@ export interface MemoryCore {
     sessionId?: SessionId;
     q?: string;
   }): Promise<TraceDTO[]>;
+  /** Total trace rows matching the same filter (no limit/offset). */
+  countTraces(input?: { sessionId?: SessionId; q?: string }): Promise<number>;
 
   /**
    * Paged listing of the rich api_logs table ({@link ApiLogDTO}).
@@ -285,6 +296,8 @@ export interface MemoryCore {
 
   // ── skills ──
   listSkills(input?: { status?: SkillDTO["status"]; limit?: number }): Promise<SkillDTO[]>;
+  /** Total skill rows matching the same filter (no limit). */
+  countSkills(input?: { status?: SkillDTO["status"] }): Promise<number>;
   getSkill(id: SkillId): Promise<SkillDTO | null>;
   archiveSkill(id: SkillId, reason?: string): Promise<void>;
   /**

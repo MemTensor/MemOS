@@ -55,6 +55,7 @@ export function TasksView() {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [detail, setDetail] = useState<EpisodeRow | null>(null);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -74,18 +75,20 @@ export function TasksView() {
     qs.set("limit", String(PAGE_SIZE));
     qs.set("offset", String(nextPage * PAGE_SIZE));
     api
-      .get<{ episodes: EpisodeRow[]; nextOffset?: number }>(
+      .get<{ episodes: EpisodeRow[]; nextOffset?: number; total?: number }>(
         `/api/v1/episodes?${qs.toString()}`,
         { signal: ctrl.signal },
       )
       .then((r) => {
         setRows(r.episodes ?? []);
         setHasMore(r.nextOffset != null);
+        setTotal(r.total ?? 0);
         setPage(nextPage);
       })
       .catch(() => {
         setRows([]);
         setHasMore(false);
+        setTotal(0);
       })
       .finally(() => setLoading(false));
     return ctrl;
@@ -308,7 +311,12 @@ export function TasksView() {
             <Icon name="chevron-left" size={14} />
             {t("common.prev")}
           </button>
-          <span class="pager__info">{t("pager.page", { n: page + 1 })}</span>
+          <span class="pager__info">
+            {t("pager.pageOfTotal", {
+              n: page + 1,
+              total: Math.max(1, Math.ceil(total / PAGE_SIZE)),
+            })}
+          </span>
           <button
             class="btn btn--ghost btn--sm"
             disabled={!hasMore || loading}

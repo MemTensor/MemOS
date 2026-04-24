@@ -309,6 +309,18 @@ const OPENCLAW_BOOT_SIGNATURES: readonly string[] = [
   "A new session was started via /new",
   "A new session was started via /reset",
   "BEGIN_QUOTED_NOTES",
+  // V7 — heartbeat / cron / async-exec wakeup prompts. OpenClaw
+  // synthesises these as if they were user input so the agent comes
+  // out of idle and processes the side-channel event. They are NOT
+  // user-typed content; capturing them as an L1 trace pollutes the
+  // Memories panel and creates phantom episodes (one per heartbeat).
+  // Source signatures live in OpenClaw `infra/heartbeat-events-filter.ts`
+  // and `auto-reply/reply/session-reset-prompt.ts`.
+  "An async command you ran earlier has completed",
+  "A scheduled reminder has been triggered",
+  "A scheduled cron event was triggered",
+  "Run the following periodic tasks",
+  "When reading HEARTBEAT.md",
 ];
 
 const OPENCLAW_SENTINEL_REPLIES = new Set([
@@ -433,6 +445,28 @@ function stripOpenClawUserEnvelope(raw: string): string {
   // 5. Inline envelope tags OpenClaw leaves behind.
   text = text.replace(/\[message_id:\s*[a-f0-9-]+\]/gi, "");
   text = text.replace(/\[\[reply_to_current\]\]/gi, "");
+
+  // 6. Line-level OpenClaw side-channel injections. OpenClaw appends
+  // accumulated system events to the top of synthesised user prompts,
+  // each line prefixed with `System (untrusted): [ts] …` (see
+  // `openclaw/src/auto-reply/reply/session-system-events.ts`). It also
+  // appends a `Current time: …` footer (`appendCronStyleCurrentTimeLine`)
+  // and an `[Untrusted …]` envelope on inbound messages. Drop these
+  // lines wholesale — they're never user-typed content, and leaving
+  // them in pollutes the Memories panel + tricks the relation
+  // classifier into thinking the user actually said them.
+  text = text
+    .split("\n")
+    .filter((line) => {
+      const t = line.trim();
+      if (!t) return true; // keep blank lines so paragraph breaks survive
+      if (/^System(?:\s+\(untrusted\))?:/.test(t)) return false;
+      if (/^Current time:/i.test(t)) return false;
+      if (/^\[Untrusted\b/.test(t)) return false;
+      if (/^When reading HEARTBEAT\.md/i.test(t)) return false;
+      return true;
+    })
+    .join("\n");
 
   return text.trim();
 }

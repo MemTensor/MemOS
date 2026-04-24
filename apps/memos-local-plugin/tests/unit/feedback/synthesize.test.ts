@@ -38,6 +38,7 @@ function trace(args: {
     tags: [],
     vecSummary: null,
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
   };
 }
@@ -55,6 +56,7 @@ function policy(id: string): PolicyRow {
     status: "active" as PolicyRow["status"],
     sourceEpisodeIds: [],
     inducedBy: "l2.l2.induction.v1",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: vec([1, 0, 0]),
     createdAt: NOW as PolicyRow["createdAt"],
     updatedAt: NOW as PolicyRow["updatedAt"],

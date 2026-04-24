@@ -43,8 +43,10 @@ runL2({episodeId, sessionId, traces, trigger})
   │
   ├─ 4. gain + status         → for every touched policy:
   │      with-set:    traces associated with this policy in this episode
-  │      without-set: all other traces in the episode
-  │      gain = weightedMean(with) − arithmeticMean(without)
+  │      without-set: all other traces in the episode (+ Bayesian prior)
+  │      gain = weightedMean(with) − shrink(arithmeticMean(without))
+  │             where shrink(x, n) blends x against a 0.5 neutral prior
+  │             with a pseudocount of 5 (see core/memory/l2/gain.ts)
   │      status transitions via `nextStatus(currentSupport, gain, thresholds)`
   │      persist `support`, `gain`, `status`, `updated_at`
   │
@@ -100,16 +102,38 @@ V7 §0.5.2 defines policy gain as "how much better does outcome look
 when this policy is actually in play?". We implement it as:
 
 ```
-gain = weightedMean(V | with-set)  −  arithmeticMean(V | without-set)
+gain = weightedMean(V | with-set)  −  shrinkBaseline(V | without-set)
 ```
 
 where `weightedMean` is the softmax-weighted mean from V7 §0.6 eq. 3
-(see `similarity.ts::valueWeightedMean`). Use cases:
+(see `similarity.ts::valueWeightedMean`), and `shrinkBaseline` is a
+Beta-binomial style blend of the empirical without-mean against a
+neutral 0.5 prior (`gain.ts::V7_NEUTRAL_BASELINE`,
+`WITHOUT_PRIOR_PSEUDOCOUNT = 5`):
+
+```
+shrinkBaseline(empirical, n) =
+    (empirical · n  +  0.5 · 5)
+  / (n  +  5)
+```
+
+Why the prior? In real interactive usage almost every episode succeeds
+and reward backprop spreads similar V values across all step traces, so
+`mean(V_without)` collapses onto `mean(V_with)` and the V7 contrast
+formula evaluates to ≈ 0 for every policy regardless of its actual
+utility. Anchoring the without-set against a neutral 0.5 baseline
+guarantees that genuinely-useful policies (V_with ≈ 0.7-0.85) score
+positive and net-neutral or harmful ones don't. As real comparable
+without-evidence accumulates, the prior gracefully dilutes and we
+recover the original V7 §0.6 contrast formulation.
+
+Use cases:
 
 - `withCount < 3` → fall back to arithmetic mean to avoid tiny-N
-  softmax blow-ups.
-- `withoutCount == 0` → treat `withoutMean = 0`; the policy only has
-  positive evidence so far.
+  softmax blow-ups on the with-set.
+- `withoutCount == 0` → `shrinkBaseline` returns the prior (0.5);
+  the policy is judged purely on whether its with-set lifts above
+  neutral.
 
 Status transitions (`gain.ts::nextStatus`):
 
@@ -126,13 +150,13 @@ L2 + Skill — see `docs/CONFIG-ADVANCED.md`).
 
 | Key                       | Default  | Meaning                                                   |
 |---------------------------|----------|-----------------------------------------------------------|
-| `minSimilarity`           | 0.72     | Cosine floor for trace→policy association.                |
+| `minSimilarity`           | 0.65     | Cosine floor for trace→policy association.                |
 | `candidateTtlDays`        | 30       | How long an unpromoted candidate stays in the pool.       |
 | `minEpisodesForInduction` | 2        | Minimum distinct episodes to mint a new policy.           |
-| `minTraceValue`           | 0.1      | Ignore traces whose V is below this after backprop.       |
+| `minTraceValue`           | 0.01     | Ignore traces whose V is below this after backprop.       |
 | `useLlm`                  | true     | `false` → collect candidates but never call the prompt.   |
 | `traceCharCap`            | 3000     | Chars per trace handed to `l2.induction`.                 |
-| `retireGain`              | -0.05    | Active policies dipping below this become `retired`.      |
+| `archiveGain`             | -0.05    | Active policies dipping below this become `archived`.     |
 
 Shared with `algorithm.reward.*`:
 - `gamma`, `tauSoftmax` — used for value-weighted mean in `gain`.

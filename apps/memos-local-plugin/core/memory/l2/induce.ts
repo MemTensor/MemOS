@@ -154,6 +154,9 @@ export function buildPolicyRow(args: {
     status: "candidate",
     sourceEpisodeIds: Array.from(new Set(args.episodeIds)),
     inducedBy: args.inducedBy,
+    // Fresh policy starts without learned guidance — populated by the
+    // decision-repair pipeline as user feedback / failure bursts arrive.
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: vec as EmbeddingVector | null,
     createdAt: now,
     updatedAt: now,

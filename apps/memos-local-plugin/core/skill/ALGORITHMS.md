@@ -194,12 +194,19 @@ trialsPassed'    = trialsPassed + (passed ? 1 : 0)
 Transition rules:
 
 ```
-if status == probationary && trialsAttempted' ≥ probationaryTrials:
+if status == candidate && trialsAttempted' ≥ candidateTrials:
     if η' ≥ minEtaForRetrieval:  status' = active
-    else:                         status' = retired
-if status == active && η' < retireEta:
-    status' = retired
+    else:                         status' = archived
+if status == active && η' < archiveEta:
+    status' = archived
 ```
+
+> Field name note: earlier drafts of this doc called the threshold
+> `probationaryTrials`. The actual schema / config field is
+> `candidateTrials` — see `core/skill/types.ts` and
+> `core/config/schema.ts`. Default lowered from 5 → 3 in 2026-04 so
+> first-time skills can graduate within a normal usage week instead of
+> sitting in `candidate` forever.
 
 The Beta(1,1) prior keeps early trials from whipsawing η between 0
 and 1 — `2/3 passes` yields η ≈ 0.6 instead of 0.67, `0/3 passes`

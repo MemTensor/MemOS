@@ -33,6 +33,7 @@ function mkTrace(partial: Partial<TraceRow> = {}): TraceRow {
     tags: [],
     vecSummary: null,
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
     ...partial,
   };
@@ -51,6 +52,7 @@ function mkPolicy(partial: Partial<PolicyRow> = {}): PolicyRow {
     status: "active",
     sourceEpisodeIds: [],
     inducedBy: "unit-test",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: null,
     createdAt: 0 as PolicyRow["createdAt"],
     updatedAt: 0 as PolicyRow["updatedAt"],

@@ -210,6 +210,7 @@ describe("feedback/evidence", () => {
       tags: [],
       vecSummary: null,
       vecAction: null,
+      turnId: 0 as TraceRow["turnId"],
       schemaVersion: 1,
     };
     const capped = capTrace(trace, 50);

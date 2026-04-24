@@ -32,6 +32,7 @@ function mkTrace(id: string, ep: string, vec: EmbeddingVector | null): TraceRow 
     tags: ["docker", "pip"],
     vecSummary: vec,
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
   };
 }
@@ -138,6 +139,7 @@ describe("memory/l2/induce", () => {
       episodeIds: ["ep_1", "ep_2"] as EpisodeId[],
       evidenceTraces: [mkTrace("tr_a", "ep_1", vec([1, 0])), mkTrace("tr_b", "ep_2", vec([0, 1]))],
       inducedBy: "l2.l2.induction.v1",
+      decisionGuidance: { preference: [], antiPattern: [] },
       now: 42,
     });
     expect(row.status).toBe("candidate");

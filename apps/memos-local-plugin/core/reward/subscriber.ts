@@ -154,6 +154,33 @@ export function attachRewardSubscriber(
       unsub();
     },
     async drain() {
+      // Step 1: kick every still-pending episode immediately. The
+      // scheduled `setTimeout` would normally wait `feedbackWindowSec`
+      // (default 30 s) before firing the implicit fallback. On
+      // process shutdown we don't have 30 s to wait — without this
+      // the bridge exits, all timers get GC'd, and the episode
+      // permanently has `r_task = null` (which then starves L2 / L3 /
+      // Skill induction of any positive evidence).
+      const flushed: PendingEpisode[] = [];
+      for (const entry of pending.values()) {
+        if (entry.timer) clearTimeout(entry.timer);
+        flushed.push(entry);
+      }
+      pending.clear();
+      for (const entry of flushed) {
+        runInBackground(() =>
+          runner.run({
+            episodeId: entry.episodeId,
+            feedback: entry.feedback,
+            trigger:
+              entry.feedback.length > 0
+                ? "explicit_feedback"
+                : "implicit_fallback",
+          }),
+        );
+      }
+      // Step 2: now wait for every in-flight reward computation
+      // (including those just kicked above) to settle.
       while (inflight.size > 0) {
         await Promise.all(Array.from(inflight));
       }

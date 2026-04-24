@@ -96,6 +96,7 @@ function seedTrace(
     tags: [],
     vecSummary: null,
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
   };
   handle.repos.traces.insert(row);

@@ -141,7 +141,26 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
 
   function closeSession(id: SessionId, reason = "explicit"): void {
     for (const ep of epm.listForSession(id)) {
-      if (ep.status === "open") epm.abandon(ep.id, `session_closed:${reason}`);
+      if (ep.status !== "open") continue;
+      // V7 §0.2 — a user-initiated session close (`/new`, `/quit`, the
+      // host shutting down cleanly) is **normal lifecycle**, NOT
+      // episode abandonment. Finalize the episode so the capture +
+      // reward pipelines run as if the user had completed their task:
+      //
+      //   - substantial conversations get LLM-scored → "已完成" badge
+      //   - trivial / single-turn episodes get re-stamped to
+      //     `closeReason="abandoned"` by reward.ts itself with a clear
+      //     human-readable `abandonReason` ("对话轮次不足，N 轮…")
+      //
+      // Crucially, this keeps the technical `session_closed:client`
+      // string out of the user-facing TasksView "已跳过" badge — that
+      // string was the source of the "为什么 /new 后立刻显示已跳过"
+      // confusion. True crash-orphans get a separate recovery path
+      // at plugin bootstrap (see `recoverOrphanedEpisodes` in
+      // `core/pipeline/memory-core.ts`).
+      epm.finalize(ep.id, {
+        patchMeta: { sessionCloseReason: reason },
+      });
     }
     live.delete(id);
     log.info("session.closed", { sessionId: id, reason });
@@ -251,8 +270,27 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
 
   function shutdown(reason: string): void {
     log.info("shutdown.begin", { reason });
-    for (const ep of epm.listOpen()) abandonEpisode(ep.id, `shutdown:${reason}`);
-    for (const id of Array.from(live.keys())) closeSession(id, `shutdown:${reason}`);
+    // Process-wide shutdown is normal lifecycle (host stopping cleanly,
+    // not a crash) — same semantics as `closeSession`. Finalize open
+    // episodes via the same code path so they don't get the ugly
+    // `closeReason="abandoned"` + `abandonReason="shutdown:..."` badge
+    // that used to confuse users reading the Tasks list.
+    //
+    // First catch episodes whose session was already pruned from
+    // `live` (race: idle prune → process exit). closeSession's per-
+    // session loop wouldn't find them otherwise.
+    for (const ep of epm.listOpen()) {
+      if (!live.has(ep.sessionId)) {
+        finalizeEpisode(ep.id, {
+          patchMeta: { sessionCloseReason: `shutdown:${reason}` },
+        });
+      }
+    }
+    // Then close every still-live session — closeSession's loop
+    // finalizes any remaining open episodes.
+    for (const id of Array.from(live.keys())) {
+      closeSession(id, `shutdown:${reason}`);
+    }
     log.info("shutdown.done", { reason });
   }
 

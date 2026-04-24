@@ -103,19 +103,33 @@ describe("session/session-manager", () => {
     expect(sm.getSession(a.id)).not.toBeNull(); // getSession reloads from repo
   });
 
-  it("closeSession abandons open episodes and emits session.closed", async () => {
+  it("closeSession finalizes (not abandons) open episodes and emits session.closed", async () => {
+    // V7 §0.2 — a user-initiated session close is normal lifecycle, not
+    // episode abandonment. The episode is finalized so the reward
+    // pipeline can score it; only truly trivial episodes get re-stamped
+    // to "abandoned" by reward.ts itself with a clear reason.
     const sm = makeSm();
     const session = sm.openSession({ agent: "openclaw" });
     const ep = await sm.startEpisode({ sessionId: session.id, userMessage: "long running" });
     const events: string[] = [];
     sm.bus.onAny((e) => events.push(e.kind));
-    sm.closeSession(session.id);
-    expect(episodesFake.rows.get(ep.id)?.status).toBe("closed");
-    expect(episodesFake.rows.get(ep.id)?.meta.closeReason).toBe("abandoned");
+    sm.closeSession(session.id, "client");
+    const stored = episodesFake.rows.get(ep.id);
+    expect(stored?.status).toBe("closed");
+    expect(stored?.meta.closeReason).toBe("finalized");
+    // The literal session-end reason is preserved as audit metadata so
+    // logs / analytics can still tell `/new` from `/quit` apart, but
+    // it never reaches the user-facing `abandonReason` column.
+    expect(stored?.meta.sessionCloseReason).toBe("client");
+    expect(stored?.meta.abandonReason).toBeUndefined();
     expect(events).toContain("session.closed");
   });
 
   it("shutdown finalizes all open episodes across sessions", async () => {
+    // V7 §0.2 — clean process shutdown is normal lifecycle (not a
+    // crash), so episodes get `closeReason="finalized"` and the audit
+    // trail goes into `meta.sessionCloseReason="shutdown:test"`.
+    // Crash-orphans are handled separately on next bootstrap.
     const sm = makeSm();
     const s1 = sm.openSession({ agent: "openclaw" });
     const s2 = sm.openSession({ agent: "hermes" });
@@ -124,7 +138,9 @@ describe("session/session-manager", () => {
     sm.shutdown("test");
     for (const row of episodesFake.rows.values()) {
       expect(row.status).toBe("closed");
-      expect(row.meta.closeReason).toBe("abandoned");
+      expect(row.meta.closeReason).toBe("finalized");
+      expect(row.meta.sessionCloseReason).toBe("shutdown:test");
+      expect(row.meta.abandonReason).toBeUndefined();
     }
   });
 

@@ -18,6 +18,7 @@
  * the `flattenChat` function tested in
  * `tests/unit/web/tasks-chat.test.ts` (no Preact dependency).
  */
+import type { JSX } from "preact";
 import { Icon } from "../components/Icon";
 import { t } from "../stores/i18n";
 import type { ChatMsg, ChatRole } from "./tasks-chat-data";
@@ -34,11 +35,85 @@ export {
 
 export function ChatLog({ messages }: { messages: readonly ChatMsg[] }) {
   if (messages.length === 0) return null;
+  // Walk the messages once and emit either a standalone `<ChatBubble>`
+  // or a `<ParallelBatchGroup>` wrapper around a contiguous run of
+  // tool calls that share the same `parallelBatchKey` (set by
+  // `assignParallelBatches` in the data layer). Solo tools and all
+  // non-tool roles fall through to the unchanged single-bubble path.
+  const items: JSX.Element[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]!;
+    if (
+      m.role === "tool" &&
+      m.parallelBatchKey != null &&
+      (m.parallelBatchSize ?? 0) >= 2
+    ) {
+      const groupKey = m.parallelBatchKey;
+      const batch: ChatMsg[] = [];
+      while (
+        i < messages.length &&
+        messages[i]!.parallelBatchKey === groupKey
+      ) {
+        batch.push(messages[i]!);
+        i++;
+      }
+      i--; // for-loop will i++; we already advanced past the run
+      items.push(
+        <ParallelBatchGroup
+          key={groupKey}
+          tools={batch}
+          totalMs={m.parallelBatchTotalMs ?? 0}
+        />,
+      );
+      continue;
+    }
+    items.push(<ChatBubble key={m.key} msg={m} />);
+  }
+  return <div class="chat-log">{items}</div>;
+}
+
+/**
+ * Wrap a contiguous run of parallel-batch tool calls in a single card
+ * so users can tell at a glance that "these N tools ran concurrently"
+ * — distinct from the visually identical "one tool finished, LLM
+ * thought for a sec, called the next" sequential case.
+ *
+ * The header surfaces the wall-clock span of the batch (= max(endedAt)
+ * − min(startedAt)). For typical multi-tool turns this is ~1/N of the
+ * naïve sum, which makes the parallelism payoff legible.
+ */
+function ParallelBatchGroup({
+  tools,
+  totalMs,
+}: {
+  tools: readonly ChatMsg[];
+  totalMs: number;
+}) {
+  const sumMs = tools.reduce((acc, t) => acc + (t.toolDurationMs ?? 0), 0);
+  const headerLabel = t("tasks.chat.tool.parallelBatch", {
+    n: tools.length,
+    ms: totalMs,
+  });
+  const sequentialHint =
+    sumMs > totalMs && totalMs > 0
+      ? t("tasks.chat.tool.parallelBatch.savings", { sum: sumMs })
+      : "";
   return (
-    <div class="chat-log">
-      {messages.map((msg) => (
-        <ChatBubble key={msg.key} msg={msg} />
-      ))}
+    <div class="chat-item__tool-batch" role="group" aria-label={headerLabel}>
+      <div class="chat-item__tool-batch-header">
+        <Icon name="zap" size={14} />
+        <span>{headerLabel}</span>
+        {sequentialHint && (
+          <span class="chat-item__tool-batch-hint muted">
+            {sequentialHint}
+          </span>
+        )}
+      </div>
+      <div class="chat-item__tool-batch-body">
+        {tools.map((m) => (
+          <ChatBubble key={m.key} msg={m} />
+        ))}
+      </div>
     </div>
   );
 }

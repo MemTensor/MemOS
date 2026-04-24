@@ -51,6 +51,7 @@ function makeTrace(i: number, opts: Partial<TraceRow> & { tool?: string; text?: 
     tags: [],
     vecSummary: null,
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
   };
 }

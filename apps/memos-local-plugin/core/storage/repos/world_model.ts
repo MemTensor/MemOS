@@ -141,6 +141,11 @@ export function makeWorldModelRepo(db: StorageDb) {
       return db.prepare<unknown, RawWorldRow>(sql).all().map(mapRow);
     },
 
+    count(): number {
+      const sql = `SELECT COUNT(*) AS n FROM world_model`;
+      return db.prepare<unknown, { n: number }>(sql).get()?.n ?? 0;
+    },
+
     searchByVector(
       query: EmbeddingVector,
       k: number,
