@@ -384,11 +384,93 @@ const memosLocalPlugin = {
 
     api.logger.info(`memos-local: initialized (db: ${ctx.config.storage!.dbPath})`);
 
-    // Current agent ID — updated by hooks, read by tools for owner isolation.
-    // Falls back to "main" when no hook has fired yet (single-agent setups).
-    let currentAgentId = "main";
-    const getCurrentOwner = () => `agent:${currentAgentId}`;
+    // ── Session + Project isolation ──────────────────────────────────────
+    //
+    // sessionKey format from OpenClaw: "agent:{agentId}:{channelId}"
+    //   - Feishu group chat: channelId = group ID  → unique project
+    //   - DM/private chat:   channelId = "main"    → use "default"
+    //
+    // This map tracks (sessionKey → {agentId, projectId}) so that concurrent
+    // calls from different agents never overwrite each other's context.
+    // Key: sessionKey, Value: { agentId, projectId }
+    const sessionContextMap = new Map<string, { agentId: string; projectId: string }>();
 
+    /** Fallback for completely untracked sessions. */
+    let lastKnownAgentId = "main";
+    let lastKnownProjectId = "default";
+
+    /**
+     * Extract projectId from a sessionKey.
+     * sessionKey format: "agent:{agentId}:{platform}:{type}:{channelId}"
+     *
+     *   Feishu group:   agent:dev-agent:feishu:group:oc_eee5d2...   → projectId = oc_eee5d2...
+     *   Feishu DM:      agent:polymarket:feishu:direct:ou_98c3...    → projectId = ou_98c3... (the user)
+     *   Default DM:     agent:main:main                                → projectId = "default"
+     *   Default group:  agent:polymarket:main                         → projectId = "default"
+     */
+    const extractProjectId = (sessionKey: string): string => {
+      const parts = sessionKey.split(":");
+      // agent:main:main          → parts[2]="main"     → "default"
+      // agent:polymarket:feishu:direct:ou_xxx → parts[2]="feishu"
+      // agent:dev-agent:feishu:group:oc_xxx   → parts[2]="feishu"
+      if (parts[2] === "feishu") {
+        // Feishu: use the channel ID (parts[4]) as projectId
+        const channelId = parts[4] ?? "default";
+        return channelId;
+      }
+      // Default DM/private-chat: channel is "main" or absent → "default"
+      const channelId = parts[2] ?? "default";
+      return channelId === "main" ? "default" : channelId;
+    };
+
+    /**
+     * Get or infer the full session context (agentId + projectId) for a given sessionKey.
+     * Used by tool handlers to build correct owner filters.
+     */
+    const getSessionContext = (sessionKey: string, explicitAgentId?: string) => {
+      const tracked = sessionContextMap.get(sessionKey);
+      const agentId = explicitAgentId ?? tracked?.agentId ?? lastKnownAgentId;
+      const projectId = tracked?.projectId ?? lastKnownProjectId;
+      return {
+        agentId,
+        projectId,
+        sessionKey,
+        // New layered owner formats
+        ownerPrivate: `agent:${agentId}:project:${projectId}`,
+        ownerShared:  `project:${projectId}:shared`,
+        ownerPublic:  `public`,
+        // Backward-compatible owner (old single-agent format without project)
+        ownerLegacy:  `agent:${agentId}`,
+        // Full filter: new project-isolated format + public only
+        // Legacy format (agent:xxx without project) is intentionally excluded
+        // to enforce strict project-level memory isolation between agents.
+        ownerFilter: [
+          `agent:${agentId}:project:${projectId}`,
+          `project:${projectId}:shared`,
+          `public`,
+        ],
+      };
+    };
+
+    /**
+     * Update tracked context for a session. Called by hook handlers
+     * (before_prompt_build, agent_end) when a new agent/project context begins.
+     */
+    const setSessionContext = (sessionKey: string, agentId: string, projectId: string): void => {
+      sessionContextMap.set(sessionKey, { agentId, projectId });
+      lastKnownAgentId = agentId;
+      lastKnownProjectId = projectId;
+    };
+
+    /**
+     * The sessionKey of the currently executing hook cycle.
+     * Set at the top of before_prompt_build / agent_end; all tools called
+     * during this cycle read from it to build their ownerFilter.
+     */
+    let currentSessionKey = "main";
+
+    const globalRef = globalThis as any;
+    
     // ─── Check allowPromptInjection policy ───
     // When allowPromptInjection=false, the prompt mutation fields (such as prependContext) in the hook return value
     // will be stripped by the framework. Skip auto-recall to avoid unnecessary LLM/embedding calls.
@@ -566,10 +648,10 @@ const memosLocalPlugin = {
           let searchScope = resolveMemorySearchScope(rawScope);
           const searchLimit = typeof maxResults === "number" ? Math.max(1, Math.min(20, Math.round(maxResults))) : 10;
 
-          const agentId = context?.agentId ?? currentAgentId;
-          const ownerFilter = [`agent:${agentId}`, "public"];
+          const sc = getSessionContext(currentSessionKey);
+          const ownerFilter = sc.ownerFilter;
           const effectiveMaxResults = searchLimit;
-          ctx.log.debug(`memory_search query="${query}" maxResults=${effectiveMaxResults} minScore=${minScore ?? 0.45} role=${role ?? "all"} owner=agent:${agentId}`);
+          ctx.log.debug(`memory_search query="${query}" maxResults=${effectiveMaxResults} minScore=${minScore ?? 0.45} role=${role ?? "all"} ownerFilter=[${ownerFilter.join(", ")}]`);
 
           // ── Phase 1: Local search ∥ Hub search (parallel) ──
           const localSearchP = engine.search({ query, maxResults: effectiveMaxResults, minScore, role, ownerFilter });
@@ -769,14 +851,14 @@ const memosLocalPlugin = {
           window: Type.Optional(Type.Number({ description: "Context window ±N (default 2)" })),
         }),
         execute: trackTool("memory_timeline", async (_toolCallId: any, params: any) => {
-          const agentId = context?.agentId ?? currentAgentId;
-          ctx.log.debug(`memory_timeline called (agent=${agentId})`);
+          const sc = getSessionContext(currentSessionKey);
+          const ownerFilter = sc.ownerFilter;
+          ctx.log.debug(`memory_timeline called ownerFilter=[${ownerFilter.join(", ")}]`);
           const { chunkId, window: win } = params as {
             chunkId: string;
             window?: number;
           };
 
-          const ownerFilter = [`agent:${agentId}`, "public"];
           const anchorChunk = store.getChunkForOwners(chunkId, ownerFilter);
           if (!anchorChunk) {
             return {
@@ -834,8 +916,8 @@ const memosLocalPlugin = {
           const { chunkId, maxChars } = params as { chunkId: string; maxChars?: number };
           const limit = Math.min(maxChars ?? DEFAULTS.getMaxCharsDefault, DEFAULTS.getMaxCharsMax);
 
-          const agentId = context?.agentId ?? currentAgentId;
-          const ownerFilter = [`agent:${agentId}`, "public"];
+          const sc = getSessionContext(currentSessionKey);
+          const ownerFilter = sc.ownerFilter;
           const chunk = store.getChunkForOwners(chunkId, ownerFilter);
           if (!chunk) {
             return {
@@ -1393,8 +1475,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         execute: trackTool("memory_viewer", async (_toolCallId: any, params: any) => {
           ctx.log.debug(`memory_viewer called`);
           telemetry.trackViewerOpened();
-          const agentId = context?.agentId ?? context?.profileId ?? currentAgentId;
-          const url = `http://127.0.0.1:${viewerPort}?agentId=${encodeURIComponent(agentId)}`;
+          const sc = getSessionContext(currentSessionKey);
+          const url = `http://127.0.0.1:${viewerPort}?agentId=${encodeURIComponent(sc.agentId)}`;
           return {
             content: [
               {
@@ -1659,8 +1741,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         execute: trackTool("skill_search", async (_toolCallId: any, params: any) => {
           const { query: skillQuery, scope: rawScope } = params as { query: string; scope?: string };
           const scope = (rawScope === "self" || rawScope === "public") ? rawScope : "mix";
-          const agentId = context?.agentId ?? currentAgentId;
-          const currentOwner = `agent:${agentId}`;
+          const sc = getSessionContext(currentSessionKey);
+          const currentOwner = sc.ownerPrivate;
 
           if (rawScope === "group" || rawScope === "all") {
             const [localHits, hub] = await Promise.all([
@@ -1867,10 +1949,16 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
 
+      const sk = hookCtx?.sessionKey ?? "main";
       const recallAgentId = hookCtx?.agentId ?? (event as any)?.agentId ?? (event as any)?.profileId ?? "main";
-      currentAgentId = recallAgentId;
-      const recallOwnerFilter = [`agent:${recallAgentId}`, "public"];
-      ctx.log.info(`auto-recall: agentId=${recallAgentId} (from hookCtx)`);
+      const projectId = extractProjectId(sk);
+
+      // Update current session context so subsequent tool calls use the right ownerFilter
+      currentSessionKey = sk;
+      setSessionContext(sk, recallAgentId, projectId);
+
+      const recallOwnerFilter = getSessionContext(sk, recallAgentId).ownerFilter;
+      ctx.log.info(`auto-recall: agentId=${recallAgentId} projectId=${projectId} sessionKey=${sk}`);
 
       const recallT0 = performance.now();
       let recallQuery = "";
@@ -1940,7 +2028,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           if (skillAutoRecallEarly) {
             try {
               const skillLimit = ctx.config.skillEvolution?.autoRecallSkillLimit ?? DEFAULTS.skillAutoRecallLimit;
-              const skillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
+              const skillHits = await engine.searchSkills(query, "mix" as any, getSessionContext(sk, recallAgentId).ownerPrivate);
               const topSkills = skillHits.slice(0, skillLimit);
               if (topSkills.length > 0) {
                 const skillLines = topSkills.map((sc, i) => {
@@ -2063,7 +2151,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             const skillCandidateMap = new Map<string, { name: string; description: string; skillId: string; source: string }>();
 
             try {
-              const directSkillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
+              const directSkillHits = await engine.searchSkills(query, "mix" as any, getSessionContext(sk, recallAgentId).ownerPrivate);
               for (const sh of directSkillHits.slice(0, skillLimit + 2)) {
                 if (!skillCandidateMap.has(sh.skillId)) {
                   skillCandidateMap.set(sh.skillId, { name: sh.name, description: sh.description, skillId: sh.skillId, source: "query" });
@@ -2163,11 +2251,14 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
       try {
         const captureAgentId = hookCtx?.agentId ?? event?.agentId ?? event?.profileId ?? "main";
-        currentAgentId = captureAgentId;
-        const captureOwner = `agent:${captureAgentId}`;
-        const sessionKey = hookCtx?.sessionKey ?? "default";
-        ctx.log.info(`agent_end: agentId=${captureAgentId} sessionKey=${sessionKey} (from hookCtx)`);
-        const cursorKey = `${sessionKey}::${captureAgentId}`;
+        const sk = hookCtx?.sessionKey ?? "default";
+        const projectId = extractProjectId(sk);
+        currentSessionKey = sk;
+        setSessionContext(sk, captureAgentId, projectId);
+
+        const captureOwner = `agent:${captureAgentId}:project:${projectId}`;
+        ctx.log.info(`agent_end: agentId=${captureAgentId} projectId=${projectId} sessionKey=${sk}`);
+        const cursorKey = `${sk}::${captureAgentId}`;
         const allMessages = event.messages;
 
         if (!sessionMsgCursor.has(cursorKey)) {
@@ -2180,7 +2271,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           }
           const initCursor = lastUserIdx >= 0 ? lastUserIdx : allMessages.length;
           sessionMsgCursor.set(cursorKey, initCursor);
-          ctx.log.debug(`agent_end: first encounter session=${sessionKey} agent=${captureAgentId}, initialized cursor=${initCursor} (total=${allMessages.length})`);
+          ctx.log.debug(`agent_end: first encounter session=${sk} agent=${captureAgentId}, initialized cursor=${initCursor} (total=${allMessages.length})`);
         }
 
         let cursor = sessionMsgCursor.get(cursorKey)!;
@@ -2192,7 +2283,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         const newMessages = allMessages.slice(cursor);
         sessionMsgCursor.set(cursorKey, allMessages.length);
 
-        ctx.log.debug(`agent_end: session=${sessionKey} total=${allMessages.length} cursor=${cursor} new=${newMessages.length}`);
+        ctx.log.debug(`agent_end: session=${sk} total=${allMessages.length} cursor=${cursor} new=${newMessages.length}`);
 
         const raw: Array<{ role: string; content: string; toolName?: string }> = [];
         for (const msg of newMessages) {
@@ -2281,7 +2372,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         if (msgs.length === 0) return;
 
         const turnId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const captured = captureMessages(msgs, sessionKey, turnId, evidenceTag, ctx.log, captureOwner);
+        const captured = captureMessages(msgs, sk, turnId, evidenceTag, ctx.log, captureOwner);
 
         if (captured.length > 0) {
           worker.enqueue(captured);
@@ -2382,8 +2473,45 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     let serviceStarted = false;
 
-    const startServiceCore = async () => {
+    function isGatewayStartCommand(): boolean {
+      const args = process.argv.map(a => String(a || "").toLowerCase());
+      const gIdx = args.lastIndexOf("gateway");
+      if (gIdx === -1) return false;
+      const next = args[gIdx + 1];
+      return !next || next.startsWith("-") || next === "start" || next === "restart";
+    }
+
+    const startServiceCore = async (isHostStart = false) => {
+      if (!isGatewayStartCommand()) {
+        api.logger.info("memos-local: not a gateway start command, skipping service startup.");
+        return;
+      }
+
+      if (globalRef.__memosLocalPluginStopPromise) {
+        await globalRef.__memosLocalPluginStopPromise;
+        globalRef.__memosLocalPluginStopPromise = undefined;
+      }
       if (serviceStarted) return;
+      
+      if (!isHostStart) {
+        if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
+          api.logger.info("memos-local: aborting startServiceCore because a newer plugin instance is active.");
+          return;
+        }
+      }
+
+      if (globalRef.__memosLocalPluginActiveService && globalRef.__memosLocalPluginActiveService !== service) {
+        api.logger.info("memos-local: Stopping previous plugin instance due to start of new instance...");
+        const oldService = globalRef.__memosLocalPluginActiveService;
+        globalRef.__memosLocalPluginActiveService = undefined;
+        try {
+          await oldService.stop({ preserveDb: true });
+        } catch (e: any) {
+          api.logger.warn(`memos-local: Error stopping previous instance: ${e}`);
+        }
+      }
+      
+      globalRef.__memosLocalPluginActiveService = service;
       serviceStarted = true;
 
       if (hubServer) {
@@ -2425,33 +2553,45 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       );
     };
 
-    api.registerService({
+    const service = {
       id: "memos-local-openclaw-plugin",
-      start: async () => { await startServiceCore(); },
-      stop: async () => {
+      start: async () => { await startServiceCore(true); },
+      stop: async (options?: { preserveDb?: boolean }) => {
+        await viewer.stop();
+        if (globalRef.__memosLocalPluginActiveService === service) {
+          globalRef.__memosLocalPluginActiveService = undefined;
+        }
         await worker.flush();
         await telemetry.shutdown();
         await hubServer?.stop();
-        viewer.stop();
-        store.close();
+        
+        // If we are hot-reloading, the new instance is already using the SAME
+        // database file on disk. Closing the sqlite store here might kill the
+        // connection for the new instance or cause locking issues depending on
+        // how the native binding manages handles.
+        if (!options?.preserveDb) {
+          store.close();
+        }
         api.logger.info("memos-local: stopped");
       },
-    });
+    };
+
+    api.registerService(service);
 
     // Fallback: OpenClaw may load this plugin via deferred reload after
     // startPluginServices has already run, so service.start() never fires.
-    // Start on the next tick instead of waiting several seconds; the
-    // serviceStarted guard still prevents duplicate startup if the host calls
-    // service.start() immediately after registration.
-    const SELF_START_DELAY_MS = 0;
-    setTimeout(() => {
-      if (!serviceStarted) {
+    // Start on a delay instead of next tick so the host has time to call
+    // service.start() during normal startup if this is a fresh launch.
+    const SELF_START_DELAY_MS = 2000;
+    const selfStartTimer = setTimeout(() => {
+      if (!serviceStarted && isGatewayStartCommand()) {
         api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
         startServiceCore().catch((err) => {
           api.logger.warn(`memos-local: self-start failed: ${err}`);
         });
       }
     }, SELF_START_DELAY_MS);
+    if (selfStartTimer.unref) selfStartTimer.unref();
   },
 };
 
