@@ -6,6 +6,7 @@ using dependency injection for better modularity and testability.
 """
 
 import copy
+import logging
 import math
 
 from typing import Any
@@ -71,7 +72,40 @@ class SearchHandler(BaseHandler):
         results = cube_view.search_memories(search_req_local)
         if not search_req_local.relativity:
             search_req_local.relativity = 0
+
         self.logger.info(f"[SearchHandler] Relativity filter: {search_req_local.relativity}")
+
+        # Extract and log scores for visibility before filtering
+        if self.logger.isEnabledFor(logging.DEBUG):
+            score_details = []
+            for key in ("text_mem", "pref_mem"):
+                buckets = results.get(key)
+                if not isinstance(buckets, list):
+                    continue
+                for bucket in buckets:
+                    memories = bucket.get("memories")
+                    if not isinstance(memories, list):
+                        continue
+                    for mem in memories:
+                        if not isinstance(mem, dict):
+                            continue
+                        mem_text = mem.get("memory", "").replace("\n", "  ")
+                        # Truncate to 100 chars to avoid log flooding
+                        if len(mem_text) > 100:
+                            mem_text = mem_text[:100] + "..."
+                        meta = mem.get("metadata", {})
+                        score = meta.get("relativity", 1.0) if isinstance(meta, dict) else 1.0
+                        try:
+                            score_val = float(score) if score is not None else 1.0
+                        except (TypeError, ValueError):
+                            score_val = 1.0
+                        score_details.append(f"[{score_val:.4f}] {mem_text}")
+
+            if score_details:
+                self.logger.debug(
+                    f"[SearchHandler] Reranker scores before threshold ({search_req_local.relativity}): \n"
+                    + "\n".join(score_details)
+                )
         results = self._apply_relativity_threshold(results, search_req_local.relativity)
 
         if search_req_local.dedup == "sim":
