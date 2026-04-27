@@ -63,7 +63,7 @@ if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
 from bridge_client import MemosBridgeClient  # noqa: E402
-from daemon_manager import ensure_bridge_running, shutdown_bridge  # noqa: E402
+from daemon_manager import ensure_bridge_running  # noqa: E402
 
 
 try:  # pragma: no cover — host-provided base class, absent in unit tests
@@ -208,10 +208,9 @@ class MemTensorProvider(MemoryProvider):
             return
         try:
             from hermes_cli.plugins import get_plugin_manager
+
             mgr = get_plugin_manager()
-            mgr._hooks.setdefault("post_tool_call", []).append(
-                self._on_post_tool_call
-            )
+            mgr._hooks.setdefault("post_tool_call", []).append(self._on_post_tool_call)
             self._hook_registered = True
             logger.debug("MemOS: registered post_tool_call hook")
         except Exception as err:
@@ -227,11 +226,15 @@ class MemTensorProvider(MemoryProvider):
         **_kw: Any,
     ) -> None:
         """Accumulate a tool call record for the current turn."""
-        self._tool_calls.append({
-            "name": tool_name,
-            "input": json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args or ""),
-            "output": (result or "")[:4000],
-        })
+        self._tool_calls.append(
+            {
+                "name": tool_name,
+                "input": json.dumps(args, ensure_ascii=False)
+                if isinstance(args, dict)
+                else str(args or ""),
+                "output": (result or "")[:4000],
+            }
+        )
 
     # ─── Turn-level hooks ─────────────────────────────────────────────────
 
@@ -296,7 +299,9 @@ class MemTensorProvider(MemoryProvider):
         self._tool_calls = []
         logger.info(
             "MemOS: sync_turn user=%d assistant=%d tools=%d",
-            len(user), len(assistant), len(tool_calls),
+            len(user),
+            len(assistant),
+            len(tool_calls),
         )
         try:
             self._turn_end(user, assistant, tool_calls, int(time.time() * 1000))
