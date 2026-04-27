@@ -90,6 +90,13 @@ export function makeEpisodesRepo(db: StorageDb) {
       ).run({ id });
     },
 
+    deleteById(id: EpisodeId): boolean {
+      const r = db.prepare<{ id: string }>(
+        `DELETE FROM episodes WHERE id=@id`,
+      ).run({ id });
+      return r.changes > 0;
+    },
+
     setRTask(id: EpisodeId, rTask: number): void {
       db.prepare<{ id: string; r: number }>(
         `UPDATE episodes SET r_task=@r WHERE id=@id`,

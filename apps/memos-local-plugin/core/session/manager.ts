@@ -143,6 +143,14 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     for (const ep of epm.listForSession(id)) {
       if (ep.status === "open") epm.abandon(ep.id, `session_closed:${reason}`);
     }
+    // Stamp the session row with closedAt so future bridge init()
+    // can distinguish "explicitly closed" from "might reconnect".
+    try {
+      const row = deps.sessionsRepo.getById(id);
+      if (row) {
+        deps.sessionsRepo.touchLastSeen(id, Date.now(), { closedAt: Date.now() });
+      }
+    } catch { /* best-effort */ }
     live.delete(id);
     log.info("session.closed", { sessionId: id, reason });
     bus.emit({ kind: "session.closed", sessionId: id, reason });

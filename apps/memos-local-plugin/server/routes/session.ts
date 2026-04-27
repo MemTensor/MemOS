@@ -51,8 +51,20 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "episodeId is required");
       return;
     }
-    await deps.core.closeEpisode(id as EpisodeId);
-    return { ok: true };
+    const result = await deps.core.deleteEpisode(id as EpisodeId);
+    return result;
+  });
+
+  routes.set("POST /api/v1/episodes/delete", async (ctx) => {
+    const body = parseJson<{ ids?: unknown }>(ctx);
+    const ids = Array.isArray(body.ids)
+      ? body.ids.filter((v): v is string => typeof v === "string" && v.length > 0)
+      : [];
+    if (ids.length === 0) {
+      writeError(ctx, 400, "invalid_argument", "ids[] is required");
+      return;
+    }
+    return await deps.core.deleteEpisodes(ids as EpisodeId[]);
   });
 
   routes.set("GET /api/v1/episodes", async (ctx) => {
@@ -61,10 +73,6 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
     const rawOffset = numberOrUndefined(ctx.url.searchParams.get("offset"));
     const limit = rawLimit && rawLimit > 0 ? rawLimit : 50;
     const offset = rawOffset && rawOffset >= 0 ? rawOffset : 0;
-    // Return the rich row shape — the viewer's task list needs
-    // session id / status / turn count / preview. The old `ids`-only
-    // variant is still available under the `episode.list` JSON-RPC
-    // method and via `?shape=ids`.
     if (ctx.url.searchParams.get("shape") === "ids") {
       const episodeIds = await deps.core.listEpisodes({ sessionId, limit, offset });
       return {
@@ -83,9 +91,6 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
     };
   });
 
-  // Backward-compat: legacy `/api/v1/episodes/timeline?episodeId=…`
-  // still works; the preferred path `/api/v1/episodes/:id/timeline`
-  // is registered in `trace.ts`.
   routes.set("GET /api/v1/episodes/timeline", async (ctx) => {
     const episodeId = ctx.url.searchParams.get("episodeId");
     if (!episodeId) {

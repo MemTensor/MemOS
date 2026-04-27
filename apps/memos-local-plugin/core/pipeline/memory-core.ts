@@ -332,9 +332,19 @@ export function createMemoryCore(
     // to `closed` + sets `closeReason: "abandoned"` without touching
     // trace_ids_json.
     try {
-      const orphans = handle.repos.episodes.list({ status: "open", limit: 500 });
+      const openEpisodes = handle.repos.episodes.list({ status: "open", limit: 500 });
+      // Only treat an open episode as an orphan if its session has been
+      // explicitly closed (meta.closedAt is set) or no longer exists.
+      // Otherwise the session might reconnect — leave it alone.
+      const orphans = openEpisodes.filter((ep) => {
+        const session = handle.repos.sessions.getById(ep.sessionId);
+        if (!session) return true; // session row gone — orphan
+        if (session.meta?.closedAt != null) return true; // explicitly closed — orphan
+        return false; // session exists and not closed — skip, might reconnect
+      });
       if (orphans.length > 0) {
-        log.info("init.orphan_episodes.close", { count: orphans.length });
+        const skipped = openEpisodes.length - orphans.length;
+        log.info("init.orphan_episodes.close", { count: orphans.length, skipped });
         const endedAt = Date.now();
         for (const ep of orphans) {
           try {
@@ -630,6 +640,20 @@ export function createMemoryCore(
     }
     if (snap.status === "closed") return;
     handle.sessionManager.finalizeEpisode(episodeId);
+  }
+
+  async function deleteEpisode(episodeId: EpisodeId): Promise<{ deleted: boolean }> {
+    ensureLive();
+    return { deleted: handle.repos.episodes.deleteById(episodeId) };
+  }
+
+  async function deleteEpisodes(ids: readonly EpisodeId[]): Promise<{ deleted: number }> {
+    ensureLive();
+    let deleted = 0;
+    for (const id of ids) {
+      if (handle.repos.episodes.deleteById(id)) deleted++;
+    }
+    return { deleted };
   }
 
   // ─── Pipeline (per turn) ──
@@ -1947,6 +1971,8 @@ export function createMemoryCore(
     closeSession,
     openEpisode,
     closeEpisode,
+    deleteEpisode,
+    deleteEpisodes,
     onTurnStart,
     onTurnEnd,
     submitFeedback,
