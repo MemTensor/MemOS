@@ -111,22 +111,26 @@ short-circuit with `skill.failed { reason: "llm_disabled" }`.
 `verifyDraft` (see [`verifier.ts`](./verifier.ts)) runs two
 deterministic checks on the draft:
 
-### Consistency coverage
+### Tool coverage
 
 ```
-commandLike = tokens that look like shell commands / module paths
-              (e.g. "apk add", "docker.build", "rg", "pip install")
-coverage = |commandLike ∩ actionBlob| / |commandLike|
+evidenceTools = extractToolNames(evidence)   // from trace.toolCalls
+draftTools    = draft.tools                  // declared by LLM
+coverage      = |draftTools ∩ evidenceTools| / |draftTools|
 ```
 
-* `actionBlob` is the concatenation of every trace's
-  `userText + agentText + reflection`, lowercased.
-* `commandLike` is extracted from the draft's `steps` and `examples`
-  via a regex that catches backticked tokens and `name.method`-style
-  identifiers of length ≥ 3.
-* Stopwords (`the`, `with`, `steps`, …) are filtered out.
+* `evidenceTools` is built from the structured `toolCalls` field on
+  each evidence trace — `tc.name` (tool-level, e.g. "shell",
+  "pip.install") plus the first token of `tc.input` when it's a string
+  (command-level, e.g. "apk" from "apk add openssl-dev"). See
+  [`tool-names.ts`](./tool-names.ts).
+* `draftTools` is the `tools: string[]` array the LLM outputs during
+  crystallization (prompt v3). The LLM is constrained to pick from an
+  `EVIDENCE_TOOLS` whitelist injected into the prompt payload.
+* No regex heuristics, no stopwords — tool identity comes from ground-
+  truth structured data, not from guessing in natural-language text.
 
-Verdict: `ok = coverage ≥ 0.5 || commandLike.length === 0`.
+Verdict: `ok = coverage ≥ 0.5 || draftTools.length === 0`.
 
 ### Evidence resonance
 
@@ -137,9 +141,9 @@ resonance   = |{ trace : |tokens(trace) ∩ draftTokens| ≥ 2 }| / |evidence|
 
 Verdict: `ok = resonance ≥ minResonance` (default `0.5`).
 
-Both checks are cheap string matching by design — this is not a
-security gate, it is a first-line defence against hallucinated tool
-names. A skill can still be wrong about intent; the trial cycle is
+Both checks are cheap and deterministic — no LLM calls. Tool coverage
+catches hallucinated tool/command names; resonance catches narrative
+drift. A skill can still be wrong about intent; the trial cycle is
 what catches that.
 
 A rejected draft emits `skill.verification.failed` and the policy

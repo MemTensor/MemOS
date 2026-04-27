@@ -8,17 +8,17 @@ import type { PromptDef } from "./index.js";
  * it into a callable "Skill" with a stable name, parameter schema, and a
  * small SKILL.md authored from the evidence.
  *
- * **v2** (this version) extends the schema with `decision_guidance`:
- * preference + anti-pattern lists distilled from past failures + fixes
- * (V7 §2.4.6). The crystallizer now sees the policy's `@repair` block
- * (parsed by the orchestrator from `policy.boundary`) plus high-V vs
- * low-V evidence traces, so the LLM can write concrete "prefer X /
- * avoid Y" lines that ship with the skill. Bumping the version captures
- * that shape change so the LLM-mock op tags refresh too.
+ * **v3** adds an explicit `tools` output field: the LLM must declare which
+ * tools/commands the skill invokes, constrained to the `EVIDENCE_TOOLS`
+ * whitelist extracted from evidence trace `toolCalls`. This replaces the
+ * old regex-based command-token heuristic in the verifier — coverage is now
+ * a clean set-containment check (`draft.tools ⊆ evidenceTools`).
+ *
+ * v2 history: added `decision_guidance` (preference + anti-pattern).
  */
 export const SKILL_CRYSTALLIZE_PROMPT: PromptDef = {
   id: "skill.crystallize",
-  version: 2,
+  version: 3,
   description:
     "Turn a graduated L2 policy into a callable Skill definition, including decision guidance distilled from past prefer/avoid signals.",
   system: `You crystallize a skill an agent should be able to call.
@@ -26,6 +26,9 @@ export const SKILL_CRYSTALLIZE_PROMPT: PromptDef = {
 Input:
 - POLICY: the L2 policy being promoted (trigger / action / rationale / caveats).
 - EVIDENCE: 3..10 successful traces that support the policy.
+- EVIDENCE_TOOLS: the exhaustive list of tool/command names that actually
+  appeared in the evidence traces' tool calls. This is the ground-truth
+  whitelist — your \`tools\` output MUST be a subset of this list.
 - COUNTER_EXAMPLES (optional): traces with V < 0 from the same context —
   failures the policy is meant to prevent.
 - REPAIR_HINTS (optional): a JSON block { preference: [...], antiPattern: [...] }
@@ -50,6 +53,7 @@ Return JSON:
   "examples": [
     { "input": "...", "expected": "..." }
   ],
+  "tools": ["tool_or_command_name", ...],
   "decision_guidance": {
     "preference":   ["Prefer: …", ...],   // concrete actions to favour, ≤ 5
     "anti_pattern": ["Avoid: …", ...]     // concrete actions to avoid, ≤ 5
@@ -58,7 +62,9 @@ Return JSON:
 }
 
 Rules:
-- Only reference tools/APIs that appear in EVIDENCE.
+- \`tools\` MUST only contain names from EVIDENCE_TOOLS. Never invent tool
+  names that are not in the whitelist. Include every tool the skill's
+  procedure actually invokes — omit tools not referenced in your steps.
 - Keep "steps" short (2-6 items).
 - \`summary\` must be self-contained so the agent can decide whether to
   call this skill without reading the full SKILL.md.

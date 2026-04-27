@@ -78,6 +78,7 @@ describe("skill/crystallize", () => {
           ],
           examples: [{ input: "cryptography", expected: "success" }],
           tags: ["alpine", "Alpine", "pip"],
+          tools: ["shell", "pip.install"],
         },
       },
     });
@@ -96,6 +97,7 @@ describe("skill/crystallize", () => {
     expect(r.draft.parameters[1]!.enumValues).toEqual(["dev", "prod"]);
     expect(r.draft.steps.length).toBe(2);
     expect(r.draft.tags).toEqual(["alpine", "pip"]);
+    expect(r.draft.tools).toEqual(["shell", "pip.install"]);
   });
 
   it("skips when useLlm is false", async () => {
