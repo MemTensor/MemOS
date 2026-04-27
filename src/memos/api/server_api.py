@@ -1,5 +1,7 @@
+import json
 import logging
 import os
+import sys
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -19,6 +21,71 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _validate_auth_config_or_exit() -> None:
+    """Refuse to start if auth is required but no usable agent registry exists.
+
+    Previously the server would happily start with ``MEMOS_AUTH_REQUIRED=true``
+    and an empty/missing ``agents-auth.json`` — every authenticated request
+    would then 401, leaving demo agents memory-blind with no obvious cause.
+    Fail loud at startup instead so the operator notices immediately.
+
+    Pass conditions when ``MEMOS_AUTH_REQUIRED=true``:
+      - ``MEMOS_AGENT_AUTH_CONFIG`` is set
+      - the file at that path exists and is readable
+      - it parses as JSON
+      - it contains at least one ``agents[*].key_hash`` entry (v2)
+        OR at least one ``agents[*].key`` entry (legacy v1)
+
+    Anything else → write a clear stderr message and ``sys.exit(2)`` before
+    we bind a port.
+    """
+    if os.getenv("MEMOS_AUTH_REQUIRED", "false").lower() != "true":
+        return  # Auth optional — empty registry is allowed.
+
+    config_path = os.getenv("MEMOS_AGENT_AUTH_CONFIG", "").strip()
+    if not config_path:
+        print(
+            "FATAL: MEMOS_AUTH_REQUIRED=true but MEMOS_AGENT_AUTH_CONFIG is unset. "
+            "Run deploy/scripts/setup-memos-agents.py to provision agents and set "
+            "MEMOS_AGENT_AUTH_CONFIG to the resulting file path. Refusing to start.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if not os.path.exists(config_path):
+        print(
+            f"FATAL: MEMOS_AUTH_REQUIRED=true but agent-auth file is missing at "
+            f"{config_path!r}. Run deploy/scripts/setup-memos-agents.py to "
+            f"recreate it. Refusing to start.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(
+            f"FATAL: agent-auth file at {config_path!r} is unreadable or not "
+            f"valid JSON ({type(e).__name__}: {e}). Refusing to start.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    agents = data.get("agents", []) if isinstance(data, dict) else []
+    has_v2 = any(a.get("key_hash") for a in agents)
+    has_v1 = any(a.get("key") for a in agents)
+    if not (has_v2 or has_v1):
+        print(
+            f"FATAL: agent-auth file at {config_path!r} contains zero agent keys. "
+            "Run deploy/scripts/setup-memos-agents.py to provision the demo agents. "
+            "Refusing to start.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
+_validate_auth_config_or_exit()
 
 app = FastAPI(
     title="MemOS Server REST APIs",
