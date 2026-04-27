@@ -642,13 +642,27 @@ export function createMemoryCore(
     handle.sessionManager.finalizeEpisode(episodeId);
   }
 
+  function assertEpisodeDeletable(episodeId: EpisodeId): void {
+    const snap = handle.sessionManager.getEpisode(episodeId);
+    if (snap?.status === "open") {
+      throw new MemosError(
+        "conflict",
+        `cannot delete open episode: ${episodeId}`,
+      );
+    }
+  }
+
   async function deleteEpisode(episodeId: EpisodeId): Promise<{ deleted: boolean }> {
     ensureLive();
+    assertEpisodeDeletable(episodeId);
     return { deleted: handle.repos.episodes.deleteById(episodeId) };
   }
 
   async function deleteEpisodes(ids: readonly EpisodeId[]): Promise<{ deleted: number }> {
     ensureLive();
+    for (const id of ids) {
+      assertEpisodeDeletable(id);
+    }
     let deleted = 0;
     for (const id of ids) {
       if (handle.repos.episodes.deleteById(id)) deleted++;
