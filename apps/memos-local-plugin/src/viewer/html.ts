@@ -1181,7 +1181,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
             <div class="step-title" data-i18n="reset.step1.title">Open Terminal</div>
             <div class="step-desc" data-i18n="reset.step1.desc">Run the following command to get your reset token (use the pattern below so you get the line that contains the token):</div>
             <div class="cmd-box" onclick="copyCmd(this)">
-              <code>grep "password reset token:" /tmp/openclaw/openclaw-*.log ~/.openclaw/logs/gateway.log 2>/dev/null | tail -1</code>
+              <code>cat ~/.hermes/memos-state/viewer-reset-token 2>/dev/null || grep "password reset token:" ~/.hermes/memos-state/daemon/bridge.log 2>/dev/null | tail -1</code>
               <span class="copy-hint" data-i18n="copy.hint">Click to copy</span>
             </div>
           </div>
@@ -1190,7 +1190,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <div class="step-num">2</div>
           <div class="step-body">
             <div class="step-title" data-i18n="reset.step2.title">Find the token</div>
-            <div class="step-desc" id="resetStep2Desc">In the output, find <span style="font-family:monospace;font-size:12px;color:var(--pri)">password reset token: <strong>a1b2c3d4e5f6...</strong></span> (plain line or inside JSON). Copy the 32-character hex string after the colon.</div>
+            <div class="step-desc" id="resetStep2Desc">Copy the 32-character hex token from the output. If the output is a log line, copy the token after the colon.</div>
           </div>
         </div>
         <div class="reset-step">
@@ -2100,8 +2100,8 @@ const I18N={
     'reset.step1.title':'Open Terminal',
     'reset.step1.desc':'Run the following command to get your reset token (use the pattern below so you get the line that contains the token):',
     'reset.step2.title':'Find the token',
-    'reset.step2.desc.pre':'In the output, find ',
-    'reset.step2.desc.post':' (plain line or inside JSON). Copy the 32-character hex string after the colon.',
+    'reset.step2.desc.pre':'Copy the 32-character hex token from the output',
+    'reset.step2.desc.post':'. If the output is a log line, copy the token after the colon.',
     'reset.step3.title':'Paste & reset',
     'reset.step3.desc':'Paste the token below and set your new password.',
     'reset.token':'Paste reset token here',
@@ -2871,10 +2871,10 @@ const I18N={
     'login.err':'密码错误',
     'login.forgot':'忘记密码？',
     'reset.step1.title':'打开终端',
-    'reset.step1.desc':'运行以下命令获取重置令牌：',
+    'reset.step1.desc':'运行以下 Hermes 命令获取当前重置令牌：',
     'reset.step2.title':'找到令牌',
-    'reset.step2.desc.pre':'在输出中找到 ',
-    'reset.step2.desc.post':'（纯文本行或 JSON 内）。复制冒号后的32位十六进制字符串。',
+    'reset.step2.desc.pre':'复制输出中的32位十六进制令牌',
+    'reset.step2.desc.post':'。如果输出是日志行，请复制冒号后的令牌。',
     'reset.step3.title':'粘贴并重置',
     'reset.step3.desc':'将令牌粘贴到下方并设置新密码。',
     'reset.token':'在此粘贴重置令牌',
@@ -3645,7 +3645,7 @@ function applyI18n(){
     if(key) el.placeholder=t(key);
   });
   const step2=document.getElementById('resetStep2Desc');
-  if(step2) step2.innerHTML=t('reset.step2.desc.pre')+'<span style="font-family:monospace;font-size:12px;color:var(--pri)">password reset token: <strong>a1b2c3d4e5f6...</strong></span>'+t('reset.step2.desc.post');
+  if(step2) step2.textContent=t('reset.step2.desc.pre')+t('reset.step2.desc.post');
   document.title=t('title')+' - MemTensor';
   if(typeof loadStats==='function' && document.getElementById('app').style.display==='flex'){loadStats();}
   if(document.querySelector('.analytics-view.show') && typeof loadMetrics==='function'){loadMetrics();}
