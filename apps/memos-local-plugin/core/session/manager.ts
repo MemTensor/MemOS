@@ -148,7 +148,8 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     try {
       const row = deps.sessionsRepo.getById(id);
       if (row) {
-        deps.sessionsRepo.touchLastSeen(id, Date.now(), { closedAt: Date.now() });
+        const ts = now();
+        deps.sessionsRepo.touchLastSeen(id, ts, { closedAt: ts });
       }
     } catch { /* best-effort */ }
     live.delete(id);
