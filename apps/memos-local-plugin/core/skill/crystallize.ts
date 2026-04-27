@@ -17,6 +17,7 @@ import {
 import { SKILL_CRYSTALLIZE_PROMPT } from "../llm/prompts/skill-crystallize.js";
 import type { Logger } from "../logger/types.js";
 import type { PolicyRow, SkillRow, TraceRow } from "../types.js";
+import { extractToolNames } from "./tool-names.js";
 import type {
   SkillConfig,
   SkillCrystallizationDraft,
@@ -158,9 +159,12 @@ function packPrompt(input: CrystallizeInput, config: SkillConfig): string {
       tags: t.tags,
     }));
 
+  const evidenceTools = Array.from(extractToolNames(input.evidence));
+
   const payload: Record<string, unknown> = {
     policy,
     evidence,
+    evidence_tools: evidenceTools,
     naming_space: input.namingSpace,
   };
   if (counterExamples.length > 0) payload.counter_examples = counterExamples;
@@ -202,6 +206,8 @@ function normaliseDraft(
   // to keep the skill body skim-able and the prompt budget bounded.
   const decisionGuidance = coerceDecisionGuidance(raw.decision_guidance ?? raw.decisionGuidance);
 
+  const tools = dedupeLc(asStringArray(raw.tools));
+
   return {
     name,
     displayTitle,
@@ -212,6 +218,7 @@ function normaliseDraft(
     examples,
     tags,
     decisionGuidance,
+    tools,
   };
 }
 

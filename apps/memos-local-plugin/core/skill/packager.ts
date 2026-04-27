@@ -133,12 +133,9 @@ function buildProcedure(draft: SkillCrystallizationDraft): SkillProcedure {
     preconditions: draft.preconditions,
     steps: draft.steps,
     examples: draft.examples,
-    // V7 §2.4.6 — `decisionGuidance` now flows from the LLM draft
-    // (which folded in the policy's `@repair` block + V-contrast
-    // signals). Older code path used to hard-code `[] / []` here,
-    // dropping every prefer / avoid line on the floor.
     decisionGuidance: draft.decisionGuidance ?? { preference: [], antiPattern: [] },
     tags: draft.tags,
+    tools: draft.tools ?? [],
   };
 }
 
@@ -182,6 +179,11 @@ function renderInvocationGuide(
       lines.push(`- Input: \`${e.input}\``);
       lines.push(`  Expected: ${e.expected}`);
     }
+    lines.push("");
+  }
+  if (draft.tools && draft.tools.length > 0) {
+    lines.push(`**Tools used**`);
+    for (const t of draft.tools) lines.push(`- \`${t}\``);
     lines.push("");
   }
   const dg = draft.decisionGuidance;

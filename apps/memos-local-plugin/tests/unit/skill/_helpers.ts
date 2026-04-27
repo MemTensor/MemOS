@@ -99,6 +99,7 @@ export interface SeedTraceArgs {
   value?: number;
   tags?: string[];
   vec?: EmbeddingVector | null;
+  toolCalls?: TraceRow["toolCalls"];
 }
 
 export function seedTrace(handle: TmpDbHandle, args: SeedTraceArgs): TraceRow {
@@ -111,7 +112,7 @@ export function seedTrace(handle: TmpDbHandle, args: SeedTraceArgs): TraceRow {
     ts: NOW,
     userText: args.userText ?? "",
     agentText: args.agentText ?? "",
-    toolCalls: [],
+    toolCalls: args.toolCalls ?? [],
     reflection: args.reflection ?? null,
     value: args.value ?? 0.7,
     alpha: 0.6 as TraceRow["alpha"],
@@ -195,6 +196,7 @@ export function makeDraft(
     ],
     tags: ["pip", "alpine"],
     decisionGuidance: { preference: [], antiPattern: [] },
+    tools: [],
     ...overrides,
   };
 }

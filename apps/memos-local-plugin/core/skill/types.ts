@@ -54,6 +54,8 @@ export interface SkillProcedure {
   examples: SkillExampleDraft[];
   decisionGuidance: { preference: string[]; antiPattern: string[] };
   tags: string[];
+  /** Tool names this skill references (from evidence toolCalls). */
+  tools: string[];
 }
 
 /**
@@ -76,6 +78,8 @@ export interface SkillCrystallizationDraft {
   examples: SkillExampleDraft[];
   tags: string[];
   decisionGuidance: { preference: string[]; antiPattern: string[] };
+  /** Tool names this skill references. Must be a subset of evidence tool names. */
+  tools: string[];
 }
 
 /**
