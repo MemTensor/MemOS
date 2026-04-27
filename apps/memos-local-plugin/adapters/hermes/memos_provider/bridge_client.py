@@ -22,6 +22,9 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+# Ensure at-most-one bridge instance via PID file.
+from daemon_manager import kill_existing_bridge, register_bridge
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -72,9 +75,16 @@ class MemosBridgeClient:
         script = bridge_path or str(
             Path(__file__).resolve().parent.parent.parent.parent / "bridge.cts"
         )
+        tsx_bin = str(
+            Path(__file__).resolve().parent.parent.parent.parent / "node_modules" / ".bin" / "tsx"
+        )
+        runtime = tsx_bin if Path(tsx_bin).exists() else node
+        runtime_args = [] if Path(tsx_bin).exists() else ["--experimental-strip-types"]
         env = {**os.environ, **(extra_env or {})}
+        # Kill any previously-running bridge before spawning a new one.
+        kill_existing_bridge()
         self._proc = subprocess.Popen(
-            [node, "--experimental-strip-types", script, f"--agent={agent}"],
+            [runtime, *runtime_args, script, f"--agent={agent}"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -82,6 +92,8 @@ class MemosBridgeClient:
             bufsize=1,
             env=env,
         )
+        # Register the new process so daemon_manager can track it.
+        register_bridge(self._proc)
         self._reader = threading.Thread(
             target=self._read_loop,
             daemon=True,
@@ -163,6 +175,8 @@ class MemosBridgeClient:
             self._proc.wait(timeout=5.0)
         except subprocess.TimeoutExpired:
             self._proc.kill()
+        # Clear PID file so a future incarnation starts fresh.
+        register_bridge(None)
         # unblock any pending waiters
         with self._lock:
             for entry in list(self._pending.values()):
