@@ -7,11 +7,22 @@
  *   node --experimental-strip-types bridge.cts                (default: stdio)
  *   node --experimental-strip-types bridge.cts --daemon       (stdio)
  *   node --experimental-strip-types bridge.cts --daemon --tcp=18911
+ *   node --experimental-strip-types bridge.cts --agent=hermes --home=/opt/data/home/.hermes/memos-plugin
  *
  * The `.cts` extension is intentional: it lets the file be required
  * from CommonJS environments that spawn Node with `require("...")`
  * semantics. Internally we re-export the ESM implementation via
  * `import()`.
+ *
+ * CLI flags:
+ *   --daemon            Run in daemon mode (keep process alive)
+ *   --tcp=PORT          Listen on TCP instead of stdio
+ *   --agent=AGENT       Agent type: openclaw | hermes (default: openclaw)
+ *   --home=PATH         Override runtime home (equivalent to MEMOS_HOME env)
+ *
+ * Environment variables (resolved by core/config/paths.ts):
+ *   MEMOS_HOME          Override runtime home directory
+ *   MEMOS_CONFIG_FILE   Override config.yaml path only
  */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const path = require("node:path") as typeof import("node:path");
@@ -20,6 +31,8 @@ interface BridgeArgs {
   daemon: boolean;
   tcpPort?: number;
   agent: "openclaw" | "hermes";
+  /** Override runtime home directory (equivalent to MEMOS_HOME env var). */
+  home?: string;
 }
 
 function parseArgs(argv: readonly string[]): BridgeArgs {
@@ -29,6 +42,7 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
     else if (raw.startsWith("--tcp=")) args.tcpPort = Number(raw.slice(6));
     else if (raw === "--agent=hermes") args.agent = "hermes";
     else if (raw === "--agent=openclaw") args.agent = "openclaw";
+    else if (raw.startsWith("--home=")) args.home = raw.slice(7);
   }
   return args;
 }
@@ -50,6 +64,14 @@ async function main(): Promise<void> {
   const { memoryBuffer } = (await import(
     pathToEsmUrl(path.resolve(__dirname, "core/logger/index.ts"))
   )) as typeof import("./core/logger/index.js");
+
+  // When --home is provided, set MEMOS_HOME so resolveHome() in
+  // core/config/paths.ts picks it up. This is the recommended way to
+  // configure the bridge in Docker where the daemon is started outside
+  // the Python adapter (which would normally pass extra_env).
+  if (args.home) {
+    process.env["MEMOS_HOME"] = path.resolve(args.home);
+  }
 
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,

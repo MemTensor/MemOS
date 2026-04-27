@@ -66,6 +66,22 @@ communicates over its stdin/stdout pipes. The subprocess exits when the
 provider's stdin closes (on `shutdown()`), yielding clean lifecycle
 semantics.
 
+### Docker / Manual Daemon Startup
+
+When running inside Docker, the bridge may be started by the container's
+entrypoint instead of being lazily spawned by the Python adapter. In this
+case, pass `--home=<path>` to tell the bridge where its runtime home is:
+
+```bash
+node --experimental-strip-types bridge.cts \
+  --agent=hermes \
+  --daemon \
+  --home=/opt/data/home/.hermes/memos-plugin
+```
+
+Alternatively, set the `MEMOS_HOME` environment variable. See
+[docs/DOCKER.md](../../docs/DOCKER.md) for the full Docker deployment guide.
+
 ## Why a subprocess instead of a long-lived daemon?
 
 Earlier prototypes used a persistent HTTP daemon on a well-known port.
