@@ -555,9 +555,9 @@ const en = {
   "import.import.desc":
     "Restore memories, experiences, environment knowledge and skills from a JSON bundle. Your existing data is preserved; imported rows are added alongside with new ids.",
   "import.import.btn": "Choose JSON bundle…",
-  "import.migrate.title": "Migrate from memos-local-openclaw (legacy)",
+  "import.migrate.title": "Migrate from legacy plugin (memos-local-openclaw / memos-local-hermes)",
   "import.migrate.desc":
-    "Scan the legacy plugin's SQLite database and copy matching rows into the new store. Non-destructive — the legacy file stays put.",
+    "Scan the legacy plugin's SQLite database for the currently running agent (openclaw → ~/.openclaw/memos-local, hermes → ~/.hermes/memos-state/memos-local) and copy matching rows into the new store. Non-destructive — the legacy file stays put.",
   "import.migrate.scan": "Scan legacy DB",
   "import.migrate.run": "Run migration",
 
@@ -1124,8 +1124,9 @@ const zh: Record<TranslationKey, string> = {
   "import.import.desc":
     "从 JSON 包中恢复记忆、经验、环境认知和技能。原有数据保留，导入内容以新 id 追加。",
   "import.import.btn": "选择 JSON 文件…",
-  "import.migrate.title": "从旧插件迁入（memos-local-openclaw）",
-  "import.migrate.desc": "扫描旧插件的 SQLite 数据库，把匹配的记录拷贝到新存储。非破坏性，旧文件不动。",
+  "import.migrate.title": "从旧插件迁入（memos-local-openclaw / memos-local-hermes）",
+  "import.migrate.desc":
+    "扫描当前运行 agent 对应的旧插件 SQLite 数据库（openclaw → ~/.openclaw/memos-local，hermes → ~/.hermes/memos-state/memos-local），把匹配的记录拷贝到新存储。非破坏性，旧文件不动。",
   "import.migrate.scan": "扫描旧数据库",
   "import.migrate.run": "执行迁移",
 

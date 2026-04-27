@@ -5,8 +5,10 @@
  *     trace/policy/world-model/skill. We trigger a browser download.
  *   - Import: POST the file back to `/api/v1/import`. The server
  *     preserves existing data and assigns fresh ids to imported rows.
- *   - Migrate: `POST /api/v1/migrate/openclaw` — scans the legacy
- *     SQLite file and copies rows into the V7 store.
+ *   - Migrate: `POST /api/v1/migrate/legacy/run` — scans the legacy
+ *     SQLite file for the **currently running agent** (openclaw or
+ *     hermes — the server picks the right path based on its own
+ *     `options.agent`) and copies rows into the V7 store.
  */
 import { useState } from "preact/hooks";
 import { api } from "../api/client";
@@ -159,6 +161,7 @@ function MigrateCard() {
   const [scanning, setScanning] = useState(false);
   const [scan, setScan] = useState<{
     found: boolean;
+    agent?: "openclaw" | "hermes";
     candidates?: { traces: number; skills: number; tasks: number };
     path?: string;
   } | null>(null);
@@ -169,7 +172,7 @@ function MigrateCard() {
     setScanning(true);
     setResult(null);
     try {
-      const r = await api.get<typeof scan>("/api/v1/migrate/openclaw/scan");
+      const r = await api.get<typeof scan>("/api/v1/migrate/legacy/scan");
       setScan(r);
     } catch {
       setScan({ found: false });
@@ -183,7 +186,7 @@ function MigrateCard() {
     try {
       const r = await api.post<{
         imported: { traces: number; skills: number; tasks: number };
-      }>("/api/v1/migrate/openclaw/run", {});
+      }>("/api/v1/migrate/legacy/run", {});
       setResult(
         `Imported ${r.imported.traces} traces, ${r.imported.skills} skills, ${r.imported.tasks} tasks.`,
       );
@@ -231,8 +234,8 @@ function MigrateCard() {
       {scan && (
         <div class="muted" style="margin-top:var(--sp-3);font-size:var(--fs-sm)">
           {scan.found
-            ? `Found legacy DB at ${scan.path}. Candidates — traces: ${scan.candidates?.traces ?? 0}, skills: ${scan.candidates?.skills ?? 0}, tasks: ${scan.candidates?.tasks ?? 0}.`
-            : "No legacy database found at ~/.openclaw/memos-local/memos.db."}
+            ? `Found legacy ${scan.agent ?? ""} DB at ${scan.path}. Candidates — traces: ${scan.candidates?.traces ?? 0}, skills: ${scan.candidates?.skills ?? 0}, tasks: ${scan.candidates?.tasks ?? 0}.`
+            : `No legacy database found${scan.path ? ` at ${scan.path}` : ""}.`}
         </div>
       )}
       {result && (

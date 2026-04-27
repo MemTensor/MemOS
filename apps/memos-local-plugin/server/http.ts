@@ -183,7 +183,13 @@ async function dispatch(
   // exists). Auth endpoints + `/health` are explicitly allowed so
   // the viewer can complete login even from a locked state.
   if (pathname.startsWith("/api/") && deps.home?.root) {
-    const ok = requireSession(req, res, String(deps.home.root), pathname);
+    const ok = requireSession(
+      req,
+      res,
+      String(deps.home.root),
+      pathname,
+      selfAgent,
+    );
     if (!ok) return;
   }
 
