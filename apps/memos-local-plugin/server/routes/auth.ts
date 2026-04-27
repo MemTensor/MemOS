@@ -3,8 +3,8 @@
  *
  * Opt-in security for the Memory Viewer — when the operator enables
  * password protection (Settings → 账户 → "启用密码保护"), every
- * `/api/v1/*` request MUST carry a valid `memos_sess` cookie issued
- * by this module. When password protection is OFF (the default,
+ * `/api/v1/*` request MUST carry a valid session cookie issued by
+ * this module. When password protection is OFF (the default,
  * preserves zero-config install.sh behaviour), this module is a
  * no-op and the API is reachable from localhost without auth.
  *
@@ -23,14 +23,39 @@
  * and a 32-byte key. Sessions are HMAC-SHA256 signed JSON with a
  * 7-day rolling TTL — refreshed on every successful request.
  *
+ * ## Multi-agent cookie scoping
+ *
+ * Browsers do NOT isolate cookies by port — `localhost:18799`
+ * (openclaw) and `localhost:18800` (hermes) share a single cookie
+ * jar. Same goes for the hub layout where one server proxies
+ * `/openclaw/*` and `/hermes/*` from the same origin. If both
+ * agents wrote the same cookie name (`memos_sess`) with `Path=/`,
+ * a login on hermes would silently overwrite the openclaw cookie
+ * (and vice versa) → refreshing one viewer would log the other one
+ * out, because each agent signs sessions with its own
+ * `sessionSecret`.
+ *
+ * To stay isolated we name the cookie `memos_sess_<agent>` (e.g.
+ * `memos_sess_openclaw`, `memos_sess_hermes`). Both cookies coexist
+ * in the browser's jar without conflict. When the host doesn't
+ * advertise an agent (test fixtures, plain single-agent installs)
+ * we fall back to the legacy `memos_sess` name so existing setups
+ * continue to work unchanged.
+ *
+ * On the read side we additionally accept the legacy `memos_sess`
+ * cookie when the per-agent one is missing. This means users who
+ * were already logged in before the upgrade aren't kicked out the
+ * first time they refresh — the next successful response will
+ * write the new per-agent cookie and the transition is silent.
+ *
  * Endpoints (public, no auth):
  *   - `GET  /api/v1/auth/status`
  *   - `POST /api/v1/auth/setup`   body: { password }
  *   - `POST /api/v1/auth/login`   body: { password }
  *   - `POST /api/v1/auth/logout`
  *
- * Everything else under `/api/v1/*` is gated by `requireSession` (see
- * `middleware/session.ts`).
+ * Everything else under `/api/v1/*` is gated by `requireSession`
+ * (called from `server/http.ts::dispatch`).
  */
 import {
   existsSync,
@@ -47,12 +72,40 @@ import {
   createHmac,
 } from "node:crypto";
 
-import type { ServerDeps } from "../types.js";
+import type { ServerDeps, ServerOptions } from "../types.js";
 import { parseJson, writeError, type Routes } from "./registry.js";
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const COOKIE_NAME = "memos_sess";
+const LEGACY_COOKIE_NAME = "memos_sess";
 const SCRYPT_KEYLEN = 32;
+
+/**
+ * Resolve the per-agent cookie name. Falls back to the legacy
+ * `memos_sess` when no agent is configured (single-agent installs +
+ * test fixtures) so unrelated callers continue to work.
+ */
+function cookieNameFor(agent: string | null | undefined): string {
+  if (!agent) return LEGACY_COOKIE_NAME;
+  return `${LEGACY_COOKIE_NAME}_${agent}`;
+}
+
+/**
+ * Read the current session cookie, preferring the per-agent name and
+ * silently falling back to the legacy name (for users upgrading from
+ * a pre-fix viewer). Returns null when neither is present.
+ */
+function readSessionCookie(
+  cookieHeader: string | undefined,
+  agent: string | null | undefined,
+): string | null {
+  const primary = cookieNameFor(agent);
+  const v = readCookie(cookieHeader, primary);
+  if (v) return v;
+  if (primary !== LEGACY_COOKIE_NAME) {
+    return readCookie(cookieHeader, LEGACY_COOKIE_NAME);
+  }
+  return null;
+}
 
 export interface AuthState {
   version: 1;
@@ -166,28 +219,46 @@ export function readCookie(header: string | undefined, name: string): string | n
   return null;
 }
 
-function setSessionCookie(res: {
-  setHeader: (name: string, value: string | string[]) => void;
-}, token: string): void {
+function setSessionCookie(
+  res: { setHeader: (name: string, value: string | string[]) => void },
+  token: string,
+  agent: string | null | undefined,
+): void {
+  const name = cookieNameFor(agent);
   res.setHeader("Set-Cookie", [
-    `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(
+    `${name}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(
       SESSION_TTL_MS / 1000,
     )}`,
   ]);
 }
 
-function clearSessionCookie(res: {
-  setHeader: (name: string, value: string | string[]) => void;
-}): void {
-  res.setHeader("Set-Cookie", [
-    `${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`,
-  ]);
+function clearSessionCookie(
+  res: { setHeader: (name: string, value: string | string[]) => void },
+  agent: string | null | undefined,
+): void {
+  const name = cookieNameFor(agent);
+  // Also clear the legacy name so users upgrading from a pre-fix
+  // viewer don't end up with two stale cookies after logout.
+  const cookies = [
+    `${name}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`,
+  ];
+  if (name !== LEGACY_COOKIE_NAME) {
+    cookies.push(
+      `${LEGACY_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`,
+    );
+  }
+  res.setHeader("Set-Cookie", cookies);
 }
 
 // ─── Public routes ─────────────────────────────────────────────────────────
 
-export function registerAuthRoutes(routes: Routes, deps: ServerDeps): void {
+export function registerAuthRoutes(
+  routes: Routes,
+  deps: ServerDeps,
+  options: ServerOptions = {},
+): void {
   const homeRoot = (): string | null => deps.home?.root ?? null;
+  const agent = options.agent ?? null;
 
   routes.set("GET /api/v1/auth/status", async (ctx) => {
     const root = homeRoot();
@@ -205,7 +276,7 @@ export function registerAuthRoutes(routes: Routes, deps: ServerDeps): void {
       // exists — see `requireSession` below).
       return { enabled: true, needsSetup: true, authenticated: false };
     }
-    const cookie = readCookie(ctx.req.headers.cookie, COOKIE_NAME);
+    const cookie = readSessionCookie(ctx.req.headers.cookie, agent);
     const authed = cookie ? verifySession(cookie, state) : false;
     return { enabled: true, needsSetup: false, authenticated: authed };
   });
@@ -240,7 +311,7 @@ export function registerAuthRoutes(routes: Routes, deps: ServerDeps): void {
     writeAuthState(root, state);
     const now = Date.now();
     const token = signSession(state, { iat: now, exp: now + SESSION_TTL_MS });
-    setSessionCookie(ctx.res, token);
+    setSessionCookie(ctx.res, token, agent);
     return { ok: true };
   });
 
@@ -263,12 +334,12 @@ export function registerAuthRoutes(routes: Routes, deps: ServerDeps): void {
     }
     const now = Date.now();
     const token = signSession(state, { iat: now, exp: now + SESSION_TTL_MS });
-    setSessionCookie(ctx.res, token);
+    setSessionCookie(ctx.res, token, agent);
     return { ok: true };
   });
 
   routes.set("POST /api/v1/auth/logout", async (ctx) => {
-    clearSessionCookie(ctx.res);
+    clearSessionCookie(ctx.res, agent);
     return { ok: true };
   });
 
@@ -295,7 +366,7 @@ export function registerAuthRoutes(routes: Routes, deps: ServerDeps): void {
     // otherwise anyone on localhost could drop the password.
     const state = readAuthState(root);
     if (state) {
-      const cookie = readCookie(ctx.req.headers.cookie, COOKIE_NAME);
+      const cookie = readSessionCookie(ctx.req.headers.cookie, agent);
       if (!cookie || !verifySession(cookie, state)) {
         writeError(ctx, 401, "unauthenticated", "login required");
         return;
@@ -310,7 +381,7 @@ export function registerAuthRoutes(routes: Routes, deps: ServerDeps): void {
         return;
       }
     }
-    clearSessionCookie(ctx.res);
+    clearSessionCookie(ctx.res, agent);
     return { ok: true };
   });
 }
@@ -322,6 +393,10 @@ export function registerAuthRoutes(routes: Routes, deps: ServerDeps): void {
  * Called from `server/http.ts::dispatch` ahead of the route table.
  * Auth endpoints themselves bypass this check (they're what a locked
  * client uses to unlock).
+ *
+ * `agent` (optional) scopes the cookie name so this server's session
+ * doesn't collide with another agent's session sharing the same
+ * `localhost` cookie jar (see file header).
  */
 export function requireSession(
   req: { headers: { cookie?: string } },
@@ -332,6 +407,7 @@ export function requireSession(
   },
   homeDir: string,
   pathname: string,
+  agent?: string | null,
 ): boolean {
   // Public: auth endpoints + health (so the viewer can tell whether
   // the backend is up BEFORE unlocking).
@@ -341,7 +417,7 @@ export function requireSession(
   const state = readAuthState(homeDir);
   if (!state) return true; // password protection off → open
 
-  const cookie = readCookie(req.headers.cookie, COOKIE_NAME);
+  const cookie = readSessionCookie(req.headers.cookie, agent);
   if (cookie && verifySession(cookie, state)) return true;
 
   res.writeHead(401, { "Content-Type": "application/json" });

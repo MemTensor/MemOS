@@ -172,9 +172,9 @@ export function buildRoutes(
   registerConfigRoutes(routes, deps);
   registerMetricsRoutes(routes, deps);
   registerImportExportRoutes(routes, deps);
-  registerMigrateRoutes(routes, deps);
+  registerMigrateRoutes(routes, deps, options);
   registerHubAdminRoutes(routes, deps);
-  registerAuthRoutes(routes, deps);
+  registerAuthRoutes(routes, deps, options);
   registerAdminRoutes(routes, deps);
   registerModelsRoutes(routes, deps);
   registerApiLogsRoutes(routes, deps);
