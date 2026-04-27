@@ -1,0 +1,16 @@
+name: memos
+version: 1.0.0
+description: "MemOS Platform memory provider plugin for Hermes."
+provides_tools:
+  - memos_search
+  - memos_add_message
+provides_hooks:
+  - prefetch
+  - queue_prefetch
+  - sync_turn
+pip_dependencies:
+  - MemoryOS
+hooks:
+  - prefetch
+  - queue_prefetch
+  - sync_turn
