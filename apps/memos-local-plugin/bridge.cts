@@ -15,6 +15,7 @@
  */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const path = require("node:path") as typeof import("node:path");
+const pkgVersion: string = (require(path.resolve(__dirname, "package.json")) as { version: string }).version;
 
 interface BridgeArgs {
   daemon: boolean;
@@ -53,7 +54,7 @@ async function main(): Promise<void> {
 
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
-    pkgVersion: "2.0.0-alpha.1",
+    pkgVersion,
   });
   await core.init();
 
@@ -108,15 +109,20 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-  // Keep the process alive until stdin ends.
-  await stdio.done;
-  try {
-    if (viewer) await viewer.close();
-  } catch {
-    /* best-effort */
+  // In daemon mode, run indefinitely (stdin is /dev/null — EOF is normal).
+  // In stdio mode, run until the calling process closes stdin.
+  if (args.daemon) {
+    await new Promise(() => {});  // never resolve → process lives forever
+  } else {
+    await stdio.done;
+    try {
+      if (viewer) await viewer.close();
+    } catch {
+      /* best-effort */
+    }
+    await core.shutdown();
+    process.exit(0);
   }
-  await core.shutdown();
-  process.exit(0);
 }
 
 async function tryHubRegister(opts: {
@@ -127,7 +133,7 @@ async function tryHubRegister(opts: {
   const body = JSON.stringify({
     agent: opts.selfAgent,
     port: opts.selfPort,
-    version: "2.0.0-alpha.1",
+    version: pkgVersion,
   });
   for (let i = 0; i < 6; i++) {
     try {
