@@ -401,11 +401,13 @@ describe("HTTP server — REST routes", () => {
   it("GET /api/v1/migrate/openclaw/scan returns the scan result shape", async () => {
     const r = await fetch(`${handle.url}/api/v1/migrate/openclaw/scan`);
     expect(r.status).toBe(200);
-    const body = (await r.json()) as { found: boolean; path?: string };
+    const body = (await r.json()) as { found: boolean; path?: string; agent?: string };
     // `found` is always a boolean regardless of whether the legacy DB
     // is on disk. The viewer uses this to toggle the "Run migration"
-    // button.
+    // button. The path is hard-coded to the openclaw layout.
     expect(typeof body.found).toBe("boolean");
+    expect(body.agent).toBe("openclaw");
+    if (body.path) expect(body.path).toMatch(/\.openclaw\/memos-local\/memos\.db$/);
   });
 
   it("POST /api/v1/migrate/openclaw/run returns { imported: {...} } even when empty", async () => {
@@ -418,11 +420,70 @@ describe("HTTP server — REST routes", () => {
     // OR 404 when the server reports "no legacy db". Either way the
     // viewer handles both.
     expect([200, 404]).toContain(r.status);
-    const body = (await r.json()) as { imported?: Record<string, number>; error?: unknown };
+    const body = (await r.json()) as {
+      imported?: Record<string, number>;
+      error?: { message?: string };
+    };
     if (r.status === 200) {
       expect(typeof body.imported).toBe("object");
     } else {
       expect(body.error).toBeDefined();
+      // 404 must mention the openclaw legacy path so the user knows
+      // which file we tried to read.
+      expect(body.error?.message ?? "").toMatch(/\.openclaw\//);
+    }
+  });
+
+  it("GET /api/v1/migrate/hermes/scan reports the hermes legacy path", async () => {
+    const r = await fetch(`${handle.url}/api/v1/migrate/hermes/scan`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { found: boolean; path?: string; agent?: string };
+    expect(body.agent).toBe("hermes");
+    // The hermes legacy plugin nested its data under
+    // `~/.hermes/memos-state/memos-local/memos.db` (not the openclaw
+    // layout). This test is what would have caught the original bug.
+    if (body.path) expect(body.path).toMatch(/\.hermes\/memos-state\/memos-local\/memos\.db$/);
+  });
+
+  it("POST /api/v1/migrate/hermes/run targets the hermes legacy path", async () => {
+    const r = await fetch(`${handle.url}/api/v1/migrate/hermes/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect([200, 404]).toContain(r.status);
+    const body = (await r.json()) as {
+      agent?: string;
+      path?: string;
+      error?: { message?: string };
+    };
+    if (r.status === 200) {
+      expect(body.agent).toBe("hermes");
+      expect(body.path ?? "").toMatch(/\.hermes\/memos-state\/memos-local\/memos\.db$/);
+    } else {
+      expect(body.error?.message ?? "").toMatch(/\.hermes\/memos-state\//);
+    }
+  });
+
+  it("GET /api/v1/migrate/legacy/scan picks the path from options.agent (default openclaw)", async () => {
+    const r = await fetch(`${handle.url}/api/v1/migrate/legacy/scan`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { found: boolean; path?: string; agent?: string };
+    // The default server fixture omits `options.agent`; the migrate
+    // route falls back to openclaw.
+    expect(body.agent).toBe("openclaw");
+  });
+
+  it("GET /api/v1/migrate/legacy/scan honours options.agent='hermes'", async () => {
+    const local = await startHttpServer({ core }, { port: 0, agent: "hermes" });
+    try {
+      const r = await fetch(`${local.url}/api/v1/migrate/legacy/scan`);
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { found: boolean; path?: string; agent?: string };
+      expect(body.agent).toBe("hermes");
+      if (body.path) expect(body.path).toMatch(/\.hermes\/memos-state\/memos-local\/memos\.db$/);
+    } finally {
+      await local.close();
     }
   });
 

@@ -1,17 +1,29 @@
 /**
  * Legacy-DB migration endpoints (one-shot).
  *
- *   GET  /api/v1/migrate/openclaw/scan  → open the legacy sqlite file
- *                                          in read-only mode and count
- *                                          how many rows we could
- *                                          import. Safe to call
- *                                          repeatedly.
- *   POST /api/v1/migrate/openclaw/run   → actually copy the rows over.
- *                                          Returns per-type counts.
+ *   GET  /api/v1/migrate/legacy/scan   → open the **current agent's**
+ *                                        legacy sqlite file in
+ *                                        read-only mode and count how
+ *                                        many rows we could import.
+ *                                        Safe to call repeatedly.
+ *   POST /api/v1/migrate/legacy/run    → actually copy the rows over.
+ *                                        Returns per-type counts.
  *
- * We purposefully keep this logic in the route module (not the core)
- * because it's host-specific: the path layout only matters to the
- * OpenClaw host. Other agents can ignore it.
+ * The agent is taken from `options.agent` (the same flag that
+ * controls the multi-agent path prefix in `server/http.ts`). If it's
+ * absent we default to `openclaw` so existing call-sites keep working.
+ *
+ * Each agent's legacy plugin shipped with its own on-disk layout:
+ *
+ *   openclaw → ~/.openclaw/memos-local/memos.db
+ *   hermes   → ~/.hermes/memos-state/memos-local/memos.db
+ *
+ * The schema (chunks/skills/tasks) is the same across both, so the
+ * import logic itself is agent-agnostic — only the source path differs.
+ *
+ * Backwards-compat aliases:
+ *   /api/v1/migrate/openclaw/{scan,run} → always openclaw path
+ *   /api/v1/migrate/hermes/{scan,run}   → always hermes path
  *
  * Schema map (legacy → new):
  *
@@ -36,113 +48,189 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ServerDeps } from "../types.js";
-import { writeError, type Routes } from "./registry.js";
+import { rootLogger } from "../../core/logger/index.js";
+import type { ServerDeps, ServerOptions } from "../types.js";
+import { writeError, type Routes, type RouteContext } from "./registry.js";
 import type { TraceDTO, SkillDTO } from "../../agent-contract/dto.js";
 
-const LEGACY_DB_PATH = join(homedir(), ".openclaw", "memos-local", "memos.db");
+type LegacyAgent = "openclaw" | "hermes";
 
-export function registerMigrateRoutes(routes: Routes, deps: ServerDeps): void {
-  routes.set("GET /api/v1/migrate/openclaw/scan", async () => {
-    if (!existsSync(LEGACY_DB_PATH)) {
-      return { found: false, path: LEGACY_DB_PATH };
-    }
+const log = rootLogger.child({ channel: "server.migrate" });
+
+/**
+ * Per-agent on-disk layout of the legacy plugin's SQLite file.
+ *
+ * Note the `hermes` extra `memos-state` segment: the legacy hermes
+ * plugin nested its data under `~/.hermes/memos-state/...` while
+ * openclaw kept it directly under `~/.openclaw/memos-local/...`.
+ */
+function legacyDbPath(agent: LegacyAgent): string {
+  switch (agent) {
+    case "hermes":
+      return join(homedir(), ".hermes", "memos-state", "memos-local", "memos.db");
+    case "openclaw":
+    default:
+      return join(homedir(), ".openclaw", "memos-local", "memos.db");
+  }
+}
+
+function resolveAgent(options: ServerOptions | undefined): LegacyAgent {
+  const a = options?.agent;
+  if (a === "hermes") return "hermes";
+  return "openclaw";
+}
+
+export function registerMigrateRoutes(
+  routes: Routes,
+  deps: ServerDeps,
+  options: ServerOptions = {},
+): void {
+  const currentAgent = resolveAgent(options);
+
+  // ── Generic, agent-aware endpoints (preferred). Pick the source
+  //    DB based on the running agent; the viewer uses these. ──────────
+  routes.set("GET /api/v1/migrate/legacy/scan", async () => scanFor(currentAgent));
+  routes.set("POST /api/v1/migrate/legacy/run", async (ctx) =>
+    runFor(ctx, deps, currentAgent),
+  );
+
+  // ── Explicit per-agent aliases (back-compat + tests). ─────────────
+  routes.set("GET /api/v1/migrate/openclaw/scan", async () => scanFor("openclaw"));
+  routes.set("POST /api/v1/migrate/openclaw/run", async (ctx) =>
+    runFor(ctx, deps, "openclaw"),
+  );
+  routes.set("GET /api/v1/migrate/hermes/scan", async () => scanFor("hermes"));
+  routes.set("POST /api/v1/migrate/hermes/run", async (ctx) =>
+    runFor(ctx, deps, "hermes"),
+  );
+}
+
+interface ScanResult {
+  found: boolean;
+  path: string;
+  agent: LegacyAgent;
+  candidates?: { traces: number; skills: number; tasks: number };
+  error?: string;
+}
+
+async function scanFor(agent: LegacyAgent): Promise<ScanResult> {
+  const path = legacyDbPath(agent);
+  log.debug("scan", { agent, path });
+  if (!existsSync(path)) {
+    return { found: false, agent, path };
+  }
+  try {
+    const { default: Sqlite } = await import("better-sqlite3");
+    const db = new Sqlite(path, { readonly: true });
     try {
-      const { default: Sqlite } = await import("better-sqlite3");
-      const db = new Sqlite(LEGACY_DB_PATH, { readonly: true });
-      try {
-        const counts = countLegacyRows(db);
-        return { found: true, path: LEGACY_DB_PATH, candidates: counts };
-      } finally {
-        db.close();
-      }
-    } catch (err) {
-      return {
-        found: true,
-        path: LEGACY_DB_PATH,
-        candidates: { traces: 0, skills: 0, tasks: 0 },
-        error: (err as Error).message,
+      const counts = countLegacyRows(db);
+      return { found: true, agent, path, candidates: counts };
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    return {
+      found: true,
+      agent,
+      path,
+      candidates: { traces: 0, skills: 0, tasks: 0 },
+      error: (err as Error).message,
+    };
+  }
+}
+
+async function runFor(
+  ctx: RouteContext,
+  deps: ServerDeps,
+  agent: LegacyAgent,
+): Promise<unknown> {
+  const path = legacyDbPath(agent);
+  log.info("run.start", { agent, path });
+  if (!existsSync(path)) {
+    writeError(ctx, 404, "not_found", `legacy db not found at ${path}`);
+    return;
+  }
+  try {
+    const { default: Sqlite } = await import("better-sqlite3");
+    const db = new Sqlite(path, { readonly: true });
+    try {
+      const legacyChunks = readLegacyChunks(db);
+      const legacySkills = readLegacySkills(db);
+      const legacyTasks = readLegacyTasks(db);
+
+      // Group chunks by (session_key, turn_id) into turns so a
+      // user↔assistant pair becomes a single trace (matches the new
+      // model). Tools/system/other rows get their own trace with
+      // role-based text placement.
+      const traces: TraceDTO[] = buildTracesFromChunks(legacyChunks);
+      const skills: SkillDTO[] = legacySkills.map((s) => ({
+        id: s.id,
+        name: s.name || s.id,
+        status: legacySkillStatus(s.status),
+        invocationGuide: s.description ?? "",
+        // Imported skills don't carry decision guidance / evidence
+        // anchors — those live on the rows produced by the live
+        // crystallizer, not in legacy SQLite dumps.
+        decisionGuidance: { preference: [], antiPattern: [] },
+        evidenceAnchors: [],
+        eta: 0 as never,
+        support: 0,
+        gain: 0,
+        sourcePolicyIds: [],
+        sourceWorldModelIds: [],
+        createdAt: (Number(s.created_at) || Date.now()) as never,
+        updatedAt: (Number(s.updated_at) || Date.now()) as never,
+        version: 1,
+      }));
+
+      const bundle = {
+        version: 1 as const,
+        traces,
+        policies: [],
+        worldModels: [],
+        skills,
       };
+      const res = await deps.core.importBundle(bundle);
+      log.audit("run.done", {
+        agent,
+        path,
+        candidates: { traces: traces.length, skills: skills.length, tasks: legacyTasks.length },
+        imported: res.imported,
+        skipped: res.skipped,
+      });
+
+      return {
+        agent,
+        path,
+        imported: {
+          traces: Math.max(0, res.imported - skills.length),
+          // We can't tell which of `res.imported` came from which
+          // array with the current importBundle signature, so we
+          // surface totals separately:
+          totalImported: res.imported,
+          skills: skills.length,
+          tasks: 0,
+        },
+        skipped: {
+          total: res.skipped,
+          tasks: legacyTasks.length,
+          reason_tasks:
+            "tasks are now represented as episodes — legacy tasks rows were not imported (tracked as skipped)",
+        },
+        candidates: {
+          traces: traces.length,
+          skills: skills.length,
+          tasks: legacyTasks.length,
+        },
+      };
+    } finally {
+      db.close();
     }
-  });
-
-  routes.set("POST /api/v1/migrate/openclaw/run", async (ctx) => {
-    if (!existsSync(LEGACY_DB_PATH)) {
-      writeError(ctx, 404, "not_found", `legacy db not found at ${LEGACY_DB_PATH}`);
-      return;
-    }
-    try {
-      const { default: Sqlite } = await import("better-sqlite3");
-      const db = new Sqlite(LEGACY_DB_PATH, { readonly: true });
-      try {
-        const legacyChunks = readLegacyChunks(db);
-        const legacySkills = readLegacySkills(db);
-        const legacyTasks = readLegacyTasks(db);
-
-        // Group chunks by (session_key, turn_id) into turns so a
-        // user↔assistant pair becomes a single trace (matches the new
-        // model). Tools/system/other rows get their own trace with
-        // role-based text placement.
-        const traces: TraceDTO[] = buildTracesFromChunks(legacyChunks);
-        const skills: SkillDTO[] = legacySkills.map((s) => ({
-          id: s.id,
-          name: s.name || s.id,
-          status: legacySkillStatus(s.status),
-          invocationGuide: s.description ?? "",
-          // Imported skills don't carry decision guidance / evidence
-          // anchors — those live on the rows produced by the live
-          // crystallizer, not in legacy SQLite dumps.
-          decisionGuidance: { preference: [], antiPattern: [] },
-          evidenceAnchors: [],
-          eta: 0 as never,
-          support: 0,
-          gain: 0,
-          sourcePolicyIds: [],
-          sourceWorldModelIds: [],
-          createdAt: (Number(s.created_at) || Date.now()) as never,
-          updatedAt: (Number(s.updated_at) || Date.now()) as never,
-          version: 1,
-        }));
-
-        const bundle = {
-          version: 1 as const,
-          traces,
-          policies: [],
-          worldModels: [],
-          skills,
-        };
-        const res = await deps.core.importBundle(bundle);
-
-        return {
-          imported: {
-            traces: res.imported - skills.length < 0 ? 0 : Math.max(0, res.imported - skills.length),
-            // We can't tell which of `res.imported` came from which
-            // array with the current importBundle signature, so we
-            // surface totals separately:
-            totalImported: res.imported,
-            skills: skills.length,
-            tasks: 0,
-          },
-          skipped: {
-            total: res.skipped,
-            tasks: legacyTasks.length,
-            reason_tasks:
-              "tasks are now represented as episodes — legacy tasks rows were not imported (tracked as skipped)",
-          },
-          candidates: {
-            traces: traces.length,
-            skills: skills.length,
-            tasks: legacyTasks.length,
-          },
-        };
-      } finally {
-        db.close();
-      }
-    } catch (err) {
-      writeError(ctx, 500, "internal", (err as Error).message);
-      return;
-    }
-  });
+  } catch (err) {
+    log.error("run.failed", { agent, path, err });
+    writeError(ctx, 500, "internal", (err as Error).message);
+    return;
+  }
 }
 
 // ─── Legacy row shape helpers ─────────────────────────────────────────────

@@ -16,3 +16,4 @@ coverage/
 # Local notes (developer scratch)
 .notes/
 TODO.local.md
+AGENTS_*.md

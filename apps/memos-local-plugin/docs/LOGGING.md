@@ -82,7 +82,7 @@ The full canonical list lives in `core/logger/channels.ts`. Quick reference:
 | `storage`, `storage.migration`, `storage.repos`, `storage.vector` | `core/storage/` |
 | `embedding`, `embedding.*` | `core/embedding/` |
 | `llm`, `llm.*`      | `core/llm/`     |
-| `server`, `server.*` | `server/`     |
+| `server`, `server.*` (incl. `server.migrate`) | `server/`     |
 | `bridge`, `bridge.*` | `bridge/`     |
 | `adapter.openclaw`  | `adapters/openclaw/` |
 | `adapter.hermes`    | `adapters/hermes/` (Python forwards through bridge) |

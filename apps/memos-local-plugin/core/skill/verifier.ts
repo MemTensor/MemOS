@@ -2,16 +2,16 @@
  * V7 §2.5.3 — Consistency + integration verification for a freshly minted
  * skill.
  *
- * Two checks, both heuristic and deterministic — no LLM calls. The goal is
- * to catch obvious drafts that should never surface in Tier-1 retrieval
- * (e.g. the LLM invented a tool name not present in any evidence, or the
- * steps don't cover the originating sub-problem).
+ * Two checks, both deterministic — no LLM calls:
  *
- * 1. **Consistency coverage**: every non-empty step title / body token that
- *    looks like a tool / command identifier (`rg`, `git_diff`, `docker.ps`)
- *    must appear in at least one evidence trace's action text.
+ * 1. **Tool coverage**: every tool name declared in `draft.tools` must
+ *    appear in the evidence traces' structured `toolCalls`. Coverage is a
+ *    simple set-containment check — `draft.tools ⊆ evidenceTools`. This
+ *    catches the most common LLM hallucination: inventing tool/command
+ *    names that never appeared in any evidence trace.
+ *
  * 2. **Evidence resonance**: at least `minResonance` fraction of the
- *    evidence traces should share ≥ one token with the skill's summary or
+ *    evidence traces should share ≥ 2 tokens with the skill's summary or
  *    steps. Prevents a skill whose narrative contradicts the examples.
  *
  * The check returns a verdict; the caller (orchestrator) decides whether to
@@ -22,6 +22,7 @@
 import type { Logger } from "../logger/types.js";
 import type { TraceRow } from "../types.js";
 import type { SkillCrystallizationDraft } from "./types.js";
+import { extractToolNames } from "./tool-names.js";
 
 export interface VerifyInput {
   draft: SkillCrystallizationDraft;
@@ -59,23 +60,22 @@ export function verifyDraft(
     };
   }
 
-  const actionBlob = evidence
-    .flatMap((t) => [t.agentText, t.userText, t.reflection ?? ""])
-    .join("\n")
-    .toLowerCase();
-
-  const commandLike = collectCommandTokens(draft);
+  // --- Tool coverage (structured set comparison) ---
+  const evidenceTools = extractToolNames(evidence);
+  const draftTools = (draft.tools ?? []).map((t) => t.toLowerCase());
   const matched: string[] = [];
   const unmapped: string[] = [];
-  for (const tok of commandLike) {
-    if (actionBlob.includes(tok)) matched.push(tok);
+  for (const tok of draftTools) {
+    if (evidenceTools.has(tok)) matched.push(tok);
     else unmapped.push(tok);
   }
-  const coverage = commandLike.length === 0 ? 1 : matched.length / commandLike.length;
+  const coverage =
+    draftTools.length === 0 ? 1 : matched.length / draftTools.length;
 
+  // --- Evidence resonance (unchanged) ---
   const resonance = computeResonance(draft, evidence);
 
-  if (coverage < 0.5 && commandLike.length > 0) {
+  if (coverage < 0.5 && draftTools.length > 0) {
     deps.log.warn("skill.verify.fail", { reason: "coverage-low", coverage });
     return {
       ok: false,
@@ -100,50 +100,9 @@ export function verifyDraft(
   return { ok: true, coverage, resonance, unmappedTokens: unmapped };
 }
 
-function collectCommandTokens(draft: SkillCrystallizationDraft): string[] {
-  const fields = [
-    ...draft.steps.flatMap((s) => [s.title, s.body]),
-    ...draft.examples.flatMap((e) => [e.input, e.expected]),
-  ].join(" ");
-  const matches =
-    fields.match(/`([^`]+)`|([A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9_.]+|[A-Za-z0-9_./-]{3,})/g) ?? [];
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const raw of matches) {
-    const rawTok = raw.replace(/`/g, "").trim();
-    const tok = rawTok.toLowerCase();
-    if (tok.length < 3) continue;
-    if (STOPWORDS.has(tok)) continue;
-    if (!isCoverageToken(rawTok)) continue;
-    if (!seen.has(tok)) {
-      seen.add(tok);
-      out.push(tok);
-    }
-  }
-  return out;
-}
-
-function isCoverageToken(raw: string): boolean {
-  const tok = raw.trim();
-  const lower = tok.toLowerCase();
-  if (tok.length < 3) return false;
-  if (STOPWORDS.has(lower)) return false;
-
-  // Coverage is meant to catch invented APIs / tools / paths, not every
-  // natural-language word in the generated skill prose.
-  if (
-    tok.includes(".") ||
-    tok.includes("/") ||
-    tok.includes("_") ||
-    tok.includes("-") ||
-    /[0-9]/.test(tok) ||
-    /[A-Z]/.test(tok)
-  ) {
-    return true;
-  }
-
-  return ACTION_TOKENS.has(lower);
-}
+// ---------------------------------------------------------------------------
+// Resonance
+// ---------------------------------------------------------------------------
 
 function computeResonance(
   draft: SkillCrystallizationDraft,
@@ -170,18 +129,12 @@ function computeResonance(
 
 function tokensOf(s: string): Set<string> {
   const out = new Set<string>();
-  // ASCII identifier-ish tokens (length ≥ 4 incl. leading char).
   const asciiMatches = s.match(/[a-z0-9_][a-z0-9_./-]{3,}/g) ?? [];
   for (const m of asciiMatches) {
     const tok = m.toLowerCase();
-    if (STOPWORDS.has(tok)) continue;
+    if (RESONANCE_STOPWORDS.has(tok)) continue;
     out.add(tok);
   }
-  // CJK support: Chinese / Japanese / Korean text isn't whitespace-separated,
-  // so the ASCII-only tokenizer above produces an empty set on Chinese
-  // evidence and the resonance check rejects every skill (the famous
-  // "resonance=0.00<0.5" failure). Add character bigrams from any CJK runs
-  // to give the verifier a reasonable signal in non-Latin contexts.
   const cjkRuns = s.match(/[\u4e00-\u9fff\u3040-\u30ff\u3400-\u4dbf]{2,}/g) ?? [];
   for (const run of cjkRuns) {
     for (let i = 0; i + 1 < run.length; i++) {
@@ -191,38 +144,7 @@ function tokensOf(s: string): Set<string> {
   return out;
 }
 
-const ACTION_TOKENS = new Set([
-  "apk",
-  "build",
-  "cat",
-  "commit",
-  "curl",
-  "export",
-  "find",
-  "grep",
-  "import",
-  "install",
-  "load",
-  "ls",
-  "npm",
-  "parse",
-  "pip",
-  "pnpm",
-  "python",
-  "read",
-  "retry",
-  "rg",
-  "run",
-  "save",
-  "sqlite3",
-  "test",
-  "tree",
-  "validate",
-  "verify",
-  "write",
-]);
-
-const STOPWORDS = new Set([
+const RESONANCE_STOPWORDS = new Set([
   "the", "and", "for", "with", "that", "this", "from", "will", "then",
   "into", "when", "what", "where", "your", "user", "agent", "null", "true",
   "false", "none", "let", "new", "old", "use", "used", "have", "has", "its",
