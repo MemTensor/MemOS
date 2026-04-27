@@ -35,7 +35,7 @@
     "docs"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "build:web": "vite build --config vite.config.ts",
     "build:site": "cd site && vite build",
     "build:all": "npm run build && npm run build:web && npm run build:site",

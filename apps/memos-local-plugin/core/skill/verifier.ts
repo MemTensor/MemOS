@@ -105,19 +105,44 @@ function collectCommandTokens(draft: SkillCrystallizationDraft): string[] {
     ...draft.steps.flatMap((s) => [s.title, s.body]),
     ...draft.examples.flatMap((e) => [e.input, e.expected]),
   ].join(" ");
-  const matches = fields.match(/`([^`]+)`|([a-z][a-z0-9_]{1,}\.[a-z][a-z0-9_]+|[a-z_]{3,}\b)/gi) ?? [];
+  const matches =
+    fields.match(/`([^`]+)`|([A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9_.]+|[A-Za-z0-9_./-]{3,})/g) ?? [];
   const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of matches) {
-    const tok = raw.replace(/`/g, "").toLowerCase().trim();
+    const rawTok = raw.replace(/`/g, "").trim();
+    const tok = rawTok.toLowerCase();
     if (tok.length < 3) continue;
     if (STOPWORDS.has(tok)) continue;
+    if (!isCoverageToken(rawTok)) continue;
     if (!seen.has(tok)) {
       seen.add(tok);
       out.push(tok);
     }
   }
   return out;
+}
+
+function isCoverageToken(raw: string): boolean {
+  const tok = raw.trim();
+  const lower = tok.toLowerCase();
+  if (tok.length < 3) return false;
+  if (STOPWORDS.has(lower)) return false;
+
+  // Coverage is meant to catch invented APIs / tools / paths, not every
+  // natural-language word in the generated skill prose.
+  if (
+    tok.includes(".") ||
+    tok.includes("/") ||
+    tok.includes("_") ||
+    tok.includes("-") ||
+    /[0-9]/.test(tok) ||
+    /[A-Z]/.test(tok)
+  ) {
+    return true;
+  }
+
+  return ACTION_TOKENS.has(lower);
 }
 
 function computeResonance(
@@ -165,6 +190,37 @@ function tokensOf(s: string): Set<string> {
   }
   return out;
 }
+
+const ACTION_TOKENS = new Set([
+  "apk",
+  "build",
+  "cat",
+  "commit",
+  "curl",
+  "export",
+  "find",
+  "grep",
+  "import",
+  "install",
+  "load",
+  "ls",
+  "npm",
+  "parse",
+  "pip",
+  "pnpm",
+  "python",
+  "read",
+  "retry",
+  "rg",
+  "run",
+  "save",
+  "sqlite3",
+  "test",
+  "tree",
+  "validate",
+  "verify",
+  "write",
+]);
 
 const STOPWORDS = new Set([
   "the", "and", "for", "with", "that", "this", "from", "will", "then",
