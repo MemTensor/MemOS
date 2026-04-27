@@ -123,6 +123,7 @@ export class ViewerServer {
   private readonly log: Logger;
   private readonly dataDir: string;
   private readonly authFile: string;
+  private readonly resetTokenFile: string;
   private readonly auth: AuthState;
   private readonly ctx?: PluginContext;
   private readonly cookieName: string;
@@ -166,11 +167,12 @@ export class ViewerServer {
     this.dataDir = opts.dataDir;
     this.ctx = opts.ctx;
     this.authFile = path.join(opts.dataDir, "viewer-auth.json");
+    this.resetTokenFile = path.join(opts.dataDir, "viewer-reset-token");
     this.auth = { passwordHash: null, sessions: new Map() };
     this.cookieName = `memos_token_${opts.port}`;
     this.defaultHubPort = opts.defaultHubPort ?? 18800;
     this.branding = opts.branding;
-    this.resetToken = crypto.randomBytes(16).toString("hex");
+    this.resetToken = this.loadOrCreateResetToken();
     this.loadAuth();
   }
 
@@ -256,6 +258,31 @@ export class ViewerServer {
     } catch (e) {
       this.log.warn(`Failed to save viewer auth: ${e}`);
     }
+  }
+
+  private loadOrCreateResetToken(): string {
+    try {
+      if (fs.existsSync(this.resetTokenFile)) {
+        const token = fs.readFileSync(this.resetTokenFile, "utf-8").trim().toLowerCase();
+        if (/^[a-f0-9]{32}$/.test(token)) {
+          return token;
+        }
+      }
+    } catch {
+      this.log.warn("Failed to load viewer reset token file, generating a new token");
+    }
+    return this.rotateResetToken();
+  }
+
+  private rotateResetToken(): string {
+    const token = crypto.randomBytes(16).toString("hex");
+    try {
+      fs.mkdirSync(path.dirname(this.resetTokenFile), { recursive: true });
+      fs.writeFileSync(this.resetTokenFile, `${token}\n`, { mode: 0o600 });
+    } catch (e) {
+      this.log.warn(`Failed to save viewer reset token: ${e}`);
+    }
+    return token;
   }
 
   private hashPassword(pw: string): string {
@@ -490,7 +517,7 @@ export class ViewerServer {
     this.readBody(req, (body) => {
       try {
         const { token, newPassword } = JSON.parse(body);
-        if (token !== this.resetToken) {
+        if (String(token ?? "").trim().toLowerCase() !== this.resetToken) {
           res.writeHead(403, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Invalid reset token" }));
           return;
@@ -503,7 +530,7 @@ export class ViewerServer {
         this.auth.passwordHash = this.hashPassword(newPassword);
         this.auth.sessions.clear();
         this.saveAuth();
-        this.resetToken = crypto.randomBytes(16).toString("hex");
+        this.resetToken = this.rotateResetToken();
         this.log.info(`memos-local: password has been reset. New reset token: ${this.resetToken}`);
         const sessionToken = this.createSession();
         res.writeHead(200, {

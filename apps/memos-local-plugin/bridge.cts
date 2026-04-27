@@ -361,6 +361,8 @@ async function runDaemon(tcpPort: number, viewerPort: number): Promise<void> {
     viewer = new ViewerServer({ store, embedder, port: viewerPort, log, dataDir: stateDir, ctx, branding: configOpts.branding });
     viewerUrl = await viewer.start();
     log.info(`Viewer started at ${viewerUrl}`);
+    log.info(`memos-local: password reset token: ${viewer.getResetToken()}`);
+    log.info(`memos-local: reset token file: ${path.join(stateDir, "viewer-reset-token")}`);
     const httpSrv = (viewer as any).server;
     if (httpSrv) {
       httpSrv.on("request", (req: any) => {
