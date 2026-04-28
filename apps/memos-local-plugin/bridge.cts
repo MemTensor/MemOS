@@ -61,11 +61,14 @@ async function main(): Promise<void> {
   });
   await core.init();
 
-  // Default transport: stdio. In daemon mode, also start TCP if a port was given.
+  // Default transport: stdio. Start TCP only in daemon mode when a port was given.
   const stdio = startStdioServer({ core });
-
   let tcpServer: Awaited<ReturnType<typeof startTcpServer>> | null = null;
-  if (args.tcpPort !== undefined) {
+  if (args.tcpPort !== undefined && !args.daemon) {
+    process.stderr.write(
+      "bridge: ignoring --tcp because TCP mode requires --daemon\n",
+    );
+  } else if (args.tcpPort !== undefined) {
     if (!Number.isFinite(args.tcpPort) || args.tcpPort < 1 || args.tcpPort > 65535) {
       process.stderr.write(
         `bridge: invalid --tcp port value: ${String(args.tcpPort)} (must be 1–65535)\n`,
@@ -83,6 +86,10 @@ async function main(): Promise<void> {
         process.stderr.write(
           `bridge: tcp server failed to start: ${(err as Error).message}\n`,
         );
+        if (tcpServer) {
+          await tcpServer.close().catch(() => {});
+          tcpServer = null;
+        }
       }
     }
   }

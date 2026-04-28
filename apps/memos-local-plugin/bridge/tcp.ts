@@ -178,18 +178,21 @@ export function startTcpServer(options: TcpServerOptions): TcpServerHandle {
   });
 
   // Wrap listen in a promise so callers can catch EADDRINUSE etc.
+  let isListening = false;
   const listenPromise = new Promise<void>((resolve, reject) => {
-    server.on("error", reject);
+    server.on("error", (err) => {
+      if (!isListening) {
+        reject(err);
+        return;
+      }
+      process.stderr.write(`bridge.tcp: server error: ${err.message}\n`);
+    });
     server.listen(port, host, () => {
+      isListening = true;
       process.stderr.write(`bridge.tcp: listening on ${host}:${port}\n`);
       resolve();
     });
   });
-  // Once listening, switch error handler to non-fatal logging.
-  listenPromise.then(
-    () => server.removeAllListeners("error"),
-    () => {}, // rejection handled by caller
-  );
 
   return {
     get url() {

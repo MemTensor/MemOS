@@ -62,7 +62,7 @@ _PLUGIN_DIR = Path(__file__).resolve().parent
 if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
-from bridge_client import MemosBridgeClient  # noqa: E402
+from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
 from daemon_manager import ensure_bridge_running, shutdown_bridge  # noqa: E402
 
 
