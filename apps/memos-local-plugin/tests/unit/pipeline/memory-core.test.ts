@@ -188,7 +188,180 @@ describe("MemoryCore façade", () => {
   });
 });
 
-describe("bootstrapMemoryCore", () => {
+describe("init() orphan episode handling", () => {
+    it("preserves open episodes for sessions that were not explicitly closed", async () => {
+      pipeline = createPipeline(buildDeps(db!));
+      core = createMemoryCore(
+        pipeline,
+        resolveHome("openclaw", "/tmp/memos-mc-test"),
+        "test",
+      );
+      // Simulate a session still active on disk — no meta.closedAt.
+      db!.repos.sessions.upsert({
+        id: "s-orphan-keep",
+        agent: "openclaw",
+        startedAt: 1_700_000_000_000,
+        lastSeenAt: 1_700_000_100_000,
+        meta: {},
+      });
+      db!.repos.episodes.insert({
+        id: "ep-orphan-keep",
+        sessionId: "s-orphan-keep",
+        startedAt: 1_700_000_000_000,
+        endedAt: null,
+        traceIds: [],
+        rTask: null,
+        status: "open",
+        meta: {},
+      });
+
+      await core.init();
+
+      const ep = db!.repos.episodes.getById("ep-orphan-keep");
+      expect(ep).not.toBeNull();
+      expect(ep!.status).toBe("open");
+    });
+
+    it("closes open episodes for sessions that were explicitly closed", async () => {
+      pipeline = createPipeline(buildDeps(db!));
+      core = createMemoryCore(
+        pipeline,
+        resolveHome("openclaw", "/tmp/memos-mc-test"),
+        "test",
+      );
+      db!.repos.sessions.upsert({
+        id: "s-orphan-close",
+        agent: "openclaw",
+        startedAt: 1_700_000_000_000,
+        lastSeenAt: 1_700_000_200_000,
+        meta: { closedAt: 1_700_000_200_000 },
+      });
+      db!.repos.episodes.insert({
+        id: "ep-orphan-close",
+        sessionId: "s-orphan-close",
+        startedAt: 1_700_000_000_000,
+        endedAt: null,
+        traceIds: [],
+        rTask: null,
+        status: "open",
+        meta: {},
+      });
+
+      await core.init();
+
+      const ep = db!.repos.episodes.getById("ep-orphan-close");
+      expect(ep).not.toBeNull();
+      expect(ep!.status).toBe("closed");
+    });
+
+    it("closes open episodes for sessions that no longer exist", async () => {
+      pipeline = createPipeline(buildDeps(db!));
+      core = createMemoryCore(
+        pipeline,
+        resolveHome("openclaw", "/tmp/memos-mc-test"),
+        "test",
+      );
+      // FK requires the session to exist first; we then delete it via
+      // raw SQL to simulate a session row that was removed (e.g. manual
+      // DB cleanup), leaving an orphan episode behind.
+      db!.repos.sessions.upsert({
+        id: "s-gone",
+        agent: "openclaw",
+        startedAt: 1_700_000_000_000,
+        lastSeenAt: 1_700_000_000_000,
+        meta: {},
+      });
+      db!.repos.episodes.insert({
+        id: "ep-no-session",
+        sessionId: "s-gone",
+        startedAt: 1_700_000_000_000,
+        endedAt: null,
+        traceIds: [],
+        rTask: null,
+        status: "open",
+        meta: {},
+      });
+      // Temporarily disable FK checks so we can delete the session
+      // while keeping the orphan episode for the test.
+      db!.db.exec("PRAGMA foreign_keys = OFF; DELETE FROM sessions WHERE id='s-gone'; PRAGMA foreign_keys = ON;");
+
+      await core.init();
+
+      const ep = db!.repos.episodes.getById("ep-no-session");
+      expect(ep).not.toBeNull();
+      expect(ep!.status).toBe("closed");
+    });
+  });
+
+  describe("deleteEpisode / deleteEpisodes", () => {
+    it("deletes a closed episode and returns deleted: true", async () => {
+      pipeline = createPipeline(buildDeps(db!));
+      core = createMemoryCore(
+        pipeline,
+        resolveHome("openclaw", "/tmp/memos-mc-test"),
+        "test",
+      );
+      await core.init();
+      const sid = await core.openSession({ agent: "openclaw" });
+      const eid = await core.openEpisode({ sessionId: sid });
+      await core.closeEpisode(eid);
+
+      const result = await core.deleteEpisode(eid);
+      expect(result.deleted).toBe(true);
+      expect(db!.repos.episodes.getById(eid)).toBeNull();
+    });
+
+    it("returns deleted: false for a missing episode", async () => {
+      pipeline = createPipeline(buildDeps(db!));
+      core = createMemoryCore(
+        pipeline,
+        resolveHome("openclaw", "/tmp/memos-mc-test"),
+        "test",
+      );
+      await core.init();
+
+      const result = await core.deleteEpisode("ep-does-not-exist");
+      expect(result.deleted).toBe(false);
+    });
+
+    it("throws conflict when deleting an open episode", async () => {
+      pipeline = createPipeline(buildDeps(db!));
+      core = createMemoryCore(
+        pipeline,
+        resolveHome("openclaw", "/tmp/memos-mc-test"),
+        "test",
+      );
+      await core.init();
+      const sid = await core.openSession({ agent: "openclaw" });
+      const eid = await core.openEpisode({ sessionId: sid });
+
+      await expect(core.deleteEpisode(eid)).rejects.toMatchObject({
+        code: "conflict",
+      });
+    });
+
+    it("deleteEpisodes bulk-deletes multiple closed episodes", async () => {
+      pipeline = createPipeline(buildDeps(db!));
+      core = createMemoryCore(
+        pipeline,
+        resolveHome("openclaw", "/tmp/memos-mc-test"),
+        "test",
+      );
+      await core.init();
+      const sid = await core.openSession({ agent: "openclaw" });
+      const e1 = await core.openEpisode({ sessionId: sid });
+      const e2 = await core.openEpisode({ sessionId: sid });
+      await core.closeEpisode(e1);
+      await core.closeEpisode(e2);
+
+      const result = await core.deleteEpisodes([e1, e2]);
+      expect(result.deleted).toBe(2);
+      expect(db!.repos.episodes.getById(e1)).toBeNull();
+      expect(db!.repos.episodes.getById(e2)).toBeNull();
+    });
+  });
+
+  describe("bootstrapMemoryCore", () => {
   let home: TmpHomeContext | null = null;
 
   afterEach(async () => {
