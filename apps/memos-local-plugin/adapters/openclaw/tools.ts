@@ -29,7 +29,8 @@ import type {
 
 export interface ToolsOptions {
   agent: AgentKind;
-  core: MemoryCore;
+  core?: MemoryCore;
+  getCore?: () => MemoryCore | null | Promise<MemoryCore | null>;
   log: HostLogger;
   /** Cap on how many characters we return per snippet. */
   maxBodyChars?: number;
@@ -108,6 +109,14 @@ function sessionFromCtx(ctx: OpenClawPluginToolContext | undefined): string | un
   return bridgeSessionId(agentId, sessionKey);
 }
 
+async function resolveCore(opts: ToolsOptions): Promise<MemoryCore> {
+  const core = opts.core ?? (await opts.getCore?.());
+  if (!core) {
+    throw new Error("MemOS Local runtime is not ready yet");
+  }
+  return core;
+}
+
 // ─── Registration ──────────────────────────────────────────────────────────
 
 export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions): void {
@@ -125,8 +134,9 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
       parameters: MemorySearchParams,
       async execute(_toolCallId: string, params: MemorySearchParamsT) {
         const started = Date.now();
+        const core = await resolveCore(opts);
         const sessionId = params.sessionScope ? sessionFromCtx(ctx) : undefined;
-        const result = await opts.core.searchMemory({
+        const result = await core.searchMemory({
           agent: opts.agent,
           sessionId: sessionId as never,
           query: params.query,
@@ -161,9 +171,10 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         '"policy", or "world_model".',
       parameters: MemoryGetParams,
       async execute(_toolCallId: string, params: MemoryGetParamsT) {
+        const core = await resolveCore(opts);
         const kind = params.kind ?? "trace";
         if (kind === "trace") {
-          const trace = await opts.core.getTrace(params.id as TraceId);
+          const trace = await core.getTrace(params.id as TraceId);
           if (!trace) return { found: false, kind, id: params.id, body: "", meta: {} };
           return {
             found: true,
@@ -185,7 +196,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
           };
         }
         if (kind === "policy") {
-          const policy = await opts.core.getPolicy(params.id);
+          const policy = await core.getPolicy(params.id);
           if (!policy) return { found: false, kind, id: params.id, body: "", meta: {} };
           return {
             found: true,
@@ -202,7 +213,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
             },
           };
         }
-        const wm = await opts.core.getWorldModel(params.id);
+        const wm = await core.getWorldModel(params.id);
         if (!wm) return { found: false, kind, id: params.id, body: "", meta: {} };
         return {
           found: true,
@@ -226,7 +237,8 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         "conversation flow and debugging.",
       parameters: MemoryTimelineParams,
       async execute(_toolCallId: string, params: MemoryTimelineParamsT) {
-        const traces = await opts.core.timeline({ episodeId: params.episodeId as never });
+        const core = await resolveCore(opts);
+        const traces = await core.timeline({ episodeId: params.episodeId as never });
         const limited = traces.slice(0, params.limit ?? 20);
         return {
           episodeId: params.episodeId,
@@ -253,7 +265,8 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         "List callable skills the agent can invoke. Filter by status (candidate | active | archived).",
       parameters: SkillListParams,
       async execute(_toolCallId: string, params: SkillListParamsT) {
-        const skills = await opts.core.listSkills({
+        const core = await resolveCore(opts);
+        const skills = await core.listSkills({
           status: params.status,
           limit: params.limit,
         });
@@ -299,8 +312,9 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         // directly. Avoids paying for an LLM filter pass when the
         // agent just wants a quick "what do we know about here?"
         // dump.
+        const core = await resolveCore(opts);
         if (!query) {
-          const rows = await opts.core.listWorldModels({ limit: cap, offset: 0 });
+          const rows = await core.listWorldModels({ limit: cap, offset: 0 });
           return {
             worldModels: rows.map((w) => ({
               id: w.id,
@@ -314,7 +328,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         }
         // With a query, go through `searchMemory` so tag filters +
         // cosine ranking apply, then keep only the tier-3 hits.
-        const res = await opts.core.searchMemory({
+        const res = await core.searchMemory({
           agent: opts.agent,
           query,
           topK: { tier1: 0, tier2: 0, tier3: cap },
@@ -343,7 +357,8 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
       description: "Return the full invocation guide for a crystallized skill.",
       parameters: SkillGetParams,
       async execute(_toolCallId: string, params: SkillGetParamsT) {
-        const skill = await opts.core.getSkill(params.id as SkillId);
+        const core = await resolveCore(opts);
+        const skill = await core.getSkill(params.id as SkillId);
         if (!skill) return { found: false, skill: null };
         return {
           found: true,
