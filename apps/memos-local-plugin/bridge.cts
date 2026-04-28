@@ -120,7 +120,6 @@ async function main(): Promise<void> {
       `bridge: viewer failed to start: ${(err as Error).message}\n`,
     );
   }
-  let tcpServer: Awaited<ReturnType<typeof startTcpServer>> | null = null;
   let shuttingDown = false;
 
   const shutdown = async (sig: string) => {
