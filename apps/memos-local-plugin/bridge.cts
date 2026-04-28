@@ -62,7 +62,7 @@ async function main(): Promise<void> {
     pathToEsmUrl(path.resolve(__dirname, "server/http.ts"))
   )) as typeof import("./server/http.js");
 
-  const pkgVersion = "2.0.0-alpha.1";
+  const pkgVersion = require("./package.json").version;
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
     pkgVersion,

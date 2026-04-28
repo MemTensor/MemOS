@@ -42,7 +42,9 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
       setTimeout(() => process.exit(0), 300);
       return { ok: true, restarting: true };
     }
-    // Hermes / other hosts: no-op — the viewer shows a manual-restart toast.
-    return { ok: true, restarting: false, note: "config persisted; restart the agent process to apply" };
+    // Hermes: the bridge IS the current process. Exit so that the next
+    // `hermes chat` invocation spawns a fresh bridge with updated config.
+    setTimeout(() => process.exit(0), 300);
+    return { ok: true, restarting: true };
   });
 }

@@ -80,19 +80,22 @@ async function pollHealthUntilUp(maxAttempts = 60): Promise<boolean> {
 }
 
 /**
- * Config saved. For OpenClaw: auto-restart with spinner overlay.
- * For Hermes/others: show a dismissible toast.
+ * Config saved. Trigger a restart for any agent — the backend now
+ * exits on POST /api/v1/admin/restart for both OpenClaw and Hermes.
+ * OpenClaw: launchd respawns automatically → poll until up → reload.
+ * Hermes: bridge exits → viewer goes down → show toast telling user
+ * to run `hermes chat` again.
  */
 export async function triggerRestart(
   _opts: TriggerRestartOptions = {},
 ): Promise<void> {
+  restartState.value = { phase: "restarting" };
+  try {
+    await api.post("/api/v1/admin/restart");
+  } catch {
+    // Server might already be going down
+  }
   if (isOpenClaw()) {
-    restartState.value = { phase: "restarting" };
-    try {
-      await api.post("/api/v1/admin/restart");
-    } catch {
-      // Server might already be going down
-    }
     const ok = await pollHealthUntilUp(60);
     if (ok) {
       window.location.href =
@@ -101,7 +104,7 @@ export async function triggerRestart(
       restartState.value = { phase: "restartFailed" };
     }
   } else {
-    restartState.value = { phase: "saved" };
+    restartState.value = { phase: "saved", message: "restartHermes" };
     scheduleDismiss();
   }
 }

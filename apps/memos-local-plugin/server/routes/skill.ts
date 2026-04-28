@@ -14,14 +14,20 @@ import { parseJson, writeError, type Routes } from "./registry.js";
 export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
   routes.set("GET /api/v1/skills", async (ctx) => {
     const status = (ctx.url.searchParams.get("status") as SkillDTO["status"] | null) ?? undefined;
+    const q = (ctx.url.searchParams.get("q") || "").trim().toLowerCase();
     // Viewer needs prev/next pagination — ask for one extra page so we
     // can tell the client whether there's more without a count query.
     const pageSize = limitOrUndefined(ctx.url.searchParams.get("limit")) ?? 50;
     const offset = Math.max(0, Number(ctx.url.searchParams.get("offset") ?? 0) || 0);
-    const all = await deps.core.listSkills({ status, limit: pageSize + offset + 1 });
+    let all = await deps.core.listSkills({ status, limit: q ? 5000 : pageSize + offset + 1 });
+    if (q) {
+      all = all.filter(
+        (s) => s.name.toLowerCase().includes(q) || s.invocationGuide.toLowerCase().includes(q),
+      );
+    }
     const page = all.slice(offset, offset + pageSize);
     const hasMore = all.length > offset + pageSize;
-    const total = await deps.core.countSkills({ status });
+    const total = q ? all.length : await deps.core.countSkills({ status });
     return {
       skills: page,
       limit: pageSize,
