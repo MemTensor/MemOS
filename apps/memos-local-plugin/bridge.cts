@@ -66,17 +66,23 @@ async function main(): Promise<void> {
 
   let tcpServer: Awaited<ReturnType<typeof startTcpServer>> | null = null;
   if (args.tcpPort !== undefined) {
-    try {
-      tcpServer = startTcpServer({
-        core,
-        host: "127.0.0.1",
-        port: args.tcpPort,
-      });
-      process.stderr.write(`bridge: tcp → ${tcpServer.url}\n`);
-    } catch (err) {
+    if (!Number.isFinite(args.tcpPort) || args.tcpPort < 1 || args.tcpPort > 65535) {
       process.stderr.write(
-        `bridge: tcp server failed to start: ${(err as Error).message}\n`,
+        `bridge: invalid --tcp port value: ${String(args.tcpPort)} (must be 1–65535)\n`,
       );
+    } else {
+      try {
+        tcpServer = startTcpServer({
+          core,
+          host: "127.0.0.1",
+          port: args.tcpPort,
+        });
+        process.stderr.write(`bridge: tcp → ${tcpServer.url}\n`);
+      } catch (err) {
+        process.stderr.write(
+          `bridge: tcp server failed to start: ${(err as Error).message}\n`,
+        );
+      }
     }
   }
 

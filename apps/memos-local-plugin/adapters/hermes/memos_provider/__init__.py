@@ -142,7 +142,13 @@ class MemTensorProvider(MemoryProvider):
             logger.warning("MemOS: failed to start bridge — %s", err)
             return
         try:
-            self._bridge = MemosBridgeClient(tcp_host="127.0.0.1", tcp_port=18911)
+            # Try TCP mode first (connect to daemon bridge).
+            # Falls back to stdio (spawn subprocess) if daemon isn't running.
+            try:
+                self._bridge = MemosBridgeClient(tcp_host="127.0.0.1", tcp_port=18911)
+            except BridgeError:
+                logger.info("MemOS: TCP daemon not available, falling back to stdio bridge")
+                self._bridge = MemosBridgeClient()
             resp = self._bridge.request(
                 "session.open",
                 {
@@ -455,13 +461,14 @@ class MemTensorProvider(MemoryProvider):
         if pending:
             with contextlib.suppress(Exception):
                 self._turn_end(*pending)
-        # In TCP mode the daemon bridge owns the session — don't close it.
-        # The pipeline will finalize the episode naturally on the daemon side.
-        if not self._bridge._tcp_mode:
-            with contextlib.suppress(Exception):
-                self._bridge.request("episode.close", {"episodeId": self._episode_id})
-            with contextlib.suppress(Exception):
-                self._bridge.request("session.close", {"sessionId": self._session_id})
+        # Close the episode and session so the core stamps closure metadata
+        # (e.g. session.meta.closedAt). In TCP mode this ensures the daemon
+        # can distinguish "normal shutdown" from "abrupt disconnect" on
+        # restart, preventing orphan retention.
+        with contextlib.suppress(Exception):
+            self._bridge.request("episode.close", {"episodeId": self._episode_id})
+        with contextlib.suppress(Exception):
+            self._bridge.request("session.close", {"sessionId": self._session_id})
 
     def shutdown(self) -> None:  # type: ignore[override]
         if self._prefetch_thread and self._prefetch_thread.is_alive():

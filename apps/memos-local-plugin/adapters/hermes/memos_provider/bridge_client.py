@@ -61,7 +61,9 @@ class _SocketTransport:
         self._rfile = self._sock.makefile("r", buffering=1, encoding="utf-8")
 
     def write_line(self, text: str) -> None:
-        self._sock.sendall((text + "\n").encode("utf-8"))
+        # Avoid double newline: callers may or may not include \n.
+        payload = text if text.endswith("\n") else text + "\n"
+        self._sock.sendall(payload.encode("utf-8"))
 
     def read_line(self) -> str | None:
         line = self._rfile.readline()

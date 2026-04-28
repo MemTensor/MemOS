@@ -52,7 +52,9 @@ def _read_pid() -> int | None:
 
 
 def _write_pid(pid: int) -> None:
-    _pid_path().write_text(str(pid))
+    pid_path = _pid_path()
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(pid))
 
 
 def _clean_pid() -> None:
