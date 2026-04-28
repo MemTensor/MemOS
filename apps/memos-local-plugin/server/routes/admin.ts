@@ -33,8 +33,12 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
       try { await fs.unlink(dbFile + suffix); } catch { /* may not exist */ }
     }
     const agent = options.agent ?? "unknown";
-    if (agent !== "openclaw") {
-      // Hermes: spawn replacement daemon after clearing data
+    if (agent === "openclaw") {
+      setTimeout(() => process.exit(0), 300);
+      return { ok: true, restarting: true };
+    }
+    if (options.daemon) {
+      // Daemon mode: spawn replacement then exit.
       const nodePath = await import("node:path");
       const { fileURLToPath } = await import("node:url");
       const { spawn } = await import("node:child_process");
@@ -49,9 +53,13 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
         cwd: pluginRoot,
       });
       child.unref();
+      setTimeout(() => process.exit(0), 200);
+      return { ok: true, restarting: true };
     }
-    setTimeout(() => process.exit(0), 200);
-    return { ok: true, restarting: true };
+    // Stdio mode: DB is cleared but we re-init in-place to keep
+    // the hermes connection alive. Core will recreate DB on next write.
+    await deps.core.init();
+    return { ok: true, restarting: false, configSaved: true };
   });
 
   routes.set("POST /api/v1/admin/restart", async (_ctx) => {
@@ -60,10 +68,17 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
       setTimeout(() => process.exit(0), 300);
       return { ok: true, restarting: true };
     }
-    // Hermes (and others): exit first (releasing the port), then a
-    // small wrapper script spawns the new daemon. We use a shell
-    // one-liner that sleeps briefly (for port release) then starts
-    // the new daemon.
+    // Hermes: behavior depends on whether we're running as a standalone
+    // daemon or as a stdio bridge attached to a live hermes chat session.
+    if (!options.daemon) {
+      // Stdio mode: hermes chat is actively connected. DON'T exit —
+      // that would break the memory capture pipeline. Config is already
+      // saved to disk; health() reads model names from disk anyway.
+      // Changes requiring a process restart (model client swap) will
+      // take effect on the next `hermes chat` session.
+      return { ok: true, restarting: false, configSaved: true };
+    }
+    // Daemon mode: no stdio connection — safe to restart.
     const nodePath = await import("node:path");
     const { fileURLToPath } = await import("node:url");
     const { spawn } = await import("node:child_process");

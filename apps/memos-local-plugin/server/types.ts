@@ -44,6 +44,11 @@ export interface ServerOptions {
    * installed on disk.
    */
   agent?: "openclaw" | "hermes";
+  /**
+   * True when running in --daemon mode (standalone viewer, no stdio).
+   * Controls whether admin/restart actually exits or just acknowledges.
+   */
+  daemon?: boolean;
 }
 
 export interface ServerHandle {

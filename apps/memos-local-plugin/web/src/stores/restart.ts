@@ -80,18 +80,30 @@ async function quickPollUp(maxAttempts = 10): Promise<boolean> {
 }
 
 /**
- * Config saved. Trigger a restart for any agent. The backend spawns a
- * fresh daemon bridge before exiting, so the viewer port comes back up
- * automatically for both OpenClaw (launchd) and Hermes (self-respawn).
+ * Config saved. Trigger a restart.
+ *
+ * - OpenClaw: always restarts (launchd respawns).
+ * - Hermes daemon mode: restarts (spawn new daemon, exit old).
+ * - Hermes stdio mode (hermes chat running): does NOT restart —
+ *   config is saved to disk, health() reads from disk, and the
+ *   memory capture pipeline stays intact. Just reload the page.
  */
 export async function triggerRestart(
   _opts: TriggerRestartOptions = {},
 ): Promise<void> {
   restartState.value = { phase: "restarting" };
+  let response: { restarting?: boolean } = { restarting: true };
   try {
-    await api.post("/api/v1/admin/restart");
+    response = await api.post<{ restarting?: boolean }>("/api/v1/admin/restart");
   } catch {
     // Server might already be going down
+  }
+
+  if (!response.restarting) {
+    // Stdio mode: server stayed up, config saved. Just reload.
+    window.location.href =
+      window.location.pathname + "?_t=" + Date.now();
+    return;
   }
 
   if (isOpenClaw()) {
@@ -103,7 +115,6 @@ export async function triggerRestart(
       restartState.value = { phase: "restartFailed" };
     }
   } else {
-    // Hermes: new daemon spawns before old exits, transition is fast.
     const ok = await quickPollUp(10);
     if (ok) {
       window.location.href =
@@ -115,10 +126,26 @@ export async function triggerRestart(
 }
 
 /**
- * Data cleared. Both agents self-respawn via the daemon mechanism.
+ * Data cleared. Same logic: daemon restarts, stdio stays alive.
  */
 export async function triggerCleared(): Promise<void> {
   restartState.value = { phase: "restarting" };
+
+  // The clear-data endpoint handles the restart logic server-side.
+  // If it returns restarting:false, the server stayed up (stdio mode).
+  let response: { restarting?: boolean } = { restarting: true };
+  try {
+    response = await api.post<{ restarting?: boolean }>("/api/v1/admin/clear-data");
+  } catch {
+    // might already be going down
+  }
+
+  if (!response.restarting) {
+    window.location.href =
+      window.location.pathname + "?_t=" + Date.now();
+    return;
+  }
+
   if (isOpenClaw()) {
     const ok = await pollHealthUntilUp(60);
     if (ok) {
@@ -128,8 +155,6 @@ export async function triggerCleared(): Promise<void> {
       restartState.value = { phase: "restartFailed" };
     }
   } else {
-    // Hermes: clear-data spawns a new daemon. Give it extra time
-    // since it also needs to re-create the DB on first boot.
     const ok = await quickPollUp(15);
     if (ok) {
       window.location.href =

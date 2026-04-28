@@ -91,6 +91,7 @@ async function main(): Promise<void> {
           host: config.viewer.bindHost,
           staticRoot: path.resolve(__dirname, "web/dist"),
           agent: args.agent,
+          daemon: true,
         },
       );
       process.stderr.write(
