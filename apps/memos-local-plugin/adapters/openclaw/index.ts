@@ -196,20 +196,14 @@ function register(api: OpenClawPluginApi): void {
     },
   });
 
-  // 2. Kick off core bootstrap. We register tools + hooks against the
-  //    resulting runtime. Hooks proxy to the bridge and gracefully no-op
-  //    while bootstrap is in-flight — the host must still register them
-  //    before any turn can fire.
+  // 2. Kick off core bootstrap. OpenClaw only accepts tool / hook
+  //    registration during the synchronous `register(api)` window, so
+  //    tools register a shell now and wait for runtime inside execute().
   let runtime: PluginRuntime | null = null;
   let bootstrapError: Error | null = null;
   const bootstrapPromise = createRuntime(api)
     .then((r) => {
       runtime = r;
-      registerOpenClawTools(api, {
-        agent: "openclaw",
-        core: r.core,
-        log: api.logger,
-      });
       api.logger.info("memos-local: plugin ready");
     })
     .catch((err) => {
@@ -224,6 +218,12 @@ function register(api: OpenClawPluginApi): void {
     await bootstrapPromise;
     return runtime;
   };
+
+  registerOpenClawTools(api, {
+    agent: "openclaw",
+    getCore: async () => (await ensureRuntime())?.core ?? null,
+    log: api.logger,
+  });
 
   // 3. Hooks — every handler matches the upstream `PluginHookHandlerMap`
   //    signature so OpenClaw's type-check passes in a monorepo install.
