@@ -590,6 +590,10 @@ const en = {
     "Scan the legacy plugin's SQLite database for the currently running agent (openclaw → ~/.openclaw/memos-local, hermes → ~/.hermes/memos-state/memos-local) and copy matching rows into the new store. Non-destructive — the legacy file stays put.",
   "import.migrate.scan": "Scan legacy DB",
   "import.migrate.run": "Run migration",
+  "import.migrate.found":
+    "Found legacy {agent} DB at {path}. Candidates — traces: {traces}, skills: {skills}, tasks: {tasks}.",
+  "import.migrate.notFoundAt": "No legacy database found at {path}.",
+  "import.migrate.notFound": "No legacy database found.",
 
   // Admin.
   "admin.title": "Team administration",
@@ -1190,6 +1194,10 @@ const zh: Record<TranslationKey, string> = {
     "扫描当前运行 agent 对应的旧插件 SQLite 数据库（openclaw → ~/.openclaw/memos-local，hermes → ~/.hermes/memos-state/memos-local），把匹配的记录拷贝到新存储。非破坏性，旧文件不动。",
   "import.migrate.scan": "扫描旧数据库",
   "import.migrate.run": "执行迁移",
+  "import.migrate.found":
+    "在 {path} 找到 {agent} 旧数据库。可迁移条目 — 记忆：{traces}，技能：{skills}，任务：{tasks}。",
+  "import.migrate.notFoundAt": "在 {path} 没有找到旧数据库。",
+  "import.migrate.notFound": "没有找到旧数据库。",
 
   "admin.title": "团队管理",
   "admin.subtitle": "管理团队分享的用户、群组与待审批。",
