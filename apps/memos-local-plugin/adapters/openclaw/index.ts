@@ -79,6 +79,24 @@ function resolveViewerStaticRoot(): string | undefined {
 async function createRuntime(api: OpenClawPluginApi): Promise<PluginRuntime> {
   const log = rootLogger.child({ channel: "adapters.openclaw" });
   log.info("plugin.bootstrap", { version: PLUGIN_VERSION });
+  // #region agent log
+  fetch("http://127.0.0.1:7473/ingest/27b1a306-5d2b-412b-9be3-3042c316316f", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "1e3acd",
+    },
+    body: JSON.stringify({
+      sessionId: "1e3acd",
+      runId: "startup-recovery",
+      hypothesisId: "H6",
+      location: "adapters/openclaw/index.ts:createRuntime",
+      message: "adapter_bootstrap",
+      data: { version: PLUGIN_VERSION },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
 
   // Bootstrap core — returns `{ core, home, config }` so we know which
   // viewer port to bind.
