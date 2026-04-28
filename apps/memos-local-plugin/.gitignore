@@ -17,3 +17,4 @@ coverage/
 .notes/
 TODO.local.md
 AGENTS_*.md
+.test_*
