@@ -68,6 +68,7 @@ import { runMigrations } from "../storage/migrator.js";
 import { makeRepos } from "../storage/repos/index.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
+import { getHostLlmBridge } from "../llm/host-bridge.js";
 
 import { createPipeline } from "./orchestrator.js";
 import type { PipelineDeps, PipelineHandle } from "./types.js";
@@ -161,6 +162,24 @@ export async function bootstrapMemoryCoreFull(
   } catch (err) {
     log.warn("llm.unavailable", {
       err: err instanceof Error ? err.message : String(err),
+    });
+    llm = null;
+  }
+
+  // When provider=host, the LLM client was created successfully but
+  // every call will fail at runtime if no HostLlmBridge is registered.
+  // Detect this eagerly and null-out the client so downstream modules
+  // see "no LLM" instead of burning retries on every reward/L2/skill
+  // tick. The adapter is responsible for calling registerHostLlmBridge()
+  // before core.init(); if it hasn't by now, it won't.
+  if (llm && llm.provider === "host" && !getHostLlmBridge()) {
+    log.warn("llm.host_bridge_missing", {
+      provider: "host",
+      impact: "LLM client created but no HostLlmBridge registered — " +
+        "every call would fail with LLM_UNAVAILABLE. " +
+        "Nulling out the client so reward/L2/skill/L3 skip cleanly. " +
+        "Configure a direct provider (openai_compatible, anthropic, gemini) " +
+        "or ensure the host adapter calls registerHostLlmBridge().",
     });
     llm = null;
   }
