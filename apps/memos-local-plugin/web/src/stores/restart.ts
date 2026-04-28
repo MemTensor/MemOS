@@ -1,37 +1,30 @@
 /**
- * Lightweight "config saved" banner state.
+ * Config-save restart state manager.
  *
- * Why this is no longer a real restart coordinator
- * ================================================
- * Earlier versions of this file POSTed `/api/v1/admin/restart`,
- * which made the plugin call `process.exit(0)` on the assumption
- * that the host (OpenClaw gateway / Hermes Python) would respawn
- * the viewer process. That assumption is wrong:
+ * Two distinct flows based on agent type:
  *
- *   - OpenClaw's plugin runs *inside* the `openclaw-gateway` process,
- *     so `process.exit(0)` kills the whole gateway. macOS launchd
- *     re-bootstraps the LaunchAgent eventually, but easily later
- *     than the 90 s health-poll deadline.
- *   - Hermes' bridge is spawned via Python `subprocess.Popen` on
- *     demand; once the bridge exits, hermes doesn't try to bring it
- *     back until the next `hermes chat` invocation.
+ *   - **OpenClaw**: the plugin runs inside the `openclaw-gateway` process
+ *     which is managed by macOS launchd. We POST `/api/v1/admin/restart`
+ *     to trigger `process.exit(0)`, launchd respawns the gateway, and
+ *     we poll `/api/v1/health` until the service comes back, then reload.
+ *     During this time a full-screen spinner overlay is shown.
  *
- * Result: the overlay almost always ended in
- *   "Restart didn't complete — service didn't come back in time"
- * even though the config patch on disk had succeeded. Confusing.
- *
- * The honest behaviour is much simpler:
- *
- *   1. The PATCH `/api/v1/config` request already wrote the new
- *      values to `~/.<agent>/memos-plugin/config.yaml`.
- *   2. Show a short "Saved — restart <agent> to apply" toast for a
- *      few seconds. No process exit, no polling, no overlay.
- *   3. The user runs `openclaw gateway stop && start` or relaunches
- *      `hermes chat`; the new bridge picks up the YAML on boot.
+ *   - **Hermes**: the bridge is spawned via Python `subprocess.Popen` on
+ *     demand; once it exits, hermes doesn't bring it back until the next
+ *     `hermes chat` invocation. So we only show a dismissible toast
+ *     telling the user to restart manually.
  */
 import { signal } from "@preact/signals";
+import { api } from "../api/client";
+import { health } from "./health";
 
-export type RestartPhase = "idle" | "saved" | "cleared";
+export type RestartPhase =
+  | "idle"
+  | "saved"
+  | "cleared"
+  | "restarting"
+  | "waitingUp"
+  | "restartFailed";
 
 export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
@@ -50,32 +43,87 @@ function scheduleDismiss(): void {
 }
 
 export interface TriggerRestartOptions {
-  /** Kept for back-compat; ignored. */
   kick?: "restart-endpoint" | "skip";
 }
 
+function isOpenClaw(): boolean {
+  return health.value?.agent === "openclaw";
+}
+
+async function pollHealthUntilUp(maxAttempts = 60): Promise<boolean> {
+  let phase: "waitDown" | "waitUp" = "waitDown";
+  const MAX_WAIT_DOWN = 8;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const delay = phase === "waitDown" ? 1500 : 2500;
+    await new Promise((r) => setTimeout(r, delay));
+    try {
+      const res = await fetch("/api/v1/health");
+      if (phase === "waitDown") {
+        if (res.ok || res.status === 401 || res.status === 403) {
+          if (attempt >= MAX_WAIT_DOWN) return true;
+        } else {
+          phase = "waitUp";
+          restartState.value = { phase: "waitingUp" };
+        }
+      } else {
+        if (res.ok || res.status === 401 || res.status === 403) return true;
+      }
+    } catch {
+      if (phase === "waitDown") {
+        phase = "waitUp";
+        restartState.value = { phase: "waitingUp" };
+      }
+    }
+  }
+  return false;
+}
+
 /**
- * Show the "config saved, restart agent to apply" banner.
- *
- * Used by Settings → 保存; the upstream `PATCH /api/v1/config` call
- * has already persisted the YAML before we get here.
+ * Config saved. For OpenClaw: auto-restart with spinner overlay.
+ * For Hermes/others: show a dismissible toast.
  */
 export async function triggerRestart(
   _opts: TriggerRestartOptions = {},
 ): Promise<void> {
-  restartState.value = { phase: "saved" };
-  scheduleDismiss();
+  if (isOpenClaw()) {
+    restartState.value = { phase: "restarting" };
+    try {
+      await api.post("/api/v1/admin/restart");
+    } catch {
+      // Server might already be going down
+    }
+    const ok = await pollHealthUntilUp(60);
+    if (ok) {
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } else {
+      restartState.value = { phase: "restartFailed" };
+    }
+  } else {
+    restartState.value = { phase: "saved" };
+    scheduleDismiss();
+  }
 }
 
 /**
- * Show the "data cleared, restart agent to start fresh" banner.
- *
- * Used by Settings → 危险区 → 清空所有数据. The server has wiped the
- * SQLite file; the next agent boot will recreate an empty DB.
+ * Data cleared. For OpenClaw: auto-restart with spinner.
+ * For Hermes/others: show toast.
  */
-export function triggerCleared(): void {
-  restartState.value = { phase: "cleared" };
-  scheduleDismiss();
+export async function triggerCleared(): Promise<void> {
+  if (isOpenClaw()) {
+    restartState.value = { phase: "restarting" };
+    const ok = await pollHealthUntilUp(60);
+    if (ok) {
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } else {
+      restartState.value = { phase: "restartFailed" };
+    }
+  } else {
+    restartState.value = { phase: "cleared" };
+    scheduleDismiss();
+  }
 }
 
 /** Dismiss the banner immediately (e.g. user clicked the close button). */

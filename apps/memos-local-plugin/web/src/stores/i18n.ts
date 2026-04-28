@@ -158,6 +158,12 @@ const en = {
     "Restart Hermes to apply: stop and rerun `hermes chat`",
   "restart.hint.generic":
     "Restart this agent's process to load the new configuration.",
+  "restart.restarting": "Configuration saved. Service is restarting…",
+  "restart.waitingUp": "Waiting for the service to come back online…",
+  "restart.autoRefresh": "The page will refresh automatically once the service is ready.",
+  "restart.failed": "Restart didn't complete — the service didn't come back in time.",
+  "restart.failedHint":
+    "Try manually: openclaw gateway stop && openclaw gateway start",
   "common.selectAll": "Select all",
   "common.deleteSelected": "Delete selected",
 
@@ -759,6 +765,12 @@ const zh: Record<TranslationKey, string> = {
   "restart.hint.hermes":
     "请重启 Hermes 后生效：停止后重新执行 `hermes chat`",
   "restart.hint.generic": "请重启该 agent 进程以加载新配置。",
+  "restart.restarting": "配置已保存，服务正在重启…",
+  "restart.waitingUp": "正在等待服务重新上线…",
+  "restart.autoRefresh": "服务就绪后页面将自动刷新。",
+  "restart.failed": "重启超时 — 服务未能在预期时间内恢复。",
+  "restart.failedHint":
+    "请手动重启：openclaw gateway stop && openclaw gateway start",
   "common.selectAll": "全选",
   "common.deleteSelected": "删除所选",
 

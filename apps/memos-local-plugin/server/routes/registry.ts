@@ -175,7 +175,7 @@ export function buildRoutes(
   registerMigrateRoutes(routes, deps, options);
   registerHubAdminRoutes(routes, deps);
   registerAuthRoutes(routes, deps, options);
-  registerAdminRoutes(routes, deps);
+  registerAdminRoutes(routes, deps, options);
   registerModelsRoutes(routes, deps);
   registerApiLogsRoutes(routes, deps);
   registerDiagRoutes(routes, deps);

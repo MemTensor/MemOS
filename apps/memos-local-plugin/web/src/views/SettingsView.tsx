@@ -108,8 +108,9 @@ export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
     try {
       await api.patch<ResolvedConfig>("/api/v1/config", dirty);
       setDirty({});
-      // Kick off the restart overlay — it handles the poll loop + reload.
       await triggerRestart();
+      // For Hermes/generic the page stays; reset the button state.
+      setSaving("idle");
     } catch (err) {
       setError((err as Error).message);
       setSaving("idle");
@@ -830,7 +831,7 @@ function DangerZoneSection() {
       await api.post("/api/v1/admin/clear-data", {});
       setConfirming(false);
       setClearing(false);
-      triggerCleared();
+      await triggerCleared();
     } catch {
       setClearing(false);
       setConfirming(false);

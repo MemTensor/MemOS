@@ -1,28 +1,85 @@
 /**
- * Lightweight bottom-of-screen toast announcing "config saved" or
- * "data cleared". Shown for ~8 s, then auto-dismisses.
+ * Restart overlay — two UX modes:
  *
- * Replaces the full-screen restart overlay used by earlier versions:
- * we no longer try to restart the plugin process from the viewer
- * (see `stores/restart.ts` for the rationale), so there's no more
- * "waiting for service to come back" UX. The agent process picks up
- * the new YAML on its own next boot; the toast tells the user that
- * needs to happen manually.
+ *   - **OpenClaw** (auto-restart): full-screen spinner overlay styled after
+ *     the legacy `memos-local-openclaw` viewer. The gateway is being
+ *     restarted; we poll health and reload automatically.
+ *
+ *   - **Hermes / generic** (manual restart): bottom-of-screen toast that
+ *     tells the user to restart the agent process themselves.
  */
 import { restartState, dismissRestartBanner } from "../stores/restart";
 import { health } from "../stores/health";
 import { t } from "../stores/i18n";
 import { Icon } from "./Icon";
 
-export function RestartOverlay() {
+function FullScreenSpinner() {
   const s = restartState.value;
-  if (s.phase === "idle") return null;
 
+  const message =
+    s.phase === "restartFailed"
+      ? t("restart.failed")
+      : s.phase === "waitingUp"
+        ? t("restart.waitingUp")
+        : t("restart.restarting");
+
+  const hint =
+    s.phase === "restartFailed"
+      ? t("restart.failedHint")
+      : t("restart.autoRefresh");
+
+  return (
+    <div
+      role="status"
+      aria-live="assertive"
+      style={`
+        position:fixed;inset:0;z-index:99999;
+        display:flex;flex-direction:column;align-items:center;justify-content:center;
+        background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
+        color:#fff;font-family:inherit;
+      `}
+    >
+      <div
+        style={`
+          display:flex;flex-direction:column;align-items:center;
+          gap:16px;max-width:400px;text-align:center;
+        `}
+      >
+        {s.phase !== "restartFailed" ? (
+          <div
+            style={`
+              width:36px;height:36px;
+              border:3px solid rgba(255,255,255,.2);
+              border-top-color:#fff;
+              border-radius:50%;
+              animation:restartSpin 1s linear infinite;
+            `}
+          />
+        ) : (
+          <Icon name="circle-alert" size={36} />
+        )}
+        <div style="font-size:15px;font-weight:600">{message}</div>
+        <div style="font-size:12px;opacity:.6">{hint}</div>
+        {s.phase === "restartFailed" && (
+          <button
+            class="btn btn--ghost btn--sm"
+            onClick={dismissRestartBanner}
+            style="color:#fff;border-color:rgba(255,255,255,.3);margin-top:8px"
+          >
+            {t("common.close")}
+          </button>
+        )}
+      </div>
+      <style>{`@keyframes restartSpin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
+}
+
+function Toast() {
+  const s = restartState.value;
   const agent = health.value?.agent ?? "agent";
   const restartHint =
-    agent === "openclaw"
-      ? t("restart.hint.openclaw")
-      : agent === "hermes"
+    agent === "hermes"
       ? t("restart.hint.hermes")
       : t("restart.hint.generic");
 
@@ -67,4 +124,19 @@ export function RestartOverlay() {
       </div>
     </div>
   );
+}
+
+export function RestartOverlay() {
+  const s = restartState.value;
+  if (s.phase === "idle") return null;
+
+  if (
+    s.phase === "restarting" ||
+    s.phase === "waitingUp" ||
+    s.phase === "restartFailed"
+  ) {
+    return <FullScreenSpinner />;
+  }
+
+  return <Toast />;
 }
