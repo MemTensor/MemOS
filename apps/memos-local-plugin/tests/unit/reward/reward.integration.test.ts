@@ -39,6 +39,8 @@ function cfg(): RewardConfig {
     // disable the triviality gate; real usage defaults to 2.
     minExchangesForCompletion: 0,
     minContentCharsForCompletion: 0,
+    toolHeavyRatio: 0.7,
+    minAssistantCharsForToolHeavy: 80,
   };
 }
 

@@ -65,6 +65,13 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
   const log = rootLogger.child({ channel: "core.reward" });
   const now = deps.now ?? Date.now;
 
+  if (!deps.llm) {
+    log.warn("reward.llm_unavailable", {
+      impact: "R_human will use heuristic fallback (always 0 without explicit feedback); L2/Skill/L3 pipelines will be skipped",
+      fix: "configure a working LLM provider in config.yaml or ensure the host bridge is attached",
+    });
+  }
+
   async function run(input: RewardInput): Promise<RewardResult> {
     const startedAt = now() as EpochMs;
     const warnings: RewardResult["warnings"] = [];
@@ -373,7 +380,7 @@ function looksLikeTrivialContent(text: string): boolean {
 function decideSkipReason(
   snapshot: import("../session/types.js").EpisodeSnapshot,
   traces: readonly TraceRow[],
-  cfg: Pick<RewardConfig, "minExchangesForCompletion" | "minContentCharsForCompletion">,
+  cfg: Pick<RewardConfig, "minExchangesForCompletion" | "minContentCharsForCompletion" | "toolHeavyRatio" | "minAssistantCharsForToolHeavy">,
 ): string | null {
   // Prefer the live snapshot's turn list; fall back to traces when the
   // snapshot came from a SQLite row (no turns materialised).
@@ -476,12 +483,14 @@ function decideSkipReason(
     (sum, c) => sum + c.length,
     0,
   );
+  const toolHeavyRatio = cfg.toolHeavyRatio ?? 0.7;
+  const minAssistantChars = cfg.minAssistantCharsForToolHeavy ?? 80;
   if (
     toolTurns > 0 &&
     totalTurns > 0 &&
-    toolTurns >= totalTurns * 0.7 &&
+    toolTurns >= totalTurns * toolHeavyRatio &&
     userTurns <= 1 &&
-    assistantContentChars < 80
+    assistantContentChars < minAssistantChars
   ) {
     return `该任务主要由工具执行结果组成（${toolTurns}/${totalTurns} 条），缺少足够的用户交互内容。`;
   }

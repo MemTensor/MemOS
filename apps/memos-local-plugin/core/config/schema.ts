@@ -158,6 +158,19 @@ const AlgorithmSchema = Type.Object({
      * that still accepts short CJK prompts.
      */
     minContentCharsForCompletion: NumberInRange(80, 0, 4_000),
+    /**
+     * Fraction of turns that are tool calls above which an episode is
+     * considered "tool-heavy". When combined with low assistant text
+     * the episode is skipped as noise. Default 0.7 (70%).
+     */
+    toolHeavyRatio: NumberInRange(0.7, 0, 1),
+    /**
+     * Minimum total assistant content chars to keep an episode that
+     * would otherwise be flagged by the tool-heavy heuristic. If the
+     * assistant wrote at least this many characters the episode is
+     * scored normally even if tool calls dominate. Default 80.
+     */
+    minAssistantCharsForToolHeavy: NumberInRange(80, 0, 10_000),
   }, { default: {} }),
   l2Induction: Type.Object({
     /** Cosine ≥ this to associate a new trace with an existing L2 policy. */
