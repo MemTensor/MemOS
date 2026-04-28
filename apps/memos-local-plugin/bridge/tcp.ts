@@ -194,7 +194,12 @@ export function startTcpServer(options: TcpServerOptions): TcpServerHandle {
         sock.destroy();
       }
       clients.clear();
-      server.close();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
       doneResolve();
     },
     done: donePromise,

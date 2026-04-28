@@ -194,7 +194,11 @@ class MemosBridgeClient:
     def _reconnect_tcp(self) -> None:
         """Attempt transparent reconnection after transport loss."""
         logger.warning("bridge_client: TCP transport lost, reconnecting…")
+        old = self._transport
         self._transport = None
+        if old is not None:
+            with contextlib.suppress(Exception):
+                old.close()
         self._connect_tcp()
         # Re-send session greetings so the daemon knows this client is alive.
         # The daemon treats a new TCP connection as a new client — no session
