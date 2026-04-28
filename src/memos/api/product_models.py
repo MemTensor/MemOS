@@ -608,6 +608,17 @@ class APIADDRequest(BaseRequest):
         description=("Whether this request represents user feedback. Default: False."),
     )
 
+    # ==== Upload skill flag ====
+    is_upload_skill: bool = Field(
+        False,
+        description=(
+            "Whether this request is an upload skill request. "
+            "When True, the messages field should contain file items "
+            "with zip file download URLs for pre-built skill packages. "
+            "Default: False."
+        ),
+    )
+
     # ==== Backward compatibility fields (will delete later) ====
     mem_cube_id: str | None = Field(
         None,
