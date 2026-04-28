@@ -531,7 +531,7 @@ function HubTab({
         <div>
           <h3 class="card__title">{t("settings.hub.enabled")}</h3>
           <p class="card__subtitle">
-            Share your skills and (optionally) memories with teammates.
+            {t("settings.hub.subtitle")}
           </p>
         </div>
         <ToggleSwitch

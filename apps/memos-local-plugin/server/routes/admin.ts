@@ -12,8 +12,9 @@
  *       Agent-aware restart. For OpenClaw the plugin lives inside the
  *       gateway process, which is managed by macOS launchd — calling
  *       `process.exit(0)` causes launchd to respawn it automatically.
- *       For Hermes and other hosts, the endpoint is a no-op (the
- *       viewer shows a manual-restart toast instead).
+ *       For Hermes: spawn a new bridge in --daemon mode, then exit the
+ *       current process. The new daemon takes over the viewer port so
+ *       the Memory Viewer stays available without user intervention.
  */
 import type { ServerDeps, ServerOptions } from "../types.js";
 import type { Routes } from "./registry.js";
@@ -38,11 +39,29 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
   routes.set("POST /api/v1/admin/restart", async (_ctx) => {
     const agent = options.agent ?? "unknown";
     if (agent === "openclaw") {
-      // OpenClaw gateway is managed by launchd — exit and let it respawn.
       setTimeout(() => process.exit(0), 300);
       return { ok: true, restarting: true };
     }
-    // Hermes / other hosts: no-op — the viewer shows a manual-restart toast.
-    return { ok: true, restarting: false, note: "config persisted; restart the agent process to apply" };
+    // Hermes (and others): exit first (releasing the port), then a
+    // small wrapper script spawns the new daemon. We use a shell
+    // one-liner that sleeps briefly (for port release) then starts
+    // the new daemon.
+    const nodePath = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const { spawn } = await import("node:child_process");
+    const thisFile = fileURLToPath(import.meta.url);
+    const pluginRoot = nodePath.resolve(nodePath.dirname(thisFile), "../..");
+    const tsxBin = nodePath.join(pluginRoot, "node_modules/.bin/tsx");
+    const bridgeScript = nodePath.join(pluginRoot, "bridge.cts");
+
+    const cmd = `sleep 1 && "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
+    const child = spawn("bash", ["-c", cmd], {
+      detached: true,
+      stdio: "ignore",
+      cwd: pluginRoot,
+    });
+    child.unref();
+    setTimeout(() => process.exit(0), 200);
+    return { ok: true, restarting: true };
   });
 }
