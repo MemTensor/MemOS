@@ -49,6 +49,29 @@ def _extract_zip_url_from_items(items: list[TextualMemoryItem]) -> str | None:
     return None
 
 
+def _extract_file_ids_from_items(items: list[TextualMemoryItem]) -> list[str]:
+    """Extract uploaded file ids from fast-stage memory metadata and sources."""
+    file_ids: list[str] = []
+
+    def _append_file_id(file_id: Any) -> None:
+        if isinstance(file_id, str) and file_id and file_id not in file_ids:
+            file_ids.append(file_id)
+
+    for item in items:
+        metadata = getattr(item, "metadata", None)
+        metadata_file_ids = getattr(metadata, "file_ids", None) if metadata else None
+        if isinstance(metadata_file_ids, list):
+            for file_id in metadata_file_ids:
+                _append_file_id(file_id)
+
+        for source in getattr(metadata, "sources", None) or []:
+            file_info = getattr(source, "file_info", None)
+            if isinstance(file_info, dict):
+                _append_file_id(file_info.get("file_id"))
+
+    return file_ids
+
+
 def _download_zip(url: str, tmp_dir: Path) -> Path:
     """Download a zip file to a local temporary directory."""
     try:
@@ -242,6 +265,7 @@ def process_upload_skill_memory(
     if not zip_url:
         logger.warning("[UPLOAD_SKILL] No zip URL found in fast_memory_items")
         return []
+    file_ids = _extract_file_ids_from_items(fast_memory_items)
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="upload_skill_"))
     try:
@@ -267,6 +291,11 @@ def process_upload_skill_memory(
 
     try:
         skill_memory_item = create_skill_memory_item(skill_memory, info, embedder, **kwargs)
+        if file_ids:
+            skill_memory_item.metadata.file_ids = file_ids
+            metadata_info = dict(skill_memory_item.metadata.info or {})
+            metadata_info.setdefault("file_id", file_ids[0])
+            skill_memory_item.metadata.info = metadata_info
     except Exception as e:
         logger.error("[UPLOAD_SKILL] Failed to create skill memory item: %s", e)
         shutil.rmtree(tmp_dir, ignore_errors=True)
