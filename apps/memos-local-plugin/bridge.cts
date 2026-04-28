@@ -45,6 +45,9 @@ async function main(): Promise<void> {
   const { startStdioServer, waitForShutdown } = (await import(
     pathToEsmUrl(path.resolve(__dirname, "bridge/stdio.ts"))
   )) as typeof import("./bridge/stdio.js");
+  const { startTcpServer } = (await import(
+    pathToEsmUrl(path.resolve(__dirname, "bridge/tcp.ts"))
+  )) as typeof import("./bridge/tcp.js");
   const { startHttpServer } = (await import(
     pathToEsmUrl(path.resolve(__dirname, "server/index.ts"))
   )) as typeof import("./server/index.js");
@@ -58,8 +61,24 @@ async function main(): Promise<void> {
   });
   await core.init();
 
-  // Default transport: stdio. Daemon + TCP support arrives in V1.1.
+  // Default transport: stdio. In daemon mode, also start TCP if a port was given.
   const stdio = startStdioServer({ core });
+
+  let tcpServer: Awaited<ReturnType<typeof startTcpServer>> | null = null;
+  if (args.tcpPort !== undefined) {
+    try {
+      tcpServer = startTcpServer({
+        core,
+        host: "127.0.0.1",
+        port: args.tcpPort,
+      });
+      process.stderr.write(`bridge: tcp → ${tcpServer.url}\n`);
+    } catch (err) {
+      process.stderr.write(
+        `bridge: tcp server failed to start: ${(err as Error).message}\n`,
+      );
+    }
+  }
 
   // Boot a viewer too — hermes needs its own HTTP surface for the
   // Memory Viewer, and it discovers the openclaw hub (if any) so
@@ -98,6 +117,11 @@ async function main(): Promise<void> {
   const shutdown = async (sig: string) => {
     process.stderr.write(`bridge: received ${sig}, shutting down\n`);
     try {
+      if (tcpServer) await tcpServer.close();
+    } catch {
+      /* best-effort */
+    }
+    try {
       if (viewer) await viewer.close();
     } catch {
       /* best-effort */
@@ -109,10 +133,11 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-  // In daemon mode, run indefinitely (stdin is /dev/null — EOF is normal).
+  // In daemon mode, keep alive until TCP server stops (stdin is /dev/null).
   // In stdio mode, run until the calling process closes stdin.
-  if (args.daemon) {
-    await new Promise(() => {});  // never resolve → process lives forever
+  if (args.daemon && tcpServer) {
+    await tcpServer.done;
+    await shutdown("daemon_done");
   } else {
     await stdio.done;
     try {

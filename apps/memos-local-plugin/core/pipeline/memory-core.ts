@@ -333,11 +333,17 @@ export function createMemoryCore(
     // trace_ids_json.
     try {
       const openEpisodes = handle.repos.episodes.list({ status: "open", limit: 500 });
+      // Batch-fetch sessions to avoid N+1 lookups per episode.
+      const sessionIds = new Set(openEpisodes.map((ep) => ep.sessionId));
+      const sessionById = new Map<string, ReturnType<typeof handle.repos.sessions.getById>>();
+      for (const sid of sessionIds) {
+        sessionById.set(sid, handle.repos.sessions.getById(sid));
+      }
       // Only treat an open episode as an orphan if its session has been
       // explicitly closed (meta.closedAt is set) or no longer exists.
       // Otherwise the session might reconnect — leave it alone.
       const orphans = openEpisodes.filter((ep) => {
-        const session = handle.repos.sessions.getById(ep.sessionId);
+        const session = sessionById.get(ep.sessionId);
         if (!session) return true; // session row gone — orphan
         if (session.meta?.closedAt != null) return true; // explicitly closed — orphan
         return false; // session exists and not closed — skip, might reconnect
@@ -648,6 +654,14 @@ export function createMemoryCore(
       throw new MemosError(
         "conflict",
         `cannot delete open episode: ${episodeId}`,
+      );
+    }
+    // After restart the in-memory manager may not have this episode,
+    // but it might still be open in SQLite — double-check the DB.
+    if (!snap && handle.repos.episodes.getById(episodeId)?.status === "open") {
+      throw new MemosError(
+        "conflict",
+        `cannot delete open episode: ${episodeId} (open in DB)`,
       );
     }
   }
