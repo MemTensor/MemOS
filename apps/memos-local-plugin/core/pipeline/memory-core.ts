@@ -697,26 +697,7 @@ export function createMemoryCore(
     hypothesisId: string,
     message: string,
     data: Record<string, unknown>,
-  ): void {
-    // #region agent log
-    fetch("http://127.0.0.1:7473/ingest/27b1a306-5d2b-412b-9be3-3042c316316f", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "1e3acd",
-      },
-      body: JSON.stringify({
-        sessionId: "1e3acd",
-        runId: "startup-recovery",
-        hypothesisId,
-        location: "core/pipeline/memory-core.ts:recoverOpenEpisodesAsSessionEnd",
-        message,
-        data,
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
-  }
+  ): void {}
 
   async function shutdown(): Promise<void> {
     if (shutDown) return;

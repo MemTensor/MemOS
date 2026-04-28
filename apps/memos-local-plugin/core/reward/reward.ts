@@ -111,9 +111,10 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
         reason: skipReason,
       });
       try {
+        const existingMeta = episode.meta ?? {};
+        const wasFinalized = existingMeta.closeReason === "finalized";
         deps.episodesRepo.updateMeta(input.episodeId, {
-          closeReason: "abandoned",
-          abandonReason: skipReason,
+          ...(wasFinalized ? {} : { closeReason: "abandoned", abandonReason: skipReason }),
           reward: {
             source: "heuristic",
             reason: skipReason,
