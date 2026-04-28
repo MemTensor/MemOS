@@ -111,6 +111,7 @@ export function MemoriesView() {
       const qs = new URLSearchParams();
       qs.set("limit", String(PAGE_SIZE));
       qs.set("offset", String(opts.page * PAGE_SIZE));
+      qs.set("groupByTurn", "true");
       if (opts.q) qs.set("q", opts.q);
       const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`);
       setTraces(res.traces);
@@ -161,6 +162,16 @@ export function MemoriesView() {
   const isGroupSelected = (g: MemoryGroup): boolean =>
     g.ids.length > 0 && g.ids.every((id) => selected.has(id));
 
+  // Number of selected memories (turns), not raw traces. A memory card
+  // contains all the tool sub-step traces of one user turn, so the
+  // batch-bar count and confirm prompts must report turns or the user
+  // sees inflated numbers.
+  const selectedGroupCount = useMemo(
+    () => groups.filter(isGroupSelected).length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groups, selected],
+  );
+
   const toggleGroupSel = (g: MemoryGroup) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -178,7 +189,7 @@ export function MemoriesView() {
 
   const bulkDelete = async () => {
     if (selected.size === 0) return;
-    if (!confirm(t("memories.delete.bulkConfirm", { n: selected.size }))) return;
+    if (!confirm(t("memories.delete.bulkConfirm", { n: selectedGroupCount }))) return;
     try {
       const ids = [...selected];
       const res = await api.post<{ deleted: number }>(`/api/v1/traces/delete`, { ids });
@@ -233,7 +244,7 @@ export function MemoriesView() {
     const txt = lines.join("\n");
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(txt).then(
-        () => showToast(t("memories.copy.done", { n: selected.size })),
+        () => showToast(t("memories.copy.done", { n: selectedGroupCount })),
         () => showToast("Copy failed", "error"),
       );
     } else {
@@ -376,7 +387,7 @@ export function MemoriesView() {
       {selected.size > 0 && (
         <div class="batch-bar" role="region" aria-label="bulk actions">
           <span class="batch-bar__count">
-            {t("common.selected", { n: selected.size })}
+            {t("common.selected", { n: selectedGroupCount })}
           </span>
           <button class="btn btn--sm" onClick={selectPage}>
             <Icon name="check-square" size={14} />

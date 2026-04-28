@@ -1646,19 +1646,26 @@ export function createMemoryCore(
   async function countTraces(input?: {
     sessionId?: SessionId;
     q?: string;
+    groupByTurn?: boolean;
   }): Promise<number> {
     ensureLive();
     const needle = (input?.q ?? "").trim().toLowerCase();
     if (!needle) {
-      return handle.repos.traces.count({ sessionId: input?.sessionId });
+      return input?.groupByTurn
+        ? handle.repos.traces.countTurns({ sessionId: input?.sessionId })
+        : handle.repos.traces.count({ sessionId: input?.sessionId });
     }
     // q substring scan — mirror `listTraces`. Walk all matching
     // traces from the repo (no limit) and apply the same filter.
     const rows = handle.repos.traces.list({ sessionId: input?.sessionId });
-    return rows.filter((r) => {
+    const matched = rows.filter((r) => {
       const hay = ((r.summary ?? "") + "\n" + r.userText + "\n" + r.agentText).toLowerCase();
       return hay.includes(needle);
-    }).length;
+    });
+    if (!input?.groupByTurn) return matched.length;
+    const turnKeys = new Set<string>();
+    for (const r of matched) turnKeys.add(`${r.episodeId ?? "_"}:${r.turnId}`);
+    return turnKeys.size;
   }
 
   async function listTraces(input?: {
@@ -1666,11 +1673,75 @@ export function createMemoryCore(
     offset?: number;
     sessionId?: SessionId;
     q?: string;
+    groupByTurn?: boolean;
   }): Promise<TraceDTO[]> {
     ensureLive();
     const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
     const offset = Math.max(0, input?.offset ?? 0);
     const needle = (input?.q ?? "").trim().toLowerCase();
+
+    if (input?.groupByTurn) {
+      // Group-by-turn: paginate at the (episodeId, turnId) level so each
+      // "memory" on the Memories page corresponds to one user turn.
+      if (!needle) {
+        const turnKeys = handle.repos.traces.listTurnKeys({
+          sessionId: input?.sessionId,
+          limit,
+          offset,
+        });
+        const rows = handle.repos.traces.listByTurnKeys(turnKeys);
+        // The frontend's `buildGroups` preserves first-encounter order
+        // when bucketing traces by turnKey. We need newest turn first
+        // (matching `listTurnKeys` DESC order), with chronological order
+        // within each turn.
+        const turnOrder = new Map<string, number>();
+        turnKeys.forEach((k, i) =>
+          turnOrder.set(`${k.episodeId ?? "_"}:${k.turnId}`, i),
+        );
+        rows.sort((a, b) => {
+          const ka = `${a.episodeId ?? "_"}:${a.turnId}`;
+          const kb = `${b.episodeId ?? "_"}:${b.turnId}`;
+          const ia = turnOrder.get(ka) ?? 0;
+          const ib = turnOrder.get(kb) ?? 0;
+          if (ia !== ib) return ia - ib;
+          return a.ts - b.ts;
+        });
+        return rows.map(traceRowToDTO);
+      }
+      // Search + group: scan, filter, then paginate by distinct turn key.
+      const allRows = handle.repos.traces.list({ sessionId: input?.sessionId });
+      const matched = allRows.filter((r) => {
+        const hay = ((r.summary ?? "") + "\n" + r.userText + "\n" + r.agentText).toLowerCase();
+        return hay.includes(needle);
+      });
+      const seen = new Map<string, { episodeId: string | null; turnId: number; maxTs: number }>();
+      for (const r of matched) {
+        const k = `${r.episodeId ?? "_"}:${r.turnId}`;
+        const existing = seen.get(k);
+        if (!existing || r.ts > existing.maxTs) {
+          seen.set(k, { episodeId: r.episodeId, turnId: r.turnId, maxTs: r.ts });
+        }
+      }
+      const orderedKeys = [...seen.values()]
+        .sort((a, b) => b.maxTs - a.maxTs)
+        .slice(offset, offset + limit);
+      const turnOrder = new Map<string, number>();
+      orderedKeys.forEach((k, i) =>
+        turnOrder.set(`${k.episodeId ?? "_"}:${k.turnId}`, i),
+      );
+      const traces = matched
+        .filter((r) => turnOrder.has(`${r.episodeId ?? "_"}:${r.turnId}`))
+        .sort((a, b) => {
+          const ka = `${a.episodeId ?? "_"}:${a.turnId}`;
+          const kb = `${b.episodeId ?? "_"}:${b.turnId}`;
+          const ia = turnOrder.get(ka) ?? 0;
+          const ib = turnOrder.get(kb) ?? 0;
+          if (ia !== ib) return ia - ib;
+          return a.ts - b.ts;
+        });
+      return traces.map(traceRowToDTO);
+    }
+
     if (!needle) {
       const rows = handle.repos.traces.list({
         sessionId: input?.sessionId,
@@ -1860,8 +1931,14 @@ export function createMemoryCore(
         sourcePolicyIds: s.sourcePolicyIds ?? [],
       }));
 
+    // Count unique (episodeId, turnId) groups instead of raw traces so
+    // the Overview "memories" metric matches what the Memories page
+    // shows: 1 user turn = 1 memory (regardless of how many tool calls
+    // / sub-steps were captured for that turn).
+    const totalTurns = handle.repos.traces.countTurns();
+
     return {
-      total: traces.length,
+      total: totalTurns,
       writesToday,
       sessions: sessions.size,
       embeddings,

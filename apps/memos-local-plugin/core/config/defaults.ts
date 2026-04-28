@@ -115,13 +115,13 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       minSimilarity: 0.65,
       candidateTtlDays: 30,
       minEpisodesForInduction: 2,
-      // Lowered from 0.05 → 0.01. Reward backprop V values for typical
+      // Lowered from 0.05 → 0.005. Reward backprop V values for typical
       // multi-step turns (5-15 steps) are clustered around 0.02-0.5 even
       // for successful episodes; the old 0.05 floor was throwing away
       // most of the signal before induction could see it. Negative-V
       // traces are still excluded (they'd never count as "with-set"
       // evidence anyway).
-      minTraceValue: 0.01,
+      minTraceValue: 0.005,
       useLlm: true,
       traceCharCap: 3_000,
       archiveGain: -0.05,
@@ -140,17 +140,25 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // but still cleanly rejects net-neutral noise.
       minPolicyGain: 0.02,
       minPolicySupport: 1,
-      clusterMinSimilarity: 0.6,
+      // Lowered from 0.6 → 0.3 so the typical 2-3 active policies in
+      // an early-life install can still cluster into a world model;
+      // strict 0.6 starved L3 in real usage.
+      clusterMinSimilarity: 0.3,
       policyCharCap: 800,
       traceCharCap: 500,
       traceEvidencePerPolicy: 1,
       useLlm: true,
-      cooldownDays: 1,
+      // Lowered from 1 → 0 so abstraction can run as soon as the
+      // ingredients show up, not on a per-day cadence.
+      cooldownDays: 0,
       confidenceDelta: 0.05,
       minConfidenceForRetrieval: 0.2,
     },
     skill: {
-      minSupport: 2,
+      // Lowered from 2 → 1: a single supporting episode is enough to
+      // attempt skill crystallization. Quality is still gated by
+      // minGain + candidate trials below.
+      minSupport: 1,
       // Lowered from 0.1 → 0.02. Same rationale as l3.minPolicyGain:
       // the new shrinkage-anchored gain formula gives positive scores
       // proportional to V_with − 0.5, so 0.1 was unreachable for any
@@ -158,12 +166,14 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // 0.02 is enough to filter neutral-noise policies while still
       // letting genuinely-useful patterns crystallize.
       minGain: 0.02,
-      // Lowered from 5 → 3. Demanding 5 trials in `candidate` before a
-      // skill can graduate effectively meant most skills never made it
-      // out of probation in real usage; 3 is the smallest number that
-      // still gives the lifecycle a meaningful trial window.
-      candidateTrials: 3,
-      cooldownMs: 6 * 60 * 60 * 1000,
+      // Lowered from 5 → 1. Demanding multiple trials in `candidate`
+      // before a skill can graduate meant skills rarely promoted in
+      // real usage; 1 lets the candidate→active transition happen
+      // immediately on first successful invocation.
+      candidateTrials: 1,
+      // Lowered from 6 hours → 0: no cooldown, skills can re-evolve
+      // as soon as new evidence arrives.
+      cooldownMs: 0,
       traceCharCap: 500,
       evidenceLimit: 6,
       useLlm: true,
@@ -196,7 +206,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       includeLowValue: false,
       rrfConstant: 60,
       minSkillEta: 0.5,
-      minTraceSim: 0.35,
+      // Lowered from 0.35 → 0.25 so partial-match traces still surface
+      // for users with smaller corpora.
+      minTraceSim: 0.25,
       episodeGoalMinSim: 0.45,
       tagFilter: "auto",
       keywordTopK: 20,
@@ -216,10 +228,11 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // small budget; combined with the richer prompt (v3) this keeps
       // packets concise without over-dropping.
       llmFilterMaxKeep: 4,
-      // Lowered from 2 → 1: even a single candidate gets a precision
-      // pass. Mirrors `memos-local-openclaw`'s tool-level filter and
-      // prevents a lone off-topic memory from sneaking through unchecked.
-      llmFilterMinCandidates: 1,
+      // Set to 2: skip the LLM precision pass when there's only one
+      // candidate (no point ranking a single item). Anything with 2+
+      // candidates still goes through the filter to drop off-topic
+      // hits before injection.
+      llmFilterMinCandidates: 2,
       llmFilterCandidateBodyChars: 500,
     },
   },
