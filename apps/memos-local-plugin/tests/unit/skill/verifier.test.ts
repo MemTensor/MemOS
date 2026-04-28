@@ -140,6 +140,35 @@ describe("skill/verifier", () => {
     expect(r.unmappedTokens).toContain("kubectl");
   });
 
+  it("does not count plain prose words as coverage tokens", () => {
+    const draft = makeDraft({
+      summary: "Create modular storage backends with consistent interface",
+      steps: [
+        {
+          title: "Implement storage backend",
+          body: "Create a modular implementation that mirrors JSONStore with load and save methods.",
+        },
+      ],
+    });
+    const evidence = [
+      trace(
+        "tr_1",
+        "Add a YAML storage backend",
+        "Wrote YAMLStore mirroring JSONStore with load and save methods.",
+      ),
+      trace(
+        "tr_2",
+        "Verify storage files",
+        "Checked task_cli/storage/yaml_store.py and __init__.py exports.",
+      ),
+    ];
+    const r = verifyDraft({ draft, evidence }, { log });
+    expect(r.ok).toBe(true);
+    expect(r.unmappedTokens).not.toContain("modular");
+    expect(r.unmappedTokens).not.toContain("interface");
+    expect(r.unmappedTokens).not.toContain("implementation");
+  });
+
   it("fails when there is no evidence at all", () => {
     const r = verifyDraft({ draft: makeDraft(), evidence: [] }, { log });
     expect(r.ok).toBe(false);

@@ -1804,6 +1804,7 @@ export function createMemoryCore(
           status: dto.status,
           sourceEpisodeIds: [],
           inducedBy: "import",
+          decisionGuidance: (dto as any).decisionGuidance ?? { preference: [], antiPattern: [] },
           vec: null,
           createdAt: dto.createdAt ?? Date.now(),
           updatedAt: dto.updatedAt ?? Date.now(),

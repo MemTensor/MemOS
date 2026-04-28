@@ -97,7 +97,11 @@ export async function crystallizeDraft(
       ],
       {
         op: "skill.crystallize",
-        schemaHint: "skill-crystallize.v2",
+        schemaHint:
+          'skill-crystallize.v2\n{"name":"snake_case","display_title":"string","summary":"string","parameters":[{"name":"string","type":"string|number|boolean|enum","required":true,"description":"string"}],"preconditions":["string"],"steps":[{"title":"string","body":"string"}],"examples":[{"input":"string","expected":"string"}],"decision_guidance":{"preference":["string"],"anti_pattern":["string"]},"tags":["string"]}',
+        malformedRetries: 2,
+        temperature: 0,
+        maxTokens: 4096,
       },
     );
     const draft = normaliseDraft(rsp.value, input);
