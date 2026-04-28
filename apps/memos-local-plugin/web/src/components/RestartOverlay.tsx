@@ -23,9 +23,10 @@ function FullScreenSpinner() {
         ? t("restart.waitingUp")
         : t("restart.restarting");
 
+  const agentType = health.value?.agent === "openclaw" ? "openclaw" : "hermes";
   const hint =
     s.phase === "restartFailed"
-      ? t("restart.failedHint")
+      ? t(`restart.failedHint.${agentType}` as any)
       : t("restart.autoRefresh");
 
   return (

@@ -164,8 +164,10 @@ const en = {
   "restart.waitingUp": "Waiting for the service to come back online…",
   "restart.autoRefresh": "The page will refresh automatically once the service is ready.",
   "restart.failed": "Restart didn't complete — the service didn't come back in time.",
-  "restart.failedHint":
+  "restart.failedHint.openclaw":
     "Try manually: openclaw gateway stop && openclaw gateway start",
+  "restart.failedHint.hermes":
+    "Try manually: pkill -f bridge.cts && hermes chat",
   "common.selectAll": "Select all",
   "common.deleteSelected": "Delete selected",
 
@@ -794,8 +796,10 @@ const zh: Record<TranslationKey, string> = {
   "restart.waitingUp": "正在等待服务重新上线…",
   "restart.autoRefresh": "服务就绪后页面将自动刷新。",
   "restart.failed": "重启超时 — 服务未能在预期时间内恢复。",
-  "restart.failedHint":
+  "restart.failedHint.openclaw":
     "请手动重启：openclaw gateway stop && openclaw gateway start",
+  "restart.failedHint.hermes":
+    "请手动重启：pkill -f bridge.cts && hermes chat",
   "common.selectAll": "全选",
   "common.deleteSelected": "删除所选",
 
