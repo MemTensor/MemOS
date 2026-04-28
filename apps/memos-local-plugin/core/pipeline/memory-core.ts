@@ -49,6 +49,11 @@ import type {
   MemoryCore,
   Unsubscribe,
 } from "../../agent-contract/memory-core.js";
+import type {
+  EpisodeSnapshot,
+  EpisodeTurn,
+  IntentDecision,
+} from "../session/types.js";
 
 import type {
   EpisodeRow,
@@ -338,59 +343,17 @@ export function createMemoryCore(
 
     // Any `status: "open"` row we see on boot is an orphan from a
     // previous unclean shutdown — the plugin host was SIGKILL'd, the
-    // gateway was bootout'd, the process crashed mid-turn, etc. We
-    // have no in-memory state to reconcile them against, so they'd
-    // otherwise stay "激活" forever in the viewer even though no one
-    // is working on them. Abandon them now with an explicit reason
-    // so the Tasks list shows the right status on first load.
+    // gateway was bootout'd, the process crashed mid-turn, etc.
     //
-    // We deliberately do NOT fire the reward/capture chain for these
-    // rows — the orphan state means there's no completed assistant
-    // turn to score against, and re-running capture on a mid-flight
-    // episode would double-insert traces. `abandon()` flips the row
-    // to `closed` + sets `closeReason: "abandoned"` without touching
-    // trace_ids_json.
+    // Treat rows that already have traces as a missed `session_end`,
+    // not as user abandonment: finalize them and emit the same
+    // `episode.finalized` event the normal session close path emits so
+    // capture → reward → L2 → L3 → Skill can catch up on restart. Rows
+    // that already carry rTask only need their final status repaired.
     try {
       const orphans = handle.repos.episodes.list({ status: "open", limit: 500 });
       if (orphans.length > 0) {
-        log.info("init.orphan_episodes.close", { count: orphans.length });
-        const endedAt = Date.now();
-        for (const ep of orphans) {
-          try {
-            handle.repos.episodes.close(
-              ep.id as import("../../agent-contract/dto.js").EpisodeId,
-              endedAt,
-            );
-            // If the pipeline already scored this episode (rTask is set),
-            // mark it as "finalized" — the chain ran to completion before
-            // the crash, only the final status flip was lost. Blanket
-            // "abandoned" would show "已跳过" for a task that produced
-            // real knowledge + possibly a skill.
-            const hasReward = ep.rTask != null;
-            handle.repos.episodes.updateMeta(
-              ep.id as import("../../agent-contract/dto.js").EpisodeId,
-              hasReward
-                ? {
-                    closeReason: "finalized",
-                    abandonReason: undefined,
-                  }
-                : {
-                    closeReason: "abandoned",
-                    abandonReason:
-                      "插件上次未正常退出，启动时自动关闭未完成的任务",
-                  },
-            );
-            log.info(hasReward ? "init.orphan.finalized" : "init.orphan.abandoned", {
-              episodeId: ep.id,
-              rTask: ep.rTask,
-            });
-          } catch (err) {
-            log.debug("init.orphan_close.skipped", {
-              episodeId: ep.id,
-              err: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
+        await recoverOpenEpisodesAsSessionEnd(orphans);
       }
     } catch (err) {
       log.debug("init.orphan_scan.failed", {
@@ -542,6 +505,214 @@ export function createMemoryCore(
     });
   }
 
+  async function recoverOpenEpisodesAsSessionEnd(
+    orphans: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
+  ): Promise<void> {
+    const endedAt = Date.now();
+    log.info("init.orphan_episodes.session_end_recover", { count: orphans.length });
+    debugStartupRecovery("H1", "startup_recovery_scan", {
+      count: orphans.length,
+      episodes: orphans.map((ep) => ({
+        id: ep.id,
+        sessionId: ep.sessionId,
+        traceCount: ep.traceIds.length,
+        rTask: ep.rTask,
+      })),
+    });
+
+    const needsRewardFallback: EpisodeId[] = [];
+    for (const ep of orphans) {
+      try {
+        const episodeId = ep.id as EpisodeId;
+        const traceIds = (ep.traceIds ?? []) as TraceId[];
+        handle.repos.episodes.close(episodeId, endedAt, ep.rTask ?? undefined);
+        handle.repos.episodes.updateMeta(episodeId, {
+          closeReason: "finalized",
+          abandonReason: undefined,
+          recoveredAtStartup: endedAt,
+          recoveryReason: "missed_session_end",
+        });
+
+        if (ep.rTask != null) {
+          log.info("init.orphan.repaired_finalized", {
+            episodeId,
+            sessionId: ep.sessionId,
+            rTask: ep.rTask,
+          });
+          debugStartupRecovery("H2", "startup_recovery_already_scored", {
+            episodeId,
+            sessionId: ep.sessionId,
+            rTask: ep.rTask,
+          });
+          continue;
+        }
+
+        const snapshot = snapshotFromRecoveredEpisode(ep, endedAt);
+        debugStartupRecovery("H3", "startup_recovery_emit_finalized", {
+          episodeId,
+          sessionId: ep.sessionId,
+          traceCount: traceIds.length,
+          recoveredTurnCount: snapshot.turnCount,
+        });
+        handle.buses.session.emit({
+          kind: "episode.finalized",
+          episode: snapshot,
+          closedBy: "finalized",
+        });
+        needsRewardFallback.push(episodeId);
+      } catch (err) {
+        log.debug("init.orphan_recovery.skipped", {
+          episodeId: ep.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        debugStartupRecovery("H4", "startup_recovery_error", {
+          episodeId: ep.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    try {
+      await handle.flush();
+      for (const episodeId of needsRewardFallback) {
+        const row = handle.repos.episodes.getById(episodeId);
+        if (row?.rTask == null) {
+          await handle.rewardRunner.run({
+            episodeId,
+            feedback: [],
+            trigger: "manual",
+          });
+        }
+      }
+      await handle.flush();
+      debugStartupRecovery("H5", "startup_recovery_flush_done", {
+        recoveredCount: orphans.length,
+        rewardedEpisodes: needsRewardFallback.map((episodeId) => {
+          const row = handle.repos.episodes.getById(episodeId);
+          return {
+            episodeId,
+            rTask: row?.rTask ?? null,
+            closeReason: (row?.meta as { closeReason?: unknown } | undefined)?.closeReason,
+            abandonReason: (row?.meta as { abandonReason?: unknown } | undefined)?.abandonReason,
+          };
+        }),
+      });
+    } catch (err) {
+      log.warn("init.orphan_recovery.flush_failed", {
+        count: orphans.length,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      debugStartupRecovery("H5", "startup_recovery_flush_failed", {
+        count: orphans.length,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  function snapshotFromRecoveredEpisode(
+    ep: EpisodeRow & { meta?: Record<string, unknown> },
+    endedAt: number,
+  ): EpisodeSnapshot {
+    const traceIds = (ep.traceIds ?? []) as TraceId[];
+    const traces =
+      traceIds.length > 0
+        ? handle.repos.traces
+            .getManyByIds(traceIds)
+            .sort((a, b) => a.ts - b.ts)
+        : [];
+    const turns: EpisodeTurn[] = [];
+    for (const tr of traces) {
+      if (tr.userText) {
+        turns.push({
+          id: `${tr.id}:user`,
+          ts: tr.ts,
+          role: "user",
+          content: tr.userText,
+        });
+      }
+      if (tr.toolCalls.length > 0) {
+        turns.push({
+          id: `${tr.id}:tool`,
+          ts: tr.ts,
+          role: "tool",
+          content: JSON.stringify(tr.toolCalls),
+          meta: { toolCalls: tr.toolCalls },
+        });
+      }
+      if (tr.agentText) {
+        turns.push({
+          id: `${tr.id}:assistant`,
+          ts: tr.ts,
+          role: "assistant",
+          content: tr.agentText,
+          meta: {
+            thinking: tr.agentThinking ?? undefined,
+            summary: tr.summary ?? undefined,
+          },
+        });
+      }
+    }
+    return {
+      id: ep.id as EpisodeId,
+      sessionId: ep.sessionId as SessionId,
+      startedAt: ep.startedAt,
+      endedAt,
+      status: "closed",
+      rTask: ep.rTask ?? null,
+      turnCount: turns.length,
+      turns,
+      traceIds,
+      meta: {
+        ...(ep.meta ?? {}),
+        closeReason: "finalized",
+        recoveredAtStartup: endedAt,
+        recoveryReason: "missed_session_end",
+      },
+      intent: normaliseRecoveredIntent(ep.meta),
+    };
+  }
+
+  function normaliseRecoveredIntent(meta?: Record<string, unknown>): IntentDecision {
+    const maybeIntent = (meta as { intent?: Partial<IntentDecision> } | undefined)?.intent;
+    return {
+      kind: maybeIntent?.kind ?? "unknown",
+      confidence: typeof maybeIntent?.confidence === "number" ? maybeIntent.confidence : 0,
+      reason: maybeIntent?.reason ?? "recovered from startup orphan episode",
+      retrieval: maybeIntent?.retrieval ?? {
+        tier1: true,
+        tier2: true,
+        tier3: true,
+      },
+      llmModel: maybeIntent?.llmModel,
+      signals: maybeIntent?.signals ?? ["startup_recovery"],
+    };
+  }
+
+  function debugStartupRecovery(
+    hypothesisId: string,
+    message: string,
+    data: Record<string, unknown>,
+  ): void {
+    // #region agent log
+    fetch("http://127.0.0.1:7473/ingest/27b1a306-5d2b-412b-9be3-3042c316316f", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": "1e3acd",
+      },
+      body: JSON.stringify({
+        sessionId: "1e3acd",
+        runId: "startup-recovery",
+        hypothesisId,
+        location: "core/pipeline/memory-core.ts:recoverOpenEpisodesAsSessionEnd",
+        message,
+        data,
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+  }
+
   async function shutdown(): Promise<void> {
     if (shutDown) return;
     shutDown = true;
@@ -615,6 +786,14 @@ export function createMemoryCore(
       );
     }
     handle.sessionManager.closeSession(sessionId, "client");
+    try {
+      await handle.flush();
+    } catch (err) {
+      log.warn("closeSession.flush_failed", {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   async function openEpisode(input: {
@@ -1823,10 +2002,14 @@ export function createMemoryCore(
           status: dto.status,
           sourceEpisodeIds: [],
           inducedBy: "import",
+          decisionGuidance: {
+            preference: [...(dto.preference ?? [])],
+            antiPattern: [...(dto.antiPattern ?? [])],
+          },
           vec: null,
           createdAt: dto.createdAt ?? Date.now(),
           updatedAt: dto.updatedAt ?? Date.now(),
-        } as PolicyRow);
+        });
         imported++;
       } catch {
         skipped++;

@@ -631,6 +631,10 @@ export function isEphemeralSessionKey(sessionKey: string | undefined): boolean {
   return sessionKey.startsWith("temp:");
 }
 
+function isExplicitOneShotSessionKey(sessionKey: string | undefined): boolean {
+  return typeof sessionKey === "string" && sessionKey.includes(":explicit:");
+}
+
 // ─── Prompt injection rendering ────────────────────────────────────────────
 
 const CONTEXT_OPEN = "<memos_context>";
@@ -948,6 +952,12 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       // (V7 §0.1 routes multi-turn continuation through the relation
       // classifier, not through stickiness in this cache).
       openEpisodeBySession.delete(sessionId);
+
+      if (isExplicitOneShotSessionKey(ctx.sessionKey)) {
+        await opts.core.closeSession(sessionId);
+        messageCursor.delete(sessionId);
+        lastUserTextBySession.delete(sessionId);
+      }
     } catch (err) {
       opts.log.warn("memos.onTurnEnd.failed", {
         err: err instanceof Error ? err.message : String(err),
