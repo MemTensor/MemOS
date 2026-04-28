@@ -128,7 +128,9 @@ export async function triggerCleared(): Promise<void> {
       restartState.value = { phase: "restartFailed" };
     }
   } else {
-    const ok = await quickPollUp(10);
+    // Hermes: clear-data spawns a new daemon. Give it extra time
+    // since it also needs to re-create the DB on first boot.
+    const ok = await quickPollUp(15);
     if (ok) {
       window.location.href =
         window.location.pathname + "?_t=" + Date.now();
