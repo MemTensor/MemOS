@@ -507,4 +507,3 @@ All operations return:
   "detail": "Detailed error message"
 }
 ```
-
