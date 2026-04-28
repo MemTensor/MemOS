@@ -3,15 +3,15 @@
  *
  * Unified flow for all agents: POST `/api/v1/admin/restart` triggers
  * the backend to spawn a fresh daemon bridge and exit. The frontend
- * shows a full-screen spinner and polls `/api/v1/health` until the new
- * process is live, then reloads the page.
+ * polls `/api/v1/health` until the new process is live, then reloads.
  *
- *   - OpenClaw: launchd respawns the gateway automatically.
+ *   - OpenClaw: launchd respawns the gateway — may take a few seconds.
  *   - Hermes: the restart endpoint spawns `bridge.cts --daemon` before
- *     exiting, so the viewer comes back without user intervention.
+ *     exiting, so the viewer comes back almost immediately.
  */
 import { signal } from "@preact/signals";
 import { api } from "../api/client";
+import { health } from "./health";
 
 export type RestartPhase =
   | "idle"
@@ -27,6 +27,10 @@ export const restartState = signal<{ phase: RestartPhase; message?: string }>({
 
 export interface TriggerRestartOptions {
   kick?: "restart-endpoint" | "skip";
+}
+
+function isOpenClaw(): boolean {
+  return health.value?.agent === "openclaw";
 }
 
 async function pollHealthUntilUp(maxAttempts = 60): Promise<boolean> {
@@ -59,6 +63,23 @@ async function pollHealthUntilUp(maxAttempts = 60): Promise<boolean> {
 }
 
 /**
+ * Quick health check — just verify the server responds once.
+ * Used for Hermes where the new daemon is already up before the old exits.
+ */
+async function quickPollUp(maxAttempts = 10): Promise<boolean> {
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise((r) => setTimeout(r, 800));
+    try {
+      const res = await fetch("/api/v1/health");
+      if (res.ok || res.status === 401 || res.status === 403) return true;
+    } catch {
+      /* server still transitioning */
+    }
+  }
+  return false;
+}
+
+/**
  * Config saved. Trigger a restart for any agent. The backend spawns a
  * fresh daemon bridge before exiting, so the viewer port comes back up
  * automatically for both OpenClaw (launchd) and Hermes (self-respawn).
@@ -72,12 +93,24 @@ export async function triggerRestart(
   } catch {
     // Server might already be going down
   }
-  const ok = await pollHealthUntilUp(60);
-  if (ok) {
-    window.location.href =
-      window.location.pathname + "?_t=" + Date.now();
+
+  if (isOpenClaw()) {
+    const ok = await pollHealthUntilUp(60);
+    if (ok) {
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } else {
+      restartState.value = { phase: "restartFailed" };
+    }
   } else {
-    restartState.value = { phase: "restartFailed" };
+    // Hermes: new daemon spawns before old exits, transition is fast.
+    const ok = await quickPollUp(10);
+    if (ok) {
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } else {
+      restartState.value = { phase: "restartFailed" };
+    }
   }
 }
 
@@ -86,20 +119,26 @@ export async function triggerRestart(
  */
 export async function triggerCleared(): Promise<void> {
   restartState.value = { phase: "restarting" };
-  const ok = await pollHealthUntilUp(60);
-  if (ok) {
-    window.location.href =
-      window.location.pathname + "?_t=" + Date.now();
+  if (isOpenClaw()) {
+    const ok = await pollHealthUntilUp(60);
+    if (ok) {
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } else {
+      restartState.value = { phase: "restartFailed" };
+    }
   } else {
-    restartState.value = { phase: "restartFailed" };
+    const ok = await quickPollUp(10);
+    if (ok) {
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } else {
+      restartState.value = { phase: "restartFailed" };
+    }
   }
 }
 
 /** Dismiss the banner immediately (e.g. user clicked the close button). */
 export function dismissRestartBanner(): void {
-  if (dismissTimer) {
-    clearTimeout(dismissTimer);
-    dismissTimer = null;
-  }
   restartState.value = { phase: "idle" };
 }

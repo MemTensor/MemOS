@@ -42,8 +42,10 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
       setTimeout(() => process.exit(0), 300);
       return { ok: true, restarting: true };
     }
-    // Hermes (and others): spawn a replacement daemon bridge before
-    // exiting so the viewer port is re-bound with fresh config.
+    // Hermes (and others): exit first (releasing the port), then a
+    // small wrapper script spawns the new daemon. We use a shell
+    // one-liner that sleeps briefly (for port release) then starts
+    // the new daemon.
     const nodePath = await import("node:path");
     const { fileURLToPath } = await import("node:url");
     const { spawn } = await import("node:child_process");
@@ -51,13 +53,15 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
     const pluginRoot = nodePath.resolve(nodePath.dirname(thisFile), "../..");
     const tsxBin = nodePath.join(pluginRoot, "node_modules/.bin/tsx");
     const bridgeScript = nodePath.join(pluginRoot, "bridge.cts");
-    const child = spawn(tsxBin, [bridgeScript, `--agent=${agent}`, "--daemon"], {
+
+    const cmd = `sleep 1 && "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
+    const child = spawn("bash", ["-c", cmd], {
       detached: true,
       stdio: "ignore",
       cwd: pluginRoot,
     });
     child.unref();
-    setTimeout(() => process.exit(0), 600);
+    setTimeout(() => process.exit(0), 200);
     return { ok: true, restarting: true };
   });
 }
