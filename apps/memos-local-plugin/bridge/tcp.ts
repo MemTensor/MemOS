@@ -41,6 +41,8 @@ export interface TcpServerOptions {
 
 export interface TcpServerHandle {
   readonly url: string;
+  /** Resolves once the server is actually listening, rejects on error. */
+  ready: Promise<void>;
   close: () => Promise<void>;
   done: Promise<void>;
 }
@@ -172,18 +174,26 @@ export function startTcpServer(options: TcpServerOptions): TcpServerHandle {
     });
   });
 
-  server.on("error", (err) => {
-    process.stderr.write(`bridge.tcp: server error: ${err.message}\n`);
+  // Wrap listen in a promise so callers can catch EADDRINUSE etc.
+  const listenPromise = new Promise<void>((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(port, host, () => {
+      process.stderr.write(`bridge.tcp: listening on ${host}:${port}\n`);
+      resolve();
+    });
   });
-
-  server.listen(port, host, () => {
-    process.stderr.write(`bridge.tcp: listening on ${host}:${port}\n`);
-  });
+  // Once listening, switch error handler to non-fatal logging.
+  listenPromise.then(
+    () => server.removeAllListeners("error"),
+    () => {}, // rejection handled by caller
+  );
 
   return {
     get url() {
       return `tcp://${host}:${port}`;
     },
+    /** Resolves once the server is actually listening. */
+    ready: listenPromise,
     async close() {
       if (closed) return;
       closed = true;

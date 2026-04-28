@@ -77,6 +77,7 @@ async function main(): Promise<void> {
           host: "127.0.0.1",
           port: args.tcpPort,
         });
+        await tcpServer.ready;  // throws on EADDRINUSE etc.
         process.stderr.write(`bridge: tcp → ${tcpServer.url}\n`);
       } catch (err) {
         process.stderr.write(

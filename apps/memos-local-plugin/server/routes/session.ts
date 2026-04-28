@@ -52,7 +52,7 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
       return;
     }
     const result = await deps.core.deleteEpisode(id as EpisodeId);
-    return result;
+    return { ok: true, deleted: result.deleted };
   });
 
   routes.set("POST /api/v1/episodes/delete", async (ctx) => {
@@ -64,7 +64,8 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "ids[] is required");
       return;
     }
-    return await deps.core.deleteEpisodes(ids as EpisodeId[]);
+    const result = await deps.core.deleteEpisodes(ids as EpisodeId[]);
+    return { ok: true, deleted: result.deleted };
   });
 
   routes.set("GET /api/v1/episodes", async (ctx) => {

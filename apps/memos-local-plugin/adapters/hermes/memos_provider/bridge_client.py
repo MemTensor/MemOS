@@ -116,7 +116,7 @@ class MemosBridgeClient:
         self._events: list[Callable[[dict[str, Any]], None]] = []
         self._logs: list[Callable[[dict[str, Any]], None]] = []
         self._closed = False
-        self._tcp_mode = tcp_host is not None
+        self._tcp_mode = tcp_host is not None or tcp_port is not None
 
         if self._tcp_mode:
             self._tcp_host = tcp_host or DEFAULT_TCP_HOST
