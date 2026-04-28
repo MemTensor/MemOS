@@ -40,7 +40,15 @@ _ACTIVE_BRIDGE_PROC: subprocess.Popen | None = None
 
 
 def _pid_path() -> Path:
-    """Path to the singleton PID file under the plugin data directory."""
+    """Path to the singleton PID file under the runtime daemon directory.
+
+    Respects ``MEMOS_HOME`` when set (``~/.hermes/memos-plugin`` by
+    convention), falling back to the plugin source tree only when the env
+    var is absent for compatibility with development installs.
+    """
+    memos_home = os.environ.get("MEMOS_HOME")
+    if memos_home:
+        return Path(memos_home) / "daemon" / "bridge.pid"
     return Path(__file__).resolve().parent.parent.parent.parent / "data" / "bridge.pid"
 
 
@@ -111,25 +119,66 @@ def ensure_bridge_running(*, probe_only: bool = False) -> bool:
         return True
 
 
+def _is_bridge_process(pid: int) -> bool:
+    """Return True when *pid* looks like a bridge process.
+
+    Checks the process command line for ``bridge.cts`` to avoid killing an
+    unrelated process that happened to recycle a stale PID.
+    """
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            import ctypes.wintypes
+
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(0x0400 | 0x0010, False, pid)
+            if not handle:
+                return False
+            try:
+                exe_path = (ctypes.c_wchar * 260)()
+                size = ctypes.wintypes.DWORD(260)
+                if kernel32.K32GetProcessImageFileNameW(handle, exe_path, size):
+                    return "bridge" in str(exe_path.value).lower()
+            finally:
+                kernel32.CloseHandle(handle)
+            return False
+        # Unix: read /proc/<pid>/cmdline
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+        return b"bridge.cts" in cmdline
+    except Exception:
+        # If we can't validate, err on the side of safety — skip kill.
+        return False
+
+
 def kill_existing_bridge() -> None:
     """Kill any previously-running bridge process recorded in the PID file.
 
     Called **before** spawning a new bridge to guarantee at-most-one
-    instance. Safe to call even when no stale PID exists.
+    instance. Validates that the PID belongs to a bridge process before
+    sending any signal to avoid killing an unrelated process when the
+    PID file is stale.
     """
     pid = _read_pid()
     if pid is not None and _pid_alive(pid):
-        logger.info("MemOS: killing stale bridge (pid=%d)", pid)
-        try:
-            os.kill(pid, signal.SIGTERM)
-            for _ in range(25):  # wait up to 2.5 s
-                if not _pid_alive(pid):
-                    break
-                time.sleep(0.1)
-            else:
-                os.kill(pid, signal.SIGKILL)
-        except (OSError, ProcessLookupError):
-            pass
+        if not _is_bridge_process(pid):
+            logger.warning(
+                "MemOS: PID %d is alive but does not appear to be a bridge "
+                "process — refusing to kill. Removing stale PID file.",
+                pid,
+            )
+        else:
+            logger.info("MemOS: killing stale bridge (pid=%d)", pid)
+            try:
+                os.kill(pid, signal.SIGTERM)
+                for _ in range(25):  # wait up to 2.5 s
+                    if not _pid_alive(pid):
+                        break
+                    time.sleep(0.1)
+                else:
+                    os.kill(pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
     _clean_pid()
 
 

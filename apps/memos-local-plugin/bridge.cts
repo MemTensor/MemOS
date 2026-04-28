@@ -61,8 +61,10 @@ async function main(): Promise<void> {
   });
   await core.init();
 
-  // Default transport: stdio. Start TCP only in daemon mode when a port was given.
-  const stdio = startStdioServer({ core });
+  // In daemon mode stdin is typically /dev/null — starting the stdio
+  // server would subscribe to events/logs and buffer writes to a pipe
+  // that nobody drains, wasting memory. Skip it.
+  const stdio = args.daemon ? null : startStdioServer({ core });
   let tcpServer: Awaited<ReturnType<typeof startTcpServer>> | null = null;
   if (args.tcpPort !== undefined && !args.daemon) {
     process.stderr.write(
@@ -143,7 +145,15 @@ async function main(): Promise<void> {
     } catch {
       /* best-effort */
     }
-    await waitForShutdown(core, stdio);
+    if (stdio) {
+      await waitForShutdown(core, stdio);
+    } else {
+      try {
+        await core.shutdown();
+      } catch {
+        /* swallow */
+      }
+    }
     process.exit(0);
   };
 
@@ -155,7 +165,7 @@ async function main(): Promise<void> {
   if (args.daemon && tcpServer) {
     await tcpServer.done;
     await shutdown("daemon_done");
-  } else {
+  } else if (stdio) {
     await stdio.done;
     try {
       if (viewer) await viewer.close();
@@ -164,6 +174,9 @@ async function main(): Promise<void> {
     }
     await core.shutdown();
     process.exit(0);
+  } else {
+    // Daemon mode without TCP — wait forever (kept alive by event loop).
+    await new Promise(() => {});
   }
 }
 

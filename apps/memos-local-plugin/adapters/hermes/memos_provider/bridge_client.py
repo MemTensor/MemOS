@@ -71,6 +71,10 @@ class _SocketTransport:
 
     def close(self) -> None:
         try:
+            self._rfile.close()
+        except Exception:
+            pass
+        try:
             self._sock.shutdown(_socket.SHUT_RDWR)
         except OSError:
             pass
