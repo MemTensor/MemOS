@@ -197,7 +197,9 @@ async function dispatch(
   const key = `${method} ${pathname}`;
   const exact = routes.getExact(key);
   if (exact) {
-    const body = await readBody(req, options.maxBodyBytes ?? 1_048_576);
+    const isImport = pathname === "/api/v1/import";
+    const limit = isImport ? 104_857_600 : (options.maxBodyBytes ?? 1_048_576);
+    const body = await readBody(req, limit);
     const result = await exact({ req, res, url, body, deps, params: {} });
     if (!res.headersSent && result !== undefined) {
       writeJson(res, 200, result);
