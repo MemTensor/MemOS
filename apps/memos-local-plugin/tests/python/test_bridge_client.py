@@ -224,8 +224,17 @@ class MemTensorProviderTests(unittest.TestCase):
         p = self._provider_mod.MemTensorProvider()
         schemas = p.get_tool_schemas()
         names = {s["name"] for s in schemas}
-        self.assertIn("memory_search", names)
-        self.assertIn("memory_timeline", names)
+        self.assertSetEqual(
+            names,
+            {
+                "memory_search",
+                "memory_get",
+                "memory_timeline",
+                "skill_list",
+                "memory_environment",
+                "skill_get",
+            },
+        )
 
     def test_handle_tool_call_fails_gracefully_without_bridge(self) -> None:
         p = self._provider_mod.MemTensorProvider()

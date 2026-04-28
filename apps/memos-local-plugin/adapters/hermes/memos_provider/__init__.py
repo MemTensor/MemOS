@@ -35,8 +35,8 @@ Lifecycle mapping (V7 §0.2)
 | ``on_session_end``   | flush pending + close episode + close session |
 | ``on_pre_compress``  | extract a short memory summary               |
 | ``on_delegation``    | record a subagent outcome as a trace         |
-| ``get_tool_schemas`` | expose ``memory_search`` + ``memory_timeline``|
-| ``handle_tool_call`` | dispatch to ``memory.search`` / ``.timeline`` |
+| ``get_tool_schemas`` | expose memory, skill, and environment tools   |
+| ``handle_tool_call`` | dispatch to MemOS JSON-RPC tool methods       |
 | ``shutdown``         | close bridge                                  |
 
 Threading: all JSON-RPC calls are synchronous. ``queue_prefetch`` runs on
@@ -180,10 +180,11 @@ class MemTensorProvider(MemoryProvider):
     def system_prompt_block(self) -> str:  # type: ignore[override]
         return (
             "# MemOS Memory\n"
-            "Persistent long-term memory is active. Call `memory_search` to "
-            "fetch prior context or `memory_timeline` to inspect a past "
-            "episode. Relevant memories are automatically injected at the "
-            "start of every turn."
+            "Persistent long-term memory is active. Call `memory_search`, "
+            "`memory_get`, `memory_timeline`, `memory_environment`, "
+            "`skill_list`, or `skill_get` when prior context or learned "
+            "procedures would help. Relevant memories are automatically "
+            "injected at the start of every turn."
         )
 
     # ─── Episode tracking ─────────────────────────────────────────────────
@@ -356,6 +357,19 @@ class MemTensorProvider(MemoryProvider):
 
     # ─── Tool surface ─────────────────────────────────────────────────────
 
+    @staticmethod
+    def _clip(value: Any, limit: int = 1200) -> str:
+        text = "" if value is None else str(value)
+        return text if len(text) <= limit else text[:limit] + "..."
+
+    @staticmethod
+    def _int_arg(args: dict[str, Any], key: str, default: int, lower: int, upper: int) -> int:
+        try:
+            value = int(args.get(key, default))
+        except Exception:
+            value = default
+        return max(lower, min(upper, value))
+
     def get_tool_schemas(self) -> list[dict[str, Any]]:  # type: ignore[override]
         return [
             {
@@ -377,8 +391,32 @@ class MemTensorProvider(MemoryProvider):
                             "minimum": 1,
                             "maximum": 50,
                         },
+                        "sessionScope": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Restrict results to the current Hermes session only.",
+                        },
                     },
                     "required": ["query"],
+                },
+            },
+            {
+                "name": "memory_get",
+                "description": (
+                    "Fetch the full body of a memory item by id. `kind` can be "
+                    '"trace" (default), "policy", or "world_model".'
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "kind": {
+                            "type": "string",
+                            "enum": ["trace", "policy", "world_model"],
+                            "default": "trace",
+                        },
+                    },
+                    "required": ["id"],
                 },
             },
             {
@@ -393,6 +431,59 @@ class MemTensorProvider(MemoryProvider):
                     "required": ["episodeId"],
                 },
             },
+            {
+                "name": "skill_list",
+                "description": (
+                    "List callable skills the agent can invoke. Filter by status "
+                    "(candidate | active | archived)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "enum": ["candidate", "active", "archived"],
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "default": 10,
+                            "minimum": 1,
+                            "maximum": 50,
+                        },
+                    },
+                },
+            },
+            {
+                "name": "memory_environment",
+                "description": (
+                    "Return accumulated environment knowledge (L3 world models): "
+                    "structural facts, behavioral rules, and project constraints."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Optional keyword query; omit to list recent world models.",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "default": 5,
+                            "minimum": 1,
+                            "maximum": 30,
+                        },
+                    },
+                },
+            },
+            {
+                "name": "skill_get",
+                "description": "Return the full invocation guide for a crystallized skill.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}},
+                    "required": ["id"],
+                },
+            },
         ]
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **_kwargs: Any) -> str:  # type: ignore[override]
@@ -403,29 +494,148 @@ class MemTensorProvider(MemoryProvider):
                 query = (args.get("query") or "").strip()
                 if not query:
                     return json.dumps({"error": "missing query"})
-                max_results = int(args.get("maxResults", 10))
+                max_results = self._int_arg(args, "maxResults", 10, 1, 50)
+                params: dict[str, Any] = {
+                    "agent": "hermes",
+                    "query": query,
+                    "topK": {
+                        "tier1": max_results,
+                        "tier2": max_results,
+                        "tier3": max_results,
+                    },
+                }
+                if bool(args.get("sessionScope", False)):
+                    params["sessionId"] = self._session_id
                 resp = self._bridge.request(
                     "memory.search",
-                    {
-                        "agent": "hermes",
-                        "query": query,
-                        "sessionId": self._session_id,
-                        "topK": {
-                            "tier1": max_results,
-                            "tier2": max_results,
-                            "tier3": max_results,
-                        },
-                    },
+                    params,
                 )
                 return json.dumps({"hits": resp.get("hits", [])})
+            if tool_name == "memory_get":
+                item_id = (args.get("id") or "").strip()
+                if not item_id:
+                    return json.dumps({"error": "missing id"})
+                kind = args.get("kind") or "trace"
+                methods = {
+                    "trace": "memory.get_trace",
+                    "policy": "memory.get_policy",
+                    "world_model": "memory.get_world",
+                }
+                method = methods.get(kind)
+                if method is None:
+                    return json.dumps({"error": f"unknown memory kind: {kind}"})
+                item = self._bridge.request(method, {"id": item_id})
+                if not item:
+                    return json.dumps({"found": False, "kind": kind, "id": item_id})
+                if kind == "trace":
+                    body = self._clip(item.get("agentText") or item.get("body"))
+                    meta = {
+                        "episodeId": item.get("episodeId"),
+                        "ts": item.get("ts"),
+                        "value": item.get("value"),
+                        "reflection": self._clip(item.get("reflection")),
+                        "userText": self._clip(item.get("userText")),
+                        "toolCalls": item.get("toolCalls") or [],
+                    }
+                elif kind == "policy":
+                    body = self._clip(
+                        "\n\n".join(
+                            part
+                            for part in [item.get("title"), item.get("procedure")]
+                            if part
+                        )
+                    )
+                    meta = {
+                        "trigger": item.get("trigger"),
+                        "verification": item.get("verification"),
+                        "boundary": item.get("boundary"),
+                        "gain": item.get("gain"),
+                        "support": item.get("support"),
+                        "status": item.get("status"),
+                    }
+                else:
+                    body = self._clip(item.get("body"))
+                    meta = {
+                        "title": item.get("title"),
+                        "policyIds": item.get("policyIds") or [],
+                    }
+                return json.dumps(
+                    {
+                        "found": True,
+                        "kind": kind,
+                        "id": item.get("id", item_id),
+                        "body": body,
+                        "meta": meta,
+                    }
+                )
             if tool_name == "memory_timeline":
                 resp = self._bridge.request(
                     "memory.timeline",
                     {"episodeId": args.get("episodeId", self._episode_id)},
                 )
-                limit = int(args.get("limit", 20))
+                limit = self._int_arg(args, "limit", 20, 1, 100)
                 traces = resp.get("traces", [])[:limit]
                 return json.dumps({"traces": traces})
+            if tool_name == "skill_list":
+                limit = self._int_arg(args, "limit", 10, 1, 50)
+                params = {"limit": limit}
+                if args.get("status"):
+                    params["status"] = args["status"]
+                return json.dumps(self._bridge.request("skill.list", params))
+            if tool_name == "memory_environment":
+                query = (args.get("query") or "").strip()
+                limit = self._int_arg(args, "limit", 5, 1, 30)
+                if not query:
+                    resp = self._bridge.request(
+                        "memory.list_world_models",
+                        {"limit": limit, "offset": 0},
+                    )
+                    return json.dumps(
+                        {
+                            "worldModels": [
+                                {
+                                    **w,
+                                    "body": self._clip(w.get("body")),
+                                }
+                                for w in resp.get("worldModels", [])
+                            ],
+                            "queried": False,
+                        }
+                    )
+                resp = self._bridge.request(
+                    "memory.search",
+                    {
+                        "agent": "hermes",
+                        "query": query,
+                        "topK": {"tier1": 0, "tier2": 0, "tier3": limit},
+                    },
+                )
+                hits = [
+                    h
+                    for h in resp.get("hits", [])
+                    if h.get("tier") == 3 or h.get("refKind") == "world_model"
+                ]
+                return json.dumps(
+                    {
+                        "worldModels": [
+                            {
+                                "id": h.get("refId") or h.get("id"),
+                                "title": self._clip((h.get("snippet") or "").split("\n")[0]),
+                                "body": self._clip(h.get("snippet")),
+                                "policyIds": [],
+                                "score": h.get("score"),
+                            }
+                            for h in hits[:limit]
+                        ],
+                        "queried": True,
+                    }
+                )
+            if tool_name == "skill_get":
+                skill_id = (args.get("id") or "").strip()
+                if not skill_id:
+                    return json.dumps({"error": "missing id"})
+                skill = self._bridge.request("skill.get", {"id": skill_id})
+                return json.dumps({"found": bool(skill), "skill": skill})
         except Exception as err:
             return json.dumps({"error": str(err)})
         return json.dumps({"error": f"unknown tool: {tool_name}"})
