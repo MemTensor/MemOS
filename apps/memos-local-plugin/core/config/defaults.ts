@@ -96,8 +96,18 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       feedbackWindowSec: 30,
       summaryMaxChars: 2_000,
       llmConcurrency: 2,
-      minExchangesForCompletion: 2,
-      minContentCharsForCompletion: 80,
+      // Default lowered 2→1 to support single-shot CLI patterns
+      // (`hermes chat -q "..."`, `openclaw run --once`). With the old
+      // floor every CLI single-query episode was abandoned with
+      // "对话轮次不足", starving reward → L2 → Skill of any signal.
+      // Multi-turn TUI flows still trigger reward as before because
+      // they always satisfy the looser bound. Operators wanting the
+      // strict pre-2026Q2 behaviour can set 2 in config.yaml.
+      minExchangesForCompletion: 1,
+      // Lowered 80→40 to match the relaxed exchanges floor. 40 chars
+      // is "ok"/"thanks" + a real follow-up clause; below that we
+      // still skip as a triviality gate.
+      minContentCharsForCompletion: 40,
       toolHeavyRatio: 0.7,
       minAssistantCharsForToolHeavy: 80,
     },
