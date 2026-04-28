@@ -1,22 +1,17 @@
 /**
  * Config-save restart state manager.
  *
- * Two distinct flows based on agent type:
+ * Unified flow for all agents: POST `/api/v1/admin/restart` triggers
+ * the backend to spawn a fresh daemon bridge and exit. The frontend
+ * shows a full-screen spinner and polls `/api/v1/health` until the new
+ * process is live, then reloads the page.
  *
- *   - **OpenClaw**: the plugin runs inside the `openclaw-gateway` process
- *     which is managed by macOS launchd. We POST `/api/v1/admin/restart`
- *     to trigger `process.exit(0)`, launchd respawns the gateway, and
- *     we poll `/api/v1/health` until the service comes back, then reload.
- *     During this time a full-screen spinner overlay is shown.
- *
- *   - **Hermes**: the bridge is spawned via Python `subprocess.Popen` on
- *     demand; once it exits, hermes doesn't bring it back until the next
- *     `hermes chat` invocation. So we only show a dismissible toast
- *     telling the user to restart manually.
+ *   - OpenClaw: launchd respawns the gateway automatically.
+ *   - Hermes: the restart endpoint spawns `bridge.cts --daemon` before
+ *     exiting, so the viewer comes back without user intervention.
  */
 import { signal } from "@preact/signals";
 import { api } from "../api/client";
-import { health } from "./health";
 
 export type RestartPhase =
   | "idle"
@@ -30,24 +25,8 @@ export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
 });
 
-const TOAST_DISMISS_MS = 8_000;
-
-let dismissTimer: ReturnType<typeof setTimeout> | null = null;
-
-function scheduleDismiss(): void {
-  if (dismissTimer) clearTimeout(dismissTimer);
-  dismissTimer = setTimeout(() => {
-    restartState.value = { phase: "idle" };
-    dismissTimer = null;
-  }, TOAST_DISMISS_MS);
-}
-
 export interface TriggerRestartOptions {
   kick?: "restart-endpoint" | "skip";
-}
-
-function isOpenClaw(): boolean {
-  return health.value?.agent === "openclaw";
 }
 
 async function pollHealthUntilUp(maxAttempts = 60): Promise<boolean> {
@@ -80,11 +59,9 @@ async function pollHealthUntilUp(maxAttempts = 60): Promise<boolean> {
 }
 
 /**
- * Config saved. Trigger a restart for any agent — the backend now
- * exits on POST /api/v1/admin/restart for both OpenClaw and Hermes.
- * OpenClaw: launchd respawns automatically → poll until up → reload.
- * Hermes: bridge exits → viewer goes down → show toast telling user
- * to run `hermes chat` again.
+ * Config saved. Trigger a restart for any agent. The backend spawns a
+ * fresh daemon bridge before exiting, so the viewer port comes back up
+ * automatically for both OpenClaw (launchd) and Hermes (self-respawn).
  */
 export async function triggerRestart(
   _opts: TriggerRestartOptions = {},
@@ -95,37 +72,26 @@ export async function triggerRestart(
   } catch {
     // Server might already be going down
   }
-  if (isOpenClaw()) {
-    const ok = await pollHealthUntilUp(60);
-    if (ok) {
-      window.location.href =
-        window.location.pathname + "?_t=" + Date.now();
-    } else {
-      restartState.value = { phase: "restartFailed" };
-    }
+  const ok = await pollHealthUntilUp(60);
+  if (ok) {
+    window.location.href =
+      window.location.pathname + "?_t=" + Date.now();
   } else {
-    restartState.value = { phase: "saved", message: "restartHermes" };
-    scheduleDismiss();
+    restartState.value = { phase: "restartFailed" };
   }
 }
 
 /**
- * Data cleared. For OpenClaw: auto-restart with spinner.
- * For Hermes/others: show toast.
+ * Data cleared. Both agents self-respawn via the daemon mechanism.
  */
 export async function triggerCleared(): Promise<void> {
-  if (isOpenClaw()) {
-    restartState.value = { phase: "restarting" };
-    const ok = await pollHealthUntilUp(60);
-    if (ok) {
-      window.location.href =
-        window.location.pathname + "?_t=" + Date.now();
-    } else {
-      restartState.value = { phase: "restartFailed" };
-    }
+  restartState.value = { phase: "restarting" };
+  const ok = await pollHealthUntilUp(60);
+  if (ok) {
+    window.location.href =
+      window.location.pathname + "?_t=" + Date.now();
   } else {
-    restartState.value = { phase: "cleared" };
-    scheduleDismiss();
+    restartState.value = { phase: "restartFailed" };
   }
 }
 

@@ -69,16 +69,63 @@ async function main(): Promise<void> {
   });
   await core.init();
 
-  // Default transport: stdio. Daemon + TCP support arrives in V1.1.
-  const stdio = startStdioServer({ core });
-
-  // Per-agent fixed viewer port. We deliberately ignore
-  // `config.viewer.port` so old config.yaml files (which baked in
-  // the legacy single-port :18799) don't collide between agents.
-  // Users who really want a different port should `lsof`/`nc` the
-  // collision themselves rather than edit a YAML field.
+  // Per-agent fixed viewer port.
   const AGENT_DEFAULT_PORTS = { openclaw: 18799, hermes: 18800 } as const;
   const viewerPort = AGENT_DEFAULT_PORTS[args.agent];
+
+  // ─── Daemon mode ──────────────────────────────────────────────
+  // When started with `--daemon`, skip stdio and run as a pure HTTP
+  // viewer daemon. Used by install.sh (post-install) and admin/restart
+  // (self-restart) to keep the Memory Viewer always available.
+  if (args.daemon) {
+    let viewer: import("./server/types.js").ServerHandle | null = null;
+    try {
+      viewer = await startHttpServer(
+        {
+          core,
+          home,
+          logTail: () => memoryBuffer().tail({ limit: 200 }),
+        },
+        {
+          port: viewerPort,
+          host: config.viewer.bindHost,
+          staticRoot: path.resolve(__dirname, "web/dist"),
+          agent: args.agent,
+        },
+      );
+      process.stderr.write(
+        `bridge: daemon viewer live at ${viewer.url} (agent=${args.agent})\n`,
+      );
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e?.code === "EADDRINUSE") {
+        process.stderr.write(
+          `bridge: daemon port :${viewerPort} already in use — exiting.\n`,
+        );
+        await core.shutdown();
+        process.exit(1);
+      }
+      process.stderr.write(
+        `bridge: daemon viewer failed: ${(err as Error)?.message ?? String(err)}\n`,
+      );
+      await core.shutdown();
+      process.exit(1);
+    }
+
+    const shutdownDaemon = async (sig: string) => {
+      process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
+      try { await viewer!.close(); } catch { /* best-effort */ }
+      await core.shutdown();
+      process.exit(0);
+    };
+    process.on("SIGINT", () => void shutdownDaemon("SIGINT"));
+    process.on("SIGTERM", () => void shutdownDaemon("SIGTERM"));
+    // Process stays alive via the HTTP server's ref'd socket.
+    return;
+  }
+
+  // ─── Normal (stdio) mode ──────────────────────────────────────
+  const stdio = startStdioServer({ core });
 
   // Try to bind the viewer port. EADDRINUSE → stay headless.
   let viewer: import("./server/types.js").ServerHandle | null = null;
@@ -135,27 +182,19 @@ async function main(): Promise<void> {
 
   // If a viewer is running, keep the process alive as a daemon so the
   // memory panel stays accessible between `hermes chat` sessions.
-  // The next `hermes chat` will spawn a new headless bridge (EADDRINUSE
-  // on the viewer port); this daemon stays for the viewer only.
   if (viewer && !viewer.closed) {
     process.stderr.write(
       `bridge: stdin closed but viewer is still serving at ${viewer.url} — ` +
         `staying alive as daemon. Send SIGTERM to stop.\n`,
     );
-    // Unref'd interval keeps the event loop alive without preventing
-    // graceful exit on SIGTERM/SIGINT (handled above).
     const keepalive = setInterval(() => {
       if (viewer!.closed) {
         clearInterval(keepalive);
         void core.shutdown().then(() => process.exit(0));
       }
     }, 5_000);
-    // Don't let the keepalive timer keep the process alive if
-    // everything else (viewer, core) has been torn down.
     (keepalive as unknown as { unref?: () => void }).unref?.();
-    // ...but DO ref the viewer's server socket so the process stays
-    // alive for HTTP requests. The server is already ref'd by default.
-    return; // don't fall through to shutdown + exit
+    return;
   }
 
   // No viewer (headless bridge) — clean exit.
