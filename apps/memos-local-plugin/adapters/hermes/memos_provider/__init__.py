@@ -142,7 +142,7 @@ class MemTensorProvider(MemoryProvider):
             logger.warning("MemOS: failed to start bridge — %s", err)
             return
         try:
-            self._bridge = MemosBridgeClient()
+            self._bridge = MemosBridgeClient(tcp_host="127.0.0.1", tcp_port=18911)
             resp = self._bridge.request(
                 "session.open",
                 {
@@ -455,10 +455,13 @@ class MemTensorProvider(MemoryProvider):
         if pending:
             with contextlib.suppress(Exception):
                 self._turn_end(*pending)
-        with contextlib.suppress(Exception):
-            self._bridge.request("episode.close", {"episodeId": self._episode_id})
-        with contextlib.suppress(Exception):
-            self._bridge.request("session.close", {"sessionId": self._session_id})
+        # In TCP mode the daemon bridge owns the session — don't close it.
+        # The pipeline will finalize the episode naturally on the daemon side.
+        if not self._bridge._tcp_mode:
+            with contextlib.suppress(Exception):
+                self._bridge.request("episode.close", {"episodeId": self._episode_id})
+            with contextlib.suppress(Exception):
+                self._bridge.request("session.close", {"sessionId": self._session_id})
 
     def shutdown(self) -> None:  # type: ignore[override]
         if self._prefetch_thread and self._prefetch_thread.is_alive():
