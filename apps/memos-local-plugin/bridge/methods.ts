@@ -214,6 +214,15 @@ export function makeDispatcher(
         });
         return { traces: out };
       }
+      case RPC_METHODS.MEMORY_LIST_WORLDS: {
+        const p = asRecord(params, method);
+        const out = await core.listWorldModels({
+          limit: typeof p.limit === "number" ? p.limit : undefined,
+          offset: typeof p.offset === "number" ? p.offset : undefined,
+          q: typeof p.q === "string" ? p.q : undefined,
+        });
+        return { worldModels: out };
+      }
 
       // ── skills ──
       case RPC_METHODS.SKILL_LIST: {

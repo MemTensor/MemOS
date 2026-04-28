@@ -11,7 +11,8 @@
  *   - session.open / episode.open — used during `initialize()`.
  *   - turn.start — returns injected context for Python-side prefetch.
  *   - turn.end — accepts the completed turn payload.
- *   - memory.search / memory.timeline — tool schemas exposed to Hermes.
+ *   - memory.search / memory.get_* / memory.timeline — memory tools exposed to Hermes.
+ *   - skill.list / skill.get — skill tools exposed to Hermes.
  *   - feedback.submit — thumbs-up/thumbs-down signal.
  *   - episode.close / session.close — shutdown path.
  */
@@ -69,6 +70,7 @@ function stubCore(): MemoryCore {
     getWorldModel: vi.fn(async () => null),
     listEpisodes: vi.fn(async () => []),
     timeline: vi.fn(async () => [{ id: "t1", step: 0, ts: 0 }] as any),
+    listWorldModels: vi.fn(async () => []),
     listSkills: vi.fn(async () => []),
     getSkill: vi.fn(async () => null),
     archiveSkill: vi.fn(async () => {}),
@@ -148,6 +150,25 @@ describe("hermes protocol surface", () => {
     const res = await dispatch("memory.timeline", { episodeId: "e-1" });
     expect(core.timeline).toHaveBeenCalledWith({ episodeId: "e-1" });
     expect((res as any).traces).toBeInstanceOf(Array);
+  });
+
+  it("expanded Hermes tools route to memory and skill RPCs", async () => {
+    const core = stubCore();
+    const dispatch = makeDispatcher(core);
+
+    await dispatch("memory.get_trace", { id: "t-1" });
+    await dispatch("memory.get_policy", { id: "p-1" });
+    await dispatch("memory.get_world", { id: "w-1" });
+    await dispatch("memory.list_world_models", { limit: 5, offset: 0 });
+    await dispatch("skill.list", { status: "active", limit: 10 });
+    await dispatch("skill.get", { id: "s-1" });
+
+    expect(core.getTrace).toHaveBeenCalledWith("t-1");
+    expect(core.getPolicy).toHaveBeenCalledWith("p-1");
+    expect(core.getWorldModel).toHaveBeenCalledWith("w-1");
+    expect(core.listWorldModels).toHaveBeenCalledWith({ limit: 5, offset: 0, q: undefined });
+    expect(core.listSkills).toHaveBeenCalledWith({ status: "active", limit: 10 });
+    expect(core.getSkill).toHaveBeenCalledWith("s-1");
   });
 
   it("submit_feedback path: feedback.submit carries polarity+magnitude", async () => {
