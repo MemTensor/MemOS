@@ -120,8 +120,12 @@ async function main(): Promise<void> {
       `bridge: viewer failed to start: ${(err as Error).message}\n`,
     );
   }
+  let tcpServer: Awaited<ReturnType<typeof startTcpServer>> | null = null;
+  let shuttingDown = false;
 
   const shutdown = async (sig: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     process.stderr.write(`bridge: received ${sig}, shutting down\n`);
     try {
       if (tcpServer) await tcpServer.close();

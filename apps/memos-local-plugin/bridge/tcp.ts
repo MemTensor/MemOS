@@ -117,7 +117,7 @@ export function startTcpServer(options: TcpServerOptions): TcpServerHandle {
       return;
     }
 
-    if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0" || !msg.method) {
+    if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") {
       writeLine(sock, errorResponse(msg?.id ?? null, JSONRPC_INVALID_REQUEST, "not JSON-RPC 2.0"));
       return;
     }
@@ -171,6 +171,7 @@ export function startTcpServer(options: TcpServerOptions): TcpServerHandle {
     sock.on("error", (err) => {
       process.stderr.write(`bridge.tcp: socket error: ${err.message}\n`);
       clients.delete(sock);
+      sock.destroy();
     });
   });
 
