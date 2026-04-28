@@ -111,6 +111,13 @@ class MemTensorProvider(MemoryProvider):
         # Tool calls accumulated via the Hermes `post_tool_call` plugin
         # hook — flushed alongside user/assistant text in `sync_turn`.
         self._tool_calls: list[dict[str, Any]] = []
+        # Reasoning text captured via the `post_llm_call` hook for the
+        # current turn. Hermes' MemoryProvider.sync_turn signature only
+        # carries the visible assistant text; reasoning lives on the
+        # `assistant` message's `reasoning` field. We capture it from
+        # `post_llm_call`'s `conversation_history` so the viewer can
+        # show the model's thinking like OpenClaw does.
+        self._turn_thinking: str = ""
         self._hook_registered = False
 
     # ─── Identity ─────────────────────────────────────────────────────────
@@ -212,8 +219,9 @@ class MemTensorProvider(MemoryProvider):
 
             mgr = get_plugin_manager()
             mgr._hooks.setdefault("post_tool_call", []).append(self._on_post_tool_call)
+            mgr._hooks.setdefault("post_llm_call", []).append(self._on_post_llm_call)
             self._hook_registered = True
-            logger.debug("MemOS: registered post_tool_call hook")
+            logger.debug("MemOS: registered post_tool_call + post_llm_call hooks")
         except Exception as err:
             logger.debug("MemOS: could not register tool hook — %s", err)
 
@@ -226,7 +234,13 @@ class MemTensorProvider(MemoryProvider):
         tool_call_id: str = "",
         **_kw: Any,
     ) -> None:
-        """Accumulate a tool call record for the current turn."""
+        """Accumulate a tool call record for the current turn.
+
+        We keep the host's ``tool_call_id`` on a private ``_id`` field so
+        ``_on_post_llm_call`` can later attach the assistant message's
+        ``reasoning`` (the model's "thinking before this tool") to the
+        right entry. The ``_id`` is stripped before the JSON-RPC send.
+        """
         self._tool_calls.append(
             {
                 "name": tool_name,
@@ -234,14 +248,86 @@ class MemTensorProvider(MemoryProvider):
                 if isinstance(args, dict)
                 else str(args or ""),
                 "output": (result or "")[:4000],
+                "_id": tool_call_id or "",
             }
         )
+
+    def _on_post_llm_call(
+        self,
+        *,
+        conversation_history: list[dict[str, Any]] | None = None,
+        user_message: str = "",
+        **_kw: Any,
+    ) -> None:
+        """Capture reasoning content from assistant messages in this turn.
+
+        Hermes' ``_build_assistant_message`` writes the model's reasoning
+        text into ``msg["reasoning"]`` (extended thinking, OpenAI o1
+        ``reasoning_content``, etc.). The default ``MemoryProvider.sync_turn``
+        only carries plain ``user_content`` / ``assistant_content``, so we
+        fish the reasoning out of the conversation history fired with the
+        ``post_llm_call`` hook and stash it for the upcoming ``sync_turn``.
+
+        We walk through assistant messages of the current turn (those
+        after the most recent user message). For each message that
+        contains ``reasoning`` AND ``tool_calls``, we attach the reasoning
+        as ``thinkingBefore`` to every captured tool call whose
+        ``tool_call_id`` matches one of the message's tool calls — this
+        is the model's chain-of-thought immediately before invoking that
+        tool. The final reasoning (the message that produced the user-
+        facing reply) becomes the turn-level ``agentThinking``.
+        """
+        if not conversation_history:
+            return
+
+        # Find the last user message and walk forward from there.
+        last_user_idx = -1
+        for i, msg in enumerate(conversation_history):
+            if msg.get("role") == "user":
+                last_user_idx = i
+
+        # Build a map: tool_call_id -> reasoning text.
+        thinking_by_id: dict[str, str] = {}
+        # Reasoning of the message that produced the final reply (no
+        # tool_calls in that message) becomes the turn-level thinking.
+        final_reasoning = ""
+
+        for msg in conversation_history[last_user_idx + 1 :]:
+            if msg.get("role") != "assistant":
+                continue
+            r = msg.get("reasoning")
+            r_str = r.strip() if isinstance(r, str) and r.strip() else ""
+            tcs = msg.get("tool_calls")
+            if isinstance(tcs, list) and tcs:
+                # Reasoning preceded these tool calls.
+                if r_str:
+                    for tc in tcs:
+                        tc_id = (tc.get("id") if isinstance(tc, dict) else None) or ""
+                        if tc_id:
+                            thinking_by_id[tc_id] = r_str
+            else:
+                # Plain assistant reply — overwrite final_reasoning so we
+                # keep the LATEST one (mirrors Hermes' ``last_reasoning``).
+                if r_str:
+                    final_reasoning = r_str
+
+        # Attach thinkingBefore to matching captured tool calls.
+        for tc in self._tool_calls:
+            tc_id = tc.get("_id") or ""
+            if tc_id and tc_id in thinking_by_id:
+                tc["thinkingBefore"] = thinking_by_id[tc_id]
+
+        self._turn_thinking = final_reasoning
 
     # ─── Turn-level hooks ─────────────────────────────────────────────────
 
     def on_turn_start(self, turn_number: int, message: str, **_kwargs: Any) -> None:  # type: ignore[override]
         self._turn_number = int(turn_number or 0)
         self._last_user_text = (message or "").strip()
+        # Reset per-turn buffers so reasoning / tool calls captured here
+        # belong only to this turn.
+        self._turn_thinking = ""
+        self._tool_calls = []
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:  # type: ignore[override]
         """Inject relevant memories ahead of the next model call.
@@ -297,15 +383,24 @@ class MemTensorProvider(MemoryProvider):
         user = user_content or self._last_user_text
         assistant = assistant_content or ""
         tool_calls = self._tool_calls
+        thinking = self._turn_thinking
         self._tool_calls = []
+        self._turn_thinking = ""
         logger.info(
-            "MemOS: sync_turn user=%d assistant=%d tools=%d",
+            "MemOS: sync_turn user=%d assistant=%d tools=%d thinking=%d",
             len(user),
             len(assistant),
             len(tool_calls),
+            len(thinking),
         )
         try:
-            self._turn_end(user, assistant, tool_calls, int(time.time() * 1000))
+            self._turn_end(
+                user,
+                assistant,
+                tool_calls,
+                int(time.time() * 1000),
+                agent_thinking=thinking,
+            )
         except Exception as err:
             logger.warning("MemOS: sync_turn turn.end failed — %s", err)
         if user_content:
@@ -764,21 +859,25 @@ class MemTensorProvider(MemoryProvider):
         assistant_content: str,
         tool_calls: list[dict[str, Any]],
         ts_ms: int,
+        *,
+        agent_thinking: str = "",
     ) -> None:
         if not self._bridge:
             return
-        self._bridge.request(
-            "turn.end",
-            {
-                "agent": "hermes",
-                "sessionId": self._session_id,
-                "episodeId": self._episode_id,
-                "agentText": assistant_content,
-                "userText": user_content,
-                "toolCalls": tool_calls,
-                "ts": ts_ms,
-            },
-        )
+        # Strip the private `_id` book-keeping field before sending.
+        clean_tool_calls = [{k: v for k, v in tc.items() if k != "_id"} for tc in tool_calls]
+        payload: dict[str, Any] = {
+            "agent": "hermes",
+            "sessionId": self._session_id,
+            "episodeId": self._episode_id,
+            "agentText": assistant_content,
+            "userText": user_content,
+            "toolCalls": clean_tool_calls,
+            "ts": ts_ms,
+        }
+        if agent_thinking:
+            payload["agentThinking"] = agent_thinking
+        self._bridge.request("turn.end", payload)
 
 
 # ─── Discovery entry points ───────────────────────────────────────────────
