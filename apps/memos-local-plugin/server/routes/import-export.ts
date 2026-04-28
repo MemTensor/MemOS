@@ -34,31 +34,48 @@ export function registerImportExportRoutes(routes: Routes, deps: ServerDeps): vo
     // The frontend uses `FormData` with field `bundle` (a File). We
     // accept EITHER multipart OR raw JSON body, detected from the
     // content-type header.
-    const ct = (ctx.req.headers["content-type"] ?? "").toLowerCase();
+    // IMPORTANT: do NOT lowercase the full header — the boundary value
+    // is case-sensitive and lowercasing it breaks matching against
+    // the body where the original-case boundary appears verbatim.
+    const ct = ctx.req.headers["content-type"] ?? "";
     let bundle: Parameters<typeof deps.core.importBundle>[0] | null = null;
 
-    if (ct.startsWith("application/json")) {
+    const ctLower = ct.toLowerCase();
+    if (ctLower.startsWith("application/json")) {
       bundle = parseJson(ctx);
-    } else if (ct.startsWith("multipart/form-data")) {
+    } else if (ctLower.startsWith("multipart/form-data")) {
       const parsed = parseMultipartBundle(ct, ctx.body);
       if (!parsed) {
-        writeError(ctx, 400, "invalid_argument", "missing 'bundle' file field");
-        return;
-      }
-      try {
-        bundle = JSON.parse(parsed);
-      } catch (err) {
-        writeError(ctx, 400, "invalid_argument", "bundle is not valid JSON");
-        return;
+        // Fallback: try parsing the raw body as JSON directly (some
+        // environments strip multipart wrappers or the boundary detection
+        // can fail on edge-case formatting).
+        try {
+          bundle = JSON.parse(ctx.body.toString("utf8"));
+        } catch {
+          writeError(ctx, 400, "invalid_argument", "missing 'bundle' file field");
+          return;
+        }
+      } else {
+        try {
+          bundle = JSON.parse(parsed);
+        } catch (err) {
+          writeError(ctx, 400, "invalid_argument", "bundle is not valid JSON");
+          return;
+        }
       }
     } else {
-      writeError(
-        ctx,
-        415,
-        "unsupported_media_type",
-        "content-type must be application/json or multipart/form-data",
-      );
-      return;
+      // Last resort: try parsing as JSON regardless of content-type
+      try {
+        bundle = JSON.parse(ctx.body.toString("utf8"));
+      } catch {
+        writeError(
+          ctx,
+          415,
+          "unsupported_media_type",
+          "content-type must be application/json or multipart/form-data",
+        );
+        return;
+      }
     }
 
     if (!bundle || typeof bundle !== "object") {
@@ -78,19 +95,47 @@ export function registerImportExportRoutes(routes: Routes, deps: ServerDeps): vo
 function parseMultipartBundle(contentType: string, body: Buffer): string | null {
   const boundaryMatch = contentType.match(/boundary=("?)([^";]+)\1/i);
   if (!boundaryMatch) return null;
-  const boundary = `--${boundaryMatch[2]}`;
-  const text = body.toString("binary");
-  const parts = text.split(boundary);
-  for (const part of parts) {
-    if (!part || part === "--\r\n") continue;
-    const headerEnd = part.indexOf("\r\n\r\n");
-    if (headerEnd < 0) continue;
-    const headers = part.slice(0, headerEnd);
-    if (!/name="bundle"/i.test(headers)) continue;
-    // Strip final CRLF before the next boundary (if any).
-    let payload = part.slice(headerEnd + 4);
-    if (payload.endsWith("\r\n")) payload = payload.slice(0, -2);
-    return Buffer.from(payload, "binary").toString("utf8");
+  // The boundary in the content-type header may or may not start with
+  // dashes. In the body, each boundary line is always prefixed with "--".
+  // We try both: `--<boundary>` and the raw boundary as-is.
+  let raw = boundaryMatch[2]!;
+  let boundaryBuf = Buffer.from(`--${raw}`);
+  if (body.indexOf(boundaryBuf) < 0) {
+    // The header already included the dashes (e.g. "boundary=----Webkit...")
+    // so `--` + `----Webkit` = `------Webkit` which won't match.
+    // Try using the raw boundary directly.
+    boundaryBuf = Buffer.from(raw);
+    if (body.indexOf(boundaryBuf) < 0) return null;
+  }
+
+  const crlfcrlf = Buffer.from("\r\n\r\n");
+
+  let offset = 0;
+  while (offset < body.length) {
+    const bStart = body.indexOf(boundaryBuf, offset);
+    if (bStart < 0) break;
+    let partStart = bStart + boundaryBuf.length;
+    // Skip CRLF after the boundary line
+    if (partStart + 2 <= body.length &&
+        body[partStart] === 0x0d && body[partStart + 1] === 0x0a) {
+      partStart += 2;
+    }
+    const nextBoundary = body.indexOf(boundaryBuf, partStart);
+    const partEnd = nextBoundary >= 0 ? nextBoundary : body.length;
+    const part = body.subarray(partStart, partEnd);
+
+    const headerEnd = part.indexOf(crlfcrlf);
+    if (headerEnd < 0) { offset = partEnd; continue; }
+    const headers = part.subarray(0, headerEnd).toString("utf8");
+    if (!/name="bundle"/i.test(headers)) { offset = partEnd; continue; }
+
+    let payload = part.subarray(headerEnd + 4);
+    if (payload.length >= 2 &&
+        payload[payload.length - 2] === 0x0d &&
+        payload[payload.length - 1] === 0x0a) {
+      payload = payload.subarray(0, payload.length - 2);
+    }
+    return payload.toString("utf8");
   }
   return null;
 }

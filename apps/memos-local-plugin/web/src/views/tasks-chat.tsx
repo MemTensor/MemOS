@@ -20,6 +20,7 @@
  */
 import type { JSX } from "preact";
 import { Icon } from "../components/Icon";
+import { Markdown } from "../components/Markdown";
 import { t } from "../stores/i18n";
 import type { ChatMsg, ChatRole } from "./tasks-chat-data";
 
@@ -154,10 +155,12 @@ export function ChatBubble({ msg }: { msg: ChatMsg }) {
           <ToolBubble msg={msg} />
         ) : msg.role === "thinking" ? (
           <div class="chat-item__bubble chat-item__bubble--thinking">
-            {msg.text}
+            <Markdown text={msg.text} />
           </div>
         ) : (
-          <div class="chat-item__bubble">{msg.text}</div>
+          <div class="chat-item__bubble">
+            <Markdown text={msg.text} />
+          </div>
         )}
       </div>
     </div>

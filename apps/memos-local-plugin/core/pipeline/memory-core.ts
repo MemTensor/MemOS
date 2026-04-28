@@ -380,7 +380,12 @@ export function createMemoryCore(
           role: inferTurnRole(tc),
           action: phase === "lite" ? ("stored" as const) : ("reflected" as const),
           summary: tc.reflection?.text ?? null,
-          content: (tc.userText || tc.agentText || "").slice(0, 400),
+          content: (
+            tc.userText ||
+            tc.agentText ||
+            summarizeToolCalls(tc.toolCalls) ||
+            ""
+          ).slice(0, 400),
           traceId: tc.traceId,
         }));
         handle.repos.apiLogs.insert({
@@ -726,6 +731,40 @@ export function createMemoryCore(
   }
 
   async function health(): Promise<CoreHealth> {
+    // Read the latest on-disk config so that model names reflect what
+    // the user last saved, even before a restart applies the change.
+    let diskConfig: Record<string, unknown> | null = null;
+    try {
+      const { loadConfig } = await import("../config/index.js");
+      const { config } = await loadConfig(handle.home);
+      diskConfig = config as unknown as Record<string, unknown>;
+    } catch {
+      /* fall through to in-memory */
+    }
+
+    const llmInfo = llmHealth(handle.llm, latestTraceTs());
+    const embedderInfo = embedderHealth(handle.embedder, latestTraceTs());
+    const skillEvolverInfo = resolveSkillEvolver(
+      diskConfig ?? handle.config,
+      handle.llm,
+      latestTraceTs(),
+    );
+
+    // Override model names from disk config if they differ from the
+    // in-memory client (user saved new settings but hasn't restarted).
+    if (diskConfig) {
+      const diskLlm = diskConfig.llm as { model?: string; provider?: string } | undefined;
+      if (diskLlm?.model && diskLlm.model !== llmInfo.model) {
+        llmInfo.model = diskLlm.model;
+        if (diskLlm.provider) llmInfo.provider = diskLlm.provider;
+      }
+      const diskEmb = diskConfig.embedding as { model?: string; provider?: string } | undefined;
+      if (diskEmb?.model && diskEmb.model !== embedderInfo.model) {
+        embedderInfo.model = diskEmb.model;
+        if (diskEmb.provider) embedderInfo.provider = diskEmb.provider;
+      }
+    }
+
     return {
       ok: initialized && !shutDown,
       version: pkgVersion,
@@ -738,17 +777,9 @@ export function createMemoryCore(
         skills: home.skillsDir,
         logs: home.logsDir,
       },
-      // V7 overview card: fall back to the newest captured trace as
-      // a proxy for "LLM + embedder were OK recently" when the live
-      // `stats().lastOkAt` counter hasn't yet been populated in this
-      // process. Every captured trace is proof that reflection / α
-      // scoring (LLM) and summary embedding (embedder) both
-      // succeeded at that moment — so reading the DB max ts gives a
-      // correct, non-fabricated lower bound that survives plugin
-      // restarts without misleading the user.
-      llm: llmHealth(handle.llm, latestTraceTs()),
-      embedder: embedderHealth(handle.embedder, latestTraceTs()),
-      skillEvolver: resolveSkillEvolver(handle.config, handle.llm, latestTraceTs()),
+      llm: llmInfo,
+      embedder: embedderInfo,
+      skillEvolver: skillEvolverInfo,
     };
   }
 
@@ -1562,6 +1593,8 @@ export function createMemoryCore(
         tags: tagSet.size > 0 ? Array.from(tagSet).sort() : undefined,
         skillStatus: derivation.status,
         skillReason: derivation.reason,
+        skillReasonKey: derivation.reasonKey,
+        skillReasonParams: derivation.reasonParams,
         linkedSkillId: derivation.linkedSkillId,
         closeReason,
         abandonReason,
@@ -2673,37 +2706,52 @@ export function deriveSkillStatus(
 ): {
   status: EpisodeListItemDTO["skillStatus"];
   reason: string | null;
+  reasonKey: string | null;
+  reasonParams: Record<string, string> | null;
   linkedSkillId: SkillId | null;
 } {
   if (ep.status === "open") {
-    return { status: "queued", reason: "任务仍在进行中，技能流水线尚未启动", linkedSkillId: null };
+    return {
+      status: "queued",
+      reason: "任务仍在进行中，技能流水线尚未启动",
+      reasonKey: "tasks.skillReason.queued.inProgress",
+      reasonParams: null,
+      linkedSkillId: null,
+    };
   }
   if (ep.rTask == null) {
     return {
       status: "queued",
       reason: "Reward 评分尚未完成，技能流水线将在评分后启动",
+      reasonKey: "tasks.skillReason.queued.rewardPending",
+      reasonParams: null,
       linkedSkillId: null,
     };
   }
   if (ep.rTask <= R_NEGATIVE_FLOOR) {
     return {
       status: "skipped",
-      reason: `任务评分为明显负分 (R=${ep.rTask.toFixed(2)})，视为反例；不会沉淀出新的 L2 经验或技能，但原始 L1 轨迹会作为反面教材保留，在后续 Decision Repair 中生成 anti-pattern 规避下次同类错误`,
+      reason: `任务评分为明显负分 (R=${ep.rTask.toFixed(2)})，视为反例`,
+      reasonKey: "tasks.skillReason.skipped",
+      reasonParams: { rTask: ep.rTask.toFixed(2) },
       linkedSkillId: null,
     };
   }
   if (ep.rTask < R_BELOW_THRESHOLD) {
     return {
       status: "not_generated",
-      reason: `任务评分 R=${ep.rTask.toFixed(2)} 未达到沉淀阈值 (≥ ${R_BELOW_THRESHOLD.toFixed(2)})——对话本身正常，只是还不够强到能泛化成 L2 经验；多做几个相似任务后会自动积累`,
+      reason: `任务评分 R=${ep.rTask.toFixed(2)} 未达到沉淀阈值`,
+      reasonKey: "tasks.skillReason.not_generated.belowThreshold",
+      reasonParams: { rTask: ep.rTask.toFixed(2), threshold: R_BELOW_THRESHOLD.toFixed(2) },
       linkedSkillId: null,
     };
   }
   if (relatedPolicies.length === 0) {
     return {
       status: "not_generated",
-      reason:
-        "暂未归纳出 L2 经验——单个任务无法跨任务泛化；需要至少 2 个相似任务（minEpisodesForInduction），且 V 值 ≥ 0.1 才能触发 L2 诱导，之后支撑 ≥ 3 个相似任务才会结晶为技能",
+      reason: "暂未归纳出 L2 经验",
+      reasonKey: "tasks.skillReason.not_generated.noPolicy",
+      reasonParams: null,
       linkedSkillId: null,
     };
   }
@@ -2711,39 +2759,72 @@ export function deriveSkillStatus(
   const policyBucket = skillsByPolicy.get(best.id) ?? [];
   if (policyBucket.length > 0) {
     const active = policyBucket.find((s) => s.status !== "archived") ?? policyBucket[0]!;
+    const isUpgraded = best.updatedAt > active.updatedAt;
     return {
-      status: best.updatedAt > active.updatedAt ? "upgraded" : "generated",
+      status: isUpgraded ? "upgraded" : "generated",
       reason: `技能「${active.name ?? active.id}」已从经验 ${best.id.slice(0, 8)} 结晶`,
+      reasonKey: isUpgraded ? "tasks.skillReason.upgraded" : "tasks.skillReason.generated",
+      reasonParams: { skillName: active.name ?? active.id, policyId: best.id.slice(0, 8) },
       linkedSkillId: active.id as SkillId,
     };
   }
   if (best.status !== "active") {
     return {
       status: "queued",
-      reason: `经验 ${best.id.slice(0, 8)} 状态为 ${best.status}——需要更多支撑任务才能结晶为技能（当前 support=${best.support ?? 0}，需 ≥3）`,
+      reason: `经验 ${best.id.slice(0, 8)} 需要更多支撑任务`,
+      reasonKey: "tasks.skillReason.queued.policyPending",
+      reasonParams: { support: String(best.support ?? 0) },
       linkedSkillId: null,
     };
   }
   return {
     status: "queued",
-    reason: `经验 ${best.id.slice(0, 8)} 已就绪（gain=${best.gain.toFixed(2)}，support=${best.support ?? 0}），技能结晶将在下次 reward 评分后自动触发`,
+    reason: `经验 ${best.id.slice(0, 8)} 已就绪`,
+    reasonKey: "tasks.skillReason.queued.ready",
+    reasonParams: { gain: best.gain.toFixed(2), support: String(best.support ?? 0) },
     linkedSkillId: null,
   };
+}
+
+/**
+ * Produce a short content string from toolCalls when userText/agentText
+ * are both empty (sub-steps after the first in a multi-tool turn).
+ */
+function summarizeToolCalls(
+  toolCalls?: readonly { name?: string; output?: unknown }[] | null,
+): string {
+  if (!toolCalls || toolCalls.length === 0) return "";
+  return toolCalls
+    .map((tc) => {
+      const name = tc.name ?? "tool";
+      const out = typeof tc.output === "string"
+        ? tc.output.slice(0, 200)
+        : tc.output != null
+        ? JSON.stringify(tc.output).slice(0, 200)
+        : "";
+      return out ? `[${name}] ${out}` : `[${name}]`;
+    })
+    .join("\n");
 }
 
 /**
  * Heuristic role inference for api_logs "memory_add" rows — mirrors
  * the legacy plugin's behaviour where each captured turn showed up
  * labelled `user` / `assistant` / `tool` on the Logs page.
+ *
+ * Priority: if the step carries userText (the user's query), label it
+ * "user" even when toolCalls are present — this is the first sub-step
+ * of a multi-tool turn and semantically represents the user request.
  */
 function inferTurnRole(step: {
   userText?: string;
   agentText?: string;
   toolCalls?: readonly unknown[];
 }): "user" | "assistant" | "tool" | "other" {
-  if ((step.toolCalls?.length ?? 0) > 0) return "tool";
   const u = (step.userText ?? "").length;
   const a = (step.agentText ?? "").length;
+  if (u > 0 && (step.toolCalls?.length ?? 0) > 0) return "user";
+  if ((step.toolCalls?.length ?? 0) > 0) return "tool";
   if (u >= a && u > 0) return "user";
   if (a > 0) return "assistant";
   return "other";
