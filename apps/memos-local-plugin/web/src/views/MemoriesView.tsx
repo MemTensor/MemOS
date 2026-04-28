@@ -54,8 +54,6 @@ import { Icon } from "../components/Icon";
 import { route } from "../stores/router";
 import type { TraceDTO } from "../api/types";
 
-type RoleFilter = "" | "user" | "assistant" | "tool";
-
 interface ListResponse {
   traces: TraceDTO[];
   limit: number;
@@ -87,13 +85,12 @@ interface MemoryGroup {
   shared: boolean;
 }
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 20;
 
 export function MemoriesView() {
   // Pre-fill from URL `?q=` so the global search box in Header can
   // navigate here with a pending query.
   const [query, setQuery] = useState(() => route.value.params.q ?? "");
-  const [role, setRole] = useState<RoleFilter>("");
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [traces, setTraces] = useState<TraceDTO[]>([]);
@@ -151,13 +148,10 @@ export function MemoriesView() {
   /**
    * Bucket the page's traces by `(episodeId, turnId)` so each "user
    * message + every sub-step it produced" collapses into one card.
-   * Then drop groups whose role doesn't match the chip filter.
    */
   const groups = useMemo<MemoryGroup[]>(() => {
-    const all = buildGroups(traces);
-    if (!role) return all;
-    return all.filter((g) => detectGroupRole(g) === role);
-  }, [traces, role]);
+    return buildGroups(traces);
+  }, [traces]);
 
   /**
    * A card is "selected" when every member trace id is in the
@@ -348,7 +342,6 @@ export function MemoriesView() {
             class="btn btn--ghost btn--sm"
             onClick={() => {
               setQuery("");
-              setRole("");
               setSelected(new Set());
               void loadPage({ q: "", page: 0 });
             }}
@@ -371,27 +364,6 @@ export function MemoriesView() {
             onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
           />
         </label>
-      </div>
-
-      {/* Row 2: filter chips — own row, matches TasksView layout */}
-      <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
-        <div class="toolbar__group" role="group" aria-label={t("memories.filter.role")}>
-          {[
-            { v: "" as RoleFilter, k: "common.all" as const },
-            { v: "user" as RoleFilter, k: "memories.filter.role.user" as const },
-            { v: "assistant" as RoleFilter, k: "memories.filter.role.assistant" as const },
-            { v: "tool" as RoleFilter, k: "memories.filter.role.tool" as const },
-          ].map((opt) => (
-            <button
-              key={opt.v}
-              class="chip"
-              aria-pressed={role === opt.v}
-              onClick={() => setRole(opt.v)}
-            >
-              {t(opt.k)}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/*
@@ -456,7 +428,6 @@ export function MemoriesView() {
           {groups.map((g) => {
             const isSel = isGroupSelected(g);
             const line = pickSummary(g.head);
-            const roleKey = detectGroupRole(g);
             const scope = g.scope;
             const stepLabel =
               g.traces.length > 1
@@ -491,11 +462,6 @@ export function MemoriesView() {
                 <div class="mem-card__body">
                   <div class="mem-card__title">{line}</div>
                   <div class="mem-card__meta">
-                    {roleKey && (
-                      <span class={`pill pill--role-${roleKey}`}>
-                        {t(`memories.filter.role.${roleKey}` as never)}
-                      </span>
-                    )}
                     <span class={`pill pill--share-${scope}`}>
                       {t(`memories.share.scope.${scope}` as never).split(" (")[0]}
                     </span>
@@ -707,15 +673,6 @@ function summarizeToolNames(
   return `${unique.slice(0, 2).join(", ")} +${unique.length - 2}`;
 }
 
-function detectRole(trace: TraceDTO): "user" | "assistant" | "tool" | "" {
-  if ((trace.toolCalls?.length ?? 0) > 0) return "tool";
-  if (trace.userText && trace.userText.length > (trace.agentText?.length ?? 0))
-    return "user";
-  if (trace.agentText) return "assistant";
-  if (trace.userText) return "user";
-  return "";
-}
-
 /**
  * Bucket the page's traces by `(episodeId, turnId)`. Within each
  * bucket, sort sub-steps by `ts ascending` and pick the first row
@@ -777,11 +734,6 @@ function groupKey(tr: TraceDTO): string {
   // sub-step from the same user message shares it. Pair with episodeId
   // because turnId is just a ts (could repeat across episodes).
   return `${tr.episodeId ?? "_"}:${tr.turnId}`;
-}
-
-function detectGroupRole(g: MemoryGroup): "user" | "assistant" | "tool" | "" {
-  if (g.toolCount > 0) return "tool";
-  return detectRole(g.head);
 }
 
 function flattenToolCallList(g: MemoryGroup): { name: string }[] {
