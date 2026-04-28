@@ -151,6 +151,78 @@ export function makeTracesRepo(db: StorageDb) {
     },
 
     /**
+     * Count distinct (episode_id, turn_id) groups — i.e. "memory turns",
+     * where one user query + its tool sub-steps + final reply are
+     * counted as 1. Used by the Memories viewer for accurate pagination.
+     */
+    countTurns(filter: Omit<TraceListFilter, "limit" | "offset"> = {}): number {
+      const fragments: string[] = [];
+      const params: Record<string, unknown> = {};
+      if (filter.sessionId) {
+        fragments.push(`session_id = @session_id`);
+        params.session_id = filter.sessionId;
+      }
+      if (filter.episodeId) {
+        fragments.push(`episode_id = @episode_id`);
+        params.episode_id = filter.episodeId;
+      }
+      const where = joinWhere(fragments);
+      const sql = `SELECT COUNT(*) AS n FROM (SELECT DISTINCT episode_id, turn_id FROM traces ${where})`;
+      const row = db.prepare<typeof params, { n: number }>(sql).get(params);
+      return row?.n ?? 0;
+    },
+
+    /**
+     * List paginated turn keys (episode_id, turn_id) ordered by the
+     * turn's most recent trace timestamp DESC. The viewer uses this to
+     * fetch a page of "memories" (1 turn = 1 memory).
+     */
+    listTurnKeys(filter: TraceListFilter = {}): Array<{ episodeId: string | null; turnId: number; maxTs: number }> {
+      const fragments: string[] = [];
+      const params: Record<string, unknown> = {};
+      if (filter.sessionId) {
+        fragments.push(`session_id = @session_id`);
+        params.session_id = filter.sessionId;
+      }
+      if (filter.episodeId) {
+        fragments.push(`episode_id = @episode_id`);
+        params.episode_id = filter.episodeId;
+      }
+      const where = joinWhere(fragments);
+      const limit = Math.max(1, Math.min(500, filter.limit ?? 50));
+      const offset = Math.max(0, filter.offset ?? 0);
+      params.limit = limit;
+      params.offset = offset;
+      const sql = `SELECT episode_id, turn_id, MAX(ts) as max_ts FROM traces ${where} GROUP BY episode_id, turn_id ORDER BY max_ts DESC LIMIT @limit OFFSET @offset`;
+      const rows = db
+        .prepare<typeof params, { episode_id: string | null; turn_id: number; max_ts: number }>(sql)
+        .all(params);
+      return rows.map((r) => ({ episodeId: r.episode_id, turnId: r.turn_id, maxTs: r.max_ts }));
+    },
+
+    /**
+     * Fetch all traces belonging to the given (episodeId, turnId) pairs.
+     * Returned rows are ordered by ts ascending so the frontend can
+     * render the conversation in chronological order.
+     */
+    listByTurnKeys(keys: ReadonlyArray<{ episodeId: string | null; turnId: number }>): TraceRow[] {
+      if (keys.length === 0) return [];
+      const conditions: string[] = [];
+      const params: Record<string, unknown> = {};
+      keys.forEach((k, i) => {
+        if (k.episodeId == null) {
+          conditions.push(`(episode_id IS NULL AND turn_id = @turn_${i})`);
+        } else {
+          conditions.push(`(episode_id = @ep_${i} AND turn_id = @turn_${i})`);
+          params[`ep_${i}`] = k.episodeId;
+        }
+        params[`turn_${i}`] = k.turnId;
+      });
+      const sql = `SELECT ${COLUMNS.join(", ")} FROM traces WHERE ${conditions.join(" OR ")} ORDER BY ts ASC`;
+      return db.prepare<typeof params, RawTraceRow>(sql).all(params).map(mapRow);
+    },
+
+    /**
      * Vector top-K over `vec_summary` (or `vec_action` if `kind='action'`).
      * The caller passes any extra SQL filter (e.g. same-episode only).
      */

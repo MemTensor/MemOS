@@ -33,22 +33,34 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
     const offset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const sessionId = params.get("sessionId") || undefined;
     const q = params.get("q") || undefined;
+    // When `groupByTurn=true`, pagination treats each (episodeId, turnId)
+    // pair as one "memory" — matching the viewer's grouped display where
+    // a user query + its tool steps + final reply collapse into one card.
+    const groupByTurn = params.get("groupByTurn") === "true";
     const traces = await deps.core.listTraces({
       limit,
       offset,
       sessionId: sessionId as SessionId | undefined,
       q,
+      groupByTurn,
     });
     const total = await deps.core.countTraces({
       sessionId: sessionId as SessionId | undefined,
       q,
+      groupByTurn,
     });
+    // When grouping, `traces.length === limit` is no longer a reliable
+    // "has more" signal (a single turn can yield many traces). Use the
+    // total count instead to detect a next page.
+    const nextOffset = groupByTurn
+      ? offset + limit < total ? offset + limit : undefined
+      : traces.length === limit ? offset + limit : undefined;
     return {
       traces,
       limit,
       offset,
       total,
-      nextOffset: traces.length === limit ? offset + limit : undefined,
+      nextOffset,
     };
   });
 

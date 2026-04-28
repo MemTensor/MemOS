@@ -268,20 +268,6 @@ function ModelsTab({
         block={embedding}
         providers={EMBEDDING_PROVIDERS}
         type="embedding"
-        extra={
-          <Field label="Dimensions">
-            <input
-              class="input"
-              type="number"
-              value={embedding.dimensions ?? ""}
-              onInput={(e) =>
-                onPatchEmbedding({
-                  dimensions: Number((e.target as HTMLInputElement).value) || undefined,
-                })
-              }
-            />
-          </Field>
-        }
         onPatch={onPatchEmbedding}
       />
 
@@ -291,7 +277,6 @@ function ModelsTab({
         desc={t("settings.summarizer.desc")}
         block={llm}
         providers={LLM_PROVIDERS}
-        withTemperature
         type="summarizer"
         onPatch={onPatchLlm}
       />
@@ -302,7 +287,6 @@ function ModelsTab({
         desc={t("settings.skillEvolver.desc")}
         block={skillEvolver}
         providers={SKILL_PROVIDERS}
-        withTemperature
         type="skillEvolver"
         inheritsLabel={t("settings.skillEvolver.inherit")}
         onPatch={onPatchSkillEvolver}
