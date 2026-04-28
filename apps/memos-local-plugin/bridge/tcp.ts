@@ -171,7 +171,9 @@ export function startTcpServer(options: TcpServerOptions): TcpServerHandle {
     sock.on("error", (err) => {
       process.stderr.write(`bridge.tcp: socket error: ${err.message}\n`);
       clients.delete(sock);
-      sock.destroy();
+      if (!sock.destroyed) {
+        sock.destroy();
+      }
     });
   });
 

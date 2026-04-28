@@ -666,20 +666,31 @@ export function createMemoryCore(
     }
   }
 
+  function deleteClosedEpisode(episodeId: EpisodeId): boolean {
+    const existing = handle.repos.episodes.getById(episodeId);
+    assertEpisodeDeletable(episodeId);
+    const deleted = handle.repos.episodes.deleteById(episodeId);
+    // Guard against regressions where deletion silently becomes a no-op
+    // for an existing closed episode. Missing episodes return `false`.
+    if (existing && !deleted) {
+      throw new MemosError(
+        "internal",
+        `failed to delete closed episode: ${episodeId}`,
+      );
+    }
+    return deleted;
+  }
+
   async function deleteEpisode(episodeId: EpisodeId): Promise<{ deleted: boolean }> {
     ensureLive();
-    assertEpisodeDeletable(episodeId);
-    return { deleted: handle.repos.episodes.deleteById(episodeId) };
+    return { deleted: deleteClosedEpisode(episodeId) };
   }
 
   async function deleteEpisodes(ids: readonly EpisodeId[]): Promise<{ deleted: number }> {
     ensureLive();
-    for (const id of ids) {
-      assertEpisodeDeletable(id);
-    }
     let deleted = 0;
     for (const id of ids) {
-      if (handle.repos.episodes.deleteById(id)) deleted++;
+      if (deleteClosedEpisode(id)) deleted++;
     }
     return { deleted };
   }
