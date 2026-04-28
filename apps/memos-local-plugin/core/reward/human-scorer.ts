@@ -49,12 +49,16 @@ export async function scoreHuman(input: HumanScoreInput, opts: ScoreOpts): Promi
 
   const hasLlm = Boolean(opts.cfg.llmScoring && opts.llm);
   if (!hasLlm) {
-    const h = heuristicScore(input.feedback);
-    log.debug("score.heuristic", {
+    const reason = !opts.cfg.llmScoring
+      ? "llmScoring disabled in config"
+      : "llm client is null (provider not attached?)";
+    log.warn("score.llm_unavailable", {
       episodeId: input.episodeSummary.episodeId,
+      reason,
       feedbackCount: input.feedback.length,
-      rHuman: h.rHuman,
+      fallback: "heuristic",
     });
+    const h = heuristicScore(input.feedback);
     return h;
   }
 

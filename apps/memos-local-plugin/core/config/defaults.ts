@@ -98,6 +98,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       llmConcurrency: 2,
       minExchangesForCompletion: 2,
       minContentCharsForCompletion: 80,
+      toolHeavyRatio: 0.7,
+      minAssistantCharsForToolHeavy: 80,
     },
     l2Induction: {
       minSimilarity: 0.65,

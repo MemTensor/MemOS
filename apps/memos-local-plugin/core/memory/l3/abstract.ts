@@ -54,6 +54,14 @@ export async function abstractDraft(
 ): Promise<L3AbstractionDraftResult> {
   const { llm, log, config } = deps;
   if (!config.useLlm || !llm) {
+    const reason = !config.useLlm
+      ? "useLlm disabled in config"
+      : "llm client is null (provider not attached?)";
+    log.warn("l3.abstract.llm_unavailable", {
+      clusterPolicies: input.cluster.policies.length,
+      reason,
+      fallback: "skipped",
+    });
     return { ok: false, reason: "llm_disabled" };
   }
 

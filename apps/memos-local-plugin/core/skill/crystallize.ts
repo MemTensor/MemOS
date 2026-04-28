@@ -71,7 +71,14 @@ export async function crystallizeDraft(
   }
 
   if (!config.useLlm || !llm) {
-    log.info("skill.crystallize.llm_disabled", { policyId: input.policy.id });
+    const reason = !config.useLlm
+      ? "useLlm disabled in config"
+      : "llm client is null (provider not attached?)";
+    log.warn("skill.crystallize.llm_unavailable", {
+      policyId: input.policy.id,
+      reason,
+      fallback: "skipped",
+    });
     return { ok: false, skippedReason: "llm-disabled" };
   }
 

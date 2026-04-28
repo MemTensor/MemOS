@@ -64,6 +64,8 @@ function cfg(windowSec = 0): RewardConfig {
     llmConcurrency: 1,
     minExchangesForCompletion: 0,
     minContentCharsForCompletion: 0,
+    toolHeavyRatio: 0.7,
+    minAssistantCharsForToolHeavy: 80,
   };
 }
 

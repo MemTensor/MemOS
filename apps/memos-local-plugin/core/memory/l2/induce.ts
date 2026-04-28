@@ -58,7 +58,14 @@ export async function induceDraft(
   deps: InduceDeps,
 ): Promise<InductionDraftResult> {
   const { llm, log } = deps;
-  if (!llm) return { ok: false, reason: "llm_disabled" };
+  if (!llm) {
+    log.warn("l2.induce.llm_unavailable", {
+      signatureLabel: input.signatureLabel,
+      evidenceCount: input.evidenceTraces.length,
+      fallback: "skipped",
+    });
+    return { ok: false, reason: "llm_disabled" };
+  }
 
   const userPayload = packTraces(input.evidenceTraces, input.charCap, input.signatureLabel);
 
