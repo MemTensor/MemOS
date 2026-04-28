@@ -577,7 +577,11 @@ install_hermes() {
   local adapter_dir="${prefix}/adapters/hermes"
   mkdir -p "${HOME}/.hermes"
 
+  step "Stopping existing bridge daemon"
   pkill -f "bridge.cts" >/dev/null 2>&1 || true
+  sleep 1
+  pkill -9 -f "bridge.cts" >/dev/null 2>&1 || true
+  success "Bridge daemon stopped"
   local was_running="false"
   if pgrep -f "/bin/hermes" >/dev/null 2>&1; then
     step "Stopping running Hermes process"
