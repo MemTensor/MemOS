@@ -91,6 +91,8 @@ export interface MemoryCore {
     userMessage?: string;
   }): Promise<EpisodeId>;
   closeEpisode(episodeId: EpisodeId): Promise<void>;
+  deleteEpisode?(episodeId: EpisodeId): Promise<{ deleted: boolean }>;
+  deleteEpisodes?(ids: readonly EpisodeId[]): Promise<{ deleted: number }>;
 
   // ── pipeline (per turn) ──
   /** Called *before* the agent acts. Returns the context to inject. */
