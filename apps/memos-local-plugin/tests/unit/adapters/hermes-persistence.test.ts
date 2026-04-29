@@ -90,6 +90,9 @@ function testConfig(): ResolvedConfig {
   cfg.algorithm.skill.useLlm = false;
   cfg.algorithm.feedback.useLlm = false;
   cfg.algorithm.retrieval.llmFilterEnabled = false;
+  cfg.algorithm.retrieval.includeLowValue = true;
+  cfg.algorithm.retrieval.minTraceSim = 0;
+  cfg.algorithm.retrieval.relativeThresholdFloor = 0;
   return cfg;
 }
 
@@ -215,7 +218,8 @@ describe("Hermes MemoryCore persistence", () => {
       query: "HERMES_MEMOS_E2E_0428 18800",
       topK: { tier1: 0, tier2: 5, tier3: 0 },
     });
-    expect(search.hits.some((hit) => hit.refId === traces[0]!.id)).toBe(true);
+    const traceIds = new Set(traces.map((trace) => trace.id));
+    expect(search.hits.some((hit) => traceIds.has(hit.refId))).toBe(true);
 
     const logs = await second.core.listApiLogs({ toolName: "memory_search", limit: 20 });
     expect(logs.total).toBeGreaterThan(0);

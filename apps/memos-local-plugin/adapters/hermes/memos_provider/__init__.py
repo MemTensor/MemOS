@@ -255,7 +255,9 @@ class MemTensorProvider(MemoryProvider):
         if self._hook_registered:
             return
         try:
-            from hermes_cli.plugins import get_plugin_manager  # pyright: ignore[reportMissingImports]
+            from hermes_cli.plugins import (
+                get_plugin_manager,  # pyright: ignore[reportMissingImports]
+            )
 
             mgr = get_plugin_manager()
             mgr._hooks.setdefault("post_tool_call", []).append(self._on_post_tool_call)
@@ -1161,11 +1163,11 @@ class MemTensorProvider(MemoryProvider):
     def on_session_end(self, messages: list[dict[str, Any]]) -> None:  # type: ignore[override]
         if not self._bridge:
             return
-        # `sync_turn` already flushed the turn data synchronously.
-        # Just close the episode and session.
-        if self._episode_id:
-            with contextlib.suppress(Exception):
-                self._bridge.request("episode.close", {"episodeId": self._episode_id})
+        # `sync_turn` already flushed completed turn data synchronously.
+        # Closing the host session is not the same as ending the topic:
+        # the core will pause or finalize the open episode according to
+        # topic-boundary rules so interrupted Hermes sessions can resume
+        # into the same task later.
         with contextlib.suppress(Exception):
             self._bridge.request("session.close", {"sessionId": self._session_id})
 

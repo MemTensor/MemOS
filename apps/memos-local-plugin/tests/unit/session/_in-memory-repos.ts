@@ -77,6 +77,10 @@ export function makeInMemoryEpisodesRepo(): {
       const cur = rows.get(id);
       if (cur) cur.traceIds = [...traceIds];
     },
+    updateMeta(id, metaPatch) {
+      const cur = rows.get(id);
+      if (cur) cur.meta = { ...cur.meta, ...metaPatch };
+    },
     close(id, endedAt, rTask, meta) {
       const cur = rows.get(id);
       if (!cur) return;
