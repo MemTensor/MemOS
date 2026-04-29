@@ -54,8 +54,9 @@ class FakeBridge:
 class HermesProviderPipelineTests(unittest.TestCase):
     def test_lifecycle_persists_turn_and_closes_real_episode(self) -> None:
         bridge = FakeBridge()
-        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
-            "memos_provider.MemosBridgeClient", return_value=bridge
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
             provider.initialize(
@@ -104,16 +105,15 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertEqual(turn_end["toolCalls"][0]["name"], "terminal")
         self.assertIn("npm test", turn_end["toolCalls"][0]["input"])
 
-        episode_close = next(
-            params for method, params in bridge.calls if method == "episode.close"
-        )
+        episode_close = next(params for method, params in bridge.calls if method == "episode.close")
         self.assertEqual(episode_close["episodeId"], "episode-from-turn-start")
         self.assertTrue(bridge.closed)
 
     def test_on_pre_compress_reuses_last_user_text_for_snapshot(self) -> None:
         bridge = FakeBridge()
-        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
-            "memos_provider.MemosBridgeClient", return_value=bridge
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("compress-session")
@@ -128,8 +128,9 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
     def test_post_llm_call_backfills_tool_calls_without_post_tool_hook(self) -> None:
         bridge = FakeBridge()
-        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
-            "memos_provider.MemosBridgeClient", return_value=bridge
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("host-session")
@@ -151,7 +152,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
                                 "type": "function",
                                 "function": {
                                     "name": "todo",
-                                    "arguments": "{\"todos\": [{\"id\": \"1\"}]}",
+                                    "arguments": '{"todos": [{"id": "1"}]}',
                                 },
                             }
                         ],
@@ -167,8 +168,9 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
     def test_post_tool_call_merges_with_llm_tool_aliases(self) -> None:
         bridge = FakeBridge()
-        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
-            "memos_provider.MemosBridgeClient", return_value=bridge
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("host-session")
@@ -188,7 +190,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
                                 "type": "function",
                                 "function": {
                                     "name": "terminal",
-                                    "arguments": "{\"command\": \"curl example\"}",
+                                    "arguments": '{"command": "curl example"}',
                                 },
                             }
                         ],
@@ -211,8 +213,9 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
     def test_post_llm_call_orders_backfilled_tools_before_later_tool_results(self) -> None:
         bridge = FakeBridge()
-        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
-            "memos_provider.MemosBridgeClient", return_value=bridge
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("host-session")
@@ -240,7 +243,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
                                 "type": "function",
                                 "function": {
                                     "name": "todo",
-                                    "arguments": "{\"todos\": [{\"id\": \"1\"}]}",
+                                    "arguments": '{"todos": [{"id": "1"}]}',
                                 },
                             },
                             {
@@ -249,7 +252,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
                                 "type": "function",
                                 "function": {
                                     "name": "terminal",
-                                    "arguments": "{\"command\": \"search flights\"}",
+                                    "arguments": '{"command": "search flights"}',
                                 },
                             },
                         ],

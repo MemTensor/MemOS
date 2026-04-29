@@ -254,9 +254,7 @@ class MemTensorProvider(MemoryProvider):
             }
         )
         input_text = (
-            json.dumps(args, ensure_ascii=False)
-            if isinstance(args, dict)
-            else str(args or "")
+            json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args or "")
         )
         existing = self._find_tool_call(ids)
         if existing is not None:
@@ -375,9 +373,7 @@ class MemTensorProvider(MemoryProvider):
         # matters when post_tool_call fires for later tools before
         # post_llm_call backfills earlier planner/todo calls.
         if ordered_tool_calls:
-            remaining = [
-                tc for tc in self._tool_calls if id(tc) not in ordered_object_ids
-            ]
+            remaining = [tc for tc in self._tool_calls if id(tc) not in ordered_object_ids]
             self._tool_calls = ordered_tool_calls + remaining
 
         # Attach thinkingBefore to matching captured tool calls.
@@ -752,9 +748,7 @@ class MemTensorProvider(MemoryProvider):
                 elif kind == "policy":
                     body = self._clip(
                         "\n\n".join(
-                            part
-                            for part in [item.get("title"), item.get("procedure")]
-                            if part
+                            part for part in [item.get("title"), item.get("procedure")] if part
                         )
                     )
                     meta = {
@@ -983,8 +977,7 @@ class MemTensorProvider(MemoryProvider):
             return
         # Strip private book-keeping fields before sending.
         clean_tool_calls = [
-            {k: v for k, v in tc.items() if k not in {"_id", "_ids"}}
-            for tc in tool_calls
+            {k: v for k, v in tc.items() if k not in {"_id", "_ids"}} for tc in tool_calls
         ]
         payload: dict[str, Any] = {
             "agent": "hermes",
