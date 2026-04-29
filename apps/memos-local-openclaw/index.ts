@@ -97,6 +97,23 @@ const buildMemoryPromptSection = ({ availableTools, citationsMode }: {
 function normalizeAutoRecallQuery(rawPrompt: string): string {
   let query = rawPrompt.trim();
 
+  // Skip instructional/system prompts that are not user queries.
+  // These are internal agent prompts (e.g. skill review, memory review)
+  // that get passed to the hook but should NOT be used as search queries.
+  // They cause FTS5 query failures and wasted LLM calls.
+  if (query.length > 300) {
+    // Long prompts are almost certainly system instructions, not user queries
+    return "";
+  }
+  if (/^You are\b/i.test(query)) {
+    // System prompt pattern: "You are a memory relevance judge..."
+    return "";
+  }
+  if (/Review the conversation above/i.test(query)) {
+    // Hermes skill/memory review prompt
+    return "";
+  }
+
   const senderTag = "Sender (untrusted metadata):";
   const senderPos = query.indexOf(senderTag);
   if (senderPos !== -1) {
