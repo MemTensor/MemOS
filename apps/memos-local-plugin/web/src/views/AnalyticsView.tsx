@@ -260,8 +260,16 @@ interface ToolStat {
 
 interface ToolMetricsResponse {
   tools: ToolStat[];
+  unavailableTools?: ToolCallCount[];
   toolNames?: string[];
   series?: Array<Record<string, unknown>>;
+}
+
+interface ToolCallCount {
+  name: string;
+  calls: number;
+  errors: number;
+  lastTs: number;
 }
 
 const TOOL_COLORS = [
@@ -274,6 +282,7 @@ function ToolLatencyCard() {
   const [rows, setRows] = useState<ToolStat[]>([]);
   const [toolNames, setToolNames] = useState<string[]>([]);
   const [series, setSeries] = useState<Array<Record<string, unknown>>>([]);
+  const [unavailableTools, setUnavailableTools] = useState<ToolCallCount[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -281,11 +290,24 @@ function ToolLatencyCard() {
     api
       .get<ToolMetricsResponse>(`/api/v1/metrics/tools?minutes=${minutes}&series=true`)
       .then((r) => {
-        setRows(r.tools ?? []);
-        setToolNames(r.toolNames ?? (r.tools ?? []).map((t) => t.name));
-        setSeries(r.series ?? []);
+        const nextRows = r.tools ?? [];
+        const nextSeries = r.series ?? [];
+        const names = r.toolNames ?? nextRows.map((tool) => tool.name);
+        const namesWithLatency = names.filter((name) => {
+          const row = nextRows.find((tool) => tool.name === name);
+          return (
+            nextSeries.some((point) => getSeriesValue(point, name) > 0) ||
+            Boolean(row && (row.avgMs > 0 || row.p50Ms > 0 || row.p95Ms > 0))
+          );
+        });
+        setRows(
+          nextRows.filter((row) => namesWithLatency.includes(row.name)),
+        );
+        setToolNames(namesWithLatency);
+        setSeries(nextSeries);
+        setUnavailableTools(r.unavailableTools ?? []);
       })
-      .catch(() => { setRows([]); setToolNames([]); setSeries([]); })
+      .catch(() => { setRows([]); setToolNames([]); setSeries([]); setUnavailableTools([]); })
       .finally(() => setLoading(false));
   }, [minutes]);
 
@@ -315,29 +337,82 @@ function ToolLatencyCard() {
       </div>
       {loading ? (
         <div class="skeleton" style="height:280px" />
-      ) : rows.length === 0 ? (
+      ) : rows.length === 0 && unavailableTools.length === 0 ? (
         <div class="empty" style="padding:var(--sp-5) 0">
           <div class="empty__hint">{t("analytics.tools.empty")}</div>
         </div>
       ) : (
         <>
-          {series.length >= 2 ? (
+          {rows.length > 0 && series.length >= 2 ? (
             <ToolLineChart series={series} toolNames={toolNames} />
-          ) : (
+          ) : rows.length > 0 ? (
             <div
               class="muted"
               style="font-size:var(--fs-xs);padding:var(--sp-3) 0;text-align:center"
             >
               {t("analytics.tools.chart.insufficient")}
             </div>
+          ) : null}
+          {rows.length > 0 && (
+            <div style="margin-top:var(--sp-4)">
+              <ToolAggTable rows={rows} maxAvg={maxAvg} />
+            </div>
           )}
-          <div style="margin-top:var(--sp-4)">
-            <ToolAggTable rows={rows} maxAvg={maxAvg} />
-          </div>
+          {unavailableTools.length > 0 && (
+            <UnavailableToolList tools={unavailableTools} />
+          )}
         </>
       )}
     </section>
   );
+}
+
+function UnavailableToolList({ tools }: { tools: ToolCallCount[] }) {
+  return (
+    <div
+      class="card card--flat"
+      style="margin-top:var(--sp-4);padding:var(--sp-3);background:var(--bg-canvas)"
+    >
+      <div class="hstack" style="justify-content:space-between;gap:var(--sp-3);margin-bottom:var(--sp-2)">
+        <div>
+          <div style="font-weight:var(--fw-semi);font-size:var(--fs-sm)">
+            {t("analytics.tools.unavailable.title")}
+          </div>
+          <div class="muted" style="font-size:var(--fs-xs)">
+            {t("analytics.tools.unavailable.subtitle")}
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap">
+        {tools.slice(0, 12).map((tool) => (
+          <span
+            key={tool.name}
+            class="pill pill--info"
+            title={`${tool.name}: ${tool.calls} calls`}
+          >
+            {tool.name} · {tool.calls}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function getSeriesValue(point: Record<string, unknown>, toolName: string): number {
+  const raw = point[toolName];
+  if (typeof raw === "number" && Number.isFinite(raw)) return Math.max(0, raw);
+  if (typeof raw === "string") {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  }
+  return 0;
+}
+
+function formatMinuteLabel(raw: unknown, includeDate = false): string {
+  const minute = String(raw ?? "");
+  if (!minute) return "";
+  const label = minute.replace("T", " ");
+  return includeDate || label.length <= 11 ? label : label.slice(11);
 }
 
 function ToolLineChart({
@@ -347,11 +422,19 @@ function ToolLineChart({
   series: Array<Record<string, unknown>>;
   toolNames: string[];
 }) {
+  const [hover, setHover] = useState<{
+    x: number;
+    y: number;
+    toolName: string;
+    minute: string;
+    value: number;
+  } | null>(null);
   // Track which tools are currently visible. Empty set = all visible.
   // Clicking a legend entry toggles the filter: first click narrows to
   // a single tool, further clicks add/remove more tools.
   const [visible, setVisible] = useState<Set<string>>(new Set());
   const isVisible = (tn: string) => visible.size === 0 || visible.has(tn);
+  const visibleTools = toolNames.filter(isVisible);
   const toggleTool = (tn: string) => {
     setVisible((prev) => {
       const next = new Set(prev);
@@ -374,7 +457,7 @@ function ToolLineChart({
   // being clipped by the container's `overflow:hidden`.
   const W = 1200;
   const H = 280;
-  const pad = { t: 16, r: 16, b: 32, l: 72 };
+  const pad = { t: 16, r: 18, b: 46, l: 78 };
   const cw = W - pad.l - pad.r;
   const ch = H - pad.t - pad.b;
 
@@ -382,9 +465,8 @@ function ToolLineChart({
   // zooms in when the user filters down.
   let maxVal = 0;
   for (const s of series) {
-    for (const tn of toolNames) {
-      if (!isVisible(tn)) continue;
-      const v = Number(s[tn]) || 0;
+    for (const tn of visibleTools) {
+      const v = getSeriesValue(s, tn);
       if (v > maxVal) maxVal = v;
     }
   }
@@ -397,6 +479,8 @@ function ToolLineChart({
 
   const toY = (v: number) => pad.t + ch - (v / maxVal) * ch;
   const toX = (i: number) => pad.l + i * step;
+  const tooltipX = hover ? Math.min(W - 214, Math.max(pad.l + 8, hover.x + 10)) : 0;
+  const tooltipY = hover ? Math.max(pad.t + 8, hover.y - 48) : 0;
 
   return (
     <div style="width:100%;border-radius:12px;position:relative">
@@ -404,6 +488,7 @@ function ToolLineChart({
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="xMidYMid meet"
         style="width:100%;height:auto;display:block"
+        onMouseLeave={() => setHover(null)}
       >
         {Array.from({ length: gridLines + 1 }).map((_, i) => {
           const y = toY((maxVal / gridLines) * i);
@@ -415,12 +500,26 @@ function ToolLineChart({
             </g>
           );
         })}
+        <line x1={pad.l} y1={pad.t} x2={pad.l} y2={pad.t + ch} stroke="var(--fg-dim)" stroke-width="0.8" />
+        <line x1={pad.l} y1={pad.t + ch} x2={W - pad.r} y2={pad.t + ch} stroke="var(--fg-dim)" stroke-width="0.8" />
+        <text
+          x={16}
+          y={pad.t + ch / 2}
+          transform={`rotate(-90 16 ${pad.t + ch / 2})`}
+          text-anchor="middle"
+          fill="var(--fg-dim)"
+          font-size="12"
+        >
+          {t("analytics.axis.latencyMs")}
+        </text>
+        <text x={pad.l + cw / 2} y={H - 6} text-anchor="middle" fill="var(--fg-dim)" font-size="12">
+          {t("analytics.axis.time")}
+        </text>
         {series.map((s, i) => {
           if (i % labelEvery !== 0 && i !== series.length - 1) return null;
-          const minute = String(s.minute ?? "");
-          const time = minute.length > 11 ? minute.slice(11) : minute;
+          const time = formatMinuteLabel(s.minute);
           return (
-            <text key={`xl-${i}`} x={toX(i)} y={H - 6} text-anchor="middle" fill="var(--fg-dim)" font-size="11">
+            <text key={`xl-${i}`} x={toX(i)} y={pad.t + ch + 16} text-anchor="middle" fill="var(--fg-dim)" font-size="11">
               {time}
             </text>
           );
@@ -430,7 +529,8 @@ function ToolLineChart({
           const color = TOOL_COLORS[ti % TOOL_COLORS.length];
           const pts = series.map((s, i) => ({
             x: toX(i),
-            y: toY(Number(s[tn]) || 0),
+            y: toY(getSeriesValue(s, tn)),
+            value: getSeriesValue(s, tn),
           }));
           if (pts.length === 0) return null;
           let d = `M${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
@@ -443,13 +543,49 @@ function ToolLineChart({
               <path d={areaD} fill={color} opacity="0.08" />
               <path d={d} fill="none" stroke={color} stroke-width="1.5" />
               {pts.map((p, i) => (
-                <circle key={`c-${i}`} cx={p.x} cy={p.y} r="2" fill={color}>
-                  <title>{`${String(series[i].minute)}: ${tn} ${Number(series[i][tn]) || 0}ms`}</title>
-                </circle>
+                <g key={`c-${i}`}>
+                  <circle cx={p.x} cy={p.y} r="2.4" fill={color} />
+                  <circle
+                    cx={p.x}
+                    cy={p.y}
+                    r="9"
+                    fill="transparent"
+                    onMouseEnter={() =>
+                      setHover({
+                        x: p.x,
+                        y: p.y,
+                        toolName: tn,
+                        minute: formatMinuteLabel(series[i].minute, true),
+                        value: p.value,
+                      })
+                    }
+                    onMouseMove={() =>
+                      setHover({
+                        x: p.x,
+                        y: p.y,
+                        toolName: tn,
+                        minute: formatMinuteLabel(series[i].minute, true),
+                        value: p.value,
+                      })
+                    }
+                  />
+                </g>
               ))}
             </g>
           );
         })}
+        {hover && (
+          <g pointer-events="none">
+            <line x1={hover.x} y1={pad.t} x2={hover.x} y2={pad.t + ch} stroke="var(--fg-dim)" stroke-width="0.8" stroke-dasharray="4 4" opacity="0.45" />
+            <rect x={tooltipX} y={tooltipY} width="204" height="42" rx="8" fill="var(--bg-elev-1)" stroke="var(--border)" />
+            <text x={tooltipX + 10} y={tooltipY + 16} fill="var(--fg-dim)" font-size="11">
+              {hover.minute}
+            </text>
+            <text x={tooltipX + 10} y={tooltipY + 32} fill="var(--fg)" font-size="12" font-weight="600">
+              {hover.toolName}: {hover.value}ms
+            </text>
+          </g>
+        )}
       </svg>
       <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap;margin-top:var(--sp-2);padding:0 4px">
         {toolNames.map((tn, ti) => {
@@ -618,51 +754,115 @@ function BarChart({
   }
 
   const hovered = hoverIdx != null ? data[hoverIdx] : null;
+  const W = 640;
+  const H = 220;
+  const pad = { t: 16, r: 16, b: 42, l: 48 };
+  const cw = W - pad.l - pad.r;
+  const ch = H - pad.t - pad.b;
+  const gridLines = 4;
+  const barGap = 3;
+  const barSlot = cw / Math.max(1, data.length);
+  const barWidth = Math.max(3, barSlot - barGap);
+  const labelEvery = Math.max(1, Math.floor(data.length / 6));
+  const toY = (value: number) => pad.t + ch - (value / max) * ch;
+  const tooltipX = hoverIdx == null
+    ? 0
+    : Math.min(
+        W - 156,
+        Math.max(pad.l + 4, pad.l + hoverIdx * barSlot + barSlot / 2 + 8),
+      );
+  const tooltipY = hovered ? Math.max(pad.t + 4, toY(hovered.count) - 46) : 0;
 
   return (
-    <div style="display:flex;flex-direction:column;gap:0;position:relative">
-      {/* Hover tooltip — the only place we show the date + count. */}
-      {hovered && (
-        <div
-          style={`
-            position:absolute;top:-4px;left:50%;transform:translateX(-50%);
-            background:var(--bg-elev-1);border:1px solid var(--border);
-            border-radius:var(--radius-sm);padding:4px 8px;
-            font-size:var(--fs-xs);color:var(--fg);white-space:nowrap;
-            box-shadow:var(--shadow-sm);z-index:2;pointer-events:none
-          `}
-        >
-          <span class="mono" style="color:var(--fg-dim);margin-right:6px">
-            {hovered.date}
-          </span>
-          <span style="font-weight:600">{hovered.count}</span>
-        </div>
-      )}
-
-      <div
-        style="display:grid;grid-auto-flow:column;gap:2px;align-items:end;height:180px;padding-top:12px"
-        onMouseLeave={() => setHoverIdx(null)}
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      preserveAspectRatio="none"
+      style="width:100%;height:220px;display:block"
+      onMouseLeave={() => setHoverIdx(null)}
+    >
+      {Array.from({ length: gridLines + 1 }).map((_, i) => {
+        const value = Math.round((max / gridLines) * i);
+        const y = toY(value);
+        return (
+          <g key={`bar-grid-${i}`}>
+            <line x1={pad.l} y1={y} x2={W - pad.r} y2={y} stroke="var(--border)" stroke-width="0.6" />
+            <text x={pad.l - 8} y={y + 4} text-anchor="end" fill="var(--fg-dim)" font-size="11">
+              {value}
+            </text>
+          </g>
+        );
+      })}
+      <line x1={pad.l} y1={pad.t} x2={pad.l} y2={pad.t + ch} stroke="var(--fg-dim)" stroke-width="0.8" />
+      <line x1={pad.l} y1={pad.t + ch} x2={W - pad.r} y2={pad.t + ch} stroke="var(--fg-dim)" stroke-width="0.8" />
+      <text
+        x={14}
+        y={pad.t + ch / 2}
+        transform={`rotate(-90 14 ${pad.t + ch / 2})`}
+        text-anchor="middle"
+        fill="var(--fg-dim)"
+        font-size="12"
       >
-        {data.map((d, i) => {
-          const pct = (d.count / max) * 100;
-          const isHover = hoverIdx === i;
-          return (
-            <div
-              key={d.date}
-              onMouseEnter={() => setHoverIdx(i)}
-              style={`
-                height:${Math.max(2, pct)}%;
-                background:linear-gradient(180deg, ${isHover ? "var(--accent-strong, var(--accent))" : "var(--accent)"}, color-mix(in srgb, var(--accent) 40%, transparent));
-                border-radius:var(--radius-sm);
-                min-width:6px;
-                transition:height var(--dur-md) var(--ease-out), background var(--dur-xs);
-                cursor:pointer;
-                opacity:${hoverIdx !== null && !isHover ? "0.6" : "1"};
-              `}
-            />
-          );
-        })}
-      </div>
-    </div>
+        {t("analytics.axis.count")}
+      </text>
+      <text x={pad.l + cw / 2} y={H - 6} text-anchor="middle" fill="var(--fg-dim)" font-size="12">
+        {t("analytics.axis.date")}
+      </text>
+      {data.map((d, i) => {
+        if (i % labelEvery !== 0 && i !== data.length - 1) return null;
+        return (
+          <text
+            key={`bar-x-${d.date}`}
+            x={pad.l + i * barSlot + barSlot / 2}
+            y={pad.t + ch + 16}
+            text-anchor="middle"
+            fill="var(--fg-dim)"
+            font-size="10"
+          >
+            {d.date.slice(5)}
+          </text>
+        );
+      })}
+      {data.map((d, i) => {
+        const x = pad.l + i * barSlot + (barSlot - barWidth) / 2;
+        const y = toY(d.count);
+        const h = pad.t + ch - y;
+        const isHover = hoverIdx === i;
+        return (
+          <rect
+            key={d.date}
+            x={x}
+            y={y}
+            width={barWidth}
+            height={Math.max(2, h)}
+            rx="3"
+            fill="var(--accent)"
+            opacity={hoverIdx !== null && !isHover ? "0.55" : "1"}
+            onMouseEnter={() => setHoverIdx(i)}
+            onMouseMove={() => setHoverIdx(i)}
+          />
+        );
+      })}
+      {hovered && hoverIdx != null && (
+        <g pointer-events="none">
+          <line
+            x1={pad.l + hoverIdx * barSlot + barSlot / 2}
+            y1={pad.t}
+            x2={pad.l + hoverIdx * barSlot + barSlot / 2}
+            y2={pad.t + ch}
+            stroke="var(--fg-dim)"
+            stroke-width="0.8"
+            stroke-dasharray="4 4"
+            opacity="0.45"
+          />
+          <rect x={tooltipX} y={tooltipY} width="148" height="40" rx="8" fill="var(--bg-elev-1)" stroke="var(--border)" />
+          <text x={tooltipX + 10} y={tooltipY + 16} fill="var(--fg-dim)" font-size="11">
+            {hovered.date}
+          </text>
+          <text x={tooltipX + 10} y={tooltipY + 32} fill="var(--fg)" font-size="12" font-weight="600">
+            {t("analytics.axis.count")}: {hovered.count}
+          </text>
+        </g>
+      )}
+    </svg>
   );
 }

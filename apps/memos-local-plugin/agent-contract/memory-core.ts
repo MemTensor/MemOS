@@ -58,17 +58,39 @@ export interface CoreHealth {
 
 /**
  * Per-model connectivity summary used by the viewer's Overview page.
- * `available` reflects whether the client is configured (non-null);
- * `lastOkAt` / `lastError` reflect the most recent **actual** call
- * outcome tracked by the runtime. A green dot means "called successfully
- * at least once and the last call was good"; red means "most recent
- * call failed" + the error text to surface in a tooltip.
+ *
+ * The viewer renders the slot in one of four colours, picked by
+ * comparing the timestamps below — most-recent event wins:
+ *
+ *   - **green** (`ok`)        : `lastOkAt` is the latest stamp →
+ *     primary provider answered directly.
+ *   - **yellow** (`fallback`) : `lastFallbackAt` is the latest stamp →
+ *     primary provider failed *but* the host LLM bridge rescued the
+ *     call. Only ever set on the LLM / skillEvolver slots; the
+ *     embedder has no fallback path so this stays `null`.
+ *   - **red** (`err`)         : `lastError.at` is the latest stamp →
+ *     primary provider failed and either no fallback was configured
+ *     or the fallback also failed. The accompanying `message` is
+ *     surfaced verbatim on the card.
+ *   - **idle / off**          : every timestamp is `null` → the
+ *     facade has not been called yet (idle) or no client is
+ *     configured at all (off).
+ *
+ * `lastError` is **sticky** — it is not cleared by a later success.
+ * The viewer's timestamp comparison naturally promotes a fresh
+ * success over a stale failure, while keeping the message available
+ * in case a subsequent failure flips the card back to red.
  */
 export interface ModelHealth {
   available: boolean;
   provider: string;
   model: string;
   lastOkAt: number | null;
+  /**
+   * Latest time the primary provider failed but the host LLM bridge
+   * answered successfully. Always `null` on the embedder slot.
+   */
+  lastFallbackAt: number | null;
   lastError: { at: number; message: string } | null;
 }
 

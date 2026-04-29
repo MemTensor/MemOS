@@ -22,6 +22,7 @@ import { resolveHome } from "../../../core/config/paths.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { makeTmpHome, type TmpHomeContext } from "../../helpers/tmp-home.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
+import type { MemosError } from "../../../agent-contract/errors.js";
 
 let db: TmpDbHandle | null = null;
 let pipeline: PipelineHandle | null = null;
@@ -140,6 +141,15 @@ describe("MemoryCore façade", () => {
       childSessionId: "s-child",
       task: "check package.json scripts",
       result: "found build and test scripts",
+      toolCalls: [
+        {
+          name: "read_file",
+          input: { path: "package.json", limit: 20 },
+          output: "{\"scripts\":{\"build\":\"tsc\"}}",
+          startedAt: 1_700_000_000_001,
+          endedAt: 1_700_000_000_002,
+        },
+      ],
       outcome: "ok",
       ts: 1_700_000_000_001,
     });
@@ -163,6 +173,22 @@ describe("MemoryCore façade", () => {
       childSessionId: "s-child",
       outcome: "ok",
     });
+
+    const childEpisodes = await core.listEpisodeRows({
+      sessionId: "s-child",
+      limit: 10,
+    });
+    expect(childEpisodes).toHaveLength(1);
+    const childTimeline = await core.timeline({ episodeId: childEpisodes[0]!.id });
+    expect(childTimeline.some((trace) =>
+      trace.userText.includes("Subagent task: check package.json scripts")
+    )).toBe(true);
+    expect(childTimeline.some((trace) =>
+      trace.agentText.includes("Subagent result: found build and test scripts")
+    )).toBe(true);
+    expect(childTimeline.some((trace) =>
+      trace.toolCalls.some((call) => call.name === "read_file")
+    )).toBe(true);
   });
 
   it("submitFeedback persists and returns a DTO", async () => {
@@ -185,6 +211,63 @@ describe("MemoryCore façade", () => {
 
     // Verify it's actually in the repo.
     expect(db!.repos.feedback.getById(fb.id)).not.toBeNull();
+  });
+
+  it("onTurnEnd returns a real persisted trace id that feedback accepts", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const start = await core.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-feedback",
+      userText: "remember that I prefer short status updates",
+      ts: 1_700_000_000_000,
+    });
+    const end = await core.onTurnEnd({
+      agent: "openclaw",
+      sessionId: start.query.sessionId!,
+      episodeId: start.query.episodeId!,
+      agentText: "Got it.",
+      toolCalls: [],
+      ts: 1_700_000_000_500,
+    });
+
+    expect(end.traceId).toMatch(/^tr_/);
+    expect(db!.repos.traces.getById(end.traceId as never)).not.toBeNull();
+
+    const fb = await core.submitFeedback({
+      channel: "explicit",
+      polarity: "positive",
+      magnitude: 1,
+      traceId: end.traceId,
+      episodeId: end.episodeId,
+    });
+    expect(fb.traceId).toBe(end.traceId);
+  });
+
+  it("submitFeedback rejects unknown trace ids before SQLite FK failure", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    await expect(core.submitFeedback({
+      channel: "explicit",
+      polarity: "negative",
+      magnitude: 1,
+      traceId: "trace-not-in-db",
+    })).rejects.toMatchObject({
+      name: "MemosError",
+      code: "trace_not_found",
+    } satisfies Partial<MemosError>);
   });
 
   it("listEpisodes + timeline return empty arrays when nothing has happened", async () => {
@@ -346,8 +429,8 @@ describe("bootstrapMemoryCore", () => {
       closeReason?: string;
       abandonReason?: string;
     };
-    expect(unscoredMeta.closeReason).toBe("abandoned");
-    expect(unscoredMeta.abandonReason).toContain("插件上次未正常退出");
+    expect(unscoredMeta.closeReason).toBe("finalized");
+    expect(unscoredMeta.abandonReason).toBeFalsy();
 
     expect(scored).toBeDefined();
     expect(scored!.status).toBe("closed");

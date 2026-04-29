@@ -63,9 +63,73 @@ async function main(): Promise<void> {
   )) as typeof import("./server/http.js");
 
   const pkgVersion = require("./package.json").version;
+
+  // ─── Host LLM bridge (reverse RPC, lazy-bound to stdio) ────────
+  // We need to register the bridge BEFORE bootstrap creates the
+  // LlmClients (so the very first `shouldFallback()` check sees a
+  // non-null bridge), but `stdio` itself doesn't exist until later
+  // in this function. The trick: hand a placeholder closure to
+  // bootstrap that defers actual stdio access to the time of the
+  // first fallback call. By then `stdio` has been assigned.
+  //
+  // Routing through `bootstrapMemoryCoreFull({ hostLlmBridge })`
+  // (instead of having `bridge.cts` call `registerHostLlmBridge`
+  // directly) avoids a subtle ESM module-identity issue: the static
+  // `import` chain inside `core/llm/client.ts` and the dynamic
+  // `await import(...)` here resolve to the same file URL but Node
+  // can occasionally treat them as different module instances with
+  // independent `currentBridge` slots. Registering inside bootstrap
+  // forces both ends to share the same module instance.
+  let stdio: import("./bridge/stdio.js").StdioServerHandle | null = null;
+  const lazyHostLlmBridge: import("./core/llm/host-bridge.js").HostLlmBridge =
+    {
+      id: `stdio.host.${args.agent}.v1`,
+      async complete(input) {
+        if (!stdio) {
+          throw new Error(
+            "host LLM bridge invoked before stdio server was ready",
+          );
+        }
+        const result = (await stdio.serverRequest(
+          "host.llm.complete",
+          {
+            messages: input.messages,
+            model: input.model,
+            temperature: input.temperature,
+            maxTokens: input.maxTokens,
+            timeoutMs: input.timeoutMs,
+          },
+          { timeoutMs: (input.timeoutMs ?? 60_000) + 5_000 },
+        )) as {
+          text?: string;
+          model?: string;
+          usage?: {
+            promptTokens?: number;
+            completionTokens?: number;
+            totalTokens?: number;
+          };
+          durationMs?: number;
+        };
+        return {
+          text: typeof result?.text === "string" ? result.text : "",
+          model:
+            typeof result?.model === "string"
+              ? result.model
+              : input.model ?? "",
+          usage: result?.usage,
+          durationMs:
+            typeof result?.durationMs === "number" ? result.durationMs : 0,
+        };
+      },
+    };
+
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
     pkgVersion,
+    // Skip in daemon mode — daemon has no stdio, so reverse RPC
+    // can't ever fire and registering would just hide the "no
+    // bridge" error message.
+    hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
   });
   await core.init();
 
@@ -78,38 +142,56 @@ async function main(): Promise<void> {
   // viewer daemon. Used by install.sh (post-install) and admin/restart
   // (self-restart) to keep the Memory Viewer always available.
   if (args.daemon) {
+    // Daemon mode is the target of `POST /api/v1/admin/restart`,
+    // which re-spawns the bridge after a short sleep. On busy
+    // machines the previous bridge's listening socket can take a
+    // moment longer than expected to release, so we retry the bind
+    // a few times before giving up. Without this the user sees
+    // "重启超时" in the viewer because the new daemon raced its
+    // predecessor and lost.
     let viewer: import("./server/types.js").ServerHandle | null = null;
-    try {
-      viewer = await startHttpServer(
-        {
-          core,
-          home,
-          logTail: () => memoryBuffer().tail({ limit: 200 }),
-        },
-        {
-          port: viewerPort,
-          host: config.viewer.bindHost,
-          staticRoot: path.resolve(__dirname, "web/dist"),
-          agent: args.agent,
-        },
-      );
-      process.stderr.write(
-        `bridge: daemon viewer live at ${viewer.url} (agent=${args.agent})\n`,
-      );
-    } catch (err) {
-      const e = err as NodeJS.ErrnoException;
-      if (e?.code === "EADDRINUSE") {
+    const maxBindAttempts = 10;
+    for (let attempt = 1; attempt <= maxBindAttempts; attempt++) {
+      try {
+        viewer = await startHttpServer(
+          {
+            core,
+            home,
+            logTail: () => memoryBuffer().tail({ limit: 200 }),
+          },
+          {
+            port: viewerPort,
+            host: config.viewer.bindHost,
+            staticRoot: path.resolve(__dirname, "web/dist"),
+            agent: args.agent,
+          },
+        );
         process.stderr.write(
-          `bridge: daemon port :${viewerPort} already in use — exiting.\n`,
+          `bridge: daemon viewer live at ${viewer.url} (agent=${args.agent})\n`,
+        );
+        break;
+      } catch (err) {
+        const e = err as NodeJS.ErrnoException;
+        if (e?.code === "EADDRINUSE" && attempt < maxBindAttempts) {
+          process.stderr.write(
+            `bridge: daemon port :${viewerPort} busy (attempt ${attempt}/${maxBindAttempts}), retrying in 1s...\n`,
+          );
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
+        if (e?.code === "EADDRINUSE") {
+          process.stderr.write(
+            `bridge: daemon port :${viewerPort} still in use after ${maxBindAttempts}s — exiting.\n`,
+          );
+          await core.shutdown();
+          process.exit(1);
+        }
+        process.stderr.write(
+          `bridge: daemon viewer failed: ${(err as Error)?.message ?? String(err)}\n`,
         );
         await core.shutdown();
         process.exit(1);
       }
-      process.stderr.write(
-        `bridge: daemon viewer failed: ${(err as Error)?.message ?? String(err)}\n`,
-      );
-      await core.shutdown();
-      process.exit(1);
     }
 
     const shutdownDaemon = async (sig: string) => {
@@ -125,7 +207,10 @@ async function main(): Promise<void> {
   }
 
   // ─── Normal (stdio) mode ──────────────────────────────────────
-  const stdio = startStdioServer({ core });
+  // Assign the stdio handle into the closure variable so the host
+  // LLM bridge (registered earlier inside bootstrap) can dispatch
+  // reverse-direction requests to the adapter.
+  stdio = startStdioServer({ core });
 
   // Try to bind the viewer port. EADDRINUSE → stay headless.
   let viewer: import("./server/types.js").ServerHandle | null = null;
@@ -170,7 +255,7 @@ async function main(): Promise<void> {
         /* best-effort */
       }
     }
-    await waitForShutdown(core, stdio);
+    await waitForShutdown(core, stdio!);
     process.exit(0);
   };
 

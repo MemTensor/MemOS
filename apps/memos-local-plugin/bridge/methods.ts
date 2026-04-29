@@ -275,6 +275,9 @@ export function makeDispatcher(
               : null,
           task: requireString(p, "task", method),
           result: typeof p.result === "string" ? p.result : "",
+          toolCalls: Array.isArray(p.toolCalls)
+            ? (p.toolCalls as SubagentOutcomeDTO["toolCalls"])
+            : undefined,
           outcome: typeof p.outcome === "string" ? p.outcome as SubagentOutcomeDTO["outcome"] : undefined,
           error: typeof p.error === "string" ? p.error : undefined,
           ts: typeof p.ts === "number" ? p.ts : undefined,

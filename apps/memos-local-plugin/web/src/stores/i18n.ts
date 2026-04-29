@@ -85,12 +85,23 @@ const en = {
   "common.loadMore": "Load more",
   "common.selected": "{n} selected",
   "common.selectPage": "Select page",
+  "common.deselectPage": "Deselect page",
   "common.deselect": "Deselect",
   "common.bulkDelete": "Delete selected",
   "common.bulkDelete.confirm": "Delete {n} selected items? This cannot be undone.",
   "pager.page": "Page {n}",
   "pager.pageOfAtLeast": "Page {n} / {total}+",
   "pager.pageOfTotal": "Page {n} / {total}",
+  "pager.totalPerPage": "Total {total} items, {pageSize} per page",
+  "pager.totalCompact": "{total} items · {pageSize}/page",
+  "pager.pageSize.label": "Items per page",
+  "pager.pageSize.option": "{pageSize} / page",
+  "pager.jump.label": "Go to",
+  "pager.jump.short": "Jump",
+  "pager.jump.to": "Go to",
+  "pager.jump.pageUnit": "page",
+  "pager.jump.go": "Go",
+  "pager.jump.goShort": "Go",
 
   // Settings extensions.
   "settings.test": "Test",
@@ -152,22 +163,16 @@ const en = {
   "analytics.tools.subtitle":
     "Per-tool response time and failure counts over the selected time range.",
 
-  "restart.saved": "Settings saved",
-  "restart.cleared": "All data cleared",
-  "restart.hint.openclaw":
-    "Restart OpenClaw to apply: openclaw gateway stop && openclaw gateway start",
-  "restart.hint.hermes":
-    "Restart Hermes to apply: stop and rerun `hermes chat`",
-  "restart.hint.generic":
-    "Restart this agent's process to load the new configuration.",
   "restart.restarting": "Configuration saved. Service is restarting…",
+  "restart.restarting.hermes":
+    "Configuration saved. Closing the current Hermes session…",
   "restart.waitingUp": "Waiting for the service to come back online…",
   "restart.autoRefresh": "The page will refresh automatically once the service is ready.",
   "restart.failed": "Restart didn't complete — the service didn't come back in time.",
   "restart.failedHint.openclaw":
     "Try manually: openclaw gateway stop && openclaw gateway start",
   "restart.failedHint.hermes":
-    "Try manually: pkill -f bridge.cts && hermes chat",
+    "Try manually: stop the current Hermes session and rerun `hermes chat`",
   "common.selectAll": "Select all",
   "common.deleteSelected": "Delete selected",
 
@@ -205,6 +210,9 @@ const en = {
   "overview.metric.model.connectedAt": "Last OK call at {ts}",
   "overview.metric.model.failed": "Last call failed",
   "overview.metric.model.idle": "Not called yet",
+  "overview.metric.model.fallback": "Falling back to host model",
+  "overview.metric.model.fallback.tooltip":
+    "Primary provider unavailable, host LLM is handling the call. Original error: {msg}",
   "overview.metric.policies.breakdown": "{active} active · {candidate} candidate",
   "overview.metric.skills.breakdown": "{active} active · {candidate} candidate",
   "overview.live.title": "Live activity",
@@ -496,6 +504,10 @@ const en = {
   "analytics.chart.skillEvolutions": "Skill crystallizations per day",
   "analytics.chart.skillEvolutions.empty":
     "No skills crystallized yet — keep the plugin running to collect evidence.",
+  "analytics.axis.date": "Date",
+  "analytics.axis.time": "Time",
+  "analytics.axis.count": "Count",
+  "analytics.axis.latencyMs": "Latency (ms)",
   "analytics.kpi.evolutionRate": "Skill evolution rate",
   "analytics.kpi.evolutionRate.hint": "tasks → skills conversion",
   "analytics.kpi.policyCoverage": "Policy activation rate",
@@ -526,6 +538,9 @@ const en = {
   "analytics.tools.chart.insufficient":
     "Not enough data points in this window to draw a trend chart.",
   "analytics.tools.legend.showAll": "Show all",
+  "analytics.tools.unavailable.title": "Calls without latency data",
+  "analytics.tools.unavailable.subtitle":
+    "These tools were recorded, but their start/end timestamps were missing or identical, so they are not plotted as response-time data.",
 
   // Logs.
   "logs.title": "Logs",
@@ -545,6 +560,11 @@ const en = {
   "logs.tag.skill": "Skill",
   "logs.tag.policy": "Experience",
   "logs.tag.world": "World model",
+  "logs.tag.system": "System",
+  "logs.system.role": "{role} call failed",
+  "logs.system.role.embedding": "Embedding model",
+  "logs.system.role.llm": "Summary model",
+  "logs.system.role.skillEvolver": "Skill evolver model",
   "logs.tool.search": "Search",
   "logs.tool.add": "Ingest",
   "logs.tool.skill_generate": "Generate",
@@ -729,12 +749,23 @@ const zh: Record<TranslationKey, string> = {
   "common.loadMore": "加载更多",
   "common.selected": "已选 {n} 项",
   "common.selectPage": "全选当前页",
+  "common.deselectPage": "取消当前页选择",
   "common.deselect": "取消选择",
   "common.bulkDelete": "批量删除",
   "common.bulkDelete.confirm": "确认删除 {n} 项？此操作不可撤销。",
   "pager.page": "第 {n} 页",
   "pager.pageOfAtLeast": "第 {n} 页 / 共 {total}+ 页",
   "pager.pageOfTotal": "第 {n} 页 / 共 {total} 页",
+  "pager.totalPerPage": "共 {total} 条，每页 {pageSize} 条",
+  "pager.totalCompact": "{total} 条 · {pageSize}/页",
+  "pager.pageSize.label": "每页条数",
+  "pager.pageSize.option": "{pageSize} 条/页",
+  "pager.jump.label": "跳至",
+  "pager.jump.short": "跳页",
+  "pager.jump.to": "到",
+  "pager.jump.pageUnit": "页",
+  "pager.jump.go": "跳转",
+  "pager.jump.goShort": "跳",
 
   "settings.test": "测试",
   "settings.hub.admin": "团队成员",
@@ -789,21 +820,15 @@ const zh: Record<TranslationKey, string> = {
   "analytics.tools.title": "工具响应耗时",
   "analytics.tools.subtitle": "所选时间窗口内，各工具的延迟和失败次数。来源：最近的记忆行。",
 
-  "restart.saved": "设置已保存",
-  "restart.cleared": "所有数据已清空",
-  "restart.hint.openclaw":
-    "请重启 OpenClaw 后生效：openclaw gateway stop && openclaw gateway start",
-  "restart.hint.hermes":
-    "请重启 Hermes 后生效：停止后重新执行 `hermes chat`",
-  "restart.hint.generic": "请重启该 agent 进程以加载新配置。",
   "restart.restarting": "配置已保存，服务正在重启…",
+  "restart.restarting.hermes": "配置已保存，正在关闭当前 Hermes 会话…",
   "restart.waitingUp": "正在等待服务重新上线…",
   "restart.autoRefresh": "服务就绪后页面将自动刷新。",
   "restart.failed": "重启超时 — 服务未能在预期时间内恢复。",
   "restart.failedHint.openclaw":
     "请手动重启：openclaw gateway stop && openclaw gateway start",
   "restart.failedHint.hermes":
-    "请手动重启：pkill -f bridge.cts && hermes chat",
+    "请手动重启：停止当前 Hermes 会话后重新执行 `hermes chat`",
   "common.selectAll": "全选",
   "common.deleteSelected": "删除所选",
 
@@ -837,6 +862,9 @@ const zh: Record<TranslationKey, string> = {
   "overview.metric.model.connectedAt": "上次成功调用于 {ts}",
   "overview.metric.model.failed": "上次调用失败",
   "overview.metric.model.idle": "暂未调用",
+  "overview.metric.model.fallback": "已降级到 Agent 内置模型",
+  "overview.metric.model.fallback.tooltip":
+    "原配置模型不可用，已自动切换到 Agent 内置模型继续工作。原始错误：{msg}",
   "overview.metric.policies.breakdown": "{active} 已启用 · {candidate} 候选",
   "overview.metric.skills.breakdown": "{active} 已启用 · {candidate} 候选",
   "overview.live.title": "实时活动",
@@ -1105,6 +1133,10 @@ const zh: Record<TranslationKey, string> = {
   "analytics.chart.skillEvolutions": "每日技能进化次数",
   "analytics.chart.skillEvolutions.empty":
     "暂无技能结晶 — 让插件继续运行，等证据累积到门槛即可。",
+  "analytics.axis.date": "日期",
+  "analytics.axis.time": "时间",
+  "analytics.axis.count": "数量",
+  "analytics.axis.latencyMs": "耗时（ms）",
   "analytics.kpi.evolutionRate": "技能进化率",
   "analytics.kpi.evolutionRate.hint": "任务 → 技能 转化比例",
   "analytics.kpi.policyCoverage": "规则覆盖率",
@@ -1135,6 +1167,9 @@ const zh: Record<TranslationKey, string> = {
   "analytics.tools.chart.insufficient":
     "当前时间范围内数据点不足，无法绘制趋势图。",
   "analytics.tools.legend.showAll": "显示全部",
+  "analytics.tools.unavailable.title": "有调用但缺少耗时数据",
+  "analytics.tools.unavailable.subtitle":
+    "这些工具调用已被记录，但开始/结束时间缺失或相同，因此不会进入响应耗时图。",
 
   "logs.title": "日志",
   "logs.subtitle": "记忆检索和写入的结构化轨迹：召回候选、Hub 候选、LLM 筛选后保留的记忆。",
@@ -1147,6 +1182,11 @@ const zh: Record<TranslationKey, string> = {
   "logs.tag.skill": "技能",
   "logs.tag.policy": "经验",
   "logs.tag.world": "环境认知",
+  "logs.tag.system": "系统",
+  "logs.system.role": "{role}调用失败",
+  "logs.system.role.embedding": "嵌入模型",
+  "logs.system.role.llm": "摘要模型",
+  "logs.system.role.skillEvolver": "技能进化模型",
   "logs.tool.search": "检索",
   "logs.tool.add": "写入",
   "logs.tool.skill_generate": "生成",

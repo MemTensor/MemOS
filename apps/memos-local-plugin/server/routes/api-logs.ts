@@ -61,6 +61,14 @@ export function registerApiLogsRoutes(routes: Routes, deps: ServerDeps): void {
       "world_model_evolve",
       "task_done",
       "task_failed",
+      // Infrastructure-layer failures (embedding / summary LLM /
+      // skillEvolver). Surfaced under the "系统" tag in LogsView so
+      // operators can see provider errors without tailing logs.
+      "system_error",
+      // Durable machine-readable status source for Overview model
+      // cards. This is intentionally persisted because Hermes' viewer
+      // daemon and stdio bridge can be different processes.
+      "system_model_status",
     ] as const;
     const rows = await Promise.all(
       tools.map(async (t) => {

@@ -62,7 +62,7 @@ _PLUGIN_DIR = Path(__file__).resolve().parent
 if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
-from bridge_client import MemosBridgeClient  # noqa: E402
+from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
 from daemon_manager import ensure_bridge_running  # noqa: E402
 
 
@@ -82,6 +82,40 @@ logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "memos-local-hermes"
 PLUGIN_VERSION = "2.0.0-beta.1"
+
+_HERMES_INTERNAL_REVIEW_PREFIXES = (
+    "review the conversation above and consider saving to memory if appropriate.",
+    "review the conversation above and update the skill library.",
+    "review the conversation above and update two things:",
+    "review the conversation above and consider saving or updating a skill if appropriate.",
+)
+
+
+def _is_hermes_internal_review_prompt(message: str) -> bool:
+    """Return True for Hermes' own background memory/skill review turns."""
+    normalized = " ".join((message or "").strip().lower().split())
+    if not normalized:
+        return False
+    return any(normalized.startswith(prefix) for prefix in _HERMES_INTERNAL_REVIEW_PREFIXES)
+
+
+def _is_explicit_delegation_request(message: str) -> bool:
+    """Return True when the user explicitly asks Hermes to use a subagent."""
+    text = " ".join((message or "").strip().lower().split())
+    if not text:
+        return False
+    delegation_terms = (
+        "subagent",
+        "sub-agent",
+        "sub agent",
+        "delegate",
+        "delegation",
+        "子代理",
+        "子任务",
+        "派一个",
+        "派发",
+    )
+    return any(term in text for term in delegation_terms)
 
 
 class MemTensorProvider(MemoryProvider):
@@ -119,6 +153,10 @@ class MemTensorProvider(MemoryProvider):
         # show the model's thinking like OpenClaw does.
         self._turn_thinking: str = ""
         self._hook_registered = False
+        # Hermes runs background memory/skill reviewers by forking an agent and
+        # appending a synthetic user turn. That turn is instruction plumbing,
+        # not a human utterance, so it must not become a MemOS trace.
+        self._skip_current_turn = False
 
     # ─── Identity ─────────────────────────────────────────────────────────
 
@@ -146,6 +184,7 @@ class MemTensorProvider(MemoryProvider):
         ``on_turn_start``), so the actual user message can be passed as
         the episode's initial text instead of a generic placeholder.
         """
+        self._session_id = session_id or self._session_id
         self._hermes_home = str(kwargs.get("hermes_home") or "")
         self._platform = str(kwargs.get("platform") or "cli")
         self._agent_identity = str(kwargs.get("agent_identity") or "hermes")
@@ -156,19 +195,15 @@ class MemTensorProvider(MemoryProvider):
             return
         try:
             self._bridge = MemosBridgeClient()
-            resp = self._bridge.request(
-                "session.open",
-                {
-                    "agent": "hermes",
-                    "sessionId": session_id or "",
-                    "meta": {
-                        "hermesHome": self._hermes_home,
-                        "platform": self._platform,
-                        "agentIdentity": self._agent_identity,
-                    },
-                },
+            # Register the fallback LLM handler BEFORE we open the
+            # session so it is available the very first time the
+            # plugin's facade asks for help (e.g. on the first
+            # `turn.start` retrieval call).
+            self._bridge.register_host_handler(
+                "host.llm.complete",
+                self._handle_host_llm_complete,
             )
-            self._session_id = resp.get("sessionId") or session_id
+            self._open_session(session_id)
             logger.info(
                 "MemOS: bridge ready session=%s platform=%s (episode deferred)",
                 self._session_id,
@@ -237,7 +272,7 @@ class MemTensorProvider(MemoryProvider):
         result: str = "",
         tool_call_id: str = "",
         session_id: str = "",
-        **_kw: Any,
+        **kw: Any,
     ) -> None:
         """Accumulate a tool call record for the current turn.
 
@@ -248,16 +283,82 @@ class MemTensorProvider(MemoryProvider):
         """
         if not self._matches_session(session_id):
             return
-        self._tool_calls.append(
-            {
-                "name": tool_name,
-                "input": json.dumps(args, ensure_ascii=False)
-                if isinstance(args, dict)
-                else str(args or ""),
-                "output": (result or "")[:4000],
-                "_id": tool_call_id or "",
-            }
+        timing = self._coerce_tool_timing(kw)
+        call = {
+            "name": tool_name,
+            "input": json.dumps(args, ensure_ascii=False)
+            if isinstance(args, dict)
+            else str(args or ""),
+            "output": (result or "")[:4000],
+            "_id": tool_call_id or "",
+        }
+        if timing:
+            call.update(timing)
+        self._tool_calls.append(call)
+
+    def _coerce_tool_timing(self, payload: dict[str, Any]) -> dict[str, int] | None:
+        """Preserve real tool timing if Hermes exposes it in hook kwargs."""
+        started = self._coerce_epoch_ms(
+            payload.get("startedAt")
+            or payload.get("started_at")
+            or payload.get("startTime")
+            or payload.get("start_time")
         )
+        ended = self._coerce_epoch_ms(
+            payload.get("endedAt")
+            or payload.get("ended_at")
+            or payload.get("endTime")
+            or payload.get("end_time")
+        )
+        if started is not None and ended is not None and ended > started:
+            return {"startedAt": started, "endedAt": ended}
+
+        duration = self._coerce_duration_ms(
+            payload.get("durationMs")
+            or payload.get("duration_ms")
+            or payload.get("elapsedMs")
+            or payload.get("elapsed_ms")
+            or payload.get("latencyMs")
+            or payload.get("latency_ms")
+        )
+        if duration is not None and duration > 0:
+            end_ms = int(time.time() * 1000)
+            return {"startedAt": end_ms - duration, "endedAt": end_ms}
+
+        return None
+
+    @staticmethod
+    def _coerce_epoch_ms(value: Any) -> int | None:
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+        elif isinstance(value, str):
+            try:
+                numeric = float(value)
+            except ValueError:
+                return None
+        else:
+            return None
+        if numeric <= 0:
+            return None
+        # Accept seconds or milliseconds.
+        if numeric < 10_000_000_000:
+            numeric *= 1000
+        return int(numeric)
+
+    @staticmethod
+    def _coerce_duration_ms(value: Any) -> int | None:
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+        elif isinstance(value, str):
+            try:
+                numeric = float(value)
+            except ValueError:
+                return None
+        else:
+            return None
+        if numeric <= 0:
+            return None
+        return int(numeric)
 
     def _on_post_llm_call(
         self,
@@ -333,7 +434,8 @@ class MemTensorProvider(MemoryProvider):
 
     def on_turn_start(self, turn_number: int, message: str, **_kwargs: Any) -> None:  # type: ignore[override]
         self._turn_number = int(turn_number or 0)
-        self._last_user_text = (message or "").strip()
+        self._skip_current_turn = _is_hermes_internal_review_prompt(message)
+        self._last_user_text = "" if self._skip_current_turn else (message or "").strip()
         # Reset per-turn buffers so reasoning / tool calls captured here
         # belong only to this turn.
         self._turn_thinking = ""
@@ -351,12 +453,21 @@ class MemTensorProvider(MemoryProvider):
         with self._prefetch_lock:
             cached = self._prefetch_result
             self._prefetch_result = ""
+        if self._skip_current_turn or _is_hermes_internal_review_prompt(query):
+            self._skip_current_turn = True
+            return ""
+        suppress_injection = _is_explicit_delegation_request(query)
         if cached:
-            return cached
-        if not self._bridge:
+            return "" if suppress_injection else cached
+        if not self._ensure_bridge(session_id or self._session_id, timeout=10.0):
             return ""
         try:
-            return self._turn_start(query, session_id=session_id)
+            context = self._turn_start(query, session_id=session_id)
+            if suppress_injection:
+                # Do not let remembered "do it directly" skills override an
+                # explicit user request to dispatch work to a subagent.
+                return ""
+            return context
         except Exception as err:
             logger.debug("MemOS: prefetch failed — %s", err)
             return ""
@@ -388,14 +499,19 @@ class MemTensorProvider(MemoryProvider):
         ``sync_turn`` is called the full list of tool calls for this
         turn has already been accumulated in ``self._tool_calls``.
         """
-        if not self._bridge:
-            return
         user = user_content or self._last_user_text
         assistant = assistant_content or ""
         tool_calls = self._tool_calls
         thinking = self._turn_thinking
         self._tool_calls = []
         self._turn_thinking = ""
+        if self._skip_current_turn or _is_hermes_internal_review_prompt(user):
+            self._skip_current_turn = False
+            self._last_user_text = ""
+            return
+        if not self._ensure_bridge(session_id or self._session_id, timeout=75.0):
+            logger.warning("MemOS: sync_turn skipped because bridge is unavailable")
+            return
         logger.info(
             "MemOS: sync_turn user=%d assistant=%d tools=%d thinking=%d",
             len(user),
@@ -403,16 +519,42 @@ class MemTensorProvider(MemoryProvider):
             len(tool_calls),
             len(thinking),
         )
+        ts_ms = int(time.time() * 1000)
         try:
+            if user and not self._episode_id:
+                self._turn_start(user, session_id=session_id or self._session_id)
             self._turn_end(
                 user,
                 assistant,
                 tool_calls,
-                int(time.time() * 1000),
+                ts_ms,
                 agent_thinking=thinking,
             )
         except Exception as err:
-            logger.warning("MemOS: sync_turn turn.end failed — %s", err)
+            if not self._is_transport_closed(err):
+                logger.warning("MemOS: sync_turn turn.end failed — %s", err)
+            else:
+                logger.warning(
+                    "MemOS: bridge transport closed during sync_turn; "
+                    "reconnecting and retrying once — %s",
+                    err,
+                )
+                try:
+                    self._reconnect_bridge(session_id or self._session_id, timeout=75.0)
+                    if user:
+                        self._turn_start(user, session_id=session_id or self._session_id)
+                    self._turn_end(
+                        user,
+                        assistant,
+                        tool_calls,
+                        ts_ms,
+                        agent_thinking=thinking,
+                    )
+                except Exception:
+                    logger.exception(
+                        "MemOS: sync_turn failed after bridge reconnect; "
+                        "memory turn was not persisted"
+                    )
         if user_content:
             self._last_user_text = user_content
 
@@ -431,9 +573,11 @@ class MemTensorProvider(MemoryProvider):
         failure bursts and so Tier 2 retrieval can surface past
         delegations.
         """
-        if not self._bridge:
+        if not self._ensure_bridge(self._session_id, timeout=30.0):
             return
         try:
+            if not self._episode_id and self._last_user_text:
+                self._turn_start(self._last_user_text, session_id=self._session_id)
             self._bridge.request(
                 "subagent.record",
                 {
@@ -442,11 +586,90 @@ class MemTensorProvider(MemoryProvider):
                     "childSessionId": child_session_id or None,
                     "task": task,
                     "result": result,
+                    "toolCalls": self._extract_child_tool_calls(child_session_id),
                     "ts": int(time.time() * 1000),
                 },
             )
         except Exception as err:
             logger.warning("MemOS: subagent.record failed — %s", err)
+
+    def _extract_child_tool_calls(self, child_session_id: str = "") -> list[dict[str, Any]]:
+        """Best-effort recovery of subagent tool calls from Hermes session JSON.
+
+        Hermes invokes ``on_delegation`` on the parent and only passes the
+        child task/result. The child transcript is still persisted under
+        ``$HERMES_HOME/sessions/session_<id>.json``, so we read that file to
+        preserve structured tool use in the MemOS child episode.
+        """
+        if not child_session_id:
+            return []
+        sessions_dir = (
+            Path(self._hermes_home).expanduser() / "sessions"
+            if self._hermes_home
+            else Path.home() / ".hermes" / "sessions"
+        )
+        session_path = sessions_dir / f"session_{child_session_id}.json"
+        try:
+            payload = json.loads(session_path.read_text(encoding="utf-8"))
+        except Exception as err:
+            logger.debug("MemOS: child session tool extraction skipped — %s", err)
+            return []
+
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return []
+
+        tool_outputs: dict[str, str] = {}
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") != "tool":
+                continue
+            tool_call_id = str(message.get("tool_call_id") or "")
+            if tool_call_id:
+                tool_outputs[tool_call_id] = str(message.get("content") or "")[:4000]
+
+        base_ts = int(time.time() * 1000)
+        calls: list[dict[str, Any]] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            raw_calls = message.get("tool_calls")
+            if not isinstance(raw_calls, list):
+                continue
+            for raw_call in raw_calls:
+                if not isinstance(raw_call, dict):
+                    continue
+                function = raw_call.get("function")
+                if not isinstance(function, dict):
+                    function = {}
+                call_id = str(
+                    raw_call.get("id")
+                    or raw_call.get("call_id")
+                    or raw_call.get("tool_call_id")
+                    or ""
+                )
+                raw_args = function.get("arguments", raw_call.get("arguments", ""))
+                output = tool_outputs.get(call_id, "")
+                call: dict[str, Any] = {
+                    "name": str(function.get("name") or raw_call.get("name") or "tool"),
+                    "input": self._json_or_raw(raw_args),
+                    "output": output,
+                    "startedAt": base_ts + len(calls),
+                    "endedAt": base_ts + len(calls),
+                }
+                parsed_output = self._json_or_raw(output)
+                if isinstance(parsed_output, dict) and parsed_output.get("error"):
+                    call["errorCode"] = "tool_error"
+                calls.append(call)
+        return calls
+
+    @staticmethod
+    def _json_or_raw(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
 
     def on_pre_compress(self, messages: list[dict[str, Any]]) -> str:  # type: ignore[override]
         """Extract a compression-time memory summary.
@@ -648,9 +871,7 @@ class MemTensorProvider(MemoryProvider):
                 elif kind == "policy":
                     body = self._clip(
                         "\n\n".join(
-                            part
-                            for part in [item.get("title"), item.get("procedure")]
-                            if part
+                            part for part in [item.get("title"), item.get("procedure")] if part
                         )
                     )
                     meta = {
@@ -824,8 +1045,9 @@ class MemTensorProvider(MemoryProvider):
             return
         # `sync_turn` already flushed the turn data synchronously.
         # Just close the episode and session.
-        with contextlib.suppress(Exception):
-            self._bridge.request("episode.close", {"episodeId": self._episode_id})
+        if self._episode_id:
+            with contextlib.suppress(Exception):
+                self._bridge.request("episode.close", {"episodeId": self._episode_id})
         with contextlib.suppress(Exception):
             self._bridge.request("session.close", {"sessionId": self._session_id})
 
@@ -840,7 +1062,202 @@ class MemTensorProvider(MemoryProvider):
         # as a daemon if its viewer is running, so the memory panel
         # remains accessible between `hermes chat` sessions.
 
+    # ─── Host LLM bridge (fallback for plugin-side model failures) ────────
+
+    def _handle_host_llm_complete(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Run a fallback LLM call using the host (hermes) agent's models.
+
+        Wired into the bridge's reverse-RPC channel under the
+        ``host.llm.complete`` method. Triggered when the plugin's
+        configured summary or skill-evolver model fails — instead of
+        bubbling the error straight up (which would stall the V7
+        capture / reflection / skill pipeline), we replay the prompt
+        through ``agent.auxiliary_client.call_llm`` so hermes' own
+        provider stack (including its OpenRouter / Codex / custom
+        endpoint resolution) handles it.
+
+        If the host LLM also fails this raises, the bridge converts
+        that into a JSON-RPC error, the LlmClient ``markFail``s, and
+        the Overview card flips red — exactly matching the spec
+        "if the agent's main model is also down, stop falling back
+        and surface red".
+        """
+        messages = params.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("host.llm.complete: missing messages")
+
+        # Lazy imports — these pull in heavy deps (openai client,
+        # credential pool, …) that we don't want to load until a
+        # fallback is actually requested.
+        try:
+            from agent.auxiliary_client import call_llm  # type: ignore[import-not-found]
+            from hermes_cli.runtime_provider import (  # type: ignore[import-not-found]
+                resolve_runtime_provider,
+            )
+        except Exception as err:
+            raise RuntimeError(f"host LLM bridge unavailable: {err}") from err
+
+        # Resolve hermes' MAIN conversation provider so the fallback
+        # uses exactly what the user configured for chat. Walking the
+        # generic auxiliary auto-detect chain would otherwise depend
+        # on env vars (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, …) that
+        # often don't propagate into the bridge subprocess and would
+        # leave us with no working credential. Pinning to the resolved
+        # main runtime guarantees we hit the same endpoint the user
+        # already authenticated for chat.
+        try:
+            runtime = resolve_runtime_provider()
+        except Exception as err:
+            raise RuntimeError(f"could not resolve hermes main runtime: {err}") from err
+
+        main_runtime: dict[str, str] = {}
+        for field in ("provider", "model", "base_url", "api_key", "api_mode"):
+            value = runtime.get(field) if isinstance(runtime, dict) else None
+            if isinstance(value, str) and value.strip():
+                main_runtime[field] = value.strip()
+
+        normalized = [
+            {
+                "role": str(m.get("role", "user")),
+                "content": str(m.get("content", "")),
+            }
+            for m in messages
+            if isinstance(m, dict)
+        ]
+        timeout_ms = params.get("timeoutMs")
+        timeout_s: float | None = None
+        if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
+            timeout_s = float(timeout_ms) / 1000.0
+
+        max_tokens = params.get("maxTokens")
+        temperature = params.get("temperature")
+
+        kwargs: dict[str, Any] = {
+            "messages": normalized,
+            # `main_runtime` makes `_resolve_auto` prefer the user's
+            # main conversation provider + model over the generic auto
+            # chain. If the user's main provider is also down,
+            # `call_llm` raises — which is exactly the "agent's own
+            # model is broken too, stop falling back" semantic we want
+            # (red light on Overview).
+            "main_runtime": main_runtime,
+        }
+        if isinstance(max_tokens, (int, float)) and max_tokens > 0:
+            kwargs["max_tokens"] = int(max_tokens)
+        if isinstance(temperature, (int, float)):
+            kwargs["temperature"] = float(temperature)
+        if timeout_s is not None:
+            kwargs["timeout"] = timeout_s
+
+        started = time.time()
+        try:
+            response = call_llm(**kwargs)
+        except Exception as err:
+            # Surface the original failure verbatim — the LlmClient
+            # will tag this as a "host fallback failed" terminal error
+            # and the Overview red-light path takes over.
+            raise RuntimeError(f"host LLM call failed: {err}") from err
+
+        # `call_llm` returns an OpenAI ChatCompletion-shaped object.
+        # Pluck the assistant text + token usage defensively so a
+        # non-standard host (e.g. Anthropic native) still produces a
+        # populated response.
+        text = ""
+        model = ""
+        usage_dict: dict[str, int] = {}
+        try:
+            choices = getattr(response, "choices", None) or response.get("choices", [])  # type: ignore[union-attr]
+            if choices:
+                first = choices[0]
+                msg = getattr(first, "message", None) or first.get("message", {})  # type: ignore[union-attr]
+                content = getattr(msg, "content", None) or msg.get("content", "")  # type: ignore[union-attr]
+                text = str(content or "")
+            model = (
+                getattr(response, "model", None)
+                or response.get("model", "")  # type: ignore[union-attr]
+                or ""
+            )
+            u = getattr(response, "usage", None) or response.get("usage", None)  # type: ignore[union-attr]
+            if u is not None:
+                pt = getattr(u, "prompt_tokens", None)
+                ct = getattr(u, "completion_tokens", None)
+                tt = getattr(u, "total_tokens", None)
+                if pt is None and isinstance(u, dict):
+                    pt = u.get("prompt_tokens")
+                    ct = u.get("completion_tokens")
+                    tt = u.get("total_tokens")
+                if isinstance(pt, int):
+                    usage_dict["promptTokens"] = pt
+                if isinstance(ct, int):
+                    usage_dict["completionTokens"] = ct
+                if isinstance(tt, int):
+                    usage_dict["totalTokens"] = tt
+        except Exception:
+            logger.debug("host.llm.complete: shape parse failed", exc_info=True)
+
+        result: dict[str, Any] = {
+            "text": text,
+            "model": str(model or ""),
+            "durationMs": int((time.time() - started) * 1000),
+        }
+        if usage_dict:
+            result["usage"] = usage_dict
+        return result
+
     # ─── Internals ────────────────────────────────────────────────────────
+
+    def _open_session(self, session_id: str = "", *, timeout: float = 30.0) -> None:
+        assert self._bridge is not None
+        requested_session = session_id or self._session_id or ""
+        resp = self._bridge.request(
+            "session.open",
+            {
+                "agent": "hermes",
+                "sessionId": requested_session,
+                "meta": {
+                    "hermesHome": self._hermes_home,
+                    "platform": self._platform,
+                    "agentIdentity": self._agent_identity,
+                },
+            },
+            timeout=timeout,
+        )
+        self._session_id = resp.get("sessionId") or requested_session
+
+    def _is_transport_closed(self, err: Exception) -> bool:
+        if isinstance(err, BridgeError) and err.code == "transport_closed":
+            return True
+        msg = str(err).lower()
+        return "broken pipe" in msg or "bridge closed" in msg or "transport_closed" in msg
+
+    def _reconnect_bridge(self, session_id: str = "", *, timeout: float = 30.0) -> None:
+        old_bridge = self._bridge
+        if old_bridge:
+            with contextlib.suppress(Exception):
+                old_bridge.close()
+        ensure_bridge_running()
+        self._bridge = MemosBridgeClient()
+        self._bridge.register_host_handler(
+            "host.llm.complete",
+            self._handle_host_llm_complete,
+        )
+        self._open_session(session_id, timeout=timeout)
+
+    def _ensure_bridge(self, session_id: str = "", *, timeout: float = 30.0) -> bool:
+        if self._bridge:
+            return True
+        try:
+            self._reconnect_bridge(session_id or self._session_id, timeout=timeout)
+            logger.info(
+                "MemOS: bridge reconnected session=%s platform=%s",
+                self._session_id,
+                self._platform,
+            )
+            return True
+        except Exception as err:
+            logger.warning("MemOS: bridge reconnect failed — %s", err)
+            self._bridge = None
+            return False
 
     def _turn_start(self, query: str, *, session_id: str = "") -> str:
         assert self._bridge is not None

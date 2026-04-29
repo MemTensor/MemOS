@@ -66,6 +66,14 @@ class MemosBridgeClient:
         self._pending: dict[int, dict[str, Any]] = {}
         self._events: list[Callable[[dict[str, Any]], None]] = []
         self._logs: list[Callable[[dict[str, Any]], None]] = []
+        # Reverse-direction handlers: the bridge can send us a
+        # JSON-RPC request via `serverRequest(...)` (e.g.
+        # `host.llm.complete` for fallback LLM calls). Registered
+        # methods run on the dedicated reader thread; long-running
+        # work should spawn its own worker if it needs to. Each
+        # handler returns a JSON-serialisable value or raises to
+        # surface a JSON-RPC error back to the bridge.
+        self._host_handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
         self._closed = False
 
         node = node_binary or shutil.which("node") or "node"
@@ -173,6 +181,22 @@ class MemosBridgeClient:
     def on_log(self, cb: Callable[[dict[str, Any]], None]) -> None:
         self._logs.append(cb)
 
+    def register_host_handler(
+        self,
+        method: str,
+        handler: Callable[[dict[str, Any]], Any],
+    ) -> None:
+        """Register a handler for bridge → adapter (reverse) requests.
+
+        The Node-side bridge calls these via ``stdio.serverRequest``.
+        Most-recent registration wins. The handler runs on the reader
+        thread; if it blocks for a long time it stalls every other
+        bridge → adapter notification, so handlers that need to do
+        heavy work (e.g. an LLM call) are still expected to return
+        within the bridge-side timeout (default 60 s).
+        """
+        self._host_handlers[method] = handler
+
     def close(self) -> None:
         if self._closed:
             return
@@ -225,6 +249,68 @@ class MemosBridgeClient:
                     except Exception:
                         logger.debug("log listener threw", exc_info=True)
                 continue
+            # Reverse-direction request: the bridge is asking the
+            # adapter to do something (e.g. run a fallback LLM call
+            # via `host.llm.complete`). Dispatch to the registered
+            # handler and write the response back synchronously.
+            method = msg.get("method")
+            rpc_id = msg.get("id")
+            if (
+                isinstance(method, str)
+                and rpc_id is not None
+                and "result" not in msg
+                and "error" not in msg
+            ):
+                handler = self._host_handlers.get(method)
+                if handler is None:
+                    self._send_response(
+                        rpc_id,
+                        error={
+                            "code": -32601,
+                            "message": f"method not found: {method}",
+                            "data": {"code": "unknown_method"},
+                        },
+                    )
+                    continue
+                params = msg.get("params") or {}
+                if not isinstance(params, dict):
+                    params = {}
+                try:
+                    result = handler(params)
+                    self._send_response(rpc_id, result=result)
+                except Exception as err:
+                    logger.warning("host handler %s failed: %s", method, err)
+                    self._send_response(
+                        rpc_id,
+                        error={
+                            "code": -32000,
+                            "message": str(err) or err.__class__.__name__,
+                            "data": {"code": "host_handler_failed"},
+                        },
+                    )
+                continue
+
+    def _send_response(
+        self,
+        rpc_id: Any,
+        *,
+        result: Any = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        """Write a JSON-RPC response for a reverse-direction request."""
+        if self._closed:
+            return
+        payload: dict[str, Any] = {"jsonrpc": "2.0", "id": rpc_id}
+        if error is not None:
+            payload["error"] = error
+        else:
+            payload["result"] = result
+        with self._lock:
+            try:
+                self._proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                self._proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass
 
     def _stderr_loop(self) -> None:
         assert self._proc.stderr is not None

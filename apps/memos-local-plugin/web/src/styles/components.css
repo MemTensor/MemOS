@@ -368,10 +368,12 @@
   border-radius: 50%;
   flex-shrink: 0;
 }
-.status-dot--ok   { background: var(--green); box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18); }
-.status-dot--err  { background: var(--red);   box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.20); }
-.status-dot--idle { background: var(--fg-dim); opacity: 0.6; }
-.status-dot--off  { background: transparent; border: 1px dashed var(--fg-dim); }
+.status-dot--ok       { background: var(--green); box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18); }
+/* Yellow ring — primary provider broken but host LLM bridge rescued the call. */
+.status-dot--fallback { background: #f59e0b;     box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.22); }
+.status-dot--err      { background: var(--red);   box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.20); }
+.status-dot--idle     { background: var(--fg-dim); opacity: 0.6; }
+.status-dot--off      { background: transparent; border: 1px dashed var(--fg-dim); }
 
 /* ── Pills (status badges) ──────────────────────────────────────── */
 
@@ -628,11 +630,88 @@
   gap: var(--sp-2);
   align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
   margin-top: var(--sp-5);
 }
-.pager__info {
+.pager__pages {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.pager__nav,
+.pager__page-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--fg-muted);
-  font-size: var(--fs-xs);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: all var(--dur-xs);
+}
+.pager__nav:hover,
+.pager__page-btn:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.pager__nav:disabled,
+.pager__page-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pager__page-btn[aria-current="page"] {
+  border-color: var(--accent);
+  background: var(--bg-elev-1);
+  color: var(--accent);
+  font-weight: var(--fw-semi);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.pager__ellipsis {
+  min-width: 32px;
+  color: var(--fg-dim);
+  text-align: center;
+  letter-spacing: 0.08em;
+}
+.pager__spacer {
+  width: var(--sp-4);
+}
+.pager__page-size-select {
+  width: auto;
+  min-width: 112px;
+  height: 36px;
+  padding-right: var(--sp-6);
+  font-size: var(--fs-sm);
+}
+.pager__jump {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.pager__jump-label {
+  color: var(--fg);
+  font-size: var(--fs-sm);
+}
+.pager__jump-input {
+  width: 74px;
+  height: 36px;
+  text-align: center;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ── Event / log stream (monospace) ────────────────────────────── */

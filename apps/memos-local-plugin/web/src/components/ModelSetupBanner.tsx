@@ -1,18 +1,29 @@
 /**
  * ModelSetupBanner — sticky amber strip just under the topbar.
  *
- * A simple "please configure your models" reminder. Always shown until
- * the operator clicks `✕`; the dismissal is persisted to localStorage
- * so it survives page reloads. We intentionally do NOT inspect health
- * to decide whether to hide it — the banner is a one-time onboarding
- * nudge, not a live status indicator.
+ * Shows up when at least one of the three model slots
+ * (`embedder`, `llm`, `skillEvolver`) is not usable. Hides itself
+ * automatically as soon as the bridge reports all three as
+ * `available=true` — the same flag `stores/health.ts` advertises as
+ * "the viewer's setup banner uses this flag". The user can also
+ * dismiss it manually with `✕`; that dismissal is persisted to
+ * localStorage so a half-configured user doesn't get nagged forever.
+ *
+ * Display rules, in order:
+ *   1. User clicked `✕` before          → hidden permanently.
+ *   2. `health` hasn't loaded yet       → hidden (avoids flashing a red
+ *                                          bar on first paint before we
+ *                                          know whether anything's wrong).
+ *   3. All three slots `available=true` → hidden (setup is complete).
+ *   4. Otherwise                        → shown.
  *
  * Mounted as the second row of `.shell` (see `styles/layout.css`); the
- * row collapses to zero height when the banner is dismissed.
+ * row collapses to zero height when the banner is hidden.
  */
 import { useState } from "preact/hooks";
 import { t } from "../stores/i18n";
 import { navigate } from "../stores/router";
+import { health } from "../stores/health";
 import { Icon } from "./Icon";
 
 const STORAGE_KEY = "memos.banner.modelSetup.dismissed";
@@ -37,6 +48,18 @@ export function ModelSetupBanner() {
   const [dismissed, setDismissed] = useState<boolean>(() => isDismissed());
 
   if (dismissed) return null;
+
+  // Reading `health.value` here subscribes the component to the signal,
+  // so the banner re-evaluates every time `/api/v1/health` polls (15s).
+  // If the user later misconfigures (e.g. clears apiKey in Settings),
+  // the bridge will report `available=false` and the banner reappears
+  // without needing a page reload.
+  const h = health.value;
+  if (h === null) return null; // first paint, status unknown
+  const allConfigured = Boolean(
+    h.embedder?.available && h.llm?.available && h.skillEvolver?.available,
+  );
+  if (allConfigured) return null;
 
   const handleDismiss = () => {
     persistDismissed();

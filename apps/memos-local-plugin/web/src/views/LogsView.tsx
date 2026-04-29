@@ -19,6 +19,7 @@ import { useEffect, useState } from "preact/hooks";
 import { api } from "../api/client";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
+import { Pager } from "../components/Pager";
 import type { ApiLogDTO } from "../api/types";
 
 type ToolFilter =
@@ -32,7 +33,9 @@ type ToolFilter =
   | "world_model_generate"
   | "world_model_evolve"
   | "task_done"
-  | "task_failed";
+  | "task_failed"
+  | "system_error"
+  | "system_model_status";
 
 /**
  * Frontend log-tag categories. Each tag maps to one or more backend
@@ -48,7 +51,13 @@ type LogTag =
   | "task"
   | "skill"
   | "policy"
-  | "world";
+  | "world"
+  // Infrastructure-layer failures (embedding / summary LLM /
+  // skillEvolver provider errors). The bootstrap layer drops a
+  // `system_error` row into api_logs every time a model facade
+  // throws, so users can correlate Overview red dots with concrete
+  // upstream messages without tailing the server logs.
+  | "system";
 
 const LOG_TAGS: Array<{ v: LogTag; k: string }> = [
   { v: "", k: "common.all" },
@@ -58,6 +67,7 @@ const LOG_TAGS: Array<{ v: LogTag; k: string }> = [
   { v: "skill", k: "logs.tag.skill" },
   { v: "policy", k: "logs.tag.policy" },
   { v: "world", k: "logs.tag.world" },
+  { v: "system", k: "logs.tag.system" },
 ];
 
 /**
@@ -74,6 +84,7 @@ const ALLOWED_TOOLS: Record<LogTag, readonly ToolFilter[]> = {
   skill: ["skill_generate", "skill_evolve"],
   policy: ["policy_generate", "policy_evolve"],
   world: ["world_model_generate", "world_model_evolve"],
+  system: ["system_error", "system_model_status"],
 };
 
 interface ApiLogsResponse {
@@ -84,7 +95,7 @@ interface ApiLogsResponse {
   nextOffset?: number;
 }
 
-const PAGE_SIZE = 25;
+const DEFAULT_PAGE_SIZE = 25;
 
 export function LogsView() {
   const [tag, setTag] = useState<LogTag>("");
@@ -92,6 +103,7 @@ export function LogsView() {
   const [logs, setLogs] = useState<ApiLogDTO[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
@@ -112,8 +124,8 @@ export function LogsView() {
       // result locally.
       const allowed = ALLOWED_TOOLS[opts.tag];
       const needsClient = allowed.length > 1 || opts.query.trim().length > 0;
-      qs.set("limit", String(needsClient ? 500 : PAGE_SIZE));
-      qs.set("offset", String(needsClient ? 0 : opts.page * PAGE_SIZE));
+      qs.set("limit", String(needsClient ? 500 : pageSize));
+      qs.set("offset", String(needsClient ? 0 : opts.page * pageSize));
       if (allowed.length === 1) qs.set("tool", allowed[0]!);
       const res = await api.get<ApiLogsResponse>(`/api/v1/api-logs?${qs.toString()}`);
       setLogs(res.logs);
@@ -130,7 +142,7 @@ export function LogsView() {
   useEffect(() => {
     void load({ tag, page: 0, query });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tag]);
+  }, [tag, pageSize]);
 
   // Debounced client-side refresh when the search query changes.
   useEffect(() => {
@@ -139,7 +151,7 @@ export function LogsView() {
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [query, pageSize]);
 
   const toggleExpand = (id: number) => {
     setExpanded((prev) => {
@@ -161,10 +173,9 @@ export function LogsView() {
       })
     : logs;
   const pagedRows = clientFilterActive
-    ? filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+    ? filtered.slice(page * pageSize, (page + 1) * pageSize)
     : filtered;
   const displayTotal = clientFilterActive ? filtered.length : total;
-  const totalPages = Math.max(1, Math.ceil(displayTotal / PAGE_SIZE));
 
   return (
     <>
@@ -254,34 +265,18 @@ export function LogsView() {
         </div>
       )}
 
-      {displayTotal > PAGE_SIZE && (
-        <div class="pager">
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page === 0 || loading}
-            onClick={() => {
-              if (clientFilterActive) setPage(page - 1);
-              else void load({ tag, page: page - 1, query });
-            }}
-          >
-            <Icon name="chevron-left" size={14} />
-            {t("common.prev")}
-          </button>
-          <span class="pager__info">
-            {t("pager.pageN", { n: page + 1, total: totalPages })}
-          </span>
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page + 1 >= totalPages || loading}
-            onClick={() => {
-              if (clientFilterActive) setPage(page + 1);
-              else void load({ tag, page: page + 1, query });
-            }}
-          >
-            {t("common.next")}
-            <Icon name="chevron-right" size={14} />
-          </button>
-        </div>
+      {displayTotal > pageSize && (
+        <Pager
+          page={page}
+          totalItems={displayTotal}
+          pageSize={pageSize}
+          loading={loading}
+          onPageSizeChange={setPageSize}
+          onPageChange={(nextPage) => {
+            if (clientFilterActive) setPage(nextPage);
+            else void load({ tag, page: nextPage, query });
+          }}
+        />
       )}
     </>
   );
@@ -312,7 +307,7 @@ function LogCard({
         </span>
         <span class="log-card__summary">{buildSummary(log, input, output)}</span>
         <span class="muted mono" style="font-size:var(--fs-xs)">
-          {log.durationMs}ms
+          {formatLogDuration(log)}
         </span>
         <span class="muted" style="font-size:var(--fs-xs)">
           {formatTs(log.calledAt)}
@@ -326,6 +321,10 @@ function LogCard({
             <MemorySearchDetail input={input} output={output} />
           ) : log.toolName === "memory_add" ? (
             <MemoryAddDetail input={input} output={output} />
+          ) : log.toolName === "system_error" ? (
+            <SystemErrorDetail output={output} />
+          ) : log.toolName === "system_model_status" ? (
+            <SystemModelStatusDetail output={output} />
           ) : log.toolName.startsWith("skill_") ||
             log.toolName.startsWith("policy_") ||
             log.toolName.startsWith("world_model_") ||
@@ -765,6 +764,117 @@ function LifecycleDetail({
   );
 }
 
+// ─── system_error template ──────────────────────────────────────────────
+
+interface SystemErrorPayload {
+  role?: "embedding" | "llm" | "skillEvolver";
+  provider?: string;
+  model?: string;
+  message?: string;
+  code?: string;
+  at?: number;
+}
+
+interface SystemModelStatusPayload extends SystemErrorPayload {
+  status?: "ok" | "fallback" | "error";
+  fallbackProvider?: string;
+  fallbackModel?: string;
+}
+
+/**
+ * Detail view for a `system_error` row. The bootstrap-installed sink
+ * stores a flat `{ role, provider, model, message, code, at }` blob so
+ * the renderer is intentionally minimal — one prominent red error line
+ * plus a row of metadata pills.
+ */
+function SystemErrorDetail({ output }: { output: unknown }) {
+  const out = (output ?? {}) as SystemErrorPayload;
+  const role = out.role ?? "(unknown)";
+  return (
+    <div class="vstack" style="gap:var(--sp-3)">
+      <section
+        class="card card--flat"
+        style="border-color:var(--danger);background:var(--danger-soft)"
+      >
+        <div
+          class="muted"
+          style="font-size:var(--fs-xs);margin-bottom:4px;color:var(--danger)"
+        >
+          {t("logs.system.role", { role: roleLabel(role) })}
+        </div>
+        <div class="mono" style="font-size:var(--fs-sm);line-height:1.5;word-break:break-word">
+          {out.message || "(no message)"}
+        </div>
+      </section>
+      <div class="hstack" style="gap:var(--sp-2);flex-wrap:wrap">
+        {out.provider && (
+          <span class="pill pill--info" style="font-family:var(--font-mono)">
+            provider: {out.provider}
+          </span>
+        )}
+        {out.model && (
+          <span class="pill pill--info" style="font-family:var(--font-mono)">
+            model: {out.model}
+          </span>
+        )}
+        {out.code && (
+          <span class="pill pill--failed" style="font-family:var(--font-mono)">
+            code: {out.code}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SystemModelStatusDetail({ output }: { output: unknown }) {
+  const out = (output ?? {}) as SystemModelStatusPayload;
+  const status = out.status ?? "error";
+  const role = out.role ?? "(unknown)";
+  const tone =
+    status === "ok"
+      ? { border: "var(--success)", bg: "var(--success-soft)", pill: "pill--active" }
+      : status === "fallback"
+      ? { border: "#f59e0b", bg: "rgba(245, 158, 11, 0.12)", pill: "pill--info" }
+      : { border: "var(--danger)", bg: "var(--danger-soft)", pill: "pill--failed" };
+  return (
+    <div class="vstack" style="gap:var(--sp-3)">
+      <section
+        class="card card--flat"
+        style={`border-color:${tone.border};background:${tone.bg}`}
+      >
+        <div class="hstack" style="gap:var(--sp-2);margin-bottom:6px;flex-wrap:wrap">
+          <span class={`pill ${tone.pill}`}>{status}</span>
+          <span class="pill pill--info">{roleLabel(role)}</span>
+          {out.provider && <span class="pill">provider: {out.provider}</span>}
+          {out.model && <span class="pill">model: {out.model}</span>}
+          {out.fallbackProvider && (
+            <span class="pill pill--info">fallback: {out.fallbackProvider}</span>
+          )}
+        </div>
+        {out.message && (
+          <div class="mono" style="font-size:var(--fs-sm);line-height:1.5;word-break:break-word">
+            {out.message}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function roleLabel(role: string): string {
+  switch (role) {
+    case "embedding":
+      return t("logs.system.role.embedding");
+    case "llm":
+      return t("logs.system.role.llm");
+    case "skillEvolver":
+      return t("logs.system.role.skillEvolver");
+    default:
+      return role;
+  }
+}
+
 // ─── Generic fallback ───────────────────────────────────────────────────
 
 function GenericDetail({
@@ -803,6 +913,21 @@ function GenericDetail({
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────
+
+function formatLogDuration(log: ApiLogDTO): string {
+  if (log.durationMs > 0) return `${log.durationMs}ms`;
+  if (isLifecycleTool(log.toolName)) return "—";
+  return "<1ms";
+}
+
+function isLifecycleTool(toolName: string): boolean {
+  return (
+    toolName.startsWith("skill_") ||
+    toolName.startsWith("policy_") ||
+    toolName.startsWith("world_model_") ||
+    toolName.startsWith("task_")
+  );
+}
 
 function parseJson(s: string): unknown {
   if (!s) return null;
@@ -886,6 +1011,29 @@ function buildSummary(log: ApiLogDTO, input: unknown, output: unknown): string {
       (out.worldModelId as string | undefined) ??
       (inp.worldModelId as string | undefined);
     return id ? `world model ${truncate(id, 24)}` : log.toolName;
+  }
+  if (log.toolName === "system_error") {
+    const role = (out.role as string | undefined) ?? "?";
+    const message = (out.message as string | undefined) ?? "";
+    const provider = (out.provider as string | undefined) ?? "";
+    const head = `[${roleLabel(role)}]`;
+    const tail = message
+      ? truncate(message, 80)
+      : provider
+      ? provider
+      : "(no message)";
+    return `${head} ${tail}`;
+  }
+  if (log.toolName === "system_model_status") {
+    const role = (out.role as string | undefined) ?? "?";
+    const status = (out.status as string | undefined) ?? "?";
+    const provider = (out.provider as string | undefined) ?? "";
+    const model = (out.model as string | undefined) ?? "";
+    const message = (out.message as string | undefined) ?? "";
+    const bits = [`[${roleLabel(role)}]`, status];
+    if (provider || model) bits.push([provider, model].filter(Boolean).join("/"));
+    if (message) bits.push(truncate(message, 60));
+    return bits.join(" · ");
   }
   if (log.toolName === "task_done" || log.toolName === "task_failed") {
     const rHuman = typeof out.rHuman === "number" ? (out.rHuman as number).toFixed(2) : null;

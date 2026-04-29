@@ -114,6 +114,8 @@ export interface SubagentOutcomeDTO {
   task: string;
   /** The child result or terminal reason. */
   result: string;
+  /** Structured tool calls observed inside the child session, when available. */
+  toolCalls?: ToolCallDTO[];
   outcome?: SubagentOutcome;
   error?: string;
   ts?: EpochMs;

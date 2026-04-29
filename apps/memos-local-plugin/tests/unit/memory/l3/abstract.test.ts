@@ -73,6 +73,8 @@ function mkCluster(): PolicyCluster {
     domainTags: ["docker", "alpine", "pip"],
     centroidVec: vec([1, 0, 0]),
     avgGain: 0.3,
+    cohesion: 1,
+    admission: "strict",
   };
 }
 
@@ -171,7 +173,6 @@ describe("memory/l3/abstract", () => {
       cluster,
       episodeIds: ["ep_a", "ep_b", "ep_a"] as EpisodeId[],
       inducedBy: OP,
-      decisionGuidance: { preference: [], antiPattern: [] },
       now: NOW,
       id: "wm_test" as Parameters<typeof buildWorldModelRow>[0]["id"],
     });
