@@ -211,6 +211,10 @@ class MemTensorProvider(MemoryProvider):
 
     # ─── Tool call capture via Hermes plugin hook ──────────────────────────
 
+    def _matches_session(self, session_id: str = "") -> bool:
+        """Return True when a global Hermes hook belongs to this provider."""
+        return not session_id or not self._session_id or session_id == self._session_id
+
     def _register_tool_call_hook(self) -> None:
         if self._hook_registered:
             return
@@ -232,6 +236,7 @@ class MemTensorProvider(MemoryProvider):
         args: dict | None = None,
         result: str = "",
         tool_call_id: str = "",
+        session_id: str = "",
         **_kw: Any,
     ) -> None:
         """Accumulate a tool call record for the current turn.
@@ -241,6 +246,8 @@ class MemTensorProvider(MemoryProvider):
         ``reasoning`` (the model's "thinking before this tool") to the
         right entry. The ``_id`` is stripped before the JSON-RPC send.
         """
+        if not self._matches_session(session_id):
+            return
         self._tool_calls.append(
             {
                 "name": tool_name,
@@ -257,6 +264,7 @@ class MemTensorProvider(MemoryProvider):
         *,
         conversation_history: list[dict[str, Any]] | None = None,
         user_message: str = "",
+        session_id: str = "",
         **_kw: Any,
     ) -> None:
         """Capture reasoning content from assistant messages in this turn.
@@ -277,6 +285,8 @@ class MemTensorProvider(MemoryProvider):
         tool. The final reasoning (the message that produced the user-
         facing reply) becomes the turn-level ``agentThinking``.
         """
+        if not self._matches_session(session_id):
+            return
         if not conversation_history:
             return
 
@@ -423,17 +433,20 @@ class MemTensorProvider(MemoryProvider):
         """
         if not self._bridge:
             return
-        with contextlib.suppress(Exception):
+        try:
             self._bridge.request(
                 "subagent.record",
                 {
                     "sessionId": self._session_id,
+                    "episodeId": self._episode_id or None,
                     "childSessionId": child_session_id or None,
                     "task": task,
                     "result": result,
                     "ts": int(time.time() * 1000),
                 },
             )
+        except Exception as err:
+            logger.warning("MemOS: subagent.record failed — %s", err)
 
     def on_pre_compress(self, messages: list[dict[str, Any]]) -> str:  # type: ignore[override]
         """Extract a compression-time memory summary.

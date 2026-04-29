@@ -26,6 +26,7 @@ import type {
   SessionId,
   SkillDTO,
   SkillId,
+  SubagentOutcomeDTO,
   ToolOutcomeDTO,
   TurnInputDTO,
   TurnResultDTO,
@@ -256,6 +257,32 @@ export function makeDispatcher(
           agent: (typeof p.agent === "string" ? p.agent : "openclaw") as AgentKind,
           query: requireString(p, "query", method),
         });
+      }
+
+      // ── subagents ──
+      case RPC_METHODS.SUBAGENT_RECORD: {
+        const p = asRecord(params, method);
+        const input: SubagentOutcomeDTO = {
+          agent: (typeof p.agent === "string" ? p.agent : "hermes") as AgentKind,
+          sessionId: requireString(p, "sessionId", method) as SessionId,
+          episodeId:
+            typeof p.episodeId === "string" && p.episodeId.length > 0
+              ? (p.episodeId as SubagentOutcomeDTO["episodeId"])
+              : undefined,
+          childSessionId:
+            typeof p.childSessionId === "string" && p.childSessionId.length > 0
+              ? (p.childSessionId as SessionId)
+              : null,
+          task: requireString(p, "task", method),
+          result: typeof p.result === "string" ? p.result : "",
+          outcome: typeof p.outcome === "string" ? p.outcome as SubagentOutcomeDTO["outcome"] : undefined,
+          error: typeof p.error === "string" ? p.error : undefined,
+          ts: typeof p.ts === "number" ? p.ts : undefined,
+          meta: p.meta && typeof p.meta === "object" && !Array.isArray(p.meta)
+            ? p.meta as Record<string, unknown>
+            : undefined,
+        };
+        return await core.recordSubagentOutcome(input);
       }
 
       // ── tool-outcome ──

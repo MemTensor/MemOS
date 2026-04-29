@@ -126,6 +126,52 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertEqual(bridge.calls[-1][0], "turn.start")
         self.assertIn("HERMES_MEMOS_E2E_0428", bridge.calls[-1][1]["userText"])
 
+    def test_tool_hook_ignores_other_sessions(self) -> None:
+        bridge = FakeBridge()
+        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
+            "memos_provider.MemosBridgeClient", return_value=bridge
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("parent-session")
+            provider.on_turn_start(1, "parent task")
+            provider.prefetch("parent task")
+
+            provider._on_post_tool_call(
+                tool_name="read_file",
+                args={"path": "child-only.txt"},
+                result="child output",
+                tool_call_id="child-tool",
+                session_id="child-session",
+            )
+            provider._on_post_tool_call(
+                tool_name="terminal",
+                args={"cmd": "npm test"},
+                result="parent output",
+                tool_call_id="parent-tool",
+                session_id="parent-session",
+            )
+            provider.sync_turn("parent task", "parent done")
+
+        turn_end = next(params for method, params in bridge.calls if method == "turn.end")
+        self.assertEqual([tc["name"] for tc in turn_end["toolCalls"]], ["terminal"])
+
+    def test_on_delegation_targets_parent_episode(self) -> None:
+        bridge = FakeBridge()
+        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
+            "memos_provider.MemosBridgeClient", return_value=bridge
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("parent-session")
+            provider.on_turn_start(1, "delegate task")
+            provider.prefetch("delegate task")
+            provider.on_delegation("check package", "no package.json", child_session_id="child-session")
+
+        method, params = bridge.calls[-1]
+        self.assertEqual(method, "subagent.record")
+        self.assertEqual(params["sessionId"], "parent-session")
+        self.assertEqual(params["episodeId"], "episode-from-turn-start")
+        self.assertEqual(params["childSessionId"], "child-session")
+
 
 if __name__ == "__main__":
     unittest.main()

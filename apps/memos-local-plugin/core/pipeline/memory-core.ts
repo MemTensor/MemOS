@@ -39,6 +39,7 @@ import type {
   SessionId,
   SkillDTO,
   SkillId,
+  SubagentOutcomeDTO,
   TraceDTO,
   WorldModelDTO,
 } from "../../agent-contract/dto.js";
@@ -714,11 +715,11 @@ export function createMemoryCore(
   async function health(): Promise<CoreHealth> {
     // Read the latest on-disk config so that model names reflect what
     // the user last saved, even before a restart applies the change.
-    let diskConfig: Record<string, unknown> | null = null;
+    let diskConfig: ResolvedConfig | null = null;
     try {
       const { loadConfig } = await import("../config/index.js");
       const { config } = await loadConfig(handle.home);
-      diskConfig = config as unknown as Record<string, unknown>;
+      diskConfig = config;
     } catch {
       /* fall through to in-memory */
     }
@@ -1027,6 +1028,76 @@ export function createMemoryCore(
         err: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  async function recordSubagentOutcome(
+    outcome: SubagentOutcomeDTO,
+  ): Promise<{ traceId: string; episodeId: EpisodeId }> {
+    ensureLive();
+    const ts = outcome.ts ?? Date.now();
+    const task = outcome.task.trim() || "(subagent task)";
+    const result = outcome.result.trim() || outcome.error || outcome.outcome || "(no subagent result)";
+    const normalizedOutcome = outcome.outcome ?? (outcome.error ? "error" : "unknown");
+
+    await openSession({ agent: outcome.agent, sessionId: outcome.sessionId });
+    const recorded = await onTurnEnd({
+      agent: outcome.agent,
+      sessionId: outcome.sessionId,
+      episodeId: outcome.episodeId ?? ("" as EpisodeId),
+      agentText: `Subagent task: ${task}\n\nSubagent result: ${result}`,
+      toolCalls: [
+        {
+          name: "subagent",
+          input: {
+            task,
+            childSessionId: outcome.childSessionId ?? null,
+            outcome: normalizedOutcome,
+            meta: outcome.meta ?? {},
+          },
+          output: {
+            result,
+            error: outcome.error ?? null,
+          },
+          errorCode:
+            outcome.error || (normalizedOutcome !== "ok" && normalizedOutcome !== "unknown")
+              ? normalizedOutcome
+              : undefined,
+          startedAt: ts,
+          endedAt: ts,
+        },
+      ],
+      ts,
+    });
+
+    try {
+      handle.repos.apiLogs.insert({
+        toolName: "subagent_record",
+        input: {
+          agent: outcome.agent,
+          sessionId: outcome.sessionId,
+          episodeId: outcome.episodeId ?? null,
+          childSessionId: outcome.childSessionId ?? null,
+          task,
+          outcome: normalizedOutcome,
+          meta: outcome.meta ?? {},
+        },
+        output: {
+          result,
+          error: outcome.error ?? null,
+          traceId: recorded.traceId,
+          episodeId: recorded.episodeId,
+        },
+        durationMs: 0,
+        success: !outcome.error && normalizedOutcome !== "error",
+        calledAt: ts,
+      });
+    } catch (err) {
+      log.debug("apiLogs.subagent_record.skipped", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    return recorded;
   }
 
   // ─── Memory queries ──
@@ -2314,6 +2385,7 @@ export function createMemoryCore(
     onTurnEnd,
     submitFeedback,
     recordToolOutcome,
+    recordSubagentOutcome,
     searchMemory,
     getTrace,
     updateTrace,

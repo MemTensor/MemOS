@@ -93,6 +93,33 @@ export interface TurnResultDTO {
   ts: EpochMs;
 }
 
+export type SubagentOutcome =
+  | "ok"
+  | "error"
+  | "timeout"
+  | "killed"
+  | "reset"
+  | "deleted"
+  | "unknown";
+
+export interface SubagentOutcomeDTO {
+  agent: AgentKind;
+  /** Parent session that requested the delegation. */
+  sessionId: SessionId;
+  /** Parent episode to append the delegation result to, when known. */
+  episodeId?: EpisodeId;
+  /** Host-specific child/subagent session id, if available. */
+  childSessionId?: SessionId | null;
+  /** The delegated mission/task. */
+  task: string;
+  /** The child result or terminal reason. */
+  result: string;
+  outcome?: SubagentOutcome;
+  error?: string;
+  ts?: EpochMs;
+  meta?: Record<string, unknown>;
+}
+
 // ─── Memory items ─────────────────────────────────────────────────────────────
 
 export interface TraceDTO {

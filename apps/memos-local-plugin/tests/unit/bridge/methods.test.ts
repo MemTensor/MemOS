@@ -212,6 +212,41 @@ describe("makeDispatcher", () => {
     );
   });
 
+  it("routes subagent.record to the core subagent outcome recorder", async () => {
+    const core = stubCore();
+    (core as any).recordSubagentOutcome = vi.fn(async () => ({
+      traceId: "tr-sub-1",
+      episodeId: "ep-sub-1",
+    }));
+    const dispatch = makeDispatcher(core);
+
+    await expect(
+      dispatch("subagent.record", {
+        agent: "hermes",
+        sessionId: "s-parent",
+        episodeId: "ep-parent",
+        childSessionId: "s-child",
+        task: "run focused tests",
+        result: "all green",
+        outcome: "ok",
+        ts: 123,
+      }),
+    ).resolves.toEqual({ traceId: "tr-sub-1", episodeId: "ep-sub-1" });
+
+    expect((core as any).recordSubagentOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "hermes",
+        sessionId: "s-parent",
+        episodeId: "ep-parent",
+        childSessionId: "s-child",
+        task: "run focused tests",
+        result: "all green",
+        outcome: "ok",
+        ts: 123,
+      }),
+    );
+  });
+
   it("raises protocol_error for transport-only methods", async () => {
     const core = stubCore();
     const dispatch = makeDispatcher(core);
