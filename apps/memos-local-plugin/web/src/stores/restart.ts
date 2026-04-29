@@ -1,13 +1,13 @@
 /**
  * Config-save restart state manager.
  *
- * Unified flow for all agents: POST `/api/v1/admin/restart` triggers
- * the backend to spawn a fresh daemon bridge and exit. The frontend
- * polls `/api/v1/health` until the new process is live, then reloads.
+ * OpenClaw can be restarted from the viewer because the plugin lives
+ * inside the gateway process and launchd brings it back.
  *
- *   - OpenClaw: launchd respawns the gateway — may take a few seconds.
- *   - Hermes: the restart endpoint spawns `bridge.cts --daemon` before
- *     exiting, so the viewer comes back almost immediately.
+ * Hermes is different: the viewer daemon is intentionally long-lived,
+ * so restart means "terminate the active `hermes chat` process" while
+ * keeping this Memory Viewer online. The user can relaunch Hermes and
+ * it will reconnect to the existing viewer service.
  */
 import { signal } from "@preact/signals";
 import { api } from "../api/client";
@@ -15,8 +15,6 @@ import { health } from "./health";
 
 export type RestartPhase =
   | "idle"
-  | "saved"
-  | "cleared"
   | "restarting"
   | "waitingUp"
   | "restartFailed";
@@ -24,10 +22,6 @@ export type RestartPhase =
 export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
 });
-
-export interface TriggerRestartOptions {
-  kick?: "restart-endpoint" | "skip";
-}
 
 function isOpenClaw(): boolean {
   return health.value?.agent === "openclaw";
@@ -63,16 +57,9 @@ async function pollHealthUntilUp(maxAttempts = 60): Promise<boolean> {
 }
 
 /**
- * Quick health check — verify the server responds again.
- *
- * Hermes' restart flow spawns the new daemon AFTER `sleep 3`
- * (admin.ts) so the old bridge can fully release the viewer port,
- * then `tsx` cold-compiles + bootstrap (DB migrations, embedder /
- * LLM clients, host-bridge registration) takes another few seconds
- * before the port is bound. Total worst-case wall time is ~10–15 s
- * on slower machines. We poll every 1 s for up to 30 attempts (30 s
- * total) so even a sluggish cold start succeeds without the user
- * hitting the "重启超时" toast prematurely.
+ * Quick health check for destructive clear-data only.
+ * Do not use this for Hermes config saves: those must keep the current
+ * viewer daemon online and terminate only the active `hermes chat`.
  */
 async function quickPollUp(maxAttempts = 30): Promise<boolean> {
   for (let i = 0; i < maxAttempts; i++) {
@@ -88,40 +75,40 @@ async function quickPollUp(maxAttempts = 30): Promise<boolean> {
 }
 
 /**
- * Config saved. Trigger a restart for any agent. The backend spawns a
- * fresh daemon bridge before exiting, so the viewer port comes back up
- * automatically for both OpenClaw (launchd) and Hermes (self-respawn).
+ * Config saved. OpenClaw gets an in-place gateway restart. Hermes keeps
+ * the viewer online and asks the backend to terminate the active chat
+ * process; once that request returns, reload the same viewer page.
+ *
+ * Do not add a passive "settings saved" toast/card here. The restart
+ * affordance is intentionally blocking for both agents so the operator
+ * sees Hermes' active chat window being closed before the viewer returns.
  */
-export async function triggerRestart(
-  _opts: TriggerRestartOptions = {},
-): Promise<void> {
+export async function triggerRestart(): Promise<void> {
   restartState.value = { phase: "restarting" };
+  if (!isOpenClaw()) {
+    try {
+      await api.post("/api/v1/admin/restart");
+      await new Promise((r) => setTimeout(r, 500));
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } catch {
+      restartState.value = { phase: "restartFailed" };
+    }
+    return;
+  }
+
   try {
     await api.post("/api/v1/admin/restart");
   } catch {
     // Server might already be going down
   }
 
-  if (isOpenClaw()) {
-    const ok = await pollHealthUntilUp(60);
-    if (ok) {
-      window.location.href =
-        window.location.pathname + "?_t=" + Date.now();
-    } else {
-      restartState.value = { phase: "restartFailed" };
-    }
+  const ok = await pollHealthUntilUp(60);
+  if (ok) {
+    window.location.href =
+      window.location.pathname + "?_t=" + Date.now();
   } else {
-    // Hermes: new daemon spawns after `sleep 3` (admin.ts) so the
-    // old bridge can fully release the port; cold-start of tsx +
-    // bootstrap may take another few seconds. Use the default
-    // `quickPollUp` attempts (30s total).
-    const ok = await quickPollUp();
-    if (ok) {
-      window.location.href =
-        window.location.pathname + "?_t=" + Date.now();
-    } else {
-      restartState.value = { phase: "restartFailed" };
-    }
+    restartState.value = { phase: "restartFailed" };
   }
 }
 

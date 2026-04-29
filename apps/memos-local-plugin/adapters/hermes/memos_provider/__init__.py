@@ -83,6 +83,21 @@ logger = logging.getLogger(__name__)
 PLUGIN_ID = "memos-local-hermes"
 PLUGIN_VERSION = "2.0.0-beta.1"
 
+_HERMES_INTERNAL_REVIEW_PREFIXES = (
+    "review the conversation above and consider saving to memory if appropriate.",
+    "review the conversation above and update the skill library.",
+    "review the conversation above and update two things:",
+    "review the conversation above and consider saving or updating a skill if appropriate.",
+)
+
+
+def _is_hermes_internal_review_prompt(message: str) -> bool:
+    """Return True for Hermes' own background memory/skill review turns."""
+    normalized = " ".join((message or "").strip().lower().split())
+    if not normalized:
+        return False
+    return any(normalized.startswith(prefix) for prefix in _HERMES_INTERNAL_REVIEW_PREFIXES)
+
 
 class MemTensorProvider(MemoryProvider):
     """MemOS Reflect2Evolve memory for hermes-agent.
@@ -119,6 +134,10 @@ class MemTensorProvider(MemoryProvider):
         # show the model's thinking like OpenClaw does.
         self._turn_thinking: str = ""
         self._hook_registered = False
+        # Hermes runs background memory/skill reviewers by forking an agent and
+        # appending a synthetic user turn. That turn is instruction plumbing,
+        # not a human utterance, so it must not become a MemOS trace.
+        self._skip_current_turn = False
 
     # ─── Identity ─────────────────────────────────────────────────────────
 
@@ -385,7 +404,8 @@ class MemTensorProvider(MemoryProvider):
 
     def on_turn_start(self, turn_number: int, message: str, **_kwargs: Any) -> None:  # type: ignore[override]
         self._turn_number = int(turn_number or 0)
-        self._last_user_text = (message or "").strip()
+        self._skip_current_turn = _is_hermes_internal_review_prompt(message)
+        self._last_user_text = "" if self._skip_current_turn else (message or "").strip()
         # Reset per-turn buffers so reasoning / tool calls captured here
         # belong only to this turn.
         self._turn_thinking = ""
@@ -403,6 +423,9 @@ class MemTensorProvider(MemoryProvider):
         with self._prefetch_lock:
             cached = self._prefetch_result
             self._prefetch_result = ""
+        if self._skip_current_turn or _is_hermes_internal_review_prompt(query):
+            self._skip_current_turn = True
+            return ""
         if cached:
             return cached
         if not self._bridge:
@@ -448,6 +471,10 @@ class MemTensorProvider(MemoryProvider):
         thinking = self._turn_thinking
         self._tool_calls = []
         self._turn_thinking = ""
+        if self._skip_current_turn or _is_hermes_internal_review_prompt(user):
+            self._skip_current_turn = False
+            self._last_user_text = ""
+            return
         logger.info(
             "MemOS: sync_turn user=%d assistant=%d tools=%d thinking=%d",
             len(user),
@@ -895,8 +922,9 @@ class MemTensorProvider(MemoryProvider):
             return
         # `sync_turn` already flushed the turn data synchronously.
         # Just close the episode and session.
-        with contextlib.suppress(Exception):
-            self._bridge.request("episode.close", {"episodeId": self._episode_id})
+        if self._episode_id:
+            with contextlib.suppress(Exception):
+                self._bridge.request("episode.close", {"episodeId": self._episode_id})
         with contextlib.suppress(Exception):
             self._bridge.request("session.close", {"sessionId": self._session_id})
 

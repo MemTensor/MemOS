@@ -163,22 +163,16 @@ const en = {
   "analytics.tools.subtitle":
     "Per-tool response time and failure counts over the selected time range.",
 
-  "restart.saved": "Settings saved",
-  "restart.cleared": "All data cleared",
-  "restart.hint.openclaw":
-    "Restart OpenClaw to apply: openclaw gateway stop && openclaw gateway start",
-  "restart.hint.hermes":
-    "Restart Hermes to apply: stop and rerun `hermes chat`",
-  "restart.hint.generic":
-    "Restart this agent's process to load the new configuration.",
   "restart.restarting": "Configuration saved. Service is restarting…",
+  "restart.restarting.hermes":
+    "Configuration saved. Closing the current Hermes session…",
   "restart.waitingUp": "Waiting for the service to come back online…",
   "restart.autoRefresh": "The page will refresh automatically once the service is ready.",
   "restart.failed": "Restart didn't complete — the service didn't come back in time.",
   "restart.failedHint.openclaw":
     "Try manually: openclaw gateway stop && openclaw gateway start",
   "restart.failedHint.hermes":
-    "Try manually: pkill -f bridge.cts && hermes chat",
+    "Try manually: stop the current Hermes session and rerun `hermes chat`",
   "common.selectAll": "Select all",
   "common.deleteSelected": "Delete selected",
 
@@ -826,21 +820,15 @@ const zh: Record<TranslationKey, string> = {
   "analytics.tools.title": "工具响应耗时",
   "analytics.tools.subtitle": "所选时间窗口内，各工具的延迟和失败次数。来源：最近的记忆行。",
 
-  "restart.saved": "设置已保存",
-  "restart.cleared": "所有数据已清空",
-  "restart.hint.openclaw":
-    "请重启 OpenClaw 后生效：openclaw gateway stop && openclaw gateway start",
-  "restart.hint.hermes":
-    "请重启 Hermes 后生效：停止后重新执行 `hermes chat`",
-  "restart.hint.generic": "请重启该 agent 进程以加载新配置。",
   "restart.restarting": "配置已保存，服务正在重启…",
+  "restart.restarting.hermes": "配置已保存，正在关闭当前 Hermes 会话…",
   "restart.waitingUp": "正在等待服务重新上线…",
   "restart.autoRefresh": "服务就绪后页面将自动刷新。",
   "restart.failed": "重启超时 — 服务未能在预期时间内恢复。",
   "restart.failedHint.openclaw":
     "请手动重启：openclaw gateway stop && openclaw gateway start",
   "restart.failedHint.hermes":
-    "请手动重启：pkill -f bridge.cts && hermes chat",
+    "请手动重启：停止当前 Hermes 会话后重新执行 `hermes chat`",
   "common.selectAll": "全选",
   "common.deleteSelected": "删除所选",
 
