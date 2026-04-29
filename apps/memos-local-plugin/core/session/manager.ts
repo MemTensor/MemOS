@@ -29,6 +29,7 @@ import type {
   EpisodeSnapshot,
   EpisodeStartInput,
   EpisodeTurn,
+  EpisodeTurnInput,
   IntentDecision,
   SessionEventBus,
   SessionOpenInput,
@@ -54,6 +55,8 @@ export interface StartEpisodeInput {
   id?: EpisodeId;
   /** First user message. Required. */
   userMessage: string;
+  /** Adapter-provided event time for the first user turn. */
+  ts?: EpochMs;
   meta?: Record<string, unknown>;
 }
 
@@ -67,7 +70,7 @@ export interface SessionManager {
   pruneIdle(now?: EpochMs): SessionId[];
 
   startEpisode(input: StartEpisodeInput): Promise<EpisodeSnapshot>;
-  addTurn(episodeId: EpisodeId, turn: Omit<EpisodeTurn, "id" | "ts">): EpisodeTurn;
+  addTurn(episodeId: EpisodeId, turn: EpisodeTurnInput): EpisodeTurn;
   finalizeEpisode(episodeId: EpisodeId, input?: EpisodeFinalizeInput): EpisodeSnapshot;
   abandonEpisode(episodeId: EpisodeId, reason: string): EpisodeSnapshot;
   /** V7 §0.1 "revision" path — reopen a previously-closed episode. */
@@ -218,7 +221,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
         const startInput: EpisodeStartInput = {
           sessionId: input.sessionId,
           id: episodeId,
-          initialTurn: { role: "user", content: input.userMessage, meta: input.meta },
+          initialTurn: { role: "user", content: input.userMessage, ts: input.ts, meta: input.meta },
           meta: input.meta,
         };
         const snap = epm.start(startInput, intent);

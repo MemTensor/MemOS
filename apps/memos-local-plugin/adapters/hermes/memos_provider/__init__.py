@@ -62,7 +62,7 @@ _PLUGIN_DIR = Path(__file__).resolve().parent
 if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
-from bridge_client import MemosBridgeClient  # noqa: E402
+from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
 from daemon_manager import ensure_bridge_running  # noqa: E402
 
 
@@ -156,19 +156,7 @@ class MemTensorProvider(MemoryProvider):
             return
         try:
             self._bridge = MemosBridgeClient()
-            resp = self._bridge.request(
-                "session.open",
-                {
-                    "agent": "hermes",
-                    "sessionId": session_id or "",
-                    "meta": {
-                        "hermesHome": self._hermes_home,
-                        "platform": self._platform,
-                        "agentIdentity": self._agent_identity,
-                    },
-                },
-            )
-            self._session_id = resp.get("sessionId") or session_id
+            self._open_session(session_id)
             logger.info(
                 "MemOS: bridge ready session=%s platform=%s (episode deferred)",
                 self._session_id,
@@ -232,7 +220,7 @@ class MemTensorProvider(MemoryProvider):
         args: dict | None = None,
         result: str = "",
         tool_call_id: str = "",
-        **_kw: Any,
+        **kw: Any,
     ) -> None:
         """Accumulate a tool call record for the current turn.
 
@@ -241,16 +229,82 @@ class MemTensorProvider(MemoryProvider):
         ``reasoning`` (the model's "thinking before this tool") to the
         right entry. The ``_id`` is stripped before the JSON-RPC send.
         """
-        self._tool_calls.append(
-            {
-                "name": tool_name,
-                "input": json.dumps(args, ensure_ascii=False)
-                if isinstance(args, dict)
-                else str(args or ""),
-                "output": (result or "")[:4000],
-                "_id": tool_call_id or "",
-            }
+        timing = self._coerce_tool_timing(kw)
+        call = {
+            "name": tool_name,
+            "input": json.dumps(args, ensure_ascii=False)
+            if isinstance(args, dict)
+            else str(args or ""),
+            "output": (result or "")[:4000],
+            "_id": tool_call_id or "",
+        }
+        if timing:
+            call.update(timing)
+        self._tool_calls.append(call)
+
+    def _coerce_tool_timing(self, payload: dict[str, Any]) -> dict[str, int] | None:
+        """Preserve real tool timing if Hermes exposes it in hook kwargs."""
+        started = self._coerce_epoch_ms(
+            payload.get("startedAt")
+            or payload.get("started_at")
+            or payload.get("startTime")
+            or payload.get("start_time")
         )
+        ended = self._coerce_epoch_ms(
+            payload.get("endedAt")
+            or payload.get("ended_at")
+            or payload.get("endTime")
+            or payload.get("end_time")
+        )
+        if started is not None and ended is not None and ended > started:
+            return {"startedAt": started, "endedAt": ended}
+
+        duration = self._coerce_duration_ms(
+            payload.get("durationMs")
+            or payload.get("duration_ms")
+            or payload.get("elapsedMs")
+            or payload.get("elapsed_ms")
+            or payload.get("latencyMs")
+            or payload.get("latency_ms")
+        )
+        if duration is not None and duration > 0:
+            end_ms = int(time.time() * 1000)
+            return {"startedAt": end_ms - duration, "endedAt": end_ms}
+
+        return None
+
+    @staticmethod
+    def _coerce_epoch_ms(value: Any) -> int | None:
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+        elif isinstance(value, str):
+            try:
+                numeric = float(value)
+            except ValueError:
+                return None
+        else:
+            return None
+        if numeric <= 0:
+            return None
+        # Accept seconds or milliseconds.
+        if numeric < 10_000_000_000:
+            numeric *= 1000
+        return int(numeric)
+
+    @staticmethod
+    def _coerce_duration_ms(value: Any) -> int | None:
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+        elif isinstance(value, str):
+            try:
+                numeric = float(value)
+            except ValueError:
+                return None
+        else:
+            return None
+        if numeric <= 0:
+            return None
+        return int(numeric)
 
     def _on_post_llm_call(
         self,
@@ -393,16 +447,40 @@ class MemTensorProvider(MemoryProvider):
             len(tool_calls),
             len(thinking),
         )
+        ts_ms = int(time.time() * 1000)
         try:
             self._turn_end(
                 user,
                 assistant,
                 tool_calls,
-                int(time.time() * 1000),
+                ts_ms,
                 agent_thinking=thinking,
             )
         except Exception as err:
-            logger.warning("MemOS: sync_turn turn.end failed — %s", err)
+            if not self._is_transport_closed(err):
+                logger.warning("MemOS: sync_turn turn.end failed — %s", err)
+            else:
+                logger.warning(
+                    "MemOS: bridge transport closed during sync_turn; "
+                    "reconnecting and retrying once — %s",
+                    err,
+                )
+                try:
+                    self._reconnect_bridge(session_id or self._session_id)
+                    if user:
+                        self._turn_start(user, session_id=session_id or self._session_id)
+                    self._turn_end(
+                        user,
+                        assistant,
+                        tool_calls,
+                        ts_ms,
+                        agent_thinking=thinking,
+                    )
+                except Exception:
+                    logger.exception(
+                        "MemOS: sync_turn failed after bridge reconnect; "
+                        "memory turn was not persisted"
+                    )
         if user_content:
             self._last_user_text = user_content
 
@@ -828,6 +906,42 @@ class MemTensorProvider(MemoryProvider):
         # remains accessible between `hermes chat` sessions.
 
     # ─── Internals ────────────────────────────────────────────────────────
+
+    def _open_session(self, session_id: str = "") -> None:
+        assert self._bridge is not None
+        requested_session = session_id or self._session_id or ""
+        resp = self._bridge.request(
+            "session.open",
+            {
+                "agent": "hermes",
+                "sessionId": requested_session,
+                "meta": {
+                    "hermesHome": self._hermes_home,
+                    "platform": self._platform,
+                    "agentIdentity": self._agent_identity,
+                },
+            },
+        )
+        self._session_id = resp.get("sessionId") or requested_session
+
+    def _is_transport_closed(self, err: Exception) -> bool:
+        if isinstance(err, BridgeError) and err.code == "transport_closed":
+            return True
+        msg = str(err).lower()
+        return (
+            "broken pipe" in msg
+            or "bridge closed" in msg
+            or "transport_closed" in msg
+        )
+
+    def _reconnect_bridge(self, session_id: str = "") -> None:
+        old_bridge = self._bridge
+        if old_bridge:
+            with contextlib.suppress(Exception):
+                old_bridge.close()
+        ensure_bridge_running()
+        self._bridge = MemosBridgeClient()
+        self._open_session(session_id)
 
     def _turn_start(self, query: str, *, session_id: str = "") -> str:
         assert self._bridge is not None

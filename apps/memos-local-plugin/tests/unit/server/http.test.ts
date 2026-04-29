@@ -260,6 +260,24 @@ describe("HTTP server — REST routes", () => {
     });
   });
 
+  it("POST /api/v1/feedback returns trace_not_found for stale trace ids", async () => {
+    (core.getTrace as any).mockResolvedValueOnce(null);
+    const r = await fetch(`${handle.url}/api/v1/feedback`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        channel: "explicit",
+        polarity: "negative",
+        magnitude: 1,
+        traceId: "trace-not-real",
+      }),
+    });
+    expect(r.status).toBe(404);
+    const body = (await r.json()) as any;
+    expect(body.error.code).toBe("trace_not_found");
+    expect(core.submitFeedback).not.toHaveBeenCalled();
+  });
+
   it("GET /api/v1/traces lists newest-first traces (used by Memories panel)", async () => {
     const r = await fetch(`${handle.url}/api/v1/traces?limit=25&q=hi`);
     expect(r.status).toBe(200);

@@ -14,9 +14,11 @@ import { api } from "../api/client";
 import { openSse } from "../api/sse";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
+import { Pager } from "../components/Pager";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import type { CoreEvent, SkillDTO } from "../api/types";
+import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
 
 interface SkillUsage {
   sourcePolicies: Array<{
@@ -30,7 +32,7 @@ interface SkillUsage {
 
 type StatusFilter = "" | "active" | "candidate" | "archived";
 
-const PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE = 20;
 
 interface SkillModelRefusalPayload {
   kind?: string;
@@ -57,6 +59,7 @@ export function SkillsView() {
   const [detail, setDetail] = useState<SkillDTO | null>(null);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -75,8 +78,8 @@ export function SkillsView() {
     setLoading(true);
     try {
       const qs = new URLSearchParams();
-      qs.set("limit", String(PAGE_SIZE));
-      qs.set("offset", String(nextPage * PAGE_SIZE));
+      qs.set("limit", String(pageSize));
+      qs.set("offset", String(nextPage * pageSize));
       if (status) qs.set("status", status);
       const r = await api.get<{ skills: SkillDTO[]; nextOffset?: number; total?: number }>(
         `/api/v1/skills?${qs.toString()}`,
@@ -95,7 +98,7 @@ export function SkillsView() {
   };
   useEffect(() => {
     void load(0);
-  }, [status]);
+  }, [status, pageSize]);
 
   useEffect(() => {
     const handle = openSse("/api/v1/events", (_, data) => {
@@ -147,6 +150,8 @@ export function SkillsView() {
       s.invocationGuide.toLowerCase().includes(q)
     );
   });
+  const pageIds = filtered.map((s) => s.id);
+  const isPageSelected = areAllIdsSelected(selected, pageIds);
 
   return (
     <>
@@ -291,30 +296,17 @@ export function SkillsView() {
       )}
 
       {(page > 0 || hasMore) && (
-        <div class="pager">
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page === 0 || loading}
-            onClick={() => void load(page - 1)}
-          >
-            <Icon name="chevron-left" size={14} />
-            {t("common.prev")}
-          </button>
-          <span class="pager__info">
-            {t("pager.pageOfTotal", {
-              n: page + 1,
-              total: Math.max(1, Math.ceil(total / PAGE_SIZE)),
-            })}
-          </span>
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={!hasMore || loading}
-            onClick={() => void load(page + 1)}
-          >
-            {t("common.next")}
-            <Icon name="chevron-right" size={14} />
-          </button>
-        </div>
+        <Pager
+          page={page}
+          totalItems={total}
+          pageSize={pageSize}
+          hasMore={hasMore}
+          loading={loading}
+          onPageSizeChange={setPageSize}
+          onPageChange={(nextPage) => {
+            void load(nextPage);
+          }}
+        />
       )}
 
       {detail && (
@@ -339,10 +331,10 @@ export function SkillsView() {
           </span>
           <button
             class="btn btn--sm"
-            onClick={() => setSelected(new Set(filtered.map((s) => s.id)))}
+            onClick={() => setSelected((prev) => toggleIdsInSelection(prev, pageIds))}
           >
             <Icon name="check-square" size={14} />
-            {t("common.selectPage")}
+            {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
           </button>
           <button
             class="btn btn--danger btn--sm"

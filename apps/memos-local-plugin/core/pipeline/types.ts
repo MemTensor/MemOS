@@ -236,6 +236,8 @@ export interface RecordToolOutcomeInput {
 
 export interface TurnEndResult {
   traceCount: number;
+  /** Trace ids actually persisted by the per-turn lite capture pass. */
+  traceIds: string[];
   /** The episode we wrote this turn into. */
   episodeId: EpisodeId;
   /**

@@ -51,8 +51,13 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "../api/client";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
+import { Pager } from "../components/Pager";
 import { route } from "../stores/router";
+import { clearEntryId } from "../stores/cross-link";
 import type { TraceDTO } from "../api/types";
+import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
+
+type RoleFilter = "" | "user" | "assistant" | "tool";
 
 interface ListResponse {
   traces: TraceDTO[];
@@ -85,13 +90,16 @@ interface MemoryGroup {
   shared: boolean;
 }
 
-const PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE = 20;
+const ROLE_FILTER_FETCH_LIMIT = 500;
 
 export function MemoriesView() {
   // Pre-fill from URL `?q=` so the global search box in Header can
   // navigate here with a pending query.
   const [query, setQuery] = useState(() => route.value.params.q ?? "");
+  const [role, setRole] = useState<RoleFilter>("");
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(false);
   const [traces, setTraces] = useState<TraceDTO[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -109,13 +117,14 @@ export function MemoriesView() {
     setLoading(true);
     try {
       const qs = new URLSearchParams();
-      qs.set("limit", String(PAGE_SIZE));
-      qs.set("offset", String(opts.page * PAGE_SIZE));
+      const roleFilterActive = role !== "";
+      qs.set("limit", String(roleFilterActive ? ROLE_FILTER_FETCH_LIMIT : pageSize));
+      qs.set("offset", String(roleFilterActive ? 0 : opts.page * pageSize));
       qs.set("groupByTurn", "true");
       if (opts.q) qs.set("q", opts.q);
       const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`);
       setTraces(res.traces);
-      setHasMore(res.nextOffset != null);
+      setHasMore(roleFilterActive ? false : res.nextOffset != null);
       setTotal(res.total ?? 0);
       setPage(opts.page);
     } catch {
@@ -127,14 +136,59 @@ export function MemoriesView() {
     }
   };
 
-  // Debounced filter — reset to page 0 on query change.
+  // Debounced filter — reset to page 0 on query or tab change.
   useEffect(() => {
+    if (route.value.params.id) return;
     const h = setTimeout(() => {
       void loadPage({ q: query.trim(), page: 0 });
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [query, pageSize, role, route.value.params.id]);
+
+  useEffect(() => {
+    const id = route.value.params.id;
+    if (!id) return;
+    const ctrl = new AbortController();
+    void openLinkedMemory(id, ctrl.signal);
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.value.params.id, pageSize]);
+
+  const openLinkedMemory = async (id: string, signal: AbortSignal) => {
+    setQuery("");
+    setRole("");
+    setLoading(true);
+    try {
+      const targetTrace = await api.get<TraceDTO>(
+        `/api/v1/traces/${encodeURIComponent(id)}`,
+        { signal },
+      );
+      const targetPage = await findTracePage(id, pageSize, signal);
+      const qs = new URLSearchParams();
+      qs.set("limit", String(pageSize));
+      qs.set("offset", String(targetPage * pageSize));
+      qs.set("groupByTurn", "true");
+      const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`, {
+        signal,
+      });
+      const nextTraces = res.traces ?? [];
+      const targetKey = groupKey(targetTrace);
+      const targetGroup =
+        buildGroups(nextTraces).find((g) => g.ids.includes(id) || g.turnKey === targetKey) ??
+        buildGroups([targetTrace])[0] ??
+        null;
+      setTraces(nextTraces);
+      setHasMore(res.nextOffset != null);
+      setTotal(res.total ?? 0);
+      setPage(targetPage);
+      if (targetGroup) setDetail(targetGroup);
+    } catch {
+      // Missing or aborted deep links should not break the list.
+    } finally {
+      if (!signal.aborted) setLoading(false);
+    }
+  };
 
   // Sync with URL `?q=` when the route changes (e.g. the Header's
   // global search bar navigates here while this view is already open).
@@ -150,9 +204,17 @@ export function MemoriesView() {
    * Bucket the page's traces by `(episodeId, turnId)` so each "user
    * message + every sub-step it produced" collapses into one card.
    */
-  const groups = useMemo<MemoryGroup[]>(() => {
-    return buildGroups(traces);
-  }, [traces]);
+  const allGroups = useMemo<MemoryGroup[]>(() => {
+    const all = buildGroups(traces);
+    if (!role) return all;
+    return all.filter((g) => detectGroupRole(g) === role);
+  }, [traces, role]);
+  const displayTotal = role ? allGroups.length : total;
+  const groups = role
+    ? allGroups.slice(page * pageSize, (page + 1) * pageSize)
+    : allGroups;
+  const pageIds = groups.flatMap((g) => g.ids);
+  const isPageSelected = areAllIdsSelected(selected, pageIds);
 
   /**
    * A card is "selected" when every member trace id is in the
@@ -183,8 +245,8 @@ export function MemoriesView() {
       return next;
     });
   };
-  const selectPage = () =>
-    setSelected(new Set(groups.flatMap((g) => g.ids)));
+  const togglePageSelection = () =>
+    setSelected((prev) => toggleIdsInSelection(prev, pageIds));
   const deselectAll = () => setSelected(new Set());
 
   const bulkDelete = async () => {
@@ -377,6 +439,27 @@ export function MemoriesView() {
         </label>
       </div>
 
+      {/* Row 2: filter chips — own row, matches TasksView layout */}
+      <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
+        <div class="toolbar__group" role="group" aria-label={t("memories.filter.role")}>
+          {[
+            { v: "" as RoleFilter, k: "common.all" as const },
+            { v: "user" as RoleFilter, k: "memories.filter.role.user" as const },
+            { v: "assistant" as RoleFilter, k: "memories.filter.role.assistant" as const },
+            { v: "tool" as RoleFilter, k: "memories.filter.role.tool" as const },
+          ].map((opt) => (
+            <button
+              key={opt.v}
+              class="chip"
+              aria-pressed={role === opt.v}
+              onClick={() => setRole(opt.v)}
+            >
+              {t(opt.k)}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/*
        * Batch-bar is positioned `fixed` to the bottom of the viewport
        * via its `.batch-bar` class so it stays visible even when the
@@ -389,9 +472,11 @@ export function MemoriesView() {
           <span class="batch-bar__count">
             {t("common.selected", { n: selectedGroupCount })}
           </span>
-          <button class="btn btn--sm" onClick={selectPage}>
+          <button class="btn btn--sm" onClick={togglePageSelection}>
             <Icon name="check-square" size={14} />
-            {t("memories.bulk.selectPage")}
+            {isPageSelected
+              ? t("common.deselectPage")
+              : t("memories.bulk.selectPage")}
           </button>
           <button class="btn btn--sm" onClick={() => bulkShare("public")}>
             <Icon name="share" size={14} />
@@ -510,37 +595,28 @@ export function MemoriesView() {
       )}
 
       {/* Pager */}
-      {(page > 0 || hasMore) && (
-        <div class="pager">
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page === 0 || loading}
-            onClick={() => void loadPage({ q: query.trim(), page: page - 1 })}
-          >
-            <Icon name="chevron-left" size={14} />
-            {t("common.prev")}
-          </button>
-          <span class="pager__info">
-            {t("pager.pageOfTotal", {
-              n: page + 1,
-              total: Math.max(1, Math.ceil(total / PAGE_SIZE)),
-            })}
-          </span>
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={!hasMore || loading}
-            onClick={() => void loadPage({ q: query.trim(), page: page + 1 })}
-          >
-            {t("common.next")}
-            <Icon name="chevron-right" size={14} />
-          </button>
-        </div>
+      {(displayTotal > pageSize || page > 0 || hasMore) && (
+        <Pager
+          page={page}
+          totalItems={displayTotal}
+          pageSize={pageSize}
+          hasMore={role ? false : hasMore}
+          loading={loading}
+          onPageSizeChange={setPageSize}
+          onPageChange={(nextPage) => {
+            if (role) setPage(nextPage);
+            else void loadPage({ q: query.trim(), page: nextPage });
+          }}
+        />
       )}
 
       {detail && (
         <TraceDrawer
           group={detail}
-          onClose={() => setDetail(null)}
+          onClose={() => {
+            setDetail(null);
+            clearEntryId();
+          }}
           onSave={saveEdit}
           onShare={(scope) => applyShareGroup(detail, scope)}
           onDelete={() => deleteGroup(detail)}
@@ -566,6 +642,39 @@ function pickSummary(trace: TraceDTO): string {
   const a = (trace.agentText ?? "").replace(/\s+/g, " ").trim();
   if (a) return a.length > 180 ? a.slice(0, 177) + "…" : a;
   return "(empty trace)";
+}
+
+function detectRole(trace: TraceDTO): "user" | "assistant" | "tool" | "" {
+  if ((trace.toolCalls?.length ?? 0) > 0) return "tool";
+  if (trace.userText && trace.userText.length > (trace.agentText?.length ?? 0)) {
+    return "user";
+  }
+  if (trace.agentText) return "assistant";
+  if (trace.userText) return "user";
+  return "";
+}
+
+async function findTracePage(
+  id: string,
+  pageSize: number,
+  signal: AbortSignal,
+): Promise<number> {
+  const scanLimit = 500;
+  let offset = 0;
+  while (true) {
+    const qs = new URLSearchParams();
+    qs.set("limit", String(scanLimit));
+    qs.set("offset", String(offset));
+    qs.set("groupByTurn", "true");
+    const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`, {
+      signal,
+    });
+    const groups = buildGroups(res.traces ?? []);
+    const index = groups.findIndex((group) => group.ids.includes(id));
+    if (index >= 0) return Math.floor((offset + index) / pageSize);
+    if (res.nextOffset == null) return 0;
+    offset = res.nextOffset;
+  }
 }
 
 /**
@@ -745,6 +854,11 @@ function groupKey(tr: TraceDTO): string {
   // sub-step from the same user message shares it. Pair with episodeId
   // because turnId is just a ts (could repeat across episodes).
   return `${tr.episodeId ?? "_"}:${tr.turnId}`;
+}
+
+function detectGroupRole(g: MemoryGroup): "user" | "assistant" | "tool" | "" {
+  if (g.toolCount > 0) return "tool";
+  return detectRole(g.head);
 }
 
 function flattenToolCallList(g: MemoryGroup): { name: string }[] {
