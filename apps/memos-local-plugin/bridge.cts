@@ -23,6 +23,7 @@ import { SqliteStore } from "./src/storage/sqlite";
 import { Embedder } from "./src/embedding";
 import { ViewerServer } from "./src/viewer/server";
 import { Telemetry } from "./src/telemetry";
+import type { MemosLocalConfig, PluginContext } from "./src/types";
 
 // ─── Types ───
 
@@ -80,13 +81,13 @@ function parseConfig(): PluginInitOptions & { branding?: Record<string, string> 
 }
 
 /**
- * Read embedding config from the openclaw.json config file(s).
+ * Read the plugin config from openclaw.json config file(s).
  * Checks the memos state dir first (where the viewer saves), then ~/.openclaw.
  */
-function readEmbeddingConfigFromFile(
+function readPluginConfigFromFile(
   stateDir: string,
   log: ReturnType<typeof createLogger>,
-): Record<string, unknown> | undefined {
+): Partial<MemosLocalConfig> | undefined {
   const home = process.env.HOME || process.env.USERPROFILE || "";
   const candidates = [
     process.env.OPENCLAW_CONFIG_PATH,
@@ -103,14 +104,54 @@ function readEmbeddingConfigFromFile(
       for (const [name, entry] of Object.entries(entries)) {
         if (!name.toLowerCase().includes("memos")) continue;
         const cfg = (entry as any)?.config ?? {};
-        if (cfg.embedding?.provider) {
-          log.info(`Read embedding config from ${cfgPath}: provider=${cfg.embedding.provider}`);
-          return cfg.embedding;
+        if (cfg && Object.keys(cfg).length > 0) {
+          log.info(
+            `Read plugin config from ${cfgPath}: embedding=${cfg.embedding?.provider ?? "none"}, summarizer=${cfg.summarizer?.provider ?? "none"}, skillSummarizer=${cfg.skillEvolution?.summarizer?.provider ?? "none"}`,
+          );
+          return cfg as Partial<MemosLocalConfig>;
         }
       }
     } catch { /* skip unreadable files */ }
   }
   return undefined;
+}
+
+function mergeRuntimeConfig(
+  baseConfig: Partial<MemosLocalConfig> | undefined,
+  fileConfig: Partial<MemosLocalConfig> | undefined,
+): Partial<MemosLocalConfig> | undefined {
+  if (!baseConfig && !fileConfig) return undefined;
+  const merged: Partial<MemosLocalConfig> = {
+    ...(baseConfig ?? {}),
+    ...(fileConfig ?? {}),
+  };
+  if (baseConfig?.telemetry || fileConfig?.telemetry) {
+    merged.telemetry = {
+      ...(baseConfig?.telemetry ?? {}),
+      ...(fileConfig?.telemetry ?? {}),
+    };
+  }
+  return merged;
+}
+
+function buildRuntimeOptions(
+  configOpts: PluginInitOptions & { branding?: Record<string, string> },
+  stateDir: string,
+  log: ReturnType<typeof createLogger>,
+): { opts: PluginInitOptions; ctx: PluginContext } {
+  const fileConfig = readPluginConfigFromFile(stateDir, log);
+  const config = mergeRuntimeConfig(configOpts.config, fileConfig);
+  const workspaceDir = configOpts.workspaceDir ?? process.cwd();
+  const opts: PluginInitOptions = {
+    stateDir,
+    workspaceDir,
+    config,
+    log,
+  };
+  return {
+    opts,
+    ctx: buildContext(stateDir, workspaceDir, config, log),
+  };
 }
 
 function buildPromptSection(hits: Array<{ summary: string; original_excerpt?: string; score: number }>): string {
@@ -255,13 +296,9 @@ async function handleRequest(plugin: MemosLocalPlugin, method: string, params: R
 async function runStdio(): Promise<void> {
   const configOpts = parseConfig();
   const log = createLogger();
+  const stateDir = configOpts.stateDir ?? `${process.env.HOME}/.openharness/memos-state`;
 
-  const opts: PluginInitOptions = {
-    stateDir: configOpts.stateDir,
-    workspaceDir: configOpts.workspaceDir ?? process.cwd(),
-    config: configOpts.config,
-    log,
-  };
+  const { opts, ctx } = buildRuntimeOptions(configOpts, stateDir, log);
 
   let plugin: MemosLocalPlugin;
   try {
@@ -272,10 +309,8 @@ async function runStdio(): Promise<void> {
     process.exit(1);
   }
 
-  const stateDir = configOpts.stateDir ?? `${process.env.HOME}/.openharness/memos-state`;
   const pluginDir = detectPluginDir();
   const pluginVersion = readPluginVersion(pluginDir);
-  const ctx = buildContext(stateDir, process.cwd(), configOpts.config, log);
   const telemetry = new Telemetry(ctx.config.telemetry ?? {}, stateDir, pluginVersion, log, pluginDir);
   telemetry.trackPluginStarted(ctx.config.embedding?.provider ?? "local", ctx.config.summarizer?.provider ?? "none");
 
@@ -329,16 +364,11 @@ async function runDaemon(tcpPort: number, viewerPort: number): Promise<void> {
   const log = createLogger();
   const stateDir = configOpts.stateDir ?? `${process.env.HOME}/.openharness/memos-state`;
 
-  const opts: PluginInitOptions = {
-    stateDir,
-    workspaceDir: configOpts.workspaceDir ?? process.cwd(),
-    config: configOpts.config,
-    log,
-  };
+  let runtime = buildRuntimeOptions(configOpts, stateDir, log);
 
   let plugin: MemosLocalPlugin;
   try {
-    plugin = initPlugin(opts);
+    plugin = initPlugin(runtime.opts);
     log.info("Bridge: plugin initialized (daemon mode)");
   } catch (err) {
     process.stderr.write(`[fatal] Failed to initialize plugin: ${err}\n`);
@@ -347,7 +377,7 @@ async function runDaemon(tcpPort: number, viewerPort: number): Promise<void> {
 
   const pluginDir = detectPluginDir();
   const pluginVersion = readPluginVersion(pluginDir);
-  const ctx = buildContext(stateDir, process.cwd(), configOpts.config, log);
+  let ctx = runtime.ctx;
   const telemetry = new Telemetry(ctx.config.telemetry ?? {}, stateDir, pluginVersion, log, pluginDir);
   telemetry.trackPluginStarted(ctx.config.embedding?.provider ?? "local", ctx.config.summarizer?.provider ?? "none");
 
@@ -438,20 +468,29 @@ async function runDaemon(tcpPort: number, viewerPort: number): Promise<void> {
 
   // Hot-reload config on SIGUSR1 (used by viewer after saving settings).
   // In Node.js, SIGUSR1 normally starts the debugger — we override it to
-  // re-read the config file and swap in an updated Embedder so changes
-  // take effect without a full daemon restart.
-  process.on("SIGUSR1", () => {
+  // re-read the full plugin config and rebuild runtime dependencies so
+  // embedding, summarizer, and skill-evolution model changes all apply.
+  process.on("SIGUSR1", async () => {
     log.info("SIGUSR1 received — hot-reloading config from file...");
     try {
-      const embeddingCfg = readEmbeddingConfigFromFile(stateDir, log);
-      if (embeddingCfg && viewer) {
-        const resolvedCfg = buildContext(stateDir, process.cwd(), { embedding: embeddingCfg }, log);
-        const newEmbedder = new Embedder(resolvedCfg.config.embedding, log);
-        viewer.updateEmbedder(newEmbedder);
-        log.info(`Config hot-reloaded: embedding provider=${newEmbedder.provider}`);
-      } else {
-        log.info("No embedding config change detected or viewer not available");
+      const nextRuntime = buildRuntimeOptions(configOpts, stateDir, log);
+      const nextPlugin = initPlugin(nextRuntime.opts);
+      const previousPlugin = plugin;
+      plugin = nextPlugin;
+      runtime = nextRuntime;
+      ctx = nextRuntime.ctx;
+
+      if (viewer) {
+        const newEmbedder = new Embedder(ctx.config.embedding, log);
+        viewer.updateRuntime(newEmbedder, ctx);
       }
+
+      await previousPlugin.shutdown().catch((err) => {
+        log.warn(`Previous runtime shutdown after hot-reload failed: ${err}`);
+      });
+      log.info(
+        `Config hot-reloaded: embedding=${ctx.config.embedding?.provider ?? "local"}, summarizer=${ctx.config.summarizer?.provider ?? "none"}, skillSummarizer=${ctx.config.skillEvolution?.summarizer?.provider ?? "none"}`,
+      );
     } catch (err) {
       log.warn(`SIGUSR1 config hot-reload failed: ${err}`);
     }
