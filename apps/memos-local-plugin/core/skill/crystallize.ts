@@ -10,6 +10,7 @@
  */
 
 import type { LlmClient } from "../llm/types.js";
+import { detectModelRefusal } from "../llm/refusal.js";
 import {
   detectDominantLanguage,
   languageSteeringLine,
@@ -17,8 +18,10 @@ import {
 import { SKILL_CRYSTALLIZE_PROMPT } from "../llm/prompts/skill-crystallize.js";
 import type { Logger } from "../logger/types.js";
 import type { PolicyRow, SkillRow, TraceRow } from "../types.js";
+import { MemosError } from "../../agent-contract/errors.js";
 import { extractToolNames } from "./tool-names.js";
 import type {
+  SkillModelRefusalDetails,
   SkillConfig,
   SkillCrystallizationDraft,
   SkillExampleDraft,
@@ -51,7 +54,7 @@ export interface CrystallizeDeps {
 
 export type CrystallizeResult =
   | { ok: true; draft: SkillCrystallizationDraft }
-  | { ok: false; skippedReason: string };
+  | { ok: false; skippedReason: string; modelRefusal?: SkillModelRefusalDetails };
 
 /**
  * Run one crystallization call and return a normalised draft.
@@ -107,14 +110,72 @@ export async function crystallizeDraft(
         schemaHint: "skill-crystallize.v2",
       },
     );
+    const rawRefusal = detectModelRefusal(rsp.raw);
+    if (rawRefusal) {
+      const modelRefusal = {
+        provider: rsp.provider,
+        model: rsp.model,
+        servedBy: rsp.servedBy,
+        ...rawRefusal,
+      };
+      log.error("skill.crystallize.model_refusal", {
+        policyId: input.policy.id,
+        ...modelRefusal,
+      });
+      return { ok: false, skippedReason: "llm-refusal", modelRefusal };
+    }
     const draft = normaliseDraft(rsp.value, input);
+    const draftRefusal = detectModelRefusal(draft);
+    if (draftRefusal) {
+      const modelRefusal = {
+        provider: rsp.provider,
+        model: rsp.model,
+        servedBy: rsp.servedBy,
+        ...draftRefusal,
+      };
+      log.error("skill.crystallize.model_refusal", {
+        policyId: input.policy.id,
+        ...modelRefusal,
+      });
+      return { ok: false, skippedReason: "llm-refusal", modelRefusal };
+    }
     if (deps.validate) deps.validate(draft);
     return { ok: true, draft };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const rawPreview = rawPreviewFromError(err);
+    const refusal = rawPreview ? detectModelRefusal(rawPreview) : null;
+    if (refusal) {
+      const modelRefusal = {
+        provider: providerFromError(err) ?? llm.provider,
+        model: llm.model,
+        servedBy: llm.provider,
+        ...refusal,
+      };
+      log.error("skill.crystallize.model_refusal", {
+        policyId: input.policy.id,
+        error: message,
+        ...modelRefusal,
+      });
+      return { ok: false, skippedReason: "llm-refusal", modelRefusal };
+    }
     log.error("skill.crystallize.failed", { policyId: input.policy.id, error: message });
     return { ok: false, skippedReason: `llm-failed: ${message}` };
   }
+}
+
+function rawPreviewFromError(err: unknown): string | null {
+  if (err instanceof MemosError && typeof err.details?.rawPreview === "string") {
+    return err.details.rawPreview;
+  }
+  return null;
+}
+
+function providerFromError(err: unknown): string | null {
+  if (err instanceof MemosError && typeof err.details?.provider === "string") {
+    return err.details.provider;
+  }
+  return null;
 }
 
 /**

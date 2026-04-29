@@ -5,6 +5,7 @@ import {
   defaultDraftValidator,
 } from "../../../core/skill/crystallize.js";
 import { rootLogger } from "../../../core/logger/index.js";
+import type { LlmClient, LlmJsonCompletion } from "../../../core/llm/types.js";
 import type { PolicyRow, TraceRow } from "../../../core/types.js";
 import { fakeLlm, throwingLlm } from "../../helpers/fake-llm.js";
 import {
@@ -57,6 +58,25 @@ function mkTrace(id: string, userText: string): TraceRow {
 }
 
 const log = rootLogger.child({ channel: "core.skill.crystallize" });
+
+function refusalLlm(raw: string): LlmClient {
+  return {
+    ...fakeLlm(),
+    provider: "anthropic",
+    model: "claude-test",
+    async completeJson<T>(): Promise<LlmJsonCompletion<T>> {
+      return {
+        value: makeDraft() as T,
+        raw,
+        provider: "anthropic",
+        model: "claude-test",
+        finishReason: "stop",
+        servedBy: "anthropic",
+        durationMs: 1,
+      };
+    },
+  };
+}
 
 describe("skill/crystallize", () => {
   it("normalises the LLM draft into a structured object", async () => {
@@ -128,6 +148,27 @@ describe("skill/crystallize", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.skippedReason).toMatch(/^llm-failed:/);
+  });
+
+  it("rejects model refusals instead of persisting them as skills", async () => {
+    const r = await crystallizeDraft(
+      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "x")], namingSpace: [] },
+      {
+        llm: refusalLlm("I am Claude, made by Anthropic. I cannot process this request."),
+        log,
+        config: makeSkillConfig(),
+        validate: defaultDraftValidator,
+      },
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.skippedReason).toBe("llm-refusal");
+    expect(r.modelRefusal).toMatchObject({
+      provider: "anthropic",
+      model: "claude-test",
+      matchedPrefix: "I am Claude",
+    });
+    expect(r.modelRefusal?.content).toContain("I cannot process this request");
   });
 
   it("rejects drafts that the validator flags as invalid", async () => {

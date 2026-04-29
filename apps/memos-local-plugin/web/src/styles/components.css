@@ -715,6 +715,81 @@
 .toast--error   { border-left: 3px solid var(--danger); }
 .toast--info    { border-left: 3px solid var(--info); }
 
+/* ── Skill Refusal Notifications ───────────────────────────────── */
+
+.skill-refusal-menu {
+  position: relative;
+}
+.skill-refusal-menu__trigger {
+  position: relative;
+}
+.skill-refusal-menu__badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--danger);
+  color: var(--accent-fg);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semi);
+  line-height: 1;
+}
+.skill-refusal-menu__panel {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  right: 0;
+  width: min(520px, calc(100vw - 32px));
+  max-height: 420px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  z-index: 80;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+.skill-refusal-menu__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.skill-refusal-menu__empty {
+  padding: var(--sp-4);
+  color: var(--fg-dim);
+}
+.skill-refusal-menu__list {
+  overflow-y: auto;
+}
+.skill-refusal-menu__item {
+  padding: var(--sp-3) var(--sp-4);
+  border-left: 3px solid var(--danger);
+  border-bottom: 1px solid var(--border);
+}
+.skill-refusal-menu__item:last-child {
+  border-bottom: 0;
+}
+.skill-refusal-menu__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+}
+.skill-refusal-menu__content {
+  margin-top: var(--sp-2);
+  color: var(--fg);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
 /* ── Utility ────────────────────────────────────────────────────── */
 
 .hstack {
