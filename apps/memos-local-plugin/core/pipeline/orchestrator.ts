@@ -64,6 +64,7 @@ import type {
   InjectionPacket,
   RepairCtx,
   SessionId,
+  TraceId,
   ToolDrivenCtx,
   TurnInputDTO,
   TurnResultDTO,
@@ -394,6 +395,101 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     // ─── Case 2: there's a previously-closed episode ────────────────
     const prev = lastEpisodeBySession.get(sessionId);
     if (!prev) {
+      const recoverable = findRecoverableOpenTopic(sessionId, turnTs ?? now());
+      if (recoverable) {
+        const snapshot = session.sessionManager.hydrateEpisode(recoverable);
+        const ctx = buildClassifierContext(snapshot.turns);
+        const lastTurnTs = snapshot.turns[snapshot.turns.length - 1]?.ts ?? snapshot.startedAt;
+        const gapMs = Math.max(0, (turnTs ?? now()) - lastTurnTs);
+        const hardWindowMs = staleTopicWindowMs();
+
+        if (gapMs > hardWindowMs) {
+          log.info("episode.recovered_topic_hard_boundary", {
+            sessionId,
+            episodeId: snapshot.id,
+            gapMs,
+            hardWindowMs,
+          });
+          if (snapshot.status === "open") {
+            session.sessionManager.finalizeEpisode(snapshot.id as EpisodeId, {
+              patchMeta: {
+                topicState: "ended",
+                recoveryReason: "hard_timeout_before_new_turn",
+              },
+            });
+          }
+        } else {
+          const decision = await session.relation.classify({
+            prevUserText: ctx.prevUserText,
+            prevAssistantText: ctx.prevAssistantText,
+            newUserText: userText,
+            gapMs,
+          });
+
+          log.info("relation.classified", {
+            sessionId,
+            prevEpisodeId: snapshot.id,
+            relation: decision.relation,
+            confidence: decision.confidence,
+            reason: decision.reason,
+            gapMs,
+            source: "recovered_open_topic",
+          });
+          buses.session.emit({
+            kind: "episode.relation_classified",
+            sessionId,
+            episodeId: snapshot.id as EpisodeId,
+            relation: decision.relation,
+            confidence: decision.confidence,
+            reason: decision.reason,
+          });
+
+          const withinMergeWindow = mergeCapMs === 0 || gapMs <= mergeCapMs;
+          const keepAppending =
+            mergeMode &&
+            withinMergeWindow &&
+            (decision.relation === "revision" ||
+              decision.relation === "follow_up" ||
+              decision.relation === "unknown");
+
+          if (keepAppending) {
+            if (snapshot.status === "closed") {
+              session.sessionManager.reopenEpisode(
+                snapshot.id as EpisodeId,
+                decision.relation === "revision" ? "revision" : "follow_up",
+              );
+            }
+            session.sessionManager.addTurn(snapshot.id as EpisodeId, {
+              role: "user",
+              content: userText,
+              ts: turnTs,
+              meta: {
+                source: "recovered_topic",
+                classifiedRelation: decision.relation,
+                previousSessionId: snapshot.sessionId,
+                ...meta,
+              },
+            });
+            openEpisodeBySession.set(sessionId, snapshot.id as EpisodeId);
+            lastEpisodeBySession.delete(sessionId);
+            return {
+              episode: session.sessionManager.getEpisode(snapshot.id as EpisodeId) ?? snapshot,
+              sessionId,
+              relation: decision.relation,
+            };
+          }
+
+          if (snapshot.status === "open") {
+            session.sessionManager.finalizeEpisode(snapshot.id as EpisodeId, {
+              patchMeta: {
+                topicState: "ended",
+                boundaryRelation: decision.relation,
+                boundaryReason: decision.reason,
+              },
+            });
+          }
+        }
+      }
       // ─── Case 3: bootstrap ──────────────────────────────────────
       const snap = await session.sessionManager.startEpisode({
         sessionId,
@@ -503,6 +599,124 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       rTask: rTask ?? null,
     });
     openEpisodeBySession.delete(sessionId);
+  }
+
+  function staleTopicWindowMs(): number {
+    return Math.max(
+      algorithm.session.mergeMaxGapMs * 2,
+      4 * 60 * 60 * 1000,
+    );
+  }
+
+  function findRecoverableOpenTopic(
+    currentSessionId: SessionId,
+    atTs: number,
+  ): EpisodeSnapshot | null {
+    const candidates = deps.repos.episodes.list({ limit: 50 });
+    for (const row of candidates) {
+      const meta = (row as { meta?: Record<string, unknown> }).meta ?? {};
+      if (meta.boundaryRelation === "new_task") continue;
+      const ageMs = Math.max(0, atTs - (row.endedAt ?? row.startedAt));
+      if (ageMs > staleTopicWindowMs()) continue;
+      if (row.status === "closed" && meta.closeReason !== "finalized") continue;
+      if (
+        row.sessionId !== currentSessionId &&
+        meta.topicState !== "paused" &&
+        meta.topicState !== "interrupted"
+      ) {
+        continue;
+      }
+      // Prefer the same session, but allow cross-session continuation
+      // after Hermes/OpenClaw restarts. New-topic classification below
+      // will close unrelated candidates before bootstrapping a fresh one.
+      if (row.sessionId !== currentSessionId && candidates.length > 1) {
+        const sameSession = candidates.some((c) => c.sessionId === currentSessionId);
+        if (sameSession) continue;
+      }
+      return snapshotFromOpenEpisodeRow(row);
+    }
+    return null;
+  }
+
+  function snapshotFromOpenEpisodeRow(
+    ep: ReturnType<typeof deps.repos.episodes.list>[number],
+  ): EpisodeSnapshot {
+    const traceIds = (ep.traceIds ?? []) as TraceId[];
+    const traces =
+      traceIds.length > 0
+        ? deps.repos.traces
+            .getManyByIds(traceIds)
+            .sort((a, b) => a.ts - b.ts)
+        : [];
+    const turns: EpisodeSnapshot["turns"] = [];
+    const meta = (ep as { meta?: Record<string, unknown> }).meta ?? {};
+    const initialUserText =
+      typeof meta.initialUserText === "string"
+        ? meta.initialUserText
+        : typeof meta.pendingUserText === "string"
+          ? meta.pendingUserText
+          : "";
+    if (initialUserText && traces.length === 0) {
+      turns.push({
+        id: `${ep.id}:initial-user`,
+        ts: ep.startedAt,
+        role: "user",
+        content: initialUserText,
+        meta: { recovered: true },
+      });
+    }
+    for (const tr of traces) {
+      if (tr.userText) {
+        turns.push({
+          id: `${tr.id}:user`,
+          ts: tr.ts,
+          role: "user",
+          content: tr.userText,
+        });
+      }
+      if (tr.toolCalls.length > 0) {
+        turns.push({
+          id: `${tr.id}:tool`,
+          ts: tr.ts,
+          role: "tool",
+          content: JSON.stringify(tr.toolCalls),
+          meta: { toolCalls: tr.toolCalls },
+        });
+      }
+      if (tr.agentText) {
+        turns.push({
+          id: `${tr.id}:assistant`,
+          ts: tr.ts,
+          role: "assistant",
+          content: tr.agentText,
+          meta: {
+            agentThinking: tr.agentThinking ?? undefined,
+            reflection: tr.reflection ?? undefined,
+          },
+        });
+      }
+    }
+    const maybeIntent = (meta as { intent?: Partial<import("../session/index.js").IntentDecision> }).intent;
+    return {
+      id: ep.id as EpisodeId,
+      sessionId: ep.sessionId as SessionId,
+      startedAt: ep.startedAt,
+      endedAt: ep.endedAt ?? null,
+      status: ep.status,
+      rTask: ep.rTask ?? null,
+      turnCount: turns.length,
+      turns,
+      traceIds,
+      meta,
+      intent: {
+        kind: maybeIntent?.kind ?? "unknown",
+        confidence: maybeIntent?.confidence ?? 0,
+        reason: maybeIntent?.reason ?? "recovered open topic",
+        retrieval: maybeIntent?.retrieval ?? { tier1: true, tier2: true, tier3: true },
+        signals: maybeIntent?.signals ?? ["recovered_open_topic"],
+        llmModel: maybeIntent?.llmModel,
+      },
+    };
   }
 
   // ─── subscribeEvents / subscribeLogs ────────────────────────────────────

@@ -844,6 +844,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       const routedEpisodeId = packet.query.episodeId as EpisodeId | undefined;
       if (routedEpisodeId) {
         openEpisodeBySession.set(routedSessionId, routedEpisodeId);
+        openEpisodeBySession.set(sessionId, routedEpisodeId);
       }
 
       opts.log.info("memos.onTurnStart", {
