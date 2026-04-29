@@ -125,7 +125,7 @@ export class ViewerServer {
   private readonly authFile: string;
   private readonly resetTokenFile: string;
   private readonly auth: AuthState;
-  private readonly ctx?: PluginContext;
+  private ctx?: PluginContext;
   private readonly cookieName: string;
   private readonly defaultHubPort: number;
   private readonly branding?: ViewerBranding;
@@ -607,6 +607,15 @@ export class ViewerServer {
   updateEmbedder(newEmbedder: Embedder): void {
     this.embedder = newEmbedder;
     this.log.info(`Embedder hot-reloaded: provider=${newEmbedder.provider}`);
+  }
+
+  /** Replace runtime dependencies after daemon config hot-reload. */
+  updateRuntime(newEmbedder: Embedder, newCtx: PluginContext): void {
+    this.embedder = newEmbedder;
+    this.ctx = newCtx;
+    this.log.info(
+      `Viewer runtime hot-reloaded: embedding=${newEmbedder.provider}, summarizer=${newCtx.config.summarizer?.provider ?? "none"}, skillSummarizer=${newCtx.config.skillEvolution?.summarizer?.provider ?? "none"}`,
+    );
   }
 
   // ─── Data APIs ───
