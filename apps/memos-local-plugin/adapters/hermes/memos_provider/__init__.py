@@ -239,16 +239,40 @@ class MemTensorProvider(MemoryProvider):
         We keep the host's ``tool_call_id`` on a private ``_id`` field so
         ``_on_post_llm_call`` can later attach the assistant message's
         ``reasoning`` (the model's "thinking before this tool") to the
-        right entry. The ``_id`` is stripped before the JSON-RPC send.
+        right entry. Hermes/OpenAI-compatible providers may surface the
+        same call under ``id``, ``call_id``, or ``response_item_id``; keep
+        all aliases so post-LLM and post-tool events can be merged even
+        when a particular tool omits one field. Private fields are stripped
+        before the JSON-RPC send.
         """
+        ids = self._tool_call_ids(
+            {
+                "id": tool_call_id,
+                "call_id": _kw.get("call_id"),
+                "response_item_id": _kw.get("response_item_id"),
+                "tool_call_id": _kw.get("tool_call_id"),
+            }
+        )
+        input_text = (
+            json.dumps(args, ensure_ascii=False)
+            if isinstance(args, dict)
+            else str(args or "")
+        )
+        existing = self._find_tool_call(ids)
+        if existing is not None:
+            existing["name"] = tool_name or existing.get("name") or "unknown_tool"
+            existing["input"] = input_text or existing.get("input", "")
+            existing["output"] = (result or "")[:4000]
+            existing["_ids"] = sorted(set((existing.get("_ids") or []) + ids))
+            existing["_id"] = existing.get("_id") or (ids[0] if ids else "")
+            return
         self._tool_calls.append(
             {
                 "name": tool_name,
-                "input": json.dumps(args, ensure_ascii=False)
-                if isinstance(args, dict)
-                else str(args or ""),
+                "input": input_text,
                 "output": (result or "")[:4000],
-                "_id": tool_call_id or "",
+                "_id": ids[0] if ids else "",
+                "_ids": ids,
             }
         )
 
@@ -288,6 +312,8 @@ class MemTensorProvider(MemoryProvider):
 
         # Build a map: tool_call_id -> reasoning text.
         thinking_by_id: dict[str, str] = {}
+        ordered_tool_calls: list[dict[str, Any]] = []
+        ordered_object_ids: set[int] = set()
         # Reasoning of the message that produced the final reply (no
         # tool_calls in that message) becomes the turn-level thinking.
         final_reasoning = ""
@@ -300,24 +326,115 @@ class MemTensorProvider(MemoryProvider):
             tcs = msg.get("tool_calls")
             if isinstance(tcs, list) and tcs:
                 # Reasoning preceded these tool calls.
-                if r_str:
-                    for tc in tcs:
-                        tc_id = (tc.get("id") if isinstance(tc, dict) else None) or ""
-                        if tc_id:
+                for tc in tcs:
+                    if not isinstance(tc, dict):
+                        continue
+                    ids = self._tool_call_ids(tc)
+                    if r_str:
+                        for tc_id in ids:
                             thinking_by_id[tc_id] = r_str
+
+                    existing = self._find_tool_call(ids)
+                    # Some Hermes tools (for example planner/todo-style
+                    # host tools) appear in the assistant message but do
+                    # not fire `post_tool_call`. Add a placeholder so the
+                    # trace still records the tool decision and reasoning;
+                    # `post_tool_call` will merge real output later if it
+                    # eventually arrives.
+                    if existing is None:
+                        existing = {
+                            "name": self._tool_name(tc),
+                            "input": self._tool_input(tc),
+                            "output": "",
+                            "thinkingBefore": r_str or "",
+                            "_id": ids[0] if ids else "",
+                            "_ids": ids,
+                        }
+                        self._tool_calls.append(existing)
+                    else:
+                        # Preserve output captured by post_tool_call, but
+                        # let the LLM message supply canonical order,
+                        # input/name aliases, and thinkingBefore.
+                        existing["name"] = existing.get("name") or self._tool_name(tc)
+                        existing["input"] = existing.get("input") or self._tool_input(tc)
+                        existing["thinkingBefore"] = r_str or existing.get("thinkingBefore", "")
+                        existing["_ids"] = sorted(set((existing.get("_ids") or []) + ids))
+                        existing["_id"] = existing.get("_id") or (ids[0] if ids else "")
+
+                    marker = id(existing)
+                    if marker not in ordered_object_ids:
+                        ordered_tool_calls.append(existing)
+                        ordered_object_ids.add(marker)
             else:
                 # Plain assistant reply — overwrite final_reasoning so we
                 # keep the LATEST one (mirrors Hermes' ``last_reasoning``).
                 if r_str:
                     final_reasoning = r_str
 
+        # Make the turn payload follow the LLM-declared tool order. This
+        # matters when post_tool_call fires for later tools before
+        # post_llm_call backfills earlier planner/todo calls.
+        if ordered_tool_calls:
+            remaining = [
+                tc for tc in self._tool_calls if id(tc) not in ordered_object_ids
+            ]
+            self._tool_calls = ordered_tool_calls + remaining
+
         # Attach thinkingBefore to matching captured tool calls.
         for tc in self._tool_calls:
-            tc_id = tc.get("_id") or ""
-            if tc_id and tc_id in thinking_by_id:
-                tc["thinkingBefore"] = thinking_by_id[tc_id]
+            ids = tc.get("_ids") or ([tc.get("_id")] if tc.get("_id") else [])
+            for tc_id in ids:
+                if tc_id and tc_id in thinking_by_id:
+                    tc["thinkingBefore"] = thinking_by_id[tc_id]
+                    break
 
         self._turn_thinking = final_reasoning
+
+    @staticmethod
+    def _tool_call_ids(raw: dict[str, Any]) -> list[str]:
+        ids: list[str] = []
+        for key in ("id", "call_id", "response_item_id", "tool_call_id"):
+            value = raw.get(key)
+            if isinstance(value, str) and value and value not in ids:
+                ids.append(value)
+        return ids
+
+    @staticmethod
+    def _tool_name(raw: dict[str, Any]) -> str:
+        fn = raw.get("function")
+        if isinstance(fn, dict) and isinstance(fn.get("name"), str):
+            return fn["name"]
+        name = raw.get("name")
+        return name if isinstance(name, str) and name else "unknown_tool"
+
+    @staticmethod
+    def _tool_input(raw: dict[str, Any]) -> str:
+        fn = raw.get("function")
+        if isinstance(fn, dict):
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                return args
+            if args is not None:
+                return json.dumps(args, ensure_ascii=False)
+        for key in ("arguments", "args", "input"):
+            args = raw.get(key)
+            if isinstance(args, str):
+                return args
+            if args is not None:
+                return json.dumps(args, ensure_ascii=False)
+        return ""
+
+    def _find_tool_call(self, ids: list[str]) -> dict[str, Any] | None:
+        if not ids:
+            return None
+        needle = set(ids)
+        for tc in self._tool_calls:
+            existing = set(tc.get("_ids") or [])
+            if tc.get("_id"):
+                existing.add(str(tc["_id"]))
+            if existing & needle:
+                return tc
+        return None
 
     # ─── Turn-level hooks ─────────────────────────────────────────────────
 
@@ -864,8 +981,11 @@ class MemTensorProvider(MemoryProvider):
     ) -> None:
         if not self._bridge:
             return
-        # Strip the private `_id` book-keeping field before sending.
-        clean_tool_calls = [{k: v for k, v in tc.items() if k != "_id"} for tc in tool_calls]
+        # Strip private book-keeping fields before sending.
+        clean_tool_calls = [
+            {k: v for k, v in tc.items() if k not in {"_id", "_ids"}}
+            for tc in tool_calls
+        ]
         payload: dict[str, Any] = {
             "agent": "hermes",
             "sessionId": self._session_id,

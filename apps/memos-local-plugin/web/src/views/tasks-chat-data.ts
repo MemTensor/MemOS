@@ -54,6 +54,8 @@ export interface ChatMsg {
   traceId: string;
   // Tool-only fields:
   toolName?: string;
+  /** Model reasoning immediately before this tool call. */
+  toolThinking?: string;
   toolInput?: string;
   toolOutput?: string;
   toolDurationMs?: number;
@@ -95,9 +97,9 @@ const TOOL_OUTPUT_PREVIEW_CHARS = 1_600;
  * recognise, in pi-ai's natural emission order:
  *
  *   1. `user`       — the user query that opened the step (if non-empty).
- *   2. Interleaved `thinking` + `tool` blocks — each tool call's
- *      `thinkingBefore` is rendered as a thinking bubble directly
- *      before its tool, faithfully mirroring the model's think→act loop.
+ *   2. `tool` blocks — each tool call carries its `thinkingBefore`
+ *      as `toolThinking`, so the renderer can show the model's
+ *      think→act loop inside the corresponding tool card.
  *   3. `assistant`  — the assistant's final text reply (if non-empty).
  *
  * `trace.reflection` is **deliberately not** turned into a chat bubble.
@@ -147,16 +149,6 @@ export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
 
     tools.forEach((tc, idx) => {
       const tb = (tc.thinkingBefore ?? "").trim();
-      if (tb) {
-        out.push({
-          role: "thinking",
-          text: tb,
-          ts: tc.startedAt ?? tr.ts,
-          key: `${tr.id}:thinking:${idx}`,
-          traceId: tr.id,
-        });
-      }
-
       const inputStr = serializeToolPayload(tc.input);
       const outputStr = serializeToolPayload(tc.output);
       const dur =
@@ -170,6 +162,7 @@ export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
         key: `${tr.id}:tool:${idx}`,
         traceId: tr.id,
         toolName: tc.name,
+        toolThinking: tb || undefined,
         toolInput: inputStr ? clip(inputStr, TOOL_INPUT_PREVIEW_CHARS) : undefined,
         toolOutput: outputStr ? clip(outputStr, TOOL_OUTPUT_PREVIEW_CHARS) : undefined,
         toolDurationMs: dur,
@@ -222,10 +215,10 @@ const PARALLEL_BATCH_GAP_MS = 500;
  *
  * Detection rule (paired-comparison, walks the flattened list):
  *
- *   - `messages[i]` and `messages[i+1]` are both `tool` (no `thinking`
- *     or `assistant` text between them — those break the run because
- *     a thinkingBefore implies the model spoke up between the two
- *     tools, which can only happen in a new LLM turn).
+ *   - `messages[i]` and `messages[i+1]` are both `tool`, and the next
+ *     tool has no `toolThinking` (a fresh thinkingBefore means the
+ *     model spoke up between the two tools, which can only happen in
+ *     a new LLM turn).
  *   - `messages[i+1].ts - messages[i].ts < PARALLEL_BATCH_GAP_MS`
  *     (the spread between start times stays inside the parallel
  *     dispatch window).
@@ -247,6 +240,7 @@ export function assignParallelBatches(messages: ChatMsg[]): void {
     while (
       j + 1 < messages.length &&
       messages[j + 1]!.role === "tool" &&
+      !messages[j + 1]!.toolThinking &&
       messages[j + 1]!.ts - messages[j]!.ts < PARALLEL_BATCH_GAP_MS
     ) {
       j++;

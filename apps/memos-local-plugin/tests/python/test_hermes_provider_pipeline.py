@@ -126,6 +126,145 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertEqual(bridge.calls[-1][0], "turn.start")
         self.assertIn("HERMES_MEMOS_E2E_0428", bridge.calls[-1][1]["userText"])
 
+    def test_post_llm_call_backfills_tool_calls_without_post_tool_hook(self) -> None:
+        bridge = FakeBridge()
+        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
+            "memos_provider.MemosBridgeClient", return_value=bridge
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("host-session")
+            provider.on_turn_start(1, "东京房产投资分析")
+            provider.prefetch("东京房产投资分析")
+
+            provider._on_post_llm_call(
+                conversation_history=[
+                    {"role": "user", "content": "东京房产投资分析"},
+                    {
+                        "role": "assistant",
+                        "content": "好的，我来逐步完成这个分析。",
+                        "reasoning": "先列计划，再查汇率和房源。",
+                        "tool_calls": [
+                            {
+                                "id": "call_todo_1",
+                                "call_id": "call_todo_1",
+                                "response_item_id": "fc_todo_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "todo",
+                                    "arguments": "{\"todos\": [{\"id\": \"1\"}]}",
+                                },
+                            }
+                        ],
+                    },
+                ]
+            )
+            provider.sync_turn("东京房产投资分析", "好的，我来逐步完成这个分析。")
+
+        turn_end = next(params for method, params in bridge.calls if method == "turn.end")
+        self.assertEqual(turn_end["toolCalls"][0]["name"], "todo")
+        self.assertIn('"todos"', turn_end["toolCalls"][0]["input"])
+        self.assertEqual(turn_end["toolCalls"][0]["thinkingBefore"], "先列计划，再查汇率和房源。")
+
+    def test_post_tool_call_merges_with_llm_tool_aliases(self) -> None:
+        bridge = FakeBridge()
+        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
+            "memos_provider.MemosBridgeClient", return_value=bridge
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("host-session")
+            provider.on_turn_start(1, "查汇率")
+            provider.prefetch("查汇率")
+            provider._on_post_llm_call(
+                conversation_history=[
+                    {"role": "user", "content": "查汇率"},
+                    {
+                        "role": "assistant",
+                        "reasoning": "用 terminal 调 API。",
+                        "tool_calls": [
+                            {
+                                "id": "call_terminal_1",
+                                "call_id": "call_terminal_1",
+                                "response_item_id": "fc_terminal_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "terminal",
+                                    "arguments": "{\"command\": \"curl example\"}",
+                                },
+                            }
+                        ],
+                    },
+                ]
+            )
+            provider._on_post_tool_call(
+                tool_name="terminal",
+                args={"command": "curl example"},
+                result="1 JPY = 0.006 USD",
+                tool_call_id="call_terminal_1",
+            )
+            provider.sync_turn("查汇率", "查到了。")
+
+        turn_end = next(params for method, params in bridge.calls if method == "turn.end")
+        self.assertEqual(len(turn_end["toolCalls"]), 1)
+        self.assertEqual(turn_end["toolCalls"][0]["name"], "terminal")
+        self.assertIn("0.006 USD", turn_end["toolCalls"][0]["output"])
+        self.assertEqual(turn_end["toolCalls"][0]["thinkingBefore"], "用 terminal 调 API。")
+
+    def test_post_llm_call_orders_backfilled_tools_before_later_tool_results(self) -> None:
+        bridge = FakeBridge()
+        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
+            "memos_provider.MemosBridgeClient", return_value=bridge
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("host-session")
+            provider.on_turn_start(1, "规划北欧旅行")
+            provider.prefetch("规划北欧旅行")
+
+            # A later executed tool may be reported before post_llm_call
+            # backfills planner/todo calls from conversation_history.
+            provider._on_post_tool_call(
+                tool_name="terminal",
+                args={"command": "search flights"},
+                result="PVG-CPH 4200 RMB",
+                tool_call_id="call_terminal_1",
+            )
+            provider._on_post_llm_call(
+                conversation_history=[
+                    {"role": "user", "content": "规划北欧旅行"},
+                    {
+                        "role": "assistant",
+                        "reasoning": "先列计划，再查机票。",
+                        "tool_calls": [
+                            {
+                                "id": "call_todo_1",
+                                "call_id": "call_todo_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "todo",
+                                    "arguments": "{\"todos\": [{\"id\": \"1\"}]}",
+                                },
+                            },
+                            {
+                                "id": "call_terminal_1",
+                                "call_id": "call_terminal_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "terminal",
+                                    "arguments": "{\"command\": \"search flights\"}",
+                                },
+                            },
+                        ],
+                    },
+                ]
+            )
+            provider.sync_turn("规划北欧旅行", "路线和预算整理好了。")
+
+        turn_end = next(params for method, params in bridge.calls if method == "turn.end")
+        self.assertEqual([tc["name"] for tc in turn_end["toolCalls"]], ["todo", "terminal"])
+        self.assertIn('"todos"', turn_end["toolCalls"][0]["input"])
+        self.assertEqual(turn_end["toolCalls"][0]["thinkingBefore"], "先列计划，再查机票。")
+        self.assertIn("PVG-CPH", turn_end["toolCalls"][1]["output"])
+        self.assertEqual(turn_end["toolCalls"][1]["thinkingBefore"], "先列计划，再查机票。")
+
 
 if __name__ == "__main__":
     unittest.main()
