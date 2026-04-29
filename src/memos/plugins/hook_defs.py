@@ -77,6 +77,7 @@ class H:
 
     # mem_reader — generic extension point before LLM extraction
     MEM_READER_PRE_EXTRACT = "mem_reader.pre_extract"
+    MEMORY_ITEMS_AFTER_FINE_EXTRACT = "memory_items.after_fine_extract"
 
     # memory version — single-provider business hooks
     MEMORY_VERSION_PREPARE_UPDATES = "memory_version.prepare_updates"
@@ -100,6 +101,13 @@ define_hook(
     description="Customize prompt before mem_reader LLM extraction",
     params=["prompt", "prompt_type", "mem_str", "lang", "sources"],
     pipe_key="prompt",
+)
+
+define_hook(
+    H.MEMORY_ITEMS_AFTER_FINE_EXTRACT,
+    description="Post-process memory items after mem_reader fine extraction completes",
+    params=["items", "user_context", "mem_reader", "extract_mode"],
+    pipe_key="items",
 )
 
 define_hook(
