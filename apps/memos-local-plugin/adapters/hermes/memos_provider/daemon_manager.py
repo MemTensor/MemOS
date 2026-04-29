@@ -73,7 +73,10 @@ def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
         return True
-    except (OSError, PermissionError):
+    except PermissionError:
+        # Process exists but is owned by another user — still alive.
+        return True
+    except OSError:
         return False
 
 
@@ -143,9 +146,22 @@ def _is_bridge_process(pid: int) -> bool:
             finally:
                 kernel32.CloseHandle(handle)
             return False
-        # Unix: read /proc/<pid>/cmdline
-        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
-        return b"bridge.cts" in cmdline
+        # Unix: prefer /proc/<pid>/cmdline; fall back to ps(1) on macOS / BSD.
+        try:
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+            return b"bridge.cts" in cmdline
+        except FileNotFoundError:
+            import subprocess
+            try:
+                result = subprocess.run(
+                    ["ps", "-p", str(pid), "-o", "command="],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                return result.returncode == 0 and "bridge.cts" in result.stdout
+            except Exception:
+                return False
     except Exception:
         # If we can't validate, err on the side of safety — skip kill.
         return False

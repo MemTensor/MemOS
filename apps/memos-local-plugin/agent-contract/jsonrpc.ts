@@ -70,6 +70,8 @@ export const RPC_METHODS = {
   SESSION_CLOSE: "session.close",
   EPISODE_OPEN: "episode.open",
   EPISODE_CLOSE: "episode.close",
+  EPISODE_DELETE: "episode.delete",
+  EPISODE_DELETE_BULK: "episode.delete_bulk",
 
   // ── pipeline (per turn) ──
   TURN_START: "turn.start",

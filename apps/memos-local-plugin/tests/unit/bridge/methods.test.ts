@@ -48,6 +48,8 @@ function stubCore(overrides: Partial<MemoryCore> = {}): MemoryCore {
     closeSession: vi.fn(async () => {}),
     openEpisode: vi.fn(async ({ episodeId }) => episodeId ?? "e-auto"),
     closeEpisode: vi.fn(async () => {}),
+    deleteEpisode: vi.fn(async () => ({ deleted: true })),
+    deleteEpisodes: vi.fn(async () => ({ deleted: 1 })),
     onTurnStart: vi.fn(async () => ({
       query: { agent: "openclaw", query: "" },
       hits: [],

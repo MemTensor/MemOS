@@ -70,13 +70,17 @@ class _SocketTransport:
         return line if line else None
 
     def close(self) -> None:
-        try:
-            self._rfile.close()
-        except Exception:
-            pass
+        # Shutdown the underlying socket BEFORE closing the buffered file
+        # handle — on macOS _rfile.close() can block indefinitely when the
+        # peer has already disconnected. SHUT_RDWR terminates the
+        # connection first so close() returns immediately.
         try:
             self._sock.shutdown(_socket.SHUT_RDWR)
         except OSError:
+            pass
+        try:
+            self._rfile.close()
+        except Exception:
             pass
         self._sock.close()
 
