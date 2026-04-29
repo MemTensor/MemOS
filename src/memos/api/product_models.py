@@ -438,6 +438,14 @@ class APISearchRequest(BaseRequest):
     )
 
     # ==== Context ====
+    reference_time: str | None = Field(
+        None,
+        description=(
+            "Optional reference time for time-sensitive search parsing. "
+            "If omitted, search uses the current server time."
+        ),
+    )
+
     chat_history: MessageList | None = Field(
         None,
         description=(

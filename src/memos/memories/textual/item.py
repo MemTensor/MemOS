@@ -81,6 +81,14 @@ class ArchivedTextualMemory(BaseModel):
         default_factory=lambda: datetime.now().isoformat(),
         description="The time the memory was created.",
     )
+    timespec: dict[str, Any] | None = Field(
+        default=None,
+        description="Compact temporal index snapshot for this archived version, used by retrieval-side version selection.",
+    )
+    memory_form: Literal["state", "event"] | None = Field(
+        default=None,
+        description="Internal memory form snapshot for this archived version, used by retrieval-side routing.",
+    )
 
 
 class TextualMemoryMetadata(BaseModel):
