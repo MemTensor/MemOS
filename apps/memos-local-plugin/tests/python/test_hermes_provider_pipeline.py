@@ -116,7 +116,8 @@ class HermesProviderPipelineTests(unittest.TestCase):
     def test_internal_hermes_review_prompt_is_not_persisted_as_user_turn(self) -> None:
         bridge = FakeBridge()
         review_prompt = (
-            "Review the conversation above and consider saving or updating a skill if appropriate."
+            "Review the conversation above and consider whether a skill should be "
+            "saved or updated.  Work in this order -- do not skip."
         )
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
