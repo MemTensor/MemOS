@@ -83,12 +83,23 @@ const en = {
   "common.loadMore": "Load more",
   "common.selected": "{n} selected",
   "common.selectPage": "Select page",
+  "common.deselectPage": "Deselect page",
   "common.deselect": "Deselect",
   "common.bulkDelete": "Delete selected",
   "common.bulkDelete.confirm": "Delete {n} selected items? This cannot be undone.",
   "pager.page": "Page {n}",
   "pager.pageOfAtLeast": "Page {n} / {total}+",
   "pager.pageOfTotal": "Page {n} / {total}",
+  "pager.totalPerPage": "Total {total} items, {pageSize} per page",
+  "pager.totalCompact": "{total} items · {pageSize}/page",
+  "pager.pageSize.label": "Items per page",
+  "pager.pageSize.option": "{pageSize} / page",
+  "pager.jump.label": "Go to",
+  "pager.jump.short": "Jump",
+  "pager.jump.to": "Go to",
+  "pager.jump.pageUnit": "page",
+  "pager.jump.go": "Go",
+  "pager.jump.goShort": "Go",
 
   // Settings extensions.
   "settings.test": "Test",
@@ -472,6 +483,10 @@ const en = {
   "analytics.chart.skillEvolutions": "Skill crystallizations per day",
   "analytics.chart.skillEvolutions.empty":
     "No skills crystallized yet — keep the plugin running to collect evidence.",
+  "analytics.axis.date": "Date",
+  "analytics.axis.time": "Time",
+  "analytics.axis.count": "Count",
+  "analytics.axis.latencyMs": "Latency (ms)",
   "analytics.kpi.evolutionRate": "Skill evolution rate",
   "analytics.kpi.evolutionRate.hint": "tasks → skills conversion",
   "analytics.kpi.policyCoverage": "Policy activation rate",
@@ -502,6 +517,9 @@ const en = {
   "analytics.tools.chart.insufficient":
     "Not enough data points in this window to draw a trend chart.",
   "analytics.tools.legend.showAll": "Show all",
+  "analytics.tools.unavailable.title": "Calls without latency data",
+  "analytics.tools.unavailable.subtitle":
+    "These tools were recorded, but their start/end timestamps were missing or identical, so they are not plotted as response-time data.",
 
   // Logs.
   "logs.title": "Logs",
@@ -698,12 +716,23 @@ const zh: Record<TranslationKey, string> = {
   "common.loadMore": "加载更多",
   "common.selected": "已选 {n} 项",
   "common.selectPage": "全选当前页",
+  "common.deselectPage": "取消当前页选择",
   "common.deselect": "取消选择",
   "common.bulkDelete": "批量删除",
   "common.bulkDelete.confirm": "确认删除 {n} 项？此操作不可撤销。",
   "pager.page": "第 {n} 页",
   "pager.pageOfAtLeast": "第 {n} 页 / 共 {total}+ 页",
   "pager.pageOfTotal": "第 {n} 页 / 共 {total} 页",
+  "pager.totalPerPage": "共 {total} 条，每页 {pageSize} 条",
+  "pager.totalCompact": "{total} 条 · {pageSize}/页",
+  "pager.pageSize.label": "每页条数",
+  "pager.pageSize.option": "{pageSize} 条/页",
+  "pager.jump.label": "跳至",
+  "pager.jump.short": "跳页",
+  "pager.jump.to": "到",
+  "pager.jump.pageUnit": "页",
+  "pager.jump.go": "跳转",
+  "pager.jump.goShort": "跳",
 
   "settings.test": "测试",
   "settings.hub.admin": "团队成员",
@@ -1052,6 +1081,10 @@ const zh: Record<TranslationKey, string> = {
   "analytics.chart.skillEvolutions": "每日技能进化次数",
   "analytics.chart.skillEvolutions.empty":
     "暂无技能结晶 — 让插件继续运行，等证据累积到门槛即可。",
+  "analytics.axis.date": "日期",
+  "analytics.axis.time": "时间",
+  "analytics.axis.count": "数量",
+  "analytics.axis.latencyMs": "耗时（ms）",
   "analytics.kpi.evolutionRate": "技能进化率",
   "analytics.kpi.evolutionRate.hint": "任务 → 技能 转化比例",
   "analytics.kpi.policyCoverage": "规则覆盖率",
@@ -1082,6 +1115,9 @@ const zh: Record<TranslationKey, string> = {
   "analytics.tools.chart.insufficient":
     "当前时间范围内数据点不足，无法绘制趋势图。",
   "analytics.tools.legend.showAll": "显示全部",
+  "analytics.tools.unavailable.title": "有调用但缺少耗时数据",
+  "analytics.tools.unavailable.subtitle":
+    "这些工具调用已被记录，但开始/结束时间缺失或相同，因此不会进入响应耗时图。",
 
   "logs.title": "日志",
   "logs.subtitle": "记忆检索和写入的结构化轨迹：召回候选、Hub 候选、LLM 筛选后保留的记忆。",

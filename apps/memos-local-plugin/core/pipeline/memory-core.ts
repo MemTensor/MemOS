@@ -254,6 +254,10 @@ export function createMemoryCore(
   let shutDown = false;
   /** Per-episode monotonic step counter for tool outcomes. */
   const toolStepByEpisode = new Map<string, number>();
+  const skillStartedAtByPolicy = new Map<string, number>();
+  const skillRunDurationBySkill = new Map<string, number>();
+  const l2StartedAtByEpisode = new Map<string, number>();
+  let l3StartedAt: number | null = null;
 
   function ensureLive(): void {
     if (shutDown) {
@@ -437,25 +441,41 @@ export function createMemoryCore(
     handle.buses.skill.onAny((evt) => {
       const k = evt.kind;
       if (k === "skill.crystallization.started") {
-        writeApiLog(handle, log, "skill_generate", {
-          phase: "started",
-          policyId: evt.policyId,
-        }, evt, 0, true);
+        skillStartedAtByPolicy.set(evt.policyId, eventTime(evt));
       } else if (k === "skill.crystallized") {
+        const durationMs = durationSince(
+          skillStartedAtByPolicy.get(evt.policyId),
+          eventTime(evt),
+          1,
+        );
+        skillStartedAtByPolicy.delete(evt.policyId);
+        skillRunDurationBySkill.set(evt.skillId, durationMs);
         writeApiLog(handle, log, "skill_generate", {
           phase: "done",
           skillId: evt.skillId,
-        }, evt, 0, true);
+        }, evt, durationMs, true);
       } else if (k === "skill.rebuilt" || k === "skill.eta.updated" || k === "skill.archived") {
+        const skillId = (evt as { skillId?: string }).skillId;
+        const durationMs =
+          (skillId ? skillRunDurationBySkill.get(skillId) : undefined) ??
+          durationSince(eventTime(evt) - 1, eventTime(evt), 1);
+        if (k === "skill.rebuilt" && skillId) skillRunDurationBySkill.delete(skillId);
         writeApiLog(handle, log, "skill_evolve", {
           kind: k,
-          skillId: (evt as { skillId?: string }).skillId,
-        }, evt, 0, true);
+          skillId,
+        }, evt, durationMs, true);
       } else if (k === "skill.verification.failed" || k === "skill.failed") {
+        const policyId = (evt as { policyId?: string }).policyId;
+        const durationMs = durationSince(
+          policyId ? skillStartedAtByPolicy.get(policyId) : undefined,
+          eventTime(evt),
+          policyId ? 1 : 0,
+        );
+        if (policyId) skillStartedAtByPolicy.delete(policyId);
         writeApiLog(handle, log, "skill_generate", {
           phase: "failed",
           kind: k,
-        }, evt, 0, false);
+        }, evt, durationMs, false);
       }
     });
 
@@ -463,45 +483,51 @@ export function createMemoryCore(
     handle.buses.l2.onAny((evt) => {
       const k = evt.kind;
       if (k === "l2.policy.induced") {
+        const durationMs = durationSince(l2StartedAtByEpisode.get(evt.episodeId), Date.now(), 1);
         writeApiLog(handle, log, "policy_generate", {
           phase: "induced",
           policyId: evt.policyId,
           title: evt.title,
-        }, evt, 0, true);
+        }, evt, durationMs, true);
       } else if (k === "l2.policy.updated") {
+        const durationMs = durationSince(l2StartedAtByEpisode.get(evt.episodeId), Date.now(), 1);
         writeApiLog(handle, log, "policy_evolve", {
           policyId: evt.policyId,
           status: evt.status,
-        }, evt, 0, true);
+        }, evt, durationMs, true);
       } else if (k === "l2.failed") {
+        const durationMs = durationSince(l2StartedAtByEpisode.get(evt.episodeId), Date.now(), 1);
+        l2StartedAtByEpisode.delete(evt.episodeId);
         writeApiLog(handle, log, "policy_generate", {
           phase: "failed",
-        }, evt, 0, false);
+        }, evt, durationMs, false);
       }
     });
 
     // ─── L3 (领域认知) lifecycle → api_logs(world_model_*) ────────────
     handle.buses.l3.onAny((evt) => {
       const k = evt.kind;
-      if (k === "l3.world-model.created") {
+      if (k === "l3.abstraction.started") {
+        l3StartedAt = Date.now();
+      } else if (k === "l3.world-model.created") {
         writeApiLog(handle, log, "world_model_generate", {
           phase: "created",
           worldModelId: evt.worldModelId,
           title: evt.title,
-        }, evt, 0, true);
+        }, evt, durationSince(l3StartedAt, Date.now(), 1), true);
       } else if (k === "l3.world-model.updated") {
         writeApiLog(handle, log, "world_model_evolve", {
           worldModelId: evt.worldModelId,
           title: evt.title,
-        }, evt, 0, true);
+        }, evt, durationSince(l3StartedAt, Date.now(), 1), true);
       } else if (k === "l3.confidence.adjusted") {
         writeApiLog(handle, log, "world_model_evolve", {
           kind: "confidence.adjusted",
-        }, evt, 0, true);
+        }, evt, durationSince(l3StartedAt, Date.now(), 1), true);
       } else if (k === "l3.failed") {
         writeApiLog(handle, log, "world_model_generate", {
           phase: "failed",
-        }, evt, 0, false);
+        }, evt, durationSince(l3StartedAt, Date.now(), 1), false);
       }
     });
 
@@ -510,15 +536,18 @@ export function createMemoryCore(
     // what makes a task "completed" (R ≥ 0) or "failed" (R < 0) in the
     // viewer's Tasks panel.
     handle.buses.reward.onAny((evt) => {
-      if (evt.kind === "reward.scored") {
-        const ok = evt.rHuman >= 0;
+      if (evt.kind === "reward.updated") {
+        const result = evt.result;
+        const ok = result.rHuman >= 0;
+        l2StartedAtByEpisode.set(result.episodeId, Date.now());
         writeApiLog(handle, log, ok ? "task_done" : "task_failed", {
-          episodeId: evt.episodeId,
-          sessionId: evt.sessionId,
+          episodeId: result.episodeId,
+          sessionId: result.sessionId,
         }, {
-          rHuman: evt.rHuman,
-          source: evt.source,
-        }, 0, ok);
+          rHuman: result.rHuman,
+          source: result.source,
+          timings: result.timings,
+        }, durationSince(result.startedAt, result.completedAt), ok);
       }
     });
   }
@@ -745,17 +774,13 @@ export function createMemoryCore(
   ): Promise<{ traceId: string; episodeId: EpisodeId }> {
     ensureLive();
     const outcome = await handle.onTurnEnd(result);
-    // Capture is asynchronous — when the caller wants a `traceId` we
-    // deterministically allocate one upstream, but the V1 contract just
-    // returns the latest snapshot ids. We return the final trace id the
-    // episode snapshot reports (or a synthetic turn id if nothing yet).
-    const snap = outcome.episode;
-    const turnCount = snap?.turnCount ?? 0;
-    const traceIds = snap?.traceIds ?? [];
-    const lastTraceId =
-      traceIds.length > 0
-        ? traceIds[traceIds.length - 1]!
-        : `trace-${outcome.episodeId}-${turnCount}`;
+    // Return the real row id produced by the synchronous lite capture.
+    // Feedback submits this id as a FK, so a synthetic placeholder would
+    // cause SQLite "FOREIGN KEY constraint failed" later.
+    const traceIds = outcome.traceIds.length > 0
+      ? outcome.traceIds
+      : outcome.episode?.traceIds ?? [];
+    const lastTraceId = traceIds[traceIds.length - 1] ?? "";
     return {
       traceId: lastTraceId,
       episodeId: outcome.episodeId,
@@ -766,6 +791,13 @@ export function createMemoryCore(
     feedback: Omit<FeedbackDTO, "id" | "ts"> & { ts?: number },
   ): Promise<FeedbackDTO> {
     ensureLive();
+    if (feedback.traceId && !handle.repos.traces.getById(feedback.traceId as TraceId)) {
+      throw new MemosError(
+        "trace_not_found",
+        `trace not found: ${feedback.traceId}`,
+        { traceId: feedback.traceId },
+      );
+    }
     const ts = feedback.ts ?? Date.now();
     const id = randomUUID();
     const row: FeedbackRow = {
@@ -2292,6 +2324,27 @@ export function inferTier(
   if (kind === "skill") return 1;
   if (kind === "world-model") return 3;
   return 2;
+}
+
+function eventTime(evt: unknown): number {
+  const at = (evt as { at?: unknown } | null)?.at;
+  return typeof at === "number" && Number.isFinite(at) ? at : Date.now();
+}
+
+function durationSince(
+  startedAt: number | undefined | null,
+  endedAt = Date.now(),
+  fallbackMs = 0,
+): number {
+  if (
+    typeof startedAt !== "number" ||
+    !Number.isFinite(startedAt) ||
+    !Number.isFinite(endedAt) ||
+    endedAt <= startedAt
+  ) {
+    return fallbackMs;
+  }
+  return Math.max(fallbackMs, Math.round(endedAt - startedAt));
 }
 
 /**

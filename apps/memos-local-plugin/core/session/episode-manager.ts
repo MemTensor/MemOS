@@ -29,6 +29,7 @@ import type {
   EpisodeSnapshot,
   EpisodeStartInput,
   EpisodeTurn,
+  EpisodeTurnInput,
   IntentDecision,
   SessionEventBus,
 } from "./types.js";
@@ -42,7 +43,7 @@ export interface EpisodeManagerDeps {
 
 export interface EpisodeManager {
   start(input: EpisodeStartInput, intent: IntentDecision): EpisodeSnapshot;
-  addTurn(id: EpisodeId, turn: Omit<EpisodeTurn, "id" | "ts">): EpisodeTurn;
+  addTurn(id: EpisodeId, turn: EpisodeTurnInput): EpisodeTurn;
   finalize(id: EpisodeId, input?: EpisodeFinalizeInput): EpisodeSnapshot;
   abandon(id: EpisodeId, reason: string): EpisodeSnapshot;
   attachTraceIds(id: EpisodeId, traceIds: string[]): void;
@@ -97,7 +98,7 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
           "episode.start requires an initial user turn with non-empty content",
         );
       }
-      const startedAt = now();
+      const startedAt = input.initialTurn.ts ?? now();
       const id = (input.id ?? ids.episode()) as EpisodeId;
       const firstTurn: EpisodeTurn = {
         ...input.initialTurn,
@@ -142,7 +143,7 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
 
     addTurn(id, turn) {
       const snap = assertOpen(get(id), id);
-      const full: EpisodeTurn = { ...turn, id: ids.span(), ts: now() };
+      const full: EpisodeTurn = { ...turn, id: ids.span(), ts: turn.ts ?? now() };
       snap.turns.push(full);
       snap.turnCount++;
       deps.sessionsRepo.touchLastSeen(snap.sessionId, full.ts);

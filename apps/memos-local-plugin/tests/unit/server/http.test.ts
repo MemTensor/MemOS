@@ -73,6 +73,7 @@ function stubCore(): MemoryCore {
     updateWorldModel: vi.fn(async (id, patch) => ({ id, status: "active", ...patch } as any)),
     archiveWorldModel: vi.fn(async (id) => ({ id, status: "archived" } as any)),
     unarchiveWorldModel: vi.fn(async (id) => ({ id, status: "active" } as any)),
+    countEpisodes: vi.fn(async () => 2),
     listEpisodes: vi.fn(async () => ["e1", "e2"]),
     listEpisodeRows: vi.fn(async () => [
       {
@@ -110,7 +111,9 @@ function stubCore(): MemoryCore {
         priority: 0.5,
       },
     ] as any),
+    countTraces: vi.fn(async () => 1),
     listApiLogs: vi.fn(async () => ({ logs: [], total: 0 })),
+    countSkills: vi.fn(async () => 0),
     listSkills: vi.fn(async () => []),
     getSkill: vi.fn(async (id) => ({
       id,
@@ -255,6 +258,24 @@ describe("HTTP server — REST routes", () => {
       polarity: "positive",
       magnitude: 0.7,
     });
+  });
+
+  it("POST /api/v1/feedback returns trace_not_found for stale trace ids", async () => {
+    (core.getTrace as any).mockResolvedValueOnce(null);
+    const r = await fetch(`${handle.url}/api/v1/feedback`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        channel: "explicit",
+        polarity: "negative",
+        magnitude: 1,
+        traceId: "trace-not-real",
+      }),
+    });
+    expect(r.status).toBe(404);
+    const body = (await r.json()) as any;
+    expect(body.error.code).toBe("trace_not_found");
+    expect(core.submitFeedback).not.toHaveBeenCalled();
   });
 
   it("GET /api/v1/traces lists newest-first traces (used by Memories panel)", async () => {

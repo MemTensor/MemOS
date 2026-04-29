@@ -19,6 +19,7 @@ import { useEffect, useState } from "preact/hooks";
 import { api } from "../api/client";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
+import { Pager } from "../components/Pager";
 import type { ApiLogDTO } from "../api/types";
 
 type ToolFilter =
@@ -84,7 +85,7 @@ interface ApiLogsResponse {
   nextOffset?: number;
 }
 
-const PAGE_SIZE = 25;
+const DEFAULT_PAGE_SIZE = 25;
 
 export function LogsView() {
   const [tag, setTag] = useState<LogTag>("");
@@ -92,6 +93,7 @@ export function LogsView() {
   const [logs, setLogs] = useState<ApiLogDTO[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
@@ -112,8 +114,8 @@ export function LogsView() {
       // result locally.
       const allowed = ALLOWED_TOOLS[opts.tag];
       const needsClient = allowed.length > 1 || opts.query.trim().length > 0;
-      qs.set("limit", String(needsClient ? 500 : PAGE_SIZE));
-      qs.set("offset", String(needsClient ? 0 : opts.page * PAGE_SIZE));
+      qs.set("limit", String(needsClient ? 500 : pageSize));
+      qs.set("offset", String(needsClient ? 0 : opts.page * pageSize));
       if (allowed.length === 1) qs.set("tool", allowed[0]!);
       const res = await api.get<ApiLogsResponse>(`/api/v1/api-logs?${qs.toString()}`);
       setLogs(res.logs);
@@ -130,7 +132,7 @@ export function LogsView() {
   useEffect(() => {
     void load({ tag, page: 0, query });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tag]);
+  }, [tag, pageSize]);
 
   // Debounced client-side refresh when the search query changes.
   useEffect(() => {
@@ -139,7 +141,7 @@ export function LogsView() {
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [query, pageSize]);
 
   const toggleExpand = (id: number) => {
     setExpanded((prev) => {
@@ -161,10 +163,9 @@ export function LogsView() {
       })
     : logs;
   const pagedRows = clientFilterActive
-    ? filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+    ? filtered.slice(page * pageSize, (page + 1) * pageSize)
     : filtered;
   const displayTotal = clientFilterActive ? filtered.length : total;
-  const totalPages = Math.max(1, Math.ceil(displayTotal / PAGE_SIZE));
 
   return (
     <>
@@ -254,34 +255,18 @@ export function LogsView() {
         </div>
       )}
 
-      {displayTotal > PAGE_SIZE && (
-        <div class="pager">
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page === 0 || loading}
-            onClick={() => {
-              if (clientFilterActive) setPage(page - 1);
-              else void load({ tag, page: page - 1, query });
-            }}
-          >
-            <Icon name="chevron-left" size={14} />
-            {t("common.prev")}
-          </button>
-          <span class="pager__info">
-            {t("pager.pageN", { n: page + 1, total: totalPages })}
-          </span>
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page + 1 >= totalPages || loading}
-            onClick={() => {
-              if (clientFilterActive) setPage(page + 1);
-              else void load({ tag, page: page + 1, query });
-            }}
-          >
-            {t("common.next")}
-            <Icon name="chevron-right" size={14} />
-          </button>
-        </div>
+      {displayTotal > pageSize && (
+        <Pager
+          page={page}
+          totalItems={displayTotal}
+          pageSize={pageSize}
+          loading={loading}
+          onPageSizeChange={setPageSize}
+          onPageChange={(nextPage) => {
+            if (clientFilterActive) setPage(nextPage);
+            else void load({ tag, page: nextPage, query });
+          }}
+        />
       )}
     </>
   );
@@ -312,7 +297,7 @@ function LogCard({
         </span>
         <span class="log-card__summary">{buildSummary(log, input, output)}</span>
         <span class="muted mono" style="font-size:var(--fs-xs)">
-          {log.durationMs}ms
+          {formatLogDuration(log)}
         </span>
         <span class="muted" style="font-size:var(--fs-xs)">
           {formatTs(log.calledAt)}
@@ -803,6 +788,21 @@ function GenericDetail({
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────
+
+function formatLogDuration(log: ApiLogDTO): string {
+  if (log.durationMs > 0) return `${log.durationMs}ms`;
+  if (isLifecycleTool(log.toolName)) return "—";
+  return "<1ms";
+}
+
+function isLifecycleTool(toolName: string): boolean {
+  return (
+    toolName.startsWith("skill_") ||
+    toolName.startsWith("policy_") ||
+    toolName.startsWith("world_model_") ||
+    toolName.startsWith("task_")
+  );
+}
 
 function parseJson(s: string): unknown {
   if (!s) return null;
