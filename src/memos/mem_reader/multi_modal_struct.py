@@ -17,7 +17,7 @@ from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
 from memos.mem_reader.utils import parse_json_result
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.plugins.hook_defs import H
-from memos.plugins.hooks import trigger_single_hook
+from memos.plugins.hooks import trigger_hook, trigger_single_hook
 from memos.templates.mem_reader_prompts import MEMORY_MERGE_PROMPT_EN, MEMORY_MERGE_PROMPT_ZH
 from memos.templates.tool_mem_prompts import TOOL_TRAJECTORY_PROMPT_EN, TOOL_TRAJECTORY_PROMPT_ZH
 from memos.types import MessagesType
@@ -785,6 +785,14 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 )
                 rawfile_node.metadata.summary_ids = [mem_node.id for mem_node in fine_items]
                 fine_items.append(rawfile_node)
+            enriched_items = trigger_hook(
+                H.MEMORY_ITEMS_AFTER_FINE_EXTRACT,
+                items=fine_items,
+                user_context=kwargs.get("user_context"),
+                mem_reader=self,
+                extract_mode="fine",
+            )
+            fine_items = enriched_items if enriched_items is not None else fine_items
             return fine_items
 
         fine_memory_items: list[TextualMemoryItem] = []
