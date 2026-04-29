@@ -31,7 +31,7 @@ function trace(part: Partial<TimelineTrace>): TimelineTrace {
 }
 
 describe("flattenChat", () => {
-  it("emits user → [thinking+tool pairs] → assistant; reflection is dropped", () => {
+  it("emits user → tool cards with thinking → assistant; reflection is dropped", () => {
     const t = trace({
       id: "tr1",
       userText: "go fix the deploy",
@@ -60,20 +60,19 @@ describe("flattenChat", () => {
     const msgs = flattenChat([t]);
     expect(msgs.map((m) => m.role)).toEqual([
       "user",
-      "thinking",
       "tool",
       "tool",
       "assistant",
     ]);
-    expect(msgs[1]!.text).toContain("pg_config is missing");
-    expect(msgs[1]!.text).not.toContain("INTERNAL: scoring note");
-    expect(msgs[2]!.traceId).toBe("tr1");
-    expect(msgs[2]!.toolName).toBe("bash");
-    expect(msgs[2]!.toolInput).toContain("pip install psycopg2");
-    expect(msgs[2]!.toolOutput).toContain("pg_config not found");
-    expect(msgs[2]!.errorCode).toBe("EXIT_1");
-    expect(msgs[2]!.toolDurationMs).toBe(190);
-    expect(msgs[4]!.text).toBe("done — see PR #42");
+    expect(msgs[1]!.traceId).toBe("tr1");
+    expect(msgs[1]!.toolName).toBe("bash");
+    expect(msgs[1]!.toolThinking).toContain("pg_config is missing");
+    expect(msgs[1]!.toolThinking).not.toContain("INTERNAL: scoring note");
+    expect(msgs[1]!.toolInput).toContain("pip install psycopg2");
+    expect(msgs[1]!.toolOutput).toContain("pg_config not found");
+    expect(msgs[1]!.errorCode).toBe("EXIT_1");
+    expect(msgs[1]!.toolDurationMs).toBe(190);
+    expect(msgs[3]!.text).toBe("done — see PR #42");
     for (const m of msgs) {
       expect(m.text).not.toContain("INTERNAL: scoring note");
     }
@@ -203,7 +202,7 @@ describe("flattenChat", () => {
     ]);
   });
 
-  it("interleaves per-tool thinking when thinkingBefore is present", () => {
+  it("attaches per-tool thinking when thinkingBefore is present", () => {
     const t = trace({
       id: "tr_interleave",
       userText: "fix the build",
@@ -239,17 +238,14 @@ describe("flattenChat", () => {
     const msgs = flattenChat([t]);
     expect(msgs.map((m) => m.role)).toEqual([
       "user",
-      "thinking",   // before tool 0
       "tool",
-      "thinking",   // before tool 1
       "tool",
-      "thinking",   // before tool 2
       "tool",
       "assistant",
     ]);
-    expect(msgs[1]!.text).toBe("Check error log.");
-    expect(msgs[3]!.text).toBe("Need libpq-dev.");
-    expect(msgs[5]!.text).toBe("Retry the build.");
+    expect(msgs[1]!.toolThinking).toBe("Check error log.");
+    expect(msgs[2]!.toolThinking).toBe("Need libpq-dev.");
+    expect(msgs[3]!.toolThinking).toBe("Retry the build.");
   });
 
   it("no thinking bubbles when tools lack thinkingBefore (agentThinking only shown for no-tool turns)", () => {
@@ -296,12 +292,11 @@ describe("flattenChat", () => {
     const msgs = flattenChat([t]);
     expect(msgs.map((m) => m.role)).toEqual([
       "user",
-      "thinking",   // before tool_a
       "tool",
       "tool",       // no thinking before tool_b
       "assistant",
     ]);
-    expect(msgs[1]!.text).toBe("initial");
+    expect(msgs[1]!.toolThinking).toBe("initial");
   });
 
   it("returns empty array for empty input", () => {

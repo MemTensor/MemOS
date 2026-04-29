@@ -350,9 +350,7 @@ class MemTensorProviderTests(unittest.TestCase):
         self.assertIn("HERMES_MEMOS_E2E_0428", got_trace["meta"]["userText"])
         self.assertEqual(bridge.calls[-1][0], "memory.get_trace")
 
-        got_policy = json.loads(
-            p.handle_tool_call("memory_get", {"id": "p-1", "kind": "policy"})
-        )
+        got_policy = json.loads(p.handle_tool_call("memory_get", {"id": "p-1", "kind": "policy"}))
         self.assertEqual(got_policy["kind"], "policy")
         self.assertIn("Hermes validation", got_policy["body"])
         self.assertEqual(bridge.calls[-1][0], "memory.get_policy")
