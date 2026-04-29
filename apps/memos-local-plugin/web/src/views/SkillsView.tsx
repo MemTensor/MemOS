@@ -9,7 +9,7 @@
  *   - Archive
  */
 import { useEffect, useState } from "preact/hooks";
-import { api, withAgentPrefix } from "../api/client";
+import { api } from "../api/client";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
 import { route } from "../stores/router";
@@ -434,16 +434,23 @@ function SkillDrawer({
     }
   };
 
-  const downloadZip = () => {
-    const url = withAgentPrefix(
-      `/api/v1/skills/${encodeURIComponent(skill.id)}/download`,
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${skill.name.replace(/[^\w.-]+/g, "_") || "skill"}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const downloadZip = async () => {
+    setBusy(true);
+    try {
+      const blob = await api.blob(
+        `/api/v1/skills/${encodeURIComponent(skill.id)}/download`,
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${skill.name.replace(/[^\w.-]+/g, "_") || "skill"}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
