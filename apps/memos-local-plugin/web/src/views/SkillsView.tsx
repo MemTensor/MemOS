@@ -1,3 +1,4 @@
+/** @jsxImportSource preact */
 /**
  * Skills view — browse + archive + download crystallized skills.
  *

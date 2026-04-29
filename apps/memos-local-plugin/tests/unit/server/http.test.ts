@@ -94,6 +94,7 @@ function stubCore(): MemoryCore {
         rTask: null,
       },
     ]),
+    countEpisodes: vi.fn(async () => 2),
     timeline: vi.fn(async () => [{ id: "t1", step: 0, ts: 0 } as any]),
     listTraces: vi.fn(async () => [
       {
@@ -110,8 +111,10 @@ function stubCore(): MemoryCore {
         priority: 0.5,
       },
     ] as any),
+    countTraces: vi.fn(async () => 1),
     listApiLogs: vi.fn(async () => ({ logs: [], total: 0 })),
     listSkills: vi.fn(async () => []),
+    countSkills: vi.fn(async () => 0),
     getSkill: vi.fn(async (id) => ({
       id,
       name: "test-skill",
@@ -276,6 +279,7 @@ describe("HTTP server — REST routes", () => {
       offset: 0,
       sessionId: undefined,
       q: "hi",
+      groupByTurn: false,
     });
   });
 
