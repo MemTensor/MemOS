@@ -88,6 +88,7 @@ _HERMES_INTERNAL_REVIEW_PREFIXES = (
     "review the conversation above and update the skill library.",
     "review the conversation above and update two things:",
     "review the conversation above and consider saving or updating a skill if appropriate.",
+    "review the conversation above and consider whether a skill should be saved or updated.",
 )
 
 
@@ -263,15 +264,15 @@ class MemTensorProvider(MemoryProvider):
         ids = self._tool_call_ids(
             {
                 "id": tool_call_id,
-                "call_id": _kw.get("call_id"),
-                "response_item_id": _kw.get("response_item_id"),
-                "tool_call_id": _kw.get("tool_call_id"),
+                "call_id": kw.get("call_id"),
+                "response_item_id": kw.get("response_item_id"),
+                "tool_call_id": kw.get("tool_call_id"),
             }
         )
         input_text = (
             json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args or "")
         )
-        timing = self._coerce_tool_timing(_kw)
+        timing = self._coerce_tool_timing(kw)
 
         existing = self._find_tool_call(ids)
         if existing is not None:
