@@ -39,9 +39,12 @@ import type {
   HostLogger,
   PluginHookAgentContext,
   PluginHookSessionContext,
+  PluginHookSubagentContext,
   PluginHookToolContext,
   SessionEndEvent,
   SessionStartEvent,
+  SubagentEndedEvent,
+  SubagentSpawnedEvent,
 } from "./openclaw-api.js";
 
 // ─── Message flattening ────────────────────────────────────────────────────
@@ -347,6 +350,7 @@ export function isOpenClawBootstrapMessage(raw: string): boolean {
   const text = raw.trim();
   if (text.length === 0) return true;
   if (OPENCLAW_SENTINEL_REPLIES.has(text)) return true;
+  if (isOpenClawSubagentAnnouncementPrompt(text)) return false;
   for (const sig of OPENCLAW_BOOT_SIGNATURES) {
     if (text.startsWith(sig)) return true;
     if (text.includes(sig)) {
@@ -358,6 +362,12 @@ export function isOpenClawBootstrapMessage(raw: string): boolean {
     }
   }
   return false;
+}
+
+function isOpenClawSubagentAnnouncementPrompt(raw: string): boolean {
+  const text = raw.trim();
+  return text.includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>") &&
+    text.includes("A completed subagent task is ready for user delivery");
 }
 
 /**
@@ -715,6 +725,18 @@ export interface BridgeHandle {
     ctx: PluginHookSessionContext,
   ) => Promise<void>;
 
+  /** Handler for `subagent_spawned` — cache delegation metadata. */
+  handleSubagentSpawned: (
+    event: SubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+  ) => void;
+
+  /** Handler for `subagent_ended` — clear cached delegation metadata. */
+  handleSubagentEnded: (
+    event: SubagentEndedEvent,
+    ctx: PluginHookSubagentContext,
+  ) => Promise<void>;
+
   /** Snapshot for tests. */
   trackedSessions: () => number;
   trackedToolCalls: () => number;
@@ -732,6 +754,14 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   // Per-toolCallId start timestamps so `after_tool_call` can compute duration
   // when the host doesn't populate `durationMs`.
   const toolCallStartedAt = new Map<string, { ts: number; sessionId: SessionId }>();
+  const spawnedSubagents = new Map<string, {
+    event: SubagentSpawnedEvent;
+    ctx: PluginHookSubagentContext;
+    ts: number;
+    parentSessionId?: SessionId;
+    parentEpisodeId?: EpisodeId;
+  }>();
+  const pendingSubagentSessions = new Set<SessionId>();
 
   async function ensureSession(
     agentId: string | undefined,
@@ -775,6 +805,13 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         opts.log.debug("memos.onTurnStart.skipped_bootstrap", {
           sessionKey: ctx.sessionKey,
           head: rawPrompt.slice(0, 60),
+        });
+        return;
+      }
+      if (isOpenClawSubagentAnnouncementPrompt(rawPrompt)) {
+        opts.log.debug("memos.onTurnStart.skipped_subagent_announcement", {
+          sessionKey: ctx.sessionKey,
+          agentId: ctx.agentId,
         });
         return;
       }
@@ -906,6 +943,8 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         });
         return;
       }
+      const isSubagentAnnouncement = isOpenClawSubagentAnnouncementPrompt(turn.userText);
+      const hasSubagentSpawn = turn.toolCalls.some((tc) => tc.name === "sessions_spawn");
 
       // Resolve (or lazily open) the target episode. Three cases:
       //   1. `before_prompt_build` already ran this turn → we have the
@@ -917,6 +956,13 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       //      better to capture under a fresh id than to drop the turn.
       let episodeId = openEpisodeBySession.get(sessionId);
       if (!episodeId) {
+        if (isSubagentAnnouncement) {
+          opts.log.info("memos.agent_end.skipped", {
+            reason: "subagent_announcement_without_parent_episode",
+            sessionKey: ctx.sessionKey,
+          });
+          return;
+        }
         await opts.core.openSession({ agent: opts.agent, sessionId });
         episodeId = await opts.core.openEpisode({
           sessionId,
@@ -951,9 +997,14 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       // Close the episode mapping so the next turn opens a fresh one
       // (V7 §0.1 routes multi-turn continuation through the relation
       // classifier, not through stickiness in this cache).
-      openEpisodeBySession.delete(sessionId);
+      if (hasSubagentSpawn) {
+        pendingSubagentSessions.add(sessionId);
+      } else {
+        pendingSubagentSessions.delete(sessionId);
+        openEpisodeBySession.delete(sessionId);
+      }
 
-      if (isExplicitOneShotSessionKey(ctx.sessionKey)) {
+      if (isExplicitOneShotSessionKey(ctx.sessionKey) && !hasSubagentSpawn) {
         await opts.core.closeSession(sessionId);
         messageCursor.delete(sessionId);
         lastUserTextBySession.delete(sessionId);
@@ -1036,6 +1087,14 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     try {
       const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
+      if (pendingSubagentSessions.has(sessionId)) {
+        opts.log.debug("memos.session.end.deferred_for_subagent", {
+          sessionId,
+          sessionKey: ctx.sessionKey,
+          reason: event.reason,
+        });
+        return;
+      }
       await opts.core.closeSession(sessionId);
       messageCursor.delete(sessionId);
       openEpisodeBySession.delete(sessionId);
@@ -1053,6 +1112,58 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     }
   }
 
+  function handleSubagentSpawned(
+    event: SubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+  ): void {
+    const key = event.runId || event.childSessionKey || ctx.childSessionKey;
+    if (!key) return;
+    const parentAgentId = (ctx as { agentId?: string }).agentId ?? event.agentId ?? "main";
+    const parentSessionKey = ctx.requesterSessionKey ?? (ctx as { sessionKey?: string }).sessionKey;
+    const parentSessionId = parentSessionKey
+      ? bridgeSessionId(parentAgentId, parentSessionKey)
+      : undefined;
+    spawnedSubagents.set(key, {
+      event,
+      ctx,
+      ts: now(),
+      parentSessionId,
+      parentEpisodeId: parentSessionId ? openEpisodeBySession.get(parentSessionId) : undefined,
+    });
+    if (parentSessionId) pendingSubagentSessions.add(parentSessionId);
+    opts.log.debug("memos.subagent.spawned", {
+      runId: event.runId,
+      childSessionKey: event.childSessionKey,
+      requesterSessionKey: ctx.requesterSessionKey,
+      label: event.label,
+      mode: event.mode,
+    });
+  }
+
+  async function handleSubagentEnded(
+    event: SubagentEndedEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<void> {
+    try {
+      const cached =
+        (event.runId ? spawnedSubagents.get(event.runId) : undefined) ??
+        spawnedSubagents.get(event.targetSessionKey);
+      if (event.runId) spawnedSubagents.delete(event.runId);
+      spawnedSubagents.delete(event.targetSessionKey);
+      opts.log.info("memos.subagent.ended", {
+        sessionId: cached?.parentSessionId,
+        episodeId: cached?.parentEpisodeId,
+        childSessionKey: event.targetSessionKey,
+        outcome: event.outcome,
+        reason: event.reason,
+      });
+    } catch (err) {
+      opts.log.warn("memos.subagent.end.failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return {
     handleBeforePrompt,
     handleAgentEnd,
@@ -1060,6 +1171,8 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     handleAfterToolCall,
     handleSessionStart,
     handleSessionEnd,
+    handleSubagentSpawned,
+    handleSubagentEnded,
     trackedSessions: () => messageCursor.size,
     trackedToolCalls: () => toolCallStartedAt.size,
   };

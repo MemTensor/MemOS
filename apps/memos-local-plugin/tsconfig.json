@@ -31,8 +31,7 @@
     "adapters/openclaw/**/*.ts",
     "scripts/**/*.ts",
     "site/scripts/**/*.ts",
-    "bridge.cts",
-    "tests/**/*.ts"
+    "bridge.cts"
   ],
   "exclude": [
     "node_modules",

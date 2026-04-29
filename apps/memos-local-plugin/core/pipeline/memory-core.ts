@@ -39,6 +39,7 @@ import type {
   SessionId,
   SkillDTO,
   SkillId,
+  SubagentOutcomeDTO,
   TraceDTO,
   WorldModelDTO,
 } from "../../agent-contract/dto.js";
@@ -1218,6 +1219,119 @@ export function createMemoryCore(
         err: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  async function recordSubagentOutcome(
+    outcome: SubagentOutcomeDTO,
+  ): Promise<{ traceId: string; episodeId: EpisodeId }> {
+    ensureLive();
+    const ts = outcome.ts ?? Date.now();
+    const task = outcome.task.trim() || "(subagent task)";
+    const result = outcome.result.trim() || outcome.error || outcome.outcome || "(no subagent result)";
+    const normalizedOutcome = outcome.outcome ?? (outcome.error ? "error" : "unknown");
+    const childToolCalls = outcome.toolCalls ?? [];
+
+    await openSession({ agent: outcome.agent, sessionId: outcome.sessionId });
+    const recorded = await onTurnEnd({
+      agent: outcome.agent,
+      sessionId: outcome.sessionId,
+      episodeId: outcome.episodeId ?? ("" as EpisodeId),
+      agentText: `Subagent task: ${task}\n\nSubagent result: ${result}`,
+      toolCalls: [
+        {
+          name: "subagent",
+          input: {
+            task,
+            childSessionId: outcome.childSessionId ?? null,
+            childToolCalls: childToolCalls.length,
+            outcome: normalizedOutcome,
+            meta: outcome.meta ?? {},
+          },
+          output: {
+            result,
+            error: outcome.error ?? null,
+          },
+          errorCode:
+            outcome.error || (normalizedOutcome !== "ok" && normalizedOutcome !== "unknown")
+              ? normalizedOutcome
+              : undefined,
+          startedAt: ts,
+          endedAt: ts,
+        },
+      ],
+      ts,
+    });
+
+    let childRecorded: { traceId: string; episodeId: EpisodeId } | null = null;
+    const childSessionId = outcome.childSessionId ?? null;
+    if (childSessionId && childSessionId !== outcome.sessionId) {
+      const childHasEpisode = handle.repos.episodes
+        .list({ sessionId: childSessionId, limit: 1 })
+        .length > 0;
+      if (!childHasEpisode) {
+        try {
+          await openSession({ agent: outcome.agent, sessionId: childSessionId });
+          const childTurn = await onTurnStart({
+            agent: outcome.agent,
+            sessionId: childSessionId,
+            userText: `Subagent task: ${task}`,
+            ts,
+          });
+          const childEpisodeId = childTurn.query.episodeId;
+          if (!childEpisodeId) {
+            throw new Error("child turn.start did not return an episodeId");
+          }
+          childRecorded = await onTurnEnd({
+            agent: outcome.agent,
+            sessionId: childSessionId,
+            episodeId: childEpisodeId,
+            agentText: `Subagent result: ${result}`,
+            toolCalls: childToolCalls,
+            ts: ts + 1,
+          });
+          await closeEpisode(childEpisodeId);
+        } catch (err) {
+          log.warn("subagent.child_episode.create_failed", {
+            childSessionId,
+            parentSessionId: outcome.sessionId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    try {
+      handle.repos.apiLogs.insert({
+        toolName: "subagent_record",
+        input: {
+          agent: outcome.agent,
+          sessionId: outcome.sessionId,
+          episodeId: outcome.episodeId ?? null,
+          childSessionId: outcome.childSessionId ?? null,
+          task,
+          childToolCalls: childToolCalls.length,
+          outcome: normalizedOutcome,
+          meta: outcome.meta ?? {},
+        },
+        output: {
+          result,
+          error: outcome.error ?? null,
+          traceId: recorded.traceId,
+          episodeId: recorded.episodeId,
+          childTraceId: childRecorded?.traceId ?? null,
+          childEpisodeId: childRecorded?.episodeId ?? null,
+        },
+        durationMs: 0,
+        success: !outcome.error && normalizedOutcome !== "error",
+        calledAt: ts,
+      });
+    } catch (err) {
+      log.debug("apiLogs.subagent_record.skipped", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    return recorded;
   }
 
   // ─── Memory queries ──
@@ -2505,6 +2619,7 @@ export function createMemoryCore(
     onTurnEnd,
     submitFeedback,
     recordToolOutcome,
+    recordSubagentOutcome,
     searchMemory,
     getTrace,
     updateTrace,

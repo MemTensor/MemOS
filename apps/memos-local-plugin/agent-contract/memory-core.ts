@@ -21,6 +21,7 @@ import type {
   SessionId,
   SkillDTO,
   SkillId,
+  SubagentOutcomeDTO,
   ToolOutcomeDTO,
   TraceDTO,
   TurnInputDTO,
@@ -127,6 +128,14 @@ export interface MemoryCore {
    * call returns before repair runs and never throws on unknown sessions.
    */
   recordToolOutcome(outcome: ToolOutcomeDTO): void;
+  /**
+   * Record a parent-session delegation outcome. Subagent lifecycle hooks
+   * usually carry task/result metadata, not a full child transcript, so this
+   * appends the visible delegation task/result to the parent episode.
+   */
+  recordSubagentOutcome(
+    outcome: SubagentOutcomeDTO,
+  ): Promise<{ traceId: string; episodeId: EpisodeId }>;
 
   // ── memory queries ──
   searchMemory(query: RetrievalQueryDTO): Promise<RetrievalResultDTO>;

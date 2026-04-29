@@ -94,6 +94,9 @@ export const RPC_METHODS = {
   // ── retrieval ──
   RETRIEVAL_QUERY: "retrieval.query",
 
+  // ── subagents ──
+  SUBAGENT_RECORD: "subagent.record",
+
   // ── config ──
   CONFIG_GET: "config.get",
   CONFIG_PATCH: "config.patch",

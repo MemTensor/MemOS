@@ -119,6 +119,78 @@ describe("MemoryCore façade", () => {
     expect(res.query.query).toBe("how do I build this project?");
   });
 
+  it("records visible subagent task and result in the parent episode", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    const turn = await core.onTurnStart({
+      agent: "hermes",
+      sessionId: "s-parent",
+      userText: "delegate package script inspection",
+      ts: 1_700_000_000_000,
+    });
+
+    await core.recordSubagentOutcome({
+      agent: "hermes",
+      sessionId: "s-parent",
+      episodeId: turn.episodeId,
+      childSessionId: "s-child",
+      task: "check package.json scripts",
+      result: "found build and test scripts",
+      toolCalls: [
+        {
+          name: "read_file",
+          input: { path: "package.json", limit: 20 },
+          output: "{\"scripts\":{\"build\":\"tsc\"}}",
+          startedAt: 1_700_000_000_001,
+          endedAt: 1_700_000_000_002,
+        },
+      ],
+      outcome: "ok",
+      ts: 1_700_000_000_001,
+    });
+
+    const timeline = await core.timeline({ episodeId: turn.episodeId });
+    const subagentTrace = timeline.find((trace) =>
+      trace.agentText.includes("Subagent task:"),
+    );
+    const toolTrace = timeline.find((trace) =>
+      trace.toolCalls.some((call) => call.name === "subagent"),
+    );
+
+    expect(subagentTrace?.agentText).toContain(
+      "Subagent task: check package.json scripts",
+    );
+    expect(subagentTrace?.agentText).toContain(
+      "Subagent result: found build and test scripts",
+    );
+    expect(toolTrace?.toolCalls[0]?.input).toMatchObject({
+      task: "check package.json scripts",
+      childSessionId: "s-child",
+      outcome: "ok",
+    });
+
+    const childEpisodes = await core.listEpisodeRows({
+      sessionId: "s-child",
+      limit: 10,
+    });
+    expect(childEpisodes).toHaveLength(1);
+    const childTimeline = await core.timeline({ episodeId: childEpisodes[0]!.id });
+    expect(childTimeline.some((trace) =>
+      trace.userText.includes("Subagent task: check package.json scripts")
+    )).toBe(true);
+    expect(childTimeline.some((trace) =>
+      trace.agentText.includes("Subagent result: found build and test scripts")
+    )).toBe(true);
+    expect(childTimeline.some((trace) =>
+      trace.toolCalls.some((call) => call.name === "read_file")
+    )).toBe(true);
+  });
+
   it("submitFeedback persists and returns a DTO", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(

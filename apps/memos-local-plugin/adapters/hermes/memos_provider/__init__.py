@@ -100,6 +100,25 @@ def _is_hermes_internal_review_prompt(message: str) -> bool:
     return any(normalized.startswith(prefix) for prefix in _HERMES_INTERNAL_REVIEW_PREFIXES)
 
 
+def _is_explicit_delegation_request(message: str) -> bool:
+    """Return True when the user explicitly asks Hermes to use a subagent."""
+    text = " ".join((message or "").strip().lower().split())
+    if not text:
+        return False
+    delegation_terms = (
+        "subagent",
+        "sub-agent",
+        "sub agent",
+        "delegate",
+        "delegation",
+        "子代理",
+        "子任务",
+        "派一个",
+        "派发",
+    )
+    return any(term in text for term in delegation_terms)
+
+
 class MemTensorProvider(MemoryProvider):
     """MemOS Reflect2Evolve memory for hermes-agent.
 
@@ -166,6 +185,7 @@ class MemTensorProvider(MemoryProvider):
         ``on_turn_start``), so the actual user message can be passed as
         the episode's initial text instead of a generic placeholder.
         """
+        self._session_id = session_id or self._session_id
         self._hermes_home = str(kwargs.get("hermes_home") or "")
         self._platform = str(kwargs.get("platform") or "cli")
         self._agent_identity = str(kwargs.get("agent_identity") or "hermes")
@@ -227,11 +247,15 @@ class MemTensorProvider(MemoryProvider):
 
     # ─── Tool call capture via Hermes plugin hook ──────────────────────────
 
+    def _matches_session(self, session_id: str = "") -> bool:
+        """Return True when a global Hermes hook belongs to this provider."""
+        return not session_id or not self._session_id or session_id == self._session_id
+
     def _register_tool_call_hook(self) -> None:
         if self._hook_registered:
             return
         try:
-            from hermes_cli.plugins import get_plugin_manager
+            from hermes_cli.plugins import get_plugin_manager  # pyright: ignore[reportMissingImports]
 
             mgr = get_plugin_manager()
             mgr._hooks.setdefault("post_tool_call", []).append(self._on_post_tool_call)
@@ -248,6 +272,7 @@ class MemTensorProvider(MemoryProvider):
         args: dict | None = None,
         result: str = "",
         tool_call_id: str = "",
+        session_id: str = "",
         **kw: Any,
     ) -> None:
         """Accumulate a tool call record for the current turn.
@@ -261,6 +286,8 @@ class MemTensorProvider(MemoryProvider):
         when a particular tool omits one field. Private fields are stripped
         before the JSON-RPC send.
         """
+        if not self._matches_session(session_id):
+            return
         ids = self._tool_call_ids(
             {
                 "id": tool_call_id,
@@ -365,6 +392,7 @@ class MemTensorProvider(MemoryProvider):
         *,
         conversation_history: list[dict[str, Any]] | None = None,
         user_message: str = "",
+        session_id: str = "",
         **_kw: Any,
     ) -> None:
         """Capture reasoning content from assistant messages in this turn.
@@ -385,6 +413,8 @@ class MemTensorProvider(MemoryProvider):
         tool. The final reasoning (the message that produced the user-
         facing reply) becomes the turn-level ``agentThinking``.
         """
+        if not self._matches_session(session_id):
+            return
         if not conversation_history:
             return
 
@@ -544,12 +574,18 @@ class MemTensorProvider(MemoryProvider):
         if self._skip_current_turn or _is_hermes_internal_review_prompt(query):
             self._skip_current_turn = True
             return ""
+        suppress_injection = _is_explicit_delegation_request(query)
         if cached:
-            return cached
-        if not self._bridge:
+            return "" if suppress_injection else cached
+        if not self._ensure_bridge(session_id or self._session_id, timeout=10.0):
             return ""
         try:
-            return self._turn_start(query, session_id=session_id)
+            context = self._turn_start(query, session_id=session_id)
+            if suppress_injection:
+                # Do not let remembered "do it directly" skills override an
+                # explicit user request to dispatch work to a subagent.
+                return ""
+            return context
         except Exception as err:
             logger.debug("MemOS: prefetch failed — %s", err)
             return ""
@@ -581,8 +617,6 @@ class MemTensorProvider(MemoryProvider):
         ``sync_turn`` is called the full list of tool calls for this
         turn has already been accumulated in ``self._tool_calls``.
         """
-        if not self._bridge:
-            return
         user = user_content or self._last_user_text
         assistant = assistant_content or ""
         tool_calls = self._tool_calls
@@ -593,6 +627,9 @@ class MemTensorProvider(MemoryProvider):
             self._skip_current_turn = False
             self._last_user_text = ""
             return
+        if not self._ensure_bridge(session_id or self._session_id, timeout=75.0):
+            logger.warning("MemOS: sync_turn skipped because bridge is unavailable")
+            return
         logger.info(
             "MemOS: sync_turn user=%d assistant=%d tools=%d thinking=%d",
             len(user),
@@ -602,6 +639,8 @@ class MemTensorProvider(MemoryProvider):
         )
         ts_ms = int(time.time() * 1000)
         try:
+            if user and not self._episode_id:
+                self._turn_start(user, session_id=session_id or self._session_id)
             self._turn_end(
                 user,
                 assistant,
@@ -619,7 +658,7 @@ class MemTensorProvider(MemoryProvider):
                     err,
                 )
                 try:
-                    self._reconnect_bridge(session_id or self._session_id)
+                    self._reconnect_bridge(session_id or self._session_id, timeout=75.0)
                     if user:
                         self._turn_start(user, session_id=session_id or self._session_id)
                     self._turn_end(
@@ -652,19 +691,103 @@ class MemTensorProvider(MemoryProvider):
         failure bursts and so Tier 2 retrieval can surface past
         delegations.
         """
-        if not self._bridge:
+        if not self._ensure_bridge(self._session_id, timeout=30.0):
             return
-        with contextlib.suppress(Exception):
+        try:
+            if not self._episode_id and self._last_user_text:
+                self._turn_start(self._last_user_text, session_id=self._session_id)
             self._bridge.request(
                 "subagent.record",
                 {
                     "sessionId": self._session_id,
+                    "episodeId": self._episode_id or None,
                     "childSessionId": child_session_id or None,
                     "task": task,
                     "result": result,
+                    "toolCalls": self._extract_child_tool_calls(child_session_id),
                     "ts": int(time.time() * 1000),
                 },
             )
+        except Exception as err:
+            logger.warning("MemOS: subagent.record failed — %s", err)
+
+    def _extract_child_tool_calls(self, child_session_id: str = "") -> list[dict[str, Any]]:
+        """Best-effort recovery of subagent tool calls from Hermes session JSON.
+
+        Hermes invokes ``on_delegation`` on the parent and only passes the
+        child task/result. The child transcript is still persisted under
+        ``$HERMES_HOME/sessions/session_<id>.json``, so we read that file to
+        preserve structured tool use in the MemOS child episode.
+        """
+        if not child_session_id:
+            return []
+        sessions_dir = (
+            Path(self._hermes_home).expanduser() / "sessions"
+            if self._hermes_home
+            else Path.home() / ".hermes" / "sessions"
+        )
+        session_path = sessions_dir / f"session_{child_session_id}.json"
+        try:
+            payload = json.loads(session_path.read_text(encoding="utf-8"))
+        except Exception as err:
+            logger.debug("MemOS: child session tool extraction skipped — %s", err)
+            return []
+
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return []
+
+        tool_outputs: dict[str, str] = {}
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") != "tool":
+                continue
+            tool_call_id = str(message.get("tool_call_id") or "")
+            if tool_call_id:
+                tool_outputs[tool_call_id] = str(message.get("content") or "")[:4000]
+
+        base_ts = int(time.time() * 1000)
+        calls: list[dict[str, Any]] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            raw_calls = message.get("tool_calls")
+            if not isinstance(raw_calls, list):
+                continue
+            for raw_call in raw_calls:
+                if not isinstance(raw_call, dict):
+                    continue
+                function = raw_call.get("function")
+                if not isinstance(function, dict):
+                    function = {}
+                call_id = str(
+                    raw_call.get("id")
+                    or raw_call.get("call_id")
+                    or raw_call.get("tool_call_id")
+                    or ""
+                )
+                raw_args = function.get("arguments", raw_call.get("arguments", ""))
+                output = tool_outputs.get(call_id, "")
+                call: dict[str, Any] = {
+                    "name": str(function.get("name") or raw_call.get("name") or "tool"),
+                    "input": self._json_or_raw(raw_args),
+                    "output": output,
+                    "startedAt": base_ts + len(calls),
+                    "endedAt": base_ts + len(calls),
+                }
+                parsed_output = self._json_or_raw(output)
+                if isinstance(parsed_output, dict) and parsed_output.get("error"):
+                    call["errorCode"] = "tool_error"
+                calls.append(call)
+        return calls
+
+    @staticmethod
+    def _json_or_raw(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
 
     def on_pre_compress(self, messages: list[dict[str, Any]]) -> str:  # type: ignore[override]
         """Extract a compression-time memory summary.
@@ -1201,7 +1324,7 @@ class MemTensorProvider(MemoryProvider):
 
     # ─── Internals ────────────────────────────────────────────────────────
 
-    def _open_session(self, session_id: str = "") -> None:
+    def _open_session(self, session_id: str = "", *, timeout: float = 30.0) -> None:
         assert self._bridge is not None
         requested_session = session_id or self._session_id or ""
         resp = self._bridge.request(
@@ -1215,6 +1338,7 @@ class MemTensorProvider(MemoryProvider):
                     "agentIdentity": self._agent_identity,
                 },
             },
+            timeout=timeout,
         )
         self._session_id = resp.get("sessionId") or requested_session
 
@@ -1224,14 +1348,34 @@ class MemTensorProvider(MemoryProvider):
         msg = str(err).lower()
         return "broken pipe" in msg or "bridge closed" in msg or "transport_closed" in msg
 
-    def _reconnect_bridge(self, session_id: str = "") -> None:
+    def _reconnect_bridge(self, session_id: str = "", *, timeout: float = 30.0) -> None:
         old_bridge = self._bridge
         if old_bridge:
             with contextlib.suppress(Exception):
                 old_bridge.close()
         ensure_bridge_running()
         self._bridge = MemosBridgeClient()
-        self._open_session(session_id)
+        self._bridge.register_host_handler(
+            "host.llm.complete",
+            self._handle_host_llm_complete,
+        )
+        self._open_session(session_id, timeout=timeout)
+
+    def _ensure_bridge(self, session_id: str = "", *, timeout: float = 30.0) -> bool:
+        if self._bridge:
+            return True
+        try:
+            self._reconnect_bridge(session_id or self._session_id, timeout=timeout)
+            logger.info(
+                "MemOS: bridge reconnected session=%s platform=%s",
+                self._session_id,
+                self._platform,
+            )
+            return True
+        except Exception as err:
+            logger.warning("MemOS: bridge reconnect failed — %s", err)
+            self._bridge = None
+            return False
 
     def _turn_start(self, query: str, *, session_id: str = "") -> str:
         assert self._bridge is not None
