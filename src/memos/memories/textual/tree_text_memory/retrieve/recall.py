@@ -338,7 +338,20 @@ class GraphMemoryRetriever:
         # TODO: tackle with post-filter and pre-filter(5.18+) better.
         """
         if not query_embedding:
+            logger.info(
+                "[VECTOR_RECALL] skipped empty query embedding, scope=%s, user_name=%s",
+                memory_scope,
+                user_name,
+            )
             return []
+
+        logger.info(
+            "[VECTOR_RECALL] start scope=%s, user_name=%s, top_k=%s, embedding_count=%s",
+            memory_scope,
+            user_name,
+            top_k,
+            min(len(query_embedding), max_num),
+        )
 
         def search_single(vec, search_priority=None, search_filter=None):
             return (
@@ -390,6 +403,13 @@ class GraphMemoryRetriever:
             all_hits.extend(path_a_future.result())
             all_hits.extend(path_b_future.result())
 
+        logger.info(
+            "[VECTOR_RECALL] raw hits scope=%s, user_name=%s, count=%s",
+            memory_scope,
+            user_name,
+            len(all_hits),
+        )
+
         if not all_hits:
             return []
 
@@ -436,6 +456,13 @@ class GraphMemoryRetriever:
                     node["metadata"] = {}
                 node["metadata"]["relativity"] = id_to_score.get(rid, 0.0)
                 ordered_nodes.append(node)
+
+        logger.info(
+            "[VECTOR_RECALL] loaded nodes scope=%s, user_name=%s, count=%s",
+            memory_scope,
+            user_name,
+            len(ordered_nodes),
+        )
 
         return [TextualMemoryItem.from_dict(n) for n in ordered_nodes]
 
