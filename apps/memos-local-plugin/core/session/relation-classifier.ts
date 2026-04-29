@@ -201,8 +201,15 @@ const STRONG_HEURISTIC_THRESHOLD = 0.85;
 const IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 // ─── Low-confidence new_task threshold for arbitration ───────────────────
-
-const ARBITRATION_THRESHOLD = 0.65;
+//
+// Raised from 0.65 → 0.8 so the LLM has to be quite sure (confidence ≥ 0.8)
+// before its `new_task` verdict is taken at face value. Anything below that
+// goes through the second-pass arbitration prompt (which is biased toward
+// follow_up). Real-world observation: the primary classifier often returns
+// `new_task` at 0.65–0.75 for messages that are actually sub-tasks of the
+// same project — pulling the cut-off up reduces false topic splits at the
+// cost of one extra LLM call on borderline turns.
+const ARBITRATION_THRESHOLD = 0.8;
 
 // ─── Public factory ──────────────────────────────────────────────────────
 
