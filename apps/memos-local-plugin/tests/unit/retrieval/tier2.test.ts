@@ -25,6 +25,9 @@ const cfg: RetrievalConfig = {
   minTraceSim: 0.3,
   tagFilter: "auto",
   decayHalfLifeDays: 30,
+  llmFilterEnabled: false,
+  llmFilterMaxKeep: 4,
+  llmFilterMinCandidates: 1,
 };
 
 function seed(handle: TmpDbHandle) {

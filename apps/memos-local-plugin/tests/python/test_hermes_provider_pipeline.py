@@ -27,6 +27,10 @@ class FakeBridge:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
         self.closed = False
+        self.host_handlers: dict[str, object] = {}
+
+    def register_host_handler(self, method: str, handler: object) -> None:
+        self.host_handlers[method] = handler
 
     def request(self, method: str, params: dict | None = None) -> dict:
         payload = params or {}
@@ -108,6 +112,34 @@ class HermesProviderPipelineTests(unittest.TestCase):
         episode_close = next(params for method, params in bridge.calls if method == "episode.close")
         self.assertEqual(episode_close["episodeId"], "episode-from-turn-start")
         self.assertTrue(bridge.closed)
+
+    def test_internal_hermes_review_prompt_is_not_persisted_as_user_turn(self) -> None:
+        bridge = FakeBridge()
+        review_prompt = (
+            "Review the conversation above and consider saving or updating a skill if appropriate."
+        )
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("host-session")
+
+            provider.on_turn_start(10, review_prompt)
+            self.assertEqual(provider.prefetch(review_prompt), "")
+            provider._on_post_tool_call(
+                tool_name="memory_search",
+                args={"query": "conversation"},
+                result="[]",
+                tool_call_id="tool-1",
+            )
+            provider.sync_turn(review_prompt, "Nothing to save.")
+            provider.on_session_end([])
+
+        methods = [method for method, _params in bridge.calls]
+        self.assertEqual(methods, ["session.open", "session.close"])
+        self.assertFalse(any(method == "turn.start" for method, _ in bridge.calls))
+        self.assertFalse(any(method == "turn.end" for method, _ in bridge.calls))
 
     def test_on_pre_compress_reuses_last_user_text_for_snapshot(self) -> None:
         bridge = FakeBridge()

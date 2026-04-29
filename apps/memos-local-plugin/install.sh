@@ -578,9 +578,21 @@ install_hermes() {
   mkdir -p "${HOME}/.hermes"
 
   step "Stopping existing bridge daemon"
-  pkill -f "bridge.cts" >/dev/null 2>&1 || true
-  sleep 1
-  pkill -9 -f "bridge.cts" >/dev/null 2>&1 || true
+  local bridge_pids=""
+  bridge_pids="$(pgrep -f "bridge.cts" 2>/dev/null || true)"
+  if [[ -n "${bridge_pids}" ]]; then
+    kill ${bridge_pids} >/dev/null 2>&1 || true
+    local i
+    for i in {1..10}; do
+      sleep 1
+      pgrep -f "bridge.cts" >/dev/null 2>&1 || break
+    done
+    bridge_pids="$(pgrep -f "bridge.cts" 2>/dev/null || true)"
+    if [[ -n "${bridge_pids}" ]]; then
+      kill -9 ${bridge_pids} >/dev/null 2>&1 || true
+      sleep 1
+    fi
+  fi
   success "Bridge daemon stopped"
   local was_running="false"
   if pgrep -f "/bin/hermes" >/dev/null 2>&1; then
@@ -699,8 +711,7 @@ CFGEOF
       mkdir -p "${prefix}/logs"
       # Launch bridge in --daemon mode (pure HTTP, no stdio).
       # The process stays alive to serve the Memory Viewer.
-      ( cd "${prefix}" && nohup "${tsx_bin}" "${bridge_cts}" --agent=hermes --daemon >"${daemon_log}" 2>&1 ) &
-      disown $! 2>/dev/null || true
+      ( cd "${prefix}" && nohup "${tsx_bin}" "${bridge_cts}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
 
       if wait_for_viewer "${HERMES_PORT}"; then
         success "Memory Viewer daemon running"

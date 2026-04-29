@@ -421,6 +421,107 @@ class MemTensorProviderTests(unittest.TestCase):
         p.on_turn_start(1, "earlier user text")
         self.assertEqual(p.on_pre_compress([{"role": "user", "content": "x"}]), "")
 
+    def test_sync_turn_transport_closed_logs_error_if_retry_fails(self) -> None:
+        """Retry failures are surfaced explicitly instead of silent loss."""
+
+        class BrokenBridge:
+            def close(self):
+                pass
+
+            def request(self, method, params=None):
+                if method == "turn.end":
+                    raise BridgeError("transport_closed", "[Errno 32] Broken pipe")
+                return {}
+
+        class RetryFailBridge:
+            def request(self, method, params=None):
+                if method == "session.open":
+                    return {"sessionId": (params or {}).get("sessionId", "sess")}
+                if method == "turn.start":
+                    return {"query": {"episodeId": "ep_after_reconnect"}}
+                if method == "turn.end":
+                    raise BridgeError("internal", "still down")
+                return {}
+
+        p = self._provider_mod.MemTensorProvider()
+        p._bridge = BrokenBridge()
+        p._session_id = "sess_tui_long_running"
+        p._episode_id = "ep_tui_long_running"
+
+        with patch("memos_provider.MemosBridgeClient", return_value=RetryFailBridge()):
+            with self.assertLogs("memos_provider", level="ERROR") as logs:
+                p.sync_turn(
+                    "帮我检索一下最近关于中东的事件，以及分析下局势",
+                    "最近有关中东的事件和局势如下...",
+                )
+
+        joined = "\n".join(logs.output)
+        self.assertIn("failed after bridge reconnect", joined)
+        self.assertIn("memory turn was not persisted", joined)
+
+    def test_sync_turn_reconnects_and_retries_after_transport_closed(self) -> None:
+        """Reconnect and retry once after a stale bridge pipe."""
+
+        class BrokenBridge:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+            def request(self, method, params=None):
+                if method == "turn.end":
+                    raise BridgeError("transport_closed", "[Errno 32] Broken pipe")
+                return {}
+
+        class HealthyBridge:
+            def __init__(self):
+                self.calls = []
+
+            def request(self, method, params=None):
+                self.calls.append((method, params or {}))
+                if method == "session.open":
+                    return {"sessionId": (params or {}).get("sessionId", "sess")}
+                if method == "turn.start":
+                    return {"query": {"episodeId": "ep_after_reconnect"}}
+                if method == "turn.end":
+                    return {"traceId": "tr_after_reconnect"}
+                return {}
+
+        broken = BrokenBridge()
+        replacement = HealthyBridge()
+        p = self._provider_mod.MemTensorProvider()
+        p._bridge = broken
+        p._session_id = "sess_tui_long_running"
+        p._episode_id = "ep_tui_long_running"
+        p._hermes_home = "/tmp/hermes-home"
+        p._platform = "tui"
+        p._agent_identity = "hermes-test"
+        p._tool_calls = [{"name": "search_files", "input": "{}", "output": "ok"}]
+
+        with patch("memos_provider.MemosBridgeClient", return_value=replacement):
+            p.sync_turn(
+                "帮我检索一下最近关于中东的事件，以及分析下局势",
+                "最近有关中东的事件和局势如下...",
+            )
+
+        methods = [method for method, _params in replacement.calls]
+        self.assertEqual(methods, ["session.open", "turn.start", "turn.end"])
+        self.assertTrue(broken.closed)
+        self.assertEqual(p._episode_id, "ep_after_reconnect")
+
+        session_params = replacement.calls[0][1]
+        self.assertEqual(session_params["sessionId"], "sess_tui_long_running")
+        self.assertEqual(session_params["meta"]["platform"], "tui")
+        self.assertEqual(session_params["meta"]["agentIdentity"], "hermes-test")
+
+        retry_payload = replacement.calls[-1][1]
+        self.assertEqual(retry_payload["sessionId"], "sess_tui_long_running")
+        self.assertEqual(retry_payload["episodeId"], "ep_after_reconnect")
+        self.assertIn("中东", retry_payload["userText"])
+        self.assertIn("局势", retry_payload["agentText"])
+        self.assertEqual(retry_payload["toolCalls"][0]["name"], "search_files")
+
     def test_get_config_schema_describes_known_fields(self) -> None:
         p = self._provider_mod.MemTensorProvider()
         schema = p.get_config_schema()

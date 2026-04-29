@@ -1,3 +1,4 @@
+/** @jsxImportSource preact */
 /**
  * Skills view — browse + archive + download crystallized skills.
  *
@@ -9,12 +10,15 @@
  *   - Archive
  */
 import { useEffect, useState } from "preact/hooks";
-import { api, withAgentPrefix } from "../api/client";
+import { api } from "../api/client";
+import { openSse } from "../api/sse";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
+import { Pager } from "../components/Pager";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
-import type { SkillDTO } from "../api/types";
+import type { CoreEvent, SkillDTO } from "../api/types";
+import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
 
 interface SkillUsage {
   sourcePolicies: Array<{
@@ -28,7 +32,25 @@ interface SkillUsage {
 
 type StatusFilter = "" | "active" | "candidate" | "archived";
 
-const PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE = 20;
+
+interface SkillModelRefusalPayload {
+  kind?: string;
+  policyId?: string;
+  modelRefusal?: {
+    provider?: string;
+    model?: string;
+    servedBy?: string;
+    content?: string;
+  };
+}
+
+interface SkillRefusalNotice {
+  id: number;
+  policyId: string;
+  model: string;
+  content: string;
+}
 
 export function SkillsView() {
   const [query, setQuery] = useState("");
@@ -37,9 +59,12 @@ export function SkillsView() {
   const [detail, setDetail] = useState<SkillDTO | null>(null);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [refusalNotices, setRefusalNotices] = useState<SkillRefusalNotice[]>([]);
+  const [showRefusalNotices, setShowRefusalNotices] = useState(false);
   const toggleSel = (id: string) => {
     setSelected((prev) => {
       const n = new Set(prev);
@@ -53,8 +78,8 @@ export function SkillsView() {
     setLoading(true);
     try {
       const qs = new URLSearchParams();
-      qs.set("limit", String(PAGE_SIZE));
-      qs.set("offset", String(nextPage * PAGE_SIZE));
+      qs.set("limit", String(pageSize));
+      qs.set("offset", String(nextPage * pageSize));
       if (status) qs.set("status", status);
       const r = await api.get<{ skills: SkillDTO[]; nextOffset?: number; total?: number }>(
         `/api/v1/skills?${qs.toString()}`,
@@ -73,7 +98,31 @@ export function SkillsView() {
   };
   useEffect(() => {
     void load(0);
-  }, [status]);
+  }, [status, pageSize]);
+
+  useEffect(() => {
+    const handle = openSse("/api/v1/events", (_, data) => {
+      try {
+        const evt = JSON.parse(data) as CoreEvent<SkillModelRefusalPayload>;
+        if (evt.type !== "system.error") return;
+        const payload = evt.payload;
+        if (payload?.kind !== "skill.model_refusal") return;
+        const refusal = payload.modelRefusal ?? {};
+        setRefusalNotices((prev) => [
+          {
+            id: evt.seq,
+            policyId: payload.policyId ?? "unknown",
+            model: [refusal.provider, refusal.model].filter(Boolean).join("/") || "unknown model",
+            content: refusal.content ?? "",
+          },
+          ...prev,
+        ].slice(0, 20));
+      } catch {
+        /* Ignore malformed SSE payloads. */
+      }
+    });
+    return () => handle.close();
+  }, []);
 
   // Deep-link: `#/skills?id=sk_xxx` auto-opens the drawer.
   useEffect(() => {
@@ -101,6 +150,8 @@ export function SkillsView() {
       s.invocationGuide.toLowerCase().includes(q)
     );
   });
+  const pageIds = filtered.map((s) => s.id);
+  const isPageSelected = areAllIdsSelected(selected, pageIds);
 
   return (
     <>
@@ -110,6 +161,15 @@ export function SkillsView() {
           <p>{t("skills.subtitle")}</p>
         </div>
         <div class="view-header__actions">
+          <SkillRefusalDropdown
+            notices={refusalNotices}
+            open={showRefusalNotices}
+            onToggle={() => setShowRefusalNotices((v) => !v)}
+            onClear={() => {
+              setRefusalNotices([]);
+              setShowRefusalNotices(false);
+            }}
+          />
           {/*
            * Refresh — matches MemoriesView / TasksView / PoliciesView /
            * WorldModelsView. Clears search + status filter, drops
@@ -236,30 +296,17 @@ export function SkillsView() {
       )}
 
       {(page > 0 || hasMore) && (
-        <div class="pager">
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page === 0 || loading}
-            onClick={() => void load(page - 1)}
-          >
-            <Icon name="chevron-left" size={14} />
-            {t("common.prev")}
-          </button>
-          <span class="pager__info">
-            {t("pager.pageOfTotal", {
-              n: page + 1,
-              total: Math.max(1, Math.ceil(total / PAGE_SIZE)),
-            })}
-          </span>
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={!hasMore || loading}
-            onClick={() => void load(page + 1)}
-          >
-            {t("common.next")}
-            <Icon name="chevron-right" size={14} />
-          </button>
-        </div>
+        <Pager
+          page={page}
+          totalItems={total}
+          pageSize={pageSize}
+          hasMore={hasMore}
+          loading={loading}
+          onPageSizeChange={setPageSize}
+          onPageChange={(nextPage) => {
+            void load(nextPage);
+          }}
+        />
       )}
 
       {detail && (
@@ -284,10 +331,10 @@ export function SkillsView() {
           </span>
           <button
             class="btn btn--sm"
-            onClick={() => setSelected(new Set(filtered.map((s) => s.id)))}
+            onClick={() => setSelected((prev) => toggleIdsInSelection(prev, pageIds))}
           >
             <Icon name="check-square" size={14} />
-            {t("common.selectPage")}
+            {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
           </button>
           <button
             class="btn btn--danger btn--sm"
@@ -314,6 +361,66 @@ export function SkillsView() {
         </div>
       )}
     </>
+  );
+}
+
+function SkillRefusalDropdown({
+  notices,
+  open,
+  onToggle,
+  onClear,
+}: {
+  notices: SkillRefusalNotice[];
+  open: boolean;
+  onToggle: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div class="skill-refusal-menu">
+      <button
+        class="btn btn--ghost btn--sm skill-refusal-menu__trigger"
+        onClick={onToggle}
+        aria-expanded={open}
+        title="Skill 沉淀模型拒答提醒"
+      >
+        <Icon name="bell" size={14} />
+        <span>提醒</span>
+        {notices.length > 0 && (
+          <span class="skill-refusal-menu__badge">{notices.length}</span>
+        )}
+        <Icon name={open ? "chevron-up" : "chevron-down"} size={12} />
+      </button>
+      {open && (
+        <div class="skill-refusal-menu__panel">
+          <div class="skill-refusal-menu__head">
+            <strong>Skill 沉淀提醒</strong>
+            <button
+              class="btn btn--ghost btn--icon"
+              onClick={onClear}
+              aria-label="清空提醒"
+              title="清空提醒"
+            >
+              <Icon name="x" size={14} />
+            </button>
+          </div>
+          {notices.length === 0 ? (
+            <div class="skill-refusal-menu__empty">暂无模型拒答提醒</div>
+          ) : (
+            <div class="skill-refusal-menu__list">
+              {notices.map((item) => (
+                <div class="skill-refusal-menu__item" key={item.id}>
+                  <div class="skill-refusal-menu__meta">
+                    <span>Policy: {item.policyId}</span>
+                    <span>Model: {item.model}</span>
+                  </div>
+                  <div class="skill-refusal-menu__content">{item.content}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -434,16 +541,23 @@ function SkillDrawer({
     }
   };
 
-  const downloadZip = () => {
-    const url = withAgentPrefix(
-      `/api/v1/skills/${encodeURIComponent(skill.id)}/download`,
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${skill.name.replace(/[^\w.-]+/g, "_") || "skill"}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const downloadZip = async () => {
+    setBusy(true);
+    try {
+      const blob = await api.blob(
+        `/api/v1/skills/${encodeURIComponent(skill.id)}/download`,
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${skill.name.replace(/[^\w.-]+/g, "_") || "skill"}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (

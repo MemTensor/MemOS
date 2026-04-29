@@ -62,7 +62,7 @@ _PLUGIN_DIR = Path(__file__).resolve().parent
 if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
-from bridge_client import MemosBridgeClient  # noqa: E402
+from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
 from daemon_manager import ensure_bridge_running  # noqa: E402
 
 
@@ -82,6 +82,21 @@ logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "memos-local-hermes"
 PLUGIN_VERSION = "2.0.0-beta.1"
+
+_HERMES_INTERNAL_REVIEW_PREFIXES = (
+    "review the conversation above and consider saving to memory if appropriate.",
+    "review the conversation above and update the skill library.",
+    "review the conversation above and update two things:",
+    "review the conversation above and consider saving or updating a skill if appropriate.",
+)
+
+
+def _is_hermes_internal_review_prompt(message: str) -> bool:
+    """Return True for Hermes' own background memory/skill review turns."""
+    normalized = " ".join((message or "").strip().lower().split())
+    if not normalized:
+        return False
+    return any(normalized.startswith(prefix) for prefix in _HERMES_INTERNAL_REVIEW_PREFIXES)
 
 
 class MemTensorProvider(MemoryProvider):
@@ -119,6 +134,10 @@ class MemTensorProvider(MemoryProvider):
         # show the model's thinking like OpenClaw does.
         self._turn_thinking: str = ""
         self._hook_registered = False
+        # Hermes runs background memory/skill reviewers by forking an agent and
+        # appending a synthetic user turn. That turn is instruction plumbing,
+        # not a human utterance, so it must not become a MemOS trace.
+        self._skip_current_turn = False
 
     # ─── Identity ─────────────────────────────────────────────────────────
 
@@ -156,19 +175,15 @@ class MemTensorProvider(MemoryProvider):
             return
         try:
             self._bridge = MemosBridgeClient()
-            resp = self._bridge.request(
-                "session.open",
-                {
-                    "agent": "hermes",
-                    "sessionId": session_id or "",
-                    "meta": {
-                        "hermesHome": self._hermes_home,
-                        "platform": self._platform,
-                        "agentIdentity": self._agent_identity,
-                    },
-                },
+            # Register the fallback LLM handler BEFORE we open the
+            # session so it is available the very first time the
+            # plugin's facade asks for help (e.g. on the first
+            # `turn.start` retrieval call).
+            self._bridge.register_host_handler(
+                "host.llm.complete",
+                self._handle_host_llm_complete,
             )
-            self._session_id = resp.get("sessionId") or session_id
+            self._open_session(session_id)
             logger.info(
                 "MemOS: bridge ready session=%s platform=%s (episode deferred)",
                 self._session_id,
@@ -232,7 +247,7 @@ class MemTensorProvider(MemoryProvider):
         args: dict | None = None,
         result: str = "",
         tool_call_id: str = "",
-        **_kw: Any,
+        **kw: Any,
     ) -> None:
         """Accumulate a tool call record for the current turn.
 
@@ -506,7 +521,8 @@ class MemTensorProvider(MemoryProvider):
 
     def on_turn_start(self, turn_number: int, message: str, **_kwargs: Any) -> None:  # type: ignore[override]
         self._turn_number = int(turn_number or 0)
-        self._last_user_text = (message or "").strip()
+        self._skip_current_turn = _is_hermes_internal_review_prompt(message)
+        self._last_user_text = "" if self._skip_current_turn else (message or "").strip()
         # Reset per-turn buffers so reasoning / tool calls captured here
         # belong only to this turn.
         self._turn_thinking = ""
@@ -524,6 +540,9 @@ class MemTensorProvider(MemoryProvider):
         with self._prefetch_lock:
             cached = self._prefetch_result
             self._prefetch_result = ""
+        if self._skip_current_turn or _is_hermes_internal_review_prompt(query):
+            self._skip_current_turn = True
+            return ""
         if cached:
             return cached
         if not self._bridge:
@@ -569,6 +588,10 @@ class MemTensorProvider(MemoryProvider):
         thinking = self._turn_thinking
         self._tool_calls = []
         self._turn_thinking = ""
+        if self._skip_current_turn or _is_hermes_internal_review_prompt(user):
+            self._skip_current_turn = False
+            self._last_user_text = ""
+            return
         logger.info(
             "MemOS: sync_turn user=%d assistant=%d tools=%d thinking=%d",
             len(user),
@@ -576,16 +599,40 @@ class MemTensorProvider(MemoryProvider):
             len(tool_calls),
             len(thinking),
         )
+        ts_ms = int(time.time() * 1000)
         try:
             self._turn_end(
                 user,
                 assistant,
                 tool_calls,
-                int(time.time() * 1000),
+                ts_ms,
                 agent_thinking=thinking,
             )
         except Exception as err:
-            logger.warning("MemOS: sync_turn turn.end failed — %s", err)
+            if not self._is_transport_closed(err):
+                logger.warning("MemOS: sync_turn turn.end failed — %s", err)
+            else:
+                logger.warning(
+                    "MemOS: bridge transport closed during sync_turn; "
+                    "reconnecting and retrying once — %s",
+                    err,
+                )
+                try:
+                    self._reconnect_bridge(session_id or self._session_id)
+                    if user:
+                        self._turn_start(user, session_id=session_id or self._session_id)
+                    self._turn_end(
+                        user,
+                        assistant,
+                        tool_calls,
+                        ts_ms,
+                        agent_thinking=thinking,
+                    )
+                except Exception:
+                    logger.exception(
+                        "MemOS: sync_turn failed after bridge reconnect; "
+                        "memory turn was not persisted"
+                    )
         if user_content:
             self._last_user_text = user_content
 
@@ -992,8 +1039,9 @@ class MemTensorProvider(MemoryProvider):
             return
         # `sync_turn` already flushed the turn data synchronously.
         # Just close the episode and session.
-        with contextlib.suppress(Exception):
-            self._bridge.request("episode.close", {"episodeId": self._episode_id})
+        if self._episode_id:
+            with contextlib.suppress(Exception):
+                self._bridge.request("episode.close", {"episodeId": self._episode_id})
         with contextlib.suppress(Exception):
             self._bridge.request("session.close", {"sessionId": self._session_id})
 
@@ -1008,7 +1056,181 @@ class MemTensorProvider(MemoryProvider):
         # as a daemon if its viewer is running, so the memory panel
         # remains accessible between `hermes chat` sessions.
 
+    # ─── Host LLM bridge (fallback for plugin-side model failures) ────────
+
+    def _handle_host_llm_complete(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Run a fallback LLM call using the host (hermes) agent's models.
+
+        Wired into the bridge's reverse-RPC channel under the
+        ``host.llm.complete`` method. Triggered when the plugin's
+        configured summary or skill-evolver model fails — instead of
+        bubbling the error straight up (which would stall the V7
+        capture / reflection / skill pipeline), we replay the prompt
+        through ``agent.auxiliary_client.call_llm`` so hermes' own
+        provider stack (including its OpenRouter / Codex / custom
+        endpoint resolution) handles it.
+
+        If the host LLM also fails this raises, the bridge converts
+        that into a JSON-RPC error, the LlmClient ``markFail``s, and
+        the Overview card flips red — exactly matching the spec
+        "if the agent's main model is also down, stop falling back
+        and surface red".
+        """
+        messages = params.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("host.llm.complete: missing messages")
+
+        # Lazy imports — these pull in heavy deps (openai client,
+        # credential pool, …) that we don't want to load until a
+        # fallback is actually requested.
+        try:
+            from agent.auxiliary_client import call_llm  # type: ignore[import-not-found]
+            from hermes_cli.runtime_provider import (  # type: ignore[import-not-found]
+                resolve_runtime_provider,
+            )
+        except Exception as err:
+            raise RuntimeError(f"host LLM bridge unavailable: {err}") from err
+
+        # Resolve hermes' MAIN conversation provider so the fallback
+        # uses exactly what the user configured for chat. Walking the
+        # generic auxiliary auto-detect chain would otherwise depend
+        # on env vars (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, …) that
+        # often don't propagate into the bridge subprocess and would
+        # leave us with no working credential. Pinning to the resolved
+        # main runtime guarantees we hit the same endpoint the user
+        # already authenticated for chat.
+        try:
+            runtime = resolve_runtime_provider()
+        except Exception as err:
+            raise RuntimeError(f"could not resolve hermes main runtime: {err}") from err
+
+        main_runtime: dict[str, str] = {}
+        for field in ("provider", "model", "base_url", "api_key", "api_mode"):
+            value = runtime.get(field) if isinstance(runtime, dict) else None
+            if isinstance(value, str) and value.strip():
+                main_runtime[field] = value.strip()
+
+        normalized = [
+            {
+                "role": str(m.get("role", "user")),
+                "content": str(m.get("content", "")),
+            }
+            for m in messages
+            if isinstance(m, dict)
+        ]
+        timeout_ms = params.get("timeoutMs")
+        timeout_s: float | None = None
+        if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
+            timeout_s = float(timeout_ms) / 1000.0
+
+        max_tokens = params.get("maxTokens")
+        temperature = params.get("temperature")
+
+        kwargs: dict[str, Any] = {
+            "messages": normalized,
+            # `main_runtime` makes `_resolve_auto` prefer the user's
+            # main conversation provider + model over the generic auto
+            # chain. If the user's main provider is also down,
+            # `call_llm` raises — which is exactly the "agent's own
+            # model is broken too, stop falling back" semantic we want
+            # (red light on Overview).
+            "main_runtime": main_runtime,
+        }
+        if isinstance(max_tokens, (int, float)) and max_tokens > 0:
+            kwargs["max_tokens"] = int(max_tokens)
+        if isinstance(temperature, (int, float)):
+            kwargs["temperature"] = float(temperature)
+        if timeout_s is not None:
+            kwargs["timeout"] = timeout_s
+
+        started = time.time()
+        try:
+            response = call_llm(**kwargs)
+        except Exception as err:
+            # Surface the original failure verbatim — the LlmClient
+            # will tag this as a "host fallback failed" terminal error
+            # and the Overview red-light path takes over.
+            raise RuntimeError(f"host LLM call failed: {err}") from err
+
+        # `call_llm` returns an OpenAI ChatCompletion-shaped object.
+        # Pluck the assistant text + token usage defensively so a
+        # non-standard host (e.g. Anthropic native) still produces a
+        # populated response.
+        text = ""
+        model = ""
+        usage_dict: dict[str, int] = {}
+        try:
+            choices = getattr(response, "choices", None) or response.get("choices", [])  # type: ignore[union-attr]
+            if choices:
+                first = choices[0]
+                msg = getattr(first, "message", None) or first.get("message", {})  # type: ignore[union-attr]
+                content = getattr(msg, "content", None) or msg.get("content", "")  # type: ignore[union-attr]
+                text = str(content or "")
+            model = (
+                getattr(response, "model", None)
+                or response.get("model", "")  # type: ignore[union-attr]
+                or ""
+            )
+            u = getattr(response, "usage", None) or response.get("usage", None)  # type: ignore[union-attr]
+            if u is not None:
+                pt = getattr(u, "prompt_tokens", None)
+                ct = getattr(u, "completion_tokens", None)
+                tt = getattr(u, "total_tokens", None)
+                if pt is None and isinstance(u, dict):
+                    pt = u.get("prompt_tokens")
+                    ct = u.get("completion_tokens")
+                    tt = u.get("total_tokens")
+                if isinstance(pt, int):
+                    usage_dict["promptTokens"] = pt
+                if isinstance(ct, int):
+                    usage_dict["completionTokens"] = ct
+                if isinstance(tt, int):
+                    usage_dict["totalTokens"] = tt
+        except Exception:
+            logger.debug("host.llm.complete: shape parse failed", exc_info=True)
+
+        result: dict[str, Any] = {
+            "text": text,
+            "model": str(model or ""),
+            "durationMs": int((time.time() - started) * 1000),
+        }
+        if usage_dict:
+            result["usage"] = usage_dict
+        return result
+
     # ─── Internals ────────────────────────────────────────────────────────
+
+    def _open_session(self, session_id: str = "") -> None:
+        assert self._bridge is not None
+        requested_session = session_id or self._session_id or ""
+        resp = self._bridge.request(
+            "session.open",
+            {
+                "agent": "hermes",
+                "sessionId": requested_session,
+                "meta": {
+                    "hermesHome": self._hermes_home,
+                    "platform": self._platform,
+                    "agentIdentity": self._agent_identity,
+                },
+            },
+        )
+        self._session_id = resp.get("sessionId") or requested_session
+
+    def _is_transport_closed(self, err: Exception) -> bool:
+        if isinstance(err, BridgeError) and err.code == "transport_closed":
+            return True
+        msg = str(err).lower()
+        return "broken pipe" in msg or "bridge closed" in msg or "transport_closed" in msg
+
+    def _reconnect_bridge(self, session_id: str = "") -> None:
+        old_bridge = self._bridge
+        if old_bridge:
+            with contextlib.suppress(Exception):
+                old_bridge.close()
+        ensure_bridge_running()
+        self._bridge = MemosBridgeClient()
+        self._open_session(session_id)
 
     def _turn_start(self, query: str, *, session_id: str = "") -> str:
         assert self._bridge is not None

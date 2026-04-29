@@ -11,9 +11,11 @@ import { useEffect, useState } from "preact/hooks";
 import { api } from "../api/client";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
+import { Pager } from "../components/Pager";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import { ChatLog, flattenChat, type TimelineTrace } from "./tasks-chat";
+import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
 
 type TaskStatus = "" | "active" | "completed" | "skipped" | "failed";
 
@@ -48,7 +50,13 @@ interface Timeline {
   traces: TimelineTrace[];
 }
 
-const PAGE_SIZE = 20;
+interface EpisodeListResponse {
+  episodes: EpisodeRow[];
+  nextOffset?: number;
+  total?: number;
+}
+
+const DEFAULT_PAGE_SIZE = 20;
 
 export function TasksView() {
   const [query, setQuery] = useState("");
@@ -56,6 +64,7 @@ export function TasksView() {
   const [rows, setRows] = useState<EpisodeRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState(0);
   const [detail, setDetail] = useState<EpisodeRow | null>(null);
@@ -74,10 +83,10 @@ export function TasksView() {
     const ctrl = new AbortController();
     setLoading(true);
     const qs = new URLSearchParams();
-    qs.set("limit", String(PAGE_SIZE));
-    qs.set("offset", String(nextPage * PAGE_SIZE));
+    qs.set("limit", String(pageSize));
+    qs.set("offset", String(nextPage * pageSize));
     api
-      .get<{ episodes: EpisodeRow[]; nextOffset?: number; total?: number }>(
+      .get<EpisodeListResponse>(
         `/api/v1/episodes?${qs.toString()}`,
         { signal: ctrl.signal },
       )
@@ -97,10 +106,48 @@ export function TasksView() {
   };
 
   useEffect(() => {
+    if (route.value.params.id) return;
     const ctrl = loadPage(0);
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [pageSize, route.value.params.id]);
+
+  useEffect(() => {
+    const id = route.value.params.id;
+    if (!id) return;
+    const ctrl = new AbortController();
+    void openLinkedEpisode(id, ctrl.signal);
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.value.params.id, pageSize]);
+
+  const openLinkedEpisode = async (id: string, signal: AbortSignal) => {
+    setQuery("");
+    setStatus("");
+    setLoading(true);
+    try {
+      const pageSizeForLookup = pageSize;
+      const targetPage = await findEpisodePage(id, pageSizeForLookup, signal);
+      const qs = new URLSearchParams();
+      qs.set("limit", String(pageSizeForLookup));
+      qs.set("offset", String(targetPage * pageSizeForLookup));
+      const res = await api.get<EpisodeListResponse>(
+        `/api/v1/episodes?${qs.toString()}`,
+        { signal },
+      );
+      const nextRows = res.episodes ?? [];
+      setRows(nextRows);
+      setHasMore(res.nextOffset != null);
+      setTotal(res.total ?? 0);
+      setPage(targetPage);
+      const match = nextRows.find((r) => r.id === id);
+      if (match) setDetail(match);
+    } catch {
+      // Ignore aborted or stale deep links; the list stays as-is.
+    } finally {
+      if (!signal.aborted) setLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!detail) {
@@ -129,9 +176,11 @@ export function TasksView() {
     }
     return true;
   });
+  const pageIds = filtered.map((r) => r.id);
+  const isPageSelected = areAllIdsSelected(selected, pageIds);
 
-  const selectPage = () => {
-    setSelected(new Set(filtered.map((r) => r.id)));
+  const togglePageSelection = () => {
+    setSelected((prev) => toggleIdsInSelection(prev, pageIds));
   };
   const deselectAll = () => setSelected(new Set());
   const bulkDelete = async () => {
@@ -306,37 +355,27 @@ export function TasksView() {
       )}
 
       {(page > 0 || hasMore) && (
-        <div class="pager">
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page === 0 || loading}
-            onClick={() => loadPage(page - 1)}
-          >
-            <Icon name="chevron-left" size={14} />
-            {t("common.prev")}
-          </button>
-          <span class="pager__info">
-            {t("pager.pageOfTotal", {
-              n: page + 1,
-              total: Math.max(1, Math.ceil(total / PAGE_SIZE)),
-            })}
-          </span>
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={!hasMore || loading}
-            onClick={() => loadPage(page + 1)}
-          >
-            {t("common.next")}
-            <Icon name="chevron-right" size={14} />
-          </button>
-        </div>
+        <Pager
+          page={page}
+          totalItems={total}
+          pageSize={pageSize}
+          hasMore={hasMore}
+          loading={loading}
+          onPageSizeChange={setPageSize}
+          onPageChange={(nextPage) => {
+            loadPage(nextPage);
+          }}
+        />
       )}
 
       {detail && (
         <TaskDrawer
           episode={detail}
           timeline={timeline}
-          onClose={() => setDetail(null)}
+          onClose={() => {
+            setDetail(null);
+            clearEntryId();
+          }}
         />
       )}
 
@@ -345,9 +384,9 @@ export function TasksView() {
           <span class="batch-bar__count">
             {t("common.selected", { n: selected.size })}
           </span>
-          <button class="btn btn--sm" onClick={selectPage}>
+          <button class="btn btn--sm" onClick={togglePageSelection}>
             <Icon name="check-square" size={14} />
-            {t("common.selectPage")}
+            {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
           </button>
           <button class="btn btn--danger btn--sm" onClick={bulkDelete}>
             <Icon name="trash-2" size={14} />
@@ -361,6 +400,29 @@ export function TasksView() {
       )}
     </>
   );
+}
+
+async function findEpisodePage(
+  id: string,
+  pageSize: number,
+  signal: AbortSignal,
+): Promise<number> {
+  const scanLimit = 5_000;
+  let offset = 0;
+  while (true) {
+    const qs = new URLSearchParams();
+    qs.set("shape", "ids");
+    qs.set("limit", String(scanLimit));
+    qs.set("offset", String(offset));
+    const res = await api.get<{
+      episodeIds: string[];
+      nextOffset?: number;
+    }>(`/api/v1/episodes?${qs.toString()}`, { signal });
+    const index = (res.episodeIds ?? []).indexOf(id);
+    if (index >= 0) return Math.floor((offset + index) / pageSize);
+    if (res.nextOffset == null) return 0;
+    offset = res.nextOffset;
+  }
 }
 
 // Keep this in lockstep with `core/pipeline/memory-core.ts::deriveSkillStatus`:

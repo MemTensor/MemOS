@@ -52,7 +52,7 @@ function semanticFakeEmbedder(dims = 64): Embedder {
   };
   return {
     dimensions: dims,
-    provider: "test",
+    provider: "local",
     model: "semantic-fake",
     async embedOne(input: string | EmbedInput): Promise<EmbeddingVector> {
       stats.requests++;
@@ -168,13 +168,14 @@ describe("Hermes MemoryCore persistence", () => {
       agent: "hermes" as AgentKind,
       sessionId,
       episodeId,
-      userText: "请记住 HERMES_MEMOS_E2E_0428 viewer 端口是 18800",
       agentText: "已记录 Hermes MemOS 测试事实。",
       toolCalls: [
         {
           name: "memory_search",
           input: "{\"query\":\"HERMES_MEMOS_E2E_0428\"}",
           output: "[]",
+          startedAt: 1_700_000_000_002,
+          endedAt: 1_700_000_000_002,
         },
       ],
       ts: 1_700_000_000_002,

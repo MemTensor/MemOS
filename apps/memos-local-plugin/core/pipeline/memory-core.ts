@@ -73,7 +73,11 @@ import { runMigrations } from "../storage/migrator.js";
 import { makeRepos } from "../storage/repos/index.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
-import { getHostLlmBridge } from "../llm/host-bridge.js";
+import {
+  getHostLlmBridge,
+  registerHostLlmBridge,
+  type HostLlmBridge,
+} from "../llm/host-bridge.js";
 
 import { createPipeline } from "./orchestrator.js";
 import type { PipelineDeps, PipelineHandle } from "./types.js";
@@ -90,6 +94,23 @@ export interface BootstrapOptions {
   now?: () => number;
   /** Plugin package version (surfaced via `health()`). */
   pkgVersion?: string;
+  /**
+   * Optional adapter-supplied LLM bridge. When set, registered on the
+   * shared host-bridge singleton **before** the LLM clients are
+   * created so `shouldFallback()` can see it on the very first call.
+   *
+   * Wiring this through bootstrap (rather than asking the adapter to
+   * call `registerHostLlmBridge` itself) avoids a subtle ESM module-
+   * identity bug: when the adapter dynamically imports
+   * `core/llm/host-bridge.ts` from a different URL than the static
+   * `import` chain inside `core/llm/client.ts`, Node's module loader
+   * treats them as two separate modules with two independent
+   * `currentBridge` slots — register hits one, get sees the other,
+   * fallback never engages. Routing through bootstrap forces the
+   * register call to happen via the same module instance the LLM
+   * client closes over.
+   */
+  hostLlmBridge?: HostLlmBridge | null;
 }
 
 export interface BootstrapResult {
@@ -148,6 +169,77 @@ export async function bootstrapMemoryCoreFull(
   }
   const repos = makeRepos(db);
 
+  // ─── Host LLM bridge ──
+  // Register the adapter-supplied bridge BEFORE constructing any
+  // LlmClient so the very first call site sees a non-null bridge.
+  // The shouldFallback() check inside the LLM facade reads this
+  // singleton at every call; pinning it here guarantees the
+  // identity-by-module is the same instance the client closes over.
+  if (options.hostLlmBridge) {
+    registerHostLlmBridge(options.hostLlmBridge);
+    log.info("hostLlmBridge.registered", {
+      id: options.hostLlmBridge.id,
+    });
+  }
+
+  // ─── system_error sink ──
+  // Every facade we build (embedder / main LLM / reflect LLM) gets a
+  // tiny error sink that drops a `system_error` row into `api_logs`
+  // when the underlying provider call fails terminally. The Logs
+  // viewer renders these under the "系统" tag so users can correlate
+  // a red model card on the Overview with the exact provider message.
+  // Wrapped in try/catch because logging must never break the call.
+  function recordSystemError(
+    role: "embedding" | "llm" | "skillEvolver",
+    detail: {
+      provider: string;
+      model: string;
+      message: string;
+      code?: string;
+      at?: number;
+    },
+  ): void {
+    try {
+      repos.apiLogs.insert({
+        toolName: "system_error",
+        input: { role },
+        output: { role, ...detail },
+        durationMs: 0,
+        success: false,
+        calledAt: detail.at ?? Date.now(),
+      });
+    } catch {
+      /* the system_error row itself failing is non-fatal */
+    }
+  }
+
+  function recordSystemModelStatus(
+    role: "embedding" | "llm" | "skillEvolver",
+    detail: {
+      status: "ok" | "fallback" | "error";
+      provider: string;
+      model: string;
+      message?: string;
+      code?: string;
+      at?: number;
+      fallbackProvider?: string;
+      fallbackModel?: string;
+    },
+  ): void {
+    try {
+      repos.apiLogs.insert({
+        toolName: "system_model_status",
+        input: { role },
+        output: { role, ...detail },
+        durationMs: 0,
+        success: detail.status !== "error",
+        calledAt: detail.at ?? Date.now(),
+      });
+    } catch {
+      /* the status row itself failing is non-fatal */
+    }
+  }
+
   // 2. Providers (embedding + LLM) — nullable so we can run without them.
   // The LLM facade we build falls through to "local_only" when no remote
   // endpoint is configured, but we still catch construction errors so the
@@ -155,7 +247,19 @@ export async function bootstrapMemoryCoreFull(
   let embedder = null as ReturnType<typeof createEmbedder> | null;
   let llm = null as ReturnType<typeof createLlmClient> | null;
   try {
-    embedder = createEmbedder(config.embedding as never);
+    embedder = createEmbedder({
+      ...(config.embedding as object),
+      onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
+        recordSystemError("embedding", d),
+      onStatus: (d: {
+        status: "ok" | "error";
+        provider: string;
+        model: string;
+        message?: string;
+        code?: string;
+        at?: number;
+      }) => recordSystemModelStatus("embedding", d),
+    } as never);
   } catch (err) {
     log.warn("embedder.unavailable", {
       err: err instanceof Error ? err.message : String(err),
@@ -163,7 +267,21 @@ export async function bootstrapMemoryCoreFull(
     embedder = null;
   }
   try {
-    llm = createLlmClient(config.llm as never);
+    llm = createLlmClient({
+      ...(config.llm as object),
+      onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
+        recordSystemError("llm", d),
+      onStatus: (d: {
+        status: "ok" | "fallback" | "error";
+        provider: string;
+        model: string;
+        message?: string;
+        code?: string;
+        at?: number;
+        fallbackProvider?: string;
+        fallbackModel?: string;
+      }) => recordSystemModelStatus("llm", d),
+    } as never);
   } catch (err) {
     log.warn("llm.unavailable", {
       err: err instanceof Error ? err.message : String(err),
@@ -206,7 +324,25 @@ export async function bootstrapMemoryCoreFull(
         temperature: evolver?.temperature ?? 0,
         timeoutMs: evolver?.timeoutMs ?? 60_000,
         maxRetries: 3,
-        fallbackToHost: false,
+        // V7 §0.x — when the user's dedicated skill-evolver model is
+        // down (auth, model name typo, server outage), prefer falling
+        // back to the host agent's main LLM via the stdio host
+        // bridge instead of hard-failing the skill pipeline. The
+        // viewer paints the slot yellow + surfaces the upstream error
+        // so the operator still notices.
+        fallbackToHost: true,
+        onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
+          recordSystemError("skillEvolver", d),
+        onStatus: (d: {
+          status: "ok" | "fallback" | "error";
+          provider: string;
+          model: string;
+          message?: string;
+          code?: string;
+          at?: number;
+          fallbackProvider?: string;
+          fallbackModel?: string;
+        }) => recordSystemModelStatus("skillEvolver", d),
       } as never);
       log.info("reflectLlm.ready", {
         provider: evolverProvider,
@@ -278,6 +414,10 @@ export function createMemoryCore(
   let shutDown = false;
   /** Per-episode monotonic step counter for tool outcomes. */
   const toolStepByEpisode = new Map<string, number>();
+  const skillStartedAtByPolicy = new Map<string, number>();
+  const skillRunDurationBySkill = new Map<string, number>();
+  const l2StartedAtByEpisode = new Map<string, number>();
+  let l3StartedAt: number | null = null;
 
   function ensureLive(): void {
     if (shutDown) {
@@ -424,25 +564,41 @@ export function createMemoryCore(
     handle.buses.skill.onAny((evt) => {
       const k = evt.kind;
       if (k === "skill.crystallization.started") {
-        writeApiLog(handle, log, "skill_generate", {
-          phase: "started",
-          policyId: evt.policyId,
-        }, evt, 0, true);
+        skillStartedAtByPolicy.set(evt.policyId, eventTime(evt));
       } else if (k === "skill.crystallized") {
+        const durationMs = durationSince(
+          skillStartedAtByPolicy.get(evt.policyId),
+          eventTime(evt),
+          1,
+        );
+        skillStartedAtByPolicy.delete(evt.policyId);
+        skillRunDurationBySkill.set(evt.skillId, durationMs);
         writeApiLog(handle, log, "skill_generate", {
           phase: "done",
           skillId: evt.skillId,
-        }, evt, 0, true);
+        }, evt, durationMs, true);
       } else if (k === "skill.rebuilt" || k === "skill.eta.updated" || k === "skill.archived") {
+        const skillId = (evt as { skillId?: string }).skillId;
+        const durationMs =
+          (skillId ? skillRunDurationBySkill.get(skillId) : undefined) ??
+          durationSince(eventTime(evt) - 1, eventTime(evt), 1);
+        if (k === "skill.rebuilt" && skillId) skillRunDurationBySkill.delete(skillId);
         writeApiLog(handle, log, "skill_evolve", {
           kind: k,
-          skillId: (evt as { skillId?: string }).skillId,
-        }, evt, 0, true);
+          skillId,
+        }, evt, durationMs, true);
       } else if (k === "skill.verification.failed" || k === "skill.failed") {
+        const policyId = (evt as { policyId?: string }).policyId;
+        const durationMs = durationSince(
+          policyId ? skillStartedAtByPolicy.get(policyId) : undefined,
+          eventTime(evt),
+          policyId ? 1 : 0,
+        );
+        if (policyId) skillStartedAtByPolicy.delete(policyId);
         writeApiLog(handle, log, "skill_generate", {
           phase: "failed",
           kind: k,
-        }, evt, 0, false);
+        }, evt, durationMs, false);
       }
     });
 
@@ -450,45 +606,51 @@ export function createMemoryCore(
     handle.buses.l2.onAny((evt) => {
       const k = evt.kind;
       if (k === "l2.policy.induced") {
+        const durationMs = durationSince(l2StartedAtByEpisode.get(evt.episodeId), Date.now(), 1);
         writeApiLog(handle, log, "policy_generate", {
           phase: "induced",
           policyId: evt.policyId,
           title: evt.title,
-        }, evt, 0, true);
+        }, evt, durationMs, true);
       } else if (k === "l2.policy.updated") {
+        const durationMs = durationSince(l2StartedAtByEpisode.get(evt.episodeId), Date.now(), 1);
         writeApiLog(handle, log, "policy_evolve", {
           policyId: evt.policyId,
           status: evt.status,
-        }, evt, 0, true);
+        }, evt, durationMs, true);
       } else if (k === "l2.failed") {
+        const durationMs = durationSince(l2StartedAtByEpisode.get(evt.episodeId), Date.now(), 1);
+        l2StartedAtByEpisode.delete(evt.episodeId);
         writeApiLog(handle, log, "policy_generate", {
           phase: "failed",
-        }, evt, 0, false);
+        }, evt, durationMs, false);
       }
     });
 
     // ─── L3 (领域认知) lifecycle → api_logs(world_model_*) ────────────
     handle.buses.l3.onAny((evt) => {
       const k = evt.kind;
-      if (k === "l3.world-model.created") {
+      if (k === "l3.abstraction.started") {
+        l3StartedAt = Date.now();
+      } else if (k === "l3.world-model.created") {
         writeApiLog(handle, log, "world_model_generate", {
           phase: "created",
           worldModelId: evt.worldModelId,
           title: evt.title,
-        }, evt, 0, true);
+        }, evt, durationSince(l3StartedAt, Date.now(), 1), true);
       } else if (k === "l3.world-model.updated") {
         writeApiLog(handle, log, "world_model_evolve", {
           worldModelId: evt.worldModelId,
           title: evt.title,
-        }, evt, 0, true);
+        }, evt, durationSince(l3StartedAt, Date.now(), 1), true);
       } else if (k === "l3.confidence.adjusted") {
         writeApiLog(handle, log, "world_model_evolve", {
           kind: "confidence.adjusted",
-        }, evt, 0, true);
+        }, evt, durationSince(l3StartedAt, Date.now(), 1), true);
       } else if (k === "l3.failed") {
         writeApiLog(handle, log, "world_model_generate", {
           phase: "failed",
-        }, evt, 0, false);
+        }, evt, durationSince(l3StartedAt, Date.now(), 1), false);
       }
     });
 
@@ -497,15 +659,18 @@ export function createMemoryCore(
     // what makes a task "completed" (R ≥ 0) or "failed" (R < 0) in the
     // viewer's Tasks panel.
     handle.buses.reward.onAny((evt) => {
-      if (evt.kind === "reward.scored") {
-        const ok = evt.rHuman >= 0;
+      if (evt.kind === "reward.updated") {
+        const result = evt.result;
+        const ok = result.rHuman >= 0;
+        l2StartedAtByEpisode.set(result.episodeId, Date.now());
         writeApiLog(handle, log, ok ? "task_done" : "task_failed", {
-          episodeId: evt.episodeId,
-          sessionId: evt.sessionId,
+          episodeId: result.episodeId,
+          sessionId: result.sessionId,
         }, {
-          rHuman: evt.rHuman,
-          source: evt.source,
-        }, 0, ok);
+          rHuman: result.rHuman,
+          source: result.humanScore.source,
+          timings: result.timings,
+        }, durationSince(result.startedAt, result.completedAt), ok);
       }
     });
   }
@@ -714,11 +879,11 @@ export function createMemoryCore(
   async function health(): Promise<CoreHealth> {
     // Read the latest on-disk config so that model names reflect what
     // the user last saved, even before a restart applies the change.
-    let diskConfig: Record<string, unknown> | null = null;
+    let diskConfig: ResolvedConfig | null = null;
     try {
       const { loadConfig } = await import("../config/index.js");
       const { config } = await loadConfig(handle.home);
-      diskConfig = config as unknown as Record<string, unknown>;
+      diskConfig = config;
     } catch {
       /* fall through to in-memory */
     }
@@ -727,9 +892,24 @@ export function createMemoryCore(
     const embedderInfo = embedderHealth(handle.embedder, latestTraceTs());
     const skillEvolverInfo = resolveSkillEvolver(
       diskConfig ?? handle.config,
-      handle.llm,
+      // Prefer the dedicated reflect LLM stats so an independently
+      // configured skill-evolver model reports its OWN failures
+      // instead of inheriting the (possibly healthy) summary LLM's
+      // status. Falls back to `handle.llm` when the operator left
+      // skillEvolver blank — bootstrap aliases reflectLlm to llm
+      // in that case anyway.
+      handle.reflectLlm ?? handle.llm,
       latestTraceTs(),
     );
+
+    // NOTE: we deliberately do NOT fall back to `api_logs`-stored
+    // historical `system_error` rows here. Doing so used to keep the
+    // overview card red across restarts even after the operator had
+    // already fixed the misconfigured endpoint, because the ancient
+    // failure row would mask a freshly-booted process whose stats
+    // are still null. Now the card colour is driven purely by
+    // in-memory stats — if you want to inspect past failures, head
+    // to LogsView → 系统 tag.
 
     // Override model names from disk config if they differ from the
     // in-memory client (user saved new settings but hasn't restarted).
@@ -745,6 +925,14 @@ export function createMemoryCore(
         if (diskEmb.provider) embedderInfo.provider = diskEmb.provider;
       }
     }
+
+    applyPersistedModelStatus(handle.repos, "llm", llmInfo);
+    applyPersistedModelStatus(handle.repos, "embedding", embedderInfo);
+    applyPersistedModelStatus(
+      handle.repos,
+      skillEvolverInfo.inherited ? "llm" : "skillEvolver",
+      skillEvolverInfo,
+    );
 
     return {
       ok: initialized && !shutDown,
@@ -955,17 +1143,13 @@ export function createMemoryCore(
   ): Promise<{ traceId: string; episodeId: EpisodeId }> {
     ensureLive();
     const outcome = await handle.onTurnEnd(result);
-    // Capture is asynchronous — when the caller wants a `traceId` we
-    // deterministically allocate one upstream, but the V1 contract just
-    // returns the latest snapshot ids. We return the final trace id the
-    // episode snapshot reports (or a synthetic turn id if nothing yet).
-    const snap = outcome.episode;
-    const turnCount = snap?.turnCount ?? 0;
-    const traceIds = snap?.traceIds ?? [];
-    const lastTraceId =
-      traceIds.length > 0
-        ? traceIds[traceIds.length - 1]!
-        : `trace-${outcome.episodeId}-${turnCount}`;
+    // Return the real row id produced by the synchronous lite capture.
+    // Feedback submits this id as a FK, so a synthetic placeholder would
+    // cause SQLite "FOREIGN KEY constraint failed" later.
+    const traceIds = outcome.traceIds.length > 0
+      ? outcome.traceIds
+      : outcome.episode?.traceIds ?? [];
+    const lastTraceId = traceIds[traceIds.length - 1] ?? "";
     return {
       traceId: lastTraceId,
       episodeId: outcome.episodeId,
@@ -976,6 +1160,13 @@ export function createMemoryCore(
     feedback: Omit<FeedbackDTO, "id" | "ts"> & { ts?: number },
   ): Promise<FeedbackDTO> {
     ensureLive();
+    if (feedback.traceId && !handle.repos.traces.getById(feedback.traceId as TraceId)) {
+      throw new MemosError(
+        "trace_not_found",
+        `trace not found: ${feedback.traceId}`,
+        { traceId: feedback.traceId },
+      );
+    }
     const ts = feedback.ts ?? Date.now();
     const id = randomUUID();
     const row: FeedbackRow = {
@@ -2587,6 +2778,27 @@ export function inferTier(
   return 2;
 }
 
+function eventTime(evt: unknown): number {
+  const at = (evt as { at?: unknown } | null)?.at;
+  return typeof at === "number" && Number.isFinite(at) ? at : Date.now();
+}
+
+function durationSince(
+  startedAt: number | undefined | null,
+  endedAt = Date.now(),
+  fallbackMs = 0,
+): number {
+  if (
+    typeof startedAt !== "number" ||
+    !Number.isFinite(startedAt) ||
+    !Number.isFinite(endedAt) ||
+    endedAt <= startedAt
+  ) {
+    return fallbackMs;
+  }
+  return Math.max(fallbackMs, Math.round(endedAt - startedAt));
+}
+
 /**
  * Narrow helper that wraps the api_logs.insert call with the same
  * failure-tolerance all bus subscribers use — we never want logging
@@ -2600,9 +2812,75 @@ export function inferTier(
  * the main `llm.*` model for skill induction. We surface that fallback
  * explicitly so the Overview card can label it as "inherited from LLM".
  */
+function applyPersistedModelStatus(
+  repos: PipelineHandle["repos"],
+  role: "embedding" | "llm" | "skillEvolver",
+  info: CoreHealth["llm"],
+): void {
+  const latest = findLatestPersistedModelStatus(repos, role, info.provider, info.model);
+  if (!latest) return;
+  info.lastOkAt = latest.status === "ok" ? latest.at : null;
+  info.lastFallbackAt = latest.status === "fallback" ? latest.at : null;
+  info.lastError =
+    latest.status === "error" || latest.status === "fallback"
+      ? { at: latest.at, message: latest.message || "(no message)" }
+      : null;
+}
+
+function findLatestPersistedModelStatus(
+  repos: PipelineHandle["repos"],
+  role: "embedding" | "llm" | "skillEvolver",
+  provider: string,
+  model: string,
+): {
+  status: "ok" | "fallback" | "error";
+  at: number;
+  message?: string;
+} | null {
+  try {
+    const rows = repos.apiLogs.list({
+      toolName: "system_model_status",
+      limit: 500,
+      offset: 0,
+    });
+    for (const row of rows) {
+      try {
+        const out = JSON.parse(row.outputJson) as {
+          role?: unknown;
+          status?: unknown;
+          provider?: unknown;
+          model?: unknown;
+          message?: unknown;
+        };
+        if (out.role !== role) continue;
+        // Only apply status rows for the currently configured model.
+        // This prevents an old 404 for a typo'd model from keeping the
+        // card red after the operator fixes Settings and restarts.
+        if (String(out.provider ?? "") !== provider) continue;
+        if (String(out.model ?? "") !== model) continue;
+        if (out.status !== "ok" && out.status !== "fallback" && out.status !== "error") {
+          continue;
+        }
+        return {
+          status: out.status,
+          at: row.calledAt,
+          message: typeof out.message === "string" ? out.message : undefined,
+        };
+      } catch {
+        // Malformed row — skip and keep walking.
+      }
+    }
+  } catch {
+    // Repo failure is non-fatal for health; leave in-memory stats.
+  }
+  return null;
+}
+
 function llmHealth(
   llm: PipelineHandle["llm"],
-  fallbackTs: number | null,
+  // Kept in the signature for source compatibility with older callers
+  // but intentionally unused — see comment below.
+  _fallbackTs: number | null,
 ): CoreHealth["llm"] {
   if (!llm) {
     return {
@@ -2610,26 +2888,30 @@ function llmHealth(
       provider: "none",
       model: "",
       lastOkAt: null,
+      lastFallbackAt: null,
       lastError: null,
     };
   }
   const s = llm.stats();
+  // We deliberately DO NOT fall back to the latest trace timestamp
+  // here. Doing so used to paint the slot "connected" on every
+  // restart even when the configured model was actually broken — any
+  // historical trace from a prior, working configuration would mask
+  // a fresh authentication / model-name failure. Now the colour is
+  // driven entirely by *this process's* facade activity.
   return {
     available: true,
     provider: llm.provider,
     model: llm.model,
-    // Prefer the live counter (most-recent call in this process).
-    // Fall back to `fallbackTs` — the newest trace timestamp — so the
-    // Overview card shows "connected" across plugin restarts as long
-    // as there's proof of a successful call on disk.
-    lastOkAt: s.lastOkAt ?? fallbackTs,
+    lastOkAt: s.lastOkAt,
+    lastFallbackAt: s.lastFallbackAt,
     lastError: s.lastError,
   };
 }
 
 function embedderHealth(
   embedder: PipelineHandle["embedder"],
-  fallbackTs: number | null,
+  _fallbackTs: number | null,
 ): CoreHealth["embedder"] {
   if (!embedder) {
     return {
@@ -2638,16 +2920,21 @@ function embedderHealth(
       model: "",
       dim: 0,
       lastOkAt: null,
+      lastFallbackAt: null,
       lastError: null,
     };
   }
   const s = embedder.stats();
+  // No `?? fallbackTs` here either — see `llmHealth`. The embedder
+  // also has no host fallback path, so `lastFallbackAt` stays `null`
+  // by definition.
   return {
     available: true,
     provider: embedder.provider,
     model: embedder.model,
     dim: embedder.dimensions,
-    lastOkAt: s.lastOkAt ?? fallbackTs,
+    lastOkAt: s.lastOkAt,
+    lastFallbackAt: null,
     lastError: s.lastError,
   };
 }
@@ -2661,17 +2948,19 @@ function resolveSkillEvolver(
     .skillEvolver;
   const own = (evolver?.model ?? "").trim();
   if (own) {
+    // `llm` here is the dedicated `reflectLlm` instance built from the
+    // skillEvolver config (see `bootstrapMemoryCoreFull`). Reading its
+    // stats means the Overview card flips red as soon as a skill
+    // crystallization call fails — independent of the summary LLM.
+    const s = llm?.stats();
     return {
       available: true,
       provider: evolver?.provider ?? "",
       model: own,
       inherited: false,
-      // Skill evolver uses its own LlmClient instance when the operator
-      // overrides the model. Today we don't expose that client through
-      // the pipeline handle, so status reporting follows the shared LLM
-      // while we keep the plumbing minimal.
-      lastOkAt: llm?.stats().lastOkAt ?? fallbackTs,
-      lastError: llm?.stats().lastError ?? null,
+      lastOkAt: s?.lastOkAt ?? null,
+      lastFallbackAt: s?.lastFallbackAt ?? null,
+      lastError: s?.lastError ?? null,
     };
   }
   const fallback = llmHealth(llm, fallbackTs);
@@ -2681,6 +2970,7 @@ function resolveSkillEvolver(
     model: fallback.model,
     inherited: true,
     lastOkAt: fallback.lastOkAt,
+    lastFallbackAt: fallback.lastFallbackAt,
     lastError: fallback.lastError,
   };
 }

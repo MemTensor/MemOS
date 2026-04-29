@@ -281,7 +281,6 @@ describe("storage/keyword channels — world model", () => {
       policyIds: [],
       sourceEpisodeIds: [],
       inducedBy: "",
-      decisionGuidance: { preference: [], antiPattern: [] },
       vec: vec([1, 0, 0]),
       createdAt: 0,
       updatedAt: 0,

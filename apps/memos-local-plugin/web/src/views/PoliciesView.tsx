@@ -14,9 +14,11 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "../api/client";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
+import { Pager } from "../components/Pager";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import type { PolicyDTO } from "../api/types";
+import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
 
 interface PolicyUsage {
   skills: Array<{ id: string; name: string; status: string; eta: number }>;
@@ -24,7 +26,7 @@ interface PolicyUsage {
   sourceEpisodes: string[];
 }
 
-const PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE = 20;
 
 type StatusFilter = "" | "candidate" | "active" | "archived";
 
@@ -42,6 +44,7 @@ export function PoliciesView() {
   const [rows, setRows] = useState<PolicyDTO[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState(0);
   const [detail, setDetail] = useState<PolicyDTO | null>(null);
@@ -60,8 +63,8 @@ export function PoliciesView() {
     setLoading(true);
     try {
       const qs = new URLSearchParams();
-      qs.set("limit", String(PAGE_SIZE));
-      qs.set("offset", String(opts.page * PAGE_SIZE));
+      qs.set("limit", String(pageSize));
+      qs.set("offset", String(opts.page * pageSize));
       if (opts.q) qs.set("q", opts.q);
       if (opts.status) qs.set("status", opts.status);
       const res = await api.get<ListResponse>(`/api/v1/policies?${qs.toString()}`);
@@ -84,7 +87,7 @@ export function PoliciesView() {
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, status]);
+  }, [query, status, pageSize]);
 
   // Deep-link: `#/policies?id=po_xxx` auto-opens the row's drawer.
   // Lets other views (Skills / WorldModels / Tasks) link straight
@@ -107,6 +110,8 @@ export function PoliciesView() {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   };
+  const pageIds = rows.map((p) => p.id);
+  const isPageSelected = areAllIdsSelected(selected, pageIds);
 
   const setPolicyStatus = async (p: PolicyDTO, next: PolicyDTO["status"]) => {
     try {
@@ -278,30 +283,17 @@ export function PoliciesView() {
       )}
 
       {(page > 0 || hasMore) && (
-        <div class="pager">
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page === 0 || loading}
-            onClick={() => void load({ q: query.trim(), status, page: page - 1 })}
-          >
-            <Icon name="chevron-left" size={14} />
-            {t("common.prev")}
-          </button>
-          <span class="pager__info">
-            {t("pager.pageOfTotal", {
-              n: page + 1,
-              total: Math.max(1, Math.ceil(total / PAGE_SIZE)),
-            })}
-          </span>
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={!hasMore || loading}
-            onClick={() => void load({ q: query.trim(), status, page: page + 1 })}
-          >
-            {t("common.next")}
-            <Icon name="chevron-right" size={14} />
-          </button>
-        </div>
+        <Pager
+          page={page}
+          totalItems={total}
+          pageSize={pageSize}
+          hasMore={hasMore}
+          loading={loading}
+          onPageSizeChange={setPageSize}
+          onPageChange={(nextPage) => {
+            void load({ q: query.trim(), status, page: nextPage });
+          }}
+        />
       )}
 
       {detail && (
@@ -328,10 +320,10 @@ export function PoliciesView() {
           </span>
           <button
             class="btn btn--sm"
-            onClick={() => setSelected(new Set(rows.map((p) => p.id)))}
+            onClick={() => setSelected((prev) => toggleIdsInSelection(prev, pageIds))}
           >
             <Icon name="check-square" size={14} />
-            {t("common.selectPage")}
+            {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
           </button>
           <button
             class="btn btn--danger btn--sm"

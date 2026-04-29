@@ -12,10 +12,11 @@
  *       Agent-aware restart. For OpenClaw the plugin lives inside the
  *       gateway process, which is managed by macOS launchd — calling
  *       `process.exit(0)` causes launchd to respawn it automatically.
- *       For Hermes: spawn a new bridge in --daemon mode, then exit the
- *       current process. The new daemon takes over the viewer port so
- *       the Memory Viewer stays available without user intervention.
+ *       For Hermes the HTTP viewer is the long-lived smoke/daemon bridge.
+ *       Do NOT restart this process; terminate the active `hermes chat`
+ *       process so the user can relaunch it and reconnect to this viewer.
  */
+import { spawn } from "node:child_process";
 import type { ServerDeps, ServerOptions } from "../types.js";
 import type { Routes } from "./registry.js";
 
@@ -42,7 +43,7 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
       const pluginRoot = nodePath.resolve(nodePath.dirname(thisFile), "../..");
       const tsxBin = nodePath.join(pluginRoot, "node_modules/.bin/tsx");
       const bridgeScript = nodePath.join(pluginRoot, "bridge.cts");
-      const cmd = `sleep 1 && "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
+      const cmd = `sleep 3 && "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
       const child = spawn("bash", ["-c", cmd], {
         detached: true,
         stdio: "ignore",
@@ -60,26 +61,40 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
       setTimeout(() => process.exit(0), 300);
       return { ok: true, restarting: true };
     }
-    // Hermes (and others): exit first (releasing the port), then a
-    // small wrapper script spawns the new daemon. We use a shell
-    // one-liner that sleeps briefly (for port release) then starts
-    // the new daemon.
-    const nodePath = await import("node:path");
-    const { fileURLToPath } = await import("node:url");
-    const { spawn } = await import("node:child_process");
-    const thisFile = fileURLToPath(import.meta.url);
-    const pluginRoot = nodePath.resolve(nodePath.dirname(thisFile), "../..");
-    const tsxBin = nodePath.join(pluginRoot, "node_modules/.bin/tsx");
-    const bridgeScript = nodePath.join(pluginRoot, "bridge.cts");
 
-    const cmd = `sleep 1 && "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
-    const child = spawn("bash", ["-c", cmd], {
-      detached: true,
-      stdio: "ignore",
-      cwd: pluginRoot,
-    });
-    child.unref();
-    setTimeout(() => process.exit(0), 200);
-    return { ok: true, restarting: true };
+    if (agent === "hermes") {
+      const killed = await terminateHermesChat();
+      return { ok: true, restarting: false, killed };
+    }
+
+    return { ok: false, error: `restart unsupported for agent: ${agent}` };
+  });
+}
+
+async function terminateHermesChat(): Promise<boolean> {
+  // Match the Hermes CLI wrapper used by install.sh without touching
+  // `bridge.cts --daemon`, which owns the Memory Viewer port.
+  const patterns = ["/bin/hermes", "hermes chat"];
+  let signalled = false;
+
+  for (const pattern of patterns) {
+    const ok = await runQuiet("pkill", ["-TERM", "-f", pattern]);
+    signalled ||= ok;
+  }
+
+  if (!signalled) return false;
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  for (const pattern of patterns) {
+    await runQuiet("pkill", ["-KILL", "-f", pattern]);
+  }
+  return true;
+}
+
+function runQuiet(command: string, args: readonly string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(command, [...args], { stdio: "ignore" });
+    child.on("error", () => resolve(false));
+    child.on("exit", (code) => resolve(code === 0));
   });
 }

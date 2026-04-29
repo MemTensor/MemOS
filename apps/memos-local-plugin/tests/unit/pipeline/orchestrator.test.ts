@@ -95,10 +95,38 @@ describe("pipeline/orchestrator", () => {
     expect(end.episodeFinalized).toBe(false);
     expect(end.asyncWorkScheduled).toBe(true);
     expect(end.episode?.status).toBe("open");
+    expect(end.traceIds).toHaveLength(1);
+    expect(dbHandle!.repos.traces.getById(end.traceIds[0]!)).not.toBeNull();
 
     // Flush still drains any in-flight lite capture work; reflect
     // won't fire until the next turn closes this topic.
     await pipeline.flush();
+  });
+
+  it("preserves adapter-provided turn timestamps on captured traces", async () => {
+    pipeline = createPipeline(buildDeps(dbHandle!));
+    const historicalStartTs = 1_700_000_000_000 - 90 * 24 * 60 * 60 * 1000;
+    const historicalEndTs = historicalStartTs + 500;
+
+    const packet = await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-historical",
+      userText: "90 days ago I decided Monday mornings are for project review",
+      ts: historicalStartTs,
+    });
+    await pipeline.onTurnEnd({
+      agent: "openclaw",
+      sessionId: "s-historical",
+      episodeId: packet.episodeId ?? "ep-ignored",
+      agentText: "Got it, I will remember that weekly review habit.",
+      toolCalls: [],
+      ts: historicalEndTs,
+    });
+    await pipeline.flush();
+
+    const traces = dbHandle!.repos.traces.list({ sessionId: "s-historical" });
+    expect(traces).toHaveLength(1);
+    expect(traces[0]!.ts).toBe(historicalEndTs);
   });
 
   it("emits a unified CoreEvent stream", async () => {

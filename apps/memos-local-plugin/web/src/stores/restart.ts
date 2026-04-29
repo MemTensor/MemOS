@@ -1,13 +1,13 @@
 /**
  * Config-save restart state manager.
  *
- * Unified flow for all agents: POST `/api/v1/admin/restart` triggers
- * the backend to spawn a fresh daemon bridge and exit. The frontend
- * polls `/api/v1/health` until the new process is live, then reloads.
+ * OpenClaw can be restarted from the viewer because the plugin lives
+ * inside the gateway process and launchd brings it back.
  *
- *   - OpenClaw: launchd respawns the gateway — may take a few seconds.
- *   - Hermes: the restart endpoint spawns `bridge.cts --daemon` before
- *     exiting, so the viewer comes back almost immediately.
+ * Hermes is different: the viewer daemon is intentionally long-lived,
+ * so restart means "terminate the active `hermes chat` process" while
+ * keeping this Memory Viewer online. The user can relaunch Hermes and
+ * it will reconnect to the existing viewer service.
  */
 import { signal } from "@preact/signals";
 import { api } from "../api/client";
@@ -15,8 +15,6 @@ import { health } from "./health";
 
 export type RestartPhase =
   | "idle"
-  | "saved"
-  | "cleared"
   | "restarting"
   | "waitingUp"
   | "restartFailed";
@@ -24,10 +22,6 @@ export type RestartPhase =
 export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
 });
-
-export interface TriggerRestartOptions {
-  kick?: "restart-endpoint" | "skip";
-}
 
 function isOpenClaw(): boolean {
   return health.value?.agent === "openclaw";
@@ -63,12 +57,13 @@ async function pollHealthUntilUp(maxAttempts = 60): Promise<boolean> {
 }
 
 /**
- * Quick health check — just verify the server responds once.
- * Used for Hermes where the new daemon is already up before the old exits.
+ * Quick health check for destructive clear-data only.
+ * Do not use this for Hermes config saves: those must keep the current
+ * viewer daemon online and terminate only the active `hermes chat`.
  */
-async function quickPollUp(maxAttempts = 10): Promise<boolean> {
+async function quickPollUp(maxAttempts = 30): Promise<boolean> {
   for (let i = 0; i < maxAttempts; i++) {
-    await new Promise((r) => setTimeout(r, 800));
+    await new Promise((r) => setTimeout(r, 1000));
     try {
       const res = await fetch("/api/v1/health");
       if (res.ok || res.status === 401 || res.status === 403) return true;
@@ -80,37 +75,40 @@ async function quickPollUp(maxAttempts = 10): Promise<boolean> {
 }
 
 /**
- * Config saved. Trigger a restart for any agent. The backend spawns a
- * fresh daemon bridge before exiting, so the viewer port comes back up
- * automatically for both OpenClaw (launchd) and Hermes (self-respawn).
+ * Config saved. OpenClaw gets an in-place gateway restart. Hermes keeps
+ * the viewer online and asks the backend to terminate the active chat
+ * process; once that request returns, reload the same viewer page.
+ *
+ * Do not add a passive "settings saved" toast/card here. The restart
+ * affordance is intentionally blocking for both agents so the operator
+ * sees Hermes' active chat window being closed before the viewer returns.
  */
-export async function triggerRestart(
-  _opts: TriggerRestartOptions = {},
-): Promise<void> {
+export async function triggerRestart(): Promise<void> {
   restartState.value = { phase: "restarting" };
+  if (!isOpenClaw()) {
+    try {
+      await api.post("/api/v1/admin/restart");
+      await new Promise((r) => setTimeout(r, 500));
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } catch {
+      restartState.value = { phase: "restartFailed" };
+    }
+    return;
+  }
+
   try {
     await api.post("/api/v1/admin/restart");
   } catch {
     // Server might already be going down
   }
 
-  if (isOpenClaw()) {
-    const ok = await pollHealthUntilUp(60);
-    if (ok) {
-      window.location.href =
-        window.location.pathname + "?_t=" + Date.now();
-    } else {
-      restartState.value = { phase: "restartFailed" };
-    }
+  const ok = await pollHealthUntilUp(60);
+  if (ok) {
+    window.location.href =
+      window.location.pathname + "?_t=" + Date.now();
   } else {
-    // Hermes: new daemon spawns before old exits, transition is fast.
-    const ok = await quickPollUp(10);
-    if (ok) {
-      window.location.href =
-        window.location.pathname + "?_t=" + Date.now();
-    } else {
-      restartState.value = { phase: "restartFailed" };
-    }
+    restartState.value = { phase: "restartFailed" };
   }
 }
 
@@ -128,9 +126,9 @@ export async function triggerCleared(): Promise<void> {
       restartState.value = { phase: "restartFailed" };
     }
   } else {
-    // Hermes: clear-data spawns a new daemon. Give it extra time
-    // since it also needs to re-create the DB on first boot.
-    const ok = await quickPollUp(15);
+    // Hermes: clear-data spawns a new daemon. The default 30s of
+    // `quickPollUp` already covers the slow first-boot DB migration.
+    const ok = await quickPollUp();
     if (ok) {
       window.location.href =
         window.location.pathname + "?_t=" + Date.now();

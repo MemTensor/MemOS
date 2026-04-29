@@ -95,6 +95,7 @@ describe("skill/packager", () => {
       vec: null,
       createdAt: NOW,
       updatedAt: NOW,
+      version: 1,
     } as SkillRow;
     const r = await buildSkillRow(
       {

@@ -258,6 +258,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   ): Promise<{ episode: EpisodeSnapshot; sessionId: SessionId; relation?: string }> {
     const mergeMode = algorithm.session.followUpMode === "merge_follow_ups";
     const mergeCapMs = algorithm.session.mergeMaxGapMs;
+    const turnTs = timestampFromMeta(meta, "startedAtTurnTs");
 
     // ─── Case 1: there is a currently open episode ──────────────────
     const currentEpId = openEpisodeBySession.get(sessionId);
@@ -271,7 +272,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         // tail.
         const ctx = buildClassifierContext(open.turns);
         const lastTurnTs = open.turns[open.turns.length - 1]?.ts ?? open.startedAt;
-        const gapMs = Math.max(0, now() - lastTurnTs);
+        const gapMs = Math.max(0, (turnTs ?? now()) - lastTurnTs);
 
         const decision = await session.relation.classify({
           prevUserText: ctx.prevUserText,
@@ -313,6 +314,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           session.sessionManager.addTurn(currentEpId, {
             role: "user",
             content: userText,
+            ts: turnTs,
             meta: {
               source: "follow_up",
               classifiedRelation: decision.relation,
@@ -359,6 +361,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           const snap = await session.sessionManager.startEpisode({
             sessionId,
             userMessage: userText,
+            ts: turnTs,
             meta: { ...meta, relation: "new_task" },
           });
           openEpisodeBySession.set(sessionId, snap.id as EpisodeId);
@@ -377,6 +380,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         const fresh = await session.sessionManager.startEpisode({
           sessionId,
           userMessage: userText,
+          ts: turnTs,
           meta: { ...meta, relation: decision.relation, gapMs },
         });
         openEpisodeBySession.set(sessionId, fresh.id as EpisodeId);
@@ -394,13 +398,14 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       const snap = await session.sessionManager.startEpisode({
         sessionId,
         userMessage: userText,
+        ts: turnTs,
         meta,
       });
       openEpisodeBySession.set(sessionId, snap.id as EpisodeId);
       return { episode: snap, sessionId, relation: "bootstrap" };
     }
 
-    const gapMs = now() - prev.endedAt;
+    const gapMs = Math.max(0, (turnTs ?? now()) - prev.endedAt);
     const decision = await session.relation.classify({
       prevUserText: prev.userText,
       prevAssistantText: prev.assistantText,
@@ -439,6 +444,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       session.sessionManager.addTurn(prev.episodeId, {
         role: "user",
         content: userText,
+        ts: turnTs,
         meta: {
           source: reopenReason,
           classifiedRelation: decision.relation,
@@ -468,6 +474,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       const snap = await session.sessionManager.startEpisode({
         sessionId,
         userMessage: userText,
+        ts: turnTs,
         meta: { ...meta, relation: "new_task" },
       });
       openEpisodeBySession.set(sessionId, snap.id as EpisodeId);
@@ -477,6 +484,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     const snap = await session.sessionManager.startEpisode({
       sessionId,
       userMessage: userText,
+      ts: turnTs,
       meta: { ...meta, relation: decision.relation },
     });
     openEpisodeBySession.set(sessionId, snap.id as EpisodeId);
@@ -680,6 +688,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           : tc.output != null
             ? JSON.stringify(tc.output).slice(0, 2000)
             : "",
+        ts: Number.isFinite(tc.endedAt) ? tc.endedAt : result.ts,
         meta: {
           tool: tc.name,
           name: tc.name,
@@ -699,6 +708,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     session.sessionManager.addTurn(episodeId, {
       role: "assistant",
       content: result.agentText,
+      ts: result.ts,
       meta: {
         toolCalls: result.toolCalls,
         // V7 §0.1 split:
@@ -721,9 +731,11 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     // (next turn classified as `new_task`, idle timeout, session_end,
     // or shutdown).
     const liveEpisode = session.sessionManager.getEpisode(episodeId);
+    let liteTraceIds: string[] = [];
     if (liveEpisode) {
       try {
         const captureResult = await subs.captureRunner.runLite({ episode: liveEpisode });
+        liteTraceIds = captureResult.traceIds;
         if (captureResult.traceIds.length > 0) {
           session.sessionManager.attachTraceIds(episodeId, captureResult.traceIds as string[]);
         }
@@ -758,7 +770,8 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
     // The episode stays OPEN — finalize is deferred to topic end.
     return {
-      traceCount: liveEpisode?.turnCount ?? 0,
+      traceCount: liteTraceIds.length,
+      traceIds: liteTraceIds,
       episodeId: episodeId as EpisodeId,
       episode: liveEpisode ?? null,
       episodeFinalized: false,
@@ -850,6 +863,11 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     return (deps.now ?? Date.now)();
   }
 
+  function timestampFromMeta(meta: Record<string, unknown>, key: string): number | undefined {
+    const ts = meta[key];
+    return typeof ts === "number" && Number.isFinite(ts) ? ts : undefined;
+  }
+
   /**
    * Build richer context for the relation classifier from episode turns.
    *
@@ -897,6 +915,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     db: deps.db,
     repos: deps.repos,
     llm: deps.llm,
+    reflectLlm: deps.reflectLlm,
     embedder: deps.embedder,
     sessionManager: session.sessionManager,
     episodeManager: session.episodeManager,

@@ -94,6 +94,7 @@ function stubCore(): MemoryCore {
         rTask: null,
       },
     ]),
+    countEpisodes: vi.fn(async () => 2),
     timeline: vi.fn(async () => [{ id: "t1", step: 0, ts: 0 } as any]),
     listTraces: vi.fn(async () => [
       {
@@ -110,8 +111,10 @@ function stubCore(): MemoryCore {
         priority: 0.5,
       },
     ] as any),
+    countTraces: vi.fn(async () => 1),
     listApiLogs: vi.fn(async () => ({ logs: [], total: 0 })),
     listSkills: vi.fn(async () => []),
+    countSkills: vi.fn(async () => 0),
     getSkill: vi.fn(async (id) => ({
       id,
       name: "test-skill",
@@ -257,6 +260,24 @@ describe("HTTP server — REST routes", () => {
     });
   });
 
+  it("POST /api/v1/feedback returns trace_not_found for stale trace ids", async () => {
+    (core.getTrace as any).mockResolvedValueOnce(null);
+    const r = await fetch(`${handle.url}/api/v1/feedback`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        channel: "explicit",
+        polarity: "negative",
+        magnitude: 1,
+        traceId: "trace-not-real",
+      }),
+    });
+    expect(r.status).toBe(404);
+    const body = (await r.json()) as any;
+    expect(body.error.code).toBe("trace_not_found");
+    expect(core.submitFeedback).not.toHaveBeenCalled();
+  });
+
   it("GET /api/v1/traces lists newest-first traces (used by Memories panel)", async () => {
     const r = await fetch(`${handle.url}/api/v1/traces?limit=25&q=hi`);
     expect(r.status).toBe(200);
@@ -276,6 +297,7 @@ describe("HTTP server — REST routes", () => {
       offset: 0,
       sessionId: undefined,
       q: "hi",
+      groupByTurn: false,
     });
   });
 
@@ -559,6 +581,14 @@ describe("HTTP server — REST routes", () => {
     const buf = Buffer.from(await r.arrayBuffer());
     // PKZIP local-file-header magic.
     expect(buf.slice(0, 4).toString("hex")).toBe("504b0304");
+    const nameLen = buf.readUInt16LE(26);
+    const extraLen = buf.readUInt16LE(28);
+    const fileSize = buf.readUInt32LE(22);
+    const name = buf.subarray(30, 30 + nameLen).toString("utf8");
+    const start = 30 + nameLen + extraLen;
+    const md = buf.subarray(start, start + fileSize).toString("utf8");
+    expect(name).toBe("test-skill/SKILL.md");
+    expect(md).toMatch(/^---\nname: "test-skill"\ndescription: "use this when X"\n---\n/);
   });
 
   it("PATCH /api/v1/policies/:id accepts a status-only body (back-compat)", async () => {
