@@ -147,7 +147,6 @@ export function seedWorldModel(
     policyIds: [...(args.policyIds ?? [])],
     sourceEpisodeIds: [...(args.sourceEpisodeIds ?? [])],
     inducedBy: "l3.abstraction.v1",
-    decisionGuidance: { preference: [], antiPattern: [] },
     vec: args.vec ?? vec([1, 0, 0]),
     createdAt: NOW,
     updatedAt: NOW,

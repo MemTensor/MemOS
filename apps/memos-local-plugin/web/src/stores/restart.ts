@@ -63,12 +63,20 @@ async function pollHealthUntilUp(maxAttempts = 60): Promise<boolean> {
 }
 
 /**
- * Quick health check — just verify the server responds once.
- * Used for Hermes where the new daemon is already up before the old exits.
+ * Quick health check — verify the server responds again.
+ *
+ * Hermes' restart flow spawns the new daemon AFTER `sleep 3`
+ * (admin.ts) so the old bridge can fully release the viewer port,
+ * then `tsx` cold-compiles + bootstrap (DB migrations, embedder /
+ * LLM clients, host-bridge registration) takes another few seconds
+ * before the port is bound. Total worst-case wall time is ~10–15 s
+ * on slower machines. We poll every 1 s for up to 30 attempts (30 s
+ * total) so even a sluggish cold start succeeds without the user
+ * hitting the "重启超时" toast prematurely.
  */
-async function quickPollUp(maxAttempts = 10): Promise<boolean> {
+async function quickPollUp(maxAttempts = 30): Promise<boolean> {
   for (let i = 0; i < maxAttempts; i++) {
-    await new Promise((r) => setTimeout(r, 800));
+    await new Promise((r) => setTimeout(r, 1000));
     try {
       const res = await fetch("/api/v1/health");
       if (res.ok || res.status === 401 || res.status === 403) return true;
@@ -103,8 +111,11 @@ export async function triggerRestart(
       restartState.value = { phase: "restartFailed" };
     }
   } else {
-    // Hermes: new daemon spawns before old exits, transition is fast.
-    const ok = await quickPollUp(10);
+    // Hermes: new daemon spawns after `sleep 3` (admin.ts) so the
+    // old bridge can fully release the port; cold-start of tsx +
+    // bootstrap may take another few seconds. Use the default
+    // `quickPollUp` attempts (30s total).
+    const ok = await quickPollUp();
     if (ok) {
       window.location.href =
         window.location.pathname + "?_t=" + Date.now();
@@ -128,9 +139,9 @@ export async function triggerCleared(): Promise<void> {
       restartState.value = { phase: "restartFailed" };
     }
   } else {
-    // Hermes: clear-data spawns a new daemon. Give it extra time
-    // since it also needs to re-create the DB on first boot.
-    const ok = await quickPollUp(15);
+    // Hermes: clear-data spawns a new daemon. The default 30s of
+    // `quickPollUp` already covers the slow first-boot DB migration.
+    const ok = await quickPollUp();
     if (ok) {
       window.location.href =
         window.location.pathname + "?_t=" + Date.now();
