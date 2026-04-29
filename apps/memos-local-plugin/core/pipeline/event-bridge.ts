@@ -197,6 +197,18 @@ export function bridgeToCoreEvents(deps: EventBridgeDeps): EventBridgeHandle {
           return send("skill.archived", evt, evt.skillId);
         case "skill.rebuilt":
           return send("skill.repaired", evt, evt.skillId);
+        case "skill.failed":
+          if (evt.stage === "crystallize" && evt.modelRefusal) {
+            return send("system.error", {
+              kind: "skill.model_refusal",
+              message: `Skill crystallization model refusal for policy ${evt.policyId ?? "unknown"}`,
+              policyId: evt.policyId,
+              stage: evt.stage,
+              reason: evt.reason,
+              modelRefusal: evt.modelRefusal,
+            }, evt.policyId);
+          }
+          return;
       }
     }),
   );

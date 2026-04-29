@@ -144,6 +144,38 @@ describe("skill/runSkill (integration)", () => {
     );
   });
 
+  it("emits policy and model details when skill crystallization is refused by the model", async () => {
+    const h = open();
+    const { policyId } = seedFullCandidate(h);
+    const { deps, events } = makeDeps(h, {
+      llm: fakeLlm({
+        servedBy: "anthropic",
+        model: "claude-test",
+        completeJson: {
+          "skill.crystallize": makeDraft({
+            summary: "I am Claude, made by Anthropic. I cannot process this request.",
+          }),
+        },
+      }),
+    });
+
+    const r = await runSkill({ trigger: "manual", policyId }, deps);
+    expect(r.rejected).toBe(1);
+    expect(r.crystallized).toBe(0);
+    const failed = events.find(
+      (e) => e.kind === "skill.failed" && e.stage === "crystallize",
+    );
+    expect(failed).toMatchObject({
+      policyId,
+      reason: "llm-refusal",
+      modelRefusal: {
+        provider: "openai_compatible",
+        model: "claude-test",
+        content: expect.stringContaining("I cannot process this request"),
+      },
+    });
+  });
+
   it("applySkillFeedback updates η + status and emits", async () => {
     const h = open();
     const { policyId } = seedFullCandidate(h);
