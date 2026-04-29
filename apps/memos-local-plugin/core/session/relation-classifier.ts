@@ -192,6 +192,21 @@ function matchesAny(text: string, patterns: readonly RegExp[]): boolean {
   return patterns.some((p) => p.test(text));
 }
 
+function ruleTiePriority(rule: Rule): number {
+  switch (rule.id) {
+    case "r5_new_phrase":
+      return 40;
+    case "r1_negation_keyword":
+      return 30;
+    case "r2_quotes_prev":
+      return 20;
+    case "r3_pronoun_ref":
+      return 10;
+    default:
+      return 0;
+  }
+}
+
 // ─── Strong heuristic threshold ──────────────────────────────────────────
 
 const STRONG_HEURISTIC_THRESHOLD = 0.85;
@@ -266,7 +281,11 @@ export function createRelationClassifier(
         if (tag) fired.push({ rule, tag });
       }
       if (fired.length > 0) {
-        fired.sort((a, b) => b.rule.confidence - a.rule.confidence);
+        fired.sort(
+          (a, b) =>
+            b.rule.confidence - a.rule.confidence ||
+            ruleTiePriority(b.rule) - ruleTiePriority(a.rule),
+        );
         const top = fired[0];
         if (top.rule.confidence >= STRONG_HEURISTIC_THRESHOLD) {
           log.debug("heuristic.strong", {
