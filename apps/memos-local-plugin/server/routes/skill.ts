@@ -260,8 +260,9 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       return;
     }
     const md = renderSkillMarkdown(skill);
-    const buf = buildSingleFileZip("SKILL.md", md);
-    const filename = sanitizeFilename(skill.name || skill.id) + ".zip";
+    const packageName = sanitizeFilename(skill.name || skill.id);
+    const buf = buildSingleFileZip(`${packageName}/SKILL.md`, md);
+    const filename = packageName + ".zip";
     ctx.res.writeHead(200, {
       "content-type": "application/zip",
       "content-length": String(buf.length),
@@ -272,10 +273,32 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
 }
 
 function renderSkillMarkdown(skill: SkillDTO): string {
-  const head = `# ${skill.name || skill.id}\n\n`;
+  const name = skill.name || skill.id;
+  const description = skillDescription(skill.invocationGuide, name);
+  const frontmatter =
+    `---\n` +
+    `name: ${yamlString(name)}\n` +
+    `description: ${yamlString(description)}\n` +
+    `---\n\n`;
+  const head = `# ${name}\n\n`;
   const meta = `> id: ${skill.id}\n> status: ${skill.status}\n> version: ${skill.version}\n\n`;
   const guide = skill.invocationGuide?.trim() || "(no invocation guide)";
-  return head + meta + guide + "\n";
+  return frontmatter + head + meta + guide + "\n";
+}
+
+function skillDescription(invocationGuide: string | undefined, name: string): string {
+  const fallback = `Use ${name} when this learned skill matches the current task.`;
+  const lines = (invocationGuide ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const firstBodyLine =
+    lines.find((line) => !line.startsWith("#") && !line.startsWith(">")) ?? fallback;
+  return firstBodyLine.replace(/\s+/g, " ").slice(0, 240);
+}
+
+function yamlString(raw: string): string {
+  return JSON.stringify(raw.replace(/\s+/g, " ").trim());
 }
 
 function sanitizeFilename(raw: string): string {
