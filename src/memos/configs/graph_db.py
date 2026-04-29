@@ -249,6 +249,7 @@ class GraphDBConfigFactory(BaseModel):
         "neo4j": Neo4jGraphDBConfig,
         "neo4j-community": Neo4jCommunityGraphDBConfig,
         "polardb": PolarDBGraphDBConfig,
+        "polardb_dual": PolarDBGraphDBConfig,
         "postgres": PostgresGraphDBConfig,
     }
 

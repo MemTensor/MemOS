@@ -40,6 +40,7 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
         "neo4j-community": APIConfig.get_neo4j_community_config(user_id=user_id),
         "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
         "polardb": APIConfig.get_polardb_config(user_id=user_id),
+        "polardb_dual": APIConfig.get_polardb_config(user_id=user_id),
         "postgres": APIConfig.get_postgres_config(user_id=user_id),
     }
 
