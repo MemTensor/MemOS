@@ -42,7 +42,7 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
       const pluginRoot = nodePath.resolve(nodePath.dirname(thisFile), "../..");
       const tsxBin = nodePath.join(pluginRoot, "node_modules/.bin/tsx");
       const bridgeScript = nodePath.join(pluginRoot, "bridge.cts");
-      const cmd = `sleep 1 && "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
+      const cmd = `sleep 3 && "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
       const child = spawn("bash", ["-c", cmd], {
         detached: true,
         stdio: "ignore",
@@ -72,7 +72,12 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
     const tsxBin = nodePath.join(pluginRoot, "node_modules/.bin/tsx");
     const bridgeScript = nodePath.join(pluginRoot, "bridge.cts");
 
-    const cmd = `sleep 1 && "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
+    // 3s sleep gives the OS time to release the viewer port (TCP
+    // TIME_WAIT lingers for ~1s on macOS/Linux even after the
+    // previous bridge fully exited). Bumped from 1s after operators
+    // hit "重启超时" because the new daemon kept losing the port-
+    // bind race against its predecessor.
+    const cmd = `sleep 3 && "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
     const child = spawn("bash", ["-c", cmd], {
       detached: true,
       stdio: "ignore",

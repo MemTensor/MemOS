@@ -41,7 +41,6 @@ function mkWorldModel(partial: Partial<WorldModelRow> & { id: WorldModelId }): W
     policyIds: partial.policyIds ?? [],
     sourceEpisodeIds: partial.sourceEpisodeIds ?? [],
     inducedBy: partial.inducedBy ?? "",
-    decisionGuidance: { preference: [], antiPattern: [] },
     vec: partial.vec ?? vec([1, 0, 0]),
     createdAt: NOW,
     updatedAt: NOW,

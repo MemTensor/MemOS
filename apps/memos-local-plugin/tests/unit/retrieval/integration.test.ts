@@ -92,6 +92,7 @@ function seed(handle: TmpDbHandle) {
     vec: vec([1, 0, 0]),
     createdAt: NOW as never,
     updatedAt: NOW as never,
+    version: 1,
   });
   handle.repos.skills.upsert({
     id: "sk_weak" as SkillId,
@@ -110,6 +111,7 @@ function seed(handle: TmpDbHandle) {
     vec: vec([1, 0, 0]),
     createdAt: NOW as never,
     updatedAt: NOW as never,
+    version: 1,
   });
 
   handle.repos.worldModel.upsert({
@@ -122,7 +124,6 @@ function seed(handle: TmpDbHandle) {
     policyIds: [],
     sourceEpisodeIds: [],
     inducedBy: "",
-    decisionGuidance: { preference: [], antiPattern: [] },
     vec: vec([1, 0, 0]),
     createdAt: NOW as never,
     updatedAt: NOW as never,

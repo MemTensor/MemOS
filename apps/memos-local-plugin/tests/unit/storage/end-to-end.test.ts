@@ -94,6 +94,7 @@ describe("storage/end-to-end", () => {
           vec: vec([1, 0, 0]),
           createdAt: 101,
           updatedAt: 101,
+          version: 1,
         });
         repos.feedback.insert({
           id: "fb-1",

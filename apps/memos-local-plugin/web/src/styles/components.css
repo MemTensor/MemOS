@@ -368,10 +368,12 @@
   border-radius: 50%;
   flex-shrink: 0;
 }
-.status-dot--ok   { background: var(--green); box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18); }
-.status-dot--err  { background: var(--red);   box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.20); }
-.status-dot--idle { background: var(--fg-dim); opacity: 0.6; }
-.status-dot--off  { background: transparent; border: 1px dashed var(--fg-dim); }
+.status-dot--ok       { background: var(--green); box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18); }
+/* Yellow ring — primary provider broken but host LLM bridge rescued the call. */
+.status-dot--fallback { background: #f59e0b;     box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.22); }
+.status-dot--err      { background: var(--red);   box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.20); }
+.status-dot--idle     { background: var(--fg-dim); opacity: 0.6; }
+.status-dot--off      { background: transparent; border: 1px dashed var(--fg-dim); }
 
 /* ── Pills (status badges) ──────────────────────────────────────── */
 

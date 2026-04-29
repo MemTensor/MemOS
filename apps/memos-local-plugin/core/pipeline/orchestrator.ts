@@ -915,6 +915,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     db: deps.db,
     repos: deps.repos,
     llm: deps.llm,
+    reflectLlm: deps.reflectLlm,
     embedder: deps.embedder,
     sessionManager: session.sessionManager,
     episodeManager: session.episodeManager,

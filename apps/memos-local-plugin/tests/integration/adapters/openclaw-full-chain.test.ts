@@ -181,7 +181,7 @@ function buildLlm(): LlmClient {
         reason: "programming request",
       }),
 
-      "session.relation.classify": (input) => {
+      "session.relation.classify": (input: unknown) => {
         const newMsg = newUserSegment(lastUserContent(input));
         if (/不对|错了|改一下|\bwrong\b|redo/i.test(newMsg)) {
           return { relation: "revision", confidence: 0.9, reason: "negation" };
@@ -195,7 +195,7 @@ function buildLlm(): LlmClient {
         return { relation: "follow_up", confidence: 0.5, reason: "default" };
       },
 
-      "reward.reward.r_human.v3": (input) => {
+      "reward.reward.r_human.v3": (input: unknown) => {
         const text = lastUserContent(input);
         // We pre-fill the scorer with positive user feedback baked
         // into the "FEEDBACK:" block, so it should return a healthy
@@ -218,7 +218,7 @@ function buildLlm(): LlmClient {
         };
       },
 
-      "capture.summarize": (input) => {
+      "capture.summarize": (input: unknown) => {
         const text = lastUserContent(input);
         if (/fib/i.test(text)) return { summary: "Python fibonacci 函数实现" };
         if (/quicksort/i.test(text)) return { summary: "Python 快速排序实现" };
@@ -234,7 +234,7 @@ function buildLlm(): LlmClient {
         reason: "concrete root-cause reflection",
       }),
 
-      "l2.l2.induction.v2": (input) => {
+      "l2.l2.induction.v2": (input: unknown) => {
         const evidence = (input as { evidenceTraces?: Array<{ id: string }> })
           ?.evidenceTraces ?? [];
         return {
@@ -480,6 +480,7 @@ describe("OpenClaw adapter integration — multi-session full V7 chain", () => {
       agent: AGENT,
       core: core!,
       log: {
+        trace: (_m: string, _c?: unknown) => undefined,
         info: (_m: string, _c?: unknown) => undefined,
         warn: (_m: string, _c?: unknown) => undefined,
         error: (_m: string, _c?: unknown) => undefined,

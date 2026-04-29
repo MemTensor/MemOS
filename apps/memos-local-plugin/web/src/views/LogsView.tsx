@@ -33,7 +33,9 @@ type ToolFilter =
   | "world_model_generate"
   | "world_model_evolve"
   | "task_done"
-  | "task_failed";
+  | "task_failed"
+  | "system_error"
+  | "system_model_status";
 
 /**
  * Frontend log-tag categories. Each tag maps to one or more backend
@@ -49,7 +51,13 @@ type LogTag =
   | "task"
   | "skill"
   | "policy"
-  | "world";
+  | "world"
+  // Infrastructure-layer failures (embedding / summary LLM /
+  // skillEvolver provider errors). The bootstrap layer drops a
+  // `system_error` row into api_logs every time a model facade
+  // throws, so users can correlate Overview red dots with concrete
+  // upstream messages without tailing the server logs.
+  | "system";
 
 const LOG_TAGS: Array<{ v: LogTag; k: string }> = [
   { v: "", k: "common.all" },
@@ -59,6 +67,7 @@ const LOG_TAGS: Array<{ v: LogTag; k: string }> = [
   { v: "skill", k: "logs.tag.skill" },
   { v: "policy", k: "logs.tag.policy" },
   { v: "world", k: "logs.tag.world" },
+  { v: "system", k: "logs.tag.system" },
 ];
 
 /**
@@ -75,6 +84,7 @@ const ALLOWED_TOOLS: Record<LogTag, readonly ToolFilter[]> = {
   skill: ["skill_generate", "skill_evolve"],
   policy: ["policy_generate", "policy_evolve"],
   world: ["world_model_generate", "world_model_evolve"],
+  system: ["system_error", "system_model_status"],
 };
 
 interface ApiLogsResponse {
@@ -311,6 +321,10 @@ function LogCard({
             <MemorySearchDetail input={input} output={output} />
           ) : log.toolName === "memory_add" ? (
             <MemoryAddDetail input={input} output={output} />
+          ) : log.toolName === "system_error" ? (
+            <SystemErrorDetail output={output} />
+          ) : log.toolName === "system_model_status" ? (
+            <SystemModelStatusDetail output={output} />
           ) : log.toolName.startsWith("skill_") ||
             log.toolName.startsWith("policy_") ||
             log.toolName.startsWith("world_model_") ||
@@ -750,6 +764,117 @@ function LifecycleDetail({
   );
 }
 
+// ─── system_error template ──────────────────────────────────────────────
+
+interface SystemErrorPayload {
+  role?: "embedding" | "llm" | "skillEvolver";
+  provider?: string;
+  model?: string;
+  message?: string;
+  code?: string;
+  at?: number;
+}
+
+interface SystemModelStatusPayload extends SystemErrorPayload {
+  status?: "ok" | "fallback" | "error";
+  fallbackProvider?: string;
+  fallbackModel?: string;
+}
+
+/**
+ * Detail view for a `system_error` row. The bootstrap-installed sink
+ * stores a flat `{ role, provider, model, message, code, at }` blob so
+ * the renderer is intentionally minimal — one prominent red error line
+ * plus a row of metadata pills.
+ */
+function SystemErrorDetail({ output }: { output: unknown }) {
+  const out = (output ?? {}) as SystemErrorPayload;
+  const role = out.role ?? "(unknown)";
+  return (
+    <div class="vstack" style="gap:var(--sp-3)">
+      <section
+        class="card card--flat"
+        style="border-color:var(--danger);background:var(--danger-soft)"
+      >
+        <div
+          class="muted"
+          style="font-size:var(--fs-xs);margin-bottom:4px;color:var(--danger)"
+        >
+          {t("logs.system.role", { role: roleLabel(role) })}
+        </div>
+        <div class="mono" style="font-size:var(--fs-sm);line-height:1.5;word-break:break-word">
+          {out.message || "(no message)"}
+        </div>
+      </section>
+      <div class="hstack" style="gap:var(--sp-2);flex-wrap:wrap">
+        {out.provider && (
+          <span class="pill pill--info" style="font-family:var(--font-mono)">
+            provider: {out.provider}
+          </span>
+        )}
+        {out.model && (
+          <span class="pill pill--info" style="font-family:var(--font-mono)">
+            model: {out.model}
+          </span>
+        )}
+        {out.code && (
+          <span class="pill pill--failed" style="font-family:var(--font-mono)">
+            code: {out.code}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SystemModelStatusDetail({ output }: { output: unknown }) {
+  const out = (output ?? {}) as SystemModelStatusPayload;
+  const status = out.status ?? "error";
+  const role = out.role ?? "(unknown)";
+  const tone =
+    status === "ok"
+      ? { border: "var(--success)", bg: "var(--success-soft)", pill: "pill--active" }
+      : status === "fallback"
+      ? { border: "#f59e0b", bg: "rgba(245, 158, 11, 0.12)", pill: "pill--info" }
+      : { border: "var(--danger)", bg: "var(--danger-soft)", pill: "pill--failed" };
+  return (
+    <div class="vstack" style="gap:var(--sp-3)">
+      <section
+        class="card card--flat"
+        style={`border-color:${tone.border};background:${tone.bg}`}
+      >
+        <div class="hstack" style="gap:var(--sp-2);margin-bottom:6px;flex-wrap:wrap">
+          <span class={`pill ${tone.pill}`}>{status}</span>
+          <span class="pill pill--info">{roleLabel(role)}</span>
+          {out.provider && <span class="pill">provider: {out.provider}</span>}
+          {out.model && <span class="pill">model: {out.model}</span>}
+          {out.fallbackProvider && (
+            <span class="pill pill--info">fallback: {out.fallbackProvider}</span>
+          )}
+        </div>
+        {out.message && (
+          <div class="mono" style="font-size:var(--fs-sm);line-height:1.5;word-break:break-word">
+            {out.message}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function roleLabel(role: string): string {
+  switch (role) {
+    case "embedding":
+      return t("logs.system.role.embedding");
+    case "llm":
+      return t("logs.system.role.llm");
+    case "skillEvolver":
+      return t("logs.system.role.skillEvolver");
+    default:
+      return role;
+  }
+}
+
 // ─── Generic fallback ───────────────────────────────────────────────────
 
 function GenericDetail({
@@ -886,6 +1011,29 @@ function buildSummary(log: ApiLogDTO, input: unknown, output: unknown): string {
       (out.worldModelId as string | undefined) ??
       (inp.worldModelId as string | undefined);
     return id ? `world model ${truncate(id, 24)}` : log.toolName;
+  }
+  if (log.toolName === "system_error") {
+    const role = (out.role as string | undefined) ?? "?";
+    const message = (out.message as string | undefined) ?? "";
+    const provider = (out.provider as string | undefined) ?? "";
+    const head = `[${roleLabel(role)}]`;
+    const tail = message
+      ? truncate(message, 80)
+      : provider
+      ? provider
+      : "(no message)";
+    return `${head} ${tail}`;
+  }
+  if (log.toolName === "system_model_status") {
+    const role = (out.role as string | undefined) ?? "?";
+    const status = (out.status as string | undefined) ?? "?";
+    const provider = (out.provider as string | undefined) ?? "";
+    const model = (out.model as string | undefined) ?? "";
+    const message = (out.message as string | undefined) ?? "";
+    const bits = [`[${roleLabel(role)}]`, status];
+    if (provider || model) bits.push([provider, model].filter(Boolean).join("/"));
+    if (message) bits.push(truncate(message, 60));
+    return bits.join(" · ");
   }
   if (log.toolName === "task_done" || log.toolName === "task_failed") {
     const rHuman = typeof out.rHuman === "number" ? (out.rHuman as number).toFixed(2) : null;

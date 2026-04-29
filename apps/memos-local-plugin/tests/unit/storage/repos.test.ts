@@ -203,6 +203,7 @@ describe("storage/repos — happy paths", () => {
         vec: vec([1, 0]),
         createdAt: 1,
         updatedAt: 1,
+        version: 1,
       });
 
       expect(() =>
@@ -223,6 +224,7 @@ describe("storage/repos — happy paths", () => {
           vec: null,
           createdAt: 1,
           updatedAt: 1,
+          version: 1,
         }),
       ).toThrow(/UNIQUE/i);
 

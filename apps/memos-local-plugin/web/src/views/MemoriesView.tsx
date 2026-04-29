@@ -760,7 +760,23 @@ function ToolCallCard({
 
 function formatToolPayload(v: unknown): string {
   if (v === undefined || v === null) return "";
-  if (typeof v === "string") return v;
+  // Tool inputs/outputs frequently arrive as already-stringified JSON
+  // (the agent serializes them before storing). Re-parse so the same
+  // 2-space pretty-print path applies regardless of upstream encoding.
+  if (typeof v === "string") {
+    const trimmed = v.trim();
+    if (
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
+      try {
+        return JSON.stringify(JSON.parse(trimmed), null, 2);
+      } catch {
+        return v;
+      }
+    }
+    return v;
+  }
   try {
     return JSON.stringify(v, null, 2);
   } catch {
@@ -893,6 +909,27 @@ function formatTs(ts: number): string {
   if (!ts) return "—";
   try {
     return new Date(ts).toLocaleString();
+  } catch {
+    return String(ts);
+  }
+}
+
+/**
+ * Format a step timestamp with millisecond precision (HH:MM:SS.mmm).
+ * Used in the per-step header row so users can tell apart sub-steps
+ * fired within the same second by a fast tool loop. Uses 24h fields
+ * directly so the locale's AM/PM suffix doesn't end up between the
+ * seconds and the millisecond fraction.
+ */
+function formatStepTime(ts: number): string {
+  if (!ts) return "—";
+  try {
+    const d = new Date(ts);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    const ms = String(d.getMilliseconds()).padStart(3, "0");
+    return `${hh}:${mm}:${ss}.${ms}`;
   } catch {
     return String(ts);
   }
@@ -1205,8 +1242,9 @@ function TraceDrawer({
  *     and any `toolCalls` rendered through the existing
  *     `ToolCallCard`. Empty fields collapse silently.
  *
- * The first step is open by default; the rest start collapsed so the
- * drawer doesn't drown the user when a turn fired a dozen tools.
+ * Every step starts collapsed so the drawer stays compact when a turn
+ * fired a dozen tools — users opt into the detail they want instead of
+ * scrolling past an auto-expanded first step.
  */
 function StepList({ traces }: { traces: readonly TraceDTO[] }) {
   return (
@@ -1223,7 +1261,6 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
           return (
             <details
               key={tr.id}
-              open={idx === 0}
               class="card card--flat"
               style="padding:var(--sp-2) var(--sp-3)"
             >
@@ -1236,7 +1273,7 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
                 </span>
                 <span class={`pill pill--role-${role}`}>{roleLabel}</span>
                 <span class="mono muted" style="font-size:var(--fs-xs)">
-                  {new Date(tr.ts).toLocaleTimeString()}
+                  {formatStepTime(tr.ts)}
                 </span>
                 <span class="mono muted" style="font-size:var(--fs-xs)">
                   V {tr.value.toFixed(2)} · α {tr.alpha.toFixed(2)}

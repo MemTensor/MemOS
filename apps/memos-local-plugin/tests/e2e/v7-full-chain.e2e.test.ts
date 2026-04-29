@@ -85,7 +85,7 @@ function buildFullChainLlm(): LlmClient {
   const script: FakeLlmScript = {
     completeJson: {
       // Intent classifier — task-shaped for everything meaningful.
-      "session.intent.classify": (input) => {
+      "session.intent.classify": (input: unknown) => {
         const text = lastUserMessage(input).toLowerCase();
         if (/^\s*(hi|hello|你好|嗨)\s*$/.test(text)) {
           return {
@@ -106,7 +106,7 @@ function buildFullChainLlm(): LlmClient {
       // Relation classifier — decides revision / follow_up / new_task.
       // IMPORTANT: check `NEW_USER_MESSAGE` only; the system prompt itself
       // mentions "wrong" / "redo", which would otherwise always match.
-      "session.relation.classify": (input) => {
+      "session.relation.classify": (input: unknown) => {
         const newMsg = newUserSegment(lastUserMessage(input));
         if (/不对|错了|重做|改一下|\bwrong\b|\bredo\b|not quite/i.test(newMsg)) {
           return {
@@ -137,7 +137,7 @@ function buildFullChainLlm(): LlmClient {
       },
 
       // R_human scoring — treat negative keywords as a failed turn.
-      "reward.reward.r_human.v3": (input) => {
+      "reward.reward.r_human.v3": (input: unknown) => {
         const text = lastUserMessage(input);
         if (/不对|错了|没覆盖|\bwrong\b/i.test(text)) {
           return {
@@ -167,7 +167,7 @@ function buildFullChainLlm(): LlmClient {
       },
 
       // Capture summarizer — one short line per step.
-      "capture.summarize": (input) => {
+      "capture.summarize": (input: unknown) => {
         const text = lastUserMessage(input);
         if (/fib|斐波那契/i.test(text)) return { summary: "斐波那契函数实现（Python 递归/迭代）" };
         if (/test|测试/i.test(text)) return { summary: "为 Python 函数补充单元测试（含边界）" };
@@ -177,19 +177,19 @@ function buildFullChainLlm(): LlmClient {
       },
 
       // α scorer — reflection quality.
-      "capture.alpha.reflection.score.v1": (input) => {
+      "capture.alpha.reflection.score.v1": (input: unknown) => {
         const text = lastUserMessage(input);
         const alpha = /关键|识别|根因|发现/i.test(text) ? 0.75 : 0.45;
         return { alpha, rationale: "rule-of-thumb by keyword" };
       },
 
       // Capture reflection synth (only when reflection was missing).
-      "capture.reflection.synth": (input) => ({
+      "capture.reflection.synth": (input: unknown) => ({
         reflection: "Scripted fallback: summarized step outcome.",
       }),
 
       // L2 induction — distills a policy from ≥2 similar traces.
-      "l2.l2.induction.v2": (input) => {
+      "l2.l2.induction.v2": (input: unknown) => {
         const text = lastUserMessage(input);
         const isPython = /python|pip|\.py\b/i.test(text);
         return {

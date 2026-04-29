@@ -156,6 +156,14 @@ class MemTensorProvider(MemoryProvider):
             return
         try:
             self._bridge = MemosBridgeClient()
+            # Register the fallback LLM handler BEFORE we open the
+            # session so it is available the very first time the
+            # plugin's facade asks for help (e.g. on the first
+            # `turn.start` retrieval call).
+            self._bridge.register_host_handler(
+                "host.llm.complete",
+                self._handle_host_llm_complete,
+            )
             self._open_session(session_id)
             logger.info(
                 "MemOS: bridge ready session=%s platform=%s (episode deferred)",
@@ -713,9 +721,7 @@ class MemTensorProvider(MemoryProvider):
                 elif kind == "policy":
                     body = self._clip(
                         "\n\n".join(
-                            part
-                            for part in [item.get("title"), item.get("procedure")]
-                            if part
+                            part for part in [item.get("title"), item.get("procedure")] if part
                         )
                     )
                     meta = {
@@ -905,6 +911,148 @@ class MemTensorProvider(MemoryProvider):
         # as a daemon if its viewer is running, so the memory panel
         # remains accessible between `hermes chat` sessions.
 
+    # ─── Host LLM bridge (fallback for plugin-side model failures) ────────
+
+    def _handle_host_llm_complete(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Run a fallback LLM call using the host (hermes) agent's models.
+
+        Wired into the bridge's reverse-RPC channel under the
+        ``host.llm.complete`` method. Triggered when the plugin's
+        configured summary or skill-evolver model fails — instead of
+        bubbling the error straight up (which would stall the V7
+        capture / reflection / skill pipeline), we replay the prompt
+        through ``agent.auxiliary_client.call_llm`` so hermes' own
+        provider stack (including its OpenRouter / Codex / custom
+        endpoint resolution) handles it.
+
+        If the host LLM also fails this raises, the bridge converts
+        that into a JSON-RPC error, the LlmClient ``markFail``s, and
+        the Overview card flips red — exactly matching the spec
+        "if the agent's main model is also down, stop falling back
+        and surface red".
+        """
+        messages = params.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("host.llm.complete: missing messages")
+
+        # Lazy imports — these pull in heavy deps (openai client,
+        # credential pool, …) that we don't want to load until a
+        # fallback is actually requested.
+        try:
+            from agent.auxiliary_client import call_llm  # type: ignore[import-not-found]
+            from hermes_cli.runtime_provider import (  # type: ignore[import-not-found]
+                resolve_runtime_provider,
+            )
+        except Exception as err:
+            raise RuntimeError(f"host LLM bridge unavailable: {err}") from err
+
+        # Resolve hermes' MAIN conversation provider so the fallback
+        # uses exactly what the user configured for chat. Walking the
+        # generic auxiliary auto-detect chain would otherwise depend
+        # on env vars (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, …) that
+        # often don't propagate into the bridge subprocess and would
+        # leave us with no working credential. Pinning to the resolved
+        # main runtime guarantees we hit the same endpoint the user
+        # already authenticated for chat.
+        try:
+            runtime = resolve_runtime_provider()
+        except Exception as err:
+            raise RuntimeError(f"could not resolve hermes main runtime: {err}") from err
+
+        main_runtime: dict[str, str] = {}
+        for field in ("provider", "model", "base_url", "api_key", "api_mode"):
+            value = runtime.get(field) if isinstance(runtime, dict) else None
+            if isinstance(value, str) and value.strip():
+                main_runtime[field] = value.strip()
+
+        normalized = [
+            {
+                "role": str(m.get("role", "user")),
+                "content": str(m.get("content", "")),
+            }
+            for m in messages
+            if isinstance(m, dict)
+        ]
+        timeout_ms = params.get("timeoutMs")
+        timeout_s: float | None = None
+        if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
+            timeout_s = float(timeout_ms) / 1000.0
+
+        max_tokens = params.get("maxTokens")
+        temperature = params.get("temperature")
+
+        kwargs: dict[str, Any] = {
+            "messages": normalized,
+            # `main_runtime` makes `_resolve_auto` prefer the user's
+            # main conversation provider + model over the generic auto
+            # chain. If the user's main provider is also down,
+            # `call_llm` raises — which is exactly the "agent's own
+            # model is broken too, stop falling back" semantic we want
+            # (red light on Overview).
+            "main_runtime": main_runtime,
+        }
+        if isinstance(max_tokens, (int, float)) and max_tokens > 0:
+            kwargs["max_tokens"] = int(max_tokens)
+        if isinstance(temperature, (int, float)):
+            kwargs["temperature"] = float(temperature)
+        if timeout_s is not None:
+            kwargs["timeout"] = timeout_s
+
+        started = time.time()
+        try:
+            response = call_llm(**kwargs)
+        except Exception as err:
+            # Surface the original failure verbatim — the LlmClient
+            # will tag this as a "host fallback failed" terminal error
+            # and the Overview red-light path takes over.
+            raise RuntimeError(f"host LLM call failed: {err}") from err
+
+        # `call_llm` returns an OpenAI ChatCompletion-shaped object.
+        # Pluck the assistant text + token usage defensively so a
+        # non-standard host (e.g. Anthropic native) still produces a
+        # populated response.
+        text = ""
+        model = ""
+        usage_dict: dict[str, int] = {}
+        try:
+            choices = getattr(response, "choices", None) or response.get("choices", [])  # type: ignore[union-attr]
+            if choices:
+                first = choices[0]
+                msg = getattr(first, "message", None) or first.get("message", {})  # type: ignore[union-attr]
+                content = getattr(msg, "content", None) or msg.get("content", "")  # type: ignore[union-attr]
+                text = str(content or "")
+            model = (
+                getattr(response, "model", None)
+                or response.get("model", "")  # type: ignore[union-attr]
+                or ""
+            )
+            u = getattr(response, "usage", None) or response.get("usage", None)  # type: ignore[union-attr]
+            if u is not None:
+                pt = getattr(u, "prompt_tokens", None)
+                ct = getattr(u, "completion_tokens", None)
+                tt = getattr(u, "total_tokens", None)
+                if pt is None and isinstance(u, dict):
+                    pt = u.get("prompt_tokens")
+                    ct = u.get("completion_tokens")
+                    tt = u.get("total_tokens")
+                if isinstance(pt, int):
+                    usage_dict["promptTokens"] = pt
+                if isinstance(ct, int):
+                    usage_dict["completionTokens"] = ct
+                if isinstance(tt, int):
+                    usage_dict["totalTokens"] = tt
+        except Exception:
+            logger.debug("host.llm.complete: shape parse failed", exc_info=True)
+
+        result: dict[str, Any] = {
+            "text": text,
+            "model": str(model or ""),
+            "durationMs": int((time.time() - started) * 1000),
+        }
+        if usage_dict:
+            result["usage"] = usage_dict
+        return result
+
     # ─── Internals ────────────────────────────────────────────────────────
 
     def _open_session(self, session_id: str = "") -> None:
@@ -928,11 +1076,7 @@ class MemTensorProvider(MemoryProvider):
         if isinstance(err, BridgeError) and err.code == "transport_closed":
             return True
         msg = str(err).lower()
-        return (
-            "broken pipe" in msg
-            or "bridge closed" in msg
-            or "transport_closed" in msg
-        )
+        return "broken pipe" in msg or "bridge closed" in msg or "transport_closed" in msg
 
     def _reconnect_bridge(self, session_id: str = "") -> None:
         old_bridge = self._bridge
