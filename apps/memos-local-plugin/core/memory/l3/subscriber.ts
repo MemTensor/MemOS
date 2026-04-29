@@ -56,32 +56,28 @@ export function attachL3Subscriber(deps: L3SubscriberDeps): L3SubscriberHandle {
 
   let closed = false;
   let inflight: Promise<unknown> | null = null;
+  // L3 reads the persisted policy set on each run, so event bursts only need
+  // one replay after the current abstraction settles.
+  let queued: { trigger: L3ProcessInput["trigger"]; extra: Partial<L3ProcessInput> } | null = null;
 
-  async function triggerRun(
+  async function runSafely(
     trigger: L3ProcessInput["trigger"],
     extra: Partial<L3ProcessInput> = {},
   ): Promise<L3ProcessResult | null> {
-    if (closed) return null;
-    if (inflight) {
-      subLog.debug("skip.inflight", { trigger });
-      return null;
-    }
-    const p = runL3(
-      {
-        trigger,
-        ...extra,
-      },
-      {
-        repos: deps.repos,
-        llm: deps.llm,
-        log: subLog,
-        bus: deps.l3Bus,
-        config: deps.config,
-      },
-    );
-    inflight = p;
     try {
-      return await p;
+      return await runL3(
+        {
+          trigger,
+          ...extra,
+        },
+        {
+          repos: deps.repos,
+          llm: deps.llm,
+          log: subLog,
+          bus: deps.l3Bus,
+          config: deps.config,
+        },
+      );
     } catch (err) {
       subLog.error("run.failed", {
         trigger,
@@ -96,9 +92,52 @@ export function attachL3Subscriber(deps: L3SubscriberDeps): L3SubscriberHandle {
         },
       });
       return null;
+    }
+  }
+
+  async function triggerRun(
+    trigger: L3ProcessInput["trigger"],
+    extra: Partial<L3ProcessInput> = {},
+  ): Promise<L3ProcessResult | null> {
+    if (closed) return null;
+    if (inflight) {
+      subLog.debug("skip.inflight", { trigger });
+      return null;
+    }
+    const p = runSafely(trigger, extra);
+    inflight = p;
+    try {
+      return await p;
     } finally {
       inflight = null;
     }
+  }
+
+  async function drainQueuedRuns(): Promise<void> {
+    while (queued && !closed) {
+      const next = queued;
+      queued = null;
+      await runSafely(next.trigger, next.extra);
+    }
+  }
+
+  function scheduleRun(
+    trigger: L3ProcessInput["trigger"],
+    extra: Partial<L3ProcessInput> = {},
+  ): void {
+    if (closed) return;
+    queued = {
+      trigger,
+      extra,
+    };
+    if (inflight) {
+      subLog.debug("queued.inflight", { trigger });
+      return;
+    }
+    const p = drainQueuedRuns().finally(() => {
+      if (inflight === p) inflight = null;
+    });
+    inflight = p;
   }
 
   const offInduced = l2Bus.on("l2.policy.induced", (evt) => {
@@ -107,7 +146,7 @@ export function attachL3Subscriber(deps: L3SubscriberDeps): L3SubscriberHandle {
       policyId: evt.policyId,
       episodeId: evt.episodeId,
     });
-    void triggerRun("l2.policy.induced", {
+    scheduleRun("l2.policy.induced", {
       sessionId: undefined,
       episodeId: evt.episodeId,
     });
@@ -133,7 +172,7 @@ export function attachL3Subscriber(deps: L3SubscriberDeps): L3SubscriberHandle {
       policyId: evt.policyId,
       episodeId: evt.episodeId,
     });
-    void triggerRun("l2.policy.induced", {
+    scheduleRun("l2.policy.induced", {
       sessionId: undefined,
       episodeId: evt.episodeId,
     });
@@ -150,10 +189,10 @@ export function attachL3Subscriber(deps: L3SubscriberDeps): L3SubscriberHandle {
       off();
     },
     async drain(): Promise<void> {
-      // Wait for any in-flight L3 abstraction (LLM call, may take
-      // several seconds) to settle. Called from the pipeline's
-      // `flush()` so single-shot adapters (Hermes' `chat -q`) don't
-      // exit before L3 finishes.
+      // Wait for any in-flight L3 abstraction plus queued replay (LLM call,
+      // may take several seconds) to settle. Called from the pipeline's
+      // `flush()` so single-shot adapters (Hermes' `chat -q`) don't exit
+      // before L3 finishes.
       while (inflight) {
         await inflight;
       }

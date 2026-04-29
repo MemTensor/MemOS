@@ -40,9 +40,11 @@ const en = {
   "nav.section.system": "System",
 
   // Header.
-  "header.brand": "MemOS Local",
-  "header.subtitle": "Local memory viewer",
+  "header.brand": "MemOS",
+  "header.subtitle": "Memory viewer",
   "header.search.placeholder": "Search anywhere…",
+  "header.search.noResults": "No results found",
+  "header.search.viewAll": "View all",
   "header.lang.en": "EN",
   "header.lang.zh": "中",
   "header.theme.light": "Switch to light",
@@ -173,8 +175,10 @@ const en = {
   "restart.waitingUp": "Waiting for the service to come back online…",
   "restart.autoRefresh": "The page will refresh automatically once the service is ready.",
   "restart.failed": "Restart didn't complete — the service didn't come back in time.",
-  "restart.failedHint":
+  "restart.failedHint.openclaw":
     "Try manually: openclaw gateway stop && openclaw gateway start",
+  "restart.failedHint.hermes":
+    "Try manually: pkill -f bridge.cts && hermes chat",
   "common.selectAll": "Select all",
   "common.deleteSelected": "Delete selected",
 
@@ -423,6 +427,26 @@ const en = {
   "tasks.skill.not_generated": "Below induction threshold",
   "tasks.skill.skipped": "Scored as negative example (R ≤ -0.5)",
   "tasks.skill.openSkill": "Open skill",
+  "tasks.skillReason.queued.inProgress":
+    "Task still in progress; skill pipeline has not started yet.",
+  "tasks.skillReason.queued.rewardPending":
+    "Reward scoring not yet complete; skill pipeline will start after scoring.",
+  "tasks.skillReason.queued.policyPending":
+    "Experience is not yet active — needs more supporting tasks to crystallize into a skill (current support: {support}, required: ≥ 3).",
+  "tasks.skillReason.queued.ready":
+    "Experience is ready (gain={gain}, support={support}); skill crystallization will trigger automatically after the next reward scoring.",
+  "tasks.skillReason.skipped":
+    "Task scored significantly negative (R={rTask}), treated as counterexample; no L2 experience or skill will be derived, but L1 traces are retained as negative examples for future Decision Repair.",
+  "tasks.skillReason.not_generated.belowThreshold":
+    "Task score R={rTask} is below the induction threshold (≥ {threshold}) — the conversation was normal, but not strong enough to generalize into an L2 experience; similar tasks will accumulate over time.",
+  "tasks.skillReason.not_generated.noPolicy":
+    "No L2 experience induced yet — a single task cannot generalize across tasks; requires at least 2 similar tasks (minEpisodesForInduction) with V ≥ 0.1 to trigger L2 induction, then ≥ 3 supporting tasks to crystallize into a skill.",
+  "tasks.skillReason.generated":
+    "Skill \"{skillName}\" crystallized from experience {policyId}.",
+  "tasks.skillReason.upgraded":
+    "Skill \"{skillName}\" upgraded from experience {policyId}.",
+  "tasks.abandonReason.uncleanExit":
+    "Plugin did not exit cleanly last time; incomplete tasks were automatically closed on startup.",
 
   // Skills.
   "skills.title": "Skills",
@@ -584,6 +608,10 @@ const en = {
     "Scan the legacy plugin's SQLite database for the currently running agent (openclaw → ~/.openclaw/memos-local, hermes → ~/.hermes/memos-state/memos-local) and copy matching rows into the new store. Non-destructive — the legacy file stays put.",
   "import.migrate.scan": "Scan legacy DB",
   "import.migrate.run": "Run migration",
+  "import.migrate.found":
+    "Found legacy {agent} DB at {path}. Candidates — traces: {traces}, skills: {skills}, tasks: {tasks}.",
+  "import.migrate.notFoundAt": "No legacy database found at {path}.",
+  "import.migrate.notFound": "No legacy database found.",
 
   // Admin.
   "admin.title": "Team administration",
@@ -627,6 +655,7 @@ const en = {
   "settings.skill.desc":
     "Model that turns proven experiences into reusable skills and keeps environment knowledge up to date.",
   "settings.hub.enabled": "Enable team sharing",
+  "settings.hub.subtitle": "Share your skills and (optionally) memories with teammates.",
   "settings.hub.role": "Role",
   "settings.hub.role.hub": "Host a hub",
   "settings.hub.role.client": "Join a hub",
@@ -674,9 +703,11 @@ const zh: Record<TranslationKey, string> = {
   "nav.section.insights": "洞察",
   "nav.section.system": "系统",
 
-  "header.brand": "MemOS 本地",
-  "header.subtitle": "本地记忆面板",
+  "header.brand": "MemOS",
+  "header.subtitle": "记忆面板",
   "header.search.placeholder": "全局搜索…",
+  "header.search.noResults": "未找到匹配结果",
+  "header.search.viewAll": "查看全部",
   "header.lang.en": "EN",
   "header.lang.zh": "中",
   "header.theme.light": "切换为浅色",
@@ -798,8 +829,10 @@ const zh: Record<TranslationKey, string> = {
   "restart.waitingUp": "正在等待服务重新上线…",
   "restart.autoRefresh": "服务就绪后页面将自动刷新。",
   "restart.failed": "重启超时 — 服务未能在预期时间内恢复。",
-  "restart.failedHint":
+  "restart.failedHint.openclaw":
     "请手动重启：openclaw gateway stop && openclaw gateway start",
+  "restart.failedHint.hermes":
+    "请手动重启：pkill -f bridge.cts && hermes chat",
   "common.selectAll": "全选",
   "common.deleteSelected": "删除所选",
 
@@ -1024,6 +1057,26 @@ const zh: Record<TranslationKey, string> = {
   "tasks.skill.not_generated": "未达沉淀阈值",
   "tasks.skill.skipped": "本任务评为反例 (R ≤ -0.5)",
   "tasks.skill.openSkill": "打开技能",
+  "tasks.skillReason.queued.inProgress":
+    "任务仍在进行中，技能流水线尚未启动。",
+  "tasks.skillReason.queued.rewardPending":
+    "Reward 评分尚未完成，技能流水线将在评分后启动。",
+  "tasks.skillReason.queued.policyPending":
+    "经验尚未激活——需要更多支撑任务才能结晶为技能（当前 support={support}，需 ≥3）。",
+  "tasks.skillReason.queued.ready":
+    "经验已就绪（gain={gain}，support={support}），技能结晶将在下次 reward 评分后自动触发。",
+  "tasks.skillReason.skipped":
+    "任务评分为明显负分 (R={rTask})，视为反例；不会沉淀出新的 L2 经验或技能，但原始 L1 轨迹会作为反面教材保留，在后续 Decision Repair 中生成规避建议。",
+  "tasks.skillReason.not_generated.belowThreshold":
+    "任务评分 R={rTask} 未达到沉淀阈值 (≥ {threshold})——对话本身正常，只是还不够强到能泛化成 L2 经验；多做几个相似任务后会自动积累。",
+  "tasks.skillReason.not_generated.noPolicy":
+    "暂未归纳出 L2 经验——单个任务无法跨任务泛化；需要至少 2 个相似任务（minEpisodesForInduction），且 V 值 ≥ 0.1 才能触发 L2 诱导，之后支撑 ≥ 3 个相似任务才会结晶为技能。",
+  "tasks.skillReason.generated":
+    "技能「{skillName}」已从经验 {policyId} 结晶。",
+  "tasks.skillReason.upgraded":
+    "技能「{skillName}」已从经验 {policyId} 升级。",
+  "tasks.abandonReason.uncleanExit":
+    "插件上次未正常退出，启动时自动关闭未完成的任务。",
 
   "skills.title": "技能",
   "skills.subtitle": "从成功任务中沉淀出来、可以重复调用的能力。",
@@ -1177,6 +1230,10 @@ const zh: Record<TranslationKey, string> = {
     "扫描当前运行 agent 对应的旧插件 SQLite 数据库（openclaw → ~/.openclaw/memos-local，hermes → ~/.hermes/memos-state/memos-local），把匹配的记录拷贝到新存储。非破坏性，旧文件不动。",
   "import.migrate.scan": "扫描旧数据库",
   "import.migrate.run": "执行迁移",
+  "import.migrate.found":
+    "在 {path} 找到 {agent} 旧数据库。可迁移条目 — 记忆：{traces}，技能：{skills}，任务：{tasks}。",
+  "import.migrate.notFoundAt": "在 {path} 没有找到旧数据库。",
+  "import.migrate.notFound": "没有找到旧数据库。",
 
   "admin.title": "团队管理",
   "admin.subtitle": "管理团队分享的用户、群组与待审批。",
@@ -1213,6 +1270,7 @@ const zh: Record<TranslationKey, string> = {
   "settings.skill.title": "技能进化",
   "settings.skill.desc": "用于把稳定的经验转成可调用技能，并维护环境认知的模型。",
   "settings.hub.enabled": "启用团队分享",
+  "settings.hub.subtitle": "与团队成员分享你的技能和（可选的）记忆。",
   "settings.hub.role": "角色",
   "settings.hub.role.hub": "托管 Hub",
   "settings.hub.role.client": "加入 Hub",

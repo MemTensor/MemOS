@@ -1,18 +1,13 @@
 /**
  * Config-save restart state manager.
  *
- * Two distinct flows based on agent type:
+ * Unified flow for all agents: POST `/api/v1/admin/restart` triggers
+ * the backend to spawn a fresh daemon bridge and exit. The frontend
+ * polls `/api/v1/health` until the new process is live, then reloads.
  *
- *   - **OpenClaw**: the plugin runs inside the `openclaw-gateway` process
- *     which is managed by macOS launchd. We POST `/api/v1/admin/restart`
- *     to trigger `process.exit(0)`, launchd respawns the gateway, and
- *     we poll `/api/v1/health` until the service comes back, then reload.
- *     During this time a full-screen spinner overlay is shown.
- *
- *   - **Hermes**: the bridge is spawned via Python `subprocess.Popen` on
- *     demand; once it exits, hermes doesn't bring it back until the next
- *     `hermes chat` invocation. So we only show a dismissible toast
- *     telling the user to restart manually.
+ *   - OpenClaw: launchd respawns the gateway — may take a few seconds.
+ *   - Hermes: the restart endpoint spawns `bridge.cts --daemon` before
+ *     exiting, so the viewer comes back almost immediately.
  */
 import { signal } from "@preact/signals";
 import { api } from "../api/client";
@@ -29,18 +24,6 @@ export type RestartPhase =
 export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
 });
-
-const TOAST_DISMISS_MS = 8_000;
-
-let dismissTimer: ReturnType<typeof setTimeout> | null = null;
-
-function scheduleDismiss(): void {
-  if (dismissTimer) clearTimeout(dismissTimer);
-  dismissTimer = setTimeout(() => {
-    restartState.value = { phase: "idle" };
-    dismissTimer = null;
-  }, TOAST_DISMISS_MS);
-}
 
 export interface TriggerRestartOptions {
   kick?: "restart-endpoint" | "skip";
@@ -80,19 +63,38 @@ async function pollHealthUntilUp(maxAttempts = 60): Promise<boolean> {
 }
 
 /**
- * Config saved. For OpenClaw: auto-restart with spinner overlay.
- * For Hermes/others: show a dismissible toast.
+ * Quick health check — just verify the server responds once.
+ * Used for Hermes where the new daemon is already up before the old exits.
+ */
+async function quickPollUp(maxAttempts = 10): Promise<boolean> {
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise((r) => setTimeout(r, 800));
+    try {
+      const res = await fetch("/api/v1/health");
+      if (res.ok || res.status === 401 || res.status === 403) return true;
+    } catch {
+      /* server still transitioning */
+    }
+  }
+  return false;
+}
+
+/**
+ * Config saved. Trigger a restart for any agent. The backend spawns a
+ * fresh daemon bridge before exiting, so the viewer port comes back up
+ * automatically for both OpenClaw (launchd) and Hermes (self-respawn).
  */
 export async function triggerRestart(
   _opts: TriggerRestartOptions = {},
 ): Promise<void> {
+  restartState.value = { phase: "restarting" };
+  try {
+    await api.post("/api/v1/admin/restart");
+  } catch {
+    // Server might already be going down
+  }
+
   if (isOpenClaw()) {
-    restartState.value = { phase: "restarting" };
-    try {
-      await api.post("/api/v1/admin/restart");
-    } catch {
-      // Server might already be going down
-    }
     const ok = await pollHealthUntilUp(60);
     if (ok) {
       window.location.href =
@@ -101,18 +103,23 @@ export async function triggerRestart(
       restartState.value = { phase: "restartFailed" };
     }
   } else {
-    restartState.value = { phase: "saved" };
-    scheduleDismiss();
+    // Hermes: new daemon spawns before old exits, transition is fast.
+    const ok = await quickPollUp(10);
+    if (ok) {
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } else {
+      restartState.value = { phase: "restartFailed" };
+    }
   }
 }
 
 /**
- * Data cleared. For OpenClaw: auto-restart with spinner.
- * For Hermes/others: show toast.
+ * Data cleared. Both agents self-respawn via the daemon mechanism.
  */
 export async function triggerCleared(): Promise<void> {
+  restartState.value = { phase: "restarting" };
   if (isOpenClaw()) {
-    restartState.value = { phase: "restarting" };
     const ok = await pollHealthUntilUp(60);
     if (ok) {
       window.location.href =
@@ -121,16 +128,19 @@ export async function triggerCleared(): Promise<void> {
       restartState.value = { phase: "restartFailed" };
     }
   } else {
-    restartState.value = { phase: "cleared" };
-    scheduleDismiss();
+    // Hermes: clear-data spawns a new daemon. Give it extra time
+    // since it also needs to re-create the DB on first boot.
+    const ok = await quickPollUp(15);
+    if (ok) {
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } else {
+      restartState.value = { phase: "restartFailed" };
+    }
   }
 }
 
 /** Dismiss the banner immediately (e.g. user clicked the close button). */
 export function dismissRestartBanner(): void {
-  if (dismissTimer) {
-    clearTimeout(dismissTimer);
-    dismissTimer = null;
-  }
   restartState.value = { phase: "idle" };
 }

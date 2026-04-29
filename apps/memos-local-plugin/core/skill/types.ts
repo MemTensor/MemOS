@@ -215,6 +215,14 @@ export interface SkillVerificationFailedEvent
   reason: string;
 }
 
+export interface SkillModelRefusalDetails {
+  provider: string;
+  model: string;
+  servedBy?: string;
+  matchedPrefix: string;
+  content: string;
+}
+
 export interface SkillStatusChangedEvent
   extends SkillEventBase<"skill.status.changed"> {
   skillId: SkillId;
@@ -248,6 +256,7 @@ export interface SkillFailedEvent extends SkillEventBase<"skill.failed"> {
   skillId?: SkillId;
   stage: "eligibility" | "evidence" | "crystallize" | "verify" | "persist";
   reason: string;
+  modelRefusal?: SkillModelRefusalDetails;
 }
 
 export type SkillEvent =

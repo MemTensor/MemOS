@@ -49,6 +49,11 @@ import type {
   MemoryCore,
   Unsubscribe,
 } from "../../agent-contract/memory-core.js";
+import type {
+  EpisodeSnapshot,
+  EpisodeTurn,
+  IntentDecision,
+} from "../session/types.js";
 
 import type {
   EpisodeRow,
@@ -68,6 +73,7 @@ import { runMigrations } from "../storage/migrator.js";
 import { makeRepos } from "../storage/repos/index.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
+import { getHostLlmBridge } from "../llm/host-bridge.js";
 
 import { createPipeline } from "./orchestrator.js";
 import type { PipelineDeps, PipelineHandle } from "./types.js";
@@ -161,6 +167,24 @@ export async function bootstrapMemoryCoreFull(
   } catch (err) {
     log.warn("llm.unavailable", {
       err: err instanceof Error ? err.message : String(err),
+    });
+    llm = null;
+  }
+
+  // When provider=host, the LLM client was created successfully but
+  // every call will fail at runtime if no HostLlmBridge is registered.
+  // Detect this eagerly and null-out the client so downstream modules
+  // see "no LLM" instead of burning retries on every reward/L2/skill
+  // tick. The adapter is responsible for calling registerHostLlmBridge()
+  // before core.init(); if it hasn't by now, it won't.
+  if (llm && llm.provider === "host" && !getHostLlmBridge()) {
+    log.warn("llm.host_bridge_missing", {
+      provider: "host",
+      impact: "LLM client created but no HostLlmBridge registered — " +
+        "every call would fail with LLM_UNAVAILABLE. " +
+        "Nulling out the client so reward/L2/skill/L3 skip cleanly. " +
+        "Configure a direct provider (openai_compatible, anthropic, gemini) " +
+        "or ensure the host adapter calls registerHostLlmBridge().",
     });
     llm = null;
   }
@@ -323,59 +347,17 @@ export function createMemoryCore(
 
     // Any `status: "open"` row we see on boot is an orphan from a
     // previous unclean shutdown — the plugin host was SIGKILL'd, the
-    // gateway was bootout'd, the process crashed mid-turn, etc. We
-    // have no in-memory state to reconcile them against, so they'd
-    // otherwise stay "激活" forever in the viewer even though no one
-    // is working on them. Abandon them now with an explicit reason
-    // so the Tasks list shows the right status on first load.
+    // gateway was bootout'd, the process crashed mid-turn, etc.
     //
-    // We deliberately do NOT fire the reward/capture chain for these
-    // rows — the orphan state means there's no completed assistant
-    // turn to score against, and re-running capture on a mid-flight
-    // episode would double-insert traces. `abandon()` flips the row
-    // to `closed` + sets `closeReason: "abandoned"` without touching
-    // trace_ids_json.
+    // Treat rows that already have traces as a missed `session_end`,
+    // not as user abandonment: finalize them and emit the same
+    // `episode.finalized` event the normal session close path emits so
+    // capture → reward → L2 → L3 → Skill can catch up on restart. Rows
+    // that already carry rTask only need their final status repaired.
     try {
       const orphans = handle.repos.episodes.list({ status: "open", limit: 500 });
       if (orphans.length > 0) {
-        log.info("init.orphan_episodes.close", { count: orphans.length });
-        const endedAt = Date.now();
-        for (const ep of orphans) {
-          try {
-            handle.repos.episodes.close(
-              ep.id as import("../../agent-contract/dto.js").EpisodeId,
-              endedAt,
-            );
-            // If the pipeline already scored this episode (rTask is set),
-            // mark it as "finalized" — the chain ran to completion before
-            // the crash, only the final status flip was lost. Blanket
-            // "abandoned" would show "已跳过" for a task that produced
-            // real knowledge + possibly a skill.
-            const hasReward = ep.rTask != null;
-            handle.repos.episodes.updateMeta(
-              ep.id as import("../../agent-contract/dto.js").EpisodeId,
-              hasReward
-                ? {
-                    closeReason: "finalized",
-                    abandonReason: undefined,
-                  }
-                : {
-                    closeReason: "abandoned",
-                    abandonReason:
-                      "插件上次未正常退出，启动时自动关闭未完成的任务",
-                  },
-            );
-            log.info(hasReward ? "init.orphan.finalized" : "init.orphan.abandoned", {
-              episodeId: ep.id,
-              rTask: ep.rTask,
-            });
-          } catch (err) {
-            log.debug("init.orphan_close.skipped", {
-              episodeId: ep.id,
-              err: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
+        await recoverOpenEpisodesAsSessionEnd(orphans);
       }
     } catch (err) {
       log.debug("init.orphan_scan.failed", {
@@ -402,7 +384,12 @@ export function createMemoryCore(
           role: inferTurnRole(tc),
           action: phase === "lite" ? ("stored" as const) : ("reflected" as const),
           summary: tc.reflection?.text ?? null,
-          content: (tc.userText || tc.agentText || "").slice(0, 400),
+          content: (
+            tc.userText ||
+            tc.agentText ||
+            summarizeToolCalls(tc.toolCalls) ||
+            ""
+          ).slice(0, 400),
           traceId: tc.traceId,
         }));
         handle.repos.apiLogs.insert({
@@ -545,12 +532,201 @@ export function createMemoryCore(
           sessionId: result.sessionId,
         }, {
           rHuman: result.rHuman,
-          source: result.source,
+          source: result.humanScore.source,
           timings: result.timings,
         }, durationSince(result.startedAt, result.completedAt), ok);
       }
     });
   }
+
+  async function recoverOpenEpisodesAsSessionEnd(
+    orphans: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
+  ): Promise<void> {
+    const endedAt = Date.now();
+    log.info("init.orphan_episodes.session_end_recover", { count: orphans.length });
+    debugStartupRecovery("H1", "startup_recovery_scan", {
+      count: orphans.length,
+      episodes: orphans.map((ep) => ({
+        id: ep.id,
+        sessionId: ep.sessionId,
+        traceCount: ep.traceIds.length,
+        rTask: ep.rTask,
+      })),
+    });
+
+    const needsRewardFallback: EpisodeId[] = [];
+    for (const ep of orphans) {
+      try {
+        const episodeId = ep.id as EpisodeId;
+        const traceIds = (ep.traceIds ?? []) as TraceId[];
+        handle.repos.episodes.close(episodeId, endedAt, ep.rTask ?? undefined);
+        handle.repos.episodes.updateMeta(episodeId, {
+          closeReason: "finalized",
+          abandonReason: undefined,
+          recoveredAtStartup: endedAt,
+          recoveryReason: "missed_session_end",
+        });
+
+        if (ep.rTask != null) {
+          log.info("init.orphan.repaired_finalized", {
+            episodeId,
+            sessionId: ep.sessionId,
+            rTask: ep.rTask,
+          });
+          debugStartupRecovery("H2", "startup_recovery_already_scored", {
+            episodeId,
+            sessionId: ep.sessionId,
+            rTask: ep.rTask,
+          });
+          continue;
+        }
+
+        const snapshot = snapshotFromRecoveredEpisode(ep, endedAt);
+        debugStartupRecovery("H3", "startup_recovery_emit_finalized", {
+          episodeId,
+          sessionId: ep.sessionId,
+          traceCount: traceIds.length,
+          recoveredTurnCount: snapshot.turnCount,
+        });
+        handle.buses.session.emit({
+          kind: "episode.finalized",
+          episode: snapshot,
+          closedBy: "finalized",
+        });
+        needsRewardFallback.push(episodeId);
+      } catch (err) {
+        log.debug("init.orphan_recovery.skipped", {
+          episodeId: ep.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        debugStartupRecovery("H4", "startup_recovery_error", {
+          episodeId: ep.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    try {
+      await handle.flush();
+      for (const episodeId of needsRewardFallback) {
+        const row = handle.repos.episodes.getById(episodeId);
+        if (row?.rTask == null) {
+          await handle.rewardRunner.run({
+            episodeId,
+            feedback: [],
+            trigger: "manual",
+          });
+        }
+      }
+      await handle.flush();
+      debugStartupRecovery("H5", "startup_recovery_flush_done", {
+        recoveredCount: orphans.length,
+        rewardedEpisodes: needsRewardFallback.map((episodeId) => {
+          const row = handle.repos.episodes.getById(episodeId);
+          return {
+            episodeId,
+            rTask: row?.rTask ?? null,
+            closeReason: (row?.meta as { closeReason?: unknown } | undefined)?.closeReason,
+            abandonReason: (row?.meta as { abandonReason?: unknown } | undefined)?.abandonReason,
+          };
+        }),
+      });
+    } catch (err) {
+      log.warn("init.orphan_recovery.flush_failed", {
+        count: orphans.length,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      debugStartupRecovery("H5", "startup_recovery_flush_failed", {
+        count: orphans.length,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  function snapshotFromRecoveredEpisode(
+    ep: EpisodeRow & { meta?: Record<string, unknown> },
+    endedAt: number,
+  ): EpisodeSnapshot {
+    const traceIds = (ep.traceIds ?? []) as TraceId[];
+    const traces =
+      traceIds.length > 0
+        ? handle.repos.traces
+            .getManyByIds(traceIds)
+            .sort((a, b) => a.ts - b.ts)
+        : [];
+    const turns: EpisodeTurn[] = [];
+    for (const tr of traces) {
+      if (tr.userText) {
+        turns.push({
+          id: `${tr.id}:user`,
+          ts: tr.ts,
+          role: "user",
+          content: tr.userText,
+        });
+      }
+      if (tr.toolCalls.length > 0) {
+        turns.push({
+          id: `${tr.id}:tool`,
+          ts: tr.ts,
+          role: "tool",
+          content: JSON.stringify(tr.toolCalls),
+          meta: { toolCalls: tr.toolCalls },
+        });
+      }
+      if (tr.agentText) {
+        turns.push({
+          id: `${tr.id}:assistant`,
+          ts: tr.ts,
+          role: "assistant",
+          content: tr.agentText,
+          meta: {
+            thinking: tr.agentThinking ?? undefined,
+            summary: tr.summary ?? undefined,
+          },
+        });
+      }
+    }
+    return {
+      id: ep.id as EpisodeId,
+      sessionId: ep.sessionId as SessionId,
+      startedAt: ep.startedAt,
+      endedAt,
+      status: "closed",
+      rTask: ep.rTask ?? null,
+      turnCount: turns.length,
+      turns,
+      traceIds,
+      meta: {
+        ...(ep.meta ?? {}),
+        closeReason: "finalized",
+        recoveredAtStartup: endedAt,
+        recoveryReason: "missed_session_end",
+      },
+      intent: normaliseRecoveredIntent(ep.meta),
+    };
+  }
+
+  function normaliseRecoveredIntent(meta?: Record<string, unknown>): IntentDecision {
+    const maybeIntent = (meta as { intent?: Partial<IntentDecision> } | undefined)?.intent;
+    return {
+      kind: maybeIntent?.kind ?? "unknown",
+      confidence: typeof maybeIntent?.confidence === "number" ? maybeIntent.confidence : 0,
+      reason: maybeIntent?.reason ?? "recovered from startup orphan episode",
+      retrieval: maybeIntent?.retrieval ?? {
+        tier1: true,
+        tier2: true,
+        tier3: true,
+      },
+      llmModel: maybeIntent?.llmModel,
+      signals: maybeIntent?.signals ?? ["startup_recovery"],
+    };
+  }
+
+  function debugStartupRecovery(
+    hypothesisId: string,
+    message: string,
+    data: Record<string, unknown>,
+  ): void {}
 
   async function shutdown(): Promise<void> {
     if (shutDown) return;
@@ -565,6 +741,40 @@ export function createMemoryCore(
   }
 
   async function health(): Promise<CoreHealth> {
+    // Read the latest on-disk config so that model names reflect what
+    // the user last saved, even before a restart applies the change.
+    let diskConfig: ResolvedConfig | null = null;
+    try {
+      const { loadConfig } = await import("../config/index.js");
+      const { config } = await loadConfig(handle.home);
+      diskConfig = config;
+    } catch {
+      /* fall through to in-memory */
+    }
+
+    const llmInfo = llmHealth(handle.llm, latestTraceTs());
+    const embedderInfo = embedderHealth(handle.embedder, latestTraceTs());
+    const skillEvolverInfo = resolveSkillEvolver(
+      diskConfig ?? handle.config,
+      handle.llm,
+      latestTraceTs(),
+    );
+
+    // Override model names from disk config if they differ from the
+    // in-memory client (user saved new settings but hasn't restarted).
+    if (diskConfig) {
+      const diskLlm = diskConfig.llm as { model?: string; provider?: string } | undefined;
+      if (diskLlm?.model && diskLlm.model !== llmInfo.model) {
+        llmInfo.model = diskLlm.model;
+        if (diskLlm.provider) llmInfo.provider = diskLlm.provider;
+      }
+      const diskEmb = diskConfig.embedding as { model?: string; provider?: string } | undefined;
+      if (diskEmb?.model && diskEmb.model !== embedderInfo.model) {
+        embedderInfo.model = diskEmb.model;
+        if (diskEmb.provider) embedderInfo.provider = diskEmb.provider;
+      }
+    }
+
     return {
       ok: initialized && !shutDown,
       version: pkgVersion,
@@ -577,17 +787,9 @@ export function createMemoryCore(
         skills: home.skillsDir,
         logs: home.logsDir,
       },
-      // V7 overview card: fall back to the newest captured trace as
-      // a proxy for "LLM + embedder were OK recently" when the live
-      // `stats().lastOkAt` counter hasn't yet been populated in this
-      // process. Every captured trace is proof that reflection / α
-      // scoring (LLM) and summary embedding (embedder) both
-      // succeeded at that moment — so reading the DB max ts gives a
-      // correct, non-fabricated lower bound that survives plugin
-      // restarts without misleading the user.
-      llm: llmHealth(handle.llm, latestTraceTs()),
-      embedder: embedderHealth(handle.embedder, latestTraceTs()),
-      skillEvolver: resolveSkillEvolver(handle.config, handle.llm, latestTraceTs()),
+      llm: llmInfo,
+      embedder: embedderInfo,
+      skillEvolver: skillEvolverInfo,
     };
   }
 
@@ -625,6 +827,14 @@ export function createMemoryCore(
       );
     }
     handle.sessionManager.closeSession(sessionId, "client");
+    try {
+      await handle.flush();
+    } catch (err) {
+      log.warn("closeSession.flush_failed", {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   async function openEpisode(input: {
@@ -1396,6 +1606,8 @@ export function createMemoryCore(
         tags: tagSet.size > 0 ? Array.from(tagSet).sort() : undefined,
         skillStatus: derivation.status,
         skillReason: derivation.reason,
+        skillReasonKey: derivation.reasonKey,
+        skillReasonParams: derivation.reasonParams,
         linkedSkillId: derivation.linkedSkillId,
         closeReason,
         abandonReason,
@@ -1447,19 +1659,26 @@ export function createMemoryCore(
   async function countTraces(input?: {
     sessionId?: SessionId;
     q?: string;
+    groupByTurn?: boolean;
   }): Promise<number> {
     ensureLive();
     const needle = (input?.q ?? "").trim().toLowerCase();
     if (!needle) {
-      return handle.repos.traces.count({ sessionId: input?.sessionId });
+      return input?.groupByTurn
+        ? handle.repos.traces.countTurns({ sessionId: input?.sessionId })
+        : handle.repos.traces.count({ sessionId: input?.sessionId });
     }
     // q substring scan — mirror `listTraces`. Walk all matching
     // traces from the repo (no limit) and apply the same filter.
     const rows = handle.repos.traces.list({ sessionId: input?.sessionId });
-    return rows.filter((r) => {
+    const matched = rows.filter((r) => {
       const hay = ((r.summary ?? "") + "\n" + r.userText + "\n" + r.agentText).toLowerCase();
       return hay.includes(needle);
-    }).length;
+    });
+    if (!input?.groupByTurn) return matched.length;
+    const turnKeys = new Set<string>();
+    for (const r of matched) turnKeys.add(`${r.episodeId ?? "_"}:${r.turnId}`);
+    return turnKeys.size;
   }
 
   async function listTraces(input?: {
@@ -1467,11 +1686,75 @@ export function createMemoryCore(
     offset?: number;
     sessionId?: SessionId;
     q?: string;
+    groupByTurn?: boolean;
   }): Promise<TraceDTO[]> {
     ensureLive();
     const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
     const offset = Math.max(0, input?.offset ?? 0);
     const needle = (input?.q ?? "").trim().toLowerCase();
+
+    if (input?.groupByTurn) {
+      // Group-by-turn: paginate at the (episodeId, turnId) level so each
+      // "memory" on the Memories page corresponds to one user turn.
+      if (!needle) {
+        const turnKeys = handle.repos.traces.listTurnKeys({
+          sessionId: input?.sessionId,
+          limit,
+          offset,
+        });
+        const rows = handle.repos.traces.listByTurnKeys(turnKeys);
+        // The frontend's `buildGroups` preserves first-encounter order
+        // when bucketing traces by turnKey. We need newest turn first
+        // (matching `listTurnKeys` DESC order), with chronological order
+        // within each turn.
+        const turnOrder = new Map<string, number>();
+        turnKeys.forEach((k, i) =>
+          turnOrder.set(`${k.episodeId ?? "_"}:${k.turnId}`, i),
+        );
+        rows.sort((a, b) => {
+          const ka = `${a.episodeId ?? "_"}:${a.turnId}`;
+          const kb = `${b.episodeId ?? "_"}:${b.turnId}`;
+          const ia = turnOrder.get(ka) ?? 0;
+          const ib = turnOrder.get(kb) ?? 0;
+          if (ia !== ib) return ia - ib;
+          return a.ts - b.ts;
+        });
+        return rows.map(traceRowToDTO);
+      }
+      // Search + group: scan, filter, then paginate by distinct turn key.
+      const allRows = handle.repos.traces.list({ sessionId: input?.sessionId });
+      const matched = allRows.filter((r) => {
+        const hay = ((r.summary ?? "") + "\n" + r.userText + "\n" + r.agentText).toLowerCase();
+        return hay.includes(needle);
+      });
+      const seen = new Map<string, { episodeId: string | null; turnId: number; maxTs: number }>();
+      for (const r of matched) {
+        const k = `${r.episodeId ?? "_"}:${r.turnId}`;
+        const existing = seen.get(k);
+        if (!existing || r.ts > existing.maxTs) {
+          seen.set(k, { episodeId: r.episodeId, turnId: r.turnId, maxTs: r.ts });
+        }
+      }
+      const orderedKeys = [...seen.values()]
+        .sort((a, b) => b.maxTs - a.maxTs)
+        .slice(offset, offset + limit);
+      const turnOrder = new Map<string, number>();
+      orderedKeys.forEach((k, i) =>
+        turnOrder.set(`${k.episodeId ?? "_"}:${k.turnId}`, i),
+      );
+      const traces = matched
+        .filter((r) => turnOrder.has(`${r.episodeId ?? "_"}:${r.turnId}`))
+        .sort((a, b) => {
+          const ka = `${a.episodeId ?? "_"}:${a.turnId}`;
+          const kb = `${b.episodeId ?? "_"}:${b.turnId}`;
+          const ia = turnOrder.get(ka) ?? 0;
+          const ib = turnOrder.get(kb) ?? 0;
+          if (ia !== ib) return ia - ib;
+          return a.ts - b.ts;
+        });
+      return traces.map(traceRowToDTO);
+    }
+
     if (!needle) {
       const rows = handle.repos.traces.list({
         sessionId: input?.sessionId,
@@ -1661,8 +1944,14 @@ export function createMemoryCore(
         sourcePolicyIds: s.sourcePolicyIds ?? [],
       }));
 
+    // Count unique (episodeId, turnId) groups instead of raw traces so
+    // the Overview "memories" metric matches what the Memories page
+    // shows: 1 user turn = 1 memory (regardless of how many tool calls
+    // / sub-steps were captured for that turn).
+    const totalTurns = handle.repos.traces.countTurns();
+
     return {
-      total: traces.length,
+      total: totalTurns,
       writesToday,
       sessions: sessions.size,
       embeddings,
@@ -1836,10 +2125,14 @@ export function createMemoryCore(
           status: dto.status,
           sourceEpisodeIds: [],
           inducedBy: "import",
+          decisionGuidance: {
+            preference: [...(dto.preference ?? [])],
+            antiPattern: [...(dto.antiPattern ?? [])],
+          },
           vec: null,
           createdAt: dto.createdAt ?? Date.now(),
           updatedAt: dto.updatedAt ?? Date.now(),
-        } as PolicyRow);
+        });
         imported++;
       } catch {
         skipped++;
@@ -2524,37 +2817,52 @@ export function deriveSkillStatus(
 ): {
   status: EpisodeListItemDTO["skillStatus"];
   reason: string | null;
+  reasonKey: string | null;
+  reasonParams: Record<string, string> | null;
   linkedSkillId: SkillId | null;
 } {
   if (ep.status === "open") {
-    return { status: "queued", reason: "任务仍在进行中，技能流水线尚未启动", linkedSkillId: null };
+    return {
+      status: "queued",
+      reason: "任务仍在进行中，技能流水线尚未启动",
+      reasonKey: "tasks.skillReason.queued.inProgress",
+      reasonParams: null,
+      linkedSkillId: null,
+    };
   }
   if (ep.rTask == null) {
     return {
       status: "queued",
       reason: "Reward 评分尚未完成，技能流水线将在评分后启动",
+      reasonKey: "tasks.skillReason.queued.rewardPending",
+      reasonParams: null,
       linkedSkillId: null,
     };
   }
   if (ep.rTask <= R_NEGATIVE_FLOOR) {
     return {
       status: "skipped",
-      reason: `任务评分为明显负分 (R=${ep.rTask.toFixed(2)})，视为反例；不会沉淀出新的 L2 经验或技能，但原始 L1 轨迹会作为反面教材保留，在后续 Decision Repair 中生成 anti-pattern 规避下次同类错误`,
+      reason: `任务评分为明显负分 (R=${ep.rTask.toFixed(2)})，视为反例`,
+      reasonKey: "tasks.skillReason.skipped",
+      reasonParams: { rTask: ep.rTask.toFixed(2) },
       linkedSkillId: null,
     };
   }
   if (ep.rTask < R_BELOW_THRESHOLD) {
     return {
       status: "not_generated",
-      reason: `任务评分 R=${ep.rTask.toFixed(2)} 未达到沉淀阈值 (≥ ${R_BELOW_THRESHOLD.toFixed(2)})——对话本身正常，只是还不够强到能泛化成 L2 经验；多做几个相似任务后会自动积累`,
+      reason: `任务评分 R=${ep.rTask.toFixed(2)} 未达到沉淀阈值`,
+      reasonKey: "tasks.skillReason.not_generated.belowThreshold",
+      reasonParams: { rTask: ep.rTask.toFixed(2), threshold: R_BELOW_THRESHOLD.toFixed(2) },
       linkedSkillId: null,
     };
   }
   if (relatedPolicies.length === 0) {
     return {
       status: "not_generated",
-      reason:
-        "暂未归纳出 L2 经验——单个任务无法跨任务泛化；需要至少 2 个相似任务（minEpisodesForInduction），且 V 值 ≥ 0.1 才能触发 L2 诱导，之后支撑 ≥ 3 个相似任务才会结晶为技能",
+      reason: "暂未归纳出 L2 经验",
+      reasonKey: "tasks.skillReason.not_generated.noPolicy",
+      reasonParams: null,
       linkedSkillId: null,
     };
   }
@@ -2562,39 +2870,72 @@ export function deriveSkillStatus(
   const policyBucket = skillsByPolicy.get(best.id) ?? [];
   if (policyBucket.length > 0) {
     const active = policyBucket.find((s) => s.status !== "archived") ?? policyBucket[0]!;
+    const isUpgraded = best.updatedAt > active.updatedAt;
     return {
-      status: best.updatedAt > active.updatedAt ? "upgraded" : "generated",
+      status: isUpgraded ? "upgraded" : "generated",
       reason: `技能「${active.name ?? active.id}」已从经验 ${best.id.slice(0, 8)} 结晶`,
+      reasonKey: isUpgraded ? "tasks.skillReason.upgraded" : "tasks.skillReason.generated",
+      reasonParams: { skillName: active.name ?? active.id, policyId: best.id.slice(0, 8) },
       linkedSkillId: active.id as SkillId,
     };
   }
   if (best.status !== "active") {
     return {
       status: "queued",
-      reason: `经验 ${best.id.slice(0, 8)} 状态为 ${best.status}——需要更多支撑任务才能结晶为技能（当前 support=${best.support ?? 0}，需 ≥3）`,
+      reason: `经验 ${best.id.slice(0, 8)} 需要更多支撑任务`,
+      reasonKey: "tasks.skillReason.queued.policyPending",
+      reasonParams: { support: String(best.support ?? 0) },
       linkedSkillId: null,
     };
   }
   return {
     status: "queued",
-    reason: `经验 ${best.id.slice(0, 8)} 已就绪（gain=${best.gain.toFixed(2)}，support=${best.support ?? 0}），技能结晶将在下次 reward 评分后自动触发`,
+    reason: `经验 ${best.id.slice(0, 8)} 已就绪`,
+    reasonKey: "tasks.skillReason.queued.ready",
+    reasonParams: { gain: best.gain.toFixed(2), support: String(best.support ?? 0) },
     linkedSkillId: null,
   };
+}
+
+/**
+ * Produce a short content string from toolCalls when userText/agentText
+ * are both empty (sub-steps after the first in a multi-tool turn).
+ */
+function summarizeToolCalls(
+  toolCalls?: readonly { name?: string; output?: unknown }[] | null,
+): string {
+  if (!toolCalls || toolCalls.length === 0) return "";
+  return toolCalls
+    .map((tc) => {
+      const name = tc.name ?? "tool";
+      const out = typeof tc.output === "string"
+        ? tc.output.slice(0, 200)
+        : tc.output != null
+        ? JSON.stringify(tc.output).slice(0, 200)
+        : "";
+      return out ? `[${name}] ${out}` : `[${name}]`;
+    })
+    .join("\n");
 }
 
 /**
  * Heuristic role inference for api_logs "memory_add" rows — mirrors
  * the legacy plugin's behaviour where each captured turn showed up
  * labelled `user` / `assistant` / `tool` on the Logs page.
+ *
+ * Priority: if the step carries userText (the user's query), label it
+ * "user" even when toolCalls are present — this is the first sub-step
+ * of a multi-tool turn and semantically represents the user request.
  */
 function inferTurnRole(step: {
   userText?: string;
   agentText?: string;
   toolCalls?: readonly unknown[];
 }): "user" | "assistant" | "tool" | "other" {
-  if ((step.toolCalls?.length ?? 0) > 0) return "tool";
   const u = (step.userText ?? "").length;
   const a = (step.agentText ?? "").length;
+  if (u > 0 && (step.toolCalls?.length ?? 0) > 0) return "user";
+  if ((step.toolCalls?.length ?? 0) > 0) return "tool";
   if (u >= a && u > 0) return "user";
   if (a > 0) return "assistant";
   return "other";

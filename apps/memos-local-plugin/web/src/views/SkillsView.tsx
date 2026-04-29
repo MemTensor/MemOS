@@ -1,3 +1,4 @@
+/** @jsxImportSource preact */
 /**
  * Skills view — browse + archive + download crystallized skills.
  *
@@ -9,13 +10,14 @@
  *   - Archive
  */
 import { useEffect, useState } from "preact/hooks";
-import { api, withAgentPrefix } from "../api/client";
+import { api } from "../api/client";
+import { openSse } from "../api/sse";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
 import { Pager } from "../components/Pager";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
-import type { SkillDTO } from "../api/types";
+import type { CoreEvent, SkillDTO } from "../api/types";
 import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
 
 interface SkillUsage {
@@ -32,6 +34,24 @@ type StatusFilter = "" | "active" | "candidate" | "archived";
 
 const DEFAULT_PAGE_SIZE = 20;
 
+interface SkillModelRefusalPayload {
+  kind?: string;
+  policyId?: string;
+  modelRefusal?: {
+    provider?: string;
+    model?: string;
+    servedBy?: string;
+    content?: string;
+  };
+}
+
+interface SkillRefusalNotice {
+  id: number;
+  policyId: string;
+  model: string;
+  content: string;
+}
+
 export function SkillsView() {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("");
@@ -43,6 +63,8 @@ export function SkillsView() {
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [refusalNotices, setRefusalNotices] = useState<SkillRefusalNotice[]>([]);
+  const [showRefusalNotices, setShowRefusalNotices] = useState(false);
   const toggleSel = (id: string) => {
     setSelected((prev) => {
       const n = new Set(prev);
@@ -77,6 +99,30 @@ export function SkillsView() {
   useEffect(() => {
     void load(0);
   }, [status, pageSize]);
+
+  useEffect(() => {
+    const handle = openSse("/api/v1/events", (_, data) => {
+      try {
+        const evt = JSON.parse(data) as CoreEvent<SkillModelRefusalPayload>;
+        if (evt.type !== "system.error") return;
+        const payload = evt.payload;
+        if (payload?.kind !== "skill.model_refusal") return;
+        const refusal = payload.modelRefusal ?? {};
+        setRefusalNotices((prev) => [
+          {
+            id: evt.seq,
+            policyId: payload.policyId ?? "unknown",
+            model: [refusal.provider, refusal.model].filter(Boolean).join("/") || "unknown model",
+            content: refusal.content ?? "",
+          },
+          ...prev,
+        ].slice(0, 20));
+      } catch {
+        /* Ignore malformed SSE payloads. */
+      }
+    });
+    return () => handle.close();
+  }, []);
 
   // Deep-link: `#/skills?id=sk_xxx` auto-opens the drawer.
   useEffect(() => {
@@ -115,6 +161,15 @@ export function SkillsView() {
           <p>{t("skills.subtitle")}</p>
         </div>
         <div class="view-header__actions">
+          <SkillRefusalDropdown
+            notices={refusalNotices}
+            open={showRefusalNotices}
+            onToggle={() => setShowRefusalNotices((v) => !v)}
+            onClear={() => {
+              setRefusalNotices([]);
+              setShowRefusalNotices(false);
+            }}
+          />
           {/*
            * Refresh — matches MemoriesView / TasksView / PoliciesView /
            * WorldModelsView. Clears search + status filter, drops
@@ -309,6 +364,66 @@ export function SkillsView() {
   );
 }
 
+function SkillRefusalDropdown({
+  notices,
+  open,
+  onToggle,
+  onClear,
+}: {
+  notices: SkillRefusalNotice[];
+  open: boolean;
+  onToggle: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div class="skill-refusal-menu">
+      <button
+        class="btn btn--ghost btn--sm skill-refusal-menu__trigger"
+        onClick={onToggle}
+        aria-expanded={open}
+        title="Skill 沉淀模型拒答提醒"
+      >
+        <Icon name="bell" size={14} />
+        <span>提醒</span>
+        {notices.length > 0 && (
+          <span class="skill-refusal-menu__badge">{notices.length}</span>
+        )}
+        <Icon name={open ? "chevron-up" : "chevron-down"} size={12} />
+      </button>
+      {open && (
+        <div class="skill-refusal-menu__panel">
+          <div class="skill-refusal-menu__head">
+            <strong>Skill 沉淀提醒</strong>
+            <button
+              class="btn btn--ghost btn--icon"
+              onClick={onClear}
+              aria-label="清空提醒"
+              title="清空提醒"
+            >
+              <Icon name="x" size={14} />
+            </button>
+          </div>
+          {notices.length === 0 ? (
+            <div class="skill-refusal-menu__empty">暂无模型拒答提醒</div>
+          ) : (
+            <div class="skill-refusal-menu__list">
+              {notices.map((item) => (
+                <div class="skill-refusal-menu__item" key={item.id}>
+                  <div class="skill-refusal-menu__meta">
+                    <span>Policy: {item.policyId}</span>
+                    <span>Model: {item.model}</span>
+                  </div>
+                  <div class="skill-refusal-menu__content">{item.content}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface TimelineEntry {
   ts: number;
   kind: string;
@@ -426,16 +541,23 @@ function SkillDrawer({
     }
   };
 
-  const downloadZip = () => {
-    const url = withAgentPrefix(
-      `/api/v1/skills/${encodeURIComponent(skill.id)}/download`,
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${skill.name.replace(/[^\w.-]+/g, "_") || "skill"}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const downloadZip = async () => {
+    setBusy(true);
+    try {
+      const blob = await api.blob(
+        `/api/v1/skills/${encodeURIComponent(skill.id)}/download`,
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${skill.name.replace(/[^\w.-]+/g, "_") || "skill"}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (

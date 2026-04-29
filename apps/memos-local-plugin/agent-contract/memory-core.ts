@@ -279,9 +279,15 @@ export interface MemoryCore {
     offset?: number;
     sessionId?: SessionId;
     q?: string;
+    /**
+     * When true, paginate by distinct `(episodeId, turnId)` groups so
+     * one user turn (query + tool sub-steps + reply) counts as one
+     * memory. Returns all traces belonging to the paginated turns.
+     */
+    groupByTurn?: boolean;
   }): Promise<TraceDTO[]>;
   /** Total trace rows matching the same filter (no limit/offset). */
-  countTraces(input?: { sessionId?: SessionId; q?: string }): Promise<number>;
+  countTraces(input?: { sessionId?: SessionId; q?: string; groupByTurn?: boolean }): Promise<number>;
 
   /**
    * Paged listing of the rich api_logs table ({@link ApiLogDTO}).

@@ -1221,4 +1221,30 @@ describe("registerOpenClawTools", () => {
     expect(Array.isArray(res.hits)).toBe(true);
     expect(res.totalMs).toBeGreaterThanOrEqual(0);
   });
+
+  it("registers tool shells before the async core is resolved", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    let requestedCore = false;
+    const { api, tools } = collectTools();
+    registerOpenClawTools(api, {
+      agent: "openclaw",
+      getCore: async () => {
+        requestedCore = true;
+        return mc;
+      },
+      log: silentLogger(),
+    });
+
+    expect(tools.map((t) => t.descriptor.name)).toContain("memory_search");
+    expect(requestedCore).toBe(false);
+
+    const search = tools.find((t) => t.descriptor.name === "memory_search")!;
+    await search.descriptor.execute("toolCall_1", {
+      query: "anything",
+      maxResults: 5,
+    });
+    expect(requestedCore).toBe(true);
+  });
 });

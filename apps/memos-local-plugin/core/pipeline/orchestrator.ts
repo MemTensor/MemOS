@@ -734,8 +734,11 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     let liteTraceIds: string[] = [];
     if (liveEpisode) {
       try {
-        const lite = await subs.captureRunner.runLite({ episode: liveEpisode });
-        liteTraceIds = lite.traceIds;
+        const captureResult = await subs.captureRunner.runLite({ episode: liveEpisode });
+        liteTraceIds = captureResult.traceIds;
+        if (captureResult.traceIds.length > 0) {
+          session.sessionManager.attachTraceIds(episodeId, captureResult.traceIds as string[]);
+        }
       } catch (err) {
         log.warn("turn.lite_capture.failed", {
           episodeId,

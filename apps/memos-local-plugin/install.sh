@@ -577,7 +577,11 @@ install_hermes() {
   local adapter_dir="${prefix}/adapters/hermes"
   mkdir -p "${HOME}/.hermes"
 
+  step "Stopping existing bridge daemon"
   pkill -f "bridge.cts" >/dev/null 2>&1 || true
+  sleep 1
+  pkill -9 -f "bridge.cts" >/dev/null 2>&1 || true
+  success "Bridge daemon stopped"
   local was_running="false"
   if pgrep -f "/bin/hermes" >/dev/null 2>&1; then
     step "Stopping running Hermes process"
@@ -687,38 +691,26 @@ CFGEOF
   if command -v lsof >/dev/null 2>&1 && lsof -i ":${HERMES_PORT}" -t >/dev/null 2>&1; then
     warn "Port :${HERMES_PORT} already in use — skipping smoke test."
   else
-    step "Running bridge smoke test"
+    step "Starting Memory Viewer daemon"
     local tsx_bin="${prefix}/node_modules/.bin/tsx"
     local bridge_cts="${prefix}/bridge.cts"
     if [[ -x "${tsx_bin}" && -f "${bridge_cts}" ]]; then
-      local smoke_log smoke_fifo smoke_pid sleeper_pid
-      smoke_log="$(mktemp)"
-      smoke_fifo="$(mktemp -u)"
-      mkfifo "${smoke_fifo}"
-      # Keep stdin open via a FIFO so the bridge doesn't exit on EOF.
-      sleep 60 > "${smoke_fifo}" &
-      sleeper_pid=$!
-      disown "${sleeper_pid}" 2>/dev/null || true
-      ( cd "${prefix}" && "${tsx_bin}" "${bridge_cts}" --agent=hermes <"${smoke_fifo}" >"${smoke_log}" 2>&1 ) &
-      smoke_pid=$!
-      disown "${smoke_pid}" 2>/dev/null || true
+      local daemon_log="${prefix}/logs/daemon-start.log"
+      mkdir -p "${prefix}/logs"
+      # Launch bridge in --daemon mode (pure HTTP, no stdio).
+      # The process stays alive to serve the Memory Viewer.
+      ( cd "${prefix}" && nohup "${tsx_bin}" "${bridge_cts}" --agent=hermes --daemon >"${daemon_log}" 2>&1 ) &
+      disown $! 2>/dev/null || true
 
       if wait_for_viewer "${HERMES_PORT}"; then
-        success "Bridge smoke test passed"
+        success "Memory Viewer daemon running"
       else
         error "Memory Viewer did not respond within 30s."
         warn "Re-install dependencies and re-run: cd ${prefix} && npm install"
-        kill "${smoke_pid}" "${sleeper_pid}" >/dev/null 2>&1 || true
-        kill -9 "${smoke_pid}" "${sleeper_pid}" >/dev/null 2>&1 || true
-        rm -f "${smoke_log}" "${smoke_fifo}"
         return 1
       fi
-
-      kill "${smoke_pid}" "${sleeper_pid}" >/dev/null 2>&1 || true
-      kill -9 "${smoke_pid}" "${sleeper_pid}" >/dev/null 2>&1 || true
-      rm -f "${smoke_log}" "${smoke_fifo}"
     else
-      warn "tsx not found — skipping smoke test."
+      warn "tsx not found — skipping daemon start."
     fi
   fi
 

@@ -234,8 +234,16 @@ function MigrateCard() {
       {scan && (
         <div class="muted" style="margin-top:var(--sp-3);font-size:var(--fs-sm)">
           {scan.found
-            ? `Found legacy ${scan.agent ?? ""} DB at ${scan.path}. Candidates — traces: ${scan.candidates?.traces ?? 0}, skills: ${scan.candidates?.skills ?? 0}, tasks: ${scan.candidates?.tasks ?? 0}.`
-            : `No legacy database found${scan.path ? ` at ${scan.path}` : ""}.`}
+            ? t("import.migrate.found", {
+                agent: scan.agent ?? "",
+                path: scan.path ?? "",
+                traces: scan.candidates?.traces ?? 0,
+                skills: scan.candidates?.skills ?? 0,
+                tasks: scan.candidates?.tasks ?? 0,
+              })
+            : scan.path
+              ? t("import.migrate.notFoundAt", { path: scan.path })
+              : t("import.migrate.notFound")}
         </div>
       )}
       {result && (

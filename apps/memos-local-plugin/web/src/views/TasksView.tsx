@@ -38,6 +38,8 @@ interface EpisodeRow {
     | "skipped"
     | null;
   skillReason?: string | null;
+  skillReasonKey?: string | null;
+  skillReasonParams?: Record<string, string> | null;
   linkedSkillId?: string | null;
   closeReason?: "finalized" | "abandoned" | null;
   abandonReason?: string | null;
@@ -321,7 +323,9 @@ export function TasksView() {
                     {showSkillStatus && (
                       <span
                         class={`pill pill--skill-${r.skillStatus}`}
-                        title={r.skillReason ?? undefined}
+                        title={r.skillReasonKey
+                          ? t(r.skillReasonKey as any, r.skillReasonParams ?? undefined)
+                          : r.skillReason ?? undefined}
                       >
                         {t(`tasks.skill.${r.skillStatus}` as never)}
                       </span>
@@ -472,6 +476,9 @@ function statusReason(r: EpisodeRow): string | null {
   if (s === "active" || s === "completed") return null;
 
   if (r.abandonReason && r.abandonReason.trim().length > 0) {
+    if (r.abandonReason.includes("插件上次未正常退出")) {
+      return t("tasks.abandonReason.uncleanExit" as any);
+    }
     return r.abandonReason;
   }
 
@@ -655,12 +662,14 @@ function TaskDrawer({
                   </button>
                 )}
               </div>
-              {episode.skillReason && (
+              {(episode.skillReasonKey || episode.skillReason) && (
                 <p
                   class="muted"
                   style="font-size:var(--fs-sm);line-height:1.6;margin:0"
                 >
-                  {episode.skillReason}
+                  {episode.skillReasonKey
+                    ? t(episode.skillReasonKey as any, episode.skillReasonParams ?? undefined)
+                    : episode.skillReason}
                 </p>
               )}
             </section>

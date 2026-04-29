@@ -11,7 +11,8 @@
  *   - session.open / episode.open — used during `initialize()`.
  *   - turn.start — returns injected context for Python-side prefetch.
  *   - turn.end — accepts the completed turn payload.
- *   - memory.search / memory.timeline — tool schemas exposed to Hermes.
+ *   - memory.search / memory.get_* / memory.timeline — memory tools exposed to Hermes.
+ *   - skill.list / skill.get — skill tools exposed to Hermes.
  *   - feedback.submit — thumbs-up/thumbs-down signal.
  *   - episode.close / session.close — shutdown path.
  */
@@ -69,8 +70,13 @@ function stubCore(): MemoryCore {
     getWorldModel: vi.fn(async () => null),
     listEpisodes: vi.fn(async () => []),
     timeline: vi.fn(async () => [{ id: "t1", step: 0, ts: 0 }] as any),
-    listSkills: vi.fn(async () => []),
-    getSkill: vi.fn(async () => null),
+    listWorldModels: vi.fn(async () => [
+      { id: "wm-1", title: "Hermes install", body: "path ~/.hermes/memos-plugin" },
+    ] as any),
+    listSkills: vi.fn(async () => [
+      { id: "sk-1", name: "verify-hermes-memos", status: "active" },
+    ] as any),
+    getSkill: vi.fn(async (id) => ({ id, name: "verify-hermes-memos" }) as any),
     archiveSkill: vi.fn(async () => {}),
     subscribeEvents: vi.fn(() => () => {}),
     subscribeLogs: vi.fn(() => () => {}),
@@ -127,17 +133,23 @@ describe("hermes protocol surface", () => {
     );
   });
 
-  it("memory_search tool: memory.search routes to searchMemory", async () => {
+  it("memory_search tool: memory.search routes agent, session and topK to searchMemory", async () => {
     const core = stubCore();
     const dispatch = makeDispatcher(core);
 
     await dispatch("memory.search", {
       agent: "hermes",
+      sessionId: "s-1",
       query: "yesterday",
       topK: { tier1: 5, tier2: 5, tier3: 5 },
     });
     expect(core.searchMemory).toHaveBeenCalledWith(
-      expect.objectContaining({ agent: "hermes", query: "yesterday" }),
+      expect.objectContaining({
+        agent: "hermes",
+        sessionId: "s-1",
+        query: "yesterday",
+        topK: { tier1: 5, tier2: 5, tier3: 5 },
+      }),
     );
   });
 
@@ -148,6 +160,46 @@ describe("hermes protocol surface", () => {
     const res = await dispatch("memory.timeline", { episodeId: "e-1" });
     expect(core.timeline).toHaveBeenCalledWith({ episodeId: "e-1" });
     expect((res as any).traces).toBeInstanceOf(Array);
+  });
+
+  it("expanded Hermes tools route to memory and skill RPCs", async () => {
+    const core = stubCore();
+    const dispatch = makeDispatcher(core);
+
+    await dispatch("memory.get_trace", { id: "t-1" });
+    await dispatch("memory.get_policy", { id: "p-1" });
+    await dispatch("memory.get_world", { id: "w-1" });
+    const worlds = await dispatch("memory.list_world_models", {
+      limit: 5,
+      offset: 0,
+      q: "Hermes",
+    });
+    const skills = await dispatch("skill.list", { status: "active", limit: 10 });
+    const skill = await dispatch("skill.get", { id: "sk-1" });
+
+    expect(core.getTrace).toHaveBeenCalledWith("t-1");
+    expect(core.getPolicy).toHaveBeenCalledWith("p-1");
+    expect(core.getWorldModel).toHaveBeenCalledWith("w-1");
+    expect(core.listWorldModels).toHaveBeenCalledWith({ limit: 5, offset: 0, q: "Hermes" });
+    expect((worlds as any).worldModels[0].id).toBe("wm-1");
+    expect(core.listSkills).toHaveBeenCalledWith({ status: "active", limit: 10 });
+    expect((skills as any).skills[0].id).toBe("sk-1");
+    expect(core.getSkill).toHaveBeenCalledWith("sk-1");
+    expect((skill as any).id).toBe("sk-1");
+  });
+
+  it("rejects malformed required ids before hitting core", async () => {
+    const core = stubCore();
+    const dispatch = makeDispatcher(core);
+
+    await expect(dispatch("memory.get_trace", {})).rejects.toMatchObject({
+      code: "invalid_argument",
+    });
+    await expect(dispatch("skill.get", { id: "" })).rejects.toMatchObject({
+      code: "invalid_argument",
+    });
+    expect(core.getTrace).not.toHaveBeenCalled();
+    expect(core.getSkill).not.toHaveBeenCalled();
   });
 
   it("submit_feedback path: feedback.submit carries polarity+magnitude", async () => {

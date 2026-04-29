@@ -192,6 +192,21 @@ function matchesAny(text: string, patterns: readonly RegExp[]): boolean {
   return patterns.some((p) => p.test(text));
 }
 
+function ruleTiePriority(rule: Rule): number {
+  switch (rule.id) {
+    case "r5_new_phrase":
+      return 40;
+    case "r1_negation_keyword":
+      return 30;
+    case "r2_quotes_prev":
+      return 20;
+    case "r3_pronoun_ref":
+      return 10;
+    default:
+      return 0;
+  }
+}
+
 // ─── Strong heuristic threshold ──────────────────────────────────────────
 
 const STRONG_HEURISTIC_THRESHOLD = 0.85;
@@ -201,8 +216,15 @@ const STRONG_HEURISTIC_THRESHOLD = 0.85;
 const IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 // ─── Low-confidence new_task threshold for arbitration ───────────────────
-
-const ARBITRATION_THRESHOLD = 0.65;
+//
+// Raised from 0.65 → 0.8 so the LLM has to be quite sure (confidence ≥ 0.8)
+// before its `new_task` verdict is taken at face value. Anything below that
+// goes through the second-pass arbitration prompt (which is biased toward
+// follow_up). Real-world observation: the primary classifier often returns
+// `new_task` at 0.65–0.75 for messages that are actually sub-tasks of the
+// same project — pulling the cut-off up reduces false topic splits at the
+// cost of one extra LLM call on borderline turns.
+const ARBITRATION_THRESHOLD = 0.8;
 
 // ─── Public factory ──────────────────────────────────────────────────────
 
@@ -259,7 +281,11 @@ export function createRelationClassifier(
         if (tag) fired.push({ rule, tag });
       }
       if (fired.length > 0) {
-        fired.sort((a, b) => b.rule.confidence - a.rule.confidence);
+        fired.sort(
+          (a, b) =>
+            b.rule.confidence - a.rule.confidence ||
+            ruleTiePriority(b.rule) - ruleTiePriority(a.rule),
+        );
         const top = fired[0];
         if (top.rule.confidence >= STRONG_HEURISTIC_THRESHOLD) {
           log.debug("heuristic.strong", {

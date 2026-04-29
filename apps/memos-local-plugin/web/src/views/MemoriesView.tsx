@@ -90,8 +90,8 @@ interface MemoryGroup {
   shared: boolean;
 }
 
-const DEFAULT_PAGE_SIZE = 25;
-const ROLE_FILTER_FETCH_LIMIT = 5000;
+const DEFAULT_PAGE_SIZE = 20;
+const ROLE_FILTER_FETCH_LIMIT = 500;
 
 export function MemoriesView() {
   // Pre-fill from URL `?q=` so the global search box in Header can
@@ -120,6 +120,7 @@ export function MemoriesView() {
       const roleFilterActive = role !== "";
       qs.set("limit", String(roleFilterActive ? ROLE_FILTER_FETCH_LIMIT : pageSize));
       qs.set("offset", String(roleFilterActive ? 0 : opts.page * pageSize));
+      qs.set("groupByTurn", "true");
       if (opts.q) qs.set("q", opts.q);
       const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`);
       setTraces(res.traces);
@@ -167,6 +168,7 @@ export function MemoriesView() {
       const qs = new URLSearchParams();
       qs.set("limit", String(pageSize));
       qs.set("offset", String(targetPage * pageSize));
+      qs.set("groupByTurn", "true");
       const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`, {
         signal,
       });
@@ -201,7 +203,6 @@ export function MemoriesView() {
   /**
    * Bucket the page's traces by `(episodeId, turnId)` so each "user
    * message + every sub-step it produced" collapses into one card.
-   * Then drop groups whose role doesn't match the chip filter.
    */
   const allGroups = useMemo<MemoryGroup[]>(() => {
     const all = buildGroups(traces);
@@ -223,6 +224,16 @@ export function MemoriesView() {
   const isGroupSelected = (g: MemoryGroup): boolean =>
     g.ids.length > 0 && g.ids.every((id) => selected.has(id));
 
+  // Number of selected memories (turns), not raw traces. A memory card
+  // contains all the tool sub-step traces of one user turn, so the
+  // batch-bar count and confirm prompts must report turns or the user
+  // sees inflated numbers.
+  const selectedGroupCount = useMemo(
+    () => groups.filter(isGroupSelected).length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groups, selected],
+  );
+
   const toggleGroupSel = (g: MemoryGroup) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -240,7 +251,7 @@ export function MemoriesView() {
 
   const bulkDelete = async () => {
     if (selected.size === 0) return;
-    if (!confirm(t("memories.delete.bulkConfirm", { n: selected.size }))) return;
+    if (!confirm(t("memories.delete.bulkConfirm", { n: selectedGroupCount }))) return;
     try {
       const ids = [...selected];
       const res = await api.post<{ deleted: number }>(`/api/v1/traces/delete`, { ids });
@@ -295,7 +306,7 @@ export function MemoriesView() {
     const txt = lines.join("\n");
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(txt).then(
-        () => showToast(t("memories.copy.done", { n: selected.size })),
+        () => showToast(t("memories.copy.done", { n: selectedGroupCount })),
         () => showToast("Copy failed", "error"),
       );
     } else {
@@ -404,7 +415,6 @@ export function MemoriesView() {
             class="btn btn--ghost btn--sm"
             onClick={() => {
               setQuery("");
-              setRole("");
               setSelected(new Set());
               void loadPage({ q: "", page: 0 });
             }}
@@ -460,7 +470,7 @@ export function MemoriesView() {
       {selected.size > 0 && (
         <div class="batch-bar" role="region" aria-label="bulk actions">
           <span class="batch-bar__count">
-            {t("common.selected", { n: selected.size })}
+            {t("common.selected", { n: selectedGroupCount })}
           </span>
           <button class="btn btn--sm" onClick={togglePageSelection}>
             <Icon name="check-square" size={14} />
@@ -514,7 +524,6 @@ export function MemoriesView() {
           {groups.map((g) => {
             const isSel = isGroupSelected(g);
             const line = pickSummary(g.head);
-            const roleKey = detectGroupRole(g);
             const scope = g.scope;
             const stepLabel =
               g.traces.length > 1
@@ -549,11 +558,6 @@ export function MemoriesView() {
                 <div class="mem-card__body">
                   <div class="mem-card__title">{line}</div>
                   <div class="mem-card__meta">
-                    {roleKey && (
-                      <span class={`pill pill--role-${roleKey}`}>
-                        {t(`memories.filter.role.${roleKey}` as never)}
-                      </span>
-                    )}
                     <span class={`pill pill--share-${scope}`}>
                       {t(`memories.share.scope.${scope}` as never).split(" (")[0]}
                     </span>
@@ -640,6 +644,16 @@ function pickSummary(trace: TraceDTO): string {
   return "(empty trace)";
 }
 
+function detectRole(trace: TraceDTO): "user" | "assistant" | "tool" | "" {
+  if ((trace.toolCalls?.length ?? 0) > 0) return "tool";
+  if (trace.userText && trace.userText.length > (trace.agentText?.length ?? 0)) {
+    return "user";
+  }
+  if (trace.agentText) return "assistant";
+  if (trace.userText) return "user";
+  return "";
+}
+
 async function findTracePage(
   id: string,
   pageSize: number,
@@ -651,10 +665,12 @@ async function findTracePage(
     const qs = new URLSearchParams();
     qs.set("limit", String(scanLimit));
     qs.set("offset", String(offset));
+    qs.set("groupByTurn", "true");
     const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`, {
       signal,
     });
-    const index = (res.traces ?? []).findIndex((trace) => trace.id === id);
+    const groups = buildGroups(res.traces ?? []);
+    const index = groups.findIndex((group) => group.ids.includes(id));
     if (index >= 0) return Math.floor((offset + index) / pageSize);
     if (res.nextOffset == null) return 0;
     offset = res.nextOffset;
@@ -775,15 +791,6 @@ function summarizeToolNames(
   }
   if (unique.length <= 2) return unique.join(", ");
   return `${unique.slice(0, 2).join(", ")} +${unique.length - 2}`;
-}
-
-function detectRole(trace: TraceDTO): "user" | "assistant" | "tool" | "" {
-  if ((trace.toolCalls?.length ?? 0) > 0) return "tool";
-  if (trace.userText && trace.userText.length > (trace.agentText?.length ?? 0))
-    return "user";
-  if (trace.agentText) return "assistant";
-  if (trace.userText) return "user";
-  return "";
 }
 
 /**

@@ -151,6 +151,7 @@ export async function runSkill(
         policyId: decision.policy.id,
         stage: "crystallize",
         reason: crystResult.skippedReason,
+        modelRefusal: crystResult.modelRefusal,
       });
       continue;
     }

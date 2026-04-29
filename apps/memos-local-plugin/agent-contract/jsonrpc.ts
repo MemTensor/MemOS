@@ -84,6 +84,7 @@ export const RPC_METHODS = {
   MEMORY_LIST_EPISODES: "memory.list_episodes",
   MEMORY_TIMELINE: "memory.timeline",
   MEMORY_LIST_TRACES: "memory.list_traces",
+  MEMORY_LIST_WORLDS: "memory.list_world_models",
 
   // ── skills ──
   SKILL_LIST: "skill.list",

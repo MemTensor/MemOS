@@ -158,8 +158,8 @@ describe("MemoryCore façade", () => {
     });
     const end = await core.onTurnEnd({
       agent: "openclaw",
-      sessionId: start.query.sessionId,
-      episodeId: start.query.episodeId,
+      sessionId: start.query.sessionId!,
+      episodeId: start.query.episodeId!,
       agentText: "Got it.",
       toolCalls: [],
       ts: 1_700_000_000_500,
@@ -357,8 +357,8 @@ describe("bootstrapMemoryCore", () => {
       closeReason?: string;
       abandonReason?: string;
     };
-    expect(unscoredMeta.closeReason).toBe("abandoned");
-    expect(unscoredMeta.abandonReason).toContain("插件上次未正常退出");
+    expect(unscoredMeta.closeReason).toBe("finalized");
+    expect(unscoredMeta.abandonReason).toBeFalsy();
 
     expect(scored).toBeDefined();
     expect(scored!.status).toBe("closed");

@@ -42,7 +42,8 @@ export interface RewardConfig {
    * episode is eligible for scoring. Episodes shorter than this are
    * closed as abandoned with reason "too few conversation turns" —
    * mirroring the legacy `memos-local-openclaw` shouldSkipSummary rule
-   * (chunks < 4 OR min(user, assistant) < 2). Default 2.
+   * (chunks < 4 OR min(user, assistant) < N). Default 1
+   * (relaxed in 2026Q2 to admit CLI single-shot patterns; was 2).
    */
   minExchangesForCompletion: number;
   /**

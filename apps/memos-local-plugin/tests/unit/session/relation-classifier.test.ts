@@ -181,6 +181,17 @@ describe("relation-classifier — V7 §0.1", () => {
     expect(d.signals).toContain("r3_pronoun_ref");
   });
 
+  it("explicit new-task phrase wins over pronoun follow-up when confidence ties", async () => {
+    const c = heuristic();
+    const d = await c.classify({
+      prevUserText: "帮我配置Nginx的SSL证书",
+      prevAssistantText: "好的，SSL证书配置如下...",
+      newUserText: "那再换个新任务",
+    });
+    expect(d.relation).toBe("new_task");
+    expect(d.signals).toContain("r5_new_phrase");
+  });
+
   it("idle > 2h triggers hard new_task split", async () => {
     const c = heuristic();
     const d = await c.classify({

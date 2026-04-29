@@ -148,16 +148,20 @@ const AlgorithmSchema = Type.Object({
     llmConcurrency: NumberInRange(2, 1, 16),
     /**
      * Min user↔assistant *exchanges* before an episode is scored.
-     * Shorter episodes are closed as abandoned. Default 2 ≈ "at least
-     * one real back-and-forth" (legacy memos-local-openclaw rule).
+     * Shorter episodes are closed as abandoned. Default 1 — admits
+     * single-shot CLI patterns (`hermes chat -q "..."`,
+     * `openclaw run --once`) which always have exactly one
+     * user-assistant pair. Set 2 for the strict legacy behaviour
+     * (skip episodes that aren't a real back-and-forth).
      */
-    minExchangesForCompletion: NumberInRange(2, 1, 20),
+    minExchangesForCompletion: NumberInRange(1, 1, 20),
     /**
      * Min combined user+assistant content characters before scoring.
-     * Filters trivial turns ("hi"/"ok"). Default 80 — cheap threshold
-     * that still accepts short CJK prompts.
+     * Filters trivial turns ("hi"/"ok"). Default 40 — pairs with the
+     * relaxed exchanges floor; raise to 80+ if your workflow always
+     * sends long prompts and you want stronger triviality gating.
      */
-    minContentCharsForCompletion: NumberInRange(80, 0, 4_000),
+    minContentCharsForCompletion: NumberInRange(40, 0, 4_000),
     /**
      * Fraction of turns that are tool calls above which an episode is
      * considered "tool-heavy". When combined with low assistant text
