@@ -256,6 +256,8 @@ class MemTensorProvider(MemoryProvider):
         input_text = (
             json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args or "")
         )
+        timing = self._coerce_tool_timing(_kw)
+
         existing = self._find_tool_call(ids)
         if existing is not None:
             existing["name"] = tool_name or existing.get("name") or "unknown_tool"
@@ -263,16 +265,84 @@ class MemTensorProvider(MemoryProvider):
             existing["output"] = (result or "")[:4000]
             existing["_ids"] = sorted(set((existing.get("_ids") or []) + ids))
             existing["_id"] = existing.get("_id") or (ids[0] if ids else "")
+            if timing:
+                existing.update(timing)
             return
-        self._tool_calls.append(
-            {
-                "name": tool_name,
-                "input": input_text,
-                "output": (result or "")[:4000],
-                "_id": ids[0] if ids else "",
-                "_ids": ids,
-            }
+
+        call = {
+            "name": tool_name,
+            "input": input_text,
+            "output": (result or "")[:4000],
+            "_id": ids[0] if ids else "",
+            "_ids": ids,
+        }
+        if timing:
+            call.update(timing)
+        self._tool_calls.append(call)
+
+    def _coerce_tool_timing(self, payload: dict[str, Any]) -> dict[str, int] | None:
+        """Preserve real tool timing if Hermes exposes it in hook kwargs."""
+        started = self._coerce_epoch_ms(
+            payload.get("startedAt")
+            or payload.get("started_at")
+            or payload.get("startTime")
+            or payload.get("start_time")
         )
+        ended = self._coerce_epoch_ms(
+            payload.get("endedAt")
+            or payload.get("ended_at")
+            or payload.get("endTime")
+            or payload.get("end_time")
+        )
+        if started is not None and ended is not None and ended > started:
+            return {"startedAt": started, "endedAt": ended}
+
+        duration = self._coerce_duration_ms(
+            payload.get("durationMs")
+            or payload.get("duration_ms")
+            or payload.get("elapsedMs")
+            or payload.get("elapsed_ms")
+            or payload.get("latencyMs")
+            or payload.get("latency_ms")
+        )
+        if duration is not None and duration > 0:
+            end_ms = int(time.time() * 1000)
+            return {"startedAt": end_ms - duration, "endedAt": end_ms}
+
+        return None
+
+    @staticmethod
+    def _coerce_epoch_ms(value: Any) -> int | None:
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+        elif isinstance(value, str):
+            try:
+                numeric = float(value)
+            except ValueError:
+                return None
+        else:
+            return None
+        if numeric <= 0:
+            return None
+        # Accept seconds or milliseconds.
+        if numeric < 10_000_000_000:
+            numeric *= 1000
+        return int(numeric)
+
+    @staticmethod
+    def _coerce_duration_ms(value: Any) -> int | None:
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+        elif isinstance(value, str):
+            try:
+                numeric = float(value)
+            except ValueError:
+                return None
+        else:
+            return None
+        if numeric <= 0:
+            return None
+        return int(numeric)
 
     def _on_post_llm_call(
         self,
