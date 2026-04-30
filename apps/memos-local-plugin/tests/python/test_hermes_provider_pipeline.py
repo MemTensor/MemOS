@@ -49,6 +49,8 @@ class FakeBridge:
             }
         if method == "turn.end":
             return {"traceId": "trace-1", "episodeId": payload.get("episodeId")}
+        if method == "core.health":
+            return {"ok": True}
         if method in {"episode.close", "session.close", "subagent.record"}:
             return {"ok": True}
         raise AssertionError(f"unexpected bridge method: {method}")

@@ -45,6 +45,12 @@ export interface CoreHealth {
     skills: string;
     logs: string;
   };
+  /**
+   * Optional host transport status. Hermes fills this at the HTTP
+   * server layer because the core itself does not own the Python ↔ Node
+   * stdio bridge.
+   */
+  bridge?: BridgeHealth;
   llm: ModelHealth;
   embedder: ModelHealth & { dim: number };
   /**
@@ -54,6 +60,19 @@ export interface CoreHealth {
    * The health fields mirror the main LLM client when `inherited=true`.
    */
   skillEvolver: ModelHealth & { inherited: boolean };
+}
+
+export type BridgeHealthStatus =
+  | "connected"
+  | "reconnecting"
+  | "disconnected"
+  | "unknown";
+
+export interface BridgeHealth {
+  status: BridgeHealthStatus;
+  lastOkAt: number | null;
+  lastErrorAt: number | null;
+  lastError: string | null;
 }
 
 /**

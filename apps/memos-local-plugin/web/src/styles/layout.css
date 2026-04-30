@@ -147,13 +147,17 @@ body {
   text-transform: uppercase;
 }
 
-.sidebar__version {
+.sidebar__status {
   position: sticky;
   bottom: 0;
   margin: var(--sp-3) 0 0;
   padding: var(--sp-3) var(--sp-3) var(--sp-2);
   border-top: 1px solid var(--border);
   background: var(--bg-sidebar);
+}
+
+.sidebar__version,
+.sidebar__bridge {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -162,10 +166,25 @@ body {
   font-family: var(--font-mono);
   font-weight: var(--fw-med);
 }
-.sidebar__version-text { white-space: nowrap; }
+
+.sidebar__bridge {
+  margin-top: 6px;
+}
+
+.sidebar__version-text,
+.sidebar__bridge-text {
+  white-space: nowrap;
+}
+
 @media (max-width: 960px) {
-  .sidebar__version-text { display: none; }
-  .sidebar__version { justify-content: center; }
+  .sidebar__version-text,
+  .sidebar__bridge-text {
+    display: none;
+  }
+  .sidebar__version,
+  .sidebar__bridge {
+    justify-content: center;
+  }
 }
 
 .topbar__center {

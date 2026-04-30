@@ -26,11 +26,28 @@
  */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const path = require("node:path") as typeof import("node:path");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const fs = require("node:fs") as typeof import("node:fs");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const childProcess = require("node:child_process") as typeof import("node:child_process");
+
+const BRIDGE_STATUS_HEARTBEAT_MS = 5_000;
+const BRIDGE_STATUS_STALE_MS = 20_000;
+const BRIDGE_STATUS_FILE = "bridge-status.json";
 
 interface BridgeArgs {
   daemon: boolean;
   tcpPort?: number;
   agent: "openclaw" | "hermes";
+}
+
+type BridgeStatus = "connected" | "reconnecting" | "disconnected" | "unknown";
+
+interface BridgeStatusSnapshot {
+  status: BridgeStatus;
+  lastOkAt: number | null;
+  lastErrorAt: number | null;
+  lastError: string | null;
 }
 
 function parseArgs(argv: readonly string[]): BridgeArgs {
@@ -131,6 +148,13 @@ async function main(): Promise<void> {
     // bridge" error message.
     hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
   });
+  const bridgeStatus =
+    args.agent === "hermes"
+      ? createBridgeStatusTracker(
+          path.join(home.root, BRIDGE_STATUS_FILE),
+          args.daemon,
+        )
+      : null;
   await core.init();
 
   // Per-agent fixed viewer port.
@@ -158,6 +182,7 @@ async function main(): Promise<void> {
             core,
             home,
             logTail: () => memoryBuffer().tail({ limit: 200 }),
+            bridgeStatus: bridgeStatus ? () => bridgeStatus.snapshot() : undefined,
           },
           {
             port: viewerPort,
@@ -211,6 +236,12 @@ async function main(): Promise<void> {
   // LLM bridge (registered earlier inside bootstrap) can dispatch
   // reverse-direction requests to the adapter.
   stdio = startStdioServer({ core });
+  bridgeStatus?.markConnected();
+  const bridgeHeartbeat = bridgeStatus?.startHeartbeat();
+  void stdio.done.then(() => {
+    bridgeHeartbeat?.stop();
+    bridgeStatus?.markDisconnected("Hermes chat disconnected");
+  });
 
   // Try to bind the viewer port. EADDRINUSE → stay headless.
   let viewer: import("./server/types.js").ServerHandle | null = null;
@@ -220,6 +251,7 @@ async function main(): Promise<void> {
         core,
         home,
         logTail: () => memoryBuffer().tail({ limit: 200 }),
+        bridgeStatus: bridgeStatus ? () => bridgeStatus.snapshot() : undefined,
       },
       {
         port: viewerPort,
@@ -290,6 +322,132 @@ async function main(): Promise<void> {
 function pathToEsmUrl(abs: string): string {
   const u = abs.startsWith("/") ? `file://${abs}` : `file:///${abs}`;
   return u;
+}
+
+function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
+  snapshot(): BridgeStatusSnapshot;
+  markConnected(): void;
+  markDisconnected(message: string): void;
+  startHeartbeat(): { stop(): void };
+} {
+  let snapshot: BridgeStatusSnapshot = daemon
+    ? {
+        status: "disconnected",
+        lastOkAt: null,
+        lastErrorAt: Date.now(),
+        lastError: "Hermes chat is not connected",
+      }
+    : {
+        status: "unknown",
+        lastOkAt: null,
+        lastErrorAt: null,
+        lastError: null,
+      };
+
+  function writeStatus(next: BridgeStatusSnapshot): void {
+    snapshot = next;
+    try {
+      fs.mkdirSync(path.dirname(statusFile), { recursive: true });
+      fs.writeFileSync(statusFile, JSON.stringify(next), "utf8");
+    } catch {
+      // Status display must never affect chat capture.
+    }
+  }
+
+  function readStatus(): BridgeStatusSnapshot | null {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(statusFile, "utf8")) as Partial<BridgeStatusSnapshot>;
+      if (
+        parsed.status === "connected" ||
+        parsed.status === "reconnecting" ||
+        parsed.status === "disconnected" ||
+        parsed.status === "unknown"
+      ) {
+        return {
+          status: parsed.status,
+          lastOkAt: typeof parsed.lastOkAt === "number" ? parsed.lastOkAt : null,
+          lastErrorAt: typeof parsed.lastErrorAt === "number" ? parsed.lastErrorAt : null,
+          lastError: typeof parsed.lastError === "string" ? parsed.lastError : null,
+        };
+      }
+    } catch {
+      // Missing or corrupt status files are treated as disconnected.
+    }
+    return null;
+  }
+
+  function applyStaleRule(raw: BridgeStatusSnapshot): BridgeStatusSnapshot {
+    if (raw.status === "disconnected" && daemon && isHermesChatRunning()) {
+      return {
+        status: "reconnecting",
+        lastOkAt: raw.lastOkAt,
+        lastErrorAt: raw.lastErrorAt,
+        lastError: "Hermes chat is running; waiting for memory bridge",
+      };
+    }
+    if (
+      raw.status === "connected" &&
+      raw.lastOkAt != null &&
+      Date.now() - raw.lastOkAt > BRIDGE_STATUS_STALE_MS
+    ) {
+      return {
+        status: "disconnected",
+        lastOkAt: raw.lastOkAt,
+        lastErrorAt: Date.now(),
+        lastError: "Hermes bridge heartbeat is stale",
+      };
+    }
+    return raw;
+  }
+
+  function markConnected(): void {
+    writeStatus({
+      status: "connected",
+      lastOkAt: Date.now(),
+      lastErrorAt: snapshot.lastErrorAt,
+      lastError: snapshot.lastError,
+    });
+  }
+
+  function markDisconnected(message: string): void {
+    writeStatus({
+      status: "disconnected",
+      lastOkAt: snapshot.lastOkAt,
+      lastErrorAt: Date.now(),
+      lastError: message,
+    });
+  }
+
+  return {
+    snapshot() {
+      return { ...applyStaleRule(readStatus() ?? snapshot) };
+    },
+    markConnected,
+    markDisconnected,
+    startHeartbeat() {
+      const timer = setInterval(() => {
+        markConnected();
+      }, BRIDGE_STATUS_HEARTBEAT_MS);
+      (timer as unknown as { unref?: () => void }).unref?.();
+      return {
+        stop() {
+          clearInterval(timer);
+        },
+      };
+    },
+  };
+}
+
+function isHermesChatRunning(): boolean {
+  try {
+    const out = childProcess.execFileSync("pgrep", ["-f", "hermes chat"], {
+      encoding: "utf8",
+      timeout: 1000,
+    });
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 void main().catch((err) => {

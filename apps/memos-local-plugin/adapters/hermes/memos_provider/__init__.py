@@ -154,6 +154,8 @@ class MemTensorProvider(MemoryProvider):
         # show the model's thinking like OpenClaw does.
         self._turn_thinking: str = ""
         self._hook_registered = False
+        self._bridge_keepalive_stop = threading.Event()
+        self._bridge_keepalive_thread: threading.Thread | None = None
         # Hermes runs background memory/skill reviewers by forking an agent and
         # appending a synthetic user turn. That turn is instruction plumbing,
         # not a human utterance, so it must not become a MemOS trace.
@@ -219,6 +221,7 @@ class MemTensorProvider(MemoryProvider):
         # tool name, arguments, and result. We accumulate them and
         # flush in `sync_turn`.
         self._register_tool_call_hook()
+        self._start_bridge_keepalive()
 
     def system_prompt_block(self) -> str:  # type: ignore[override]
         return (
@@ -1172,6 +1175,9 @@ class MemTensorProvider(MemoryProvider):
             self._bridge.request("session.close", {"sessionId": self._session_id})
 
     def shutdown(self) -> None:  # type: ignore[override]
+        self._bridge_keepalive_stop.set()
+        if self._bridge_keepalive_thread and self._bridge_keepalive_thread.is_alive():
+            self._bridge_keepalive_thread.join(timeout=2.0)
         if self._prefetch_thread and self._prefetch_thread.is_alive():
             self._prefetch_thread.join(timeout=5.0)
         if self._bridge:
@@ -1378,6 +1384,33 @@ class MemTensorProvider(MemoryProvider):
             logger.warning("MemOS: bridge reconnect failed — %s", err)
             self._bridge = None
             return False
+
+    def _start_bridge_keepalive(self) -> None:
+        if self._bridge_keepalive_thread and self._bridge_keepalive_thread.is_alive():
+            return
+        self._bridge_keepalive_stop.clear()
+
+        def _run() -> None:
+            while not self._bridge_keepalive_stop.wait(5.0):
+                if not self._ensure_bridge(self._session_id, timeout=10.0):
+                    continue
+                try:
+                    assert self._bridge is not None
+                    self._bridge.request("core.health", {}, timeout=10.0)
+                except Exception as err:
+                    if self._is_transport_closed(err):
+                        logger.info("MemOS: bridge keepalive reconnecting after transport close")
+                        with contextlib.suppress(Exception):
+                            self._reconnect_bridge(self._session_id, timeout=10.0)
+                    else:
+                        logger.debug("MemOS: bridge keepalive failed — %s", err)
+
+        self._bridge_keepalive_thread = threading.Thread(
+            target=_run,
+            daemon=True,
+            name="memos-bridge-keepalive",
+        )
+        self._bridge_keepalive_thread.start()
 
     def _turn_start(self, query: str, *, session_id: str = "") -> str:
         assert self._bridge is not None
