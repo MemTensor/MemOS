@@ -375,6 +375,13 @@ export function createMemoryCore(
               ep.id as import("../../agent-contract/dto.js").EpisodeId,
               endedAt,
             );
+            // TODO: orphan close bypasses the event bus (episode.finalized /
+            // episode.abandoned), so capture+reward never fires even when
+            // rTask is null. Episodes closed here will show "已完成但 Reward
+            // 评分尚未完成" in the viewer. For now this only affects orphans
+            // discovered on bridge restart — closeSession() now triggers the
+            // full chain for normal exits.
+            //
             // If the pipeline already scored this episode (rTask is set),
             // mark it as "finalized" — the chain ran to completion before
             // the crash, only the final status flip was lost. Blanket

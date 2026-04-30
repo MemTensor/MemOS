@@ -216,10 +216,13 @@ class MemTensorProvider(MemoryProvider):
 
         def _run() -> None:
             try:
-                result = self._turn_start(query, session_id=session_id) if self._bridge else ""
-                if result:
-                    with self._prefetch_lock:
-                        self._prefetch_result = result
+                # Skip turn.start for auto-skill eval prompts to avoid
+                # creating a trace that _turn_end will never complete.
+                if not self._AUTO_SKILL_EVAL_RE.search(query):
+                    result = self._turn_start(query, session_id=session_id) if self._bridge else ""
+                    if result:
+                        with self._prefetch_lock:
+                            self._prefetch_result = result
             except Exception as err:
                 logger.debug("MemOS: queue_prefetch failed — %s", err)
 
