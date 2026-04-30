@@ -174,7 +174,9 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
         methods = [method for method, _params in recovered_bridge.calls]
         self.assertEqual(methods, ["session.open", "turn.start", "subagent.record"])
-        record = next(params for method, params in recovered_bridge.calls if method == "subagent.record")
+        record = next(
+            params for method, params in recovered_bridge.calls if method == "subagent.record"
+        )
         self.assertEqual(record["sessionId"], "slow-parent-session")
         self.assertEqual(record["episodeId"], "episode-from-turn-start")
         self.assertEqual(record["childSessionId"], "child-session")
@@ -264,8 +266,9 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
     def test_tool_hook_ignores_other_sessions(self) -> None:
         bridge = FakeBridge()
-        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
-            "memos_provider.MemosBridgeClient", return_value=bridge
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("parent-session")
@@ -293,14 +296,17 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
     def test_on_delegation_targets_parent_episode(self) -> None:
         bridge = FakeBridge()
-        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
-            "memos_provider.MemosBridgeClient", return_value=bridge
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("parent-session")
             provider.on_turn_start(1, "delegate task")
             provider.prefetch("delegate task")
-            provider.on_delegation("check package", "no package.json", child_session_id="child-session")
+            provider.on_delegation(
+                "check package", "no package.json", child_session_id="child-session"
+            )
 
         method, params = bridge.calls[-1]
         self.assertEqual(method, "subagent.record")
@@ -343,8 +349,9 @@ class HermesProviderPipelineTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
-                "memos_provider.MemosBridgeClient", return_value=bridge
+            with (
+                patch("memos_provider.ensure_bridge_running", return_value=True),
+                patch("memos_provider.MemosBridgeClient", return_value=bridge),
             ):
                 provider = memos_provider.MemTensorProvider()
                 provider.initialize("parent-session", hermes_home=tmp)

@@ -21,6 +21,7 @@ function trace(part: Partial<TimelineTrace>): TimelineTrace {
   return {
     id: part.id ?? "tr_x",
     ts: part.ts ?? T0,
+    turnId: part.turnId,
     userText: part.userText ?? "",
     agentText: part.agentText ?? "",
     agentThinking: part.agentThinking ?? null,
@@ -106,6 +107,20 @@ describe("flattenChat", () => {
     const msgs = flattenChat([t]);
     const toolOrder = msgs.filter((m) => m.role === "tool").map((m) => m.toolName);
     expect(toolOrder).toEqual(["first", "second", "third"]);
+  });
+
+  it("timestamps the user bubble with turnId when trace ts belongs to a later step", () => {
+    const t = trace({
+      id: "tr_turn",
+      ts: T0 + 70_000,
+      turnId: T0,
+      userText: "analyse this dataset",
+      toolCalls: [{ name: "todo" }],
+    });
+
+    const user = flattenChat([t]).find((m) => m.role === "user")!;
+
+    expect(user.ts).toBe(T0);
   });
 
   it("keeps tool calls without startedAt untimed", () => {
@@ -399,6 +414,23 @@ describe("flattenChat / parallel-batch detection", () => {
     expect(tools[1]!.parallelBatchKey).toBeUndefined();
     expect(tools[0]!.parallelBatchSize).toBeUndefined();
     expect(tools[1]!.parallelBatchSize).toBeUndefined();
+  });
+
+  it("does not batch fast sequential helper tools whose windows do not overlap", () => {
+    const t = trace({
+      id: "tr_fast_serial",
+      userText: "inspect csv headers",
+      toolCalls: [
+        { name: "wc train", startedAt: T0 + 1, endedAt: T0 + 240 },
+        { name: "wc test", startedAt: T0 + 242, endedAt: T0 + 480 },
+        { name: "wc sample", startedAt: T0 + 482, endedAt: T0 + 720 },
+      ],
+    });
+
+    const tools = flattenChat([t]).filter((m) => m.role === "tool");
+
+    expect(tools).toHaveLength(3);
+    expect(tools.every((m) => m.parallelBatchKey == null)).toBe(true);
   });
 
   it("mixes a parallel pair followed by a serial single tool", () => {

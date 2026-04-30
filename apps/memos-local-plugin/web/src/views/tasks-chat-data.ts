@@ -22,6 +22,7 @@ export interface TimelineToolCall {
 export interface TimelineTrace {
   id: string;
   ts?: number;
+  turnId?: number;
   userText: string;
   agentText: string;
   /**
@@ -124,7 +125,7 @@ export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
       out.push({
         role: "user",
         text: u,
-        ts: tr.ts,
+        ts: tr.turnId ?? tr.ts,
         key: `${tr.id}:user`,
         traceId: tr.id,
       });
@@ -227,8 +228,9 @@ const PARALLEL_BATCH_GAP_MS = 500;
  *     model spoke up between the two tools, which can only happen in
  *     a new LLM turn).
  *   - `messages[i+1].ts - messages[i].ts < PARALLEL_BATCH_GAP_MS`
- *     (the spread between start times stays inside the parallel
- *     dispatch window).
+ *   - The calls' execution windows overlap. Fast sequential helper
+ *     calls can start within a few ms of each other, but their next
+ *     start lands after the previous end; those should stay serial.
  *
  * Mutates `messages` in place — cheap and avoids an extra allocation
  * pass since the function is called from `flattenChat` which already
@@ -251,13 +253,20 @@ export function assignParallelBatches(messages: ChatMsg[]): void {
       !messages[j + 1]!.toolThinking &&
       messages[j]!.ts != null &&
       messages[j + 1]!.ts != null &&
-      messages[j + 1]!.ts - messages[j]!.ts < PARALLEL_BATCH_GAP_MS
+      messages[j + 1]!.ts - messages[j]!.ts < PARALLEL_BATCH_GAP_MS &&
+      toolsOverlap(messages[j]!, messages[j + 1]!)
     ) {
       j++;
     }
     if (j > i) markBatch(messages, i, j);
     i = j + 1;
   }
+}
+
+function toolsOverlap(a: ChatMsg, b: ChatMsg): boolean {
+  if (a.ts == null || b.ts == null) return false;
+  if (a.toolDurationMs == null || b.toolDurationMs == null) return false;
+  return b.ts < a.ts + a.toolDurationMs;
 }
 
 function markBatch(messages: ChatMsg[], from: number, to: number): void {

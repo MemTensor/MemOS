@@ -839,10 +839,9 @@ function summarizeToolNames(
 
 /**
  * Bucket the page's traces by `(episodeId, turnId)`. Within each
- * bucket, sort sub-steps by `ts ascending` and pick the first row
- * with a non-empty `userText` as the head — the `step-extractor`
- * guarantees this is the first sub-step (`subStepIdx === 0`), but we
- * fall back to "earliest by ts" so legacy rows still group cleanly.
+ * bucket, preserve the API order. The server returns sub-steps in the
+ * episode's conversation order, which can differ from `ts` when
+ * planner/todo calls have no real tool execution time.
  *
  * Aggregates exposed on the card:
  *   - `aggValue` / `aggAlpha`: arithmetic mean across members. Plain
@@ -867,7 +866,6 @@ function buildGroups(traces: readonly TraceDTO[]): MemoryGroup[] {
   }
   return order.map((key) => {
     const bucket = buckets.get(key)!;
-    bucket.sort((a, b) => a.ts - b.ts);
     const head =
       bucket.find((t) => (t.userText ?? "").trim().length > 0) ?? bucket[0]!;
     const tools = bucket.flatMap((t) => t.toolCalls ?? []);
@@ -878,7 +876,7 @@ function buildGroups(traces: readonly TraceDTO[]): MemoryGroup[] {
     return {
       turnKey: key,
       episodeId: head.episodeId ?? null,
-      ts: bucket[0]!.ts,
+      ts: head.turnId ?? bucket[0]!.turnId ?? bucket[0]!.ts,
       head,
       traces: bucket,
       ids,

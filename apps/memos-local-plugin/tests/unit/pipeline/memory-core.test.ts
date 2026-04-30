@@ -284,6 +284,71 @@ describe("MemoryCore façade", () => {
     expect(tl.length).toBe(0);
   });
 
+  it("timeline preserves episode trace order instead of timestamp order", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    db!.repos.sessions.upsert({
+      id: "s-order",
+      agent: "openclaw",
+      startedAt: 1_000,
+      lastSeenAt: 2_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep-order",
+      sessionId: "s-order",
+      startedAt: 1_000,
+      endedAt: 2_000,
+      traceIds: ["tr-late", "tr-early"] as never,
+      rTask: null,
+      status: "closed",
+      meta: {},
+    });
+    const baseTrace = {
+      episodeId: "ep-order",
+      sessionId: "s-order",
+      userText: "",
+      agentText: "",
+      summary: null,
+      reflection: null,
+      agentThinking: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      turnId: 1_000,
+      schemaVersion: 1,
+    } as const;
+    db!.repos.traces.insert({
+      ...baseTrace,
+      id: "tr-early",
+      ts: 1_100,
+      toolCalls: [{ name: "terminal", input: "", startedAt: 1_000, endedAt: 1_100 }],
+    } as never);
+    db!.repos.traces.insert({
+      ...baseTrace,
+      id: "tr-late",
+      ts: 1_500,
+      userText: "first in conversation",
+      toolCalls: [{ name: "todo", input: "" }],
+    } as never);
+
+    await core.init();
+    const tl = await core.timeline({ episodeId: "ep-order" });
+
+    expect(tl.map((tr) => tr.id)).toEqual(["tr-late", "tr-early"]);
+    const grouped = await core.listTraces({ groupByTurn: true });
+    expect(grouped.map((tr) => tr.id)).toEqual(["tr-late", "tr-early"]);
+  });
+
   it("subscribeEvents fires on session.opened", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(
