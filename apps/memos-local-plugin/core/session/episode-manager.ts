@@ -200,16 +200,30 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
       const endedAt = now();
       snap.status = "closed";
       snap.endedAt = endedAt;
-      snap.meta = { ...snap.meta, closeReason: "abandoned", abandonReason: reason };
+      const hasReward = snap.rTask != null;
+      if (hasReward) {
+        snap.meta = { ...snap.meta, closeReason: "finalized", abandonReason: undefined };
+        log.info("episode.abandon_finalized", {
+          episodeId: id,
+          sessionId: snap.sessionId,
+          turnCount: snap.turnCount,
+          rTask: snap.rTask,
+          reason,
+        });
+      } else {
+        snap.meta = { ...snap.meta, closeReason: "abandoned", abandonReason: reason };
+        log.warn("episode.abandoned", {
+          episodeId: id,
+          sessionId: snap.sessionId,
+          turnCount: snap.turnCount,
+          reason,
+        });
+      }
       deps.episodesRepo.close(id, endedAt, snap.rTask ?? undefined, snap.meta);
-      log.warn("episode.abandoned", {
-        episodeId: id,
-        sessionId: snap.sessionId,
-        turnCount: snap.turnCount,
-        reason,
-      });
-      deps.bus.emit({ kind: "episode.finalized", episode: cloneSnapshot(snap), closedBy: "abandoned" });
-      deps.bus.emit({ kind: "episode.abandoned", episodeId: id, reason });
+      deps.bus.emit({ kind: "episode.finalized", episode: cloneSnapshot(snap), closedBy: hasReward ? "finalized" : "abandoned" });
+      if (!hasReward) {
+        deps.bus.emit({ kind: "episode.abandoned", episodeId: id, reason });
+      }
       return cloneSnapshot(snap);
     },
 

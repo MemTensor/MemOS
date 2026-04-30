@@ -516,12 +516,15 @@ class MemTensorProvider(MemoryProvider):
     ) -> None:
         if not self._bridge:
             return
-        # Strip Hermes auto-skill evaluation blocks from the assistant
-        # response. When the header phrase is present the entire remainder
-        # of the message is system-generated scaffolding, not user content.
+        # Strip Hermes auto-skill evaluation blocks. The prompt may appear
+        # in assistant_content (main agent) or user_content (fork agent that
+        # receives the review prompt as a user_message).
         m = self._AUTO_SKILL_EVAL_RE.search(assistant_content)
         if m:
             assistant_content = assistant_content[: m.start()].strip()
+        m = self._AUTO_SKILL_EVAL_RE.search(user_content)
+        if m:
+            user_content = user_content[: m.start()].strip()
         if not assistant_content.strip() and not user_content.strip():
             return
         self._bridge.request(
