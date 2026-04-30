@@ -18,6 +18,7 @@ import {
 import { L2_INDUCTION_PROMPT } from "../../llm/prompts/l2-induction.js";
 import type { LlmClient } from "../../llm/index.js";
 import type { Logger } from "../../logger/types.js";
+import { sanitizeDerivedMarkdown, sanitizeDerivedMarkdownList, sanitizeDerivedText } from "../../safety/content.js";
 import type {
   EmbeddingVector,
   EpisodeId,
@@ -228,19 +229,19 @@ function normaliseDraft(value: Record<string, unknown>, traceIds: readonly Trace
       ? (value.action as string)
       : "";
   const caveats = Array.isArray(value.caveats)
-    ? (value.caveats as unknown[]).filter((c): c is string => typeof c === "string")
+    ? sanitizeDerivedMarkdownList((value.caveats as unknown[]).filter((c): c is string => typeof c === "string"))
     : [];
   const confidence = typeof value.confidence === "number" ? value.confidence : 0.5;
   const supportTraceIds = Array.isArray(value.support_trace_ids)
     ? (value.support_trace_ids as unknown[]).filter((x): x is string => typeof x === "string")
     : [];
   return {
-    title: String(value.title ?? "").trim(),
-    trigger: String(value.trigger ?? "").trim(),
-    procedure: procedure.trim(),
-    verification: typeof value.verification === "string" ? (value.verification as string).trim() : "",
-    boundary: typeof value.boundary === "string" ? (value.boundary as string).trim() : "",
-    rationale: typeof value.rationale === "string" ? (value.rationale as string).trim() : "",
+    title: sanitizeDerivedText(value.title),
+    trigger: sanitizeDerivedMarkdown(value.trigger),
+    procedure: sanitizeDerivedMarkdown(procedure),
+    verification: typeof value.verification === "string" ? sanitizeDerivedMarkdown(value.verification) : "",
+    boundary: typeof value.boundary === "string" ? sanitizeDerivedMarkdown(value.boundary) : "",
+    rationale: typeof value.rationale === "string" ? sanitizeDerivedMarkdown(value.rationale) : "",
     caveats,
     confidence: Math.max(0, Math.min(1, confidence)),
     supportTraceIds: supportTraceIds.length > 0 ? (supportTraceIds as TraceId[]) : Array.from(traceIds),

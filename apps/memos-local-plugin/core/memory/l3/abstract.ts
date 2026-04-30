@@ -14,6 +14,7 @@ import {
 import { L3_ABSTRACTION_PROMPT } from "../../llm/prompts/l3-abstraction.js";
 import type { LlmClient } from "../../llm/index.js";
 import type { Logger } from "../../logger/types.js";
+import { sanitizeDerivedMarkdown, sanitizeDerivedText } from "../../safety/content.js";
 import type {
   EmbeddingVector,
   EpisodeId,
@@ -250,12 +251,12 @@ function packPolicy(
 function normaliseDraft(value: Record<string, unknown>): L3AbstractionDraft {
   const triple = pickTriple(value);
   return {
-    title: String(value.title ?? "").trim(),
+    title: sanitizeDerivedText(value.title),
     domainTags: normaliseTags(value.domain_tags),
     environment: triple.environment,
     inference: triple.inference,
     constraints: triple.constraints,
-    body: typeof value.body === "string" ? (value.body as string).trim() : "",
+    body: typeof value.body === "string" ? sanitizeDerivedMarkdown(value.body) : "",
     confidence: clamp01(typeof value.confidence === "number" ? value.confidence : 0.5),
     supersedesWorldIds: Array.isArray(value.supersedes_world_ids)
       ? (value.supersedes_world_ids as unknown[])
@@ -283,8 +284,8 @@ function toEntries(raw: unknown): L3AbstractionDraftEntry[] {
     .map((r): L3AbstractionDraftEntry | null => {
       if (!r || typeof r !== "object") return null;
       const o = r as Record<string, unknown>;
-      const label = typeof o.label === "string" ? (o.label as string).trim() : "";
-      const description = typeof o.description === "string" ? (o.description as string).trim() : "";
+      const label = typeof o.label === "string" ? sanitizeDerivedText(o.label) : "";
+      const description = typeof o.description === "string" ? sanitizeDerivedMarkdown(o.description) : "";
       if (!label && !description) return null;
       const evidenceIds = Array.isArray(o.evidenceIds)
         ? (o.evidenceIds as unknown[]).filter((s): s is string => typeof s === "string")

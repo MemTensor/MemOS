@@ -30,6 +30,7 @@ import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type { LlmClient } from "../llm/index.js";
 import { REWARD_R_HUMAN_PROMPT } from "../llm/prompts/reward.js";
 import { rootLogger } from "../logger/index.js";
+import { sanitizeDerivedText } from "../safety/content.js";
 import type { HumanScore, HumanScoreInput, RewardConfig, UserFeedback } from "./types.js";
 
 const AXIS_WEIGHTS = {
@@ -123,7 +124,7 @@ async function llmScore(input: HumanScoreInput, llm: LlmClient): Promise<HumanSc
   const goal = clamp(rsp.value.goal_achievement as number, -1, 1);
   const proc = clamp(rsp.value.process_quality as number, -1, 1);
   const sat = clamp(rsp.value.user_satisfaction as number, -1, 1);
-  const reason = typeof rsp.value.reason === "string" ? (rsp.value.reason as string) : null;
+  const reason = typeof rsp.value.reason === "string" ? sanitizeDerivedText(rsp.value.reason) : null;
 
   const rHuman = combine(goal, proc, sat);
 

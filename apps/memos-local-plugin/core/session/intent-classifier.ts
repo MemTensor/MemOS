@@ -16,6 +16,7 @@
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
+import { sanitizeDerivedText } from "../safety/content.js";
 import { HEURISTIC_RULES, matchFirst, retrievalFor } from "./heuristics.js";
 import type { IntentDecision, IntentKind } from "./types.js";
 
@@ -217,7 +218,7 @@ async function callLlm(llm: LlmClient, text: string): Promise<LlmIntentAnswer> {
   return {
     kind: rsp.value.kind as IntentKind,
     confidence: rsp.value.confidence as number,
-    reason: rsp.value.reason as string,
+    reason: sanitizeDerivedText(rsp.value.reason),
     servedBy: rsp.servedBy,
   };
 }

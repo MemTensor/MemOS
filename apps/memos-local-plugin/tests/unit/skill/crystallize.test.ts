@@ -120,6 +120,65 @@ describe("skill/crystallize", () => {
     expect(r.draft.tools).toEqual(["shell", "pip.install"]);
   });
 
+  it("cleans unsafe markup from LLM-derived skill fields", async () => {
+    const policy = mkPolicy();
+    const llm = fakeLlm({
+      completeJson: {
+        "skill.crystallize": {
+          name: "unsafe-skill",
+          display_title: "<img src=x onerror=alert(1)> Alpine Pip",
+          summary: "<script>alert(1)</script>Use [docs](javascript:alert(1))",
+          parameters: [
+            {
+              name: "package",
+              type: "string",
+              required: true,
+              description: "<b>pip target</b>",
+            },
+          ],
+          preconditions: ["<svg onload=alert(1)>alpine base"],
+          steps: [
+            {
+              title: "<b>detect</b>",
+              body: "Use [safe](https://example.com) not [bad](javascript:alert(1))",
+            },
+          ],
+          examples: [{ input: "<script>alert(1)</script>cryptography", expected: "<b>success</b>" }],
+          tags: ["alpine"],
+          tools: ["shell"],
+          decision_guidance: {
+            preference: ["<script>alert(1)</script>install libs first"],
+            anti_pattern: ["[bad](javascript:alert(1))"],
+          },
+        },
+      },
+    });
+
+    const r = await crystallizeDraft(
+      { policy, evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
+    );
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const combined = [
+      r.draft.displayTitle,
+      r.draft.summary,
+      r.draft.parameters[0]?.description,
+      ...r.draft.preconditions,
+      ...r.draft.steps.flatMap((s) => [s.title, s.body]),
+      ...r.draft.examples.flatMap((e) => [e.input, e.expected]),
+      ...r.draft.decisionGuidance.preference,
+      ...r.draft.decisionGuidance.antiPattern,
+    ].join("\n");
+    expect(combined).not.toMatch(/<script|<img|<svg|javascript:/i);
+    expect(r.draft.displayTitle).toBe("Alpine Pip");
+    expect(r.draft.parameters[0]!.description).toBe("<b>pip target</b>");
+    expect(r.draft.examples[0]!.expected).toBe("<b>success</b>");
+    expect(r.draft.steps[0]!.body).toContain("[safe](https://example.com)");
+    expect(r.draft.steps[0]!.body).toContain("bad");
+  });
+
   it("skips when useLlm is false", async () => {
     const r = await crystallizeDraft(
       { policy: mkPolicy(), evidence: [mkTrace("tr_1", "x")], namingSpace: [] },
