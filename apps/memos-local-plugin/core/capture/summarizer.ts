@@ -19,6 +19,7 @@
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
+import { sanitizeDerivedText } from "../safety/content.js";
 import type { NormalizedStep } from "./types.js";
 
 const MAX_SUMMARY_CHARS = 140;
@@ -75,7 +76,7 @@ export function createSummarizer(opts: SummarizerOptions): Summarizer {
         ),
         timeoutMs,
       );
-      const llmSummary = String((result?.value as { summary?: string })?.summary ?? "").trim();
+      const llmSummary = sanitizeDerivedText((result?.value as { summary?: string })?.summary);
       if (!llmSummary) return heuristic;
       return clampLength(llmSummary, MAX_SUMMARY_CHARS);
     } catch (err) {

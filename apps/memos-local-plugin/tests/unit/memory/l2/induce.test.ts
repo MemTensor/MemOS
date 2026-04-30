@@ -72,6 +72,49 @@ describe("memory/l2/induce", () => {
     expect(res.draft.confidence).toBeGreaterThan(0);
   });
 
+  it("cleans unsafe markup from LLM-derived policy fields", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        "l2.l2.induction.v2": {
+          title: "<img src=x onerror=alert(1)> install system libs",
+          trigger: "<script>alert(1)</script>pip fails [bad](javascript:alert(1))",
+          procedure: "Use [safe](https://example.com), ignore [bad](javascript:alert(1))",
+          verification: "<b>pip install succeeds</b>",
+          boundary: "<svg onload=alert(1)>containers only",
+          rationale: "<style>body{}</style>derived from failures",
+          caveats: ["<script>alert(1)</script>alpine only"],
+          confidence: 0.72,
+        },
+      },
+    });
+    const res = await induceDraft(
+      {
+        evidenceTraces: [mkTrace("tr_a", "ep_1", vec([1, 0])), mkTrace("tr_b", "ep_2", vec([0.9, 0.1]))],
+        episodeIds: ["ep_1", "ep_2"] as EpisodeId[],
+        signatureLabel: "docker|pip",
+        charCap: 2000,
+      },
+      { llm, log },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const combined = [
+      res.draft.title,
+      res.draft.trigger,
+      res.draft.procedure,
+      res.draft.verification,
+      res.draft.boundary,
+      res.draft.rationale,
+      ...res.draft.caveats,
+    ].join("\n");
+    expect(combined).not.toMatch(/<script|<img|<svg|<style|javascript:/i);
+    expect(res.draft.title).toBe("install system libs");
+    expect(res.draft.verification).toContain("<b>pip install succeeds</b>");
+    expect(res.draft.procedure).toContain("[safe](https://example.com)");
+    expect(res.draft.procedure).toContain("bad");
+  });
+
   it("reason=llm_disabled when llm is null", async () => {
     const res = await induceDraft(
       {

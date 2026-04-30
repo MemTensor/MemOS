@@ -8,6 +8,8 @@
  * Security: output is sanitized (no raw HTML passthrough).
  */
 
+import { isSafeLinkTarget } from "../../../core/safety/content";
+
 const ESC: Record<string, string> = {
   "&": "&amp;",
   "<": "&lt;",
@@ -20,7 +22,7 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ESC[c] ?? c);
 }
 
-function renderMarkdown(src: string): string {
+export function renderMarkdown(src: string): string {
   const lines = src.split("\n");
   const out: string[] = [];
   let i = 0;
@@ -109,8 +111,12 @@ function inlineFormat(text: string): string {
   s = s.replace(/~~(.+?)~~/g, "<del>$1</del>");
   // Links
   s = s.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener">$1</a>',
+    /\[([^\]\n]+)\]\(((?:\\.|[^()\n]|\([^()\n]*\))+)\)/g,
+    (_match, label: string, rawUrl: string) => {
+      const url = rawUrl.trim();
+      if (!isSafeLinkTarget(url)) return label;
+      return `<a href="${url}" target="_blank" rel="noopener">${label}</a>`;
+    },
   );
   return s;
 }
