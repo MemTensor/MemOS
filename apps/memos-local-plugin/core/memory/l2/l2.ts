@@ -29,6 +29,7 @@ import type {
   TraceRow,
 } from "../../types.js";
 import type { Repos } from "../../storage/repos/index.js";
+import { ids } from "../../id.js";
 import { L2_INDUCTION_PROMPT } from "../../llm/prompts/l2-induction.js";
 import { associateTraces } from "./associate.js";
 import { makeCandidatePool } from "./candidate-pool.js";
@@ -47,7 +48,7 @@ import type {
 } from "./types.js";
 
 export interface RunL2Deps {
-  repos: Pick<Repos, "candidatePool" | "policies" | "traces">;
+  repos: Pick<Repos, "candidatePool" | "embeddingRetryQueue" | "policies" | "traces">;
   db: Parameters<typeof makeCandidatePool>[0]["db"];
   llm: LlmClient | null;
   log: Logger;
@@ -224,6 +225,21 @@ export async function runL2(
       });
       try {
         repos.policies.insert(policy);
+        if (!policy.vec) {
+          repos.embeddingRetryQueue.enqueue({
+            id: `er_${ids.span()}`,
+            targetKind: "policy",
+            targetId: policy.id,
+            vectorField: "vec",
+            sourceText: policyVectorText(policy),
+            now: input.now ?? Date.now(),
+          });
+          warnings.push({
+            stage: "embed",
+            message: "embedding retry queued for policy vector",
+            detail: { policyId: policy.id },
+          });
+        }
         pool.promote(bucket.candidateIds, policy.id);
         touched.set(policy.id, policy);
         inductionEvidenceByPolicy.set(
@@ -375,6 +391,16 @@ function stageWarn(
 ): { stage: string; message: string; detail?: Record<string, unknown> } {
   const message = err instanceof Error ? err.message : String(err);
   return { stage, message, detail };
+}
+
+function policyVectorText(policy: PolicyRow): string {
+  return [
+    policy.title,
+    policy.trigger,
+    policy.procedure,
+    policy.verification,
+    policy.boundary,
+  ].filter(Boolean).join("\n");
 }
 
 function pickOnePerEpisode(traces: readonly TraceRow[]): TraceRow[] {

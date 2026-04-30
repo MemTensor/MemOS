@@ -487,6 +487,18 @@ export function makeTracesRepo(db: StorageDb) {
       db.prepare<typeof params>(sql).run(params);
     },
 
+    updateVector(
+      id: TraceId,
+      field: "vecSummary" | "vecAction",
+      vec: EmbeddingVector,
+    ): boolean {
+      const column = field === "vecAction" ? "vec_action" : "vec_summary";
+      const res = db.prepare<{ id: string; vec: Buffer }>(
+        `UPDATE traces SET ${column}=@vec WHERE id=@id`,
+      ).run({ id, vec: toBlob(vec)! });
+      return res.changes > 0;
+    },
+
     /**
      * Fill in reflection + α for a trace that was previously written
      * in the "lite" capture phase (reflection=null, α=0). Invoked

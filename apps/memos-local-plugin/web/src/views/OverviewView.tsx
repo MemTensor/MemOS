@@ -220,7 +220,9 @@ export function OverviewView() {
             {recent.map((evt) => (
               <div class="stream__line" key={evt.seq}>
                 <span class="stream__time">{new Date(evt.ts).toLocaleTimeString()}</span>
-                <span class="stream__level stream__level--info">{evt.type}</span>
+                <span class={`stream__level ${evt.type === "system.error" ? "stream__level--warn" : "stream__level--info"}`}>
+                  {evt.type}
+                </span>
                 <span class="stream__body">
                   {JSON.stringify(evt.payload ?? {}).slice(0, 240)}
                 </span>

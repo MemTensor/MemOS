@@ -76,6 +76,7 @@ import type { CoreEvent } from "../../agent-contract/events.js";
 import type { LogRecord } from "../../agent-contract/log-record.js";
 import { memoryBuffer } from "../logger/index.js";
 import { onBroadcastLog } from "../logger/transports/sse-broadcast.js";
+import { createEmbeddingRetryWorker, systemErrorEvent } from "../embedding/index.js";
 import type { EpisodeSnapshot } from "../session/index.js";
 
 // ─── Factory ──────────────────────────────────────────────────────────────
@@ -126,6 +127,18 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
   const getRecentEvents = (): readonly CoreEvent[] =>
     recentEvents.slice();
+
+  let retryEventSeq = 1_000_000;
+  const embeddingRetryWorker = createEmbeddingRetryWorker({
+    repos: deps.repos,
+    embedder: deps.embedder,
+    log: log.child({ channel: "core.embedding.retry" }),
+    now: deps.now,
+    onSystemError: (payload, correlationId) => {
+      emitCore(systemErrorEvent(payload, retryEventSeq++, correlationId));
+    },
+  });
+  embeddingRetryWorker.start();
 
   // Hydrate the ring buffer with synthetic events derived from the
   // most-recent rows on disk. Without this, every plugin restart
@@ -541,6 +554,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // ─── Retrieval entry points ─────────────────────────────────────────────
 
   const retrievalDeps = buildRetrievalDeps(deps, algorithm);
+  const turnStartRetrievalStats = new Map<string, RetrievalResult["stats"]>();
 
   async function retrieveTurnStart(input: TurnInputDTO): Promise<InjectionPacket> {
     const ctx = {
@@ -557,7 +571,14 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       ctx,
       { events: buses.retrieval },
     );
+    turnStartRetrievalStats.set(result.packet.packetId, result.stats);
     return result.packet;
+  }
+
+  function consumeRetrievalStats(packetId: string): RetrievalResult["stats"] | null {
+    const stats = turnStartRetrievalStats.get(packetId) ?? null;
+    turnStartRetrievalStats.delete(packetId);
+    return stats;
   }
 
   async function retrieveToolDriven(ctx: ToolDrivenCtx): Promise<InjectionPacket> {
@@ -835,6 +856,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     await nextTick();
     await subs.skills.flush();
     await subs.feedback.flush();
+    await embeddingRetryWorker.flush();
   }
 
   async function shutdown(reason: string = "shutdown"): Promise<void> {
@@ -853,6 +875,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     subs.l3.detach();
     subs.skills.dispose();
     subs.feedback.dispose();
+    embeddingRetryWorker.stop();
     bridge.dispose();
     logSubscription();
     session.sessionManager.shutdown(reason);
@@ -932,6 +955,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     getRecentEvents,
     subscribeLogs,
     onTurnStart,
+    consumeRetrievalStats,
     onTurnEnd,
     recordToolOutcome,
     retrieveToolDriven,

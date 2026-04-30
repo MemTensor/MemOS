@@ -26,6 +26,7 @@ import type { LlmClient } from "../llm/types.js";
 import type { Logger } from "../logger/types.js";
 import type { Repos } from "../storage/repos/index.js";
 import { now as nowMs } from "../time.js";
+import { ids } from "../id.js";
 import type {
   PolicyRow,
   SkillId,
@@ -208,6 +209,20 @@ export async function runSkill(
     }
 
     repos.skills.upsert(row);
+    if (!row.vec && deps.embedder) {
+      repos.embeddingRetryQueue.enqueue({
+        id: `er_${ids.span()}`,
+        targetKind: "skill",
+        targetId: row.id,
+        vectorField: "vec",
+        sourceText: built.vecSource || row.invocationGuide || row.name,
+        now: nowMs(),
+      });
+      warnings.push({
+        skillId: row.id,
+        reason: "embedding retry queued for skill vector",
+      });
+    }
     timings.persist += nowMs() - tPersist;
 
     if (decision.action === "rebuild") rebuilt += 1;

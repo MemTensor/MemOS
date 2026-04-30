@@ -201,6 +201,7 @@ export function buildPipelineSubscribers(
 
   const captureRunner = createCaptureRunner({
     tracesRepo: deps.repos.traces,
+    embeddingRetryQueue: deps.repos.embeddingRetryQueue,
     episodesRepo: adaptEpisodesRepo(deps.repos.episodes),
     embedder: deps.embedder,
     llm: deps.llm,

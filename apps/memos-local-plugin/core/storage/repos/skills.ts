@@ -320,6 +320,13 @@ export function makeSkillsRepo(db: StorageDb) {
       const sql = `UPDATE skills SET ${sets.join(", ")} WHERE id = @id`;
       db.prepare<typeof params>(sql).run(params);
     },
+
+    updateVector(id: SkillId, vec: EmbeddingVector): boolean {
+      const res = db.prepare<{ id: string; vec: Buffer; updated_at: number }>(
+        `UPDATE skills SET vec=@vec, updated_at=@updated_at WHERE id=@id`,
+      ).run({ id, vec: toBlob(vec)!, updated_at: Date.now() });
+      return res.changes > 0;
+    },
   };
 }
 
