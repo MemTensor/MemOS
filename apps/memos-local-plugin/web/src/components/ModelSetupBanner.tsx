@@ -22,8 +22,8 @@
  */
 import { useState } from "preact/hooks";
 import { t } from "../stores/i18n";
-import { navigate } from "../stores/router";
 import { health } from "../stores/health";
+import { navigate } from "../stores/router";
 import { Icon } from "./Icon";
 
 const STORAGE_KEY = "memos.banner.modelSetup.dismissed";
@@ -46,20 +46,9 @@ function persistDismissed(): void {
 
 export function ModelSetupBanner() {
   const [dismissed, setDismissed] = useState<boolean>(() => isDismissed());
-
-  if (dismissed) return null;
-
-  // Reading `health.value` here subscribes the component to the signal,
-  // so the banner re-evaluates every time `/api/v1/health` polls (15s).
-  // If the user later misconfigures (e.g. clears apiKey in Settings),
-  // the bridge will report `available=false` and the banner reappears
-  // without needing a page reload.
   const h = health.value;
-  if (h === null) return null; // first paint, status unknown
-  const allConfigured = Boolean(
-    h.embedder?.available && h.llm?.available && h.skillEvolver?.available,
-  );
-  if (allConfigured) return null;
+
+  if (dismissed || !h || modelsReady(h)) return null;
 
   const handleDismiss = () => {
     persistDismissed();
@@ -106,5 +95,13 @@ export function ModelSetupBanner() {
         <Icon name="x" size={16} />
       </button>
     </div>
+  );
+}
+
+function modelsReady(h: NonNullable<typeof health.value>): boolean {
+  return Boolean(
+    h.llm?.available &&
+      h.embedder?.available &&
+      h.skillEvolver?.available,
   );
 }

@@ -38,8 +38,13 @@ export interface ToolCallDTO {
   input: unknown;
   output?: unknown;
   errorCode?: string;
-  startedAt: EpochMs;
-  endedAt: EpochMs;
+  /**
+   * Real tool execution timestamps when the host exposes them. Tools
+   * reconstructed later from `post_llm_call` history may not have reliable
+   * timing; leave these undefined rather than filling with capture time.
+   */
+  startedAt?: EpochMs;
+  endedAt?: EpochMs;
   /**
    * LLM-native thinking emitted *before* the model decided to invoke this
    * tool — e.g. "I got an error from tool_1, let me try a different
@@ -50,6 +55,15 @@ export interface ToolCallDTO {
    * Stored inside `tool_calls_json` (no schema migration needed).
    */
   thinkingBefore?: string;
+  /**
+   * Visible assistant text emitted in the same message before the model
+   * requested this tool. Hermes/OpenAI-style responses may contain both
+   * `content` and `tool_calls`; this field preserves that user-facing
+   * narration without mixing it into private reasoning.
+   *
+   * Stored inside `tool_calls_json` (no schema migration needed).
+   */
+  assistantTextBefore?: string;
 }
 
 export interface TurnInputDTO {

@@ -701,6 +701,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           // the captured ToolCallDTO. Without this, chained tool calls
           // lose the natural-language bridge between steps.
           thinkingBefore: tc.thinkingBefore,
+          assistantTextBefore: tc.assistantTextBefore,
         },
       });
     }

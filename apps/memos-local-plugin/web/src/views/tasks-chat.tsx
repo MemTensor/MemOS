@@ -179,6 +179,19 @@ function ToolBubble({ msg }: { msg: ChatMsg }) {
         <span class="chat-item__tool-name mono">{msg.toolName}</span>
         {!errored && <span class="pill pill--active">{t("tasks.chat.tool.ok")}</span>}
       </div>
+      {msg.toolAssistantTextBefore && (
+        <details class="chat-item__tool-section" open>
+          <summary class="chat-item__tool-summary">
+            <Icon name="chevron-right" size={12} />
+            <span class="chat-item__tool-label">
+              {t("tasks.chat.tool.assistantTextBefore")}
+            </span>
+          </summary>
+          <div class="chat-item__tool-thinking">
+            <Markdown text={msg.toolAssistantTextBefore} />
+          </div>
+        </details>
+      )}
       {msg.toolThinking && (
         <details class="chat-item__tool-section" open>
           <summary class="chat-item__tool-summary">
@@ -230,7 +243,7 @@ function roleLabel(msg: ChatMsg): string {
   return t(`tasks.chat.role.${msg.role}` as "tasks.chat.role.user");
 }
 
-function formatTime(ts: number): string {
+function formatTime(ts?: number): string {
   if (!ts) return "";
   try {
     return new Date(ts).toLocaleTimeString();
