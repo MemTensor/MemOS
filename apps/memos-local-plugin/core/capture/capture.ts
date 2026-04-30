@@ -20,6 +20,7 @@ import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
 import { ids } from "../id.js";
 import type { TraceRow, TraceId } from "../types.js";
+import type { makeEmbeddingRetryQueueRepo } from "../storage/repos/embedding_retry_queue.js";
 import type { makeTracesRepo } from "../storage/repos/traces.js";
 import type { EpisodesRepo } from "../session/persistence.js";
 import { disabledScore, scoreReflection } from "./alpha-scorer.js";
@@ -45,9 +46,11 @@ import type {
 } from "./types.js";
 
 type TracesRepo = ReturnType<typeof makeTracesRepo>;
+type EmbeddingRetryQueueRepo = ReturnType<typeof makeEmbeddingRetryQueueRepo>;
 
 export interface CaptureDeps {
   tracesRepo: TracesRepo;
+  embeddingRetryQueue?: EmbeddingRetryQueueRepo;
   episodesRepo: EpisodesRepo;
   embedder: Embedder | null;
   /** Main LLM — used for per-turn lite capture (summarisation). */
@@ -564,6 +567,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
   ): Promise<boolean> {
     try {
       for (const row of rows) deps.tracesRepo.insert(row);
+      enqueueMissingTraceVectors(rows, warnings);
     } catch (err) {
       const failure = errDetail(err);
       log.error("persist.failed", {
@@ -597,6 +601,46 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       });
     }
     return true;
+  }
+
+  function enqueueMissingTraceVectors(
+    rows: TraceRow[],
+    warnings: CaptureResult["warnings"],
+  ): void {
+    if (!deps.cfg.embedTraces || !deps.embeddingRetryQueue || !deps.embedder) return;
+    const queuedAt = now();
+    let queued = 0;
+    for (const row of rows) {
+      if (!row.vecSummary) {
+        deps.embeddingRetryQueue.enqueue({
+          id: `er_${ids.span()}`,
+          targetKind: "trace",
+          targetId: row.id,
+          vectorField: "vec_summary",
+          sourceText: row.summary?.trim() || row.userText.trim() || "(empty)",
+          now: queuedAt,
+        });
+        queued++;
+      }
+      if (!row.vecAction) {
+        deps.embeddingRetryQueue.enqueue({
+          id: `er_${ids.span()}`,
+          targetKind: "trace",
+          targetId: row.id,
+          vectorField: "vec_action",
+          sourceText: traceActionText(row),
+          now: queuedAt,
+        });
+        queued++;
+      }
+    }
+    if (queued > 0) {
+      warnings.push({
+        stage: "embed",
+        message: "embedding retry queued for missing trace vectors",
+        detail: { queued },
+      });
+    }
   }
 
   function finalResult(
@@ -803,6 +847,23 @@ function errDetail(err: unknown): Record<string, unknown> {
   if (err instanceof MemosError) return { code: err.code, message: err.message, ...(err.details ?? {}) };
   if (err instanceof Error) return { name: err.name, message: err.message };
   return { value: String(err) };
+}
+
+function traceActionText(row: Pick<TraceRow, "agentText" | "toolCalls">): string {
+  const toolSig = row.toolCalls
+    .map((t) => `${t.name}(${safeStringify(t.input).slice(0, 300)})`)
+    .join("; ");
+  return [row.agentText.trim(), toolSig].filter((s) => s.length > 0).join("\n---\n") || "(empty)";
+}
+
+function safeStringify(v: unknown): string {
+  if (v === undefined || v === null) return "";
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
 }
 
 /**

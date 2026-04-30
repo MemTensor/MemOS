@@ -371,6 +371,13 @@ interface RetrievalStatsPayload {
   channelHits?: Record<string, number>;
   queryTokens?: number;
   queryTags?: string[];
+  embedding?: {
+    attempted?: boolean;
+    ok?: boolean;
+    degraded?: boolean;
+    errorCode?: string;
+    errorMessage?: string;
+  };
 }
 interface SearchCandidate {
   tier?: number;
@@ -482,6 +489,11 @@ function RetrievalFunnel({ stats }: { stats: RetrievalStatsPayload }) {
         class="hstack"
         style="gap:var(--sp-3);flex-wrap:wrap;font-size:var(--fs-xs)"
       >
+        {stats.embedding?.degraded && (
+          <span class="pill pill--failed">
+            embedder degraded · {stats.embedding.errorCode ?? stats.embedding.errorMessage ?? "failed"}
+          </span>
+        )}
         <span class="pill pill--info">raw {raw}</span>
         <span class="pill pill--info">ranked {ranked}</span>
         {dropped > 0 && (

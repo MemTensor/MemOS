@@ -192,11 +192,25 @@ async function runAll(
   });
 
   try {
+    const embeddingStats: RetrievalStats["embedding"] = {
+      attempted: compiled.text.length > 0,
+      ok: false,
+      degraded: false,
+    };
     const queryVec = compiled.text
-      ? await deps.embedder.embed(compiled.text, "query").catch((err) => {
+      ? await deps.embedder.embed(compiled.text, "query").then((vec) => {
+          embeddingStats.ok = true;
+          return vec;
+        }).catch((err) => {
+          const code = (err as { code?: string })?.code;
+          const message = err instanceof Error ? err.message : String(err);
+          embeddingStats.degraded = true;
+          embeddingStats.errorCode = code;
+          embeddingStats.errorMessage = message;
           log.warn("embed_failed", {
             reason: ctx.reason,
-            err: err instanceof Error ? err.message : String(err),
+            code,
+            err: message,
           });
           return null;
         })
@@ -372,6 +386,7 @@ async function runAll(
       queryTokens: approxTokens(compiled.text),
       queryTags: compiled.tags,
       emptyPacket: packet.snippets.length === 0,
+      embedding: embeddingStats,
       rawCandidateCount,
       droppedByThresholdCount: ranked.droppedByThreshold,
       thresholdFloor: ranked.thresholdFloor,
@@ -463,6 +478,7 @@ function emptyResult(
       queryTokens: 0,
       queryTags: [],
       emptyPacket: true,
+      embedding: { attempted: false, ok: false, degraded: false },
     },
   };
 }

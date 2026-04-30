@@ -25,6 +25,7 @@ import type { Logger } from "../../logger/types.js";
 import type { LlmClient } from "../../llm/index.js";
 import { L3_ABSTRACTION_PROMPT } from "../../llm/prompts/l3-abstraction.js";
 import type { Repos } from "../../storage/repos/index.js";
+import { ids } from "../../id.js";
 import type {
   EpisodeId,
   EpochMs,
@@ -53,7 +54,7 @@ import type {
 // ─── Deps ──────────────────────────────────────────────────────────────────
 
 export interface RunL3Deps {
-  repos: Pick<Repos, "policies" | "traces" | "worldModel" | "kv">;
+  repos: Pick<Repos, "embeddingRetryQueue" | "policies" | "traces" | "worldModel" | "kv">;
   llm: LlmClient | null;
   log: Logger;
   bus?: L3EventBus;
@@ -196,6 +197,21 @@ export async function runL3(
           vec: patch.vec,
           updatedAt: now,
         });
+        if (!patch.vec) {
+          repos.embeddingRetryQueue.enqueue({
+            id: `er_${ids.span()}`,
+            targetKind: "world_model",
+            targetId: decision.target.id,
+            vectorField: "vec",
+            sourceText: worldModelVectorText(patch.title, patch.body),
+            now,
+          });
+          warnings.push({
+            stage: "embed",
+            message: "embedding retry queued for world model vector",
+            detail: { worldModelId: decision.target.id },
+          });
+        }
         const bumped = clamp01(decision.target.confidence + config.confidenceDelta);
         if (bumped !== decision.target.confidence) {
           repos.worldModel.updateConfidence(decision.target.id, bumped, now);
@@ -248,6 +264,21 @@ export async function runL3(
       });
       try {
         repos.worldModel.insert(wm);
+        if (!wm.vec) {
+          repos.embeddingRetryQueue.enqueue({
+            id: `er_${ids.span()}`,
+            targetKind: "world_model",
+            targetId: wm.id,
+            vectorField: "vec",
+            sourceText: worldModelVectorText(wm.title, wm.body),
+            now,
+          });
+          warnings.push({
+            stage: "embed",
+            message: "embedding retry queued for world model vector",
+            detail: { worldModelId: wm.id },
+          });
+        }
         abstractions.push({
           clusterKey: cluster.key,
           worldModelId: wm.id,
@@ -310,6 +341,10 @@ function stageWarn(
 ): { stage: string; message: string; detail?: Record<string, unknown> } {
   const message = err instanceof Error ? err.message : String(err);
   return { stage, message, detail };
+}
+
+function worldModelVectorText(title: string, body: string): string {
+  return [title.trim(), body.trim()].filter(Boolean).join("\n\n") || "(empty)";
 }
 
 function skipped(

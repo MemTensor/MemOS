@@ -107,10 +107,9 @@ export function runMigrations(db: StorageDb, dir: string = defaultMigrationsDir(
         skipped++;
         continue;
       }
-      const sql = fs.readFileSync(file.fullPath, "utf8");
       const t0 = now();
       db.tx(() => {
-        db.exec(sql);
+        applyMigration(db, file);
         db.prepare(
           `INSERT INTO schema_migrations (version, name, applied_at) VALUES (@version, @name, @applied_at)`,
         ).run({ version: file.version, name: file.name, applied_at: now() });
@@ -147,6 +146,28 @@ export function runMigrations(db: StorageDb, dir: string = defaultMigrationsDir(
 function migrationNeedsUnsafeMode(fullPath: string): boolean {
   const sql = fs.readFileSync(fullPath, "utf8");
   return /PRAGMA\s+writable_schema/i.test(sql);
+}
+
+function applyMigration(db: StorageDb, file: MigrationFile): void {
+  if (file.version === 3 && file.name === "embedding-retry-lease") {
+    ensureEmbeddingRetryLeaseColumns(db);
+    return;
+  }
+  db.exec(fs.readFileSync(file.fullPath, "utf8"));
+}
+
+function ensureEmbeddingRetryLeaseColumns(db: StorageDb): void {
+  const columns = new Set(
+    db.prepare<unknown, { name: string }>(`PRAGMA table_info(embedding_retry_queue)`)
+      .all()
+      .map((row) => row.name),
+  );
+  if (!columns.has("claimed_by")) {
+    db.exec(`ALTER TABLE embedding_retry_queue ADD COLUMN claimed_by TEXT`);
+  }
+  if (!columns.has("lease_until")) {
+    db.exec(`ALTER TABLE embedding_retry_queue ADD COLUMN lease_until INTEGER`);
+  }
 }
 
 function ensureSchemaMigrationsTable(db: StorageDb): void {

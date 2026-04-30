@@ -190,6 +190,7 @@ export interface PipelineHandle {
 
   // Orchestrator entry points (turn lifecycle).
   onTurnStart(input: TurnInputDTO): Promise<InjectionPacket>;
+  consumeRetrievalStats(packetId: string): RetrievalResult["stats"] | null;
   onTurnEnd(result: TurnResultDTO): Promise<TurnEndResult>;
 
   // Tool-level signals.
@@ -287,8 +288,7 @@ export interface DerivedTurnStartCtx extends TurnStartCtx {
 
 /**
  * The rolled-up retrieval outcome used both by adapters and by the
- * viewer. The pipeline always returns an `InjectionPacket` — tests that
- * want richer stats should use `pipeline.retrievalDeps()` directly.
+ * viewer. The packet is what adapters inject; stats are kept for logs.
  */
 export interface PipelineRetrievalResult extends RetrievalResult {
   /** For logging: why the retrieval ran. */

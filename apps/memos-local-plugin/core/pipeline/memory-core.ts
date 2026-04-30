@@ -1117,6 +1117,7 @@ export function createMemoryCore(
         );
         const filtered = candidates.filter((c) => !droppedIds.has(c.refId));
         const dropped = candidates.filter((c) => droppedIds.has(c.refId));
+        const stats = packet ? handle.consumeRetrievalStats(packet.packetId) : null;
         handle.repos.apiLogs.insert({
           toolName: "memory_search",
           input: {
@@ -1132,6 +1133,7 @@ export function createMemoryCore(
                 hubCandidates: [] as unknown[],
                 filtered,
                 droppedByLlm: dropped,
+                stats: stats ? retrievalStatsPayload(stats) : undefined,
               }
             : { error: "turn_start_retrieval_failed" },
           durationMs: Date.now() - startedAt,
@@ -1377,6 +1379,13 @@ export function createMemoryCore(
       channelHits?: Record<string, number>;
       queryTokens?: number;
       queryTags?: string[];
+      embedding?: {
+        attempted: boolean;
+        ok: boolean;
+        degraded: boolean;
+        errorCode?: string;
+        errorMessage?: string;
+      };
     } | undefined;
     try {
       const result = await turnStartRetrieve(deps, {
@@ -1417,22 +1426,23 @@ export function createMemoryCore(
       // funnels. All fields are optional on the producer side so older
       // consumers keep working.
       const s = result.stats;
-      retrievalStats = {
-        raw: s.rawCandidateCount,
-        ranked: s.rankedCount,
-        droppedByThreshold: s.droppedByThresholdCount,
-        thresholdFloor: s.thresholdFloor,
-        topRelevance: s.topRelevance,
-        llmFilter: {
-          outcome: s.llmFilterOutcome,
-          kept: s.llmFilterKept,
-          dropped: s.llmFilterDropped,
-          sufficient: s.llmFilterSufficient ?? null,
-        },
-        channelHits: s.channelHits as Record<string, number> | undefined,
-        queryTokens: s.queryTokens,
-        queryTags: s.queryTags,
-      };
+      retrievalStats = retrievalStatsPayload(s);
+      if (s.embedding?.degraded) {
+        handle.repos.apiLogs.insert({
+          toolName: "system_error",
+          input: { role: "embedding" },
+          output: {
+            role: "embedding",
+            provider: deps.embedder ? "retrieval" : "none",
+            model: "query",
+            message: s.embedding.errorMessage ?? "query embedding failed; retrieval degraded",
+            code: s.embedding.errorCode,
+          },
+          durationMs: 0,
+          success: false,
+          calledAt: Date.now(),
+        });
+      }
 
       return {
         query,
@@ -3019,6 +3029,42 @@ function findLatestPersistedModelStatus(
     // Repo failure is non-fatal for health; leave in-memory stats.
   }
   return null;
+}
+
+function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats): {
+  raw?: number;
+  ranked?: number;
+  droppedByThreshold?: number;
+  thresholdFloor?: number;
+  topRelevance?: number;
+  llmFilter?: {
+    outcome?: string;
+    kept?: number;
+    dropped?: number;
+    sufficient?: boolean | null;
+  };
+  channelHits?: Record<string, number>;
+  queryTokens?: number;
+  queryTags?: string[];
+  embedding?: import("../retrieval/types.js").RetrievalStats["embedding"];
+} {
+  return {
+    raw: s.rawCandidateCount,
+    ranked: s.rankedCount,
+    droppedByThreshold: s.droppedByThresholdCount,
+    thresholdFloor: s.thresholdFloor,
+    topRelevance: s.topRelevance,
+    llmFilter: {
+      outcome: s.llmFilterOutcome,
+      kept: s.llmFilterKept,
+      dropped: s.llmFilterDropped,
+      sufficient: s.llmFilterSufficient ?? null,
+    },
+    channelHits: s.channelHits as Record<string, number> | undefined,
+    queryTokens: s.queryTokens,
+    queryTags: s.queryTags,
+    embedding: s.embedding,
+  };
 }
 
 function llmHealth(

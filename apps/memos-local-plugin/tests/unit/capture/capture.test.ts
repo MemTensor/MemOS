@@ -10,6 +10,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createCaptureEventBus } from "../../../core/capture/events.js";
 import { createCaptureRunner, type CaptureRunner } from "../../../core/capture/capture.js";
+import type { Embedder } from "../../../core/embedding/types.js";
 import { REFLECTION_SCORE_PROMPT } from "../../../core/llm/prompts/reflection.js";
 import type {
   CaptureConfig,
@@ -168,11 +169,16 @@ describe("capture/pipeline (end-to-end)", () => {
     tmp.cleanup();
   });
 
-  function buildRunner(overrides: Partial<CaptureConfig> = {}, llm: ReturnType<typeof fakeLlm> | null = null): CaptureRunner {
+  function buildRunner(
+    overrides: Partial<CaptureConfig> = {},
+    llm: ReturnType<typeof fakeLlm> | null = null,
+    embedder: Embedder | null = fakeEmbedder({ dimensions: 8 }),
+  ): CaptureRunner {
     return createCaptureRunner({
       tracesRepo: tmp.repos.traces,
+      embeddingRetryQueue: tmp.repos.embeddingRetryQueue,
       episodesRepo,
-      embedder: fakeEmbedder({ dimensions: 8 }),
+      embedder,
       llm,
       reflectLlm: llm,
       bus,
@@ -350,6 +356,7 @@ describe("capture/pipeline (end-to-end)", () => {
     // chain. Two starts + one done is the correct topology.
     expect(seen.map((e) => e.kind)).toEqual([
       "capture.started",
+      "capture.lite.done",
       "capture.started",
       "capture.done",
     ]);
@@ -379,5 +386,35 @@ describe("capture/pipeline (end-to-end)", () => {
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
     expect(t.vecSummary).toBeNull();
     expect(t.vecAction).toBeNull();
+    expect(tmp.repos.embeddingRetryQueue.countByStatus("pending")).toBe(0);
+  });
+
+  it("embedder failure queues missing trace vectors for retry", async () => {
+    const runner = buildRunner(
+      { embedTraces: true, alphaScoring: false },
+      null,
+      fakeEmbedder({ dimensions: 8, throwWith: new Error("embedder offline") }),
+    );
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [turn("user", "q", 1_000), turn("assistant", "a", 1_100)],
+    });
+
+    const result = await runCapture(runner, ep);
+    const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
+
+    expect(t.vecSummary).toBeNull();
+    expect(t.vecAction).toBeNull();
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stage: "embed",
+          message: "embedding retry queued for missing trace vectors",
+          detail: { queued: 2 },
+        }),
+      ]),
+    );
+    expect(tmp.repos.embeddingRetryQueue.countByStatus("pending")).toBe(2);
   });
 });
