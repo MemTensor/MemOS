@@ -281,6 +281,78 @@ describe("retrieval/ranker", () => {
     expect(ids).toContain("w_irrelevant");
   });
 
+  it("scores Phase-A seeds on the same MMR scale as Phase-B picks", () => {
+    const out = rank({
+      tier1: [skill("seed_skill", 0.75, 0)],
+      tier2Traces: [
+        trace("top_trace", 1.0, 0),
+        trace("second_trace", 0.95, 0),
+      ],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 3,
+      config: {
+        ...cfg,
+        relativeThresholdFloor: 0,
+        skillEtaBlend: 0,
+        smartSeed: true,
+        smartSeedRatio: 0.7,
+      },
+      now: NOW,
+    });
+
+    const ids = out.ranked.map((r) => String(r.candidate.refId));
+    expect(ids.indexOf("second_trace")).toBeLessThan(ids.indexOf("seed_skill"));
+  });
+
+  it("uses MMR, not raw relevance, when choosing a Phase-A seed within a tier", () => {
+    const out = rank({
+      tier1: [skill("seed_skill", 1.0, 0, [1, 0])],
+      tier2Traces: [
+        trace("duplicate_trace", 0.95, 0, [1, 0]),
+        trace("diverse_trace", 0.8, 0, [0, 1]),
+      ],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 2,
+      config: {
+        ...cfg,
+        mmrLambda: 0.5,
+        relativeThresholdFloor: 0,
+        smartSeed: true,
+        smartSeedRatio: 0.7,
+      },
+      now: NOW,
+    });
+
+    const ids = out.ranked.map((r) => String(r.candidate.refId));
+    expect(ids).toContain("diverse_trace");
+    expect(ids).not.toContain("duplicate_trace");
+  });
+
+  it("anchors the first MMR pick by relevance when lambda is zero", () => {
+    const out = rank({
+      tier1: [],
+      tier2Traces: [
+        trace("weak_first", 0.1, 0),
+        trace("strong_second", 1.0, 0),
+      ],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 1,
+      config: {
+        ...cfg,
+        mmrLambda: 0,
+        relativeThresholdFloor: 0,
+        smartSeed: true,
+        smartSeedRatio: 0,
+      },
+      now: NOW,
+    });
+
+    expect(String(out.ranked[0]!.candidate.refId)).toBe("strong_second");
+  });
+
   it("multi-channel hits get an RRF lift over single-channel hits at same base", () => {
     const single = trace("single_ch", 0.6, 0.0);
     single.channels = [{ channel: "vec_summary", rank: 0, score: 0.6 }];

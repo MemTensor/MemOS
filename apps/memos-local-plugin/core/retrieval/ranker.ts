@@ -199,19 +199,23 @@ export function rank(input: RankerInput): RankerResult {
   for (const tk of seedTiers) {
     if (out.length >= limit) break;
     let bestIdx = -1;
-    let bestRel = -Infinity;
+    let bestScore = -Infinity;
+    let tierBestRel = -Infinity;
     for (let i = 0; i < pool.length; i++) {
       const c = pool[i]!;
       if (c.candidate.tier !== tk) continue;
-      if (c.relevance > bestRel) {
-        bestRel = c.relevance;
+      if (c.relevance > tierBestRel) tierBestRel = c.relevance;
+      if (smartSeed && c.relevance < seedCutoff) continue;
+      const score = mmrScore(c, selectedVecs, selectedNorms, λ);
+      if (score > bestScore) {
+        bestScore = score;
         bestIdx = i;
       }
     }
     if (bestIdx < 0) continue;
-    if (bestRel < seedCutoff) continue;
+    if (tierBestRel < seedCutoff) continue;
     const c = pool.splice(bestIdx, 1)[0]!;
-    c.score = c.relevance;
+    c.score = bestScore;
     out.push(c);
     kept[tk] += 1;
     pushVec(selectedVecs, selectedNorms, c);
@@ -223,8 +227,7 @@ export function rank(input: RankerInput): RankerResult {
     let bestScore = -Infinity;
     for (let i = 0; i < pool.length; i += 1) {
       const c = pool[i]!;
-      const redundancy = maxCos(c, selectedVecs, selectedNorms);
-      const mmr = λ * c.relevance - (1 - λ) * redundancy;
+      const mmr = mmrScore(c, selectedVecs, selectedNorms, λ);
       if (mmr > bestScore) {
         bestScore = mmr;
         bestIdx = i;
@@ -238,8 +241,8 @@ export function rank(input: RankerInput): RankerResult {
     pushVec(selectedVecs, selectedNorms, picked!);
   }
 
-  // Sort the final list by score desc (MMR scores are not guaranteed
-  // monotone during the loop because Phase A seeds get their raw relevance).
+  // Sort the final list by score desc. MMR scores are not guaranteed
+  // monotone during greedy selection because redundancy changes after each pick.
   out.sort((a, b) => b.score - a.score || b.rrf - a.rrf);
   return {
     ranked: out,
@@ -384,6 +387,17 @@ function maxCos(
     if (sim > m) m = sim;
   }
   return m;
+}
+
+function mmrScore(
+  cand: RankedCandidate,
+  selected: readonly EmbeddingVector[],
+  selectedNorms: readonly number[],
+  lambda: number,
+): number {
+  if (selected.length === 0) return cand.relevance;
+  const redundancy = maxCos(cand, selected, selectedNorms);
+  return lambda * cand.relevance - (1 - lambda) * redundancy;
 }
 
 function pushVec(
