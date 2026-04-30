@@ -220,6 +220,15 @@ const en = {
   "overview.live.empty": "No events yet",
   "overview.live.hint": "Events will appear here as sessions advance.",
 
+  // Host bridge status.
+  "bridge.connected": "Memory bridge connected",
+  "bridge.reconnecting": "Memory bridge connected",
+  "bridge.disconnected": "Memory bridge disconnected",
+  "bridge.unknown": "Memory bridge unknown",
+  "bridge.tooltip": "Memory bridge: connection between Hermes and the local memory core",
+  "bridge.tooltip.lastOk": "Last success: {ts}",
+  "bridge.tooltip.lastError": "Last error: {msg}",
+
   // Memories.
   "memories.title": "Memories",
   "memories.subtitle": "Every message the agent remembered while you were working together.",
@@ -332,6 +341,7 @@ const en = {
   "policies.col.boundary": "Boundary",
   "policies.act.activate": "Activate",
   "policies.act.archive": "Archive",
+  "policies.act.retire": "Archive",
   "policies.act.reinstate": "Reinstate",
   "policies.act.candidate": "Candidate",
   "policies.col.title": "Title",
@@ -877,6 +887,14 @@ const zh: Record<TranslationKey, string> = {
   "overview.live.empty": "暂无事件",
   "overview.live.hint": "Agent 交互后事件会显示在这里。",
 
+  "bridge.connected": "记忆桥接已连接",
+  "bridge.reconnecting": "记忆桥接已连接",
+  "bridge.disconnected": "记忆桥接已断开",
+  "bridge.unknown": "记忆桥接未知",
+  "bridge.tooltip": "记忆桥接：Hermes 与本地记忆核心之间的连接",
+  "bridge.tooltip.lastOk": "上次成功：{ts}",
+  "bridge.tooltip.lastError": "上次错误：{msg}",
+
   "memories.title": "记忆",
   "memories.subtitle": "Agent 每步的执行与反思痕迹。",
   "memories.search.placeholder": "搜索记忆（支持语义）…",
@@ -982,6 +1000,7 @@ const zh: Record<TranslationKey, string> = {
   "policies.col.boundary": "边界",
   "policies.act.activate": "启用",
   "policies.act.archive": "归档",
+  "policies.act.retire": "归档",
   "policies.act.reinstate": "重新启用",
   "policies.act.candidate": "候选",
   "policies.col.title": "标题",

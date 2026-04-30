@@ -101,6 +101,26 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
     writeNotification(RPC_METHODS.LOGS_FORWARD, r);
   });
 
+  function finishTransport(err?: Error): void {
+    if (closed) return;
+    closed = true;
+    try {
+      eventsUnsubscribe();
+    } catch {
+      /* ignore */
+    }
+    try {
+      logsUnsubscribe();
+    } catch {
+      /* ignore */
+    }
+    for (const [id, entry] of serverPending) {
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.reject(err ?? new Error("stdio bridge closed"));
+      serverPending.delete(id);
+    }
+  }
+
   function writeLine(obj: unknown): void {
     try {
       stdout.write(JSON.stringify(obj) + "\n");
@@ -223,12 +243,14 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
         void handleLine(buffer);
         buffer = "";
       }
+      finishTransport();
       resolve();
     });
     stdin.on("error", (err) => {
       if (logToStderr) {
         process.stderr.write(`bridge.stdio.read.err: ${err.message}\n`);
       }
+      finishTransport(err);
       resolve();
     });
   });
@@ -265,24 +287,7 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
     },
     async close() {
       if (closed) return;
-      closed = true;
-      try {
-        eventsUnsubscribe();
-      } catch {
-        /* ignore */
-      }
-      try {
-        logsUnsubscribe();
-      } catch {
-        /* ignore */
-      }
-      // Reject any in-flight server-initiated requests so the host
-      // bridge doesn't hang while we tear down.
-      for (const [id, entry] of serverPending) {
-        if (entry.timer) clearTimeout(entry.timer);
-        entry.reject(new Error("stdio bridge closed"));
-        serverPending.delete(id);
-      }
+      finishTransport();
       // Drain remaining lines then flush.
       await donePromise;
     },

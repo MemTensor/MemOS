@@ -99,7 +99,7 @@ function wire() {
     logToStderr: false,
   });
   const client = createStdioClient(serverOut, clientOut);
-  return { core, server, client };
+  return { core, server, client, clientOut };
 }
 
 describe("stdio transport", () => {
@@ -135,5 +135,15 @@ describe("stdio transport", () => {
     expect(received.map((r) => r.method)).toEqual(
       expect.arrayContaining(["events.notify", "logs.forward"]),
     );
+  });
+
+  it("marks the server disconnected when stdin ends", async () => {
+    const { server, clientOut } = wire();
+    expect(server.connected).toBe(true);
+
+    clientOut.end();
+    await server.done;
+
+    expect(server.connected).toBe(false);
   });
 });

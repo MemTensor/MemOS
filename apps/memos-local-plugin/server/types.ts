@@ -13,7 +13,7 @@
  * this layer only handles URL routing, serialisation, and transport.
  */
 
-import type { MemoryCore } from "../agent-contract/memory-core.js";
+import type { BridgeHealth, MemoryCore } from "../agent-contract/memory-core.js";
 import type { LogRecord } from "../agent-contract/log-record.js";
 
 export interface ServerOptions {
@@ -87,4 +87,9 @@ export interface ServerDeps {
    * If absent, `/api/v1/logs` starts empty.
    */
   logTail?: () => LogRecord[];
+  /**
+   * Optional host-transport health surfaced on `/api/v1/health`.
+   * Hermes uses this for the Python provider ↔ Node bridge connection.
+   */
+  bridgeStatus?: () => BridgeHealth;
 }
