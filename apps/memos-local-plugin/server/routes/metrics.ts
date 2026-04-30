@@ -117,16 +117,20 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
       if (tr.ts < sinceMs) continue;
       for (const tc of tr.toolCalls ?? []) {
         const name = tc.name ?? "unknown";
+        const startedAt = tc.startedAt;
+        const endedAt = tc.endedAt;
         if (
-          !Number.isFinite(tc.startedAt) ||
-          !Number.isFinite(tc.endedAt) ||
-          tc.endedAt <= tc.startedAt
+          typeof startedAt !== "number" ||
+          typeof endedAt !== "number" ||
+          !Number.isFinite(startedAt) ||
+          !Number.isFinite(endedAt) ||
+          endedAt <= startedAt
         ) {
           bumpUnavailable(name, !tc.errorCode, tr.ts);
           continue;
         }
-        const dur = tc.endedAt - tc.startedAt;
-        bump(name, dur, !tc.errorCode, tc.endedAt ?? tr.ts);
+        const dur = endedAt - startedAt;
+        bump(name, dur, !tc.errorCode, endedAt);
       }
     }
 

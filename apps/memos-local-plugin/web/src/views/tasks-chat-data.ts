@@ -16,11 +16,13 @@ export interface TimelineToolCall {
   startedAt?: number;
   endedAt?: number;
   thinkingBefore?: string | null;
+  assistantTextBefore?: string | null;
 }
 
 export interface TimelineTrace {
   id: string;
-  ts: number;
+  ts?: number;
+  turnId?: number;
   userText: string;
   agentText: string;
   /**
@@ -47,13 +49,15 @@ export interface ChatMsg {
   role: ChatRole;
   /** Plain-text body for `user` / `assistant` / `thinking`. */
   text: string;
-  ts: number;
+  ts?: number;
   /** Stable id (trace id + suffix) — drives Preact key + DOM ids. */
   key: string;
   /** Trace id this message originates from (so we can deep-link later). */
   traceId: string;
   // Tool-only fields:
   toolName?: string;
+  /** Visible assistant narration emitted before this tool call. */
+  toolAssistantTextBefore?: string;
   /** Model reasoning immediately before this tool call. */
   toolThinking?: string;
   toolInput?: string;
@@ -97,9 +101,10 @@ const TOOL_OUTPUT_PREVIEW_CHARS = 1_600;
  * recognise, in pi-ai's natural emission order:
  *
  *   1. `user`       — the user query that opened the step (if non-empty).
- *   2. `tool` blocks — each tool call carries its `thinkingBefore`
- *      as `toolThinking`, so the renderer can show the model's
- *      think→act loop inside the corresponding tool card.
+ *   2. `tool` blocks — each tool call carries `assistantTextBefore`
+ *      (visible pre-tool narration) and `thinkingBefore` (model
+ *      reasoning) so the renderer can show the full think/say→act loop
+ *      inside the corresponding tool card.
  *   3. `assistant`  — the assistant's final text reply (if non-empty).
  *
  * `trace.reflection` is **deliberately not** turned into a chat bubble.
@@ -110,8 +115,7 @@ const TOOL_OUTPUT_PREVIEW_CHARS = 1_600;
  *
  * The function never throws on malformed input — missing fields are
  * dropped silently, unknown JSON is best-effort serialised, and tool
- * calls without a `startedAt` fall back to the trace's own `ts` for
- * sorting + display.
+ * calls without a `startedAt` stay untimed in the UI.
  */
 export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
   const out: ChatMsg[] = [];
@@ -121,15 +125,17 @@ export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
       out.push({
         role: "user",
         text: u,
-        ts: tr.ts,
+        ts: tr.turnId ?? tr.ts,
         key: `${tr.id}:user`,
         traceId: tr.id,
       });
     }
 
-    const tools = [...(tr.toolCalls ?? [])].sort(
-      (a, b) => (a.startedAt ?? tr.ts) - (b.startedAt ?? tr.ts),
-    );
+    const tools = [...(tr.toolCalls ?? [])].sort((a, b) => {
+      const at = a.startedAt ?? Number.POSITIVE_INFINITY;
+      const bt = b.startedAt ?? Number.POSITIVE_INFINITY;
+      return at - bt;
+    });
 
     // When there are no tool calls, agentThinking (if present) appears
     // as a standalone thinking bubble. When tools exist, the per-tool
@@ -148,6 +154,7 @@ export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
     }
 
     tools.forEach((tc, idx) => {
+      const assistantBefore = (tc.assistantTextBefore ?? "").trim();
       const tb = (tc.thinkingBefore ?? "").trim();
       const inputStr = serializeToolPayload(tc.input);
       const outputStr = serializeToolPayload(tc.output);
@@ -158,10 +165,11 @@ export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
       out.push({
         role: "tool",
         text: tc.name,
-        ts: tc.startedAt ?? tr.ts,
+        ts: tc.startedAt,
         key: `${tr.id}:tool:${idx}`,
         traceId: tr.id,
         toolName: tc.name,
+        toolAssistantTextBefore: assistantBefore || undefined,
         toolThinking: tb || undefined,
         toolInput: inputStr ? clip(inputStr, TOOL_INPUT_PREVIEW_CHARS) : undefined,
         toolOutput: outputStr ? clip(outputStr, TOOL_OUTPUT_PREVIEW_CHARS) : undefined,
@@ -216,12 +224,13 @@ const PARALLEL_BATCH_GAP_MS = 500;
  * Detection rule (paired-comparison, walks the flattened list):
  *
  *   - `messages[i]` and `messages[i+1]` are both `tool`, and the next
- *     tool has no `toolThinking` (a fresh thinkingBefore means the
+ *     tool has no pre-tool assistant text / thinking (either means the
  *     model spoke up between the two tools, which can only happen in
  *     a new LLM turn).
  *   - `messages[i+1].ts - messages[i].ts < PARALLEL_BATCH_GAP_MS`
- *     (the spread between start times stays inside the parallel
- *     dispatch window).
+ *   - The calls' execution windows overlap. Fast sequential helper
+ *     calls can start within a few ms of each other, but their next
+ *     start lands after the previous end; those should stay serial.
  *
  * Mutates `messages` in place — cheap and avoids an extra allocation
  * pass since the function is called from `flattenChat` which already
@@ -240,14 +249,24 @@ export function assignParallelBatches(messages: ChatMsg[]): void {
     while (
       j + 1 < messages.length &&
       messages[j + 1]!.role === "tool" &&
+      !messages[j + 1]!.toolAssistantTextBefore &&
       !messages[j + 1]!.toolThinking &&
-      messages[j + 1]!.ts - messages[j]!.ts < PARALLEL_BATCH_GAP_MS
+      messages[j]!.ts != null &&
+      messages[j + 1]!.ts != null &&
+      messages[j + 1]!.ts - messages[j]!.ts < PARALLEL_BATCH_GAP_MS &&
+      toolsOverlap(messages[j]!, messages[j + 1]!)
     ) {
       j++;
     }
     if (j > i) markBatch(messages, i, j);
     i = j + 1;
   }
+}
+
+function toolsOverlap(a: ChatMsg, b: ChatMsg): boolean {
+  if (a.ts == null || b.ts == null) return false;
+  if (a.toolDurationMs == null || b.toolDurationMs == null) return false;
+  return b.ts < a.ts + a.toolDurationMs;
 }
 
 function markBatch(messages: ChatMsg[], from: number, to: number): void {
@@ -258,9 +277,11 @@ function markBatch(messages: ChatMsg[], from: number, to: number): void {
   let maxEnd = -Infinity;
   for (let k = from; k <= to; k++) {
     const m = messages[k]!;
+    if (m.ts == null) continue;
     minStart = Math.min(minStart, m.ts);
     maxEnd = Math.max(maxEnd, m.ts + (m.toolDurationMs ?? 0));
   }
+  if (!Number.isFinite(minStart) || !Number.isFinite(maxEnd)) return;
   const totalMs = Math.max(0, maxEnd - minStart);
   for (let k = from; k <= to; k++) {
     const m = messages[k]!;

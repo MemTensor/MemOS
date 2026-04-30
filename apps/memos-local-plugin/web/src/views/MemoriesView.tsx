@@ -702,14 +702,20 @@ function ToolCallCard({
     input?: unknown;
     output?: unknown;
     errorCode?: string;
-    startedAt: number;
-    endedAt: number;
+    startedAt?: number;
+    endedAt?: number;
+    thinkingBefore?: string;
+    assistantTextBefore?: string;
   };
 }) {
   const inputStr = formatToolPayload(call.input);
   const outputStr = formatToolPayload(call.output);
+  const assistantTextBefore = (call.assistantTextBefore ?? "").trim();
+  const thinkingBefore = (call.thinkingBefore ?? "").trim();
   const dur =
-    call.endedAt > call.startedAt ? call.endedAt - call.startedAt : null;
+    call.startedAt != null && call.endedAt != null && call.endedAt > call.startedAt
+      ? call.endedAt - call.startedAt
+      : null;
   const errored = !!call.errorCode;
   return (
     <div
@@ -727,6 +733,28 @@ function ToolCallCard({
         )}
         {dur != null && <span class="muted mono">{dur}ms</span>}
       </div>
+      {assistantTextBefore && (
+        <details class="chat-item__tool-section" open>
+          <summary class="chat-item__tool-summary">
+            <Icon name="chevron-right" size={12} />
+            <span class="chat-item__tool-label">
+              {t("tasks.chat.tool.assistantTextBefore")}
+            </span>
+          </summary>
+          <pre class="chat-item__tool-pre">{clipPayload(assistantTextBefore, 4000)}</pre>
+        </details>
+      )}
+      {thinkingBefore && (
+        <details class="chat-item__tool-section">
+          <summary class="chat-item__tool-summary">
+            <Icon name="chevron-right" size={12} />
+            <span class="chat-item__tool-label">
+              {t("tasks.chat.role.thinking")}
+            </span>
+          </summary>
+          <pre class="chat-item__tool-pre">{clipPayload(thinkingBefore, 4000)}</pre>
+        </details>
+      )}
       {inputStr && (
         <details class="chat-item__tool-section">
           <summary class="chat-item__tool-summary">
@@ -811,10 +839,9 @@ function summarizeToolNames(
 
 /**
  * Bucket the page's traces by `(episodeId, turnId)`. Within each
- * bucket, sort sub-steps by `ts ascending` and pick the first row
- * with a non-empty `userText` as the head — the `step-extractor`
- * guarantees this is the first sub-step (`subStepIdx === 0`), but we
- * fall back to "earliest by ts" so legacy rows still group cleanly.
+ * bucket, preserve the API order. The server returns sub-steps in the
+ * episode's conversation order, which can differ from `ts` when
+ * planner/todo calls have no real tool execution time.
  *
  * Aggregates exposed on the card:
  *   - `aggValue` / `aggAlpha`: arithmetic mean across members. Plain
@@ -839,7 +866,6 @@ function buildGroups(traces: readonly TraceDTO[]): MemoryGroup[] {
   }
   return order.map((key) => {
     const bucket = buckets.get(key)!;
-    bucket.sort((a, b) => a.ts - b.ts);
     const head =
       bucket.find((t) => (t.userText ?? "").trim().length > 0) ?? bucket[0]!;
     const tools = bucket.flatMap((t) => t.toolCalls ?? []);
@@ -850,7 +876,7 @@ function buildGroups(traces: readonly TraceDTO[]): MemoryGroup[] {
     return {
       turnKey: key,
       episodeId: head.episodeId ?? null,
-      ts: bucket[0]!.ts,
+      ts: head.turnId ?? bucket[0]!.turnId ?? bucket[0]!.ts,
       head,
       traces: bucket,
       ids,
@@ -1258,6 +1284,8 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
           const role = tools.length > 0 ? "tool" : "assistant";
           const roleLabel = t(`memories.filter.role.${role}` as never);
           const summary = stepHeadline(tr);
+          const displayTs = stepDisplayTs(tr);
+          const stepThinking = tools.length === 0 ? (tr.agentThinking ?? "").trim() : "";
           return (
             <details
               key={tr.id}
@@ -1272,9 +1300,11 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
                   #{idx + 1}
                 </span>
                 <span class={`pill pill--role-${role}`}>{roleLabel}</span>
-                <span class="mono muted" style="font-size:var(--fs-xs)">
-                  {formatStepTime(tr.ts)}
-                </span>
+                {displayTs != null && (
+                  <span class="mono muted" style="font-size:var(--fs-xs)">
+                    {formatStepTime(displayTs)}
+                  </span>
+                )}
                 <span class="mono muted" style="font-size:var(--fs-xs)">
                   V {tr.value.toFixed(2)} · α {tr.alpha.toFixed(2)}
                 </span>
@@ -1283,13 +1313,13 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
                 </span>
               </summary>
               <div class="vstack" style="gap:var(--sp-3);margin-top:var(--sp-3)">
-                {tr.agentThinking && (
+                {stepThinking && (
                   <div>
                     <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                       {t("tasks.chat.role.thinking")}
                     </div>
                     <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
-                      {tr.agentThinking}
+                      {stepThinking}
                     </pre>
                   </div>
                 )}
@@ -1337,4 +1367,14 @@ function stepHeadline(tr: TraceDTO): string {
   const u = (tr.userText ?? "").trim().replace(/\s+/g, " ");
   if (u) return u.length > 80 ? u.slice(0, 77) + "…" : u;
   return "(empty step)";
+}
+
+function stepDisplayTs(tr: TraceDTO): number | undefined {
+  const tools = tr.toolCalls ?? [];
+  if (tools.length === 0) return tr.ts;
+  const firstStartedAt = tools
+    .map((tc) => tc.startedAt)
+    .filter((ts): ts is number => typeof ts === "number" && Number.isFinite(ts))
+    .sort((a, b) => a - b)[0];
+  return firstStartedAt;
 }

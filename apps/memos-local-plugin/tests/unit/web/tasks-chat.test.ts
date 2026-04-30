@@ -21,6 +21,7 @@ function trace(part: Partial<TimelineTrace>): TimelineTrace {
   return {
     id: part.id ?? "tr_x",
     ts: part.ts ?? T0,
+    turnId: part.turnId,
     userText: part.userText ?? "",
     agentText: part.agentText ?? "",
     agentThinking: part.agentThinking ?? null,
@@ -108,7 +109,21 @@ describe("flattenChat", () => {
     expect(toolOrder).toEqual(["first", "second", "third"]);
   });
 
-  it("falls back to trace.ts when a tool call has no startedAt", () => {
+  it("timestamps the user bubble with turnId when trace ts belongs to a later step", () => {
+    const t = trace({
+      id: "tr_turn",
+      ts: T0 + 70_000,
+      turnId: T0,
+      userText: "analyse this dataset",
+      toolCalls: [{ name: "todo" }],
+    });
+
+    const user = flattenChat([t]).find((m) => m.role === "user")!;
+
+    expect(user.ts).toBe(T0);
+  });
+
+  it("keeps tool calls without startedAt untimed", () => {
     const t = trace({
       id: "tr3",
       ts: T0 + 9_000,
@@ -120,10 +135,10 @@ describe("flattenChat", () => {
       ],
     });
     const msgs = flattenChat([t]).filter((m) => m.role === "tool");
-    // `early` (1000) sorts before `no-time` (which fell back to trace.ts=9000).
+    // `early` (1000) sorts before `no-time` (which is sorted by trace.ts only).
     expect(msgs.map((m) => m.toolName)).toEqual(["early", "no-time"]);
-    // The fallback message uses the trace ts too.
-    expect(msgs[1]!.ts).toBe(T0 + 9_000);
+    // The fallback is only for ordering; the rendered tool bubble has no time.
+    expect(msgs[1]!.ts).toBeUndefined();
     // No duration when startedAt/endedAt are missing.
     expect(msgs[1]!.toolDurationMs).toBeUndefined();
   });
@@ -246,6 +261,29 @@ describe("flattenChat", () => {
     expect(msgs[1]!.toolThinking).toBe("Check error log.");
     expect(msgs[2]!.toolThinking).toBe("Need libpq-dev.");
     expect(msgs[3]!.toolThinking).toBe("Retry the build.");
+  });
+
+  it("preserves visible assistant text before a tool call separately from thinking", () => {
+    const t = trace({
+      id: "tr_tool_preamble",
+      userText: "分析房价数据集",
+      agentText: "计划已创建。",
+      toolCalls: [
+        {
+          name: "todo",
+          assistantTextBefore: "好的，这是经典的 Kaggle 房价预测数据集。先创建计划。",
+          thinkingBefore: "用户要元数据清单，先列 todo。",
+          startedAt: T0 + 10,
+          endedAt: T0 + 20,
+        },
+      ],
+    });
+    const msgs = flattenChat([t]);
+    const tool = msgs.find((m) => m.role === "tool")!;
+    expect(tool.toolAssistantTextBefore).toBe(
+      "好的，这是经典的 Kaggle 房价预测数据集。先创建计划。",
+    );
+    expect(tool.toolThinking).toBe("用户要元数据清单，先列 todo。");
   });
 
   it("no thinking bubbles when tools lack thinkingBefore (agentThinking only shown for no-tool turns)", () => {
@@ -378,6 +416,23 @@ describe("flattenChat / parallel-batch detection", () => {
     expect(tools[1]!.parallelBatchSize).toBeUndefined();
   });
 
+  it("does not batch fast sequential helper tools whose windows do not overlap", () => {
+    const t = trace({
+      id: "tr_fast_serial",
+      userText: "inspect csv headers",
+      toolCalls: [
+        { name: "wc train", startedAt: T0 + 1, endedAt: T0 + 240 },
+        { name: "wc test", startedAt: T0 + 242, endedAt: T0 + 480 },
+        { name: "wc sample", startedAt: T0 + 482, endedAt: T0 + 720 },
+      ],
+    });
+
+    const tools = flattenChat([t]).filter((m) => m.role === "tool");
+
+    expect(tools).toHaveLength(3);
+    expect(tools.every((m) => m.parallelBatchKey == null)).toBe(true);
+  });
+
   it("mixes a parallel pair followed by a serial single tool", () => {
     const t = trace({
       id: "tr_mix",
@@ -432,6 +487,26 @@ describe("flattenChat / parallel-batch detection", () => {
     expect(tools).toHaveLength(1);
     expect(tools[0]!.parallelBatchKey).toBeUndefined();
     expect(tools[0]!.parallelBatchSize).toBeUndefined();
+  });
+
+  it("does not group tools when the later call has visible pre-tool text", () => {
+    const t = trace({
+      id: "tr_pretool_text_breaks_batch",
+      userText: "查 cpu 内存",
+      toolCalls: [
+        { name: "lscpu", startedAt: T0 + 1, endedAt: T0 + 12 },
+        {
+          name: "free",
+          assistantTextBefore: "CPU 看完了，接着查内存。",
+          startedAt: T0 + 3,
+          endedAt: T0 + 8,
+        },
+      ],
+    });
+    const tools = flattenChat([t]).filter((m) => m.role === "tool");
+    expect(tools).toHaveLength(2);
+    expect(tools[0]!.parallelBatchKey).toBeUndefined();
+    expect(tools[1]!.parallelBatchKey).toBeUndefined();
   });
 
   it("crosses trace boundaries when sub-steps share an LLM dispatch", () => {

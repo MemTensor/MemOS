@@ -174,7 +174,9 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
         methods = [method for method, _params in recovered_bridge.calls]
         self.assertEqual(methods, ["session.open", "turn.start", "subagent.record"])
-        record = next(params for method, params in recovered_bridge.calls if method == "subagent.record")
+        record = next(
+            params for method, params in recovered_bridge.calls if method == "subagent.record"
+        )
         self.assertEqual(record["sessionId"], "slow-parent-session")
         self.assertEqual(record["episodeId"], "episode-from-turn-start")
         self.assertEqual(record["childSessionId"], "child-session")
@@ -264,8 +266,9 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
     def test_tool_hook_ignores_other_sessions(self) -> None:
         bridge = FakeBridge()
-        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
-            "memos_provider.MemosBridgeClient", return_value=bridge
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("parent-session")
@@ -293,14 +296,17 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
     def test_on_delegation_targets_parent_episode(self) -> None:
         bridge = FakeBridge()
-        with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
-            "memos_provider.MemosBridgeClient", return_value=bridge
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("parent-session")
             provider.on_turn_start(1, "delegate task")
             provider.prefetch("delegate task")
-            provider.on_delegation("check package", "no package.json", child_session_id="child-session")
+            provider.on_delegation(
+                "check package", "no package.json", child_session_id="child-session"
+            )
 
         method, params = bridge.calls[-1]
         self.assertEqual(method, "subagent.record")
@@ -343,8 +349,9 @@ class HermesProviderPipelineTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with patch("memos_provider.ensure_bridge_running", return_value=True), patch(
-                "memos_provider.MemosBridgeClient", return_value=bridge
+            with (
+                patch("memos_provider.ensure_bridge_running", return_value=True),
+                patch("memos_provider.MemosBridgeClient", return_value=bridge),
             ):
                 provider = memos_provider.MemTensorProvider()
                 provider.initialize("parent-session", hermes_home=tmp)
@@ -401,6 +408,10 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertEqual(turn_end["toolCalls"][0]["name"], "todo")
         self.assertIn('"todos"', turn_end["toolCalls"][0]["input"])
         self.assertEqual(turn_end["toolCalls"][0]["thinkingBefore"], "先列计划，再查汇率和房源。")
+        self.assertEqual(
+            turn_end["toolCalls"][0]["assistantTextBefore"],
+            "好的，我来逐步完成这个分析。",
+        )
 
     def test_post_tool_call_merges_with_llm_tool_aliases(self) -> None:
         bridge = FakeBridge()
@@ -446,6 +457,48 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertEqual(turn_end["toolCalls"][0]["name"], "terminal")
         self.assertIn("0.006 USD", turn_end["toolCalls"][0]["output"])
         self.assertEqual(turn_end["toolCalls"][0]["thinkingBefore"], "用 terminal 调 API。")
+
+    def test_post_llm_call_preserves_visible_text_before_tool_call(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("host-session")
+            provider.on_turn_start(1, "分析房价数据集")
+            provider.prefetch("分析房价数据集")
+            provider._on_post_llm_call(
+                conversation_history=[
+                    {"role": "user", "content": "分析房价数据集"},
+                    {
+                        "role": "assistant",
+                        "content": "好的，这是经典的 Kaggle 房价预测数据集。先创建计划。",
+                        "reasoning": "用户要元数据清单，先列 todo。",
+                        "tool_calls": [
+                            {
+                                "id": "call_todo_1",
+                                "call_id": "call_todo_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "todo",
+                                    "arguments": '{"todos": [{"id": "step0"}]}',
+                                },
+                            }
+                        ],
+                    },
+                ]
+            )
+            provider.sync_turn("分析房价数据集", "计划已创建。")
+
+        turn_end = next(params for method, params in bridge.calls if method == "turn.end")
+        tool = turn_end["toolCalls"][0]
+        self.assertEqual(tool["name"], "todo")
+        self.assertEqual(tool["thinkingBefore"], "用户要元数据清单，先列 todo。")
+        self.assertEqual(
+            tool["assistantTextBefore"],
+            "好的，这是经典的 Kaggle 房价预测数据集。先创建计划。",
+        )
 
     def test_post_llm_call_orders_backfilled_tools_before_later_tool_results(self) -> None:
         bridge = FakeBridge()

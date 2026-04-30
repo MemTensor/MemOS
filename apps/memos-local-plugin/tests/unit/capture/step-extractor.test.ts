@@ -138,6 +138,55 @@ describe("capture/step-extractor", () => {
     expect(turnIds[0]).toBe(2_000);
   });
 
+  it("preserves visible assistant text before tool calls", () => {
+    const ep = episode([
+      turn("user", "analyze dataset", 3_000),
+      turn(
+        "tool",
+        "todo ok",
+        3_010,
+        {
+          tool: "todo",
+          input: { todos: [] },
+          startedAt: 3_005,
+          endedAt: 3_010,
+          thinkingBefore: "Need a plan first.",
+          assistantTextBefore: "我会先制定分析计划，然后按计划执行。",
+        },
+      ),
+      turn("assistant", "done", 3_020),
+    ]);
+
+    const steps = extractSteps(ep);
+    expect(steps[0]!.toolCalls[0]!.thinkingBefore).toBe("Need a plan first.");
+    expect(steps[0]!.toolCalls[0]!.assistantTextBefore).toBe("我会先制定分析计划，然后按计划执行。");
+  });
+
+  it("attaches final assistant reasoning to the response sub-step", () => {
+    const ep = episode([
+      turn("user", "analyze dataset", 4_000),
+      turn(
+        "tool",
+        "analysis output",
+        4_010,
+        { tool: "terminal", input: { cmd: "python analyze.py" } },
+      ),
+      turn(
+        "assistant",
+        "分析完成。以下是汇总报告：",
+        4_020,
+        { agentThinking: "All steps completed. Let me present a clean summary." },
+      ),
+    ]);
+
+    const steps = extractSteps(ep);
+    expect(steps).toHaveLength(2);
+    expect(steps[0]!.toolCalls[0]!.name).toBe("terminal");
+    expect(steps[0]!.agentThinking).toBeNull();
+    expect(steps[1]!.agentText).toBe("分析完成。以下是汇总报告：");
+    expect(steps[1]!.agentThinking).toBe("All steps completed. Let me present a clean summary.");
+  });
+
   it("trailing user without assistant is dropped (incomplete)", () => {
     const ep = episode([
       turn("user", "first", 1_000),

@@ -477,6 +477,11 @@ if (fs.existsSync(configPath)) {
   }
 }
 
+if (!config.gateway || typeof config.gateway !== 'object' || Array.isArray(config.gateway)) {
+  config.gateway = {};
+}
+if (!config.gateway.mode) config.gateway.mode = 'local';
+
 if (!config.plugins || typeof config.plugins !== 'object' || Array.isArray(config.plugins)) {
   config.plugins = {};
 }
@@ -562,8 +567,20 @@ NODE
     printf "       ${DIM}Viewer:${NC}    ${CYAN}http://127.0.0.1:${OPENCLAW_PORT}/${NC}\n"
     return 0
   fi
+
+  warn "Memory Viewer did not respond after service start; trying foreground gateway mode."
+  nohup "${oc_bin}" gateway >/tmp/openclaw-memos-gateway.log 2>&1 &
+  sleep 2
+  if wait_for_viewer "${OPENCLAW_PORT}"; then
+    echo
+    success "OpenClaw install complete"
+    printf "       ${DIM}Plugin:${NC}    %s\n" "${HOME}/.openclaw/extensions/${PLUGIN_ID}"
+    printf "       ${DIM}Viewer:${NC}    ${CYAN}http://127.0.0.1:${OPENCLAW_PORT}/${NC}\n"
+    return 0
+  fi
+
   warn "Memory Viewer did not respond within 30s."
-  printf "       ${DIM}Check: ~/.openclaw/logs/gateway.err.log${NC}\n" >&2
+  printf "       ${DIM}Check: /tmp/openclaw-memos-gateway.log or /tmp/openclaw/openclaw-*.log${NC}\n" >&2
   return 1
 }
 

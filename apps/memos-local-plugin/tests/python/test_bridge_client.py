@@ -448,12 +448,14 @@ class MemTensorProviderTests(unittest.TestCase):
         p._session_id = "sess_tui_long_running"
         p._episode_id = "ep_tui_long_running"
 
-        with patch("memos_provider.MemosBridgeClient", return_value=RetryFailBridge()):
-            with self.assertLogs("memos_provider", level="ERROR") as logs:
-                p.sync_turn(
-                    "帮我检索一下最近关于中东的事件，以及分析下局势",
-                    "最近有关中东的事件和局势如下...",
-                )
+        with (
+            patch("memos_provider.MemosBridgeClient", return_value=RetryFailBridge()),
+            self.assertLogs("memos_provider", level="ERROR") as logs,
+        ):
+            p.sync_turn(
+                "帮我检索一下最近关于中东的事件，以及分析下局势",
+                "最近有关中东的事件和局势如下...",
+            )
 
         joined = "\n".join(logs.output)
         self.assertIn("failed after bridge reconnect", joined)

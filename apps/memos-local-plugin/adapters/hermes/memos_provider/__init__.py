@@ -411,12 +411,15 @@ class MemTensorProvider(MemoryProvider):
 
         We walk through assistant messages of the current turn (those
         after the most recent user message). For each message that
-        contains ``reasoning`` AND ``tool_calls``, we attach the reasoning
-        as ``thinkingBefore`` to every captured tool call whose
-        ``tool_call_id`` matches one of the message's tool calls — this
-        is the model's chain-of-thought immediately before invoking that
-        tool. The final reasoning (the message that produced the user-
-        facing reply) becomes the turn-level ``agentThinking``.
+        contains ``tool_calls``, we attach two pieces of pre-tool context
+        to each captured tool call:
+
+        * ``thinkingBefore`` — private/model-native reasoning.
+        * ``assistantTextBefore`` — visible assistant narration emitted in
+          the same message before the tool call.
+
+        The final reasoning (the message that produced the user-facing
+        reply) becomes the turn-level ``agentThinking``.
         """
         if not self._matches_session(session_id):
             return
@@ -429,8 +432,10 @@ class MemTensorProvider(MemoryProvider):
             if msg.get("role") == "user":
                 last_user_idx = i
 
-        # Build a map: tool_call_id -> reasoning text.
+        # Build maps keyed by tool_call_id so post-tool events can be
+        # merged with the canonical assistant message later.
         thinking_by_id: dict[str, str] = {}
+        assistant_text_by_id: dict[str, str] = {}
         ordered_tool_calls: list[dict[str, Any]] = []
         ordered_object_ids: set[int] = set()
         # Reasoning of the message that produced the final reply (no
@@ -442,6 +447,7 @@ class MemTensorProvider(MemoryProvider):
                 continue
             r = msg.get("reasoning")
             r_str = r.strip() if isinstance(r, str) and r.strip() else ""
+            content_str = self._assistant_text(msg.get("content"))
             tcs = msg.get("tool_calls")
             if isinstance(tcs, list) and tcs:
                 # Reasoning preceded these tool calls.
@@ -452,6 +458,9 @@ class MemTensorProvider(MemoryProvider):
                     if r_str:
                         for tc_id in ids:
                             thinking_by_id[tc_id] = r_str
+                    if content_str:
+                        for tc_id in ids:
+                            assistant_text_by_id[tc_id] = content_str
 
                     existing = self._find_tool_call(ids)
                     # Some Hermes tools (for example planner/todo-style
@@ -466,6 +475,7 @@ class MemTensorProvider(MemoryProvider):
                             "input": self._tool_input(tc),
                             "output": "",
                             "thinkingBefore": r_str or "",
+                            "assistantTextBefore": content_str or "",
                             "_id": ids[0] if ids else "",
                             "_ids": ids,
                         }
@@ -477,6 +487,9 @@ class MemTensorProvider(MemoryProvider):
                         existing["name"] = existing.get("name") or self._tool_name(tc)
                         existing["input"] = existing.get("input") or self._tool_input(tc)
                         existing["thinkingBefore"] = r_str or existing.get("thinkingBefore", "")
+                        existing["assistantTextBefore"] = content_str or existing.get(
+                            "assistantTextBefore", ""
+                        )
                         existing["_ids"] = sorted(set((existing.get("_ids") or []) + ids))
                         existing["_id"] = existing.get("_id") or (ids[0] if ids else "")
 
@@ -504,8 +517,32 @@ class MemTensorProvider(MemoryProvider):
                 if tc_id and tc_id in thinking_by_id:
                     tc["thinkingBefore"] = thinking_by_id[tc_id]
                     break
+            for tc_id in ids:
+                if tc_id and tc_id in assistant_text_by_id:
+                    tc["assistantTextBefore"] = assistant_text_by_id[tc_id]
+                    break
 
         self._turn_thinking = final_reasoning
+
+    @staticmethod
+    def _assistant_text(content: Any) -> str:
+        """Extract visible assistant text from Hermes/OpenAI message content."""
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if isinstance(block, str):
+                    text = block.strip()
+                elif isinstance(block, dict):
+                    raw = block.get("text") or block.get("content")
+                    text = raw.strip() if isinstance(raw, str) else ""
+                else:
+                    text = ""
+                if text:
+                    parts.append(text)
+            return "\n".join(parts).strip()
+        return ""
 
     @staticmethod
     def _tool_call_ids(raw: dict[str, Any]) -> list[str]:

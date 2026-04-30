@@ -1933,12 +1933,13 @@ export function createMemoryCore(
     episodeId: EpisodeId;
   }): Promise<TraceDTO[]> {
     ensureLive();
+    const episode = handle.repos.episodes.getById(input.episodeId);
     const rows = handle.repos.traces.list({
       episodeId: input.episodeId,
       limit: 500,
       newestFirst: false,
     });
-    return rows.map(traceRowToDTO);
+    return orderTraceRowsForEpisode(rows, episode?.traceIds ?? []).map(traceRowToDTO);
   }
 
   async function listApiLogs(input?: {
@@ -2018,19 +2019,20 @@ export function createMemoryCore(
         const rows = handle.repos.traces.listByTurnKeys(turnKeys);
         // The frontend's `buildGroups` preserves first-encounter order
         // when bucketing traces by turnKey. We need newest turn first
-        // (matching `listTurnKeys` DESC order), with chronological order
-        // within each turn.
+        // (matching `listTurnKeys` DESC order), with the episode's
+        // conversation trace order inside each turn.
         const turnOrder = new Map<string, number>();
         turnKeys.forEach((k, i) =>
           turnOrder.set(`${k.episodeId ?? "_"}:${k.turnId}`, i),
         );
+        const traceOrder = traceOrderLookup(rows);
         rows.sort((a, b) => {
           const ka = `${a.episodeId ?? "_"}:${a.turnId}`;
           const kb = `${b.episodeId ?? "_"}:${b.turnId}`;
           const ia = turnOrder.get(ka) ?? 0;
           const ib = turnOrder.get(kb) ?? 0;
           if (ia !== ib) return ia - ib;
-          return a.ts - b.ts;
+          return compareTraceRowsForEpisodeOrder(a, b, traceOrder);
         });
         return rows.map(traceRowToDTO);
       }
@@ -2055,6 +2057,7 @@ export function createMemoryCore(
       orderedKeys.forEach((k, i) =>
         turnOrder.set(`${k.episodeId ?? "_"}:${k.turnId}`, i),
       );
+      const traceOrder = traceOrderLookup(matched);
       const traces = matched
         .filter((r) => turnOrder.has(`${r.episodeId ?? "_"}:${r.turnId}`))
         .sort((a, b) => {
@@ -2063,7 +2066,7 @@ export function createMemoryCore(
           const ia = turnOrder.get(ka) ?? 0;
           const ib = turnOrder.get(kb) ?? 0;
           if (ia !== ib) return ia - ib;
-          return a.ts - b.ts;
+          return compareTraceRowsForEpisodeOrder(a, b, traceOrder);
         });
       return traces.map(traceRowToDTO);
     }
@@ -2090,6 +2093,21 @@ export function createMemoryCore(
       return hay.includes(needle);
     });
     return filtered.slice(offset, offset + limit).map(traceRowToDTO);
+  }
+
+  function traceOrderLookup(
+    rows: readonly TraceRow[],
+  ): Map<string, Map<string, number>> {
+    const out = new Map<string, Map<string, number>>();
+    const episodeIds = new Set(rows.map((r) => r.episodeId).filter(Boolean));
+    for (const episodeId of episodeIds) {
+      const ep = handle.repos.episodes.getById(episodeId);
+      if (!ep || ep.traceIds.length === 0) continue;
+      const order = new Map<string, number>();
+      ep.traceIds.forEach((id, idx) => order.set(id, idx));
+      out.set(episodeId, order);
+    }
+    return out;
   }
 
   // ─── Skills ──
@@ -2776,6 +2794,37 @@ function stripEmptySecrets(patch: Record<string, unknown>): Record<string, unkno
     }
   }
   return out;
+}
+
+function orderTraceRowsForEpisode(
+  rows: readonly TraceRow[],
+  traceIds: readonly TraceId[],
+): TraceRow[] {
+  if (traceIds.length === 0) return [...rows];
+  const order = new Map<string, number>();
+  traceIds.forEach((id, idx) => order.set(id, idx));
+  return [...rows].sort((a, b) => {
+    const ai = order.get(a.id) ?? Number.POSITIVE_INFINITY;
+    const bi = order.get(b.id) ?? Number.POSITIVE_INFINITY;
+    if (ai !== bi) return ai - bi;
+    return a.ts - b.ts;
+  });
+}
+
+function compareTraceRowsForEpisodeOrder(
+  a: TraceRow,
+  b: TraceRow,
+  lookup: ReadonlyMap<string, ReadonlyMap<string, number>>,
+): number {
+  if (a.episodeId === b.episodeId) {
+    const order = lookup.get(a.episodeId);
+    if (order) {
+      const ai = order.get(a.id) ?? Number.POSITIVE_INFINITY;
+      const bi = order.get(b.id) ?? Number.POSITIVE_INFINITY;
+      if (ai !== bi) return ai - bi;
+    }
+  }
+  return a.ts - b.ts;
 }
 
 // ─── Row → DTO mappers ───────────────────────────────────────────────────────
