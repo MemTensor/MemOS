@@ -7,8 +7,8 @@ Node, Hermes, or the HTTP viewer.
 
 from __future__ import annotations
 
-import sys
 import json
+import sys
 import tempfile
 import unittest
 
@@ -105,7 +105,6 @@ class HermesProviderPipelineTests(unittest.TestCase):
                 "session.open",
                 "turn.start",
                 "turn.end",
-                "episode.close",
                 "session.close",
             ],
         )
@@ -119,8 +118,6 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertEqual(turn_end["toolCalls"][0]["name"], "terminal")
         self.assertIn("npm test", turn_end["toolCalls"][0]["input"])
 
-        episode_close = next(params for method, params in bridge.calls if method == "episode.close")
-        self.assertEqual(episode_close["episodeId"], "episode-from-turn-start")
         self.assertTrue(bridge.closed)
 
     def test_sync_turn_recovers_when_initial_bridge_open_timed_out(self) -> None:
@@ -180,10 +177,31 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertEqual(record["episodeId"], "episode-from-turn-start")
         self.assertEqual(record["childSessionId"], "child-session")
 
+    def test_sync_turn_lazily_starts_turn_when_prefetch_was_skipped(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("host-session")
+
+            provider.on_turn_start(1, "继续处理 Hermes viewer 端口")
+            provider.sync_turn(
+                "继续处理 Hermes viewer 端口",
+                "已继续检查 viewer 端口配置。",
+            )
+
+        methods = [method for method, _params in bridge.calls]
+        self.assertEqual(methods, ["session.open", "turn.start", "turn.end"])
+        turn_end = next(params for method, params in bridge.calls if method == "turn.end")
+        self.assertEqual(turn_end["episodeId"], "episode-from-turn-start")
+
     def test_internal_hermes_review_prompt_is_not_persisted_as_user_turn(self) -> None:
         bridge = FakeBridge()
         review_prompt = (
-            "Review the conversation above and consider saving or updating a skill if appropriate."
+            "Review the conversation above and consider whether a skill should be "
+            "saved or updated.  Work in this order -- do not skip."
         )
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),

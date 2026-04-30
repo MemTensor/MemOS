@@ -76,7 +76,7 @@ export async function turnStartRetrieve(
     wantTier1: true,
     wantTier2: true,
     wantTier3: true,
-    includeLowValue: false,
+    includeLowValue: deps.config.includeLowValue,
     limit:
       opts.limit ??
       deps.config.tier1TopK + deps.config.tier2TopK + deps.config.tier3TopK,

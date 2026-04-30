@@ -78,6 +78,7 @@ export interface SessionManager {
     episodeId: EpisodeId,
     reason: import("./types.js").TurnRelation,
   ): EpisodeSnapshot;
+  hydrateEpisode(snapshot: EpisodeSnapshot): EpisodeSnapshot;
   attachTraceIds(episodeId: EpisodeId, traceIds: string[]): void;
 
   getEpisode(id: EpisodeId): EpisodeSnapshot | null;
@@ -161,8 +162,16 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
       // confusion. True crash-orphans get a separate recovery path
       // at plugin bootstrap (see `recoverOrphanedEpisodes` in
       // `core/pipeline/memory-core.ts`).
-      epm.finalize(ep.id, {
-        patchMeta: { sessionCloseReason: reason },
+      if (isCompletedExchange(ep)) {
+        epm.finalize(ep.id, {
+          patchMeta: { sessionCloseReason: reason },
+        });
+        continue;
+      }
+      epm.patchMeta(ep.id, {
+        topicState: "paused",
+        pauseReason: `session_closed:${reason}`,
+        sessionCloseReason: reason,
       });
     }
     live.delete(id);
@@ -271,21 +280,42 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     return snap;
   }
 
+  function hydrateEpisode(snapshot: EpisodeSnapshot): EpisodeSnapshot {
+    const snap = epm.hydrate(snapshot);
+    const session = getSession(snap.sessionId);
+    if (session && snap.status === "open") {
+      const cached = live.get(snap.sessionId);
+      if (cached) {
+        cached.openEpisodeCount = epm
+          .listForSession(snap.sessionId)
+          .filter((e) => e.status === "open").length;
+      }
+    }
+    return snap;
+  }
+
   function shutdown(reason: string): void {
     log.info("shutdown.begin", { reason });
     // Process-wide shutdown is normal lifecycle (host stopping cleanly,
-    // not a crash) — same semantics as `closeSession`. Finalize open
-    // episodes via the same code path so they don't get the ugly
-    // `closeReason="abandoned"` + `abandonReason="shutdown:..."` badge
-    // that used to confuse users reading the Tasks list.
+    // not a topic boundary). Pause open episodes so a restarted host can
+    // classify the next user turn against the same topic instead of
+    // prematurely triggering reflect/reward.
     //
     // First catch episodes whose session was already pruned from
     // `live` (race: idle prune → process exit). closeSession's per-
     // session loop wouldn't find them otherwise.
     for (const ep of epm.listOpen()) {
       if (!live.has(ep.sessionId)) {
-        finalizeEpisode(ep.id, {
-          patchMeta: { sessionCloseReason: `shutdown:${reason}` },
+        if (isCompletedExchange(ep)) {
+          finalizeEpisode(ep.id, {
+            patchMeta: { sessionCloseReason: `shutdown:${reason}` },
+          });
+          continue;
+        }
+        epm.patchMeta(ep.id, {
+          topicState: "paused",
+          pauseReason: `shutdown:${reason}`,
+          sessionCloseReason: `shutdown:${reason}`,
         });
       }
     }
@@ -295,6 +325,11 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
       closeSession(id, `shutdown:${reason}`);
     }
     log.info("shutdown.done", { reason });
+  }
+
+  function isCompletedExchange(ep: EpisodeSnapshot): boolean {
+    if (ep.traceIds.length > 0) return true;
+    return ep.turns.some((t) => t.role === "assistant" && t.content.trim().length > 0);
   }
 
   return {
@@ -310,6 +345,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     finalizeEpisode,
     abandonEpisode,
     reopenEpisode,
+    hydrateEpisode,
     attachTraceIds: epm.attachTraceIds,
 
     getEpisode: epm.get,

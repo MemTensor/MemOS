@@ -103,11 +103,10 @@ describe("session/session-manager", () => {
     expect(sm.getSession(a.id)).not.toBeNull(); // getSession reloads from repo
   });
 
-  it("closeSession finalizes (not abandons) open episodes and emits session.closed", async () => {
-    // V7 §0.2 — a user-initiated session close is normal lifecycle, not
-    // episode abandonment. The episode is finalized so the reward
-    // pipeline can score it; only truly trivial episodes get re-stamped
-    // to "abandoned" by reward.ts itself with a clear reason.
+  it("closeSession pauses incomplete open episodes and emits session.closed", async () => {
+    // A clean session close is not automatically a topic boundary. If
+    // the episode has no assistant reply yet, keep it open so a later
+    // turn can be classified back into the same topic.
     const sm = makeSm();
     const session = sm.openSession({ agent: "openclaw" });
     const ep = await sm.startEpisode({ sessionId: session.id, userMessage: "long running" });
@@ -115,8 +114,9 @@ describe("session/session-manager", () => {
     sm.bus.onAny((e) => events.push(e.kind));
     sm.closeSession(session.id, "client");
     const stored = episodesFake.rows.get(ep.id);
-    expect(stored?.status).toBe("closed");
-    expect(stored?.meta.closeReason).toBe("finalized");
+    expect(stored?.status).toBe("open");
+    expect(stored?.meta.topicState).toBe("paused");
+    expect(stored?.meta.pauseReason).toBe("session_closed:client");
     // The literal session-end reason is preserved as audit metadata so
     // logs / analytics can still tell `/new` from `/quit` apart, but
     // it never reaches the user-facing `abandonReason` column.
@@ -125,11 +125,9 @@ describe("session/session-manager", () => {
     expect(events).toContain("session.closed");
   });
 
-  it("shutdown finalizes all open episodes across sessions", async () => {
-    // V7 §0.2 — clean process shutdown is normal lifecycle (not a
-    // crash), so episodes get `closeReason="finalized"` and the audit
-    // trail goes into `meta.sessionCloseReason="shutdown:test"`.
-    // Crash-orphans are handled separately on next bootstrap.
+  it("shutdown pauses incomplete open episodes across sessions", async () => {
+    // Process shutdown is not itself a topic boundary. Incomplete topics
+    // stay open and can be recovered on the next bootstrap.
     const sm = makeSm();
     const s1 = sm.openSession({ agent: "openclaw" });
     const s2 = sm.openSession({ agent: "hermes" });
@@ -137,8 +135,8 @@ describe("session/session-manager", () => {
     await sm.startEpisode({ sessionId: s2.id, userMessage: "task two" });
     sm.shutdown("test");
     for (const row of episodesFake.rows.values()) {
-      expect(row.status).toBe("closed");
-      expect(row.meta.closeReason).toBe("finalized");
+      expect(row.status).toBe("open");
+      expect(row.meta.topicState).toBe("paused");
       expect(row.meta.sessionCloseReason).toBe("shutdown:test");
       expect(row.meta.abandonReason).toBeUndefined();
     }

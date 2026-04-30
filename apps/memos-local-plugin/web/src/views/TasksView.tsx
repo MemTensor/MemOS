@@ -42,6 +42,8 @@ interface EpisodeRow {
   skillReasonParams?: Record<string, string> | null;
   linkedSkillId?: string | null;
   closeReason?: "finalized" | "abandoned" | null;
+  topicState?: "active" | "paused" | "interrupted" | "ended" | null;
+  pauseReason?: string | null;
   abandonReason?: string | null;
 }
 
@@ -473,7 +475,12 @@ function deriveStatus(r: EpisodeRow): "active" | "completed" | "skipped" | "fail
  */
 function statusReason(r: EpisodeRow): string | null {
   const s = deriveStatus(r);
-  if (s === "active" || s === "completed") return null;
+  if (s === "active") {
+    if (r.topicState === "interrupted") return t("tasks.active.reason.interrupted" as any);
+    if (r.topicState === "paused") return t("tasks.active.reason.paused" as any);
+    return null;
+  }
+  if (s === "completed") return null;
 
   if (r.abandonReason && r.abandonReason.trim().length > 0) {
     if (r.abandonReason.includes("插件上次未正常退出")) {
