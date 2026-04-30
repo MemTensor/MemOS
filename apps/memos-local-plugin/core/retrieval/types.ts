@@ -571,6 +571,14 @@ export interface RetrievalStats {
   queryTokens: number;
   queryTags: string[];
   emptyPacket: boolean;
+  /** Query embedding status. `degraded=true` means vector recall was unavailable. */
+  embedding?: {
+    attempted: boolean;
+    ok: boolean;
+    degraded: boolean;
+    errorCode?: string;
+    errorMessage?: string;
+  };
   /**
    * Observability breakdown — populated so the Logs page (and
    * api_logs) can show "how many candidates survived each stage" and

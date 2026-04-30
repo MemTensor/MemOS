@@ -220,6 +220,15 @@ const en = {
   "overview.live.empty": "No events yet",
   "overview.live.hint": "Events will appear here as sessions advance.",
 
+  // Host bridge status.
+  "bridge.connected": "Memory bridge connected",
+  "bridge.reconnecting": "Memory bridge connected",
+  "bridge.disconnected": "Memory bridge disconnected",
+  "bridge.unknown": "Memory bridge unknown",
+  "bridge.tooltip": "Memory bridge: connection between Hermes and the local memory core",
+  "bridge.tooltip.lastOk": "Last success: {ts}",
+  "bridge.tooltip.lastError": "Last error: {msg}",
+
   // Memories.
   "memories.title": "Memories",
   "memories.subtitle": "Every message the agent remembered while you were working together.",
@@ -332,6 +341,7 @@ const en = {
   "policies.col.boundary": "Boundary",
   "policies.act.activate": "Activate",
   "policies.act.archive": "Archive",
+  "policies.act.retire": "Archive",
   "policies.act.reinstate": "Reinstate",
   "policies.act.candidate": "Candidate",
   "policies.col.title": "Title",
@@ -411,6 +421,10 @@ const en = {
     "Not enough messages to learn from — at least a user question and an assistant reply are needed.",
   "tasks.skip.reason.noAssistant":
     "The user message was captured but no assistant reply came back — the agent host may have crashed, filtered the turn, or been interrupted. Nothing to summarize yet.",
+  "tasks.active.reason.interrupted":
+    "This topic was interrupted before the assistant reply completed. It will stay in the same task until the next related message arrives.",
+  "tasks.active.reason.paused":
+    "This topic is paused after the session closed. If you continue the same topic soon, the next turn will be added to this task.",
   "tasks.skip.reason.abandoned":
     "The pipeline closed this task without a reward (e.g. the relation classifier decided the next turn was a brand-new task). Check the session timeline for the full arc.",
   "tasks.skip.reason.rewardPending":
@@ -874,6 +888,14 @@ const zh: Record<TranslationKey, string> = {
   "overview.live.empty": "暂无事件",
   "overview.live.hint": "Agent 交互后事件会显示在这里。",
 
+  "bridge.connected": "记忆桥接已连接",
+  "bridge.reconnecting": "记忆桥接已连接",
+  "bridge.disconnected": "记忆桥接已断开",
+  "bridge.unknown": "记忆桥接未知",
+  "bridge.tooltip": "记忆桥接：Hermes 与本地记忆核心之间的连接",
+  "bridge.tooltip.lastOk": "上次成功：{ts}",
+  "bridge.tooltip.lastError": "上次错误：{msg}",
+
   "memories.title": "记忆",
   "memories.subtitle": "Agent 每步的执行与反思痕迹。",
   "memories.search.placeholder": "搜索记忆（支持语义）…",
@@ -979,6 +1001,7 @@ const zh: Record<TranslationKey, string> = {
   "policies.col.boundary": "边界",
   "policies.act.activate": "启用",
   "policies.act.archive": "归档",
+  "policies.act.retire": "归档",
   "policies.act.reinstate": "重新启用",
   "policies.act.candidate": "候选",
   "policies.col.title": "标题",
@@ -1048,6 +1071,8 @@ const zh: Record<TranslationKey, string> = {
   "tasks.failed.default": "任务评分 R={rTask}，被视为失败交互，未来相似任务的检索权重会被下调。",
   "tasks.skip.reason.tooFewTurns": "对话轮次不足，需要至少 2 轮完整的问答交互才能生成摘要。",
   "tasks.skip.reason.noAssistant": "只捕获到用户消息，没收到 assistant 回复——可能是 Agent 宿主崩溃、turn 被 bootstrap 过滤、或用户打断。暂时没有可总结的内容。",
+  "tasks.active.reason.interrupted": "这个 topic 在 assistant 回复完成前被打断了。下次继续同一 topic 时，会归入同一个任务。",
+  "tasks.active.reason.paused": "这个 topic 因 session 关闭而暂停；短时间内继续同一 topic，会继续追加到这个任务。",
   "tasks.skip.reason.abandoned": "管线在未完成打分前主动结束了这条任务（例如 relation 分类器判定下一条属于全新任务），可以去 Session 时间轴看完整链路。",
   "tasks.skip.reason.rewardPending": "Reward 管线还没给它打分——可能仍在计算中，也可能 LLM 打分失败了；到 Logs 面板搜 `reward.*` 事件看看。",
   "tasks.skip.reason.default": "对话未达到生成摘要的条件。",

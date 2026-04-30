@@ -107,6 +107,35 @@ export interface TurnResultDTO {
   ts: EpochMs;
 }
 
+export type SubagentOutcome =
+  | "ok"
+  | "error"
+  | "timeout"
+  | "killed"
+  | "reset"
+  | "deleted"
+  | "unknown";
+
+export interface SubagentOutcomeDTO {
+  agent: AgentKind;
+  /** Parent session that requested the delegation. */
+  sessionId: SessionId;
+  /** Parent episode to append the delegation result to, when known. */
+  episodeId?: EpisodeId;
+  /** Host-specific child/subagent session id, if available. */
+  childSessionId?: SessionId | null;
+  /** The delegated mission/task. */
+  task: string;
+  /** The child result or terminal reason. */
+  result: string;
+  /** Structured tool calls observed inside the child session, when available. */
+  toolCalls?: ToolCallDTO[];
+  outcome?: SubagentOutcome;
+  error?: string;
+  ts?: EpochMs;
+  meta?: Record<string, unknown>;
+}
+
 // ─── Memory items ─────────────────────────────────────────────────────────────
 
 export interface TraceDTO {
@@ -413,6 +442,11 @@ export interface EpisodeListItemDTO {
    * failed) without guessing from `rTask`.
    */
   closeReason?: "finalized" | "abandoned" | null;
+  /** Topic-level lifecycle state used by the viewer to distinguish
+   * interrupted/paused-but-continuable tasks from truly skipped ones. */
+  topicState?: "active" | "paused" | "interrupted" | "ended" | null;
+  /** Human-readable audit reason for a paused/interrupted open topic. */
+  pauseReason?: string | null;
   /**
    * User-readable reason when `closeReason === "abandoned"`. Mirrors
    * the legacy plugin's Chinese skip-reason strings (e.g. "对话内容

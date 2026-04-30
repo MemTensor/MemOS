@@ -9,7 +9,7 @@
  * `openclaw/plugin-sdk` surface (verified against
  * `openclaw/src/plugins/hook-types.ts::PluginHookHandlerMap`).
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createMemoryCore,
@@ -1123,6 +1123,149 @@ describe("createOpenClawBridge", () => {
       ctx,
     );
     expect(bridge.trackedToolCalls()).toBe(0);
+  });
+
+  it("subagent_ended does not create a synthetic parent task", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const recordSubagentOutcome = vi.fn(mc.recordSubagentOutcome.bind(mc));
+    (mc as any).recordSubagentOutcome = recordSubagentOutcome;
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+
+    expect(typeof (bridge as any).handleSubagentEnded).toBe("function");
+    await (bridge as any).handleSubagentEnded(
+      {
+        targetSessionKey: "child-session",
+        targetKind: "subagent",
+        reason: "completed",
+        runId: "run-sub-1",
+        outcome: "ok",
+      },
+      {
+        agentId: "main",
+        sessionKey: "parent-session",
+        sessionId: "host-parent",
+        runId: "run-parent",
+      },
+    );
+
+    expect(recordSubagentOutcome).not.toHaveBeenCalled();
+    await expect(mc.listEpisodeRows({ limit: 10 })).resolves.toHaveLength(0);
+  });
+
+  it("merges subagent auto-announce into the parent episode", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const ctx: PluginHookAgentContext = {
+      agentId: "main",
+      sessionKey: "agent:main:explicit:subagent-parent",
+      sessionId: "host-parent",
+      runId: "run-parent",
+      workspaceDir: "/tmp/workspace",
+    };
+    const parentSessionId = bridgeSessionId("main", ctx.sessionKey!);
+
+    await bridge.handleBeforePrompt(
+      {
+        prompt: "请派一个子代理检查 package.json scripts，然后主代理总结结果。",
+        messages: [],
+      },
+      ctx,
+    );
+    bridge.handleSubagentSpawned(
+      {
+        runId: "run-sub",
+        childSessionKey: "agent:main:subagent:child",
+        agentId: "main",
+        mode: "run",
+        label: "检查 package.json scripts",
+      },
+      {
+        ...ctx,
+        requesterSessionKey: ctx.sessionKey,
+        childSessionKey: "agent:main:subagent:child",
+      },
+    );
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "请派一个子代理检查 package.json scripts，然后主代理总结结果。" },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-spawn",
+                name: "sessions_spawn",
+                arguments: {
+                  mode: "run",
+                  runtime: "subagent",
+                  task: "检查 package.json scripts",
+                },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-spawn",
+            toolName: "sessions_spawn",
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "accepted",
+                  childSessionKey: "agent:main:subagent:child",
+                  runId: "run-sub",
+                }),
+              },
+            ],
+          },
+          { role: "assistant", content: "子代理已派出，等待完成后我会总结。" },
+        ],
+      },
+      ctx,
+    );
+
+    const announcementPrompt = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "A completed subagent task is ready for user delivery.",
+      "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>",
+      "当前目录没有 package.json。",
+      "<<<END_UNTRUSTED_CHILD_RESULT>>>",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    await expect(
+      bridge.handleBeforePrompt({ prompt: announcementPrompt, messages: [] }, ctx),
+    ).resolves.toBeUndefined();
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: announcementPrompt },
+          { role: "assistant", content: "子代理检查完成：当前目录没有 package.json。" },
+        ],
+      },
+      ctx,
+    );
+
+    const episodes = await mc.listEpisodeRows({ sessionId: parentSessionId, limit: 10 });
+    expect(episodes).toHaveLength(1);
+    const traces = await mc.timeline({ episodeId: episodes[0]!.id as never });
+    expect(traces.some((tr) => tr.agentText.includes("子代理已派出"))).toBe(true);
+    expect(traces.some((tr) => tr.userText.includes("BEGIN_OPENCLAW_INTERNAL_CONTEXT"))).toBe(false);
   });
 
   it("handleSessionEnd closes the core session", async () => {

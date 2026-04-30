@@ -23,6 +23,7 @@ import {
 } from "../llm/prompts/index.js";
 import { REFLECTION_SCORE_PROMPT } from "../llm/prompts/reflection.js";
 import { rootLogger } from "../logger/index.js";
+import { sanitizeDerivedText } from "../safety/content.js";
 import type { NormalizedStep, ReflectionScore } from "./types.js";
 
 export interface AlphaInput {
@@ -117,7 +118,7 @@ export async function scoreReflection(
   const usable = Boolean(rsp.value.usable);
   const alpha = clamp01(rawAlpha);
   const finalAlpha = usable ? alpha : 0;
-  const reason = typeof rsp.value.reason === "string" ? (rsp.value.reason as string) : null;
+  const reason = typeof rsp.value.reason === "string" ? sanitizeDerivedText(rsp.value.reason) : null;
 
   log.debug("alpha.scored", {
     key: input.step.key,

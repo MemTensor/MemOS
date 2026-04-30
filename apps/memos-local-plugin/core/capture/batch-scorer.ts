@@ -36,6 +36,7 @@ import {
 } from "../llm/prompts/index.js";
 import { BATCH_REFLECTION_PROMPT } from "../llm/prompts/reflection.js";
 import { rootLogger } from "../logger/index.js";
+import { sanitizeDerivedText } from "../safety/content.js";
 import type { NormalizedStep, ReflectionScore } from "./types.js";
 
 export interface BatchScoreInput {
@@ -178,7 +179,7 @@ export async function batchScoreReflections(
       return disabledScoreFor(input);
     }
     const incomingText = (input.existingReflection ?? "").trim();
-    const llmText = typeof raw.reflection_text === "string" ? raw.reflection_text.trim() : "";
+    const llmText = typeof raw.reflection_text === "string" ? sanitizeDerivedText(raw.reflection_text) : "";
     const usable = Boolean(raw.usable);
     const rawAlpha = clamp01(numOrZero(raw.alpha));
     const alpha = usable ? rawAlpha : 0;

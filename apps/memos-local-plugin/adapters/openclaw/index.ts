@@ -263,6 +263,18 @@ function register(api: OpenClawPluginApi): void {
     await r.bridge.handleSessionEnd(event, ctx);
   });
 
+  api.on("subagent_spawned", async (event, ctx) => {
+    const r = await ensureRuntime();
+    if (!r) return;
+    r.bridge.handleSubagentSpawned(event, ctx);
+  });
+
+  api.on("subagent_ended", async (event, ctx) => {
+    const r = await ensureRuntime();
+    if (!r) return;
+    await r.bridge.handleSubagentEnded(event, ctx);
+  });
+
   // 4. Service — lets the host flush + wait for ready and shut us down.
   //
   // OpenClaw's current loader (≥ 2026.4) keys the service registry by

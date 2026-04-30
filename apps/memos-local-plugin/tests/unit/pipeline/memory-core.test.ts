@@ -119,6 +119,78 @@ describe("MemoryCore façade", () => {
     expect(res.query.query).toBe("how do I build this project?");
   });
 
+  it("records visible subagent task and result in the parent episode", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    const turn = await core.onTurnStart({
+      agent: "hermes",
+      sessionId: "s-parent",
+      userText: "delegate package script inspection",
+      ts: 1_700_000_000_000,
+    });
+
+    await core.recordSubagentOutcome({
+      agent: "hermes",
+      sessionId: "s-parent",
+      episodeId: turn.episodeId,
+      childSessionId: "s-child",
+      task: "check package.json scripts",
+      result: "found build and test scripts",
+      toolCalls: [
+        {
+          name: "read_file",
+          input: { path: "package.json", limit: 20 },
+          output: "{\"scripts\":{\"build\":\"tsc\"}}",
+          startedAt: 1_700_000_000_001,
+          endedAt: 1_700_000_000_002,
+        },
+      ],
+      outcome: "ok",
+      ts: 1_700_000_000_001,
+    });
+
+    const timeline = await core.timeline({ episodeId: turn.episodeId });
+    const subagentTrace = timeline.find((trace) =>
+      trace.agentText.includes("Subagent task:"),
+    );
+    const toolTrace = timeline.find((trace) =>
+      trace.toolCalls.some((call) => call.name === "subagent"),
+    );
+
+    expect(subagentTrace?.agentText).toContain(
+      "Subagent task: check package.json scripts",
+    );
+    expect(subagentTrace?.agentText).toContain(
+      "Subagent result: found build and test scripts",
+    );
+    expect(toolTrace?.toolCalls[0]?.input).toMatchObject({
+      task: "check package.json scripts",
+      childSessionId: "s-child",
+      outcome: "ok",
+    });
+
+    const childEpisodes = await core.listEpisodeRows({
+      sessionId: "s-child",
+      limit: 10,
+    });
+    expect(childEpisodes).toHaveLength(1);
+    const childTimeline = await core.timeline({ episodeId: childEpisodes[0]!.id });
+    expect(childTimeline.some((trace) =>
+      trace.userText.includes("Subagent task: check package.json scripts")
+    )).toBe(true);
+    expect(childTimeline.some((trace) =>
+      trace.agentText.includes("Subagent result: found build and test scripts")
+    )).toBe(true);
+    expect(childTimeline.some((trace) =>
+      trace.toolCalls.some((call) => call.name === "read_file")
+    )).toBe(true);
+  });
+
   it("submitFeedback persists and returns a DTO", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(
@@ -283,16 +355,16 @@ describe("bootstrapMemoryCore", () => {
   it("init() recovers orphaned open episodes left behind by a previous crash", async () => {
     // When the host (OpenClaw / Hermes / a daemon) is hard-killed
     // mid-conversation, no `session.end` event is fired and the open
-    // episode rows in SQLite never get closed. Without recovery, those
-    // rows show "激活" forever in the viewer even though no one is
-    // working on them. `core.init()` sweeps the open set on boot and:
+    // episode rows in SQLite never get closed. `core.init()` now keeps
+    // incomplete recent topics open so the next user turn can be routed
+    // back into the same task, while repairing rows that already carry
+    // a completed/scored signal:
     //
     //   - Already-rewarded rows (`r_task != null`) → close + stamp
     //     `closeReason="finalized"` (the chain ran to completion before
     //     the crash; only the final status flip was lost).
-    //   - Un-scored rows → close + stamp
-    //     `closeReason="abandoned"` with a clear human-readable
-    //     `abandonReason` ("插件上次未正常退出，启动时自动关闭未完成的任务").
+    //   - Un-scored rows with no traces → stay open + `topicState`
+    //     `interrupted` so they do not show as skipped.
     home = await makeTmpHome({ agent: "openclaw" });
 
     // First bootstrap: lets migrations run + schema exists. Shut it
@@ -352,12 +424,16 @@ describe("bootstrapMemoryCore", () => {
     readDb.close();
 
     expect(unscored).toBeDefined();
-    expect(unscored!.status).toBe("closed");
+    expect(unscored!.status).toBe("open");
     const unscoredMeta = JSON.parse(unscored!.meta_json) as {
       closeReason?: string;
       abandonReason?: string;
+      topicState?: string;
+      pauseReason?: string;
     };
-    expect(unscoredMeta.closeReason).toBe("finalized");
+    expect(unscoredMeta.topicState).toBe("interrupted");
+    expect(unscoredMeta.pauseReason).toBe("startup_recovered_open_topic");
+    expect(unscoredMeta.closeReason).toBeUndefined();
     expect(unscoredMeta.abandonReason).toBeFalsy();
 
     expect(scored).toBeDefined();
@@ -370,5 +446,47 @@ describe("bootstrapMemoryCore", () => {
     // viewer can show them as "已完成" instead of "已跳过".
     expect(scoredMeta.closeReason).toBe("finalized");
     expect(scoredMeta.abandonReason).toBeFalsy();
+  });
+
+  it("keeps an interrupted topic open across restart and appends the next same-topic turn", async () => {
+    home = await makeTmpHome({ agent: "openclaw" });
+
+    const first = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "topic-recover-1",
+    });
+    await first.init();
+    const firstStart = await first.onTurnStart({
+      agent: "openclaw",
+      sessionId: "se_topic_a" as never,
+      userText: "帮我配置 Hermes viewer 端口 18800",
+      ts: Date.now(),
+    });
+    const episodeId = firstStart.query.episodeId;
+    expect(episodeId).toBeTruthy();
+    await first.shutdown();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "topic-recover-2",
+    });
+    await core.init();
+    const secondStart = await core.onTurnStart({
+      agent: "openclaw",
+      sessionId: "se_topic_b" as never,
+      userText: "那这个端口继续怎么验证",
+      ts: Date.now() + 1_000,
+    });
+
+    expect(secondStart.query.episodeId).toBe(episodeId);
+    const rows = await core.listEpisodeRows({ limit: 10 });
+    const row = rows.find((r) => r.id === episodeId);
+    expect(row?.status).toBe("open");
+    expect(row?.topicState === "active" || row?.topicState === "interrupted").toBe(true);
+    expect(row?.preview).toContain("Hermes viewer");
   });
 });

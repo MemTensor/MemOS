@@ -29,7 +29,7 @@ import { adjustConfidence, runL3 } from "./l3.js";
 import type { L3Config, L3EventBus, L3ProcessInput, L3ProcessResult } from "./types.js";
 
 export interface L3SubscriberDeps {
-  repos: Pick<Repos, "policies" | "traces" | "worldModel" | "kv">;
+  repos: Pick<Repos, "embeddingRetryQueue" | "policies" | "traces" | "worldModel" | "kv">;
   l2Bus: L2EventBus;
   l3Bus: L3EventBus;
   llm: LlmClient | null;

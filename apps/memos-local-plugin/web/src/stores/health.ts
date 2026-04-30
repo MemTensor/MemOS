@@ -10,6 +10,11 @@ import { signal } from "@preact/signals";
 import { api } from "../api/client";
 
 export type HealthStatus = "unknown" | "ok" | "degraded" | "down";
+export type BridgeHealthStatus =
+  | "connected"
+  | "reconnecting"
+  | "disconnected"
+  | "unknown";
 
 /**
  * Most-recent call status carried on every model slot. Populated by
@@ -57,6 +62,12 @@ export interface HealthPayload {
         model: string;
         inherited: boolean;
       } & ModelCallStatus);
+  bridge?: {
+    status: BridgeHealthStatus;
+    lastOkAt?: number | null;
+    lastErrorAt?: number | null;
+    lastError?: string | null;
+  };
 }
 
 export const health = signal<HealthPayload | null>(null);

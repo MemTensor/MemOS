@@ -6,7 +6,7 @@
 import { route, navigate } from "../stores/router";
 import { t } from "../stores/i18n";
 import { Icon, type IconName } from "./Icon";
-import { health } from "../stores/health";
+import { health, type BridgeHealthStatus, type HealthPayload } from "../stores/health";
 
 interface NavItem {
   path: string;
@@ -76,6 +76,9 @@ export function Sidebar() {
     : h.llm?.available && h.embedder?.available
     ? "var(--success)"
     : "var(--warning)";
+  const bridge = h?.bridge;
+  const bridgeVisual = bridgeVisualFor(bridge?.status ?? "unknown");
+  const bridgeTitle = bridge ? bridgeTooltip(bridge) : "";
 
   return (
     <aside class="sidebar">
@@ -104,15 +107,59 @@ export function Sidebar() {
       ))}
 
       {h?.version && (
-        <div class="sidebar__version" title={`v${h.version}`}>
-          <span
-            class="dot"
-            aria-hidden="true"
-            style={`width:6px;height:6px;border-radius:999px;background:${statusColor};box-shadow:0 0 0 3px color-mix(in srgb, ${statusColor} 20%, transparent)`}
-          />
-          <span class="sidebar__version-text">v{h.version}</span>
+        <div class="sidebar__status">
+          <div class="sidebar__version" title={`v${h.version}`}>
+            <span
+              class="dot"
+              aria-hidden="true"
+              style={`width:6px;height:6px;border-radius:999px;background:${statusColor};box-shadow:0 0 0 3px color-mix(in srgb, ${statusColor} 20%, transparent)`}
+            />
+            <span class="sidebar__version-text">v{h.version}</span>
+          </div>
+          {bridge && (
+            <div class="sidebar__bridge" title={bridgeTitle}>
+              <span
+                class="dot"
+                aria-hidden="true"
+                style={`width:6px;height:6px;border-radius:999px;background:${bridgeVisual.color};box-shadow:0 0 0 3px color-mix(in srgb, ${bridgeVisual.color} 20%, transparent)`}
+              />
+              <span class="sidebar__bridge-text">{t(bridgeVisual.labelKey)}</span>
+            </div>
+          )}
         </div>
       )}
     </aside>
   );
+}
+
+function bridgeVisualFor(status: BridgeHealthStatus): {
+  color: string;
+  labelKey:
+    | "bridge.connected"
+    | "bridge.reconnecting"
+    | "bridge.disconnected"
+    | "bridge.unknown";
+} {
+  switch (status) {
+    case "connected":
+      return { color: "var(--success)", labelKey: "bridge.connected" };
+    case "reconnecting":
+      return { color: "var(--warning)", labelKey: "bridge.reconnecting" };
+    case "disconnected":
+      return { color: "var(--red)", labelKey: "bridge.disconnected" };
+    case "unknown":
+    default:
+      return { color: "var(--fg-dim)", labelKey: "bridge.unknown" };
+  }
+}
+
+function bridgeTooltip(bridge: NonNullable<HealthPayload["bridge"]>): string {
+  const parts = [t("bridge.tooltip")];
+  if (bridge.lastOkAt) {
+    parts.push(t("bridge.tooltip.lastOk", { ts: new Date(bridge.lastOkAt).toLocaleTimeString() }));
+  }
+  if (bridge.status !== "connected" && bridge.lastError) {
+    parts.push(t("bridge.tooltip.lastError", { msg: bridge.lastError }));
+  }
+  return parts.join("\n");
 }

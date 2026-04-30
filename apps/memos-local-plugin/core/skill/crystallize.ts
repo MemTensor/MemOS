@@ -17,6 +17,12 @@ import {
 } from "../llm/prompts/index.js";
 import { SKILL_CRYSTALLIZE_PROMPT } from "../llm/prompts/skill-crystallize.js";
 import type { Logger } from "../logger/types.js";
+import {
+  sanitizeDerivedList,
+  sanitizeDerivedMarkdown,
+  sanitizeDerivedMarkdownList,
+  sanitizeDerivedText,
+} from "../safety/content.js";
 import type { PolicyRow, SkillRow, TraceRow } from "../types.js";
 import { MemosError } from "../../agent-contract/errors.js";
 import { extractToolNames } from "./tool-names.js";
@@ -260,21 +266,21 @@ function normaliseDraft(
   const rawName = String(raw.name ?? "").trim();
   const name = sanitiseName(rawName || `skill_${input.policy.id.slice(-6)}`);
   const displayTitle =
-    String(raw.display_title ?? raw.displayTitle ?? input.policy.title ?? name).trim() ||
+    sanitizeDerivedText(raw.display_title ?? raw.displayTitle ?? input.policy.title ?? name) ||
     name;
-  const summary = String(raw.summary ?? "").trim();
+  const summary = sanitizeDerivedText(raw.summary);
 
   const parameters = asArray(raw.parameters).map(coerceParameter).filter(Boolean) as SkillParameterDraft[];
-  const preconditions = asStringArray(raw.preconditions);
+  const preconditions = sanitizeDerivedMarkdownList(asStringArray(raw.preconditions));
   const steps = asArray(raw.steps).map(coerceStep).filter(Boolean) as SkillStepDraft[];
   const examples = asArray(raw.examples).map(coerceExample).filter(Boolean) as SkillExampleDraft[];
-  const tags = dedupeLc(asStringArray(raw.tags));
+  const tags = dedupeLc(sanitizeDerivedList(asStringArray(raw.tags)));
   // V7 §2.4.6 — coerce both `decision_guidance` (preferred LLM key)
   // and `decisionGuidance` (camelCase fallback). Caps at 5 entries each
   // to keep the skill body skim-able and the prompt budget bounded.
   const decisionGuidance = coerceDecisionGuidance(raw.decision_guidance ?? raw.decisionGuidance);
 
-  const tools = dedupeLc(asStringArray(raw.tools));
+  const tools = dedupeLc(sanitizeDerivedList(asStringArray(raw.tools)));
 
   return {
     name,
@@ -298,9 +304,9 @@ function coerceDecisionGuidance(raw: unknown): {
     return { preference: [], antiPattern: [] };
   }
   const o = raw as Record<string, unknown>;
-  const pref = dedupeLc(asStringArray(o.preference)).slice(0, 5);
+  const pref = dedupeLc(sanitizeDerivedMarkdownList(asStringArray(o.preference))).slice(0, 5);
   const anti = dedupeLc(
-    asStringArray(o.anti_pattern ?? o.antiPattern),
+    sanitizeDerivedMarkdownList(asStringArray(o.anti_pattern ?? o.antiPattern)),
   ).slice(0, 5);
   return { preference: pref, antiPattern: anti };
 }
@@ -337,7 +343,7 @@ function dedupeLc(arr: string[]): string[] {
 function coerceParameter(x: unknown): SkillParameterDraft | null {
   if (!x || typeof x !== "object") return null;
   const o = x as Record<string, unknown>;
-  const name = String(o.name ?? "").trim();
+  const name = sanitizeDerivedText(o.name);
   if (!name) return null;
   const t = String(o.type ?? "string").toLowerCase() as SkillParameterDraft["type"];
   const allowed = new Set(["string", "number", "boolean", "enum"]);
@@ -346,10 +352,10 @@ function coerceParameter(x: unknown): SkillParameterDraft | null {
     name,
     type,
     required: Boolean(o.required ?? false),
-    description: String(o.description ?? "").trim(),
+    description: sanitizeDerivedMarkdown(o.description),
   };
   if (type === "enum") {
-    out.enumValues = asStringArray(o.enum);
+    out.enumValues = sanitizeDerivedMarkdownList(asStringArray(o.enum));
   }
   return out;
 }
@@ -357,8 +363,8 @@ function coerceParameter(x: unknown): SkillParameterDraft | null {
 function coerceStep(x: unknown): SkillStepDraft | null {
   if (!x || typeof x !== "object") return null;
   const o = x as Record<string, unknown>;
-  const title = String(o.title ?? "").trim();
-  const body = String(o.body ?? "").trim();
+  const title = sanitizeDerivedText(o.title);
+  const body = sanitizeDerivedMarkdown(o.body);
   if (!title && !body) return null;
   return { title: title || body.slice(0, 32), body };
 }
@@ -366,8 +372,8 @@ function coerceStep(x: unknown): SkillStepDraft | null {
 function coerceExample(x: unknown): SkillExampleDraft | null {
   if (!x || typeof x !== "object") return null;
   const o = x as Record<string, unknown>;
-  const input = String(o.input ?? "").trim();
-  const expected = String(o.expected ?? "").trim();
+  const input = sanitizeDerivedMarkdown(o.input);
+  const expected = sanitizeDerivedMarkdown(o.expected);
   if (!input && !expected) return null;
   return { input, expected };
 }

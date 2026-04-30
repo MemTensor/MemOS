@@ -9,6 +9,7 @@ import { makeApiLogsRepo } from "./api_logs.js";
 import { makeAuditRepo } from "./audit.js";
 import { makeCandidatePoolRepo } from "./candidate_pool.js";
 import { makeDecisionRepairsRepo } from "./decision_repairs.js";
+import { makeEmbeddingRetryQueueRepo } from "./embedding_retry_queue.js";
 import { makeEpisodesRepo } from "./episodes.js";
 import { makeFeedbackRepo } from "./feedback.js";
 import { makeKvRepo } from "./kv.js";
@@ -24,6 +25,7 @@ export interface Repos {
   audit: ReturnType<typeof makeAuditRepo>;
   candidatePool: ReturnType<typeof makeCandidatePoolRepo>;
   decisionRepairs: ReturnType<typeof makeDecisionRepairsRepo>;
+  embeddingRetryQueue: ReturnType<typeof makeEmbeddingRetryQueueRepo>;
   episodes: ReturnType<typeof makeEpisodesRepo>;
   feedback: ReturnType<typeof makeFeedbackRepo>;
   kv: ReturnType<typeof makeKvRepo>;
@@ -41,6 +43,7 @@ export function makeRepos(db: StorageDb): Repos {
     audit: makeAuditRepo(db),
     candidatePool: makeCandidatePoolRepo(db),
     decisionRepairs: makeDecisionRepairsRepo(db),
+    embeddingRetryQueue: makeEmbeddingRetryQueueRepo(db),
     episodes: makeEpisodesRepo(db),
     feedback: makeFeedbackRepo(db),
     kv: makeKvRepo(db),
@@ -58,6 +61,7 @@ export { makeApiLogsRepo } from "./api_logs.js";
 export { makeAuditRepo } from "./audit.js";
 export { makeCandidatePoolRepo } from "./candidate_pool.js";
 export { makeDecisionRepairsRepo } from "./decision_repairs.js";
+export { makeEmbeddingRetryQueueRepo } from "./embedding_retry_queue.js";
 export { makeEpisodesRepo } from "./episodes.js";
 export { makeFeedbackRepo } from "./feedback.js";
 export { makeKvRepo } from "./kv.js";

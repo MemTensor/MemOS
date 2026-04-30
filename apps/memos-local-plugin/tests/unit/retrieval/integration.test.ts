@@ -311,6 +311,40 @@ describe("retrieval/integration", () => {
     // Graceful degradation: empty packet + started + done, not a throw.
     expect(res.packet.snippets.length).toBe(0);
     expect(res.stats.emptyPacket).toBe(true);
+    expect(res.stats.embedding).toMatchObject({
+      attempted: true,
+      ok: false,
+      degraded: true,
+      errorMessage: "boom",
+    });
     expect(kinds).toEqual(["retrieval.started", "retrieval.done"]);
+  });
+
+  it("does not call the query embedder for blank turn-start text", async () => {
+    let calls = 0;
+    const deps: RetrievalDeps = {
+      ...makeDeps(handle),
+      embedder: {
+        embed: async () => {
+          calls++;
+          throw new Error("should not be called");
+        },
+      },
+    };
+
+    const res = await turnStartRetrieve(deps, {
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s1" as SessionId,
+      userText: "   ",
+      ts: NOW as never,
+    });
+
+    expect(calls).toBe(0);
+    expect(res.stats.embedding).toMatchObject({
+      attempted: false,
+      ok: false,
+      degraded: false,
+    });
   });
 });

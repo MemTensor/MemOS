@@ -179,6 +179,29 @@ describe("HTTP server — REST routes", () => {
     expect(core.health).toHaveBeenCalled();
   });
 
+  it("GET /api/v1/health includes optional bridge status", async () => {
+    await handle.close();
+    handle = await startHttpServer({
+      core,
+      bridgeStatus: () => ({
+        status: "connected",
+        lastOkAt: 123,
+        lastErrorAt: null,
+        lastError: null,
+      }),
+    }, { port: 0 });
+
+    const r = await fetch(`${handle.url}/api/v1/health`);
+    expect(r.status).toBe(200);
+    const body = await r.json();
+    expect(body.bridge).toEqual({
+      status: "connected",
+      lastOkAt: 123,
+      lastErrorAt: null,
+      lastError: null,
+    });
+  });
+
   it("POST /api/v1/sessions opens a session", async () => {
     const r = await fetch(`${handle.url}/api/v1/sessions`, {
       method: "POST",

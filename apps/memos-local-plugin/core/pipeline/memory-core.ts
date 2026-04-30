@@ -39,6 +39,7 @@ import type {
   SessionId,
   SkillDTO,
   SkillId,
+  SubagentOutcomeDTO,
   TraceDTO,
   WorldModelDTO,
 } from "../../agent-contract/dto.js";
@@ -428,44 +429,39 @@ export function createMemoryCore(
     }
   }
 
-  // ─── Stale episode auto-finalize ──
-  // Mirrors `memos-local-openclaw` ViewerServer.autoFinalizeStaleTasks().
-  // Open episodes older than 4 hours (configurable via
-  // `algorithm.session.mergeMaxGapMs * 2`) are abandoned so the Tasks
-  // view shows them as completed/skipped rather than perpetually "active".
+  // ─── Stale topic auto-finalize ──
+  // Open topics are allowed to survive clean session closes and process
+  // restarts so the next user turn can be classified against them. Once a
+  // topic exceeds this hard window, we treat it as ended and run the normal
+  // reflect/reward path.
   const STALE_EPISODE_TIMEOUT_MS = Math.max(
     handle.config.algorithm.session.mergeMaxGapMs * 2,
     4 * 60 * 60 * 1000,
   );
   let lastStaleScan = 0;
-  function autoFinalizeStaleTasks(): void {
+  async function autoFinalizeStaleTasks(): Promise<void> {
     const nowMs = Date.now();
     if (nowMs - lastStaleScan < 30_000) return;
     lastStaleScan = nowMs;
     try {
       const openEpisodes = handle.repos.episodes.list({ status: "open", limit: 200 });
       if (openEpisodes.length === 0) return;
+      const stale: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
       for (const ep of openEpisodes) {
         const epAge = nowMs - (ep.endedAt ?? ep.startedAt);
         if (epAge > STALE_EPISODE_TIMEOUT_MS) {
-          log.info("stale_episode.auto_abandon", {
+          log.info("stale_topic.auto_finalize", {
             episodeId: ep.id,
             sessionId: ep.sessionId,
             ageMs: epAge,
             thresholdMs: STALE_EPISODE_TIMEOUT_MS,
           });
-          try {
-            handle.episodeManager.abandon(
-              ep.id as import("../../agent-contract/dto.js").EpisodeId,
-              `自动关闭：空闲 ${Math.round(epAge / 60_000)} 分钟（阈值 ${Math.round(STALE_EPISODE_TIMEOUT_MS / 60_000)} 分钟）`,
-            );
-          } catch {
-            // Episode may have been finalized concurrently — safe to ignore.
-          }
+          stale.push(ep);
         }
       }
+      if (stale.length > 0) await recoverOpenEpisodesAsSessionEnd(stale);
     } catch (err) {
-      log.debug("stale_episode.scan_error", {
+      log.debug("stale_topic.scan_error", {
         err: err instanceof Error ? err.message : String(err),
       });
     }
@@ -481,19 +477,31 @@ export function createMemoryCore(
     }
     initialized = true;
 
-    // Any `status: "open"` row we see on boot is an orphan from a
-    // previous unclean shutdown — the plugin host was SIGKILL'd, the
-    // gateway was bootout'd, the process crashed mid-turn, etc.
-    //
-    // Treat rows that already have traces as a missed `session_end`,
-    // not as user abandonment: finalize them and emit the same
-    // `episode.finalized` event the normal session close path emits so
-    // capture → reward → L2 → L3 → Skill can catch up on restart. Rows
-    // that already carry rTask only need their final status repaired.
+    // Preserve recent open topics across restarts. A crash or Ctrl+C is
+    // not evidence that the topic ended; the next user turn gets routed
+    // through relation classification. Only hard-stale open topics are
+    // finalized here so the pipeline eventually catches up.
     try {
       const orphans = handle.repos.episodes.list({ status: "open", limit: 500 });
       if (orphans.length > 0) {
-        await recoverOpenEpisodesAsSessionEnd(orphans);
+        const nowMs = Date.now();
+        const stale = orphans.filter(
+          (ep) =>
+            ep.rTask != null ||
+            (ep.traceIds?.length ?? 0) > 0 ||
+            nowMs - (ep.endedAt ?? ep.startedAt) > STALE_EPISODE_TIMEOUT_MS,
+        );
+        const recent = orphans.filter((ep) => !stale.includes(ep));
+        for (const ep of recent) {
+          handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+            topicState: (ep.meta?.topicState as string | undefined) ?? "interrupted",
+            pauseReason: (ep.meta?.pauseReason as string | undefined) ?? "startup_recovered_open_topic",
+            recoveredAtStartup: nowMs,
+          });
+        }
+        if (stale.length > 0) {
+          await recoverOpenEpisodesAsSessionEnd(stale);
+        }
       }
     } catch (err) {
       log.debug("init.orphan_scan.failed", {
@@ -1109,6 +1117,7 @@ export function createMemoryCore(
         );
         const filtered = candidates.filter((c) => !droppedIds.has(c.refId));
         const dropped = candidates.filter((c) => droppedIds.has(c.refId));
+        const stats = packet ? handle.consumeRetrievalStats(packet.packetId) : null;
         handle.repos.apiLogs.insert({
           toolName: "memory_search",
           input: {
@@ -1124,6 +1133,7 @@ export function createMemoryCore(
                 hubCandidates: [] as unknown[],
                 filtered,
                 droppedByLlm: dropped,
+                stats: stats ? retrievalStatsPayload(stats) : undefined,
               }
             : { error: "turn_start_retrieval_failed" },
           durationMs: Date.now() - startedAt,
@@ -1220,6 +1230,119 @@ export function createMemoryCore(
     }
   }
 
+  async function recordSubagentOutcome(
+    outcome: SubagentOutcomeDTO,
+  ): Promise<{ traceId: string; episodeId: EpisodeId }> {
+    ensureLive();
+    const ts = outcome.ts ?? Date.now();
+    const task = outcome.task.trim() || "(subagent task)";
+    const result = outcome.result.trim() || outcome.error || outcome.outcome || "(no subagent result)";
+    const normalizedOutcome = outcome.outcome ?? (outcome.error ? "error" : "unknown");
+    const childToolCalls = outcome.toolCalls ?? [];
+
+    await openSession({ agent: outcome.agent, sessionId: outcome.sessionId });
+    const recorded = await onTurnEnd({
+      agent: outcome.agent,
+      sessionId: outcome.sessionId,
+      episodeId: outcome.episodeId ?? ("" as EpisodeId),
+      agentText: `Subagent task: ${task}\n\nSubagent result: ${result}`,
+      toolCalls: [
+        {
+          name: "subagent",
+          input: {
+            task,
+            childSessionId: outcome.childSessionId ?? null,
+            childToolCalls: childToolCalls.length,
+            outcome: normalizedOutcome,
+            meta: outcome.meta ?? {},
+          },
+          output: {
+            result,
+            error: outcome.error ?? null,
+          },
+          errorCode:
+            outcome.error || (normalizedOutcome !== "ok" && normalizedOutcome !== "unknown")
+              ? normalizedOutcome
+              : undefined,
+          startedAt: ts,
+          endedAt: ts,
+        },
+      ],
+      ts,
+    });
+
+    let childRecorded: { traceId: string; episodeId: EpisodeId } | null = null;
+    const childSessionId = outcome.childSessionId ?? null;
+    if (childSessionId && childSessionId !== outcome.sessionId) {
+      const childHasEpisode = handle.repos.episodes
+        .list({ sessionId: childSessionId, limit: 1 })
+        .length > 0;
+      if (!childHasEpisode) {
+        try {
+          await openSession({ agent: outcome.agent, sessionId: childSessionId });
+          const childTurn = await onTurnStart({
+            agent: outcome.agent,
+            sessionId: childSessionId,
+            userText: `Subagent task: ${task}`,
+            ts,
+          });
+          const childEpisodeId = childTurn.query.episodeId;
+          if (!childEpisodeId) {
+            throw new Error("child turn.start did not return an episodeId");
+          }
+          childRecorded = await onTurnEnd({
+            agent: outcome.agent,
+            sessionId: childSessionId,
+            episodeId: childEpisodeId,
+            agentText: `Subagent result: ${result}`,
+            toolCalls: childToolCalls,
+            ts: ts + 1,
+          });
+          await closeEpisode(childEpisodeId);
+        } catch (err) {
+          log.warn("subagent.child_episode.create_failed", {
+            childSessionId,
+            parentSessionId: outcome.sessionId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    try {
+      handle.repos.apiLogs.insert({
+        toolName: "subagent_record",
+        input: {
+          agent: outcome.agent,
+          sessionId: outcome.sessionId,
+          episodeId: outcome.episodeId ?? null,
+          childSessionId: outcome.childSessionId ?? null,
+          task,
+          childToolCalls: childToolCalls.length,
+          outcome: normalizedOutcome,
+          meta: outcome.meta ?? {},
+        },
+        output: {
+          result,
+          error: outcome.error ?? null,
+          traceId: recorded.traceId,
+          episodeId: recorded.episodeId,
+          childTraceId: childRecorded?.traceId ?? null,
+          childEpisodeId: childRecorded?.episodeId ?? null,
+        },
+        durationMs: 0,
+        success: !outcome.error && normalizedOutcome !== "error",
+        calledAt: ts,
+      });
+    } catch (err) {
+      log.debug("apiLogs.subagent_record.skipped", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    return recorded;
+  }
+
   // ─── Memory queries ──
   async function searchMemory(
     query: RetrievalQueryDTO,
@@ -1256,6 +1379,13 @@ export function createMemoryCore(
       channelHits?: Record<string, number>;
       queryTokens?: number;
       queryTags?: string[];
+      embedding?: {
+        attempted: boolean;
+        ok: boolean;
+        degraded: boolean;
+        errorCode?: string;
+        errorMessage?: string;
+      };
     } | undefined;
     try {
       const result = await turnStartRetrieve(deps, {
@@ -1296,22 +1426,23 @@ export function createMemoryCore(
       // funnels. All fields are optional on the producer side so older
       // consumers keep working.
       const s = result.stats;
-      retrievalStats = {
-        raw: s.rawCandidateCount,
-        ranked: s.rankedCount,
-        droppedByThreshold: s.droppedByThresholdCount,
-        thresholdFloor: s.thresholdFloor,
-        topRelevance: s.topRelevance,
-        llmFilter: {
-          outcome: s.llmFilterOutcome,
-          kept: s.llmFilterKept,
-          dropped: s.llmFilterDropped,
-          sufficient: s.llmFilterSufficient ?? null,
-        },
-        channelHits: s.channelHits as Record<string, number> | undefined,
-        queryTokens: s.queryTokens,
-        queryTags: s.queryTags,
-      };
+      retrievalStats = retrievalStatsPayload(s);
+      if (s.embedding?.degraded) {
+        handle.repos.apiLogs.insert({
+          toolName: "system_error",
+          input: { role: "embedding" },
+          output: {
+            role: "embedding",
+            provider: deps.embedder ? "retrieval" : "none",
+            model: "query",
+            message: s.embedding.errorMessage ?? "query embedding failed; retrieval degraded",
+            code: s.embedding.errorCode,
+          },
+          durationMs: 0,
+          success: false,
+          calledAt: Date.now(),
+        });
+      }
 
       return {
         query,
@@ -1682,10 +1813,9 @@ export function createMemoryCore(
   }): Promise<Parameters<MemoryCore["listEpisodeRows"]> extends unknown[] ? Awaited<ReturnType<MemoryCore["listEpisodeRows"]>> : never> {
     ensureLive();
 
-    // Legacy parity: auto-finalize stale open episodes when the task
-    // list is fetched, matching `memos-local-openclaw` ViewerServer's
-    // `autoFinalizeStaleTasks()`. Default threshold: 4 hours.
-    autoFinalizeStaleTasks();
+    // Auto-finalize only hard-stale open topics. Recent interrupted
+    // topics stay open so the next user turn can be merged by topic.
+    await autoFinalizeStaleTasks();
 
     const rows = handle.repos.episodes.list({
       sessionId: input?.sessionId,
@@ -1745,6 +1875,18 @@ export function createMemoryCore(
       // abandon. Surface them through the API so TasksView can render
       // a human-readable status badge without guessing from rTask.
       const meta = (r as { meta?: Record<string, unknown> }).meta ?? {};
+      if (!preview) {
+        const fallback =
+          typeof meta.initialUserText === "string"
+            ? meta.initialUserText
+            : typeof meta.pendingUserText === "string"
+              ? meta.pendingUserText
+              : typeof meta.lastUserText === "string"
+                ? meta.lastUserText
+                : "";
+        const raw = fallback.replace(/\s+/g, " ").trim();
+        if (raw) preview = raw.length > 160 ? raw.slice(0, 157) + "…" : raw;
+      }
       const closeReasonRaw = meta.closeReason;
       const closeReason: "finalized" | "abandoned" | null =
         closeReasonRaw === "finalized" || closeReasonRaw === "abandoned"
@@ -1752,6 +1894,16 @@ export function createMemoryCore(
           : null;
       const abandonReason =
         typeof meta.abandonReason === "string" ? meta.abandonReason : null;
+      const topicStateRaw = meta.topicState;
+      const topicState =
+        topicStateRaw === "active" ||
+        topicStateRaw === "paused" ||
+        topicStateRaw === "interrupted" ||
+        topicStateRaw === "ended"
+          ? topicStateRaw
+          : null;
+      const pauseReason =
+        typeof meta.pauseReason === "string" ? meta.pauseReason : null;
 
       return {
         id: r.id,
@@ -1769,6 +1921,8 @@ export function createMemoryCore(
         skillReasonParams: derivation.reasonParams,
         linkedSkillId: derivation.linkedSkillId,
         closeReason,
+        topicState,
+        pauseReason,
         abandonReason,
       };
     });
@@ -2505,6 +2659,7 @@ export function createMemoryCore(
     onTurnEnd,
     submitFeedback,
     recordToolOutcome,
+    recordSubagentOutcome,
     searchMemory,
     getTrace,
     updateTrace,
@@ -2874,6 +3029,42 @@ function findLatestPersistedModelStatus(
     // Repo failure is non-fatal for health; leave in-memory stats.
   }
   return null;
+}
+
+function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats): {
+  raw?: number;
+  ranked?: number;
+  droppedByThreshold?: number;
+  thresholdFloor?: number;
+  topRelevance?: number;
+  llmFilter?: {
+    outcome?: string;
+    kept?: number;
+    dropped?: number;
+    sufficient?: boolean | null;
+  };
+  channelHits?: Record<string, number>;
+  queryTokens?: number;
+  queryTags?: string[];
+  embedding?: import("../retrieval/types.js").RetrievalStats["embedding"];
+} {
+  return {
+    raw: s.rawCandidateCount,
+    ranked: s.rankedCount,
+    droppedByThreshold: s.droppedByThresholdCount,
+    thresholdFloor: s.thresholdFloor,
+    topRelevance: s.topRelevance,
+    llmFilter: {
+      outcome: s.llmFilterOutcome,
+      kept: s.llmFilterKept,
+      dropped: s.llmFilterDropped,
+      sufficient: s.llmFilterSufficient ?? null,
+    },
+    channelHits: s.channelHits as Record<string, number> | undefined,
+    queryTokens: s.queryTokens,
+    queryTags: s.queryTags,
+    embedding: s.embedding,
+  };
 }
 
 function llmHealth(

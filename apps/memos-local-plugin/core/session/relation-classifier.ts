@@ -26,6 +26,7 @@
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
+import { sanitizeDerivedText } from "../safety/content.js";
 import type { RelationDecision, RelationInput, TurnRelation } from "./types.js";
 
 // ─── Heuristic rules ─────────────────────────────────────────────────────
@@ -557,7 +558,7 @@ async function callLlm(llm: LlmClient, input: RelationInput): Promise<LlmRelatio
   return {
     relation: rsp.value.relation as TurnRelation,
     confidence: rsp.value.confidence as number,
-    reason: rsp.value.reason as string,
+    reason: sanitizeDerivedText(rsp.value.reason),
     servedBy: rsp.servedBy,
   };
 }

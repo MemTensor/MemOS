@@ -117,6 +117,47 @@ describe("memory/l3/abstract", () => {
     expect(res.draft.confidence).toBeCloseTo(0.7, 5);
   });
 
+  it("cleans unsafe markup from LLM-derived world model fields", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: {
+          title: "<img src=x onerror=alert(1)> Alpine model",
+          domain_tags: ["Alpine"],
+          environment: [
+            {
+              label: "<b>Runtime</b>",
+              description: "<script>alert(1)</script>Use [docs](javascript:alert(1)) safely",
+            },
+          ],
+          inference: [],
+          constraints: [],
+          body: "<script>alert(1)</script>See [safe](https://example.com) and [bad](javascript:alert(1))",
+          confidence: 0.7,
+          supersedes_world_ids: [],
+        },
+      },
+    });
+
+    const res = await abstractDraft(
+      { cluster: mkCluster(), evidenceByPolicy: new Map() },
+      { llm, log, config: cfg() },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const combined = [
+      res.draft.title,
+      res.draft.body,
+      ...res.draft.environment.flatMap((e) => [e.label, e.description]),
+    ].join("\n");
+    expect(combined).not.toMatch(/<script|<img|<b>|javascript:/i);
+    expect(res.draft.title).toBe("Alpine model");
+    expect(res.draft.environment[0]!.label).toBe("Runtime");
+    expect(res.draft.environment[0]!.description).toContain("Use docs safely");
+    expect(res.draft.body).toContain("[safe](https://example.com)");
+    expect(res.draft.body).toContain("bad");
+  });
+
   it("returns llm_disabled when useLlm is off", async () => {
     const res = await abstractDraft(
       { cluster: mkCluster(), evidenceByPolicy: new Map() },

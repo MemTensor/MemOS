@@ -21,6 +21,7 @@ import type {
   SessionId,
   SkillDTO,
   SkillId,
+  SubagentOutcomeDTO,
   ToolOutcomeDTO,
   TraceDTO,
   TurnInputDTO,
@@ -44,6 +45,12 @@ export interface CoreHealth {
     skills: string;
     logs: string;
   };
+  /**
+   * Optional host transport status. Hermes fills this at the HTTP
+   * server layer because the core itself does not own the Python ↔ Node
+   * stdio bridge.
+   */
+  bridge?: BridgeHealth;
   llm: ModelHealth;
   embedder: ModelHealth & { dim: number };
   /**
@@ -53,6 +60,19 @@ export interface CoreHealth {
    * The health fields mirror the main LLM client when `inherited=true`.
    */
   skillEvolver: ModelHealth & { inherited: boolean };
+}
+
+export type BridgeHealthStatus =
+  | "connected"
+  | "reconnecting"
+  | "disconnected"
+  | "unknown";
+
+export interface BridgeHealth {
+  status: BridgeHealthStatus;
+  lastOkAt: number | null;
+  lastErrorAt: number | null;
+  lastError: string | null;
 }
 
 /**
@@ -127,6 +147,14 @@ export interface MemoryCore {
    * call returns before repair runs and never throws on unknown sessions.
    */
   recordToolOutcome(outcome: ToolOutcomeDTO): void;
+  /**
+   * Record a parent-session delegation outcome. Subagent lifecycle hooks
+   * usually carry task/result metadata, not a full child transcript, so this
+   * appends the visible delegation task/result to the parent episode.
+   */
+  recordSubagentOutcome(
+    outcome: SubagentOutcomeDTO,
+  ): Promise<{ traceId: string; episodeId: EpisodeId }>;
 
   // ── memory queries ──
   searchMemory(query: RetrievalQueryDTO): Promise<RetrievalResultDTO>;
