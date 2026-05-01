@@ -91,6 +91,10 @@ export interface MemoryCore {
     userMessage?: string;
   }): Promise<EpisodeId>;
   closeEpisode(episodeId: EpisodeId): Promise<void>;
+  /** Hard-delete a closed episode by id (idempotent). Rejects if the episode is still open. */
+  deleteEpisode(id: string): Promise<{ deleted: boolean }>;
+  /** Bulk delete closed episodes — returns how many rows were actually removed. */
+  deleteEpisodes(ids: readonly string[]): Promise<{ deleted: number }>;
 
   // ── pipeline (per turn) ──
   /** Called *before* the agent acts. Returns the context to inject. */
