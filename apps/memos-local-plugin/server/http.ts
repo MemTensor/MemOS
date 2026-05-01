@@ -135,7 +135,7 @@ async function dispatch(
   let pathname = url.pathname;
 
   const selfAgent = options.agent ?? null;
-  const AGENT_NAMES = ["openclaw", "hermes"] as const;
+  const AGENT_NAMES = ["openclaw", "hermes", "memos"] as const;
 
   // ── Multi-agent path routing ────────────────────────────────────────
   // The first agent to bind the port acts as the hub. Subsequent
