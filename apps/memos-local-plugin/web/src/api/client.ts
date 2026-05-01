@@ -26,7 +26,7 @@ export const AGENT_PREFIX: string = detectAgentPrefix();
 function detectAgentPrefix(): string {
   if (typeof location === "undefined") return "";
   const seg = location.pathname.split("/").filter(Boolean)[0];
-  return seg === "openclaw" || seg === "hermes" ? `/${seg}` : "";
+  return seg === "openclaw" || seg === "hermes" || seg === "memos" ? `/${seg}` : "";
 }
 
 /**
