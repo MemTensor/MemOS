@@ -332,9 +332,25 @@ export function createMemoryCore(
     // to `closed` + sets `closeReason: "abandoned"` without touching
     // trace_ids_json.
     try {
-      const orphans = handle.repos.episodes.list({ status: "open", limit: 500 });
+      const openEpisodes = handle.repos.episodes.list({ status: "open", limit: 500 });
+      // Batch-fetch sessions to avoid N+1 lookups per episode.
+      const sessionIds = new Set(openEpisodes.map((ep) => ep.sessionId));
+      const sessionById = new Map<string, ReturnType<typeof handle.repos.sessions.getById>>();
+      for (const sid of sessionIds) {
+        sessionById.set(sid, handle.repos.sessions.getById(sid));
+      }
+      // Only treat an open episode as an orphan if its session has been
+      // explicitly closed (meta.closedAt is set) or no longer exists.
+      // Otherwise the session might reconnect — leave it alone.
+      const orphans = openEpisodes.filter((ep) => {
+        const session = sessionById.get(ep.sessionId);
+        if (!session) return true;
+        if (session.meta?.closedAt != null) return true;
+        return false;
+      });
       if (orphans.length > 0) {
-        log.info("init.orphan_episodes.close", { count: orphans.length });
+        const skipped = openEpisodes.length - orphans.length;
+        log.info("init.orphan_episodes.close", { count: orphans.length, skipped });
         const endedAt = Date.now();
         for (const ep of orphans) {
           try {
@@ -630,6 +646,49 @@ export function createMemoryCore(
     }
     if (snap.status === "closed") return;
     handle.sessionManager.finalizeEpisode(episodeId);
+  }
+
+  function assertEpisodeDeletable(episodeId: EpisodeId): void {
+    const snap = handle.sessionManager.getEpisode(episodeId);
+    if (snap?.status === "open") {
+      throw new MemosError(
+        "conflict",
+        `cannot delete open episode: ${episodeId}`,
+      );
+    }
+    if (!snap && handle.repos.episodes.getById(episodeId)?.status === "open") {
+      throw new MemosError(
+        "conflict",
+        `cannot delete open episode: ${episodeId} (open in DB)`,
+      );
+    }
+  }
+
+  function deleteClosedEpisode(episodeId: EpisodeId): boolean {
+    const existing = handle.repos.episodes.getById(episodeId);
+    assertEpisodeDeletable(episodeId);
+    const deleted = handle.repos.episodes.deleteById(episodeId);
+    if (existing && !deleted) {
+      throw new MemosError(
+        "internal",
+        `failed to delete closed episode: ${episodeId}`,
+      );
+    }
+    return deleted;
+  }
+
+  async function deleteEpisode(episodeId: EpisodeId): Promise<{ deleted: boolean }> {
+    ensureLive();
+    return { deleted: deleteClosedEpisode(episodeId) };
+  }
+
+  async function deleteEpisodes(ids: readonly EpisodeId[]): Promise<{ deleted: number }> {
+    ensureLive();
+    let deleted = 0;
+    for (const id of ids) {
+      if (deleteClosedEpisode(id)) deleted++;
+    }
+    return { deleted };
   }
 
   // ─── Pipeline (per turn) ──
@@ -1947,6 +2006,8 @@ export function createMemoryCore(
     closeSession,
     openEpisode,
     closeEpisode,
+    deleteEpisode,
+    deleteEpisodes,
     onTurnStart,
     onTurnEnd,
     submitFeedback,

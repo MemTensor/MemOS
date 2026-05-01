@@ -134,6 +134,29 @@ export function makeDispatcher(
         await core.closeEpisode(requireString(p, "episodeId", method) as EpisodeId);
         return { ok: true };
       }
+      case RPC_METHODS.EPISODE_DELETE: {
+        const p = asRecord(params, method);
+        return await core.deleteEpisode(requireString(p, "episodeId", method) as EpisodeId);
+      }
+      case RPC_METHODS.EPISODE_DELETE_BULK: {
+        const p = asRecord(params, method);
+        const ids = p.ids;
+        if (!Array.isArray(ids) || ids.length === 0) {
+          throw new MemosError(
+            "invalid_argument",
+            "ids must be a non-empty array",
+          );
+        }
+        for (const id of ids) {
+          if (typeof id !== "string" || id.trim().length === 0) {
+            throw new MemosError(
+              "invalid_argument",
+              "each element in ids must be a non-empty string",
+            );
+          }
+        }
+        return await core.deleteEpisodes(ids as EpisodeId[]);
+      }
 
       // ── turn lifecycle ──
       case RPC_METHODS.TURN_START: {
