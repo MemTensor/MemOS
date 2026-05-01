@@ -292,6 +292,8 @@ const en = {
   "memories.field.episodeTimeline": "Steps in this task",
   "memories.field.steps": "Steps in this turn ({n})",
   "memories.card.steps": "{n} steps",
+  "memories.score.skipped": "Scoring skipped",
+  "memories.score.pending": "Pending score",
   // Tooltip helpers for memory metadata fields. Shown when the user
   // hovers the small "?" icon next to each label so they can find out
   // what the score means without leaving the drawer.
@@ -958,6 +960,8 @@ const zh: Record<TranslationKey, string> = {
   "memories.field.episodeTimeline": "本任务的其他步骤",
   "memories.field.steps": "本轮步骤（共 {n} 步）",
   "memories.card.steps": "{n} 步",
+  "memories.score.skipped": "跳过评分",
+  "memories.score.pending": "待评分",
   "memories.help.value":
     "记忆被捕获时的重要性评分（0–1）。值越高表示助手当时越觉得这条记忆值得保留。",
   "memories.help.alpha":

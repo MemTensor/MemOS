@@ -46,6 +46,12 @@ export interface RewardDeps {
   llm: LlmClient | null;
   bus: RewardEventBus;
   cfg: RewardConfig;
+  evaluator?: {
+    reflectionProvider?: string;
+    reflectionModel?: string;
+    scorerProvider?: string;
+    scorerModel?: string;
+  };
   now?: () => number;
   /**
    * Optional accessor for the episode snapshot (turns + meta). If omitted,
@@ -180,6 +186,7 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
       episode: snapshot,
       traces,
       cfg: { summaryMaxChars: deps.cfg.summaryMaxChars },
+      evaluator: deps.evaluator,
     });
     tMetrics.summary = now() - tSumStart;
 
@@ -257,7 +264,10 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
           reason: humanScore.reason,
           scoredAt: startedAt,
           trigger: input.trigger,
+          traceCount: bp.updates.length,
+          traceIds: bp.updates.map((u) => u.traceId),
         },
+        rewardDirty: undefined,
       });
     } catch (err) {
       warnings.push({

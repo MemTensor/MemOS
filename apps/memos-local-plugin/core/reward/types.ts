@@ -116,6 +116,8 @@ export interface HumanScoreInput {
 export interface TaskSummary {
   episodeId: EpisodeId;
   sessionId: SessionId;
+  /** Optional host/evaluator context included in the packed summary. */
+  hostContext?: string;
   userQuery: string;
   agentActions: string;
   outcome: string;

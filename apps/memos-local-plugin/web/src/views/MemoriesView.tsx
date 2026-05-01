@@ -562,9 +562,7 @@ export function MemoriesView() {
                       {t(`memories.share.scope.${scope}` as never).split(" (")[0]}
                     </span>
                     <span>{formatTs(g.ts)}</span>
-                    <span class="mono">
-                      V {g.aggValue.toFixed(2)} · α {g.aggAlpha.toFixed(2)}
-                    </span>
+                    <span class="mono">{groupScoreLabel(g)}</span>
                     {g.toolCount > 0 && (
                       <span class="pill pill--info" title={g.toolNames.join(", ")}>
                         <Icon name="cable" size={12} />
@@ -652,6 +650,27 @@ function detectRole(trace: TraceDTO): "user" | "assistant" | "tool" | "" {
   if (trace.agentText) return "assistant";
   if (trace.userText) return "user";
   return "";
+}
+
+function episodeScoringSkipped(trace: TraceDTO): boolean {
+  return trace.episodeRewardSkipped === true;
+}
+
+function episodeScoringPending(trace: TraceDTO): boolean {
+  return trace.episodeRTask == null && !episodeScoringSkipped(trace);
+}
+
+function groupScoreLabel(group: MemoryGroup): string {
+  const scoringTrace = group.traces.find((trace) => trace.episodeRTask != null) ?? group.head;
+  if (episodeScoringSkipped(scoringTrace)) return t("memories.score.skipped");
+  if (episodeScoringPending(scoringTrace)) return t("memories.score.pending");
+  return `V ${group.aggValue.toFixed(2)} · α ${group.aggAlpha.toFixed(2)}`;
+}
+
+function traceScoreLabel(trace: TraceDTO): string {
+  if (episodeScoringSkipped(trace)) return t("memories.score.skipped");
+  if (episodeScoringPending(trace)) return t("memories.score.pending");
+  return `V ${trace.value.toFixed(2)} · α ${trace.alpha.toFixed(2)}`;
 }
 
 async function findTracePage(
@@ -1073,9 +1092,13 @@ function TraceDrawer({
                   <dt class="muted">{t("memories.field.ts")}</dt>
                   <dd>{group.ts ? new Date(group.ts).toLocaleString() : "—"}</dd>
                   <dt class="muted">{t("memories.field.value")}</dt>
-                  <dd>{group.aggValue.toFixed(3)}</dd>
-                  <dt class="muted">{t("memories.field.alpha")}</dt>
-                  <dd>{group.aggAlpha.toFixed(3)}</dd>
+                  <dd>{groupScoreLabel(group)}</dd>
+                  {!episodeScoringSkipped(head) && (
+                    <>
+                      <dt class="muted">{t("memories.field.alpha")}</dt>
+                      <dd>{group.aggAlpha.toFixed(3)}</dd>
+                    </>
+                  )}
                   {head.rHuman != null && (
                     <>
                       <dt class="muted">{t("memories.field.rHuman")}</dt>
@@ -1306,7 +1329,7 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
                   </span>
                 )}
                 <span class="mono muted" style="font-size:var(--fs-xs)">
-                  V {tr.value.toFixed(2)} · α {tr.alpha.toFixed(2)}
+                  {traceScoreLabel(tr)}
                 </span>
                 <span class="truncate" style="flex:1;min-width:0;font-size:var(--fs-sm)">
                   {summary}

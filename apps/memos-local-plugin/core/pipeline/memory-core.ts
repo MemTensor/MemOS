@@ -439,6 +439,7 @@ export function createMemoryCore(
     4 * 60 * 60 * 1000,
   );
   let lastStaleScan = 0;
+  let lastDirtyClosedScan = 0;
   async function autoFinalizeStaleTasks(): Promise<void> {
     const nowMs = Date.now();
     if (nowMs - lastStaleScan < 30_000) return;
@@ -462,6 +463,24 @@ export function createMemoryCore(
       if (stale.length > 0) await recoverOpenEpisodesAsSessionEnd(stale);
     } catch (err) {
       log.debug("stale_topic.scan_error", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async function autoRescoreDirtyClosedEpisodes(): Promise<void> {
+    const nowMs = Date.now();
+    if (nowMs - lastDirtyClosedScan < 30_000) return;
+    lastDirtyClosedScan = nowMs;
+    try {
+      const dirtyClosed = handle.repos.episodes
+        .list({ status: "closed", limit: 500 })
+        .filter((ep) => episodeRewardIsDirty(ep));
+      if (dirtyClosed.length > 0) {
+        await recoverDirtyClosedEpisodes(dirtyClosed);
+      }
+    } catch (err) {
+      log.debug("dirty_closed_reward.scan_error", {
         err: err instanceof Error ? err.message : String(err),
       });
     }
@@ -502,6 +521,12 @@ export function createMemoryCore(
         if (stale.length > 0) {
           await recoverOpenEpisodesAsSessionEnd(stale);
         }
+      }
+      const dirtyClosed = handle.repos.episodes
+        .list({ status: "closed", limit: 500 })
+        .filter((ep) => episodeRewardIsDirty(ep));
+      if (dirtyClosed.length > 0) {
+        await recoverDirtyClosedEpisodes(dirtyClosed);
       }
     } catch (err) {
       log.debug("init.orphan_scan.failed", {
@@ -711,7 +736,7 @@ export function createMemoryCore(
           recoveryReason: "missed_session_end",
         });
 
-        if (ep.rTask != null) {
+        if (ep.rTask != null && !episodeRewardIsDirty(ep)) {
           log.info("init.orphan.repaired_finalized", {
             episodeId,
             sessionId: ep.sessionId,
@@ -787,9 +812,67 @@ export function createMemoryCore(
     }
   }
 
+  async function recoverDirtyClosedEpisodes(
+    episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
+  ): Promise<void> {
+    log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
+    for (const ep of episodes) {
+      const episodeId = ep.id as EpisodeId;
+      const endedAt = ep.endedAt ?? Date.now();
+      handle.repos.episodes.updateMeta(episodeId, {
+        closeReason: "finalized",
+        recoveredAtStartup: endedAt,
+        recoveryReason: "dirty_reward_rescore",
+      });
+      const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
+        recoveryReason: "dirty_reward_rescore",
+      });
+      handle.buses.session.emit({
+        kind: "episode.finalized",
+        episode: snapshot,
+        closedBy: "finalized",
+      });
+    }
+    await handle.flush();
+  }
+
+  function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
+    const meta = ep.meta ?? {};
+    if (meta.rewardDirty && typeof meta.rewardDirty === "object") return true;
+
+    const reward = meta.reward;
+    if (reward && typeof reward === "object" && (reward as { skipped?: unknown }).skipped === true) {
+      return false;
+    }
+    if (
+      ep.rTask == null &&
+      (ep.traceIds?.length ?? 0) > 0 &&
+      (meta.closeReason === "finalized" || meta.recoveryReason === "missed_session_end")
+    ) {
+      return true;
+    }
+    if (!reward || typeof reward !== "object") return false;
+    const traceCount = (reward as { traceCount?: unknown }).traceCount;
+    if (typeof traceCount === "number") {
+      return traceCount !== (ep.traceIds?.length ?? 0);
+    }
+
+    // Backward compatibility for episodes scored before reward coverage
+    // metadata existed: if a trace was appended after the recorded reward
+    // time, the old task score no longer covers the full episode.
+    const scoredAt = (reward as { scoredAt?: unknown }).scoredAt;
+    if (typeof scoredAt !== "number") return false;
+    const traceIds = (ep.traceIds ?? []) as TraceId[];
+    if (traceIds.length === 0) return false;
+    return handle.repos.traces
+      .getManyByIds(traceIds)
+      .some((tr) => tr.ts > scoredAt);
+  }
+
   function snapshotFromRecoveredEpisode(
     ep: EpisodeRow & { meta?: Record<string, unknown> },
     endedAt: number,
+    opts: { recoveryReason?: string } = {},
   ): EpisodeSnapshot {
     const traceIds = (ep.traceIds ?? []) as TraceId[];
     const traces =
@@ -844,7 +927,7 @@ export function createMemoryCore(
         ...(ep.meta ?? {}),
         closeReason: "finalized",
         recoveredAtStartup: endedAt,
-        recoveryReason: "missed_session_end",
+        recoveryReason: opts.recoveryReason ?? "missed_session_end",
       },
       intent: normaliseRecoveredIntent(ep.meta),
     };
@@ -974,12 +1057,13 @@ export function createMemoryCore(
   async function openSession(input: {
     agent: AgentKind;
     sessionId?: SessionId;
+    meta?: Record<string, unknown>;
   }): Promise<SessionId> {
     ensureLive();
     const snap = handle.sessionManager.openSession({
       id: input.sessionId,
       agent: input.agent,
-      meta: {},
+      meta: input.meta ?? {},
     });
     return snap.id as SessionId;
   }
@@ -1270,6 +1354,14 @@ export function createMemoryCore(
       ],
       ts,
     });
+    const anchor = {
+      task,
+      result,
+      childSessionId: outcome.childSessionId ?? null,
+      traceId: recorded.traceId as TraceId,
+      meta: outcome.meta ?? {},
+    };
+    anchorSubagentTraceAfterDelegate(recorded.episodeId, anchor);
 
     let childRecorded: { traceId: string; episodeId: EpisodeId } | null = null;
     const childSessionId = outcome.childSessionId ?? null;
@@ -1308,6 +1400,7 @@ export function createMemoryCore(
         }
       }
     }
+    anchorSubagentTraceAfterDelegate(recorded.episodeId, anchor);
 
     try {
       handle.repos.apiLogs.insert({
@@ -1341,6 +1434,169 @@ export function createMemoryCore(
     }
 
     return recorded;
+  }
+
+  function anchorSubagentTraceAfterDelegate(
+    episodeId: EpisodeId,
+    anchor: {
+      task: string;
+      result: string;
+      childSessionId: SessionId | null;
+      traceId: TraceId;
+      meta: Record<string, unknown>;
+    },
+  ): void {
+    const episode = handle.repos.episodes.getById(episodeId);
+    if (!episode) return;
+    const rows = episode.traceIds.length > 0
+      ? handle.repos.traces.getManyByIds(episode.traceIds)
+      : handle.repos.traces.list({ episodeId, limit: 500, newestFirst: false });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const ordered = (
+      episode.traceIds.length > 0 ? episode.traceIds : rows.map((row) => row.id)
+    ).filter((id) => byId.has(id));
+    const synthetic = ordered.filter((id) =>
+      isMatchingSubagentTrace(byId.get(id)!, anchor),
+    );
+    if (synthetic.length === 0) return;
+    const delegateId = findMatchingDelegateTaskTrace(ordered.map((id) => byId.get(id)!), anchor);
+    if (!delegateId) return;
+    moveUserTextToAnchoredDelegate(byId, delegateId, synthetic);
+
+    const withoutSynthetic = ordered.filter((id) => !synthetic.includes(id));
+    const delegateIdx = withoutSynthetic.indexOf(delegateId);
+    if (delegateIdx < 0) return;
+    const next = [
+      ...withoutSynthetic.slice(0, delegateIdx + 1),
+      ...synthetic,
+      ...withoutSynthetic.slice(delegateIdx + 1),
+    ];
+    if (next.join("\0") !== episode.traceIds.join("\0")) {
+      handle.repos.episodes.appendTrace(episodeId, next);
+    }
+  }
+
+  function moveUserTextToAnchoredDelegate(
+    byId: Map<string, TraceRow>,
+    delegateId: TraceId,
+    syntheticIds: string[],
+  ): void {
+    const delegate = byId.get(delegateId);
+    if (!delegate || delegate.userText.trim()) return;
+    const source = syntheticIds
+      .map((id) => byId.get(id))
+      .find((row): row is TraceRow =>
+        Boolean(row && row.turnId === delegate.turnId && row.userText.trim()),
+      );
+    if (!source) return;
+    handle.repos.traces.updateBody(delegateId, { userText: source.userText });
+    handle.repos.traces.updateBody(source.id, { userText: "" });
+    delegate.userText = source.userText;
+    source.userText = "";
+  }
+
+  function isMatchingSubagentTrace(
+    row: TraceRow,
+    anchor: {
+      task: string;
+      result: string;
+      childSessionId: SessionId | null;
+      traceId: TraceId;
+      meta: Record<string, unknown>;
+    },
+  ): boolean {
+    if (row.id === anchor.traceId) return true;
+    if (row.agentText.includes(`Subagent task: ${anchor.task}`)) return true;
+    if (row.agentText.includes(`Subagent result: ${anchor.result}`)) return true;
+    const tool = row.toolCalls[0];
+    if (!tool || tool.name !== "subagent") return false;
+    const input = asRecord(tool.input);
+    if (!input) return false;
+    if (typeof input.task === "string" && input.task === anchor.task) return true;
+    return anchor.childSessionId != null && input.childSessionId === anchor.childSessionId;
+  }
+
+  function findMatchingDelegateTaskTrace(
+    rows: TraceRow[],
+    anchor: { task: string; meta: Record<string, unknown> },
+  ): TraceId | null {
+    const anchorToolCallId = subagentAnchorToolCallId(anchor.meta);
+    if (anchorToolCallId) {
+      const byId = rows.find((row) => delegateToolCallIdMatches(row, anchorToolCallId));
+      if (byId) return byId.id;
+    }
+
+    // Deterministic fallback for Hermes versions whose `on_delegation`
+    // hook does not expose tool_call_id: only anchor when exactly one
+    // delegate_task goal equals the subagent task.
+    const matches = rows.filter((row) => delegateTaskGoal(row) === anchor.task);
+    return matches.length === 1 ? matches[0]!.id : null;
+  }
+
+  function delegateToolCallIdMatches(row: TraceRow, anchorToolCallId: string): boolean {
+    const tool = row.toolCalls[0];
+    if (!tool || tool.name !== "delegate_task") return false;
+    if (tool.toolCallId === anchorToolCallId) return true;
+
+    const input = parseMaybeJsonObject(tool.input);
+    if (!input) return false;
+    const inputCallId = firstString(
+      input.toolCallId,
+      input.tool_call_id,
+      input.callId,
+      input.call_id,
+    );
+    return inputCallId === anchorToolCallId;
+  }
+
+  function delegateTaskGoal(row: TraceRow): string | null {
+    const tool = row.toolCalls[0];
+    if (!tool || tool.name !== "delegate_task") return null;
+    const input = parseMaybeJsonObject(tool.input);
+    if (!input) return null;
+    return firstString(input.goal);
+  }
+
+  function subagentAnchorToolCallId(meta: Record<string, unknown>): string | null {
+    const hookKwargs = asRecord(meta.hookKwargs) ?? {};
+    return firstString(
+      meta.toolCallId,
+      meta.tool_call_id,
+      meta.callId,
+      meta.call_id,
+      hookKwargs.toolCallId,
+      hookKwargs.tool_call_id,
+      hookKwargs.callId,
+      hookKwargs.call_id,
+    );
+  }
+
+  function parseMaybeJsonObject(value: unknown): Record<string, unknown> | null {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+    if (typeof value !== "string") return null;
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+  }
+
+  function firstString(...values: unknown[]): string | null {
+    for (const value of values) {
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    return null;
   }
 
   // ─── Memory queries ──
@@ -1488,7 +1744,7 @@ export function createMemoryCore(
   async function getTrace(id: string): Promise<TraceDTO | null> {
     ensureLive();
     const row = handle.repos.traces.getById(id);
-    return row ? traceRowToDTO(row) : null;
+    return row ? traceRowToDTO(row, handle.repos.episodes.getById(row.episodeId)) : null;
   }
 
   async function updateTrace(
@@ -1505,7 +1761,9 @@ export function createMemoryCore(
     if (!existing) return null;
     handle.repos.traces.updateBody(id, patch);
     const updated = handle.repos.traces.getById(id);
-    return updated ? traceRowToDTO(updated) : null;
+    return updated
+      ? traceRowToDTO(updated, handle.repos.episodes.getById(updated.episodeId))
+      : null;
   }
 
   async function deleteTrace(id: string): Promise<{ deleted: boolean }> {
@@ -1543,7 +1801,9 @@ export function createMemoryCore(
     if (!existing) return null;
     handle.repos.traces.updateShare(id, share);
     const updated = handle.repos.traces.getById(id);
-    return updated ? traceRowToDTO(updated) : null;
+    return updated
+      ? traceRowToDTO(updated, handle.repos.episodes.getById(updated.episodeId))
+      : null;
   }
 
   async function getPolicy(id: string): Promise<PolicyDTO | null> {
@@ -1816,6 +2076,7 @@ export function createMemoryCore(
     // Auto-finalize only hard-stale open topics. Recent interrupted
     // topics stay open so the next user turn can be merged by topic.
     await autoFinalizeStaleTasks();
+    await autoRescoreDirtyClosedEpisodes();
 
     const rows = handle.repos.episodes.list({
       sessionId: input?.sessionId,
@@ -1939,7 +2200,9 @@ export function createMemoryCore(
       limit: 500,
       newestFirst: false,
     });
-    return orderTraceRowsForEpisode(rows, episode?.traceIds ?? []).map(traceRowToDTO);
+    return orderTraceRowsForEpisode(rows, episode?.traceIds ?? []).map((row) =>
+      traceRowToDTO(row, episode),
+    );
   }
 
   async function listApiLogs(input?: {
@@ -1986,8 +2249,7 @@ export function createMemoryCore(
     // traces from the repo (no limit) and apply the same filter.
     const rows = handle.repos.traces.list({ sessionId: input?.sessionId });
     const matched = rows.filter((r) => {
-      const hay = ((r.summary ?? "") + "\n" + r.userText + "\n" + r.agentText).toLowerCase();
-      return hay.includes(needle);
+      return traceSearchHaystack(r).includes(needle);
     });
     if (!input?.groupByTurn) return matched.length;
     const turnKeys = new Set<string>();
@@ -2034,13 +2296,12 @@ export function createMemoryCore(
           if (ia !== ib) return ia - ib;
           return compareTraceRowsForEpisodeOrder(a, b, traceOrder);
         });
-        return rows.map(traceRowToDTO);
+        return traceRowsToDTOs(rows);
       }
       // Search + group: scan, filter, then paginate by distinct turn key.
       const allRows = handle.repos.traces.list({ sessionId: input?.sessionId });
       const matched = allRows.filter((r) => {
-        const hay = ((r.summary ?? "") + "\n" + r.userText + "\n" + r.agentText).toLowerCase();
-        return hay.includes(needle);
+        return traceSearchHaystack(r).includes(needle);
       });
       const seen = new Map<string, { episodeId: string | null; turnId: number; maxTs: number }>();
       for (const r of matched) {
@@ -2057,9 +2318,11 @@ export function createMemoryCore(
       orderedKeys.forEach((k, i) =>
         turnOrder.set(`${k.episodeId ?? "_"}:${k.turnId}`, i),
       );
-      const traceOrder = traceOrderLookup(matched);
-      const traces = matched
-        .filter((r) => turnOrder.has(`${r.episodeId ?? "_"}:${r.turnId}`))
+      // Once a turn matches the search, return the whole turn so the
+      // Memories card uses the same step list as the Tasks timeline.
+      const rows = handle.repos.traces.listByTurnKeys(orderedKeys);
+      const traceOrder = traceOrderLookup(rows);
+      const traces = rows
         .sort((a, b) => {
           const ka = `${a.episodeId ?? "_"}:${a.turnId}`;
           const kb = `${b.episodeId ?? "_"}:${b.turnId}`;
@@ -2068,7 +2331,7 @@ export function createMemoryCore(
           if (ia !== ib) return ia - ib;
           return compareTraceRowsForEpisodeOrder(a, b, traceOrder);
         });
-      return traces.map(traceRowToDTO);
+      return traceRowsToDTOs(traces);
     }
 
     if (!needle) {
@@ -2077,7 +2340,7 @@ export function createMemoryCore(
         limit,
         offset,
       });
-      return rows.map(traceRowToDTO);
+      return traceRowsToDTOs(rows);
     }
     // Substring search: SQLite LIKE would need an index. For the
     // viewer's interactive filter the current volumes (low thousands
@@ -2089,10 +2352,30 @@ export function createMemoryCore(
       offset: 0,
     });
     const filtered = rows.filter((r) => {
-      const hay = ((r.summary ?? "") + "\n" + r.userText + "\n" + r.agentText).toLowerCase();
-      return hay.includes(needle);
+      return traceSearchHaystack(r).includes(needle);
     });
-    return filtered.slice(offset, offset + limit).map(traceRowToDTO);
+    return traceRowsToDTOs(filtered.slice(offset, offset + limit));
+  }
+
+  function traceSearchHaystack(row: TraceRow): string {
+    return [
+      row.id,
+      row.episodeId,
+      row.summary ?? "",
+      row.userText,
+      row.agentText,
+      summarizeToolCalls(row.toolCalls),
+    ].join("\n").toLowerCase();
+  }
+
+  function traceRowsToDTOs(rows: readonly TraceRow[]): TraceDTO[] {
+    const episodes = new Map<string, EpisodeRow | null>();
+    return rows.map((row) => {
+      if (!episodes.has(row.episodeId)) {
+        episodes.set(row.episodeId, handle.repos.episodes.getById(row.episodeId));
+      }
+      return traceRowToDTO(row, episodes.get(row.episodeId) ?? undefined);
+    });
   }
 
   function traceOrderLookup(
@@ -2102,9 +2385,12 @@ export function createMemoryCore(
     const episodeIds = new Set(rows.map((r) => r.episodeId).filter(Boolean));
     for (const episodeId of episodeIds) {
       const ep = handle.repos.episodes.getById(episodeId);
-      if (!ep || ep.traceIds.length === 0) continue;
+      if (!ep) continue;
       const order = new Map<string, number>();
-      ep.traceIds.forEach((id, idx) => order.set(id, idx));
+      const episodeRows = rows.filter((row) => row.episodeId === episodeId);
+      orderTraceRowsForEpisode(episodeRows, ep.traceIds).forEach((row, idx) =>
+        order.set(row.id, idx),
+      );
       out.set(episodeId, order);
     }
     return out;
@@ -2321,7 +2607,7 @@ export function createMemoryCore(
     skills: SkillDTO[];
   }> {
     ensureLive();
-    const traces = handle.repos.traces.list({ limit: 100_000 }).map(traceRowToDTO);
+    const traces = traceRowsToDTOs(handle.repos.traces.list({ limit: 100_000 }));
     const policies = handle.repos.policies.list({ limit: 5_000 }).map(policyRowToDTO);
     const worldModels = handle.repos.worldModel.list({ limit: 2_000 }).map(worldModelRowToDTO);
     const skills = handle.repos.skills.list({ limit: 5_000 }).map(skillRowToDTO);
@@ -2800,15 +3086,198 @@ function orderTraceRowsForEpisode(
   rows: readonly TraceRow[],
   traceIds: readonly TraceId[],
 ): TraceRow[] {
-  if (traceIds.length === 0) return [...rows];
+  if (traceIds.length === 0) return anchorSubagentRowsForDisplay([...rows]);
   const order = new Map<string, number>();
   traceIds.forEach((id, idx) => order.set(id, idx));
-  return [...rows].sort((a, b) => {
+  const ordered = [...rows].sort((a, b) => {
     const ai = order.get(a.id) ?? Number.POSITIVE_INFINITY;
     const bi = order.get(b.id) ?? Number.POSITIVE_INFINITY;
     if (ai !== bi) return ai - bi;
     return a.ts - b.ts;
   });
+  return anchorSubagentRowsForDisplay(ordered);
+}
+
+function anchorSubagentRowsForDisplay(rows: TraceRow[]): TraceRow[] {
+  const delegateByToolCallId = new Map<string, string>();
+  const delegateByGoal = new Map<string, string>();
+  const duplicateGoals = new Set<string>();
+  for (const row of rows) {
+    const tool = row.toolCalls[0];
+    if (tool?.name !== "delegate_task") continue;
+    if (tool.toolCallId) delegateByToolCallId.set(tool.toolCallId, row.id);
+    const goal = delegateRowGoal(row);
+    if (goal) {
+      if (delegateByGoal.has(goal)) duplicateGoals.add(goal);
+      else delegateByGoal.set(goal, row.id);
+    }
+  }
+  for (const goal of duplicateGoals) delegateByGoal.delete(goal);
+  if (delegateByToolCallId.size === 0 && delegateByGoal.size === 0) return rows;
+
+  const groups: Array<{ delegateId: string; rows: TraceRow[] }> = [];
+  const groupedIds = new Set<string>();
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    if (groupedIds.has(row.id)) continue;
+    const delegateId = subagentRowDelegateId(row, delegateByToolCallId, delegateByGoal);
+    if (!delegateId) continue;
+    const relatedTextRows: TraceRow[] = [];
+    for (let j = i - 1; j >= 0; j--) {
+      const prev = rows[j]!;
+      if (groupedIds.has(prev.id)) continue;
+      if (!isSubagentTextRow(prev)) break;
+      relatedTextRows.unshift(prev);
+    }
+    const group = [row, ...relatedTextRows];
+    groupedIds.add(row.id);
+    for (const related of relatedTextRows) groupedIds.add(related.id);
+    for (let j = i + 1; j < rows.length; j++) {
+      const next = rows[j]!;
+      if (
+        next.toolCalls.length > 0 ||
+        groupedIds.has(next.id) ||
+        !isSubagentTextRow(next)
+      ) {
+        break;
+      }
+      group.push(next);
+      groupedIds.add(next.id);
+    }
+    groups.push({ delegateId, rows: group });
+  }
+  if (groups.length === 0) return rows;
+
+  let ordered = rows.filter((row) => !groupedIds.has(row.id));
+  for (const group of groups) {
+    const delegateIdx = ordered.findIndex((row) => row.id === group.delegateId);
+    if (delegateIdx < 0) {
+      ordered.push(...group.rows);
+      continue;
+    }
+    ordered = [
+      ...ordered.slice(0, delegateIdx + 1),
+      ...group.rows,
+      ...ordered.slice(delegateIdx + 1),
+    ];
+  }
+  return moveDisplayUserTextToAnchoredDelegates(ordered);
+}
+
+function isSubagentTextRow(row: TraceRow): boolean {
+  return row.toolCalls.length === 0 &&
+    (
+      row.agentText.includes("Subagent task:") ||
+      row.agentText.includes("Subagent result:")
+    );
+}
+
+function moveDisplayUserTextToAnchoredDelegates(rows: TraceRow[]): TraceRow[] {
+  let out = rows;
+  let cloned = false;
+  const clone = (): TraceRow[] => {
+    if (!cloned) {
+      out = out.map((row) => ({ ...row }));
+      cloned = true;
+    }
+    return out;
+  };
+
+  for (let i = 0; i < out.length; i++) {
+    const delegate = out[i]!;
+    if (delegate.toolCalls[0]?.name !== "delegate_task" || delegate.userText.trim()) continue;
+    for (let j = i + 1; j < out.length; j++) {
+      const candidate = out[j]!;
+      if (candidate.turnId !== delegate.turnId) break;
+      if (candidate.toolCalls[0]?.name === "delegate_task") break;
+      if (candidate.toolCalls[0]?.name !== "subagent" || !candidate.userText.trim()) continue;
+      const next = clone();
+      next[i] = { ...next[i]!, userText: candidate.userText };
+      next[j] = { ...next[j]!, userText: "" };
+      break;
+    }
+  }
+  return out;
+}
+
+function subagentRowDelegateId(
+  row: TraceRow,
+  delegateByToolCallId: ReadonlyMap<string, string>,
+  delegateByGoal: ReadonlyMap<string, string>,
+): string | null {
+  const toolCallId = subagentRowToolCallId(row);
+  if (toolCallId) {
+    const byId = delegateByToolCallId.get(toolCallId);
+    if (byId) return byId;
+  }
+  const task = subagentRowTask(row);
+  return task ? delegateByGoal.get(task) ?? null : null;
+}
+
+function subagentRowToolCallId(row: TraceRow): string | null {
+  const tool = row.toolCalls[0];
+  if (tool?.name !== "subagent") return null;
+  const input = tool.input && typeof tool.input === "object" && !Array.isArray(tool.input)
+    ? tool.input as Record<string, unknown>
+    : null;
+  const meta = input && input.meta && typeof input.meta === "object" && !Array.isArray(input.meta)
+    ? input.meta as Record<string, unknown>
+    : {};
+  const hookKwargs = meta.hookKwargs && typeof meta.hookKwargs === "object" && !Array.isArray(meta.hookKwargs)
+    ? meta.hookKwargs as Record<string, unknown>
+    : {};
+  return firstNonEmptyString(
+    meta.toolCallId,
+    meta.tool_call_id,
+    meta.callId,
+    meta.call_id,
+    hookKwargs.toolCallId,
+    hookKwargs.tool_call_id,
+    hookKwargs.callId,
+    hookKwargs.call_id,
+  );
+}
+
+function subagentRowTask(row: TraceRow): string | null {
+  const tool = row.toolCalls[0];
+  if (tool?.name !== "subagent") return null;
+  const input = topLevelRecord(tool.input);
+  return firstNonEmptyString(input?.task);
+}
+
+function delegateRowGoal(row: TraceRow): string | null {
+  const tool = row.toolCalls[0];
+  if (tool?.name !== "delegate_task") return null;
+  const input = topLevelJsonObject(tool.input);
+  return firstNonEmptyString(input?.goal);
+}
+
+function topLevelRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function topLevelJsonObject(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== "string") return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function firstNonEmptyString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }
 
 function compareTraceRowsForEpisodeOrder(
@@ -2829,7 +3298,7 @@ function compareTraceRowsForEpisodeOrder(
 
 // ─── Row → DTO mappers ───────────────────────────────────────────────────────
 
-export function traceRowToDTO(row: TraceRow): TraceDTO {
+export function traceRowToDTO(row: TraceRow, episode?: EpisodeRow | null): TraceDTO {
   return {
     id: row.id,
     episodeId: row.episodeId,
@@ -2847,8 +3316,17 @@ export function traceRowToDTO(row: TraceRow): TraceDTO {
     alpha: row.alpha,
     rHuman: row.rHuman ?? undefined,
     priority: row.priority,
+    episodeStatus: episode?.status,
+    episodeRTask: episode?.rTask ?? null,
+    episodeRewardSkipped: episodeRewardSkipped(episode),
     turnId: row.turnId,
   };
+}
+
+function episodeRewardSkipped(episode?: EpisodeRow | null): boolean {
+  const meta = (episode as { meta?: Record<string, unknown> } | null | undefined)?.meta;
+  const reward = meta?.reward;
+  return Boolean(reward && typeof reward === "object" && (reward as { skipped?: unknown }).skipped === true);
 }
 
 export function policyRowToDTO(row: PolicyRow): PolicyDTO {

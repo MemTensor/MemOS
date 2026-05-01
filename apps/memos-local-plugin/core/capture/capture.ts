@@ -19,7 +19,7 @@ import type { Embedder } from "../embedding/index.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
 import { ids } from "../id.js";
-import type { TraceRow, TraceId } from "../types.js";
+import type { EpisodeRow, TraceRow, TraceId } from "../types.js";
 import type { makeEmbeddingRetryQueueRepo } from "../storage/repos/embedding_retry_queue.js";
 import type { makeTracesRepo } from "../storage/repos/traces.js";
 import type { EpisodesRepo } from "../session/persistence.js";
@@ -42,6 +42,7 @@ import type {
   NormalizedStep,
   ReflectionScore,
   ScoredStep,
+  StepCandidate,
   TraceCandidate,
 } from "./types.js";
 
@@ -551,13 +552,27 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     scored: ScoredStep[],
     rows: TraceRow[],
   ): TraceCandidate[] {
-    return scored.map((s, i) => ({
-      ...s,
-      traceId: rows[i]!.id as TraceId,
-      tags: rows[i]!.tags,
-      vecSummary: rows[i]!.vecSummary,
-      vecAction: rows[i]!.vecAction,
-    }));
+    const used = new Set<number>();
+    return rows.map((row) => {
+      const idx = scored.findIndex((s, i) => !used.has(i) && rowMatchesStep(row, s));
+      const s = scored[idx >= 0 ? idx : 0]!;
+      if (idx >= 0) used.add(idx);
+      return {
+        ...s,
+        traceId: row.id as TraceId,
+        tags: row.tags,
+        vecSummary: row.vecSummary,
+        vecAction: row.vecAction,
+      };
+    });
+  }
+
+  function rowMatchesStep(row: TraceRow, step: ScoredStep): boolean {
+    if (row.ts !== step.ts) return false;
+    const rowTool = row.toolCalls[0];
+    const stepTool = step.toolCalls[0];
+    if (rowTool || stepTool) return rowTool?.name === stepTool?.name;
+    return row.userText === step.userText && row.agentText === step.agentText;
   }
 
   async function persistRows(
@@ -565,6 +580,26 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     input: CaptureInput,
     warnings: CaptureResult["warnings"],
   ): Promise<boolean> {
+    const existingBeforeInsert = deps.tracesRepo.list({ episodeId: input.episode.id });
+    const seenSignatures = new Set(existingBeforeInsert.map(traceIdentitySignature));
+    const uniqueRows = rows.filter((row) => {
+      const signature = traceIdentitySignature(row);
+      if (seenSignatures.has(signature)) return false;
+      seenSignatures.add(signature);
+      return true;
+    });
+    if (uniqueRows.length !== rows.length) {
+      warnings.push({
+        stage: "persist",
+        message: "skipped duplicate trace rows during capture persist",
+        detail: {
+          skipped: rows.length - uniqueRows.length,
+          episodeId: input.episode.id,
+        },
+      });
+      rows.splice(0, rows.length, ...uniqueRows);
+    }
+
     try {
       for (const row of rows) deps.tracesRepo.insert(row);
       enqueueMissingTraceVectors(rows, warnings);
@@ -589,9 +624,11 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         : new MemosError(ERROR_CODES.INTERNAL, "capture.persist failed", failure);
     }
     try {
+      const current = deps.episodesRepo.getById(input.episode.id) as EpisodeRow | null;
+      const currentTraceIds = current?.traceIds ?? input.episode.traceIds;
       deps.episodesRepo.updateTraceIds(
         input.episode.id,
-        [...input.episode.traceIds, ...rows.map((r) => r.id)],
+        reconcileTraceIds([...currentTraceIds, ...rows.map((r) => r.id)], input.episode),
       );
     } catch (err) {
       warnings.push({
@@ -601,6 +638,105 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       });
     }
     return true;
+  }
+
+  function reconcileTraceIds(traceIds: TraceId[], episode: CaptureInput["episode"]): TraceId[] {
+    const uniqueIds = dedupeTraceIds(traceIds);
+    const rowById = new Map(deps.tracesRepo.getManyByIds(uniqueIds).map((row) => [row.id, row]));
+    const originalIndex = new Map(uniqueIds.map((id, idx) => [id, idx]));
+    const stepOrder = new Map<string, number>();
+    extractSteps(episode).forEach((step, idx) => {
+      const signature = stepIdentitySignature(step);
+      if (!stepOrder.has(signature)) stepOrder.set(signature, idx);
+    });
+    const seenSignatures = new Set<string>();
+    return uniqueIds
+      .filter((id) => rowById.has(id))
+      .sort((a, b) => {
+        const ai = stepOrder.get(traceIdentitySignature(rowById.get(a)!));
+        const bi = stepOrder.get(traceIdentitySignature(rowById.get(b)!));
+        if (ai != null && bi != null && ai !== bi) return ai - bi;
+        if (ai != null && bi == null) return -1;
+        if (ai == null && bi != null) return 1;
+        return (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0);
+      })
+      .filter((id) => {
+        const signature = traceIdentitySignature(rowById.get(id)!);
+        if (seenSignatures.has(signature)) return false;
+        seenSignatures.add(signature);
+        return true;
+      });
+  }
+
+  function dedupeTraceIds(traceIds: TraceId[]): TraceId[] {
+    const seen = new Set<TraceId>();
+    const out: TraceId[] = [];
+    for (const id of traceIds) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out;
+  }
+
+  function stepIdentitySignature(step: StepCandidate): string {
+    const tool = step.toolCalls[0];
+    const turnId = pickTurnId(step.meta, step.ts);
+    if (tool) {
+      const hasRealTiming =
+        typeof tool.startedAt === "number" || typeof tool.endedAt === "number";
+      return [
+        "tool",
+        turnId,
+        tool.name,
+        hasRealTiming ? tool.startedAt ?? "" : step.ts,
+        hasRealTiming ? tool.endedAt ?? "" : "",
+        stableJson(tool.input),
+        stableJson(tool.output),
+        tool.errorCode ?? "",
+      ].join("\x1f");
+    }
+    if (step.agentText.trim()) {
+      return ["assistant", turnId, step.ts, step.agentText.trim()].join("\x1f");
+    }
+    return ["user", turnId, step.ts, step.userText.trim()].join("\x1f");
+  }
+
+  function traceIdentitySignature(row: TraceRow): string {
+    const tool = row.toolCalls[0];
+    if (tool) {
+      const hasRealTiming =
+        typeof tool.startedAt === "number" || typeof tool.endedAt === "number";
+      return [
+        "tool",
+        row.turnId,
+        tool.name,
+        hasRealTiming ? tool.startedAt ?? "" : row.ts,
+        hasRealTiming ? tool.endedAt ?? "" : "",
+        stableJson(tool.input),
+        stableJson(tool.output),
+        tool.errorCode ?? "",
+      ].join("\x1f");
+    }
+    if (row.agentText.trim()) {
+      return ["assistant", row.turnId, row.ts, row.agentText.trim()].join("\x1f");
+    }
+    return ["user", row.turnId, row.ts, row.userText.trim()].join("\x1f");
+  }
+
+  function stableJson(value: unknown): string {
+    if (value === undefined) return "";
+    return JSON.stringify(sortJson(value));
+  }
+
+  function sortJson(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(sortJson);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, val]) => [key, sortJson(val)]),
+    );
   }
 
   function enqueueMissingTraceVectors(

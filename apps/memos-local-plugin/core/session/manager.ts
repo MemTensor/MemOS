@@ -80,6 +80,7 @@ export interface SessionManager {
   ): EpisodeSnapshot;
   hydrateEpisode(snapshot: EpisodeSnapshot): EpisodeSnapshot;
   attachTraceIds(episodeId: EpisodeId, traceIds: string[]): void;
+  patchEpisodeMeta(episodeId: EpisodeId, metaPatch: Record<string, unknown>): EpisodeSnapshot;
 
   getEpisode(id: EpisodeId): EpisodeSnapshot | null;
   listEpisodes(sessionId: SessionId): EpisodeSnapshot[];
@@ -125,6 +126,9 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
       lastSeenAt: ts,
       meta: input.meta ?? {},
     });
+    if (input.meta && Object.keys(input.meta).length > 0) {
+      deps.sessionsRepo.touchLastSeen(id, ts, input.meta);
+    }
     const row = deps.sessionsRepo.getById(id);
     if (!row) {
       throw new MemosError(ERROR_CODES.INTERNAL, "sessions.upsert inserted row but getById returned null", {
@@ -347,6 +351,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     reopenEpisode,
     hydrateEpisode,
     attachTraceIds: epm.attachTraceIds,
+    patchEpisodeMeta: epm.patchMeta,
 
     getEpisode: epm.get,
     listEpisodes: epm.listForSession,

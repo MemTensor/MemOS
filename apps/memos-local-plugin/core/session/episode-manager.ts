@@ -297,12 +297,28 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
       }
       snap.status = "open";
       snap.endedAt = null;
+      const previousReward = snap.rTask != null
+        ? {
+            previousRTask: snap.rTask,
+            previousScoredAt: rewardScoredAt(snap.meta),
+          }
+        : {};
       snap.meta = {
         ...snap.meta,
         closeReason: undefined,
         topicState: "active",
         reopenedAt: now(),
         reopenReason: reason,
+        ...(snap.rTask != null || snap.meta.reward
+          ? {
+              rewardDirty: {
+                reason: "episode_reopened",
+                reopenedFor: reason,
+                at: now(),
+                ...previousReward,
+              },
+            }
+          : {}),
       };
       deps.episodesRepo.reopen(id, snap.meta);
       log.info("episode.reopened", {
@@ -332,6 +348,12 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
       return out;
     },
   };
+}
+
+function rewardScoredAt(meta: Record<string, unknown>): unknown {
+  const reward = meta.reward;
+  if (!reward || typeof reward !== "object") return undefined;
+  return (reward as { scoredAt?: unknown }).scoredAt;
 }
 
 function cloneSnapshot(s: EpisodeSnapshot): EpisodeSnapshot {

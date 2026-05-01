@@ -61,6 +61,10 @@ function asRecord(p: unknown, method: RpcMethodName): Record<string, unknown> {
   return p as Record<string, unknown>;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function requireString(
   obj: Record<string, unknown>,
   key: string,
@@ -114,7 +118,8 @@ export function makeDispatcher(
           typeof p.sessionId === "string" && p.sessionId.length > 0
             ? (p.sessionId as SessionId)
             : undefined;
-        const out = await core.openSession({ agent, sessionId });
+        const meta = isRecord(p.meta) ? p.meta : undefined;
+        const out = await core.openSession({ agent, sessionId, meta });
         return { sessionId: out };
       }
       case RPC_METHODS.SESSION_CLOSE: {

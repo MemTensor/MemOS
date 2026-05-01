@@ -27,7 +27,7 @@ import type {
   EpisodeTurn,
 } from "../../../core/session/types.js";
 import { retrievalFor } from "../../../core/session/heuristics.js";
-import type { EpochMs, EpisodeId, SessionId } from "../../../core/types.js";
+import type { EpochMs, EpisodeId, SessionId, TraceId, TraceRow } from "../../../core/types.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 import { fakeLlm } from "../../helpers/fake-llm.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
@@ -131,6 +131,37 @@ function episodeSnapshot(opts: {
   };
 }
 
+function traceRow(opts: {
+  id: string;
+  ts: number;
+  userText?: string;
+  agentText?: string;
+  toolCalls?: TraceRow["toolCalls"];
+}): TraceRow {
+  return {
+    id: opts.id as TraceId,
+    episodeId: "ep_1" as EpisodeId,
+    sessionId: "se_1" as SessionId,
+    ts: opts.ts as EpochMs,
+    userText: opts.userText ?? "",
+    agentText: opts.agentText ?? "",
+    summary: null,
+    toolCalls: opts.toolCalls ?? [],
+    reflection: null,
+    agentThinking: null,
+    value: 0,
+    alpha: 0,
+    rHuman: null,
+    priority: 0.5,
+    tags: [],
+    errorSignatures: [],
+    vecSummary: null,
+    vecAction: null,
+    turnId: 1_000 as EpochMs,
+    schemaVersion: 1,
+  };
+}
+
 describe("capture/pipeline (end-to-end)", () => {
   beforeAll(() => initTestLogger());
 
@@ -209,6 +240,117 @@ describe("capture/pipeline (end-to-end)", () => {
     expect(persisted!.priority).toBe(0.5);
     expect(persisted!.vecSummary).toBeInstanceOf(Float32Array);
     expect(persisted!.vecAction).toBeInstanceOf(Float32Array);
+  });
+
+  it("preserves existing episode trace order when tools have no reliable startedAt", async () => {
+    const runner = buildRunner({ alphaScoring: false });
+    const rows: TraceRow[] = [
+      traceRow({
+        id: "tr_web",
+        ts: 3_000,
+        userText: "look up current sales",
+        toolCalls: [{ name: "web_search", input: undefined, output: "[web_search]" }],
+      }),
+      traceRow({
+        id: "tr_terminal",
+        ts: 1_100,
+        toolCalls: [{
+          name: "terminal",
+          input: undefined,
+          output: JSON.stringify({ output: "ok" }),
+          startedAt: 1_050,
+          endedAt: 1_100,
+        }],
+      }),
+      traceRow({ id: "tr_final", ts: 4_000, agentText: "final answer" }),
+    ];
+    for (const row of rows) tmp.repos.traces.insert(row);
+    episodesRepo.updateTraceIds("ep_1" as EpisodeId, rows.map((row) => row.id));
+
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "look up current sales", 1_000),
+        turn("tool", "[web_search]", 3_000, { tool: "web_search" }),
+        turn("tool", JSON.stringify({ output: "ok" }), 1_100, {
+          tool: "terminal",
+          startedAt: 1_050,
+          endedAt: 1_100,
+        }),
+        turn("assistant", "final answer", 4_000),
+        turn("user", "thanks", 5_000),
+        turn("assistant", "you are welcome", 5_100),
+      ],
+    });
+    ep.traceIds = rows.map((row) => row.id);
+
+    const lite = await runner.runLite({ episode: ep });
+
+    expect(lite.traceIds).toHaveLength(1);
+    const episode = tmp.repos.episodes.getById("ep_1" as EpisodeId)!;
+    expect(episode.traceIds).toEqual([...rows.map((row) => row.id), lite.traceIds[0]]);
+  });
+
+  it("places newly inserted older conversation steps before the final assistant trace", async () => {
+    const runner = buildRunner({ alphaScoring: false });
+    const finalTrace = traceRow({ id: "tr_final", ts: 2_000, agentText: "final answer" });
+    tmp.repos.traces.insert(finalTrace);
+    episodesRepo.updateTraceIds("ep_1" as EpisodeId, [finalTrace.id]);
+
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "look up current sales", 1_000),
+        turn("tool", JSON.stringify({ success: true }), 1_100, {
+          tool: "browser_navigate",
+          input: { url: "https://example.com" },
+          output: { success: true },
+          startedAt: 1_050,
+          endedAt: 1_100,
+        }),
+        turn("assistant", "final answer", 2_000),
+      ],
+    });
+    ep.traceIds = [finalTrace.id];
+
+    const lite = await runner.runLite({ episode: ep });
+
+    expect(lite.traceIds).toHaveLength(1);
+    expect(tmp.repos.episodes.getById("ep_1" as EpisodeId)!.traceIds).toEqual([
+      lite.traceIds[0],
+      finalTrace.id,
+    ]);
+  });
+
+  it("skips duplicate tool rows with the same action signature during capture persist", async () => {
+    const runner = buildRunner({ alphaScoring: false });
+    const toolMeta = {
+      tool: "browser_navigate",
+      input: { url: "https://example.com" },
+      output: { success: true },
+      startedAt: 1_050,
+      endedAt: 1_100,
+    };
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "look up current sales", 1_000),
+        turn("tool", JSON.stringify({ success: true }), 1_100, toolMeta),
+        turn("tool", JSON.stringify({ success: true }), 1_200, toolMeta),
+        turn("assistant", "final answer", 2_000),
+      ],
+    });
+
+    const lite = await runner.runLite({ episode: ep });
+    const rows = tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId });
+
+    expect(lite.traceIds).toHaveLength(2);
+    expect(rows.filter((row) => row.toolCalls[0]?.name === "browser_navigate")).toHaveLength(1);
+    expect(rows.filter((row) => row.agentText === "final answer")).toHaveLength(1);
+    expect(tmp.repos.episodes.getById("ep_1" as EpisodeId)!.traceIds).toEqual(lite.traceIds);
   });
 
   it("passes through adapter-provided reflection and stores α from LLM", async () => {
