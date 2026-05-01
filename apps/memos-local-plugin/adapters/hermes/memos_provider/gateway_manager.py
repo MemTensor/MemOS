@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from daemon_manager import ensure_bridge_running, shutdown_bridge
+from adapters.hermes.memos_provider.daemon_manager import ensure_bridge_running, shutdown_bridge
 
 logger = logging.getLogger(__name__)
 
