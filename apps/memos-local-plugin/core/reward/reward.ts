@@ -242,6 +242,8 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
 
     try {
       deps.episodesRepo.updateMeta(input.episodeId, {
+        closeReason: "finalized",
+        abandonReason: undefined,
         reward: {
           rHuman: humanScore.rHuman,
           source: humanScore.source,

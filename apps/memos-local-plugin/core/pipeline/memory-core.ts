@@ -284,19 +284,36 @@ export function createMemoryCore(
       for (const ep of openEpisodes) {
         const epAge = nowMs - (ep.endedAt ?? ep.startedAt);
         if (epAge > STALE_EPISODE_TIMEOUT_MS) {
-          log.info("stale_episode.auto_abandon", {
-            episodeId: ep.id,
-            sessionId: ep.sessionId,
-            ageMs: epAge,
-            thresholdMs: STALE_EPISODE_TIMEOUT_MS,
-          });
-          try {
-            handle.episodeManager.abandon(
-              ep.id as import("../../agent-contract/dto.js").EpisodeId,
-              `自动关闭：空闲 ${Math.round(epAge / 60_000)} 分钟（阈值 ${Math.round(STALE_EPISODE_TIMEOUT_MS / 60_000)} 分钟）`,
-            );
-          } catch {
-            // Episode may have been finalized concurrently — safe to ignore.
+          const idleReason = `自动关闭：空闲 ${Math.round(epAge / 60_000)} 分钟（阈值 ${Math.round(STALE_EPISODE_TIMEOUT_MS / 60_000)} 分钟）`;
+          if (ep.traceIds && ep.traceIds.length > 0) {
+            log.info("stale_episode.auto_finalize", {
+              episodeId: ep.id,
+              sessionId: ep.sessionId,
+              ageMs: epAge,
+              thresholdMs: STALE_EPISODE_TIMEOUT_MS,
+              traceCount: ep.traceIds.length,
+              reason: idleReason,
+            });
+            try {
+              handle.sessionManager.finalizeEpisode(ep.id);
+            } catch {
+              // Episode may have been finalized concurrently — safe to ignore.
+            }
+          } else {
+            log.info("stale_episode.auto_abandon", {
+              episodeId: ep.id,
+              sessionId: ep.sessionId,
+              ageMs: epAge,
+              thresholdMs: STALE_EPISODE_TIMEOUT_MS,
+            });
+            try {
+              handle.episodeManager.abandon(
+                ep.id as import("../../agent-contract/dto.js").EpisodeId,
+                idleReason,
+              );
+            } catch {
+              // Episode may have been finalized concurrently — safe to ignore.
+            }
           }
         }
       }
