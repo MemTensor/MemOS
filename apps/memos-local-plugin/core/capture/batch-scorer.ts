@@ -119,6 +119,7 @@ export async function batchScoreReflections(
   const fieldChars = { ...DEFAULT_FIELD_CHARS, ...(opts.perFieldChars ?? {}) };
 
   const payload = {
+    host_context: batchHostContext(inputs, llm),
     steps: inputs.map((input, i) => ({
       idx: i,
       state: clip(input.step.userText, fieldChars.state),
@@ -221,6 +222,26 @@ export async function batchScoreReflections(
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
+
+function batchHostContext(
+  inputs: ReadonlyArray<BatchScoreInput>,
+  llm: LlmClient,
+): Record<string, string> | undefined {
+  const hints = inputs
+    .map((input) => input.step.meta.contextHints)
+    .find((value): value is Record<string, unknown> =>
+      typeof value === "object" && value !== null && !Array.isArray(value),
+    );
+  const out: Record<string, string> = {
+    reflectionProvider: llm.provider,
+    reflectionModel: llm.model,
+  };
+  for (const key of ["agentIdentity", "hostProvider", "hostModel", "hostApiMode", "hostBaseUrl"]) {
+    const value = hints?.[key];
+    if (typeof value === "string" && value.trim()) out[key] = value.trim();
+  }
+  return out;
+}
 
 function disabledScoreFor(input: BatchScoreInput): ReflectionScore {
   const text = (input.existingReflection ?? "").trim();

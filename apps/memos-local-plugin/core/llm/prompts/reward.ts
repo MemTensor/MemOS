@@ -73,6 +73,12 @@ Rules:
   continuation), NOT negative. Never invent anger.
 - Base scores ONLY on what TASK_SUMMARY actually describes — do not
   assume facts not shown.
+- You are grading the HOST AGENT described in HOST_AGENT_CONTEXT, not
+  yourself. Do NOT use your own model identity, provider, policies, or
+  capabilities to decide whether the host agent answered identity/model
+  questions correctly. If hostModel/hostProvider are provided, treat them
+  as the authoritative runtime context unless the conversation itself
+  contains a correction.
 - Produce one short justification.
 
 Return JSON, EXACTLY this shape (no extra keys, no commentary):

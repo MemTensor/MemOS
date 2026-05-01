@@ -218,6 +218,12 @@ export function buildPipelineSubscribers(
     llm: deps.llm,
     bus: buses.reward,
     cfg: algorithm.reward,
+    evaluator: {
+      reflectionProvider: deps.reflectLlm?.provider,
+      reflectionModel: deps.reflectLlm?.model,
+      scorerProvider: deps.llm?.provider,
+      scorerModel: deps.llm?.model,
+    },
     now: deps.now,
     // Wire the live episode snapshot so the R_human scorer sees the
     // real user / assistant turns of the episode. Without this, the

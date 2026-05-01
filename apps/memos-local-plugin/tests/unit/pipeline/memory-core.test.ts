@@ -16,6 +16,7 @@ import {
   type PipelineHandle,
 } from "../../../core/pipeline/index.js";
 import type { MemoryCore } from "../../../agent-contract/memory-core.js";
+import type { TraceDTO } from "../../../agent-contract/dto.js";
 import { rootLogger } from "../../../core/logger/index.js";
 import { DEFAULT_CONFIG } from "../../../core/config/defaults.js";
 import { resolveHome } from "../../../core/config/paths.js";
@@ -41,6 +42,15 @@ function buildDeps(h: TmpDbHandle): PipelineDeps {
     log: rootLogger.child({ channel: "test.memory-core" }),
     now: () => 1_700_000_000_000,
   };
+}
+
+function traceKind(trace: TraceDTO): string {
+  return trace.toolCalls[0]?.name ??
+    (trace.agentText.includes("Subagent task:")
+      ? "subagent_task_text"
+      : trace.agentText.includes("Subagent result:")
+      ? "subagent_result_text"
+      : "assistant");
 }
 
 beforeEach(() => {
@@ -133,11 +143,12 @@ describe("MemoryCore façade", () => {
       userText: "delegate package script inspection",
       ts: 1_700_000_000_000,
     });
+    const episodeId = turn.query.episodeId!;
 
     await core.recordSubagentOutcome({
       agent: "hermes",
       sessionId: "s-parent",
-      episodeId: turn.episodeId,
+      episodeId,
       childSessionId: "s-child",
       task: "check package.json scripts",
       result: "found build and test scripts",
@@ -154,7 +165,7 @@ describe("MemoryCore façade", () => {
       ts: 1_700_000_000_001,
     });
 
-    const timeline = await core.timeline({ episodeId: turn.episodeId });
+    const timeline = await core.timeline({ episodeId });
     const subagentTrace = timeline.find((trace) =>
       trace.agentText.includes("Subagent task:"),
     );
@@ -189,6 +200,190 @@ describe("MemoryCore façade", () => {
     expect(childTimeline.some((trace) =>
       trace.toolCalls.some((call) => call.name === "read_file")
     )).toBe(true);
+  });
+
+  it("anchors subagent records after the matching delegate_task tool call id", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    const turn = await core.onTurnStart({
+      agent: "hermes",
+      sessionId: "s-parent",
+      userText: "delegate weather lookup",
+      ts: 1_700_000_000_000,
+    });
+    const episodeId = turn.query.episodeId!;
+    const delegateGoal = "check Hangzhou weather";
+    await core.onTurnEnd({
+      agent: "hermes",
+      sessionId: "s-parent",
+      episodeId,
+      agentText: "I will use the delegated result.",
+      toolCalls: [
+        {
+          name: "delegate_task",
+          toolCallId: "call_delegate_1",
+          input: { goal: delegateGoal, context: "weather" },
+          output: { results: [{ task_index: 0, summary: "sunny" }] },
+          startedAt: 1_700_000_000_100,
+          endedAt: 1_700_000_000_200,
+        },
+      ],
+      ts: 1_700_000_000_300,
+    });
+
+    await core.recordSubagentOutcome({
+      agent: "hermes",
+      sessionId: "s-parent",
+      episodeId,
+      childSessionId: "s-child",
+      task: delegateGoal,
+      result: "sunny",
+      outcome: "ok",
+      ts: 1_700_000_000_050,
+      meta: { hookKwargs: { tool_call_id: "call_delegate_1" } },
+    });
+
+    const timeline = await core.timeline({ episodeId });
+    const order = timeline.map((trace) =>
+      trace.toolCalls[0]?.name ??
+        (trace.agentText.includes("Subagent task:")
+          ? "subagent_task_text"
+          : trace.agentText.includes("Subagent result:")
+          ? "subagent_result_text"
+          : "assistant"),
+    );
+    expect(order).toEqual([
+      "delegate_task",
+      "subagent",
+      "subagent_task_text",
+      "assistant",
+    ]);
+  });
+
+  it("anchors subagent records by a unique matching delegate goal when tool call id is absent", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    const turn = await core.onTurnStart({
+      agent: "hermes",
+      sessionId: "s-parent",
+      userText: "delegate Canada weather",
+      ts: 1_700_000_000_000,
+    });
+    const episodeId = turn.query.episodeId!;
+    const delegateGoal = "check Canada weather";
+
+    await core.recordSubagentOutcome({
+      agent: "hermes",
+      sessionId: "s-parent",
+      episodeId,
+      childSessionId: "s-child",
+      task: delegateGoal,
+      result: "Toronto sunny",
+      outcome: "ok",
+      ts: 1_700_000_000_050,
+      meta: { hookKwargs: {} },
+    });
+    await core.onTurnEnd({
+      agent: "hermes",
+      sessionId: "s-parent",
+      episodeId,
+      agentText: "Here is the delegated result.",
+      toolCalls: [
+        {
+          name: "delegate_task",
+          toolCallId: "call_delegate_late",
+          input: { goal: delegateGoal, context: "weather" },
+          output: "Toronto sunny",
+          startedAt: 1_700_000_000_100,
+          endedAt: 1_700_000_000_200,
+        },
+      ],
+      ts: 1_700_000_000_300,
+    });
+
+    const timeline = await core.timeline({ episodeId });
+    expect(timeline.map(traceKind)).toEqual([
+      "delegate_task",
+      "subagent",
+      "subagent_task_text",
+      "assistant",
+    ]);
+    const delegateTrace = timeline.find((trace) => trace.toolCalls[0]?.name === "delegate_task")!;
+    const subagentTrace = timeline.find((trace) => trace.toolCalls[0]?.name === "subagent")!;
+    expect(delegateTrace.userText).toBe("delegate Canada weather");
+    expect(subagentTrace.userText).toBe("");
+  });
+
+  it("does not anchor by goal when multiple delegate_task traces share the same goal", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    const turn = await core.onTurnStart({
+      agent: "hermes",
+      sessionId: "s-parent",
+      userText: "delegate duplicate weather tasks",
+      ts: 1_700_000_000_000,
+    });
+    const episodeId = turn.query.episodeId!;
+    const delegateGoal = "check Canada weather";
+
+    await core.recordSubagentOutcome({
+      agent: "hermes",
+      sessionId: "s-parent",
+      episodeId,
+      childSessionId: "s-child",
+      task: delegateGoal,
+      result: "Toronto sunny",
+      outcome: "ok",
+      ts: 1_700_000_000_050,
+      meta: { hookKwargs: {} },
+    });
+    await core.onTurnEnd({
+      agent: "hermes",
+      sessionId: "s-parent",
+      episodeId,
+      agentText: "Here is the delegated result.",
+      toolCalls: [
+        {
+          name: "delegate_task",
+          toolCallId: "call_delegate_1",
+          input: { goal: delegateGoal, city: "Toronto" },
+          output: "Toronto sunny",
+          startedAt: 1_700_000_000_100,
+          endedAt: 1_700_000_000_200,
+        },
+        {
+          name: "delegate_task",
+          toolCallId: "call_delegate_2",
+          input: { goal: delegateGoal, city: "Vancouver" },
+          output: "Vancouver rainy",
+          startedAt: 1_700_000_000_210,
+          endedAt: 1_700_000_000_250,
+        },
+      ],
+      ts: 1_700_000_000_300,
+    });
+
+    const timeline = await core.timeline({ episodeId });
+    expect(timeline.map(traceKind).slice(0, 3)).toEqual([
+      "subagent",
+      "subagent_task_text",
+      "delegate_task",
+    ]);
   });
 
   it("submitFeedback persists and returns a DTO", async () => {
@@ -553,5 +748,188 @@ describe("bootstrapMemoryCore", () => {
     expect(row?.status).toBe("open");
     expect(row?.topicState === "active" || row?.topicState === "interrupted").toBe(true);
     expect(row?.preview).toContain("Hermes viewer");
+  });
+
+  it("rescoring closed episodes when traces were appended after the last reward", async () => {
+    home = await makeTmpHome({ agent: "openclaw" });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-rescore-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 1_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_dirty", "openclaw", ts, ts, "{}");
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_dirty",
+        "se_dirty",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_dirty"]),
+        0.7,
+        JSON.stringify({
+          closeReason: "finalized",
+          reward: { rHuman: 0.7, scoredAt: ts - 500 },
+        }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_dirty",
+        "ep_dirty",
+        "se_dirty",
+        ts,
+        "请继续解释这个数据集的建模任务和目标变量，说明为什么它是回归问题。",
+        "这是一个房价预测回归任务，目标变量 SalePrice 是连续数值，需要根据房屋特征预测价格。",
+        "房价预测回归任务说明",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-rescore-recover",
+    });
+    await core.init();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_dirty") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    expect(episode!.r_task).toBe(0);
+    const meta = JSON.parse(episode!.meta_json) as {
+      rewardDirty?: unknown;
+      recoveryReason?: string;
+      reward?: { traceCount?: number; traceIds?: string[] };
+    };
+    expect(meta.rewardDirty).toBeUndefined();
+    expect(meta.recoveryReason).toBe("dirty_reward_rescore");
+    expect(meta.reward?.traceCount).toBe(1);
+    expect(meta.reward?.traceIds).toEqual(["tr_dirty"]);
+  });
+
+  it("rescoring finalized closed episodes that have traces but no reward metadata", async () => {
+    home = await makeTmpHome({ agent: "openclaw" });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "missing-reward-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 1_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_missing_reward", "openclaw", ts, ts, "{}");
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_missing_reward",
+        "se_missing_reward",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_missing_reward"]),
+        null,
+        JSON.stringify({ closeReason: "finalized", recoveryReason: "missed_session_end" }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_missing_reward",
+        "ep_missing_reward",
+        "se_missing_reward",
+        ts,
+        "上海骨科医院推荐",
+        "上海六院、长征医院、华山医院等骨科较强，可按创伤、脊柱、手外科方向选择。",
+        "上海骨科医院推荐",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "missing-reward-recover",
+    });
+    await core.init();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_missing_reward") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    expect(episode!.r_task).toBe(0);
+    const meta = JSON.parse(episode!.meta_json) as {
+      recoveryReason?: string;
+      reward?: { traceCount?: number; traceIds?: string[] };
+    };
+    expect(meta.recoveryReason).toBe("dirty_reward_rescore");
+    expect(meta.reward?.traceCount).toBe(1);
+    expect(meta.reward?.traceIds).toEqual(["tr_missing_reward"]);
   });
 });

@@ -124,7 +124,11 @@ export interface MemoryCore {
   health(): Promise<CoreHealth>;
 
   // ── session / episode ──
-  openSession(input: { agent: AgentKind; sessionId?: SessionId }): Promise<SessionId>;
+  openSession(input: {
+    agent: AgentKind;
+    sessionId?: SessionId;
+    meta?: Record<string, unknown>;
+  }): Promise<SessionId>;
   closeSession(sessionId: SessionId): Promise<void>;
   openEpisode(input: {
     sessionId: SessionId;

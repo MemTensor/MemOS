@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { REWARD_R_HUMAN_PROMPT } from "../../../core/llm/prompts/reward.js";
 import { buildTaskSummary } from "../../../core/reward/task-summary.js";
 import type { EpisodeSnapshot } from "../../../core/session/types.js";
 import type { EpochMs, TraceRow } from "../../../core/types.js";
@@ -57,6 +58,12 @@ function makeTrace(i: number, opts: Partial<TraceRow> & { tool?: string; text?: 
 }
 
 describe("reward/task-summary", () => {
+  it("tells the scorer not to project its own identity onto the host agent", () => {
+    expect(REWARD_R_HUMAN_PROMPT.system).toContain("grading the HOST AGENT");
+    expect(REWARD_R_HUMAN_PROMPT.system).toContain("Do NOT use your own model identity");
+    expect(REWARD_R_HUMAN_PROMPT.system).toContain("hostModel/hostProvider");
+  });
+
   it("builds a multi-turn exchange summary with user asks, steps, and final exchange", () => {
     const ep = makeEpisode();
     const traces = [makeTrace(1, { tool: "fetch" }), makeTrace(2, { text: "parsed JSON" })];
@@ -121,5 +128,47 @@ describe("reward/task-summary", () => {
     const sum = buildTaskSummary({ episode: ep, traces, cfg: { summaryMaxChars: 1000 } });
     expect(sum.agentActions).toMatch(/web\.search/);
     expect(sum.agentActions).not.toMatch(/this text should NOT appear/);
+  });
+
+  it("includes host and evaluator model context for identity-sensitive scoring", () => {
+    const ep = makeEpisode({
+      meta: {
+        agent: "hermes",
+        contextHints: {
+          agentIdentity: "hermes",
+          hostProvider: "custom",
+          hostModel: "deepseek-v4-flash",
+        },
+      },
+      turns: [
+        { id: "u1", ts: 1 as EpochMs, role: "user", content: "现在是什么模型" },
+        {
+          id: "a1",
+          ts: 2 as EpochMs,
+          role: "assistant",
+          content: "当前模型是 deepseek-v4-flash",
+        },
+      ],
+    });
+
+    const sum = buildTaskSummary({
+      episode: ep,
+      traces: [],
+      cfg: { summaryMaxChars: 1000 },
+      evaluator: {
+        reflectionProvider: "openai_compatible",
+        reflectionModel: "claude-sonnet-4-6-20260218",
+        scorerProvider: "openai_compatible",
+        scorerModel: "claude-sonnet-4-6-20260218",
+      },
+    });
+
+    expect(sum.text).toMatch(/HOST_AGENT_CONTEXT:/);
+    expect(sum.text).toContain("agent: hermes");
+    expect(sum.text).toContain("hostProvider: custom");
+    expect(sum.text).toContain("hostModel: deepseek-v4-flash");
+    expect(sum.text).toContain("reflectionModel: claude-sonnet-4-6-20260218");
+    expect(sum.text).toContain("scorerModel: claude-sonnet-4-6-20260218");
+    expect(sum.text).toContain("do not project the evaluator model's own identity");
   });
 });

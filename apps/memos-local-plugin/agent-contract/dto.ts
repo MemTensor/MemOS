@@ -38,6 +38,8 @@ export interface ToolCallDTO {
   input: unknown;
   output?: unknown;
   errorCode?: string;
+  /** Host/model tool call id, when available. Used to correlate tool results. */
+  toolCallId?: string;
   /**
    * Real tool execution timestamps when the host exposes them. Tools
    * reconstructed later from `post_llm_call` history may not have reliable
@@ -96,6 +98,8 @@ export interface TurnResultDTO {
   agentThinking?: string;
   /** Tools called this turn (in order). */
   toolCalls: ToolCallDTO[];
+  /** Optional adapter-provided host/runtime hints for scoring context. */
+  contextHints?: Record<string, unknown>;
   /**
    * Optional MemOS-produced reflection (the plugin's summary of what
    * the model did, used to compute α + backprop V). NEVER displayed
@@ -186,6 +190,16 @@ export interface TraceDTO {
   rHuman?: Reward;
   /** Cached priority used for L2 candidate selection. */
   priority: number;
+  /** Episode-level scoring state, attached for viewer display. */
+  episodeStatus?: "open" | "closed";
+  episodeRTask?: Reward | null;
+  /**
+   * True only when the reward gate explicitly stamped
+   * `meta.reward.skipped=true`. Do not infer this from `rTask=null` because a
+   * freshly-finalized episode can be closed while reward scoring is still
+   * running.
+   */
+  episodeRewardSkipped?: boolean;
   /**
    * Stable group key shared by every L1 trace produced from the same
    * user message. Equal to the user turn's `ts` (epoch ms). The

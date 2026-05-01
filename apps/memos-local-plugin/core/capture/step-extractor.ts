@@ -264,6 +264,7 @@ function toolCallFromTurn(turn: EpisodeTurn): ToolCallDTO | null {
   const endedAt = typeof meta.endedAt === "number" ? meta.endedAt : undefined;
   const input = meta.input ?? meta.args ?? undefined;
   const errorCode = typeof meta.errorCode === "string" ? meta.errorCode : undefined;
+  const toolCallId = typeof meta.toolCallId === "string" ? meta.toolCallId : undefined;
   const thinkingBefore = typeof meta.thinkingBefore === "string" ? meta.thinkingBefore : undefined;
   const assistantTextBefore = typeof meta.assistantTextBefore === "string" ? meta.assistantTextBefore : undefined;
   return {
@@ -271,6 +272,7 @@ function toolCallFromTurn(turn: EpisodeTurn): ToolCallDTO | null {
     input,
     output: turn.content,
     errorCode,
+    toolCallId,
     startedAt,
     endedAt,
     thinkingBefore,
@@ -297,11 +299,12 @@ function coerceToolCall(raw: unknown): ToolCallDTO | null {
   const input = r.input ?? r.args ?? undefined;
   const output = r.output ?? r.result ?? undefined;
   const errorCode = typeof r.errorCode === "string" ? r.errorCode : undefined;
+  const toolCallId = typeof r.toolCallId === "string" ? r.toolCallId : undefined;
   const startedAt = typeof r.startedAt === "number" ? r.startedAt : undefined;
   const endedAt = typeof r.endedAt === "number" ? r.endedAt : undefined;
   const thinkingBefore = typeof r.thinkingBefore === "string" ? r.thinkingBefore : undefined;
   const assistantTextBefore = typeof r.assistantTextBefore === "string" ? r.assistantTextBefore : undefined;
-  return { name, input, output, errorCode, startedAt, endedAt, thinkingBefore, assistantTextBefore };
+  return { name, input, output, errorCode, toolCallId, startedAt, endedAt, thinkingBefore, assistantTextBefore };
 }
 
 function depthFromMeta(meta: Record<string, unknown>): number {

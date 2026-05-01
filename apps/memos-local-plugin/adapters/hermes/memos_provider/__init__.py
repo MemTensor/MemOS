@@ -136,6 +136,7 @@ class MemTensorProvider(MemoryProvider):
         self._hermes_home: str = ""
         self._agent_identity: str = "hermes"
         self._platform: str = "cli"
+        self._last_host_runtime: dict[str, str] = {}
         self._turn_number: int = 0
         # Last user turn text — used by `sync_turn` to compose `turn.end`.
         self._last_user_text: str = ""
@@ -313,6 +314,8 @@ class MemTensorProvider(MemoryProvider):
             existing["output"] = (result or "")[:4000]
             existing["_ids"] = sorted(set((existing.get("_ids") or []) + ids))
             existing["_id"] = existing.get("_id") or (ids[0] if ids else "")
+            if existing.get("_id"):
+                existing["toolCallId"] = existing["_id"]
             if timing:
                 existing.update(timing)
             return
@@ -323,6 +326,7 @@ class MemTensorProvider(MemoryProvider):
             "output": (result or "")[:4000],
             "_id": ids[0] if ids else "",
             "_ids": ids,
+            "toolCallId": ids[0] if ids else "",
         }
         if timing:
             call.update(timing)
@@ -478,6 +482,7 @@ class MemTensorProvider(MemoryProvider):
                             "assistantTextBefore": content_str or "",
                             "_id": ids[0] if ids else "",
                             "_ids": ids,
+                            "toolCallId": ids[0] if ids else "",
                         }
                         self._tool_calls.append(existing)
                     else:
@@ -492,6 +497,8 @@ class MemTensorProvider(MemoryProvider):
                         )
                         existing["_ids"] = sorted(set((existing.get("_ids") or []) + ids))
                         existing["_id"] = existing.get("_id") or (ids[0] if ids else "")
+                        if existing.get("_id"):
+                            existing["toolCallId"] = existing["_id"]
 
                     marker = id(existing)
                     if marker not in ordered_object_ids:
@@ -724,7 +731,7 @@ class MemTensorProvider(MemoryProvider):
         result: str,
         *,
         child_session_id: str = "",
-        **_kwargs: Any,
+        **kwargs: Any,
     ) -> None:  # type: ignore[override]
         """Record a subagent outcome.
 
@@ -738,6 +745,9 @@ class MemTensorProvider(MemoryProvider):
         try:
             if not self._episode_id and self._last_user_text:
                 self._turn_start(self._last_user_text, session_id=self._session_id)
+            hook_meta = {
+                "hookKwargs": kwargs,
+            }
             self._bridge.request(
                 "subagent.record",
                 {
@@ -748,6 +758,7 @@ class MemTensorProvider(MemoryProvider):
                     "result": result,
                     "toolCalls": self._extract_child_tool_calls(child_session_id),
                     "ts": int(time.time() * 1000),
+                    "meta": hook_meta,
                 },
             )
         except Exception as err:
@@ -1369,9 +1380,36 @@ class MemTensorProvider(MemoryProvider):
 
     # ─── Internals ────────────────────────────────────────────────────────
 
+    def _host_runtime_context(self) -> dict[str, str]:
+        """Best-effort snapshot of Hermes' main conversation runtime."""
+        try:
+            from hermes_cli.runtime_provider import (  # type: ignore[import-not-found]
+                resolve_runtime_provider,
+            )
+
+            runtime = resolve_runtime_provider()
+        except Exception:
+            return dict(self._last_host_runtime)
+
+        out: dict[str, str] = {}
+        if isinstance(runtime, dict):
+            for source, target in (
+                ("provider", "hostProvider"),
+                ("model", "hostModel"),
+                ("api_mode", "hostApiMode"),
+                ("base_url", "hostBaseUrl"),
+            ):
+                value = runtime.get(source)
+                if isinstance(value, str) and value.strip():
+                    out[target] = value.strip()
+        if out:
+            self._last_host_runtime = dict(out)
+        return out
+
     def _open_session(self, session_id: str = "", *, timeout: float = 30.0) -> None:
         assert self._bridge is not None
         requested_session = session_id or self._session_id or ""
+        host_runtime = self._host_runtime_context()
         resp = self._bridge.request(
             "session.open",
             {
@@ -1381,6 +1419,7 @@ class MemTensorProvider(MemoryProvider):
                     "hermesHome": self._hermes_home,
                     "platform": self._platform,
                     "agentIdentity": self._agent_identity,
+                    **host_runtime,
                 },
             },
             timeout=timeout,
@@ -1451,12 +1490,17 @@ class MemTensorProvider(MemoryProvider):
 
     def _turn_start(self, query: str, *, session_id: str = "") -> str:
         assert self._bridge is not None
+        host_runtime = self._host_runtime_context()
         resp = self._bridge.request(
             "turn.start",
             {
                 "agent": "hermes",
                 "sessionId": session_id or self._session_id,
                 "userText": query,
+                "contextHints": {
+                    "agentIdentity": self._agent_identity,
+                    **host_runtime,
+                },
                 "ts": int(time.time() * 1000),
             },
         )
@@ -1495,6 +1539,10 @@ class MemTensorProvider(MemoryProvider):
             "agentText": assistant_content,
             "userText": user_content,
             "toolCalls": clean_tool_calls,
+            "contextHints": {
+                "agentIdentity": self._agent_identity,
+                **self._host_runtime_context(),
+            },
             "ts": ts_ms,
         }
         if agent_thinking:

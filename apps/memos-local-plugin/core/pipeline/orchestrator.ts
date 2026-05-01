@@ -222,14 +222,21 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
   // ─── session/episode helpers ────────────────────────────────────────────
 
-  async function ensureSession(agent: AgentKind, sessionId?: SessionId): Promise<SessionId> {
+  async function ensureSession(
+    agent: AgentKind,
+    sessionId?: SessionId,
+    meta?: Record<string, unknown>,
+  ): Promise<SessionId> {
     if (sessionId && session.sessionManager.getSession(sessionId)) {
+      if (meta && Object.keys(meta).length > 0) {
+        session.sessionManager.openSession({ id: sessionId, agent, meta });
+      }
       return sessionId;
     }
     const snap = session.sessionManager.openSession({
       id: sessionId,
       agent,
-      meta: {},
+      meta: meta ?? {},
     });
     return snap.id as SessionId;
   }
@@ -835,7 +842,11 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
   async function onTurnStart(input: TurnInputDTO): Promise<InjectionPacket> {
     const t0 = now();
-    const initialSessionId = await ensureSession(input.agent, input.sessionId);
+    const initialSessionId = await ensureSession(
+      input.agent,
+      input.sessionId,
+      input.contextHints,
+    );
 
     const routing = await openEpisodeIfNeeded(
       initialSessionId,
@@ -894,7 +905,11 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   }
 
   async function onTurnEnd(result: TurnResultDTO): Promise<TurnEndResult> {
-    const sessionId = await ensureSession(result.agent, result.sessionId);
+    const sessionId = await ensureSession(
+      result.agent,
+      result.sessionId,
+      result.contextHints,
+    );
     const episodeId = openEpisodeBySession.get(sessionId) ?? result.episodeId;
     if (!episodeId) {
       throw new Error(
@@ -906,6 +921,14 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       throw new Error(
         "pipeline.onTurnEnd: episode " + episodeId + " is not open",
       );
+    }
+    if (result.contextHints && Object.keys(result.contextHints).length > 0) {
+      session.sessionManager.patchEpisodeMeta(episodeId, {
+        contextHints: {
+          ...((episode.meta.contextHints as Record<string, unknown> | undefined) ?? {}),
+          ...result.contextHints,
+        },
+      });
     }
 
     // V7 §0.1: record tool-call turns BEFORE the assistant turn so the
@@ -929,6 +952,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           name: tc.name,
           input: tc.input,
           errorCode: tc.errorCode,
+          toolCallId: tc.toolCallId,
           startedAt: tc.startedAt,
           endedAt: tc.endedAt,
           // V7 §0.1: preserve the model's "Thought for X" narration that
@@ -955,6 +979,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         //     reflection field on the trace row.
         agentThinking: result.agentThinking ?? null,
         reflection: result.reflection ?? null,
+        contextHints: result.contextHints ?? {},
         ts: result.ts,
       },
     });
