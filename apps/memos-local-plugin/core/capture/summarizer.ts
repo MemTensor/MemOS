@@ -32,7 +32,12 @@ export interface SummarizerOptions {
 }
 
 export interface Summarizer {
-  summarize(step: NormalizedStep): Promise<string>;
+  summarize(step: NormalizedStep, context?: SummarizerContext): Promise<string>;
+}
+
+export interface SummarizerContext {
+  episodeId?: string;
+  phase?: string;
 }
 
 /**
@@ -44,7 +49,7 @@ export function createSummarizer(opts: SummarizerOptions): Summarizer {
   const log = opts.log ?? rootLogger.child({ channel: "core.capture.summarizer" });
   const timeoutMs = opts.timeoutMs ?? 8_000;
 
-  async function summarize(step: NormalizedStep): Promise<string> {
+  async function summarize(step: NormalizedStep, context?: SummarizerContext): Promise<string> {
     // Heuristic first pass — a safety net both when the LLM is off
     // and as the input we re-anchor the LLM call against (so even if
     // the LLM returns garbage we still have a sensible string).
@@ -63,6 +68,8 @@ export function createSummarizer(opts: SummarizerOptions): Summarizer {
           ],
           {
             op: "capture.summarize",
+            episodeId: context?.episodeId,
+            phase: context?.phase,
             schemaHint: '{"summary":"..."}',
             validate: (v) => {
               const s = (v as { summary?: unknown }).summary;

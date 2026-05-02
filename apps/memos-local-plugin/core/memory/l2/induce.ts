@@ -96,6 +96,7 @@ export async function induceDraft(
       ],
       {
         op: `l2.${L2_INDUCTION_PROMPT.id}.v${L2_INDUCTION_PROMPT.version}`,
+        phase: "l2",
         temperature: 0.1,
         malformedRetries: 1,
         schemaHint: `{"title":"...","trigger":"...","procedure":"...","verification":"...","rationale":"...","caveats":["..."],"confidence":0..1,"support_trace_ids":["tr_..."]}`,

@@ -152,6 +152,7 @@ export function createLlmClientWithProvider(
     op: string,
   ): Promise<{ completion: LlmCompletion }> {
     requests++;
+    const startedAt = Date.now();
     try {
       const raw = await provider.complete(messages, input, makeCtx(opts, asProviderLog(providerLog)));
       const completion: LlmCompletion = {
@@ -170,6 +171,10 @@ export function createLlmClientWithProvider(
         provider: provider.name,
         model: config.model,
         at: okAt,
+        durationMs: completion.durationMs,
+        op,
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
       });
       return { completion };
     } catch (err) {
@@ -206,7 +211,11 @@ export function createLlmClientWithProvider(
             message: summarizeErrMessage(err),
             code: err instanceof MemosError ? err.code : undefined,
             at: fallbackAt,
+            durationMs: completion.durationMs,
             fallbackProvider: "host",
+            op,
+            episodeId: opts?.episodeId,
+            phase: opts?.phase,
           });
           return { completion };
         } catch (hostErr) {
@@ -224,7 +233,11 @@ export function createLlmClientWithProvider(
             message: summarizeErrMessage(hostErr),
             code: hostErr instanceof MemosError ? hostErr.code : undefined,
             at: failAt,
+            durationMs: Date.now() - startedAt,
             fallbackProvider: "host",
+            op,
+            episodeId: opts?.episodeId,
+            phase: opts?.phase,
           });
           throw hostErr instanceof MemosError
             ? hostErr
@@ -244,6 +257,10 @@ export function createLlmClientWithProvider(
         message: summarizeErrMessage(err),
         code: err instanceof MemosError ? err.code : undefined,
         at: failAt,
+        durationMs: Date.now() - startedAt,
+        op,
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
       });
       throw err instanceof MemosError
         ? err
@@ -282,8 +299,12 @@ export function createLlmClientWithProvider(
     message?: string;
     code?: string;
     at?: number;
+    durationMs?: number;
     fallbackProvider?: string;
     fallbackModel?: string;
+    op?: string;
+    episodeId?: string;
+    phase?: string;
   }): void {
     if (!config.onStatus) return;
     try {
@@ -432,6 +453,10 @@ export function createLlmClientWithProvider(
         provider: provider.name,
         model: config.model,
         at: okAt,
+        durationMs: Date.now() - start,
+        op: opts?.op ?? "stream",
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
       });
     } catch (err) {
       failures++;
@@ -445,6 +470,10 @@ export function createLlmClientWithProvider(
         message: summarizeErrMessage(err),
         code: err instanceof MemosError ? err.code : undefined,
         at: failAt,
+        durationMs: Date.now() - start,
+        op: opts?.op ?? "stream",
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
       });
       throw err;
     }

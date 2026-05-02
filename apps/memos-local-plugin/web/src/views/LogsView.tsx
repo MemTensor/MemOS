@@ -34,6 +34,7 @@ type ToolFilter =
   | "world_model_evolve"
   | "task_done"
   | "task_failed"
+  | "session_relation_classify"
   | "system_error"
   | "system_model_status";
 
@@ -52,6 +53,7 @@ type LogTag =
   | "skill"
   | "policy"
   | "world"
+  | "session"
   // Infrastructure-layer failures (embedding / summary LLM /
   // skillEvolver provider errors). The bootstrap layer drops a
   // `system_error` row into api_logs every time a model facade
@@ -67,6 +69,7 @@ const LOG_TAGS: Array<{ v: LogTag; k: string }> = [
   { v: "skill", k: "logs.tag.skill" },
   { v: "policy", k: "logs.tag.policy" },
   { v: "world", k: "logs.tag.world" },
+  { v: "session", k: "logs.tag.session" },
   { v: "system", k: "logs.tag.system" },
 ];
 
@@ -84,6 +87,7 @@ const ALLOWED_TOOLS: Record<LogTag, readonly ToolFilter[]> = {
   skill: ["skill_generate", "skill_evolve"],
   policy: ["policy_generate", "policy_evolve"],
   world: ["world_model_generate", "world_model_evolve"],
+  session: ["session_relation_classify"],
   system: ["system_error", "system_model_status"],
 };
 
@@ -325,6 +329,8 @@ function LogCard({
             <SystemErrorDetail output={output} />
           ) : log.toolName === "system_model_status" ? (
             <SystemModelStatusDetail output={output} />
+          ) : log.toolName === "session_relation_classify" ? (
+            <RelationClassifyDetail input={input} output={output} />
           ) : log.toolName.startsWith("skill_") ||
             log.toolName.startsWith("policy_") ||
             log.toolName.startsWith("world_model_") ||
@@ -776,6 +782,100 @@ function LifecycleDetail({
   );
 }
 
+// ─── session_relation_classify template ─────────────────────────────────
+
+interface RelationClassifyInput {
+  sessionId?: string;
+  prevEpisodeId?: string;
+  source?: string;
+  gapMs?: number;
+  mergeMode?: boolean;
+  withinMergeWindow?: boolean;
+  prevUserText?: string;
+  prevAssistantText?: string;
+  newUserText?: string;
+}
+
+interface RelationClassifyOutput {
+  relation?: string;
+  confidence?: number;
+  reason?: string;
+  signals?: string[];
+  llmModel?: string;
+  action?: string;
+}
+
+function RelationClassifyDetail({
+  input,
+  output,
+}: {
+  input: unknown;
+  output: unknown;
+}) {
+  const inp = (input ?? {}) as RelationClassifyInput;
+  const out = (output ?? {}) as RelationClassifyOutput;
+  return (
+    <div class="vstack" style="gap:var(--sp-3)">
+      <section class="card card--flat">
+        <div class="hstack" style="gap:var(--sp-2);margin-bottom:8px;flex-wrap:wrap">
+          {out.relation && <span class="pill pill--active">relation: {out.relation}</span>}
+          {typeof out.confidence === "number" && (
+            <span class="pill pill--info">confidence: {out.confidence.toFixed(2)}</span>
+          )}
+          {out.action && <span class="pill">action: {out.action}</span>}
+          {out.llmModel && <span class="pill">llm: {out.llmModel}</span>}
+        </div>
+        {out.reason && (
+          <div class="mono" style="font-size:var(--fs-sm);line-height:1.5;word-break:break-word">
+            {out.reason}
+          </div>
+        )}
+        {out.signals && out.signals.length > 0 && (
+          <div class="hstack" style="gap:var(--sp-2);margin-top:8px;flex-wrap:wrap">
+            {out.signals.map((signal) => (
+              <span key={signal} class="pill pill--info">{signal}</span>
+            ))}
+          </div>
+        )}
+      </section>
+      <section class="card card--flat">
+        <div class="hstack" style="gap:var(--sp-2);margin-bottom:8px;flex-wrap:wrap">
+          {inp.source && <span class="pill">source: {inp.source}</span>}
+          {inp.prevEpisodeId && <span class="pill">prev: {inp.prevEpisodeId}</span>}
+          {typeof inp.gapMs === "number" && <span class="pill">gapMs: {inp.gapMs}</span>}
+          <span class="pill">mergeMode: {String(inp.mergeMode)}</span>
+          <span class="pill">withinWindow: {String(inp.withinMergeWindow)}</span>
+        </div>
+        <div class="grid grid--2" style="gap:var(--sp-3)">
+          <TextPreview title="prev user" value={inp.prevUserText} />
+          <TextPreview title="new user" value={inp.newUserText} />
+        </div>
+        {inp.prevAssistantText && (
+          <div style="margin-top:var(--sp-3)">
+            <TextPreview title="prev assistant" value={inp.prevAssistantText} />
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function TextPreview({ title, value }: { title: string; value?: string }) {
+  return (
+    <div>
+      <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
+        {title}
+      </div>
+      <pre
+        class="mono"
+        style="white-space:pre-wrap;font-size:var(--fs-xs);margin:0;word-break:break-word"
+      >
+        {value || "(empty)"}
+      </pre>
+    </div>
+  );
+}
+
 // ─── system_error template ──────────────────────────────────────────────
 
 interface SystemErrorPayload {
@@ -791,6 +891,9 @@ interface SystemModelStatusPayload extends SystemErrorPayload {
   status?: "ok" | "fallback" | "error";
   fallbackProvider?: string;
   fallbackModel?: string;
+  op?: string;
+  episodeId?: string;
+  phase?: string;
 }
 
 /**
@@ -858,6 +961,9 @@ function SystemModelStatusDetail({ output }: { output: unknown }) {
         <div class="hstack" style="gap:var(--sp-2);margin-bottom:6px;flex-wrap:wrap">
           <span class={`pill ${tone.pill}`}>{status}</span>
           <span class="pill pill--info">{roleLabel(role)}</span>
+          {out.op && <span class="pill">op: {out.op}</span>}
+          {out.episodeId && <span class="pill">episode: {out.episodeId}</span>}
+          {out.phase && <span class="pill">phase: {out.phase}</span>}
           {out.provider && <span class="pill">provider: {out.provider}</span>}
           {out.model && <span class="pill">model: {out.model}</span>}
           {out.fallbackProvider && (
@@ -1046,6 +1152,18 @@ function buildSummary(log: ApiLogDTO, input: unknown, output: unknown): string {
     if (provider || model) bits.push([provider, model].filter(Boolean).join("/"));
     if (message) bits.push(truncate(message, 60));
     return bits.join(" · ");
+  }
+  if (log.toolName === "session_relation_classify") {
+    const relation = (out.relation as string | undefined) ?? "?";
+    const confidence =
+      typeof out.confidence === "number" ? (out.confidence as number).toFixed(2) : "?";
+    const action = (out.action as string | undefined) ?? "";
+    const reason = (out.reason as string | undefined) ?? "";
+    return [
+      `${relation} (${confidence})`,
+      action,
+      reason ? truncate(reason, 80) : "",
+    ].filter(Boolean).join(" · ");
   }
   if (log.toolName === "task_done" || log.toolName === "task_failed") {
     const rHuman = typeof out.rHuman === "number" ? (out.rHuman as number).toFixed(2) : null;

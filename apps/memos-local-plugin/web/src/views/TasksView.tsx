@@ -45,6 +45,9 @@ interface EpisodeRow {
   topicState?: "active" | "paused" | "interrupted" | "ended" | null;
   pauseReason?: string | null;
   abandonReason?: string | null;
+  rewardSkipped?: boolean;
+  rewardReason?: string | null;
+  hasAssistantReply?: boolean;
 }
 
 interface Timeline {
@@ -445,6 +448,7 @@ function deriveStatus(r: EpisodeRow): "active" | "completed" | "skipped" | "fail
   // they were closed (finalized or abandoned).
   if (r.rTask != null && r.rTask <= R_NEGATIVE_FLOOR) return "failed";
   if (r.rTask != null) return "completed";
+  if (r.rewardSkipped) return "skipped";
   // If the skill pipeline produced a skill for this episode (via L2
   // policy linkage), the task contributed meaningful knowledge — show
   // "completed" even when rTask is null (e.g. plugin crashed after
@@ -464,14 +468,15 @@ function deriveStatus(r: EpisodeRow): "active" | "completed" | "skipped" | "fail
  *      `abandonReason` — e.g. relation classifier closed the old
  *      session via `new_task` and the pipeline is waiting for a
  *      future turn.
- *   3. `turnCount < 2` — the user turn landed but the assistant turn
- *      never arrived. This is almost always a bridge / host issue
- *      (agent crashed, bootstrap filter hit, `/new` routed weirdly),
- *      *not* a "too brief to summarize" problem.
- *   4. `turnCount >= 2` + `rTask == null` — reward pipeline hasn't
- *      scored it yet or the LLM scorer failed silently.
- *   5. `failed` branch — R_task < 0.
- *   6. Generic fallback.
+ *   3. Reward skip reason from the reward pipeline (tool-heavy,
+ *      trivial, too short, etc.) — authoritative when present.
+ *   4. `hasAssistantReply === false` — the user turn landed but the
+ *      assistant turn never arrived. This is almost always a bridge /
+ *      host issue, *not* a "too brief to summarize" problem.
+ *   5. `rTask == null` — reward pipeline hasn't scored it yet or the
+ *      LLM scorer failed silently.
+ *   6. `failed` branch — R_task < 0.
+ *   7. Generic fallback.
  */
 function statusReason(r: EpisodeRow): string | null {
   const s = deriveStatus(r);
@@ -493,7 +498,10 @@ function statusReason(r: EpisodeRow): string | null {
     if (r.closeReason === "abandoned") {
       return t("tasks.skip.reason.abandoned");
     }
-    if ((r.turnCount ?? 0) < 2) {
+    if (r.rewardReason && r.rewardReason.trim().length > 0) {
+      return r.rewardReason;
+    }
+    if (r.hasAssistantReply === false) {
       return t("tasks.skip.reason.noAssistant");
     }
     if (r.rTask == null) {

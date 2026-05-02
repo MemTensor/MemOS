@@ -167,6 +167,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       summarizeStart,
       llmCalls,
       warnings,
+      { episodeId: input.episode.id, phase: "lite" },
     );
 
     // Embed.
@@ -284,6 +285,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         summStart,
         llmCalls,
         warnings,
+        { episodeId: input.episode.id, phase: "reflect" },
       );
       const orphanScored: ScoredStep[] = orphan.map((s) => ({
         ...s,
@@ -314,10 +316,10 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const useBatch = shouldBatch(deps.cfg, normalized.length, rLlm !== null);
     let scored: ScoredStep[] = [];
     if (useBatch) {
-      scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls);
+      scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id);
     }
     if (!useBatch || scored.length === 0) {
-      scored = await runPerStepScoring(normalized, rLlm, deps, warnings, llmCalls);
+      scored = await runPerStepScoring(normalized, rLlm, deps, warnings, llmCalls, input.episode.id);
     }
     const reflectMs = now() - reflectStart;
 
@@ -452,6 +454,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     summarizeStart: number,
     llmCalls: ReturnType<typeof newLlmCounters>,
     warnings: CaptureResult["warnings"],
+    context: { episodeId?: string; phase?: string },
   ): Promise<{ summaries: string[]; summarizeMs: number }> {
     const concurrency = Math.max(1, deps.cfg.llmConcurrency);
     const summaries = await runConcurrently(
@@ -459,7 +462,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       concurrency,
       async (step) => {
         try {
-          const s = await summarizer.summarize(step);
+          const s = await summarizer.summarize(step, context);
           llmCalls.summarize += 1;
           return s;
         } catch (err) {
@@ -845,6 +848,7 @@ async function runBatchScoring(
   deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
   llmCalls: { reflectionSynth: number; alphaScoring: number; batchedReflection: number },
+  episodeId: string,
 ): Promise<ScoredStep[]> {
   const inputs: BatchScoreInput[] = normalized.map((step) => ({
     step,
@@ -854,6 +858,8 @@ async function runBatchScoring(
   try {
     const out = await batchScoreReflections(llm, inputs, {
       synthReflections: deps.cfg.synthReflections,
+      episodeId,
+      phase: "reflect",
     });
     llmCalls.batchedReflection += 1;
     return normalized.map((step, i) => ({
@@ -879,12 +885,13 @@ async function runPerStepScoring(
   deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
   llmCalls: { reflectionSynth: number; alphaScoring: number },
+  episodeId: string,
 ): Promise<ScoredStep[]> {
   const concurrency = Math.max(1, deps.cfg.llmConcurrency);
   return runConcurrently(normalized, concurrency, async (step): Promise<ScoredStep> => {
-    const { score, synthCount } = await resolveReflection(step, llm, deps, warnings);
+    const { score, synthCount } = await resolveReflection(step, llm, deps, warnings, episodeId);
     llmCalls.reflectionSynth += synthCount;
-    const finalScore = await resolveAlpha(step, score, llm, deps, warnings);
+    const finalScore = await resolveAlpha(step, score, llm, deps, warnings, episodeId);
     if (finalScore !== score) llmCalls.alphaScoring += 1;
     return { ...step, reflection: finalScore };
   });
@@ -895,6 +902,7 @@ async function resolveReflection(
   llm: LlmClient | null,
   deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
+  episodeId: string,
 ): Promise<{ score: ReflectionScore; synthCount: number }> {
   const adapterProvided = step.rawReflection !== null && step.rawReflection.trim().length > 0;
   const extracted = extractReflection(step);
@@ -908,7 +916,7 @@ async function resolveReflection(
     return { score: disabledScore(null, "none"), synthCount: 0 };
   }
   try {
-    const synth = await synthesizeReflection(llm, step);
+    const synth = await synthesizeReflection(llm, step, { episodeId, phase: "reflect" });
     if (synth.text) {
       return {
         score: { text: synth.text, alpha: null, usable: true, source: "synth", model: synth.model },
@@ -932,6 +940,7 @@ async function resolveAlpha(
   llm: LlmClient | null,
   deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
+  episodeId: string,
 ): Promise<ReflectionScore> {
   if (!current.text) return current; // nothing to grade
   if (!deps.cfg.alphaScoring || !llm) return current;
@@ -940,6 +949,8 @@ async function resolveAlpha(
     const scored = await scoreReflection(llm, {
       step,
       reflectionText: current.text,
+      episodeId,
+      phase: "reflect",
     });
     return {
       ...current,

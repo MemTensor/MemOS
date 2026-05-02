@@ -73,9 +73,17 @@ export interface LlmStatusDetail {
   message?: string;
   code?: string;
   at?: number;
+  /** Actual model call duration when available. */
+  durationMs?: number;
   fallbackProvider?: string;
   fallbackModel?: string;
   role?: "llm" | "skillEvolver";
+  /** Logical call-site, e.g. `capture.summarize` or `capture.reflection.batch`. */
+  op?: string;
+  /** Optional task context for viewer/audit logs. */
+  episodeId?: string;
+  /** Optional pipeline phase, e.g. `lite`, `reflect`, `reward`, `induce`. */
+  phase?: string;
 }
 
 // ─── Messages ────────────────────────────────────────────────────────────────
@@ -92,6 +100,10 @@ export interface LlmMessage {
 export interface LlmCallOptions {
   /** Which logical call site is this? Used for log tagging (e.g. "reflection.score"). */
   op?: string;
+  /** Optional task context forwarded to model-status audit logs. */
+  episodeId?: string;
+  /** Optional pipeline phase forwarded to model-status audit logs. */
+  phase?: string;
   /** Override per-call temperature. */
   temperature?: number;
   /** Override per-call maxTokens. */

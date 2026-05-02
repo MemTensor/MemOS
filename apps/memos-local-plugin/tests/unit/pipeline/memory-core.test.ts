@@ -263,6 +263,8 @@ describe("MemoryCore façade", () => {
       "subagent_task_text",
       "assistant",
     ]);
+    const rows = await core.listEpisodeRows({ sessionId: "s-parent", limit: 10 });
+    expect(rows.find((row) => row.id === episodeId)?.turnCount).toBe(1);
   });
 
   it("anchors subagent records by a unique matching delegate goal when tool call id is absent", async () => {

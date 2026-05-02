@@ -90,6 +90,7 @@ export async function abstractDraft(
       ],
       {
         op: `${L3_ABSTRACTION_PROMPT.id}.v${L3_ABSTRACTION_PROMPT.version}`,
+        phase: "l3",
         temperature: 0.15,
         malformedRetries: 1,
         schemaHint: `{"title":"...","domain_tags":["..."],"environment":[{"label":"...","description":"...","evidenceIds":["..."]}],"inference":[...],"constraints":[...],"body":"markdown","confidence":0..1,"supersedes_world_ids":[]}`,

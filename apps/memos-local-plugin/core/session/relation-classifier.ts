@@ -245,7 +245,7 @@ export function createRelationClassifier(
 ): RelationClassifier {
   const log = rootLogger.child({ channel: "core.session.relation" });
   const llmDisabled = opts.disableLlm ?? !opts.llm;
-  const timeoutMs = opts.timeoutMs ?? 4_000;
+  const timeoutMs = opts.timeoutMs ?? 6_000;
 
   return {
     async classify(input: RelationInput): Promise<RelationDecision> {
@@ -526,6 +526,7 @@ async function callLlm(llm: LlmClient, input: RelationInput): Promise<LlmRelatio
     ],
     {
       op: "session.relation.classify",
+      phase: "session",
       schemaHint: `{"relation":"revision"|"follow_up"|"new_task"|"unknown","confidence":0..1,"reason":"..."}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;
@@ -593,6 +594,7 @@ async function callArbitration(llm: LlmClient, input: RelationInput): Promise<Tu
     ],
     {
       op: "session.relation.arbitrate",
+      phase: "session",
       schemaHint: `{"relation":"follow_up"|"new_task","reason":"..."}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;

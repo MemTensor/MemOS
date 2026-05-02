@@ -188,6 +188,7 @@ async function callLlm(llm: LlmClient, text: string): Promise<LlmIntentAnswer> {
     ],
     {
       op: "session.intent.classify",
+      phase: "session",
       schemaHint: `{"kind":"task"|"memory_probe"|"chitchat"|"meta"|"unknown","confidence":0..1,"reason":"..."}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;

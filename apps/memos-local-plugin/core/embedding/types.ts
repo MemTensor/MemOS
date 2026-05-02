@@ -75,6 +75,8 @@ export interface EmbeddingStatusDetail {
   message?: string;
   code?: string;
   at?: number;
+  /** Actual provider batch-call duration when available. */
+  durationMs?: number;
 }
 
 // ─── Roles ───────────────────────────────────────────────────────────────────
