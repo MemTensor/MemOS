@@ -55,6 +55,8 @@ export interface BatchScoreOptions {
    * (text→null, α→0, source→none) — preserves the per-step contract.
    */
   synthReflections: boolean;
+  episodeId?: string;
+  phase?: string;
   /**
    * Cap per-field text we shovel into the prompt. Default 1_200 chars per
    * `state`/`outcome`, 1_500 per `action`. Mirrors per-step prompts.
@@ -158,6 +160,8 @@ export async function batchScoreReflections(
     ],
     {
       op: BATCH_OP_TAG,
+      episodeId: opts.episodeId,
+      phase: opts.phase,
       schemaHint:
         '{"scores": [{"idx": int, "reflection_text": "str", "alpha": 0..1, "usable": bool, "reason": "str"}]}',
       validate: (v) => validateBatchPayload(v, inputs.length),

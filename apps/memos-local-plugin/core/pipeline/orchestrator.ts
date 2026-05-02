@@ -79,6 +79,7 @@ import { memoryBuffer } from "../logger/index.js";
 import { onBroadcastLog } from "../logger/transports/sse-broadcast.js";
 import { createEmbeddingRetryWorker, systemErrorEvent } from "../embedding/index.js";
 import type { EpisodeSnapshot } from "../session/index.js";
+import type { RelationDecision } from "../session/types.js";
 
 // ─── Factory ──────────────────────────────────────────────────────────────
 
@@ -295,12 +296,14 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         const lastTurnTs = open.turns[open.turns.length - 1]?.ts ?? open.startedAt;
         const gapMs = Math.max(0, (turnTs ?? now()) - lastTurnTs);
 
+        const relationStartedAt = Date.now();
         const decision = await session.relation.classify({
           prevUserText: ctx.prevUserText,
           prevAssistantText: ctx.prevAssistantText,
           newUserText: userText,
           gapMs,
         });
+        const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
         log.info("relation.classified", {
           sessionId,
@@ -327,6 +330,24 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           (decision.relation === "revision" ||
             decision.relation === "follow_up" ||
             decision.relation === "unknown");
+        recordRelationClassification({
+          sessionId,
+          prevEpisodeId: currentEpId,
+          source: "open_episode",
+          gapMs,
+          mergeMode,
+          withinMergeWindow,
+          prevUserText: ctx.prevUserText,
+          prevAssistantText: ctx.prevAssistantText,
+          newUserText: userText,
+          decision,
+          action: keepAppending
+            ? "append_to_open_episode"
+            : decision.relation === "new_task"
+              ? "close_open_and_start_new_task"
+              : "close_open_and_start_new_episode",
+          durationMs: relationDurationMs,
+        });
 
         if (keepAppending) {
           // Same topic — just append the new user turn to the open
@@ -439,12 +460,14 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
             });
           }
         } else {
+          const relationStartedAt = Date.now();
           const decision = await session.relation.classify({
             prevUserText: ctx.prevUserText,
             prevAssistantText: ctx.prevAssistantText,
             newUserText: userText,
             gapMs,
           });
+          const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
           log.info("relation.classified", {
             sessionId,
@@ -471,6 +494,22 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
             (decision.relation === "revision" ||
               decision.relation === "follow_up" ||
               decision.relation === "unknown");
+          recordRelationClassification({
+            sessionId,
+            prevEpisodeId: snapshot.id as EpisodeId,
+            source: "recovered_open_topic",
+            gapMs,
+            mergeMode,
+            withinMergeWindow,
+            prevUserText: ctx.prevUserText,
+            prevAssistantText: ctx.prevAssistantText,
+            newUserText: userText,
+            decision,
+            action: keepAppending
+              ? "reopen_or_append_recovered_episode"
+              : "start_new_episode_after_recovered_topic",
+            durationMs: relationDurationMs,
+          });
 
           if (keepAppending) {
             if (snapshot.status === "closed") {
@@ -522,12 +561,14 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     }
 
     const gapMs = Math.max(0, (turnTs ?? now()) - prev.endedAt);
+    const relationStartedAt = Date.now();
     const decision = await session.relation.classify({
       prevUserText: prev.userText,
       prevAssistantText: prev.assistantText,
       newUserText: userText,
       gapMs,
     });
+    const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
     log.info("relation.classified", {
       sessionId,
@@ -552,6 +593,24 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       decision.relation === "revision" ||
       (mergeMode && decision.relation === "follow_up" && withinMergeWindow) ||
       (mergeMode && decision.relation === "unknown" && withinMergeWindow);
+    recordRelationClassification({
+      sessionId,
+      prevEpisodeId: prev.episodeId,
+      source: "closed_episode",
+      gapMs,
+      mergeMode,
+      withinMergeWindow,
+      prevUserText: prev.userText,
+      prevAssistantText: prev.assistantText,
+      newUserText: userText,
+      decision,
+      action: shouldReopen
+        ? "reopen_previous_episode"
+        : decision.relation === "new_task"
+          ? "start_new_task_episode"
+          : "start_new_episode",
+      durationMs: relationDurationMs,
+    });
 
     if (shouldReopen) {
       const reopenReason =
@@ -1124,6 +1183,58 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
   function now(): number {
     return (deps.now ?? Date.now)();
+  }
+
+  function recordRelationClassification(input: {
+    sessionId: SessionId;
+    prevEpisodeId: EpisodeId;
+    source: "open_episode" | "recovered_open_topic" | "closed_episode";
+    gapMs: number;
+    mergeMode: boolean;
+    withinMergeWindow: boolean;
+    prevUserText: string;
+    prevAssistantText: string;
+    newUserText: string;
+    decision: RelationDecision;
+    action: string;
+    durationMs: number;
+  }): void {
+    try {
+      deps.repos.apiLogs.insert({
+        toolName: "session_relation_classify",
+        input: {
+          sessionId: input.sessionId,
+          prevEpisodeId: input.prevEpisodeId,
+          source: input.source,
+          gapMs: input.gapMs,
+          mergeMode: input.mergeMode,
+          withinMergeWindow: input.withinMergeWindow,
+          prevUserText: truncateForLog(input.prevUserText, 600),
+          prevAssistantText: truncateForLog(input.prevAssistantText, 900),
+          newUserText: truncateForLog(input.newUserText, 600),
+        },
+        output: {
+          relation: input.decision.relation,
+          confidence: input.decision.confidence,
+          reason: input.decision.reason,
+          signals: input.decision.signals,
+          llmModel: input.decision.llmModel,
+          action: input.action,
+        },
+        durationMs: input.durationMs,
+        success: true,
+        calledAt: Date.now(),
+      });
+    } catch (err) {
+      log.debug("apiLogs.session_relation_classify.skipped", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  function truncateForLog(text: string, maxChars: number): string {
+    if (text.length <= maxChars) return text;
+    return `${text.slice(0, maxChars)}...`;
   }
 
   function timestampFromMeta(meta: Record<string, unknown>, key: string): number | undefined {

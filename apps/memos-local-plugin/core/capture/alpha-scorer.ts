@@ -29,6 +29,8 @@ import type { NormalizedStep, ReflectionScore } from "./types.js";
 export interface AlphaInput {
   step: NormalizedStep;
   reflectionText: string;
+  episodeId?: string;
+  phase?: string;
 }
 
 export interface AlphaOutput {
@@ -95,6 +97,8 @@ export async function scoreReflection(
     ],
     {
       op: `capture.alpha.${REFLECTION_SCORE_PROMPT.id}.v${REFLECTION_SCORE_PROMPT.version}`,
+      episodeId: input.episodeId,
+      phase: input.phase,
       schemaHint: `{"alpha": 0..1, "usable": true|false, "reason": "short string"}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;

@@ -467,6 +467,12 @@ export interface EpisodeListItemDTO {
    * 过少（2 条消息）..."). Always safe to show verbatim.
    */
   abandonReason?: string | null;
+  /** True when the reward gate intentionally skipped scoring this episode. */
+  rewardSkipped?: boolean;
+  /** User-readable reward/skip reason stamped by the reward pipeline. */
+  rewardReason?: string | null;
+  /** Whether any trace in this episode contains visible assistant text. */
+  hasAssistantReply?: boolean;
 }
 
 // ─── Feedback ─────────────────────────────────────────────────────────────────

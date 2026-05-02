@@ -85,6 +85,7 @@ export function createEmbedderWithProvider(
     message?: string;
     code?: string;
     at?: number;
+    durationMs?: number;
   }): void {
     if (!config.onStatus) return;
     try {
@@ -172,6 +173,7 @@ export function createEmbedderWithProvider(
         const texts = slice.map((s) => s.text);
         roundTrips++;
         let raw: number[][];
+        const startedAt = Date.now();
         try {
           const ctx: ProviderCallCtx = {
             config,
@@ -189,6 +191,7 @@ export function createEmbedderWithProvider(
             provider: provider.name,
             model: config.model,
             at: lastOkAt,
+            durationMs: lastOkAt - startedAt,
           });
         } catch (err) {
           failures++;
@@ -231,6 +234,7 @@ export function createEmbedderWithProvider(
             message: errMessage,
             code: err instanceof MemosError ? err.code : undefined,
             at: errAt,
+            durationMs: errAt - startedAt,
           });
           throw err instanceof MemosError
             ? err

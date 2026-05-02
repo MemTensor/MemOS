@@ -32,6 +32,7 @@ export interface SynthesizedReflection {
 export async function synthesizeReflection(
   llm: LlmClient,
   step: NormalizedStep,
+  context?: { episodeId?: string; phase?: string },
 ): Promise<SynthesizedReflection> {
   const log = rootLogger.child({ channel: "core.capture.reflection" });
 
@@ -64,7 +65,12 @@ export async function synthesizeReflection(
         { role: "system", content: SYSTEM },
         { role: "user", content: userPayload },
       ],
-      { op: "capture.reflection.synth", temperature: 0.1 },
+      {
+        op: "capture.reflection.synth",
+        episodeId: context?.episodeId,
+        phase: context?.phase,
+        temperature: 0.1,
+      },
     );
     const raw = sanitizeDerivedText(rsp.text);
     if (raw === "" || raw === "NO_REFLECTION") {

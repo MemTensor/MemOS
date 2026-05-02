@@ -113,6 +113,7 @@ export async function crystallizeDraft(
       ],
       {
         op: "skill.crystallize",
+        phase: "skill",
         schemaHint: "skill-crystallize.v2",
       },
     );

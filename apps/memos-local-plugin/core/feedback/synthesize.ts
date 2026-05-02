@@ -76,6 +76,7 @@ export async function synthesizeDraft(
     const prompt = packPrompt(input, prefer, avoid, deps.config.traceCharCap);
     const res = await deps.llm.completeJson<LlmRepairResponse>(prompt, {
       op: "decision.repair",
+      phase: "feedback",
       schemaHint: "decision-repair.v1",
     });
     const value = res.value as LlmRepairResponse;

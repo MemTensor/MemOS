@@ -223,16 +223,25 @@ export async function bootstrapMemoryCoreFull(
       message?: string;
       code?: string;
       at?: number;
+      durationMs?: number;
       fallbackProvider?: string;
       fallbackModel?: string;
+      op?: string;
+      episodeId?: string;
+      phase?: string;
     },
   ): void {
     try {
       repos.apiLogs.insert({
         toolName: "system_model_status",
-        input: { role },
+        input: {
+          role,
+          op: detail.op,
+          episodeId: detail.episodeId,
+          phase: detail.phase,
+        },
         output: { role, ...detail },
-        durationMs: 0,
+        durationMs: detail.durationMs ?? 0,
         success: detail.status !== "error",
         calledAt: detail.at ?? Date.now(),
       });
@@ -259,6 +268,10 @@ export async function bootstrapMemoryCoreFull(
         message?: string;
         code?: string;
         at?: number;
+        durationMs?: number;
+        op?: string;
+        episodeId?: string;
+        phase?: string;
       }) => recordSystemModelStatus("embedding", d),
     } as never);
   } catch (err) {
@@ -279,8 +292,12 @@ export async function bootstrapMemoryCoreFull(
         message?: string;
         code?: string;
         at?: number;
+        durationMs?: number;
         fallbackProvider?: string;
         fallbackModel?: string;
+        op?: string;
+        episodeId?: string;
+        phase?: string;
       }) => recordSystemModelStatus("llm", d),
     } as never);
   } catch (err) {
@@ -341,8 +358,12 @@ export async function bootstrapMemoryCoreFull(
           message?: string;
           code?: string;
           at?: number;
+          durationMs?: number;
           fallbackProvider?: string;
           fallbackModel?: string;
+          op?: string;
+          episodeId?: string;
+          phase?: string;
         }) => recordSystemModelStatus("skillEvolver", d),
       } as never);
       log.info("reflectLlm.ready", {
@@ -2073,10 +2094,11 @@ export function createMemoryCore(
   }): Promise<Parameters<MemoryCore["listEpisodeRows"]> extends unknown[] ? Awaited<ReturnType<MemoryCore["listEpisodeRows"]>> : never> {
     ensureLive();
 
-    // Auto-finalize only hard-stale open topics. Recent interrupted
-    // topics stay open so the next user turn can be merged by topic.
-    await autoFinalizeStaleTasks();
-    await autoRescoreDirtyClosedEpisodes();
+    // Keep list queries read-only. Startup recovery still handles stale
+    // open topics and dirty closed episodes during init; viewer refreshes
+    // should not trigger finalize/reflect/reward side effects.
+    // await autoFinalizeStaleTasks();
+    // await autoRescoreDirtyClosedEpisodes();
 
     const rows = handle.repos.episodes.list({
       sessionId: input?.sessionId,
@@ -2108,21 +2130,27 @@ export function createMemoryCore(
       }
     }
 
-    // For each row, fetch a cheap first-trace preview (single DB query
-    // per episode). We keep it O(N) because typical N ≤ 50; a joined
-    // query would optimise this but adds nontrivial SQL. Fine for the
-    // viewer's task list.
+    // For each row, fetch the episode's traces once. We need the rows
+    // for both preview/tags and turn counting: Tasks should count user
+    // turns (`turnId` groups), not step-level L1 traces.
     const out = rows.map((r: EpisodeRow) => {
       const firstTraceId = r.traceIds[0];
+      const episodeTraces = r.traceIds.length > 0
+        ? handle.repos.traces.getManyByIds(r.traceIds as TraceId[])
+        : [];
       let preview: string | undefined;
       const tagSet = new Set<string>();
       if (firstTraceId) {
-        const trace = handle.repos.traces.getById(firstTraceId as TraceId);
+        const trace =
+          episodeTraces.find((tr) => tr.id === firstTraceId) ??
+          handle.repos.traces.getById(firstTraceId as TraceId);
         if (trace) {
           const raw = (trace.userText ?? trace.agentText ?? "").replace(/\s+/g, " ").trim();
           if (raw) preview = raw.length > 160 ? raw.slice(0, 157) + "…" : raw;
-          for (const t of trace.tags ?? []) tagSet.add(t);
         }
+      }
+      for (const trace of episodeTraces) {
+        for (const t of trace.tags ?? []) tagSet.add(t);
       }
 
       const derivation = deriveSkillStatus(
@@ -2165,6 +2193,22 @@ export function createMemoryCore(
           : null;
       const pauseReason =
         typeof meta.pauseReason === "string" ? meta.pauseReason : null;
+      const reward =
+        meta.reward && typeof meta.reward === "object"
+          ? (meta.reward as { skipped?: unknown; reason?: unknown })
+          : null;
+      const rewardSkipped = reward?.skipped === true;
+      const rewardReason =
+        typeof reward?.reason === "string" && reward.reason.trim().length > 0
+          ? reward.reason
+          : null;
+      const hasAssistantReply = episodeTraces.some((trace) => {
+        if ((trace.agentText ?? "").trim().length > 0) return true;
+        return (trace.toolCalls ?? []).some((toolCall) => {
+          const text = toolCall.assistantTextBefore;
+          return typeof text === "string" && text.trim().length > 0;
+        });
+      });
 
       return {
         id: r.id,
@@ -2173,7 +2217,7 @@ export function createMemoryCore(
         endedAt: r.endedAt ?? undefined,
         status: r.status,
         rTask: r.rTask,
-        turnCount: deriveTurnCount(r),
+        turnCount: deriveTurnCount(r, episodeTraces),
         preview,
         tags: tagSet.size > 0 ? Array.from(tagSet).sort() : undefined,
         skillStatus: derivation.status,
@@ -2185,6 +2229,9 @@ export function createMemoryCore(
         topicState,
         pauseReason,
         abandonReason,
+        rewardSkipped,
+        rewardReason,
+        hasAssistantReply,
       };
     });
     return out as never;
@@ -3728,22 +3775,25 @@ function writeApiLog(
  * Order matters: we return the first matching branch.
  */
 /**
- * Derive a meaningful "turn count" for the viewer's task list.
+ * Derive a meaningful user-turn count for the viewer's task list.
  *
- * In the new project a "trace" represents a complete user→assistant
- * exchange (1 trace = 1 full turn). So `traceIds.length` of 1 means
- * there IS an assistant reply. The old project counted individual
- * messages (user + assistant + tool = separate chunks), so "2" meant
- * one user + one assistant.
- *
- * To keep the frontend's `turnCount` semantics consistent with how the
- * old project used it (and how the viewer renders it):
- *   - Each trace counts as 2 turns (user + assistant).
- *   - Open episodes with no traces yet get at least 1 (user sent).
- *   - This way `turnCount < 2` correctly means "no assistant reply yet".
+ * L1 traces are step-level rows: one user request can produce many tool
+ * traces plus a final assistant trace. `turnId` is the stable group key
+ * stamped on every trace created from the same user message, so the Tasks
+ * tab should count distinct `turnId`s rather than raw trace ids.
  */
-export function deriveTurnCount(r: EpisodeRow): number {
-  if (r.traceIds.length > 0) return r.traceIds.length * 2;
+export function deriveTurnCount(
+  r: EpisodeRow,
+  traces: readonly Pick<TraceRow, "turnId">[] = [],
+): number {
+  if (traces.length > 0) {
+    return new Set(
+      traces
+        .map((trace) => trace.turnId)
+        .filter((turnId) => Number.isFinite(turnId)),
+    ).size;
+  }
+  if (r.traceIds.length > 0) return 1;
   return r.status === "open" ? 1 : 0;
 }
 

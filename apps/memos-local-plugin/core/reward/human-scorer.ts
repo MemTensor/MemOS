@@ -107,6 +107,8 @@ async function llmScore(input: HumanScoreInput, llm: LlmClient): Promise<HumanSc
     ],
     {
       op: `reward.${REWARD_R_HUMAN_PROMPT.id}.v${REWARD_R_HUMAN_PROMPT.version}`,
+      episodeId: input.episodeSummary.episodeId,
+      phase: "reward",
       schemaHint: `{"goal_achievement":-1..1,"process_quality":-1..1,"user_satisfaction":-1..1,"label":"…","reason":"…"}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;
