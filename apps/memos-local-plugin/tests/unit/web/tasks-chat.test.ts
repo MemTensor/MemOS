@@ -123,6 +123,30 @@ describe("flattenChat", () => {
     expect(user.ts).toBe(T0);
   });
 
+  it("renders the turn user message before tools even when a later trace carries userText", () => {
+    const skill = trace({
+      id: "tr_skill",
+      ts: T0 + 1_000,
+      turnId: T0,
+      toolCalls: [{ name: "skill_get", input: { id: "sk_1" } }],
+    });
+    const delegate = trace({
+      id: "tr_delegate",
+      ts: T0 + 2_000,
+      turnId: T0,
+      userText: "今年杭州五一游客多吗",
+      toolCalls: [{ name: "delegate_task", input: { goal: "查杭州五一游客数据" } }],
+    });
+
+    const msgs = flattenChat([skill, delegate]);
+
+    expect(msgs.map((m) => m.role)).toEqual(["user", "tool", "tool"]);
+    expect(msgs[0]!.text).toBe("今年杭州五一游客多吗");
+    expect(msgs[0]!.traceId).toBe("tr_delegate");
+    expect(msgs[1]!.toolName).toBe("skill_get");
+    expect(msgs[2]!.toolName).toBe("delegate_task");
+  });
+
   it("keeps tool calls without startedAt untimed", () => {
     const t = trace({
       id: "tr3",
