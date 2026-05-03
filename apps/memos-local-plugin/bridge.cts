@@ -15,6 +15,7 @@
  */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const path = require("node:path") as typeof import("node:path");
+const pkgVersion: string = (require(path.resolve(__dirname, "package.json")) as { version: string }).version;
 
 interface BridgeArgs {
   daemon: boolean;
@@ -44,6 +45,9 @@ async function main(): Promise<void> {
   const { startStdioServer, waitForShutdown } = (await import(
     pathToEsmUrl(path.resolve(__dirname, "bridge/stdio.ts"))
   )) as typeof import("./bridge/stdio.js");
+  const { startTcpServer } = (await import(
+    pathToEsmUrl(path.resolve(__dirname, "bridge/tcp.ts"))
+  )) as typeof import("./bridge/tcp.js");
   const { startHttpServer } = (await import(
     pathToEsmUrl(path.resolve(__dirname, "server/index.ts"))
   )) as typeof import("./server/index.js");
@@ -53,12 +57,44 @@ async function main(): Promise<void> {
 
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
-    pkgVersion: "2.0.0-alpha.1",
+    pkgVersion,
   });
   await core.init();
 
-  // Default transport: stdio. Daemon + TCP support arrives in V1.1.
-  const stdio = startStdioServer({ core });
+  // In daemon mode stdin is typically /dev/null — starting the stdio
+  // server would subscribe to events/logs and buffer writes to a pipe
+  // that nobody drains, wasting memory. Skip it.
+  const stdio = args.daemon ? null : startStdioServer({ core });
+  let tcpServer: Awaited<ReturnType<typeof startTcpServer>> | null = null;
+  if (args.tcpPort !== undefined && !args.daemon) {
+    process.stderr.write(
+      "bridge: ignoring --tcp because TCP mode requires --daemon\n",
+    );
+  } else if (args.tcpPort !== undefined) {
+    if (!Number.isFinite(args.tcpPort) || args.tcpPort < 1 || args.tcpPort > 65535) {
+      process.stderr.write(
+        `bridge: invalid --tcp port value: ${String(args.tcpPort)} (must be 1–65535)\n`,
+      );
+    } else {
+      try {
+        tcpServer = startTcpServer({
+          core,
+          host: "127.0.0.1",
+          port: args.tcpPort,
+        });
+        await tcpServer.ready;  // throws on EADDRINUSE etc.
+        process.stderr.write(`bridge: tcp → ${tcpServer.url}\n`);
+      } catch (err) {
+        process.stderr.write(
+          `bridge: tcp server failed to start: ${(err as Error).message}\n`,
+        );
+        if (tcpServer) {
+          await tcpServer.close().catch(() => {});
+          tcpServer = null;
+        }
+      }
+    }
+  }
 
   // Boot a viewer too — hermes needs its own HTTP surface for the
   // Memory Viewer, and it discovers the openclaw hub (if any) so
@@ -93,30 +129,55 @@ async function main(): Promise<void> {
       `bridge: viewer failed to start: ${(err as Error).message}\n`,
     );
   }
+  let shuttingDown = false;
 
   const shutdown = async (sig: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     process.stderr.write(`bridge: received ${sig}, shutting down\n`);
+    try {
+      if (tcpServer) await tcpServer.close();
+    } catch {
+      /* best-effort */
+    }
     try {
       if (viewer) await viewer.close();
     } catch {
       /* best-effort */
     }
-    await waitForShutdown(core, stdio);
+    if (stdio) {
+      await waitForShutdown(core, stdio);
+    } else {
+      try {
+        await core.shutdown();
+      } catch {
+        /* swallow */
+      }
+    }
     process.exit(0);
   };
 
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-  // Keep the process alive until stdin ends.
-  await stdio.done;
-  try {
-    if (viewer) await viewer.close();
-  } catch {
-    /* best-effort */
+  // In daemon mode, keep alive until TCP server stops (stdin is /dev/null).
+  // In stdio mode, run until the calling process closes stdin.
+  if (args.daemon && tcpServer) {
+    await tcpServer.done;
+    await shutdown("daemon_done");
+  } else if (stdio) {
+    await stdio.done;
+    try {
+      if (viewer) await viewer.close();
+    } catch {
+      /* best-effort */
+    }
+    await core.shutdown();
+    process.exit(0);
+  } else {
+    // Daemon mode without TCP — wait forever (kept alive by event loop).
+    await new Promise(() => {});
   }
-  await core.shutdown();
-  process.exit(0);
 }
 
 async function tryHubRegister(opts: {
@@ -127,7 +188,7 @@ async function tryHubRegister(opts: {
   const body = JSON.stringify({
     agent: opts.selfAgent,
     port: opts.selfPort,
-    version: "2.0.0-alpha.1",
+    version: pkgVersion,
   });
   for (let i = 0; i < 6; i++) {
     try {
