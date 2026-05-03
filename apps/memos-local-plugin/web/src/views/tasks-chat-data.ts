@@ -119,18 +119,55 @@ const TOOL_OUTPUT_PREVIEW_CHARS = 1_600;
  */
 export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
   const out: ChatMsg[] = [];
-  for (const tr of traces) {
-    const u = (tr.userText ?? "").trim();
-    if (u) {
+  for (const group of groupTracesByTurn(traces)) {
+    const userTrace = group.find((tr) => (tr.userText ?? "").trim().length > 0);
+    const userText = (userTrace?.userText ?? "").trim();
+    if (userTrace && userText) {
       out.push({
         role: "user",
-        text: u,
-        ts: tr.turnId ?? tr.ts,
-        key: `${tr.id}:user`,
-        traceId: tr.id,
+        text: userText,
+        ts: userTrace.turnId ?? userTrace.ts,
+        key: `${userTrace.id}:user`,
+        traceId: userTrace.id,
       });
     }
 
+    for (const tr of group) {
+      appendTraceMessages(out, tr);
+    }
+  }
+  // Walk the flattened list in a second pass and stamp parallel-batch
+  // metadata onto runs of consecutive `tool` messages. Done after the
+  // whole list is built so the heuristic can compare each tool to its
+  // visible neighbour, regardless of which trace it came from.
+  assignParallelBatches(out);
+  return out;
+}
+
+function groupTracesByTurn(traces: readonly TimelineTrace[]): TimelineTrace[][] {
+  const groups: TimelineTrace[][] = [];
+  let current: TimelineTrace[] = [];
+  let currentTurnId: number | null = null;
+
+  for (const tr of traces) {
+    const turnId = Number.isFinite(tr.turnId) ? tr.turnId! : null;
+    if (
+      current.length === 0 ||
+      (turnId !== null && currentTurnId !== null && turnId === currentTurnId)
+    ) {
+      current.push(tr);
+      currentTurnId = turnId;
+      continue;
+    }
+    groups.push(current);
+    current = [tr];
+    currentTurnId = turnId;
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
+function appendTraceMessages(out: ChatMsg[], tr: TimelineTrace): void {
     const tools = [...(tr.toolCalls ?? [])].sort((a, b) => {
       const at = a.startedAt ?? Number.POSITIVE_INFINITY;
       const bt = b.startedAt ?? Number.POSITIVE_INFINITY;
@@ -188,13 +225,6 @@ export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
         traceId: tr.id,
       });
     }
-  }
-  // Walk the flattened list in a second pass and stamp parallel-batch
-  // metadata onto runs of consecutive `tool` messages. Done after the
-  // whole list is built so the heuristic can compare each tool to its
-  // visible neighbour, regardless of which trace it came from.
-  assignParallelBatches(out);
-  return out;
 }
 
 // ─── assignParallelBatches: detect parallel tool batches ────────────────
