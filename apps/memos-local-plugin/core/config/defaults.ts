@@ -178,8 +178,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       evidenceLimit: 6,
       useLlm: true,
       etaDelta: 0.1,
-      archiveEta: 0.25,
-      minEtaForRetrieval: 0.5,
+      archiveEta: 0.1,
+      minEtaForRetrieval: 0.1,
     },
     feedback: {
       failureThreshold: 3,
@@ -205,7 +205,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       mmrLambda: 0.7,
       includeLowValue: false,
       rrfConstant: 60,
-      minSkillEta: 0.5,
+      minSkillEta: 0.1,
       // Lowered from 0.35 → 0.25 so partial-match traces still surface
       // for users with smaller corpora.
       minTraceSim: 0.25,

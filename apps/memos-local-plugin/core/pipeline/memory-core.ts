@@ -2462,10 +2462,71 @@ export function createMemoryCore(
     return handle.repos.skills.count({ status: input?.status });
   }
 
-  async function getSkill(id: SkillId): Promise<SkillDTO | null> {
+  async function getSkill(
+    id: SkillId,
+    opts?: {
+      recordUse?: boolean;
+      recordTrial?: boolean;
+      sessionId?: SessionId;
+      episodeId?: EpisodeId;
+      traceId?: string;
+      turnId?: number;
+      toolCallId?: string;
+    },
+  ): Promise<SkillDTO | null> {
     ensureLive();
     const row = handle.repos.skills.getById(id);
-    return row ? skillRowToDTO(row) : null;
+    if (!row) return null;
+    if (opts?.recordUse) {
+      handle.repos.skills.recordUse(id, Date.now());
+      if (opts.recordTrial) {
+        recordSkillTrial(id, opts);
+      }
+      const updated = handle.repos.skills.getById(id);
+      return updated ? skillRowToDTO(updated) : skillRowToDTO(row);
+    }
+    return skillRowToDTO(row);
+  }
+
+  function recordSkillTrial(
+    skillId: SkillId,
+    opts: {
+      sessionId?: SessionId;
+      episodeId?: EpisodeId;
+      traceId?: string;
+      turnId?: number;
+      toolCallId?: string;
+    },
+  ): void {
+    const episode =
+      opts.episodeId
+        ? handle.repos.episodes.getById(opts.episodeId)
+        : opts.sessionId
+          ? handle.repos.episodes.getOpenForSession(opts.sessionId)
+          : null;
+    if (!episode) {
+      rootLogger.child({ channel: "core.skill" }).debug("skill.trial.skipped", {
+        skillId,
+        reason: "missing_episode",
+        sessionId: opts.sessionId,
+      });
+      return;
+    }
+    handle.repos.skillTrials.createPending({
+      id: `st_${randomUUID()}`,
+      skillId,
+      sessionId: opts.sessionId ?? episode.sessionId ?? null,
+      episodeId: episode.id,
+      traceId: opts.traceId ?? null,
+      turnId: Number.isFinite(opts.turnId) ? (opts.turnId as number) : null,
+      toolCallId: opts.toolCallId ?? null,
+      status: "pending",
+      createdAt: Date.now(),
+      resolvedAt: null,
+      evidence: {
+        source: "skill_get",
+      },
+    });
   }
 
   async function metrics(input?: { days?: number }): Promise<{
@@ -2815,13 +2876,18 @@ export function createMemoryCore(
           eta: dto.eta ?? 0,
           support: dto.support ?? 0,
           gain: dto.gain ?? 0,
+          trialsAttempted: 0,
+          trialsPassed: 0,
           sourcePolicyIds: dto.sourcePolicyIds ?? [],
           sourceWorldModelIds: dto.sourceWorldModelIds ?? [],
+          evidenceAnchors: dto.evidenceAnchors ?? [],
           procedureJson: {},
           vec: null,
           createdAt: dto.createdAt ?? Date.now(),
           updatedAt: dto.updatedAt ?? Date.now(),
           version: dto.version ?? 1,
+          usageCount: dto.usageCount ?? 0,
+          lastUsedAt: dto.lastUsedAt ?? null,
         } as SkillRow);
         imported++;
       } catch {
@@ -2846,6 +2912,7 @@ export function createMemoryCore(
           vec: null,
           createdAt: dto.createdAt ?? Date.now(),
           updatedAt: dto.updatedAt ?? Date.now(),
+          version: dto.version ?? 1,
           status: dto.status ?? "active",
         } as WorldModelRow);
         imported++;
@@ -3433,6 +3500,7 @@ export function worldModelRowToDTO(row: WorldModelRow): WorldModelDTO {
     policyIds: row.policyIds,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    version: row.version ?? 1,
     status: row.status ?? "active",
     share: row.share ?? null,
     editedAt: row.editedAt ?? undefined,
@@ -3469,6 +3537,8 @@ export function skillRowToDTO(row: SkillRow): SkillDTO {
     eta: row.eta,
     support: row.support,
     gain: row.gain,
+    trialsAttempted: row.trialsAttempted ?? 0,
+    trialsPassed: row.trialsPassed ?? 0,
     sourcePolicyIds: row.sourcePolicyIds,
     sourceWorldModelIds: row.sourceWorldModelIds,
     createdAt: row.createdAt,
@@ -3476,6 +3546,8 @@ export function skillRowToDTO(row: SkillRow): SkillDTO {
     version: row.version ?? 1,
     share: row.share ?? null,
     editedAt: row.editedAt ?? undefined,
+    usageCount: row.usageCount ?? 0,
+    lastUsedAt: row.lastUsedAt ?? null,
   };
 }
 

@@ -153,6 +153,10 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     ensureEmbeddingRetryLeaseColumns(db);
     return;
   }
+  if (file.version === 4 && file.name === "skill-usage") {
+    ensureSkillUsageColumns(db);
+    return;
+  }
   db.exec(fs.readFileSync(file.fullPath, "utf8"));
 }
 
@@ -167,6 +171,26 @@ function ensureEmbeddingRetryLeaseColumns(db: StorageDb): void {
   }
   if (!columns.has("lease_until")) {
     db.exec(`ALTER TABLE embedding_retry_queue ADD COLUMN lease_until INTEGER`);
+  }
+}
+
+function ensureSkillUsageColumns(db: StorageDb): void {
+  const table = db
+    .prepare<unknown, { name: string }>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='skills'`,
+    )
+    .get();
+  if (!table) return;
+  const columns = new Set(
+    db.prepare<unknown, { name: string }>(`PRAGMA table_info(skills)`)
+      .all()
+      .map((row) => row.name),
+  );
+  if (!columns.has("usage_count")) {
+    db.exec(`ALTER TABLE skills ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!columns.has("last_used_at")) {
+    db.exec(`ALTER TABLE skills ADD COLUMN last_used_at INTEGER`);
   }
 }
 

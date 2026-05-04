@@ -30,6 +30,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _installed_node_binary(plugin_root: Path) -> str | None:
+    marker = plugin_root / ".memos-node-bin"
+    try:
+        candidate = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return candidate
+    return None
+
+
 class BridgeError(RuntimeError):
     """Raised when the bridge returns a JSON-RPC error object."""
 
@@ -76,8 +87,14 @@ class MemosBridgeClient:
         self._host_handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
         self._closed = False
 
-        node = node_binary or shutil.which("node") or "node"
         plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+        node = (
+            node_binary
+            or os.environ.get("MEMOS_NODE_BINARY")
+            or _installed_node_binary(plugin_root)
+            or shutil.which("node")
+            or "node"
+        )
         script = bridge_path or str(plugin_root / "bridge.cts")
         env = {**os.environ, **(extra_env or {})}
 
@@ -92,7 +109,7 @@ class MemosBridgeClient:
         # under node_modules/.bin after `npm install`.
         tsx_bin = plugin_root / "node_modules" / ".bin" / "tsx"
         if tsx_bin.exists():
-            cmd = [str(tsx_bin), script, f"--agent={agent}"]
+            cmd = [node, str(tsx_bin), script, f"--agent={agent}"]
         else:
             # Fallback path: `node --import tsx` reproduces the same loader
             # inline. Requires tsx to be resolvable as a package from the

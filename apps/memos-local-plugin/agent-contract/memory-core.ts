@@ -12,6 +12,7 @@
 import type {
   AgentKind,
   ApiLogDTO,
+  EpochMs,
   EpisodeId,
   EpisodeListItemDTO,
   FeedbackDTO,
@@ -358,7 +359,15 @@ export interface MemoryCore {
   listSkills(input?: { status?: SkillDTO["status"]; limit?: number }): Promise<SkillDTO[]>;
   /** Total skill rows matching the same filter (no limit). */
   countSkills(input?: { status?: SkillDTO["status"] }): Promise<number>;
-  getSkill(id: SkillId): Promise<SkillDTO | null>;
+  getSkill(id: SkillId, opts?: {
+    recordUse?: boolean;
+    recordTrial?: boolean;
+    sessionId?: SessionId;
+    episodeId?: EpisodeId;
+    traceId?: string;
+    turnId?: EpochMs;
+    toolCallId?: string;
+  }): Promise<SkillDTO | null>;
   archiveSkill(id: SkillId, reason?: string): Promise<void>;
   /**
    * Hard-delete a skill row. Distinct from {@link archiveSkill}, which

@@ -181,6 +181,7 @@ export function buildWorldModelRow(args: {
     vec: (args.cluster.centroidVec ?? null) as EmbeddingVector | null,
     createdAt: now,
     updatedAt: now,
+    version: 1,
     status: "active",
   };
 }

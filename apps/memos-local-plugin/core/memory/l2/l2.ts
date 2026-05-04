@@ -184,6 +184,9 @@ export async function runL2(
         });
         pool.promote(bucket.candidateIds, dup.id);
         touched.set(dup.id, dup);
+        const evidence = inductionEvidenceByPolicy.get(dup.id) ?? new Set<string>();
+        for (const id of bucket.evidenceTraceIds) evidence.add(id);
+        inductionEvidenceByPolicy.set(dup.id, evidence);
         continue;
       }
 

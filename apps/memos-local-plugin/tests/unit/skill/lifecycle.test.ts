@@ -27,16 +27,36 @@ function mkSkill(partial: Partial<SkillRow> = {}): SkillRow {
 }
 
 describe("skill/lifecycle", () => {
-  it("bumps trial counters and recomputes Beta mean η", () => {
+  it("bumps trial counters and blends outcomes with a one-sample η prior", () => {
     const s = mkSkill();
     const a = applyFeedback(s, "trial.pass", makeSkillConfig());
     expect(a.trialsAttempted).toBe(1);
     expect(a.trialsPassed).toBe(1);
-    expect(a.eta).toBeGreaterThan(0.5);
+    expect(a.eta).toBeCloseTo(0.75, 5);
     const b = applyFeedback({ ...s, ...a }, "trial.fail", makeSkillConfig());
     expect(b.trialsAttempted).toBe(2);
     expect(b.trialsPassed).toBe(1);
     expect(b.eta).toBe(0.5);
+  });
+
+  it("keeps a 0.58-prior skill alive until the fifth consecutive failure at a 0.1 floor", () => {
+    const cfg = makeSkillConfig({
+      candidateTrials: 1,
+      archiveEta: 0.1,
+      minEtaForRetrieval: 0.1,
+    });
+    let s = mkSkill({ status: "candidate", eta: 0.58 });
+
+    for (let i = 0; i < 4; i += 1) {
+      const update = applyFeedback(s, "trial.fail", cfg);
+      expect(update.status).not.toBe("archived");
+      s = { ...s, ...update };
+    }
+
+    const fifth = applyFeedback(s, "trial.fail", cfg);
+    expect(fifth.eta).toBeLessThan(0.1);
+    expect(fifth.status).toBe("archived");
+    expect(fifth.transition).toBe("archived");
   });
 
   it("promotes candidate → active once enough passing trials accrue", () => {

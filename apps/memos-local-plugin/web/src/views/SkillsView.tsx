@@ -280,6 +280,23 @@ export function SkillsView() {
                     <span>gain {(s.gain ?? 0).toFixed(2)}</span>
                     <span>support {s.support ?? 0}</span>
                     <span>
+                      {t("skills.trials.pass", {
+                        count: String(s.trialsPassed ?? 0),
+                      })}
+                    </span>
+                    <span>
+                      {t("skills.usage.count", {
+                        count: String(s.usageCount ?? 0),
+                      })}
+                    </span>
+                    {s.lastUsedAt && (
+                      <span>
+                        {t("skills.usage.lastUsed", {
+                          at: formatWhen(s.lastUsedAt),
+                        })}
+                      </span>
+                    )}
+                    <span>
                       {t("skills.updated.ago", {
                         at: formatWhen(s.updatedAt),
                       })}
@@ -605,6 +622,17 @@ function SkillDrawer({
               <dd>{(skill.gain ?? 0).toFixed(3)}</dd>
               <dt class="muted">{t("memories.field.support")}</dt>
               <dd>{skill.support ?? 0}</dd>
+              <dt class="muted">{t("skills.trials.pass.label")}</dt>
+              <dd>
+                {t("skills.trials.pass.detail", {
+                  passed: String(skill.trialsPassed ?? 0),
+                  attempted: String(skill.trialsAttempted ?? 0),
+                })}
+              </dd>
+              <dt class="muted">{t("skills.usage.count.label")}</dt>
+              <dd>{skill.usageCount ?? 0}</dd>
+              <dt class="muted">{t("skills.usage.lastUsed.label")}</dt>
+              <dd>{skill.lastUsedAt ? formatWhen(skill.lastUsedAt) : t("common.never")}</dd>
               <dt class="muted">{t("memories.field.updatedAt")}</dt>
               <dd>{formatWhen(skill.updatedAt)}</dd>
             </dl>

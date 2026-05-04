@@ -18,6 +18,7 @@ import {
   type L2Config,
   type L2Event,
 } from "../../../../core/memory/l2/index.js";
+import { makeCandidatePool } from "../../../../core/memory/l2/candidate-pool.js";
 import { rootLogger } from "../../../../core/logger/index.js";
 import type {
   EmbeddingVector,
@@ -211,6 +212,97 @@ describe("memory/l2/integration", () => {
     expect(runC.associations[0].matchedPolicyId).toBe(induced.policyId);
     const afterC = handle.repos.policies.getById(induced.policyId!)!;
     expect(afterC.support).toBeGreaterThan(0);
+  });
+
+  it("uses duplicate bucket evidence as with-traces when updating an existing policy", async () => {
+    ensureEpisode(handle, "ep_A", "s_int");
+    ensureEpisode(handle, "ep_B", "s_int");
+
+    const trA = mkTrace({
+      id: "tr_dup_a",
+      episodeId: "ep_A",
+      tags: ["docker"],
+      toolCalls: [
+        { name: "pip.install", input: { pkg: "lxml" }, output: "Error: MODULE_NOT_FOUND xmlsec1" },
+      ],
+      value: 0.82,
+      vecSummary: vec([1, 0, 0]),
+    });
+    const trB = mkTrace({
+      id: "tr_dup_b",
+      episodeId: "ep_B",
+      tags: ["docker"],
+      toolCalls: [
+        { name: "pip.install", input: { pkg: "psycopg2" }, output: "Error: MODULE_NOT_FOUND pg_config" },
+      ],
+      value: 0.86,
+      vecSummary: vec([1, 0, 0]),
+    });
+    handle.repos.traces.insert(trA);
+    handle.repos.traces.insert(trB);
+
+    const pool = makeCandidatePool({ db: handle.db, repos: handle.repos });
+    const ttlMs = cfg().candidateTtlDays * 24 * 60 * 60 * 1000;
+    pool.addCandidate({ trace: trA, ttlMs, now: NOW });
+    pool.addCandidate({ trace: trB, ttlMs, now: NOW });
+
+    handle.repos.policies.insert({
+      id: "po_existing" as never,
+      title: "install missing system libraries before retrying pip",
+      trigger: "docker pip install fails with missing native dependency",
+      procedure: "install the matching distro package, then retry pip",
+      verification: "pip install succeeds",
+      boundary: "non-container environments with libraries already present",
+      support: 0,
+      gain: 0,
+      status: "active",
+      sourceEpisodeIds: [],
+      inducedBy: "unit-test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: vec([1, 0, 0]),
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+
+    const bus = createL2EventBus();
+    const events: L2Event[] = [];
+    bus.onAny((e) => events.push(e));
+
+    const result = await runL2(
+      {
+        episodeId: "ep_B" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [],
+        trigger: "manual",
+        now: NOW,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({ completeJson: {} }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus,
+        config: cfg(),
+        thresholds: { minSupport: 3, minGain: 0.15, archiveGain: -0.05 },
+      },
+    );
+
+    expect(result.inductions).toHaveLength(1);
+    expect(result.inductions[0].skippedReason).toBe("duplicate_of");
+    expect(result.inductions[0].duplicateOfPolicyId).toBe("po_existing");
+
+    const updated = handle.repos.policies.getById("po_existing" as never)!;
+    expect(updated.support).toBe(2);
+    expect(updated.gain).toBeGreaterThan(0.3);
+    expect(updated.status).toBe("active");
+    expect(
+      events.some(
+        (e) =>
+          e.kind === "l2.policy.updated" &&
+          e.policyId === "po_existing" &&
+          e.gain > 0,
+      ),
+    ).toBe(true);
   });
 
   it("minEpisodesForInduction=3 suppresses induction until a third episode arrives", async () => {

@@ -284,6 +284,7 @@ describe("storage/keyword channels — world model", () => {
       vec: vec([1, 0, 0]),
       createdAt: 0,
       updatedAt: 0,
+      version: 1,
       status: "active",
     });
   }

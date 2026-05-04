@@ -33,6 +33,8 @@ const COLUMNS = [
   "shared_at",
   "edited_at",
   "evidence_anchors_json",
+  "usage_count",
+  "last_used_at",
 ];
 
 export interface SkillSearchMeta {
@@ -85,7 +87,13 @@ export function makeSkillsRepo(db: StorageDb) {
       if (!row) throw new Error(`[skills] bumpTrial: not found: ${id}`);
       const trialsAttempted = row.trials_attempted + 1;
       const trialsPassed = row.trials_passed + (passed ? 1 : 0);
-      const eta = trialsAttempted === 0 ? 0 : trialsPassed / trialsAttempted;
+      const eta = trialEtaWithPrior(
+        row.eta,
+        row.trials_attempted,
+        row.trials_passed,
+        trialsAttempted,
+        trialsPassed,
+      );
       updateTrials.run({
         id,
         trials_attempted: trialsAttempted,
@@ -327,7 +335,31 @@ export function makeSkillsRepo(db: StorageDb) {
       ).run({ id, vec: toBlob(vec)!, updated_at: Date.now() });
       return res.changes > 0;
     },
+
+    recordUse(id: SkillId, usedAt: number): boolean {
+      const res = db.prepare<{ id: string; last_used_at: number }>(
+        `UPDATE skills
+            SET usage_count = COALESCE(usage_count, 0) + 1,
+                last_used_at = @last_used_at
+          WHERE id = @id`,
+      ).run({ id, last_used_at: usedAt });
+      return res.changes > 0;
+    },
   };
+}
+
+function trialEtaWithPrior(
+  currentEta: number,
+  previousAttempts: number,
+  previousPasses: number,
+  nextAttempts: number,
+  nextPasses: number,
+): number {
+  const priorStrength = 1;
+  const priorEta = clamp01(
+    currentEta * (priorStrength + previousAttempts) - previousPasses,
+  );
+  return clamp01((priorEta * priorStrength + nextPasses) / (priorStrength + nextAttempts));
 }
 
 interface RawSkillRow {
@@ -352,6 +384,8 @@ interface RawSkillRow {
   shared_at: number | null;
   edited_at: number | null;
   evidence_anchors_json: string;
+  usage_count: number;
+  last_used_at: number | null;
 }
 
 function rowToParams(row: SkillRow): Record<string, unknown> {
@@ -377,7 +411,16 @@ function rowToParams(row: SkillRow): Record<string, unknown> {
     shared_at: row.share?.sharedAt ?? null,
     edited_at: row.editedAt ?? null,
     evidence_anchors_json: toJsonText(row.evidenceAnchors),
+    usage_count: row.usageCount ?? 0,
+    last_used_at: row.lastUsedAt ?? null,
   };
+}
+
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
 }
 
 function mapRow(r: RawSkillRow): SkillRow {
@@ -408,5 +451,7 @@ function mapRow(r: RawSkillRow): SkillRow {
           }
         : null,
     editedAt: r.edited_at,
+    usageCount: r.usage_count ?? 0,
+    lastUsedAt: r.last_used_at ?? null,
   };
 }

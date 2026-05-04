@@ -121,6 +121,8 @@ export async function buildSkillRow(
     // so the viewer can show "this skill has evolved N times" next to
     // the timeline sourced from api_logs (skill_generate / skill_evolve).
     version: existing ? (existing.version ?? 1) + 1 : 1,
+    usageCount: existing?.usageCount ?? 0,
+    lastUsedAt: existing?.lastUsedAt ?? null,
   };
 
   return { row, vecSource, freshMint };

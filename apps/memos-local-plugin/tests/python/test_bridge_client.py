@@ -385,7 +385,9 @@ class MemTensorProviderTests(unittest.TestCase):
         skill = json.loads(p.handle_tool_call("skill_get", {"id": "sk-1"}))
         self.assertTrue(skill["found"])
         self.assertEqual(skill["skill"]["id"], "sk-1")
-        self.assertEqual(bridge.calls[-1], ("skill.get", {"id": "sk-1"}))
+        self.assertEqual(bridge.calls[-1][0], "skill.get")
+        self.assertEqual(bridge.calls[-1][1]["id"], "sk-1")
+        self.assertTrue(bridge.calls[-1][1]["recordTrial"])
 
     def test_handle_tool_call_validates_required_arguments(self) -> None:
         p = self._provider_mod.MemTensorProvider()
@@ -428,7 +430,7 @@ class MemTensorProviderTests(unittest.TestCase):
             def close(self):
                 pass
 
-            def request(self, method, params=None):
+            def request(self, method, params=None, **_kwargs):
                 if method == "turn.end":
                     raise BridgeError("transport_closed", "[Errno 32] Broken pipe")
                 return {}
@@ -480,7 +482,10 @@ class MemTensorProviderTests(unittest.TestCase):
             def __init__(self):
                 self.calls = []
 
-            def request(self, method, params=None):
+            def register_host_handler(self, _method, _handler):
+                return None
+
+            def request(self, method, params=None, **_kwargs):
                 self.calls.append((method, params or {}))
                 if method == "session.open":
                     return {"sessionId": (params or {}).get("sessionId", "sess")}

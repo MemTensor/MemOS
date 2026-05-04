@@ -127,6 +127,7 @@ function seed(handle: TmpDbHandle) {
     vec: vec([1, 0, 0]),
     createdAt: NOW as never,
     updatedAt: NOW as never,
+    version: 1,
     status: "active",
   });
 }

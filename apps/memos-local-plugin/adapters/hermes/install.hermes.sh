@@ -28,6 +28,7 @@ cd "$PREFIX"
 
 # ── 1. node_modules ───────────────────────────────────────────────────────────
 if command -v npm >/dev/null 2>&1; then
+  command -v node > .memos-node-bin
   if [[ -d "node_modules" ]]; then
     log "node_modules already present — skipping install"
   else

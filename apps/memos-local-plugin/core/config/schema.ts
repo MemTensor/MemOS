@@ -246,9 +246,9 @@ const AlgorithmSchema = Type.Object({
     /** η delta applied per user thumbs up/down. */
     etaDelta: NumberInRange(0.1, 0, 1),
     /** Archive an active skill whose η drops below this. */
-    archiveEta: NumberInRange(0.25, 0, 1),
+    archiveEta: NumberInRange(0.1, 0, 1),
     /** Hide Tier-1 skills whose η is below this. Mirrors retrieval.minSkillEta. */
-    minEtaForRetrieval: NumberInRange(0.5, 0, 1),
+    minEtaForRetrieval: NumberInRange(0.1, 0, 1),
   }, { default: {} }),
   feedback: Type.Object({
     /** Raise a burst after this many failures of the same tool in-window. */
@@ -318,7 +318,7 @@ const AlgorithmSchema = Type.Object({
     /** Classic Reciprocal Rank Fusion constant. */
     rrfConstant: NumberInRange(60, 1, 10_000),
     /** Skip Tier-1 skills whose η is below this floor. */
-    minSkillEta: NumberInRange(0.5, 0, 1),
+    minSkillEta: NumberInRange(0.1, 0, 1),
     /** Drop Tier-2 hits whose cosine is below this floor. */
     minTraceSim: NumberInRange(0.35, 0, 1),
     /**

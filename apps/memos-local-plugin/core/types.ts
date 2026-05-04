@@ -211,6 +211,8 @@ export interface WorldModelRow {
   vec: EmbeddingVector | null;
   createdAt: EpochMs;
   updatedAt: EpochMs;
+  /** L3 abstraction version. Starts at 1 and increments on every L3 merge/rebuild. */
+  version: number;
   /**
    * Lifecycle state. `'archived'` rows are kept on disk so the viewer
    * can offer "归档 / 取消归档" without deleting evidence.
@@ -267,6 +269,24 @@ export interface SkillRow {
   } | null;
   /** Last user edit through the viewer's edit modal (migration 009). */
   editedAt?: EpochMs | null;
+  /** Number of successful `skill_get` calls that loaded this skill. */
+  usageCount?: number;
+  /** Last successful `skill_get` time, or null when never loaded. */
+  lastUsedAt?: EpochMs | null;
+}
+
+export interface SkillTrialRow {
+  id: string;
+  skillId: SkillId;
+  sessionId: SessionId | null;
+  episodeId: EpisodeId;
+  traceId: TraceId | null;
+  turnId: EpochMs | null;
+  toolCallId: string | null;
+  status: "pending" | "pass" | "fail" | "unknown";
+  createdAt: EpochMs;
+  resolvedAt: EpochMs | null;
+  evidence: Record<string, unknown>;
 }
 
 export interface EpisodeRow {

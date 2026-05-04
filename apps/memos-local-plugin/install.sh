@@ -298,7 +298,7 @@ deploy_tarball_to_prefix() {
   local prefix="$1"
   step "Deploying to ${prefix}"
   local saved_dir=""
-  local preserve=(node_modules data logs skills daemon config.yaml .auth.json)
+  local preserve=(node_modules data logs skills daemon config.yaml .auth.json .memos-node-bin)
   if [[ -d "${prefix}" ]]; then
     saved_dir="$(mktemp -d)"
     local item
@@ -326,6 +326,7 @@ deploy_tarball_to_prefix() {
   success "Package extracted"
 
   step "Installing npm dependencies"
+  command -v node > "${prefix}/.memos-node-bin"
   ( cd "${prefix}" && MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
   [[ -d "${prefix}/node_modules" ]] || die "npm install failed in ${prefix}"
 
@@ -721,14 +722,16 @@ CFGEOF
     warn "Port :${HERMES_PORT} already in use — skipping smoke test."
   else
     step "Starting Memory Viewer daemon"
+    local node_bin
+    node_bin="$(cat "${prefix}/.memos-node-bin" 2>/dev/null || command -v node || true)"
     local tsx_bin="${prefix}/node_modules/.bin/tsx"
     local bridge_cts="${prefix}/bridge.cts"
-    if [[ -x "${tsx_bin}" && -f "${bridge_cts}" ]]; then
+    if [[ -n "${node_bin}" && -x "${node_bin}" && -x "${tsx_bin}" && -f "${bridge_cts}" ]]; then
       local daemon_log="${prefix}/logs/daemon-start.log"
       mkdir -p "${prefix}/logs"
       # Launch bridge in --daemon mode (pure HTTP, no stdio).
       # The process stays alive to serve the Memory Viewer.
-      ( cd "${prefix}" && nohup "${tsx_bin}" "${bridge_cts}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
+      ( cd "${prefix}" && nohup "${node_bin}" "${tsx_bin}" "${bridge_cts}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
 
       if wait_for_viewer "${HERMES_PORT}"; then
         success "Memory Viewer daemon running"
@@ -738,7 +741,7 @@ CFGEOF
         return 1
       fi
     else
-      warn "tsx not found — skipping daemon start."
+      warn "node or tsx not found — skipping daemon start."
     fi
   fi
 

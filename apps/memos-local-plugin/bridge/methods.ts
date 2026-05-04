@@ -241,7 +241,14 @@ export function makeDispatcher(
       }
       case RPC_METHODS.SKILL_GET: {
         const p = asRecord(params, method);
-        return await core.getSkill(requireString(p, "id", method) as SkillId);
+        const opts: Parameters<MemoryCore["getSkill"]>[1] = { recordUse: true };
+        opts.recordTrial = p.recordTrial !== false;
+        if (typeof p.sessionId === "string") opts.sessionId = p.sessionId as SessionId;
+        if (typeof p.episodeId === "string") opts.episodeId = p.episodeId as EpisodeId;
+        if (typeof p.traceId === "string") opts.traceId = p.traceId;
+        if (typeof p.turnId === "number") opts.turnId = p.turnId;
+        if (typeof p.toolCallId === "string") opts.toolCallId = p.toolCallId;
+        return await core.getSkill(requireString(p, "id", method) as SkillId, opts);
       }
       case RPC_METHODS.SKILL_ARCHIVE: {
         const p = asRecord(params, method);
