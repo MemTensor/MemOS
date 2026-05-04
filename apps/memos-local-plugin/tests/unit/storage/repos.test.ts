@@ -229,9 +229,9 @@ describe("storage/repos — happy paths", () => {
       ).toThrow(/UNIQUE/i);
 
       const after = repos.skills.bumpTrial("sk1", true, 2);
-      expect(after).toEqual({ trialsAttempted: 1, trialsPassed: 1, eta: 1 });
+      expect(after).toEqual({ trialsAttempted: 1, trialsPassed: 1, eta: 0.5 });
       const after2 = repos.skills.bumpTrial("sk1", false, 3);
-      expect(after2.eta).toBeCloseTo(0.5);
+      expect(after2.eta).toBeCloseTo(1 / 3, 5);
     } finally {
       cleanup();
     }

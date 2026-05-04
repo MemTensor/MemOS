@@ -199,6 +199,9 @@ export function WorldModelsView() {
                 <div class="mem-card__body">
                   <div class="mem-card__title">{m.title || "(untitled)"}</div>
                   <div class="mem-card__meta">
+                    <span class="pill pill--info" title={t("worldModels.version.title")}>
+                      v{m.version ?? 1}
+                    </span>
                     <span class="pill pill--info">
                       {m.policyIds.length} {t("worldModels.col.policies")}
                     </span>
@@ -419,6 +422,10 @@ function WorldModelDrawer({
               {t("tasks.detail.meta")}
             </h3>
             <dl style="display:grid;grid-template-columns:120px 1fr;gap:6px 16px;margin:0;font-size:var(--fs-sm)">
+              <dt class="muted">{t("worldModels.field.id")}</dt>
+              <dd class="mono" style="word-break:break-all">{worldModel.id}</dd>
+              <dt class="muted">{t("worldModels.field.version")}</dt>
+              <dd>v{worldModel.version ?? 1}</dd>
               <dt class="muted">{t("memories.field.status")}</dt>
               <dd>
                 <span class={`pill pill--${worldModel.status === "archived" ? "archived" : "active"}`}>

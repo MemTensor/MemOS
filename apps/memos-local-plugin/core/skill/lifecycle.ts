@@ -63,9 +63,13 @@ function applyTrial(
 ): LifecycleUpdate {
   const trialsAttempted = skill.trialsAttempted + 1;
   const trialsPassed = skill.trialsPassed + (passed ? 1 : 0);
-  // Beta posterior: mean = (α + passed) / (α + β + attempted)
-  //   α = β = 1 (uniform prior)
-  const eta = clamp01((trialsPassed + 1) / (trialsAttempted + 2));
+  const eta = trialEtaWithPrior(
+    skill.eta,
+    skill.trialsAttempted,
+    skill.trialsPassed,
+    trialsAttempted,
+    trialsPassed,
+  );
   let status: SkillRow["status"] = skill.status;
   let transition: SkillLifecycleTransition | undefined;
 
@@ -85,6 +89,23 @@ function applyTrial(
   }
 
   return { status, eta, trialsAttempted, trialsPassed, transition };
+}
+
+function trialEtaWithPrior(
+  currentEta: number,
+  previousAttempts: number,
+  previousPasses: number,
+  nextAttempts: number,
+  nextPasses: number,
+): number {
+  // Treat the pre-trial η as one pseudo-observation, then fold in the
+  // accumulated trial record. This preserves the skill's policy-derived
+  // prior while still letting repeated real outcomes dominate.
+  const priorStrength = 1;
+  const priorEta = clamp01(
+    currentEta * (priorStrength + previousAttempts) - previousPasses,
+  );
+  return clamp01((priorEta * priorStrength + nextPasses) / (priorStrength + nextAttempts));
 }
 
 function applyThumbs(

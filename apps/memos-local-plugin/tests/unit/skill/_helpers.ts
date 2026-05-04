@@ -38,8 +38,8 @@ export function makeSkillConfig(partial: Partial<SkillConfig> = {}): SkillConfig
     evidenceLimit: 4,
     useLlm: true,
     etaDelta: 0.1,
-    archiveEta: 0.25,
-    minEtaForRetrieval: 0.5,
+    archiveEta: 0.1,
+    minEtaForRetrieval: 0.1,
     ...partial,
   };
 }

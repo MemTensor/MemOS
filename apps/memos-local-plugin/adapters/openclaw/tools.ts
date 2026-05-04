@@ -351,14 +351,19 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
 
   // ── skill_get ──
   api.registerTool(
-    (_ctx: OpenClawPluginToolContext): AgentToolDescriptor<typeof SkillGetParams> => ({
+    (ctx: OpenClawPluginToolContext): AgentToolDescriptor<typeof SkillGetParams> => ({
       name: "skill_get",
       label: "Skill Get",
       description: "Return the full invocation guide for a crystallized skill.",
       parameters: SkillGetParams,
-      async execute(_toolCallId: string, params: SkillGetParamsT) {
+      async execute(toolCallId: string, params: SkillGetParamsT) {
         const core = await resolveCore(opts);
-        const skill = await core.getSkill(params.id as SkillId);
+        const skill = await core.getSkill(params.id as SkillId, {
+          recordUse: true,
+          recordTrial: true,
+          sessionId: sessionFromCtx(ctx) as never,
+          toolCallId,
+        });
         if (!skill) return { found: false, skill: null };
         return {
           found: true,
@@ -374,6 +379,8 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
             sourceWorldModelIds: skill.sourceWorldModelIds,
             createdAt: skill.createdAt,
             updatedAt: skill.updatedAt,
+            usageCount: skill.usageCount,
+            lastUsedAt: skill.lastUsedAt,
           },
         };
       },

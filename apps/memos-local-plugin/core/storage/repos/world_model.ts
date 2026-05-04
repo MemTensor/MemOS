@@ -23,6 +23,7 @@ const COLUMNS = [
   "vec",
   "created_at",
   "updated_at",
+  "version",
   "structure_json",
   "domain_tags_json",
   "confidence",
@@ -114,6 +115,9 @@ export function makeWorldModelRepo(db: StorageDb) {
         updated_at: patch.updatedAt,
         vec: toBlob(patch.vec),
       });
+      db.prepare<{ id: string }>(
+        `UPDATE world_model SET version=version + 1 WHERE id=@id`,
+      ).run({ id });
     },
 
     updateConfidence(id: WorldModelId, confidence: number, updatedAt: number): void {
@@ -351,6 +355,7 @@ interface RawWorldRow {
   share_target: string | null;
   shared_at: number | null;
   edited_at: number | null;
+  version: number | null;
 }
 
 const EMPTY_STRUCTURE: WorldModelStructure = {
@@ -368,6 +373,7 @@ function rowToParams(row: WorldModelRow): Record<string, unknown> {
     vec: toBlob(row.vec),
     created_at: row.createdAt,
     updated_at: row.updatedAt,
+    version: row.version ?? 1,
     structure_json: toJsonText(row.structure ?? EMPTY_STRUCTURE),
     domain_tags_json: toJsonText(row.domainTags ?? []),
     confidence: row.confidence ?? 0.5,
@@ -391,6 +397,7 @@ function mapRow(r: RawWorldRow): WorldModelRow {
     vec: fromBlob(r.vec),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    version: r.version ?? 1,
     structure: fromJsonText<WorldModelStructure>(r.structure_json, EMPTY_STRUCTURE),
     domainTags: fromJsonText<string[]>(r.domain_tags_json, []),
     confidence: r.confidence,

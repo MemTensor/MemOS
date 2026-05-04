@@ -302,4 +302,16 @@ describe("makeDispatcher", () => {
       }),
     );
   });
+
+  it("skill.get records real tool usage", async () => {
+    const core = stubCore();
+    const dispatch = makeDispatcher(core);
+    await dispatch("skill.get", { id: "sk-1", sessionId: "s-1", episodeId: "ep-1" });
+    expect(core.getSkill).toHaveBeenCalledWith("sk-1", {
+      recordUse: true,
+      recordTrial: true,
+      sessionId: "s-1",
+      episodeId: "ep-1",
+    });
+  });
 });

@@ -16,6 +16,7 @@ import { makeKvRepo } from "./kv.js";
 import { makeMigrationsRepo } from "./migrations.js";
 import { makePoliciesRepo } from "./policies.js";
 import { makeSessionsRepo } from "./sessions.js";
+import { makeSkillTrialsRepo } from "./skill_trials.js";
 import { makeSkillsRepo } from "./skills.js";
 import { makeTracesRepo } from "./traces.js";
 import { makeWorldModelRepo } from "./world_model.js";
@@ -32,6 +33,7 @@ export interface Repos {
   migrations: ReturnType<typeof makeMigrationsRepo>;
   policies: ReturnType<typeof makePoliciesRepo>;
   sessions: ReturnType<typeof makeSessionsRepo>;
+  skillTrials: ReturnType<typeof makeSkillTrialsRepo>;
   skills: ReturnType<typeof makeSkillsRepo>;
   traces: ReturnType<typeof makeTracesRepo>;
   worldModel: ReturnType<typeof makeWorldModelRepo>;
@@ -50,6 +52,7 @@ export function makeRepos(db: StorageDb): Repos {
     migrations: makeMigrationsRepo(db),
     policies: makePoliciesRepo(db),
     sessions: makeSessionsRepo(db),
+    skillTrials: makeSkillTrialsRepo(db),
     skills: makeSkillsRepo(db),
     traces: makeTracesRepo(db),
     worldModel: makeWorldModelRepo(db),
@@ -68,6 +71,7 @@ export { makeKvRepo } from "./kv.js";
 export { makeMigrationsRepo } from "./migrations.js";
 export { makePoliciesRepo } from "./policies.js";
 export { makeSessionsRepo } from "./sessions.js";
+export { makeSkillTrialsRepo } from "./skill_trials.js";
 export { makeSkillsRepo } from "./skills.js";
 export { makeTracesRepo } from "./traces.js";
 export { makeWorldModelRepo } from "./world_model.js";

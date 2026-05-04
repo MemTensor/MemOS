@@ -150,6 +150,7 @@ export function seedWorldModel(
     vec: args.vec ?? vec([1, 0, 0]),
     createdAt: NOW,
     updatedAt: NOW,
+    version: 1,
     status: "active",
   };
   handle.repos.worldModel.upsert(row);

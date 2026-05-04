@@ -1134,7 +1134,15 @@ class MemTensorProvider(MemoryProvider):
                 skill_id = (args.get("id") or "").strip()
                 if not skill_id:
                     return json.dumps({"error": "missing id"})
-                skill = self._bridge.request("skill.get", {"id": skill_id})
+                skill = self._bridge.request(
+                    "skill.get",
+                    {
+                        "id": skill_id,
+                        "recordTrial": True,
+                        "sessionId": self._session_id,
+                        "episodeId": self._episode_id or None,
+                    },
+                )
                 return json.dumps({"found": bool(skill), "skill": skill})
         except Exception as err:
             return json.dumps({"error": str(err)})

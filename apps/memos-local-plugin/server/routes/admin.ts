@@ -43,7 +43,7 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
       const pluginRoot = nodePath.resolve(nodePath.dirname(thisFile), "../..");
       const tsxBin = nodePath.join(pluginRoot, "node_modules/.bin/tsx");
       const bridgeScript = nodePath.join(pluginRoot, "bridge.cts");
-      const cmd = `sleep 3 && "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
+      const cmd = `sleep 3 && "${process.execPath}" "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
       const child = spawn("bash", ["-c", cmd], {
         detached: true,
         stdio: "ignore",

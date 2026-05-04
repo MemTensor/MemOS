@@ -323,6 +323,8 @@ export interface WorldModelDTO {
   policyIds: PolicyId[];
   createdAt: EpochMs;
   updatedAt: EpochMs;
+  /** L3 abstraction version. Starts at 1 and increments on each L3 merge/rebuild. */
+  version: number;
   /**
    * Lifecycle state (migration 009). `'archived'` rows are kept on
    * disk so the user can un-archive — distinct from a hard delete.
@@ -370,6 +372,10 @@ export interface SkillDTO {
   support: number;
   /** V_with − V_without across supporting traces. */
   gain: number;
+  /** Number of resolved trial outcomes for this skill. */
+  trialsAttempted?: number;
+  /** Number of resolved successful trial outcomes. */
+  trialsPassed?: number;
   /** Source policy/world-model ids. */
   sourcePolicyIds: PolicyId[];
   sourceWorldModelIds: WorldModelId[];
@@ -389,6 +395,10 @@ export interface SkillDTO {
   } | null;
   /** Last user edit through the viewer's edit modal. */
   editedAt?: EpochMs;
+  /** Number of successful `skill_get` calls that loaded this skill. */
+  usageCount?: number;
+  /** Last successful `skill_get` time. */
+  lastUsedAt?: EpochMs | null;
 }
 
 export interface EpisodeDTO {

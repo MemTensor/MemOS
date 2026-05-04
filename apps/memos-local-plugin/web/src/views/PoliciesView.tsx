@@ -448,7 +448,9 @@ function PolicyDrawer({
       <aside class="drawer" role="dialog" onClick={(e) => e.stopPropagation()}>
         <header class="drawer__header">
           <div>
-            <div class="muted" style="font-size:var(--fs-xs);margin-bottom:2px">policy</div>
+            <div class="muted mono" style="font-size:var(--fs-xs);margin-bottom:2px">
+              policy {policy.id}
+            </div>
             <h2 class="drawer__title">{policy.title}</h2>
           </div>
           <button class="btn btn--ghost btn--icon" onClick={onClose} aria-label={t("common.close")}>
