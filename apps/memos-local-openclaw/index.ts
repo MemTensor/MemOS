@@ -1889,7 +1889,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
 
         // ── Phase 1: Local search ∥ Hub search (parallel) ──
-        const arLocalP = engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwnerFilter });
+        const arLocalP = engine.search({ query, maxResults: ctx.config.recall.autoRecallMaxResults, minScore: ctx.config.recall.autoRecallMinScore, ownerFilter: recallOwnerFilter });
         const arHubP = ctx.config?.sharing?.enabled
           ? hubSearchMemories(store, ctx, { query, maxResults: 10, scope: "all" })
               .catch((err: any) => { ctx.log.debug(`auto-recall: hub search failed (${err})`); return { hits: [] as any[], meta: {} }; })
