@@ -2873,6 +2873,39 @@ export class SqliteStore {
     return result;
   }
 
+  // ─── Export ───
+
+  exportAll(): { memories: unknown[]; tasks: unknown[]; skills: unknown[] } {
+    const memories = this.db.prepare(
+      "SELECT * FROM chunks ORDER BY created_at ASC",
+    ).all();
+
+    const tasks = this.db.prepare(
+      "SELECT * FROM tasks ORDER BY started_at ASC",
+    ).all();
+
+    const skills = this.db.prepare(
+      "SELECT id, name, description, content, version, status, visibility, owner, created_at, updated_at FROM skills ORDER BY created_at ASC",
+    ).all();
+
+    return { memories, tasks, skills };
+  }
+
+  exportMemoriesAsCsv(): string {
+    const rows = this.db.prepare(
+      "SELECT id, session_key, role, summary, content, created_at FROM chunks ORDER BY created_at ASC",
+    ).all() as Array<{ id: string; session_key: string; role: string; summary: string; content: string; created_at: number }>;
+
+    const escape = (v: string) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const header = ["id", "session_key", "role", "summary", "content", "created_at"].join(",");
+    const lines = rows.map((r) =>
+      [r.id, r.session_key, r.role, r.summary, r.content, new Date(r.created_at).toISOString()]
+        .map(escape)
+        .join(","),
+    );
+    return [header, ...lines].join("\n");
+  }
+
   close(): void {
     this.db.close();
   }
