@@ -4,15 +4,59 @@ import { embedGemini } from "./providers/gemini";
 import { embedCohere, embedCohereQuery } from "./providers/cohere";
 import { embedVoyage } from "./providers/voyage";
 import { embedMistral } from "./providers/mistral";
+import { embedOllama } from "./providers/ollama";
 import { embedLocal } from "./local";
 import { modelHealth } from "../ingest/providers";
+import { EmbeddingCache, DEFAULT_CACHE_OPTIONS, getGlobalCache } from "./cache";
 
 export class Embedder {
+  private cache: EmbeddingCache;
+
   constructor(
     private cfg: EmbeddingConfig | undefined,
     private log: Logger,
     private openclawAPI?: OpenClawAPI,
-  ) {}
+  ) {
+    // Use global cache singleton to share cache across instances
+    this.cache = getGlobalCache(log);
+  }
+
+  /**
+   * Get embedding for query with caching support
+   */
+  async embedQueryWithCache(text: string): Promise<number[]> {
+    // Try cache first
+    const cached = await this.cache.get(text);
+    if (cached) {
+      this.log.debug(`[Embedder] Cache hit for query: "${text.slice(0, 50)}..."`);
+      return cached;
+    }
+
+    // Generate embedding
+    const startTime = Date.now();
+    const vector = await this.embedQuery(text);
+    const duration = Date.now() - startTime;
+
+    // Store in cache
+    await this.cache.set(text, vector);
+    this.log.debug(`[Embedder] Cached embedding (${duration}ms) for query: "${text.slice(0, 50)}..."`);
+
+    return vector;
+  }
+
+  /**
+   * Clear embedding cache
+   */
+  clearCache(): void {
+    this.cache.clear();
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats(): { size: number; maxSize: number; ttlMs: number } {
+    return this.cache.getStats();
+  }
 
   get provider(): string {
     if (this.cfg?.provider === "openclaw" && this.cfg.capabilities?.hostEmbedding !== true) {
@@ -70,6 +114,8 @@ export class Embedder {
           result = await embedMistral(texts, cfg!, this.log); break;
         case "voyage":
           result = await embedVoyage(texts, cfg!, this.log); break;
+        case "ollama":
+          result = await embedOllama(texts, cfg!, this.log); break;
         case "local":
         default:
           result = await embedLocal(texts, this.log); break;

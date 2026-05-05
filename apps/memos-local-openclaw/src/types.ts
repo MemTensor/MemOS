@@ -312,6 +312,8 @@ export interface MemosLocalConfig {
     recencyHalfLifeDays?: number;
     /** Cap vector search to this many most recent chunks. 0 = no cap (search all; may get slower with 200k+ chunks). If you set a cap for performance, use a large value (e.g. 200000–300000) so older memories are still in the window; FTS always searches all. */
     vectorSearchMaxChunks?: number;
+    /** Default owner filter for recall search. If not set, searches all owners. */
+    ownerFilter?: string[];
   };
   dedup?: {
     similarityThreshold?: number;

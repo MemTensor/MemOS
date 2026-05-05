@@ -54,6 +54,7 @@
     "posthog-node": "^5.28.0",
     "puppeteer": "^24.38.0",
     "semver": "^7.7.4",
+    "sqlite-vec": "^0.1.9",
     "uuid": "^10.0.0"
   },
   "devDependencies": {
