@@ -66,6 +66,20 @@ daemon/          # bridge pid/port files
 Upgrading or uninstalling the plugin **never** touches `data/`, `skills/`,
 `logs/`, or `config.yaml`.
 
+## Configuration Discovery
+
+The bridge locates its runtime home (and `config.yaml`) using this priority:
+
+1. **`--home=<path>` CLI flag** — passed to `bridge.cts` directly
+2. **`MEMOS_HOME` env var** — overrides the runtime home directory
+3. **`MEMOS_CONFIG_FILE` env var** — overrides only the config file path
+4. **Built-in default** — `~/.<agent>/memos-plugin/` (e.g. `~/.hermes/memos-plugin/`)
+
+When running inside Docker (where the daemon is started by the container's
+entrypoint rather than the Python adapter), use `--home` or `MEMOS_HOME` to
+ensure the bridge finds its config. See [**Docker Deployment**](./docs/DOCKER.md)
+for the full guide.
+
 ## Quick start
 
 ```bash
