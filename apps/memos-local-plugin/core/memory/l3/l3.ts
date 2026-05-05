@@ -154,9 +154,17 @@ export async function runL3(
     const evidenceByPolicy = loadEvidence(cluster, repos, config.traceEvidencePerPolicy);
     const episodeIds = collectEpisodeIds(cluster.policies, evidenceByPolicy);
 
+    // Surface a per-cluster trigger episode so the LLM call's
+    // `system_model_status` row can be grouped with the rest of that
+    // episode's pipeline activity in the Logs viewer. Prefer the
+    // explicit trigger (passed by the L2 → L3 subscriber); otherwise
+    // fall back to the first contributing episode in the cluster so
+    // manual / rebuild runs still get a coherent grouping.
+    const triggerEpisodeId = input.episodeId ?? episodeIds[0];
+
     const t0 = Date.now();
     const draftRes = await abstractDraft(
-      { cluster, evidenceByPolicy },
+      { cluster, evidenceByPolicy, episodeId: triggerEpisodeId },
       { llm: deps.llm, log: abstractLog, config },
     );
     timings.abstract += Date.now() - t0;

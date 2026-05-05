@@ -301,7 +301,7 @@ async function runAll(
     const queryText =
       (ctx as { userText?: string }).userText ?? compiled.text ?? "";
     const filtered = await llmFilterCandidates(
-      { query: queryText, ranked: ranked.ranked },
+      { query: queryText, ranked: ranked.ranked, episodeId },
       {
         llm: deps.llm ?? null,
         log,

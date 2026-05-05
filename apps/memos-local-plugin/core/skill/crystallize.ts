@@ -23,7 +23,7 @@ import {
   sanitizeDerivedMarkdownList,
   sanitizeDerivedText,
 } from "../safety/content.js";
-import type { PolicyRow, SkillRow, TraceRow } from "../types.js";
+import type { EpisodeId, PolicyRow, SkillRow, TraceRow } from "../types.js";
 import { MemosError } from "../../agent-contract/errors.js";
 import { extractToolNames } from "./tool-names.js";
 import type {
@@ -48,6 +48,13 @@ export interface CrystallizeInput {
   counterExamples?: TraceRow[];
   /** Names of *non-archived* skills, so the LLM can avoid collisions. */
   namingSpace: string[];
+  /**
+   * Episode that triggered this crystallization, when known. Forwarded
+   * to the LLM call so the resulting `system_model_status` audit row
+   * can be grouped with the rest of that episode's pipeline activity in
+   * the Logs viewer.
+   */
+  episodeId?: EpisodeId;
 }
 
 export interface CrystallizeDeps {
@@ -114,6 +121,7 @@ export async function crystallizeDraft(
       {
         op: "skill.crystallize",
         phase: "skill",
+        episodeId: input.episodeId,
         schemaHint: "skill-crystallize.v2",
       },
     );

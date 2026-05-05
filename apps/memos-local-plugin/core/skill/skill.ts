@@ -368,8 +368,16 @@ async function runCrystallize(
   const namingSpace = Array.from(
     new Set(Array.from(skillsByPolicy.values()).map((s) => s.name)),
   );
+  // The most recent contributing episode is the natural "trigger" the
+  // user expects to see on the Logs page (skill events appear right
+  // after the episode they were synthesised from). Falls back to the
+  // policy's first source episode when no recency ordering is
+  // available.
+  const triggerEpisodeId =
+    policy.sourceEpisodeIds[policy.sourceEpisodeIds.length - 1] ??
+    policy.sourceEpisodeIds[0];
   return crystallizeDraft(
-    { policy, evidence, counterExamples, namingSpace },
+    { policy, evidence, counterExamples, namingSpace, episodeId: triggerEpisodeId },
     {
       llm: deps.llm,
       log: deps.log.child({ channel: "core.skill.crystallize" }),

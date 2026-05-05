@@ -302,6 +302,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           prevAssistantText: ctx.prevAssistantText,
           newUserText: userText,
           gapMs,
+          prevEpisodeId: currentEpId,
         });
         const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
@@ -466,6 +467,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
             prevAssistantText: ctx.prevAssistantText,
             newUserText: userText,
             gapMs,
+            prevEpisodeId: snapshot.id as EpisodeId,
           });
           const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
@@ -567,6 +569,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       prevAssistantText: prev.assistantText,
       newUserText: userText,
       gapMs,
+      prevEpisodeId: prev.episodeId,
     });
     const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 

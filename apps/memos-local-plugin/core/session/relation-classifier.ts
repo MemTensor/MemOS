@@ -527,6 +527,7 @@ async function callLlm(llm: LlmClient, input: RelationInput): Promise<LlmRelatio
     {
       op: "session.relation.classify",
       phase: "session",
+      episodeId: input.prevEpisodeId,
       schemaHint: `{"relation":"revision"|"follow_up"|"new_task"|"unknown","confidence":0..1,"reason":"..."}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;
@@ -595,6 +596,7 @@ async function callArbitration(llm: LlmClient, input: RelationInput): Promise<Tu
     {
       op: "session.relation.arbitrate",
       phase: "session",
+      episodeId: input.prevEpisodeId,
       schemaHint: `{"relation":"follow_up"|"new_task","reason":"..."}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;
