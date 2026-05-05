@@ -86,14 +86,17 @@ jobs:
         pip install dist/*.tar.gz
         pip uninstall -y memoryos
 
-    # Ruff checks
-    - name: Install test group dependencies
+    # Ruff and Pre-commit checks
+    - name: Install test and dev group dependencies
       run: |
-        poetry install --no-interaction --with test
+        poetry install --no-interaction --with test --with dev
     - name: Ruff checks
       run: |
         poetry run ruff check
         poetry run ruff format --check
+    - name: Pre-commit checks
+      run: |
+        poetry run pre-commit run -a
 
     # PyTest checks
     - name: Install all extra dependencies
