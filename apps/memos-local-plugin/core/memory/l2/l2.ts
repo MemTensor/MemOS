@@ -196,6 +196,7 @@ export async function runL2(
           episodeIds: epIds,
           signatureLabel: bucket.signature,
           charCap: config.inductionTraceCharCap,
+          triggerEpisodeId: input.episodeId,
         },
         {
           llm: config.useLlm ? deps.llm : null,

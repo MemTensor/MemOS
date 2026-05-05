@@ -223,8 +223,28 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
       });
     }
 
-    const intent = await deps.intentClassifier.classify(input.userMessage);
+    // Pre-allocate the episode id BEFORE the intent classifier runs so
+    // its LLM call (`session.intent.classify`) can stamp the resulting
+    // `system_model_status` audit row with this episode. Without this,
+    // the call fires before any id exists and the row shows up as a
+    // stand-alone entry in the Logs viewer chain view, divorced from
+    // the rest of the episode's pipeline activity.
+    //
+    // Safety:
+    //   - id minting is a pure string generation (no DB write yet);
+    //     the row is inserted later by `epm.start` which honours the
+    //     pre-supplied id (`input.id ?? ids.episode()` in
+    //     `episode-manager.ts:start`), so there is no double-mint.
+    //   - `IntentClassifier.classify` catches all internal errors and
+    //     returns a fallback decision instead of throwing, so the
+    //     pre-allocated id will reach the insert path on every
+    //     happy-path completion.
+    //   - Wall-clock timing of the `episodes` insert is unchanged —
+    //     the classify await dominates either way.
     const episodeId = (input.id ?? ids.episode()) as EpisodeId;
+    const intent = await deps.intentClassifier.classify(input.userMessage, {
+      episodeId,
+    });
 
     // Wrap the write+emit in a log context so downstream listeners inherit
     // the correlation ids without having to know them.

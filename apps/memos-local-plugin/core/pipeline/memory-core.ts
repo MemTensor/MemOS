@@ -59,10 +59,12 @@ import type {
 import type {
   EpisodeRow,
   FeedbackRow,
+  PolicyId,
   PolicyRow,
   SkillRow,
   TraceId,
   TraceRow,
+  WorldModelId,
   WorldModelRow,
 } from "../types.js";
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
@@ -440,6 +442,13 @@ export function createMemoryCore(
   const skillRunDurationBySkill = new Map<string, number>();
   const l2StartedAtByEpisode = new Map<string, number>();
   let l3StartedAt: number | null = null;
+  // Most recent episode that triggered an L3 abstraction run. Set by
+  // the L2 → L3 hop on `l2.policy.induced` / `l2.policy.updated`,
+  // consumed by L3 lifecycle writers below. The L3 subscriber is
+  // single-flight so storing one value is sufficient for grouping
+  // `world_model_*` rows with the rest of the triggering episode's
+  // pipeline activity in the Logs viewer.
+  let l3TriggerEpisodeId: string | undefined;
 
   function ensureLive(): void {
     if (shutDown) {
@@ -630,6 +639,8 @@ export function createMemoryCore(
         writeApiLog(handle, log, "skill_generate", {
           phase: "done",
           skillId: evt.skillId,
+          policyId: evt.policyId,
+          episodeId: episodeFromPolicy(handle, evt.policyId),
         }, evt, durationMs, true);
       } else if (k === "skill.rebuilt" || k === "skill.eta.updated" || k === "skill.archived") {
         const skillId = (evt as { skillId?: string }).skillId;
@@ -637,12 +648,18 @@ export function createMemoryCore(
           (skillId ? skillRunDurationBySkill.get(skillId) : undefined) ??
           durationSince(eventTime(evt) - 1, eventTime(evt), 1);
         if (k === "skill.rebuilt" && skillId) skillRunDurationBySkill.delete(skillId);
+        const policyIdForSkill = (evt as { policyId?: string }).policyId;
         writeApiLog(handle, log, "skill_evolve", {
           kind: k,
           skillId,
+          policyId: policyIdForSkill,
+          episodeId:
+            episodeFromPolicy(handle, policyIdForSkill) ??
+            episodeFromSkill(handle, skillId),
         }, evt, durationMs, true);
       } else if (k === "skill.verification.failed" || k === "skill.failed") {
         const policyId = (evt as { policyId?: string }).policyId;
+        const skillId = (evt as { skillId?: string }).skillId;
         const durationMs = durationSince(
           policyId ? skillStartedAtByPolicy.get(policyId) : undefined,
           eventTime(evt),
@@ -652,6 +669,11 @@ export function createMemoryCore(
         writeApiLog(handle, log, "skill_generate", {
           phase: "failed",
           kind: k,
+          policyId,
+          skillId,
+          episodeId:
+            episodeFromPolicy(handle, policyId) ??
+            episodeFromSkill(handle, skillId),
         }, evt, durationMs, false);
       }
     });
@@ -660,23 +682,31 @@ export function createMemoryCore(
     handle.buses.l2.onAny((evt) => {
       const k = evt.kind;
       if (k === "l2.policy.induced") {
+        // L2 induction is the canonical L3 trigger; remember the
+        // episode so the next L3 run's lifecycle rows can be grouped
+        // with the rest of that episode's pipeline activity.
+        l3TriggerEpisodeId = evt.episodeId;
         const durationMs = durationSince(l2StartedAtByEpisode.get(evt.episodeId), Date.now(), 1);
         writeApiLog(handle, log, "policy_generate", {
           phase: "induced",
           policyId: evt.policyId,
           title: evt.title,
+          episodeId: evt.episodeId,
         }, evt, durationMs, true);
       } else if (k === "l2.policy.updated") {
+        if (evt.status === "active") l3TriggerEpisodeId = evt.episodeId;
         const durationMs = durationSince(l2StartedAtByEpisode.get(evt.episodeId), Date.now(), 1);
         writeApiLog(handle, log, "policy_evolve", {
           policyId: evt.policyId,
           status: evt.status,
+          episodeId: evt.episodeId,
         }, evt, durationMs, true);
       } else if (k === "l2.failed") {
         const durationMs = durationSince(l2StartedAtByEpisode.get(evt.episodeId), Date.now(), 1);
         l2StartedAtByEpisode.delete(evt.episodeId);
         writeApiLog(handle, log, "policy_generate", {
           phase: "failed",
+          episodeId: evt.episodeId,
         }, evt, durationMs, false);
       }
     });
@@ -691,19 +721,30 @@ export function createMemoryCore(
           phase: "created",
           worldModelId: evt.worldModelId,
           title: evt.title,
+          episodeId:
+            episodeFromWorldModel(handle, evt.worldModelId) ??
+            l3TriggerEpisodeId,
         }, evt, durationSince(l3StartedAt, Date.now(), 1), true);
       } else if (k === "l3.world-model.updated") {
         writeApiLog(handle, log, "world_model_evolve", {
           worldModelId: evt.worldModelId,
           title: evt.title,
+          episodeId:
+            episodeFromWorldModel(handle, evt.worldModelId) ??
+            l3TriggerEpisodeId,
         }, evt, durationSince(l3StartedAt, Date.now(), 1), true);
       } else if (k === "l3.confidence.adjusted") {
         writeApiLog(handle, log, "world_model_evolve", {
           kind: "confidence.adjusted",
+          worldModelId: evt.worldModelId,
+          episodeId:
+            episodeFromWorldModel(handle, evt.worldModelId) ??
+            l3TriggerEpisodeId,
         }, evt, durationSince(l3StartedAt, Date.now(), 1), true);
       } else if (k === "l3.failed") {
         writeApiLog(handle, log, "world_model_generate", {
           phase: "failed",
+          episodeId: l3TriggerEpisodeId,
         }, evt, durationSince(l3StartedAt, Date.now(), 1), false);
       }
     });
@@ -3834,6 +3875,66 @@ function writeApiLog(
     log.debug(`apiLogs.${toolName}.skipped`, {
       err: err instanceof Error ? err.message : String(err),
     });
+  }
+}
+
+/**
+ * Best-effort lookup helpers for stamping a triggering `episodeId` on
+ * `skill_*` / `world_model_*` api_log rows. The Logs viewer groups
+ * events by episode for its chain-timeline view; without this the
+ * skill / L3 lifecycle rows would float as standalone cards. Lookup
+ * failures are silently absorbed — the row is still written, just
+ * without an episode binding.
+ */
+function episodeFromPolicy(
+  handle: PipelineHandle,
+  policyId: string | undefined,
+): string | undefined {
+  if (!policyId) return undefined;
+  try {
+    const row = handle.repos.policies.getById(policyId as PolicyId);
+    if (!row) return undefined;
+    // Prefer the most recently attributed episode — that's the one the
+    // user just witnessed and the one the rest of the pipeline events
+    // (memory_add / task_done) are stamped with.
+    return (
+      row.sourceEpisodeIds[row.sourceEpisodeIds.length - 1] ??
+      row.sourceEpisodeIds[0]
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function episodeFromSkill(
+  handle: PipelineHandle,
+  skillId: string | undefined,
+): string | undefined {
+  if (!skillId) return undefined;
+  try {
+    const row = handle.repos.skills.getById(skillId as SkillId);
+    if (!row) return undefined;
+    return episodeFromPolicy(handle, row.sourcePolicyIds[0]);
+  } catch {
+    return undefined;
+  }
+}
+
+function episodeFromWorldModel(
+  handle: PipelineHandle,
+  worldModelId: string | undefined,
+): string | undefined {
+  if (!worldModelId) return undefined;
+  try {
+    const row = handle.repos.worldModel.getById(worldModelId as WorldModelId);
+    if (!row) return undefined;
+    return (
+      row.sourceEpisodeIds[row.sourceEpisodeIds.length - 1] ??
+      row.sourceEpisodeIds[0] ??
+      episodeFromPolicy(handle, row.policyIds[0])
+    );
+  } catch {
+    return undefined;
   }
 }
 

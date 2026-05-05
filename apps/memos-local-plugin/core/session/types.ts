@@ -185,6 +185,14 @@ export interface RelationInput {
   gapMs?: number;
   /** Domain/tag signals from the previous episode (capture.tagger output). */
   prevTags?: readonly string[];
+  /**
+   * Previous episode id (the one being asked "should we keep this open").
+   * Forwarded to the LLM call as `episodeId` so the resulting
+   * `system_model_status` audit row can be grouped with that episode's
+   * pipeline activity in the Logs viewer — semantically the classifier
+   * is "scoring whether to terminate prevEpisodeId".
+   */
+  prevEpisodeId?: EpisodeId;
 }
 
 // ─── Event bus ──────────────────────────────────────────────────────────────

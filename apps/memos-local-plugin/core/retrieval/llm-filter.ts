@@ -31,6 +31,13 @@ const DEFAULT_CANDIDATE_BODY_CHARS = 500;
 export interface FilterInput {
   query: string;
   ranked: readonly RankedCandidate[];
+  /**
+   * Episode this retrieval is happening for (typically the active or
+   * just-opening episode). Forwarded to the LLM call so the resulting
+   * `system_model_status` audit row can be grouped with the rest of
+   * that episode's pipeline activity in the Logs viewer.
+   */
+  episodeId?: string;
 }
 
 export interface FilterDeps {
@@ -124,6 +131,8 @@ ${list}`,
       ],
       {
         op: `retrieval.${RETRIEVAL_FILTER_PROMPT.id}.v${RETRIEVAL_FILTER_PROMPT.version}`,
+        phase: "retrieve",
+        episodeId: input.episodeId,
         temperature: 0,
         // Short output — indices + one bool. Kept tight so a misbehaving
         // model can't blow budgets.

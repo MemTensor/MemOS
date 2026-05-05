@@ -39,6 +39,13 @@ export interface InduceInput {
   /** Human-readable signature for the bucket — appears in prompts. */
   signatureLabel: string;
   charCap: number;
+  /**
+   * Episode that triggered this induction run (i.e. the episode whose
+   * trace just landed and re-fired runL2). Forwarded to the LLM call so
+   * the resulting `system_model_status` audit row can be grouped with
+   * the rest of that episode's pipeline activity in the Logs viewer.
+   */
+  triggerEpisodeId?: EpisodeId;
 }
 
 export interface InduceDeps {
@@ -97,6 +104,7 @@ export async function induceDraft(
       {
         op: `l2.${L2_INDUCTION_PROMPT.id}.v${L2_INDUCTION_PROMPT.version}`,
         phase: "l2",
+        episodeId: input.triggerEpisodeId ?? input.episodeIds[input.episodeIds.length - 1],
         temperature: 0.1,
         malformedRetries: 1,
         schemaHint: `{"title":"...","trigger":"...","procedure":"...","verification":"...","rationale":"...","caveats":["..."],"confidence":0..1,"support_trace_ids":["tr_..."]}`,

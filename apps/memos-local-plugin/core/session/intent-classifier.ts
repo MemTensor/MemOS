@@ -13,6 +13,7 @@
  * tests can stub it. When `kind=meta`, retrieval is skipped regardless.
  */
 
+import type { EpisodeId } from "../../agent-contract/dto.js";
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
@@ -31,8 +32,27 @@ export interface IntentClassifierOptions {
   disableLlm?: boolean;
 }
 
+/**
+ * Optional context the caller can supply to `classify` so the LLM
+ * audit trail (`system_model_status` rows) can be correlated back to
+ * a specific episode in the Logs viewer.
+ *
+ * Callers that have already minted the target episode id (the standard
+ * `sessionManager.startEpisode` flow does this — it pre-allocates the
+ * id before calling the classifier so the classifier's LLM call carries
+ * it) should pass it here. Anything else can omit it, in which case
+ * the resulting log row will be a stand-alone entry — same as today.
+ */
+export interface IntentClassifyOptions {
+  /** Episode id this classification is being run for, when known. */
+  episodeId?: EpisodeId;
+}
+
 export interface IntentClassifier {
-  classify(firstUserMessage: string): Promise<IntentDecision>;
+  classify(
+    firstUserMessage: string,
+    options?: IntentClassifyOptions,
+  ): Promise<IntentDecision>;
 }
 
 export function createIntentClassifier(opts: IntentClassifierOptions = {}): IntentClassifier {
@@ -42,7 +62,10 @@ export function createIntentClassifier(opts: IntentClassifierOptions = {}): Inte
   const timeoutMs = opts.timeoutMs ?? 6_000;
 
   return {
-    async classify(firstUserMessage: string): Promise<IntentDecision> {
+    async classify(
+      firstUserMessage: string,
+      options?: IntentClassifyOptions,
+    ): Promise<IntentDecision> {
       const text = (firstUserMessage ?? "").trim();
       if (text.length === 0) {
         return decisionFrom("chitchat", 0.9, "empty message", ["empty"]);
@@ -68,7 +91,7 @@ export function createIntentClassifier(opts: IntentClassifierOptions = {}): Inte
       if (!llmDisabled && llm) {
         try {
           const result = await withTimeout(
-            callLlm(llm, text),
+            callLlm(llm, text, options?.episodeId),
             timeoutMs,
             "intent.llm.timeout",
           );
@@ -180,7 +203,11 @@ Rules:
 - If unsure, pick "unknown" with confidence ≤ 0.5.
 - "task" is the safe default for imperative requests in any language.`;
 
-async function callLlm(llm: LlmClient, text: string): Promise<LlmIntentAnswer> {
+async function callLlm(
+  llm: LlmClient,
+  text: string,
+  episodeId?: EpisodeId,
+): Promise<LlmIntentAnswer> {
   const rsp = await llm.completeJson<{ kind: unknown; confidence: unknown; reason: unknown }>(
     [
       { role: "system", content: INTENT_SYSTEM },
@@ -189,6 +216,7 @@ async function callLlm(llm: LlmClient, text: string): Promise<LlmIntentAnswer> {
     {
       op: "session.intent.classify",
       phase: "session",
+      episodeId,
       schemaHint: `{"kind":"task"|"memory_probe"|"chitchat"|"meta"|"unknown","confidence":0..1,"reason":"..."}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;
