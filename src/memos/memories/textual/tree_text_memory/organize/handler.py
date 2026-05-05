@@ -155,12 +155,38 @@ class NodeHandler:
         merged: TextualMemoryItem,
         user_name: str | None = None,
     ):
-        edges_a = self.graph_store.get_edges(
-            conflict_a.id, type="ANY", direction="ANY", user_name=user_name
-        )
-        edges_b = self.graph_store.get_edges(
-            conflict_b.id, type="ANY", direction="ANY", user_name=user_name
-        )
+        edges_a = []
+
+        if hasattr(self.graph_store, "get_edges"):
+            edges_a = self.graph_store.get_edges(
+                conflict_a.id, type="ANY", direction="ANY", user_name=user_name
+            )
+        elif hasattr(self.graph_store, "get_neighbors"):
+            neighbor_nodes_in = self.graph_store.get_neighbors(
+                conflict_a.id, edge_type="ANY", direction="IN", user_name=user_name
+            )
+            neighbor_nodes_out = self.graph_store.get_neighbors(
+                conflict_a.id, edge_type="ANY", direction="OUT", user_name=user_name
+            )
+            edges_a = [
+                {"from": n["id"], "to": conflict_a.id, "type": "ANY"} for n in neighbor_nodes_in
+            ] + [{"from": conflict_a.id, "to": n["id"], "type": "ANY"} for n in neighbor_nodes_out]
+
+        edges_b = []
+        if hasattr(self.graph_store, "get_edges"):
+            edges_b = self.graph_store.get_edges(
+                conflict_b.id, type="ANY", direction="ANY", user_name=user_name
+            )
+        elif hasattr(self.graph_store, "get_neighbors"):
+            neighbor_nodes_in = self.graph_store.get_neighbors(
+                conflict_b.id, edge_type="ANY", direction="IN", user_name=user_name
+            )
+            neighbor_nodes_out = self.graph_store.get_neighbors(
+                conflict_b.id, edge_type="ANY", direction="OUT", user_name=user_name
+            )
+            edges_b = [
+                {"from": n["id"], "to": conflict_b.id, "type": "ANY"} for n in neighbor_nodes_in
+            ] + [{"from": conflict_b.id, "to": n["id"], "type": "ANY"} for n in neighbor_nodes_out]
         all_edges = edges_a + edges_b
 
         self.graph_store.add_node(
@@ -175,7 +201,7 @@ class NodeHandler:
             new_to = merged.id if edge["to"] in (conflict_a.id, conflict_b.id) else edge["to"]
             if new_from == new_to:
                 continue
-            # Check if the edge already exists before adding
+            # Check if the edge already exists before adding it
             if not self.graph_store.edge_exists(
                 new_from, new_to, edge["type"], direction="ANY", user_name=user_name
             ):

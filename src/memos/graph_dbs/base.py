@@ -302,3 +302,7 @@ class BaseGraphDB(ABC):
                 - metadata: dict[str, Any] - Node metadata
             user_name: Optional user name (will use config default if not provided)
         """
+
+    @abstractmethod
+    def node_not_exist(self, scope: str, user_name: str | None = None) -> bool:
+        pass
