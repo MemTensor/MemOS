@@ -98,12 +98,60 @@ def _node_available() -> bool:
         return False
 
 
+def _tcp_health_check(host: str = "127.0.0.1", port: int = 18911, timeout: float = 3.0) -> bool:
+    """Probe the bridge daemon via TCP by sending a ``core.health`` JSON-RPC request.
+
+    Returns True when the bridge responds with ``{ok: true}`` within
+    *timeout* seconds, False otherwise (no listener, connection refused,
+    malformed response, or timeout).
+    """
+    import json
+    import socket
+
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except (OSError, TimeoutError):
+        return False
+
+    try:
+        request = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "core.health",
+            "id": 1,
+        })
+        sock.sendall(request.encode("utf-8") + b"\n")
+        sock.settimeout(timeout)
+        buf = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            if b"\n" in buf:
+                line, _ = buf.split(b"\n", 1)
+                resp = json.loads(line)
+                ok = isinstance(resp, dict) and resp.get("result", {}).get("ok") is True
+                return bool(ok)
+    except (OSError, json.JSONDecodeError, TimeoutError):
+        return False
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
 def ensure_bridge_running(*, probe_only: bool = False) -> bool:
     """Return True when the bridge is (or can be) operational.
 
-    ``probe_only=True`` performs a lightweight availability check without
-    launching a long-lived subprocess. This is what
-    ``MemTensorProvider.is_available`` calls during Hermes startup.
+    When *probe_only* is True (the default during Hermes startup via
+    ``MemTensorProvider.is_available``), only checks script existence and
+    Node.js availability — no network traffic.
+
+    When *probe_only* is False (the heartbeat path), also performs a TCP
+    health check on ``127.0.0.1:18911``.  A bridge whose TCP listener is
+    up but crashes on database calls (e.g. native-addon mismatch) will
+    NOT be marked healthy — the heartbeat will trigger a restart.
     """
     global _bridge_ok
     with _lock:
@@ -118,6 +166,18 @@ def ensure_bridge_running(*, probe_only: bool = False) -> bool:
             logger.warning("MemOS: Node.js not found on PATH")
             _bridge_ok = False
             return False
+
+        if not probe_only:
+            # Full health check: verify the bridge is truly responding on TCP
+            if _tcp_health_check():
+                _bridge_ok = True
+                return True
+            # TCP not responding — bridge may be starting up or dead.
+            # Log and return False so the caller (heartbeat) triggers a restart.
+            logger.info("MemOS: bridge TCP health check failed — not operational")
+            _bridge_ok = False
+            return False
+
         _bridge_ok = True
         return True
 
