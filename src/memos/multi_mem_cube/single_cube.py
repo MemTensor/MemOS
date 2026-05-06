@@ -429,7 +429,9 @@ class SingleCubeView(MemCubeView):
             for edge in edges_info:
                 chunk_target_id = edge.get("to")
                 edge_type = edge.get("type")
-                item_neighbor = self.searcher.graph_store.get_node(chunk_target_id)
+                item_neighbor = self.searcher.graph_store.get_node(
+                    chunk_target_id, user_name=user_name
+                )
                 if item_neighbor:
                     item_neighbor_mem = TextualMemoryItem(**item_neighbor)
                     item_neighbor_mem.metadata.relativity = neighbor_relativity
