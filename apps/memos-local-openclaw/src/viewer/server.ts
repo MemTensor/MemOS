@@ -5,6 +5,7 @@ import { execSync, exec, execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { findPluginRoot } from "../shared/plugin-root";
 import type { SqliteStore } from "../storage/sqlite";
 import type { Embedder } from "../embedding";
 import { Summarizer, modelHealth } from "../ingest/providers";
@@ -121,7 +122,7 @@ export class ViewerServer {
   private static readonly SESSION_TTL = 24 * 60 * 60 * 1000;
   private static readonly PLUGIN_VERSION: string = (() => {
     try {
-      const pkgPath = path.resolve(__dirname, "../../package.json");
+      const pkgPath = path.join(findPluginRoot(import.meta.url), "package.json");
       return JSON.parse(fs.readFileSync(pkgPath, "utf-8")).version ?? "unknown";
     } catch {
       return "unknown";
@@ -3554,18 +3555,11 @@ export class ViewerServer {
   }
 
   private findPluginPackageJson(): string | null {
-    let dir = __dirname;
-    for (let i = 0; i < 6; i++) {
-      const candidate = path.join(dir, "package.json");
-      if (fs.existsSync(candidate)) {
-        try {
-          const pkg = JSON.parse(fs.readFileSync(candidate, "utf-8"));
-          if (pkg.name && pkg.name.includes("memos-local")) return candidate;
-        } catch { /* skip */ }
-      }
-      dir = path.dirname(dir);
+    try {
+      return path.join(findPluginRoot(import.meta.url), "package.json");
+    } catch {
+      return null;
     }
-    return null;
   }
 
   private async handleUpdateCheck(res: http.ServerResponse): Promise<void> {
