@@ -526,26 +526,14 @@ install_hermes() {
   [[ -n "${python_bin}" && -x "${python_bin}" ]] || die "Cannot locate Python for Hermes."
   success "Hermes Python: ${python_bin}"
 
-  # plugins/memory discovery.
-  local plugin_dir=""
-  plugin_dir="$("${python_bin}" -c "
-from pathlib import Path
-try:
-    import plugins.memory as pm
-    print(Path(pm.__file__).parent)
-except Exception:
-    pass
-" 2>/dev/null || true)"
-  if [[ -z "${plugin_dir}" || ! -d "${plugin_dir}" ]]; then
-    for d in "${HOME}/.hermes/hermes-agent/plugins/memory"; do
-      [[ -d "${d}" && -f "${d}/__init__.py" ]] && { plugin_dir="${d}"; break; }
-    done
-  fi
-  [[ -n "${plugin_dir}" && -d "${plugin_dir}" ]] || die "plugins/memory not found"
-  success "Hermes plugins/memory: ${plugin_dir}"
+  # Locate Hermes user plugins directory.
+  # Use $HERMES_HOME/plugins/<name>/ (outside git repo) so hermes update
+  # never deletes the symlink.  We create the dir if it doesn't exist.
+  local hermes_plugins="${HOME}/.hermes/plugins"
+  mkdir -p "${hermes_plugins}"
 
-  # Symlink memtensor provider.
-  local target="${plugin_dir}/memtensor"
+  # Symlink memtensor provider into Hermes user plugins.
+  local target="${hermes_plugins}/memtensor"
   if [[ -L "${target}" ]]; then rm "${target}"
   elif [[ -e "${target}" ]]; then rm -rf "${target}"
   fi
