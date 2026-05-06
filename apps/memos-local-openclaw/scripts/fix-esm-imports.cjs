@@ -15,8 +15,15 @@ const path = require("path");
 
 const DIST = path.resolve(__dirname, "..", "dist");
 
-// Matches:  import ... from "X"  |  export ... from "X"  |  import("X")
-const IMPORT_RE = /(\bfrom\s*['"]|\bimport\s*\(\s*['"])(\.[^'"]+)(['"])/g;
+// Matches relative module specifiers in:
+//   import ... from "X"   /   export ... from "X"   (static import / re-export)
+//   import("X")                                     (dynamic import)
+//   import "X"                                      (side-effect import)
+//
+// `\bimport\s+['"]` requires whitespace between the keyword and the quote so
+// it cannot collide with identifiers like `important`. Specifiers must start
+// with `.` so absolute and bare-package imports are left untouched.
+const IMPORT_RE = /(\bfrom\s*['"]|\bimport\s*\(\s*['"]|\bimport\s+['"])(\.[^'"]+)(['"])/g;
 
 function rewriteSpec(spec, fileDir) {
   if (/\.(m?js|cjs|json)$/.test(spec)) return spec;
