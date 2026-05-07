@@ -173,6 +173,10 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     ensureNamespaceVisibilityColumns(db);
     return;
   }
+  if (file.version === 8 && file.name === "feedback-experience-metadata") {
+    ensureFeedbackExperienceMetadataColumns(db);
+    return;
+  }
   db.exec(fs.readFileSync(file.fullPath, "utf8"));
 }
 
@@ -256,6 +260,52 @@ function ensureNamespaceVisibilityColumns(db: StorageDb): void {
   execIfTable(db, "skill_trials", `CREATE INDEX IF NOT EXISTS idx_skill_trials_owner ON skill_trials(owner_agent_kind, owner_profile_id, created_at DESC)`);
   execIfTable(db, "api_logs", `CREATE INDEX IF NOT EXISTS idx_api_logs_owner ON api_logs(owner_agent_kind, owner_profile_id, called_at DESC)`);
   execIfTable(db, "audit_events", `CREATE INDEX IF NOT EXISTS idx_audit_owner ON audit_events(owner_agent_kind, owner_profile_id, ts DESC)`);
+}
+
+function ensureFeedbackExperienceMetadataColumns(db: StorageDb): void {
+  if (!tableExists(db, "policies")) return;
+  ensureColumn(
+    db,
+    "policies",
+    "experience_type",
+    `TEXT NOT NULL DEFAULT 'success_pattern'
+      CHECK (experience_type IN ('success_pattern','repair_validated','failure_avoidance','repair_instruction','preference','verifier_feedback','procedural'))`,
+  );
+  ensureColumn(
+    db,
+    "policies",
+    "evidence_polarity",
+    `TEXT NOT NULL DEFAULT 'positive'
+      CHECK (evidence_polarity IN ('positive','negative','neutral','mixed'))`,
+  );
+  ensureColumn(db, "policies", "salience", "REAL NOT NULL DEFAULT 0");
+  ensureColumn(db, "policies", "confidence", "REAL NOT NULL DEFAULT 0.5");
+  ensureColumn(
+    db,
+    "policies",
+    "source_feedback_ids_json",
+    "TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(source_feedback_ids_json))",
+  );
+  ensureColumn(
+    db,
+    "policies",
+    "source_trace_ids_json",
+    "TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(source_trace_ids_json))",
+  );
+  ensureColumn(
+    db,
+    "policies",
+    "verifier_meta_json",
+    "TEXT NOT NULL DEFAULT 'null' CHECK (json_valid(verifier_meta_json))",
+  );
+  ensureColumn(
+    db,
+    "policies",
+    "skill_eligible",
+    "INTEGER NOT NULL DEFAULT 1 CHECK (skill_eligible IN (0,1))",
+  );
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_policies_experience ON policies(experience_type, evidence_polarity, updated_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_policies_skill_eligible ON policies(skill_eligible, status, updated_at DESC)`);
 }
 
 function execIfTable(db: StorageDb, table: string, sql: string): void {

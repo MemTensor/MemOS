@@ -259,6 +259,18 @@ export interface PolicyDTO extends OwnershipDTO {
   gain: number;
   /** "candidate" until promoted, "active" once stable, "archived" once revoked. */
   status: "candidate" | "active" | "archived";
+  experienceType?:
+    | "success_pattern"
+    | "repair_validated"
+    | "failure_avoidance"
+    | "repair_instruction"
+    | "preference"
+    | "verifier_feedback"
+    | "procedural";
+  evidencePolarity?: "positive" | "negative" | "neutral" | "mixed";
+  salience?: number;
+  confidence?: number;
+  skillEligible?: boolean;
   createdAt: EpochMs;
   updatedAt: EpochMs;
   /**
@@ -291,6 +303,9 @@ export interface PolicyDTO extends OwnershipDTO {
    * back to its source tasks.
    */
   sourceEpisodeIds: string[];
+  sourceFeedbackIds?: string[];
+  sourceTraceIds?: string[];
+  verifierMeta?: Record<string, unknown> | null;
 }
 
 /**
@@ -543,7 +558,7 @@ export interface RetrievalHitDTO {
   tier: 1 | 2 | 3;
   /** Source memory id (skillId | traceId/episodeId | worldModelId). */
   refId: string;
-  refKind: "skill" | "trace" | "episode" | "world-model";
+  refKind: "skill" | "trace" | "episode" | "experience" | "world-model";
   score: number;
   snippet: string;
   ownerAgentKind?: AgentKind;
@@ -609,7 +624,14 @@ export interface RepairCtx {
 }
 
 export interface InjectionSnippet {
-  refKind: "skill" | "trace" | "episode" | "world-model" | "preference" | "anti-pattern";
+  refKind:
+    | "skill"
+    | "trace"
+    | "episode"
+    | "experience"
+    | "world-model"
+    | "preference"
+    | "anti-pattern";
   refId: string;
   title?: string;
   body: string;

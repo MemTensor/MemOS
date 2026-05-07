@@ -24,6 +24,7 @@ import type { CollectedGuidance } from "./decision-guidance.js";
 import type { RankedCandidate } from "./ranker.js";
 import type {
   EpisodeCandidate,
+  ExperienceCandidate,
   RankedSnippet,
   SkillCandidate,
   TierCandidate,
@@ -78,7 +79,7 @@ export function toPacket(input: InjectorInput): InjectorResult {
   const skillSummaryChars =
     input.skillSummaryChars ?? DEFAULT_SKILL_SUMMARY_CHARS;
   const mapping: RankedSnippet[] = [];
-  for (const r of input.ranked) {
+  for (const r of suppressExperiencesCoveredBySkills(input.ranked)) {
     const snippet = renderSnippet(r.candidate, {
       skillMode,
       skillSummaryChars,
@@ -129,6 +130,31 @@ export function renderSnippetForDebug(c: TierCandidate): InjectionSnippet | null
   });
 }
 
+function suppressExperiencesCoveredBySkills(
+  ranked: readonly RankedCandidate[],
+): RankedCandidate[] {
+  const covered = new Set<string>();
+  for (const r of ranked) {
+    const c = r.candidate;
+    if (c.refKind !== "skill") continue;
+    for (const id of (c as SkillCandidate).sourcePolicyIds ?? []) {
+      covered.add(id);
+    }
+  }
+  if (covered.size === 0) return [...ranked];
+  return ranked.filter((r) => {
+    const c = r.candidate;
+    if (c.refKind !== "experience") return true;
+    if (!covered.has(c.refId)) return true;
+    const experienceUpdatedAt = (c as ExperienceCandidate).updatedAt ?? 0;
+    const coveringSkill = ranked.find((slot) => {
+      const sk = slot.candidate;
+      return sk.refKind === "skill" && ((sk as SkillCandidate).sourcePolicyIds ?? []).includes(c.refId);
+    })?.candidate as SkillCandidate | undefined;
+    return Boolean(coveringSkill?.updatedAt && experienceUpdatedAt > coveringSkill.updatedAt);
+  });
+}
+
 // ─── Per-candidate renderers ────────────────────────────────────────────────
 
 interface RenderOpts {
@@ -141,9 +167,9 @@ function renderSnippet(c: TierCandidate, opts: RenderOpts): InjectionSnippet | n
     case "tier1":
       return renderSkill(c as SkillCandidate, opts);
     case "tier2":
-      return c.refKind === "trace"
-        ? renderTrace(c as TraceCandidate)
-        : renderEpisode(c as EpisodeCandidate);
+      if (c.refKind === "trace") return renderTrace(c as TraceCandidate);
+      if (c.refKind === "experience") return renderExperience(c as ExperienceCandidate);
+      return renderEpisode(c as EpisodeCandidate);
     case "tier3":
       return renderWorldModel(c as WorldModelCandidate);
     default:
@@ -248,6 +274,27 @@ function renderEpisode(c: EpisodeCandidate): InjectionSnippet {
   };
 }
 
+function renderExperience(c: ExperienceCandidate): InjectionSnippet {
+  const kind = c.experienceType.replace(/_/g, " ");
+  const polarity = c.evidencePolarity;
+  const parts = [
+    `Experience: ${c.title}`,
+    `Type: ${kind}; evidence=${polarity}; confidence=${c.confidence.toFixed(2)}`,
+    c.trigger ? `Trigger: ${c.trigger}` : null,
+    c.procedure ? `Do: ${c.procedure}` : null,
+    c.decisionGuidance.antiPattern.length > 0
+      ? `Avoid: ${c.decisionGuidance.antiPattern.join("; ")}`
+      : null,
+    c.verification ? `Check: ${c.verification}` : null,
+  ].filter(Boolean);
+  return {
+    refKind: "experience",
+    refId: c.refId,
+    title: c.title,
+    body: truncate(parts.join("\n")),
+  };
+}
+
 function renderWorldModel(c: WorldModelCandidate): InjectionSnippet {
   const body = truncate(`World model: ${c.title}\n${c.body}`);
   return {
@@ -308,7 +355,10 @@ function renderWholePacket(
 
   const skills = snippets.filter((s) => s.refKind === "skill");
   const traces = snippets.filter(
-    (s) => s.refKind === "trace" || s.refKind === "episode",
+    (s) =>
+      s.refKind === "trace" ||
+      s.refKind === "episode" ||
+      s.refKind === "experience",
   );
   const worlds = snippets.filter((s) => s.refKind === "world-model");
 

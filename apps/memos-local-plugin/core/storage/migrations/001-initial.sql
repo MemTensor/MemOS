@@ -130,10 +130,20 @@ CREATE TABLE IF NOT EXISTS policies (
   support                  INTEGER NOT NULL DEFAULT 0,
   gain                     REAL    NOT NULL DEFAULT 0,
   status                   TEXT    NOT NULL CHECK (status IN ('candidate','active','archived')) DEFAULT 'candidate',
+  experience_type          TEXT    NOT NULL DEFAULT 'success_pattern'
+                                  CHECK (experience_type IN ('success_pattern','repair_validated','failure_avoidance','repair_instruction','preference','verifier_feedback','procedural')),
+  evidence_polarity        TEXT    NOT NULL DEFAULT 'positive'
+                                  CHECK (evidence_polarity IN ('positive','negative','neutral','mixed')),
+  salience                 REAL    NOT NULL DEFAULT 0,
+  confidence               REAL    NOT NULL DEFAULT 0.5,
   source_episodes_json     TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(source_episodes_json)),
+  source_feedback_ids_json TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(source_feedback_ids_json)),
+  source_trace_ids_json    TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(source_trace_ids_json)),
   induced_by               TEXT    NOT NULL DEFAULT '',
   decision_guidance_json   TEXT    NOT NULL DEFAULT '{"preference":[],"antiPattern":[]}'
                                    CHECK (json_valid(decision_guidance_json)),
+  verifier_meta_json       TEXT    NOT NULL DEFAULT 'null' CHECK (json_valid(verifier_meta_json)),
+  skill_eligible           INTEGER NOT NULL DEFAULT 1 CHECK (skill_eligible IN (0,1)),
   vec                      BLOB,
   created_at               INTEGER NOT NULL,
   updated_at               INTEGER NOT NULL,
@@ -147,6 +157,8 @@ CREATE INDEX IF NOT EXISTS idx_policies_owner   ON policies(owner_agent_kind, ow
 CREATE INDEX IF NOT EXISTS idx_policies_share   ON policies(share_scope, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_policies_status  ON policies(status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_policies_support ON policies(support DESC, gain DESC);
+CREATE INDEX IF NOT EXISTS idx_policies_experience ON policies(experience_type, evidence_polarity, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_policies_skill_eligible ON policies(skill_eligible, status, updated_at DESC);
 
 -- Candidate pool for incremental L2 induction (V7 §2.4.1 step 3).
 CREATE TABLE IF NOT EXISTS l2_candidate_pool (

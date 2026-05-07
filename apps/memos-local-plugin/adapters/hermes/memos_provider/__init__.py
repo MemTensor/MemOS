@@ -48,6 +48,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import re
 import sys
 import threading
 import time
@@ -119,6 +120,98 @@ def _is_explicit_delegation_request(message: str) -> bool:
     return any(term in text for term in delegation_terms)
 
 
+def _is_verifier_feedback_prompt(message: str) -> bool:
+    """Return True for explicit evaluator/verifier feedback turns."""
+    text = " ".join((message or "").strip().lower().split())
+    if not text:
+        return False
+
+    # Strong markers: formal verifier feedback
+    strong_markers = (
+        "本任务评为反例",
+        "本任务评为正例",
+        "verifier feedback",
+        "verification feedback",
+        "task rated as counterexample",
+        "task is rated as counterexample",
+        "r <= -0.5",
+        "r≤-0.5",
+        "r >= 0.5",
+        "r≥0.5",
+    )
+    if any(marker in text for marker in strong_markers):
+        return True
+    if re.search(r"\br\s*(?:<=|>=|≤|≥)\s*-?\d+(?:\.\d+)?", text):
+        return True
+
+    # User correction markers: natural corrective feedback
+    correction_markers = (
+        "不对",
+        "错了",
+        "不是",
+        "不行",
+        "不对的",
+        "写错了",
+        "做错了",
+        "理解错了",
+        "wrong",
+        "incorrect",
+        "not right",
+        "not correct",
+        "that's wrong",
+        "this is wrong",
+    )
+    if any(marker in text for marker in correction_markers):
+        return True
+
+    # Weak markers: require "feedback/反馈" + action keywords
+    if "feedback" not in text and "反馈" not in text:
+        return False
+    feedback_markers = (
+        "failed",
+        "failure",
+        "pass",
+        "passed",
+        "success",
+        "succeeded",
+        "should",
+        "avoid",
+        "next time",
+        "失败",
+        "成功",
+        "应该",
+        "不要",
+        "下次",
+    )
+    return any(marker in text for marker in feedback_markers)
+
+
+def _feedback_polarity(message: str) -> str:
+    text = " ".join((message or "").strip().lower().split())
+    if re.search(r"r\s*(?:<=|≤)\s*-?0\.5", text):
+        return "negative"
+    if "反例" in text:
+        return "negative"
+    if any(term in text for term in ("failed", "failure", "wrong", "incorrect", "not acceptable", "错误", "失败", "不对")):
+        return "negative"
+    if re.search(r"r\s*(?:>=|≥)\s*0\.5", text):
+        return "positive"
+    if "正例" in text:
+        return "positive"
+    if any(term in text for term in ("passed", "success", "succeeded", "correct", "great", "成功", "通过", "正确")):
+        return "positive"
+    return "neutral"
+
+
+def _feedback_magnitude(message: str, polarity: str) -> float:
+    text = " ".join((message or "").strip().lower().split())
+    match = re.search(r"\br\s*(?:=|:|<=|>=|≤|≥)\s*(-?\d+(?:\.\d+)?)", text)
+    if match:
+        with contextlib.suppress(Exception):
+            return max(0.0, min(1.0, abs(float(match.group(1)))))
+    return 1.0 if polarity in {"positive", "negative"} else 0.6
+
+
 class MemTensorProvider(MemoryProvider):
     """MemOS Reflect2Evolve memory for hermes-agent.
 
@@ -161,6 +254,8 @@ class MemTensorProvider(MemoryProvider):
         # appending a synthetic user turn. That turn is instruction plumbing,
         # not a human utterance, so it must not become a MemOS trace.
         self._skip_current_turn = False
+        # Track the last trace ID for feedback submission
+        self._last_trace_id: str = ""
 
     # ─── Identity ─────────────────────────────────────────────────────────
 
@@ -702,6 +797,7 @@ class MemTensorProvider(MemoryProvider):
             len(thinking),
         )
         ts_ms = int(time.time() * 1000)
+        feedback_submitted = False
         try:
             if user and not self._episode_id:
                 self._turn_start(user, session_id=session_id or self._session_id)
@@ -712,6 +808,9 @@ class MemTensorProvider(MemoryProvider):
                 ts_ms,
                 agent_thinking=thinking,
             )
+            if _is_verifier_feedback_prompt(user):
+                self._submit_verifier_feedback(user, assistant, ts_ms)
+                feedback_submitted = True
         except Exception as err:
             if not self._is_transport_closed(err):
                 logger.warning("MemOS: sync_turn turn.end failed — %s", err)
@@ -732,6 +831,9 @@ class MemTensorProvider(MemoryProvider):
                         ts_ms,
                         agent_thinking=thinking,
                     )
+                    if _is_verifier_feedback_prompt(user) and not feedback_submitted:
+                        self._submit_verifier_feedback(user, assistant, ts_ms)
+                        feedback_submitted = True
                 except Exception:
                     logger.exception(
                         "MemOS: sync_turn failed after bridge reconnect; "
@@ -1585,7 +1687,42 @@ class MemTensorProvider(MemoryProvider):
         }
         if agent_thinking:
             payload["agentThinking"] = agent_thinking
-        self._bridge.request("turn.end", payload)
+        result = self._bridge.request("turn.end", payload)
+        # Capture the trace ID for feedback submission
+        if result and isinstance(result, dict):
+            trace_ids = result.get("traceIds", [])
+            if trace_ids and len(trace_ids) > 0:
+                self._last_trace_id = trace_ids[-1]  # Last trace is the current turn
+
+    def _submit_verifier_feedback(
+        self,
+        user_content: str,
+        assistant_content: str,
+        ts_ms: int,
+    ) -> None:
+        if not self._bridge or not self._episode_id:
+            return
+        polarity = _feedback_polarity(user_content)
+        magnitude = _feedback_magnitude(user_content, polarity)
+        raw = {
+            "source": "hermes.verifier_feedback",
+            "userText": user_content,
+            "assistantText": assistant_content,
+            "polarity": polarity,
+        }
+        payload: dict[str, Any] = {
+            "episodeId": self._episode_id,
+            "channel": "explicit",
+            "polarity": polarity,
+            "magnitude": magnitude,
+            "rationale": user_content,
+            "raw": raw,
+            "ts": ts_ms,
+        }
+        # Include the last trace ID if available
+        if self._last_trace_id:
+            payload["traceId"] = self._last_trace_id
+        self._bridge.request("feedback.submit", payload)
 
 
 # ─── Discovery entry points ───────────────────────────────────────────────

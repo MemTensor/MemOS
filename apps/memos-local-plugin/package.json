@@ -1,6 +1,6 @@
 {
   "name": "@memtensor/memos-local-plugin",
-  "version": "2.0.0-beta.5",
+  "version": "2.0.0",
   "description": "Reflect2Evolve memory plugin: layered L1/L2/L3 memory, reflection-weighted value backprop, cross-task policy induction, skill crystallization, three-tier retrieval. Adapters for OpenClaw and Hermes Agent via a shared algorithm core.",
   "type": "module",
   "main": "dist/core/index.js",

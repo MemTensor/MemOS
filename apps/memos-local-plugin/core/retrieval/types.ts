@@ -22,6 +22,9 @@ import type {
 
 import type {
   EmbeddingVector,
+  FeedbackId,
+  PolicyId,
+  PolicyRow,
   SkillId,
   TraceId,
   WorldModelId,
@@ -104,6 +107,8 @@ export interface SkillCandidate extends TierCandidateBase {
   eta: number;
   status: SkillStatus;
   invocationGuide: string;
+  sourcePolicyIds?: PolicyId[];
+  updatedAt?: EpochMs;
 }
 
 /** Tier 2a — a single high-value trace. */
@@ -143,6 +148,31 @@ export interface EpisodeCandidate extends TierCandidateBase {
   meanPriority: number;
 }
 
+/** Tier 2c - a typed user-feedback experience. */
+export interface ExperienceCandidate extends TierCandidateBase {
+  tier: "tier2";
+  refKind: "experience";
+  refId: PolicyId;
+  title: string;
+  trigger: string;
+  procedure: string;
+  verification: string;
+  boundary: string;
+  support: number;
+  gain: number;
+  status: "candidate" | "active" | "archived";
+  experienceType: NonNullable<PolicyRow["experienceType"]>;
+  evidencePolarity: NonNullable<PolicyRow["evidencePolarity"]>;
+  salience: number;
+  confidence: number;
+  skillEligible: boolean;
+  sourceEpisodeIds: EpisodeId[];
+  sourceFeedbackIds: FeedbackId[];
+  sourceTraceIds: TraceId[];
+  decisionGuidance: { preference: string[]; antiPattern: string[] };
+  updatedAt: EpochMs;
+}
+
 /** Tier 3 — a matched world-model snippet. */
 export interface WorldModelCandidate extends TierCandidateBase {
   tier: "tier3";
@@ -160,6 +190,7 @@ export type TierCandidate =
   | SkillCandidate
   | TraceCandidate
   | EpisodeCandidate
+  | ExperienceCandidate
   | WorldModelCandidate;
 
 // ─── Ranker / fused snippets ────────────────────────────────────────────────
@@ -351,6 +382,8 @@ export interface RetrievalRepos {
       status: SkillStatus;
       invocationGuide: string;
       eta: number;
+      sourcePolicyIds?: PolicyId[];
+      updatedAt?: EpochMs;
     } | null;
   };
 
@@ -511,19 +544,72 @@ export interface RetrievalRepos {
    * decision-guidance section.
    */
   policies?: {
+    searchByVector?: (
+      query: EmbeddingVector,
+      k: number,
+      opts?: {
+        statusIn?: Array<"candidate" | "active" | "archived">;
+        hardCap?: number;
+      },
+    ) => Array<{
+      id: string;
+      score: number;
+      meta?: {
+        title: string;
+        status: "candidate" | "active" | "archived";
+        support: number;
+        gain: number;
+        experience_type?: NonNullable<PolicyRow["experienceType"]>;
+        evidence_polarity?: NonNullable<PolicyRow["evidencePolarity"]>;
+        salience?: number;
+        confidence?: number;
+      };
+    }>;
     list: (filter?: {
       status?: "candidate" | "active" | "archived";
     }) => Array<{
       id: string;
       title: string;
+      trigger?: string;
+      procedure?: string;
+      verification?: string;
+      boundary?: string;
+      support?: number;
+      gain?: number;
+      status?: "candidate" | "active" | "archived";
+      experienceType?: NonNullable<PolicyRow["experienceType"]>;
+      evidencePolarity?: NonNullable<PolicyRow["evidencePolarity"]>;
+      salience?: number;
+      confidence?: number;
+      skillEligible?: boolean;
       sourceEpisodeIds: EpisodeId[];
+      sourceFeedbackIds?: FeedbackId[];
+      sourceTraceIds?: TraceId[];
       decisionGuidance: { preference: string[]; antiPattern: string[] };
+      vec?: EmbeddingVector | null;
+      updatedAt?: EpochMs;
     }>;
     getById: (id: string) => {
       id: string;
       title: string;
+      trigger?: string;
+      procedure?: string;
+      verification?: string;
+      boundary?: string;
+      support?: number;
+      gain?: number;
+      status?: "candidate" | "active" | "archived";
+      experienceType?: NonNullable<PolicyRow["experienceType"]>;
+      evidencePolarity?: NonNullable<PolicyRow["evidencePolarity"]>;
+      salience?: number;
+      confidence?: number;
+      skillEligible?: boolean;
       sourceEpisodeIds: EpisodeId[];
+      sourceFeedbackIds?: FeedbackId[];
+      sourceTraceIds?: TraceId[];
       decisionGuidance: { preference: string[]; antiPattern: string[] };
+      vec?: EmbeddingVector | null;
+      updatedAt?: EpochMs;
     } | null;
   };
 }

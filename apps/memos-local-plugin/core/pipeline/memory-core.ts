@@ -70,6 +70,7 @@ import type {
 } from "../types.js";
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import { loadConfig, resolveHome, SECRET_FIELD_PATHS } from "../config/index.js";
+import { feedbackText, runFeedbackExperience } from "../experience/feedback-builder.js";
 import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
@@ -94,6 +95,7 @@ import {
   isVisibleTo,
 } from "../runtime/namespace.js";
 import type { RetrievalConfig } from "../retrieval/types.js";
+import type { UserFeedback } from "../reward/types.js";
 
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
 
@@ -1408,10 +1410,97 @@ export function createMemoryCore(
     };
     handle.repos.feedback.insert(row);
 
-    // Push the human signal into the reward loop via the capture bus.
-    // The feedback subscriber also listens for user feedback via its
-    // own input channel, but for the JSON-RPC path we go through the
-    // repository so every code path persists.
+    const episode = row.episodeId
+      ? handle.repos.episodes.getById(row.episodeId as EpisodeId)
+      : null;
+    const trace = row.traceId
+      ? handle.repos.traces.getById(row.traceId as TraceId)
+      : null;
+    const sessionId = episode?.sessionId ?? trace?.sessionId ?? null;
+    const text = feedbackText(row);
+
+    if (episode && sessionId) {
+      const rewardFeedback: UserFeedback = {
+        id: row.id as UserFeedback["id"],
+        episodeId: episode.id,
+        sessionId,
+        traceId: row.traceId as TraceId | null,
+        ts: row.ts,
+        channel: row.channel,
+        polarity: row.polarity,
+        magnitude: row.magnitude,
+        text: text || null,
+        rationale: row.rationale,
+      };
+      try {
+        await handle.rewardRunner.run({
+          episodeId: episode.id,
+          feedback: [rewardFeedback],
+          trigger: "explicit_feedback",
+        });
+      } catch (err) {
+        log.warn("feedback.reward_failed", {
+          episodeId: episode.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (text && sessionId) {
+      try {
+        await handle.feedback.submitUserFeedback({
+          text,
+          sessionId,
+          episodeId: episode?.id,
+          context: text.slice(0, 300),
+        });
+      } catch (err) {
+        log.warn("feedback.repair_failed", {
+          episodeId: episode?.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    let policyId: PolicyId | undefined;
+    try {
+      const experience = await runFeedbackExperience(
+        { feedback: row, episode, trace },
+        {
+          repos: handle.repos,
+          embedder: handle.embedder,
+          llm: handle.llm ?? undefined,
+          namespace: handle.namespace,
+          now: Date.now,
+        },
+      );
+      policyId = experience.policyId;
+    } catch (err) {
+      log.warn("feedback.experience_failed", {
+        episodeId: episode?.id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      await handle.l2.drain();
+      if (policyId) {
+        await handle.skills.runOnce({ trigger: "manual", policyId });
+      }
+      if (episode) {
+        await handle.l3.runOnce({ trigger: "manual", episodeId: episode.id });
+      }
+      await handle.skills.flush();
+      await handle.feedback.flush();
+      await handle.l3.drain();
+    } catch (err) {
+      log.warn("feedback.downstream_flush_failed", {
+        episodeId: episode?.id,
+        policyId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     return toFeedbackDTO(row);
   }
 
@@ -2994,12 +3083,20 @@ export function createMemoryCore(
           support: dto.support ?? 0,
           gain: dto.gain ?? 0,
           status: dto.status,
-          sourceEpisodeIds: [],
+          experienceType: dto.experienceType ?? "success_pattern",
+          evidencePolarity: dto.evidencePolarity ?? "positive",
+          salience: dto.salience ?? 0,
+          confidence: dto.confidence ?? 0.5,
+          skillEligible: dto.skillEligible !== false,
+          sourceEpisodeIds: dto.sourceEpisodeIds ?? [],
+          sourceFeedbackIds: dto.sourceFeedbackIds ?? [],
+          sourceTraceIds: dto.sourceTraceIds ?? [],
           inducedBy: "import",
           decisionGuidance: {
             preference: [...(dto.preference ?? [])],
             antiPattern: [...(dto.antiPattern ?? [])],
           },
+          verifierMeta: dto.verifierMeta ?? null,
           vec: null,
           createdAt: dto.createdAt ?? Date.now(),
           updatedAt: dto.updatedAt ?? Date.now(),
@@ -3607,6 +3704,11 @@ export function policyRowToDTO(row: PolicyRow): PolicyDTO {
     support: row.support,
     gain: row.gain,
     status: row.status,
+    experienceType: row.experienceType ?? "success_pattern",
+    evidencePolarity: row.evidencePolarity ?? "positive",
+    salience: row.salience ?? 0,
+    confidence: row.confidence ?? 0.5,
+    skillEligible: row.skillEligible !== false,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     // PolicyDTO surface keeps the flat shape the viewer's PoliciesView
@@ -3616,6 +3718,9 @@ export function policyRowToDTO(row: PolicyRow): PolicyDTO {
     preference: row.decisionGuidance.preference,
     antiPattern: row.decisionGuidance.antiPattern,
     sourceEpisodeIds: [...(row.sourceEpisodeIds ?? [])],
+    sourceFeedbackIds: [...(row.sourceFeedbackIds ?? [])],
+    sourceTraceIds: [...(row.sourceTraceIds ?? [])],
+    verifierMeta: row.verifierMeta ?? null,
     share: row.share ?? null,
     editedAt: row.editedAt ?? undefined,
   };
@@ -3729,6 +3834,7 @@ export function inferTier(
     | "skill"
     | "trace"
     | "episode"
+    | "experience"
     | "world-model"
     | "preference"
     | "anti-pattern",

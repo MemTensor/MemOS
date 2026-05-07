@@ -28,9 +28,17 @@ const COLUMNS = [
   "support",
   "gain",
   "status",
+  "experience_type",
+  "evidence_polarity",
+  "salience",
+  "confidence",
   "source_episodes_json",
+  "source_feedback_ids_json",
+  "source_trace_ids_json",
   "induced_by",
   "decision_guidance_json",
+  "verifier_meta_json",
+  "skill_eligible",
   "vec",
   "created_at",
   "updated_at",
@@ -45,6 +53,10 @@ export interface PolicySearchMeta {
   status: "candidate" | "active" | "archived";
   support: number;
   gain: number;
+  experience_type?: NonNullable<PolicyRow["experienceType"]>;
+  evidence_polarity?: NonNullable<PolicyRow["evidencePolarity"]>;
+  salience?: number;
+  confidence?: number;
   owner_agent_kind?: string;
   owner_profile_id?: string;
   owner_workspace_id?: string | null;
@@ -153,7 +165,19 @@ export function makePoliciesRepo(db: StorageDb) {
       return scanAndTopK<PolicySearchMeta>(
         db,
         "policies",
-        ["title", "status", "support", "gain", "owner_agent_kind", "owner_profile_id", "owner_workspace_id"],
+        [
+          "title",
+          "status",
+          "support",
+          "gain",
+          "experience_type",
+          "evidence_polarity",
+          "salience",
+          "confidence",
+          "owner_agent_kind",
+          "owner_profile_id",
+          "owner_workspace_id",
+        ],
         query,
         k,
         {
@@ -263,9 +287,17 @@ interface RawPolicyRow {
   support: number;
   gain: number;
   status: "candidate" | "active" | "archived";
+  experience_type: NonNullable<PolicyRow["experienceType"]> | null;
+  evidence_polarity: NonNullable<PolicyRow["evidencePolarity"]> | null;
+  salience: number | null;
+  confidence: number | null;
   source_episodes_json: string;
+  source_feedback_ids_json: string | null;
+  source_trace_ids_json: string | null;
   induced_by: string;
   decision_guidance_json: string;
+  verifier_meta_json: string | null;
+  skill_eligible: number | null;
   vec: Buffer | null;
   created_at: number;
   updated_at: number;
@@ -292,12 +324,20 @@ function rowToParams(row: PolicyRow): Record<string, unknown> {
     support: row.support,
     gain: row.gain,
     status: row.status,
+    experience_type: row.experienceType ?? "success_pattern",
+    evidence_polarity: row.evidencePolarity ?? "positive",
+    salience: row.salience ?? 0,
+    confidence: row.confidence ?? 0.5,
     source_episodes_json: toJsonText(row.sourceEpisodeIds),
+    source_feedback_ids_json: toJsonText(row.sourceFeedbackIds ?? []),
+    source_trace_ids_json: toJsonText(row.sourceTraceIds ?? []),
     induced_by: row.inducedBy,
     decision_guidance_json: toJsonText({
       preference: row.decisionGuidance.preference,
       antiPattern: row.decisionGuidance.antiPattern,
     }),
+    verifier_meta_json: toJsonText(row.verifierMeta ?? null),
+    skill_eligible: row.skillEligible === false ? 0 : 1,
     vec: toBlob(row.vec),
     created_at: row.createdAt,
     updated_at: row.updatedAt,
@@ -320,9 +360,20 @@ function mapRow(r: RawPolicyRow): PolicyRow {
     support: r.support,
     gain: r.gain,
     status: r.status,
+    experienceType: normalizeExperienceType(r.experience_type),
+    evidencePolarity: normalizeEvidencePolarity(r.evidence_polarity),
+    salience: finiteOr(r.salience, 0),
+    confidence: finiteOr(r.confidence, 0.5),
     sourceEpisodeIds: fromJsonText(r.source_episodes_json, []),
+    sourceFeedbackIds: fromJsonText(r.source_feedback_ids_json ?? "[]", []),
+    sourceTraceIds: fromJsonText(r.source_trace_ids_json ?? "[]", []),
     inducedBy: r.induced_by,
     decisionGuidance: parseGuidance(r.decision_guidance_json),
+    verifierMeta: fromJsonText<Record<string, unknown> | null>(
+      r.verifier_meta_json ?? "null",
+      null,
+    ),
+    skillEligible: r.skill_eligible == null ? true : r.skill_eligible !== 0,
     vec: fromBlob(r.vec),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -361,4 +412,39 @@ function parseGuidance(raw: string): PolicyRow["decisionGuidance"] {
   } catch {
     return { ...EMPTY_GUIDANCE };
   }
+}
+
+function normalizeExperienceType(
+  raw: NonNullable<PolicyRow["experienceType"]> | null | undefined,
+): NonNullable<PolicyRow["experienceType"]> {
+  switch (raw) {
+    case "success_pattern":
+    case "repair_validated":
+    case "failure_avoidance":
+    case "repair_instruction":
+    case "preference":
+    case "verifier_feedback":
+    case "procedural":
+      return raw;
+    default:
+      return "success_pattern";
+  }
+}
+
+function normalizeEvidencePolarity(
+  raw: NonNullable<PolicyRow["evidencePolarity"]> | null | undefined,
+): NonNullable<PolicyRow["evidencePolarity"]> {
+  switch (raw) {
+    case "positive":
+    case "negative":
+    case "neutral":
+    case "mixed":
+      return raw;
+    default:
+      return "positive";
+  }
+}
+
+function finiteOr(value: number | null | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
