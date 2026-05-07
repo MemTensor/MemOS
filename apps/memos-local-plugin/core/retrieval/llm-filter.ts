@@ -24,7 +24,7 @@ import type { LlmClient } from "../llm/index.js";
 import type { Logger } from "../logger/types.js";
 import { RETRIEVAL_FILTER_PROMPT } from "../llm/prompts/index.js";
 import type { RankedCandidate } from "./ranker.js";
-import type { RetrievalConfig, TierCandidate } from "./types.js";
+import type { RetrievalConfig } from "./types.js";
 
 const DEFAULT_CANDIDATE_BODY_CHARS = 500;
 const MIN_FILTER_OUTPUT_TOKENS = 160;
@@ -281,30 +281,21 @@ function coerceBool(v: unknown): boolean | null {
 
 /**
  * Render a ranked candidate into a single labelled string for the LLM.
- * Much richer than the old 240-char summary — now includes time, role,
- * tags, which channels surfaced the row, and the ranker's score. This
- * mirrors what openclaw's `filterRelevant` receives and lets the model
- * reason over "fresh vs stale", "skill vs memory", "keyword vs vector
- * hit" without guessing.
+ * Keep this intentionally content-focused: the filter should judge the
+ * candidate's semantic usefulness, not anchor on retrieval internals like
+ * timestamps, channels, tags, or ranker scores.
  */
 function describeCandidate(r: RankedCandidate, bodyChars: number): string {
   const c = r.candidate;
-  const meta = metaOf(r, c);
   switch (c.tier) {
     case "tier1": {
       const skill = c as {
         skillName?: string;
         invocationGuide?: string;
-        eta?: number;
-        status?: string;
       };
-      const head = `${skill.skillName ?? "(skill)"}${
-        typeof skill.eta === "number"
-          ? ` · η=${skill.eta.toFixed(2)}`
-          : ""
-      }${skill.status ? ` · ${skill.status}` : ""}`;
+      const head = skill.skillName ?? "(skill)";
       const hint = squashBody(skill.invocationGuide ?? "", bodyChars);
-      return `[SKILL ${meta}] ${head}${hint ? `\n   ${hint}` : ""}`;
+      return `[SKILL] ${head}${hint ? `\n   ${hint}` : ""}`;
     }
     case "tier2": {
       if (c.refKind === "trace") {
@@ -322,54 +313,25 @@ function describeCandidate(r: RankedCandidate, bodyChars: number): string {
         if (tr.reflection?.trim())
           parts.push(`[note] ${tr.reflection.trim()}`);
         const body = squashBody(parts.join(" "), bodyChars);
-        return `[TRACE ${meta}] ${body}`;
+        return `[TRACE] ${body}`;
       }
       const ep = c as { summary?: string };
       const body = squashBody(ep.summary ?? "", bodyChars);
-      return `[EPISODE ${meta}] ${body}`;
+      return `[EPISODE] ${body}`;
     }
     case "tier3": {
       const wm = c as { title?: string; body?: string };
       const head = wm.title ?? "(world-model)";
       const body = squashBody(wm.body ?? "", bodyChars);
-      return `[WORLD-MODEL ${meta}] ${head}${body ? `\n   ${body}` : ""}`;
+      return `[WORLD-MODEL] ${head}${body ? `\n   ${body}` : ""}`;
     }
     default:
-      return `[UNKNOWN ${meta}]`;
+      return "[UNKNOWN]";
   }
-}
-
-function metaOf(r: RankedCandidate, c: TierCandidate): string {
-  const bits: string[] = [];
-  if (typeof c.ts === "number" && c.ts > 0) {
-    bits.push(`time=${formatTime(c.ts)}`);
-  }
-  if (Array.isArray((c as { tags?: readonly string[] }).tags)) {
-    const tags = ((c as { tags?: readonly string[] }).tags ?? [])
-      .filter(Boolean)
-      .slice(0, 6);
-    if (tags.length) bits.push(`tags=[${tags.join(",")}]`);
-  }
-  const channels = (c.channels ?? [])
-    .map((ch) => ch.channel)
-    .filter(Boolean)
-    .slice(0, 4);
-  if (channels.length) bits.push(`via=${channels.join("+")}`);
-  const score = r.score ?? r.relevance;
-  if (Number.isFinite(score)) bits.push(`score=${score.toFixed(3)}`);
-  return bits.join(" ");
 }
 
 function squashBody(s: string, max: number): string {
   const cleaned = s.replace(/\s+/g, " ").trim();
   if (cleaned.length <= max) return cleaned;
   return cleaned.slice(0, Math.max(0, max - 1)) + "…";
-}
-
-function formatTime(ts: number): string {
-  try {
-    return new Date(ts).toISOString().slice(0, 16).replace("T", " ");
-  } catch {
-    return String(ts);
-  }
 }

@@ -165,7 +165,7 @@ function renderSnippet(c: TierCandidate, opts: RenderOpts): InjectionSnippet | n
 function renderSkill(c: SkillCandidate, opts: RenderOpts): InjectionSnippet {
   if (opts.skillMode === "full") {
     const body = truncate(
-      `Skill: ${c.skillName} (η=${c.eta.toFixed(2)})\n` + c.invocationGuide.trim(),
+      `Skill: ${c.skillName}\n` + c.invocationGuide.trim(),
     );
     return {
       refKind: "skill",
@@ -176,9 +176,7 @@ function renderSkill(c: SkillCandidate, opts: RenderOpts): InjectionSnippet {
   }
 
   const summary = firstLineSummary(c.invocationGuide, opts.skillSummaryChars);
-  const lines = [
-    `${c.skillName} — η=${c.eta.toFixed(2)}, status=${c.status}`,
-  ];
+  const lines: string[] = [];
   if (summary) lines.push(summary);
   lines.push(
     `→ call \`skill_get(id="${c.refId}")\` to load the full procedure if you decide to use it`,
@@ -279,17 +277,14 @@ function renderWorldModel(c: WorldModelCandidate): InjectionSnippet {
  * 1. [Trace · 2026-03-05 10:12]
  *    [user] 我喜欢的运动是游泳
  *    [assistant] 记住了。
- *    refId="trace_xyz"
  *
  * ## Skills
  *
- * 1. [Skill · Python dependency fix] (η=0.82)
+ * 1. Python dependency fix
  *    When container pip fails, install -dev OS lib first …
- *    refId="skill_abc"
  *
  * Available follow-up tools:
  * - call `memory_search(query=...)` for a shorter, more targeted query
- * - call `memory_timeline(episodeId=...)` to expand an episode
  * ```
  *
  * We deliberately keep the "IMPORTANT" instructions — without them the
@@ -389,7 +384,7 @@ function renderDecisionGuidance(g: CollectedGuidance | undefined): string | null
 
 function renderNumberedSnippet(s: InjectionSnippet, n: number): string {
   const title = s.title ?? s.refId;
-  const block = [`${n}. ${title}`, s.body, `   refId="${s.refId}"`]
+  const block = [`${n}. ${title}`, s.body]
     .filter(Boolean)
     .join("\n");
   return indentBlock(block);
@@ -417,14 +412,11 @@ const HEADER_BY_REASON: Record<RetrievalReason, string> = {
 };
 
 const FOOTER_LINES_COMMON: readonly string[] = [
-  "- `memory_search(query, maxResults?, tier1topK?, tier2topK?, tier3topK?)` — re-query with a shorter / rephrased string",
-  "- `memory_get(id, kind?)` — fetch a full trace / policy / world-model body by refId",
-  "- `memory_timeline(episodeId, limit?)` — expand an episode into its step-by-step traces",
+  "- `memory_search(query, maxResults?)` — re-query with a shorter / rephrased string",
 ];
 
 const FOOTER_LINES_SKILL_SUMMARY: readonly string[] = [
   "- `skill_get(id)` — load the full procedure/verification of a candidate skill listed above",
-  "- `skill_list(status?, limit?)` — browse other crystallised skills not yet shown",
 ];
 
 function footerFor(

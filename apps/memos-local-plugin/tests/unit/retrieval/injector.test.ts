@@ -110,7 +110,7 @@ describe("retrieval/injector", () => {
     expect(packet.packetId).toMatch(/[a-z0-9_]+/);
   });
 
-  it("renders LLM-actionable prose (header, MUST-treat instructions, refId footer)", () => {
+  it("renders LLM-actionable prose without noisy refId footers", () => {
     const { packet } = toPacket({
       ranked: [rc(skill("sA"), 0.9, 0.9)],
       reason: "turn_start",
@@ -124,9 +124,10 @@ describe("retrieval/injector", () => {
     expect(packet.rendered).toContain("MUST treat");
     // Trailing tool reminder so the model knows how to re-query.
     expect(packet.rendered).toContain("memory_search");
-    // Every snippet must carry its `refId` so downstream tool calls
-    // (memory_get / memory_timeline) can round-trip to the row.
-    expect(packet.rendered).toContain('refId="sA"');
+    // Row ids stay on the structured packet, but are not injected into
+    // the model-facing prose unless a tool hint explicitly needs one.
+    expect(packet.snippets[0]?.refId).toBe("sA");
+    expect(packet.rendered).not.toContain('refId="sA"');
   });
 
   it("default skill rendering is summary mode (descriptor + skill_get hint, no full guide)", () => {
@@ -148,9 +149,10 @@ describe("retrieval/injector", () => {
       episodeId: "ep_summary" as never,
     });
     const skillSnippet = packet.snippets.find((s) => s.refKind === "skill")!;
-    // Descriptor line carries name + η + status — short metadata, not a guide.
-    expect(skillSnippet.body).toContain("Skill sk_summary");
-    expect(skillSnippet.body).toContain("η=0.85");
+    // Prompt-facing body omits internal skill metadata.
+    expect(skillSnippet.title).toBe("Skill sk_summary");
+    expect(skillSnippet.body).not.toContain("η=0.85");
+    expect(skillSnippet.body).not.toContain("status=active");
     // First paragraph survives as the summary line.
     expect(skillSnippet.body).toContain("Fix Alpine container pip install");
     // Procedure steps must NOT be inlined (those live behind skill_get).
@@ -161,7 +163,7 @@ describe("retrieval/injector", () => {
     // Section heading + footer also advertise the call-on-demand workflow.
     expect(packet.rendered).toContain("Candidate skills");
     expect(packet.rendered).toContain("`skill_get(id)`");
-    expect(packet.rendered).toContain("`skill_list");
+    expect(packet.rendered).not.toContain("`skill_list");
   });
 
   it("summary mode clamps long first paragraphs to skillSummaryChars", () => {
@@ -197,6 +199,7 @@ describe("retrieval/injector", () => {
     });
     const skillSnippet = packet.snippets.find((s) => s.refKind === "skill")!;
     expect(skillSnippet.body).toContain("RUN docker compose up -d");
+    expect(skillSnippet.body).not.toContain("η=");
     expect(skillSnippet.body).not.toContain("skill_get(id=");
     // The footer should not surface the skill call hints in full mode.
     expect(packet.rendered).not.toContain("`skill_get(id)`");

@@ -693,8 +693,8 @@ export function renderContextBlock(
   // turn of a fresh session.
   const hint = [
     "No prior memories matched this query — the store may simply be cold.",
-    "You can still call `memory_search` (semantic) or `memory_timeline`",
-    "(by episodeId) if you expect there to be relevant past context.",
+    "You can still call `memory_search` with a shorter or rephrased query",
+    "if you expect there to be relevant past context.",
   ].join(" ");
   return `${CONTEXT_OPEN}\n${hint}\n${CONTEXT_CLOSE}`;
 }

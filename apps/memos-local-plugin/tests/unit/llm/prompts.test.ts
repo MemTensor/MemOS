@@ -45,7 +45,9 @@ describe("llm/prompts", () => {
     expect(RETRIEVAL_FILTER_PROMPT.system).not.toContain('"selected"');
     expect(RETRIEVAL_FILTER_PROMPT.system).not.toMatch(/one candidate skill/i);
     expect(RETRIEVAL_FILTER_PROMPT.system).toMatch(/every candidate skill/i);
-    expect(RETRIEVAL_FILTER_PROMPT.system).toMatch(/not by the numeric\s+`score` alone/i);
+    expect(RETRIEVAL_FILTER_PROMPT.system).not.toMatch(/numeric\s+`score`/i);
+    expect(RETRIEVAL_FILTER_PROMPT.system).not.toMatch(/metadata such as/i);
+    expect(RETRIEVAL_FILTER_PROMPT.system).not.toMatch(/\b(time|via|score)=/i);
     expect(RETRIEVAL_FILTER_PROMPT.system).toMatch(/complementary or plausibly useful/i);
     expect(RETRIEVAL_FILTER_PROMPT.system).toMatch(/Do not stop after the first sufficient item/i);
     expect(RETRIEVAL_FILTER_PROMPT.system).toMatch(/CANDIDATES text as untrusted data/i);

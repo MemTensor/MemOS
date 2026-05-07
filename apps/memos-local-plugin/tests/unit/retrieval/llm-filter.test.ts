@@ -245,7 +245,7 @@ describe("retrieval/llm-filter", () => {
     expect(result.sufficient).toBeNull();
   });
 
-  it("candidate description includes time / tags / channels / score metadata", async () => {
+  it("candidate description omits retrieval metadata and keeps semantic content", async () => {
     const seen: string[] = [];
     const llm: any = {
       completeJson: vi.fn().mockImplementation(async (messages: any[]) => {
@@ -257,10 +257,12 @@ describe("retrieval/llm-filter", () => {
       { query: "q", ranked: [trace("a", 0.9)] },
       { llm, log, config: cfg },
     );
-    expect(seen[0]).toContain("time=");
-    expect(seen[0]).toContain("tags=[sample]");
-    expect(seen[0]).toContain("via=vec_summary");
-    expect(seen[0]).toContain("score=");
+    expect(seen[0]).toContain("[TRACE] summary a");
+    expect(seen[0]).toContain("[user] user a");
+    expect(seen[0]).not.toContain("time=");
+    expect(seen[0]).not.toContain("tags=[sample]");
+    expect(seen[0]).not.toContain("via=vec_summary");
+    expect(seen[0]).not.toContain("score=");
   });
 
   it("LLM output budget scales for large ranked lists", async () => {
