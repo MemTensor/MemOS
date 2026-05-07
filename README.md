@@ -4,51 +4,24 @@
   </a>
 
   <h1 align="center">
-    <img src="https://statics.memtensor.com.cn/logo/memos_color_m.png" alt="MemOS Logo" width="50"/>
-    MemOS 2.0: 星尘（Stardust）
-    <img src="https://img.shields.io/badge/status-Preview-blue" alt="Preview Badge"/>
+    <img src="https://statics.memtensor.com.cn/logo/memos_color_m.png" alt="MemOS Logo" width="48"/>&nbsp;
+    MemOS 2.0&ensp;Stardust（星尘）
+
   </h1>
 
-  <p>
-    <a href="https://www.memtensor.com.cn/">
-      <img alt="Static Badge" src="https://img.shields.io/badge/Maintained_by-MemTensor-blue">
-    </a>
-    <a href="https://pypi.org/project/MemoryOS">
-      <img src="https://img.shields.io/pypi/v/MemoryOS?label=pypi%20package" alt="PyPI Version">
-    </a>
-    <a href="https://pypi.org/project/MemoryOS">
-      <img src="https://img.shields.io/pypi/pyversions/MemoryOS.svg" alt="Supported Python versions">
-    </a>
-    <a href="https://pypi.org/project/MemoryOS">
-      <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey" alt="Supported Platforms">
-    </a>
-    <a href="https://memos-docs.openmem.net/home/overview/">
-      <img src="https://img.shields.io/badge/Documentation-view-blue.svg" alt="Documentation">
-    </a>
-    <a href="https://arxiv.org/abs/2507.03724">
-      <img src="https://img.shields.io/badge/arXiv-2507.03724-b31b1b.svg" alt="ArXiv Paper">
-    </a>
-    <a href="https://github.com/MemTensor/MemOS/discussions">
-      <img src="https://img.shields.io/badge/GitHub-Discussions-181717.svg?logo=github" alt="GitHub Discussions">
-    </a>
-    <a href="https://discord.gg/Txbx3gebZR">
-      <img src="https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord" alt="Discord">
-    </a>
-    <a href="https://statics.memtensor.com.cn/memos/qr-code.png">
-      <img src="https://img.shields.io/badge/WeChat-Group-07C160.svg?logo=wechat" alt="WeChat Group">
-    </a>
-    <a href="https://opensource.org/license/apache-2-0/">
-      <img src="https://img.shields.io/badge/License-Apache_2.0-green.svg?logo=apache" alt="License">
-    </a>
-    <a href="https://github.com/IAAR-Shanghai/Awesome-AI-Memory">
-      <img alt="Awesome AI Memory" src="https://img.shields.io/badge/Resources-Awesome--AI--Memory-8A2BE2">
-    </a>
-  </p>
+<p align="center">
+  <br>
+  <a href="https://memos-docs.openmem.net/home/overview/"><img src="https://img.shields.io/badge/Docs-Get--Start-002FA7?labelColor=gray&style=for-the-badge&logo=googledocs&logoColor=white" alt="Docs"></a>
+  <a href="https://arxiv.org/abs/2507.03724"><img src="https://img.shields.io/badge/ArXiv-2507.03724-B31B1B?labelColor=gray&style=for-the-badge&logo=arxiv&logoColor=white" alt="ArXiv"></a>
+  <a href="https://x.com/MemOS_dev"><img src="https://img.shields.io/badge/Follow-MemOS-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
+  <a href="https://discord.gg/Txbx3gebZR"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FTxbx3gebZR%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://github.com/IAAR-Shanghai/Awesome-AI-Memory"><img src="https://img.shields.io/badge/Resources-Awesome--AI--Memory-8A2BE2?labelColor=gray&style=for-the-badge&logo=awesomelists&logoColor=white" alt="Resources"></a>
+</p>
 
 <p align="center">
   <strong>🎯 +43.70% Accuracy vs. OpenAI Memory</strong><br/>
-  <strong>🏆 Top-tier long-term memory + personalization</strong><br/>
-  <strong>💰 Saves 35.24% memory tokens</strong><br/>
+  <strong>🏆 Top-tier Long-term Memory + Personalization</strong><br/>
+  <strong>💰 Saves 35.24% Memory Tokens</strong><br/>
   <sub>LoCoMo 75.80 • LongMemEval +40.43% • PrefEval-10 +2568% • PersonaMem +40.75%</sub>
   <!-- <a href="https://memos.openmem.net/">
     <img src="https://statics.memtensor.com.cn/memos/github_api_free_banner.gif" alt="MemOS Free API Banner">
@@ -64,33 +37,26 @@
 
 <!-- <br> -->
 
-## 🦞 Enhanced OpenClaw with MemOS Plugin
+## 🧠 MemOS Plugin: Persistent Memory for Your AI Agents ✨
 
-![](https://cdn.memtensor.com.cn/img/1770612303123_mnaisk_compressed.png)
+<div align="center">
+  
+<img width="1660" height="664" alt="MemOS Plugin Banner" src="https://github.com/user-attachments/assets/9d15dde2-196e-4f71-a364-dd5a33062117" />
 
-🦞 Your lobster now has a working memory system — choose **Cloud** or **Local** to get started.
+Your lobsters and Hermes Agents now have **the best** memory system — choose ***Cloud Service*** or ***Self-hosted*** to get started 🏃🏻
 
-### ☁️ Cloud Plugin — Hosted Memory Service
+| 🔌 Plugin | <div align="center"> 💡 Core Features </div> | 🧩 Resources |
+| :----: | :--- | :---: |
+| 👧🏻 [**Hermes Agent Local Plugin**](https://x.com/MemOS_dev/status/2043400241232458204) | <ul><li>Visual Management via Web UI.</li><li>100% local, Hybrid retrieval, Smart dedup,<br>Skill evolution, Multi-Agent knowledge hub. </li></ul> | 📑 [Docs](https://memos-docs.openmem.net/cn/openclaw/hermes_local_plugin) · 🐙 [GitHub](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) |
+| ☁️ [**OpenClaw Cloud Plugin**](https://x.com/MemOS_dev/status/2019254160919769171?s=20) | <ul><li>[Reduces token usage by 72%.](https://x.com/MemOS_dev/status/2020854044583924111)</li><li>[Multi-agent memory sharing by `user_id`.](https://x.com/MemOS_dev/status/2020538135487062094)</li></ul> | 🖥️ [MemOS Dashboard](https://memos-dashboard.openmem.net/login/) · 📖 [Full Tutorial](https://memos-docs.openmem.net/openclaw/guide#_4-update-plugin) |
+| 🦐 [**OpenClaw Local Plugin**](https://x.com/MemOS_dev/status/2031342078480019505) | <ul><li>0 cloud dependency by local SQLite.</li><li>FTS5 + vector search, Task auto-summarization,<br>Multi-Agent memory isolation & skill sharing.</li></ul> | 🌐 [Homepage](https://memos-claw.openmem.net) · 📑 [Docs](https://memos-claw.openmem.net/docs) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-openclaw-plugin) |
 
-- [**72% lower token usage**](https://x.com/MemOS_dev/status/2020854044583924111) — intelligent memory retrieval instead of loading full chat history
-- [**Multi-agent memory sharing**](https://x.com/MemOS_dev/status/2020538135487062094) — multi-instance agents share memory via same user_id, automatic context handoff
+</div>
+<br>
 
-Get your API key: [MemOS Dashboard](https://memos-dashboard.openmem.net/cn/login/)
-Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)
-
-### 🧠 Local Plugin — 100% On-Device Memory
-
-- **Zero cloud dependency** — all data stays on your machine, persistent local SQLite storage
-- **Hybrid search + task & skill evolution** — FTS5 + vector search, auto task summarization, reusable skills that self-upgrade
-- **Multi-agent collaboration + Memory Viewer** — memory isolation, skill sharing, full web dashboard with 7 management pages
-
- 🌐 [Homepage](https://memos-claw.openmem.net) ·
-📖 [Documentation](https://memos-claw.openmem.net/docs/index.html) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-openclaw-plugin)
-
-## 📌 MemOS: Memory Operating System for AI Agents
+## 👾 MemOS: Memory Operating System for LLM & AI Agents
 
 **MemOS** is a Memory Operating System for LLMs and AI agents that unifies **store / retrieve / manage** for long-term memory, enabling **context-aware and personalized** interactions with **KB**, **multi-modal**, **tool memory**, and **enterprise-grade** optimizations built in.
-
 
 
 ### Key Features
@@ -103,6 +69,9 @@ Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/Mem
 
 
 ### News
+
+- **2026-04-10** · 👧🏻 **MemOS Hermes Agent Local Plugin**
+  Official Hermes Agent memory plugins launched: Hybrid retrieval (FTS5 + vector), smart dedup, tiered skill evolution, multi-agent collaboration. 100% local, zero cloud dependency.
 
 - **2026-03-08** · 🦞 **MemOS OpenClaw Plugin — Cloud & Local**
   Official OpenClaw memory plugins launched. **Cloud Plugin**: hosted memory service with 72% lower token usage and multi-agent memory sharing ([MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)). **Local Plugin** (`v1.0.0`): 100% on-device memory with persistent SQLite, hybrid search (FTS5 + vector), task summarization & skill evolution, multi-agent collaboration, and a full Memory Viewer dashboard.
@@ -201,7 +170,7 @@ Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/Mem
 
 <br>
 
-## 🚀 Quickstart Guide
+## 🚀 Quick-start Guide
 
 ### ☁️ 1、Cloud API (Hosted)
 #### Get API Key
@@ -288,17 +257,18 @@ Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/Mem
     res = requests.post(url=url, headers=headers, data=json.dumps(data))
     print(f"result: {res.json()}")
     ```
-
+    
 <br>
 
 ## 📚 Resources
 
 - **Awesome-AI-Memory**
- This is a curated repository dedicated to resources on memory and memory systems for large language models. It systematically collects relevant research papers, frameworks, tools, and practical insights. The repository aims to organize and present the rapidly evolving research landscape of LLM memory, bridging multiple research directions including natural language processing, information retrieval, agentic systems, and cognitive science.
-- **Get started** 👉 [IAAR-Shanghai/Awesome-AI-Memory](https://github.com/IAAR-Shanghai/Awesome-AI-Memory)
+ This is a curated repository dedicated to resources on memory and memory systems for large language models. It systematically collects relevant research papers, frameworks, tools, and practical insights. The repository aims to organize and present the rapidly evolving research landscape of LLM memory, bridging multiple research directions including natural language processing, information retrieval, agentic systems, and cognitive science.<br/>
+**Get started** 👉🏻 [IAAR-Shanghai/Awesome-AI-Memory](https://github.com/IAAR-Shanghai/Awesome-AI-Memory)
+
 - **MemOS Cloud OpenClaw Plugin**
-  Official OpenClaw lifecycle plugin for MemOS Cloud. It automatically recalls context from MemOS before the agent starts and saves the conversation back to MemOS after the agent finishes.
-- **Get started** 👉 [MemTensor/MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)
+  Official OpenClaw lifecycle plugin for MemOS Cloud. It automatically recalls context from MemOS before the agent starts and saves the conversation back to MemOS after the agent finishes.<br/>
+**Get started** 👉🏻 [MemTensor/MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)
 
 <br>
 
