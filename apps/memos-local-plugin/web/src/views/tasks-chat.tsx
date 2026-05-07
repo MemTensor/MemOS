@@ -19,6 +19,7 @@
  * `tests/unit/web/tasks-chat.test.ts` (no Preact dependency).
  */
 import type { JSX } from "preact";
+import { useState } from "preact/hooks";
 import { Icon } from "../components/Icon";
 import { Markdown } from "../components/Markdown";
 import { t } from "../stores/i18n";
@@ -132,8 +133,17 @@ function avatarFor(role: ChatRole): string {
   }
 }
 
+const COLLAPSE_THRESHOLD_USER = 200;
+const COLLAPSE_THRESHOLD_ASSISTANT = 600;
+
 export function ChatBubble({ msg }: { msg: ChatMsg }) {
   const time = formatTime(msg.ts);
+  const threshold =
+    msg.role === "user" ? COLLAPSE_THRESHOLD_USER : COLLAPSE_THRESHOLD_ASSISTANT;
+  const collapsible =
+    (msg.role === "user" || msg.role === "assistant") &&
+    msg.text.length > threshold;
+  const [expanded, setExpanded] = useState(false);
 
   return (
     <div class={`chat-item chat-item--${msg.role}`}>
@@ -158,9 +168,23 @@ export function ChatBubble({ msg }: { msg: ChatMsg }) {
             <Markdown text={msg.text} />
           </div>
         ) : (
-          <div class="chat-item__bubble">
+          <div
+            class={`chat-item__bubble${collapsible && !expanded ? " chat-item__bubble--collapsed" : ""}`}
+          >
             <Markdown text={msg.text} />
+            {collapsible && !expanded && (
+              <div class="chat-item__fade" />
+            )}
           </div>
+        )}
+        {collapsible && (
+          <button
+            type="button"
+            class="chat-item__toggle"
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? t("tasks.chat.collapse") : t("tasks.chat.expand")}
+          </button>
         )}
       </div>
     </div>

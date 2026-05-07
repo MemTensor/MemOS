@@ -22,6 +22,11 @@
   box-sizing: border-box;
 }
 
+button {
+  color: inherit;
+  font: inherit;
+}
+
 html,
 body,
 #app {

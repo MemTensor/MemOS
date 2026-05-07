@@ -72,7 +72,7 @@ async function main(): Promise<void> {
   const { startStdioServer, waitForShutdown } = (await import(
     pathToEsmUrl(path.resolve(__dirname, "bridge/stdio.ts"))
   )) as typeof import("./bridge/stdio.js");
-  const { memoryBuffer } = (await import(
+  const { memoryBuffer, rootLogger } = (await import(
     pathToEsmUrl(path.resolve(__dirname, "core/logger/index.ts"))
   )) as typeof import("./core/logger/index.js");
   const { startHttpServer } = (await import(
@@ -140,15 +140,17 @@ async function main(): Promise<void> {
       },
     };
 
+  const { Telemetry } = (await import(
+    pathToEsmUrl(path.resolve(__dirname, "core/telemetry/index.ts"))
+  )) as typeof import("./core/telemetry/index.js");
+
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
     namespace: { agentKind: args.agent, profileId: "default" },
     pkgVersion,
-    // Skip in daemon mode — daemon has no stdio, so reverse RPC
-    // can't ever fire and registering would just hide the "no
-    // bridge" error message.
     hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
   });
+
   const bridgeStatus =
     args.agent === "hermes"
       ? createBridgeStatusTracker(
@@ -157,6 +159,16 @@ async function main(): Promise<void> {
         )
       : null;
   await core.init();
+
+  const telemetry = new Telemetry(
+    config.telemetry ?? {},
+    home.root,
+    pkgVersion,
+    rootLogger.child({ channel: "core.telemetry" }),
+    __dirname,
+  );
+  (core as { bindTelemetry?: (t: InstanceType<typeof Telemetry>) => void }).bindTelemetry?.(telemetry);
+  telemetry.trackPluginStarted(args.agent);
 
   // Per-agent fixed viewer port.
   const AGENT_DEFAULT_PORTS = { openclaw: 18799, hermes: 18800 } as const;
@@ -184,6 +196,7 @@ async function main(): Promise<void> {
             home,
             logTail: () => memoryBuffer().tail({ limit: 200 }),
             bridgeStatus: bridgeStatus ? () => bridgeStatus.snapshot() : undefined,
+            telemetry,
           },
           {
             port: viewerPort,
@@ -253,6 +266,7 @@ async function main(): Promise<void> {
         home,
         logTail: () => memoryBuffer().tail({ limit: 200 }),
         bridgeStatus: bridgeStatus ? () => bridgeStatus.snapshot() : undefined,
+        telemetry,
       },
       {
         port: viewerPort,

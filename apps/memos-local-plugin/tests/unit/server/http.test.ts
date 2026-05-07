@@ -239,6 +239,33 @@ describe("HTTP server — REST routes", () => {
     );
   });
 
+  it("POST /api/v1/memory/search rejects oversized queries before retrieval", async () => {
+    const r = await fetch(`${handle.url}/api/v1/memory/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "x".repeat(513), agent: "openclaw" }),
+    });
+    expect(r.status).toBe(400);
+    expect(core.searchMemory).not.toHaveBeenCalled();
+  });
+
+  it("memory search defaults to the server agent when agent is omitted", async () => {
+    const local = await startHttpServer({ core }, { port: 0, agent: "hermes" });
+    try {
+      const r = await fetch(`${local.url}/api/v1/memory/search`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: "testing" }),
+      });
+      expect(r.status).toBe(200);
+      expect(core.searchMemory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ query: "testing", agent: "hermes" }),
+      );
+    } finally {
+      await local.close();
+    }
+  });
+
   it("GET /api/v1/memory/trace?id=t1 returns the trace", async () => {
     const r = await fetch(`${handle.url}/api/v1/memory/trace?id=t1`);
     expect(r.status).toBe(200);
@@ -536,6 +563,15 @@ describe("HTTP server — REST routes", () => {
     const r = await fetch(`${handle.url}/api/v1/skills/sk_1`, { method: "DELETE" });
     expect(r.status).toBe(200);
     expect(core.deleteSkill).toHaveBeenCalledWith("sk_1");
+  });
+
+  it("GET /api/v1/skills/:id returns skill detail", async () => {
+    const r = await fetch(`${handle.url}/api/v1/skills/sk_1`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { id: string; name: string };
+    expect(body.id).toBe("sk_1");
+    expect(body.name).toBe("test-skill");
+    expect(core.getSkill).toHaveBeenCalledWith("sk_1");
   });
 
   it("POST /api/v1/skills/reactivate flips an archived skill back to active", async () => {

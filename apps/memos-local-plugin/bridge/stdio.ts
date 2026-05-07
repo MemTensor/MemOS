@@ -151,6 +151,7 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
   }
 
   async function handleLine(line: string): Promise<void> {
+    if (closed) return;
     const trimmed = line.trim();
     if (trimmed.length === 0) return;
 
@@ -229,6 +230,7 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
 
   const donePromise = new Promise<void>((resolve) => {
     stdin.on("data", (chunk) => {
+      if (closed) return;
       buffer += String(chunk);
       let nl = buffer.indexOf("\n");
       while (nl >= 0) {
@@ -288,8 +290,7 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
     async close() {
       if (closed) return;
       finishTransport();
-      // Drain remaining lines then flush.
-      await donePromise;
+      stdin.pause?.();
     },
     done: donePromise,
     serverRequest,
@@ -394,13 +395,13 @@ export async function waitForShutdown(
   core: MemoryCore,
   handle: StdioServerHandle,
 ): Promise<void> {
-  // Stdin closing is the "client disconnected" signal.
-  await handle.done;
+  await handle.close();
   try {
     await core.shutdown();
   } catch {
     /* swallow */
   }
-  await handle.close();
-  await once(process.stdout, "drain").catch(() => {});
+  if (process.stdout.writableNeedDrain) {
+    await once(process.stdout, "drain").catch(() => {});
+  }
 }

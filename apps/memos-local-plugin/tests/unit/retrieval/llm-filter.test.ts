@@ -112,6 +112,29 @@ describe("retrieval/llm-filter", () => {
     expect(result.sufficient).toBe(false);
   });
 
+  it("LLM returns ranked indices → code truncates by llmFilterMaxKeep", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { ranked: [3, 1, 4, 2], sufficient: true },
+        servedBy: "fake",
+      }),
+    };
+    const ranked = [
+      trace("a", 0.9),
+      trace("b", 0.8),
+      trace("c", 0.7),
+      trace("d", 0.6),
+    ];
+    const result = await llmFilterCandidates(
+      { query: "q", ranked },
+      { llm, log, config: { ...cfg, llmFilterMaxKeep: 2 } },
+    );
+    expect(result.outcome).toBe("llm_filtered");
+    expect(result.kept.map((r) => String(r.candidate.refId))).toEqual(["c", "a"]);
+    expect(result.dropped.map((r) => String(r.candidate.refId))).toEqual(["b", "d"]);
+    expect(result.sufficient).toBe(true);
+  });
+
   it("LLM returns empty selection → drops everything and marks insufficient", async () => {
     const llm: any = {
       completeJson: vi.fn().mockResolvedValue({
@@ -196,6 +219,19 @@ describe("retrieval/llm-filter", () => {
     expect(result.outcome).toBe("llm_failed_safe_cutoff");
   });
 
+  it("safe-cutoff respects a zero llmFilterMaxKeep cap", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockRejectedValue(new Error("boom")),
+    };
+    const result = await llmFilterCandidates(
+      { query: "q", ranked: [trace("a", 0.9), trace("b", 0.8)] },
+      { llm, log, config: { ...cfg, llmFilterMaxKeep: 0 } },
+    );
+    expect(result.kept).toEqual([]);
+    expect(result.dropped.length).toBe(2);
+    expect(result.outcome).toBe("llm_failed_safe_cutoff");
+  });
+
   it("no LLM at all → passthrough (not safe-cutoff, since the call never happens)", async () => {
     const result = await llmFilterCandidates(
       {
@@ -225,5 +261,22 @@ describe("retrieval/llm-filter", () => {
     expect(seen[0]).toContain("tags=[sample]");
     expect(seen[0]).toContain("via=vec_summary");
     expect(seen[0]).toContain("score=");
+  });
+
+  it("LLM output budget scales for large ranked lists", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { ranked: [1], sufficient: false },
+        servedBy: "fake",
+      }),
+    };
+    const ranked = Array.from({ length: 300 }, (_, i) =>
+      trace(`candidate-${i + 1}`, 1 - i / 1000),
+    );
+    await llmFilterCandidates(
+      { query: "q", ranked },
+      { llm, log, config: { ...cfg, llmFilterMaxKeep: 300 } },
+    );
+    expect(llm.completeJson.mock.calls[0][1].maxTokens).toBeGreaterThan(512);
   });
 });

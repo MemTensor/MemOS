@@ -91,6 +91,10 @@ export function Pager({
 
       <div class="pager__spacer" />
 
+      <span class="muted pager__summary" style="font-size:var(--fs-xs);white-space:nowrap">
+        {t("pager.totalPerPage", { total: totalItems, pageSize })}
+      </span>
+
       <label class="pager__page-size">
         <select
           class="select pager__page-size-select"

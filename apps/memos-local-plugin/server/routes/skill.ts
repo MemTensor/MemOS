@@ -51,6 +51,20 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
     return skill;
   });
 
+  routes.setPattern("GET /api/v1/skills/:id", async (ctx) => {
+    const id = ctx.params.id;
+    if (!id) {
+      writeError(ctx, 400, "invalid_argument", "id is required");
+      return;
+    }
+    const skill = await deps.core.getSkill(id as SkillId);
+    if (skill === null) {
+      writeError(ctx, 404, "not_found", `skill not found: ${id}`);
+      return;
+    }
+    return skill;
+  });
+
   /**
    * `GET /api/v1/skills/:id/timeline` — evolution history for one skill.
    *

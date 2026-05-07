@@ -475,6 +475,9 @@ export function makeTracesRepo(db: StorageDb) {
     },
 
     deleteById(id: TraceId): void {
+      // The FTS trigger should remove this row, but doing it explicitly
+      // makes deletion idempotent across pre-release DBs with older schemas.
+      db.prepare<{ id: string }>(`DELETE FROM traces_fts WHERE trace_id=@id`).run({ id });
       db.prepare<{ id: string }>(`DELETE FROM traces WHERE id=@id`).run({ id });
     },
 

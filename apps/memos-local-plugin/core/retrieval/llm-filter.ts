@@ -27,6 +27,8 @@ import type { RankedCandidate } from "./ranker.js";
 import type { RetrievalConfig, TierCandidate } from "./types.js";
 
 const DEFAULT_CANDIDATE_BODY_CHARS = 500;
+const MIN_FILTER_OUTPUT_TOKENS = 160;
+const MAX_FILTER_OUTPUT_TOKENS = 2048;
 
 export interface FilterInput {
   query: string;
@@ -116,6 +118,7 @@ export async function llmFilterCandidates(
 
   try {
     const rsp = await deps.llm.completeJson<{
+      ranked?: unknown;
       selected?: unknown;
       sufficient?: unknown;
     }>(
@@ -134,27 +137,34 @@ ${list}`,
         phase: "retrieve",
         episodeId: input.episodeId,
         temperature: 0,
-        // Short output — indices + one bool. Kept tight so a misbehaving
-        // model can't blow budgets.
-        maxTokens: 160,
+        // Output is only ordered indices + one bool, but the list can
+        // legitimately be as long as the ranked candidates.
+        maxTokens: filterOutputTokenBudget(ranked.length),
         malformedRetries: 1,
       },
     );
-    const raw = (rsp.value?.selected ?? []) as unknown;
+    const raw = (rsp.value?.ranked ?? rsp.value?.selected ?? []) as unknown;
     const sufficient = coerceBool(rsp.value?.sufficient);
     if (!Array.isArray(raw)) {
       deps.log.debug("llm_filter.malformed", { got: typeof raw });
       return safeCutoff(ranked, deps);
     }
-    const keepIndices = new Set<number>();
+    const orderedIndices: number[] = [];
+    const seenIndices = new Set<number>();
     for (const v of raw) {
       const n = typeof v === "number" ? v : Number(v);
       if (!Number.isFinite(n)) continue;
       const zero = Math.floor(n) - 1;
       if (zero < 0 || zero >= ranked.length) continue;
-      keepIndices.add(zero);
-      if (keepIndices.size >= deps.config.llmFilterMaxKeep) break;
+      if (seenIndices.has(zero)) continue;
+      seenIndices.add(zero);
+      orderedIndices.push(zero);
     }
+    const cappedIndices = orderedIndices.slice(
+      0,
+      Math.max(0, deps.config.llmFilterMaxKeep),
+    );
+    const keepIndices = new Set(cappedIndices);
     if (keepIndices.size === 0) {
       // Model asked us to drop everything — honoured. Surface this
       // explicitly so the Logs page can show "LLM found nothing
@@ -166,10 +176,10 @@ ${list}`,
         sufficient: sufficient ?? false,
       };
     }
-    const kept: RankedCandidate[] = [];
+    const kept = cappedIndices.map((i) => ranked[i]!);
     const dropped: RankedCandidate[] = [];
     ranked.forEach((r, i) => {
-      (keepIndices.has(i) ? kept : dropped).push(r);
+      if (!keepIndices.has(i)) dropped.push(r);
     });
     return {
       kept,
@@ -185,6 +195,13 @@ ${list}`,
     });
     return safeCutoff(ranked, deps);
   }
+}
+
+function filterOutputTokenBudget(candidateCount: number): number {
+  return Math.min(
+    MAX_FILTER_OUTPUT_TOKENS,
+    Math.max(MIN_FILTER_OUTPUT_TOKENS, candidateCount * 8 + 80),
+  );
 }
 
 function passthrough(
@@ -225,7 +242,15 @@ function safeCutoff(
     0,
   );
   const cutoff = topScore > 0 ? topScore * ratio : 0;
-  const keepCap = Math.max(1, deps.config.llmFilterMaxKeep);
+  const keepCap = Math.max(0, deps.config.llmFilterMaxKeep);
+  if (keepCap === 0) {
+    return {
+      kept: [],
+      dropped: [...ranked],
+      outcome: "llm_failed_safe_cutoff",
+      sufficient: null,
+    };
+  }
   const kept: RankedCandidate[] = [];
   const dropped: RankedCandidate[] = [];
   for (const c of ranked) {

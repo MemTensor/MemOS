@@ -121,6 +121,17 @@ export function makeEpisodesRepo(db: StorageDb) {
       appendTrace.run({ id, trace_ids_json: toJsonText(traceIds) });
     },
 
+    removeTraceIds(id: EpisodeId, traceIds: readonly string[]): void {
+      if (traceIds.length === 0) return;
+      const current = selectById.get({ id });
+      if (!current) return;
+      const remove = new Set(traceIds);
+      const kept = fromJsonText<string[]>(current.trace_ids_json, []).filter(
+        (traceId) => !remove.has(traceId),
+      );
+      appendTrace.run({ id, trace_ids_json: toJsonText(kept) });
+    },
+
     getById(id: EpisodeId): (EpisodeRow & EpisodeMetaRow) | null {
       const r = selectById.get({ id });
       if (!r) return null;

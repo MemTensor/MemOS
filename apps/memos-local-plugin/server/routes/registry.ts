@@ -162,7 +162,7 @@ export function buildRoutes(
   registerHealthRoutes(routes, deps);
   registerOverviewRoutes(routes, deps);
   registerSessionRoutes(routes, deps);
-  registerMemoryRoutes(routes, deps);
+  registerMemoryRoutes(routes, deps, options);
   registerTraceRoutes(routes, deps);
   registerPoliciesRoutes(routes, deps);
   registerSkillRoutes(routes, deps);

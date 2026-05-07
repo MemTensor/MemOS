@@ -125,6 +125,8 @@ export interface MemoryCore {
   init(): Promise<void>;
   shutdown(): Promise<void>;
   health(): Promise<CoreHealth>;
+  /** Late-bind ARMS telemetry (called after config is available). */
+  bindTelemetry?(t: unknown): void;
 
   // ── session / episode ──
   openSession(input: {

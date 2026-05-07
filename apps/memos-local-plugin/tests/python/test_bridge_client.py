@@ -105,6 +105,21 @@ class _ServerStream(io.StringIO):
                     "result": {"sessionId": "hermes:session:1"},
                 }
             )
+        elif method == "turn.start":
+            q = (req.get("params") or {}).get("userText", "")
+            self._enqueue(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "result": {
+                        "query": {
+                            "sessionId": "hermes:session:1",
+                            "episodeId": "ep-1",
+                        },
+                        "injectedContext": f"- remembered context for {q}",
+                    },
+                }
+            )
         elif method == "boom":
             self._enqueue(
                 {
@@ -368,7 +383,10 @@ class MemTensorProviderTests(unittest.TestCase):
 
         skills = json.loads(p.handle_tool_call("skill_list", {"status": "active", "limit": 3}))
         self.assertEqual(skills["skills"][0]["id"], "sk-1")
-        self.assertEqual(bridge.calls[-1], ("skill.list", {"limit": 3, "status": "active"}))
+        self.assertEqual(bridge.calls[-1][0], "skill.list")
+        self.assertEqual(bridge.calls[-1][1]["limit"], 3)
+        self.assertEqual(bridge.calls[-1][1]["status"], "active")
+        self.assertEqual(bridge.calls[-1][1]["namespace"]["agentKind"], "hermes")
 
         env = json.loads(p.handle_tool_call("memory_environment", {"limit": 2}))
         self.assertFalse(env["queried"])
@@ -402,9 +420,32 @@ class MemTensorProviderTests(unittest.TestCase):
         self.assertIn("missing id", p.handle_tool_call("skill_get", {}))
         self.assertIn("unknown tool", p.handle_tool_call("not_a_tool", {}))
 
-    def test_prefetch_returns_empty_without_bridge(self) -> None:
+    def test_prefetch_lazily_reconnects_when_bridge_is_missing(self) -> None:
+        class PrefetchBridge:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, dict]] = []
+
+            def register_host_handler(self, *_args, **_kwargs) -> None:
+                pass
+
+            def request(self, method: str, params: dict | None = None, **_kwargs) -> dict:
+                payload = params or {}
+                self.calls.append((method, payload))
+                if method == "session.open":
+                    return {"sessionId": "hermes:session:1"}
+                if method == "turn.start":
+                    return {
+                        "query": {"episodeId": "ep-1"},
+                        "injectedContext": "- remembered context for anything",
+                    }
+                return {}
+
         p = self._provider_mod.MemTensorProvider()
-        self.assertEqual(p.prefetch("anything"), "")
+        bridge = PrefetchBridge()
+        with patch("memos_provider.MemosBridgeClient", return_value=bridge):
+            self.assertIn("Recalled Memories", p.prefetch("anything"))
+        self.assertIsNotNone(p._bridge)
+        self.assertEqual([c[0] for c in bridge.calls], ["session.open", "turn.start"])
 
     def test_on_turn_start_stashes_message(self) -> None:
         p = self._provider_mod.MemTensorProvider()

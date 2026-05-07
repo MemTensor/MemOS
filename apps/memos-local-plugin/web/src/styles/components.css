@@ -1365,6 +1365,41 @@
   padding: 10px 14px;
   border-radius: 12px 12px 12px 4px;
   word-break: break-word;
+  position: relative;
+}
+.chat-item__bubble--collapsed {
+  max-height: 120px;
+  overflow: hidden;
+}
+.chat-item__fade {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  background: linear-gradient(to bottom, transparent, var(--bg-card));
+  border-radius: 0 0 12px 4px;
+  pointer-events: none;
+}
+.chat-item--user .chat-item__bubble--collapsed .chat-item__fade,
+.chat-item--user .chat-item__fade {
+  background: linear-gradient(to bottom, transparent, rgba(124, 140, 245, 0.07));
+}
+.chat-item__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.chat-item__toggle:hover {
+  background: var(--bg-hover);
 }
 .chat-item--user .chat-item__bubble {
   background: linear-gradient(135deg, rgba(124, 140, 245, 0.14), rgba(124, 140, 245, 0.07));

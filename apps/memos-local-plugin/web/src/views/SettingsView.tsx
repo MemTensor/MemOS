@@ -525,60 +525,80 @@ function HubTab({
       </div>
 
       {hub.enabled && (
-        <div
-          style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--sp-4)"
-        >
-          <Field label={t("settings.hub.role")}>
-            <div class="segmented">
-              {(["hub", "client"] as const).map((r) => (
-                <button
-                  key={r}
-                  class="segmented__item"
-                  aria-pressed={hub.role === r}
-                  onClick={() => onPatch({ role: r })}
-                >
-                  {t(`settings.hub.role.${r}` as "settings.hub.role.hub")}
-                </button>
-              ))}
+        <>
+          <div
+            class="card card--flat"
+            style="margin-bottom:var(--sp-4);border-left:3px solid var(--accent)"
+          >
+            <div class="hstack" style="gap:var(--sp-2);align-items:flex-start">
+              <Icon name="info" size={14} style="margin-top:3px;color:var(--accent);flex-shrink:0" />
+              <div style="font-size:var(--fs-sm);line-height:1.7">
+                <div style="font-weight:var(--fw-semi);margin-bottom:4px">
+                  {t("settings.hub.help.title")}
+                </div>
+                <div class="muted">{t("settings.hub.help.role")}</div>
+                <div class="muted">{t("settings.hub.help.tokens")}</div>
+              </div>
             </div>
-          </Field>
+          </div>
 
-          {hub.role === "client" && (
-            <Field label={t("settings.hub.address")}>
+          <div
+            style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--sp-4)"
+          >
+            <Field label={t("settings.hub.role")}>
+              <div class="segmented">
+                {(["hub", "client"] as const).map((r) => (
+                  <button
+                    key={r}
+                    class="segmented__item"
+                    aria-pressed={hub.role === r}
+                    onClick={() => onPatch({ role: r })}
+                  >
+                    {t(`settings.hub.role.${r}` as "settings.hub.role.hub")}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            {hub.role === "client" && (
+              <Field label={t("settings.hub.address")}>
+                <input
+                  class="input"
+                  type="url"
+                  value={hub.address ?? ""}
+                  placeholder="http://10.0.0.12:18912"
+                  onInput={(e) =>
+                    onPatch({ address: (e.target as HTMLInputElement).value })
+                  }
+                />
+              </Field>
+            )}
+
+            <Field label={t("settings.hub.teamToken")}>
               <input
                 class="input"
-                type="url"
-                value={hub.address ?? ""}
-                placeholder="http://10.0.0.12:18912"
+                type="password"
+                value={hub.teamToken ?? ""}
+                placeholder={t("settings.hub.teamToken.placeholder")}
                 onInput={(e) =>
-                  onPatch({ address: (e.target as HTMLInputElement).value })
+                  onPatch({ teamToken: (e.target as HTMLInputElement).value })
                 }
               />
             </Field>
-          )}
 
-          <Field label={t("settings.hub.teamToken")}>
-            <input
-              class="input"
-              type="password"
-              value={hub.teamToken ?? ""}
-              onInput={(e) =>
-                onPatch({ teamToken: (e.target as HTMLInputElement).value })
-              }
-            />
-          </Field>
-
-          <Field label={t("settings.hub.userToken")}>
-            <input
-              class="input"
-              type="password"
-              value={hub.userToken ?? ""}
-              onInput={(e) =>
-                onPatch({ userToken: (e.target as HTMLInputElement).value })
-              }
-            />
-          </Field>
-        </div>
+            <Field label={t("settings.hub.userToken")}>
+              <input
+                class="input"
+                type="password"
+                value={hub.userToken ?? ""}
+                placeholder={t("settings.hub.userToken.placeholder")}
+                onInput={(e) =>
+                  onPatch({ userToken: (e.target as HTMLInputElement).value })
+                }
+              />
+            </Field>
+          </div>
+        </>
       )}
 
       {/*

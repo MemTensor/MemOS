@@ -1647,7 +1647,7 @@ function ChainCard({
         type="button"
         onClick={onToggle}
         class="hstack"
-        style="width:100%;gap:var(--sp-2);flex-wrap:wrap;align-items:center;background:transparent;border:none;padding:0;cursor:pointer;text-align:left"
+        style="width:100%;gap:var(--sp-2);flex-wrap:wrap;align-items:center;background:transparent;border:none;padding:0;cursor:pointer;text-align:left;color:var(--fg)"
       >
         <Icon name={expanded ? "chevron-down" : "chevron-right"} size={14} />
         {ep ? (
@@ -1799,7 +1799,7 @@ function InfraHeartbeatCard({
         type="button"
         onClick={onToggle}
         class="hstack"
-        style="width:100%;gap:var(--sp-2);flex-wrap:wrap;align-items:center;background:transparent;border:none;padding:0;cursor:pointer;text-align:left"
+        style="width:100%;gap:var(--sp-2);flex-wrap:wrap;align-items:center;background:transparent;border:none;padding:0;cursor:pointer;text-align:left;color:var(--fg)"
       >
         <Icon name={expanded ? "chevron-down" : "chevron-right"} size={14} />
         <span
@@ -1902,7 +1902,7 @@ function ChainEventRow({
         type="button"
         onClick={onToggle}
         class="hstack"
-        style="width:100%;padding:6px 10px;gap:var(--sp-2);background:transparent;border:none;cursor:pointer;text-align:left;align-items:center"
+        style="width:100%;padding:6px 10px;gap:var(--sp-2);background:transparent;border:none;cursor:pointer;text-align:left;align-items:center;color:var(--fg)"
       >
         <span
           aria-hidden="true"
@@ -1921,7 +1921,7 @@ function ChainEventRow({
           {ev.log.toolName}
         </span>
         <span
-          style="flex:1;min-width:0;font-size:var(--fs-xs);line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+          style="flex:1;min-width:0;font-size:var(--fs-xs);line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)"
           title={buildSummary(ev.log, ev.input, ev.output)}
         >
           {buildSummary(ev.log, ev.input, ev.output)}

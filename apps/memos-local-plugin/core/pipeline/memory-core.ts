@@ -127,6 +127,8 @@ export interface BootstrapOptions {
    * client closes over.
    */
   hostLlmBridge?: HostLlmBridge | null;
+  /** Optional telemetry instance for ARMS RUM reporting. */
+  telemetry?: import("../telemetry/index.js").Telemetry | null;
 }
 
 export interface BootstrapResult {
@@ -412,6 +414,7 @@ export async function bootstrapMemoryCoreFull(
   const handle = createPipeline(deps);
 
   const core = createMemoryCore(handle, home, options.pkgVersion ?? "dev", {
+    telemetry: options.telemetry ?? null,
     onShutdown: () => {
       try {
         db.close();
@@ -431,6 +434,8 @@ export async function bootstrapMemoryCoreFull(
 export interface CreateMemoryCoreOptions {
   /** Called after the pipeline has shut down. */
   onShutdown?: () => void | Promise<void>;
+  /** Optional telemetry instance for ARMS RUM reporting. */
+  telemetry?: import("../telemetry/index.js").Telemetry | null;
 }
 
 /**
@@ -449,6 +454,7 @@ export function createMemoryCore(
 ): MemoryCore {
   const bootAt = Date.now();
   const log = rootLogger.child({ channel: "core.pipeline.memory-core" });
+  let telemetry = options.telemetry ?? null;
   let initialized = false;
   let shutDown = false;
   /** Per-episode monotonic step counter for tool outcomes. */
@@ -1070,6 +1076,9 @@ export function createMemoryCore(
     try {
       await handle.shutdown("memory-core.shutdown");
     } finally {
+      if (telemetry) {
+        await telemetry.shutdown();
+      }
       if (options.onShutdown) {
         await options.onShutdown();
       }
@@ -1353,6 +1362,13 @@ export function createMemoryCore(
           err: logErr instanceof Error ? logErr.message : String(logErr),
         });
       }
+      if (telemetry && ok) {
+        telemetry.trackTurnStart(
+          turn.agent,
+          Date.now() - startedAt,
+          packet?.snippets?.length ?? 0,
+        );
+      }
     }
   }
 
@@ -1370,13 +1386,13 @@ export function createMemoryCore(
           ...namespaceMeta(ns),
         },
       });
-    // Return the real row id produced by the synchronous lite capture.
-    // Feedback submits this id as a FK, so a synthetic placeholder would
-    // cause SQLite "FOREIGN KEY constraint failed" later.
     const traceIds = outcome.traceIds.length > 0
       ? outcome.traceIds
       : outcome.episode?.traceIds ?? [];
     const lastTraceId = traceIds[traceIds.length - 1] ?? "";
+    if (telemetry) {
+      telemetry.trackTurnEnd(result.agent, traceIds.length);
+    }
     return {
       traceId: lastTraceId,
       episodeId: outcome.episodeId,
@@ -1387,7 +1403,10 @@ export function createMemoryCore(
     feedback: Omit<FeedbackDTO, "id" | "ts"> & { ts?: number },
   ): Promise<FeedbackDTO> {
     ensureLive();
-    if (feedback.traceId && !handle.repos.traces.getById(feedback.traceId as TraceId)) {
+    const targetTrace = feedback.traceId
+      ? handle.repos.traces.getById(feedback.traceId as TraceId)
+      : null;
+    if (feedback.traceId && !targetTrace) {
       throw new MemosError(
         "trace_not_found",
         `trace not found: ${feedback.traceId}`,
@@ -1408,7 +1427,20 @@ export function createMemoryCore(
       rationale: feedback.rationale ?? null,
       raw: feedback.raw ?? null,
     };
-    handle.repos.feedback.insert(row);
+    handle.db.tx(() => {
+      handle.repos.feedback.insert(row);
+      if (targetTrace) {
+        const explicitValue = aggregateTraceFeedbackValue(
+          handle.repos.feedback.getForTrace(targetTrace.id),
+        );
+        handle.repos.traces.updateScore(targetTrace.id, {
+          value: explicitValue,
+          alpha: targetTrace.alpha,
+          rHuman: explicitValue,
+          priority: Math.max(targetTrace.priority, Math.abs(explicitValue)),
+        });
+      }
+    });
 
     const episode = row.episodeId
       ? handle.repos.episodes.getById(row.episodeId as EpisodeId)
@@ -1501,7 +1533,28 @@ export function createMemoryCore(
       });
     }
 
+    if (telemetry) {
+      telemetry.trackFeedback(
+        handle.namespace.agentKind,
+        feedback.polarity,
+      );
+    }
     return toFeedbackDTO(row);
+  }
+
+  function aggregateTraceFeedbackValue(rows: readonly FeedbackRow[]): number {
+    if (rows.length === 0) return 0;
+    let sum = 0;
+    let weight = 0;
+    for (const feedbackRow of rows) {
+      const magnitude = clamp01(feedbackRow.magnitude);
+      if (magnitude === 0 || feedbackRow.polarity === "neutral") continue;
+      const signed = feedbackRow.polarity === "positive" ? magnitude : -magnitude;
+      sum += signed;
+      weight += magnitude;
+    }
+    if (weight === 0) return 0;
+    return clampSigned(sum / weight);
   }
 
   function recordToolOutcome(outcome: {
@@ -1970,6 +2023,13 @@ export function createMemoryCore(
           err: logErr instanceof Error ? logErr.message : String(logErr),
         });
       }
+      if (telemetry && ok) {
+        telemetry.trackMemorySearch(
+          query.agent,
+          Date.now() - startedAt,
+          candidates.length,
+        );
+      }
     }
   }
 
@@ -2003,7 +2063,10 @@ export function createMemoryCore(
     ensureLive();
     const existing = handle.repos.traces.getById(id);
     if (!existing || !ownedByCurrent(existing)) return { deleted: false };
-    handle.repos.traces.deleteById(id);
+    handle.db.tx(() => {
+      handle.repos.episodes.removeTraceIds(existing.episodeId, [id]);
+      handle.repos.traces.deleteById(id);
+    });
     return { deleted: true };
   }
 
@@ -2015,7 +2078,10 @@ export function createMemoryCore(
     for (const id of ids) {
       const existing = handle.repos.traces.getById(id);
       if (!existing || !ownedByCurrent(existing)) continue;
-      handle.repos.traces.deleteById(id);
+      handle.db.tx(() => {
+        handle.repos.episodes.removeTraceIds(existing.episodeId, [id]);
+        handle.repos.traces.deleteById(id);
+      });
       deleted++;
     }
     return { deleted };
@@ -3313,6 +3379,7 @@ export function createMemoryCore(
     init,
     shutdown,
     health,
+    bindTelemetry(t: import("../telemetry/index.js").Telemetry) { telemetry = t; },
     openSession,
     closeSession,
     openEpisode,
@@ -3849,11 +3916,15 @@ function applyTopKOverride(
   topK: RetrievalQueryDTO["topK"] | undefined,
 ): RetrievalConfig {
   if (!topK) return config;
+  const tier1TopK = clampTopK(topK.tier1, config.tier1TopK);
+  const tier2TopK = clampTopK(topK.tier2, config.tier2TopK);
+  const tier3TopK = clampTopK(topK.tier3, config.tier3TopK);
   return {
     ...config,
-    tier1TopK: clampTopK(topK.tier1, config.tier1TopK),
-    tier2TopK: clampTopK(topK.tier2, config.tier2TopK),
-    tier3TopK: clampTopK(topK.tier3, config.tier3TopK),
+    tier1TopK,
+    tier2TopK,
+    tier3TopK,
+    llmFilterMaxKeep: tier1TopK + tier2TopK + tier3TopK,
   };
 }
 
@@ -3861,6 +3932,20 @@ function clampTopK(value: number | undefined, fallback: number): number {
   if (value === undefined) return fallback;
   if (!Number.isFinite(value)) return fallback;
   return Math.min(Math.max(0, Math.trunc(value)), 100);
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return value;
+}
+
+function clampSigned(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value < -1) return -1;
+  if (value > 1) return 1;
+  return value;
 }
 
 function eventTime(evt: unknown): number {

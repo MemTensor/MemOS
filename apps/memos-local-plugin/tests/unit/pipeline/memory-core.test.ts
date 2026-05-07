@@ -491,6 +491,88 @@ describe("MemoryCore façade", () => {
       episodeId: end.episodeId,
     });
     expect(fb.traceId).toBe(end.traceId);
+    const scored = db!.repos.traces.getById(end.traceId as never)!;
+    expect(scored.value).toBe(1);
+    expect(scored.rHuman).toBe(1);
+    expect(scored.priority).toBe(1);
+  });
+
+  it("onTurnEnd preserves adapter-provided historical timestamps", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const oldUserTs = 1_692_224_000_000;
+    const oldAssistantTs = oldUserTs + 1_500;
+    const start = await core.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-historical-ts",
+      userText: "remember this imported historical preference",
+      ts: oldUserTs,
+    });
+    const end = await core.onTurnEnd({
+      agent: "openclaw",
+      sessionId: start.query.sessionId!,
+      episodeId: start.query.episodeId!,
+      agentText: "I will keep that historical preference.",
+      toolCalls: [],
+      ts: oldAssistantTs,
+    });
+
+    const trace = db!.repos.traces.getById(end.traceId as never)!;
+    expect(trace.ts).toBe(oldAssistantTs);
+    expect(trace.turnId).toBe(oldUserTs);
+    expect(trace.ts).toBeLessThan(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  });
+
+  it("submitFeedback aggregates explicit trace feedback into trace value", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const start = await core.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-feedback-aggregate",
+      userText: "remember that compact release reports are useful",
+      ts: 1_700_000_100_000,
+    });
+    const end = await core.onTurnEnd({
+      agent: "openclaw",
+      sessionId: start.query.sessionId!,
+      episodeId: start.query.episodeId!,
+      agentText: "I will keep release reports compact.",
+      toolCalls: [],
+      ts: 1_700_000_100_500,
+    });
+
+    await core.submitFeedback({
+      channel: "explicit",
+      polarity: "positive",
+      magnitude: 1,
+      traceId: end.traceId,
+      episodeId: end.episodeId,
+    });
+    expect(db!.repos.traces.getById(end.traceId as never)!.value).toBe(1);
+
+    await core.submitFeedback({
+      channel: "explicit",
+      polarity: "negative",
+      magnitude: 0.5,
+      traceId: end.traceId,
+      episodeId: end.episodeId,
+    });
+    const scored = db!.repos.traces.getById(end.traceId as never)!;
+    expect(scored.value).toBeCloseTo(1 / 3);
+    expect(scored.rHuman).toBeCloseTo(1 / 3);
+    expect(scored.priority).toBe(1);
   });
 
   it("submitFeedback rejects unknown trace ids before SQLite FK failure", async () => {
@@ -590,6 +672,79 @@ describe("MemoryCore façade", () => {
     expect(tl.map((tr) => tr.id)).toEqual(["tr-late", "tr-early"]);
     const grouped = await core.listTraces({ groupByTurn: true });
     expect(grouped.map((tr) => tr.id)).toEqual(["tr-late", "tr-early"]);
+  });
+
+  it("deleteTrace removes FTS entries and episode trace references", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    db!.repos.sessions.upsert({
+      id: "s-delete",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_000,
+      lastSeenAt: 2_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep-delete",
+      sessionId: "s-delete",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_000,
+      endedAt: 2_000,
+      traceIds: ["tr-keep", "tr-delete"] as never,
+      rTask: null,
+      status: "closed",
+      meta: {},
+    });
+    const baseTrace = {
+      episodeId: "ep-delete",
+      sessionId: "s-delete",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      agentText: "",
+      summary: null,
+      toolCalls: [],
+      reflection: null,
+      agentThinking: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      turnId: 1_000,
+      schemaVersion: 1,
+    } as const;
+    db!.repos.traces.insert({
+      ...baseTrace,
+      id: "tr-keep",
+      ts: 1_100,
+      userText: "keep marker",
+    } as never);
+    db!.repos.traces.insert({
+      ...baseTrace,
+      id: "tr-delete",
+      ts: 1_200,
+      userText: "sensitive-delete-marker",
+    } as never);
+
+    await core.init();
+    expect(await core.deleteTrace("tr-delete")).toEqual({ deleted: true });
+
+    expect(await core.getTrace("tr-delete")).toBeNull();
+    expect(db!.repos.traces.searchByText('"sensitive-delete-marker"', 10)).toEqual([]);
+    expect(db!.repos.episodes.getById("ep-delete")!.traceIds).toEqual(["tr-keep"]);
   });
 
   it("subscribeEvents fires on session.opened", async () => {

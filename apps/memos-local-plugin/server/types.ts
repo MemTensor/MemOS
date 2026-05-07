@@ -92,4 +92,6 @@ export interface ServerDeps {
    * Hermes uses this for the Python provider ↔ Node bridge connection.
    */
   bridgeStatus?: () => BridgeHealth;
+  /** Optional ARMS telemetry for viewer_opened tracking. */
+  telemetry?: { trackViewerOpened(): void };
 }

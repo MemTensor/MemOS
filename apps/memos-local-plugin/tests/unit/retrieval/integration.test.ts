@@ -201,6 +201,19 @@ describe("retrieval/integration", () => {
     expect(skillIds).not.toContain("sk_weak");
   });
 
+  it("requires keyword confirmation for long unique identifier queries", async () => {
+    const res = await turnStartRetrieve(makeDeps(handle), {
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s1" as SessionId,
+      userText: "zlxqyz_unique_marker_2026_test_no_such_content",
+      ts: NOW as never,
+    });
+
+    expect(res.packet.snippets).toEqual([]);
+    expect(res.stats.rankedCount).toBe(0);
+  });
+
   it("tool_driven skips tier1 (no skill snippets)", async () => {
     const res = await toolDrivenRetrieve(makeDeps(handle), {
       reason: "tool_driven",

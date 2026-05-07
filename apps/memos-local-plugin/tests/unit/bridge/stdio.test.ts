@@ -13,6 +13,7 @@ import { PassThrough } from "node:stream";
 import {
   createStdioClient,
   startStdioServer,
+  waitForShutdown,
 } from "../../../bridge/stdio.js";
 import type { MemoryCore } from "../../../agent-contract/memory-core.js";
 
@@ -145,5 +146,17 @@ describe("stdio transport", () => {
     await server.done;
 
     expect(server.connected).toBe(false);
+  });
+
+  it("waitForShutdown closes transport without waiting for stdin end", async () => {
+    const { server, core } = wire();
+    const finished = await Promise.race([
+      waitForShutdown(core, server).then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 200)),
+    ]);
+
+    expect(finished).toBe(true);
+    expect(server.connected).toBe(false);
+    expect(core.shutdown).toHaveBeenCalled();
   });
 });

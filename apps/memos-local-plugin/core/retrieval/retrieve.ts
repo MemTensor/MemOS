@@ -33,7 +33,7 @@ import { buildQuery, type CompiledQuery } from "./query-builder.js";
 import type { RetrievalEventBus } from "./events.js";
 import { toPacket, renderSnippetForDebug } from "./injector.js";
 import { llmFilterCandidates } from "./llm-filter.js";
-import { rank } from "./ranker.js";
+import { rank, type RankedCandidate } from "./ranker.js";
 import { runTier1 } from "./tier1-skill.js";
 import { runTier2Experience } from "./tier2-experience.js";
 import { runTier2 } from "./tier2-trace.js";
@@ -310,6 +310,10 @@ async function runAll(
       config: deps.config,
       now: deps.now(),
     });
+    const mechanicalRanked = ctx.reason !== "decision_repair" &&
+      requiresKeywordConfirmation(compiled.text)
+      ? ranked.ranked.filter(hasKeywordChannel)
+      : ranked.ranked;
     const fuseLatencyMs = Date.now() - fuseStart;
 
     // ─── LLM relevance filter ──────────────────────────────────────────
@@ -321,7 +325,7 @@ async function runAll(
     const queryText =
       (ctx as { userText?: string }).userText ?? compiled.text ?? "";
     const filtered = await llmFilterCandidates(
-      { query: queryText, ranked: ranked.ranked, episodeId },
+      { query: queryText, ranked: mechanicalRanked, episodeId },
       {
         llm: deps.llm ?? null,
         log,
@@ -332,7 +336,7 @@ async function runAll(
       outcome: filtered.outcome,
       sufficient: filtered.sufficient,
       raw: rawCandidateCount,
-      afterThreshold: ranked.ranked.length,
+      afterThreshold: mechanicalRanked.length,
       droppedByThreshold: ranked.droppedByThreshold,
       thresholdFloor: round(ranked.thresholdFloor, 3),
       topRelevance: round(ranked.topRelevance, 3),
@@ -411,7 +415,7 @@ async function runAll(
       droppedByThresholdCount: ranked.droppedByThreshold,
       thresholdFloor: ranked.thresholdFloor,
       topRelevance: ranked.topRelevance,
-      rankedCount: ranked.ranked.length,
+      rankedCount: mechanicalRanked.length,
       llmFilterOutcome: filtered.outcome,
       llmFilterSufficient: filtered.sufficient ?? undefined,
       llmFilterKept: filtered.kept.length,
@@ -502,6 +506,23 @@ function emptyResult(
       embedding: { attempted: false, ok: false, degraded: false },
     },
   };
+}
+
+function requiresKeywordConfirmation(text: string): boolean {
+  const tokens = text.match(/[A-Za-z0-9_:-]{12,}/g) ?? [];
+  return tokens.some((token) => {
+    const hasIdentifierShape = /[_:-]/.test(token) || /\d/.test(token);
+    const hasEnoughEntropy = /[A-Za-z]/.test(token) && token.length >= 16;
+    return hasIdentifierShape && hasEnoughEntropy;
+  });
+}
+
+function hasKeywordChannel(candidate: RankedCandidate): boolean {
+  return (candidate.candidate.channels ?? []).some((channel) =>
+    channel.channel === "fts" ||
+    channel.channel === "pattern" ||
+    channel.channel === "structural"
+  );
 }
 
 function approxTokens(s: string): number {

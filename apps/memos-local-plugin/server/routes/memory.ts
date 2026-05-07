@@ -8,10 +8,18 @@
  */
 
 import type { AgentKind, RetrievalQueryDTO } from "../../agent-contract/dto.js";
-import type { ServerDeps } from "../types.js";
-import { parseJson, writeError, type Routes } from "./registry.js";
+import type { ServerDeps, ServerOptions } from "../types.js";
+import { parseJson, writeError, type RouteContext, type Routes } from "./registry.js";
 
-export function registerMemoryRoutes(routes: Routes, deps: ServerDeps): void {
+const MAX_SEARCH_QUERY_CHARS = 512;
+
+export function registerMemoryRoutes(
+  routes: Routes,
+  deps: ServerDeps,
+  options: ServerOptions = {},
+): void {
+  const defaultAgent: AgentKind = options.agent ?? "openclaw";
+
   // GET variant — the viewer uses this so it can stay querystring-only.
   // `q` is the search text; `top` caps the result count per tier.
   routes.set("GET /api/v1/memory/search", async (ctx) => {
@@ -20,8 +28,9 @@ export function registerMemoryRoutes(routes: Routes, deps: ServerDeps): void {
       // Empty query is legal — returns zero hits with tier timings.
       return { hits: [], injectedContext: "", tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 } };
     }
+    if (!validateSearchQuery(ctx, q)) return;
     const top = clampTop(ctx.url.searchParams.get("top"));
-    const agent = (ctx.url.searchParams.get("agent") as AgentKind | null) ?? "openclaw";
+    const agent = (ctx.url.searchParams.get("agent") as AgentKind | null) ?? defaultAgent;
     const sessionId = (ctx.url.searchParams.get("sessionId") ?? undefined) as string | undefined;
     return await deps.core.searchMemory({
       agent,
@@ -37,7 +46,8 @@ export function registerMemoryRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "query is required");
       return;
     }
-    const agent: AgentKind = (q.agent as AgentKind | undefined) ?? "openclaw";
+    if (!validateSearchQuery(ctx, q.query)) return;
+    const agent: AgentKind = (q.agent as AgentKind | undefined) ?? defaultAgent;
     return await deps.core.searchMemory({
       agent,
       query: q.query,
@@ -89,6 +99,20 @@ export function registerMemoryRoutes(routes: Routes, deps: ServerDeps): void {
     }
     return wm;
   });
+}
+
+function validateSearchQuery(
+  ctx: RouteContext,
+  query: string,
+): boolean {
+  if (query.length <= MAX_SEARCH_QUERY_CHARS) return true;
+  writeError(
+    ctx,
+    400,
+    "invalid_argument",
+    `query is too long; max ${MAX_SEARCH_QUERY_CHARS} characters`,
+  );
+  return false;
 }
 
 function clampTop(raw: string | null): number {
