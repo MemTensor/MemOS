@@ -714,53 +714,139 @@
   border: 0;
 }
 
-/* ── Event / log stream (monospace) ────────────────────────────── */
+/* ── Activity dashboard (Overview → Live activity) ──────────────── */
+/*
+ * Six tiles, one per surfaced category, arranged in a fixed 3 × 2
+ * grid on desktop. Each tile owns a `--cat` / `--cat-soft` pair via
+ * a `cat--*` modifier so the per-category palette lives entirely in
+ * CSS (the TS components stay colour-agnostic).
+ *
+ * On <900 px the grid reflows to 2 columns, then 1 column under
+ * 560 px — keeps the dashboard usable inside the viewer's narrow
+ * embedded mode.
+ */
 
-.stream {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  line-height: 1.55;
-  background: var(--bg-canvas);
-  padding: var(--sp-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  max-height: 60vh;
-  overflow-y: auto;
-}
-.stream__line {
+.dash-grid {
   display: grid;
-  /* Middle column must not be a fixed narrow width — types like
-   * `episode.closed` are longer than ~80px and were painting on top of
-   * the JSON payload. `auto` sizes to the widest label; `minmax(0,1fr)`
-   * lets the body shrink and wrap instead of overlapping. */
-  grid-template-columns: 72px auto minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--sp-3);
-  align-items: start;
+}
+@media (max-width: 900px) {
+  .dash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .dash-grid { grid-template-columns: 1fr; }
+}
+
+/* Per-category palette: each modifier sets the two CSS variables
+ * everything inside the tile reads from. Soft variants drive the
+ * subtle gradient washes + icon backgrounds; the strong colour drives
+ * the count number and the sparkline stroke. Tokens are taken from
+ * the existing semantic palette so themes stay aligned. */
+.dash-tile.cat--memory     { --cat: var(--cyan);    --cat-soft: var(--info-soft); }
+.dash-tile.cat--experience { --cat: var(--accent);  --cat-soft: var(--accent-soft); }
+.dash-tile.cat--world      { --cat: var(--success); --cat-soft: var(--success-soft); }
+.dash-tile.cat--skill      { --cat: var(--warning); --cat-soft: var(--warning-soft); }
+.dash-tile.cat--retrieval  { --cat: var(--rose);    --cat-soft: var(--rose-bg, rgba(251, 113, 133, 0.10)); }
+.dash-tile.cat--feedback   { --cat: var(--success); --cat-soft: var(--success-soft); }
+.dash-tile.cat--session    { --cat: var(--violet);  --cat-soft: var(--violet-bg, rgba(167, 139, 250, 0.12)); }
+.dash-tile.cat--system     { --cat: var(--fg-muted); --cat-soft: var(--bg-hover); }
+.dash-tile.cat--hub        { --cat: var(--accent);  --cat-soft: var(--accent-soft); }
+
+.dash-tile {
+  position: relative;
+  padding: var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  transition: transform var(--dur-xs), border-color var(--dur-xs);
+}
+.dash-tile:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+/* Soft top-left accent wash. The pseudo-element sits beneath the
+ * content and is muted enough to not interfere with text contrast. */
+.dash-tile::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 80% at 0% 0%, var(--cat-soft), transparent 55%);
+  opacity: 0.7;
+  pointer-events: none;
+}
+.dash-tile > * {
+  position: relative;
+}
+.dash-tile__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.dash-tile__icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--cat-soft);
+  color: var(--cat);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.dash-tile__icon svg { width: 16px; height: 16px; }
+.dash-tile__name {
+  font-size: var(--fs-xs);
   color: var(--fg-muted);
-  padding: 3px var(--sp-1);
-  border-radius: 4px;
-}
-.stream__line:hover {
-  background: var(--bg-hover);
-}
-.stream__time  { color: var(--fg-dim); }
-.stream__level {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   font-weight: var(--fw-semi);
-  white-space: nowrap;
 }
-.stream__level--info  { color: var(--info); }
-.stream__level--warn  { color: var(--warning); }
-.stream__level--error { color: var(--danger); }
-.stream__level--debug { color: var(--fg-dim); }
-.stream__body {
+.dash-tile__count {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 10px;
+}
+.dash-tile__count-n {
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.02em;
+  color: var(--cat);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.dash-tile__count-unit {
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+.dash-tile__spark {
+  height: 28px;
+  margin-top: 8px;
+}
+.sparkline { width: 100%; height: 100%; display: block; }
+.dash-tile__last {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+  line-height: 1.45;
+  min-height: 2.6em;
+}
+.dash-tile__last strong {
   color: var(--fg);
-  min-width: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  font-weight: var(--fw-semi);
+  display: block;
+  margin-bottom: 2px;
+}
+.dash-tile__last-line {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+}
+.dash-tile__last-empty {
+  color: var(--fg-dim);
 }
 
 /* ── Toasts ─────────────────────────────────────────────────────── */

@@ -13,16 +13,22 @@
  * "gpt-4.1-mini", not "openai_compatible". When the skill evolver
  * inherits from the main LLM we say so explicitly.
  *
- * Third row = live SSE activity stream (unchanged).
+ * Third row = live activity dashboard. Six per-category tiles
+ * (memory / experience / environment knowledge / skill / retrieval /
+ * feedback) each showing a 5-minute event count, sparkline, and the
+ * most recent event in plain language. Tiles are bucketed off the
+ * same SSE buffer (`recent`) we already maintain. See
+ * `views/overview/ActivityDashboard.tsx` for the renderer and
+ * `views/overview/event-meta.ts` for the event-type → tile mapping.
  */
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../api/client";
 import { openSse } from "../api/sse";
 import { health } from "../stores/health";
 import { t } from "../stores/i18n";
-import { Icon } from "../components/Icon";
 import { navigate } from "../stores/router";
 import type { CoreEvent } from "../api/types";
+import { ActivityDashboard } from "./overview/ActivityDashboard";
 
 interface SkillStats {
   total: number;
@@ -86,10 +92,14 @@ export function OverviewView() {
   }, []);
 
   useEffect(() => {
+    // The dashboard buckets events into a 5-minute sliding window
+    // (30 buckets × 10 s). Cap the buffer at 256 so we keep enough
+    // history even on chatty agents (trace + retrieval + feedback can
+    // each fire several times per minute) without growing unbounded.
     const handle = openSse("/api/v1/events", (_, data) => {
       try {
         const evt = JSON.parse(data) as CoreEvent;
-        setRecent((prev) => [evt, ...prev].slice(0, 12));
+        setRecent((prev) => [evt, ...prev].slice(0, 256));
       } catch {
         /* skip */
       }
@@ -200,36 +210,22 @@ export function OverviewView() {
         />
       </section>
 
+      {/*
+       * Row 3: live activity dashboard. Replaces the previous JSON
+       * `.stream` block with a 3 × 2 grid of category tiles
+       * (memory / experience / environment knowledge / skill /
+       * retrieval / feedback) each showing a 5-minute sparkline plus
+       * the latest event in plain language. The component owns its
+       * own clock tick so sparklines slide left even while the SSE
+       * stream is quiet.
+       */}
       <section class="card">
         <div class="card__header">
           <div>
             <h3 class="card__title">{t("overview.live.title")}</h3>
-            <p class="card__subtitle">{t("overview.live.subtitle")}</p>
           </div>
         </div>
-        {recent.length === 0 ? (
-          <div class="empty">
-            <div class="empty__icon">
-              <Icon name="message-square-text" size={22} />
-            </div>
-            <div class="empty__title">{t("overview.live.empty")}</div>
-            <div class="empty__hint">{t("overview.live.hint")}</div>
-          </div>
-        ) : (
-          <div class="stream">
-            {recent.map((evt) => (
-              <div class="stream__line" key={evt.seq}>
-                <span class="stream__time">{new Date(evt.ts).toLocaleTimeString()}</span>
-                <span class={`stream__level ${evt.type === "system.error" ? "stream__level--warn" : "stream__level--info"}`}>
-                  {evt.type}
-                </span>
-                <span class="stream__body">
-                  {JSON.stringify(evt.payload ?? {}).slice(0, 240)}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+        <ActivityDashboard events={recent} />
       </section>
     </>
   );
