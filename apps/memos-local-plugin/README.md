@@ -41,17 +41,19 @@ apps/memos-local-plugin/
 └── tests/               # unit / integration / e2e (vitest)
 ```
 
-For the full structural breakdown read [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+For the full structural breakdown read `[ARCHITECTURE.md](./ARCHITECTURE.md)`.
 
 ## Where data lives
 
 The source code never writes to the user's home directly. At install time,
 `install.sh` creates a per-agent home folder for runtime state:
 
-| Agent    | Code installed to                              | Runtime data + config in                     |
-|----------|------------------------------------------------|----------------------------------------------|
-| OpenClaw | `~/.openclaw/plugins/memos-local-plugin/`      | `~/.openclaw/memos-plugin/`                  |
-| Hermes   | `~/.hermes/plugins/memos-local-plugin/`        | `~/.hermes/memos-plugin/`                    |
+
+| Agent    | Code installed to                         | Runtime data + config in    |
+| -------- | ----------------------------------------- | --------------------------- |
+| OpenClaw | `~/.openclaw/plugins/memos-local-plugin/` | `~/.openclaw/memos-plugin/` |
+| Hermes   | `~/.hermes/plugins/memos-local-plugin/`   | `~/.hermes/memos-plugin/`   |
+
 
 Inside the runtime folder:
 
@@ -77,7 +79,7 @@ From this repository:
 
 ```bash
 cd apps/memos-local-plugin
-bash install.sh --version 2.0.0-beta.10
+bash install.sh --version 2.0.0
 ```
 
 Or run against the latest published package:
@@ -93,5 +95,6 @@ tarball path instead of a registry version:
 
 ```bash
 npm pack
-bash install.sh --version ./memtensor-memos-local-plugin-2.0.0-beta.10.tgz
+bash install.sh --version ./memtensor-memos-local-plugin-1.0.0-beta.1.tgz
 ```
+
