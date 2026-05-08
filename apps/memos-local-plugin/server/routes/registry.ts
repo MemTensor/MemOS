@@ -171,7 +171,7 @@ export function buildRoutes(
   registerLogsRoutes(routes, deps, options);
   registerConfigRoutes(routes, deps);
   registerMetricsRoutes(routes, deps);
-  registerImportExportRoutes(routes, deps);
+  registerImportExportRoutes(routes, deps, options);
   registerMigrateRoutes(routes, deps, options);
   registerHubAdminRoutes(routes, deps);
   registerAuthRoutes(routes, deps, options);

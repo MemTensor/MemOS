@@ -1207,6 +1207,132 @@
   border-color: var(--accent);
 }
 
+/* ── Native import progress (Hermes / OpenClaw) ─────────────────── */
+
+.native-import-scan {
+  margin-top: var(--sp-4);
+}
+
+.native-import-scan__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+
+.native-import-metric {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 18px;
+}
+
+.native-import-metric__label {
+  margin-bottom: 6px;
+  color: var(--fg-dim);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semi);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.native-import-metric__value {
+  color: var(--fg);
+  font-size: 22px;
+  font-weight: var(--fw-bold);
+  line-height: 1.1;
+}
+
+.native-import-metric__hint {
+  margin-top: 3px;
+  color: var(--fg-dim);
+  font-size: var(--fs-2xs);
+}
+
+.native-import-scan__path {
+  margin-top: var(--sp-3);
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+.native-import-progress {
+  margin-top: var(--sp-4);
+  padding: var(--sp-4);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.native-import-progress__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+.native-import-progress__phase {
+  color: var(--fg);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+}
+
+.native-import-progress__counter {
+  flex: 1;
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+  text-align: right;
+}
+
+.native-import-progress__bar {
+  position: relative;
+  height: 6px;
+  margin-bottom: var(--sp-4);
+  overflow: hidden;
+  background: var(--bg-elev-1);
+  border-radius: 3px;
+}
+
+.native-import-progress__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 3px;
+  transition: width var(--dur-md) var(--ease-out);
+}
+
+.native-import-progress__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-5);
+}
+
+.native-import-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+}
+
+.native-import-stat__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.native-import-stat__dot--success { background: #22c55e; }
+.native-import-stat__dot--warning { background: #f59e0b; }
+.native-import-stat__dot--info    { background: #3b82f6; }
+
+.native-import-stat__label {
+  color: var(--fg-muted);
+}
+
+.native-import-stat__value {
+  color: var(--fg);
+  font-weight: var(--fw-bold);
+}
+
 /* Tool name pills — used on the Logs page */
 .pill--tool                      { background: rgba(255,255,255,.05); color: var(--fg); font-family: var(--font-mono); font-size: var(--fs-xs); }
 .pill--tool-memory_search        { background: var(--cyan-bg); color: var(--cyan); }
