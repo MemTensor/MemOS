@@ -427,6 +427,20 @@ const en = {
     "This task was scored R={rTask} and counted as a failed exchange. Future recalls will down-rank similar attempts.",
   "tasks.skip.reason.tooFewTurns":
     "Not enough messages to learn from — at least a user question and an assistant reply are needed.",
+  "tasks.skip.reason.tooFewExchanges":
+    "Not enough conversation turns ({exchanges}); at least {min} complete user-assistant exchanges are required to generate a summary.",
+  "tasks.skip.reason.noUserMessages":
+    "This task has no user messages; it only contains system or tool-generated content.",
+  "tasks.skip.reason.contentTooShort":
+    "The conversation is too short ({chars} characters) to generate a meaningful summary.",
+  "tasks.skip.reason.trivialUserContent":
+    "The conversation only contains simple greetings or test data (for example hello, test, or ok), so no summary is needed.",
+  "tasks.skip.reason.trivialBothSides":
+    "Both the user and assistant messages are simple greetings or test data, so no summary is needed.",
+  "tasks.skip.reason.toolHeavy":
+    "This task is mostly tool output ({tools}/{total} messages) and does not contain enough user interaction to learn from.",
+  "tasks.skip.reason.repeatedContent":
+    "The conversation contains too much repeated content ({unique} unique messages / {total} user messages), so no useful information can be extracted.",
   "tasks.skip.reason.noAssistant":
     "The user message was captured but no assistant reply came back — the agent host may have crashed, filtered the turn, or been interrupted. Nothing to summarize yet.",
   "tasks.active.reason.interrupted":
@@ -1101,6 +1115,20 @@ const zh: Record<TranslationKey, string> = {
   "tasks.skipped.default": "对话内容过少，未生成摘要，该任务不会出现在检索结果中。",
   "tasks.failed.default": "任务评分 R={rTask}，被视为失败交互，未来相似任务的检索权重会被下调。",
   "tasks.skip.reason.tooFewTurns": "对话轮次不足，需要至少 2 轮完整的问答交互才能生成摘要。",
+  "tasks.skip.reason.tooFewExchanges":
+    "对话轮次不足（{exchanges} 轮），需要至少 {min} 轮完整的问答交互才能生成摘要。",
+  "tasks.skip.reason.noUserMessages":
+    "该任务没有用户消息，仅包含系统或工具自动生成的内容。",
+  "tasks.skip.reason.contentTooShort":
+    "对话内容过短（{chars} 字符），信息量不足以生成有意义的摘要。",
+  "tasks.skip.reason.trivialUserContent":
+    "对话内容为简单问候或测试数据（如 hello、test、ok），无需生成摘要。",
+  "tasks.skip.reason.trivialBothSides":
+    "对话内容（用户和助手双方）为简单问候或测试数据，无需生成摘要。",
+  "tasks.skip.reason.toolHeavy":
+    "该任务主要由工具执行结果组成（{tools}/{total} 条），缺少足够的用户交互内容。",
+  "tasks.skip.reason.repeatedContent":
+    "对话中存在大量重复内容（{unique} 条独立消息 / {total} 条用户消息），无法提取有效信息。",
   "tasks.skip.reason.noAssistant": "只捕获到用户消息，没收到 assistant 回复——可能是 Agent 宿主崩溃、turn 被 bootstrap 过滤、或用户打断。暂时没有可总结的内容。",
   "tasks.active.reason.interrupted": "这个 topic 在 assistant 回复完成前被打断了。下次继续同一 topic 时，会归入同一个任务。",
   "tasks.active.reason.paused": "这个 topic 因 session 关闭而暂停；短时间内继续同一 topic，会继续追加到这个任务。",

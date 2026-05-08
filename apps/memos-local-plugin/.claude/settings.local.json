@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlite3 *)",
+      "Bash(python3 *)",
+      "Bash(npm version *)",
+      "Bash(npm run *)",
+      "Bash(npm pack *)"
+    ]
+  }
+}
