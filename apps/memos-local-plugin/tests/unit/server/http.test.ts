@@ -360,6 +360,19 @@ describe("HTTP server — REST routes", () => {
     expect(core.getTrace).toHaveBeenCalledWith("t-42");
   });
 
+  it("GET /api/v1/api-logs supports multi-tool filtering", async () => {
+    const r = await fetch(
+      `${handle.url}/api/v1/api-logs?tools=memory_add,memory_search&limit=10&offset=5`,
+    );
+    expect(r.status).toBe(200);
+    expect(core.listApiLogs).toHaveBeenCalledWith({
+      toolName: undefined,
+      toolNames: ["memory_add", "memory_search"],
+      limit: 10,
+      offset: 5,
+    });
+  });
+
   it("GET /api/v1/episodes/:id/timeline returns {episodeId, traces}", async () => {
     const r = await fetch(`${handle.url}/api/v1/episodes/e1/timeline`);
     expect(r.status).toBe(200);

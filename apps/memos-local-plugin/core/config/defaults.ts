@@ -249,6 +249,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   telemetry: { enabled: true },
   logging: {
     level: "info",
+    detailedView: false,
     console: { enabled: true, pretty: true, channels: ["*"] },
     file: {
       enabled: true,

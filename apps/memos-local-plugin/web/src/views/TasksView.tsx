@@ -188,20 +188,6 @@ export function TasksView() {
     setSelected((prev) => toggleIdsInSelection(prev, pageIds));
   };
   const deselectAll = () => setSelected(new Set());
-  const bulkDelete = async () => {
-    if (selected.size === 0) return;
-    if (!confirm(t("common.bulkDelete.confirm", { n: selected.size }))) return;
-    const ids = [...selected];
-    await Promise.all(
-      ids.map((id) =>
-        api
-          .del(`/api/v1/episodes?episodeId=${encodeURIComponent(id)}`)
-          .catch(() => null),
-      ),
-    );
-    setSelected(new Set());
-    loadPage(page);
-  };
 
   return (
     <>
@@ -392,10 +378,6 @@ export function TasksView() {
           <button class="btn btn--sm" onClick={togglePageSelection}>
             <Icon name="check-square" size={14} />
             {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
-          </button>
-          <button class="btn btn--danger btn--sm" onClick={bulkDelete}>
-            <Icon name="trash-2" size={14} />
-            {t("common.bulkDelete")}
           </button>
           <div class="batch-bar__spacer" />
           <button class="btn btn--ghost btn--sm" onClick={deselectAll}>

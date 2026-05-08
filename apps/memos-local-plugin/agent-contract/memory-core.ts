@@ -357,6 +357,7 @@ export interface MemoryCore {
    */
   listApiLogs(input?: {
     toolName?: string;
+    toolNames?: readonly string[];
     limit?: number;
     offset?: number;
   }): Promise<{ logs: ApiLogDTO[]; total: number }>;

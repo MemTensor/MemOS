@@ -73,11 +73,14 @@ const LOG_TAGS: Array<{ v: LogTag; k: string }> = [
   { v: "system", k: "logs.tag.system" },
 ];
 
+const BASIC_LOG_TAGS = LOG_TAGS.filter((tag) =>
+  tag.v === "" || tag.v === "memory_add" || tag.v === "memory_search"
+);
+
 /**
  * Backend `toolName` values that each frontend tag selects. When the
- * array has exactly one entry, we send `?tool=` to the server for
- * efficient filtering; otherwise (generate + evolve, or task_done +
- * task_failed) we over-fetch and filter client-side.
+ * array has exactly one entry, we send `?tool=` to the server; with
+ * multiple entries list mode sends `?tools=` for efficient filtering.
  */
 const ALLOWED_TOOLS: Record<LogTag, readonly ToolFilter[]> = {
   "": [],
@@ -91,6 +94,11 @@ const ALLOWED_TOOLS: Record<LogTag, readonly ToolFilter[]> = {
   system: ["system_error", "system_model_status"],
 };
 
+const BASIC_LOG_TOOLS = [
+  "memory_add",
+  "memory_search",
+] as const satisfies readonly ToolFilter[];
+
 interface ApiLogsResponse {
   logs: ApiLogDTO[];
   total: number;
@@ -99,16 +107,29 @@ interface ApiLogsResponse {
   nextOffset?: number;
 }
 
+interface ViewerConfig {
+  logging?: {
+    detailedView?: boolean;
+  };
+}
+
 const DEFAULT_PAGE_SIZE = 25;
 const CHAIN_FETCH_LIMIT = 800;
 
 type ViewMode = "chain" | "list";
+
+function allowedToolsForTag(tag: LogTag, detailedLogs: boolean): readonly ToolFilter[] {
+  if (detailedLogs) return ALLOWED_TOOLS[tag];
+  if (tag === "memory_add" || tag === "memory_search") return ALLOWED_TOOLS[tag];
+  return BASIC_LOG_TOOLS;
+}
 
 export function LogsView() {
   const [viewMode, setViewMode] = useState<ViewMode>("chain");
   const [tag, setTag] = useState<LogTag>("");
   const [query, setQuery] = useState("");
   const [failuresOnly, setFailuresOnly] = useState(false);
+  const [detailedLogs, setDetailedLogs] = useState(false);
   const [logs, setLogs] = useState<ApiLogDTO[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -120,15 +141,37 @@ export function LogsView() {
   // initialisation when filters change.
   const [expandedChains, setExpandedChains] = useState<Set<string>>(new Set());
 
+  useEffect(() => {
+    const ctrl = new AbortController();
+    api
+      .get<ViewerConfig>("/api/v1/config", { signal: ctrl.signal })
+      .then((config) => setDetailedLogs(!!config.logging?.detailedView))
+      .catch((err) => {
+        if ((err as Error).name !== "AbortError") setDetailedLogs(false);
+      });
+    return () => ctrl.abort();
+  }, []);
+
+  useEffect(() => {
+    if (detailedLogs) return;
+    if (tag !== "" && tag !== "memory_add" && tag !== "memory_search") {
+      setTag("");
+    }
+    if (failuresOnly) setFailuresOnly(false);
+    setExpandedChains(new Set());
+  }, [detailedLogs, failuresOnly, tag]);
+
   // Chain mode always over-fetches a wide window so episode-level
   // grouping has enough material to work with. List mode keeps the
   // legacy single-tool SQL filter for cheap pagination.
-  const currentAllowed = ALLOWED_TOOLS[tag];
+  const visibleLogTags = detailedLogs ? LOG_TAGS : BASIC_LOG_TAGS;
+  const effectiveViewMode: ViewMode = detailedLogs ? viewMode : "list";
+  const effectiveFailuresOnly = detailedLogs ? failuresOnly : false;
+  const currentAllowed = allowedToolsForTag(tag, detailedLogs);
   const clientFilterActive =
-    viewMode === "chain" ||
-    currentAllowed.length > 1 ||
+    effectiveViewMode === "chain" ||
     query.trim().length > 0 ||
-    failuresOnly;
+    effectiveFailuresOnly;
 
   const load = async (opts: {
     tag: LogTag;
@@ -136,18 +179,20 @@ export function LogsView() {
     query: string;
     viewMode: ViewMode;
     failuresOnly: boolean;
+    detailedLogs: boolean;
   }) => {
     setLoading(true);
     try {
       const qs = new URLSearchParams();
-      const allowed = ALLOWED_TOOLS[opts.tag];
+      const allowed = allowedToolsForTag(opts.tag, opts.detailedLogs);
+      const optsViewMode: ViewMode = opts.detailedLogs ? opts.viewMode : "list";
+      const optsFailuresOnly = opts.detailedLogs ? opts.failuresOnly : false;
       const needsClient =
-        opts.viewMode === "chain" ||
-        allowed.length > 1 ||
+        optsViewMode === "chain" ||
         opts.query.trim().length > 0 ||
-        opts.failuresOnly;
+        optsFailuresOnly;
       const limit =
-        opts.viewMode === "chain"
+        optsViewMode === "chain"
           ? CHAIN_FETCH_LIMIT
           : needsClient
           ? 500
@@ -157,8 +202,10 @@ export function LogsView() {
       // Tool-side SQL filtering is a list-mode optimisation. Chain
       // mode intentionally fetches across tools so grouped events
       // form a complete pipeline trace.
-      if (opts.viewMode === "list" && allowed.length === 1) {
+      if (optsViewMode === "list" && allowed.length === 1) {
         qs.set("tool", allowed[0]!);
+      } else if (optsViewMode === "list" && allowed.length > 1) {
+        qs.set("tools", allowed.join(","));
       }
       const res = await api.get<ApiLogsResponse>(`/api/v1/api-logs?${qs.toString()}`);
       setLogs(res.logs);
@@ -173,18 +220,18 @@ export function LogsView() {
   };
 
   useEffect(() => {
-    void load({ tag, page: 0, query, viewMode, failuresOnly });
+    void load({ tag, page: 0, query, viewMode, failuresOnly, detailedLogs });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tag, pageSize, viewMode, failuresOnly]);
+  }, [tag, pageSize, viewMode, failuresOnly, detailedLogs]);
 
   // Debounced client-side refresh when the search query changes.
   useEffect(() => {
     const h = setTimeout(() => {
-      void load({ tag, page: 0, query, viewMode, failuresOnly });
+      void load({ tag, page: 0, query, viewMode, failuresOnly, detailedLogs });
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, pageSize]);
+  }, [query, pageSize, detailedLogs]);
 
   const toggleExpand = (id: number) => {
     setExpanded((prev) => {
@@ -211,7 +258,7 @@ export function LogsView() {
   const filtered = clientFilterActive
     ? logs.filter((log) => {
         if (currentAllowed.length > 0 && !currentAllowed.includes(log.toolName as ToolFilter)) return false;
-        if (failuresOnly && log.success) return false;
+        if (effectiveFailuresOnly && log.success) return false;
         if (!needle) return true;
         const hay = `${log.toolName} ${log.inputJson ?? ""} ${log.outputJson ?? ""}`.toLowerCase();
         return hay.includes(needle);
@@ -224,9 +271,9 @@ export function LogsView() {
 
   // Chain view: regroup by episodeId (fallback sessionId). Filters
   // are applied as "match any event in the chain".
-  const allChains = viewMode === "chain" ? aggregateChains(logs) : [];
+  const allChains = effectiveViewMode === "chain" ? aggregateChains(logs) : [];
   const filteredChains =
-    viewMode === "chain"
+    effectiveViewMode === "chain"
       ? allChains.filter((chain) => {
           if (currentAllowed.length > 0) {
             const hit = chain.events.some((ev) =>
@@ -234,7 +281,7 @@ export function LogsView() {
             );
             if (!hit) return false;
           }
-          if (failuresOnly && chain.failureCount === 0) return false;
+          if (effectiveFailuresOnly && chain.failureCount === 0) return false;
           if (!needle) return true;
           if (chain.episodeId?.toLowerCase().includes(needle)) return true;
           if (chain.sessionId?.toLowerCase().includes(needle)) return true;
@@ -258,35 +305,41 @@ export function LogsView() {
           <p>{t("logs.subtitle")}</p>
         </div>
         <div class="view-header__actions hstack">
-          <div class="toolbar__group" role="group" aria-label="view mode">
+          {detailedLogs && (
+            <div class="toolbar__group" role="group" aria-label="view mode">
+              <button
+                class="chip"
+                aria-pressed={viewMode === "chain"}
+                onClick={() => setViewMode("chain")}
+                title="按 episode 聚合的链路时间线"
+              >
+                链路视图
+              </button>
+              <button
+                class="chip"
+                aria-pressed={viewMode === "list"}
+                onClick={() => setViewMode("list")}
+                title="按调用时间倒序的扁平列表"
+              >
+                列表视图
+              </button>
+            </div>
+          )}
+          {detailedLogs && (
             <button
               class="chip"
-              aria-pressed={viewMode === "chain"}
-              onClick={() => setViewMode("chain")}
-              title="按 episode 聚合的链路时间线"
+              aria-pressed={failuresOnly}
+              onClick={() => setFailuresOnly((v) => !v)}
+              title="只显示失败 / 含失败的链路"
             >
-              链路视图
+              仅看失败
             </button>
-            <button
-              class="chip"
-              aria-pressed={viewMode === "list"}
-              onClick={() => setViewMode("list")}
-              title="按调用时间倒序的扁平列表"
-            >
-              列表视图
-            </button>
-          </div>
-          <button
-            class="chip"
-            aria-pressed={failuresOnly}
-            onClick={() => setFailuresOnly((v) => !v)}
-            title="只显示失败 / 含失败的链路"
-          >
-            仅看失败
-          </button>
+          )}
           <button
             class="btn btn--ghost btn--sm"
-            onClick={() => void load({ tag, page, query, viewMode, failuresOnly })}
+            onClick={() =>
+              void load({ tag, page, query, viewMode, failuresOnly, detailedLogs })
+            }
             disabled={loading}
           >
             <Icon name="refresh-cw" size={14} class={loading ? "spin" : ""} />
@@ -314,7 +367,7 @@ export function LogsView() {
       {/* Row 2: flat tag chips, same as other views. */}
       <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
         <div class="toolbar__group" role="group" aria-label={t("common.filter")}>
-          {LOG_TAGS.map((c) => (
+          {visibleLogTags.map((c) => (
             <button
               key={c.v}
               class="chip"
@@ -326,7 +379,7 @@ export function LogsView() {
           ))}
         </div>
         <div class="toolbar__spacer" />
-        {viewMode === "chain" ? (
+        {effectiveViewMode === "chain" ? (
           filteredChains.length > 0 && (
             <span class="muted" style="font-size:var(--fs-xs)">
               {filteredChains.length} 条链路 · {chainEventCount} 事件
@@ -342,7 +395,7 @@ export function LogsView() {
       </div>
 
       {loading && (
-        viewMode === "chain"
+        effectiveViewMode === "chain"
           ? filteredChains.length === 0
           : pagedRows.length === 0
       ) && (
@@ -354,7 +407,7 @@ export function LogsView() {
       )}
 
       {!loading &&
-        (viewMode === "chain"
+        (effectiveViewMode === "chain"
           ? filteredChains.length === 0
           : pagedRows.length === 0) && (
           <div class="empty">
@@ -366,7 +419,7 @@ export function LogsView() {
           </div>
         )}
 
-      {viewMode === "chain" && filteredChains.length > 0 && (
+      {effectiveViewMode === "chain" && filteredChains.length > 0 && (
         <>
           <div
             class="hstack"
@@ -406,7 +459,7 @@ export function LogsView() {
         </>
       )}
 
-      {viewMode === "list" && pagedRows.length > 0 && (
+      {effectiveViewMode === "list" && pagedRows.length > 0 && (
         <div class="list">
           {pagedRows.map((lg) => (
             <LogCard
@@ -419,7 +472,7 @@ export function LogsView() {
         </div>
       )}
 
-      {viewMode === "list" && displayTotal > pageSize && (
+      {effectiveViewMode === "list" && displayTotal > pageSize && (
         <Pager
           page={page}
           totalItems={displayTotal}
@@ -428,7 +481,14 @@ export function LogsView() {
           onPageSizeChange={setPageSize}
           onPageChange={(nextPage) => {
             if (clientFilterActive) setPage(nextPage);
-            else void load({ tag, page: nextPage, query, viewMode, failuresOnly });
+            else void load({
+              tag,
+              page: nextPage,
+              query,
+              viewMode,
+              failuresOnly,
+              detailedLogs,
+            });
           }}
         />
       )}

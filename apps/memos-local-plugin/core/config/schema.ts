@@ -456,6 +456,8 @@ const LoggingSchema = Type.Object({
     Type.Literal("error"),
     Type.Literal("fatal"),
   ], { default: "info" }),
+  /** Viewer-only switch: expose detailed logs, lifecycle tags and chain view. */
+  detailedView: Bool(false),
   console: Type.Object({
     enabled: Bool(true),
     pretty: Bool(true),

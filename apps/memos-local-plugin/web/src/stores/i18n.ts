@@ -708,6 +708,9 @@ const en = {
   "settings.general.theme.light": "Light",
   "settings.general.theme.dark": "Dark",
   "settings.general.theme.auto": "System",
+  "settings.general.detailedLogs": "Show detailed debug logs",
+  "settings.general.detailedLogs.desc":
+    "Enable chain view, failure-only filtering, and task, experience, skill, environment and system log categories.",
   "settings.general.telemetry": "Enable anonymous usage stats",
   "settings.general.telemetry.desc":
     "Only tool names, response times and the version number are collected. No memory content, queries or personal data ever leave this machine.",
@@ -1361,6 +1364,9 @@ const zh: Record<TranslationKey, string> = {
   "settings.general.theme.light": "浅色",
   "settings.general.theme.dark": "深色",
   "settings.general.theme.auto": "跟随系统",
+  "settings.general.detailedLogs": "显示详细调试日志",
+  "settings.general.detailedLogs.desc":
+    "开启后显示链路视图、仅看失败筛选，以及任务、经验、技能、环境认知和系统日志分类。",
   "settings.general.telemetry": "启用匿名数据统计",
   "settings.general.telemetry.desc":
     "仅收集工具名称、响应时间和版本号，不涉及任何记忆内容或个人数据。",

@@ -37,3 +37,4 @@ telemetry:
 
 logging:
   level: info             # trace | debug | info | warn | error | fatal
+  detailedView: false     # show advanced log filters / chain view in the viewer

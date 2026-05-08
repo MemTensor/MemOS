@@ -46,7 +46,7 @@ interface ResolvedConfig {
     userToken?: string;
   };
   telemetry?: { enabled?: boolean };
-  logging?: { level?: string };
+  logging?: { level?: string; detailedView?: boolean };
 }
 
 const EMBEDDING_PROVIDERS = [
@@ -213,7 +213,9 @@ export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
       {tab === "general" && (
         <GeneralTab
           telemetry={(get("telemetry") ?? {}) as NonNullable<ResolvedConfig["telemetry"]>}
+          logging={(get("logging") ?? {}) as NonNullable<ResolvedConfig["logging"]>}
           onPatchTelemetry={(p) => patch("telemetry", p)}
+          onPatchLogging={(p) => patch("logging", p)}
         />
       )}
     </>
@@ -628,11 +630,17 @@ function HubTab({
 
 function GeneralTab({
   telemetry,
+  logging,
   onPatchTelemetry,
+  onPatchLogging,
 }: {
   telemetry: NonNullable<ResolvedConfig["telemetry"]>;
+  logging: NonNullable<ResolvedConfig["logging"]>;
   onPatchTelemetry: (
     p: Partial<NonNullable<ResolvedConfig["telemetry"]>>,
+  ) => void;
+  onPatchLogging: (
+    p: Partial<NonNullable<ResolvedConfig["logging"]>>,
   ) => void;
 }) {
   return (
@@ -683,6 +691,19 @@ function GeneralTab({
       </section>
 
       <AccountSection />
+
+      <section class="card">
+        <div class="hstack" style="justify-content:space-between;margin-bottom:var(--sp-2)">
+          <div>
+            <h3 class="card__title">{t("settings.general.detailedLogs")}</h3>
+            <p class="card__subtitle">{t("settings.general.detailedLogs.desc")}</p>
+          </div>
+          <ToggleSwitch
+            checked={!!logging.detailedView}
+            onChange={(v) => onPatchLogging({ detailedView: v })}
+          />
+        </div>
+      </section>
 
       <section class="card">
         <div class="hstack" style="justify-content:space-between;margin-bottom:var(--sp-2)">

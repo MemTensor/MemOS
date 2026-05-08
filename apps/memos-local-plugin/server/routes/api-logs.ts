@@ -6,6 +6,7 @@
  *
  * Query parameters:
  *   - `tool`    optional tool-name filter (e.g. `memory_search`)
+ *   - `tools`   optional comma-separated tool-name filter
  *   - `limit`   default 50, capped server-side at 500
  *   - `offset`  default 0
  *
@@ -25,8 +26,13 @@ export function registerApiLogsRoutes(routes: Routes, deps: ServerDeps): void {
     const offset =
       Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const tool = params.get("tool") || undefined;
+    const tools = (params.get("tools") ?? "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean);
     const res = await deps.core.listApiLogs({
       toolName: tool,
+      toolNames: tool ? undefined : tools,
       limit,
       offset,
     });
