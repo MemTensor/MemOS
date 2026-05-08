@@ -15,6 +15,7 @@
   },
   "files": [
     "dist",
+    "openclaw.plugin.json",
     "bridge.cts",
     "bridge",
     "core",

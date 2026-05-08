@@ -123,6 +123,28 @@ function clip(s: string | undefined, n: number): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
+type TextToolContent = Array<{ type: "text"; text: string }>;
+
+function textToolResult<T extends Record<string, unknown>>(
+  details: T,
+  text: string,
+): T & { content: TextToolContent; details: T } {
+  return {
+    ...details,
+    content: [{ type: "text", text }],
+    details,
+  };
+}
+
+function formatHitList(hits: Array<{ refKind: string; refId: string; score: number; snippet: string }>): string {
+  if (hits.length === 0) return "No relevant memories found.";
+  const lines = hits.map((h, i) => {
+    const snippet = h.snippet.trim() || "(empty snippet)";
+    return `${i + 1}. [${h.refKind}:${h.refId}] ${snippet} (score=${h.score.toFixed(3)})`;
+  });
+  return `Found ${hits.length} memories:\n\n${lines.join("\n")}`;
+}
+
 function sessionFromCtx(ctx: OpenClawPluginToolContext | undefined): string | undefined {
   const sessionKey = ctx?.sessionKey;
   if (!sessionKey) return undefined;
@@ -178,7 +200,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
           query: params.query,
           topK: topKParams(params, maxResults),
         });
-        return {
+        const details = {
           hits: result.hits.map((h) => ({
             tier: h.tier,
             refKind: h.refKind,
@@ -188,6 +210,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
           })),
           totalMs: Date.now() - started,
         };
+        return textToolResult(details, formatHitList(details.hits));
       },
     }),
     { name: "memory_search" },
@@ -207,8 +230,11 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         const kind = params.kind ?? "trace";
         if (kind === "trace") {
           const trace = await core.getTrace(params.id as TraceId, namespaceFromCtx(ctx));
-          if (!trace) return { found: false, kind, id: params.id, body: "", meta: {} };
-          return {
+          if (!trace) {
+            const details = { found: false, kind, id: params.id, body: "", meta: {} };
+            return textToolResult(details, `No ${kind} memory found for id "${params.id}".`);
+          }
+          const details = {
             found: true,
             kind,
             id: trace.id,
@@ -226,11 +252,15 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
               })),
             },
           };
+          return textToolResult(details, details.body || trace.summary || trace.userText || `Found trace ${trace.id}.`);
         }
         if (kind === "policy") {
           const policy = await core.getPolicy(params.id, namespaceFromCtx(ctx));
-          if (!policy) return { found: false, kind, id: params.id, body: "", meta: {} };
-          return {
+          if (!policy) {
+            const details = { found: false, kind, id: params.id, body: "", meta: {} };
+            return textToolResult(details, `No ${kind} memory found for id "${params.id}".`);
+          }
+          const details = {
             found: true,
             kind,
             id: policy.id,
@@ -244,16 +274,21 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
               status: policy.status,
             },
           };
+          return textToolResult(details, details.body);
         }
         const wm = await core.getWorldModel(params.id, namespaceFromCtx(ctx));
-        if (!wm) return { found: false, kind, id: params.id, body: "", meta: {} };
-        return {
+        if (!wm) {
+          const details = { found: false, kind, id: params.id, body: "", meta: {} };
+          return textToolResult(details, `No ${kind} memory found for id "${params.id}".`);
+        }
+        const details = {
           found: true,
           kind,
           id: wm.id,
           body: clip(wm.body, bodyCap),
           meta: { title: wm.title, policyIds: wm.policyIds },
         };
+        return textToolResult(details, `${wm.title}\n\n${details.body}`.trim());
       },
     }),
     { name: "memory_get" },
@@ -272,7 +307,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         const core = await resolveCore(opts);
         const traces = await core.timeline({ episodeId: params.episodeId as never, namespace: namespaceFromCtx(ctx) });
         const limited = traces.slice(0, params.limit ?? 20);
-        return {
+        const details = {
           episodeId: params.episodeId,
           traces: limited.map((t) => ({
             id: t.id,
@@ -283,6 +318,13 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
             value: t.value,
           })),
         };
+        const text = details.traces.length === 0
+          ? `No traces found for episode "${params.episodeId}".`
+          : `Episode ${params.episodeId} timeline:\n\n` +
+            details.traces
+              .map((t, i) => `${i + 1}. ${t.userText || t.agentText || t.id}`)
+              .join("\n");
+        return textToolResult(details, text);
       },
     }),
     { name: "memory_timeline" },
@@ -303,7 +345,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
           limit: params.limit,
           namespace: namespaceFromCtx(ctx),
         });
-        return {
+        const details = {
           skills: skills.map((s) => ({
             id: s.id,
             name: s.name,
@@ -314,6 +356,11 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
             invocationGuide: clip(s.invocationGuide, bodyCap),
           })),
         };
+        const text = details.skills.length === 0
+          ? "No skills found."
+          : `Found ${details.skills.length} skills:\n\n` +
+            details.skills.map((s, i) => `${i + 1}. ${s.name} (${s.id}, ${s.status})`).join("\n");
+        return textToolResult(details, text);
       },
     }),
     { name: "skill_list" },
@@ -348,7 +395,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         const core = await resolveCore(opts);
         if (!query) {
           const rows = await core.listWorldModels({ limit: cap, offset: 0, namespace: namespaceFromCtx(ctx) });
-          return {
+          const details = {
             worldModels: rows.map((w) => ({
               id: w.id,
               title: w.title,
@@ -358,6 +405,11 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
             })),
             queried: false,
           };
+          const text = details.worldModels.length === 0
+            ? "No environment knowledge found."
+            : `Environment knowledge:\n\n` +
+              details.worldModels.map((w, i) => `${i + 1}. ${w.title}\n${w.body}`).join("\n\n");
+          return textToolResult(details, text);
         }
         // With a query, go through `searchMemory` so tag filters +
         // cosine ranking apply, then keep only the tier-3 hits.
@@ -368,7 +420,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
           topK: { tier1: 0, tier2: 0, tier3: cap },
         });
         const tier3 = res.hits.filter((h) => h.tier === 3);
-        return {
+        const details = {
           worldModels: tier3.map((h) => ({
             id: h.refId,
             title: (h.snippet ?? "").split("\n")[0]?.replace(/^World model:\s*/, "") ?? "",
@@ -378,6 +430,11 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
           })),
           queried: true,
         };
+        const text = details.worldModels.length === 0
+          ? "No matching environment knowledge found."
+          : `Environment knowledge for "${query}":\n\n` +
+            details.worldModels.map((w, i) => `${i + 1}. ${w.title}\n${w.body}`).join("\n\n");
+        return textToolResult(details, text);
       },
     }),
     { name: "memory_environment" },
@@ -399,8 +456,11 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
           namespace: namespaceFromCtx(ctx),
           toolCallId,
         });
-        if (!skill) return { found: false, skill: null };
-        return {
+        if (!skill) {
+          const details = { found: false, skill: null };
+          return textToolResult(details, `No skill found for id "${params.id}".`);
+        }
+        const details = {
           found: true,
           skill: {
             id: skill.id,
@@ -418,6 +478,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
             lastUsedAt: skill.lastUsedAt,
           },
         };
+        return textToolResult(details, `${skill.name}\n\n${skill.invocationGuide}`.trim());
       },
     }),
     { name: "skill_get" },

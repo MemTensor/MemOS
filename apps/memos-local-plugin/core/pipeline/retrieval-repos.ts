@@ -18,6 +18,12 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
       searchByVector(query, k, opts) {
         return repos.skills.searchByVector(query, k, opts ?? {});
       },
+      searchByText(ftsMatch, k, opts) {
+        return repos.skills.searchByText(ftsMatch, k, opts ?? {});
+      },
+      searchByPattern(terms, k, opts) {
+        return repos.skills.searchByPattern(terms, k, opts ?? {});
+      },
       getById(id) {
         const row = repos.skills.getById(id);
         if (!row || !isVisibleTo(row, namespace)) return null;
@@ -34,6 +40,12 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
     traces: {
       searchByVector(query, k, opts) {
         return repos.traces.searchByVector(query, k, opts ?? {});
+      },
+      searchByText(ftsMatch, k, opts) {
+        return repos.traces.searchByText(ftsMatch, k, opts ?? {});
+      },
+      searchByPattern(terms, k, opts) {
+        return repos.traces.searchByPattern(terms, k, opts ?? {});
       },
       getManyByIds(ids) {
         const rows = repos.traces.getManyByIds(ids as readonly TraceId[]);
@@ -73,6 +85,12 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
     worldModel: {
       searchByVector(query, k, opts) {
         return repos.worldModel.searchByVector(query, k, opts ?? {});
+      },
+      searchByText(ftsMatch, k) {
+        return repos.worldModel.searchByText(ftsMatch, k);
+      },
+      searchByPattern(terms, k) {
+        return repos.worldModel.searchByPattern(terms, k);
       },
       getById(id) {
         const row = repos.worldModel.getById(id);

@@ -377,7 +377,7 @@ ensure_runtime_home() {
 wait_for_viewer() {
   local port="$1"
   local url="http://127.0.0.1:${port}"
-  local timeout="${2:-30}"
+  local timeout="${2:-60}"
   local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
   local idx=0
   local elapsed=0
@@ -599,7 +599,7 @@ NODE
     return 0
   fi
 
-  warn "Memory Viewer did not respond within 30s."
+  warn "Memory Viewer did not respond within 60s."
   printf "       ${DIM}Check: /tmp/openclaw-memos-gateway.log or /tmp/openclaw/openclaw-*.log${NC}\n" >&2
   return 1
 }

@@ -1361,9 +1361,20 @@ describe("registerOpenClawTools", () => {
     const res = (await search.descriptor.execute("toolCall_1", {
       query: "anything",
       maxResults: 5,
-    })) as { hits: Array<unknown>; totalMs: number };
+    })) as {
+      hits: Array<unknown>;
+      totalMs: number;
+      content: Array<{ type: "text"; text: string }>;
+      details: { hits: Array<unknown>; totalMs: number };
+    };
     expect(Array.isArray(res.hits)).toBe(true);
     expect(res.totalMs).toBeGreaterThanOrEqual(0);
+    // Latest OpenClaw's MCP plugin-tools bridge serializes only
+    // `result.content`; keep that populated while preserving the older
+    // top-level object shape used by local tests and callers.
+    expect(res.content[0]?.type).toBe("text");
+    expect(res.content[0]?.text).toContain("memories");
+    expect(res.details.hits).toBe(res.hits);
   });
 
   it("memory_search maps per-tier topK params and keeps maxResults fallback", async () => {
