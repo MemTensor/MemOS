@@ -1845,7 +1845,7 @@ export function createMemoryCore(
         contextHints: query.filters ?? {},
         ts,
       });
-      const hits: RetrievalHitDTO[] = result.packet.snippets.map((snip) => ({
+      let hits: RetrievalHitDTO[] = result.packet.snippets.map((snip) => ({
         tier: inferTier(snip.refKind),
         refId: snip.refId,
         refKind:
@@ -1855,6 +1855,27 @@ export function createMemoryCore(
         score: snip.score ?? 0,
         snippet: snip.body,
       }));
+
+      // Per-tier truncation: the retrieval pipeline's ranker limit is
+      // the SUM of per-tier topK, but callers expect each tier's topK
+      // to cap that tier's contribution. Without this, merged results
+      // can exceed the caller's expected total.
+      if (query.topK) {
+        const tierCaps: Partial<Record<1 | 2 | 3, number>> = {};
+        if (query.topK.tier1 !== undefined) tierCaps[1] = query.topK.tier1;
+        if (query.topK.tier2 !== undefined) tierCaps[2] = query.topK.tier2;
+        if (query.topK.tier3 !== undefined) tierCaps[3] = query.topK.tier3;
+        const tierCounts: Record<number, number> = {};
+        hits = hits.filter((h) => {
+          const cap = tierCaps[h.tier];
+          if (cap === undefined) return true;
+          const count = tierCounts[h.tier] ?? 0;
+          if (count >= cap) return false;
+          tierCounts[h.tier] = count + 1;
+          return true;
+        });
+      }
+
       // Build the logs-page payload BEFORE returning so the row
       // reflects the exact shape the adapter sees. `candidates` lists
       // everything tiered/retrieved; `filtered` is what the injector
