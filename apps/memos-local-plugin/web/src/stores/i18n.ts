@@ -675,9 +675,13 @@ const en = {
   "settings.temperature": "Temperature",
   "settings.embedding.title": "Embedding",
   "settings.embedding.desc": "Vector embedding model used by retrieval and deduplication.",
+  "settings.embedding.localHint":
+    "Currently using built-in MiniLM-L6-v2 (384-dim, ~23 MB). Select another provider for better retrieval accuracy.",
   "settings.summarizer.title": "Summarizer",
   "settings.summarizer.desc":
     "Model that turns your conversations into short task summaries and the takeaways the agent keeps.",
+  "settings.summarizer.inherit":
+    "Currently using the agent's model. Select a provider to override.",
   "settings.model.tip.title": "Model selection tips",
   "settings.model.tip.embedding":
     "Embedding — the built-in model is small. For better recall, configure a dedicated model such as bge-m3 or text-embedding-3-large.",
@@ -817,7 +821,7 @@ const zh: Record<TranslationKey, string> = {
   "settings.skillEvolver.title": "技能进化模型",
   "settings.skillEvolver.desc":
     "结晶新技能时专用的模型。留空则使用摘要模型。",
-  "settings.skillEvolver.inherit": "当前使用摘要模型。选择 Provider 即可覆盖。",
+  "settings.skillEvolver.inherit": "当前使用 agent 的模型。选择 Provider 即可覆盖。",
   "settings.account.protection": "密码保护",
   "settings.account.protection.desc": "启用后，打开记忆面板需要输入密码。",
   "settings.account.on": "已启用",
@@ -1330,8 +1334,12 @@ const zh: Record<TranslationKey, string> = {
   "settings.temperature": "温度",
   "settings.embedding.title": "嵌入模型",
   "settings.embedding.desc": "用于记忆检索与去重的向量嵌入模型。",
+  "settings.embedding.localHint":
+    "当前使用内置 MiniLM-L6-v2（384 维，约 23 MB）。选择其他 Provider 可获得更精准的检索效果。",
   "settings.summarizer.title": "摘要模型",
   "settings.summarizer.desc": "把原始对话压缩成任务摘要和要点的模型。",
+  "settings.summarizer.inherit":
+    "当前使用 agent 的模型。选择 Provider 即可覆盖。",
   "settings.model.tip.title": "模型选择提示",
   "settings.model.tip.embedding":
     "嵌入模型：插件内置模型较小。为获得更精准的记忆检索，建议配置 bge-m3、text-embedding-3-large 等专业嵌入模型。",

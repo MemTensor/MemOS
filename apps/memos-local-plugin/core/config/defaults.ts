@@ -34,7 +34,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     },
   },
   llm: {
-    provider: "local_only",
+    provider: "",
     endpoint: "",
     model: "",
     temperature: 0,

@@ -35,9 +35,6 @@ const EmbeddingSchema = Type.Object({
     Type.Literal("local"),
     Type.Literal("openai_compatible"),
     Type.Literal("gemini"),
-    Type.Literal("cohere"),
-    Type.Literal("voyage"),
-    Type.Literal("mistral"),
   ], { default: "local" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault("Xenova/all-MiniLM-L6-v2"),
@@ -51,13 +48,14 @@ const EmbeddingSchema = Type.Object({
 
 const LlmSchema = Type.Object({
   provider: Type.Union([
+    Type.Literal(""),
     Type.Literal("local_only"),
     Type.Literal("openai_compatible"),
-    Type.Literal("anthropic"),
     Type.Literal("gemini"),
+    Type.Literal("anthropic"),
     Type.Literal("bedrock"),
     Type.Literal("host"),
-  ], { default: "local_only" }),
+  ], { default: "" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault(""),
   temperature: NumberInRange(0, 0, 2),
@@ -84,9 +82,8 @@ const SkillEvolverSchema = Type.Object({
   provider: Type.Union([
     Type.Literal(""),
     Type.Literal("openai_compatible"),
-    Type.Literal("anthropic"),
     Type.Literal("gemini"),
-    Type.Literal("bedrock"),
+    Type.Literal("anthropic"),
   ], { default: "" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault(""),

@@ -53,26 +53,20 @@ const EMBEDDING_PROVIDERS = [
   "local",
   "openai_compatible",
   "gemini",
-  "cohere",
-  "voyage",
-  "mistral",
 ];
 
 const LLM_PROVIDERS = [
-  "local_only",
+  "", // inherit from agent
   "openai_compatible",
-  "anthropic",
   "gemini",
-  "bedrock",
-  "host",
+  "anthropic",
 ];
 
 const SKILL_PROVIDERS = [
   "", // inherit from llm
   "openai_compatible",
-  "anthropic",
   "gemini",
-  "bedrock",
+  "anthropic",
 ];
 
 export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
@@ -268,6 +262,7 @@ function ModelsTab({
         block={embedding}
         providers={EMBEDDING_PROVIDERS}
         type="embedding"
+        localHint={t("settings.embedding.localHint")}
         onPatch={onPatchEmbedding}
       />
 
@@ -278,6 +273,7 @@ function ModelsTab({
         block={llm}
         providers={LLM_PROVIDERS}
         type="summarizer"
+        inheritsLabel={t("settings.summarizer.inherit")}
         onPatch={onPatchLlm}
       />
 
@@ -307,6 +303,7 @@ function ModelCard({
   extra,
   withTemperature,
   inheritsLabel,
+  localHint,
   onPatch,
 }: {
   icon: "plug" | "sparkles" | "wand-sparkles";
@@ -318,6 +315,7 @@ function ModelCard({
   extra?: preact.ComponentChildren;
   withTemperature?: boolean;
   inheritsLabel?: string;
+  localHint?: string;
   onPatch: (p: Partial<ProviderBlock>) => void;
 }) {
   const [testing, setTesting] = useState(false);
@@ -363,7 +361,8 @@ function ModelCard({
     }
   };
 
-  const inherits = type === "skillEvolver" && !block.provider;
+  const inherits = (type === "skillEvolver" || type === "summarizer") && !block.provider;
+  const isLocal = type === "embedding" && block.provider === "local";
 
   return (
     <section class="card">
@@ -391,11 +390,18 @@ function ModelCard({
         </button>
       </div>
 
-      {inherits && (
+      {inherits && inheritsLabel && (
         <div
           style="font-size:var(--fs-xs);color:var(--fg-muted);margin-bottom:var(--sp-3);padding:var(--sp-2) var(--sp-3);background:var(--bg-canvas);border-radius:var(--radius-sm);border:1px dashed var(--border)"
         >
           {inheritsLabel}
+        </div>
+      )}
+      {isLocal && localHint && (
+        <div
+          style="font-size:var(--fs-xs);color:var(--fg-muted);margin-bottom:var(--sp-3);padding:var(--sp-2) var(--sp-3);background:var(--bg-canvas);border-radius:var(--radius-sm);border:1px dashed var(--border)"
+        >
+          {localHint}
         </div>
       )}
 
