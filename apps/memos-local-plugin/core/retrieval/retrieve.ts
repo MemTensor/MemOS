@@ -262,10 +262,14 @@ async function runAll(
         : Promise.resolve({ traces: [], episodes: [] });
 
     const tier2ExperiencePromise: Promise<ExperienceCandidate[]> =
-      wantTier2 && !!queryVec && !noUsableChannel
+      wantTier2 && !noUsableChannel
         ? runTier2Experience(
             { repos: deps.repos, config: deps.config },
-            { queryVec },
+            {
+              queryVec,
+              ftsMatch: compiled.ftsMatch,
+              patternTerms: compiled.patternTerms,
+            },
           )
         : Promise.resolve([]);
 

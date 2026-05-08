@@ -385,6 +385,49 @@ CREATE TRIGGER IF NOT EXISTS traces_fts_au AFTER UPDATE ON traces BEGIN
   );
 END;
 
+-- Policies / Experiences FTS
+CREATE VIRTUAL TABLE IF NOT EXISTS policies_fts USING fts5(
+  policy_id UNINDEXED,
+  title,
+  trigger,
+  procedure,
+  verification,
+  boundary,
+  guidance,
+  tokenize = 'trigram'
+);
+
+CREATE TRIGGER IF NOT EXISTS policies_fts_ai AFTER INSERT ON policies BEGIN
+  INSERT INTO policies_fts(policy_id, title, trigger, procedure, verification, boundary, guidance)
+  VALUES (
+    new.id,
+    new.title,
+    new.trigger,
+    new.procedure,
+    new.verification,
+    new.boundary,
+    COALESCE(new.decision_guidance_json, '')
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS policies_fts_ad AFTER DELETE ON policies BEGIN
+  DELETE FROM policies_fts WHERE policy_id = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS policies_fts_au AFTER UPDATE ON policies BEGIN
+  DELETE FROM policies_fts WHERE policy_id = old.id;
+  INSERT INTO policies_fts(policy_id, title, trigger, procedure, verification, boundary, guidance)
+  VALUES (
+    new.id,
+    new.title,
+    new.trigger,
+    new.procedure,
+    new.verification,
+    new.boundary,
+    COALESCE(new.decision_guidance_json, '')
+  );
+END;
+
 -- Skills FTS
 CREATE VIRTUAL TABLE IF NOT EXISTS skills_fts USING fts5(
   skill_id UNINDEXED,

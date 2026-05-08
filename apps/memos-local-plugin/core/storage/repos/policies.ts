@@ -189,6 +189,117 @@ export function makePoliciesRepo(db: StorageDb) {
       );
     },
 
+    /**
+     * Keyword channel — FTS5 trigram MATCH against `policies_fts`.
+     * Indexes the same user-facing fields the prompt renderer injects:
+     * title, trigger, procedure, verification, boundary and guidance.
+     */
+    searchByText(
+      ftsMatch: string,
+      k: number,
+      opts: { statusIn?: PolicyRow["status"][] } = {},
+    ): Array<VectorHit<string, PolicySearchMeta>> {
+      if (!ftsMatch || k <= 0) return [];
+      const params: Record<string, unknown> = {
+        match: ftsMatch,
+        k: Math.max(1, Math.min(200, Math.floor(k))),
+      };
+      const whereParts: string[] = [];
+      if (opts.statusIn && opts.statusIn.length > 0) {
+        const placeholders = opts.statusIn.map((_, i) => `@status_${i}`).join(",");
+        whereParts.push(`p.status IN (${placeholders})`);
+        opts.statusIn.forEach((st, i) => {
+          params[`status_${i}`] = st;
+        });
+      }
+      const extra = whereParts.length > 0 ? ` AND ${whereParts.join(" AND ")}` : "";
+      const sql = `
+        SELECT p.id AS id,
+               p.title AS title,
+               p.status AS status,
+               p.support AS support,
+               p.gain AS gain,
+               p.experience_type AS experience_type,
+               p.evidence_polarity AS evidence_polarity,
+               p.salience AS salience,
+               p.confidence AS confidence,
+               p.owner_agent_kind AS owner_agent_kind,
+               p.owner_profile_id AS owner_profile_id,
+               p.owner_workspace_id AS owner_workspace_id
+          FROM policies_fts f
+          JOIN policies     p ON p.id = f.policy_id
+         WHERE policies_fts MATCH @match${extra}
+         ORDER BY rank
+         LIMIT @k`;
+      const rows = db
+        .prepare<typeof params, RawPolicySearchRow>(sql)
+        .all(params);
+      return rows.map((r, idx) => ({
+        id: r.id,
+        score: 1 / (idx + 1),
+        meta: policySearchMeta(r),
+      }));
+    },
+
+    /**
+     * Pattern channel — substring fallback for short queries (2-char CJK,
+     * short ids, etc.) that cannot arm the trigram FTS channel.
+     */
+    searchByPattern(
+      terms: readonly string[],
+      k: number,
+      opts: { statusIn?: PolicyRow["status"][] } = {},
+    ): Array<VectorHit<string, PolicySearchMeta>> {
+      if (!terms || terms.length === 0 || k <= 0) return [];
+      const dedup = Array.from(new Set(terms.map((t) => String(t).trim()).filter(Boolean)));
+      if (dedup.length === 0) return [];
+      const params: Record<string, unknown> = {
+        k: Math.max(1, Math.min(200, Math.floor(k))),
+      };
+      const ors: string[] = [];
+      dedup.slice(0, 16).forEach((t, i) => {
+        const key = `pat_${i}`;
+        const escaped = t.replace(/[\\%_]/g, (m) => `\\${m}`);
+        params[key] = `%${escaped}%`;
+        ors.push(
+          `(title LIKE @${key} ESCAPE '\\' OR trigger LIKE @${key} ESCAPE '\\' OR procedure LIKE @${key} ESCAPE '\\' OR verification LIKE @${key} ESCAPE '\\' OR boundary LIKE @${key} ESCAPE '\\' OR decision_guidance_json LIKE @${key} ESCAPE '\\')`,
+        );
+      });
+      const whereParts: string[] = [`(${ors.join(" OR ")})`];
+      if (opts.statusIn && opts.statusIn.length > 0) {
+        const placeholders = opts.statusIn.map((_, i) => `@status_${i}`).join(",");
+        whereParts.push(`status IN (${placeholders})`);
+        opts.statusIn.forEach((st, i) => {
+          params[`status_${i}`] = st;
+        });
+      }
+      const sql = `
+        SELECT id,
+               title,
+               status,
+               support,
+               gain,
+               experience_type,
+               evidence_polarity,
+               salience,
+               confidence,
+               owner_agent_kind,
+               owner_profile_id,
+               owner_workspace_id
+          FROM policies
+         WHERE ${whereParts.join(" AND ")}
+         ORDER BY updated_at DESC
+         LIMIT @k`;
+      const rows = db
+        .prepare<typeof params, RawPolicySearchRow>(sql)
+        .all(params);
+      return rows.map((r, idx) => ({
+        id: r.id,
+        score: 1 / (idx + 1),
+        meta: policySearchMeta(r),
+      }));
+    },
+
     deleteById(id: PolicyId): void {
       db.prepare<{ id: string }>(`DELETE FROM policies WHERE id=@id`).run({ id });
     },
@@ -307,6 +418,22 @@ interface RawPolicyRow {
   edited_at: number | null;
 }
 
+type RawPolicySearchRow = Pick<
+  RawPolicyRow,
+  | "id"
+  | "title"
+  | "status"
+  | "support"
+  | "gain"
+  | "experience_type"
+  | "evidence_polarity"
+  | "salience"
+  | "confidence"
+  | "owner_agent_kind"
+  | "owner_profile_id"
+  | "owner_workspace_id"
+>;
+
 const EMPTY_GUIDANCE: PolicyRow["decisionGuidance"] = Object.freeze({
   preference: [] as string[],
   antiPattern: [] as string[],
@@ -386,6 +513,22 @@ function mapRow(r: RawPolicyRow): PolicyRow {
           }
         : null,
     editedAt: r.edited_at,
+  };
+}
+
+function policySearchMeta(r: RawPolicySearchRow): PolicySearchMeta {
+  return {
+    title: r.title,
+    status: r.status,
+    support: r.support,
+    gain: r.gain,
+    experience_type: normalizeExperienceType(r.experience_type),
+    evidence_polarity: normalizeEvidencePolarity(r.evidence_polarity),
+    salience: finiteOr(r.salience, 0),
+    confidence: finiteOr(r.confidence, 0.5),
+    owner_agent_kind: r.owner_agent_kind,
+    owner_profile_id: r.owner_profile_id,
+    owner_workspace_id: r.owner_workspace_id,
   };
 }
 

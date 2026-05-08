@@ -357,9 +357,9 @@ function renderWholePacket(
   const traces = snippets.filter(
     (s) =>
       s.refKind === "trace" ||
-      s.refKind === "episode" ||
-      s.refKind === "experience",
+      s.refKind === "episode",
   );
+  const experiences = snippets.filter((s) => s.refKind === "experience");
   const worlds = snippets.filter((s) => s.refKind === "world-model");
 
   if (skills.length > 0) {
@@ -381,6 +381,13 @@ function renderWholePacket(
   if (traces.length > 0) {
     parts.push("## Memories\n");
     traces.forEach((s, i) => {
+      parts.push(renderNumberedSnippet(s, i + 1));
+    });
+  }
+
+  if (experiences.length > 0) {
+    parts.push("## Experiences\n");
+    experiences.forEach((s, i) => {
       parts.push(renderNumberedSnippet(s, i + 1));
     });
   }

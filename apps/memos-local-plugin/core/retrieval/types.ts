@@ -565,6 +565,46 @@ export interface RetrievalRepos {
         confidence?: number;
       };
     }>;
+    searchByText?: (
+      ftsMatch: string,
+      k: number,
+      opts?: {
+        statusIn?: Array<"candidate" | "active" | "archived">;
+      },
+    ) => Array<{
+      id: string;
+      score: number;
+      meta?: {
+        title: string;
+        status: "candidate" | "active" | "archived";
+        support: number;
+        gain: number;
+        experience_type?: NonNullable<PolicyRow["experienceType"]>;
+        evidence_polarity?: NonNullable<PolicyRow["evidencePolarity"]>;
+        salience?: number;
+        confidence?: number;
+      };
+    }>;
+    searchByPattern?: (
+      terms: readonly string[],
+      k: number,
+      opts?: {
+        statusIn?: Array<"candidate" | "active" | "archived">;
+      },
+    ) => Array<{
+      id: string;
+      score: number;
+      meta?: {
+        title: string;
+        status: "candidate" | "active" | "archived";
+        support: number;
+        gain: number;
+        experience_type?: NonNullable<PolicyRow["experienceType"]>;
+        evidence_polarity?: NonNullable<PolicyRow["evidencePolarity"]>;
+        salience?: number;
+        confidence?: number;
+      };
+    }>;
     list: (filter?: {
       status?: "candidate" | "active" | "archived";
     }) => Array<{

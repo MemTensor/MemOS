@@ -13,6 +13,7 @@ import {
 import type {
   EmbeddingVector,
   EpisodeId,
+  PolicyId,
   SessionId,
   SkillId,
   TraceId,
@@ -114,6 +115,34 @@ function seed(handle: TmpDbHandle) {
     version: 1,
   });
 
+  handle.repos.policies.insert({
+    id: "po_sec13f_issuer" as PolicyId,
+    title: "SEC 13F issuer CUSIP parsing guardrail",
+    trigger: "Parse SEC 13F holdings and extract issuer/CUSIP fields",
+    procedure: "Use holdings table columns directly; do not infer issuer from filenames.",
+    verification: "Issuer and CUSIP values align with the holdings row fields.",
+    boundary: "Only SEC 13F holdings extraction.",
+    support: 1,
+    gain: 0.7,
+    status: "active",
+    experienceType: "failure_avoidance",
+    evidencePolarity: "negative",
+    salience: 0.9,
+    confidence: 0.85,
+    skillEligible: false,
+    sourceEpisodeIds: ["ep1" as EpisodeId],
+    sourceFeedbackIds: ["fb_sec13f" as never],
+    sourceTraceIds: ["t_hi" as TraceId],
+    inducedBy: "unit",
+    decisionGuidance: {
+      preference: [],
+      antiPattern: ["Do not infer SEC 13F issuer from filenames."],
+    },
+    vec: vec([1, 0, 0]),
+    createdAt: NOW as never,
+    updatedAt: NOW as never,
+  });
+
   handle.repos.worldModel.upsert({
     id: "wm_docker" as WorldModelId,
     title: "docker-compose model",
@@ -138,6 +167,7 @@ function makeDeps(handle: TmpDbHandle): RetrievalDeps {
       skills: handle.repos.skills,
       traces: handle.repos.traces,
       worldModel: handle.repos.worldModel,
+      policies: handle.repos.policies,
     },
     embedder: fakeEmbedder,
     config: {
@@ -212,6 +242,36 @@ describe("retrieval/integration", () => {
 
     expect(res.packet.snippets).toEqual([]);
     expect(res.stats.rankedCount).toBe(0);
+  });
+
+  it("recalls feedback experiences through keyword channels when embeddings degrade", async () => {
+    const deps: RetrievalDeps = {
+      ...makeDeps(handle),
+      embedder: {
+        embed: async () => {
+          throw new Error("embedding down");
+        },
+      },
+    };
+
+    const res = await turnStartRetrieve(deps, {
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s1" as SessionId,
+      userText: "SEC 13F issuer CUSIP parsing",
+      ts: NOW as never,
+    });
+
+    const experience = res.packet.snippets.find((s) => s.refKind === "experience");
+    expect(experience?.refId).toBe("po_sec13f_issuer");
+    expect(experience?.body).toContain("SEC 13F issuer CUSIP");
+    expect(res.packet.rendered).toContain("## Experiences");
+    expect(res.packet.rendered).not.toContain("## Memories\n\n\n1. SEC 13F issuer");
+    expect(res.stats.embedding).toMatchObject({
+      attempted: true,
+      ok: false,
+      degraded: true,
+    });
   });
 
   it("tool_driven skips tier1 (no skill snippets)", async () => {

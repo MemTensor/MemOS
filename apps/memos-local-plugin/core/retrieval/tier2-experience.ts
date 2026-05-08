@@ -3,11 +3,13 @@ import type { EmbeddingVector, PolicyId } from "../types.js";
 import type {
   ChannelRank,
   ExperienceCandidate,
+  RetrievalChannel,
   RetrievalConfig,
   RetrievalRepos,
 } from "./types.js";
 
 const log = rootLogger.child({ channel: "core.retrieval.tier2.experience" });
+const DEFAULT_KEYWORD_TOPK = 20;
 
 export interface Tier2ExperienceDeps {
   repos: Pick<RetrievalRepos, "policies">;
@@ -16,6 +18,8 @@ export interface Tier2ExperienceDeps {
 
 export interface Tier2ExperienceInput {
   queryVec: EmbeddingVector | null;
+  ftsMatch?: string | null;
+  patternTerms?: string[];
 }
 
 export async function runTier2Experience(
@@ -24,39 +28,87 @@ export async function runTier2Experience(
 ): Promise<ExperienceCandidate[]> {
   const startedAt = Date.now();
   const repo = deps.repos.policies;
-  if (!repo?.searchByVector || !input.queryVec || input.queryVec.length === 0) {
+  if (!repo) {
     return [];
   }
 
   try {
-    const poolSize = Math.max(
+    const vecPoolSize = Math.max(
       deps.config.tier2TopK,
       Math.ceil(deps.config.tier2TopK * deps.config.candidatePoolFactor),
     );
-    const hits = repo.searchByVector(input.queryVec, poolSize, {
-      statusIn: ["active", "candidate"],
-      hardCap: Math.max(50, poolSize * 5),
-    });
+    const keywordPoolSize = Math.max(
+      deps.config.tier2TopK,
+      deps.config.keywordTopK ?? DEFAULT_KEYWORD_TOPK,
+    );
+    const statusIn: Array<"active" | "candidate"> = ["active", "candidate"];
+    const haveVec = !!repo.searchByVector && !!input.queryVec && input.queryVec.length > 0;
+    const haveFts = !!input.ftsMatch && !!repo.searchByText;
+    const havePattern =
+      !!input.patternTerms && input.patternTerms.length > 0 && !!repo.searchByPattern;
+    if (!haveVec && !haveFts && !havePattern) {
+      return [];
+    }
+
+    const merged = new Map<PolicyId, CandidateState>();
+    if (haveVec) {
+      const hits = repo.searchByVector!(input.queryVec!, vecPoolSize, {
+        statusIn,
+        hardCap: Math.max(50, vecPoolSize * 5),
+      });
+      hits.forEach((hit, idx) => {
+        if (hit.score < deps.config.minTraceSim) return;
+        upsertCandidate(merged, hit.id as PolicyId, {
+          cosine: hit.score,
+          channel: "vec",
+          rank: idx,
+          score: hit.score,
+          vec: input.queryVec!,
+        });
+      });
+    }
+
+    if (haveFts) {
+      const hits = repo.searchByText!(input.ftsMatch!, keywordPoolSize, { statusIn });
+      hits.forEach((hit, idx) => {
+        upsertCandidate(merged, hit.id as PolicyId, {
+          cosine: 0,
+          channel: "fts",
+          rank: idx,
+          score: hit.score,
+          vec: input.queryVec ?? null,
+        });
+      });
+    }
+
+    if (havePattern) {
+      const hits = repo.searchByPattern!(input.patternTerms!, keywordPoolSize, { statusIn });
+      hits.forEach((hit, idx) => {
+        upsertCandidate(merged, hit.id as PolicyId, {
+          cosine: 0,
+          channel: "pattern",
+          rank: idx,
+          score: hit.score,
+          vec: input.queryVec ?? null,
+        });
+      });
+    }
+
     const out: ExperienceCandidate[] = [];
-    for (let i = 0; i < hits.length; i += 1) {
-      const hit = hits[i]!;
-      if (hit.score < deps.config.minTraceSim) continue;
-      const row = repo.getById(hit.id as PolicyId);
+    for (const [id, state] of merged) {
+      const row = repo.getById(id);
       if (!row) continue;
       if ((row.sourceFeedbackIds?.length ?? 0) === 0) continue;
       const status = row.status ?? "candidate";
       if (status === "archived") continue;
-      const channels: ChannelRank[] = [
-        { channel: "vec", rank: i, score: hit.score },
-      ];
       out.push({
         tier: "tier2",
         refKind: "experience",
         refId: row.id as PolicyId,
-        cosine: hit.score,
+        cosine: state.cosine,
         ts: row.updatedAt ?? Date.now(),
-        vec: row.vec ?? input.queryVec,
-        channels,
+        vec: row.vec ?? state.vec,
+        channels: state.channels,
         title: row.title,
         trigger: row.trigger ?? "",
         procedure: row.procedure ?? "",
@@ -76,18 +128,25 @@ export async function runTier2Experience(
         decisionGuidance: row.decisionGuidance,
         updatedAt: row.updatedAt ?? Date.now(),
         debug: {
-          matchedChannels: channels.map((c) => c.channel),
+          matchedChannels: state.channels.map((c) => c.channel),
           experienceType: row.experienceType ?? "success_pattern",
           evidencePolarity: row.evidencePolarity ?? "positive",
         },
       });
     }
+    out.sort((a, b) => bestChannelScore(b) - bestChannelScore(a));
+    const trimmed = out.slice(0, vecPoolSize);
     log.info("done", {
-      candidates: hits.length,
-      kept: out.length,
+      candidates: merged.size,
+      kept: trimmed.length,
+      channels: {
+        vec: haveVec,
+        fts: haveFts,
+        pattern: havePattern,
+      },
       latencyMs: Date.now() - startedAt,
     });
-    return out;
+    return trimmed;
   } catch (err) {
     log.error("failed", {
       err: { message: err instanceof Error ? err.message : String(err) },
@@ -95,4 +154,48 @@ export async function runTier2Experience(
     });
     return [];
   }
+}
+
+interface CandidateState {
+  cosine: number;
+  channels: ChannelRank[];
+  vec: EmbeddingVector | null;
+}
+
+function upsertCandidate(
+  map: Map<PolicyId, CandidateState>,
+  id: PolicyId,
+  hit: {
+    cosine: number;
+    channel: RetrievalChannel;
+    rank: number;
+    score: number;
+    vec: EmbeddingVector | null;
+  },
+): void {
+  const curr = map.get(id);
+  const channel: ChannelRank = {
+    channel: hit.channel,
+    rank: hit.rank,
+    score: hit.score,
+  };
+  if (!curr) {
+    map.set(id, {
+      cosine: hit.cosine,
+      channels: [channel],
+      vec: hit.vec,
+    });
+    return;
+  }
+  curr.cosine = Math.max(curr.cosine, hit.cosine);
+  curr.channels.push(channel);
+  if (!curr.vec && hit.vec) curr.vec = hit.vec;
+}
+
+function bestChannelScore(c: ExperienceCandidate): number {
+  let best = c.cosine;
+  for (const ch of c.channels ?? []) {
+    if (ch.score > best) best = ch.score;
+  }
+  return best;
 }
