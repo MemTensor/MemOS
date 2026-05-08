@@ -74,7 +74,7 @@ import type {
   SkillInvokeCtx,
   SubAgentCtx,
 } from "../retrieval/types.js";
-import type { CoreEvent } from "../../agent-contract/events.js";
+import type { CoreEvent, CoreEventType } from "../../agent-contract/events.js";
 import type { LogRecord } from "../../agent-contract/log-record.js";
 import { memoryBuffer } from "../logger/index.js";
 import { onBroadcastLog } from "../logger/transports/sse-broadcast.js";
@@ -105,9 +105,8 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // Small ring buffer of the most-recent events. Late-connecting SSE
   // subscribers (e.g. the viewer's Overview panel opened after an agent
   // turn already fired) replay this buffer on connect so the "实时活动"
-  // card isn't empty by default. 100 rows is plenty — the viewer only
-  // renders the last dozen.
-  const RECENT_EVENTS_CAP = 100;
+  // dashboard isn't empty by default.
+  const RECENT_EVENTS_CAP = 160;
   const recentEvents: CoreEvent[] = [];
 
   const emitCore = (evt: CoreEvent): void => {
@@ -146,30 +145,98 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // Hydrate the ring buffer with synthetic events derived from the
   // most-recent rows on disk. Without this, every plugin restart
   // produces an empty "实时活动" panel until the user happens to
-  // interact with the agent again — misleading, because the DB
-  // clearly has recent activity. We emit a small set of low-cost
-  // synthetic `episode.closed` + `trace.created` entries (no bus
-  // fan-out) just for the buffer, so SSE connects replay them to new
-  // clients. Seq numbers are monotone from 0 so the frontend's
-  // `key={evt.seq}` stays unique against live events that come later.
+  // interact with the agent again — misleading, because the DB clearly
+  // has recent activity. Include the same categories the overview
+  // dashboard renders (memory / experience / environment / skill /
+  // feedback), not just task/session lifecycle events.
   try {
+    const hydrated: CoreEvent[] = [];
+    const pushSynthetic = (
+      type: CoreEventType,
+      ts: number | null | undefined,
+      correlationId: string | undefined,
+      payload: unknown,
+    ): void => {
+      if (!Number.isFinite(ts)) return;
+      hydrated.push({
+        type,
+        ts: ts as number,
+        seq: 0,
+        correlationId,
+        payload,
+      });
+    };
+
     const recentEpisodes = deps.repos.episodes.list({ limit: 20 });
-    let seq = 0;
-    for (const ep of recentEpisodes.reverse()) {
+    for (const ep of recentEpisodes) {
       const ts = ep.endedAt ?? ep.startedAt;
       if (!ts) continue;
       const type = ep.status === "closed" ? "episode.closed" : "episode.opened";
+      pushSynthetic(type, ts, ep.id, {
+        episodeId: ep.id,
+        sessionId: ep.sessionId,
+        status: ep.status,
+        rTask: ep.rTask ?? null,
+      });
+    }
+
+    for (const tr of deps.repos.traces.list({ limit: 30 })) {
+      pushSynthetic("trace.created", tr.ts, tr.id, {
+        traceId: tr.id,
+        episodeId: tr.episodeId,
+        sessionId: tr.sessionId,
+      });
+    }
+
+    for (const policy of deps.repos.policies.list({ limit: 20 })) {
+      const ts = policy.updatedAt ?? policy.createdAt;
+      pushSynthetic("l2.revised", ts, policy.id, {
+        policyId: policy.id,
+        status: policy.status,
+        signature: policy.title,
+      });
+    }
+
+    for (const world of deps.repos.worldModel.list({ limit: 20 })) {
+      const ts = world.updatedAt ?? world.createdAt;
+      pushSynthetic("l3.revised", ts, world.id, {
+        worldModelId: world.id,
+        title: world.title,
+        status: world.status,
+      });
+    }
+
+    for (const skill of deps.repos.skills.list({ limit: 20 })) {
+      const ts = skill.updatedAt ?? skill.createdAt;
+      const type: CoreEventType =
+        skill.status === "archived" ? "skill.archived" : "skill.crystallized";
+      pushSynthetic(type, ts, skill.id, {
+        skillId: skill.id,
+        name: skill.name,
+        status: skill.status,
+      });
+    }
+
+    for (const fb of deps.repos.feedback.list({ limit: 20 })) {
+      pushSynthetic("feedback.classified", fb.ts, fb.id, {
+        feedbackId: fb.id,
+        episodeId: fb.episodeId,
+        traceId: fb.traceId,
+        tone: fb.polarity,
+        channel: fb.channel,
+      });
+    }
+
+    hydrated.sort((a, b) => a.ts - b.ts);
+    const keep = hydrated.slice(-RECENT_EVENTS_CAP);
+    const seqStart = -keep.length;
+    for (let i = 0; i < keep.length; i++) {
+      const evt = keep[i]!;
       recentEvents.push({
-        type,
-        ts,
-        seq: seq++,
-        correlationId: ep.id,
-        payload: {
-          episodeId: ep.id,
-          sessionId: ep.sessionId,
-          status: ep.status,
-          rTask: ep.rTask ?? null,
-        },
+        ...evt,
+        // Negative ids are reserved for replay-only synthetic rows, so
+        // live bridge events starting at seq=1 never collide in the UI.
+        seq: seqStart + i,
       });
     }
     if (recentEvents.length > RECENT_EVENTS_CAP) {
@@ -177,7 +244,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     }
     log.debug("events.ring.hydrated", {
       count: recentEvents.length,
-      source: "episodes",
+      source: "storage",
     });
   } catch (err) {
     log.debug("events.ring.hydrate_failed", {
