@@ -250,7 +250,7 @@ export function OverviewView() {
        * own clock tick so sparklines slide left even while the SSE
        * stream is quiet.
        */}
-      <section class="card">
+      <section class="card card--flat">
         <div class="card__header">
           <div>
             <h3 class="card__title">{t("overview.live.title")}</h3>

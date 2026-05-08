@@ -518,6 +518,10 @@ body {
   color: var(--fg-muted);
   font-size: var(--fs-md);
   max-width: 560px;
+  /* Keep CJK words like "含义" / "认知" together — `keep-all` only
+     breaks at spaces and punctuation for CJK and is a no-op for
+     non-CJK text, so it's safe to apply globally to view headers. */
+  word-break: keep-all;
 }
 .view-header__actions {
   display: flex;
@@ -525,3 +529,4 @@ body {
   align-items: center;
   flex-wrap: wrap;
 }
+
