@@ -153,8 +153,29 @@ export interface PolicyRow extends OwnedRow {
   support: number;
   gain: number;
   status: "candidate" | "active" | "archived";
+  /**
+   * User-facing "experience" classification. The Policies tab is the storage
+   * backing for the viewer's "经验" surface; these fields distinguish success
+   * patterns from feedback-derived avoid/repair notes.
+   */
+  experienceType?:
+    | "success_pattern"
+    | "repair_validated"
+    | "failure_avoidance"
+    | "repair_instruction"
+    | "preference"
+    | "verifier_feedback"
+    | "procedural";
+  evidencePolarity?: "positive" | "negative" | "neutral" | "mixed";
+  /** Recall/ranking hints for direct experience retrieval. */
+  salience?: number;
+  confidence?: number;
   /** Source episodes that contributed evidence. */
   sourceEpisodeIds: EpisodeId[];
+  /** Direct feedback rows that created or refined this experience. */
+  sourceFeedbackIds?: FeedbackId[];
+  /** Trace rows that grounded this experience, when available. */
+  sourceTraceIds?: TraceId[];
   /** Inducer prompt id, helpful for re-running with newer prompts. */
   inducedBy: string;
   /**
@@ -165,6 +186,12 @@ export interface PolicyRow extends OwnedRow {
    * Empty arrays mean "no guidance learned yet".
    */
   decisionGuidance: { preference: string[]; antiPattern: string[] };
+  verifierMeta?: Record<string, unknown> | null;
+  /**
+   * False for failure-only avoidance experiences. They are still recallable,
+   * but skill crystallization needs at least one success-backed source.
+   */
+  skillEligible?: boolean;
   vec: EmbeddingVector | null;
   createdAt: EpochMs;
   updatedAt: EpochMs;

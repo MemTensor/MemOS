@@ -4,9 +4,9 @@
  *   POST /api/v1/admin/clear-data
  *       Wipe the SQLite DB (file + WAL/SHM sidecars) and exit. The
  *       host (OpenClaw gateway / Hermes Python) doesn't reliably
- *       respawn us in-process, so the next agent boot recreates a
- *       fresh DB. The viewer surfaces a "data cleared, restart agent"
- *       toast so the user knows what to do next.
+ *       respawn us in-process, so we stop stale host-side writers
+ *       before replacing the DB and let the next agent boot recreate
+ *       a fresh connection.
  *
  *   POST /api/v1/admin/restart
  *       Agent-aware restart. For OpenClaw the plugin lives inside the
@@ -26,6 +26,14 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
     if (!dbFile) {
       return { ok: false, error: "database path not configured" };
     }
+    const agent = options.agent ?? "unknown";
+    let killedHermes = false;
+    if (agent === "hermes") {
+      // The viewer daemon and an active Hermes chat have separate Node
+      // bridges. Kill the chat first so its stdio bridge releases any
+      // SQLite handle before we unlink the DB files.
+      killedHermes = await terminateHermesChat();
+    }
     const fs = await import("node:fs/promises");
     try {
       await deps.core.shutdown();
@@ -33,7 +41,9 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
     for (const suffix of ["", "-wal", "-shm"]) {
       try { await fs.unlink(dbFile + suffix); } catch { /* may not exist */ }
     }
-    const agent = options.agent ?? "unknown";
+    if (agent === "hermes" && deps.home?.root) {
+      try { await fs.unlink(`${deps.home.root}/bridge-status.json`); } catch { /* may not exist */ }
+    }
     if (agent !== "openclaw") {
       // Hermes: spawn replacement daemon after clearing data
       const nodePath = await import("node:path");
@@ -52,7 +62,7 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
       child.unref();
     }
     setTimeout(() => process.exit(0), 200);
-    return { ok: true, restarting: true };
+    return { ok: true, restarting: true, killedHermes };
   });
 
   routes.set("POST /api/v1/admin/restart", async (_ctx) => {

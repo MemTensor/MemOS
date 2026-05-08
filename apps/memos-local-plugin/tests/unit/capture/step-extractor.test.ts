@@ -95,6 +95,54 @@ describe("capture/step-extractor", () => {
     expect(replyStep.meta.turnId).toBe(1_000);
   });
 
+  it("recovers tool calls from legacy recovered-episode toolCalls metadata", () => {
+    const toolCalls = [
+      {
+        name: "exec",
+        input: { cmd: "pwd" },
+        output: "/root/project\n",
+        toolCallId: "call_exec_1",
+      },
+    ];
+    const ep = episode([
+      turn("user", "show cwd", 1_000),
+      turn("tool", JSON.stringify(toolCalls), 1_010, { toolCalls }),
+      turn("assistant", "done", 1_020),
+    ]);
+
+    const steps = extractSteps(ep);
+    expect(steps).toHaveLength(2);
+    expect(steps[0]!.toolCalls[0]).toMatchObject({
+      name: "exec",
+      input: { cmd: "pwd" },
+      output: "/root/project\n",
+      toolCallId: "call_exec_1",
+    });
+  });
+
+  it("unwraps historical unknown_tool shells around real tool calls", () => {
+    const wrapped = [
+      {
+        name: "web_fetch",
+        input: { url: "https://example.com" },
+        output: "Example Domain",
+      },
+    ];
+    const ep = episode([
+      turn("user", "fetch the page", 1_000),
+      turn("tool", JSON.stringify(wrapped), 1_010, { name: "unknown_tool" }),
+      turn("assistant", "fetched", 1_020),
+    ]);
+
+    const steps = extractSteps(ep);
+    expect(steps).toHaveLength(2);
+    expect(steps[0]!.toolCalls[0]).toMatchObject({
+      name: "web_fetch",
+      input: { url: "https://example.com" },
+      output: "Example Domain",
+    });
+  });
+
   it("two user turns split into two steps (each turn gets its own turnId)", () => {
     const ep = episode([
       turn("user", "first", 1_000),

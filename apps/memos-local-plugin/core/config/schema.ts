@@ -182,7 +182,7 @@ const AlgorithmSchema = Type.Object({
     /** TTL (days) for unpromoted rows in `l2_candidate_pool`. */
     candidateTtlDays: NumberInRange(30, 1),
     /** Min distinct episodes in a candidate bucket before we run induction. */
-    minEpisodesForInduction: NumberInRange(2, 2, 20),
+    minEpisodesForInduction: NumberInRange(1, 1, 20),
     /** Ignore traces whose V is below this floor (prevents noise-driven L2). */
     minTraceValue: NumberInRange(0.01, -1, 1),
     /** When true, call the LLM to induce policies; else collect candidates only. */
@@ -194,7 +194,7 @@ const AlgorithmSchema = Type.Object({
   }, { default: {} }),
   l3Abstraction: Type.Object({
     /** Minimum number of compatible active L2 policies to trigger an L3 abstraction. */
-    minPolicies: NumberInRange(2, 2, 50),
+    minPolicies: NumberInRange(1, 1, 50),
     /** Hard minimum gain for an L2 to be eligible as abstraction evidence. */
     minPolicyGain: NumberInRange(0.02, -1, 1),
     /** Hard minimum support for an L2 to be eligible as abstraction evidence. */

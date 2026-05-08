@@ -315,6 +315,26 @@ function describeCandidate(r: RankedCandidate, bodyChars: number): string {
         const body = squashBody(parts.join(" "), bodyChars);
         return `[TRACE] ${body}`;
       }
+      if (c.refKind === "experience") {
+        const ex = c as {
+          title?: string;
+          trigger?: string;
+          procedure?: string;
+          verification?: string;
+          experienceType?: string;
+          evidencePolarity?: string;
+        };
+        const parts = [
+          ex.title,
+          ex.experienceType ? `type=${ex.experienceType}` : null,
+          ex.evidencePolarity ? `evidence=${ex.evidencePolarity}` : null,
+          ex.trigger,
+          ex.procedure,
+          ex.verification,
+        ].filter(Boolean).join(" ");
+        const body = squashBody(parts, bodyChars);
+        return `[EXPERIENCE] ${body}`;
+      }
       const ep = c as { summary?: string };
       const body = squashBody(ep.summary ?? "", bodyChars);
       return `[EPISODE] ${body}`;

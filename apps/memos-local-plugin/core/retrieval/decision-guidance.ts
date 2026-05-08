@@ -25,6 +25,7 @@ import type { EpisodeId } from "../../agent-contract/dto.js";
 import type { RankedCandidate } from "./ranker.js";
 import type {
   RetrievalRepos,
+  ExperienceCandidate,
   SkillCandidate,
   TraceCandidate,
 } from "./types.js";
@@ -70,16 +71,20 @@ export function collectDecisionGuidance(input: CollectInput): CollectedGuidance 
 
   // Gather the (episodeId, refKind) pairs we care about.
   const traceEpisodeIds = new Set<EpisodeId>();
-  const skillIds = new Set<string>();
+  const policyIds = new Set<string>();
   for (const r of ranked) {
     const c = r.candidate;
     if (c.tier === "tier2" && c.refKind === "trace") {
       traceEpisodeIds.add((c as TraceCandidate).episodeId);
+    } else if (c.tier === "tier2" && c.refKind === "experience") {
+      policyIds.add((c as ExperienceCandidate).refId);
     } else if (c.tier === "tier1") {
-      skillIds.add((c as SkillCandidate).refId);
+      for (const id of (c as SkillCandidate).sourcePolicyIds ?? []) {
+        policyIds.add(id);
+      }
     }
   }
-  if (traceEpisodeIds.size === 0 && skillIds.size === 0) return EMPTY;
+  if (traceEpisodeIds.size === 0 && policyIds.size === 0) return EMPTY;
 
   const activePolicies = repos.policies.list({ status: "active" });
   if (activePolicies.length === 0) return EMPTY;
@@ -94,6 +99,7 @@ export function collectDecisionGuidance(input: CollectInput): CollectedGuidance 
     for (const ep of p.sourceEpisodeIds) {
       if (traceEpisodeIds.has(ep)) matched += 1;
     }
+    if (policyIds.has(p.id)) matched += 1;
     if (matched === 0) continue; // policy isn't connected to anything we retrieved
 
     const dg = p.decisionGuidance;

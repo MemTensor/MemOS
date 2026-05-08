@@ -7,6 +7,7 @@ import {
   RETRIEVAL_FILTER_PROMPT,
   REWARD_R_HUMAN_PROMPT,
   SKILL_CRYSTALLIZE_PROMPT,
+  detectDominantLanguage,
   languageSteeringLine,
 } from "../../../core/llm/index.js";
 
@@ -38,6 +39,13 @@ describe("llm/prompts", () => {
     expect(languageSteeringLine("auto")).toMatch(/same natural language/i);
     expect(languageSteeringLine("zh")).toMatch(/中文/);
     expect(languageSteeringLine("en")).toMatch(/English/);
+  });
+
+  it("detectDominantLanguage only chooses Chinese when CJK dominates", () => {
+    expect(detectDominantLanguage(["请修复这个问题，并解释原因"])).toBe("zh");
+    expect(detectDominantLanguage(["Excelファイルの欠落値を復元してください"])).toBe("en");
+    expect(detectDominantLanguage(["저는 GRPO를 사용하여 모델을 훈련시키고 있습니다"])).toBe("en");
+    expect(detectDominantLanguage(["GRPO / TRL / reward_fn.py"])).toBe("en");
   });
 
   it("retrieval filter prompt asks for ranked output without selected-field leftovers", () => {

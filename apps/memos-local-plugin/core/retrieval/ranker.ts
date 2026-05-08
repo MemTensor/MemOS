@@ -38,6 +38,7 @@ import { priorityFor } from "../reward/backprop.js";
 import type {
   ChannelRank,
   EpisodeCandidate,
+  ExperienceCandidate,
   RetrievalChannel,
   RetrievalConfig,
   SkillCandidate,
@@ -51,6 +52,7 @@ export interface RankerInput {
   tier1: readonly SkillCandidate[];
   tier2Traces: readonly TraceCandidate[];
   tier2Episodes: readonly EpisodeCandidate[];
+  tier2Experiences?: readonly ExperienceCandidate[];
   tier3: readonly WorldModelCandidate[];
   /** Hard cap on total snippets after MMR. */
   limit: number;
@@ -108,7 +110,10 @@ const DEFAULT_PRIORITY_BLEND = 0.3;
 export function rank(input: RankerInput): RankerResult {
   const tierSizes: Record<TierKind, number> = {
     tier1: input.tier1.length,
-    tier2: input.tier2Traces.length + input.tier2Episodes.length,
+    tier2:
+      input.tier2Traces.length +
+      input.tier2Episodes.length +
+      (input.tier2Experiences?.length ?? 0),
     tier3: input.tier3.length,
   };
   const kept: Record<TierKind, number> = { tier1: 0, tier2: 0, tier3: 0 };
@@ -119,6 +124,7 @@ export function rank(input: RankerInput): RankerResult {
   pushAll(bag, input.tier1, (c) => relevanceFor(c, input));
   pushAll(bag, input.tier2Traces, (c) => relevanceFor(c, input));
   pushAll(bag, input.tier2Episodes, (c) => relevanceFor(c, input));
+  pushAll(bag, input.tier2Experiences ?? [], (c) => relevanceFor(c, input));
   pushAll(bag, input.tier3, (c) => relevanceFor(c, input));
 
   // Tally channel hits for observability.
@@ -301,6 +307,11 @@ function relevanceFor(c: TierCandidate, input: RankerInput): number {
     );
     const blend = priorityBlendFor(input.config);
     return base + blend * live;
+  }
+  if (c.refKind === "experience") {
+    const ex = c as ExperienceCandidate;
+    const salience = Math.max(ex.salience, ex.confidence, ex.gain);
+    return base + 0.2 * clamp(salience, 0, 1);
   }
   // Tier 3 world-model — no V signal; rely on base + RRF.
   return base;

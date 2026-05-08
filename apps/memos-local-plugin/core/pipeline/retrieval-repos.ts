@@ -33,6 +33,8 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
           status: row.status,
           invocationGuide: row.invocationGuide,
           eta: row.eta,
+          sourcePolicyIds: row.sourcePolicyIds,
+          updatedAt: row.updatedAt,
         };
       },
     },
@@ -108,6 +110,9 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
     // to look up `decisionGuidance` (preference / anti-pattern) attached
     // to traces / skills already chosen by tiers 1 + 2.
     policies: {
+      searchByVector(query, k, opts) {
+        return repos.policies.searchByVector(query, k, opts ?? {});
+      },
       list(filter) {
         const rows = repos.policies.list(
           filter && filter.status ? { status: filter.status } : {},
@@ -115,8 +120,24 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
         return rows.filter((r) => isVisibleTo(r, namespace)).map((r) => ({
           id: r.id,
           title: r.title,
+          trigger: r.trigger,
+          procedure: r.procedure,
+          verification: r.verification,
+          boundary: r.boundary,
+          support: r.support,
+          gain: r.gain,
+          status: r.status,
+          experienceType: r.experienceType ?? "success_pattern",
+          evidencePolarity: r.evidencePolarity ?? "positive",
+          salience: r.salience ?? 0,
+          confidence: r.confidence ?? 0.5,
+          skillEligible: r.skillEligible !== false,
           sourceEpisodeIds: r.sourceEpisodeIds,
+          sourceFeedbackIds: r.sourceFeedbackIds ?? [],
+          sourceTraceIds: r.sourceTraceIds ?? [],
           decisionGuidance: r.decisionGuidance,
+          vec: r.vec,
+          updatedAt: r.updatedAt,
         }));
       },
       getById(id) {
@@ -125,8 +146,24 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
         return {
           id: row.id,
           title: row.title,
+          trigger: row.trigger,
+          procedure: row.procedure,
+          verification: row.verification,
+          boundary: row.boundary,
+          support: row.support,
+          gain: row.gain,
+          status: row.status,
+          experienceType: row.experienceType ?? "success_pattern",
+          evidencePolarity: row.evidencePolarity ?? "positive",
+          salience: row.salience ?? 0,
+          confidence: row.confidence ?? 0.5,
+          skillEligible: row.skillEligible !== false,
           sourceEpisodeIds: row.sourceEpisodeIds,
+          sourceFeedbackIds: row.sourceFeedbackIds ?? [],
+          sourceTraceIds: row.sourceTraceIds ?? [],
           decisionGuidance: row.decisionGuidance,
+          vec: row.vec,
+          updatedAt: row.updatedAt,
         };
       },
     },

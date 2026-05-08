@@ -16,6 +16,7 @@ import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
 import { Pager } from "../components/Pager";
 import { ShareScopePill } from "../components/ShareScopePill";
+import { Markdown } from "../components/Markdown";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import type { CoreEvent, SkillDTO } from "../api/types";
@@ -477,6 +478,12 @@ function SkillDrawer({
   const [busy, setBusy] = useState(false);
   const [timeline, setTimeline] = useState<TimelineEntry[] | null>(null);
   const [usage, setUsage] = useState<SkillUsage | null>(null);
+  const decisionGuidance = normalizeDecisionGuidance(
+    (skill as { decisionGuidance?: unknown }).decisionGuidance,
+  );
+  const evidenceAnchors = normalizeEvidenceAnchors(
+    (skill as { evidenceAnchors?: unknown }).evidenceAnchors,
+  );
 
   useEffect(() => {
     setName(skill.name);
@@ -653,12 +660,13 @@ function SkillDrawer({
             <h3 class="card__title" style="font-size:var(--fs-md)">
               {t("skills.detail.desc")}
             </h3>
-            <pre
-              class="mono"
-              style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0;color:var(--fg)"
-            >
-              {skill.invocationGuide || "(empty)"}
-            </pre>
+            {skill.invocationGuide ? (
+              <Markdown text={skill.invocationGuide} />
+            ) : (
+              <div class="muted" style="font-size:var(--fs-sm)">
+                (empty)
+              </div>
+            )}
           </section>
 
           {(usage?.sourcePolicies.length ?? 0) > 0 && (
@@ -713,31 +721,31 @@ function SkillDrawer({
            * "nothing was learned yet"; we hide the section in that case
            * so the drawer stays uncluttered.
            */}
-          {(skill.decisionGuidance.preference.length > 0 ||
-            skill.decisionGuidance.antiPattern.length > 0) && (
+          {(decisionGuidance.preference.length > 0 ||
+            decisionGuidance.antiPattern.length > 0) && (
             <section class="card card--flat">
               <h3 class="card__title" style="font-size:var(--fs-md);margin-bottom:var(--sp-3)">
                 {t("skills.detail.decisionGuidance")}
               </h3>
-              {skill.decisionGuidance.preference.length > 0 && (
+              {decisionGuidance.preference.length > 0 && (
                 <div style="margin-bottom:var(--sp-3)">
                   <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                     {t("skills.detail.decisionGuidance.prefer")}
                   </div>
                   <ul style="margin:0;padding-left:18px;font-size:var(--fs-sm);line-height:1.55">
-                    {skill.decisionGuidance.preference.map((p, i) => (
+                    {decisionGuidance.preference.map((p, i) => (
                       <li key={`p-${i}`}>{p}</li>
                     ))}
                   </ul>
                 </div>
               )}
-              {skill.decisionGuidance.antiPattern.length > 0 && (
+              {decisionGuidance.antiPattern.length > 0 && (
                 <div>
                   <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                     {t("skills.detail.decisionGuidance.avoid")}
                   </div>
                   <ul style="margin:0;padding-left:18px;font-size:var(--fs-sm);line-height:1.55">
-                    {skill.decisionGuidance.antiPattern.map((a, i) => (
+                    {decisionGuidance.antiPattern.map((a, i) => (
                       <li key={`a-${i}`}>{a}</li>
                     ))}
                   </ul>
@@ -751,28 +759,30 @@ function SkillDrawer({
            * Click-through chips deep-link into MemoriesView so the user
            * can audit "which memories justified this skill?".
            */}
-          {skill.evidenceAnchors.length > 0 && (
+          {evidenceAnchors.length > 0 && (
             <section class="card card--flat">
               <h3 class="card__title" style="font-size:var(--fs-md);margin-bottom:var(--sp-3)">
                 {t("skills.detail.evidenceAnchors", {
-                  n: skill.evidenceAnchors.length,
+                  n: evidenceAnchors.length,
                 })}
               </h3>
               <div class="hstack" style="flex-wrap:wrap;gap:var(--sp-2)">
-                {skill.evidenceAnchors.map((traceId) => (
+                {evidenceAnchors.map((anchor) => (
                   <button
-                    key={traceId}
+                    key={anchor.key}
                     class="pill pill--link mono"
-                    style="cursor:pointer;border:0;font-family:var(--font-mono);font-size:var(--fs-xs)"
+                    style={`cursor:${anchor.memoryId ? "pointer" : "default"};border:0;font-family:var(--font-mono);font-size:var(--fs-xs)`}
                     // Trace ids open the Memories tab — traces surface
                     // there one-row-per-step (collapsed by turnId into
                     // memory cards). The cross-link store doesn't have
                     // a "trace" entity kind because the user-facing
                     // unit is "memory", not "trace".
-                    onClick={() => linkTo("memory", traceId)}
-                    title={traceId}
+                    onClick={() => {
+                      if (anchor.memoryId) linkTo("memory", anchor.memoryId);
+                    }}
+                    title={anchor.title}
                   >
-                    {traceId.slice(0, 12)}
+                    {anchor.label}
                   </button>
                 ))}
               </div>
@@ -981,6 +991,130 @@ function formatWhen(ts: number | undefined): string {
     return new Date(ts).toLocaleString();
   } catch {
     return "—";
+  }
+}
+
+interface EvidenceAnchorView {
+  key: string;
+  label: string;
+  title: string;
+  memoryId?: string;
+}
+
+function normalizeDecisionGuidance(raw: unknown): {
+  preference: string[];
+  antiPattern: string[];
+} {
+  const source = parseJsonString(raw);
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return { preference: [], antiPattern: [] };
+  }
+  const obj = source as { preference?: unknown; antiPattern?: unknown };
+  return {
+    preference: stringArray(obj.preference),
+    antiPattern: stringArray(obj.antiPattern),
+  };
+}
+
+function normalizeEvidenceAnchors(raw: unknown): EvidenceAnchorView[] {
+  const source = parseJsonString(raw);
+  const list = Array.isArray(source) ? source : source == null ? [] : [source];
+  return list
+    .map((item, index) => normalizeEvidenceAnchor(item, index))
+    .filter((item): item is EvidenceAnchorView => item !== null);
+}
+
+function normalizeEvidenceAnchor(
+  raw: unknown,
+  index: number,
+): EvidenceAnchorView | null {
+  const value = parseJsonString(raw);
+  if (typeof value === "string") {
+    const id = value.trim();
+    if (!id) return null;
+    return {
+      key: `${index}:${id}`,
+      label: compactAnchorLabel(id),
+      title: id,
+      memoryId: id,
+    };
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const obj = value as Record<string, unknown>;
+  const directId =
+    firstString(obj.traceId, obj.trace_id, obj.memoryId, obj.memory_id, obj.id, obj.refId) ??
+    null;
+  const label = anchorObjectLabel(obj, directId);
+  if (!label) return null;
+
+  return {
+    key: `${index}:${directId ?? label}`,
+    label: compactAnchorLabel(label),
+    title: safeJsonTitle(obj) ?? label,
+    memoryId: directId ?? undefined,
+  };
+}
+
+function anchorObjectLabel(
+  obj: Record<string, unknown>,
+  directId: string | null,
+): string | null {
+  if (directId) return directId;
+
+  const kind = firstString(obj.kind, obj.type, obj.source);
+  const task = firstString(obj.task, obj.taskId, obj.task_id);
+  const skill = firstString(obj.skill, obj.skillId, obj.skill_id, obj.name);
+  if (kind && task && skill) return `${kind}:${task}/${skill}`;
+  if (kind && task) return `${kind}:${task}`;
+  if (task && skill) return `${task}/${skill}`;
+
+  return firstString(obj.label, obj.title, obj.path) ?? safeJsonTitle(obj);
+}
+
+function parseJsonString(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (!/^[\[{"]/.test(trimmed)) return value;
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function stringArray(value: unknown): string[] {
+  const parsed = parseJsonString(value);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .map((item) => {
+      const v = parseJsonString(item);
+      return typeof v === "string" ? v.trim() : "";
+    })
+    .filter(Boolean);
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const parsed = parseJsonString(value);
+    if (typeof parsed === "string" && parsed.trim()) return parsed.trim();
+  }
+  return null;
+}
+
+function compactAnchorLabel(value: string): string {
+  return value.length > 32 ? `${value.slice(0, 29)}...` : value;
+}
+
+function safeJsonTitle(value: unknown): string | null {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
   }
 }
 

@@ -23,7 +23,7 @@
  *   - We import **types only** from `./openclaw-api.ts`; the real SDK is
  *     injected by the host at load time.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -44,7 +44,28 @@ import type { ServerHandle } from "../../server/types.js";
 // ─── Plugin metadata ───────────────────────────────────────────────────────
 
 export const PLUGIN_ID = "memos-local-plugin";
-export const PLUGIN_VERSION = "2.0.0-beta.5";
+export const PLUGIN_VERSION = readPluginPackageVersion();
+
+function readPluginPackageVersion(): string {
+  try {
+    const thisFile = fileURLToPath(import.meta.url);
+    const adapterDir = path.dirname(thisFile); // .../adapters/openclaw or .../dist/adapters/openclaw
+    const candidates = [
+      path.resolve(adapterDir, "..", "..", "..", "package.json"),
+      path.resolve(adapterDir, "..", "..", "package.json"),
+    ];
+    const packageJsonPath = candidates.find((candidate) => existsSync(candidate));
+    if (!packageJsonPath) return "dev";
+    const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+      version?: unknown;
+    };
+    return typeof pkg.version === "string" && pkg.version.trim()
+      ? pkg.version
+      : "dev";
+  } catch {
+    return "dev";
+  }
+}
 
 // ─── Runtime state (per plugin load) ───────────────────────────────────────
 

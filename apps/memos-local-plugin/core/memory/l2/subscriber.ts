@@ -55,6 +55,8 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
   let active = 0;
   let closed = false;
   const inflight = new Set<Promise<unknown>>();
+  const inflightByEpisode = new Map<EpisodeId, Promise<unknown>>();
+  const pendingByEpisode = new Map<EpisodeId, RewardResult>();
 
   async function processReward(result: RewardResult): Promise<void> {
     if (closed) return;
@@ -103,22 +105,49 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
     }
   }
 
+  async function processEpisodeQueue(initial: RewardResult): Promise<void> {
+    let next: RewardResult | undefined = initial;
+    while (next && !closed) {
+      pendingByEpisode.delete(next.episodeId);
+      await processReward(next);
+      next = pendingByEpisode.get(next.episodeId);
+    }
+  }
+
+  function scheduleReward(result: RewardResult): void {
+    if (closed) return;
+    const existing = inflightByEpisode.get(result.episodeId);
+    if (existing) {
+      // Keep only the latest reward snapshot for this episode. OpenClaw
+      // can emit several reward.updated events while reflect/lite passes
+      // are still settling; serialising them prevents parallel induction
+      // over the same candidate buckets while still preserving the newest
+      // trace set for a follow-up pass.
+      pendingByEpisode.set(result.episodeId, result);
+      return;
+    }
+    const p: Promise<unknown> = processEpisodeQueue(result).finally(() => {
+      inflightByEpisode.delete(result.episodeId);
+      inflight.delete(p);
+    });
+    inflightByEpisode.set(result.episodeId, p);
+    inflight.add(p);
+  }
+
   const off = rewardBus.on("reward.updated", (evt) => {
     if (evt.kind !== "reward.updated") return;
     // Fire-and-forget for the producer (reward subscriber must not
-    // block on us), but track the promise so `drain()` can wait
+    // block on us), but track/coalesce the promise so `drain()` can wait
     // for the L2 induction to actually finish before the process
     // shuts down.
-    const p: Promise<unknown> = processReward(evt.result).finally(() => {
-      inflight.delete(p);
-    });
-    inflight.add(p);
+    scheduleReward(evt.result);
   });
 
   return {
     detach(): void {
       closed = true;
       off();
+      pendingByEpisode.clear();
     },
     async drain(): Promise<void> {
       while (inflight.size > 0) {

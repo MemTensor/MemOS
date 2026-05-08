@@ -530,11 +530,9 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
   config.plugins.entries[pluginId] = {};
 }
 config.plugins.entries[pluginId].enabled = true;
-if (!config.plugins.entries[pluginId].hooks || typeof config.plugins.entries[pluginId].hooks !== 'object' || Array.isArray(config.plugins.entries[pluginId].hooks)) {
-  config.plugins.entries[pluginId].hooks = {};
-}
-config.plugins.entries[pluginId].hooks.allowConversationAccess = true;
-config.plugins.entries[pluginId].hooks.allowPromptInjection = true;
+// Do not write hook capability flags here. Current OpenClaw validates
+// plugin entries strictly and rejects unknown hook keys.
+if (config.plugins.entries[pluginId].hooks) delete config.plugins.entries[pluginId].hooks;
 
 if (!config.plugins.installs || typeof config.plugins.installs !== 'object') config.plugins.installs = {};
 const installsEntry = {

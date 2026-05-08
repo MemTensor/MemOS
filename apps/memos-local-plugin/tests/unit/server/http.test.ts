@@ -6,6 +6,10 @@
  * hermetic; the server just has to route + serialise + auth.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { startHttpServer } from "../../../server/index.js";
@@ -425,6 +429,179 @@ describe("HTTP server — REST routes", () => {
     expect(r.status).toBe(200);
     const body = (await r.json()) as { imported: number; skipped: number };
     expect(body.imported).toBe(0);
+  });
+
+  it("imports Hermes native MEMORY.md in batches", async () => {
+    const oldHome = process.env.HOME;
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "memos-hermes-native-"));
+    const nativeDir = path.join(tmpHome, ".hermes", "memories");
+    fs.mkdirSync(nativeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nativeDir, "MEMORY.md"),
+      "first memory\n§\nsecond memory\nwith two lines\n§\n",
+      "utf8",
+    );
+    process.env.HOME = tmpHome;
+
+    const importBundle = core.importBundle as unknown as ReturnType<typeof vi.fn>;
+    importBundle.mockImplementation(async (bundle: { traces?: unknown[] }) => ({
+      imported: bundle.traces?.length ?? 0,
+      skipped: 0,
+    }));
+
+    const local = await startHttpServer({ core }, { port: 0, agent: "hermes" });
+    try {
+      const scan = await fetch(`${local.url}/api/v1/import/hermes-native/scan`);
+      expect(scan.status).toBe(200);
+      const scanBody = (await scan.json()) as { found: boolean; total: number; path: string };
+      expect(scanBody.found).toBe(true);
+      expect(scanBody.total).toBe(2);
+      expect(scanBody.path).toMatch(/\.hermes\/memories\/MEMORY\.md$/);
+
+      const run = await fetch(`${local.url}/api/v1/import/hermes-native/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ offset: 0, limit: 1 }),
+      });
+      expect(run.status).toBe(200);
+      const runBody = (await run.json()) as {
+        total: number;
+        nextOffset: number;
+        imported: number;
+        done: boolean;
+      };
+      expect(runBody).toMatchObject({
+        total: 2,
+        nextOffset: 1,
+        imported: 1,
+        done: false,
+      });
+      expect(core.importBundle).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          version: 1,
+          traces: [
+            expect.objectContaining({
+              userText: "first memory",
+              sessionId: "se_hermes_native_memory",
+            }),
+          ],
+        }),
+      );
+    } finally {
+      await local.close();
+      importBundle.mockResolvedValue({ imported: 0, skipped: 0 });
+      if (oldHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = oldHome;
+      }
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it("imports OpenClaw native session JSONL messages in batches", async () => {
+    const oldHome = process.env.HOME;
+    const oldStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "memos-openclaw-native-"));
+    const openclawHome = path.join(tmpHome, ".openclaw");
+    const sessionsDir = path.join(openclawHome, "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, "s1.jsonl"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: "[Fri 2026-05-08 11:07 GMT+8] 记住，我喜欢吃的水果是菠萝",
+            timestamp: "2026-05-08T03:07:00.000Z",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "记住啦，你喜欢吃的水果是菠萝。" }],
+            timestamp: "2026-05-08T03:07:01.000Z",
+          },
+        }),
+        JSON.stringify({ type: "message", message: { role: "system", content: "skip me" } }),
+      ].join("\n"),
+      "utf8",
+    );
+    process.env.HOME = tmpHome;
+    process.env.OPENCLAW_STATE_DIR = openclawHome;
+
+    const importBundle = core.importBundle as unknown as ReturnType<typeof vi.fn>;
+    importBundle.mockImplementation(async (bundle: { traces?: unknown[] }) => ({
+      imported: bundle.traces?.length ?? 0,
+      skipped: 0,
+    }));
+
+    const local = await startHttpServer({ core }, { port: 0, agent: "openclaw" });
+    try {
+      const scan = await fetch(`${local.url}/api/v1/import/openclaw-native/scan`);
+      expect(scan.status).toBe(200);
+      const scanBody = (await scan.json()) as {
+        found: boolean;
+        total: number;
+        files: number;
+        sessions: number;
+        path: string;
+      };
+      expect(scanBody).toMatchObject({ found: true, total: 2, files: 1, sessions: 1 });
+      expect(scanBody.path).toMatch(/\.openclaw\/agents$/);
+
+      const run = await fetch(`${local.url}/api/v1/import/openclaw-native/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ offset: 0, limit: 2 }),
+      });
+      expect(run.status).toBe(200);
+      const runBody = (await run.json()) as {
+        total: number;
+        nextOffset: number;
+        imported: number;
+        done: boolean;
+      };
+      expect(runBody).toMatchObject({
+        total: 2,
+        nextOffset: 2,
+        imported: 2,
+        done: true,
+      });
+      expect(core.importBundle).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          version: 1,
+          traces: [
+            expect.objectContaining({
+              userText: "记住，我喜欢吃的水果是菠萝",
+              agentText: "",
+              sessionId: "se_oc_main_s1",
+            }),
+            expect.objectContaining({
+              userText: "",
+              agentText: "记住啦，你喜欢吃的水果是菠萝。",
+              sessionId: "se_oc_main_s1",
+            }),
+          ],
+        }),
+      );
+    } finally {
+      await local.close();
+      importBundle.mockResolvedValue({ imported: 0, skipped: 0 });
+      if (oldHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = oldHome;
+      }
+      if (oldStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = oldStateDir;
+      }
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
   });
 
   it("GET /api/v1/hub/admin returns {enabled:false} when sharing is off", async () => {

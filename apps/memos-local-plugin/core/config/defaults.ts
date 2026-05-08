@@ -114,7 +114,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     l2Induction: {
       minSimilarity: 0.65,
       candidateTtlDays: 30,
-      minEpisodesForInduction: 2,
+      minEpisodesForInduction: 1,
       // Lowered from 0.05 → 0.005. Reward backprop V values for typical
       // multi-step turns (5-15 steps) are clustered around 0.02-0.5 even
       // for successful episodes; the old 0.05 floor was throwing away
@@ -132,7 +132,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // world model could form, which in real usage takes weeks to
       // accumulate even for a focused user. Two compatible active
       // policies is the smallest meaningful cluster.
-      minPolicies: 2,
+      minPolicies: 1,
       // Lowered from 0.1 → 0.02. With the Bayesian-shrinkage gain
       // formula (see core/memory/l2/gain.ts), a genuinely useful policy
       // that fires on a single-success path now scores around 0.05-0.20

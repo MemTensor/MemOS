@@ -63,6 +63,7 @@ import type {
   PolicyId,
   PolicyRow,
   SkillRow,
+  EpochMs,
   TraceId,
   TraceRow,
   WorldModelId,
@@ -70,6 +71,7 @@ import type {
 } from "../types.js";
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import { loadConfig, resolveHome, SECRET_FIELD_PATHS } from "../config/index.js";
+import { feedbackText, runFeedbackExperience } from "../experience/feedback-builder.js";
 import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
@@ -94,6 +96,7 @@ import {
   isVisibleTo,
 } from "../runtime/namespace.js";
 import type { RetrievalConfig } from "../retrieval/types.js";
+import type { UserFeedback } from "../reward/types.js";
 
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
 
@@ -469,6 +472,12 @@ export function createMemoryCore(
   // `world_model_*` rows with the rest of the triggering episode's
   // pipeline activity in the Logs viewer.
   let l3TriggerEpisodeId: string | undefined;
+  const skillStatusThresholds = {
+    minEpisodesForInduction: String(handle.config.algorithm.l2Induction.minEpisodesForInduction),
+    minTraceValue: formatThreshold(handle.config.algorithm.l2Induction.minTraceValue),
+    skillMinSupport: String(handle.config.algorithm.skill.minSupport),
+    skillMinGain: formatThreshold(handle.config.algorithm.skill.minGain),
+  };
 
   function ensureLive(): void {
     if (shutDown) {
@@ -1005,12 +1014,29 @@ export function createMemoryCore(
         });
       }
       if (tr.toolCalls.length > 0) {
-        turns.push({
-          id: `${tr.id}:tool`,
-          ts: tr.ts,
-          role: "tool",
-          content: JSON.stringify(tr.toolCalls),
-          meta: { toolCalls: tr.toolCalls },
+        tr.toolCalls.forEach((toolCall, idx) => {
+          turns.push({
+            id: `${tr.id}:tool:${idx}`,
+            ts: (toolCall.endedAt ?? toolCall.startedAt ?? tr.ts) as EpochMs,
+            role: "tool",
+            content:
+              typeof toolCall.output === "string"
+                ? toolCall.output
+                : toolCall.output == null
+                  ? ""
+                  : JSON.stringify(toolCall.output),
+            meta: {
+              name: toolCall.name,
+              input: toolCall.input,
+              output: toolCall.output,
+              errorCode: toolCall.errorCode,
+              toolCallId: toolCall.toolCallId,
+              startedAt: toolCall.startedAt,
+              endedAt: toolCall.endedAt,
+              thinkingBefore: toolCall.thinkingBefore,
+              assistantTextBefore: toolCall.assistantTextBefore,
+            },
+          });
         });
       }
       if (tr.agentText) {
@@ -1440,6 +1466,97 @@ export function createMemoryCore(
       }
     });
 
+    const episode = row.episodeId
+      ? handle.repos.episodes.getById(row.episodeId as EpisodeId)
+      : null;
+    const trace = row.traceId
+      ? handle.repos.traces.getById(row.traceId as TraceId)
+      : null;
+    const sessionId = episode?.sessionId ?? trace?.sessionId ?? null;
+    const text = feedbackText(row);
+
+    if (episode && sessionId) {
+      const rewardFeedback: UserFeedback = {
+        id: row.id as UserFeedback["id"],
+        episodeId: episode.id,
+        sessionId,
+        traceId: row.traceId as TraceId | null,
+        ts: row.ts,
+        channel: row.channel,
+        polarity: row.polarity,
+        magnitude: row.magnitude,
+        text: text || null,
+        rationale: row.rationale,
+      };
+      try {
+        await handle.rewardRunner.run({
+          episodeId: episode.id,
+          feedback: [rewardFeedback],
+          trigger: "explicit_feedback",
+        });
+      } catch (err) {
+        log.warn("feedback.reward_failed", {
+          episodeId: episode.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (text && sessionId) {
+      try {
+        await handle.feedback.submitUserFeedback({
+          text,
+          sessionId,
+          episodeId: episode?.id,
+          context: text.slice(0, 300),
+        });
+      } catch (err) {
+        log.warn("feedback.repair_failed", {
+          episodeId: episode?.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    let policyId: PolicyId | undefined;
+    try {
+      const experience = await runFeedbackExperience(
+        { feedback: row, episode, trace },
+        {
+          repos: handle.repos,
+          embedder: handle.embedder,
+          llm: handle.llm ?? undefined,
+          namespace: handle.namespace,
+          now: Date.now,
+        },
+      );
+      policyId = experience.policyId;
+    } catch (err) {
+      log.warn("feedback.experience_failed", {
+        episodeId: episode?.id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      await handle.l2.drain();
+      if (policyId) {
+        await handle.skills.runOnce({ trigger: "manual", policyId });
+      }
+      if (episode) {
+        await handle.l3.runOnce({ trigger: "manual", episodeId: episode.id });
+      }
+      await handle.skills.flush();
+      await handle.feedback.flush();
+      await handle.l3.drain();
+    } catch (err) {
+      log.warn("feedback.downstream_flush_failed", {
+        episodeId: episode?.id,
+        policyId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     if (telemetry) {
       telemetry.trackFeedback(
         handle.namespace.agentKind,
@@ -1845,7 +1962,7 @@ export function createMemoryCore(
         contextHints: query.filters ?? {},
         ts,
       });
-      const hits: RetrievalHitDTO[] = result.packet.snippets.map((snip) => ({
+      let hits: RetrievalHitDTO[] = result.packet.snippets.map((snip) => ({
         tier: inferTier(snip.refKind),
         refId: snip.refId,
         refKind:
@@ -1855,6 +1972,27 @@ export function createMemoryCore(
         score: snip.score ?? 0,
         snippet: snip.body,
       }));
+
+      // Per-tier truncation: the retrieval pipeline's ranker limit is
+      // the SUM of per-tier topK, but callers expect each tier's topK
+      // to cap that tier's contribution. Without this, merged results
+      // can exceed the caller's expected total.
+      if (query.topK) {
+        const tierCaps: Partial<Record<1 | 2 | 3, number>> = {};
+        if (query.topK.tier1 !== undefined) tierCaps[1] = query.topK.tier1;
+        if (query.topK.tier2 !== undefined) tierCaps[2] = query.topK.tier2;
+        if (query.topK.tier3 !== undefined) tierCaps[3] = query.topK.tier3;
+        const tierCounts: Record<number, number> = {};
+        hits = hits.filter((h) => {
+          const cap = tierCaps[h.tier];
+          if (cap === undefined) return true;
+          const count = tierCounts[h.tier] ?? 0;
+          if (count >= cap) return false;
+          tierCounts[h.tier] = count + 1;
+          return true;
+        });
+      }
+
       // Build the logs-page payload BEFORE returning so the row
       // reflects the exact shape the adapter sees. `candidates` lists
       // everything tiered/retrieved; `filtered` is what the injector
@@ -2348,6 +2486,7 @@ export function createMemoryCore(
         r,
         policiesByEpisode.get(r.id) ?? [],
         skillsByPolicy,
+        skillStatusThresholds,
       );
 
       // `EpisodeManager` stamps `closeReason` and (for abandons)
@@ -3061,12 +3200,20 @@ export function createMemoryCore(
           support: dto.support ?? 0,
           gain: dto.gain ?? 0,
           status: dto.status,
-          sourceEpisodeIds: [],
+          experienceType: dto.experienceType ?? "success_pattern",
+          evidencePolarity: dto.evidencePolarity ?? "positive",
+          salience: dto.salience ?? 0,
+          confidence: dto.confidence ?? 0.5,
+          skillEligible: dto.skillEligible !== false,
+          sourceEpisodeIds: dto.sourceEpisodeIds ?? [],
+          sourceFeedbackIds: dto.sourceFeedbackIds ?? [],
+          sourceTraceIds: dto.sourceTraceIds ?? [],
           inducedBy: "import",
           decisionGuidance: {
             preference: [...(dto.preference ?? [])],
             antiPattern: [...(dto.antiPattern ?? [])],
           },
+          verifierMeta: dto.verifierMeta ?? null,
           vec: null,
           createdAt: dto.createdAt ?? Date.now(),
           updatedAt: dto.updatedAt ?? Date.now(),
@@ -3675,6 +3822,11 @@ export function policyRowToDTO(row: PolicyRow): PolicyDTO {
     support: row.support,
     gain: row.gain,
     status: row.status,
+    experienceType: row.experienceType ?? "success_pattern",
+    evidencePolarity: row.evidencePolarity ?? "positive",
+    salience: row.salience ?? 0,
+    confidence: row.confidence ?? 0.5,
+    skillEligible: row.skillEligible !== false,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     // PolicyDTO surface keeps the flat shape the viewer's PoliciesView
@@ -3684,6 +3836,9 @@ export function policyRowToDTO(row: PolicyRow): PolicyDTO {
     preference: row.decisionGuidance.preference,
     antiPattern: row.decisionGuidance.antiPattern,
     sourceEpisodeIds: [...(row.sourceEpisodeIds ?? [])],
+    sourceFeedbackIds: [...(row.sourceFeedbackIds ?? [])],
+    sourceTraceIds: [...(row.sourceTraceIds ?? [])],
+    verifierMeta: row.verifierMeta ?? null,
     share: row.share ?? null,
     editedAt: row.editedAt ?? undefined,
   };
@@ -3797,6 +3952,7 @@ export function inferTier(
     | "skill"
     | "trace"
     | "episode"
+    | "experience"
     | "world-model"
     | "preference"
     | "anti-pattern",
@@ -4215,6 +4371,17 @@ export function deriveSkillStatus(
   ep: EpisodeRow,
   relatedPolicies: readonly PolicyRow[],
   skillsByPolicy: ReadonlyMap<string, readonly SkillRow[]>,
+  thresholds: {
+    minEpisodesForInduction: string;
+    minTraceValue: string;
+    skillMinSupport: string;
+    skillMinGain: string;
+  } = {
+    minEpisodesForInduction: "2",
+    minTraceValue: "0.1",
+    skillMinSupport: "3",
+    skillMinGain: "0.15",
+  },
 ): {
   status: EpisodeListItemDTO["skillStatus"];
   reason: string | null;
@@ -4263,7 +4430,7 @@ export function deriveSkillStatus(
       status: "not_generated",
       reason: "暂未归纳出 L2 经验",
       reasonKey: "tasks.skillReason.not_generated.noPolicy",
-      reasonParams: null,
+      reasonParams: thresholds,
       linkedSkillId: null,
     };
   }
@@ -4285,7 +4452,7 @@ export function deriveSkillStatus(
       status: "queued",
       reason: `经验 ${best.id.slice(0, 8)} 需要更多支撑任务`,
       reasonKey: "tasks.skillReason.queued.policyPending",
-      reasonParams: { support: String(best.support ?? 0) },
+      reasonParams: { ...thresholds, support: String(best.support ?? 0) },
       linkedSkillId: null,
     };
   }
@@ -4293,9 +4460,14 @@ export function deriveSkillStatus(
     status: "queued",
     reason: `经验 ${best.id.slice(0, 8)} 已就绪`,
     reasonKey: "tasks.skillReason.queued.ready",
-    reasonParams: { gain: best.gain.toFixed(2), support: String(best.support ?? 0) },
+    reasonParams: { ...thresholds, gain: best.gain.toFixed(2), support: String(best.support ?? 0) },
     linkedSkillId: null,
   };
+}
+
+function formatThreshold(n: number): string {
+  if (!Number.isFinite(n)) return String(n);
+  return Number(n.toFixed(3)).toString();
 }
 
 /**

@@ -1043,6 +1043,70 @@ describe("createOpenClawBridge", () => {
     expect(new Set(ids).size).toBe(1);
   });
 
+  it("does not let a delayed agent_end clear the next turn's episode binding", async () => {
+    // OpenClaw hooks can overlap: the next before_prompt_build may route
+    // a fresh episode before the previous agent_end finishes. The bridge
+    // must clear only the binding that belongs to the ending run, or the
+    // next agent_end will fall back to openEpisode() and leave an empty
+    // phantom task in the viewer.
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const sessionKey = "s-overlap";
+    const firstCtx = hookCtx({ sessionKey, runId: "run-overlap-1" });
+    const secondCtx = hookCtx({ sessionKey, runId: "run-overlap-2" });
+
+    await bridge.handleBeforePrompt(
+      { prompt: "北京市市委书记是谁", messages: [] },
+      firstCtx,
+    );
+    await bridge.handleBeforePrompt(
+      { prompt: "可以只访问国内的网站", messages: [] },
+      secondCtx,
+    );
+
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "北京市市委书记是谁" },
+          { role: "assistant", content: "北京市市委书记是尹力。" },
+        ],
+      },
+      firstCtx,
+    );
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "北京市市委书记是谁" },
+          { role: "assistant", content: "北京市市委书记是尹力。" },
+          { role: "user", content: "可以只访问国内的网站" },
+          { role: "assistant", content: "好的，我会优先访问国内网站确认。" },
+        ],
+      },
+      secondCtx,
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const rows = await mc.listEpisodeRows({
+      sessionId: bridgeSessionId("main", sessionKey),
+      limit: 10,
+    });
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.turnCount > 0 || row.hasAssistantReply)).toBe(true);
+    expect(
+      rows.filter((row) =>
+        row.preview === "可以只访问国内的网站" && !row.hasAssistantReply
+      ),
+    ).toHaveLength(0);
+  });
+
   it("real-world smoke: '记住我喜欢游泳' flows into the L1 store and later surfaces via search", async () => {
     // This is the scenario the user reported in their bug ticket — a
     // simple Chinese request should produce a captured L1 trace and

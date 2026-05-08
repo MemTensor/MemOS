@@ -767,8 +767,18 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   const messageCursor = new Map<SessionId, number>();
   // Per-session last-known user text (for tool-outcome context hashing).
   const lastUserTextBySession = new Map<SessionId, string>();
-  // Per-session open episode id (populated by the core after onTurnStart).
-  const openEpisodeBySession = new Map<SessionId, EpisodeId>();
+  // Per-session latest episode binding (populated by the core after
+  // onTurnStart). The keyed side map lets a delayed `agent_end` find and
+  // clear its own turn without deleting a newer turn's mapping.
+  type EpisodeBinding = {
+    sessionId: SessionId;
+    episodeId: EpisodeId;
+    seq: number;
+    keys: string[];
+  };
+  const latestEpisodeBySession = new Map<SessionId, EpisodeBinding>();
+  const episodeBindingByTurnKey = new Map<string, EpisodeBinding>();
+  let episodeBindingSeq = 0;
   // Per-toolCallId start timestamps so `after_tool_call` can compute duration
   // when the host doesn't populate `durationMs`.
   const toolCallStartedAt = new Map<string, { ts: number; sessionId: SessionId }>();
@@ -796,6 +806,73 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       meta: namespace ? { namespace } : undefined,
     });
     return sid;
+  }
+
+  function turnBindingKeys(
+    sessionId: SessionId,
+    ctx: { runId?: string },
+    userText?: string,
+  ): string[] {
+    const keys: string[] = [];
+    if (ctx.runId) keys.push(`${sessionId}\0run\0${ctx.runId}`);
+    const text = userText?.trim();
+    if (text) keys.push(`${sessionId}\0user\0${text}`);
+    return keys;
+  }
+
+  function rememberEpisodeBinding(
+    sessionId: SessionId,
+    episodeId: EpisodeId,
+    ctx: { runId?: string },
+    userText: string | undefined,
+    seq: number = ++episodeBindingSeq,
+  ): EpisodeBinding {
+    const binding: EpisodeBinding = {
+      sessionId,
+      episodeId,
+      seq,
+      keys: turnBindingKeys(sessionId, ctx, userText),
+    };
+    latestEpisodeBySession.set(sessionId, binding);
+    for (const key of binding.keys) {
+      episodeBindingByTurnKey.set(key, binding);
+    }
+    return binding;
+  }
+
+  function findEpisodeBinding(
+    sessionId: SessionId,
+    ctx: { runId?: string },
+    userText?: string,
+  ): EpisodeBinding | undefined {
+    for (const key of turnBindingKeys(sessionId, ctx, userText)) {
+      const binding = episodeBindingByTurnKey.get(key);
+      if (binding) return binding;
+    }
+    return latestEpisodeBySession.get(sessionId);
+  }
+
+  function forgetEpisodeBinding(binding: EpisodeBinding | undefined): void {
+    if (!binding) return;
+    for (const key of binding.keys) {
+      if (episodeBindingByTurnKey.get(key)?.seq === binding.seq) {
+        episodeBindingByTurnKey.delete(key);
+      }
+    }
+    if (latestEpisodeBySession.get(binding.sessionId)?.seq === binding.seq) {
+      latestEpisodeBySession.delete(binding.sessionId);
+    }
+  }
+
+  function forgetSessionBindings(sessionId: SessionId): void {
+    latestEpisodeBySession.delete(sessionId);
+    for (const [key, binding] of episodeBindingByTurnKey.entries()) {
+      if (binding.sessionId === sessionId) episodeBindingByTurnKey.delete(key);
+    }
+  }
+
+  function currentEpisodeId(sessionId: SessionId): EpisodeId | undefined {
+    return latestEpisodeBySession.get(sessionId)?.episodeId;
   }
 
   async function handleBeforePrompt(
@@ -870,8 +947,11 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       const routedSessionId = (packet.query.sessionId ?? sessionId) as SessionId;
       const routedEpisodeId = packet.query.episodeId as EpisodeId | undefined;
       if (routedEpisodeId) {
-        openEpisodeBySession.set(routedSessionId, routedEpisodeId);
-        openEpisodeBySession.set(sessionId, routedEpisodeId);
+        const seq = ++episodeBindingSeq;
+        rememberEpisodeBinding(routedSessionId, routedEpisodeId, ctx, prompt, seq);
+        if (routedSessionId !== sessionId) {
+          rememberEpisodeBinding(sessionId, routedEpisodeId, ctx, prompt, seq);
+        }
       }
 
       opts.log.info("memos.onTurnStart", {
@@ -977,13 +1057,14 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
 
       // Resolve (or lazily open) the target episode. Three cases:
       //   1. `before_prompt_build` already ran this turn → we have the
-      //      routed episodeId in `openEpisodeBySession`.
+      //      routed episode binding for this run/user turn.
       //   2. The host skipped `before_prompt_build` (e.g. /new with no
       //      prompt build) → create an episode on the fly so the write
       //      path has a real row to hang traces on.
       //   3. Any failure here falls back to opening a new episode —
       //      better to capture under a fresh id than to drop the turn.
-      let episodeId = openEpisodeBySession.get(sessionId);
+      let binding = findEpisodeBinding(sessionId, ctx, turn.userText);
+      let episodeId = binding?.episodeId;
       if (!episodeId) {
         if (isSubagentAnnouncement) {
           opts.log.info("memos.agent_end.skipped", {
@@ -997,7 +1078,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           sessionId,
           userMessage: turn.userText,
         });
-        openEpisodeBySession.set(sessionId, episodeId);
+        binding = rememberEpisodeBinding(sessionId, episodeId, ctx, turn.userText);
       }
 
       const turnResult: TurnResultDTO = {
@@ -1032,12 +1113,13 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         pendingSubagentSessions.add(sessionId);
       } else {
         pendingSubagentSessions.delete(sessionId);
-        openEpisodeBySession.delete(sessionId);
+        forgetEpisodeBinding(binding);
       }
 
       if (isExplicitOneShotSessionKey(ctx.sessionKey) && !hasSubagentSpawn) {
         await opts.core.closeSession(sessionId);
         messageCursor.delete(sessionId);
+        forgetSessionBindings(sessionId);
         lastUserTextBySession.delete(sessionId);
       }
     } catch (err) {
@@ -1078,7 +1160,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
 
       opts.core.recordToolOutcome({
         sessionId,
-        episodeId: openEpisodeBySession.get(sessionId),
+        episodeId: currentEpisodeId(sessionId),
         tool: event.toolName,
         success: !event.error,
         errorCode: event.error,
@@ -1128,7 +1210,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       }
       await opts.core.closeSession(sessionId);
       messageCursor.delete(sessionId);
-      openEpisodeBySession.delete(sessionId);
+      forgetSessionBindings(sessionId);
       lastUserTextBySession.delete(sessionId);
       opts.log.debug("memos.session.ended", {
         sessionId: event.sessionId,
@@ -1159,7 +1241,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       ctx,
       ts: now(),
       parentSessionId,
-      parentEpisodeId: parentSessionId ? openEpisodeBySession.get(parentSessionId) : undefined,
+      parentEpisodeId: parentSessionId ? currentEpisodeId(parentSessionId) : undefined,
     });
     if (parentSessionId) pendingSubagentSessions.add(parentSessionId);
     opts.log.debug("memos.subagent.spawned", {

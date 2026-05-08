@@ -35,10 +35,12 @@ import { toPacket, renderSnippetForDebug } from "./injector.js";
 import { llmFilterCandidates } from "./llm-filter.js";
 import { rank, type RankedCandidate } from "./ranker.js";
 import { runTier1 } from "./tier1-skill.js";
+import { runTier2Experience } from "./tier2-experience.js";
 import { runTier2 } from "./tier2-trace.js";
 import { runTier3 } from "./tier3-world.js";
 import type {
   EpisodeCandidate,
+  ExperienceCandidate,
   RetrievalCtx,
   RetrievalDeps,
   RetrievalResult,
@@ -259,6 +261,18 @@ async function runAll(
           )
         : Promise.resolve({ traces: [], episodes: [] });
 
+    const tier2ExperiencePromise: Promise<ExperienceCandidate[]> =
+      wantTier2 && !noUsableChannel
+        ? runTier2Experience(
+            { repos: deps.repos, config: deps.config },
+            {
+              queryVec,
+              ftsMatch: compiled.ftsMatch,
+              patternTerms: compiled.patternTerms,
+            },
+          )
+        : Promise.resolve([]);
+
     const tier3Start = Date.now();
     const tier3Promise: Promise<WorldModelCandidate[]> =
       wantTier3 && !noUsableChannel
@@ -272,9 +286,10 @@ async function runAll(
           )
         : Promise.resolve([]);
 
-    const [tier1, tier2, tier3] = await Promise.all([
+    const [tier1, tier2, tier2Experiences, tier3] = await Promise.all([
       tier1Promise,
       tier2Promise,
+      tier2ExperiencePromise,
       tier3Promise,
     ]);
 
@@ -284,11 +299,16 @@ async function runAll(
 
     const fuseStart = Date.now();
     const rawCandidateCount =
-      tier1.length + tier2.traces.length + tier2.episodes.length + tier3.length;
+      tier1.length +
+      tier2.traces.length +
+      tier2.episodes.length +
+      tier2Experiences.length +
+      tier3.length;
     const ranked = rank({
       tier1,
       tier2Traces: tier2.traces,
       tier2Episodes: tier2.episodes,
+      tier2Experiences,
       tier3,
       limit: plan.limit,
       config: deps.config,
@@ -296,7 +316,9 @@ async function runAll(
     });
     const mechanicalRanked = ctx.reason !== "decision_repair" &&
       requiresKeywordConfirmation(compiled.text)
-      ? ranked.ranked.filter(hasKeywordChannel)
+      ? ranked.ranked.filter((candidate) =>
+          bypassesKeywordConfirmation(candidate) || hasKeywordChannel(candidate)
+        )
       : ranked.ranked;
     const fuseLatencyMs = Date.now() - fuseStart;
 
@@ -384,7 +406,7 @@ async function runAll(
       sessionId,
       episodeId,
       tier1Count: tier1.length,
-      tier2Count: tier2.traces.length + tier2.episodes.length,
+      tier2Count: tier2.traces.length + tier2.episodes.length + tier2Experiences.length,
       tier3Count: tier3.length,
       tier1LatencyMs,
       tier2LatencyMs,
@@ -413,6 +435,7 @@ async function runAll(
       tier1: tier1.length,
       tier2: tier2.traces.length,
       tier2Ep: tier2.episodes.length,
+      tier2Experience: tier2Experiences.length,
       tier3: tier3.length,
       kept: packet.snippets.length,
       totalMs: stats.totalLatencyMs,
@@ -506,6 +529,11 @@ function hasKeywordChannel(candidate: RankedCandidate): boolean {
     channel.channel === "pattern" ||
     channel.channel === "structural"
   );
+}
+
+function bypassesKeywordConfirmation(candidate: RankedCandidate): boolean {
+  const refKind = candidate.candidate.refKind;
+  return refKind === "skill" || refKind === "world-model";
 }
 
 function approxTokens(s: string): number {

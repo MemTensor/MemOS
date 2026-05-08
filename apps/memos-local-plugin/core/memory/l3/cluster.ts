@@ -41,6 +41,7 @@ const TAG_REGEXES: Array<{ re: RegExp; tag: string }> = [
   { re: /\bgolang?\b/i, tag: "go" },
   { re: /\bjava\b|\bmaven\b|\bgradle\b/i, tag: "java" },
   { re: /\bpostgres|\bmysql|\bsqlite|\bredis/i, tag: "db" },
+  { re: /\b(?:sec\s*13f|13f|cusip|infotable|holdings?|accession|issuer|aum)\b/i, tag: "sec13f" },
   { re: /\bnetwork|\bdns\b|\bproxy\b|\btls\b|\bhttps?\b/i, tag: "network" },
   { re: /\bgit\b|\bgithub\b|\bgitlab\b/i, tag: "git" },
   { re: /\bkubernetes|\bk8s\b|\bhelm\b/i, tag: "k8s" },
@@ -55,6 +56,7 @@ const TOOL_REGEXES: Array<{ re: RegExp; tag: string }> = [
   { re: /\bapt(?:-get)? install|\bapk add|\byum install/i, tag: "sysdep" },
   { re: /\bdocker build|\bdocker run\b/i, tag: "docker-cli" },
   { re: /\bgit (?:clone|push|pull|checkout)\b/i, tag: "git-cli" },
+  { re: /\b(?:sec-api|edgar|filing|xml|csv|parser)\b/i, tag: "sec-tooling" },
 ];
 
 export function domainKeyOf(policy: PolicyRow): { key: PolicyClusterKey; tags: string[] } {

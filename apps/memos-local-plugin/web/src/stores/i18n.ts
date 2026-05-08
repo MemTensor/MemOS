@@ -548,7 +548,7 @@ const en = {
   "tasks.skillReason.queued.rewardPending":
     "Reward scoring not yet complete; skill pipeline will start after scoring.",
   "tasks.skillReason.queued.policyPending":
-    "Experience is not yet active — needs more supporting tasks to crystallize into a skill (current support: {support}, required: ≥ 3).",
+    "Experience is not yet active — needs more supporting tasks to crystallize into a skill (current support: {support}, required: ≥ {skillMinSupport}).",
   "tasks.skillReason.queued.ready":
     "Experience is ready (gain={gain}, support={support}); skill crystallization will trigger automatically after the next reward scoring.",
   "tasks.skillReason.skipped":
@@ -556,7 +556,7 @@ const en = {
   "tasks.skillReason.not_generated.belowThreshold":
     "Task score R={rTask} is below the induction threshold (≥ {threshold}) — the conversation was normal, but not strong enough to generalize into an L2 experience; similar tasks will accumulate over time.",
   "tasks.skillReason.not_generated.noPolicy":
-    "No L2 experience induced yet — a single task cannot generalize across tasks; requires at least 2 similar tasks (minEpisodesForInduction) with V ≥ 0.1 to trigger L2 induction, then ≥ 3 supporting tasks to crystallize into a skill.",
+    "No L2 experience induced yet — requires at least {minEpisodesForInduction} similar task(s) (minEpisodesForInduction) with V ≥ {minTraceValue} to trigger L2 induction, then support ≥ {skillMinSupport} and gain ≥ {skillMinGain} to crystallize into a skill.",
   "tasks.skillReason.generated":
     "Skill \"{skillName}\" crystallized from experience {policyId}.",
   "tasks.skillReason.upgraded":
@@ -741,6 +741,45 @@ const en = {
     "Found legacy {agent} DB at {path}. Candidates — traces: {traces}, skills: {skills}, tasks: {tasks}.",
   "import.migrate.notFoundAt": "No legacy database found at {path}.",
   "import.migrate.notFound": "No legacy database found.",
+  "import.hermes.title": "Import Hermes native memories",
+  "import.hermes.desc":
+    "Read ~/.hermes/memories/MEMORY.md and import each entry separated by a single § line into this memory plugin.",
+  "import.hermes.scan": "Scan native memory file",
+  "import.hermes.run": "Import native memories",
+  "import.hermes.stop": "Stop import",
+  "import.hermes.running": "Importing Hermes native memories…",
+  "import.hermes.stopping": "Stopping after the current batch…",
+  "import.hermes.found": "Found {total} native Hermes memories at {path}.",
+  "import.hermes.notFoundAt": "No Hermes native memory file found at {path}.",
+  "import.hermes.progress":
+    "{done} / {total} processed · imported {imported}, skipped {skipped}",
+  "import.hermes.done": "Imported {imported}; skipped {skipped}.",
+  "import.hermes.stopped": "Import stopped. Imported {imported}; skipped {skipped}.",
+  "import.openclaw.title": "Import OpenClaw native memories",
+  "import.openclaw.desc":
+    "Read ~/.openclaw/agents/*/sessions/*.jsonl and import user/assistant messages into this memory plugin.",
+  "import.openclaw.scan": "Scan OpenClaw sessions",
+  "import.openclaw.run": "Import OpenClaw memories",
+  "import.openclaw.stop": "Stop import",
+  "import.openclaw.running": "Importing OpenClaw native memories…",
+  "import.openclaw.stopping": "Stopping after the current batch…",
+  "import.openclaw.found":
+    "Found {total} messages across {sessions} sessions / {files} files at {path}.",
+  "import.openclaw.notFoundAt": "No OpenClaw session JSONL files found under {path}.",
+  "import.openclaw.progress":
+    "{done} / {total} processed · imported {imported}, skipped {skipped}",
+  "import.openclaw.done": "Imported {imported}; skipped {skipped}.",
+  "import.openclaw.stopped": "Import stopped. Imported {imported}; skipped {skipped}.",
+  "import.native.metric.items": "Items",
+  "import.native.metric.messages": "messages",
+  "import.native.metric.memories": "memories",
+  "import.native.metric.sessions": "Sessions",
+  "import.native.metric.file": "Source file",
+  "import.native.metric.jsonl": "JSONL files",
+  "import.native.metric.memoryMd": "MEMORY.md",
+  "import.native.stat.imported": "Imported",
+  "import.native.stat.skipped": "Skipped",
+  "import.native.stat.processed": "Processed",
 
   // Admin.
   "admin.title": "Team administration",
@@ -1299,7 +1338,7 @@ const zh: Record<TranslationKey, string> = {
   "tasks.skillReason.queued.rewardPending":
     "Reward 评分尚未完成，技能流水线将在评分后启动。",
   "tasks.skillReason.queued.policyPending":
-    "经验尚未激活——需要更多支撑任务才能结晶为技能（当前 support={support}，需 ≥3）。",
+    "经验尚未激活——需要更多支撑任务才能结晶为技能（当前 support={support}，需 ≥{skillMinSupport}）。",
   "tasks.skillReason.queued.ready":
     "经验已就绪（gain={gain}，support={support}），技能结晶将在下次 reward 评分后自动触发。",
   "tasks.skillReason.skipped":
@@ -1307,7 +1346,7 @@ const zh: Record<TranslationKey, string> = {
   "tasks.skillReason.not_generated.belowThreshold":
     "任务评分 R={rTask} 未达到沉淀阈值 (≥ {threshold})——对话本身正常，只是还不够强到能泛化成 L2 经验；多做几个相似任务后会自动积累。",
   "tasks.skillReason.not_generated.noPolicy":
-    "暂未归纳出 L2 经验——单个任务无法跨任务泛化；需要至少 2 个相似任务（minEpisodesForInduction），且 V 值 ≥ 0.1 才能触发 L2 诱导，之后支撑 ≥ 3 个相似任务才会结晶为技能。",
+    "暂未归纳出 L2 经验——需要至少 {minEpisodesForInduction} 个相似任务（minEpisodesForInduction），且 V 值 ≥ {minTraceValue} 才能触发 L2 诱导，之后 support ≥ {skillMinSupport} 且 gain ≥ {skillMinGain} 才会结晶为技能。",
   "tasks.skillReason.generated":
     "技能「{skillName}」已从经验 {policyId} 结晶。",
   "tasks.skillReason.upgraded":
@@ -1484,6 +1523,42 @@ const zh: Record<TranslationKey, string> = {
     "在 {path} 找到 {agent} 旧数据库。可迁移条目 — 记忆：{traces}，技能：{skills}，任务：{tasks}。",
   "import.migrate.notFoundAt": "在 {path} 没有找到旧数据库。",
   "import.migrate.notFound": "没有找到旧数据库。",
+  "import.hermes.title": "导入 Hermes 原生记忆",
+  "import.hermes.desc":
+    "读取 ~/.hermes/memories/MEMORY.md，并把用单独一行 § 分隔的每条记忆导入当前记忆插件。",
+  "import.hermes.scan": "扫描原生记忆文件",
+  "import.hermes.run": "导入原生记忆",
+  "import.hermes.stop": "停止导入",
+  "import.hermes.running": "正在导入 Hermes 原生记忆…",
+  "import.hermes.stopping": "正在停止，当前批次完成后结束…",
+  "import.hermes.found": "在 {path} 找到 {total} 条 Hermes 原生记忆。",
+  "import.hermes.notFoundAt": "在 {path} 没有找到 Hermes 原生记忆文件。",
+  "import.hermes.progress": "已处理 {done} / {total} · 已导入 {imported}，跳过 {skipped}",
+  "import.hermes.done": "导入完成：已导入 {imported}，跳过 {skipped}。",
+  "import.hermes.stopped": "导入已停止：已导入 {imported}，跳过 {skipped}。",
+  "import.openclaw.title": "导入 OpenClaw 原生记忆",
+  "import.openclaw.desc":
+    "读取 ~/.openclaw/agents/*/sessions/*.jsonl，把其中的 user/assistant 消息导入当前记忆插件。",
+  "import.openclaw.scan": "扫描 OpenClaw 会话",
+  "import.openclaw.run": "导入 OpenClaw 记忆",
+  "import.openclaw.stop": "停止导入",
+  "import.openclaw.running": "正在导入 OpenClaw 原生记忆…",
+  "import.openclaw.stopping": "正在停止，当前批次完成后结束…",
+  "import.openclaw.found": "在 {path} 下找到 {files} 个文件、{sessions} 个会话，共 {total} 条消息。",
+  "import.openclaw.notFoundAt": "在 {path} 下没有找到 OpenClaw 会话 JSONL 文件。",
+  "import.openclaw.progress": "已处理 {done} / {total} · 已导入 {imported}，跳过 {skipped}",
+  "import.openclaw.done": "导入完成：已导入 {imported}，跳过 {skipped}。",
+  "import.openclaw.stopped": "导入已停止：已导入 {imported}，跳过 {skipped}。",
+  "import.native.metric.items": "条目",
+  "import.native.metric.messages": "消息",
+  "import.native.metric.memories": "记忆",
+  "import.native.metric.sessions": "会话",
+  "import.native.metric.file": "来源文件",
+  "import.native.metric.jsonl": "JSONL 文件",
+  "import.native.metric.memoryMd": "MEMORY.md",
+  "import.native.stat.imported": "已导入",
+  "import.native.stat.skipped": "跳过",
+  "import.native.stat.processed": "已处理",
 
   "admin.title": "团队管理",
   "admin.subtitle": "管理团队分享的用户、群组与待审批。",

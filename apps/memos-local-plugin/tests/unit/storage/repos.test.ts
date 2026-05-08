@@ -178,6 +178,16 @@ describe("storage/repos — happy paths", () => {
         statusIn: ["active"],
       });
       expect(hits.map((h) => h.id)).toEqual(["p_active"]);
+
+      const textHits = repos.policies.searchByText('"active"', 5, {
+        statusIn: ["active"],
+      });
+      expect(textHits.map((h) => h.id)).toEqual(["p_active"]);
+
+      const patternHits = repos.policies.searchByPattern(["act"], 5, {
+        statusIn: ["active"],
+      });
+      expect(patternHits.map((h) => h.id)).toEqual(["p_active"]);
     } finally {
       cleanup();
     }

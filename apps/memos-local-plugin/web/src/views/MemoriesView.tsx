@@ -53,6 +53,7 @@ import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
 import { Pager } from "../components/Pager";
 import { ShareScopePill } from "../components/ShareScopePill";
+import { Markdown } from "../components/Markdown";
 import { route } from "../stores/router";
 import { clearEntryId } from "../stores/cross-link";
 import type { TraceDTO } from "../api/types";
@@ -765,7 +766,7 @@ function ToolCallCard({
               {t("tasks.chat.tool.assistantTextBefore")}
             </span>
           </summary>
-          <pre class="chat-item__tool-pre">{clipPayload(assistantTextBefore, 4000)}</pre>
+          <Markdown text={clipPayload(assistantTextBefore, 4000)} />
         </details>
       )}
       {thinkingBefore && (
@@ -776,7 +777,7 @@ function ToolCallCard({
               {t("tasks.chat.role.thinking")}
             </span>
           </summary>
-          <pre class="chat-item__tool-pre">{clipPayload(thinkingBefore, 4000)}</pre>
+          <Markdown text={clipPayload(thinkingBefore, 4000)} />
         </details>
       )}
       {inputStr && (
@@ -1145,9 +1146,7 @@ function TraceDrawer({
                   <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                     {t("memories.field.user")}
                   </div>
-                  <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
-                    {head.userText}
-                  </pre>
+                  <Markdown text={head.userText} />
                 </section>
               )}
 
@@ -1346,9 +1345,7 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
                     <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                       {t("tasks.chat.role.thinking")}
                     </div>
-                    <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
-                      {stepThinking}
-                    </pre>
+                    <Markdown text={stepThinking} />
                   </div>
                 )}
                 {tools.length > 0 && (
@@ -1363,9 +1360,7 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
                     <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                       {t("memories.field.assistant")}
                     </div>
-                    <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
-                      {tr.agentText}
-                    </pre>
+                    <Markdown text={tr.agentText} />
                   </div>
                 )}
                 {tr.reflection && (
@@ -1373,9 +1368,7 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
                     <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                       {t("memories.field.takeaway")}
                     </div>
-                    <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
-                      {tr.reflection}
-                    </pre>
+                    <Markdown text={tr.reflection} />
                   </div>
                 )}
               </div>
