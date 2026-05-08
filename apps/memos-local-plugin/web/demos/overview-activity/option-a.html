@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <title>方案 A · 友好事件流 — 系统总览 demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+  <div class="demo-frame">
+    <div class="demo-banner">
+      <div class="demo-banner__title">
+        <span class="badge">DEMO</span>
+        方案 A · 友好事件流
+      </div>
+      <nav class="demo-banner__nav">
+        <a href="index.html">三方案对比</a>
+        <a class="is-active" href="option-a.html">A</a>
+        <a href="option-b.html">B</a>
+        <a href="option-c.html">C</a>
+        <span class="demo-banner__theme" id="theme-toggle"></span>
+      </nav>
+    </div>
+
+    <div id="overview-header"></div>
+
+    <section class="card">
+      <div class="card__header">
+        <div>
+          <h3 class="card__title">实时活动</h3>
+          <p class="card__subtitle">算法核心最近发生的事，按时间倒序排列。</p>
+        </div>
+        <div class="card__actions">
+          <span style="font-size:var(--fs-xs);color:var(--fg-muted)">点击任意一行可展开原始 payload</span>
+        </div>
+      </div>
+      <div id="feed" class="feed" role="log" aria-live="polite"></div>
+    </section>
+  </div>
+
+  <script src="shared.js"></script>
+  <script>
+    const { renderIcon, decorate, buildMockEvents, relativeTime, fmtClock,
+            renderOverviewHeader, CAT, installThemeToggle } = window.DEMO;
+
+    installThemeToggle(document.getElementById("theme-toggle"));
+    renderOverviewHeader(document.getElementById("overview-header"));
+
+    // Newest first, cap at 12 (matches the real OverviewView behaviour).
+    const events = buildMockEvents()
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, 12)
+      .map(decorate);
+
+    const feed = document.getElementById("feed");
+    feed.innerHTML = events.map((e) => `
+      <div class="feed__item cat--${e.cat} ${e.tone !== "info" ? "tone--" + e.tone : ""}"
+           role="button" tabindex="0"
+           data-seq="${e.seq}"
+           title="${e.type}\n${fmtClock(e.ts)}\n${escapeHtml(JSON.stringify(e.payload, null, 2))}">
+        <div class="feed__icon">${renderIcon(e.icon)}</div>
+        <div class="feed__main">
+          <div class="feed__title">
+            <span>${e.title}</span>
+            <span class="feed__cat">${CAT[e.cat].name}</span>
+          </div>
+          <div class="feed__detail">${e.detail}</div>
+          <div class="feed__raw">${escapeHtml(JSON.stringify(e.payload, null, 2))}</div>
+        </div>
+        <div class="feed__time" data-ts="${e.ts}">${relativeTime(e.ts)}</div>
+      </div>
+    `).join("");
+
+    // Click row → expand inline JSON. Mirrors the "power user" affordance.
+    feed.addEventListener("click", (ev) => {
+      const item = ev.target.closest(".feed__item");
+      if (item) item.classList.toggle("is-open");
+    });
+    feed.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      const item = ev.target.closest(".feed__item");
+      if (item) { ev.preventDefault(); item.classList.toggle("is-open"); }
+    });
+
+    // Refresh relative timestamps every 10s.
+    setInterval(() => {
+      document.querySelectorAll(".feed__time").forEach((el) => {
+        const ts = Number(el.dataset.ts);
+        el.textContent = relativeTime(ts);
+      });
+    }, 10_000);
+
+    // Simulate a brand-new event arriving every ~6s so the demo "feels"
+    // alive — handy for showing the slide-in animation.
+    let injected = 0;
+    const SIM_TYPES = [
+      "trace.created", "retrieval.tier1.hit", "feedback.classified",
+      "l2.candidate_added", "skill.eta_updated", "reward.computed",
+    ];
+    const SIM_PAYLOAD = {
+      "trace.created":         () => ({ traceId: "tr_" + rand(), episodeId: "ep_a1c2" }),
+      "retrieval.tier1.hit":   () => ({ count: 3 + Math.floor(Math.random()*7), ms: 30 + Math.floor(Math.random()*60) }),
+      "feedback.classified":   () => ({ tone: ["satisfied","neutral","puzzled"][Math.floor(Math.random()*3)] }),
+      "l2.candidate_added":    () => ({ signature: "sig-" + rand() }),
+      "skill.eta_updated":     () => ({ skillId: "sk_" + rand() }),
+      "reward.computed":       () => ({ rHuman: +(Math.random()).toFixed(2), source: "implicit" }),
+    };
+    function rand() { return Math.random().toString(36).slice(2, 6); }
+    setInterval(() => {
+      const type = SIM_TYPES[Math.floor(Math.random() * SIM_TYPES.length)];
+      const payload = SIM_PAYLOAD[type]();
+      const evt = decorate({ seq: 1000 + (++injected), ts: Date.now(), type, payload });
+      const html = `
+        <div class="feed__item feed__item--new cat--${evt.cat} ${evt.tone !== "info" ? "tone--" + evt.tone : ""}"
+             role="button" tabindex="0"
+             data-seq="${evt.seq}"
+             title="${evt.type}\n${fmtClock(evt.ts)}\n${escapeHtml(JSON.stringify(evt.payload, null, 2))}">
+          <div class="feed__icon">${renderIcon(evt.icon)}</div>
+          <div class="feed__main">
+            <div class="feed__title">
+              <span>${evt.title}</span>
+              <span class="feed__cat">${CAT[evt.cat].name}</span>
+            </div>
+            <div class="feed__detail">${evt.detail}</div>
+            <div class="feed__raw">${escapeHtml(JSON.stringify(evt.payload, null, 2))}</div>
+          </div>
+          <div class="feed__time" data-ts="${evt.ts}">刚刚</div>
+        </div>
+      `;
+      feed.insertAdjacentHTML("afterbegin", html);
+      // Cap at 12, drop oldest.
+      while (feed.children.length > 12) feed.removeChild(feed.lastElementChild);
+    }, 6_000);
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
+  </script>
+</body>
+</html>
