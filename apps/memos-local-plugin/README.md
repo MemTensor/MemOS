@@ -68,63 +68,30 @@ Upgrading or uninstalling the plugin **never** touches `data/`, `skills/`,
 
 ## Quick start
 
-```bash
-# 1) Install the npm package
-npm install -g @memtensor/memos-local-plugin
+Use the installer script to deploy or upgrade the plugin. Do not install the
+package directly with `npm install`; the script downloads the package, deploys it
+to the right agent directory, installs production dependencies, writes the
+initial `config.yaml`, and restarts the agent runtime when needed.
 
-# 2) Run the install script for your agent
-memos-local-plugin install openclaw      # or: hermes
-# (this is a thin wrapper around install.sh)
-
-# 3) Edit your config (optional)
-$EDITOR ~/.openclaw/memos-plugin/config.yaml
-
-# 4) Open the viewer (started automatically by the agent on first turn)
-open http://127.0.0.1:18910/
-```
-
-For the full hands-on walkthrough see [`site/content/docs/getting-started.md`](./site/content/docs/getting-started.md).
-
-## Validating end-to-end
-
-Once everything is up, follow the scripted checklist in
-[`docs/FRONTEND-VALIDATION.md`](./docs/FRONTEND-VALIDATION.md): each line is
-"say X to the agent, expect Y on the viewer". Use it to convince yourself the
-loop (capture → reward → induce → crystallize → retrieve) is actually working.
-
-## Local development
+From this repository:
 
 ```bash
-# 1) Install workspace deps
-npm install
-
-# 2) Run unit tests
-npm test
-
-# 3) Develop the viewer
-npm run web:dev
-
-# 4) Develop the marketing/docs site (local preview only)
-npm run site:dev
-
-# 5) Type-check the whole core
-npm run lint
+cd apps/memos-local-plugin
+bash install.sh --version 2.0.0-beta.10
 ```
 
-## Releasing
-
-Every published version must ship with a release-note markdown:
+Or run against the latest published package:
 
 ```bash
-npm run release:new -- 2.0.0-beta.2
-# edits site/content/releases/2.0.0-beta.2.md
-npm run release:index            # regenerates site/content/releases/index.json
-npm run release:check            # CI: package.json version <-> release md
-npm publish
+bash install.sh
 ```
 
-See [`docs/RELEASE-PROCESS.md`](./docs/RELEASE-PROCESS.md).
+The installer auto-detects OpenClaw and Hermes. In an interactive terminal it
+asks which agent to install for; in non-interactive environments it installs for
+the detected agent(s). To test a local package before publishing, pass the
+tarball path instead of a registry version:
 
-## License
-
-MIT
+```bash
+npm pack
+bash install.sh --version ./memtensor-memos-local-plugin-2.0.0-beta.10.tgz
+```

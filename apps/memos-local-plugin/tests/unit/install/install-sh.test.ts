@@ -81,7 +81,7 @@ describe("install.sh — CLI surface", () => {
     expect(script).not.toContain('"extensions": ["./adapters/openclaw/index.ts"]');
   });
 
-  it("publishes package runtime output and viewer sources without docs, tests, or site", () => {
+  it("publishes package runtime output without docs, tests, or site", () => {
     const pkg = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as {
       files?: string[];
       main?: string;
@@ -92,8 +92,13 @@ describe("install.sh — CLI surface", () => {
     expect(pkg.scripts?.build).toContain("scripts/copy-runtime-assets.cjs");
     expect(pkg.openclaw?.extensions).toContain("./dist/adapters/openclaw/index.js");
     expect(pkg.files).toContain("dist");
-    expect(pkg.files).toContain("web");
-    expect(pkg.files).not.toContain("web/dist");
+    expect(pkg.files).toContain("web/dist");
+    expect(pkg.files).not.toContain("web");
+    expect(pkg.files).not.toContain("ARCHITECTURE.md");
+    expect(pkg.files).not.toContain("CHANGELOG.md");
+    expect(pkg.files).toContain("!**/ALGORITHMS.md");
+    expect(pkg.files).toContain("!**/*.map");
+    expect(pkg.files).toContain("!dist/tests/**");
     expect(pkg.files).not.toContain("docs");
     expect(pkg.files).not.toContain("tests");
     expect(pkg.files).not.toContain("site");
