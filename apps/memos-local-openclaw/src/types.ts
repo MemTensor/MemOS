@@ -312,6 +312,10 @@ export interface MemosLocalConfig {
     recencyHalfLifeDays?: number;
     /** Cap vector search to this many most recent chunks. 0 = no cap (search all; may get slower with 200k+ chunks). If you set a cap for performance, use a large value (e.g. 200000–300000) so older memories are still in the window; FTS always searches all. */
     vectorSearchMaxChunks?: number;
+    /** Max results for the Phase 1 quick recall pass (before LLM dedup). Default 3. */
+    autoRecallMaxResults?: number;
+    /** Min score threshold for the Phase 1 quick recall pass. Default 0.50. */
+    autoRecallMinScore?: number;
   };
   dedup?: {
     similarityThreshold?: number;
@@ -333,6 +337,8 @@ export const DEFAULTS = {
   maxResultsMax: 20,
   minScoreDefault: 0.45,
   minScoreFloor: 0.35,
+  autoRecallMaxResults: 3,
+  autoRecallMinScore: 0.50,
   rrfK: 60,
   mmrLambda: 0.7,
   recencyHalfLifeDays: 14,
