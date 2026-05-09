@@ -12,6 +12,7 @@
 import type {
   AgentKind,
   ApiLogDTO,
+  EpochMs,
   EpisodeId,
   EpisodeListItemDTO,
   FeedbackDTO,
@@ -21,11 +22,13 @@ import type {
   SessionId,
   SkillDTO,
   SkillId,
+  SubagentOutcomeDTO,
   ToolOutcomeDTO,
   TraceDTO,
   TurnInputDTO,
   TurnResultDTO,
   WorldModelDTO,
+  RuntimeNamespace,
 } from "./dto.js";
 import type { CoreEvent } from "./events.js";
 import type { LogRecord } from "./log-record.js";
@@ -37,6 +40,7 @@ export interface CoreHealth {
   version: string;
   uptimeMs: number;
   agent: AgentKind;
+  namespace?: RuntimeNamespace;
   paths: {
     home: string;
     config: string;
@@ -44,6 +48,12 @@ export interface CoreHealth {
     skills: string;
     logs: string;
   };
+  /**
+   * Optional host transport status. Hermes fills this at the HTTP
+   * server layer because the core itself does not own the Python ↔ Node
+   * stdio bridge.
+   */
+  bridge?: BridgeHealth;
   llm: ModelHealth;
   embedder: ModelHealth & { dim: number };
   /**
@@ -55,19 +65,54 @@ export interface CoreHealth {
   skillEvolver: ModelHealth & { inherited: boolean };
 }
 
+export type BridgeHealthStatus =
+  | "connected"
+  | "reconnecting"
+  | "disconnected"
+  | "unknown";
+
+export interface BridgeHealth {
+  status: BridgeHealthStatus;
+  lastOkAt: number | null;
+  lastErrorAt: number | null;
+  lastError: string | null;
+}
+
 /**
  * Per-model connectivity summary used by the viewer's Overview page.
- * `available` reflects whether the client is configured (non-null);
- * `lastOkAt` / `lastError` reflect the most recent **actual** call
- * outcome tracked by the runtime. A green dot means "called successfully
- * at least once and the last call was good"; red means "most recent
- * call failed" + the error text to surface in a tooltip.
+ *
+ * The viewer renders the slot in one of four colours, picked by
+ * comparing the timestamps below — most-recent event wins:
+ *
+ *   - **green** (`ok`)        : `lastOkAt` is the latest stamp →
+ *     primary provider answered directly.
+ *   - **yellow** (`fallback`) : `lastFallbackAt` is the latest stamp →
+ *     primary provider failed *but* the host LLM bridge rescued the
+ *     call. Only ever set on the LLM / skillEvolver slots; the
+ *     embedder has no fallback path so this stays `null`.
+ *   - **red** (`err`)         : `lastError.at` is the latest stamp →
+ *     primary provider failed and either no fallback was configured
+ *     or the fallback also failed. The accompanying `message` is
+ *     surfaced verbatim on the card.
+ *   - **idle / off**          : every timestamp is `null` → the
+ *     facade has not been called yet (idle) or no client is
+ *     configured at all (off).
+ *
+ * `lastError` is **sticky** — it is not cleared by a later success.
+ * The viewer's timestamp comparison naturally promotes a fresh
+ * success over a stale failure, while keeping the message available
+ * in case a subsequent failure flips the card back to red.
  */
 export interface ModelHealth {
   available: boolean;
   provider: string;
   model: string;
   lastOkAt: number | null;
+  /**
+   * Latest time the primary provider failed but the host LLM bridge
+   * answered successfully. Always `null` on the embedder slot.
+   */
+  lastFallbackAt: number | null;
   lastError: { at: number; message: string } | null;
 }
 
@@ -80,9 +125,16 @@ export interface MemoryCore {
   init(): Promise<void>;
   shutdown(): Promise<void>;
   health(): Promise<CoreHealth>;
+  /** Late-bind ARMS telemetry (called after config is available). */
+  bindTelemetry?(t: unknown): void;
 
   // ── session / episode ──
-  openSession(input: { agent: AgentKind; sessionId?: SessionId }): Promise<SessionId>;
+  openSession(input: {
+    agent: AgentKind;
+    sessionId?: SessionId;
+    meta?: Record<string, unknown>;
+    namespace?: RuntimeNamespace;
+  }): Promise<SessionId>;
   closeSession(sessionId: SessionId): Promise<void>;
   openEpisode(input: {
     sessionId: SessionId;
@@ -105,10 +157,18 @@ export interface MemoryCore {
    * call returns before repair runs and never throws on unknown sessions.
    */
   recordToolOutcome(outcome: ToolOutcomeDTO): void;
+  /**
+   * Record a parent-session delegation outcome. Subagent lifecycle hooks
+   * usually carry task/result metadata, not a full child transcript, so this
+   * appends the visible delegation task/result to the parent episode.
+   */
+  recordSubagentOutcome(
+    outcome: SubagentOutcomeDTO,
+  ): Promise<{ traceId: string; episodeId: EpisodeId }>;
 
   // ── memory queries ──
   searchMemory(query: RetrievalQueryDTO): Promise<RetrievalResultDTO>;
-  getTrace(id: string): Promise<TraceDTO | null>;
+  getTrace(id: string, namespace?: RuntimeNamespace): Promise<TraceDTO | null>;
   /**
    * Mutate a single trace's user-facing fields (role / summary /
    * body). Never touches algorithmic signals. Returns the updated
@@ -139,13 +199,13 @@ export interface MemoryCore {
   shareTrace(
     id: string,
     share: {
-      scope: "private" | "public" | "hub" | null;
+      scope: "private" | "local" | "public" | "hub" | null;
       target?: string | null;
       sharedAt?: number | null;
     },
   ): Promise<TraceDTO | null>;
-  getPolicy(id: string): Promise<PolicyDTO | null>;
-  getWorldModel(id: string): Promise<WorldModelDTO | null>;
+  getPolicy(id: string, namespace?: RuntimeNamespace): Promise<PolicyDTO | null>;
+  getWorldModel(id: string, namespace?: RuntimeNamespace): Promise<WorldModelDTO | null>;
   /**
    * List L2 policies ("经验") — newest-first. The viewer uses this
    * for the Experiences panel.
@@ -156,6 +216,11 @@ export interface MemoryCore {
     offset?: number;
     q?: string;
   }): Promise<PolicyDTO[]>;
+  /** Total policy rows matching the same filter (no limit/offset). */
+  countPolicies(input?: {
+    status?: PolicyDTO["status"];
+    q?: string;
+  }): Promise<number>;
   /**
    * List L3 world models ("世界环境知识") — newest-first.
    */
@@ -163,7 +228,10 @@ export interface MemoryCore {
     limit?: number;
     offset?: number;
     q?: string;
+    namespace?: RuntimeNamespace;
   }): Promise<WorldModelDTO[]>;
+  /** Total world-model rows matching the same filter. */
+  countWorldModels(input?: { q?: string }): Promise<number>;
   /** Transition a policy through candidate → active → archived. */
   setPolicyStatus(
     id: string,
@@ -194,7 +262,7 @@ export interface MemoryCore {
   sharePolicy(
     id: string,
     share: {
-      scope: "private" | "public" | "hub" | null;
+      scope: "private" | "local" | "public" | "hub" | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -206,7 +274,7 @@ export interface MemoryCore {
   shareWorldModel(
     id: string,
     share: {
-      scope: "private" | "public" | "hub" | null;
+      scope: "private" | "local" | "public" | "hub" | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -249,7 +317,9 @@ export interface MemoryCore {
     limit?: number;
     offset?: number;
   }): Promise<EpisodeListItemDTO[]>;
-  timeline(input: { episodeId: EpisodeId }): Promise<TraceDTO[]>;
+  /** Total episode rows matching the same filter (no limit/offset). */
+  countEpisodes(input?: { sessionId?: SessionId }): Promise<number>;
+  timeline(input: { episodeId: EpisodeId; namespace?: RuntimeNamespace }): Promise<TraceDTO[]>;
   /**
    * Reverse-chronological trace listing for the Memories viewer.
    *
@@ -270,7 +340,15 @@ export interface MemoryCore {
     offset?: number;
     sessionId?: SessionId;
     q?: string;
+    /**
+     * When true, paginate by distinct `(episodeId, turnId)` groups so
+     * one user turn (query + tool sub-steps + reply) counts as one
+     * memory. Returns all traces belonging to the paginated turns.
+     */
+    groupByTurn?: boolean;
   }): Promise<TraceDTO[]>;
+  /** Total trace rows matching the same filter (no limit/offset). */
+  countTraces(input?: { sessionId?: SessionId; q?: string; groupByTurn?: boolean }): Promise<number>;
 
   /**
    * Paged listing of the rich api_logs table ({@link ApiLogDTO}).
@@ -279,13 +357,25 @@ export interface MemoryCore {
    */
   listApiLogs(input?: {
     toolName?: string;
+    toolNames?: readonly string[];
     limit?: number;
     offset?: number;
   }): Promise<{ logs: ApiLogDTO[]; total: number }>;
 
   // ── skills ──
-  listSkills(input?: { status?: SkillDTO["status"]; limit?: number }): Promise<SkillDTO[]>;
-  getSkill(id: SkillId): Promise<SkillDTO | null>;
+  listSkills(input?: { status?: SkillDTO["status"]; limit?: number; namespace?: RuntimeNamespace }): Promise<SkillDTO[]>;
+  /** Total skill rows matching the same filter (no limit). */
+  countSkills(input?: { status?: SkillDTO["status"] }): Promise<number>;
+  getSkill(id: SkillId, opts?: {
+    recordUse?: boolean;
+    recordTrial?: boolean;
+    sessionId?: SessionId;
+    episodeId?: EpisodeId;
+    traceId?: string;
+    turnId?: EpochMs;
+    toolCallId?: string;
+    namespace?: RuntimeNamespace;
+  }): Promise<SkillDTO | null>;
   archiveSkill(id: SkillId, reason?: string): Promise<void>;
   /**
    * Hard-delete a skill row. Distinct from {@link archiveSkill}, which
@@ -309,7 +399,7 @@ export interface MemoryCore {
   shareSkill(
     id: SkillId,
     share: {
-      scope: "private" | "public" | "hub" | null;
+      scope: "private" | "local" | "public" | "hub" | null;
       target?: string | null;
       sharedAt?: number | null;
     },

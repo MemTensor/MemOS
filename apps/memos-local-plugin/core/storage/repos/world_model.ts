@@ -11,18 +11,25 @@ import {
   buildPageClauses,
   fromBlob,
   fromJsonText,
+  normalizeShareForStorage,
+  ownerFieldsFromRaw,
+  ownerParamsFromRow,
   toBlob,
   toJsonText,
 } from "./_helpers.js";
 
 const COLUMNS = [
   "id",
+  "owner_agent_kind",
+  "owner_profile_id",
+  "owner_workspace_id",
   "title",
   "body",
   "policy_ids_json",
   "vec",
   "created_at",
   "updated_at",
+  "version",
   "structure_json",
   "domain_tags_json",
   "confidence",
@@ -38,6 +45,9 @@ const COLUMNS = [
 
 export interface WorldSearchMeta {
   title: string;
+  owner_agent_kind?: string;
+  owner_profile_id?: string;
+  owner_workspace_id?: string | null;
 }
 
 export function makeWorldModelRepo(db: StorageDb) {
@@ -114,6 +124,9 @@ export function makeWorldModelRepo(db: StorageDb) {
         updated_at: patch.updatedAt,
         vec: toBlob(patch.vec),
       });
+      db.prepare<{ id: string }>(
+        `UPDATE world_model SET version=version + 1 WHERE id=@id`,
+      ).run({ id });
     },
 
     updateConfidence(id: WorldModelId, confidence: number, updatedAt: number): void {
@@ -141,6 +154,11 @@ export function makeWorldModelRepo(db: StorageDb) {
       return db.prepare<unknown, RawWorldRow>(sql).all().map(mapRow);
     },
 
+    count(): number {
+      const sql = `SELECT COUNT(*) AS n FROM world_model`;
+      return db.prepare<unknown, { n: number }>(sql).get()?.n ?? 0;
+    },
+
     searchByVector(
       query: EmbeddingVector,
       k: number,
@@ -149,7 +167,7 @@ export function makeWorldModelRepo(db: StorageDb) {
       const where = opts.minConfidence !== undefined
         ? `vec IS NOT NULL AND confidence >= ${Number(opts.minConfidence)}`
         : "vec IS NOT NULL";
-      return scanAndTopK<WorldSearchMeta>(db, "world_model", ["title"], query, k, {
+      return scanAndTopK<WorldSearchMeta>(db, "world_model", ["title", "owner_agent_kind", "owner_profile_id", "owner_workspace_id"], query, k, {
         vecColumn: "vec",
         where,
         hardCap: opts.hardCap,
@@ -176,19 +194,22 @@ export function makeWorldModelRepo(db: StorageDb) {
           : "";
       const sql = `
         SELECT w.id    AS id,
-               w.title AS title
+               w.title AS title,
+               w.owner_agent_kind AS owner_agent_kind,
+               w.owner_profile_id AS owner_profile_id,
+               w.owner_workspace_id AS owner_workspace_id
           FROM world_model_fts f
           JOIN world_model     w ON w.id = f.world_id
          WHERE world_model_fts MATCH @match ${conf}
          ORDER BY rank
          LIMIT @k`;
       const rows = db
-        .prepare<typeof params, { id: string; title: string }>(sql)
+        .prepare<typeof params, { id: string; title: string; owner_agent_kind: string; owner_profile_id: string; owner_workspace_id: string | null }>(sql)
         .all(params);
       return rows.map((r, idx) => ({
         id: r.id,
         score: 1 / (idx + 1),
-        meta: { title: r.title },
+        meta: { title: r.title, owner_agent_kind: r.owner_agent_kind, owner_profile_id: r.owner_profile_id, owner_workspace_id: r.owner_workspace_id },
       }));
     },
 
@@ -221,18 +242,18 @@ export function makeWorldModelRepo(db: StorageDb) {
         whereParts.push(`confidence >= ${Number(opts.minConfidence)}`);
       }
       const sql = `
-        SELECT id, title
+        SELECT id, title, owner_agent_kind, owner_profile_id, owner_workspace_id
           FROM world_model
          WHERE ${whereParts.join(" AND ")}
          ORDER BY updated_at DESC
          LIMIT @k`;
       const rows = db
-        .prepare<typeof params, { id: string; title: string }>(sql)
+        .prepare<typeof params, { id: string; title: string; owner_agent_kind: string; owner_profile_id: string; owner_workspace_id: string | null }>(sql)
         .all(params);
       return rows.map((r, idx) => ({
         id: r.id,
         score: 1 / (idx + 1),
-        meta: { title: r.title },
+        meta: { title: r.title, owner_agent_kind: r.owner_agent_kind, owner_profile_id: r.owner_profile_id, owner_workspace_id: r.owner_workspace_id },
       }));
     },
 
@@ -271,7 +292,7 @@ export function makeWorldModelRepo(db: StorageDb) {
     updateShare(
       id: WorldModelId,
       share: {
-        scope: "private" | "public" | "hub" | null;
+        scope: "private" | "local" | "public" | "hub" | null;
         target?: string | null;
         sharedAt?: number | null;
       },
@@ -285,7 +306,7 @@ export function makeWorldModelRepo(db: StorageDb) {
         `UPDATE world_model SET share_scope=@share_scope, share_target=@share_target, shared_at=@shared_at WHERE id=@id`,
       ).run({
         id,
-        share_scope: share.scope,
+        share_scope: normalizeShareForStorage(share.scope),
         share_target: share.target ?? null,
         shared_at: share.sharedAt ?? null,
       });
@@ -317,11 +338,21 @@ export function makeWorldModelRepo(db: StorageDb) {
       const sql = `UPDATE world_model SET ${sets.join(", ")} WHERE id = @id`;
       db.prepare<typeof params>(sql).run(params);
     },
+
+    updateVector(id: WorldModelId, vec: EmbeddingVector): boolean {
+      const res = db.prepare<{ id: string; vec: Buffer; updated_at: number }>(
+        `UPDATE world_model SET vec=@vec, updated_at=@updated_at WHERE id=@id`,
+      ).run({ id, vec: toBlob(vec)!, updated_at: Date.now() });
+      return res.changes > 0;
+    },
   };
 }
 
 interface RawWorldRow {
   id: string;
+  owner_agent_kind: string;
+  owner_profile_id: string;
+  owner_workspace_id: string | null;
   title: string;
   body: string;
   policy_ids_json: string;
@@ -339,6 +370,7 @@ interface RawWorldRow {
   share_target: string | null;
   shared_at: number | null;
   edited_at: number | null;
+  version: number | null;
 }
 
 const EMPTY_STRUCTURE: WorldModelStructure = {
@@ -350,12 +382,14 @@ const EMPTY_STRUCTURE: WorldModelStructure = {
 function rowToParams(row: WorldModelRow): Record<string, unknown> {
   return {
     id: row.id,
+    ...ownerParamsFromRow(row),
     title: row.title,
     body: row.body,
     policy_ids_json: toJsonText(row.policyIds),
     vec: toBlob(row.vec),
     created_at: row.createdAt,
     updated_at: row.updatedAt,
+    version: row.version ?? 1,
     structure_json: toJsonText(row.structure ?? EMPTY_STRUCTURE),
     domain_tags_json: toJsonText(row.domainTags ?? []),
     confidence: row.confidence ?? 0.5,
@@ -363,7 +397,7 @@ function rowToParams(row: WorldModelRow): Record<string, unknown> {
     induced_by: row.inducedBy ?? "",
     status: row.status ?? "active",
     archived_at: row.archivedAt ?? null,
-    share_scope: row.share?.scope ?? null,
+    share_scope: normalizeShareForStorage(row.share?.scope),
     share_target: row.share?.target ?? null,
     shared_at: row.share?.sharedAt ?? null,
     edited_at: row.editedAt ?? null,
@@ -373,12 +407,14 @@ function rowToParams(row: WorldModelRow): Record<string, unknown> {
 function mapRow(r: RawWorldRow): WorldModelRow {
   return {
     id: r.id,
+    ...ownerFieldsFromRaw(r),
     title: r.title,
     body: r.body,
     policyIds: fromJsonText(r.policy_ids_json, []),
     vec: fromBlob(r.vec),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    version: r.version ?? 1,
     structure: fromJsonText<WorldModelStructure>(r.structure_json, EMPTY_STRUCTURE),
     domainTags: fromJsonText<string[]>(r.domain_tags_json, []),
     confidence: r.confidence,
@@ -389,7 +425,7 @@ function mapRow(r: RawWorldRow): WorldModelRow {
     share:
       r.share_scope != null
         ? {
-            scope: r.share_scope as "private" | "public" | "hub",
+            scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub",
             target: r.share_target,
             sharedAt: r.shared_at,
           }

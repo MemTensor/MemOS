@@ -170,6 +170,8 @@ export async function runTier1(
         eta: sk.eta,
         status: sk.status,
         invocationGuide: sk.invocationGuide,
+        sourcePolicyIds: sk.sourcePolicyIds ?? [],
+        updatedAt: sk.updatedAt,
         channels: state.channels,
         debug: { matchedChannels: state.channels.map((c) => c.channel) },
       });

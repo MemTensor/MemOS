@@ -29,6 +29,7 @@ import type {
   EpisodeSnapshot,
   EpisodeStartInput,
   EpisodeTurn,
+  EpisodeTurnInput,
   IntentDecision,
   SessionEventBus,
   SessionOpenInput,
@@ -54,6 +55,8 @@ export interface StartEpisodeInput {
   id?: EpisodeId;
   /** First user message. Required. */
   userMessage: string;
+  /** Adapter-provided event time for the first user turn. */
+  ts?: EpochMs;
   meta?: Record<string, unknown>;
 }
 
@@ -67,7 +70,7 @@ export interface SessionManager {
   pruneIdle(now?: EpochMs): SessionId[];
 
   startEpisode(input: StartEpisodeInput): Promise<EpisodeSnapshot>;
-  addTurn(episodeId: EpisodeId, turn: Omit<EpisodeTurn, "id" | "ts">): EpisodeTurn;
+  addTurn(episodeId: EpisodeId, turn: EpisodeTurnInput): EpisodeTurn;
   finalizeEpisode(episodeId: EpisodeId, input?: EpisodeFinalizeInput): EpisodeSnapshot;
   abandonEpisode(episodeId: EpisodeId, reason: string): EpisodeSnapshot;
   /** V7 §0.1 "revision" path — reopen a previously-closed episode. */
@@ -75,7 +78,9 @@ export interface SessionManager {
     episodeId: EpisodeId,
     reason: import("./types.js").TurnRelation,
   ): EpisodeSnapshot;
+  hydrateEpisode(snapshot: EpisodeSnapshot): EpisodeSnapshot;
   attachTraceIds(episodeId: EpisodeId, traceIds: string[]): void;
+  patchEpisodeMeta(episodeId: EpisodeId, metaPatch: Record<string, unknown>): EpisodeSnapshot;
 
   getEpisode(id: EpisodeId): EpisodeSnapshot | null;
   listEpisodes(sessionId: SessionId): EpisodeSnapshot[];
@@ -117,10 +122,16 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     deps.sessionsRepo.upsertIfMissing({
       id,
       agent: input.agent,
+      ownerAgentKind: stringMeta(input.meta, "ownerAgentKind") ?? input.agent,
+      ownerProfileId: stringMeta(input.meta, "ownerProfileId") ?? "default",
+      ownerWorkspaceId: stringMeta(input.meta, "ownerWorkspaceId") ?? null,
       startedAt: ts,
       lastSeenAt: ts,
       meta: input.meta ?? {},
     });
+    if (input.meta && Object.keys(input.meta).length > 0) {
+      deps.sessionsRepo.touchLastSeen(id, ts, input.meta);
+    }
     const row = deps.sessionsRepo.getById(id);
     if (!row) {
       throw new MemosError(ERROR_CODES.INTERNAL, "sessions.upsert inserted row but getById returned null", {
@@ -141,7 +152,34 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
 
   function closeSession(id: SessionId, reason = "explicit"): void {
     for (const ep of epm.listForSession(id)) {
-      if (ep.status === "open") epm.abandon(ep.id, `session_closed:${reason}`);
+      if (ep.status !== "open") continue;
+      // V7 §0.2 — a user-initiated session close (`/new`, `/quit`, the
+      // host shutting down cleanly) is **normal lifecycle**, NOT
+      // episode abandonment. Finalize the episode so the capture +
+      // reward pipelines run as if the user had completed their task:
+      //
+      //   - substantial conversations get LLM-scored → "已完成" badge
+      //   - trivial / single-turn episodes get re-stamped to
+      //     `closeReason="abandoned"` by reward.ts itself with a clear
+      //     human-readable `abandonReason` ("对话轮次不足，N 轮…")
+      //
+      // Crucially, this keeps the technical `session_closed:client`
+      // string out of the user-facing TasksView "已跳过" badge — that
+      // string was the source of the "为什么 /new 后立刻显示已跳过"
+      // confusion. True crash-orphans get a separate recovery path
+      // at plugin bootstrap (see `recoverOrphanedEpisodes` in
+      // `core/pipeline/memory-core.ts`).
+      if (isCompletedExchange(ep)) {
+        epm.finalize(ep.id, {
+          patchMeta: { sessionCloseReason: reason },
+        });
+        continue;
+      }
+      epm.patchMeta(ep.id, {
+        topicState: "paused",
+        pauseReason: `session_closed:${reason}`,
+        sessionCloseReason: reason,
+      });
     }
     live.delete(id);
     log.info("session.closed", { sessionId: id, reason });
@@ -188,8 +226,28 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
       });
     }
 
-    const intent = await deps.intentClassifier.classify(input.userMessage);
+    // Pre-allocate the episode id BEFORE the intent classifier runs so
+    // its LLM call (`session.intent.classify`) can stamp the resulting
+    // `system_model_status` audit row with this episode. Without this,
+    // the call fires before any id exists and the row shows up as a
+    // stand-alone entry in the Logs viewer chain view, divorced from
+    // the rest of the episode's pipeline activity.
+    //
+    // Safety:
+    //   - id minting is a pure string generation (no DB write yet);
+    //     the row is inserted later by `epm.start` which honours the
+    //     pre-supplied id (`input.id ?? ids.episode()` in
+    //     `episode-manager.ts:start`), so there is no double-mint.
+    //   - `IntentClassifier.classify` catches all internal errors and
+    //     returns a fallback decision instead of throwing, so the
+    //     pre-allocated id will reach the insert path on every
+    //     happy-path completion.
+    //   - Wall-clock timing of the `episodes` insert is unchanged —
+    //     the classify await dominates either way.
     const episodeId = (input.id ?? ids.episode()) as EpisodeId;
+    const intent = await deps.intentClassifier.classify(input.userMessage, {
+      episodeId,
+    });
 
     // Wrap the write+emit in a log context so downstream listeners inherit
     // the correlation ids without having to know them.
@@ -199,7 +257,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
         const startInput: EpisodeStartInput = {
           sessionId: input.sessionId,
           id: episodeId,
-          initialTurn: { role: "user", content: input.userMessage, meta: input.meta },
+          initialTurn: { role: "user", content: input.userMessage, ts: input.ts, meta: input.meta },
           meta: input.meta,
         };
         const snap = epm.start(startInput, intent);
@@ -249,11 +307,56 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     return snap;
   }
 
+  function hydrateEpisode(snapshot: EpisodeSnapshot): EpisodeSnapshot {
+    const snap = epm.hydrate(snapshot);
+    const session = getSession(snap.sessionId);
+    if (session && snap.status === "open") {
+      const cached = live.get(snap.sessionId);
+      if (cached) {
+        cached.openEpisodeCount = epm
+          .listForSession(snap.sessionId)
+          .filter((e) => e.status === "open").length;
+      }
+    }
+    return snap;
+  }
+
   function shutdown(reason: string): void {
     log.info("shutdown.begin", { reason });
-    for (const ep of epm.listOpen()) abandonEpisode(ep.id, `shutdown:${reason}`);
-    for (const id of Array.from(live.keys())) closeSession(id, `shutdown:${reason}`);
+    // Process-wide shutdown is normal lifecycle (host stopping cleanly,
+    // not a topic boundary). Pause open episodes so a restarted host can
+    // classify the next user turn against the same topic instead of
+    // prematurely triggering reflect/reward.
+    //
+    // First catch episodes whose session was already pruned from
+    // `live` (race: idle prune → process exit). closeSession's per-
+    // session loop wouldn't find them otherwise.
+    for (const ep of epm.listOpen()) {
+      if (!live.has(ep.sessionId)) {
+        if (isCompletedExchange(ep)) {
+          finalizeEpisode(ep.id, {
+            patchMeta: { sessionCloseReason: `shutdown:${reason}` },
+          });
+          continue;
+        }
+        epm.patchMeta(ep.id, {
+          topicState: "paused",
+          pauseReason: `shutdown:${reason}`,
+          sessionCloseReason: `shutdown:${reason}`,
+        });
+      }
+    }
+    // Then close every still-live session — closeSession's loop
+    // finalizes any remaining open episodes.
+    for (const id of Array.from(live.keys())) {
+      closeSession(id, `shutdown:${reason}`);
+    }
     log.info("shutdown.done", { reason });
+  }
+
+  function isCompletedExchange(ep: EpisodeSnapshot): boolean {
+    if (ep.traceIds.length > 0) return true;
+    return ep.turns.some((t) => t.role === "assistant" && t.content.trim().length > 0);
   }
 
   return {
@@ -269,7 +372,9 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     finalizeEpisode,
     abandonEpisode,
     reopenEpisode,
+    hydrateEpisode,
     attachTraceIds: epm.attachTraceIds,
+    patchEpisodeMeta: epm.patchMeta,
 
     getEpisode: epm.get,
     listEpisodes: epm.listForSession,
@@ -277,6 +382,11 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
 
     shutdown,
   };
+}
+
+function stringMeta(meta: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = meta?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 // Re-export helpers tests will want to use.

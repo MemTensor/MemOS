@@ -15,8 +15,9 @@
  *   - `userText`  = the original user message (shared context / state)
  *   - `agentText` = "" (the action is the tool call itself)
  *   - `toolCalls` = [single ToolCallDTO with input + output]
- *   - `agentThinking` = model thinking (first sub-step only, since
- *     the host provides thinking as a single blob)
+ *   - `agentThinking` = model thinking for the final response, when
+ *     the host provides a turn-level reasoning blob. Tool-call reasoning
+ *     lives on `toolCalls[].thinkingBefore`.
  *   - `meta.turnId` = the user turn's `ts`. Stable identifier shared
  *     by every sub-step that came from the same user message — the
  *     viewer uses it to collapse the row of sub-steps back into a
@@ -143,7 +144,7 @@ function segmentToSteps(
   // ever saw so downstream group_by still has something stable.
   const segTurnId: EpochMs = (turnId ?? turns[0]!.ts);
 
-  // ─── No tool calls → single step (backward compatible) ────────
+  // ─── No tool calls → single step ──────────────────────────────
   if (toolTurns.length === 0) {
     const assistantTexts = turns
       .filter((t) => t.role === "assistant")
@@ -196,7 +197,7 @@ function segmentToSteps(
       // provenance (episodeId) still links them together.
       userText: i === 0 ? userText : "",
       agentText: "",
-      agentThinking: i === 0 ? fullThinking : null,
+      agentThinking: !hasResponse && i === 0 ? fullThinking : null,
       toolCalls: [tc],
       rawReflection: null,
       depth,
@@ -218,7 +219,7 @@ function segmentToSteps(
       ts,
       userText: "",
       agentText: assistantText,
-      agentThinking: null,
+      agentThinking: fullThinking,
       toolCalls: [],
       rawReflection,
       depth,
@@ -258,20 +259,39 @@ function collectToolCallsFromMeta(turns: EpisodeTurn[]): ToolCallDTO[] {
 
 function toolCallFromTurn(turn: EpisodeTurn): ToolCallDTO | null {
   const meta = (turn.meta ?? {}) as Record<string, unknown>;
-  const name = typeof meta.tool === "string" ? meta.tool : typeof meta.name === "string" ? meta.name : "unknown_tool";
-  const startedAt = typeof meta.startedAt === "number" ? meta.startedAt : turn.ts;
-  const endedAt = typeof meta.endedAt === "number" ? meta.endedAt : turn.ts;
-  const input = meta.input ?? meta.args ?? undefined;
-  const errorCode = typeof meta.errorCode === "string" ? meta.errorCode : undefined;
-  const thinkingBefore = typeof meta.thinkingBefore === "string" ? meta.thinkingBefore : undefined;
+  const direct = coerceToolCall({
+    name: meta.name ?? meta.tool,
+    input: meta.input ?? meta.args,
+    output: turn.content || meta.output || meta.result,
+    errorCode: meta.errorCode,
+    toolCallId: meta.toolCallId,
+    startedAt: meta.startedAt,
+    endedAt: meta.endedAt,
+    thinkingBefore: meta.thinkingBefore,
+    assistantTextBefore: meta.assistantTextBefore,
+  });
+  const nested = firstToolCall(meta.toolCalls);
+  const fromContent = firstToolCall(parseJson(turn.content));
+  const fallback =
+    (direct && direct.name !== "unknown_tool" ? direct : null) ??
+    (nested ? { ...nested, output: nested.output ?? turn.content } : null) ??
+    direct ??
+    fromContent;
+
+  const tc = unwrapUnknownToolCall(fallback, turn.content);
+  if (tc) return tc;
+
   return {
-    name,
-    input,
+    name: "unknown_tool",
+    input: meta.input ?? meta.args ?? undefined,
     output: turn.content,
-    errorCode,
-    startedAt,
-    endedAt,
-    thinkingBefore,
+    errorCode: typeof meta.errorCode === "string" ? meta.errorCode : undefined,
+    toolCallId: typeof meta.toolCallId === "string" ? meta.toolCallId : undefined,
+    startedAt: typeof meta.startedAt === "number" ? meta.startedAt : undefined,
+    endedAt: typeof meta.endedAt === "number" ? meta.endedAt : undefined,
+    thinkingBefore: typeof meta.thinkingBefore === "string" ? meta.thinkingBefore : undefined,
+    assistantTextBefore:
+      typeof meta.assistantTextBefore === "string" ? meta.assistantTextBefore : undefined,
   };
 }
 
@@ -294,11 +314,48 @@ function coerceToolCall(raw: unknown): ToolCallDTO | null {
   const input = r.input ?? r.args ?? undefined;
   const output = r.output ?? r.result ?? undefined;
   const errorCode = typeof r.errorCode === "string" ? r.errorCode : undefined;
-  const startedAt =
-    typeof r.startedAt === "number" ? r.startedAt : Date.now();
-  const endedAt = typeof r.endedAt === "number" ? r.endedAt : startedAt;
+  const toolCallId = typeof r.toolCallId === "string" ? r.toolCallId : undefined;
+  const startedAt = typeof r.startedAt === "number" ? r.startedAt : undefined;
+  const endedAt = typeof r.endedAt === "number" ? r.endedAt : undefined;
   const thinkingBefore = typeof r.thinkingBefore === "string" ? r.thinkingBefore : undefined;
-  return { name, input, output, errorCode, startedAt, endedAt, thinkingBefore };
+  const assistantTextBefore = typeof r.assistantTextBefore === "string" ? r.assistantTextBefore : undefined;
+  return { name, input, output, errorCode, toolCallId, startedAt, endedAt, thinkingBefore, assistantTextBefore };
+}
+
+function firstToolCall(raw: unknown): ToolCallDTO | null {
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const tc = coerceToolCall(item);
+      if (tc) return tc;
+    }
+    return null;
+  }
+  return coerceToolCall(raw);
+}
+
+function unwrapUnknownToolCall(tc: ToolCallDTO | null, rawContent: string): ToolCallDTO | null {
+  if (!tc || tc.name !== "unknown_tool") return tc;
+
+  const nested =
+    firstToolCall(tc.output) ??
+    firstToolCall(parseJson(typeof tc.output === "string" ? tc.output : rawContent));
+  if (!nested || nested.name === "unknown_tool") return tc;
+
+  return {
+    ...nested,
+    thinkingBefore: nested.thinkingBefore ?? tc.thinkingBefore,
+    assistantTextBefore: nested.assistantTextBefore ?? tc.assistantTextBefore,
+  };
+}
+
+function parseJson(raw: string): unknown {
+  const s = raw.trim();
+  if (!s) return null;
+  try {
+    return JSON.parse(s) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 function depthFromMeta(meta: Record<string, unknown>): number {

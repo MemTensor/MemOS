@@ -22,6 +22,9 @@ const cfg: RetrievalConfig = {
   minTraceSim: 0.3,
   tagFilter: "auto",
   decayHalfLifeDays: 30,
+  llmFilterEnabled: false,
+  llmFilterMaxKeep: 4,
+  llmFilterMinCandidates: 1,
 };
 
 const qv: EmbeddingVector = Float32Array.from([1, 0, 0]);

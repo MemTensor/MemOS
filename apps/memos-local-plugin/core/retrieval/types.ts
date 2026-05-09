@@ -17,10 +17,14 @@ import type {
   ToolDrivenCtx,
   TurnStartCtx,
   EpochMs,
+  RuntimeNamespace,
 } from "../../agent-contract/dto.js";
 
 import type {
   EmbeddingVector,
+  FeedbackId,
+  PolicyId,
+  PolicyRow,
   SkillId,
   TraceId,
   WorldModelId,
@@ -103,6 +107,8 @@ export interface SkillCandidate extends TierCandidateBase {
   eta: number;
   status: SkillStatus;
   invocationGuide: string;
+  sourcePolicyIds?: PolicyId[];
+  updatedAt?: EpochMs;
 }
 
 /** Tier 2a — a single high-value trace. */
@@ -120,8 +126,8 @@ export interface TraceCandidate extends TierCandidateBase {
   agentText: string;
   /**
    * LLM-generated summary line (same string stored in
-   * `traces.summary`). `null` for rows written before migration 005.
-   * When present, renderers prefer it over `userText` — keeps the
+   * `traces.summary`). `null` when the summarizer failed open. When
+   * present, renderers prefer it over `userText` — keeps the
    * injection block skim-able.
    */
   summary: string | null;
@@ -142,6 +148,31 @@ export interface EpisodeCandidate extends TierCandidateBase {
   meanPriority: number;
 }
 
+/** Tier 2c - a typed user-feedback experience. */
+export interface ExperienceCandidate extends TierCandidateBase {
+  tier: "tier2";
+  refKind: "experience";
+  refId: PolicyId;
+  title: string;
+  trigger: string;
+  procedure: string;
+  verification: string;
+  boundary: string;
+  support: number;
+  gain: number;
+  status: "candidate" | "active" | "archived";
+  experienceType: NonNullable<PolicyRow["experienceType"]>;
+  evidencePolarity: NonNullable<PolicyRow["evidencePolarity"]>;
+  salience: number;
+  confidence: number;
+  skillEligible: boolean;
+  sourceEpisodeIds: EpisodeId[];
+  sourceFeedbackIds: FeedbackId[];
+  sourceTraceIds: TraceId[];
+  decisionGuidance: { preference: string[]; antiPattern: string[] };
+  updatedAt: EpochMs;
+}
+
 /** Tier 3 — a matched world-model snippet. */
 export interface WorldModelCandidate extends TierCandidateBase {
   tier: "tier3";
@@ -159,6 +190,7 @@ export type TierCandidate =
   | SkillCandidate
   | TraceCandidate
   | EpisodeCandidate
+  | ExperienceCandidate
   | WorldModelCandidate;
 
 // ─── Ranker / fused snippets ────────────────────────────────────────────────
@@ -350,6 +382,8 @@ export interface RetrievalRepos {
       status: SkillStatus;
       invocationGuide: string;
       eta: number;
+      sourcePolicyIds?: PolicyId[];
+      updatedAt?: EpochMs;
     } | null;
   };
 
@@ -418,8 +452,8 @@ export interface RetrievalRepos {
       userText: string;
       agentText: string;
       /**
-       * Optional LLM-generated summary for this trace. Nullable for
-       * rows written before migration 005.
+       * Optional LLM-generated summary for this trace. Nullable when
+       * the summarizer failed open at capture time.
        */
       summary?: string | null;
       reflection: string | null;
@@ -493,6 +527,131 @@ export interface RetrievalRepos {
       policyIds: string[];
     } | null;
   };
+
+  /**
+   * V7 §2.4.6 — minimal slice of the `policies` repo used to surface
+   * `decision_guidance` (preference / anti-pattern). Policies aren't
+   * directly tier-ranked; we look them up to attach guidance to the
+   * traces / skills already chosen by tiers 1 + 2.
+   *
+   * `list({status: "active"})` is called once per retrieval pass and
+   * the result is filtered in JS by `sourceEpisodeIds` / id matching.
+   * Active policy sets are bounded (typically < 200 per install) so
+   * the full scan is cheap and avoids a per-trace round-trip.
+   *
+   * Optional so unit-test fakes that don't care about guidance can
+   * skip wiring it. When undefined, retrieval simply emits no
+   * decision-guidance section.
+   */
+  policies?: {
+    searchByVector?: (
+      query: EmbeddingVector,
+      k: number,
+      opts?: {
+        statusIn?: Array<"candidate" | "active" | "archived">;
+        hardCap?: number;
+      },
+    ) => Array<{
+      id: string;
+      score: number;
+      meta?: {
+        title: string;
+        status: "candidate" | "active" | "archived";
+        support: number;
+        gain: number;
+        experience_type?: NonNullable<PolicyRow["experienceType"]>;
+        evidence_polarity?: NonNullable<PolicyRow["evidencePolarity"]>;
+        salience?: number;
+        confidence?: number;
+      };
+    }>;
+    searchByText?: (
+      ftsMatch: string,
+      k: number,
+      opts?: {
+        statusIn?: Array<"candidate" | "active" | "archived">;
+      },
+    ) => Array<{
+      id: string;
+      score: number;
+      meta?: {
+        title: string;
+        status: "candidate" | "active" | "archived";
+        support: number;
+        gain: number;
+        experience_type?: NonNullable<PolicyRow["experienceType"]>;
+        evidence_polarity?: NonNullable<PolicyRow["evidencePolarity"]>;
+        salience?: number;
+        confidence?: number;
+      };
+    }>;
+    searchByPattern?: (
+      terms: readonly string[],
+      k: number,
+      opts?: {
+        statusIn?: Array<"candidate" | "active" | "archived">;
+      },
+    ) => Array<{
+      id: string;
+      score: number;
+      meta?: {
+        title: string;
+        status: "candidate" | "active" | "archived";
+        support: number;
+        gain: number;
+        experience_type?: NonNullable<PolicyRow["experienceType"]>;
+        evidence_polarity?: NonNullable<PolicyRow["evidencePolarity"]>;
+        salience?: number;
+        confidence?: number;
+      };
+    }>;
+    list: (filter?: {
+      status?: "candidate" | "active" | "archived";
+    }) => Array<{
+      id: string;
+      title: string;
+      trigger?: string;
+      procedure?: string;
+      verification?: string;
+      boundary?: string;
+      support?: number;
+      gain?: number;
+      status?: "candidate" | "active" | "archived";
+      experienceType?: NonNullable<PolicyRow["experienceType"]>;
+      evidencePolarity?: NonNullable<PolicyRow["evidencePolarity"]>;
+      salience?: number;
+      confidence?: number;
+      skillEligible?: boolean;
+      sourceEpisodeIds: EpisodeId[];
+      sourceFeedbackIds?: FeedbackId[];
+      sourceTraceIds?: TraceId[];
+      decisionGuidance: { preference: string[]; antiPattern: string[] };
+      vec?: EmbeddingVector | null;
+      updatedAt?: EpochMs;
+    }>;
+    getById: (id: string) => {
+      id: string;
+      title: string;
+      trigger?: string;
+      procedure?: string;
+      verification?: string;
+      boundary?: string;
+      support?: number;
+      gain?: number;
+      status?: "candidate" | "active" | "archived";
+      experienceType?: NonNullable<PolicyRow["experienceType"]>;
+      evidencePolarity?: NonNullable<PolicyRow["evidencePolarity"]>;
+      salience?: number;
+      confidence?: number;
+      skillEligible?: boolean;
+      sourceEpisodeIds: EpisodeId[];
+      sourceFeedbackIds?: FeedbackId[];
+      sourceTraceIds?: TraceId[];
+      decisionGuidance: { preference: string[]; antiPattern: string[] };
+      vec?: EmbeddingVector | null;
+      updatedAt?: EpochMs;
+    } | null;
+  };
 }
 
 /** Abstract embedder surface consumed by retrieval. Mirrors `Embedder`. */
@@ -504,6 +663,7 @@ export interface RetrievalDeps {
   repos: RetrievalRepos;
   embedder: RetrievalEmbedder;
   config: RetrievalConfig;
+  namespace: RuntimeNamespace;
   now: () => EpochMs;
   /**
    * Optional LLM used by the post-rank relevance filter
@@ -539,6 +699,14 @@ export interface RetrievalStats {
   queryTokens: number;
   queryTags: string[];
   emptyPacket: boolean;
+  /** Query embedding status. `degraded=true` means vector recall was unavailable. */
+  embedding?: {
+    attempted: boolean;
+    ok: boolean;
+    degraded: boolean;
+    errorCode?: string;
+    errorMessage?: string;
+  };
   /**
    * Observability breakdown — populated so the Logs page (and
    * api_logs) can show "how many candidates survived each stage" and
@@ -590,6 +758,7 @@ export type RetrievalCtx =
 /** Called when the host model decides to invoke a specific Skill. */
 export interface SkillInvokeCtx {
   agent: AgentKind;
+  namespace?: RuntimeNamespace;
   sessionId: SessionId;
   episodeId?: EpisodeId;
   /** Skill id we're about to run (or a free-form query if id unknown). */
@@ -602,6 +771,7 @@ export interface SkillInvokeCtx {
 /** Called when a sub-agent is spawned with a mission query. */
 export interface SubAgentCtx {
   agent: AgentKind;
+  namespace?: RuntimeNamespace;
   sessionId: SessionId;
   episodeId?: EpisodeId;
   /** The sub-agent mission / system prompt head. */

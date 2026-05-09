@@ -47,9 +47,8 @@ Your lobsters and Hermes Agents now have **the best** memory system — choose *
 
 | 🔌 Plugin | <div align="center"> 💡 Core Features </div> | 🧩 Resources |
 | :----: | :--- | :---: |
-| 👧🏻 [**Hermes Agent Local Plugin**](https://x.com/MemOS_dev/status/2043400241232458204) | <ul><li>Visual Management via Web UI.</li><li>100% local, Hybrid retrieval, Smart dedup,<br>Skill evolution, Multi-Agent knowledge hub. </li></ul> | 📑 [Docs](https://memos-docs.openmem.net/cn/openclaw/hermes_local_plugin) · 🐙 [GitHub](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) |
+| 🧠 [**memos-local-plugin 2.0**](https://github.com/hijzy/MemOS/tree/main/apps/memos-local-plugin) | <ul><li>One local-first memory core for **Hermes Agent** and **OpenClaw**.</li><li>Self-evolving memory: L1 trace, L2 policy, L3 world model,<br>and crystallized Skills driven by feedback.</li></ul> | 🐙 [GitHub](https://github.com/hijzy/MemOS/tree/main/apps/memos-local-plugin) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-plugin) |
 | ☁️ [**OpenClaw Cloud Plugin**](https://x.com/MemOS_dev/status/2019254160919769171?s=20) | <ul><li>[Reduces token usage by 72%.](https://x.com/MemOS_dev/status/2020854044583924111)</li><li>[Multi-agent memory sharing by `user_id`.](https://x.com/MemOS_dev/status/2020538135487062094)</li></ul> | 🖥️ [MemOS Dashboard](https://memos-dashboard.openmem.net/login/) · 📖 [Full Tutorial](https://memos-docs.openmem.net/openclaw/guide#_4-update-plugin) |
-| 🦐 [**OpenClaw Local Plugin**](https://x.com/MemOS_dev/status/2031342078480019505) | <ul><li>0 cloud dependency by local SQLite.</li><li>FTS5 + vector search, Task auto-summarization,<br>Multi-Agent memory isolation & skill sharing.</li></ul> | 🌐 [Homepage](https://memos-claw.openmem.net) · 📑 [Docs](https://memos-claw.openmem.net/docs) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-openclaw-plugin) |
 
 </div>
 <br>
@@ -70,9 +69,12 @@ Your lobsters and Hermes Agents now have **the best** memory system — choose *
 
 ### News
 
+- **2026-05-09** · 🧠 **memos-local-plugin 2.0**
+  Official local memory plugin for **Hermes Agent** and **OpenClaw**. One core powers self-evolving memory across L1 traces, L2 policies, L3 world models, and crystallized Skills, with local-first storage and feedback-driven retrieval.
+
 - **2026-04-10** · 👧🏻 **MemOS Hermes Agent Local Plugin**
   Official Hermes Agent memory plugins launched: Hybrid retrieval (FTS5 + vector), smart dedup, tiered skill evolution, multi-agent collaboration. 100% local, zero cloud dependency.
-
+  
 - **2026-03-08** · 🦞 **MemOS OpenClaw Plugin — Cloud & Local**
   Official OpenClaw memory plugins launched. **Cloud Plugin**: hosted memory service with 72% lower token usage and multi-agent memory sharing ([MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)). **Local Plugin** (`v1.0.0`): 100% on-device memory with persistent SQLite, hybrid search (FTS5 + vector), task summarization & skill evolution, multi-agent collaboration, and a full Memory Viewer dashboard.
 

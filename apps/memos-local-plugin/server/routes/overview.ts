@@ -17,7 +17,12 @@ import type { ServerDeps } from "../types.js";
 import type { Routes } from "./registry.js";
 
 export function registerOverviewRoutes(routes: Routes, deps: ServerDeps): void {
+  let viewerTracked = false;
   routes.set("GET /api/v1/overview", async () => {
+    if (!viewerTracked) {
+      viewerTracked = true;
+      deps.telemetry?.trackViewerOpened();
+    }
     const [health, episodeIds, skills, policies, worldModels, metrics] =
       await Promise.all([
         deps.core.health(),

@@ -1,10 +1,13 @@
 import type { CandidatePoolRow, PolicyId } from "../../types.js";
 import type { PageOptions, StorageDb } from "../types.js";
 import { buildInsert, buildUpdate } from "../tx.js";
-import { buildPageClauses, fromJsonText, toJsonText } from "./_helpers.js";
+import { buildPageClauses, fromJsonText, ownerFieldsFromRaw, ownerParamsFromRow, toJsonText } from "./_helpers.js";
 
 const COLUMNS = [
   "id",
+  "owner_agent_kind",
+  "owner_profile_id",
+  "owner_workspace_id",
   "policy_id",
   "evidence_trace_ids_json",
   "signature",
@@ -40,6 +43,7 @@ export function makeCandidatePoolRepo(db: StorageDb) {
     insert(row: CandidatePoolRow): void {
       insert.run({
         id: row.id,
+        ...ownerParamsFromRow(row),
         policy_id: row.policyId,
         evidence_trace_ids_json: toJsonText(row.evidenceTraceIds),
         signature: row.signature,
@@ -98,6 +102,9 @@ export function makeCandidatePoolRepo(db: StorageDb) {
 
 interface RawCandidateRow {
   id: string;
+  owner_agent_kind: string;
+  owner_profile_id: string;
+  owner_workspace_id: string | null;
   policy_id: string | null;
   evidence_trace_ids_json: string;
   signature: string;
@@ -108,6 +115,7 @@ interface RawCandidateRow {
 function mapRow(r: RawCandidateRow): CandidatePoolRow {
   return {
     id: r.id,
+    ...ownerFieldsFromRaw(r),
     policyId: r.policy_id,
     evidenceTraceIds: fromJsonText(r.evidence_trace_ids_json, []),
     signature: r.signature,

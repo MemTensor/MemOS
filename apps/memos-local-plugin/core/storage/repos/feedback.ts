@@ -5,12 +5,17 @@ import {
   buildPageClauses,
   fromJsonText,
   joinWhere,
+  ownerFieldsFromRaw,
+  ownerParamsFromRow,
   timeRangeWhere,
   toJsonText,
 } from "./_helpers.js";
 
 const COLUMNS = [
   "id",
+  "owner_agent_kind",
+  "owner_profile_id",
+  "owner_workspace_id",
   "ts",
   "episode_id",
   "trace_id",
@@ -37,6 +42,7 @@ export function makeFeedbackRepo(db: StorageDb) {
     insert(row: FeedbackRow): void {
       insert.run({
         id: row.id,
+        ...ownerParamsFromRow(row),
         ts: row.ts,
         episode_id: row.episodeId ?? null,
         trace_id: row.traceId ?? null,
@@ -88,6 +94,9 @@ export function makeFeedbackRepo(db: StorageDb) {
 
 interface RawFeedbackRow {
   id: string;
+  owner_agent_kind: string;
+  owner_profile_id: string;
+  owner_workspace_id: string | null;
   ts: number;
   episode_id: string | null;
   trace_id: string | null;
@@ -101,6 +110,7 @@ interface RawFeedbackRow {
 function mapRow(r: RawFeedbackRow): FeedbackRow {
   return {
     id: r.id,
+    ...ownerFieldsFromRaw(r),
     ts: r.ts,
     episodeId: r.episode_id,
     traceId: r.trace_id,

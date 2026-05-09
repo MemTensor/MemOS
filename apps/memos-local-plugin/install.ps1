@@ -59,10 +59,10 @@ if ($Uninstall) {
   exit 0
 }
 
-# 1. deploy source
+# 1. deploy package contents
 Write-Info "Deploying plugin code -> $Prefix"
 New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
-$exclude = @("node_modules","dist","web\dist","site\dist","tests",".git")
+$exclude = @("node_modules","tests",".git")
 robocopy $ScriptDir $Prefix /MIR /XD $exclude | Out-Null
 
 # 2. runtime dirs

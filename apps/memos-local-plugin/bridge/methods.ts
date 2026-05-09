@@ -26,9 +26,11 @@ import type {
   SessionId,
   SkillDTO,
   SkillId,
+  SubagentOutcomeDTO,
   ToolOutcomeDTO,
   TurnInputDTO,
   TurnResultDTO,
+  RuntimeNamespace,
 } from "../agent-contract/dto.js";
 
 export interface DispatcherOptions {
@@ -58,6 +60,14 @@ function asRecord(p: unknown, method: RpcMethodName): Record<string, unknown> {
     );
   }
   return p as Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function namespaceParam(p: Record<string, unknown>): RuntimeNamespace | undefined {
+  return isRecord(p.namespace) ? (p.namespace as unknown as RuntimeNamespace) : undefined;
 }
 
 function requireString(
@@ -113,7 +123,8 @@ export function makeDispatcher(
           typeof p.sessionId === "string" && p.sessionId.length > 0
             ? (p.sessionId as SessionId)
             : undefined;
-        const out = await core.openSession({ agent, sessionId });
+        const meta = isRecord(p.meta) ? p.meta : undefined;
+        const out = await core.openSession({ agent, sessionId, meta, namespace: namespaceParam(p) });
         return { sessionId: out };
       }
       case RPC_METHODS.SESSION_CLOSE: {
@@ -126,7 +137,9 @@ export function makeDispatcher(
         const sessionId = requireString(p, "sessionId", method) as SessionId;
         const episodeId =
           typeof p.episodeId === "string" ? (p.episodeId as EpisodeId) : undefined;
-        const out = await core.openEpisode({ sessionId, episodeId });
+        const userMessage =
+          typeof p.userMessage === "string" ? p.userMessage : undefined;
+        const out = await core.openEpisode({ sessionId, episodeId, userMessage });
         return { episodeId: out };
       }
       case RPC_METHODS.EPISODE_CLOSE: {
@@ -166,6 +179,7 @@ export function makeDispatcher(
         const p = asRecord(params, method);
         const q: RetrievalQueryDTO = {
           agent: (typeof p.agent === "string" ? p.agent : "openclaw") as AgentKind,
+          namespace: namespaceParam(p),
           sessionId: (p.sessionId as SessionId | undefined) ?? undefined,
           episodeId: (p.episodeId as EpisodeId | undefined) ?? undefined,
           query: requireString(p, "query", method),
@@ -176,15 +190,21 @@ export function makeDispatcher(
       }
       case RPC_METHODS.MEMORY_GET_TRACE: {
         const p = asRecord(params, method);
-        return await core.getTrace(requireString(p, "id", method));
+        const id = requireString(p, "id", method);
+        const ns = namespaceParam(p);
+        return ns ? await core.getTrace(id, ns) : await core.getTrace(id);
       }
       case RPC_METHODS.MEMORY_GET_POLICY: {
         const p = asRecord(params, method);
-        return await core.getPolicy(requireString(p, "id", method));
+        const id = requireString(p, "id", method);
+        const ns = namespaceParam(p);
+        return ns ? await core.getPolicy(id, ns) : await core.getPolicy(id);
       }
       case RPC_METHODS.MEMORY_GET_WORLD: {
         const p = asRecord(params, method);
-        return await core.getWorldModel(requireString(p, "id", method));
+        const id = requireString(p, "id", method);
+        const ns = namespaceParam(p);
+        return ns ? await core.getWorldModel(id, ns) : await core.getWorldModel(id);
       }
       case RPC_METHODS.MEMORY_LIST_EPISODES: {
         const p = asRecord(params, method);
@@ -199,6 +219,7 @@ export function makeDispatcher(
         const p = asRecord(params, method);
         const out = await core.timeline({
           episodeId: requireString(p, "episodeId", method) as EpisodeId,
+          namespace: namespaceParam(p),
         });
         return { traces: out };
       }
@@ -212,19 +233,55 @@ export function makeDispatcher(
         });
         return { traces: out };
       }
+      case RPC_METHODS.MEMORY_LIST_WORLDS: {
+        const p = asRecord(params, method);
+        const input: Parameters<MemoryCore["listWorldModels"]>[0] = {
+          limit: typeof p.limit === "number" ? p.limit : undefined,
+          offset: typeof p.offset === "number" ? p.offset : undefined,
+          q: typeof p.q === "string" ? p.q : undefined,
+        };
+        const ns = namespaceParam(p);
+        if (ns) input!.namespace = ns;
+        const out = await core.listWorldModels(input);
+        return { worldModels: out };
+      }
 
       // ── skills ──
       case RPC_METHODS.SKILL_LIST: {
         const p = asRecord(params, method);
-        const out = await core.listSkills({
+        const input: Parameters<MemoryCore["listSkills"]>[0] = {
           status: (p.status as SkillDTO["status"] | undefined) ?? undefined,
           limit: typeof p.limit === "number" ? p.limit : undefined,
-        });
+        };
+        const ns = namespaceParam(p);
+        if (ns) input!.namespace = ns;
+        const out = await core.listSkills(input);
         return { skills: out };
       }
       case RPC_METHODS.SKILL_GET: {
         const p = asRecord(params, method);
-        return await core.getSkill(requireString(p, "id", method) as SkillId);
+        const opts: Parameters<MemoryCore["getSkill"]>[1] = {};
+        const hasOptions =
+          p.recordTrial !== undefined ||
+          p.sessionId !== undefined ||
+          p.episodeId !== undefined ||
+          p.traceId !== undefined ||
+          p.turnId !== undefined ||
+          p.toolCallId !== undefined ||
+          p.namespace !== undefined;
+        if (hasOptions) {
+          opts.recordUse = true;
+          opts.recordTrial = p.recordTrial !== false;
+        }
+        if (typeof p.sessionId === "string") opts.sessionId = p.sessionId as SessionId;
+        if (typeof p.episodeId === "string") opts.episodeId = p.episodeId as EpisodeId;
+        if (typeof p.traceId === "string") opts.traceId = p.traceId;
+        if (typeof p.turnId === "number") opts.turnId = p.turnId;
+        if (typeof p.toolCallId === "string") opts.toolCallId = p.toolCallId;
+        const ns = namespaceParam(p);
+        if (ns) opts.namespace = ns;
+        const id = requireString(p, "id", method) as SkillId;
+        return hasOptions ? await core.getSkill(id, opts) : await core.getSkill(id);
       }
       case RPC_METHODS.SKILL_ARCHIVE: {
         const p = asRecord(params, method);
@@ -245,6 +302,35 @@ export function makeDispatcher(
           agent: (typeof p.agent === "string" ? p.agent : "openclaw") as AgentKind,
           query: requireString(p, "query", method),
         });
+      }
+
+      // ── subagents ──
+      case RPC_METHODS.SUBAGENT_RECORD: {
+        const p = asRecord(params, method);
+        const input: SubagentOutcomeDTO = {
+          agent: (typeof p.agent === "string" ? p.agent : "hermes") as AgentKind,
+          sessionId: requireString(p, "sessionId", method) as SessionId,
+          episodeId:
+            typeof p.episodeId === "string" && p.episodeId.length > 0
+              ? (p.episodeId as SubagentOutcomeDTO["episodeId"])
+              : undefined,
+          childSessionId:
+            typeof p.childSessionId === "string" && p.childSessionId.length > 0
+              ? (p.childSessionId as SessionId)
+              : null,
+          task: requireString(p, "task", method),
+          result: typeof p.result === "string" ? p.result : "",
+          toolCalls: Array.isArray(p.toolCalls)
+            ? (p.toolCalls as SubagentOutcomeDTO["toolCalls"])
+            : undefined,
+          outcome: typeof p.outcome === "string" ? p.outcome as SubagentOutcomeDTO["outcome"] : undefined,
+          error: typeof p.error === "string" ? p.error : undefined,
+          ts: typeof p.ts === "number" ? p.ts : undefined,
+          meta: p.meta && typeof p.meta === "object" && !Array.isArray(p.meta)
+            ? p.meta as Record<string, unknown>
+            : undefined,
+        };
+        return await core.recordSubagentOutcome(input);
       }
 
       // ── tool-outcome ──

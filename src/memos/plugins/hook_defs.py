@@ -83,6 +83,9 @@ class H:
     MEMORY_VERSION_APPLY_UPDATES = "memory_version.apply_updates"
     MEMORY_VERSION_APPLY_FEEDBACK_UPDATE = "memory_version.apply_feedback_update"
 
+    # dream — single-provider business hook
+    DREAM_EXECUTE = "dream.execute"
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  CE custom Hook declarations (@hookable-generated ones need not be declared here)
@@ -129,4 +132,17 @@ define_hook(
     H.MEMORY_VERSION_APPLY_FEEDBACK_UPDATE,
     description="Apply memory-version update semantics during feedback update",
     params=["old_item", "new_item", "user_name"],
+)
+
+define_hook(
+    H.DREAM_EXECUTE,
+    description=("Execute the active Dream plugin pipeline for a scheduler-triggered dream task"),
+    params=[
+        "mem_cube_id",
+        "user_id",
+        "user_name",
+        "signal_snapshot",
+        "text_mem",
+        "scheduler_context",
+    ],
 )

@@ -246,12 +246,17 @@ $$
    $$\text{priority}(f^{(1)}) \propto \max\big(V(f^{(1)}),\; 0\big) \cdot \text{decay}(\Delta t)$$
    低价值 + 长期未引用的 trace 检索优先级降低，但**永久保留在磁盘上**——它们仍可在未来被新的反思或 Decision Repair 重新激活。
 
-3. **Policy gain 量化**：L2 policy 的效用增益通过对比"有策略"和"无策略"两组历史执行的平均价值来计算：
-   $$G(f^{(2)}) = \bar{V}_{\text{with}} - \bar{V}_{\text{without}}$$
+3. **Policy gain 量化**：L2 policy 的效用增益通过对比"有策略"和"无策略"两组历史执行的平均价值来计算，并在缺乏对照时用一个中性先验（neutral baseline）做 Bayesian shrinkage：
+   $$G(f^{(2)}) = \bar{V}_{\text{with}} - \tilde{V}_{\text{without}}$$
+   $$\tilde{V}_{\text{without}} = \frac{\bar{V}_{\text{without}} \cdot n_{\text{without}} + V_0 \cdot N_0}{n_{\text{without}} + N_0}$$
    其中：
    
-   - $\bar{V}_{\text{with}}$：**调用了该 policy 的所有 episode** 中，相关步骤的 $V$ 值均值。来源是 $\mathcal{M}^{(1)}$ 中标记了 `policy_id = f^{(2)}` 的 traces。
-   - $\bar{V}_{\text{without}}$：**同类任务中未调用该 policy 的 episode**（通常是更早期、策略尚未形成时的执行）中，对应步骤的 $V$ 值均值。通过 Tier 2 检索匹配相同 context 但无 policy 标记的历史 traces 获得。
+   - $\bar{V}_{\text{with}}$：**调用了该 policy 的所有 episode** 中，相关步骤的 $V$ 值均值（softmax 加权，τ 由 `algorithm.reward.tauSoftmax` 控制）。来源是 $\mathcal{M}^{(1)}$ 中标记了 `policy_id = f^{(2)}` 的 traces。
+   - $\bar{V}_{\text{without}}$：**同类任务中未调用该 policy 的 episode** 中，对应步骤的 $V$ 值算术均值。通过同 episode 中其他 trace 或 Tier 2 检索匹配相同 context 但无 policy 标记的历史 traces 获得。
+   - $V_0 = 0.5$：V7 §0.6 评分 rubric 中的中性参考（"无信号"对应 $R_{\text{human}}$ 中点；典型成功 episode 的 $V$ 在 $0.5$–$0.85$ 之间，失败在 $< 0.5$）。
+   - $N_0 = 5$：先验的虚拟样本数（pseudocount）。早期对照证据稀少时先验主导，后期实测主导，平滑过渡。
+   
+   **为何引入 shrinkage？** 真实交互场景里几乎所有 episode 都被评为成功（$R_{\text{human}} \approx 0.6$–$0.85$），加上 reward 反向传播会把相近 $V$ 值散布到所有步骤的 trace 上，于是 $\bar{V}_{\text{without}}$ 几乎必然贴近 $\bar{V}_{\text{with}}$，原始 V7 公式得分恒为 $\approx 0$，任何 policy 都升不上 active。中性先验保证了：真正有用的 policy（with-set $V \approx 0.8$）即使没有显式失败对照也能拿到 $G \approx 0.3$ 的正分；中性 / 有害 policy 维持 $G \le 0$ 被自然过滤。当真实对照证据累计到 $n_{\text{without}} \gg N_0$ 时，公式平滑回退到原始 V7 §0.6 形式。
    
    $G > 0$ 说明这个 policy 确实提升了执行质量；$G \leq 0$ 则说明它没有价值甚至有害。Skill 的 reliability $\eta$ 从"成功次数统计"升级为"期望效用增益"。
 

@@ -38,6 +38,7 @@ function trace(args: {
     tags: [],
     vecSummary: null,
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
   };
 }
@@ -55,6 +56,7 @@ function policy(id: string): PolicyRow {
     status: "active" as PolicyRow["status"],
     sourceEpisodeIds: [],
     inducedBy: "l2.l2.induction.v1",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: vec([1, 0, 0]),
     createdAt: NOW as PolicyRow["createdAt"],
     updatedAt: NOW as PolicyRow["updatedAt"],
@@ -138,6 +140,34 @@ describe("feedback/synthesize", () => {
     expect(r.draft.preference).toContain("uv");
     expect(r.draft.antiPattern).toContain("pip");
     expect(r.draft.confidence).toBeCloseTo(0.8, 5);
+  });
+
+  it("template fallback preserves code-like text while dropping dangerous links", async () => {
+    const r = await synthesizeDraft(
+      {
+        trigger: "user.preference",
+        contextHash: "ctx2b",
+        highValue: [trace({ value: 0.5, agentText: "success" })],
+        lowValue: [trace({ value: -0.4, agentText: "failure" })],
+        classifiedFeedback: {
+          shape: "preference",
+          confidence: 0.8,
+          prefer: "Prefer Array<T> examples",
+          avoid: "Avoid [bad](javascript:alert(1)) snippets",
+          text: "keep generic syntax",
+        },
+      },
+      {
+        llm: null,
+        log: rootLogger.child({ channel: "test.synth" }),
+        config: makeFeedbackConfig({ useLlm: false }),
+      },
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.draft.preference).toContain("Array<T>");
+    expect(r.draft.antiPattern).not.toContain("javascript:");
+    expect(r.draft.antiPattern).toContain("bad");
   });
 
   it("calls the LLM and uses its response when useLlm is true", async () => {

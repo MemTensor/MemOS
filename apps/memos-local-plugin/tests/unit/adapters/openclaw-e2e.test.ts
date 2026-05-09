@@ -132,7 +132,7 @@ function silentLogger(): HostLogger {
   };
 }
 
-function buildDeps(h: TmpDbHandle): PipelineDeps {
+function buildDeps(h: TmpDbHandle, embedder: Embedder | null = semanticFakeEmbedder(DEFAULT_CONFIG.embedding.dimensions)): PipelineDeps {
   return {
     agent: "openclaw",
     home: resolveHome("openclaw", "/tmp/memos-e2e-test"),
@@ -141,14 +141,15 @@ function buildDeps(h: TmpDbHandle): PipelineDeps {
     repos: h.repos,
     llm: null,
     reflectLlm: null,
-    embedder: semanticFakeEmbedder(DEFAULT_CONFIG.embedding.dimensions),
+    embedder,
     log: rootLogger.child({ channel: "test.adapters.openclaw.e2e" }),
+    namespace: { agentKind: "openclaw", profileId: "main" },
     now: () => 1_700_000_000_000,
   };
 }
 
-function buildCore(): MemoryCore {
-  pipeline = createPipeline(buildDeps(db!));
+function buildCore(embedder?: Embedder | null): MemoryCore {
+  pipeline = createPipeline(buildDeps(db!, embedder));
   const mc = createMemoryCore(
     pipeline,
     resolveHome("openclaw", "/tmp/memos-e2e-test"),
@@ -332,6 +333,38 @@ describe("OpenClaw adapter — end-to-end memory chain", () => {
     expect(search.hits.length).toBeGreaterThan(0);
     const allText = search.hits.map((h) => h.snippet).join("\n");
     expect(allText).toContain("榴莲");
+  });
+
+  it("retrieves freshly captured text through keyword fallback when embeddings are unavailable", async () => {
+    const mc = buildCore(null);
+    await mc.init();
+    const bridge = createOpenClawBridge({ agent: "openclaw", core: mc, log: silentLogger() });
+
+    await bridge.handleBeforePrompt(
+      { prompt: "记住：我喜欢蓝莓酸奶", messages: [] },
+      ctx({ sessionKey: "keyword-thread" }),
+    );
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "记住：我喜欢蓝莓酸奶" },
+          { role: "assistant", content: "好的，我记住了。" },
+        ],
+        durationMs: 80,
+      },
+      ctx({ sessionKey: "keyword-thread" }),
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const search = await mc.searchMemory({
+      agent: "openclaw",
+      query: "蓝莓酸奶",
+      topK: { tier1: 0, tier2: 5, tier3: 0 },
+    });
+
+    expect(search.hits.length).toBeGreaterThan(0);
+    expect(search.hits.map((h) => h.snippet).join("\n")).toContain("蓝莓酸奶");
   });
 
   it("toolCalls captured during agent_end are written into the trace row", async () => {

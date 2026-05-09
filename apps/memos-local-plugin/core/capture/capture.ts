@@ -19,7 +19,8 @@ import type { Embedder } from "../embedding/index.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
 import { ids } from "../id.js";
-import type { TraceRow, TraceId } from "../types.js";
+import type { EpisodeRow, TraceRow, TraceId } from "../types.js";
+import type { makeEmbeddingRetryQueueRepo } from "../storage/repos/embedding_retry_queue.js";
 import type { makeTracesRepo } from "../storage/repos/traces.js";
 import type { EpisodesRepo } from "../session/persistence.js";
 import { disabledScore, scoreReflection } from "./alpha-scorer.js";
@@ -41,13 +42,16 @@ import type {
   NormalizedStep,
   ReflectionScore,
   ScoredStep,
+  StepCandidate,
   TraceCandidate,
 } from "./types.js";
 
 type TracesRepo = ReturnType<typeof makeTracesRepo>;
+type EmbeddingRetryQueueRepo = ReturnType<typeof makeEmbeddingRetryQueueRepo>;
 
 export interface CaptureDeps {
   tracesRepo: TracesRepo;
+  embeddingRetryQueue?: EmbeddingRetryQueueRepo;
   episodesRepo: EpisodesRepo;
   embedder: Embedder | null;
   /** Main LLM — used for per-turn lite capture (summarisation). */
@@ -163,6 +167,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       summarizeStart,
       llmCalls,
       warnings,
+      { episodeId: input.episode.id, phase: "lite" },
     );
 
     // Embed.
@@ -280,6 +285,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         summStart,
         llmCalls,
         warnings,
+        { episodeId: input.episode.id, phase: "reflect" },
       );
       const orphanScored: ScoredStep[] = orphan.map((s) => ({
         ...s,
@@ -310,10 +316,10 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const useBatch = shouldBatch(deps.cfg, normalized.length, rLlm !== null);
     let scored: ScoredStep[] = [];
     if (useBatch) {
-      scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls);
+      scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id);
     }
     if (!useBatch || scored.length === 0) {
-      scored = await runPerStepScoring(normalized, rLlm, deps, warnings, llmCalls);
+      scored = await runPerStepScoring(normalized, rLlm, deps, warnings, llmCalls, input.episode.id);
     }
     const reflectMs = now() - reflectStart;
 
@@ -448,6 +454,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     summarizeStart: number,
     llmCalls: ReturnType<typeof newLlmCounters>,
     warnings: CaptureResult["warnings"],
+    context: { episodeId?: string; phase?: string },
   ): Promise<{ summaries: string[]; summarizeMs: number }> {
     const concurrency = Math.max(1, deps.cfg.llmConcurrency);
     const summaries = await runConcurrently(
@@ -455,7 +462,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       concurrency,
       async (step) => {
         try {
-          const s = await summarizer.summarize(step);
+          const s = await summarizer.summarize(step, context);
           llmCalls.summarize += 1;
           return s;
         } catch (err) {
@@ -499,6 +506,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     vecs: VecPair[],
     episode: CaptureInput["episode"],
   ): TraceRow[] {
+    const owner = ownerFromEpisode(episode);
     const traces: TraceCandidate[] = scored.map((s, i) => ({
       ...s,
       traceId: ids.trace() as TraceId,
@@ -510,6 +518,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       id: t.traceId,
       episodeId: episode.id,
       sessionId: episode.sessionId,
+      ...owner,
       ts: t.ts,
       userText: t.userText,
       agentText: t.agentText,
@@ -544,17 +553,44 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     }));
   }
 
+  function ownerFromEpisode(episode: CaptureInput["episode"]) {
+    const meta = episode.meta ?? {};
+    const contextHints =
+      meta.contextHints && typeof meta.contextHints === "object"
+        ? (meta.contextHints as Record<string, unknown>)
+        : {};
+    return {
+      ownerAgentKind: stringMeta(meta, "ownerAgentKind") ?? stringMeta(contextHints, "ownerAgentKind") ?? "unknown",
+      ownerProfileId: stringMeta(meta, "ownerProfileId") ?? stringMeta(contextHints, "ownerProfileId") ?? "default",
+      ownerWorkspaceId: stringMeta(meta, "ownerWorkspaceId") ?? stringMeta(contextHints, "ownerWorkspaceId") ?? null,
+    };
+  }
+
   function buildTraceCandidates(
     scored: ScoredStep[],
     rows: TraceRow[],
   ): TraceCandidate[] {
-    return scored.map((s, i) => ({
-      ...s,
-      traceId: rows[i]!.id as TraceId,
-      tags: rows[i]!.tags,
-      vecSummary: rows[i]!.vecSummary,
-      vecAction: rows[i]!.vecAction,
-    }));
+    const used = new Set<number>();
+    return rows.map((row) => {
+      const idx = scored.findIndex((s, i) => !used.has(i) && rowMatchesStep(row, s));
+      const s = scored[idx >= 0 ? idx : 0]!;
+      if (idx >= 0) used.add(idx);
+      return {
+        ...s,
+        traceId: row.id as TraceId,
+        tags: row.tags,
+        vecSummary: row.vecSummary,
+        vecAction: row.vecAction,
+      };
+    });
+  }
+
+  function rowMatchesStep(row: TraceRow, step: ScoredStep): boolean {
+    if (row.ts !== step.ts) return false;
+    const rowTool = row.toolCalls[0];
+    const stepTool = step.toolCalls[0];
+    if (rowTool || stepTool) return rowTool?.name === stepTool?.name;
+    return row.userText === step.userText && row.agentText === step.agentText;
   }
 
   async function persistRows(
@@ -562,8 +598,29 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     input: CaptureInput,
     warnings: CaptureResult["warnings"],
   ): Promise<boolean> {
+    const existingBeforeInsert = deps.tracesRepo.list({ episodeId: input.episode.id });
+    const seenSignatures = new Set(existingBeforeInsert.map(traceIdentitySignature));
+    const uniqueRows = rows.filter((row) => {
+      const signature = traceIdentitySignature(row);
+      if (seenSignatures.has(signature)) return false;
+      seenSignatures.add(signature);
+      return true;
+    });
+    if (uniqueRows.length !== rows.length) {
+      warnings.push({
+        stage: "persist",
+        message: "skipped duplicate trace rows during capture persist",
+        detail: {
+          skipped: rows.length - uniqueRows.length,
+          episodeId: input.episode.id,
+        },
+      });
+      rows.splice(0, rows.length, ...uniqueRows);
+    }
+
     try {
       for (const row of rows) deps.tracesRepo.insert(row);
+      enqueueMissingTraceVectors(rows, warnings);
     } catch (err) {
       const failure = errDetail(err);
       log.error("persist.failed", {
@@ -585,9 +642,11 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         : new MemosError(ERROR_CODES.INTERNAL, "capture.persist failed", failure);
     }
     try {
+      const current = deps.episodesRepo.getById(input.episode.id) as EpisodeRow | null;
+      const currentTraceIds = current?.traceIds ?? input.episode.traceIds;
       deps.episodesRepo.updateTraceIds(
         input.episode.id,
-        [...input.episode.traceIds, ...rows.map((r) => r.id)],
+        reconcileTraceIds([...currentTraceIds, ...rows.map((r) => r.id)], input.episode),
       );
     } catch (err) {
       warnings.push({
@@ -597,6 +656,145 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       });
     }
     return true;
+  }
+
+  function reconcileTraceIds(traceIds: TraceId[], episode: CaptureInput["episode"]): TraceId[] {
+    const uniqueIds = dedupeTraceIds(traceIds);
+    const rowById = new Map(deps.tracesRepo.getManyByIds(uniqueIds).map((row) => [row.id, row]));
+    const originalIndex = new Map(uniqueIds.map((id, idx) => [id, idx]));
+    const stepOrder = new Map<string, number>();
+    extractSteps(episode).forEach((step, idx) => {
+      const signature = stepIdentitySignature(step);
+      if (!stepOrder.has(signature)) stepOrder.set(signature, idx);
+    });
+    const seenSignatures = new Set<string>();
+    return uniqueIds
+      .filter((id) => rowById.has(id))
+      .sort((a, b) => {
+        const ai = stepOrder.get(traceIdentitySignature(rowById.get(a)!));
+        const bi = stepOrder.get(traceIdentitySignature(rowById.get(b)!));
+        if (ai != null && bi != null && ai !== bi) return ai - bi;
+        if (ai != null && bi == null) return -1;
+        if (ai == null && bi != null) return 1;
+        return (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0);
+      })
+      .filter((id) => {
+        const signature = traceIdentitySignature(rowById.get(id)!);
+        if (seenSignatures.has(signature)) return false;
+        seenSignatures.add(signature);
+        return true;
+      });
+  }
+
+  function dedupeTraceIds(traceIds: TraceId[]): TraceId[] {
+    const seen = new Set<TraceId>();
+    const out: TraceId[] = [];
+    for (const id of traceIds) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out;
+  }
+
+  function stepIdentitySignature(step: StepCandidate): string {
+    const tool = step.toolCalls[0];
+    const turnId = pickTurnId(step.meta, step.ts);
+    if (tool) {
+      const hasRealTiming =
+        typeof tool.startedAt === "number" || typeof tool.endedAt === "number";
+      return [
+        "tool",
+        turnId,
+        tool.name,
+        hasRealTiming ? tool.startedAt ?? "" : step.ts,
+        hasRealTiming ? tool.endedAt ?? "" : "",
+        stableJson(tool.input),
+        stableJson(tool.output),
+        tool.errorCode ?? "",
+      ].join("\x1f");
+    }
+    if (step.agentText.trim()) {
+      return ["assistant", turnId, step.ts, step.agentText.trim()].join("\x1f");
+    }
+    return ["user", turnId, step.ts, step.userText.trim()].join("\x1f");
+  }
+
+  function traceIdentitySignature(row: TraceRow): string {
+    const tool = row.toolCalls[0];
+    if (tool) {
+      const hasRealTiming =
+        typeof tool.startedAt === "number" || typeof tool.endedAt === "number";
+      return [
+        "tool",
+        row.turnId,
+        tool.name,
+        hasRealTiming ? tool.startedAt ?? "" : row.ts,
+        hasRealTiming ? tool.endedAt ?? "" : "",
+        stableJson(tool.input),
+        stableJson(tool.output),
+        tool.errorCode ?? "",
+      ].join("\x1f");
+    }
+    if (row.agentText.trim()) {
+      return ["assistant", row.turnId, row.ts, row.agentText.trim()].join("\x1f");
+    }
+    return ["user", row.turnId, row.ts, row.userText.trim()].join("\x1f");
+  }
+
+  function stableJson(value: unknown): string {
+    if (value === undefined) return "";
+    return JSON.stringify(sortJson(value));
+  }
+
+  function sortJson(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(sortJson);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, val]) => [key, sortJson(val)]),
+    );
+  }
+
+  function enqueueMissingTraceVectors(
+    rows: TraceRow[],
+    warnings: CaptureResult["warnings"],
+  ): void {
+    if (!deps.cfg.embedTraces || !deps.embeddingRetryQueue || !deps.embedder) return;
+    const queuedAt = now();
+    let queued = 0;
+    for (const row of rows) {
+      if (!row.vecSummary) {
+        deps.embeddingRetryQueue.enqueue({
+          id: `er_${ids.span()}`,
+          targetKind: "trace",
+          targetId: row.id,
+          vectorField: "vec_summary",
+          sourceText: row.summary?.trim() || row.userText.trim() || "(empty)",
+          now: queuedAt,
+        });
+        queued++;
+      }
+      if (!row.vecAction) {
+        deps.embeddingRetryQueue.enqueue({
+          id: `er_${ids.span()}`,
+          targetKind: "trace",
+          targetId: row.id,
+          vectorField: "vec_action",
+          sourceText: traceActionText(row),
+          now: queuedAt,
+        });
+        queued++;
+      }
+    }
+    if (queued > 0) {
+      warnings.push({
+        stage: "embed",
+        message: "embedding retry queued for missing trace vectors",
+        detail: { queued },
+      });
+    }
   }
 
   function finalResult(
@@ -665,6 +863,7 @@ async function runBatchScoring(
   deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
   llmCalls: { reflectionSynth: number; alphaScoring: number; batchedReflection: number },
+  episodeId: string,
 ): Promise<ScoredStep[]> {
   const inputs: BatchScoreInput[] = normalized.map((step) => ({
     step,
@@ -674,6 +873,8 @@ async function runBatchScoring(
   try {
     const out = await batchScoreReflections(llm, inputs, {
       synthReflections: deps.cfg.synthReflections,
+      episodeId,
+      phase: "reflect",
     });
     llmCalls.batchedReflection += 1;
     return normalized.map((step, i) => ({
@@ -699,12 +900,13 @@ async function runPerStepScoring(
   deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
   llmCalls: { reflectionSynth: number; alphaScoring: number },
+  episodeId: string,
 ): Promise<ScoredStep[]> {
   const concurrency = Math.max(1, deps.cfg.llmConcurrency);
   return runConcurrently(normalized, concurrency, async (step): Promise<ScoredStep> => {
-    const { score, synthCount } = await resolveReflection(step, llm, deps, warnings);
+    const { score, synthCount } = await resolveReflection(step, llm, deps, warnings, episodeId);
     llmCalls.reflectionSynth += synthCount;
-    const finalScore = await resolveAlpha(step, score, llm, deps, warnings);
+    const finalScore = await resolveAlpha(step, score, llm, deps, warnings, episodeId);
     if (finalScore !== score) llmCalls.alphaScoring += 1;
     return { ...step, reflection: finalScore };
   });
@@ -715,6 +917,7 @@ async function resolveReflection(
   llm: LlmClient | null,
   deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
+  episodeId: string,
 ): Promise<{ score: ReflectionScore; synthCount: number }> {
   const adapterProvided = step.rawReflection !== null && step.rawReflection.trim().length > 0;
   const extracted = extractReflection(step);
@@ -728,7 +931,7 @@ async function resolveReflection(
     return { score: disabledScore(null, "none"), synthCount: 0 };
   }
   try {
-    const synth = await synthesizeReflection(llm, step);
+    const synth = await synthesizeReflection(llm, step, { episodeId, phase: "reflect" });
     if (synth.text) {
       return {
         score: { text: synth.text, alpha: null, usable: true, source: "synth", model: synth.model },
@@ -752,6 +955,7 @@ async function resolveAlpha(
   llm: LlmClient | null,
   deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
+  episodeId: string,
 ): Promise<ReflectionScore> {
   if (!current.text) return current; // nothing to grade
   if (!deps.cfg.alphaScoring || !llm) return current;
@@ -760,6 +964,8 @@ async function resolveAlpha(
     const scored = await scoreReflection(llm, {
       step,
       reflectionText: current.text,
+      episodeId,
+      phase: "reflect",
     });
     return {
       ...current,
@@ -803,6 +1009,28 @@ function errDetail(err: unknown): Record<string, unknown> {
   if (err instanceof MemosError) return { code: err.code, message: err.message, ...(err.details ?? {}) };
   if (err instanceof Error) return { name: err.name, message: err.message };
   return { value: String(err) };
+}
+
+function traceActionText(row: Pick<TraceRow, "agentText" | "toolCalls">): string {
+  const toolSig = row.toolCalls
+    .map((t) => `${t.name}(${safeStringify(t.input).slice(0, 300)})`)
+    .join("; ");
+  return [row.agentText.trim(), toolSig].filter((s) => s.length > 0).join("\n---\n") || "(empty)";
+}
+
+function stringMeta(meta: Record<string, unknown>, key: string): string | undefined {
+  const value = meta[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function safeStringify(v: unknown): string {
+  if (v === undefined || v === null) return "";
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
 }
 
 /**

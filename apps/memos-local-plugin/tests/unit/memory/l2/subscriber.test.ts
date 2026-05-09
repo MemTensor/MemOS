@@ -63,6 +63,7 @@ function seedTrace(handle: TmpDbHandle, id: string, ep: string): TraceRow {
     tags: ["docker", "pip"],
     vecSummary: vec([1, 0, 0]),
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
   };
   handle.repos.traces.insert(row);
@@ -162,6 +163,38 @@ describe("memory/l2/subscriber", () => {
 
     await new Promise((r) => setTimeout(r, 30));
     expect(events).toHaveLength(0);
+  });
+
+  it("coalesces dense reward.updated events for the same episode", async () => {
+    seedTrace(handle, "tr_dense", "ep_dense");
+
+    const rewardBus = createRewardEventBus();
+    const l2Bus = createL2EventBus();
+    const events: L2Event[] = [];
+    l2Bus.onAny((e) => events.push(e));
+
+    const sub = attachL2Subscriber({
+      db: handle.db,
+      repos: handle.repos,
+      rewardBus,
+      l2Bus,
+      llm: fakeLlm(),
+      log: rootLogger,
+      config: cfg(),
+      thresholds: { minSupport: 3, minGain: 0.15, archiveGain: -0.05 },
+    });
+
+    for (let i = 0; i < 5; i++) {
+      rewardBus.emit({
+        kind: "reward.updated",
+        result: fakeRewardResult("ep_dense", ["tr_dense"]),
+      } as RewardEvent);
+    }
+
+    await sub.drain();
+
+    expect(events.filter((e) => e.kind === "l2.candidate.added")).toHaveLength(2);
+    sub.detach();
   });
 
   it("runOnce reloads traces from SQLite", async () => {

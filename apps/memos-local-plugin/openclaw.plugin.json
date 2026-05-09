@@ -1,0 +1,22 @@
+{
+  "id": "memos-local-plugin",
+  "name": "MemOS Local",
+  "description": "Reflect2Evolve memory plugin with L1 traces, L2 policies, L3 world models, skill crystallization, and three-tier retrieval.",
+  "version": "2.0.0-beta.5",
+  "kind": "memory",
+  "contracts": {
+    "tools": [
+      "memory_search",
+      "memory_get",
+      "memory_timeline",
+      "memory_environment",
+      "skill_list",
+      "skill_get"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {}
+  }
+}

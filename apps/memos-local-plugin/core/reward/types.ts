@@ -42,7 +42,8 @@ export interface RewardConfig {
    * episode is eligible for scoring. Episodes shorter than this are
    * closed as abandoned with reason "too few conversation turns" —
    * mirroring the legacy `memos-local-openclaw` shouldSkipSummary rule
-   * (chunks < 4 OR min(user, assistant) < 2). Default 2.
+   * (chunks < 4 OR min(user, assistant) < N). Default 1
+   * (relaxed in 2026Q2 to admit CLI single-shot patterns; was 2).
    */
   minExchangesForCompletion: number;
   /**
@@ -52,6 +53,17 @@ export interface RewardConfig {
    * CJK or English prompt + reply, cheap enough to run offline.
    */
   minContentCharsForCompletion: number;
+  /**
+   * Fraction of turns that are tool calls above which an episode is
+   * flagged as "tool-heavy" (combined with low assistant text → skip).
+   * Default 0.7.
+   */
+  toolHeavyRatio: number;
+  /**
+   * Minimum total assistant content chars needed to keep an episode
+   * that the tool-heavy heuristic would otherwise skip. Default 80.
+   */
+  minAssistantCharsForToolHeavy: number;
 }
 
 // ─── User feedback inputs ──────────────────────────────────────────────────
@@ -104,6 +116,8 @@ export interface HumanScoreInput {
 export interface TaskSummary {
   episodeId: EpisodeId;
   sessionId: SessionId;
+  /** Optional host/evaluator context included in the packed summary. */
+  hostContext?: string;
   userQuery: string;
   agentActions: string;
   outcome: string;

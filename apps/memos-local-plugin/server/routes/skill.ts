@@ -14,23 +14,45 @@ import { parseJson, writeError, type Routes } from "./registry.js";
 export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
   routes.set("GET /api/v1/skills", async (ctx) => {
     const status = (ctx.url.searchParams.get("status") as SkillDTO["status"] | null) ?? undefined;
+    const q = (ctx.url.searchParams.get("q") || "").trim().toLowerCase();
     // Viewer needs prev/next pagination — ask for one extra page so we
     // can tell the client whether there's more without a count query.
     const pageSize = limitOrUndefined(ctx.url.searchParams.get("limit")) ?? 50;
     const offset = Math.max(0, Number(ctx.url.searchParams.get("offset") ?? 0) || 0);
-    const all = await deps.core.listSkills({ status, limit: pageSize + offset + 1 });
+    let all = await deps.core.listSkills({ status, limit: q ? 5000 : pageSize + offset + 1 });
+    if (q) {
+      all = all.filter(
+        (s) => s.name.toLowerCase().includes(q) || s.invocationGuide.toLowerCase().includes(q),
+      );
+    }
     const page = all.slice(offset, offset + pageSize);
     const hasMore = all.length > offset + pageSize;
+    const total = q ? all.length : await deps.core.countSkills({ status });
     return {
       skills: page,
       limit: pageSize,
       offset,
+      total,
       nextOffset: hasMore ? offset + pageSize : undefined,
     };
   });
 
   routes.set("GET /api/v1/skills/get", async (ctx) => {
     const id = ctx.url.searchParams.get("id");
+    if (!id) {
+      writeError(ctx, 400, "invalid_argument", "id is required");
+      return;
+    }
+    const skill = await deps.core.getSkill(id as SkillId);
+    if (skill === null) {
+      writeError(ctx, 404, "not_found", `skill not found: ${id}`);
+      return;
+    }
+    return skill;
+  });
+
+  routes.setPattern("GET /api/v1/skills/:id", async (ctx) => {
+    const id = ctx.params.id;
     if (!id) {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
@@ -219,7 +241,7 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       return;
     }
     const body = parseJson<{
-      scope?: "private" | "public" | "hub" | null;
+      scope?: "private" | "local" | "public" | "hub" | null;
       target?: string | null;
     }>(ctx);
     const scope = body.scope === undefined ? "public" : body.scope;
@@ -252,8 +274,9 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       return;
     }
     const md = renderSkillMarkdown(skill);
-    const buf = buildSingleFileZip("SKILL.md", md);
-    const filename = sanitizeFilename(skill.name || skill.id) + ".zip";
+    const packageName = sanitizeFilename(skill.name || skill.id);
+    const buf = buildSingleFileZip(`${packageName}/SKILL.md`, md);
+    const filename = packageName + ".zip";
     ctx.res.writeHead(200, {
       "content-type": "application/zip",
       "content-length": String(buf.length),
@@ -264,10 +287,32 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
 }
 
 function renderSkillMarkdown(skill: SkillDTO): string {
-  const head = `# ${skill.name || skill.id}\n\n`;
+  const name = skill.name || skill.id;
+  const description = skillDescription(skill.invocationGuide, name);
+  const frontmatter =
+    `---\n` +
+    `name: ${yamlString(name)}\n` +
+    `description: ${yamlString(description)}\n` +
+    `---\n\n`;
+  const head = `# ${name}\n\n`;
   const meta = `> id: ${skill.id}\n> status: ${skill.status}\n> version: ${skill.version}\n\n`;
   const guide = skill.invocationGuide?.trim() || "(no invocation guide)";
-  return head + meta + guide + "\n";
+  return frontmatter + head + meta + guide + "\n";
+}
+
+function skillDescription(invocationGuide: string | undefined, name: string): string {
+  const fallback = `Use ${name} when this learned skill matches the current task.`;
+  const lines = (invocationGuide ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const firstBodyLine =
+    lines.find((line) => !line.startsWith("#") && !line.startsWith(">")) ?? fallback;
+  return firstBodyLine.replace(/\s+/g, " ").slice(0, 240);
+}
+
+function yamlString(raw: string): string {
+  return JSON.stringify(raw.replace(/\s+/g, " ").trim());
 }
 
 function sanitizeFilename(raw: string): string {

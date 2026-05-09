@@ -13,16 +13,22 @@
  * "gpt-4.1-mini", not "openai_compatible". When the skill evolver
  * inherits from the main LLM we say so explicitly.
  *
- * Third row = live SSE activity stream (unchanged).
+ * Third row = live activity dashboard. Six per-category tiles
+ * (memory / experience / environment knowledge / skill / retrieval /
+ * feedback) each showing a 5-minute event count, sparkline, and the
+ * most recent event in plain language. Tiles are bucketed off the
+ * same SSE buffer (`recent`) we already maintain. See
+ * `views/overview/ActivityDashboard.tsx` for the renderer and
+ * `views/overview/event-meta.ts` for the event-type → tile mapping.
  */
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../api/client";
 import { openSse } from "../api/sse";
 import { health } from "../stores/health";
 import { t } from "../stores/i18n";
-import { Icon } from "../components/Icon";
 import { navigate } from "../stores/router";
-import type { CoreEvent } from "../api/types";
+import type { ApiLogDTO, CoreEvent, CoreEventType } from "../api/types";
+import { ActivityDashboard } from "./overview/ActivityDashboard";
 
 interface SkillStats {
   total: number;
@@ -42,9 +48,14 @@ interface ModelInfo {
   model: string;
   dim?: number;
   inherited?: boolean;
-  /** Epoch ms of most recent successful call (null = never called). */
+  /** Epoch ms of most recent direct primary-provider success. */
   lastOkAt?: number | null;
-  /** Most recent failure, if the last call went bad. */
+  /**
+   * Epoch ms of most recent rescued-by-host-fallback call. Populates
+   * the "yellow" overview state.
+   */
+  lastFallbackAt?: number | null;
+  /** Most recent failure (sticky — see ModelHealth comment). */
   lastError?: { at: number; message: string } | null;
 }
 interface OverviewSummary {
@@ -60,9 +71,14 @@ interface OverviewSummary {
   skillEvolver?: ModelInfo;
 }
 
+interface ApiLogsResponse {
+  logs: ApiLogDTO[];
+}
+
 export function OverviewView() {
   const [summary, setSummary] = useState<OverviewSummary | null>(null);
   const [recent, setRecent] = useState<CoreEvent[]>([]);
+  const [recentApiLogEvents, setRecentApiLogEvents] = useState<CoreEvent[]>([]);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -81,15 +97,45 @@ export function OverviewView() {
   }, []);
 
   useEffect(() => {
+    // The dashboard buckets events into a 5-minute sliding window
+    // (30 buckets × 10 s). Cap the buffer at 256 so we keep enough
+    // history even on chatty agents (trace + retrieval + feedback can
+    // each fire several times per minute) without growing unbounded.
     const handle = openSse("/api/v1/events", (_, data) => {
       try {
         const evt = JSON.parse(data) as CoreEvent;
-        setRecent((prev) => [evt, ...prev].slice(0, 12));
+        setRecent((prev) => [evt, ...prev].slice(0, 256));
       } catch {
         /* skip */
       }
     });
     return () => handle.close();
+  }, []);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    const load = () =>
+      api
+        .get<ApiLogsResponse>("/api/v1/api-logs?limit=200&offset=0", {
+          signal: ctrl.signal,
+        })
+        .then((res) => {
+          setRecentApiLogEvents(
+            (res.logs ?? [])
+              .map(apiLogToCoreEvent)
+              .filter((evt): evt is CoreEvent => evt !== null),
+          );
+        })
+        .catch(() => void 0);
+    void load();
+    // api_logs is the durable source behind the Logs page. Polling it
+    // keeps the overview heartbeat alive even when the volatile CoreEvent
+    // SSE stream misses a lifecycle event or the viewer connects late.
+    const id = window.setInterval(load, 10_000);
+    return () => {
+      ctrl.abort();
+      window.clearInterval(id);
+    };
   }, []);
 
   const h = health.value;
@@ -195,37 +241,175 @@ export function OverviewView() {
         />
       </section>
 
-      <section class="card">
+      {/*
+       * Row 3: live activity dashboard. Replaces the previous JSON
+       * `.stream` block with a 3 × 2 grid of category tiles
+       * (memory / experience / environment knowledge / skill /
+       * retrieval / feedback) each showing a 5-minute sparkline plus
+       * the latest event in plain language. The component owns its
+       * own clock tick so sparklines slide left even while the SSE
+       * stream is quiet.
+       */}
+      <section class="card card--flat">
         <div class="card__header">
           <div>
             <h3 class="card__title">{t("overview.live.title")}</h3>
-            <p class="card__subtitle">{t("overview.live.subtitle")}</p>
           </div>
         </div>
-        {recent.length === 0 ? (
-          <div class="empty">
-            <div class="empty__icon">
-              <Icon name="message-square-text" size={22} />
-            </div>
-            <div class="empty__title">{t("overview.live.empty")}</div>
-            <div class="empty__hint">{t("overview.live.hint")}</div>
-          </div>
-        ) : (
-          <div class="stream">
-            {recent.map((evt) => (
-              <div class="stream__line" key={evt.seq}>
-                <span class="stream__time">{new Date(evt.ts).toLocaleTimeString()}</span>
-                <span class="stream__level stream__level--info">{evt.type}</span>
-                <span class="stream__body">
-                  {JSON.stringify(evt.payload ?? {}).slice(0, 240)}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+        <ActivityDashboard events={mergeRecentEvents(recent, recentApiLogEvents)} />
       </section>
     </>
   );
+}
+
+function mergeRecentEvents(
+  liveEvents: readonly CoreEvent[],
+  apiLogEvents: readonly CoreEvent[],
+): CoreEvent[] {
+  const byKey = new Map<string, CoreEvent>();
+  for (const evt of [...apiLogEvents, ...liveEvents]) {
+    const id = evt.correlationId ?? evt.seq;
+    byKey.set(`${evt.type}:${id}:${evt.ts}`, evt);
+  }
+  return [...byKey.values()].sort((a, b) => b.ts - a.ts).slice(0, 512);
+}
+
+function apiLogToCoreEvent(log: ApiLogDTO): CoreEvent | null {
+  const output = parseJsonObject(log.outputJson);
+  const input = parseJsonObject(log.inputJson);
+  const basePayload = {
+    apiLogId: log.id,
+    toolName: log.toolName,
+    success: log.success,
+    durationMs: log.durationMs,
+    input,
+    output,
+  };
+  const type = apiLogEventType(log, output);
+  if (!type) return null;
+  return {
+    type,
+    ts: log.calledAt,
+    seq: -1_000_000 - log.id,
+    correlationId: apiLogCorrelationId(log, input, output),
+    payload: apiLogPayload(log, type, basePayload, input, output),
+  };
+}
+
+function apiLogEventType(
+  log: ApiLogDTO,
+  output: Record<string, unknown>,
+): CoreEventType | null {
+  switch (log.toolName) {
+    case "memory_add":
+      return "trace.created";
+    case "memory_search":
+      return hasRetrievalHits(output) ? "retrieval.tier1.hit" : "retrieval.empty";
+    case "policy_generate":
+      return "l2.induced";
+    case "policy_evolve":
+      return "l2.revised";
+    case "world_model_generate":
+      return "l3.abstracted";
+    case "world_model_evolve":
+      return "l3.revised";
+    case "skill_generate":
+      return "skill.crystallized";
+    case "skill_evolve":
+      return skillEventType(output);
+    default:
+      return null;
+  }
+}
+
+function skillEventType(output: Record<string, unknown>): CoreEventType {
+  const kind = stringField(output, "kind");
+  if (kind === "skill.archived") return "skill.archived";
+  if (kind === "skill.eta.updated") return "skill.eta_updated";
+  return "skill.repaired";
+}
+
+function apiLogCorrelationId(
+  log: ApiLogDTO,
+  input: Record<string, unknown>,
+  output: Record<string, unknown>,
+): string {
+  return (
+    stringField(output, "traceId") ??
+    stringField(output, "policyId") ??
+    stringField(output, "worldModelId") ??
+    stringField(output, "skillId") ??
+    stringField(input, "episodeId") ??
+    stringField(input, "sessionId") ??
+    `api-log-${log.id}`
+  );
+}
+
+function apiLogPayload(
+  log: ApiLogDTO,
+  type: CoreEventType,
+  basePayload: Record<string, unknown>,
+  input: Record<string, unknown>,
+  output: Record<string, unknown>,
+): Record<string, unknown> {
+  if (type === "trace.created") {
+    const details = Array.isArray(output.details) ? output.details : [];
+    const firstDetail =
+      details.find((item): item is Record<string, unknown> => !!item && typeof item === "object") ??
+      {};
+    return {
+      ...basePayload,
+      traceId: stringField(firstDetail, "traceId") ?? `api-log-${log.id}`,
+      episodeId: stringField(input, "episodeId"),
+      sessionId: stringField(input, "sessionId"),
+    };
+  }
+  if (type === "retrieval.tier1.hit" || type === "retrieval.empty") {
+    const hits = retrievalHitCount(output);
+    return {
+      ...basePayload,
+      sessionId: stringField(input, "sessionId"),
+      episodeId: stringField(input, "episodeId"),
+      stats: {
+        hits,
+        latencyMs: log.durationMs,
+      },
+    };
+  }
+  return {
+    ...basePayload,
+    policyId: stringField(output, "policyId") ?? stringField(input, "policyId"),
+    worldModelId: stringField(output, "worldModelId") ?? stringField(input, "worldModelId"),
+    skillId: stringField(output, "skillId") ?? stringField(input, "skillId"),
+    episodeId: stringField(output, "episodeId") ?? stringField(input, "episodeId"),
+    signature: stringField(output, "title") ?? stringField(input, "title"),
+  };
+}
+
+function hasRetrievalHits(output: Record<string, unknown>): boolean {
+  return retrievalHitCount(output) > 0;
+}
+
+function retrievalHitCount(output: Record<string, unknown>): number {
+  const filtered = Array.isArray(output.filtered) ? output.filtered.length : 0;
+  const candidates = Array.isArray(output.candidates) ? output.candidates.length : 0;
+  return filtered || candidates;
+}
+
+function parseJsonObject(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function stringField(obj: Record<string, unknown>, key: string): string | undefined {
+  const value = obj[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function QuantityCard({
@@ -259,17 +443,26 @@ function QuantityCard({
   );
 }
 
-type ModelDotKind = "ok" | "err" | "idle" | "off";
+type ModelDotKind = "ok" | "fallback" | "err" | "idle" | "off";
 
 /**
- * Derive the overview card status from a {@link ModelInfo}:
- *   - `off`  — the client isn't even configured
- *   - `idle` — configured but no call has happened yet (fresh install)
- *   - `err`  — last call failed, surface the error message in a tooltip
- *   - `ok`   — last call succeeded
+ * Derive the overview card status from a {@link ModelInfo}.
  *
- * Preference order: error wins (even over never-called), so a
- * freshly-failed provider doesn't pretend to be idle.
+ * The card is painted by picking the most-recent of three timestamps
+ * — `lastOkAt`, `lastFallbackAt`, `lastError.at` — and mapping that
+ * winner to a colour:
+ *
+ *   - `ok` (green)        — primary provider answered directly.
+ *   - `fallback` (yellow) — primary failed but host LLM bridge
+ *                           rescued the call. The card surfaces the
+ *                           original error so users know *why* it
+ *                           degraded.
+ *   - `err` (red)         — primary failed and either there was no
+ *                           fallback or the fallback also failed.
+ *
+ * `lastError` is sticky on the backend so it can sit alongside a
+ * fresher `lastOkAt` after recovery — comparing timestamps lets the
+ * UI naturally "go green again" without having to clear the message.
  */
 function modelStatusFromInfo(info: ModelInfo | undefined): {
   kind: ModelDotKind;
@@ -279,23 +472,65 @@ function modelStatusFromInfo(info: ModelInfo | undefined): {
   if (!info || info.available === false) {
     return { kind: "off", label: t("overview.metric.model.unconfigured") };
   }
-  if (info.lastError) {
+
+  const okAt = info.lastOkAt ?? 0;
+  const fbAt = info.lastFallbackAt ?? 0;
+  const errAt = info.lastError?.at ?? 0;
+  const max = Math.max(okAt, fbAt, errAt);
+
+  // Nothing has happened yet — fresh process, no calls landed.
+  if (max === 0) {
+    return { kind: "idle", label: t("overview.metric.model.idle") };
+  }
+
+  // Priority order matters when timestamps tie.
+  //
+  // The backend stamps `lastFallbackAt` and `lastError.at` with the
+  // SAME `Date.now()` inside `markFallback` (the upstream error is
+  // kept on `lastError` so the viewer can show *why* fallback
+  // engaged). When that happens, a strict "errAt === max ⇒ red"
+  // check would always win over the fallback branch and the slot
+  // would never go yellow. The current call succeeded — through the
+  // host bridge — so semantically it is the fallback state, with
+  // the error only providing context. Hence: fallback wins ties
+  // against err.
+  //
+  // We also let fallback win ties against ok for the rare case where
+  // a successful primary call and a fallback rescue happen in the
+  // same millisecond — yellow is the most informative state.
+  if (fbAt > 0 && fbAt >= errAt && fbAt >= okAt) {
+    const raw = (info.lastError?.message ?? "").trim();
+    const head = t("overview.metric.model.fallback");
+    const tail = raw ? `: ${raw.length > 60 ? raw.slice(0, 59) + "…" : raw}` : "";
+    return {
+      kind: "fallback",
+      label: head + tail,
+      tooltip: raw
+        ? t("overview.metric.model.fallback.tooltip", { msg: raw })
+        : head,
+    };
+  }
+
+  // Most recent event was a terminal failure.
+  if (errAt > 0 && errAt >= okAt) {
+    const raw = (info.lastError?.message ?? "").trim();
+    const short =
+      raw.length > 80 ? raw.slice(0, 79) + "…" : raw || t("overview.metric.model.failed");
     return {
       kind: "err",
-      label: t("overview.metric.model.failed"),
-      tooltip: info.lastError.message,
+      label: short,
+      tooltip: raw || t("overview.metric.model.failed"),
     };
   }
-  if (info.lastOkAt) {
-    return {
-      kind: "ok",
-      label: t("overview.metric.model.connected"),
-      tooltip: t("overview.metric.model.connectedAt", {
-        ts: new Date(info.lastOkAt).toLocaleTimeString(),
-      }),
-    };
-  }
-  return { kind: "idle", label: t("overview.metric.model.idle") };
+
+  // okAt is the largest — primary provider is working directly.
+  return {
+    kind: "ok",
+    label: t("overview.metric.model.connected"),
+    tooltip: t("overview.metric.model.connectedAt", {
+      ts: new Date(okAt).toLocaleTimeString(),
+    }),
+  };
 }
 
 function ModelCard({

@@ -44,6 +44,7 @@ function mkWorldModel(partial: Partial<WorldModelRow> & { id: WorldModelId }): W
     vec: partial.vec ?? vec([1, 0, 0]),
     createdAt: NOW,
     updatedAt: NOW,
+    version: partial.version ?? 1,
     status: partial.status ?? "active",
   };
 }
@@ -55,6 +56,13 @@ function mkCluster(partial: Partial<PolicyCluster> = {}): PolicyCluster {
     domainTags: partial.domainTags ?? ["docker", "alpine"],
     centroidVec: partial.centroidVec ?? vec([1, 0, 0]),
     avgGain: partial.avgGain ?? 0.3,
+    // Default to a tight `strict` admission with full cohesion so the
+    // existing merge-tests (which predate the two-stage admission
+    // change in cluster.ts) keep their original semantics. Tests that
+    // specifically want to exercise the loose / low-cohesion branch
+    // can pass them in `partial`.
+    cohesion: partial.cohesion ?? 1.0,
+    admission: partial.admission ?? "strict",
   };
 }
 
@@ -115,6 +123,35 @@ describe("memory/l3/merge", () => {
     if (out.kind !== "update") return;
     expect(String(out.target.id)).toBe("wm_close");
     expect(out.cosineScore).toBeGreaterThan(0.9);
+  });
+
+  it("chooseMergeTarget force-merges when policy ids overlap strongly", () => {
+    const overlapping = mkWorldModel({
+      id: "wm_overlap" as WorldModelId,
+      vec: vec([0, 1, 0]),
+      policyIds: ["po_a", "po_b", "po_c"] as PolicyId[],
+    });
+    const far = mkWorldModel({
+      id: "wm_far" as WorldModelId,
+      vec: vec([1, 0, 0]),
+      policyIds: ["po_x", "po_y"] as PolicyId[],
+    });
+    const out = chooseMergeTarget(
+      mkCluster({
+        centroidVec: vec([1, 0, 0]),
+        policies: [
+          { id: "po_a" as PolicyId },
+          { id: "po_b" as PolicyId },
+          { id: "po_d" as PolicyId },
+        ] as PolicyCluster["policies"],
+      }),
+      [overlapping, far],
+      mkDraft(),
+      { lookup: fakeLookup(), config: { clusterMinSimilarity: 0.9 } },
+    );
+    expect(out.kind).toBe("update");
+    if (out.kind !== "update") return;
+    expect(String(out.target.id)).toBe("wm_overlap");
   });
 
   it("chooseMergeTarget returns create when nothing passes the cutoff", () => {

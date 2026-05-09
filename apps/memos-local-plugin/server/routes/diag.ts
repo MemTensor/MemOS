@@ -55,6 +55,31 @@ export function registerDiagRoutes(routes: Routes, deps: ServerDeps): void {
     };
   });
 
+  routes.set("GET /api/v1/diag/namespace", async () => {
+    const health = await deps.core.health();
+    const [traces, episodes, policies, worldModels, skills] = await Promise.all([
+      deps.core.listTraces({ limit: 200, offset: 0 }),
+      deps.core.listEpisodeRows({ limit: 200, offset: 0 }),
+      deps.core.listPolicies({ limit: 200, offset: 0 }),
+      deps.core.listWorldModels({ limit: 200, offset: 0 }),
+      deps.core.listSkills({ limit: 200 }),
+    ]);
+    const namespaces = new Map<string, { agentKind: string; profileId: string; count: number }>();
+    for (const row of [...traces, ...episodes, ...policies, ...worldModels, ...skills]) {
+      const agentKind = row.ownerAgentKind ?? "unknown";
+      const profileId = row.ownerProfileId ?? "default";
+      const key = `${agentKind}/${profileId}`;
+      const current = namespaces.get(key) ?? { agentKind, profileId, count: 0 };
+      current.count++;
+      namespaces.set(key, current);
+    }
+    return {
+      current: health.namespace ?? { agentKind: health.agent, profileId: "default" },
+      db: health.paths.db,
+      namespaces: [...namespaces.values()].sort((a, b) => b.count - a.count),
+    };
+  });
+
   routes.set("POST /api/v1/diag/simulate-turn", async (ctx) => {
     // Safety lock: accept only when explicitly opted-in with
     // `?allow=1`. Without this header the endpoint returns 403 — we

@@ -9,6 +9,11 @@ import type { ResolvedConfig } from "./schema.js";
 export const DEFAULT_CONFIG: ResolvedConfig = {
   version: 1,
   viewer: {
+    // Per-agent default lives in `templates/config.<agent>.yaml`:
+    //   - openclaw → 18799
+    //   - hermes   → 18800
+    // The fallback here only matters when neither config file exists
+    // (early bootstrap, tests, etc.).
     port: 18799,
     bindHost: "127.0.0.1",
     openOnFirstTurn: false,
@@ -29,7 +34,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     },
   },
   llm: {
-    provider: "local_only",
+    provider: "",
     endpoint: "",
     model: "",
     temperature: 0,
@@ -91,42 +96,90 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       feedbackWindowSec: 30,
       summaryMaxChars: 2_000,
       llmConcurrency: 2,
-      minExchangesForCompletion: 2,
-      minContentCharsForCompletion: 80,
+      // Default lowered 2→1 to support single-shot CLI patterns
+      // (`hermes chat -q "..."`, `openclaw run --once`). With the old
+      // floor every CLI single-query episode was abandoned with
+      // "对话轮次不足", starving reward → L2 → Skill of any signal.
+      // Multi-turn TUI flows still trigger reward as before because
+      // they always satisfy the looser bound. Operators wanting the
+      // strict pre-2026Q2 behaviour can set 2 in config.yaml.
+      minExchangesForCompletion: 1,
+      // Lowered 80→40 to match the relaxed exchanges floor. 40 chars
+      // is "ok"/"thanks" + a real follow-up clause; below that we
+      // still skip as a triviality gate.
+      minContentCharsForCompletion: 40,
+      toolHeavyRatio: 0.7,
+      minAssistantCharsForToolHeavy: 80,
     },
     l2Induction: {
       minSimilarity: 0.65,
       candidateTtlDays: 30,
-      minEpisodesForInduction: 2,
-      minTraceValue: 0.05,
+      minEpisodesForInduction: 1,
+      // Lowered from 0.05 → 0.005. Reward backprop V values for typical
+      // multi-step turns (5-15 steps) are clustered around 0.02-0.5 even
+      // for successful episodes; the old 0.05 floor was throwing away
+      // most of the signal before induction could see it. Negative-V
+      // traces are still excluded (they'd never count as "with-set"
+      // evidence anyway).
+      minTraceValue: 0.005,
       useLlm: true,
       traceCharCap: 3_000,
       archiveGain: -0.05,
     },
     l3Abstraction: {
-      minPolicies: 3,
-      minPolicyGain: 0.1,
+      // Lowered from 3 → 2. The original threshold required THREE
+      // distinct active policies in the same domain cluster before any
+      // world model could form, which in real usage takes weeks to
+      // accumulate even for a focused user. Two compatible active
+      // policies is the smallest meaningful cluster.
+      minPolicies: 1,
+      // Lowered from 0.1 → 0.02. With the Bayesian-shrinkage gain
+      // formula (see core/memory/l2/gain.ts), a genuinely useful policy
+      // that fires on a single-success path now scores around 0.05-0.20
+      // (proportional to V_with - 0.5). 0.02 is well below that floor
+      // but still cleanly rejects net-neutral noise.
+      minPolicyGain: 0.02,
       minPolicySupport: 1,
-      clusterMinSimilarity: 0.6,
+      // Lowered from 0.6 → 0.3 so the typical 2-3 active policies in
+      // an early-life install can still cluster into a world model;
+      // strict 0.6 starved L3 in real usage.
+      clusterMinSimilarity: 0.3,
       policyCharCap: 800,
       traceCharCap: 500,
       traceEvidencePerPolicy: 1,
       useLlm: true,
-      cooldownDays: 1,
+      // Lowered from 1 → 0 so abstraction can run as soon as the
+      // ingredients show up, not on a per-day cadence.
+      cooldownDays: 0,
       confidenceDelta: 0.05,
       minConfidenceForRetrieval: 0.2,
     },
     skill: {
-      minSupport: 2,
-      minGain: 0.1,
-      candidateTrials: 5,
-      cooldownMs: 6 * 60 * 60 * 1000,
+      // Lowered from 2 → 1: a single supporting episode is enough to
+      // attempt skill crystallization. Quality is still gated by
+      // minGain + candidate trials below.
+      minSupport: 1,
+      // Lowered from 0.1 → 0.02. Same rationale as l3.minPolicyGain:
+      // the new shrinkage-anchored gain formula gives positive scores
+      // proportional to V_with − 0.5, so 0.1 was unreachable for any
+      // policy that didn't have an explicit failure-cohort contrast.
+      // 0.02 is enough to filter neutral-noise policies while still
+      // letting genuinely-useful patterns crystallize.
+      minGain: 0.02,
+      // Lowered from 5 → 1. Demanding multiple trials in `candidate`
+      // before a skill can graduate meant skills rarely promoted in
+      // real usage; 1 lets the candidate→active transition happen
+      // immediately on first successful invocation.
+      candidateTrials: 1,
+      // Lowered from 6 hours → 0: no cooldown, skills can re-evolve
+      // as soon as new evidence arrives.
+      cooldownMs: 0,
       traceCharCap: 500,
       evidenceLimit: 6,
       useLlm: true,
       etaDelta: 0.1,
-      archiveEta: 0.25,
-      minEtaForRetrieval: 0.5,
+      archiveEta: 0.1,
+      minEtaForRetrieval: 0.1,
     },
     feedback: {
       failureThreshold: 3,
@@ -152,8 +205,10 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       mmrLambda: 0.7,
       includeLowValue: false,
       rrfConstant: 60,
-      minSkillEta: 0.5,
-      minTraceSim: 0.35,
+      minSkillEta: 0.1,
+      // Lowered from 0.35 → 0.25 so partial-match traces still surface
+      // for users with smaller corpora.
+      minTraceSim: 0.25,
       episodeGoalMinSim: 0.45,
       tagFilter: "auto",
       keywordTopK: 20,
@@ -173,10 +228,11 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // small budget; combined with the richer prompt (v3) this keeps
       // packets concise without over-dropping.
       llmFilterMaxKeep: 4,
-      // Lowered from 2 → 1: even a single candidate gets a precision
-      // pass. Mirrors `memos-local-openclaw`'s tool-level filter and
-      // prevents a lone off-topic memory from sneaking through unchecked.
-      llmFilterMinCandidates: 1,
+      // Set to 2: skip the LLM precision pass when there's only one
+      // candidate (no point ranking a single item). Anything with 2+
+      // candidates still goes through the filter to drop off-topic
+      // hits before injection.
+      llmFilterMinCandidates: 2,
       llmFilterCandidateBodyChars: 500,
     },
   },
@@ -193,6 +249,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   telemetry: { enabled: true },
   logging: {
     level: "info",
+    detailedView: false,
     console: { enabled: true, pretty: true, channels: ["*"] },
     file: {
       enabled: true,

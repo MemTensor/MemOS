@@ -1,111 +1,144 @@
 /**
- * Global restart-coordinator — signal-based so any view can trigger a
- * graceful reload.
+ * Config-save restart state manager.
  *
- * Workflow:
- *   1. `triggerRestart()` sets `restarting.value = { phase: 'down' }`
- *   2. App-shell renders a full-screen overlay driven by the signal.
- *   3. We POST `/api/v1/admin/restart` — the server flushes the
- *      response, closes the HTTP server, and `process.exit(0)`s.
- *   4. We poll `GET /api/v1/health` every 1.5s. First transition
- *      "ok → fail" flips phase to `up`; first "fail → ok" transition
- *      during phase=up flips to `done` and reloads the page.
+ * OpenClaw can be restarted from the viewer because the plugin lives
+ * inside the gateway process and launchd brings it back.
  *
- * If the server doesn't come back within `MAX_ATTEMPTS * POLL_MS`
- * (~90s), we surface a hard-error message and stop polling.
+ * Hermes is different: the viewer daemon is intentionally long-lived,
+ * so restart means "terminate the active `hermes chat` process" while
+ * keeping this Memory Viewer online. The user can relaunch Hermes and
+ * it will reconnect to the existing viewer service.
  */
 import { signal } from "@preact/signals";
-import { withAgentPrefix } from "../api/client";
+import { api } from "../api/client";
+import { health } from "./health";
 
-export type RestartPhase = "idle" | "down" | "up" | "done" | "failed";
+export type RestartPhase =
+  | "idle"
+  | "restarting"
+  | "waitingUp"
+  | "restartFailed";
 
 export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
 });
 
-const POLL_MS = 1500;
-const MAX_ATTEMPTS = 60;
-
-async function probe(): Promise<boolean> {
-  try {
-    const r = await fetch(withAgentPrefix("/api/v1/health"), { cache: "no-store" });
-    if (!r.ok) return false;
-    const body = (await r.json()) as { ok?: boolean };
-    return !!body?.ok;
-  } catch {
-    return false;
-  }
+function isOpenClaw(): boolean {
+  return health.value?.agent === "openclaw";
 }
 
-export interface TriggerRestartOptions {
-  /**
-   * What kicks the server into exiting. Defaults to hitting
-   * `POST /api/v1/admin/restart`; callers that already fired a different
-   * endpoint (e.g. "Clear all data", which the server handles by
-   * wiping SQLite + `process.exit(0)`) should pass `"skip"` so we don't
-   * double-trigger.
-   */
-  kick?: "restart-endpoint" | "skip";
-}
+async function pollHealthUntilUp(maxAttempts = 60): Promise<boolean> {
+  let phase: "waitDown" | "waitUp" = "waitDown";
+  const MAX_WAIT_DOWN = 8;
 
-export async function triggerRestart(
-  opts: TriggerRestartOptions = {},
-): Promise<void> {
-  restartState.value = { phase: "down" };
-
-  if ((opts.kick ?? "restart-endpoint") === "restart-endpoint") {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const delay = phase === "waitDown" ? 1500 : 2500;
+    await new Promise((r) => setTimeout(r, delay));
     try {
-      await fetch(withAgentPrefix("/api/v1/admin/restart"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
+      const res = await fetch("/api/v1/health");
+      if (phase === "waitDown") {
+        if (res.ok || res.status === 401 || res.status === 403) {
+          if (attempt >= MAX_WAIT_DOWN) return true;
+        } else {
+          phase = "waitUp";
+          restartState.value = { phase: "waitingUp" };
+        }
+      } else {
+        if (res.ok || res.status === 401 || res.status === 403) return true;
+      }
     } catch {
-      // That's expected — the server may have closed the socket as it
-      // shut down. Continue to the poll loop.
+      if (phase === "waitDown") {
+        phase = "waitUp";
+        restartState.value = { phase: "waitingUp" };
+      }
     }
   }
+  return false;
+}
 
-  // Phase 1 — wait for the server to go offline so we know the
-  // restart request actually took effect.
-  let wentDown = false;
-  for (let i = 0; i < 20; i++) {
-    await sleep(POLL_MS / 3);
-    const alive = await probe();
-    if (!alive) {
-      wentDown = true;
-      break;
+/**
+ * Quick health check for destructive clear-data only.
+ * Do not use this for Hermes config saves: those must keep the current
+ * viewer daemon online and terminate only the active `hermes chat`.
+ */
+async function quickPollUp(maxAttempts = 30): Promise<boolean> {
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const res = await fetch("/api/v1/health");
+      if (res.ok || res.status === 401 || res.status === 403) return true;
+    } catch {
+      /* server still transitioning */
     }
   }
-  if (!wentDown) {
-    // Config was patched but the server never restarted — most likely
-    // dev mode without a supervisor. Force a reload so the viewer
-    // picks up the new config via the normal REST path.
-    restartState.value = { phase: "done" };
-    location.reload();
+  return false;
+}
+
+/**
+ * Config saved. OpenClaw gets an in-place gateway restart. Hermes keeps
+ * the viewer online and asks the backend to terminate the active chat
+ * process; once that request returns, reload the same viewer page.
+ *
+ * Do not add a passive "settings saved" toast/card here. The restart
+ * affordance is intentionally blocking for both agents so the operator
+ * sees Hermes' active chat window being closed before the viewer returns.
+ */
+export async function triggerRestart(): Promise<void> {
+  restartState.value = { phase: "restarting" };
+  if (!isOpenClaw()) {
+    try {
+      await api.post("/api/v1/admin/restart");
+      await new Promise((r) => setTimeout(r, 500));
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } catch {
+      restartState.value = { phase: "restartFailed" };
+    }
     return;
   }
 
-  restartState.value = { phase: "up" };
-
-  // Phase 2 — wait for the server to come back.
-  for (let i = 0; i < MAX_ATTEMPTS; i++) {
-    await sleep(POLL_MS);
-    const alive = await probe();
-    if (alive) {
-      restartState.value = { phase: "done" };
-      location.reload();
-      return;
-    }
+  try {
+    await api.post("/api/v1/admin/restart");
+  } catch {
+    // Server might already be going down
   }
 
-  restartState.value = {
-    phase: "failed",
-    message:
-      "Service didn't come back in time. The plugin host may need a manual restart.",
-  };
+  const ok = await pollHealthUntilUp(60);
+  if (ok) {
+    window.location.href =
+      window.location.pathname + "?_t=" + Date.now();
+  } else {
+    restartState.value = { phase: "restartFailed" };
+  }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Data cleared. Both agents self-respawn via the daemon mechanism.
+ */
+export async function triggerCleared(): Promise<void> {
+  restartState.value = { phase: "restarting" };
+  if (isOpenClaw()) {
+    const ok = await pollHealthUntilUp(60);
+    if (ok) {
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } else {
+      restartState.value = { phase: "restartFailed" };
+    }
+  } else {
+    // Hermes: clear-data spawns a new daemon. The default 30s of
+    // `quickPollUp` already covers the slow first-boot DB migration.
+    const ok = await quickPollUp();
+    if (ok) {
+      window.location.href =
+        window.location.pathname + "?_t=" + Date.now();
+    } else {
+      restartState.value = { phase: "restartFailed" };
+    }
+  }
+}
+
+/** Dismiss the banner immediately (e.g. user clicked the close button). */
+export function dismissRestartBanner(): void {
+  restartState.value = { phase: "idle" };
 }

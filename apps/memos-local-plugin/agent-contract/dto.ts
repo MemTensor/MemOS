@@ -9,6 +9,23 @@
 
 export type AgentKind = "openclaw" | "hermes" | string;
 
+export type ShareScope = "private" | "local" | "public" | "hub";
+
+export interface RuntimeNamespace {
+  agentKind: AgentKind;
+  profileId: string;
+  profileLabel?: string;
+  workspaceId?: string;
+  workspacePath?: string;
+  sessionKey?: string;
+}
+
+export interface OwnershipDTO {
+  ownerAgentKind?: AgentKind;
+  ownerProfileId?: string;
+  ownerWorkspaceId?: string | null;
+}
+
 export type SessionId = string;
 export type EpisodeId = string;
 export type TraceId = string;
@@ -38,8 +55,15 @@ export interface ToolCallDTO {
   input: unknown;
   output?: unknown;
   errorCode?: string;
-  startedAt: EpochMs;
-  endedAt: EpochMs;
+  /** Host/model tool call id, when available. Used to correlate tool results. */
+  toolCallId?: string;
+  /**
+   * Real tool execution timestamps when the host exposes them. Tools
+   * reconstructed later from `post_llm_call` history may not have reliable
+   * timing; leave these undefined rather than filling with capture time.
+   */
+  startedAt?: EpochMs;
+  endedAt?: EpochMs;
   /**
    * LLM-native thinking emitted *before* the model decided to invoke this
    * tool — e.g. "I got an error from tool_1, let me try a different
@@ -50,11 +74,21 @@ export interface ToolCallDTO {
    * Stored inside `tool_calls_json` (no schema migration needed).
    */
   thinkingBefore?: string;
+  /**
+   * Visible assistant text emitted in the same message before the model
+   * requested this tool. Hermes/OpenAI-style responses may contain both
+   * `content` and `tool_calls`; this field preserves that user-facing
+   * narration without mixing it into private reasoning.
+   *
+   * Stored inside `tool_calls_json` (no schema migration needed).
+   */
+  assistantTextBefore?: string;
 }
 
 export interface TurnInputDTO {
   agent: AgentKind;
   sessionId: SessionId;
+  namespace?: RuntimeNamespace;
   /** Optional pre-existing episodeId (for continued tasks). */
   episodeId?: EpisodeId;
   /** Free-form text the user said this turn. */
@@ -69,6 +103,7 @@ export interface TurnResultDTO {
   agent: AgentKind;
   sessionId: SessionId;
   episodeId: EpisodeId;
+  namespace?: RuntimeNamespace;
   /** Free-form text the agent emitted. */
   agentText: string;
   /**
@@ -82,6 +117,8 @@ export interface TurnResultDTO {
   agentThinking?: string;
   /** Tools called this turn (in order). */
   toolCalls: ToolCallDTO[];
+  /** Optional adapter-provided host/runtime hints for scoring context. */
+  contextHints?: Record<string, unknown>;
   /**
    * Optional MemOS-produced reflection (the plugin's summary of what
    * the model did, used to compute α + backprop V). NEVER displayed
@@ -93,9 +130,39 @@ export interface TurnResultDTO {
   ts: EpochMs;
 }
 
+export type SubagentOutcome =
+  | "ok"
+  | "error"
+  | "timeout"
+  | "killed"
+  | "reset"
+  | "deleted"
+  | "unknown";
+
+export interface SubagentOutcomeDTO {
+  agent: AgentKind;
+  namespace?: RuntimeNamespace;
+  /** Parent session that requested the delegation. */
+  sessionId: SessionId;
+  /** Parent episode to append the delegation result to, when known. */
+  episodeId?: EpisodeId;
+  /** Host-specific child/subagent session id, if available. */
+  childSessionId?: SessionId | null;
+  /** The delegated mission/task. */
+  task: string;
+  /** The child result or terminal reason. */
+  result: string;
+  /** Structured tool calls observed inside the child session, when available. */
+  toolCalls?: ToolCallDTO[];
+  outcome?: SubagentOutcome;
+  error?: string;
+  ts?: EpochMs;
+  meta?: Record<string, unknown>;
+}
+
 // ─── Memory items ─────────────────────────────────────────────────────────────
 
-export interface TraceDTO {
+export interface TraceDTO extends OwnershipDTO {
   id: TraceId;
   episodeId: EpisodeId;
   sessionId: SessionId;
@@ -117,7 +184,7 @@ export interface TraceDTO {
    * "共享 / 取消共享" button label.
    */
   share?: {
-    scope: "private" | "public" | "hub";
+    scope: ShareScope;
     target?: string | null;
     sharedAt?: EpochMs | null;
   } | null;
@@ -143,17 +210,24 @@ export interface TraceDTO {
   rHuman?: Reward;
   /** Cached priority used for L2 candidate selection. */
   priority: number;
+  /** Episode-level scoring state, attached for viewer display. */
+  episodeStatus?: "open" | "closed";
+  episodeRTask?: Reward | null;
+  /**
+   * True only when the reward gate explicitly stamped
+   * `meta.reward.skipped=true`. Do not infer this from `rTask=null` because a
+   * freshly-finalized episode can be closed while reward scoring is still
+   * running.
+   */
+  episodeRewardSkipped?: boolean;
   /**
    * Stable group key shared by every L1 trace produced from the same
    * user message. Equal to the user turn's `ts` (epoch ms). The
    * viewer collapses rows with identical `(episodeId, turnId)` into
    * a single "one round = one memory" card; algorithm-side machinery
    * (V/α/L2/Tier 2/Decision Repair) ignores the field.
-   *
-   * Optional because rows written before migration 013 have NULL
-   * `turn_id`; the viewer falls back to per-row rendering for them.
    */
-  turnId?: EpochMs | null;
+  turnId: EpochMs;
 }
 
 /**
@@ -172,7 +246,7 @@ export interface ApiLogDTO {
   calledAt: EpochMs;
 }
 
-export interface PolicyDTO {
+export interface PolicyDTO extends OwnershipDTO {
   id: PolicyId;
   title: string;
   trigger: string;
@@ -185,6 +259,18 @@ export interface PolicyDTO {
   gain: number;
   /** "candidate" until promoted, "active" once stable, "archived" once revoked. */
   status: "candidate" | "active" | "archived";
+  experienceType?:
+    | "success_pattern"
+    | "repair_validated"
+    | "failure_avoidance"
+    | "repair_instruction"
+    | "preference"
+    | "verifier_feedback"
+    | "procedural";
+  evidencePolarity?: "positive" | "negative" | "neutral" | "mixed";
+  salience?: number;
+  confidence?: number;
+  skillEligible?: boolean;
   createdAt: EpochMs;
   updatedAt: EpochMs;
   /**
@@ -192,7 +278,7 @@ export interface PolicyDTO {
    * shape as {@link TraceDTO.share}.
    */
   share?: {
-    scope: "private" | "public" | "hub";
+    scope: ShareScope;
     target?: string | null;
     sharedAt?: EpochMs | null;
   } | null;
@@ -203,14 +289,11 @@ export interface PolicyDTO {
   editedAt?: EpochMs;
   /**
    * Decision guidance attached to this policy by the feedback pipeline
-   * (V7 §2.4.6). Mirrors the legacy `skill_heuristics` table's
-   * `kind=prefer / kind=avoid` rows — here we return both lists
-   * directly so the viewer can render them as a categorised pane.
-   *
-   * Source of truth is a JSON block stashed at the tail of `boundary`
-   * under the `@repair` sentinel; the server parses it and surfaces
-   * the structured form. Legacy policies without a `@repair` block
-   * return empty arrays, never undefined.
+   * (V7 §2.4.6). The two lists are kept flat on the DTO so the viewer
+   * can render them as a categorised pane without reaching into nested
+   * objects. Source of truth is the structured `decisionGuidance`
+   * column on `policies` (migration 001). Empty arrays mean "no
+   * guidance learned yet" — never undefined.
    */
   preference: string[];
   antiPattern: string[];
@@ -220,17 +303,63 @@ export interface PolicyDTO {
    * back to its source tasks.
    */
   sourceEpisodeIds: string[];
+  sourceFeedbackIds?: string[];
+  sourceTraceIds?: string[];
+  verifierMeta?: Record<string, unknown> | null;
 }
 
-export interface WorldModelDTO {
+/**
+ * One entry inside the V7 §1.1 (ℰ, ℐ, 𝒞) triple. Mirrors
+ * `WorldModelStructureEntry` on the storage side; copied here so the
+ * agent-contract surface stays self-contained (no peer import into
+ * `core/types.ts`).
+ */
+export interface WorldModelStructureEntryDTO {
+  /** Short label, e.g. `"src/components/"` or `"alpine → musl wheels"`. */
+  label: string;
+  /** Free-form explanation. */
+  description: string;
+  /**
+   * Optional evidence — trace ids and / or policy ids that justified
+   * this entry. The viewer renders click-through chips into the
+   * Memories tab (for `tr_*`) or PoliciesView (for `po_*`) so users
+   * can audit "why did the world model claim this?".
+   */
+  evidenceIds?: string[];
+}
+
+export interface WorldModelDTO extends OwnershipDTO {
   id: WorldModelId;
   title: string;
   /** Free-form prose summarizing structure/patterns/constraints. */
   body: string;
+  /**
+   * V7 §1.1 / §2.4.1 — structured (ℰ, ℐ, 𝒞) triple as generated by
+   * `l3.abstraction`:
+   *
+   *   - environment (ℰ)  — topology facts ("X lives at Y")
+   *   - inference   (ℐ)  — behavioural rules ("X causes Y")
+   *   - constraints (𝒞)  — taboos ("don't do Z because …")
+   *
+   * Each entry carries optional `evidenceIds` — the trace / policy
+   * ids that justified the entry. Surfaced separately from `body` so
+   * the viewer can render entry-level evidence chips with
+   * click-through.
+   *
+   * Always present; empty arrays simply mean "no entries in that
+   * facet" (common — a world model can have only constraints, etc.).
+   */
+  structure: {
+    environment: WorldModelStructureEntryDTO[];
+    inference: WorldModelStructureEntryDTO[];
+    constraints: WorldModelStructureEntryDTO[];
+  };
   /** Associated PolicyIds the model abstracts. */
   policyIds: PolicyId[];
   createdAt: EpochMs;
   updatedAt: EpochMs;
+  /** L3 abstraction version. Starts at 1 and increments on each L3 merge/rebuild. */
+  version: number;
   /**
    * Lifecycle state (migration 009). `'archived'` rows are kept on
    * disk so the user can un-archive — distinct from a hard delete.
@@ -239,7 +368,7 @@ export interface WorldModelDTO {
   status: "active" | "archived";
   /** Sharing state (migration 009). `null` = private/not shared. */
   share?: {
-    scope: "private" | "public" | "hub";
+    scope: ShareScope;
     target?: string | null;
     sharedAt?: EpochMs | null;
   } | null;
@@ -247,19 +376,41 @@ export interface WorldModelDTO {
   editedAt?: EpochMs;
 }
 
-export interface SkillDTO {
+export interface SkillDTO extends OwnershipDTO {
   id: SkillId;
   name: string;
   /** "candidate" while still on trial, then "active", then "archived". */
   status: "candidate" | "active" | "archived";
   /** Plain-text invocation guide injected at retrieval Tier-1. */
   invocationGuide: string;
+  /**
+   * V7 §2.4.6 — preference / anti-pattern lines distilled from past
+   * failures + fixes. Empty arrays mean "no guidance yet". Surfaced
+   * in the viewer drawer + folded into the rendered `invocationGuide`
+   * so Tier-1 retrieval naturally injects it into the agent's prompt.
+   *
+   * Mirrors `SkillProcedure.decisionGuidance` from the storage layer;
+   * surfaced separately on the DTO so frontends don't need to reach
+   * into `procedureJson`.
+   */
+  decisionGuidance: { preference: string[]; antiPattern: string[] };
+  /**
+   * V7 §2.1 `evidence_anchors` — the L1 traces that justified this
+   * skill at crystallisation time. The viewer renders click-through
+   * chips into the Memories tab so users can audit "why did the agent
+   * crystallise this skill?". Always present (default `[]`).
+   */
+  evidenceAnchors: TraceId[];
   /** Adoption rate, in [0, 1]. */
   eta: SkillEta;
   /** Independent positive episodes used to crystallize. */
   support: number;
   /** V_with − V_without across supporting traces. */
   gain: number;
+  /** Number of resolved trial outcomes for this skill. */
+  trialsAttempted?: number;
+  /** Number of resolved successful trial outcomes. */
+  trialsPassed?: number;
   /** Source policy/world-model ids. */
   sourcePolicyIds: PolicyId[];
   sourceWorldModelIds: WorldModelId[];
@@ -273,15 +424,19 @@ export interface SkillDTO {
   version: number;
   /** Sharing state (migration 009). `null` = private/not shared. */
   share?: {
-    scope: "private" | "public" | "hub";
+    scope: ShareScope;
     target?: string | null;
     sharedAt?: EpochMs | null;
   } | null;
   /** Last user edit through the viewer's edit modal. */
   editedAt?: EpochMs;
+  /** Number of successful `skill_get` calls that loaded this skill. */
+  usageCount?: number;
+  /** Last successful `skill_get` time. */
+  lastUsedAt?: EpochMs | null;
 }
 
-export interface EpisodeDTO {
+export interface EpisodeDTO extends OwnershipDTO {
   id: EpisodeId;
   sessionId: SessionId;
   startedAt: EpochMs;
@@ -299,6 +454,9 @@ export interface EpisodeDTO {
 export interface EpisodeListItemDTO {
   id: EpisodeId;
   sessionId: SessionId;
+  ownerAgentKind?: AgentKind;
+  ownerProfileId?: string;
+  ownerWorkspaceId?: string | null;
   startedAt: EpochMs;
   endedAt?: EpochMs;
   status: "open" | "closed";
@@ -346,12 +504,23 @@ export interface EpisodeListItemDTO {
    * failed) without guessing from `rTask`.
    */
   closeReason?: "finalized" | "abandoned" | null;
+  /** Topic-level lifecycle state used by the viewer to distinguish
+   * interrupted/paused-but-continuable tasks from truly skipped ones. */
+  topicState?: "active" | "paused" | "interrupted" | "ended" | null;
+  /** Human-readable audit reason for a paused/interrupted open topic. */
+  pauseReason?: string | null;
   /**
    * User-readable reason when `closeReason === "abandoned"`. Mirrors
    * the legacy plugin's Chinese skip-reason strings (e.g. "对话内容
    * 过少（2 条消息）..."). Always safe to show verbatim.
    */
   abandonReason?: string | null;
+  /** True when the reward gate intentionally skipped scoring this episode. */
+  rewardSkipped?: boolean;
+  /** User-readable reward/skip reason stamped by the reward pipeline. */
+  rewardReason?: string | null;
+  /** Whether any trace in this episode contains visible assistant text. */
+  hasAssistantReply?: boolean;
 }
 
 // ─── Feedback ─────────────────────────────────────────────────────────────────
@@ -375,6 +544,7 @@ export interface FeedbackDTO {
 
 export interface RetrievalQueryDTO {
   agent: AgentKind;
+  namespace?: RuntimeNamespace;
   sessionId?: SessionId;
   episodeId?: EpisodeId;
   query: string;
@@ -388,9 +558,13 @@ export interface RetrievalHitDTO {
   tier: 1 | 2 | 3;
   /** Source memory id (skillId | traceId/episodeId | worldModelId). */
   refId: string;
-  refKind: "skill" | "trace" | "episode" | "world-model";
+  refKind: "skill" | "trace" | "episode" | "experience" | "world-model";
   score: number;
   snippet: string;
+  ownerAgentKind?: AgentKind;
+  ownerProfileId?: string;
+  ownerWorkspaceId?: string | null;
+  shareScope?: ShareScope;
 }
 
 export interface RetrievalResultDTO {
@@ -414,6 +588,7 @@ export type RetrievalReason =
 
 export interface TurnStartCtx {
   agent: AgentKind;
+  namespace?: RuntimeNamespace;
   sessionId: SessionId;
   episodeId?: EpisodeId;
   userText: string;
@@ -424,6 +599,7 @@ export interface TurnStartCtx {
 
 export interface ToolDrivenCtx {
   agent: AgentKind;
+  namespace?: RuntimeNamespace;
   sessionId: SessionId;
   episodeId?: EpisodeId;
   /** Which memory tool was called (memory_search / memory_timeline / …). */
@@ -435,6 +611,7 @@ export interface ToolDrivenCtx {
 
 export interface RepairCtx {
   agent: AgentKind;
+  namespace?: RuntimeNamespace;
   sessionId: SessionId;
   episodeId?: EpisodeId;
   /** Which tool has been failing. */
@@ -447,7 +624,14 @@ export interface RepairCtx {
 }
 
 export interface InjectionSnippet {
-  refKind: "skill" | "trace" | "episode" | "world-model" | "preference" | "anti-pattern";
+  refKind:
+    | "skill"
+    | "trace"
+    | "episode"
+    | "experience"
+    | "world-model"
+    | "preference"
+    | "anti-pattern";
   refId: string;
   title?: string;
   body: string;

@@ -1,11 +1,12 @@
 /**
- * `GET /api/v1/api-logs` — paged listing of the structured api_logs
- * table (see `core/storage/migrations/007-api-logs.sql`). Fuels the
- * viewer's Logs page which renders rich per-tool templates for
- * `memory_search` and `memory_add`.
+ * `GET /api/v1/api-logs` — paged listing of the structured `api_logs`
+ * table (defined in the squashed initial schema). Fuels the viewer's
+ * Logs page which renders rich per-tool templates for `memory_search`
+ * and `memory_add`.
  *
  * Query parameters:
  *   - `tool`    optional tool-name filter (e.g. `memory_search`)
+ *   - `tools`   optional comma-separated tool-name filter
  *   - `limit`   default 50, capped server-side at 500
  *   - `offset`  default 0
  *
@@ -25,8 +26,13 @@ export function registerApiLogsRoutes(routes: Routes, deps: ServerDeps): void {
     const offset =
       Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const tool = params.get("tool") || undefined;
+    const tools = (params.get("tools") ?? "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean);
     const res = await deps.core.listApiLogs({
       toolName: tool,
+      toolNames: tool ? undefined : tools,
       limit,
       offset,
     });
@@ -61,6 +67,14 @@ export function registerApiLogsRoutes(routes: Routes, deps: ServerDeps): void {
       "world_model_evolve",
       "task_done",
       "task_failed",
+      // Infrastructure-layer failures (embedding / summary LLM /
+      // skillEvolver). Surfaced under the "系统" tag in LogsView so
+      // operators can see provider errors without tailing logs.
+      "system_error",
+      // Durable machine-readable status source for Overview model
+      // cards. This is intentionally persisted because Hermes' viewer
+      // daemon and stdio bridge can be different processes.
+      "system_model_status",
     ] as const;
     const rows = await Promise.all(
       tools.map(async (t) => {

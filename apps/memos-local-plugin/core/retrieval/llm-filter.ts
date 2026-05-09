@@ -24,13 +24,22 @@ import type { LlmClient } from "../llm/index.js";
 import type { Logger } from "../logger/types.js";
 import { RETRIEVAL_FILTER_PROMPT } from "../llm/prompts/index.js";
 import type { RankedCandidate } from "./ranker.js";
-import type { RetrievalConfig, TierCandidate } from "./types.js";
+import type { RetrievalConfig } from "./types.js";
 
 const DEFAULT_CANDIDATE_BODY_CHARS = 500;
+const MIN_FILTER_OUTPUT_TOKENS = 160;
+const MAX_FILTER_OUTPUT_TOKENS = 2048;
 
 export interface FilterInput {
   query: string;
   ranked: readonly RankedCandidate[];
+  /**
+   * Episode this retrieval is happening for (typically the active or
+   * just-opening episode). Forwarded to the LLM call so the resulting
+   * `system_model_status` audit row can be grouped with the rest of
+   * that episode's pipeline activity in the Logs viewer.
+   */
+  episodeId?: string;
 }
 
 export interface FilterDeps {
@@ -109,6 +118,7 @@ export async function llmFilterCandidates(
 
   try {
     const rsp = await deps.llm.completeJson<{
+      ranked?: unknown;
       selected?: unknown;
       sufficient?: unknown;
     }>(
@@ -124,28 +134,37 @@ ${list}`,
       ],
       {
         op: `retrieval.${RETRIEVAL_FILTER_PROMPT.id}.v${RETRIEVAL_FILTER_PROMPT.version}`,
+        phase: "retrieve",
+        episodeId: input.episodeId,
         temperature: 0,
-        // Short output — indices + one bool. Kept tight so a misbehaving
-        // model can't blow budgets.
-        maxTokens: 160,
+        // Output is only ordered indices + one bool, but the list can
+        // legitimately be as long as the ranked candidates.
+        maxTokens: filterOutputTokenBudget(ranked.length),
         malformedRetries: 1,
       },
     );
-    const raw = (rsp.value?.selected ?? []) as unknown;
+    const raw = (rsp.value?.ranked ?? rsp.value?.selected ?? []) as unknown;
     const sufficient = coerceBool(rsp.value?.sufficient);
     if (!Array.isArray(raw)) {
       deps.log.debug("llm_filter.malformed", { got: typeof raw });
       return safeCutoff(ranked, deps);
     }
-    const keepIndices = new Set<number>();
+    const orderedIndices: number[] = [];
+    const seenIndices = new Set<number>();
     for (const v of raw) {
       const n = typeof v === "number" ? v : Number(v);
       if (!Number.isFinite(n)) continue;
       const zero = Math.floor(n) - 1;
       if (zero < 0 || zero >= ranked.length) continue;
-      keepIndices.add(zero);
-      if (keepIndices.size >= deps.config.llmFilterMaxKeep) break;
+      if (seenIndices.has(zero)) continue;
+      seenIndices.add(zero);
+      orderedIndices.push(zero);
     }
+    const cappedIndices = orderedIndices.slice(
+      0,
+      Math.max(0, deps.config.llmFilterMaxKeep),
+    );
+    const keepIndices = new Set(cappedIndices);
     if (keepIndices.size === 0) {
       // Model asked us to drop everything — honoured. Surface this
       // explicitly so the Logs page can show "LLM found nothing
@@ -157,10 +176,10 @@ ${list}`,
         sufficient: sufficient ?? false,
       };
     }
-    const kept: RankedCandidate[] = [];
+    const kept = cappedIndices.map((i) => ranked[i]!);
     const dropped: RankedCandidate[] = [];
     ranked.forEach((r, i) => {
-      (keepIndices.has(i) ? kept : dropped).push(r);
+      if (!keepIndices.has(i)) dropped.push(r);
     });
     return {
       kept,
@@ -176,6 +195,13 @@ ${list}`,
     });
     return safeCutoff(ranked, deps);
   }
+}
+
+function filterOutputTokenBudget(candidateCount: number): number {
+  return Math.min(
+    MAX_FILTER_OUTPUT_TOKENS,
+    Math.max(MIN_FILTER_OUTPUT_TOKENS, candidateCount * 8 + 80),
+  );
 }
 
 function passthrough(
@@ -216,7 +242,15 @@ function safeCutoff(
     0,
   );
   const cutoff = topScore > 0 ? topScore * ratio : 0;
-  const keepCap = Math.max(1, deps.config.llmFilterMaxKeep);
+  const keepCap = Math.max(0, deps.config.llmFilterMaxKeep);
+  if (keepCap === 0) {
+    return {
+      kept: [],
+      dropped: [...ranked],
+      outcome: "llm_failed_safe_cutoff",
+      sufficient: null,
+    };
+  }
   const kept: RankedCandidate[] = [];
   const dropped: RankedCandidate[] = [];
   for (const c of ranked) {
@@ -247,30 +281,21 @@ function coerceBool(v: unknown): boolean | null {
 
 /**
  * Render a ranked candidate into a single labelled string for the LLM.
- * Much richer than the old 240-char summary — now includes time, role,
- * tags, which channels surfaced the row, and the ranker's score. This
- * mirrors what openclaw's `filterRelevant` receives and lets the model
- * reason over "fresh vs stale", "skill vs memory", "keyword vs vector
- * hit" without guessing.
+ * Keep this intentionally content-focused: the filter should judge the
+ * candidate's semantic usefulness, not anchor on retrieval internals like
+ * timestamps, channels, tags, or ranker scores.
  */
 function describeCandidate(r: RankedCandidate, bodyChars: number): string {
   const c = r.candidate;
-  const meta = metaOf(r, c);
   switch (c.tier) {
     case "tier1": {
       const skill = c as {
         skillName?: string;
         invocationGuide?: string;
-        eta?: number;
-        status?: string;
       };
-      const head = `${skill.skillName ?? "(skill)"}${
-        typeof skill.eta === "number"
-          ? ` · η=${skill.eta.toFixed(2)}`
-          : ""
-      }${skill.status ? ` · ${skill.status}` : ""}`;
+      const head = skill.skillName ?? "(skill)";
       const hint = squashBody(skill.invocationGuide ?? "", bodyChars);
-      return `[SKILL ${meta}] ${head}${hint ? `\n   ${hint}` : ""}`;
+      return `[SKILL] ${head}${hint ? `\n   ${hint}` : ""}`;
     }
     case "tier2": {
       if (c.refKind === "trace") {
@@ -288,54 +313,45 @@ function describeCandidate(r: RankedCandidate, bodyChars: number): string {
         if (tr.reflection?.trim())
           parts.push(`[note] ${tr.reflection.trim()}`);
         const body = squashBody(parts.join(" "), bodyChars);
-        return `[TRACE ${meta}] ${body}`;
+        return `[TRACE] ${body}`;
+      }
+      if (c.refKind === "experience") {
+        const ex = c as {
+          title?: string;
+          trigger?: string;
+          procedure?: string;
+          verification?: string;
+          experienceType?: string;
+          evidencePolarity?: string;
+        };
+        const parts = [
+          ex.title,
+          ex.experienceType ? `type=${ex.experienceType}` : null,
+          ex.evidencePolarity ? `evidence=${ex.evidencePolarity}` : null,
+          ex.trigger,
+          ex.procedure,
+          ex.verification,
+        ].filter(Boolean).join(" ");
+        const body = squashBody(parts, bodyChars);
+        return `[EXPERIENCE] ${body}`;
       }
       const ep = c as { summary?: string };
       const body = squashBody(ep.summary ?? "", bodyChars);
-      return `[EPISODE ${meta}] ${body}`;
+      return `[EPISODE] ${body}`;
     }
     case "tier3": {
       const wm = c as { title?: string; body?: string };
       const head = wm.title ?? "(world-model)";
       const body = squashBody(wm.body ?? "", bodyChars);
-      return `[WORLD-MODEL ${meta}] ${head}${body ? `\n   ${body}` : ""}`;
+      return `[WORLD-MODEL] ${head}${body ? `\n   ${body}` : ""}`;
     }
     default:
-      return `[UNKNOWN ${meta}]`;
+      return "[UNKNOWN]";
   }
-}
-
-function metaOf(r: RankedCandidate, c: TierCandidate): string {
-  const bits: string[] = [];
-  if (typeof c.ts === "number" && c.ts > 0) {
-    bits.push(`time=${formatTime(c.ts)}`);
-  }
-  if (Array.isArray((c as { tags?: readonly string[] }).tags)) {
-    const tags = ((c as { tags?: readonly string[] }).tags ?? [])
-      .filter(Boolean)
-      .slice(0, 6);
-    if (tags.length) bits.push(`tags=[${tags.join(",")}]`);
-  }
-  const channels = (c.channels ?? [])
-    .map((ch) => ch.channel)
-    .filter(Boolean)
-    .slice(0, 4);
-  if (channels.length) bits.push(`via=${channels.join("+")}`);
-  const score = r.score ?? r.relevance;
-  if (Number.isFinite(score)) bits.push(`score=${score.toFixed(3)}`);
-  return bits.join(" ");
 }
 
 function squashBody(s: string, max: number): string {
   const cleaned = s.replace(/\s+/g, " ").trim();
   if (cleaned.length <= max) return cleaned;
   return cleaned.slice(0, Math.max(0, max - 1)) + "…";
-}
-
-function formatTime(ts: number): string {
-  try {
-    return new Date(ts).toISOString().slice(0, 16).replace("T", " ");
-  } catch {
-    return String(ts);
-  }
 }

@@ -100,6 +100,12 @@ INPUT: a JSON array under "steps". Each entry has:
   false, leave "reflection_text" empty for steps that came in with empty
   "reflection".
 
+The user payload may also include "host_context". That describes the host
+agent being reviewed and the separate reflection model doing this review.
+Do NOT project the reflection model's own identity/provider/capabilities onto
+the host agent. If hostModel/hostProvider are present, treat them as the
+authoritative runtime context unless the episode itself contains a correction.
+
 For EACH input step, return one object containing:
 - "idx": copy the input idx exactly
 - "reflection_text":

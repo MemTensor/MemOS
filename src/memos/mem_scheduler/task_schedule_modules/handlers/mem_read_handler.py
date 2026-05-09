@@ -5,12 +5,15 @@ import contextlib
 import json
 import traceback
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
     LONG_TERM_MEMORY_TYPE,
+    MEM_ORGANIZE_TASK_LABEL,
     MEM_READ_TASK_LABEL,
     USER_INPUT_TYPE,
 )
@@ -23,7 +26,6 @@ from memos.memories.textual.tree import TreeTextMemory
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
     from memos.types.general_types import UserContext
 
 
@@ -210,6 +212,14 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                             user_name=user_name,
                         )
                         logger.info("Added %s Rawfile memories.", len(raw_file_mem_group))
+
+                    self._try_submit_organize_task(
+                        enhanced_mem_ids=enhanced_mem_ids,
+                        text_mem=text_mem,
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        user_name=user_name,
+                    )
 
                     # fallback to simple deduplication logic when mem version switch is off
                     if getattr(mem_reader, "memory_version_switch", "off") != "on":
@@ -468,3 +478,35 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                     event.task_id = task_id
                     event.status = "failed"
                     self.scheduler_context.services.submit_web_logs([event])
+
+    def _try_submit_organize_task(
+        self,
+        enhanced_mem_ids: list[str],
+        text_mem: TreeTextMemory,
+        user_id: str,
+        mem_cube_id: str,
+        user_name: str,
+    ) -> None:
+        """Submit a MEM_ORGANIZE task so the reorganizer can run optimize_structure."""
+        try:
+            reorganizer = getattr(text_mem.memory_manager, "reorganizer", None)
+            if not reorganizer or not getattr(reorganizer, "is_reorganize", False):
+                return
+
+            message_item = ScheduleMessageItem(
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                label=MEM_ORGANIZE_TASK_LABEL,
+                content=json.dumps(enhanced_mem_ids),
+                timestamp=datetime.now(tz=timezone.utc),
+                user_name=user_name,
+            )
+            self.scheduler_context.services.submit_messages([message_item])
+            logger.info(
+                "[mem_read_handler] Submitted MEM_ORGANIZE task for user_id=%s, mem_cube_id=%s, mem_ids=%s",
+                user_id,
+                mem_cube_id,
+                enhanced_mem_ids,
+            )
+        except Exception as e:
+            logger.error("Failed to enqueue MEM_ORGANIZE task: %s", e, exc_info=True)

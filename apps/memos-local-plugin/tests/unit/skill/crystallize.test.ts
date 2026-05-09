@@ -5,6 +5,7 @@ import {
   defaultDraftValidator,
 } from "../../../core/skill/crystallize.js";
 import { rootLogger } from "../../../core/logger/index.js";
+import type { LlmClient, LlmJsonCompletion } from "../../../core/llm/types.js";
 import type { PolicyRow, TraceRow } from "../../../core/types.js";
 import { fakeLlm, throwingLlm } from "../../helpers/fake-llm.js";
 import {
@@ -27,6 +28,7 @@ function mkPolicy(): PolicyRow {
     status: "active",
     sourceEpisodeIds: [],
     inducedBy: "l2.l2.induction.v1",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: vec([1, 0, 0]),
     createdAt: NOW,
     updatedAt: NOW,
@@ -50,11 +52,31 @@ function mkTrace(id: string, userText: string): TraceRow {
     tags: ["alpine", "pip"],
     vecSummary: vec([1, 0, 0]),
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
   };
 }
 
 const log = rootLogger.child({ channel: "core.skill.crystallize" });
+
+function refusalLlm(raw: string): LlmClient {
+  return {
+    ...fakeLlm(),
+    provider: "anthropic",
+    model: "claude-test",
+    async completeJson<T>(): Promise<LlmJsonCompletion<T>> {
+      return {
+        value: makeDraft() as T,
+        raw,
+        provider: "anthropic",
+        model: "claude-test",
+        finishReason: "stop",
+        servedBy: "anthropic",
+        durationMs: 1,
+      };
+    },
+  };
+}
 
 describe("skill/crystallize", () => {
   it("normalises the LLM draft into a structured object", async () => {
@@ -76,6 +98,7 @@ describe("skill/crystallize", () => {
           ],
           examples: [{ input: "cryptography", expected: "success" }],
           tags: ["alpine", "Alpine", "pip"],
+          tools: ["shell", "pip.install"],
         },
       },
     });
@@ -94,6 +117,66 @@ describe("skill/crystallize", () => {
     expect(r.draft.parameters[1]!.enumValues).toEqual(["dev", "prod"]);
     expect(r.draft.steps.length).toBe(2);
     expect(r.draft.tags).toEqual(["alpine", "pip"]);
+    expect(r.draft.tools).toEqual(["shell", "pip.install"]);
+  });
+
+  it("cleans unsafe markup from LLM-derived skill fields", async () => {
+    const policy = mkPolicy();
+    const llm = fakeLlm({
+      completeJson: {
+        "skill.crystallize": {
+          name: "unsafe-skill",
+          display_title: "<img src=x onerror=alert(1)> Alpine Pip",
+          summary: "<script>alert(1)</script>Use [docs](javascript:alert(1))",
+          parameters: [
+            {
+              name: "package",
+              type: "string",
+              required: true,
+              description: "<b>pip target</b>",
+            },
+          ],
+          preconditions: ["<svg onload=alert(1)>alpine base"],
+          steps: [
+            {
+              title: "<b>detect</b>",
+              body: "Use [safe](https://example.com) not [bad](javascript:alert(1))",
+            },
+          ],
+          examples: [{ input: "<script>alert(1)</script>cryptography", expected: "<b>success</b>" }],
+          tags: ["alpine"],
+          tools: ["shell"],
+          decision_guidance: {
+            preference: ["<script>alert(1)</script>install libs first"],
+            anti_pattern: ["[bad](javascript:alert(1))"],
+          },
+        },
+      },
+    });
+
+    const r = await crystallizeDraft(
+      { policy, evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
+    );
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const combined = [
+      r.draft.displayTitle,
+      r.draft.summary,
+      r.draft.parameters[0]?.description,
+      ...r.draft.preconditions,
+      ...r.draft.steps.flatMap((s) => [s.title, s.body]),
+      ...r.draft.examples.flatMap((e) => [e.input, e.expected]),
+      ...r.draft.decisionGuidance.preference,
+      ...r.draft.decisionGuidance.antiPattern,
+    ].join("\n");
+    expect(combined).not.toMatch(/<script|<img|<svg|javascript:/i);
+    expect(r.draft.displayTitle).toBe("Alpine Pip");
+    expect(r.draft.parameters[0]!.description).toBe("<b>pip target</b>");
+    expect(r.draft.examples[0]!.expected).toBe("<b>success</b>");
+    expect(r.draft.steps[0]!.body).toContain("[safe](https://example.com)");
+    expect(r.draft.steps[0]!.body).toContain("bad");
   });
 
   it("skips when useLlm is false", async () => {
@@ -124,6 +207,27 @@ describe("skill/crystallize", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.skippedReason).toMatch(/^llm-failed:/);
+  });
+
+  it("rejects model refusals instead of persisting them as skills", async () => {
+    const r = await crystallizeDraft(
+      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "x")], namingSpace: [] },
+      {
+        llm: refusalLlm("I am Claude, made by Anthropic. I cannot process this request."),
+        log,
+        config: makeSkillConfig(),
+        validate: defaultDraftValidator,
+      },
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.skippedReason).toBe("llm-refusal");
+    expect(r.modelRefusal).toMatchObject({
+      provider: "anthropic",
+      model: "claude-test",
+      matchedPrefix: "I am Claude",
+    });
+    expect(r.modelRefusal?.content).toContain("I cannot process this request");
   });
 
   it("rejects drafts that the validator flags as invalid", async () => {

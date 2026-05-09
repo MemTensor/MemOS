@@ -20,9 +20,11 @@ import type {
   SessionId,
 } from "../../agent-contract/dto.js";
 import { ids } from "../id.js";
+import type { CollectedGuidance } from "./decision-guidance.js";
 import type { RankedCandidate } from "./ranker.js";
 import type {
   EpisodeCandidate,
+  ExperienceCandidate,
   RankedSnippet,
   SkillCandidate,
   TierCandidate,
@@ -56,6 +58,14 @@ export interface InjectorInput {
   skillInjectionMode?: SkillInjectionMode;
   /** Per-skill summary char cap when `skillInjectionMode === "summary"`. */
   skillSummaryChars?: number;
+  /**
+   * V7 §2.4.6 — preference / anti-pattern collected from policies that
+   * share evidence with the retrieved traces / skills. Rendered as a
+   * dedicated "Decision guidance" section so the agent reads it BEFORE
+   * choosing its next action. Empty (default) means no guidance was
+   * found for the current retrieval — the section is then omitted.
+   */
+  decisionGuidance?: CollectedGuidance;
 }
 
 export interface InjectorResult {
@@ -69,7 +79,7 @@ export function toPacket(input: InjectorInput): InjectorResult {
   const skillSummaryChars =
     input.skillSummaryChars ?? DEFAULT_SKILL_SUMMARY_CHARS;
   const mapping: RankedSnippet[] = [];
-  for (const r of input.ranked) {
+  for (const r of suppressExperiencesCoveredBySkills(input.ranked)) {
     const snippet = renderSnippet(r.candidate, {
       skillMode,
       skillSummaryChars,
@@ -85,7 +95,10 @@ export function toPacket(input: InjectorInput): InjectorResult {
     });
   }
   const snippets = mapping.map((m) => m.snippet);
-  const rendered = renderWholePacket(snippets, input.reason, { skillMode });
+  const rendered = renderWholePacket(snippets, input.reason, {
+    skillMode,
+    decisionGuidance: input.decisionGuidance,
+  });
 
   const packet: InjectionPacket = {
     reason: input.reason,
@@ -117,6 +130,36 @@ export function renderSnippetForDebug(c: TierCandidate): InjectionSnippet | null
   });
 }
 
+function suppressExperiencesCoveredBySkills(
+  ranked: readonly RankedCandidate[],
+): RankedCandidate[] {
+  const covered = new Set<string>();
+  for (const r of ranked) {
+    const c = r.candidate;
+    if (c.refKind !== "skill") continue;
+    for (const id of (c as SkillCandidate).sourcePolicyIds ?? []) {
+      covered.add(id);
+    }
+  }
+  if (covered.size === 0) return [...ranked];
+  return ranked.filter((r) => {
+    const c = r.candidate;
+    if (c.refKind !== "experience") return true;
+    if (!covered.has(c.refId)) return true;
+    const experienceUpdatedAt = (c as ExperienceCandidate).updatedAt ?? 0;
+    const coveringSkill = ranked.find((slot) => {
+      const sk = slot.candidate;
+      return (
+        sk.refKind === "skill" &&
+        ((sk as SkillCandidate).sourcePolicyIds ?? []).includes(c.refId)
+      );
+    })?.candidate as SkillCandidate | undefined;
+    return Boolean(
+      coveringSkill?.updatedAt && experienceUpdatedAt > coveringSkill.updatedAt,
+    );
+  });
+}
+
 // ─── Per-candidate renderers ────────────────────────────────────────────────
 
 interface RenderOpts {
@@ -129,9 +172,11 @@ function renderSnippet(c: TierCandidate, opts: RenderOpts): InjectionSnippet | n
     case "tier1":
       return renderSkill(c as SkillCandidate, opts);
     case "tier2":
-      return c.refKind === "trace"
-        ? renderTrace(c as TraceCandidate)
-        : renderEpisode(c as EpisodeCandidate);
+      if (c.refKind === "trace") return renderTrace(c as TraceCandidate);
+      if (c.refKind === "experience") {
+        return renderExperience(c as ExperienceCandidate);
+      }
+      return renderEpisode(c as EpisodeCandidate);
     case "tier3":
       return renderWorldModel(c as WorldModelCandidate);
     default:
@@ -153,7 +198,7 @@ function renderSnippet(c: TierCandidate, opts: RenderOpts): InjectionSnippet | n
 function renderSkill(c: SkillCandidate, opts: RenderOpts): InjectionSnippet {
   if (opts.skillMode === "full") {
     const body = truncate(
-      `Skill: ${c.skillName} (η=${c.eta.toFixed(2)})\n` + c.invocationGuide.trim(),
+      `Skill: ${c.skillName}\n` + c.invocationGuide.trim(),
     );
     return {
       refKind: "skill",
@@ -164,9 +209,7 @@ function renderSkill(c: SkillCandidate, opts: RenderOpts): InjectionSnippet {
   }
 
   const summary = firstLineSummary(c.invocationGuide, opts.skillSummaryChars);
-  const lines = [
-    `${c.skillName} — η=${c.eta.toFixed(2)}, status=${c.status}`,
-  ];
+  const lines: string[] = [];
   if (summary) lines.push(summary);
   lines.push(
     `→ call \`skill_get(id="${c.refId}")\` to load the full procedure if you decide to use it`,
@@ -201,12 +244,11 @@ function firstLineSummary(guide: string, maxChars: number): string {
 }
 
 function renderTrace(c: TraceCandidate): InjectionSnippet {
-  // LLM-focused shape. When we have an LLM-generated summary (the
-  // common case since migration 005), lead with it — the summary was
-  // deliberately compressed to "the fact worth remembering", so it's
-  // the most prompt-budget-efficient form. Then attach the raw turn
-  // text as backup so the model can disambiguate pronouns, names, and
-  // anything the summary elided.
+  // LLM-focused shape. When we have an LLM-generated summary, lead
+  // with it — the summary was deliberately compressed to "the fact
+  // worth remembering", so it's the most prompt-budget-efficient
+  // form. Then attach the raw turn text as backup so the model can
+  // disambiguate pronouns, names, and anything the summary elided.
   const parts: string[] = [];
   const summaryLine = c.summary?.trim();
   if (summaryLine) parts.push(summaryLine);
@@ -234,6 +276,24 @@ function renderEpisode(c: EpisodeCandidate): InjectionSnippet {
     refId: c.refId,
     title: `Sub-task · ${when}`,
     body,
+  };
+}
+
+function renderExperience(c: ExperienceCandidate): InjectionSnippet {
+  const parts = [
+    c.trigger ? `Trigger: ${c.trigger}` : null,
+    c.procedure ? `Do: ${c.procedure}` : null,
+    c.decisionGuidance.antiPattern.length > 0
+      ? `Avoid: ${c.decisionGuidance.antiPattern.join("; ")}`
+      : null,
+    c.boundary ? `Scope: ${c.boundary}` : null,
+    c.verification ? `Check: ${c.verification}` : null,
+  ].filter(Boolean);
+  return {
+    refKind: "experience",
+    refId: c.refId,
+    title: c.title,
+    body: truncate(parts.join("\n")),
   };
 }
 
@@ -268,17 +328,14 @@ function renderWorldModel(c: WorldModelCandidate): InjectionSnippet {
  * 1. [Trace · 2026-03-05 10:12]
  *    [user] 我喜欢的运动是游泳
  *    [assistant] 记住了。
- *    refId="trace_xyz"
  *
  * ## Skills
  *
- * 1. [Skill · Python dependency fix] (η=0.82)
+ * 1. Python dependency fix
  *    When container pip fails, install -dev OS lib first …
- *    refId="skill_abc"
  *
  * Available follow-up tools:
  * - call `memory_search(query=...)` for a shorter, more targeted query
- * - call `memory_timeline(episodeId=...)` to expand an episode
  * ```
  *
  * We deliberately keep the "IMPORTANT" instructions — without them the
@@ -287,17 +344,21 @@ function renderWorldModel(c: WorldModelCandidate): InjectionSnippet {
 function renderWholePacket(
   snippets: readonly InjectionSnippet[],
   reason: RetrievalReason,
-  opts: { skillMode: SkillInjectionMode },
+  opts: { skillMode: SkillInjectionMode; decisionGuidance?: CollectedGuidance },
 ): string {
-  if (snippets.length === 0) return "";
+  const guidanceBlock = renderDecisionGuidance(opts.decisionGuidance);
+  if (snippets.length === 0 && !guidanceBlock) return "";
 
   const header = HEADER_BY_REASON[reason] ?? HEADER_BY_REASON.turn_start;
   const parts: string[] = [header];
 
   const skills = snippets.filter((s) => s.refKind === "skill");
   const traces = snippets.filter(
-    (s) => s.refKind === "trace" || s.refKind === "episode",
+    (s) =>
+      s.refKind === "trace" ||
+      s.refKind === "episode",
   );
+  const experiences = snippets.filter((s) => s.refKind === "experience");
   const worlds = snippets.filter((s) => s.refKind === "world-model");
 
   if (skills.length > 0) {
@@ -323,6 +384,13 @@ function renderWholePacket(
     });
   }
 
+  if (experiences.length > 0) {
+    parts.push("## Experiences\n");
+    experiences.forEach((s, i) => {
+      parts.push(renderNumberedSnippet(s, i + 1));
+    });
+  }
+
   if (worlds.length > 0) {
     parts.push("## Environment Knowledge\n");
     worlds.forEach((s, i) => {
@@ -330,13 +398,54 @@ function renderWholePacket(
     });
   }
 
+  // V7 §2.4.6 — surface decision guidance LAST so it sits immediately
+  // before the available-tools footer. The agent has already read the
+  // facts (Memories, Skills, Environment); now we prime it with
+  // "preferred / avoided" lines distilled from past failures + fixes.
+  if (guidanceBlock) parts.push(guidanceBlock);
+
   parts.push(footerFor(opts.skillMode, skills.length > 0));
   return parts.join("\n\n");
 }
 
+/**
+ * Render the V7 §2.4.6 "Decision guidance" section. Returns `null` when
+ * no preference / anti-pattern lines were collected — the caller skips
+ * the heading entirely so prompts stay tidy.
+ *
+ * Format mirrors the surrounding sections (Markdown heading + numbered
+ * list) so the agent perceives it as part of the same memory packet,
+ * not a foreign block.
+ */
+function renderDecisionGuidance(g: CollectedGuidance | undefined): string | null {
+  if (!g) return null;
+  if (g.preference.length === 0 && g.antiPattern.length === 0) return null;
+
+  const lines: string[] = [
+    "## Decision guidance (distilled from past similar situations)",
+    "",
+    "Apply these BEFORE choosing your next action. Each line was learned",
+    "from one or more past episodes where the user told us what to prefer",
+    "or avoid in this kind of context.",
+  ];
+  if (g.preference.length > 0) {
+    lines.push("", "**Prefer**");
+    g.preference.forEach((p, i) => {
+      lines.push(`  ${i + 1}. ${p.text}`);
+    });
+  }
+  if (g.antiPattern.length > 0) {
+    lines.push("", "**Avoid**");
+    g.antiPattern.forEach((a, i) => {
+      lines.push(`  ${i + 1}. ${a.text}`);
+    });
+  }
+  return lines.join("\n");
+}
+
 function renderNumberedSnippet(s: InjectionSnippet, n: number): string {
   const title = s.title ?? s.refId;
-  const block = [`${n}. ${title}`, s.body, `   refId="${s.refId}"`]
+  const block = [`${n}. ${title}`, s.body]
     .filter(Boolean)
     .join("\n");
   return indentBlock(block);
@@ -365,13 +474,10 @@ const HEADER_BY_REASON: Record<RetrievalReason, string> = {
 
 const FOOTER_LINES_COMMON: readonly string[] = [
   "- `memory_search(query, maxResults?)` — re-query with a shorter / rephrased string",
-  "- `memory_get(id, kind?)` — fetch a full trace / policy / world-model body by refId",
-  "- `memory_timeline(episodeId, limit?)` — expand an episode into its step-by-step traces",
 ];
 
 const FOOTER_LINES_SKILL_SUMMARY: readonly string[] = [
   "- `skill_get(id)` — load the full procedure/verification of a candidate skill listed above",
-  "- `skill_list(status?, limit?)` — browse other crystallised skills not yet shown",
 ];
 
 function footerFor(

@@ -35,9 +35,6 @@ const EmbeddingSchema = Type.Object({
     Type.Literal("local"),
     Type.Literal("openai_compatible"),
     Type.Literal("gemini"),
-    Type.Literal("cohere"),
-    Type.Literal("voyage"),
-    Type.Literal("mistral"),
   ], { default: "local" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault("Xenova/all-MiniLM-L6-v2"),
@@ -51,13 +48,14 @@ const EmbeddingSchema = Type.Object({
 
 const LlmSchema = Type.Object({
   provider: Type.Union([
+    Type.Literal(""),
     Type.Literal("local_only"),
     Type.Literal("openai_compatible"),
-    Type.Literal("anthropic"),
     Type.Literal("gemini"),
+    Type.Literal("anthropic"),
     Type.Literal("bedrock"),
     Type.Literal("host"),
-  ], { default: "local_only" }),
+  ], { default: "" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault(""),
   temperature: NumberInRange(0, 0, 2),
@@ -84,9 +82,8 @@ const SkillEvolverSchema = Type.Object({
   provider: Type.Union([
     Type.Literal(""),
     Type.Literal("openai_compatible"),
-    Type.Literal("anthropic"),
     Type.Literal("gemini"),
-    Type.Literal("bedrock"),
+    Type.Literal("anthropic"),
   ], { default: "" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault(""),
@@ -148,16 +145,33 @@ const AlgorithmSchema = Type.Object({
     llmConcurrency: NumberInRange(2, 1, 16),
     /**
      * Min user↔assistant *exchanges* before an episode is scored.
-     * Shorter episodes are closed as abandoned. Default 2 ≈ "at least
-     * one real back-and-forth" (legacy memos-local-openclaw rule).
+     * Shorter episodes are closed as abandoned. Default 1 — admits
+     * single-shot CLI patterns (`hermes chat -q "..."`,
+     * `openclaw run --once`) which always have exactly one
+     * user-assistant pair. Set 2 for the strict legacy behaviour
+     * (skip episodes that aren't a real back-and-forth).
      */
-    minExchangesForCompletion: NumberInRange(2, 1, 20),
+    minExchangesForCompletion: NumberInRange(1, 1, 20),
     /**
      * Min combined user+assistant content characters before scoring.
-     * Filters trivial turns ("hi"/"ok"). Default 80 — cheap threshold
-     * that still accepts short CJK prompts.
+     * Filters trivial turns ("hi"/"ok"). Default 40 — pairs with the
+     * relaxed exchanges floor; raise to 80+ if your workflow always
+     * sends long prompts and you want stronger triviality gating.
      */
-    minContentCharsForCompletion: NumberInRange(80, 0, 4_000),
+    minContentCharsForCompletion: NumberInRange(40, 0, 4_000),
+    /**
+     * Fraction of turns that are tool calls above which an episode is
+     * considered "tool-heavy". When combined with low assistant text
+     * the episode is skipped as noise. Default 0.7 (70%).
+     */
+    toolHeavyRatio: NumberInRange(0.7, 0, 1),
+    /**
+     * Minimum total assistant content chars to keep an episode that
+     * would otherwise be flagged by the tool-heavy heuristic. If the
+     * assistant wrote at least this many characters the episode is
+     * scored normally even if tool calls dominate. Default 80.
+     */
+    minAssistantCharsForToolHeavy: NumberInRange(80, 0, 10_000),
   }, { default: {} }),
   l2Induction: Type.Object({
     /** Cosine ≥ this to associate a new trace with an existing L2 policy. */
@@ -165,9 +179,9 @@ const AlgorithmSchema = Type.Object({
     /** TTL (days) for unpromoted rows in `l2_candidate_pool`. */
     candidateTtlDays: NumberInRange(30, 1),
     /** Min distinct episodes in a candidate bucket before we run induction. */
-    minEpisodesForInduction: NumberInRange(2, 2, 20),
+    minEpisodesForInduction: NumberInRange(1, 1, 20),
     /** Ignore traces whose V is below this floor (prevents noise-driven L2). */
-    minTraceValue: NumberInRange(0.1, -1, 1),
+    minTraceValue: NumberInRange(0.01, -1, 1),
     /** When true, call the LLM to induce policies; else collect candidates only. */
     useLlm: Bool(true),
     /** Character cap for traces handed into the `l2.induction` prompt. */
@@ -177,9 +191,9 @@ const AlgorithmSchema = Type.Object({
   }, { default: {} }),
   l3Abstraction: Type.Object({
     /** Minimum number of compatible active L2 policies to trigger an L3 abstraction. */
-    minPolicies: NumberInRange(3, 2, 50),
+    minPolicies: NumberInRange(1, 1, 50),
     /** Hard minimum gain for an L2 to be eligible as abstraction evidence. */
-    minPolicyGain: NumberInRange(0.1, -1, 1),
+    minPolicyGain: NumberInRange(0.02, -1, 1),
     /** Hard minimum support for an L2 to be eligible as abstraction evidence. */
     minPolicySupport: NumberInRange(1, 1),
     /**
@@ -207,10 +221,17 @@ const AlgorithmSchema = Type.Object({
     minConfidenceForRetrieval: NumberInRange(0.2, 0, 1),
   }, { default: {} }),
   skill: Type.Object({
-    minSupport: NumberInRange(3, 1),
-    minGain: NumberInRange(0.15, 0, 1),
+    minSupport: NumberInRange(2, 1),
+    // V7 §2.5 graduation floor. The schema allows negative values so
+    // demo / single-success-line scenarios (where with-without ≈ 0 by
+    // construction even after Bayesian shrinkage) can still force-
+    // graduate candidate policies into active. Production default is
+    // 0.02 — see `core/config/defaults.ts` for rationale and
+    // `core/memory/l2/gain.ts` for how gain is now anchored to a
+    // neutral 0.5 baseline so this floor is reachable on real data.
+    minGain: NumberInRange(0.02, -1, 1),
     /** Trials a skill must accumulate in `candidate` before it can graduate. */
-    candidateTrials: NumberInRange(5, 1),
+    candidateTrials: NumberInRange(3, 1),
     /** Back-off before we retry a failed-to-verify policy. */
     cooldownMs: NumberInRange(6 * 60 * 60 * 1000, 0, 30 * 24 * 60 * 60 * 1000),
     /** Chars per evidence trace fed into the crystallize prompt. */
@@ -222,9 +243,9 @@ const AlgorithmSchema = Type.Object({
     /** η delta applied per user thumbs up/down. */
     etaDelta: NumberInRange(0.1, 0, 1),
     /** Archive an active skill whose η drops below this. */
-    archiveEta: NumberInRange(0.25, 0, 1),
+    archiveEta: NumberInRange(0.1, 0, 1),
     /** Hide Tier-1 skills whose η is below this. Mirrors retrieval.minSkillEta. */
-    minEtaForRetrieval: NumberInRange(0.5, 0, 1),
+    minEtaForRetrieval: NumberInRange(0.1, 0, 1),
   }, { default: {} }),
   feedback: Type.Object({
     /** Raise a burst after this many failures of the same tool in-window. */
@@ -294,7 +315,7 @@ const AlgorithmSchema = Type.Object({
     /** Classic Reciprocal Rank Fusion constant. */
     rrfConstant: NumberInRange(60, 1, 10_000),
     /** Skip Tier-1 skills whose η is below this floor. */
-    minSkillEta: NumberInRange(0.5, 0, 1),
+    minSkillEta: NumberInRange(0.1, 0, 1),
     /** Drop Tier-2 hits whose cosine is below this floor. */
     minTraceSim: NumberInRange(0.35, 0, 1),
     /**
@@ -432,6 +453,8 @@ const LoggingSchema = Type.Object({
     Type.Literal("error"),
     Type.Literal("fatal"),
   ], { default: "info" }),
+  /** Viewer-only switch: expose detailed logs, lifecycle tags and chain view. */
+  detailedView: Bool(false),
   console: Type.Object({
     enabled: Bool(true),
     pretty: Bool(true),

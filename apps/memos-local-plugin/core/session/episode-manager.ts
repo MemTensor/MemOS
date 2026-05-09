@@ -29,6 +29,7 @@ import type {
   EpisodeSnapshot,
   EpisodeStartInput,
   EpisodeTurn,
+  EpisodeTurnInput,
   IntentDecision,
   SessionEventBus,
 } from "./types.js";
@@ -42,10 +43,12 @@ export interface EpisodeManagerDeps {
 
 export interface EpisodeManager {
   start(input: EpisodeStartInput, intent: IntentDecision): EpisodeSnapshot;
-  addTurn(id: EpisodeId, turn: Omit<EpisodeTurn, "id" | "ts">): EpisodeTurn;
+  addTurn(id: EpisodeId, turn: EpisodeTurnInput): EpisodeTurn;
   finalize(id: EpisodeId, input?: EpisodeFinalizeInput): EpisodeSnapshot;
   abandon(id: EpisodeId, reason: string): EpisodeSnapshot;
   attachTraceIds(id: EpisodeId, traceIds: string[]): void;
+  hydrate(snapshot: EpisodeSnapshot): EpisodeSnapshot;
+  patchMeta(id: EpisodeId, metaPatch: Record<string, unknown>): EpisodeSnapshot;
   /**
    * V7 §0.1 "revision" path: reopen a previously-finalized episode so
    * the new turn appends to the same trace set. The caller is
@@ -97,12 +100,18 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
           "episode.start requires an initial user turn with non-empty content",
         );
       }
-      const startedAt = now();
+      const startedAt = input.initialTurn.ts ?? now();
       const id = (input.id ?? ids.episode()) as EpisodeId;
       const firstTurn: EpisodeTurn = {
         ...input.initialTurn,
         id: ids.span(),
         ts: startedAt,
+      };
+      const meta = {
+        ...(input.meta ?? {}),
+        topicState: (input.meta ?? {}).topicState ?? "active",
+        initialUserText: (input.meta ?? {}).initialUserText ?? input.initialTurn.content,
+        pendingUserText: (input.meta ?? {}).pendingUserText ?? input.initialTurn.content,
       };
       const snap: EpisodeSnapshot = {
         id,
@@ -114,13 +123,16 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
         turnCount: 1,
         turns: [firstTurn],
         traceIds: [],
-        meta: { ...(input.meta ?? {}), intent: { kind: intent.kind, signals: intent.signals } },
+        meta: { ...meta, intent: { kind: intent.kind, signals: intent.signals } },
         intent,
       };
       byId.set(id, snap);
       deps.episodesRepo.insert({
         id,
         sessionId: input.sessionId,
+        ownerAgentKind: stringMeta(snap.meta, "ownerAgentKind") ?? "unknown",
+        ownerProfileId: stringMeta(snap.meta, "ownerProfileId") ?? "default",
+        ownerWorkspaceId: stringMeta(snap.meta, "ownerWorkspaceId") ?? null,
         startedAt,
         endedAt: null,
         traceIds: [],
@@ -142,9 +154,34 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
 
     addTurn(id, turn) {
       const snap = assertOpen(get(id), id);
-      const full: EpisodeTurn = { ...turn, id: ids.span(), ts: now() };
+      const full: EpisodeTurn = { ...turn, id: ids.span(), ts: turn.ts ?? now() };
       snap.turns.push(full);
       snap.turnCount++;
+      if (turn.role === "user") {
+        snap.meta = {
+          ...snap.meta,
+          topicState: "active",
+          pendingUserText: turn.content,
+          lastUserText: turn.content,
+        };
+        deps.episodesRepo.updateMeta(id, {
+          topicState: "active",
+          pendingUserText: turn.content,
+          lastUserText: turn.content,
+        });
+      } else if (turn.role === "assistant") {
+        snap.meta = {
+          ...snap.meta,
+          topicState: "active",
+          pendingUserText: undefined,
+          lastAssistantText: turn.content,
+        };
+        deps.episodesRepo.updateMeta(id, {
+          topicState: "active",
+          pendingUserText: undefined,
+          lastAssistantText: turn.content,
+        });
+      }
       deps.sessionsRepo.touchLastSeen(snap.sessionId, full.ts);
       log.debug("episode.turn_added", {
         episodeId: id,
@@ -167,6 +204,37 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
       deps.episodesRepo.updateTraceIds(id, snap.traceIds);
     },
 
+    hydrate(snapshot) {
+      const existing = byId.get(snapshot.id);
+      if (existing) return cloneSnapshot(existing);
+      const snap: EpisodeSnapshot = {
+        ...snapshot,
+        turns: snapshot.turns.map((t) => ({ ...t })),
+        traceIds: [...snapshot.traceIds],
+        meta: { ...snapshot.meta },
+      };
+      byId.set(snapshot.id, snap);
+      log.info("episode.hydrated", {
+        episodeId: snap.id,
+        sessionId: snap.sessionId,
+        status: snap.status,
+        turnCount: snap.turnCount,
+      });
+      return cloneSnapshot(snap);
+    },
+
+    patchMeta(id, metaPatch) {
+      const snap = get(id);
+      if (!snap) {
+        throw new MemosError(ERROR_CODES.EPISODE_NOT_FOUND, `episode ${id} not found`, {
+          episodeId: id,
+        });
+      }
+      snap.meta = { ...snap.meta, ...metaPatch };
+      deps.episodesRepo.updateMeta(id, metaPatch);
+      return cloneSnapshot(snap);
+    },
+
     finalize(id, input) {
       const snap = assertOpen(get(id), id);
       const endedAt = now();
@@ -174,7 +242,7 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
       snap.endedAt = endedAt;
       if (input?.rTask !== undefined) snap.rTask = input.rTask;
       if (input?.patchMeta) snap.meta = { ...snap.meta, ...input.patchMeta };
-      snap.meta = { ...snap.meta, closeReason: "finalized" };
+      snap.meta = { ...snap.meta, topicState: "ended", closeReason: "finalized" };
       deps.episodesRepo.close(id, endedAt, snap.rTask ?? undefined, snap.meta);
       log.info("episode.finalized", {
         episodeId: id,
@@ -200,7 +268,12 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
       const endedAt = now();
       snap.status = "closed";
       snap.endedAt = endedAt;
-      snap.meta = { ...snap.meta, closeReason: "abandoned", abandonReason: reason };
+      snap.meta = {
+        ...snap.meta,
+        topicState: "ended",
+        closeReason: "abandoned",
+        abandonReason: reason,
+      };
       deps.episodesRepo.close(id, endedAt, snap.rTask ?? undefined, snap.meta);
       log.warn("episode.abandoned", {
         episodeId: id,
@@ -227,11 +300,28 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
       }
       snap.status = "open";
       snap.endedAt = null;
+      const previousReward = snap.rTask != null
+        ? {
+            previousRTask: snap.rTask,
+            previousScoredAt: rewardScoredAt(snap.meta),
+          }
+        : {};
       snap.meta = {
         ...snap.meta,
         closeReason: undefined,
+        topicState: "active",
         reopenedAt: now(),
         reopenReason: reason,
+        ...(snap.rTask != null || snap.meta.reward
+          ? {
+              rewardDirty: {
+                reason: "episode_reopened",
+                reopenedFor: reason,
+                at: now(),
+                ...previousReward,
+              },
+            }
+          : {}),
       };
       deps.episodesRepo.reopen(id, snap.meta);
       log.info("episode.reopened", {
@@ -261,6 +351,17 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
       return out;
     },
   };
+}
+
+function stringMeta(meta: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = meta?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function rewardScoredAt(meta: Record<string, unknown>): unknown {
+  const reward = meta.reward;
+  if (!reward || typeof reward !== "object") return undefined;
+  return (reward as { scoredAt?: unknown }).scoredAt;
 }
 
 function cloneSnapshot(s: EpisodeSnapshot): EpisodeSnapshot {

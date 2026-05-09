@@ -26,6 +26,7 @@
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
+import { sanitizeDerivedText } from "../safety/content.js";
 import type { RelationDecision, RelationInput, TurnRelation } from "./types.js";
 
 // ─── Heuristic rules ─────────────────────────────────────────────────────
@@ -71,14 +72,29 @@ const FOLLOW_PATTERNS = [
 ];
 
 const NEW_TASK_PATTERNS = [
+  // Strict variant kept for backward compatibility.
+  /换个(话题|问题|任务|主题|场景)/i,
+  // Relaxed: allow 1–5 chars between "换个" and the topic noun, so
+  // natural phrasings like "换个新任务", "换个下一个话题",
+  // "换个完全不同的问题" all fire the strong heuristic without
+  // bouncing through the LLM (which often overrules them as
+  // follow_up when the new task shares a project / domain).
+  /换个[^\s。,，！!?？]{1,6}(话题|问题|任务|主题|场景)/i,
+  // "换下一个 / 换下个 ..." family.
+  /换下(一)?个[^\s。,，！!?？]{0,6}(话题|问题|任务|主题|场景)?/i,
+  // "下一个任务 / 下一个话题 ..." prefix family — matches when the
+  // user opens a brand-new turn with an explicit ordinal cue.
+  /^\s*下一?个(\S{0,5})?(话题|问题|任务|主题|场景)/i,
+  // Other explicit Chinese cues.
   /现在(帮我)?处理另一个/i,
-  /换个(话题|问题|任务)/i,
   /先放下/i,
   /忘掉之前/i,
-  /\bnew (task|question|topic)\b/i,
+  // English cues.
+  /\bnew (task|question|topic|subject)\b/i,
   /\bforget (that|about it)\b/i,
-  /\bchange (of )?(topic|subject)\b/i,
+  /\bchange (of )?(topic|subject|task)\b/i,
   /\bmoving on\b/i,
+  /\bnext (task|topic|question)\b/i,
 ];
 
 // Short message with pronoun reference — almost always a follow-up to the
@@ -177,6 +193,21 @@ function matchesAny(text: string, patterns: readonly RegExp[]): boolean {
   return patterns.some((p) => p.test(text));
 }
 
+function ruleTiePriority(rule: Rule): number {
+  switch (rule.id) {
+    case "r5_new_phrase":
+      return 40;
+    case "r1_negation_keyword":
+      return 30;
+    case "r2_quotes_prev":
+      return 20;
+    case "r3_pronoun_ref":
+      return 10;
+    default:
+      return 0;
+  }
+}
+
 // ─── Strong heuristic threshold ──────────────────────────────────────────
 
 const STRONG_HEURISTIC_THRESHOLD = 0.85;
@@ -186,8 +217,15 @@ const STRONG_HEURISTIC_THRESHOLD = 0.85;
 const IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 // ─── Low-confidence new_task threshold for arbitration ───────────────────
-
-const ARBITRATION_THRESHOLD = 0.65;
+//
+// Raised from 0.65 → 0.8 so the LLM has to be quite sure (confidence ≥ 0.8)
+// before its `new_task` verdict is taken at face value. Anything below that
+// goes through the second-pass arbitration prompt (which is biased toward
+// follow_up). Real-world observation: the primary classifier often returns
+// `new_task` at 0.65–0.75 for messages that are actually sub-tasks of the
+// same project — pulling the cut-off up reduces false topic splits at the
+// cost of one extra LLM call on borderline turns.
+const ARBITRATION_THRESHOLD = 0.8;
 
 // ─── Public factory ──────────────────────────────────────────────────────
 
@@ -207,7 +245,7 @@ export function createRelationClassifier(
 ): RelationClassifier {
   const log = rootLogger.child({ channel: "core.session.relation" });
   const llmDisabled = opts.disableLlm ?? !opts.llm;
-  const timeoutMs = opts.timeoutMs ?? 4_000;
+  const timeoutMs = opts.timeoutMs ?? 6_000;
 
   return {
     async classify(input: RelationInput): Promise<RelationDecision> {
@@ -244,7 +282,11 @@ export function createRelationClassifier(
         if (tag) fired.push({ rule, tag });
       }
       if (fired.length > 0) {
-        fired.sort((a, b) => b.rule.confidence - a.rule.confidence);
+        fired.sort(
+          (a, b) =>
+            b.rule.confidence - a.rule.confidence ||
+            ruleTiePriority(b.rule) - ruleTiePriority(a.rule),
+        );
         const top = fired[0];
         if (top.rule.confidence >= STRONG_HEURISTIC_THRESHOLD) {
           log.debug("heuristic.strong", {
@@ -484,6 +526,8 @@ async function callLlm(llm: LlmClient, input: RelationInput): Promise<LlmRelatio
     ],
     {
       op: "session.relation.classify",
+      phase: "session",
+      episodeId: input.prevEpisodeId,
       schemaHint: `{"relation":"revision"|"follow_up"|"new_task"|"unknown","confidence":0..1,"reason":"..."}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;
@@ -516,7 +560,7 @@ async function callLlm(llm: LlmClient, input: RelationInput): Promise<LlmRelatio
   return {
     relation: rsp.value.relation as TurnRelation,
     confidence: rsp.value.confidence as number,
-    reason: rsp.value.reason as string,
+    reason: sanitizeDerivedText(rsp.value.reason),
     servedBy: rsp.servedBy,
   };
 }
@@ -551,6 +595,8 @@ async function callArbitration(llm: LlmClient, input: RelationInput): Promise<Tu
     ],
     {
       op: "session.relation.arbitrate",
+      phase: "session",
+      episodeId: input.prevEpisodeId,
       schemaHint: `{"relation":"follow_up"|"new_task","reason":"..."}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;

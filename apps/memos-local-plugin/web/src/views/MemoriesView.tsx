@@ -51,8 +51,14 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "../api/client";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
+import { Pager } from "../components/Pager";
+import { ShareScopePill } from "../components/ShareScopePill";
+import { Markdown } from "../components/Markdown";
 import { route } from "../stores/router";
+import { clearEntryId } from "../stores/cross-link";
 import type { TraceDTO } from "../api/types";
+import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
+import { loadHubSharingEnabled } from "../utils/share";
 
 type RoleFilter = "" | "user" | "assistant" | "tool";
 
@@ -69,8 +75,7 @@ interface ListResponse {
  * sub-step it produced" unit. `traces` are the raw L1 rows the
  * pipeline wrote (tool steps + final reply); `head` is the row that
  * carries the user query. `turnKey` is what the page groups on:
- * `${episodeId}:${turnId}` (or `${episodeId}:${trace.id}` for legacy
- * rows that pre-date migration 013 and have NULL `turnId`).
+ * `${episodeId}:${turnId}`.
  */
 interface MemoryGroup {
   turnKey: string;
@@ -84,11 +89,12 @@ interface MemoryGroup {
   aggValue: number;
   aggAlpha: number;
   hasReflection: boolean;
-  scope: "private" | "public" | "hub";
+  scope: "private" | "local" | "public" | "hub";
   shared: boolean;
 }
 
-const PAGE_SIZE = 25;
+const DEFAULT_PAGE_SIZE = 20;
+const ROLE_FILTER_FETCH_LIMIT = 500;
 
 export function MemoriesView() {
   // Pre-fill from URL `?q=` so the global search box in Header can
@@ -96,9 +102,11 @@ export function MemoriesView() {
   const [query, setQuery] = useState(() => route.value.params.q ?? "");
   const [role, setRole] = useState<RoleFilter>("");
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(false);
   const [traces, setTraces] = useState<TraceDTO[]>([]);
   const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<MemoryGroup | null>(null);
   const [toast, setToast] = useState<{ msg: string; kind: "info" | "success" | "error" } | null>(null);
@@ -108,33 +116,88 @@ export function MemoriesView() {
     setTimeout(() => setToast(null), 2400);
   };
 
+  useEffect(() => {
+    const ctrl = new AbortController();
+    void loadHubSharingEnabled({ force: true, signal: ctrl.signal });
+    return () => ctrl.abort();
+  }, []);
+
   const loadPage = async (opts: { q: string; page: number }) => {
     setLoading(true);
     try {
       const qs = new URLSearchParams();
-      qs.set("limit", String(PAGE_SIZE));
-      qs.set("offset", String(opts.page * PAGE_SIZE));
+      const roleFilterActive = role !== "";
+      qs.set("limit", String(roleFilterActive ? ROLE_FILTER_FETCH_LIMIT : pageSize));
+      qs.set("offset", String(roleFilterActive ? 0 : opts.page * pageSize));
+      qs.set("groupByTurn", "true");
       if (opts.q) qs.set("q", opts.q);
       const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`);
       setTraces(res.traces);
-      setHasMore(res.nextOffset != null);
+      setHasMore(roleFilterActive ? false : res.nextOffset != null);
+      setTotal(res.total ?? 0);
       setPage(opts.page);
     } catch {
       setTraces([]);
       setHasMore(false);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
   };
 
-  // Debounced filter — reset to page 0 on query change.
+  // Debounced filter — reset to page 0 on query or tab change.
   useEffect(() => {
+    if (route.value.params.id) return;
     const h = setTimeout(() => {
       void loadPage({ q: query.trim(), page: 0 });
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [query, pageSize, role, route.value.params.id]);
+
+  useEffect(() => {
+    const id = route.value.params.id;
+    if (!id) return;
+    const ctrl = new AbortController();
+    void openLinkedMemory(id, ctrl.signal);
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.value.params.id, pageSize]);
+
+  const openLinkedMemory = async (id: string, signal: AbortSignal) => {
+    setQuery("");
+    setRole("");
+    setLoading(true);
+    try {
+      const targetTrace = await api.get<TraceDTO>(
+        `/api/v1/traces/${encodeURIComponent(id)}`,
+        { signal },
+      );
+      const targetPage = await findTracePage(id, pageSize, signal);
+      const qs = new URLSearchParams();
+      qs.set("limit", String(pageSize));
+      qs.set("offset", String(targetPage * pageSize));
+      qs.set("groupByTurn", "true");
+      const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`, {
+        signal,
+      });
+      const nextTraces = res.traces ?? [];
+      const targetKey = groupKey(targetTrace);
+      const targetGroup =
+        buildGroups(nextTraces).find((g) => g.ids.includes(id) || g.turnKey === targetKey) ??
+        buildGroups([targetTrace])[0] ??
+        null;
+      setTraces(nextTraces);
+      setHasMore(res.nextOffset != null);
+      setTotal(res.total ?? 0);
+      setPage(targetPage);
+      if (targetGroup) setDetail(targetGroup);
+    } catch {
+      // Missing or aborted deep links should not break the list.
+    } finally {
+      if (!signal.aborted) setLoading(false);
+    }
+  };
 
   // Sync with URL `?q=` when the route changes (e.g. the Header's
   // global search bar navigates here while this view is already open).
@@ -149,13 +212,18 @@ export function MemoriesView() {
   /**
    * Bucket the page's traces by `(episodeId, turnId)` so each "user
    * message + every sub-step it produced" collapses into one card.
-   * Then drop groups whose role doesn't match the chip filter.
    */
-  const groups = useMemo<MemoryGroup[]>(() => {
+  const allGroups = useMemo<MemoryGroup[]>(() => {
     const all = buildGroups(traces);
     if (!role) return all;
     return all.filter((g) => detectGroupRole(g) === role);
   }, [traces, role]);
+  const displayTotal = role ? allGroups.length : total;
+  const groups = role
+    ? allGroups.slice(page * pageSize, (page + 1) * pageSize)
+    : allGroups;
+  const pageIds = groups.flatMap((g) => g.ids);
+  const isPageSelected = areAllIdsSelected(selected, pageIds);
 
   /**
    * A card is "selected" when every member trace id is in the
@@ -164,6 +232,16 @@ export function MemoriesView() {
    */
   const isGroupSelected = (g: MemoryGroup): boolean =>
     g.ids.length > 0 && g.ids.every((id) => selected.has(id));
+
+  // Number of selected memories (turns), not raw traces. A memory card
+  // contains all the tool sub-step traces of one user turn, so the
+  // batch-bar count and confirm prompts must report turns or the user
+  // sees inflated numbers.
+  const selectedGroupCount = useMemo(
+    () => groups.filter(isGroupSelected).length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groups, selected],
+  );
 
   const toggleGroupSel = (g: MemoryGroup) => {
     setSelected((prev) => {
@@ -176,13 +254,13 @@ export function MemoriesView() {
       return next;
     });
   };
-  const selectPage = () =>
-    setSelected(new Set(groups.flatMap((g) => g.ids)));
+  const togglePageSelection = () =>
+    setSelected((prev) => toggleIdsInSelection(prev, pageIds));
   const deselectAll = () => setSelected(new Set());
 
   const bulkDelete = async () => {
     if (selected.size === 0) return;
-    if (!confirm(t("memories.delete.bulkConfirm", { n: selected.size }))) return;
+    if (!confirm(t("memories.delete.bulkConfirm", { n: selectedGroupCount }))) return;
     try {
       const ids = [...selected];
       const res = await api.post<{ deleted: number }>(`/api/v1/traces/delete`, { ids });
@@ -225,7 +303,7 @@ export function MemoriesView() {
     const lines: string[] = [];
     for (const g of groups) {
       if (!isGroupSelected(g)) continue;
-      const head = pickSummary(g.head);
+      const head = pickGroupSummary(g);
       lines.push(`# ${head}`);
       for (const tr of g.traces) {
         if (tr.userText) lines.push(`[user] ${tr.userText}`);
@@ -237,7 +315,7 @@ export function MemoriesView() {
     const txt = lines.join("\n");
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(txt).then(
-        () => showToast(t("memories.copy.done", { n: selected.size })),
+        () => showToast(t("memories.copy.done", { n: selectedGroupCount })),
         () => showToast("Copy failed", "error"),
       );
     } else {
@@ -308,7 +386,7 @@ export function MemoriesView() {
    */
   const applyShareGroup = async (
     g: MemoryGroup,
-    scope: "private" | "public" | "hub" | null,
+    scope: "private" | "local" | "public" | "hub" | null,
   ) => {
     try {
       const updates = await Promise.all(
@@ -346,7 +424,6 @@ export function MemoriesView() {
             class="btn btn--ghost btn--sm"
             onClick={() => {
               setQuery("");
-              setRole("");
               setSelected(new Set());
               void loadPage({ q: "", page: 0 });
             }}
@@ -402,11 +479,13 @@ export function MemoriesView() {
       {selected.size > 0 && (
         <div class="batch-bar" role="region" aria-label="bulk actions">
           <span class="batch-bar__count">
-            {t("common.selected", { n: selected.size })}
+            {t("common.selected", { n: selectedGroupCount })}
           </span>
-          <button class="btn btn--sm" onClick={selectPage}>
+          <button class="btn btn--sm" onClick={togglePageSelection}>
             <Icon name="check-square" size={14} />
-            {t("memories.bulk.selectPage")}
+            {isPageSelected
+              ? t("common.deselectPage")
+              : t("memories.bulk.selectPage")}
           </button>
           <button class="btn btn--sm" onClick={() => bulkShare("public")}>
             <Icon name="share" size={14} />
@@ -453,9 +532,7 @@ export function MemoriesView() {
         <div class="list">
           {groups.map((g) => {
             const isSel = isGroupSelected(g);
-            const line = pickSummary(g.head);
-            const roleKey = detectGroupRole(g);
-            const scope = g.scope;
+            const line = pickGroupSummary(g);
             const stepLabel =
               g.traces.length > 1
                 ? t("memories.card.steps", { n: g.traces.length })
@@ -489,18 +566,9 @@ export function MemoriesView() {
                 <div class="mem-card__body">
                   <div class="mem-card__title">{line}</div>
                   <div class="mem-card__meta">
-                    {roleKey && (
-                      <span class={`pill pill--role-${roleKey}`}>
-                        {t(`memories.filter.role.${roleKey}` as never)}
-                      </span>
-                    )}
-                    <span class={`pill pill--share-${scope}`}>
-                      {t(`memories.share.scope.${scope}` as never).split(" (")[0]}
-                    </span>
+                    <ShareScopePill scope={g.scope} />
                     <span>{formatTs(g.ts)}</span>
-                    <span class="mono">
-                      V {g.aggValue.toFixed(2)} · α {g.aggAlpha.toFixed(2)}
-                    </span>
+                    <span class="mono">{groupScoreLabel(g)}</span>
                     {g.toolCount > 0 && (
                       <span class="pill pill--info" title={g.toolNames.join(", ")}>
                         <Icon name="cable" size={12} />
@@ -531,34 +599,28 @@ export function MemoriesView() {
       )}
 
       {/* Pager */}
-      {(page > 0 || hasMore) && (
-        <div class="pager">
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page === 0 || loading}
-            onClick={() => void loadPage({ q: query.trim(), page: page - 1 })}
-          >
-            <Icon name="chevron-left" size={14} />
-            {t("common.prev")}
-          </button>
-          <span class="pager__info">
-            {t("pager.page", { n: page + 1 })}
-          </span>
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={!hasMore || loading}
-            onClick={() => void loadPage({ q: query.trim(), page: page + 1 })}
-          >
-            {t("common.next")}
-            <Icon name="chevron-right" size={14} />
-          </button>
-        </div>
+      {(displayTotal > pageSize || page > 0 || hasMore) && (
+        <Pager
+          page={page}
+          totalItems={displayTotal}
+          pageSize={pageSize}
+          hasMore={role ? false : hasMore}
+          loading={loading}
+          onPageSizeChange={setPageSize}
+          onPageChange={(nextPage) => {
+            if (role) setPage(nextPage);
+            else void loadPage({ q: query.trim(), page: nextPage });
+          }}
+        />
       )}
 
       {detail && (
         <TraceDrawer
           group={detail}
-          onClose={() => setDetail(null)}
+          onClose={() => {
+            setDetail(null);
+            clearEntryId();
+          }}
           onSave={saveEdit}
           onShare={(scope) => applyShareGroup(detail, scope)}
           onDelete={() => deleteGroup(detail)}
@@ -577,13 +639,91 @@ export function MemoriesView() {
 // ─── helpers ─────────────────────────────────────────────────────────────
 
 function pickSummary(trace: TraceDTO): string {
-  const s = (trace.summary ?? "").trim();
+  const s = usableSummary(trace.summary);
   if (s) return s;
   const u = (trace.userText ?? "").replace(/\s+/g, " ").trim();
   if (u) return u.length > 180 ? u.slice(0, 177) + "…" : u;
   const a = (trace.agentText ?? "").replace(/\s+/g, " ").trim();
   if (a) return a.length > 180 ? a.slice(0, 177) + "…" : a;
   return "(empty trace)";
+}
+
+function pickGroupSummary(group: MemoryGroup): string {
+  const headSummary = usableSummary(group.head.summary);
+  if (headSummary) return headSummary;
+
+  for (const trace of group.traces) {
+    if (trace.id === group.head.id) continue;
+    const summary = usableSummary(trace.summary);
+    if (summary) return summary;
+  }
+
+  return pickSummary(group.head);
+}
+
+function usableSummary(summary: string | null | undefined): string {
+  const s = (summary ?? "").trim();
+  if (!s || isPlaceholderSummary(s)) return "";
+  return s;
+}
+
+function isPlaceholderSummary(summary: string): boolean {
+  const s = summary.trim().toLowerCase();
+  return s === "(empty turn)" || s === "(empty trace)" || s === "(empty)";
+}
+
+function detectRole(trace: TraceDTO): "user" | "assistant" | "tool" | "" {
+  if ((trace.toolCalls?.length ?? 0) > 0) return "tool";
+  if (trace.userText && trace.userText.length > (trace.agentText?.length ?? 0)) {
+    return "user";
+  }
+  if (trace.agentText) return "assistant";
+  if (trace.userText) return "user";
+  return "";
+}
+
+function episodeScoringSkipped(trace: TraceDTO): boolean {
+  return trace.episodeRewardSkipped === true;
+}
+
+function episodeScoringPending(trace: TraceDTO): boolean {
+  return trace.episodeRTask == null && !episodeScoringSkipped(trace);
+}
+
+function groupScoreLabel(group: MemoryGroup): string {
+  const scoringTrace = group.traces.find((trace) => trace.episodeRTask != null) ?? group.head;
+  if (episodeScoringSkipped(scoringTrace)) return t("memories.score.skipped");
+  if (episodeScoringPending(scoringTrace)) return t("memories.score.pending");
+  return `V ${group.aggValue.toFixed(2)} · α ${group.aggAlpha.toFixed(2)}`;
+}
+
+function traceScoreLabel(trace: TraceDTO): string {
+  if (episodeScoringSkipped(trace)) return t("memories.score.skipped");
+  if (episodeScoringPending(trace)) return t("memories.score.pending");
+  return `V ${trace.value.toFixed(2)} · α ${trace.alpha.toFixed(2)}`;
+}
+
+async function findTracePage(
+  id: string,
+  pageSize: number,
+  signal: AbortSignal,
+): Promise<number> {
+  const scanLimit = 500;
+  let offset = 0;
+  while (true) {
+    const qs = new URLSearchParams();
+    qs.set("limit", String(scanLimit));
+    qs.set("offset", String(offset));
+    qs.set("groupByTurn", "true");
+    const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`, {
+      signal,
+    });
+    const groups = buildGroups(res.traces ?? []);
+    const index = groups.findIndex((group) => group.ids.includes(id));
+    if (index >= 0) return Math.floor((offset + index) / pageSize);
+    if (res.nextOffset == null) return 0;
+    offset = res.nextOffset;
+  }
 }
 
 /**
@@ -611,14 +751,20 @@ function ToolCallCard({
     input?: unknown;
     output?: unknown;
     errorCode?: string;
-    startedAt: number;
-    endedAt: number;
+    startedAt?: number;
+    endedAt?: number;
+    thinkingBefore?: string;
+    assistantTextBefore?: string;
   };
 }) {
   const inputStr = formatToolPayload(call.input);
   const outputStr = formatToolPayload(call.output);
+  const assistantTextBefore = (call.assistantTextBefore ?? "").trim();
+  const thinkingBefore = (call.thinkingBefore ?? "").trim();
   const dur =
-    call.endedAt > call.startedAt ? call.endedAt - call.startedAt : null;
+    call.startedAt != null && call.endedAt != null && call.endedAt > call.startedAt
+      ? call.endedAt - call.startedAt
+      : null;
   const errored = !!call.errorCode;
   return (
     <div
@@ -636,6 +782,28 @@ function ToolCallCard({
         )}
         {dur != null && <span class="muted mono">{dur}ms</span>}
       </div>
+      {assistantTextBefore && (
+        <details class="chat-item__tool-section" open>
+          <summary class="chat-item__tool-summary">
+            <Icon name="chevron-right" size={12} />
+            <span class="chat-item__tool-label">
+              {t("tasks.chat.tool.assistantTextBefore")}
+            </span>
+          </summary>
+          <Markdown text={clipPayload(assistantTextBefore, 4000)} />
+        </details>
+      )}
+      {thinkingBefore && (
+        <details class="chat-item__tool-section">
+          <summary class="chat-item__tool-summary">
+            <Icon name="chevron-right" size={12} />
+            <span class="chat-item__tool-label">
+              {t("tasks.chat.role.thinking")}
+            </span>
+          </summary>
+          <Markdown text={clipPayload(thinkingBefore, 4000)} />
+        </details>
+      )}
       {inputStr && (
         <details class="chat-item__tool-section">
           <summary class="chat-item__tool-summary">
@@ -669,7 +837,23 @@ function ToolCallCard({
 
 function formatToolPayload(v: unknown): string {
   if (v === undefined || v === null) return "";
-  if (typeof v === "string") return v;
+  // Tool inputs/outputs frequently arrive as already-stringified JSON
+  // (the agent serializes them before storing). Re-parse so the same
+  // 2-space pretty-print path applies regardless of upstream encoding.
+  if (typeof v === "string") {
+    const trimmed = v.trim();
+    if (
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
+      try {
+        return JSON.stringify(JSON.parse(trimmed), null, 2);
+      } catch {
+        return v;
+      }
+    }
+    return v;
+  }
   try {
     return JSON.stringify(v, null, 2);
   } catch {
@@ -702,21 +886,11 @@ function summarizeToolNames(
   return `${unique.slice(0, 2).join(", ")} +${unique.length - 2}`;
 }
 
-function detectRole(trace: TraceDTO): "user" | "assistant" | "tool" | "" {
-  if ((trace.toolCalls?.length ?? 0) > 0) return "tool";
-  if (trace.userText && trace.userText.length > (trace.agentText?.length ?? 0))
-    return "user";
-  if (trace.agentText) return "assistant";
-  if (trace.userText) return "user";
-  return "";
-}
-
 /**
  * Bucket the page's traces by `(episodeId, turnId)`. Within each
- * bucket, sort sub-steps by `ts ascending` and pick the first row
- * with a non-empty `userText` as the head — the `step-extractor`
- * guarantees this is the first sub-step (`subStepIdx === 0`), but we
- * fall back to "earliest by ts" so legacy rows still group cleanly.
+ * bucket, preserve the API order. The server returns sub-steps in the
+ * episode's conversation order, which can differ from `ts` when
+ * planner/todo calls have no real tool execution time.
  *
  * Aggregates exposed on the card:
  *   - `aggValue` / `aggAlpha`: arithmetic mean across members. Plain
@@ -741,18 +915,17 @@ function buildGroups(traces: readonly TraceDTO[]): MemoryGroup[] {
   }
   return order.map((key) => {
     const bucket = buckets.get(key)!;
-    bucket.sort((a, b) => a.ts - b.ts);
     const head =
       bucket.find((t) => (t.userText ?? "").trim().length > 0) ?? bucket[0]!;
     const tools = bucket.flatMap((t) => t.toolCalls ?? []);
     const ids = bucket.map((t) => t.id);
     const sumV = bucket.reduce((acc, t) => acc + (t.value ?? 0), 0);
     const sumA = bucket.reduce((acc, t) => acc + (t.alpha ?? 0), 0);
-    const scope: "private" | "public" | "hub" = head.share?.scope ?? "private";
+    const scope: "private" | "local" | "public" | "hub" = head.share?.scope ?? "private";
     return {
       turnKey: key,
       episodeId: head.episodeId ?? null,
-      ts: bucket[0]!.ts,
+      ts: head.turnId ?? bucket[0]!.turnId ?? bucket[0]!.ts,
       head,
       traces: bucket,
       ids,
@@ -768,11 +941,10 @@ function buildGroups(traces: readonly TraceDTO[]): MemoryGroup[] {
 }
 
 function groupKey(tr: TraceDTO): string {
-  // `turnId` is the stable key stamped by `step-extractor`. Falls back
-  // to the trace id so legacy rows (NULL turn_id) stand on their own.
-  const turn = (tr as TraceDTO & { turnId?: number | null }).turnId;
-  if (typeof turn === "number") return `${tr.episodeId ?? "_"}:${turn}`;
-  return `${tr.episodeId ?? "_"}:${tr.id}`;
+  // `turnId` is the stable key stamped by `step-extractor` — every
+  // sub-step from the same user message shares it. Pair with episodeId
+  // because turnId is just a ts (could repeat across episodes).
+  return `${tr.episodeId ?? "_"}:${tr.turnId}`;
 }
 
 function detectGroupRole(g: MemoryGroup): "user" | "assistant" | "tool" | "" {
@@ -812,6 +984,27 @@ function formatTs(ts: number): string {
   if (!ts) return "—";
   try {
     return new Date(ts).toLocaleString();
+  } catch {
+    return String(ts);
+  }
+}
+
+/**
+ * Format a step timestamp with millisecond precision (HH:MM:SS.mmm).
+ * Used in the per-step header row so users can tell apart sub-steps
+ * fired within the same second by a fast tool loop. Uses 24h fields
+ * directly so the locale's AM/PM suffix doesn't end up between the
+ * seconds and the millisecond fraction.
+ */
+function formatStepTime(ts: number): string {
+  if (!ts) return "—";
+  try {
+    const d = new Date(ts);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    const ms = String(d.getMilliseconds()).padStart(3, "0");
+    return `${hh}:${mm}:${ss}.${ms}`;
   } catch {
     return String(ts);
   }
@@ -860,16 +1053,17 @@ function TraceDrawer({
       tags?: string[];
     },
   ) => Promise<void> | void;
-  onShare: (scope: "private" | "public" | "hub" | null) => Promise<void> | void;
+  onShare: (scope: "private" | "local" | "public" | "hub" | null) => Promise<void> | void;
   onDelete: () => Promise<void> | void;
 }) {
   const head = group.head;
+  const displaySummary = pickGroupSummary(group);
   const [mode, setMode] = useState<"view" | "edit" | "share">("view");
   const [summary, setSummary] = useState(head.summary ?? "");
   const [userText, setUserText] = useState(head.userText ?? "");
   const [agentText, setAgentText] = useState(head.agentText ?? "");
   const [tags, setTags] = useState((head.tags ?? []).join(", "));
-  const [scope, setScope] = useState<"private" | "public" | "hub">(
+  const [scope, setScope] = useState<"private" | "local" | "public" | "hub">(
     head.share?.scope ?? "public",
   );
 
@@ -881,7 +1075,7 @@ function TraceDrawer({
     setScope(head.share?.scope ?? "public");
   }, [head]);
 
-  const title = pickSummary(head).slice(0, 100) || t("memories.detail.fallbackTitle");
+  const title = displaySummary.slice(0, 100) || t("memories.detail.fallbackTitle");
 
   const submitEdit = () => {
     void onSave(head.id, {
@@ -896,7 +1090,7 @@ function TraceDrawer({
     setMode("view");
   };
 
-  const submitShare = (s: "private" | "public" | "hub" | null) => {
+  const submitShare = (s: "private" | "local" | "public" | "hub" | null) => {
     void onShare(s);
     setMode("view");
   };
@@ -929,9 +1123,13 @@ function TraceDrawer({
                   <dt class="muted">{t("memories.field.ts")}</dt>
                   <dd>{group.ts ? new Date(group.ts).toLocaleString() : "—"}</dd>
                   <dt class="muted">{t("memories.field.value")}</dt>
-                  <dd>{group.aggValue.toFixed(3)}</dd>
-                  <dt class="muted">{t("memories.field.alpha")}</dt>
-                  <dd>{group.aggAlpha.toFixed(3)}</dd>
+                  <dd>{groupScoreLabel(group)}</dd>
+                  {!episodeScoringSkipped(head) && (
+                    <>
+                      <dt class="muted">{t("memories.field.alpha")}</dt>
+                      <dd>{group.aggAlpha.toFixed(3)}</dd>
+                    </>
+                  )}
                   {head.rHuman != null && (
                     <>
                       <dt class="muted">{t("memories.field.rHuman")}</dt>
@@ -942,7 +1140,7 @@ function TraceDrawer({
                   <dd>{head.priority.toFixed(3)}</dd>
                   <dt class="muted">{t("memories.field.share")}</dt>
                   <dd>
-                    <span class={`pill pill--share-${group.scope}`}>{group.scope}</span>
+                    <ShareScopePill scope={group.scope} />
                   </dd>
                   {head.tags && head.tags.length > 0 && (
                     <>
@@ -959,12 +1157,12 @@ function TraceDrawer({
                 </dl>
               </section>
 
-              {head.summary && (
+              {displaySummary !== "(empty trace)" && (
                 <section class="card card--flat">
                   <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                     {t("memories.field.summary")}
                   </div>
-                  <div style="font-size:var(--fs-sm);line-height:1.55">{head.summary}</div>
+                  <div style="font-size:var(--fs-sm);line-height:1.55">{displaySummary}</div>
                 </section>
               )}
 
@@ -973,9 +1171,7 @@ function TraceDrawer({
                   <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                     {t("memories.field.user")}
                   </div>
-                  <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
-                    {head.userText}
-                  </pre>
+                  <Markdown text={head.userText} />
                 </section>
               )}
 
@@ -1037,7 +1233,7 @@ function TraceDrawer({
               <div class="modal__field">
                 <label>{t("memories.share.scope")}</label>
                 <div class="vstack" style="gap:var(--sp-2)">
-                  {(["private", "public", "hub"] as const).map((v) => (
+                  {(["private", "local", "public", "hub"] as const).map((v) => (
                     <label
                       key={v}
                       class="hstack"
@@ -1124,8 +1320,9 @@ function TraceDrawer({
  *     and any `toolCalls` rendered through the existing
  *     `ToolCallCard`. Empty fields collapse silently.
  *
- * The first step is open by default; the rest start collapsed so the
- * drawer doesn't drown the user when a turn fired a dozen tools.
+ * Every step starts collapsed so the drawer stays compact when a turn
+ * fired a dozen tools — users opt into the detail they want instead of
+ * scrolling past an auto-expanded first step.
  */
 function StepList({ traces }: { traces: readonly TraceDTO[] }) {
   return (
@@ -1139,10 +1336,11 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
           const role = tools.length > 0 ? "tool" : "assistant";
           const roleLabel = t(`memories.filter.role.${role}` as never);
           const summary = stepHeadline(tr);
+          const displayTs = stepDisplayTs(tr);
+          const stepThinking = tools.length === 0 ? (tr.agentThinking ?? "").trim() : "";
           return (
             <details
               key={tr.id}
-              open={idx === 0}
               class="card card--flat"
               style="padding:var(--sp-2) var(--sp-3)"
             >
@@ -1154,25 +1352,25 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
                   #{idx + 1}
                 </span>
                 <span class={`pill pill--role-${role}`}>{roleLabel}</span>
+                {displayTs != null && (
+                  <span class="mono muted" style="font-size:var(--fs-xs)">
+                    {formatStepTime(displayTs)}
+                  </span>
+                )}
                 <span class="mono muted" style="font-size:var(--fs-xs)">
-                  {new Date(tr.ts).toLocaleTimeString()}
-                </span>
-                <span class="mono muted" style="font-size:var(--fs-xs)">
-                  V {tr.value.toFixed(2)} · α {tr.alpha.toFixed(2)}
+                  {traceScoreLabel(tr)}
                 </span>
                 <span class="truncate" style="flex:1;min-width:0;font-size:var(--fs-sm)">
                   {summary}
                 </span>
               </summary>
               <div class="vstack" style="gap:var(--sp-3);margin-top:var(--sp-3)">
-                {tr.agentThinking && (
+                {stepThinking && (
                   <div>
                     <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                       {t("tasks.chat.role.thinking")}
                     </div>
-                    <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
-                      {tr.agentThinking}
-                    </pre>
+                    <Markdown text={stepThinking} />
                   </div>
                 )}
                 {tools.length > 0 && (
@@ -1187,9 +1385,7 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
                     <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                       {t("memories.field.assistant")}
                     </div>
-                    <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
-                      {tr.agentText}
-                    </pre>
+                    <Markdown text={tr.agentText} />
                   </div>
                 )}
                 {tr.reflection && (
@@ -1197,9 +1393,7 @@ function StepList({ traces }: { traces: readonly TraceDTO[] }) {
                     <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
                       {t("memories.field.takeaway")}
                     </div>
-                    <pre class="mono" style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0">
-                      {tr.reflection}
-                    </pre>
+                    <Markdown text={tr.reflection} />
                   </div>
                 )}
               </div>
@@ -1219,4 +1413,14 @@ function stepHeadline(tr: TraceDTO): string {
   const u = (tr.userText ?? "").trim().replace(/\s+/g, " ");
   if (u) return u.length > 80 ? u.slice(0, 77) + "…" : u;
   return "(empty step)";
+}
+
+function stepDisplayTs(tr: TraceDTO): number | undefined {
+  const tools = tr.toolCalls ?? [];
+  if (tools.length === 0) return tr.ts;
+  const firstStartedAt = tools
+    .map((tc) => tc.startedAt)
+    .filter((ts): ts is number => typeof ts === "number" && Number.isFinite(ts))
+    .sort((a, b) => a - b)[0];
+  return firstStartedAt;
 }

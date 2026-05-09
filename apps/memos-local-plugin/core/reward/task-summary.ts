@@ -37,6 +37,12 @@ export interface SummaryInput {
   episode: EpisodeSnapshot;
   traces: readonly TraceRow[];
   cfg: Pick<RewardConfig, "summaryMaxChars">;
+  evaluator?: {
+    reflectionProvider?: string;
+    reflectionModel?: string;
+    scorerProvider?: string;
+    scorerModel?: string;
+  };
 }
 
 export function buildTaskSummary(input: SummaryInput): TaskSummary {
@@ -66,8 +72,12 @@ export function buildTaskSummary(input: SummaryInput): TaskSummary {
     : "(no recorded exchanges)";
 
   const agentActions = traces.map(traceOneLiner).filter(Boolean).join("\n");
+  const hostContext = formatHostAgentContext(episode, input.evaluator);
 
   const body = [
+    hostContext ? `HOST_AGENT_CONTEXT:` : "",
+    hostContext,
+    hostContext ? `` : "",
     `USER_ASKS_AND_AGENT_REPLIES (${pairs.length}, in order):`,
     pairsText,
     ``,
@@ -94,12 +104,44 @@ export function buildTaskSummary(input: SummaryInput): TaskSummary {
   return {
     episodeId: episode.id,
     sessionId: episode.sessionId,
+    hostContext,
     userQuery: oneLine(userQuery, 500),
     agentActions,
     outcome: oneLine(outcome, 800),
     text,
     truncated,
   };
+}
+
+function formatHostAgentContext(
+  episode: EpisodeSnapshot,
+  evaluator?: SummaryInput["evaluator"],
+): string {
+  const meta = episode.meta ?? {};
+  const hints = isRecord(meta.contextHints) ? meta.contextHints : {};
+  const fields: Array<[string, unknown]> = [
+    ["agent", meta.agent],
+    ["agentIdentity", hints.agentIdentity ?? meta.agentIdentity],
+    ["hostProvider", hints.hostProvider ?? meta.hostProvider],
+    ["hostModel", hints.hostModel ?? meta.hostModel],
+    ["hostApiMode", hints.hostApiMode ?? meta.hostApiMode],
+    ["reflectionProvider", evaluator?.reflectionProvider],
+    ["reflectionModel", evaluator?.reflectionModel],
+    ["scorerProvider", evaluator?.scorerProvider],
+    ["scorerModel", evaluator?.scorerModel],
+  ];
+  const lines = fields
+    .filter(([, value]) => typeof value === "string" && value.trim().length > 0)
+    .map(([key, value]) => `${key}: ${oneLine(String(value), 240)}`);
+  if (lines.length === 0) return "";
+  lines.push(
+    "gradingInstruction: Evaluate the host agent's answer in this host context; do not project the evaluator model's own identity, provider, or capabilities onto the host agent.",
+  );
+  return lines.join("\n");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────

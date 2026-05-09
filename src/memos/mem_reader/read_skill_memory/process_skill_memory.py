@@ -332,7 +332,7 @@ def _preprocess_extract_messages(
     history = history[-20:]
     if (len(history) + len(messages)) < 10:
         # TODO: maybe directly return []
-        logger.warning("[PROCESS_SKILLS] Not enough messages to extract skill memory")
+        logger.info("[PROCESS_SKILLS] Not enough messages to extract skill memory")
     return history, messages
 
 
@@ -1034,7 +1034,6 @@ def process_skill_memory_fine(
     chat_history = kwargs.get("chat_history")
     if not chat_history or not isinstance(chat_history, list):
         chat_history = []
-        logger.warning("[PROCESS_SKILLS] History is None in Skills")
 
     messages = _reconstruct_messages_from_memory_items(fast_memory_items)
 

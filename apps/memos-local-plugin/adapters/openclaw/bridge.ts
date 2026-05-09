@@ -23,6 +23,7 @@ import type {
   AgentKind,
   EpisodeId,
   RetrievalResultDTO,
+  RuntimeNamespace,
   SessionId,
   ToolCallDTO,
   TurnInputDTO,
@@ -39,9 +40,12 @@ import type {
   HostLogger,
   PluginHookAgentContext,
   PluginHookSessionContext,
+  PluginHookSubagentContext,
   PluginHookToolContext,
   SessionEndEvent,
   SessionStartEvent,
+  SubagentEndedEvent,
+  SubagentSpawnedEvent,
 } from "./openclaw-api.js";
 
 // ─── Message flattening ────────────────────────────────────────────────────
@@ -309,6 +313,18 @@ const OPENCLAW_BOOT_SIGNATURES: readonly string[] = [
   "A new session was started via /new",
   "A new session was started via /reset",
   "BEGIN_QUOTED_NOTES",
+  // V7 — heartbeat / cron / async-exec wakeup prompts. OpenClaw
+  // synthesises these as if they were user input so the agent comes
+  // out of idle and processes the side-channel event. They are NOT
+  // user-typed content; capturing them as an L1 trace pollutes the
+  // Memories panel and creates phantom episodes (one per heartbeat).
+  // Source signatures live in OpenClaw `infra/heartbeat-events-filter.ts`
+  // and `auto-reply/reply/session-reset-prompt.ts`.
+  "An async command you ran earlier has completed",
+  "A scheduled reminder has been triggered",
+  "A scheduled cron event was triggered",
+  "Run the following periodic tasks",
+  "When reading HEARTBEAT.md",
 ];
 
 const OPENCLAW_SENTINEL_REPLIES = new Set([
@@ -335,6 +351,7 @@ export function isOpenClawBootstrapMessage(raw: string): boolean {
   const text = raw.trim();
   if (text.length === 0) return true;
   if (OPENCLAW_SENTINEL_REPLIES.has(text)) return true;
+  if (isOpenClawSubagentAnnouncementPrompt(text)) return false;
   for (const sig of OPENCLAW_BOOT_SIGNATURES) {
     if (text.startsWith(sig)) return true;
     if (text.includes(sig)) {
@@ -346,6 +363,12 @@ export function isOpenClawBootstrapMessage(raw: string): boolean {
     }
   }
   return false;
+}
+
+function isOpenClawSubagentAnnouncementPrompt(raw: string): boolean {
+  const text = raw.trim();
+  return text.includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>") &&
+    text.includes("A completed subagent task is ready for user delivery");
 }
 
 /**
@@ -433,6 +456,28 @@ function stripOpenClawUserEnvelope(raw: string): string {
   // 5. Inline envelope tags OpenClaw leaves behind.
   text = text.replace(/\[message_id:\s*[a-f0-9-]+\]/gi, "");
   text = text.replace(/\[\[reply_to_current\]\]/gi, "");
+
+  // 6. Line-level OpenClaw side-channel injections. OpenClaw appends
+  // accumulated system events to the top of synthesised user prompts,
+  // each line prefixed with `System (untrusted): [ts] …` (see
+  // `openclaw/src/auto-reply/reply/session-system-events.ts`). It also
+  // appends a `Current time: …` footer (`appendCronStyleCurrentTimeLine`)
+  // and an `[Untrusted …]` envelope on inbound messages. Drop these
+  // lines wholesale — they're never user-typed content, and leaving
+  // them in pollutes the Memories panel + tricks the relation
+  // classifier into thinking the user actually said them.
+  text = text
+    .split("\n")
+    .filter((line) => {
+      const t = line.trim();
+      if (!t) return true; // keep blank lines so paragraph breaks survive
+      if (/^System(?:\s+\(untrusted\))?:/.test(t)) return false;
+      if (/^Current time:/i.test(t)) return false;
+      if (/^\[Untrusted\b/.test(t)) return false;
+      if (/^When reading HEARTBEAT\.md/i.test(t)) return false;
+      return true;
+    })
+    .join("\n");
 
   return text.trim();
 }
@@ -579,6 +624,23 @@ export function bridgeSessionId(agentId: string, sessionKey: string): SessionId 
   return `openclaw::${agentId}::${sessionKey}`;
 }
 
+function namespaceFromAgentCtx(ctx: {
+  agentId?: string;
+  sessionKey?: string;
+  workspaceDir?: string;
+  agentDir?: string;
+}): RuntimeNamespace {
+  const profileId = (ctx.agentId || "main").trim() || "main";
+  const workspacePath = ctx.workspaceDir || ctx.agentDir || undefined;
+  return {
+    agentKind: "openclaw",
+    profileId,
+    profileLabel: profileId,
+    workspacePath,
+    sessionKey: ctx.sessionKey,
+  };
+}
+
 /**
  * Ephemeral OpenClaw sub-agents (slug generator, boot-check probes,
  * approval prompts, …) open their own run inside the same plugin host
@@ -595,6 +657,10 @@ export function bridgeSessionId(agentId: string, sessionKey: string): SessionId 
 export function isEphemeralSessionKey(sessionKey: string | undefined): boolean {
   if (!sessionKey) return false;
   return sessionKey.startsWith("temp:");
+}
+
+function isExplicitOneShotSessionKey(sessionKey: string | undefined): boolean {
+  return typeof sessionKey === "string" && sessionKey.includes(":explicit:");
 }
 
 // ─── Prompt injection rendering ────────────────────────────────────────────
@@ -627,8 +693,8 @@ export function renderContextBlock(
   // turn of a fresh session.
   const hint = [
     "No prior memories matched this query — the store may simply be cold.",
-    "You can still call `memory_search` (semantic) or `memory_timeline`",
-    "(by episodeId) if you expect there to be relevant past context.",
+    "You can still call `memory_search` with a shorter or rephrased query",
+    "if you expect there to be relevant past context.",
   ].join(" ");
   return `${CONTEXT_OPEN}\n${hint}\n${CONTEXT_CLOSE}`;
 }
@@ -677,6 +743,18 @@ export interface BridgeHandle {
     ctx: PluginHookSessionContext,
   ) => Promise<void>;
 
+  /** Handler for `subagent_spawned` — cache delegation metadata. */
+  handleSubagentSpawned: (
+    event: SubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+  ) => void;
+
+  /** Handler for `subagent_ended` — clear cached delegation metadata. */
+  handleSubagentEnded: (
+    event: SubagentEndedEvent,
+    ctx: PluginHookSubagentContext,
+  ) => Promise<void>;
+
   /** Snapshot for tests. */
   trackedSessions: () => number;
   trackedToolCalls: () => number;
@@ -689,21 +767,112 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   const messageCursor = new Map<SessionId, number>();
   // Per-session last-known user text (for tool-outcome context hashing).
   const lastUserTextBySession = new Map<SessionId, string>();
-  // Per-session open episode id (populated by the core after onTurnStart).
-  const openEpisodeBySession = new Map<SessionId, EpisodeId>();
+  // Per-session latest episode binding (populated by the core after
+  // onTurnStart). The keyed side map lets a delayed `agent_end` find and
+  // clear its own turn without deleting a newer turn's mapping.
+  type EpisodeBinding = {
+    sessionId: SessionId;
+    episodeId: EpisodeId;
+    seq: number;
+    keys: string[];
+  };
+  const latestEpisodeBySession = new Map<SessionId, EpisodeBinding>();
+  const episodeBindingByTurnKey = new Map<string, EpisodeBinding>();
+  let episodeBindingSeq = 0;
   // Per-toolCallId start timestamps so `after_tool_call` can compute duration
   // when the host doesn't populate `durationMs`.
   const toolCallStartedAt = new Map<string, { ts: number; sessionId: SessionId }>();
+  const spawnedSubagents = new Map<string, {
+    event: SubagentSpawnedEvent;
+    ctx: PluginHookSubagentContext;
+    ts: number;
+    parentSessionId?: SessionId;
+    parentEpisodeId?: EpisodeId;
+  }>();
+  const pendingSubagentSessions = new Set<SessionId>();
 
   async function ensureSession(
     agentId: string | undefined,
     sessionKey: string | undefined,
+    namespace?: RuntimeNamespace,
   ): Promise<SessionId> {
     const effectiveAgent = agentId ?? "main";
     const effectiveKey = sessionKey ?? "default";
     const sid = bridgeSessionId(effectiveAgent, effectiveKey);
-    await opts.core.openSession({ agent: opts.agent, sessionId: sid });
+    await opts.core.openSession({
+      agent: opts.agent,
+      sessionId: sid,
+      namespace,
+      meta: namespace ? { namespace } : undefined,
+    });
     return sid;
+  }
+
+  function turnBindingKeys(
+    sessionId: SessionId,
+    ctx: { runId?: string },
+    userText?: string,
+  ): string[] {
+    const keys: string[] = [];
+    if (ctx.runId) keys.push(`${sessionId}\0run\0${ctx.runId}`);
+    const text = userText?.trim();
+    if (text) keys.push(`${sessionId}\0user\0${text}`);
+    return keys;
+  }
+
+  function rememberEpisodeBinding(
+    sessionId: SessionId,
+    episodeId: EpisodeId,
+    ctx: { runId?: string },
+    userText: string | undefined,
+    seq: number = ++episodeBindingSeq,
+  ): EpisodeBinding {
+    const binding: EpisodeBinding = {
+      sessionId,
+      episodeId,
+      seq,
+      keys: turnBindingKeys(sessionId, ctx, userText),
+    };
+    latestEpisodeBySession.set(sessionId, binding);
+    for (const key of binding.keys) {
+      episodeBindingByTurnKey.set(key, binding);
+    }
+    return binding;
+  }
+
+  function findEpisodeBinding(
+    sessionId: SessionId,
+    ctx: { runId?: string },
+    userText?: string,
+  ): EpisodeBinding | undefined {
+    for (const key of turnBindingKeys(sessionId, ctx, userText)) {
+      const binding = episodeBindingByTurnKey.get(key);
+      if (binding) return binding;
+    }
+    return latestEpisodeBySession.get(sessionId);
+  }
+
+  function forgetEpisodeBinding(binding: EpisodeBinding | undefined): void {
+    if (!binding) return;
+    for (const key of binding.keys) {
+      if (episodeBindingByTurnKey.get(key)?.seq === binding.seq) {
+        episodeBindingByTurnKey.delete(key);
+      }
+    }
+    if (latestEpisodeBySession.get(binding.sessionId)?.seq === binding.seq) {
+      latestEpisodeBySession.delete(binding.sessionId);
+    }
+  }
+
+  function forgetSessionBindings(sessionId: SessionId): void {
+    latestEpisodeBySession.delete(sessionId);
+    for (const [key, binding] of episodeBindingByTurnKey.entries()) {
+      if (binding.sessionId === sessionId) episodeBindingByTurnKey.delete(key);
+    }
+  }
+
+  function currentEpisodeId(sessionId: SessionId): EpisodeId | undefined {
+    return latestEpisodeBySession.get(sessionId)?.episodeId;
   }
 
   async function handleBeforePrompt(
@@ -740,19 +909,29 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         });
         return;
       }
+      if (isOpenClawSubagentAnnouncementPrompt(rawPrompt)) {
+        opts.log.debug("memos.onTurnStart.skipped_subagent_announcement", {
+          sessionKey: ctx.sessionKey,
+          agentId: ctx.agentId,
+        });
+        return;
+      }
       const prompt = stripOpenClawUserEnvelope(rawPrompt);
       if (!prompt) return;
 
-      const sessionId = await ensureSession(ctx.agentId, ctx.sessionKey);
+      const namespace = namespaceFromAgentCtx(ctx);
+      const sessionId = await ensureSession(ctx.agentId, ctx.sessionKey, namespace);
       lastUserTextBySession.set(sessionId, prompt);
 
       const turn: TurnInputDTO = {
         agent: opts.agent,
+        namespace,
         sessionId,
         userText: prompt,
         ts: now(),
         contextHints: {
           agentId: ctx.agentId,
+          namespace,
           sessionKey: ctx.sessionKey,
           sessionId: ctx.sessionId,
           runId: ctx.runId,
@@ -768,7 +947,11 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       const routedSessionId = (packet.query.sessionId ?? sessionId) as SessionId;
       const routedEpisodeId = packet.query.episodeId as EpisodeId | undefined;
       if (routedEpisodeId) {
-        openEpisodeBySession.set(routedSessionId, routedEpisodeId);
+        const seq = ++episodeBindingSeq;
+        rememberEpisodeBinding(routedSessionId, routedEpisodeId, ctx, prompt, seq);
+        if (routedSessionId !== sessionId) {
+          rememberEpisodeBinding(sessionId, routedEpisodeId, ctx, prompt, seq);
+        }
       }
 
       opts.log.info("memos.onTurnStart", {
@@ -800,6 +983,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       // trace / episode, so there's nothing to persist here either.
       return;
     }
+    const namespace = namespaceFromAgentCtx(ctx);
     const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
     const allMessages = Array.isArray(event.messages) ? event.messages : [];
 
@@ -868,33 +1052,45 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         });
         return;
       }
+      const isSubagentAnnouncement = isOpenClawSubagentAnnouncementPrompt(turn.userText);
+      const hasSubagentSpawn = turn.toolCalls.some((tc) => tc.name === "sessions_spawn");
 
       // Resolve (or lazily open) the target episode. Three cases:
       //   1. `before_prompt_build` already ran this turn → we have the
-      //      routed episodeId in `openEpisodeBySession`.
+      //      routed episode binding for this run/user turn.
       //   2. The host skipped `before_prompt_build` (e.g. /new with no
       //      prompt build) → create an episode on the fly so the write
       //      path has a real row to hang traces on.
       //   3. Any failure here falls back to opening a new episode —
       //      better to capture under a fresh id than to drop the turn.
-      let episodeId = openEpisodeBySession.get(sessionId);
+      let binding = findEpisodeBinding(sessionId, ctx, turn.userText);
+      let episodeId = binding?.episodeId;
       if (!episodeId) {
-        await opts.core.openSession({ agent: opts.agent, sessionId });
+        if (isSubagentAnnouncement) {
+          opts.log.info("memos.agent_end.skipped", {
+            reason: "subagent_announcement_without_parent_episode",
+            sessionKey: ctx.sessionKey,
+          });
+          return;
+        }
+        await opts.core.openSession({ agent: opts.agent, sessionId, namespace, meta: { namespace } });
         episodeId = await opts.core.openEpisode({
           sessionId,
           userMessage: turn.userText,
         });
-        openEpisodeBySession.set(sessionId, episodeId);
+        binding = rememberEpisodeBinding(sessionId, episodeId, ctx, turn.userText);
       }
 
       const turnResult: TurnResultDTO = {
         agent: opts.agent,
+        namespace,
         sessionId,
         episodeId,
         agentText: turn.agentText,
         agentThinking: turn.agentThinking,
         toolCalls: turn.toolCalls,
         reflection: turn.reflection,
+        contextHints: { namespace },
         ts: now(),
       };
 
@@ -913,7 +1109,19 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       // Close the episode mapping so the next turn opens a fresh one
       // (V7 §0.1 routes multi-turn continuation through the relation
       // classifier, not through stickiness in this cache).
-      openEpisodeBySession.delete(sessionId);
+      if (hasSubagentSpawn) {
+        pendingSubagentSessions.add(sessionId);
+      } else {
+        pendingSubagentSessions.delete(sessionId);
+        forgetEpisodeBinding(binding);
+      }
+
+      if (isExplicitOneShotSessionKey(ctx.sessionKey) && !hasSubagentSpawn) {
+        await opts.core.closeSession(sessionId);
+        messageCursor.delete(sessionId);
+        forgetSessionBindings(sessionId);
+        lastUserTextBySession.delete(sessionId);
+      }
     } catch (err) {
       opts.log.warn("memos.onTurnEnd.failed", {
         err: err instanceof Error ? err.message : String(err),
@@ -952,7 +1160,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
 
       opts.core.recordToolOutcome({
         sessionId,
-        episodeId: openEpisodeBySession.get(sessionId),
+        episodeId: currentEpisodeId(sessionId),
         tool: event.toolName,
         success: !event.error,
         errorCode: event.error,
@@ -972,7 +1180,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   ): Promise<void> {
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     try {
-      await ensureSession(ctx.agentId, ctx.sessionKey);
+      await ensureSession(ctx.agentId, ctx.sessionKey, namespaceFromAgentCtx(ctx));
       opts.log.debug("memos.session.started", {
         sessionId: event.sessionId,
         sessionKey: ctx.sessionKey,
@@ -992,9 +1200,17 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     try {
       const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
+      if (pendingSubagentSessions.has(sessionId)) {
+        opts.log.debug("memos.session.end.deferred_for_subagent", {
+          sessionId,
+          sessionKey: ctx.sessionKey,
+          reason: event.reason,
+        });
+        return;
+      }
       await opts.core.closeSession(sessionId);
       messageCursor.delete(sessionId);
-      openEpisodeBySession.delete(sessionId);
+      forgetSessionBindings(sessionId);
       lastUserTextBySession.delete(sessionId);
       opts.log.debug("memos.session.ended", {
         sessionId: event.sessionId,
@@ -1009,6 +1225,58 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     }
   }
 
+  function handleSubagentSpawned(
+    event: SubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+  ): void {
+    const key = event.runId || event.childSessionKey || ctx.childSessionKey;
+    if (!key) return;
+    const parentAgentId = (ctx as { agentId?: string }).agentId ?? event.agentId ?? "main";
+    const parentSessionKey = ctx.requesterSessionKey ?? (ctx as { sessionKey?: string }).sessionKey;
+    const parentSessionId = parentSessionKey
+      ? bridgeSessionId(parentAgentId, parentSessionKey)
+      : undefined;
+    spawnedSubagents.set(key, {
+      event,
+      ctx,
+      ts: now(),
+      parentSessionId,
+      parentEpisodeId: parentSessionId ? currentEpisodeId(parentSessionId) : undefined,
+    });
+    if (parentSessionId) pendingSubagentSessions.add(parentSessionId);
+    opts.log.debug("memos.subagent.spawned", {
+      runId: event.runId,
+      childSessionKey: event.childSessionKey,
+      requesterSessionKey: ctx.requesterSessionKey,
+      label: event.label,
+      mode: event.mode,
+    });
+  }
+
+  async function handleSubagentEnded(
+    event: SubagentEndedEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<void> {
+    try {
+      const cached =
+        (event.runId ? spawnedSubagents.get(event.runId) : undefined) ??
+        spawnedSubagents.get(event.targetSessionKey);
+      if (event.runId) spawnedSubagents.delete(event.runId);
+      spawnedSubagents.delete(event.targetSessionKey);
+      opts.log.info("memos.subagent.ended", {
+        sessionId: cached?.parentSessionId,
+        episodeId: cached?.parentEpisodeId,
+        childSessionKey: event.targetSessionKey,
+        outcome: event.outcome,
+        reason: event.reason,
+      });
+    } catch (err) {
+      opts.log.warn("memos.subagent.end.failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return {
     handleBeforePrompt,
     handleAgentEnd,
@@ -1016,6 +1284,8 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     handleAfterToolCall,
     handleSessionStart,
     handleSessionEnd,
+    handleSubagentSpawned,
+    handleSubagentEnded,
     trackedSessions: () => messageCursor.size,
     trackedToolCalls: () => toolCallStartedAt.size,
   };

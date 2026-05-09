@@ -9,10 +9,10 @@ export default defineConfig({
   root: "web",
   publicDir: "public",
   plugins: [preact()],
-  // Relative asset URLs so the same bundle can be served from `/`,
-  // `/openclaw/`, or `/hermes/` (multi-agent hub routing). Without
-  // `base: "./"`, Vite emits `/assets/index-abc.js` which 404s when
-  // the viewer is loaded under `/openclaw/`.
+  // Relative asset URLs. Each agent owns its own port and serves the
+  // SPA at root, so absolute `/assets/...` would also work — we keep
+  // `./` so legacy bookmarks at `/openclaw/...` (which the server
+  // rewrites to `/...`) still find the right asset path inside HTML.
   base: "./",
   build: {
     outDir: "dist",

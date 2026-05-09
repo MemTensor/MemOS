@@ -5,6 +5,9 @@ import {
   buildPageClauses,
   fromJsonText,
   joinWhere,
+  normalizeShareForStorage,
+  ownerFieldsFromRaw,
+  ownerParamsFromRow,
   timeRangeWhere,
   toJsonText,
 } from "./_helpers.js";
@@ -12,6 +15,10 @@ import {
 const COLUMNS = [
   "id",
   "session_id",
+  "owner_agent_kind",
+  "owner_profile_id",
+  "owner_workspace_id",
+  "share_scope",
   "started_at",
   "ended_at",
   "trace_ids_json",
@@ -47,6 +54,8 @@ export function makeEpisodesRepo(db: StorageDb) {
       insert.run({
         id: row.id,
         session_id: row.sessionId,
+        ...ownerParamsFromRow(row),
+        share_scope: normalizeShareForStorage(row.share?.scope),
         started_at: row.startedAt,
         ended_at: row.endedAt ?? null,
         trace_ids_json: toJsonText(row.traceIds),
@@ -60,6 +69,8 @@ export function makeEpisodesRepo(db: StorageDb) {
       replace.run({
         id: row.id,
         session_id: row.sessionId,
+        ...ownerParamsFromRow(row),
+        share_scope: normalizeShareForStorage(row.share?.scope),
         started_at: row.startedAt,
         ended_at: row.endedAt ?? null,
         trace_ids_json: toJsonText(row.traceIds),
@@ -110,6 +121,17 @@ export function makeEpisodesRepo(db: StorageDb) {
       appendTrace.run({ id, trace_ids_json: toJsonText(traceIds) });
     },
 
+    removeTraceIds(id: EpisodeId, traceIds: readonly string[]): void {
+      if (traceIds.length === 0) return;
+      const current = selectById.get({ id });
+      if (!current) return;
+      const remove = new Set(traceIds);
+      const kept = fromJsonText<string[]>(current.trace_ids_json, []).filter(
+        (traceId) => !remove.has(traceId),
+      );
+      appendTrace.run({ id, trace_ids_json: toJsonText(kept) });
+    },
+
     getById(id: EpisodeId): (EpisodeRow & EpisodeMetaRow) | null {
       const r = selectById.get({ id });
       if (!r) return null;
@@ -140,12 +162,34 @@ export function makeEpisodesRepo(db: StorageDb) {
       const sql = `SELECT ${COLUMNS.join(", ")} FROM episodes ${where} ${page}`;
       return db.prepare<typeof params, RawEpisodeRow>(sql).all(params).map(mapRow);
     },
+
+    count(filter: Omit<EpisodeListFilter, "limit" | "offset"> = {}): number {
+      const tr = timeRangeWhere(filter, "started_at");
+      const fragments: string[] = [];
+      const params: Record<string, unknown> = { ...tr.params };
+      if (filter.sessionId) {
+        fragments.push(`session_id = @session_id`);
+        params.session_id = filter.sessionId;
+      }
+      if (filter.status) {
+        fragments.push(`status = @status`);
+        params.status = filter.status;
+      }
+      if (tr.sql) fragments.push(tr.sql);
+      const where = joinWhere(fragments);
+      const sql = `SELECT COUNT(*) AS n FROM episodes ${where}`;
+      return db.prepare<typeof params, { n: number }>(sql).get(params)?.n ?? 0;
+    },
   };
 }
 
 interface RawEpisodeRow {
   id: string;
   session_id: string;
+  owner_agent_kind: string;
+  owner_profile_id: string;
+  owner_workspace_id: string | null;
+  share_scope: string;
   started_at: number;
   ended_at: number | null;
   trace_ids_json: string;
@@ -158,6 +202,8 @@ function mapRow(r: RawEpisodeRow): EpisodeRow & EpisodeMetaRow {
   return {
     id: r.id,
     sessionId: r.session_id,
+    ...ownerFieldsFromRaw(r),
+    share: { scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub" },
     startedAt: r.started_at,
     endedAt: r.ended_at,
     traceIds: fromJsonText<string[]>(r.trace_ids_json, []),

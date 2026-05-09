@@ -179,6 +179,7 @@ def init_server() -> dict[str, Any]:
     plugin_context = build_plugin_context(
         graph_db=graph_db,
         embedder=embedder,
+        llm=llm,
         default_cube_config=default_cube_config,
         nli_client_config=nli_client_config,
         mem_reader_config=mem_reader_config,
@@ -284,6 +285,12 @@ def init_server() -> dict[str, Any]:
 
     # Initialize SchedulerAPIModule
     api_module = mem_scheduler.api_module
+
+    # Plugins keep a reference to the original context dict, so updating the shared
+    # section here makes the runtime handles visible without adding a second init step.
+    plugin_context["shared"]["mem_scheduler"] = mem_scheduler
+    plugin_context["shared"]["submit_scheduler_messages"] = mem_scheduler.submit_messages
+    plugin_context["shared"]["api_module"] = api_module
 
     # Start scheduler if enabled
     if os.getenv("API_SCHEDULER_ON", "true").lower() == "true":
