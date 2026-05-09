@@ -312,6 +312,17 @@ export interface MemosLocalConfig {
     recencyHalfLifeDays?: number;
     /** Cap vector search to this many most recent chunks. 0 = no cap (search all; may get slower with 200k+ chunks). If you set a cap for performance, use a large value (e.g. 200000–300000) so older memories are still in the window; FTS always searches all. */
     vectorSearchMaxChunks?: number;
+    /**
+     * Hard timeout (ms) for the auto-recall path inside `before_prompt_build`.
+     *
+     * Auto-recall is best-effort enrichment: if the recall LLM/embedding work
+     * takes longer than this, we abandon it and let the prompt build proceed
+     * with no auto-injected memories. Prevents a slow LLM from blocking
+     * gateway startup or first-turn long enough to trip health checks (#1452).
+     *
+     * Default: 8000 ms.
+     */
+    autoRecallTimeoutMs?: number;
   };
   dedup?: {
     similarityThreshold?: number;
@@ -360,6 +371,7 @@ export const DEFAULTS = {
   skillPreferUpgrade: true,
   skillRedactSensitive: true,
   taskAutoFinalizeHours: 4,
+  autoRecallTimeoutMs: 8000,
 } as const;
 
 // ─── Plugin Hooks (OpenClaw integration) ───
