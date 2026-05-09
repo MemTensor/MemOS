@@ -674,6 +674,74 @@ describe("MemoryCore façade", () => {
     expect(grouped.map((tr) => tr.id)).toEqual(["tr-late", "tr-early"]);
   });
 
+  it("countTraces returns the real total even when more than 500 rows exist (regression for #1593)", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    db!.repos.sessions.upsert({
+      id: "s-count",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_000,
+      lastSeenAt: 2_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep-count",
+      sessionId: "s-count",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_000,
+      endedAt: 2_000,
+      traceIds: [] as never,
+      rTask: null,
+      status: "closed",
+      meta: {},
+    });
+    const baseTrace = {
+      episodeId: "ep-count",
+      sessionId: "s-count",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      userText: "u",
+      agentText: "a",
+      summary: null,
+      toolCalls: [],
+      reflection: null,
+      agentThinking: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      schemaVersion: 1,
+    } as const;
+    // Insert 600 rows split across 6 turns so we cross the 500-row
+    // page-size cap that previously truncated the count.
+    for (let i = 0; i < 600; i++) {
+      db!.repos.traces.insert({
+        ...baseTrace,
+        id: `tr-count-${i}`,
+        ts: 1_000 + i,
+        turnId: Math.floor(i / 100), // 6 distinct turns
+      } as never);
+    }
+
+    await core.init();
+    expect(await core.countTraces({})).toBe(600);
+    expect(await core.countTraces({ groupByTurn: true })).toBe(6);
+  });
+
   it("deleteTrace removes FTS entries and episode trace references", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(
