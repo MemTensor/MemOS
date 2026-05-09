@@ -180,7 +180,7 @@ describe("memory/l3/abstract", () => {
     expect(res.detail).toContain("boom");
   });
 
-  it("returns llm_failed when the LLM returns missing triple", async () => {
+  it("salvages missing triple into an empty-but-titled draft instead of failing", async () => {
     const llm = fakeLlm({
       completeJson: {
         [OP]: {
@@ -193,10 +193,159 @@ describe("memory/l3/abstract", () => {
       { cluster: mkCluster(), evidenceByPolicy: new Map() },
       { llm, log, config: cfg() },
     );
+    // Issue #1668: rather than aborting, the parser now returns a salvaged
+    // draft. The title alone is enough to keep the entry alive; downstream
+    // validators decide whether the (empty) facets are good enough to
+    // persist.
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.draft.title).toBe("missing triple");
+    expect(res.draft.environment).toEqual([]);
+    expect(res.draft.inference).toEqual([]);
+    expect(res.draft.constraints).toEqual([]);
+  });
+
+  it("returns llm_failed only when even normalisation can't recover anything", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: {
+          // no title, no triple, no body, no domain tags — truly empty.
+        },
+      },
+    });
+    const res = await abstractDraft(
+      { cluster: mkCluster(), evidenceByPolicy: new Map() },
+      { llm, log, config: cfg() },
+    );
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.reason).toBe("llm_failed");
-    expect(res.detail ?? "").toMatch(/environment|inference|constraints/);
+    expect(res.detail ?? "").toMatch(/empty after normalization/);
+  });
+
+  it("salvages string list entries into description-only entries (issue #1668)", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: {
+          title: "alpine",
+          domain_tags: ["alpine"],
+          environment: ["runs on musl libc"],
+          inference: ["binary wheels miss glibc"],
+          constraints: ["avoid binary install"],
+          confidence: 0.5,
+        },
+      },
+    });
+    const res = await abstractDraft(
+      { cluster: mkCluster(), evidenceByPolicy: new Map() },
+      { llm, log, config: cfg() },
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.draft.environment).toEqual([
+      { label: "", description: "runs on musl libc" },
+    ]);
+    expect(res.draft.inference[0]!.description).toBe("binary wheels miss glibc");
+    expect(res.draft.constraints[0]!.description).toBe("avoid binary install");
+  });
+
+  it("salvages {body: ...} list entries to canonical {label, description}", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: {
+          title: "alpine",
+          domain_tags: ["alpine"],
+          environment: [{ label: "musl", body: "no glibc available" }],
+          inference: [{ body: "wheels need glibc" }],
+          constraints: [{ name: "no-binary", text: "pip install --no-binary" }],
+          confidence: 0.5,
+        },
+      },
+    });
+    const res = await abstractDraft(
+      { cluster: mkCluster(), evidenceByPolicy: new Map() },
+      { llm, log, config: cfg() },
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.draft.environment).toEqual([
+      { label: "musl", description: "no glibc available" },
+    ]);
+    expect(res.draft.inference[0]).toEqual({
+      label: "",
+      description: "wheels need glibc",
+    });
+    expect(res.draft.constraints[0]).toEqual({
+      label: "no-binary",
+      description: "pip install --no-binary",
+    });
+  });
+
+  it("derives a title from inference when the LLM left it blank (issue #1668)", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: {
+          title: "   ",
+          domain_tags: ["alpine", "pip"],
+          environment: [],
+          inference: [{ label: "Binary wheels fail on alpine", description: "musl" }],
+          constraints: [],
+          confidence: 0.5,
+        },
+      },
+    });
+    const res = await abstractDraft(
+      { cluster: mkCluster(), evidenceByPolicy: new Map() },
+      { llm, log, config: cfg() },
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.draft.title).toBe("Binary wheels fail on alpine");
+  });
+
+  it("falls back to domain tags when title and triple are unhelpful", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: {
+          title: null,
+          domain_tags: ["docker", "alpine", "pip"],
+          environment: [],
+          inference: [],
+          constraints: [],
+          body: "",
+          confidence: 0.4,
+        },
+      },
+    });
+    const res = await abstractDraft(
+      { cluster: mkCluster(), evidenceByPolicy: new Map() },
+      { llm, log, config: cfg() },
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.draft.title).toBe("docker, alpine, pip");
+  });
+
+  it("splits a comma-joined domain_tags string into an array (issue #1668)", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: {
+          title: "alpine",
+          domain_tags: "Alpine, Python, pip,  ",
+          environment: [{ label: "musl", description: "x" }],
+          inference: [],
+          constraints: [],
+          confidence: 0.5,
+        },
+      },
+    });
+    const res = await abstractDraft(
+      { cluster: mkCluster(), evidenceByPolicy: new Map() },
+      { llm, log, config: cfg() },
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.draft.domainTags).toEqual(["alpine", "python", "pip"]);
   });
 
   it("buildWorldModelRow wires draft + cluster into a persist-ready row", () => {
