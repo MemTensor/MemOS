@@ -303,7 +303,8 @@ function normaliseDraft(value: Record<string, unknown>): L3AbstractionDraft {
  *   1. The cleaned LLM-provided title.
  *   2. The first inference / environment / constraints entry's label or
  *      description (whichever is non-empty), trimmed to ~80 chars.
- *   3. The first non-heading markdown line of `body`, trimmed.
+ *   3. The first non-empty markdown line of `body`, with leading
+ *      heading/list prefixes (`#`, `-`, `*`, `+`, `1.`) stripped, trimmed.
  *   4. A domain-tag joined fallback like `"docker, alpine, pip"`.
  *   5. Empty string — caller (`assertDraftMinimallyUsable`) will reject if
  *      the rest of the draft is also empty.
@@ -512,7 +513,10 @@ function firstString(...candidates: unknown[]): string | undefined {
 function collectEvidenceIds(o: Record<string, unknown>): string[] | undefined {
   const raw = o.evidenceIds ?? o.evidence_ids ?? o.evidence;
   if (Array.isArray(raw)) {
-    const ids = (raw as unknown[]).filter((s): s is string => typeof s === "string");
+    const ids = (raw as unknown[])
+      .filter((s): s is string => typeof s === "string")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
     return ids.length > 0 ? ids : undefined;
   }
   if (typeof raw === "string" && raw.trim().length > 0) {
@@ -529,29 +533,32 @@ function collectEvidenceIds(o: Record<string, unknown>): string[] | undefined {
 function buildBody(draft: L3AbstractionDraft): string {
   if (draft.body && draft.body.length > 0) return draft.body;
   const lines: string[] = [`# ${draft.title}`, ""];
+  const renderEntry = (e: L3AbstractionDraftEntry): string =>
+    e.label ? `- **${e.label}** — ${e.description}` : `- ${e.description}`;
   if (draft.environment.length > 0) {
     lines.push("## Environment (ℰ)");
-    for (const e of draft.environment) lines.push(`- **${e.label}** — ${e.description}`);
+    for (const e of draft.environment) lines.push(renderEntry(e));
     lines.push("");
   }
   if (draft.inference.length > 0) {
     lines.push("## Inference rules (ℐ)");
-    for (const e of draft.inference) lines.push(`- **${e.label}** — ${e.description}`);
+    for (const e of draft.inference) lines.push(renderEntry(e));
     lines.push("");
   }
   if (draft.constraints.length > 0) {
     lines.push("## Constraints (C)");
-    for (const e of draft.constraints) lines.push(`- **${e.label}** — ${e.description}`);
+    for (const e of draft.constraints) lines.push(renderEntry(e));
     lines.push("");
   }
   return lines.join("\n").trim();
 }
 
 function normaliseTags(raw: unknown): string[] {
-  // Canonical shape: array of strings. Also accept comma/whitespace
-  // separated strings (`"docker, alpine, pip"`) and arrays that mix
-  // strings and `{label}` / `{name}` / `{tag}` objects, since some
-  // providers return that shape under structured-output mode.
+  // Canonical shape: array of strings. Also accept comma/semicolon/newline-
+  // separated strings (`"docker, alpine, pip"`; whitespace within a tag is
+  // preserved so multi-word tags survive) and arrays that mix strings and
+  // `{label}` / `{name}` / `{tag}` objects, since some providers return
+  // that shape under structured-output mode.
   let candidates: unknown[];
   if (Array.isArray(raw)) {
     candidates = raw as unknown[];
