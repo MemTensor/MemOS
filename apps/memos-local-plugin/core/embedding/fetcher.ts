@@ -63,7 +63,8 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
           durationMs: Date.now() - start,
         });
         if (transient && attempt <= maxRetries) {
-          await sleep(retryAfterMs ?? backoffMs(attempt));
+          const sleepMs = Math.min(retryAfterMs ?? backoffMs(attempt), MAX_RETRY_AFTER_MS);
+          await sleep(sleepMs);
           continue;
         }
         throw new MemosError(
@@ -92,7 +93,7 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
         durationMs: Date.now() - start,
       });
       if (transient && attempt <= maxRetries) {
-        await sleep(backoffMs(attempt));
+        await sleep(Math.min(backoffMs(attempt), MAX_RETRY_AFTER_MS));
         continue;
       }
       throw new MemosError(

@@ -7,8 +7,11 @@
  *
  * Returns the wait duration in milliseconds, capped to `capMs` to prevent a
  * hostile or buggy server from pinning the client indefinitely. Returns
- * `null` when the header is absent, malformed, or non-positive — callers
- * should fall back to their existing backoff strategy.
+ * `null` when the header is absent, malformed, or in the past (HTTP-date
+ * already elapsed) — callers should fall back to their existing backoff
+ * strategy. A value of `0` (delta-seconds) is valid and means "retry
+ * immediately"; servers like GitHub do this briefly as a ratelimit window
+ * expires.
  */
 export function parseRetryAfterMs(resp: Response, capMs: number): number | null {
   const raw = resp.headers.get("retry-after");
