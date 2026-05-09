@@ -14,6 +14,7 @@ import {
   timeRangeWhere,
   toBlob,
   toJsonText,
+  visibilityWhere,
 } from "./_helpers.js";
 
 const COLUMNS = [
@@ -59,6 +60,22 @@ export type TraceSearchMeta = {
 };
 
 export function makeTracesRepo(db: StorageDb) {
+  /**
+   * Shared visibility predicate for `list`/`count`/`countTurns`/`listTurnKeys`.
+   *
+   * Keeping the WHERE fragment in one place is the whole point: the count
+   * queries MUST stay in lock-step with what `list` would return, otherwise
+   * pagination math goes wrong and totals can leak the existence of rows
+   * owned by other namespaces (#1674 review on #1593).
+   */
+  function buildVisibilityClause(
+    filter: { namespace?: TraceListFilter["namespace"] },
+  ): { sql: string | null; params: Record<string, unknown> } {
+    if (!filter.namespace) return { sql: null, params: {} };
+    const v = visibilityWhere(filter.namespace);
+    return { sql: v.sql, params: v.params };
+  }
+
   const insert = db.prepare(buildInsert({ table: "traces", columns: COLUMNS }));
   const upsert = db.prepare(
     buildInsert({ table: "traces", columns: COLUMNS, onConflict: "replace" }),
@@ -111,8 +128,9 @@ export function makeTracesRepo(db: StorageDb) {
 
     list(filter: TraceListFilter = {}): TraceRow[] {
       const tr = timeRangeWhere(filter, "ts");
+      const vis = buildVisibilityClause(filter);
       const fragments: string[] = [];
-      const params: Record<string, unknown> = { ...tr.params };
+      const params: Record<string, unknown> = { ...tr.params, ...vis.params };
       if (filter.sessionId) {
         fragments.push(`session_id = @session_id`);
         params.session_id = filter.sessionId;
@@ -126,6 +144,7 @@ export function makeTracesRepo(db: StorageDb) {
         params.min_abs_value = filter.minAbsValue;
       }
       if (tr.sql) fragments.push(tr.sql);
+      if (vis.sql) fragments.push(vis.sql);
       const where = joinWhere(fragments);
       const page = buildPageClauses(filter, "ts");
       const sql = `SELECT ${COLUMNS.join(", ")} FROM traces ${where} ${page}`;
@@ -138,8 +157,9 @@ export function makeTracesRepo(db: StorageDb) {
      */
     count(filter: Omit<TraceListFilter, "limit" | "offset"> = {}): number {
       const tr = timeRangeWhere(filter, "ts");
+      const vis = buildVisibilityClause(filter);
       const fragments: string[] = [];
-      const params: Record<string, unknown> = { ...tr.params };
+      const params: Record<string, unknown> = { ...tr.params, ...vis.params };
       if (filter.sessionId) {
         fragments.push(`session_id = @session_id`);
         params.session_id = filter.sessionId;
@@ -153,6 +173,7 @@ export function makeTracesRepo(db: StorageDb) {
         params.min_abs_value = filter.minAbsValue;
       }
       if (tr.sql) fragments.push(tr.sql);
+      if (vis.sql) fragments.push(vis.sql);
       const where = joinWhere(fragments);
       const sql = `SELECT COUNT(*) AS n FROM traces ${where}`;
       const row = db.prepare<typeof params, { n: number }>(sql).get(params);
@@ -165,8 +186,9 @@ export function makeTracesRepo(db: StorageDb) {
      * counted as 1. Used by the Memories viewer for accurate pagination.
      */
     countTurns(filter: Omit<TraceListFilter, "limit" | "offset"> = {}): number {
+      const vis = buildVisibilityClause(filter);
       const fragments: string[] = [];
-      const params: Record<string, unknown> = {};
+      const params: Record<string, unknown> = { ...vis.params };
       if (filter.sessionId) {
         fragments.push(`session_id = @session_id`);
         params.session_id = filter.sessionId;
@@ -175,6 +197,7 @@ export function makeTracesRepo(db: StorageDb) {
         fragments.push(`episode_id = @episode_id`);
         params.episode_id = filter.episodeId;
       }
+      if (vis.sql) fragments.push(vis.sql);
       const where = joinWhere(fragments);
       const sql = `SELECT COUNT(*) AS n FROM (SELECT DISTINCT episode_id, turn_id FROM traces ${where})`;
       const row = db.prepare<typeof params, { n: number }>(sql).get(params);
@@ -187,8 +210,9 @@ export function makeTracesRepo(db: StorageDb) {
      * fetch a page of "memories" (1 turn = 1 memory).
      */
     listTurnKeys(filter: TraceListFilter = {}): Array<{ episodeId: string | null; turnId: number; maxTs: number }> {
+      const vis = buildVisibilityClause(filter);
       const fragments: string[] = [];
-      const params: Record<string, unknown> = {};
+      const params: Record<string, unknown> = { ...vis.params };
       if (filter.sessionId) {
         fragments.push(`session_id = @session_id`);
         params.session_id = filter.sessionId;
@@ -197,6 +221,7 @@ export function makeTracesRepo(db: StorageDb) {
         fragments.push(`episode_id = @episode_id`);
         params.episode_id = filter.episodeId;
       }
+      if (vis.sql) fragments.push(vis.sql);
       const where = joinWhere(fragments);
       const limit = Math.max(1, Math.min(500, filter.limit ?? 50));
       const offset = Math.max(0, filter.offset ?? 0);

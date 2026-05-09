@@ -2637,9 +2637,20 @@ export function createMemoryCore(
       // even when the database held 1400+ traces (#1593). The repo's
       // `count` / `countTurns` issue real COUNT queries with no page-size
       // cap, so they return the actual total.
+      //
+      // Pass the active namespace so the COUNT applies the SAME visibility
+      // predicate that `list` does — otherwise the total can include rows
+      // owned by other profiles/namespaces and break pagination math
+      // (#1674 review).
       return input?.groupByTurn
-        ? handle.repos.traces.countTurns({ sessionId: input?.sessionId })
-        : handle.repos.traces.count({ sessionId: input?.sessionId });
+        ? handle.repos.traces.countTurns({
+            sessionId: input?.sessionId,
+            namespace: activeNamespace,
+          })
+        : handle.repos.traces.count({
+            sessionId: input?.sessionId,
+            namespace: activeNamespace,
+          });
     }
     // q substring scan — mirror `listTraces`. Walk all matching
     // traces from the repo and apply the same filter. We page through
@@ -2651,6 +2662,7 @@ export function createMemoryCore(
     for (let offset = 0; ; offset += PAGE) {
       const page = handle.repos.traces.list({
         sessionId: input?.sessionId,
+        namespace: activeNamespace,
         limit: PAGE,
         offset,
       });
@@ -3045,7 +3057,11 @@ export function createMemoryCore(
     // the Overview "memories" metric matches what the Memories page
     // shows: 1 user turn = 1 memory (regardless of how many tool calls
     // / sub-steps were captured for that turn).
-    const totalTurns = handle.repos.traces.countTurns();
+    //
+    // Pass the active namespace so the Overview metric stays consistent
+    // with what the current profile actually sees on the Memories page;
+    // otherwise it would aggregate turns owned by other profiles too.
+    const totalTurns = handle.repos.traces.countTurns({ namespace: activeNamespace });
 
     return {
       total: totalTurns,

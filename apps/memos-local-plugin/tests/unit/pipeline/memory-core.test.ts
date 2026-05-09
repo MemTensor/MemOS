@@ -742,6 +742,132 @@ describe("MemoryCore façade", () => {
     expect(await core.countTraces({ groupByTurn: true })).toBe(6);
   });
 
+  it("countTraces respects namespace visibility (regression for #1674)", async () => {
+    // Two profiles each insert their own traces. Each profile's
+    // countTraces must return ONLY its own count — the COUNT path
+    // must apply the same visibility predicate that listTraces does,
+    // otherwise pagination math breaks and the count leaks the
+    // existence of cross-profile rows.
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    db!.repos.sessions.upsert({
+      id: "s-main",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_000,
+      lastSeenAt: 2_000,
+      meta: {},
+    });
+    db!.repos.sessions.upsert({
+      id: "s-reviewer",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "reviewer",
+      ownerWorkspaceId: null,
+      startedAt: 1_000,
+      lastSeenAt: 2_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep-main",
+      sessionId: "s-main",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_000,
+      endedAt: 2_000,
+      traceIds: [] as never,
+      rTask: null,
+      status: "closed",
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep-reviewer",
+      sessionId: "s-reviewer",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "reviewer",
+      ownerWorkspaceId: null,
+      startedAt: 1_000,
+      endedAt: 2_000,
+      traceIds: [] as never,
+      rTask: null,
+      status: "closed",
+      meta: {},
+    });
+    const baseTrace = {
+      sessionId: "s-main",
+      episodeId: "ep-main",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      userText: "u",
+      agentText: "a",
+      summary: null,
+      toolCalls: [],
+      reflection: null,
+      agentThinking: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      schemaVersion: 1,
+    } as const;
+    // 7 traces / 3 turns owned by `main`.
+    for (let i = 0; i < 7; i++) {
+      db!.repos.traces.insert({
+        ...baseTrace,
+        id: `tr-main-${i}`,
+        ts: 1_000 + i,
+        turnId: Math.floor(i / 3),
+      } as never);
+    }
+    // 4 traces / 2 turns owned by `reviewer`.
+    for (let i = 0; i < 4; i++) {
+      db!.repos.traces.insert({
+        ...baseTrace,
+        sessionId: "s-reviewer",
+        episodeId: "ep-reviewer",
+        ownerProfileId: "reviewer",
+        id: `tr-reviewer-${i}`,
+        ts: 2_000 + i,
+        turnId: Math.floor(i / 2),
+      } as never);
+    }
+
+    await core.init();
+
+    // Default namespace from buildDeps is `main` — should see only
+    // its own 7 traces / 3 turns, not the reviewer's rows.
+    expect(await core.countTraces({})).toBe(7);
+    expect(await core.countTraces({ groupByTurn: true })).toBe(3);
+
+    // Switch to `reviewer` namespace — now we should see only the 4
+    // reviewer traces / 2 reviewer turns.
+    await core.openSession({
+      agent: "openclaw",
+      sessionId: "s-reviewer",
+      namespace: { agentKind: "openclaw", profileId: "reviewer" },
+    });
+    expect(await core.countTraces({})).toBe(4);
+    expect(await core.countTraces({ groupByTurn: true })).toBe(2);
+
+    // listTraces and countTraces must agree under both namespaces —
+    // that's the whole point: COUNT(*) must respect visibility too.
+    const reviewerList = await core.listTraces({ limit: 500 });
+    expect(reviewerList).toHaveLength(4);
+    expect(reviewerList.every((t) => t.ownerProfileId === "reviewer")).toBe(true);
+  });
+
   it("deleteTrace removes FTS entries and episode trace references", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(
