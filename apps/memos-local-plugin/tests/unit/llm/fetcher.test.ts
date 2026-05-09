@@ -82,6 +82,68 @@ describe("llm/fetcher", () => {
     }
   });
 
+  it("429 with Retry-After: <seconds> sleeps at least that long before retrying", async () => {
+    const f = mockFetch([
+      new Response("slow", { status: 429, headers: { "Retry-After": "1" } }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+    const start = Date.now();
+    await httpPostJson({
+      url: "https://x",
+      body: {},
+      timeoutMs: 10_000,
+      maxRetries: 1,
+      provider: "openai_compatible",
+      log: nullLog(),
+    });
+    const elapsed = Date.now() - start;
+    expect(f).toHaveBeenCalledTimes(2);
+    // Retry-After: 1 → ~1000ms; baseline backoff for attempt 1 is 250 + jitter < 400ms.
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+  });
+
+  it("429 with Retry-After: HTTP-date in the near future is honored", async () => {
+    const target = new Date(Date.now() + 1_200).toUTCString();
+    const f = mockFetch([
+      new Response("slow", { status: 429, headers: { "Retry-After": target } }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+    const start = Date.now();
+    await httpPostJson({
+      url: "https://x",
+      body: {},
+      timeoutMs: 10_000,
+      maxRetries: 1,
+      provider: "openai_compatible",
+      log: nullLog(),
+    });
+    const elapsed = Date.now() - start;
+    expect(f).toHaveBeenCalledTimes(2);
+    // Roughly the diff (allow generous slack for clock + jitter).
+    expect(elapsed).toBeGreaterThanOrEqual(800);
+    expect(elapsed).toBeLessThan(5_000);
+  });
+
+  it("429 with malformed Retry-After falls back to existing backoff", async () => {
+    const f = mockFetch([
+      new Response("slow", { status: 429, headers: { "Retry-After": "not-a-thing" } }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+    const start = Date.now();
+    await httpPostJson({
+      url: "https://x",
+      body: {},
+      timeoutMs: 10_000,
+      maxRetries: 1,
+      provider: "openai_compatible",
+      log: nullLog(),
+    });
+    const elapsed = Date.now() - start;
+    expect(f).toHaveBeenCalledTimes(2);
+    // Fallback backoff for attempt 1: 250ms base + jitter < 400ms; should NOT be ≥1s.
+    expect(elapsed).toBeLessThan(900);
+  });
+
   it("4xx (non-429) does not retry → LLM_UNAVAILABLE", async () => {
     const f = mockFetch([new Response("bad", { status: 400 })]);
     try {

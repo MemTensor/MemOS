@@ -8,7 +8,11 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
+import { parseRetryAfterMs } from "../util/retry-after.js";
 import type { EmbeddingProviderName, ProviderLogger } from "./types.js";
+
+/** Hard ceiling on any single retry sleep — Retry-After or otherwise. */
+const MAX_RETRY_AFTER_MS = 60_000;
 
 export interface HttpPostOpts<TBody> {
   url: string;
@@ -46,15 +50,20 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
       if (!resp.ok) {
         const text = await safeText(resp);
         const transient = resp.status >= 500 || resp.status === 429;
+        const retryAfterMs =
+          resp.status === 429 || resp.status === 503
+            ? parseRetryAfterMs(resp, MAX_RETRY_AFTER_MS)
+            : null;
         opts.log.warn("http.non_ok", {
           url: opts.url,
           status: resp.status,
           attempt,
           transient,
+          retryAfterMs,
           durationMs: Date.now() - start,
         });
         if (transient && attempt <= maxRetries) {
-          await backoff(attempt);
+          await sleep(retryAfterMs ?? backoffMs(attempt));
           continue;
         }
         throw new MemosError(
@@ -83,7 +92,7 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
         durationMs: Date.now() - start,
       });
       if (transient && attempt <= maxRetries) {
-        await backoff(attempt);
+        await sleep(backoffMs(attempt));
         continue;
       }
       throw new MemosError(
@@ -123,10 +132,13 @@ function isTransientError(err: unknown): boolean {
   return false;
 }
 
-async function backoff(attempt: number): Promise<void> {
+function backoffMs(attempt: number): number {
   const base = 200;
   const jitter = Math.floor(Math.random() * 100);
-  const ms = base * 2 ** (attempt - 1) + jitter;
+  return base * 2 ** (attempt - 1) + jitter;
+}
+
+async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 

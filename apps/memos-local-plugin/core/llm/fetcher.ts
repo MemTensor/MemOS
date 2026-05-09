@@ -11,7 +11,11 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
+import { parseRetryAfterMs } from "../util/retry-after.js";
 import type { LlmProviderLogger, LlmProviderName } from "./types.js";
+
+/** Hard ceiling on any single retry sleep — Retry-After or otherwise. */
+const MAX_RETRY_AFTER_MS = 60_000;
 
 export interface HttpPostOpts<TBody> {
   url: string;
@@ -56,15 +60,20 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
       if (!resp.ok) {
         const text = await safeText(resp);
         const transient = resp.status >= 500 || resp.status === 429;
+        const retryAfterMs =
+          resp.status === 429 || resp.status === 503
+            ? parseRetryAfterMs(resp, MAX_RETRY_AFTER_MS)
+            : null;
         opts.log.warn("http.non_ok", {
           status: resp.status,
           attempt,
           transient,
+          retryAfterMs,
           durationMs: ms,
         });
         if (transient && attempt <= opts.maxRetries) {
           opts.onRetry?.(attempt);
-          await backoff(attempt);
+          await sleep(retryAfterMs ?? backoffMs(attempt));
           continue;
         }
         throw new MemosError(
@@ -94,7 +103,7 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
       });
       if ((transient || timedOut) && attempt <= opts.maxRetries) {
         opts.onRetry?.(attempt);
-        await backoff(attempt);
+        await sleep(backoffMs(attempt));
         continue;
       }
       if (timedOut) {
@@ -233,10 +242,13 @@ function isTimeout(err: unknown): boolean {
   return false;
 }
 
-async function backoff(attempt: number): Promise<void> {
+function backoffMs(attempt: number): number {
   const base = 250;
   const jitter = Math.floor(Math.random() * 120);
-  const ms = base * 2 ** (attempt - 1) + jitter;
+  return base * 2 ** (attempt - 1) + jitter;
+}
+
+async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
