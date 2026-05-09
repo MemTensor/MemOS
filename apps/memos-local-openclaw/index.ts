@@ -31,7 +31,7 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
-import { parseJsonWithComments } from "./src/shared/json5-lite";
+import { patchToolsAllow, parseJsonWithComments } from "./src/shared/json5-lite";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -363,13 +363,11 @@ const memosLocalPlugin = {
         const cfg = parseJsonWithComments<{ tools?: { allow?: string[] } }>(raw);
         const allow: string[] | undefined = cfg?.tools?.allow;
         if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins") && !allow.includes("*")) {
-          const lastEntry = JSON.stringify(allow[allow.length - 1]);
-          // Match the last entry + optional trailing comma (legal in JSON5)
-          // + closing `]`. The replacement always re-inserts a single comma.
-          const patched = raw.replace(
-            new RegExp(`(${lastEntry})\\s*,?(\\s*\\])`),
-            `$1,\n      "group:plugins"$2`,
-          );
+          const lastEntry = allow[allow.length - 1];
+          // Anchored to the `tools.allow` array span (string-literal-aware
+          // bracket matching) and with regex metacharacters in `lastEntry`
+          // escaped — see #1377 for what happens when this is global.
+          const patched = patchToolsAllow(raw, lastEntry, "group:plugins");
           if (patched !== raw && patched.includes("group:plugins")) {
             fs.writeFileSync(openclawJsonPath, patched, "utf-8");
             ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
