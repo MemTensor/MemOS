@@ -218,13 +218,19 @@ class MemosBridgeClient:
         if self._closed:
             return
         self._closed = True
+        # Close all pipe fds so the bridge process exits cleanly.
         with contextlib.suppress(Exception):
             self._proc.stdin.close()
-        # DON'T wait() or kill() the bridge process. If it has an
-        # active viewer (HTTP server), it will stay alive as a daemon
-        # so the memory panel remains accessible between `hermes chat`
-        # sessions. If it's headless (viewer port was taken), it will
-        # notice stdin EOF and exit on its own.
+            if self._proc.stdout is not None:
+                self._proc.stdout.close()
+            if self._proc.stderr is not None:
+                self._proc.stderr.close()
+        # Wait for graceful exit (up to 2s)
+        try:
+            self._proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self._proc.terminate()
+            self._proc.wait(timeout=1)
         # unblock any pending waiters
         with self._lock:
             for entry in list(self._pending.values()):
