@@ -102,4 +102,56 @@ describe("storage/migrator", () => {
       db.close();
     }
   });
+
+  it("treats embedding retry lease migration as satisfied when columns already exist", () => {
+    const { dbPath, cleanup } = tmpDb();
+    cleanups.push(cleanup);
+    const db = openDb({ filepath: dbPath, agent: "openclaw" });
+    try {
+      db.exec(`
+        CREATE TABLE schema_migrations (
+          version     INTEGER PRIMARY KEY,
+          name        TEXT    NOT NULL,
+          applied_at  INTEGER NOT NULL
+        ) STRICT;
+        CREATE TABLE embedding_retry_queue (
+          id              TEXT    PRIMARY KEY,
+          target_kind     TEXT    NOT NULL CHECK (target_kind IN ('trace','policy','world_model','skill')),
+          target_id       TEXT    NOT NULL,
+          vector_field    TEXT    NOT NULL CHECK (vector_field IN ('vec_summary','vec_action','vec')),
+          source_text     TEXT    NOT NULL,
+          embed_role      TEXT    NOT NULL CHECK (embed_role IN ('document','query')) DEFAULT 'document',
+          status          TEXT    NOT NULL CHECK (status IN ('pending','in_progress','failed','succeeded')) DEFAULT 'pending',
+          attempts        INTEGER NOT NULL DEFAULT 0,
+          max_attempts    INTEGER NOT NULL DEFAULT 6,
+          next_attempt_at INTEGER NOT NULL,
+          claimed_by      TEXT,
+          lease_until     INTEGER,
+          last_error      TEXT,
+          created_at      INTEGER NOT NULL,
+          updated_at      INTEGER NOT NULL,
+          UNIQUE (target_kind, target_id, vector_field)
+        ) STRICT;
+        INSERT INTO schema_migrations(version, name, applied_at)
+          VALUES (1, 'initial', 0), (2, 'embedding-retry-queue', 0);
+      `);
+
+      const result = runMigrations(db);
+
+      expect(result.applied.map((m) => m.version)).toContain(3);
+      const columns = db
+        .prepare<unknown, { name: string }>(`PRAGMA table_info(embedding_retry_queue)`)
+        .all()
+        .map((row) => row.name);
+      expect(columns.filter((name) => name === "claimed_by")).toHaveLength(1);
+      expect(columns.filter((name) => name === "lease_until")).toHaveLength(1);
+      expect(db
+        .prepare<{ version: number }, { n: number }>(
+          `SELECT COUNT(*) AS n FROM schema_migrations WHERE version=@version`,
+        )
+        .get({ version: 3 })?.n).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
 });

@@ -7,7 +7,10 @@ import {
   fromBlob,
   fromJsonText,
   joinWhere,
+  normalizeShareForStorage,
   nullable,
+  ownerFieldsFromRaw,
+  ownerParamsFromRow,
   timeRangeWhere,
   toBlob,
   toJsonText,
@@ -17,6 +20,9 @@ const COLUMNS = [
   "id",
   "episode_id",
   "session_id",
+  "owner_agent_kind",
+  "owner_profile_id",
+  "owner_workspace_id",
   "ts",
   "user_text",
   "agent_text",
@@ -45,6 +51,9 @@ export type TraceSearchMeta = {
   value: number;
   episode_id: EpisodeId;
   session_id: SessionId;
+  owner_agent_kind?: string;
+  owner_profile_id?: string;
+  owner_workspace_id?: string | null;
   tags_json?: string;
   error_signatures_json?: string;
 };
@@ -124,6 +133,105 @@ export function makeTracesRepo(db: StorageDb) {
     },
 
     /**
+     * Total row count matching the same filter (no limit/offset).
+     * Used by list endpoints so the viewer can show "Page N of M".
+     */
+    count(filter: Omit<TraceListFilter, "limit" | "offset"> = {}): number {
+      const tr = timeRangeWhere(filter, "ts");
+      const fragments: string[] = [];
+      const params: Record<string, unknown> = { ...tr.params };
+      if (filter.sessionId) {
+        fragments.push(`session_id = @session_id`);
+        params.session_id = filter.sessionId;
+      }
+      if (filter.episodeId) {
+        fragments.push(`episode_id = @episode_id`);
+        params.episode_id = filter.episodeId;
+      }
+      if (filter.minAbsValue !== undefined) {
+        fragments.push(`abs(value) >= @min_abs_value`);
+        params.min_abs_value = filter.minAbsValue;
+      }
+      if (tr.sql) fragments.push(tr.sql);
+      const where = joinWhere(fragments);
+      const sql = `SELECT COUNT(*) AS n FROM traces ${where}`;
+      const row = db.prepare<typeof params, { n: number }>(sql).get(params);
+      return row?.n ?? 0;
+    },
+
+    /**
+     * Count distinct (episode_id, turn_id) groups — i.e. "memory turns",
+     * where one user query + its tool sub-steps + final reply are
+     * counted as 1. Used by the Memories viewer for accurate pagination.
+     */
+    countTurns(filter: Omit<TraceListFilter, "limit" | "offset"> = {}): number {
+      const fragments: string[] = [];
+      const params: Record<string, unknown> = {};
+      if (filter.sessionId) {
+        fragments.push(`session_id = @session_id`);
+        params.session_id = filter.sessionId;
+      }
+      if (filter.episodeId) {
+        fragments.push(`episode_id = @episode_id`);
+        params.episode_id = filter.episodeId;
+      }
+      const where = joinWhere(fragments);
+      const sql = `SELECT COUNT(*) AS n FROM (SELECT DISTINCT episode_id, turn_id FROM traces ${where})`;
+      const row = db.prepare<typeof params, { n: number }>(sql).get(params);
+      return row?.n ?? 0;
+    },
+
+    /**
+     * List paginated turn keys (episode_id, turn_id) ordered by the
+     * turn's most recent trace timestamp DESC. The viewer uses this to
+     * fetch a page of "memories" (1 turn = 1 memory).
+     */
+    listTurnKeys(filter: TraceListFilter = {}): Array<{ episodeId: string | null; turnId: number; maxTs: number }> {
+      const fragments: string[] = [];
+      const params: Record<string, unknown> = {};
+      if (filter.sessionId) {
+        fragments.push(`session_id = @session_id`);
+        params.session_id = filter.sessionId;
+      }
+      if (filter.episodeId) {
+        fragments.push(`episode_id = @episode_id`);
+        params.episode_id = filter.episodeId;
+      }
+      const where = joinWhere(fragments);
+      const limit = Math.max(1, Math.min(500, filter.limit ?? 50));
+      const offset = Math.max(0, filter.offset ?? 0);
+      params.limit = limit;
+      params.offset = offset;
+      const sql = `SELECT episode_id, turn_id, MAX(ts) as max_ts FROM traces ${where} GROUP BY episode_id, turn_id ORDER BY max_ts DESC LIMIT @limit OFFSET @offset`;
+      const rows = db
+        .prepare<typeof params, { episode_id: string | null; turn_id: number; max_ts: number }>(sql)
+        .all(params);
+      return rows.map((r) => ({ episodeId: r.episode_id, turnId: r.turn_id, maxTs: r.max_ts }));
+    },
+
+    /**
+     * Fetch all traces belonging to the given (episodeId, turnId) pairs.
+     * Returned rows are ordered by ts ascending so the frontend can
+     * render the conversation in chronological order.
+     */
+    listByTurnKeys(keys: ReadonlyArray<{ episodeId: string | null; turnId: number }>): TraceRow[] {
+      if (keys.length === 0) return [];
+      const conditions: string[] = [];
+      const params: Record<string, unknown> = {};
+      keys.forEach((k, i) => {
+        if (k.episodeId == null) {
+          conditions.push(`(episode_id IS NULL AND turn_id = @turn_${i})`);
+        } else {
+          conditions.push(`(episode_id = @ep_${i} AND turn_id = @turn_${i})`);
+          params[`ep_${i}`] = k.episodeId;
+        }
+        params[`turn_${i}`] = k.turnId;
+      });
+      const sql = `SELECT ${COLUMNS.join(", ")} FROM traces WHERE ${conditions.join(" OR ")} ORDER BY ts ASC`;
+      return db.prepare<typeof params, RawTraceRow>(sql).all(params).map(mapRow);
+    },
+
+    /**
      * Vector top-K over `vec_summary` (or `vec_action` if `kind='action'`).
      * The caller passes any extra SQL filter (e.g. same-episode only).
      */
@@ -160,7 +268,17 @@ export function makeTracesRepo(db: StorageDb) {
       return scanAndTopK<TraceSearchMeta>(
         db,
         "traces",
-        ["ts", "priority", "value", "episode_id", "session_id", "tags_json"],
+        [
+          "ts",
+          "priority",
+          "value",
+          "episode_id",
+          "session_id",
+          "owner_agent_kind",
+          "owner_profile_id",
+          "owner_workspace_id",
+          "tags_json",
+        ],
         query,
         k,
         {
@@ -215,6 +333,9 @@ export function makeTracesRepo(db: StorageDb) {
                t.value       AS value,
                t.episode_id  AS episode_id,
                t.session_id  AS session_id,
+               t.owner_agent_kind AS owner_agent_kind,
+               t.owner_profile_id AS owner_profile_id,
+               t.owner_workspace_id AS owner_workspace_id,
                t.tags_json   AS tags_json,
                t.error_signatures_json AS error_signatures_json
           FROM traces_fts f
@@ -238,6 +359,9 @@ export function makeTracesRepo(db: StorageDb) {
           value: r.value,
           episode_id: r.episode_id as EpisodeId,
           session_id: r.session_id as SessionId,
+          owner_agent_kind: r.owner_agent_kind,
+          owner_profile_id: r.owner_profile_id,
+          owner_workspace_id: r.owner_workspace_id,
           tags_json: r.tags_json,
           error_signatures_json: r.error_signatures_json,
         },
@@ -284,6 +408,7 @@ export function makeTracesRepo(db: StorageDb) {
       const extra = opts.where ? ` AND (${opts.where})` : "";
       const sql = `
         SELECT id, ts, priority, value, episode_id, session_id, tags_json,
+               owner_agent_kind, owner_profile_id, owner_workspace_id,
                error_signatures_json
           FROM traces
          WHERE (${ors.join(" OR ")})${extra}
@@ -299,6 +424,9 @@ export function makeTracesRepo(db: StorageDb) {
           value: r.value,
           episode_id: r.episode_id as EpisodeId,
           session_id: r.session_id as SessionId,
+          owner_agent_kind: r.owner_agent_kind,
+          owner_profile_id: r.owner_profile_id,
+          owner_workspace_id: r.owner_workspace_id,
           tags_json: r.tags_json,
           error_signatures_json: r.error_signatures_json,
         },
@@ -347,6 +475,9 @@ export function makeTracesRepo(db: StorageDb) {
     },
 
     deleteById(id: TraceId): void {
+      // The FTS trigger should remove this row, but doing it explicitly
+      // makes deletion idempotent across pre-release DBs with older schemas.
+      db.prepare<{ id: string }>(`DELETE FROM traces_fts WHERE trace_id=@id`).run({ id });
       db.prepare<{ id: string }>(`DELETE FROM traces WHERE id=@id`).run({ id });
     },
 
@@ -388,6 +519,18 @@ export function makeTracesRepo(db: StorageDb) {
       db.prepare<typeof params>(sql).run(params);
     },
 
+    updateVector(
+      id: TraceId,
+      field: "vecSummary" | "vecAction",
+      vec: EmbeddingVector,
+    ): boolean {
+      const column = field === "vecAction" ? "vec_action" : "vec_summary";
+      const res = db.prepare<{ id: string; vec: Buffer }>(
+        `UPDATE traces SET ${column}=@vec WHERE id=@id`,
+      ).run({ id, vec: toBlob(vec)! });
+      return res.changes > 0;
+    },
+
     /**
      * Fill in reflection + α for a trace that was previously written
      * in the "lite" capture phase (reflection=null, α=0). Invoked
@@ -421,7 +564,7 @@ export function makeTracesRepo(db: StorageDb) {
     updateShare(
       id: TraceId,
       share: {
-        scope: "private" | "public" | "hub" | null;
+        scope: "private" | "local" | "public" | "hub" | null;
         target?: string | null;
         sharedAt?: number | null;
       },
@@ -435,7 +578,7 @@ export function makeTracesRepo(db: StorageDb) {
         `UPDATE traces SET share_scope=@share_scope, share_target=@share_target, shared_at=@shared_at WHERE id=@id`,
       ).run({
         id,
-        share_scope: share.scope,
+        share_scope: normalizeShareForStorage(share.scope),
         share_target: share.target ?? null,
         shared_at: share.sharedAt ?? null,
       });
@@ -450,6 +593,9 @@ interface RawHit {
   value: number;
   episode_id: string;
   session_id: string;
+  owner_agent_kind: string;
+  owner_profile_id: string;
+  owner_workspace_id: string | null;
   tags_json: string;
   error_signatures_json: string;
 }
@@ -458,6 +604,9 @@ interface RawTraceRow {
   id: string;
   episode_id: string;
   session_id: string;
+  owner_agent_kind: string;
+  owner_profile_id: string;
+  owner_workspace_id: string | null;
   ts: number;
   user_text: string;
   agent_text: string;
@@ -476,7 +625,7 @@ interface RawTraceRow {
   share_scope: string | null;
   share_target: string | null;
   shared_at: number | null;
-  turn_id: number | null;
+  turn_id: number;
   schema_version: number;
 }
 
@@ -508,6 +657,7 @@ function rowToParams(row: TraceRow): Record<string, unknown> {
     id: row.id,
     episode_id: row.episodeId,
     session_id: row.sessionId,
+    ...ownerParamsFromRow(row),
     ts: row.ts,
     user_text: row.userText,
     agent_text: row.agentText,
@@ -523,7 +673,7 @@ function rowToParams(row: TraceRow): Record<string, unknown> {
     error_signatures_json: toJsonText(normalizeSignatures(row.errorSignatures)),
     vec_summary: toBlob(row.vecSummary),
     vec_action: toBlob(row.vecAction),
-    share_scope: row.share?.scope ?? null,
+    share_scope: normalizeShareForStorage(row.share?.scope),
     share_target: row.share?.target ?? null,
     shared_at: row.share?.sharedAt ?? null,
     turn_id: row.turnId ?? null,
@@ -536,6 +686,7 @@ function mapRow(r: RawTraceRow): TraceRow {
     id: r.id,
     episodeId: r.episode_id,
     sessionId: r.session_id,
+    ...ownerFieldsFromRaw(r),
     ts: r.ts,
     userText: r.user_text,
     agentText: r.agent_text,
@@ -554,7 +705,7 @@ function mapRow(r: RawTraceRow): TraceRow {
     share:
       r.share_scope != null
         ? {
-            scope: r.share_scope as "private" | "public" | "hub",
+            scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub",
             target: r.share_target,
             sharedAt: r.shared_at,
           }

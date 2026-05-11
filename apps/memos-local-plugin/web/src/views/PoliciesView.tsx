@@ -14,9 +14,13 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "../api/client";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
+import { Pager } from "../components/Pager";
+import { ShareScopePill } from "../components/ShareScopePill";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import type { PolicyDTO } from "../api/types";
+import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
+import { loadHubSharingEnabled } from "../utils/share";
 
 interface PolicyUsage {
   skills: Array<{ id: string; name: string; status: string; eta: number }>;
@@ -24,7 +28,7 @@ interface PolicyUsage {
   sourceEpisodes: string[];
 }
 
-const PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE = 20;
 
 type StatusFilter = "" | "candidate" | "active" | "archived";
 
@@ -33,6 +37,7 @@ interface ListResponse {
   limit: number;
   offset: number;
   nextOffset?: number;
+  total?: number;
 }
 
 export function PoliciesView() {
@@ -41,7 +46,9 @@ export function PoliciesView() {
   const [rows, setRows] = useState<PolicyDTO[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [detail, setDetail] = useState<PolicyDTO | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -54,21 +61,29 @@ export function PoliciesView() {
     });
   };
 
+  useEffect(() => {
+    const ctrl = new AbortController();
+    void loadHubSharingEnabled({ force: true, signal: ctrl.signal });
+    return () => ctrl.abort();
+  }, []);
+
   const load = async (opts: { q: string; status: StatusFilter; page: number }) => {
     setLoading(true);
     try {
       const qs = new URLSearchParams();
-      qs.set("limit", String(PAGE_SIZE));
-      qs.set("offset", String(opts.page * PAGE_SIZE));
+      qs.set("limit", String(pageSize));
+      qs.set("offset", String(opts.page * pageSize));
       if (opts.q) qs.set("q", opts.q);
       if (opts.status) qs.set("status", opts.status);
       const res = await api.get<ListResponse>(`/api/v1/policies?${qs.toString()}`);
       setRows(res.policies);
       setHasMore(res.nextOffset != null);
+      setTotal(res.total ?? 0);
       setPage(opts.page);
     } catch {
       setRows([]);
       setHasMore(false);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -80,7 +95,7 @@ export function PoliciesView() {
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, status]);
+  }, [query, status, pageSize]);
 
   // Deep-link: `#/policies?id=po_xxx` auto-opens the row's drawer.
   // Lets other views (Skills / WorldModels / Tasks) link straight
@@ -103,6 +118,8 @@ export function PoliciesView() {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   };
+  const pageIds = rows.map((p) => p.id);
+  const isPageSelected = areAllIdsSelected(selected, pageIds);
 
   const setPolicyStatus = async (p: PolicyDTO, next: PolicyDTO["status"]) => {
     try {
@@ -237,6 +254,7 @@ export function PoliciesView() {
               <div class="mem-card__body">
                 <div class="mem-card__title">{p.title || "(untitled)"}</div>
                 <div class="mem-card__meta">
+                  <ShareScopePill scope={p.share?.scope} />
                   <span class={`pill pill--${p.status}`}>{t(`status.${p.status}` as never)}</span>
                   <span>support {p.support}</span>
                   <span>gain {p.gain.toFixed(2)}</span>
@@ -274,25 +292,17 @@ export function PoliciesView() {
       )}
 
       {(page > 0 || hasMore) && (
-        <div class="pager">
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page === 0 || loading}
-            onClick={() => void load({ q: query.trim(), status, page: page - 1 })}
-          >
-            <Icon name="chevron-left" size={14} />
-            {t("common.prev")}
-          </button>
-          <span class="pager__info">{t("pager.page", { n: page + 1 })}</span>
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={!hasMore || loading}
-            onClick={() => void load({ q: query.trim(), status, page: page + 1 })}
-          >
-            {t("common.next")}
-            <Icon name="chevron-right" size={14} />
-          </button>
-        </div>
+        <Pager
+          page={page}
+          totalItems={total}
+          pageSize={pageSize}
+          hasMore={hasMore}
+          loading={loading}
+          onPageSizeChange={setPageSize}
+          onPageChange={(nextPage) => {
+            void load({ q: query.trim(), status, page: nextPage });
+          }}
+        />
       )}
 
       {detail && (
@@ -302,7 +312,10 @@ export function PoliciesView() {
             setDetail(null);
             clearEntryId();
           }}
-          onUpdated={(updated) => setDetail(updated)}
+          onUpdated={(updated) => {
+            setRows((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+            setDetail(updated);
+          }}
           onStatusChange={async (p, next) => {
             await setPolicyStatus(p, next);
             // refresh the drawer with the new status.
@@ -319,10 +332,10 @@ export function PoliciesView() {
           </span>
           <button
             class="btn btn--sm"
-            onClick={() => setSelected(new Set(rows.map((p) => p.id)))}
+            onClick={() => setSelected((prev) => toggleIdsInSelection(prev, pageIds))}
           >
             <Icon name="check-square" size={14} />
-            {t("common.selectPage")}
+            {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
           </button>
           <button
             class="btn btn--danger btn--sm"
@@ -379,7 +392,7 @@ function PolicyDrawer({
   const [procedure, setProcedure] = useState(policy.procedure);
   const [verification, setVerification] = useState(policy.verification);
   const [boundary, setBoundary] = useState(policy.boundary);
-  const [scope, setScope] = useState<"private" | "public" | "hub">(
+  const [scope, setScope] = useState<"private" | "local" | "public" | "hub">(
     policy.share?.scope ?? "public",
   );
   const [busy, setBusy] = useState(false);
@@ -413,7 +426,7 @@ function PolicyDrawer({
     }
   };
 
-  const submitShare = async (s: "private" | "public" | "hub" | null) => {
+  const submitShare = async (s: "private" | "local" | "public" | "hub" | null) => {
     setBusy(true);
     try {
       const updated = await api.post<PolicyDTO>(
@@ -447,7 +460,9 @@ function PolicyDrawer({
       <aside class="drawer" role="dialog" onClick={(e) => e.stopPropagation()}>
         <header class="drawer__header">
           <div>
-            <div class="muted" style="font-size:var(--fs-xs);margin-bottom:2px">policy</div>
+            <div class="muted mono" style="font-size:var(--fs-xs);margin-bottom:2px">
+              policy {policy.id}
+            </div>
             <h2 class="drawer__title">{policy.title}</h2>
           </div>
           <button class="btn btn--ghost btn--icon" onClick={onClose} aria-label={t("common.close")}>
@@ -460,6 +475,7 @@ function PolicyDrawer({
             <h3 class="card__title" style="font-size:var(--fs-md)">{t("tasks.detail.meta")}</h3>
             <dl style="display:grid;grid-template-columns:120px 1fr;gap:6px 16px;margin:0;font-size:var(--fs-sm)">
               <dt class="muted">{t("memories.field.status")}</dt><dd><span class={`pill pill--${policy.status}`}>{t(`status.${policy.status}` as never)}</span></dd>
+              <dt class="muted">{t("memories.field.share")}</dt><dd><ShareScopePill scope={policy.share?.scope} /></dd>
               <dt class="muted">{t("memories.field.support")}</dt><dd>{policy.support}</dd>
               <dt class="muted">{t("memories.field.gain")}</dt><dd>{policy.gain.toFixed(3)}</dd>
               <dt class="muted">{t("memories.field.createdAt")}</dt><dd>{new Date(policy.createdAt).toLocaleString()}</dd>
@@ -622,7 +638,7 @@ function PolicyDrawer({
               <div class="modal__field">
                 <label>{t("memories.share.scope")}</label>
                 <div class="vstack" style="gap:var(--sp-2)">
-                  {(["private", "public", "hub"] as const).map((v) => (
+                  {(["private", "local", "public", "hub"] as const).map((v) => (
                     <label
                       key={v}
                       class="hstack"

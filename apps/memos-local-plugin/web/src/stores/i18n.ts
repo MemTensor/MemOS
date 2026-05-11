@@ -40,9 +40,11 @@ const en = {
   "nav.section.system": "System",
 
   // Header.
-  "header.brand": "MemOS Local",
-  "header.subtitle": "Local memory viewer",
+  "header.brand": "MemOS",
+  "header.subtitle": "Memory viewer",
   "header.search.placeholder": "Search anywhere…",
+  "header.search.noResults": "No results found",
+  "header.search.viewAll": "View all",
   "header.lang.en": "EN",
   "header.lang.zh": "中",
   "header.theme.light": "Switch to light",
@@ -80,13 +82,34 @@ const en = {
   "common.empty": "Nothing here yet",
   "common.retry": "Retry",
   "common.more": "More",
+  "common.never": "Never",
   "common.loadMore": "Load more",
   "common.selected": "{n} selected",
   "common.selectPage": "Select page",
+  "common.deselectPage": "Deselect page",
   "common.deselect": "Deselect",
   "common.bulkDelete": "Delete selected",
   "common.bulkDelete.confirm": "Delete {n} selected items? This cannot be undone.",
+  // Relative-time labels — used by the activity dashboard and any
+  // future surface that wants "5 s ago" / "3 min ago" formatting.
+  "common.justNow": "just now",
+  "common.secondsAgo": "{n} s ago",
+  "common.minutesAgo": "{n} min ago",
+  "common.hoursAgo": "{n} h ago",
+  "common.daysAgo": "{n} d ago",
   "pager.page": "Page {n}",
+  "pager.pageOfAtLeast": "Page {n} / {total}+",
+  "pager.pageOfTotal": "Page {n} / {total}",
+  "pager.totalPerPage": "Total {total} items, {pageSize} per page",
+  "pager.totalCompact": "{total} items · {pageSize}/page",
+  "pager.pageSize.label": "Items per page",
+  "pager.pageSize.option": "{pageSize} / page",
+  "pager.jump.label": "Go to",
+  "pager.jump.short": "Jump",
+  "pager.jump.to": "Go to",
+  "pager.jump.pageUnit": "page",
+  "pager.jump.go": "Go",
+  "pager.jump.goShort": "Go",
 
   // Settings extensions.
   "settings.test": "Test",
@@ -148,13 +171,16 @@ const en = {
   "analytics.tools.subtitle":
     "Per-tool response time and failure counts over the selected time range.",
 
-  "restart.down": "Restarting viewer…",
-  "restart.up": "Waiting for service to come back…",
-  "restart.done": "Reloading…",
-  "restart.failed": "Restart didn't complete",
-  "restart.subtitle":
-    "Your changes have been saved. The page will reload automatically.",
-  "restart.reload": "Reload page",
+  "restart.restarting": "Configuration saved. Service is restarting…",
+  "restart.restarting.hermes":
+    "Configuration saved. Closing the current Hermes session…",
+  "restart.waitingUp": "Waiting for the service to come back online…",
+  "restart.autoRefresh": "The page will refresh automatically once the service is ready.",
+  "restart.failed": "Restart didn't complete — the service didn't come back in time.",
+  "restart.failedHint.openclaw":
+    "Try manually: openclaw gateway stop && openclaw gateway start",
+  "restart.failedHint.hermes":
+    "Try manually: stop the current Hermes session and rerun `hermes chat`",
   "common.selectAll": "Select all",
   "common.deleteSelected": "Delete selected",
 
@@ -192,12 +218,98 @@ const en = {
   "overview.metric.model.connectedAt": "Last OK call at {ts}",
   "overview.metric.model.failed": "Last call failed",
   "overview.metric.model.idle": "Not called yet",
+  "overview.metric.model.fallback": "Falling back to host model",
+  "overview.metric.model.fallback.tooltip":
+    "Primary provider unavailable, host LLM is handling the call. Original error: {msg}",
   "overview.metric.policies.breakdown": "{active} active · {candidate} candidate",
   "overview.metric.skills.breakdown": "{active} active · {candidate} candidate",
+  // Live activity dashboard — the third row of the overview page.
+  // Shows six per-category tiles (memory / experience / environment
+  // knowledge / skill / retrieval / feedback) with a five-minute
+  // sparkline and the most recent event in plain language.
   "overview.live.title": "Live activity",
-  "overview.live.subtitle": "Most recent events emitted by the algorithm core",
-  "overview.live.empty": "No events yet",
-  "overview.live.hint": "Events will appear here as sessions advance.",
+  "overview.live.tile.count": "events in last 5 min",
+  "overview.live.tile.empty": "No events in last 5 min",
+
+  // Tile labels (also used by the per-event "category pill"). Keep
+  // these in sync with overview.metric.* / nav.* labels — same noun,
+  // different surface.
+  "overview.live.cat.session": "Conversation",
+  "overview.live.cat.task": "Task",
+  "overview.live.cat.memory": "Memory",
+  "overview.live.cat.experience": "Experience",
+  "overview.live.cat.world": "Environment knowledge",
+  "overview.live.cat.skill": "Skill",
+  "overview.live.cat.retrieval": "Retrieval",
+  "overview.live.cat.feedback": "Feedback",
+  "overview.live.cat.system": "System",
+  "overview.live.cat.hub": "Hub",
+
+  // Per-event titles. Telegraphic noun-verb compounds (matching the
+  // operational-log style the rest of the product uses), one per
+  // CoreEventType. Detail text — IDs, counts, milliseconds — is
+  // formatted in TS and concatenated to the title at render time.
+  "overview.live.event.session.opened": "Session opened",
+  "overview.live.event.session.closed": "Session ended",
+  "overview.live.event.episode.opened": "Task started",
+  "overview.live.event.episode.closed": "Task ended",
+  "overview.live.event.trace.created": "Memory stored",
+  "overview.live.event.trace.value_updated": "Memory updated",
+  "overview.live.event.trace.priority_decayed": "Memory decayed",
+  "overview.live.event.l2.candidate_added": "Experience candidate",
+  "overview.live.event.l2.candidate_expired": "Experience candidate expired",
+  "overview.live.event.l2.induced": "Experience generated",
+  "overview.live.event.l2.associated": "Experience associated",
+  "overview.live.event.l2.revised": "Experience revised",
+  "overview.live.event.l2.boundary_shrunk": "Experience boundary shrunk",
+  "overview.live.event.l3.abstracted": "Environment knowledge generated",
+  "overview.live.event.l3.revised": "Environment knowledge updated",
+  "overview.live.event.skill.crystallized": "Skill crystallised",
+  "overview.live.event.skill.eta_updated": "Skill ETA updated",
+  "overview.live.event.skill.boundary_updated": "Skill boundary updated",
+  "overview.live.event.skill.archived": "Skill archived",
+  "overview.live.event.skill.repaired": "Skill repaired",
+  "overview.live.event.retrieval.triggered": "Retrieval triggered",
+  "overview.live.event.retrieval.tier1.hit": "Tier 1 retrieval hit",
+  "overview.live.event.retrieval.tier2.hit": "Tier 2 retrieval hit",
+  "overview.live.event.retrieval.tier3.hit": "Tier 3 retrieval hit",
+  "overview.live.event.retrieval.empty": "Retrieval empty",
+  "overview.live.event.feedback.received": "Feedback received",
+  "overview.live.event.feedback.classified": "Feedback classified",
+  "overview.live.event.reward.computed": "Reward computed",
+  "overview.live.event.decision_repair.generated": "Decision repair generated",
+  "overview.live.event.decision_repair.validated": "Decision repair validated",
+  "overview.live.event.hub.client_connected": "Hub client connected",
+  "overview.live.event.hub.client_disconnected": "Hub client disconnected",
+  "overview.live.event.hub.share_published": "Hub share published",
+  "overview.live.event.hub.share_received": "Hub share received",
+  "overview.live.event.system.started": "System started",
+  "overview.live.event.system.shutdown": "System shutdown",
+  "overview.live.event.system.error": "System error",
+  "overview.live.event.system.config_changed": "Config changed",
+  "overview.live.event.system.update_available": "Update available",
+
+  // Detail templates. Many events share patterns (label + id, count +
+  // latency, …) so the same template is reused across multiple types.
+  "overview.live.detail.id": "{label} {id}",
+  "overview.live.detail.idReason": "{label} {id} · {reason}",
+  "overview.live.detail.candidate": "Candidate {sig}",
+  "overview.live.detail.induced": "{sig} · from {n} successful tasks",
+  "overview.live.detail.similarity": "{label} {id} · similarity {pct}%",
+  "overview.live.detail.retrievalHit": "{count} hits · {ms}ms",
+  "overview.live.detail.feedbackTone": "Tone: {tone}",
+  "overview.live.detail.reward": "r = {r} · from {source}",
+  "overview.live.detail.version": "v{version}",
+  "overview.live.detail.raw": "{value}",
+
+  // Host bridge status.
+  "bridge.connected": "Memory bridge connected",
+  "bridge.reconnecting": "Memory bridge connected",
+  "bridge.disconnected": "Memory bridge disconnected",
+  "bridge.unknown": "Memory bridge unknown",
+  "bridge.tooltip": "Memory bridge: connection between Hermes and the local memory core",
+  "bridge.tooltip.lastOk": "Last success: {ts}",
+  "bridge.tooltip.lastError": "Last error: {msg}",
 
   // Memories.
   "memories.title": "Memories",
@@ -262,6 +374,8 @@ const en = {
   "memories.field.episodeTimeline": "Steps in this task",
   "memories.field.steps": "Steps in this turn ({n})",
   "memories.card.steps": "{n} steps",
+  "memories.score.skipped": "Scoring skipped",
+  "memories.score.pending": "Pending score",
   // Tooltip helpers for memory metadata fields. Shown when the user
   // hovers the small "?" icon next to each label so they can find out
   // what the score means without leaving the drawer.
@@ -311,6 +425,7 @@ const en = {
   "policies.col.boundary": "Boundary",
   "policies.act.activate": "Activate",
   "policies.act.archive": "Archive",
+  "policies.act.retire": "Archive",
   "policies.act.reinstate": "Reinstate",
   "policies.act.candidate": "Candidate",
   "policies.col.title": "Title",
@@ -346,7 +461,14 @@ const en = {
   "worldModels.empty.hint":
     "Environment knowledge builds up once several experiences share the same structure.",
   "worldModels.col.body": "Description",
+  "worldModels.structure.title": "Structured cognition (with evidence)",
+  "worldModels.structure.environment": "Environment topology (ℰ)",
+  "worldModels.structure.inference": "Inference rules (ℐ)",
+  "worldModels.structure.constraints": "Constraints (𝒞)",
   "worldModels.col.policies": "Related experiences",
+  "worldModels.field.id": "ID",
+  "worldModels.field.version": "Version",
+  "worldModels.version.title": "World model version (bumps on every L3 merge)",
   "worldModels.delete.confirm": "Delete this entry? This cannot be undone.",
   "worldModels.edit.title": "Title",
   "worldModels.edit.body": "Description",
@@ -370,18 +492,42 @@ const en = {
   "tasks.chat.role.assistant": "Assistant",
   "tasks.chat.role.tool": "Tool",
   "tasks.chat.role.thinking": "Thinking",
+  "tasks.chat.tool.assistantTextBefore": "Assistant text before tool",
+  "tasks.chat.tool.thinking": "Thinking",
   "tasks.chat.tool.input": "Input",
   "tasks.chat.tool.output": "Output",
   "tasks.chat.tool.ok": "ok",
   "tasks.chat.tool.noPayload": "(no input or output recorded)",
+  "tasks.chat.tool.parallelBatch": "⚡ {n} tools in parallel · {ms}ms wall-clock",
+  "tasks.chat.tool.parallelBatch.savings": "(would have been {sum}ms in series)",
+  "tasks.chat.expand": "Show more",
+  "tasks.chat.collapse": "Show less",
   "tasks.skipped.default":
     "This conversation was too brief to generate a summary or score — the task won't appear in search results.",
   "tasks.failed.default":
     "This task was scored R={rTask} and counted as a failed exchange. Future recalls will down-rank similar attempts.",
   "tasks.skip.reason.tooFewTurns":
     "Not enough messages to learn from — at least a user question and an assistant reply are needed.",
+  "tasks.skip.reason.tooFewExchanges":
+    "Not enough conversation turns ({exchanges}); at least {min} complete user-assistant exchanges are required to generate a summary.",
+  "tasks.skip.reason.noUserMessages":
+    "This task has no user messages; it only contains system or tool-generated content.",
+  "tasks.skip.reason.contentTooShort":
+    "The conversation is too short ({chars} characters) to generate a meaningful summary.",
+  "tasks.skip.reason.trivialUserContent":
+    "The conversation only contains simple greetings or test data (for example hello, test, or ok), so no summary is needed.",
+  "tasks.skip.reason.trivialBothSides":
+    "Both the user and assistant messages are simple greetings or test data, so no summary is needed.",
+  "tasks.skip.reason.toolHeavy":
+    "This task is mostly tool output ({tools}/{total} messages) and does not contain enough user interaction to learn from.",
+  "tasks.skip.reason.repeatedContent":
+    "The conversation contains too much repeated content ({unique} unique messages / {total} user messages), so no useful information can be extracted.",
   "tasks.skip.reason.noAssistant":
     "The user message was captured but no assistant reply came back — the agent host may have crashed, filtered the turn, or been interrupted. Nothing to summarize yet.",
+  "tasks.active.reason.interrupted":
+    "This topic was interrupted before the assistant reply completed. It will stay in the same task until the next related message arrives.",
+  "tasks.active.reason.paused":
+    "This topic is paused after the session closed. If you continue the same topic soon, the next turn will be added to this task.",
   "tasks.skip.reason.abandoned":
     "The pipeline closed this task without a reward (e.g. the relation classifier decided the next turn was a brand-new task). Check the session timeline for the full arc.",
   "tasks.skip.reason.rewardPending":
@@ -397,6 +543,26 @@ const en = {
   "tasks.skill.not_generated": "Below induction threshold",
   "tasks.skill.skipped": "Scored as negative example (R ≤ -0.5)",
   "tasks.skill.openSkill": "Open skill",
+  "tasks.skillReason.queued.inProgress":
+    "Task still in progress; skill pipeline has not started yet.",
+  "tasks.skillReason.queued.rewardPending":
+    "Reward scoring not yet complete; skill pipeline will start after scoring.",
+  "tasks.skillReason.queued.policyPending":
+    "Experience is not yet active — needs more supporting tasks to crystallize into a skill (current support: {support}, required: ≥ {skillMinSupport}).",
+  "tasks.skillReason.queued.ready":
+    "Experience is ready (gain={gain}, support={support}); skill crystallization will trigger automatically after the next reward scoring.",
+  "tasks.skillReason.skipped":
+    "Task scored significantly negative (R={rTask}), treated as counterexample; no L2 experience or skill will be derived, but L1 traces are retained as negative examples for future Decision Repair.",
+  "tasks.skillReason.not_generated.belowThreshold":
+    "Task score R={rTask} is below the induction threshold (≥ {threshold}) — the conversation was normal, but not strong enough to generalize into an L2 experience; similar tasks will accumulate over time.",
+  "tasks.skillReason.not_generated.noPolicy":
+    "No L2 experience induced yet — requires at least {minEpisodesForInduction} similar task(s) (minEpisodesForInduction) with V ≥ {minTraceValue} to trigger L2 induction, then support ≥ {skillMinSupport} and gain ≥ {skillMinGain} to crystallize into a skill.",
+  "tasks.skillReason.generated":
+    "Skill \"{skillName}\" crystallized from experience {policyId}.",
+  "tasks.skillReason.upgraded":
+    "Skill \"{skillName}\" upgraded from experience {policyId}.",
+  "tasks.abandonReason.uncleanExit":
+    "Plugin did not exit cleanly last time; incomplete tasks were automatically closed on startup.",
 
   // Skills.
   "skills.title": "Skills",
@@ -420,12 +586,23 @@ const en = {
   "skills.detail.version": "Version",
   "skills.detail.lastUpdated": "Updated {at}",
   "skills.detail.evolution": "Evolution timeline",
+  "skills.detail.decisionGuidance": "Decision guidance (prefer / avoid)",
+  "skills.detail.decisionGuidance.prefer": "Prefer",
+  "skills.detail.decisionGuidance.avoid": "Avoid",
+  "skills.detail.evidenceAnchors": "Evidence anchors ({n} traces)",
   "skills.detail.evolution.empty":
     "No evolution events recorded yet — the timeline fills in as the skill is crystallised, rebuilt, or archived.",
   "skills.act.delete.confirm": "Permanently delete skill \"{name}\"? This cannot be undone.",
   "skills.edit.name": "Name",
   "skills.edit.invocationGuide": "Invocation guide",
   "skills.version.title": "Skill version (bumps on every rebuild)",
+  "skills.trials.pass": "{count} pass",
+  "skills.trials.pass.label": "Trial pass",
+  "skills.trials.pass.detail": "{passed} / {attempted}",
+  "skills.usage.count": "{count} uses",
+  "skills.usage.count.label": "Uses",
+  "skills.usage.lastUsed": "used {at}",
+  "skills.usage.lastUsed.label": "Last used",
   "skills.updated.ago": "updated {at}",
   "skills.timeline.kind.crystallized": "Crystallised",
   "skills.timeline.kind.started": "Crystallise start",
@@ -453,6 +630,10 @@ const en = {
   "analytics.chart.skillEvolutions": "Skill crystallizations per day",
   "analytics.chart.skillEvolutions.empty":
     "No skills crystallized yet — keep the plugin running to collect evidence.",
+  "analytics.axis.date": "Date",
+  "analytics.axis.time": "Time",
+  "analytics.axis.count": "Count",
+  "analytics.axis.latencyMs": "Latency (ms)",
   "analytics.kpi.evolutionRate": "Skill evolution rate",
   "analytics.kpi.evolutionRate.hint": "tasks → skills conversion",
   "analytics.kpi.policyCoverage": "Policy activation rate",
@@ -483,6 +664,9 @@ const en = {
   "analytics.tools.chart.insufficient":
     "Not enough data points in this window to draw a trend chart.",
   "analytics.tools.legend.showAll": "Show all",
+  "analytics.tools.unavailable.title": "Calls without latency data",
+  "analytics.tools.unavailable.subtitle":
+    "These tools were recorded, but their start/end timestamps were missing or identical, so they are not plotted as response-time data.",
 
   // Logs.
   "logs.title": "Logs",
@@ -502,6 +686,12 @@ const en = {
   "logs.tag.skill": "Skill",
   "logs.tag.policy": "Experience",
   "logs.tag.world": "World model",
+  "logs.tag.session": "Session",
+  "logs.tag.system": "System",
+  "logs.system.role": "{role} call failed",
+  "logs.system.role.embedding": "Embedding model",
+  "logs.system.role.llm": "Summary model",
+  "logs.system.role.skillEvolver": "Skill evolver model",
   "logs.tool.search": "Search",
   "logs.tool.add": "Ingest",
   "logs.tool.skill_generate": "Generate",
@@ -542,11 +732,54 @@ const en = {
   "import.import.desc":
     "Restore memories, experiences, environment knowledge and skills from a JSON bundle. Your existing data is preserved; imported rows are added alongside with new ids.",
   "import.import.btn": "Choose JSON bundle…",
-  "import.migrate.title": "Migrate from memos-local-openclaw (legacy)",
+  "import.migrate.title": "Migrate from legacy plugin (memos-local-openclaw / memos-local-hermes)",
   "import.migrate.desc":
-    "Scan the legacy plugin's SQLite database and copy matching rows into the new store. Non-destructive — the legacy file stays put.",
+    "Scan the legacy plugin's SQLite database for the currently running agent (openclaw → ~/.openclaw/memos-local, hermes → ~/.hermes/memos-state/memos-local) and copy matching rows into the new store. Non-destructive — the legacy file stays put.",
   "import.migrate.scan": "Scan legacy DB",
   "import.migrate.run": "Run migration",
+  "import.migrate.found":
+    "Found legacy {agent} DB at {path}. Candidates — traces: {traces}, skills: {skills}, tasks: {tasks}.",
+  "import.migrate.notFoundAt": "No legacy database found at {path}.",
+  "import.migrate.notFound": "No legacy database found.",
+  "import.hermes.title": "Import Hermes native memories",
+  "import.hermes.desc":
+    "Read ~/.hermes/memories/MEMORY.md and import each entry separated by a single § line into this memory plugin.",
+  "import.hermes.scan": "Scan native memory file",
+  "import.hermes.run": "Import native memories",
+  "import.hermes.stop": "Stop import",
+  "import.hermes.running": "Importing Hermes native memories…",
+  "import.hermes.stopping": "Stopping after the current batch…",
+  "import.hermes.found": "Found {total} native Hermes memories at {path}.",
+  "import.hermes.notFoundAt": "No Hermes native memory file found at {path}.",
+  "import.hermes.progress":
+    "{done} / {total} processed · imported {imported}, skipped {skipped}",
+  "import.hermes.done": "Imported {imported}; skipped {skipped}.",
+  "import.hermes.stopped": "Import stopped. Imported {imported}; skipped {skipped}.",
+  "import.openclaw.title": "Import OpenClaw native memories",
+  "import.openclaw.desc":
+    "Read ~/.openclaw/agents/*/sessions/*.jsonl and import user/assistant messages into this memory plugin.",
+  "import.openclaw.scan": "Scan OpenClaw sessions",
+  "import.openclaw.run": "Import OpenClaw memories",
+  "import.openclaw.stop": "Stop import",
+  "import.openclaw.running": "Importing OpenClaw native memories…",
+  "import.openclaw.stopping": "Stopping after the current batch…",
+  "import.openclaw.found":
+    "Found {total} messages across {sessions} sessions / {files} files at {path}.",
+  "import.openclaw.notFoundAt": "No OpenClaw session JSONL files found under {path}.",
+  "import.openclaw.progress":
+    "{done} / {total} processed · imported {imported}, skipped {skipped}",
+  "import.openclaw.done": "Imported {imported}; skipped {skipped}.",
+  "import.openclaw.stopped": "Import stopped. Imported {imported}; skipped {skipped}.",
+  "import.native.metric.items": "Items",
+  "import.native.metric.messages": "messages",
+  "import.native.metric.memories": "memories",
+  "import.native.metric.sessions": "Sessions",
+  "import.native.metric.file": "Source file",
+  "import.native.metric.jsonl": "JSONL files",
+  "import.native.metric.memoryMd": "MEMORY.md",
+  "import.native.stat.imported": "Imported",
+  "import.native.stat.skipped": "Skipped",
+  "import.native.stat.processed": "Processed",
 
   // Admin.
   "admin.title": "Team administration",
@@ -576,9 +809,13 @@ const en = {
   "settings.temperature": "Temperature",
   "settings.embedding.title": "Embedding",
   "settings.embedding.desc": "Vector embedding model used by retrieval and deduplication.",
+  "settings.embedding.localHint":
+    "Currently using built-in MiniLM-L6-v2 (384-dim, ~23 MB). Select another provider for better retrieval accuracy.",
   "settings.summarizer.title": "Summarizer",
   "settings.summarizer.desc":
     "Model that turns your conversations into short task summaries and the takeaways the agent keeps.",
+  "settings.summarizer.inherit":
+    "Currently using the agent's model. Select a provider to override.",
   "settings.model.tip.title": "Model selection tips",
   "settings.model.tip.embedding":
     "Embedding — the built-in model is small. For better recall, configure a dedicated model such as bge-m3 or text-embedding-3-large.",
@@ -590,17 +827,28 @@ const en = {
   "settings.skill.desc":
     "Model that turns proven experiences into reusable skills and keeps environment knowledge up to date.",
   "settings.hub.enabled": "Enable team sharing",
+  "settings.hub.subtitle": "Share your skills and (optionally) memories with teammates.",
   "settings.hub.role": "Role",
   "settings.hub.role.hub": "Host a hub",
   "settings.hub.role.client": "Join a hub",
   "settings.hub.address": "Hub address",
   "settings.hub.userToken": "Your user token",
   "settings.hub.teamToken": "Team token",
+  "settings.hub.help.title": "How to configure team sharing",
+  "settings.hub.help.role":
+    "Host a hub when this machine is the team endpoint; join a hub when you connect to another teammate's hub address.",
+  "settings.hub.help.tokens":
+    "Team token authorizes the shared workspace. User token identifies your personal member identity and permissions.",
+  "settings.hub.teamToken.placeholder": "Shared workspace token",
+  "settings.hub.userToken.placeholder": "Your personal access token",
   "settings.general.lang": "Display language",
   "settings.general.theme": "Theme",
   "settings.general.theme.light": "Light",
   "settings.general.theme.dark": "Dark",
   "settings.general.theme.auto": "System",
+  "settings.general.detailedLogs": "Show detailed debug logs",
+  "settings.general.detailedLogs.desc":
+    "Enable chain view, failure-only filtering, and task, experience, skill, environment and system log categories.",
   "settings.general.telemetry": "Enable anonymous usage stats",
   "settings.general.telemetry.desc":
     "Only tool names, response times and the version number are collected. No memory content, queries or personal data ever leave this machine.",
@@ -608,6 +856,14 @@ const en = {
   // Errors / empty states.
   "error.generic": "Something went wrong.",
   "error.loadFailed": "Couldn't load data.",
+
+  // Model-setup banner — one-time onboarding nudge, dismissed via ✕.
+  "banner.modelSetup.aria": "Model configuration reminder",
+  "banner.modelSetup.title": "Model setup reminder",
+  "banner.modelSetup.msg":
+    "Make sure the three model slots — Embedding, Summarizer, and Skill evolver — are configured. Without them memory recall, summarisation and skill crystallization will not work.",
+  "banner.modelSetup.cta": "Open Settings → AI Models",
+  "banner.modelSetup.dismiss": "Dismiss",
 } as const;
 
 type TranslationKey = keyof typeof en;
@@ -629,9 +885,11 @@ const zh: Record<TranslationKey, string> = {
   "nav.section.insights": "洞察",
   "nav.section.system": "系统",
 
-  "header.brand": "MemOS 本地",
-  "header.subtitle": "本地记忆面板",
+  "header.brand": "MemOS",
+  "header.subtitle": "记忆面板",
   "header.search.placeholder": "全局搜索…",
+  "header.search.noResults": "未找到匹配结果",
+  "header.search.viewAll": "查看全部",
   "header.lang.en": "EN",
   "header.lang.zh": "中",
   "header.theme.light": "切换为浅色",
@@ -671,10 +929,28 @@ const zh: Record<TranslationKey, string> = {
   "common.loadMore": "加载更多",
   "common.selected": "已选 {n} 项",
   "common.selectPage": "全选当前页",
+  "common.deselectPage": "取消当前页选择",
   "common.deselect": "取消选择",
   "common.bulkDelete": "批量删除",
   "common.bulkDelete.confirm": "确认删除 {n} 项？此操作不可撤销。",
+  "common.justNow": "刚刚",
+  "common.secondsAgo": "{n} 秒前",
+  "common.minutesAgo": "{n} 分钟前",
+  "common.hoursAgo": "{n} 小时前",
+  "common.daysAgo": "{n} 天前",
   "pager.page": "第 {n} 页",
+  "pager.pageOfAtLeast": "第 {n} 页 / 共 {total}+ 页",
+  "pager.pageOfTotal": "第 {n} 页 / 共 {total} 页",
+  "pager.totalPerPage": "共 {total} 条，每页 {pageSize} 条",
+  "pager.totalCompact": "{total} 条 · {pageSize}/页",
+  "pager.pageSize.label": "每页条数",
+  "pager.pageSize.option": "{pageSize} 条/页",
+  "pager.jump.label": "跳至",
+  "pager.jump.short": "跳页",
+  "pager.jump.to": "到",
+  "pager.jump.pageUnit": "页",
+  "pager.jump.go": "跳转",
+  "pager.jump.goShort": "跳",
 
   "settings.test": "测试",
   "settings.hub.admin": "团队成员",
@@ -687,7 +963,7 @@ const zh: Record<TranslationKey, string> = {
   "settings.skillEvolver.title": "技能进化模型",
   "settings.skillEvolver.desc":
     "结晶新技能时专用的模型。留空则使用摘要模型。",
-  "settings.skillEvolver.inherit": "当前使用摘要模型。选择 Provider 即可覆盖。",
+  "settings.skillEvolver.inherit": "当前使用 agent 的模型。选择 Provider 即可覆盖。",
   "settings.account.protection": "密码保护",
   "settings.account.protection.desc": "启用后，打开记忆面板需要输入密码。",
   "settings.account.on": "已启用",
@@ -729,12 +1005,16 @@ const zh: Record<TranslationKey, string> = {
   "analytics.tools.title": "工具响应耗时",
   "analytics.tools.subtitle": "所选时间窗口内，各工具的延迟和失败次数。来源：最近的记忆行。",
 
-  "restart.down": "正在重启记忆面板…",
-  "restart.up": "等待服务恢复…",
-  "restart.done": "正在刷新…",
-  "restart.failed": "重启未完成",
-  "restart.subtitle": "设置已保存，页面将自动刷新。",
-  "restart.reload": "刷新页面",
+  "restart.restarting": "配置已保存，服务正在重启…",
+  "restart.restarting.hermes": "配置已保存，正在关闭当前 Hermes 会话…",
+  "restart.waitingUp": "正在等待服务重新上线…",
+  "restart.autoRefresh": "服务就绪后页面将自动刷新。",
+  "restart.failed": "重启超时 — 服务未能在预期时间内恢复。",
+  "restart.failedHint.openclaw":
+    "请手动重启：openclaw gateway stop && openclaw gateway start",
+  "restart.failedHint.hermes":
+    "请手动重启：停止当前 Hermes 会话后重新执行 `hermes chat`",
+  "common.never": "从未",
   "common.selectAll": "全选",
   "common.deleteSelected": "删除所选",
 
@@ -768,12 +1048,84 @@ const zh: Record<TranslationKey, string> = {
   "overview.metric.model.connectedAt": "上次成功调用于 {ts}",
   "overview.metric.model.failed": "上次调用失败",
   "overview.metric.model.idle": "暂未调用",
+  "overview.metric.model.fallback": "已降级到 Agent 内置模型",
+  "overview.metric.model.fallback.tooltip":
+    "原配置模型不可用，已自动切换到 Agent 内置模型继续工作。原始错误：{msg}",
   "overview.metric.policies.breakdown": "{active} 已启用 · {candidate} 候选",
   "overview.metric.skills.breakdown": "{active} 已启用 · {candidate} 候选",
   "overview.live.title": "实时活动",
-  "overview.live.subtitle": "算法核心发出的最近事件",
-  "overview.live.empty": "暂无事件",
-  "overview.live.hint": "Agent 交互后事件会显示在这里。",
+  "overview.live.tile.count": "最近 5 分钟事件",
+  "overview.live.tile.empty": "最近 5 分钟无事件",
+
+  "overview.live.cat.session": "对话",
+  "overview.live.cat.task": "任务",
+  "overview.live.cat.memory": "记忆",
+  "overview.live.cat.experience": "经验",
+  "overview.live.cat.world": "环境认知",
+  "overview.live.cat.skill": "技能",
+  "overview.live.cat.retrieval": "检索",
+  "overview.live.cat.feedback": "反馈",
+  "overview.live.cat.system": "系统",
+  "overview.live.cat.hub": "Hub",
+
+  "overview.live.event.session.opened": "对话开启",
+  "overview.live.event.session.closed": "对话结束",
+  "overview.live.event.episode.opened": "任务开始",
+  "overview.live.event.episode.closed": "任务结束",
+  "overview.live.event.trace.created": "记忆存储",
+  "overview.live.event.trace.value_updated": "记忆更新",
+  "overview.live.event.trace.priority_decayed": "记忆衰减",
+  "overview.live.event.l2.candidate_added": "候选经验新增",
+  "overview.live.event.l2.candidate_expired": "候选经验过期",
+  "overview.live.event.l2.induced": "经验生成",
+  "overview.live.event.l2.associated": "经验关联",
+  "overview.live.event.l2.revised": "经验修订",
+  "overview.live.event.l2.boundary_shrunk": "经验边界收紧",
+  "overview.live.event.l3.abstracted": "环境认知生成",
+  "overview.live.event.l3.revised": "环境认知更新",
+  "overview.live.event.skill.crystallized": "技能晶化",
+  "overview.live.event.skill.eta_updated": "技能预期更新",
+  "overview.live.event.skill.boundary_updated": "技能边界更新",
+  "overview.live.event.skill.archived": "技能归档",
+  "overview.live.event.skill.repaired": "技能修复",
+  "overview.live.event.retrieval.triggered": "检索触发",
+  "overview.live.event.retrieval.tier1.hit": "第一层检索命中",
+  "overview.live.event.retrieval.tier2.hit": "第二层检索命中",
+  "overview.live.event.retrieval.tier3.hit": "第三层检索命中",
+  "overview.live.event.retrieval.empty": "检索无结果",
+  "overview.live.event.feedback.received": "收到反馈",
+  "overview.live.event.feedback.classified": "反馈分类",
+  "overview.live.event.reward.computed": "奖励计算",
+  "overview.live.event.decision_repair.generated": "决策修补",
+  "overview.live.event.decision_repair.validated": "决策修补已校验",
+  "overview.live.event.hub.client_connected": "Hub 客户端连接",
+  "overview.live.event.hub.client_disconnected": "Hub 客户端断开",
+  "overview.live.event.hub.share_published": "Hub 分享发布",
+  "overview.live.event.hub.share_received": "Hub 收到分享",
+  "overview.live.event.system.started": "系统启动",
+  "overview.live.event.system.shutdown": "系统关闭",
+  "overview.live.event.system.error": "系统异常",
+  "overview.live.event.system.config_changed": "配置变更",
+  "overview.live.event.system.update_available": "可用更新",
+
+  "overview.live.detail.id": "{label} {id}",
+  "overview.live.detail.idReason": "{label} {id} · {reason}",
+  "overview.live.detail.candidate": "候选 {sig}",
+  "overview.live.detail.induced": "{sig} · 来自 {n} 次成功任务",
+  "overview.live.detail.similarity": "{label} {id} · 相似度 {pct}%",
+  "overview.live.detail.retrievalHit": "命中 {count} 条 · {ms}ms",
+  "overview.live.detail.feedbackTone": "情绪 {tone}",
+  "overview.live.detail.reward": "r = {r} · 来自 {source}",
+  "overview.live.detail.version": "v{version}",
+  "overview.live.detail.raw": "{value}",
+
+  "bridge.connected": "记忆通道已开启",
+  "bridge.reconnecting": "记忆通道已开启",
+  "bridge.disconnected": "记忆通道已断开",
+  "bridge.unknown": "记忆通道未知",
+  "bridge.tooltip": "记忆通道：Hermes 与本地记忆核心之间的连接",
+  "bridge.tooltip.lastOk": "上次成功：{ts}",
+  "bridge.tooltip.lastError": "上次错误：{msg}",
 
   "memories.title": "记忆",
   "memories.subtitle": "Agent 每步的执行与反思痕迹。",
@@ -837,6 +1189,8 @@ const zh: Record<TranslationKey, string> = {
   "memories.field.episodeTimeline": "本任务的其他步骤",
   "memories.field.steps": "本轮步骤（共 {n} 步）",
   "memories.card.steps": "{n} 步",
+  "memories.score.skipped": "跳过评分",
+  "memories.score.pending": "待评分",
   "memories.help.value":
     "记忆被捕获时的重要性评分（0–1）。值越高表示助手当时越觉得这条记忆值得保留。",
   "memories.help.alpha":
@@ -880,6 +1234,7 @@ const zh: Record<TranslationKey, string> = {
   "policies.col.boundary": "边界",
   "policies.act.activate": "启用",
   "policies.act.archive": "归档",
+  "policies.act.retire": "归档",
   "policies.act.reinstate": "重新启用",
   "policies.act.candidate": "候选",
   "policies.col.title": "标题",
@@ -910,7 +1265,14 @@ const zh: Record<TranslationKey, string> = {
   "worldModels.empty": "暂无环境认知。",
   "worldModels.empty.hint": "当多条经验展现出相同的规律时，会自动凝聚成这里的环境认知。",
   "worldModels.col.body": "内容",
+  "worldModels.structure.title": "结构化认知（带证据锚点）",
+  "worldModels.structure.environment": "环境拓扑（ℰ）",
+  "worldModels.structure.inference": "行为规律（ℐ）",
+  "worldModels.structure.constraints": "约束禁忌（𝒞）",
   "worldModels.col.policies": "关联经验",
+  "worldModels.field.id": "ID",
+  "worldModels.field.version": "版本",
+  "worldModels.version.title": "环境认知版本（每次 L3 合并 +1）",
   "worldModels.delete.confirm": "删除这条环境认知？该操作不可撤销。",
   "worldModels.edit.title": "标题",
   "worldModels.edit.body": "内容",
@@ -933,14 +1295,36 @@ const zh: Record<TranslationKey, string> = {
   "tasks.chat.role.assistant": "助手",
   "tasks.chat.role.tool": "工具",
   "tasks.chat.role.thinking": "思考",
+  "tasks.chat.tool.assistantTextBefore": "工具前回复",
+  "tasks.chat.tool.thinking": "工具前思考",
   "tasks.chat.tool.input": "输入",
   "tasks.chat.tool.output": "输出",
   "tasks.chat.tool.ok": "成功",
   "tasks.chat.tool.noPayload": "（未记录输入或输出）",
+  "tasks.chat.tool.parallelBatch": "⚡ {n} 个工具并行 · 实际耗时 {ms}ms",
+  "tasks.chat.tool.parallelBatch.savings": "（串行需 {sum}ms）",
+  "tasks.chat.expand": "展开全文",
+  "tasks.chat.collapse": "收起",
   "tasks.skipped.default": "对话内容过少，未生成摘要，该任务不会出现在检索结果中。",
   "tasks.failed.default": "任务评分 R={rTask}，被视为失败交互，未来相似任务的检索权重会被下调。",
   "tasks.skip.reason.tooFewTurns": "对话轮次不足，需要至少 2 轮完整的问答交互才能生成摘要。",
+  "tasks.skip.reason.tooFewExchanges":
+    "对话轮次不足（{exchanges} 轮），需要至少 {min} 轮完整的问答交互才能生成摘要。",
+  "tasks.skip.reason.noUserMessages":
+    "该任务没有用户消息，仅包含系统或工具自动生成的内容。",
+  "tasks.skip.reason.contentTooShort":
+    "对话内容过短（{chars} 字符），信息量不足以生成有意义的摘要。",
+  "tasks.skip.reason.trivialUserContent":
+    "对话内容为简单问候或测试数据（如 hello、test、ok），无需生成摘要。",
+  "tasks.skip.reason.trivialBothSides":
+    "对话内容（用户和助手双方）为简单问候或测试数据，无需生成摘要。",
+  "tasks.skip.reason.toolHeavy":
+    "该任务主要由工具执行结果组成（{tools}/{total} 条），缺少足够的用户交互内容。",
+  "tasks.skip.reason.repeatedContent":
+    "对话中存在大量重复内容（{unique} 条独立消息 / {total} 条用户消息），无法提取有效信息。",
   "tasks.skip.reason.noAssistant": "只捕获到用户消息，没收到 assistant 回复——可能是 Agent 宿主崩溃、turn 被 bootstrap 过滤、或用户打断。暂时没有可总结的内容。",
+  "tasks.active.reason.interrupted": "这个 topic 在 assistant 回复完成前被打断了。下次继续同一 topic 时，会归入同一个任务。",
+  "tasks.active.reason.paused": "这个 topic 因 session 关闭而暂停；短时间内继续同一 topic，会继续追加到这个任务。",
   "tasks.skip.reason.abandoned": "管线在未完成打分前主动结束了这条任务（例如 relation 分类器判定下一条属于全新任务），可以去 Session 时间轴看完整链路。",
   "tasks.skip.reason.rewardPending": "Reward 管线还没给它打分——可能仍在计算中，也可能 LLM 打分失败了；到 Logs 面板搜 `reward.*` 事件看看。",
   "tasks.skip.reason.default": "对话未达到生成摘要的条件。",
@@ -953,6 +1337,26 @@ const zh: Record<TranslationKey, string> = {
   "tasks.skill.not_generated": "未达沉淀阈值",
   "tasks.skill.skipped": "本任务评为反例 (R ≤ -0.5)",
   "tasks.skill.openSkill": "打开技能",
+  "tasks.skillReason.queued.inProgress":
+    "任务仍在进行中，技能流水线尚未启动。",
+  "tasks.skillReason.queued.rewardPending":
+    "Reward 评分尚未完成，技能流水线将在评分后启动。",
+  "tasks.skillReason.queued.policyPending":
+    "经验尚未激活——需要更多支撑任务才能结晶为技能（当前 support={support}，需 ≥{skillMinSupport}）。",
+  "tasks.skillReason.queued.ready":
+    "经验已就绪（gain={gain}，support={support}），技能结晶将在下次 reward 评分后自动触发。",
+  "tasks.skillReason.skipped":
+    "任务评分为明显负分 (R={rTask})，视为反例；不会沉淀出新的 L2 经验或技能，但原始 L1 轨迹会作为反面教材保留，在后续 Decision Repair 中生成规避建议。",
+  "tasks.skillReason.not_generated.belowThreshold":
+    "任务评分 R={rTask} 未达到沉淀阈值 (≥ {threshold})——对话本身正常，只是还不够强到能泛化成 L2 经验；多做几个相似任务后会自动积累。",
+  "tasks.skillReason.not_generated.noPolicy":
+    "暂未归纳出 L2 经验——需要至少 {minEpisodesForInduction} 个相似任务（minEpisodesForInduction），且 V 值 ≥ {minTraceValue} 才能触发 L2 诱导，之后 support ≥ {skillMinSupport} 且 gain ≥ {skillMinGain} 才会结晶为技能。",
+  "tasks.skillReason.generated":
+    "技能「{skillName}」已从经验 {policyId} 结晶。",
+  "tasks.skillReason.upgraded":
+    "技能「{skillName}」已从经验 {policyId} 升级。",
+  "tasks.abandonReason.uncleanExit":
+    "插件上次未正常退出，启动时自动关闭未完成的任务。",
 
   "skills.title": "技能",
   "skills.subtitle": "从成功任务中沉淀出来、可以重复调用的能力。",
@@ -974,6 +1378,10 @@ const zh: Record<TranslationKey, string> = {
   "skills.detail.version": "当前版本",
   "skills.detail.lastUpdated": "{at} 更新",
   "skills.detail.evolution": "进化时间线",
+  "skills.detail.decisionGuidance": "决策指引（偏好 / 反模式）",
+  "skills.detail.decisionGuidance.prefer": "偏好",
+  "skills.detail.decisionGuidance.avoid": "避免",
+  "skills.detail.evidenceAnchors": "证据锚点（{n} 条记忆）",
   "skills.detail.evolution.empty":
     "尚无进化事件——当技能被结晶、重建或归档后，这里会自动出现。",
 
@@ -981,6 +1389,13 @@ const zh: Record<TranslationKey, string> = {
   "skills.edit.name": "名称",
   "skills.edit.invocationGuide": "调用指南",
   "skills.version.title": "技能版本（每次重建 +1）",
+  "skills.trials.pass": "pass {count} 次",
+  "skills.trials.pass.label": "Trial 成功",
+  "skills.trials.pass.detail": "{passed} / {attempted}",
+  "skills.usage.count": "调用 {count} 次",
+  "skills.usage.count.label": "调用次数",
+  "skills.usage.lastUsed": "最近调用 {at}",
+  "skills.usage.lastUsed.label": "最近调用",
   "skills.updated.ago": "{at} 更新",
   "skills.timeline.kind.crystallized": "结晶完成",
   "skills.timeline.kind.started": "开始结晶",
@@ -1006,6 +1421,10 @@ const zh: Record<TranslationKey, string> = {
   "analytics.chart.skillEvolutions": "每日技能进化次数",
   "analytics.chart.skillEvolutions.empty":
     "暂无技能结晶 — 让插件继续运行，等证据累积到门槛即可。",
+  "analytics.axis.date": "日期",
+  "analytics.axis.time": "时间",
+  "analytics.axis.count": "数量",
+  "analytics.axis.latencyMs": "耗时（ms）",
   "analytics.kpi.evolutionRate": "技能进化率",
   "analytics.kpi.evolutionRate.hint": "任务 → 技能 转化比例",
   "analytics.kpi.policyCoverage": "规则覆盖率",
@@ -1036,6 +1455,9 @@ const zh: Record<TranslationKey, string> = {
   "analytics.tools.chart.insufficient":
     "当前时间范围内数据点不足，无法绘制趋势图。",
   "analytics.tools.legend.showAll": "显示全部",
+  "analytics.tools.unavailable.title": "有调用但缺少耗时数据",
+  "analytics.tools.unavailable.subtitle":
+    "这些工具调用已被记录，但开始/结束时间缺失或相同，因此不会进入响应耗时图。",
 
   "logs.title": "日志",
   "logs.subtitle": "记忆检索和写入的结构化轨迹：召回候选、Hub 候选、LLM 筛选后保留的记忆。",
@@ -1048,6 +1470,12 @@ const zh: Record<TranslationKey, string> = {
   "logs.tag.skill": "技能",
   "logs.tag.policy": "经验",
   "logs.tag.world": "环境认知",
+  "logs.tag.session": "会话",
+  "logs.tag.system": "系统",
+  "logs.system.role": "{role}调用失败",
+  "logs.system.role.embedding": "嵌入模型",
+  "logs.system.role.llm": "摘要模型",
+  "logs.system.role.skillEvolver": "技能进化模型",
   "logs.tool.search": "检索",
   "logs.tool.add": "写入",
   "logs.tool.skill_generate": "生成",
@@ -1090,10 +1518,51 @@ const zh: Record<TranslationKey, string> = {
   "import.import.desc":
     "从 JSON 包中恢复记忆、经验、环境认知和技能。原有数据保留，导入内容以新 id 追加。",
   "import.import.btn": "选择 JSON 文件…",
-  "import.migrate.title": "从旧插件迁入（memos-local-openclaw）",
-  "import.migrate.desc": "扫描旧插件的 SQLite 数据库，把匹配的记录拷贝到新存储。非破坏性，旧文件不动。",
+  "import.migrate.title": "从旧插件迁入（memos-local-openclaw / memos-local-hermes）",
+  "import.migrate.desc":
+    "扫描当前运行 agent 对应的旧插件 SQLite 数据库（openclaw → ~/.openclaw/memos-local，hermes → ~/.hermes/memos-state/memos-local），把匹配的记录拷贝到新存储。非破坏性，旧文件不动。",
   "import.migrate.scan": "扫描旧数据库",
   "import.migrate.run": "执行迁移",
+  "import.migrate.found":
+    "在 {path} 找到 {agent} 旧数据库。可迁移条目 — 记忆：{traces}，技能：{skills}，任务：{tasks}。",
+  "import.migrate.notFoundAt": "在 {path} 没有找到旧数据库。",
+  "import.migrate.notFound": "没有找到旧数据库。",
+  "import.hermes.title": "导入 Hermes 原生记忆",
+  "import.hermes.desc":
+    "读取 ~/.hermes/memories/MEMORY.md，并把用单独一行 § 分隔的每条记忆导入当前记忆插件。",
+  "import.hermes.scan": "扫描原生记忆文件",
+  "import.hermes.run": "导入原生记忆",
+  "import.hermes.stop": "停止导入",
+  "import.hermes.running": "正在导入 Hermes 原生记忆…",
+  "import.hermes.stopping": "正在停止，当前批次完成后结束…",
+  "import.hermes.found": "在 {path} 找到 {total} 条 Hermes 原生记忆。",
+  "import.hermes.notFoundAt": "在 {path} 没有找到 Hermes 原生记忆文件。",
+  "import.hermes.progress": "已处理 {done} / {total} · 已导入 {imported}，跳过 {skipped}",
+  "import.hermes.done": "导入完成：已导入 {imported}，跳过 {skipped}。",
+  "import.hermes.stopped": "导入已停止：已导入 {imported}，跳过 {skipped}。",
+  "import.openclaw.title": "导入 OpenClaw 原生记忆",
+  "import.openclaw.desc":
+    "读取 ~/.openclaw/agents/*/sessions/*.jsonl，把其中的 user/assistant 消息导入当前记忆插件。",
+  "import.openclaw.scan": "扫描 OpenClaw 会话",
+  "import.openclaw.run": "导入 OpenClaw 记忆",
+  "import.openclaw.stop": "停止导入",
+  "import.openclaw.running": "正在导入 OpenClaw 原生记忆…",
+  "import.openclaw.stopping": "正在停止，当前批次完成后结束…",
+  "import.openclaw.found": "在 {path} 下找到 {files} 个文件、{sessions} 个会话，共 {total} 条消息。",
+  "import.openclaw.notFoundAt": "在 {path} 下没有找到 OpenClaw 会话 JSONL 文件。",
+  "import.openclaw.progress": "已处理 {done} / {total} · 已导入 {imported}，跳过 {skipped}",
+  "import.openclaw.done": "导入完成：已导入 {imported}，跳过 {skipped}。",
+  "import.openclaw.stopped": "导入已停止：已导入 {imported}，跳过 {skipped}。",
+  "import.native.metric.items": "条目",
+  "import.native.metric.messages": "消息",
+  "import.native.metric.memories": "记忆",
+  "import.native.metric.sessions": "会话",
+  "import.native.metric.file": "来源文件",
+  "import.native.metric.jsonl": "JSONL 文件",
+  "import.native.metric.memoryMd": "MEMORY.md",
+  "import.native.stat.imported": "已导入",
+  "import.native.stat.skipped": "跳过",
+  "import.native.stat.processed": "已处理",
 
   "admin.title": "团队管理",
   "admin.subtitle": "管理团队分享的用户、群组与待审批。",
@@ -1118,8 +1587,12 @@ const zh: Record<TranslationKey, string> = {
   "settings.temperature": "温度",
   "settings.embedding.title": "嵌入模型",
   "settings.embedding.desc": "用于记忆检索与去重的向量嵌入模型。",
+  "settings.embedding.localHint":
+    "当前使用内置 MiniLM-L6-v2（384 维，约 23 MB）。选择其他 Provider 可获得更精准的检索效果。",
   "settings.summarizer.title": "摘要模型",
   "settings.summarizer.desc": "把原始对话压缩成任务摘要和要点的模型。",
+  "settings.summarizer.inherit":
+    "当前使用 agent 的模型。选择 Provider 即可覆盖。",
   "settings.model.tip.title": "模型选择提示",
   "settings.model.tip.embedding":
     "嵌入模型：插件内置模型较小。为获得更精准的记忆检索，建议配置 bge-m3、text-embedding-3-large 等专业嵌入模型。",
@@ -1130,23 +1603,41 @@ const zh: Record<TranslationKey, string> = {
   "settings.skill.title": "技能进化",
   "settings.skill.desc": "用于把稳定的经验转成可调用技能，并维护环境认知的模型。",
   "settings.hub.enabled": "启用团队分享",
+  "settings.hub.subtitle": "与团队成员分享你的技能和（可选的）记忆。",
   "settings.hub.role": "角色",
   "settings.hub.role.hub": "托管 Hub",
   "settings.hub.role.client": "加入 Hub",
   "settings.hub.address": "Hub 地址",
   "settings.hub.userToken": "个人 Token",
   "settings.hub.teamToken": "团队 Token",
+  "settings.hub.help.title": "团队分享配置说明",
+  "settings.hub.help.role":
+    "本机作为团队入口时选择托管 Hub；连接到其他成员的 Hub 地址时选择加入 Hub。",
+  "settings.hub.help.tokens":
+    "团队 Token 用于授权共享工作区；个人 Token 用于标识你的成员身份和权限边界。",
+  "settings.hub.teamToken.placeholder": "共享工作区 Token",
+  "settings.hub.userToken.placeholder": "你的个人访问 Token",
   "settings.general.lang": "显示语言",
   "settings.general.theme": "主题",
   "settings.general.theme.light": "浅色",
   "settings.general.theme.dark": "深色",
   "settings.general.theme.auto": "跟随系统",
+  "settings.general.detailedLogs": "显示详细调试日志",
+  "settings.general.detailedLogs.desc":
+    "开启后显示链路视图、仅看失败筛选，以及任务、经验、技能、环境认知和系统日志分类。",
   "settings.general.telemetry": "启用匿名数据统计",
   "settings.general.telemetry.desc":
     "仅收集工具名称、响应时间和版本号，不涉及任何记忆内容或个人数据。",
 
   "error.generic": "发生了错误。",
   "error.loadFailed": "数据加载失败。",
+
+  "banner.modelSetup.aria": "模型配置提示",
+  "banner.modelSetup.title": "请检查模型配置",
+  "banner.modelSetup.msg":
+    "请确认已配置三个模型：嵌入模型、摘要模型、技能进化模型。未配置时记忆召回、摘要、技能结晶等核心能力都无法工作。",
+  "banner.modelSetup.cta": "前往设置 → AI 模型",
+  "banner.modelSetup.dismiss": "关闭",
 };
 
 // ─── Store ──────────────────────────────────────────────────────────────

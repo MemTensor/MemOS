@@ -26,6 +26,7 @@ import type { LlmClient } from "../llm/types.js";
 import type { Logger } from "../logger/types.js";
 import type { Repos } from "../storage/repos/index.js";
 import { now as nowMs } from "../time.js";
+import { ids } from "../id.js";
 import type {
   PolicyRow,
   SkillId,
@@ -121,10 +122,19 @@ export async function runSkill(
       evidenceCount: evidence.traces.length,
     });
 
+    // V7 §2.4.6 — gather negative evidence (V < 0) from the same
+    // episodes so the crystallizer can write concrete `anti_pattern`
+    // lines that contrast positive vs negative actions in the same
+    // context. Empty when no negatives exist — that's fine; the
+    // crystallizer still produces a valid skill, just without bonus
+    // anti-pattern guidance derived from contrast.
+    const counterExamples = gatherCounterExamples(decision.policy, repos);
+
     const tCrystallize = nowMs();
     const crystResult = await runCrystallize(
       decision.policy,
       evidence.traces,
+      counterExamples,
       skillsByPolicy,
       deps,
     );
@@ -142,6 +152,7 @@ export async function runSkill(
         policyId: decision.policy.id,
         stage: "crystallize",
         reason: crystResult.skippedReason,
+        modelRefusal: crystResult.modelRefusal,
       });
       continue;
     }
@@ -174,6 +185,10 @@ export async function runSkill(
         draft: crystResult.draft,
         policy: decision.policy,
         evidenceEpisodeIds: evidence.episodeIds,
+        // V7 §2.1 — persist the L1 trace ids so the viewer can render
+        // click-through "evidence" chips back to MemoriesView and
+        // future audits / rebuilds don't have to re-mine evidence.
+        evidenceTraceIds: evidence.traces.map((t) => t.id),
         existing: decision.existingSkill,
       },
       {
@@ -194,6 +209,20 @@ export async function runSkill(
     }
 
     repos.skills.upsert(row);
+    if (!row.vec && deps.embedder) {
+      repos.embeddingRetryQueue.enqueue({
+        id: `er_${ids.span()}`,
+        targetKind: "skill",
+        targetId: row.id,
+        vectorField: "vec",
+        sourceText: built.vecSource || row.invocationGuide || row.name,
+        now: nowMs(),
+      });
+      warnings.push({
+        skillId: row.id,
+        reason: "embedding retry queued for skill vector",
+      });
+    }
     timings.persist += nowMs() - tPersist;
 
     if (decision.action === "rebuild") rebuilt += 1;
@@ -332,14 +361,23 @@ function buildSkillIndex(repos: Repos): Map<string, SkillRow> {
 async function runCrystallize(
   policy: PolicyRow,
   evidence: Parameters<typeof verifyDraft>[0]["evidence"],
+  counterExamples: Parameters<typeof verifyDraft>[0]["evidence"],
   skillsByPolicy: Map<string, SkillRow>,
   deps: RunSkillDeps,
 ): Promise<CrystallizeResult> {
   const namingSpace = Array.from(
     new Set(Array.from(skillsByPolicy.values()).map((s) => s.name)),
   );
+  // The most recent contributing episode is the natural "trigger" the
+  // user expects to see on the Logs page (skill events appear right
+  // after the episode they were synthesised from). Falls back to the
+  // policy's first source episode when no recency ordering is
+  // available.
+  const triggerEpisodeId =
+    policy.sourceEpisodeIds[policy.sourceEpisodeIds.length - 1] ??
+    policy.sourceEpisodeIds[0];
   return crystallizeDraft(
-    { policy, evidence, namingSpace },
+    { policy, evidence, counterExamples, namingSpace, episodeId: triggerEpisodeId },
     {
       llm: deps.llm,
       log: deps.log.child({ channel: "core.skill.crystallize" }),
@@ -347,4 +385,28 @@ async function runCrystallize(
       validate: defaultDraftValidator,
     },
   );
+}
+
+/**
+ * Pull traces from the policy's source episodes that scored V < 0.
+ * These are the failures the policy is supposed to prevent — perfect
+ * raw material for `decision_guidance.anti_pattern`. We cap the count
+ * at 5 (matching `evidenceLimit` order of magnitude) so the prompt
+ * stays bounded.
+ */
+function gatherCounterExamples(
+  policy: PolicyRow,
+  repos: Repos,
+): Parameters<typeof verifyDraft>[0]["evidence"] {
+  if (policy.sourceEpisodeIds.length === 0) return [];
+  const out: ReturnType<typeof repos.traces.list> = [];
+  for (const episodeId of policy.sourceEpisodeIds) {
+    const traces = repos.traces.list({ episodeId, limit: 20 });
+    for (const t of traces) {
+      if (Number.isFinite(t.value) && t.value < 0) out.push(t);
+    }
+  }
+  // Lowest V first — the worst failures get spoken about loudest.
+  out.sort((a, b) => a.value - b.value);
+  return out.slice(0, 5);
 }

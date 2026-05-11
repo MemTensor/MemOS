@@ -9,7 +9,7 @@
  * `openclaw/plugin-sdk` surface (verified against
  * `openclaw/src/plugins/hook-types.ts::PluginHookHandlerMap`).
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createMemoryCore,
@@ -59,6 +59,7 @@ function buildDeps(h: TmpDbHandle): PipelineDeps {
     reflectLlm: null,
     embedder: fakeEmbedder({ dimensions: DEFAULT_CONFIG.embedding.dimensions }),
     log: rootLogger.child({ channel: "test.adapters.openclaw" }),
+    namespace: { agentKind: "openclaw", profileId: "main" },
     now: () => 1_700_000_000_000,
   };
 }
@@ -562,6 +563,121 @@ describe("extractTurn", () => {
   });
 });
 
+/**
+ * V7 — OpenClaw side-channel "user" injections (heartbeat, async exec
+ * completion, cron, system events, current-time footer) are NOT user
+ * input. They must drop out of capture entirely so the Memories panel
+ * doesn't fill up with phantom "未命名任务" rows whose userText is
+ * actually `"An async command you ran earlier has completed…"` /
+ * `"System (untrusted): [ts] Exec completed…"` / etc.
+ *
+ * These tests mirror the literal strings OpenClaw emits in
+ * `infra/heartbeat-events-filter.ts` + `auto-reply/reply/session-system-events.ts`.
+ * If you change one, change the other in lockstep.
+ */
+describe("OpenClaw side-channel user injections", () => {
+  it("drops the async-exec-completion wakeup prompt as bootstrap (no captured turn)", () => {
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "An async command you ran earlier has completed. The result is shown in the system messages above. " +
+          "Handle the result internally. Do not relay it to the user unless explicitly requested.\n" +
+          "Current time: Thursday, April 23rd, 2026 - 10:45 AM (Asia/Shanghai)",
+      },
+      { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+    ]);
+    const turn = extractTurn(flat, 0);
+    // After the line-level stripper removes "Current time: …" the
+    // remaining text starts with "An async command…", which the
+    // bootstrap detector recognises and the bridge's handleAgentEnd
+    // skips. extractTurn returns userText that *contains* the
+    // signature; the bridge then calls isOpenClawBootstrapMessage on
+    // it and bails. We assert that string surface here.
+    expect(turn?.userText.startsWith("An async command you ran earlier has completed")).toBe(true);
+  });
+
+  it("drops the cron heartbeat wakeup prompt as bootstrap", () => {
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "A scheduled reminder has been triggered. The reminder content is:\n\n" +
+          "[cron:abc] do the thing\n\n" +
+          "Please relay this reminder to the user in a helpful and friendly way.",
+      },
+    ]);
+    const turn = extractTurn(flat, 0);
+    expect(turn?.userText.startsWith("A scheduled reminder has been triggered")).toBe(true);
+  });
+
+  it("drops the heartbeat periodic-tasks wakeup prompt as bootstrap", () => {
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "Run the following periodic tasks (only those due based on their intervals):\n\n" +
+          "- summary: write a daily summary\n\n" +
+          "After completing all due tasks, reply HEARTBEAT_OK.",
+      },
+    ]);
+    const turn = extractTurn(flat, 0);
+    expect(turn?.userText.startsWith("Run the following periodic tasks")).toBe(true);
+  });
+
+  it("strips System (untrusted) lines + Current time footer when wrapping a bootstrap prompt", () => {
+    // Pure system-event payload — every line is a side-channel
+    // injection. After stripping the user text is empty; the bridge's
+    // `if (!turn.userText)` guard then skips the whole turn.
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "System (untrusted): [2026-04-23 10:44:37 GMT+8] Exec completed (wild-kel, code 0) :: pkg-1 pkg-2 pkg-3\n" +
+          "System (untrusted): [2026-04-23 10:44:38 GMT+8] Exec completed (wild-kel, code 0) :: more-output\n" +
+          "Current time: Thursday, April 23rd, 2026 - 10:45 AM (Asia/Shanghai) / 2026-04-23 02:45 UTC",
+      },
+    ]);
+    const turn = extractTurn(flat, 0);
+    expect(turn?.userText).toBe("");
+  });
+
+  it("preserves the real user query when System (untrusted) lines are layered on top", () => {
+    // Real user said "帮我查 cpu"; OpenClaw prepended a stale exec
+    // completion event and appended a Current time footer. The
+    // stripper must drop the noise but keep the actual query intact.
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "System (untrusted): [2026-04-23 10:44:37 GMT+8] Exec completed (foo, code 0) :: build done\n" +
+          "\n" +
+          "帮我查下当前系统有几个 cpu\n" +
+          "Current time: Thursday, April 23rd, 2026 - 10:45 AM (Asia/Shanghai)",
+      },
+      { role: "assistant", content: [{ type: "text", text: "好的，我来查一下" }] },
+    ]);
+    const turn = extractTurn(flat, 0);
+    expect(turn?.userText).toBe("帮我查下当前系统有几个 cpu");
+    expect(turn?.agentText).toBe("好的，我来查一下");
+  });
+
+  it("strips the standalone HEARTBEAT.md workspace hint to empty (caught by bridge's empty-text guard)", () => {
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "When reading HEARTBEAT.md, use workspace file /Users/jiang/proj/HEARTBEAT.md (exact case). " +
+          "Do not read docs/heartbeat.md.",
+      },
+    ]);
+    const turn = extractTurn(flat, 0);
+    // Line-level stripper drops the whole line. handleAgentEnd's
+    // `if (!turn.userText) return;` then short-circuits.
+    expect(turn?.userText).toBe("");
+  });
+});
+
 describe("renderContextBlock", () => {
   it("wraps packet context in memos_context tags", () => {
     const block = renderContextBlock({
@@ -927,6 +1043,70 @@ describe("createOpenClawBridge", () => {
     expect(new Set(ids).size).toBe(1);
   });
 
+  it("does not let a delayed agent_end clear the next turn's episode binding", async () => {
+    // OpenClaw hooks can overlap: the next before_prompt_build may route
+    // a fresh episode before the previous agent_end finishes. The bridge
+    // must clear only the binding that belongs to the ending run, or the
+    // next agent_end will fall back to openEpisode() and leave an empty
+    // phantom task in the viewer.
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const sessionKey = "s-overlap";
+    const firstCtx = hookCtx({ sessionKey, runId: "run-overlap-1" });
+    const secondCtx = hookCtx({ sessionKey, runId: "run-overlap-2" });
+
+    await bridge.handleBeforePrompt(
+      { prompt: "北京市市委书记是谁", messages: [] },
+      firstCtx,
+    );
+    await bridge.handleBeforePrompt(
+      { prompt: "可以只访问国内的网站", messages: [] },
+      secondCtx,
+    );
+
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "北京市市委书记是谁" },
+          { role: "assistant", content: "北京市市委书记是尹力。" },
+        ],
+      },
+      firstCtx,
+    );
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "北京市市委书记是谁" },
+          { role: "assistant", content: "北京市市委书记是尹力。" },
+          { role: "user", content: "可以只访问国内的网站" },
+          { role: "assistant", content: "好的，我会优先访问国内网站确认。" },
+        ],
+      },
+      secondCtx,
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const rows = await mc.listEpisodeRows({
+      sessionId: bridgeSessionId("main", sessionKey),
+      limit: 10,
+    });
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.turnCount > 0 || row.hasAssistantReply)).toBe(true);
+    expect(
+      rows.filter((row) =>
+        row.preview === "可以只访问国内的网站" && !row.hasAssistantReply
+      ),
+    ).toHaveLength(0);
+  });
+
   it("real-world smoke: '记住我喜欢游泳' flows into the L1 store and later surfaces via search", async () => {
     // This is the scenario the user reported in their bug ticket — a
     // simple Chinese request should produce a captured L1 trace and
@@ -1008,6 +1188,149 @@ describe("createOpenClawBridge", () => {
       ctx,
     );
     expect(bridge.trackedToolCalls()).toBe(0);
+  });
+
+  it("subagent_ended does not create a synthetic parent task", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const recordSubagentOutcome = vi.fn(mc.recordSubagentOutcome.bind(mc));
+    (mc as any).recordSubagentOutcome = recordSubagentOutcome;
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+
+    expect(typeof (bridge as any).handleSubagentEnded).toBe("function");
+    await (bridge as any).handleSubagentEnded(
+      {
+        targetSessionKey: "child-session",
+        targetKind: "subagent",
+        reason: "completed",
+        runId: "run-sub-1",
+        outcome: "ok",
+      },
+      {
+        agentId: "main",
+        sessionKey: "parent-session",
+        sessionId: "host-parent",
+        runId: "run-parent",
+      },
+    );
+
+    expect(recordSubagentOutcome).not.toHaveBeenCalled();
+    await expect(mc.listEpisodeRows({ limit: 10 })).resolves.toHaveLength(0);
+  });
+
+  it("merges subagent auto-announce into the parent episode", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const ctx: PluginHookAgentContext = {
+      agentId: "main",
+      sessionKey: "agent:main:explicit:subagent-parent",
+      sessionId: "host-parent",
+      runId: "run-parent",
+      workspaceDir: "/tmp/workspace",
+    };
+    const parentSessionId = bridgeSessionId("main", ctx.sessionKey!);
+
+    await bridge.handleBeforePrompt(
+      {
+        prompt: "请派一个子代理检查 package.json scripts，然后主代理总结结果。",
+        messages: [],
+      },
+      ctx,
+    );
+    bridge.handleSubagentSpawned(
+      {
+        runId: "run-sub",
+        childSessionKey: "agent:main:subagent:child",
+        agentId: "main",
+        mode: "run",
+        label: "检查 package.json scripts",
+      },
+      {
+        ...ctx,
+        requesterSessionKey: ctx.sessionKey,
+        childSessionKey: "agent:main:subagent:child",
+      },
+    );
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "请派一个子代理检查 package.json scripts，然后主代理总结结果。" },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-spawn",
+                name: "sessions_spawn",
+                arguments: {
+                  mode: "run",
+                  runtime: "subagent",
+                  task: "检查 package.json scripts",
+                },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-spawn",
+            toolName: "sessions_spawn",
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "accepted",
+                  childSessionKey: "agent:main:subagent:child",
+                  runId: "run-sub",
+                }),
+              },
+            ],
+          },
+          { role: "assistant", content: "子代理已派出，等待完成后我会总结。" },
+        ],
+      },
+      ctx,
+    );
+
+    const announcementPrompt = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "A completed subagent task is ready for user delivery.",
+      "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>",
+      "当前目录没有 package.json。",
+      "<<<END_UNTRUSTED_CHILD_RESULT>>>",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    await expect(
+      bridge.handleBeforePrompt({ prompt: announcementPrompt, messages: [] }, ctx),
+    ).resolves.toBeUndefined();
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: announcementPrompt },
+          { role: "assistant", content: "子代理检查完成：当前目录没有 package.json。" },
+        ],
+      },
+      ctx,
+    );
+
+    const episodes = await mc.listEpisodeRows({ sessionId: parentSessionId, limit: 10 });
+    expect(episodes).toHaveLength(1);
+    const traces = await mc.timeline({ episodeId: episodes[0]!.id as never });
+    expect(traces.some((tr) => tr.agentText.includes("子代理已派出"))).toBe(true);
+    expect(traces.some((tr) => tr.userText.includes("BEGIN_OPENCLAW_INTERNAL_CONTEXT"))).toBe(false);
   });
 
   it("handleSessionEnd closes the core session", async () => {
@@ -1102,8 +1425,86 @@ describe("registerOpenClawTools", () => {
     const res = (await search.descriptor.execute("toolCall_1", {
       query: "anything",
       maxResults: 5,
-    })) as { hits: Array<unknown>; totalMs: number };
+    })) as {
+      hits: Array<unknown>;
+      totalMs: number;
+      content: Array<{ type: "text"; text: string }>;
+      details: { hits: Array<unknown>; totalMs: number };
+    };
     expect(Array.isArray(res.hits)).toBe(true);
     expect(res.totalMs).toBeGreaterThanOrEqual(0);
+    // Latest OpenClaw's MCP plugin-tools bridge serializes only
+    // `result.content`; keep that populated while preserving the older
+    // top-level object shape used by local tests and callers.
+    expect(res.content[0]?.type).toBe("text");
+    expect(res.content[0]?.text).toContain("memories");
+    expect(res.details.hits).toBe(res.hits);
+  });
+
+  it("memory_search maps per-tier topK params and keeps maxResults fallback", async () => {
+    const searchMemory = vi.fn(async () => ({
+      hits: [],
+      injectedContext: "",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+    }));
+    const mc = { searchMemory } as unknown as MemoryCore;
+
+    const { api, tools } = collectTools();
+    registerOpenClawTools(api, {
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const search = tools.find((t) => t.descriptor.name === "memory_search")!;
+
+    await search.descriptor.execute("toolCall_1", {
+      query: "anything",
+      maxResults: 7,
+      tier1topK: 2,
+      tier3topK: 0,
+    });
+    expect(searchMemory).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        query: "anything",
+        topK: { tier1: 2, tier2: 7, tier3: 0 },
+      }),
+    );
+
+    await search.descriptor.execute("toolCall_2", {
+      query: "fallback",
+      maxResults: 4,
+    });
+    expect(searchMemory).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        query: "fallback",
+        topK: { tier1: 4, tier2: 4, tier3: 4 },
+      }),
+    );
+  });
+
+  it("registers tool shells before the async core is resolved", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    let requestedCore = false;
+    const { api, tools } = collectTools();
+    registerOpenClawTools(api, {
+      agent: "openclaw",
+      getCore: async () => {
+        requestedCore = true;
+        return mc;
+      },
+      log: silentLogger(),
+    });
+
+    expect(tools.map((t) => t.descriptor.name)).toContain("memory_search");
+    expect(requestedCore).toBe(false);
+
+    const search = tools.find((t) => t.descriptor.name === "memory_search")!;
+    await search.descriptor.execute("toolCall_1", {
+      query: "anything",
+      maxResults: 5,
+    });
+    expect(requestedCore).toBe(true);
   });
 });

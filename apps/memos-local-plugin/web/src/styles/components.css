@@ -368,10 +368,12 @@
   border-radius: 50%;
   flex-shrink: 0;
 }
-.status-dot--ok   { background: var(--green); box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18); }
-.status-dot--err  { background: var(--red);   box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.20); }
-.status-dot--idle { background: var(--fg-dim); opacity: 0.6; }
-.status-dot--off  { background: transparent; border: 1px dashed var(--fg-dim); }
+.status-dot--ok       { background: var(--green); box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18); }
+/* Yellow ring — primary provider broken but host LLM bridge rescued the call. */
+.status-dot--fallback { background: #f59e0b;     box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.22); }
+.status-dot--err      { background: var(--red);   box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.20); }
+.status-dot--idle     { background: var(--fg-dim); opacity: 0.6; }
+.status-dot--off      { background: transparent; border: 1px dashed var(--fg-dim); }
 
 /* ── Pills (status badges) ──────────────────────────────────────── */
 
@@ -628,60 +630,223 @@
   gap: var(--sp-2);
   align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
   margin-top: var(--sp-5);
 }
-.pager__info {
+.pager__pages {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.pager__nav,
+.pager__page-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--fg-muted);
-  font-size: var(--fs-xs);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: all var(--dur-xs);
 }
-
-/* ── Event / log stream (monospace) ────────────────────────────── */
-
-.stream {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  line-height: 1.55;
-  background: var(--bg-canvas);
-  padding: var(--sp-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  max-height: 60vh;
-  overflow-y: auto;
-}
-.stream__line {
-  display: grid;
-  /* Middle column must not be a fixed narrow width — types like
-   * `episode.closed` are longer than ~80px and were painting on top of
-   * the JSON payload. `auto` sizes to the widest label; `minmax(0,1fr)`
-   * lets the body shrink and wrap instead of overlapping. */
-  grid-template-columns: 72px auto minmax(0, 1fr);
-  gap: var(--sp-3);
-  align-items: start;
-  color: var(--fg-muted);
-  padding: 3px var(--sp-1);
-  border-radius: 4px;
-}
-.stream__line:hover {
+.pager__nav:hover,
+.pager__page-btn:hover {
   background: var(--bg-hover);
-}
-.stream__time  { color: var(--fg-dim); }
-.stream__level {
-  font-weight: var(--fw-semi);
-  white-space: nowrap;
-}
-.stream__level--info  { color: var(--info); }
-.stream__level--warn  { color: var(--warning); }
-.stream__level--error { color: var(--danger); }
-.stream__level--debug { color: var(--fg-dim); }
-.stream__body {
   color: var(--fg);
-  min-width: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
+}
+.pager__nav:disabled,
+.pager__page-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pager__page-btn[aria-current="page"] {
+  border-color: var(--accent);
+  background: var(--bg-elev-1);
+  color: var(--accent);
+  font-weight: var(--fw-semi);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.pager__ellipsis {
+  min-width: 32px;
+  color: var(--fg-dim);
+  text-align: center;
+  letter-spacing: 0.08em;
+}
+.pager__spacer {
+  width: var(--sp-4);
+}
+.pager__page-size-select {
+  width: auto;
+  min-width: 112px;
+  height: 36px;
+  padding-right: var(--sp-6);
+  font-size: var(--fs-sm);
+}
+.pager__jump {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.pager__jump-label {
+  color: var(--fg);
+  font-size: var(--fs-sm);
+}
+.pager__jump-input {
+  width: 74px;
+  height: 36px;
+  text-align: center;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Activity dashboard (Overview → Live activity) ──────────────── */
+/*
+ * Six tiles, one per surfaced category, arranged in a fixed 3 × 2
+ * grid on desktop. Each tile owns a `--cat` / `--cat-soft` pair via
+ * a `cat--*` modifier so the per-category palette lives entirely in
+ * CSS (the TS components stay colour-agnostic).
+ *
+ * On <900 px the grid reflows to 2 columns, then 1 column under
+ * 560 px — keeps the dashboard usable inside the viewer's narrow
+ * embedded mode.
+ */
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+@media (max-width: 900px) {
+  .dash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .dash-grid { grid-template-columns: 1fr; }
+}
+
+/* Per-category palette: each modifier sets the two CSS variables
+ * everything inside the tile reads from. Soft variants drive the
+ * subtle gradient washes + icon backgrounds; the strong colour drives
+ * the count number and the sparkline stroke. Tokens are taken from
+ * the existing semantic palette so themes stay aligned. */
+.dash-tile.cat--memory     { --cat: var(--cyan);    --cat-soft: var(--info-soft); }
+.dash-tile.cat--experience { --cat: var(--accent);  --cat-soft: var(--accent-soft); }
+.dash-tile.cat--world      { --cat: var(--success); --cat-soft: var(--success-soft); }
+.dash-tile.cat--skill      { --cat: var(--warning); --cat-soft: var(--warning-soft); }
+.dash-tile.cat--retrieval  { --cat: var(--rose);    --cat-soft: var(--rose-bg, rgba(251, 113, 133, 0.10)); }
+.dash-tile.cat--feedback   { --cat: var(--success); --cat-soft: var(--success-soft); }
+.dash-tile.cat--session    { --cat: var(--violet);  --cat-soft: var(--violet-bg, rgba(167, 139, 250, 0.12)); }
+.dash-tile.cat--system     { --cat: var(--fg-muted); --cat-soft: var(--bg-hover); }
+.dash-tile.cat--hub        { --cat: var(--accent);  --cat-soft: var(--accent-soft); }
+
+.dash-tile {
+  position: relative;
+  padding: var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  transition: transform var(--dur-xs), border-color var(--dur-xs);
+}
+.dash-tile:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+/* Soft top-left accent wash. The pseudo-element sits beneath the
+ * content and is muted enough to not interfere with text contrast. */
+.dash-tile::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 80% at 0% 0%, var(--cat-soft), transparent 55%);
+  opacity: 0.7;
+  pointer-events: none;
+}
+.dash-tile > * {
+  position: relative;
+}
+.dash-tile__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.dash-tile__icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--cat-soft);
+  color: var(--cat);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.dash-tile__icon svg { width: 16px; height: 16px; }
+.dash-tile__name {
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: var(--fw-semi);
+}
+.dash-tile__count {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 10px;
+}
+.dash-tile__count-n {
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.02em;
+  color: var(--cat);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.dash-tile__count-unit {
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+.dash-tile__spark {
+  height: 28px;
+  margin-top: 8px;
+}
+.sparkline { width: 100%; height: 100%; display: block; }
+.dash-tile__last {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+  line-height: 1.45;
+  min-height: 2.6em;
+}
+.dash-tile__last strong {
+  color: var(--fg);
+  font-weight: var(--fw-semi);
+  display: block;
+  margin-bottom: 2px;
+}
+.dash-tile__last-line {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+}
+.dash-tile__last-empty {
+  color: var(--fg-dim);
 }
 
 /* ── Toasts ─────────────────────────────────────────────────────── */
@@ -714,6 +879,81 @@
 .toast--success { border-left: 3px solid var(--success); }
 .toast--error   { border-left: 3px solid var(--danger); }
 .toast--info    { border-left: 3px solid var(--info); }
+
+/* ── Skill Refusal Notifications ───────────────────────────────── */
+
+.skill-refusal-menu {
+  position: relative;
+}
+.skill-refusal-menu__trigger {
+  position: relative;
+}
+.skill-refusal-menu__badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--danger);
+  color: var(--accent-fg);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semi);
+  line-height: 1;
+}
+.skill-refusal-menu__panel {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  right: 0;
+  width: min(520px, calc(100vw - 32px));
+  max-height: 420px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  z-index: 80;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+.skill-refusal-menu__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.skill-refusal-menu__empty {
+  padding: var(--sp-4);
+  color: var(--fg-dim);
+}
+.skill-refusal-menu__list {
+  overflow-y: auto;
+}
+.skill-refusal-menu__item {
+  padding: var(--sp-3) var(--sp-4);
+  border-left: 3px solid var(--danger);
+  border-bottom: 1px solid var(--border);
+}
+.skill-refusal-menu__item:last-child {
+  border-bottom: 0;
+}
+.skill-refusal-menu__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+}
+.skill-refusal-menu__content {
+  margin-top: var(--sp-2);
+  color: var(--fg);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  word-break: break-word;
+}
 
 /* ── Utility ────────────────────────────────────────────────────── */
 
@@ -1053,6 +1293,132 @@
   border-color: var(--accent);
 }
 
+/* ── Native import progress (Hermes / OpenClaw) ─────────────────── */
+
+.native-import-scan {
+  margin-top: var(--sp-4);
+}
+
+.native-import-scan__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+
+.native-import-metric {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 18px;
+}
+
+.native-import-metric__label {
+  margin-bottom: 6px;
+  color: var(--fg-dim);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semi);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.native-import-metric__value {
+  color: var(--fg);
+  font-size: 22px;
+  font-weight: var(--fw-bold);
+  line-height: 1.1;
+}
+
+.native-import-metric__hint {
+  margin-top: 3px;
+  color: var(--fg-dim);
+  font-size: var(--fs-2xs);
+}
+
+.native-import-scan__path {
+  margin-top: var(--sp-3);
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+.native-import-progress {
+  margin-top: var(--sp-4);
+  padding: var(--sp-4);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.native-import-progress__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+.native-import-progress__phase {
+  color: var(--fg);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+}
+
+.native-import-progress__counter {
+  flex: 1;
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+  text-align: right;
+}
+
+.native-import-progress__bar {
+  position: relative;
+  height: 6px;
+  margin-bottom: var(--sp-4);
+  overflow: hidden;
+  background: var(--bg-elev-1);
+  border-radius: 3px;
+}
+
+.native-import-progress__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 3px;
+  transition: width var(--dur-md) var(--ease-out);
+}
+
+.native-import-progress__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-5);
+}
+
+.native-import-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+}
+
+.native-import-stat__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.native-import-stat__dot--success { background: #22c55e; }
+.native-import-stat__dot--warning { background: #f59e0b; }
+.native-import-stat__dot--info    { background: #3b82f6; }
+
+.native-import-stat__label {
+  color: var(--fg-muted);
+}
+
+.native-import-stat__value {
+  color: var(--fg);
+  font-weight: var(--fw-bold);
+}
+
 /* Tool name pills — used on the Logs page */
 .pill--tool                      { background: rgba(255,255,255,.05); color: var(--fg); font-family: var(--font-mono); font-size: var(--fs-xs); }
 .pill--tool-memory_search        { background: var(--cyan-bg); color: var(--cyan); }
@@ -1210,8 +1576,42 @@
   line-height: 1.6;
   padding: 10px 14px;
   border-radius: 12px 12px 12px 4px;
-  white-space: pre-wrap;
   word-break: break-word;
+  position: relative;
+}
+.chat-item__bubble--collapsed {
+  max-height: 120px;
+  overflow: hidden;
+}
+.chat-item__fade {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  background: linear-gradient(to bottom, transparent, var(--bg-card));
+  border-radius: 0 0 12px 4px;
+  pointer-events: none;
+}
+.chat-item--user .chat-item__bubble--collapsed .chat-item__fade,
+.chat-item--user .chat-item__fade {
+  background: linear-gradient(to bottom, transparent, rgba(124, 140, 245, 0.07));
+}
+.chat-item__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.chat-item__toggle:hover {
+  background: var(--bg-hover);
 }
 .chat-item--user .chat-item__bubble {
   background: linear-gradient(135deg, rgba(124, 140, 245, 0.14), rgba(124, 140, 245, 0.07));
@@ -1232,6 +1632,50 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/*
+ * Parallel-batch wrapper — visual signal that the inner tool bubbles
+ * came from a single LLM message and ran concurrently. The amber
+ * accent matches `.chat-item__tool-header` so the connection to "this
+ * is tool territory" stays obvious. Sequential tools intentionally
+ * have no wrapper at all so the contrast is one-glance legible.
+ */
+.chat-item__tool-batch {
+  position: relative;
+  border: 1px dashed rgba(245, 158, 11, 0.4);
+  border-radius: 12px;
+  padding: var(--sp-3) var(--sp-3) var(--sp-2) var(--sp-3);
+  margin-left: 36px; /* align under avatar+gap of nested chat-item */
+  background: rgba(245, 158, 11, 0.04);
+}
+.chat-item__tool-batch-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--amber);
+  margin-bottom: var(--sp-2);
+  letter-spacing: 0.02em;
+}
+.chat-item__tool-batch-hint {
+  margin-left: auto;
+  font-style: italic;
+  font-size: var(--fs-2xs);
+}
+.chat-item__tool-batch-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+/*
+ * Inside the batch wrapper each child is a full `.chat-item` (with its
+ * own avatar). Trim the avatar off here so the nested rows don't double
+ * the indent inside the already-indented batch card.
+ */
+.chat-item__tool-batch-body .chat-item {
+  margin-left: -36px;
 }
 
 /*
@@ -1317,9 +1761,168 @@
   color: var(--red);
 }
 
+/* ── Markdown content in chat bubbles ─────────────────────────── */
+.md-content {
+  overflow: hidden;
+}
+.md-content .md-p {
+  margin: 0 0 0.4em 0;
+}
+.md-content .md-p:last-child {
+  margin-bottom: 0;
+}
+.md-content .md-heading {
+  margin: 0.6em 0 0.3em 0;
+  font-size: 1em;
+  font-weight: var(--fw-semi);
+}
+.md-content .md-code {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+.md-content .md-pre {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--sp-3);
+  margin: 0.5em 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.md-content .md-pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+}
+.md-content .md-list {
+  margin: 0.4em 0;
+  padding-left: 1.4em;
+}
+.md-content .md-list li {
+  margin: 0.15em 0;
+}
+.md-content a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md-content a:hover {
+  opacity: 0.8;
+}
+.md-content strong {
+  font-weight: var(--fw-semi);
+}
+.md-content br + br {
+  display: none;
+}
+
 /* "Thinking" pill on memory cards — same indigo as the chat bubble. */
 .pill--thinking {
   background: rgba(139, 92, 246, 0.10);
   color: #a78bfa;
   border: 1px solid rgba(139, 92, 246, 0.35);
+}
+
+/* ── Model-setup banner ────────────────────────────────────────────
+ *
+ * Sticky amber strip mounted by `<ModelSetupBanner />` in the second
+ * row of the shell grid (between topbar and sidebar/main). Reuses the
+ * existing `--amber` / `--amber-bg` tokens so it sits visually next
+ * to the rest of the warning-tinted UI elements (warning pills,
+ * skipped-skill badges, etc.).
+ */
+.model-setup-banner {
+  grid-area: banner;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-6);
+  background: var(--amber-bg);
+  border-bottom: 1px solid var(--amber);
+  color: var(--fg);
+  font-size: var(--fs-sm);
+  /* Hover-state colour shifts trigger from the inner button only. */
+}
+.model-setup-banner__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--amber);
+}
+.model-setup-banner__body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.model-setup-banner__title {
+  color: var(--amber);
+  font-weight: var(--fw-semi);
+}
+.model-setup-banner__msg {
+  color: var(--fg);
+  opacity: 0.92;
+}
+.model-setup-banner__slots {
+  font-weight: var(--fw-med);
+  color: var(--amber);
+}
+.model-setup-banner__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: var(--sp-2);
+  color: var(--pri);
+  text-decoration: none;
+  font-weight: var(--fw-med);
+  white-space: nowrap;
+}
+.model-setup-banner__cta:hover {
+  text-decoration: underline;
+}
+.model-setup-banner__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--amber);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-xs) var(--ease-out),
+    border-color var(--dur-xs);
+}
+.model-setup-banner__close:hover {
+  background: rgba(251, 191, 36, 0.18);
+  border-color: var(--amber);
+}
+.model-setup-banner__close:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 1px;
+}
+@media (max-width: 640px) {
+  .model-setup-banner {
+    padding: var(--sp-2) var(--sp-3);
+    gap: var(--sp-2);
+  }
+  .model-setup-banner__cta {
+    margin-left: 0;
+  }
 }

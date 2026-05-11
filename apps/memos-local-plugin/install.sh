@@ -5,19 +5,26 @@
 #   bash install.sh                        # install latest from npm
 #   bash install.sh --version 2.0.0        # install specific npm version
 #   bash install.sh --version ./pkg.tgz    # use a local tarball
-#   bash install.sh --port 18799           # override viewer port (default 18799)
 #
 # Interactive: with a TTY we ask where to install (OpenClaw / Hermes /
 # both). Press ENTER for auto-detect. Non-TTY falls straight to
 # auto-detect. macOS + Linux only.
 #
 # Design notes:
-#   - The viewer port is **shared** between agents. Each agent runs in
-#     its own process and only one can own the port at a time, which is
-#     the desired behaviour: when OpenClaw is running the viewer shows
-#     OpenClaw's memory; stopping OpenClaw and starting Hermes hands the
-#     same URL over to Hermes. There's no cross-agent memory in one UI
-#     — each agent keeps its own DB under `~/.<agent>/memos-plugin/`.
+#   - Each agent runs its OWN viewer on its OWN well-known port:
+#       openclaw → :18799
+#       hermes   → :18800
+#     Ports are intentionally fixed and not configurable by the
+#     installer — having two agents share one port (the previous
+#     "hub/peer" model) caused too many sharp edges (read-only
+#     panels, dropped writes, mid-session ownership flips). Picking
+#     a port at install time would also raise the question of
+#     "which agent does this port belong to?" — we'd rather not
+#     have that conversation.
+#   - Each agent keeps its own SQLite DB under `~/.<agent>/memos-plugin/`.
+#     There is no cross-agent memory in one UI; if both are installed
+#     the root path on either viewer shows a small picker that links
+#     to the other agent's port.
 #   - All install logic is self-contained: Node bootstrap, tarball
 #     resolution, better-sqlite3 rebuild, config patching, gateway
 #     restart, viewer-readiness wait. No separate sub-scripts.
@@ -27,55 +34,86 @@ set -euo pipefail
 # ─── Colors ────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
-info()    { printf "${BLUE}%s${NC}\n" "$*"; }
-success() { printf "${GREEN}✓ %s${NC}\n" "$*"; }
-warn()    { printf "${YELLOW}⚠ %s${NC}\n" "$*" >&2; }
-error()   { printf "${RED}✗ %s${NC}\n" "$*" >&2; }
+info()    { printf "  ${BLUE}›${NC} %b\n" "$*"; }
+success() { printf "  ${GREEN}✔${NC} %b\n" "$*"; }
+warn()    { printf "  ${YELLOW}⚠${NC}  %b\n" "$*" >&2; }
+error()   { printf "  ${RED}✘${NC} %b\n" "$*" >&2; }
 die()     { error "$*"; exit 1; }
-header()  { printf "\n${BOLD}${BLUE}── %s ──${NC}\n\n" "$*"; }
+
+header() {
+  local text="$*"
+  local pad_total=$((46 - ${#text}))
+  (( pad_total < 0 )) && pad_total=0
+  local padding=""
+  local i; for ((i=0; i<pad_total; i++)); do padding+=" "; done
+  echo
+  printf "  ${BOLD}${BLUE}┌──────────────────────────────────────────────────┐${NC}\n"
+  printf "  ${BOLD}${BLUE}│${NC}  ${BOLD}%s${NC}%s  ${BOLD}${BLUE}│${NC}\n" "${text}" "${padding}"
+  printf "  ${BOLD}${BLUE}└──────────────────────────────────────────────────┘${NC}\n"
+  echo
+}
+
+STEP_CURRENT=0
+step() {
+  STEP_CURRENT=$((STEP_CURRENT + 1))
+  printf "  ${BOLD}${CYAN}[%d]${NC} %s\n" "${STEP_CURRENT}" "$*"
+}
 
 banner() {
-  printf "\n${BOLD}${BLUE}╔════════════════════════════════════════════════════╗${NC}\n"
-  printf "${BOLD}${BLUE}║  🧠  MemOS Local — Reflect2Evolve V7 Installer    ║${NC}\n"
-  printf "${BOLD}${BLUE}╚════════════════════════════════════════════════════╝${NC}\n"
-  printf "${DIM}Layered L1/L2/L3 memory, skill crystallization, tier 1/2/3 retrieval.${NC}\n\n"
+  local ver="${VERSION_ARG:-latest}"
+  echo
+  printf "  ${BOLD}${BLUE}┌──────────────────────────────────────────────────┐${NC}\n"
+  printf "  ${BOLD}${BLUE}│${NC}                                                  ${BOLD}${BLUE}│${NC}\n"
+  printf "  ${BOLD}${BLUE}│${NC}   🧠  ${BOLD}MemOS Local Plugin Installer${NC}               ${BOLD}${BLUE}│${NC}\n"
+  printf "  ${BOLD}${BLUE}│${NC}                                                  ${BOLD}${BLUE}│${NC}\n"
+  printf "  ${BOLD}${BLUE}└──────────────────────────────────────────────────┘${NC}\n"
+  printf "  ${DIM}Package: ${NPM_PACKAGE}  ·  Version: ${ver}${NC}\n"
+  echo
 }
 
 # ─── Constants ─────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
 PLUGIN_ID="memos-local-plugin"
 NPM_PACKAGE="@memtensor/memos-local-plugin"
-DEFAULT_PORT="18799"
+# Per-agent viewer ports are fixed (see header design notes).
+OPENCLAW_PORT="18799"
+HERMES_PORT="18800"
 REQUIRED_NODE_MAJOR=20
+OPENCLAW_RUNTIME_ENTRY="./dist/adapters/openclaw/index.js"
 # Older plugin IDs disabled on install so they don't fight for the
 # memory slot. We never touch the old plugin's data.
 LEGACY_PLUGIN_IDS=("memos-local-openclaw-plugin")
 
-# ─── Args — two flags, period ─────────────────────────────────────────────
+# ─── Args — one flag, period ──────────────────────────────────────────────
 VERSION_ARG=""
-PORT="${DEFAULT_PORT}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) VERSION_ARG="${2:-}"; shift 2 ;;
-    --port)    PORT="${2:-}"; shift 2 ;;
+    --port)
+      die "--port is no longer supported. Each agent uses a fixed port: \
+openclaw → :${OPENCLAW_PORT}, hermes → :${HERMES_PORT}." ;;
     -h|--help)
       cat <<EOF
 Usage:
   bash install.sh                     # latest from npm
   bash install.sh --version X.Y.Z     # specific npm version
   bash install.sh --version ./pkg.tgz # local tarball
-  bash install.sh --port 18799        # override viewer port (default ${DEFAULT_PORT})
+
+Each agent runs its viewer on a fixed port:
+  openclaw → http://127.0.0.1:${OPENCLAW_PORT}
+  hermes   → http://127.0.0.1:${HERMES_PORT}
 EOF
       exit 0
       ;;
-    *) die "Unknown argument: $1 (use --version or --port)" ;;
+    *) die "Unknown argument: $1 (only --version is supported)" ;;
   esac
 done
 
@@ -151,11 +189,8 @@ ensure_node() {
   # Node 25+ has no better-sqlite3 prebuilts → must compile. Warn the
   # user (but don't block; the rebuild step below tries regardless).
   if (( current >= 25 )); then
-    warn "Node $(node -v) has no better-sqlite3 prebuild — will compile from source."
-    warn "Ensure C++ build tools are available:"
-    warn "  macOS:  xcode-select --install"
-    warn "  Linux:  sudo apt install build-essential python3"
-    warn "Or switch to Node LTS (22/24) for prebuilt binaries: nvm install 22"
+    warn "Node $(node -v) — no better-sqlite3 prebuild available, will compile from source."
+    printf "       ${DIM}Tip: switch to Node LTS for prebuilt binaries:  nvm install 22${NC}\n" >&2
   fi
   success "Node.js $(node -v)"
 }
@@ -176,21 +211,31 @@ find_openclaw_cli() {
 AGENT_SELECTION=""
 pick_agents_interactively() {
   echo
-  printf "${BOLD}Detected agents:${NC}\n"
-  [[ "${HAS_OPENCLAW}" == "true" ]] && success "  OpenClaw   (${HOME}/.openclaw)" || printf "${DIM}  OpenClaw   (not installed)${NC}\n"
-  [[ "${HAS_HERMES}"   == "true" ]] && success "  Hermes     (${HOME}/.hermes)"   || printf "${DIM}  Hermes     (not installed)${NC}\n"
+  printf "  ${BOLD}Detected agents:${NC}\n"
+  if [[ "${HAS_OPENCLAW}" == "true" ]]; then
+    printf "    ${GREEN}●${NC}  OpenClaw   ${DIM}~/.openclaw${NC}\n"
+  else
+    printf "    ${DIM}○  OpenClaw   (not installed)${NC}\n"
+  fi
+  if [[ "${HAS_HERMES}" == "true" ]]; then
+    printf "    ${GREEN}●${NC}  Hermes     ${DIM}~/.hermes${NC}\n"
+  else
+    printf "    ${DIM}○  Hermes     (not installed)${NC}\n"
+  fi
   echo
-  printf "${BOLD}Install into which agent?${NC}\n"
-  printf "  [Enter]  auto-detect\n"
-  printf "  1        OpenClaw only\n"
-  printf "  2        Hermes only\n"
-  printf "  3        Both\n"
-  printf "  q        Quit\n"
-  printf "Choice: "
   local choice
   if [[ ! -t 0 ]]; then
-    echo "(non-interactive — auto-detect)"; choice=""
+    info "Non-interactive mode — auto-detecting agents"
+    choice=""
   else
+    printf "  ${BOLD}Install into which agent?${NC}\n\n"
+    printf "    ${DIM}[Enter]${NC}  🔍  Auto-detect\n"
+    printf "        ${DIM}[1]${NC}  🦞  OpenClaw only\n"
+    printf "        ${DIM}[2]${NC}  👩  Hermes only\n"
+    printf "        ${DIM}[3]${NC}  📦  Both\n"
+    printf "        ${DIM}[q]${NC}  🚪  Quit\n"
+    echo
+    printf "  Choice: "
     read -r choice || choice=""
   fi
   case "${choice}" in
@@ -217,70 +262,95 @@ resolve_tarball() {
     BUILT_TARBALL="$(cd "$(dirname "${VERSION_ARG}")" && pwd)/$(basename "${VERSION_ARG}")"
     SOURCE_KIND="path"
     SOURCE_SPEC="${BUILT_TARBALL}"
-    info "Using local tarball: ${BUILT_TARBALL}"
+    success "Using local tarball: ${BUILT_TARBALL}"
     return 0
   fi
 
   local spec
   if [[ -z "${VERSION_ARG}" ]]; then
     spec="${NPM_PACKAGE}"
-    info "Fetching latest ${NPM_PACKAGE} from npm..."
+    info "Downloading latest ${NPM_PACKAGE} from npm …"
   else
     spec="${NPM_PACKAGE}@${VERSION_ARG}"
-    info "Fetching ${spec} from npm..."
+    info "Downloading ${spec} from npm …"
   fi
   SOURCE_KIND="npm"
   SOURCE_SPEC="${spec}"
 
-  (cd "${STAGE_DIR}" && npm pack "${spec}" --loglevel=error >/dev/null)
+  (cd "${STAGE_DIR}" && npm pack "${spec}" --loglevel=error >/dev/null 2>&1)
   BUILT_TARBALL="$(ls "${STAGE_DIR}"/*.tgz 2>/dev/null | head -1)"
   [[ -n "${BUILT_TARBALL}" && -f "${BUILT_TARBALL}" ]] \
     || die "npm pack failed for ${spec}. Check the npm registry or pass a local path via --version ./pkg.tgz"
-  success "Package downloaded: $(basename "${BUILT_TARBALL}")"
+  success "Package ready: $(basename "${BUILT_TARBALL}")"
 }
 
 # ─── Deploy tarball into a prefix + rebuild native deps ───────────────────
+#
+# Hermes's layout puts the plugin source AND the runtime home in the same
+# directory (${HOME}/.hermes/memos-plugin/). That means data/memos.db,
+# config.yaml, logs/, skills/, daemon/, .auth.json all live next to the
+# source files the tarball ships. A naive `rm -rf ${prefix}` would wipe
+# the user's memory DB on every re-install.
+#
+# We mitigate that by preserving a well-known allowlist of user-data
+# artefacts across the rm/extract cycle. node_modules is preserved too
+# so npm install stays fast on re-install.
 deploy_tarball_to_prefix() {
   local prefix="$1"
-  info "Deploying to ${prefix}..."
+  step "Deploying to ${prefix}"
+  local saved_dir=""
+  local preserve=(node_modules data logs skills daemon config.yaml .auth.json .memos-node-bin)
   if [[ -d "${prefix}" ]]; then
-    local saved=""
-    if [[ -d "${prefix}/node_modules" ]]; then
-      saved="$(mktemp -d)"
-      mv "${prefix}/node_modules" "${saved}/node_modules"
-    fi
+    saved_dir="$(mktemp -d)"
+    local item
+    for item in "${preserve[@]}"; do
+      if [[ -e "${prefix}/${item}" ]]; then
+        mkdir -p "$(dirname "${saved_dir}/${item}")"
+        mv "${prefix}/${item}" "${saved_dir}/${item}"
+      fi
+    done
     rm -rf "${prefix}"
     mkdir -p "${prefix}"
     tar xzf "${BUILT_TARBALL}" -C "${prefix}" --strip-components=1
-    if [[ -n "${saved}" ]]; then mv "${saved}/node_modules" "${prefix}/node_modules"; rm -rf "${saved}"; fi
+    for item in "${preserve[@]}"; do
+      if [[ -e "${saved_dir}/${item}" ]]; then
+        rm -rf "${prefix}/${item}"
+        mv "${saved_dir}/${item}" "${prefix}/${item}"
+      fi
+    done
+    rm -rf "${saved_dir}"
   else
     mkdir -p "${prefix}"
     tar xzf "${BUILT_TARBALL}" -C "${prefix}" --strip-components=1
   fi
   [[ -f "${prefix}/package.json" ]] || die "Extraction failed: ${prefix}/package.json missing"
+  success "Package extracted"
 
-  info "Installing npm dependencies..."
-  ( cd "${prefix}" && MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error )
+  step "Installing npm dependencies"
+  command -v node > "${prefix}/.memos-node-bin"
+  ( cd "${prefix}" && MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
   [[ -d "${prefix}/node_modules" ]] || die "npm install failed in ${prefix}"
 
-  # Rebuild better-sqlite3 against the active Node ABI. Required on
-  # Node ≥ 25 (no prebuilds) and safe on Node 22/24 too.
   if [[ -d "${prefix}/node_modules/better-sqlite3" ]]; then
-    info "Rebuilding better-sqlite3 for Node $(node -v)..."
+    step "Rebuilding better-sqlite3 for Node $(node -v)"
     ( cd "${prefix}" && npm rebuild better-sqlite3 --loglevel=error >/dev/null 2>&1 ) \
       || ( cd "${prefix}" && npm rebuild better-sqlite3 --build-from-source --loglevel=error >/dev/null 2>&1 ) \
-      || warn "better-sqlite3 rebuild did not complete cleanly — see output above."
+      || warn "better-sqlite3 rebuild did not complete cleanly."
     if ( cd "${prefix}" && node -e "require('better-sqlite3')" >/dev/null 2>&1 ); then
-      success "better-sqlite3 loads"
+      success "better-sqlite3 native module OK"
     else
-      warn "better-sqlite3 native module not loadable — plugin will fail at startup."
-      warn "Fix: install build tools, then run: cd ${prefix} && npm rebuild better-sqlite3"
+      warn "better-sqlite3 not loadable — plugin will fail at startup."
+      printf "       ${DIM}Fix: cd ${prefix} && npm rebuild better-sqlite3${NC}\n" >&2
     fi
   fi
-  success "Dependencies installed"
+  success "Dependencies ready"
 }
 
 # ─── Generate runtime config.yaml ─────────────────────────────────────────
+# The template ships with the right per-agent port baked in
+# (`templates/config.openclaw.yaml` → 18799,
+#  `templates/config.hermes.yaml` → 18800), so we don't have to
+# rewrite `port:` here. Existing files are left untouched.
 ensure_runtime_home() {
   local agent="$1" home_dir="$2" prefix="$3"
   mkdir -p "${home_dir}/data" "${home_dir}/skills" "${home_dir}/logs" "${home_dir}/daemon"
@@ -295,63 +365,67 @@ ensure_runtime_home() {
 
   local target="${home_dir}/config.yaml"
   if [[ -f "${target}" ]]; then
-    # Align viewer port with --port but keep the rest of the user's
-    # existing config.
-    sed -i.bak "s/^\( *port: *\).*/\1${PORT}/" "${target}" && rm -f "${target}.bak"
-    info "config.yaml at ${target} — viewer port set to ${PORT}"
+    success "config.yaml exists — kept as-is"
   else
     cp "${template}" "${target}"
-    sed -i.bak "s/^\( *port: *\).*/\1${PORT}/" "${target}" && rm -f "${target}.bak"
     chmod 600 "${target}"
-    success "Wrote ${target} (viewer port ${PORT})"
+    success "Wrote ${target} from template"
   fi
 }
 
-# ─── Wait for viewer (adapted from legacy install.sh's spinner) ──────────
+# ─── Wait for viewer — spin until HTTP endpoint actually responds ─────────
 wait_for_viewer() {
-  local url="http://127.0.0.1:${PORT}"
-  local deadline=$((SECONDS + 30))
+  local port="$1"
+  local url="http://127.0.0.1:${port}"
+  local timeout="${2:-60}"
   local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
   local idx=0
-  while (( SECONDS < deadline )); do
-    if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 0.3 "${url}/" >/dev/null 2>&1; then
+  local elapsed=0
+  local spin_tick=0
+
+  while (( elapsed < timeout )); do
+    if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 "${url}/" >/dev/null 2>&1; then
       printf "\r\033[K"
-      success "Memory Viewer ready: ${url}"
+      success "Memory Viewer is ready: ${CYAN}${url}${NC}"
       return 0
     fi
-    if command -v lsof >/dev/null 2>&1 && lsof -i ":${PORT}" -t >/dev/null 2>&1; then
-      printf "\r\033[K"
-      success "Memory Viewer listening on :${PORT} (may still be initialising)"
-      return 0
-    fi
-    printf "\r${BLUE}%s${NC} Waiting for Memory Viewer on :${PORT}... " "${frames[idx]}"
+    printf "\r  ${BLUE}%s${NC}  Starting Memory Viewer ${DIM}(%ds)${NC} …" "${frames[idx]}" "${elapsed}"
     idx=$(((idx + 1) % ${#frames[@]}))
-    sleep 0.2
+    sleep 0.12
+    spin_tick=$((spin_tick + 1))
+    if (( spin_tick % 8 == 0 )); then
+      elapsed=$((elapsed + 1))
+    fi
   done
   printf "\r\033[K"
+  warn "Memory Viewer not ready after ${timeout}s"
+  warn "Check: ${CYAN}${url}${NC}  Logs: ~/.openclaw/logs/ or ~/.hermes/memos-plugin/logs/"
   return 1
 }
 
 # ─── OpenClaw install ─────────────────────────────────────────────────────
 install_openclaw() {
-  header "OpenClaw install"
+  STEP_CURRENT=0
+  header "OpenClaw Install"
   local prefix="${HOME}/.openclaw/extensions/${PLUGIN_ID}"
   local home="${HOME}/.openclaw/memos-plugin"
   local config_path="${HOME}/.openclaw/openclaw.json"
   mkdir -p "${HOME}/.openclaw"
 
-  # 1. Stop gateway first — avoids SQLite + better-sqlite3 file locks.
   local oc_bin=""
   if oc_bin="$(find_openclaw_cli)"; then
-    info "Stopping OpenClaw gateway..."
+    step "Stopping OpenClaw gateway"
     "${oc_bin}" gateway stop >/dev/null 2>&1 || true
     sleep 1
+    success "Gateway stopped"
   fi
 
-  # 2. Deploy + rebuild native deps.
   deploy_tarball_to_prefix "${prefix}"
+  local runtime_entry="${prefix}/${OPENCLAW_RUNTIME_ENTRY#./}"
+  [[ -f "${runtime_entry}" ]] \
+    || die "OpenClaw runtime entry missing: ${OPENCLAW_RUNTIME_ENTRY}. Reinstall a package built with dist/ runtime output."
 
-  # 3. Runtime home + config.yaml.
+  step "Configuring runtime environment"
   ensure_runtime_home "openclaw" "${home}" "${prefix}"
 
   # 4. OpenClaw loads plugins via two artefacts:
@@ -370,20 +444,29 @@ install_openclaw() {
   "version": "${plugin_version}",
   "homepage": "https://github.com/MemTensor/MemOS",
   "requirements": { "node": ">=${REQUIRED_NODE_MAJOR}.0.0" },
-  "extensions": ["./adapters/openclaw/index.ts"],
+  "extensions": ["${OPENCLAW_RUNTIME_ENTRY}"],
+  "contracts": {
+    "tools": [
+      "memory_search",
+      "memory_get",
+      "memory_timeline",
+      "skill_list",
+      "memory_environment",
+      "skill_get"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": true,
     "description": "Edit ${home}/config.yaml to tune LLM / embedding / viewer.",
     "properties": {
-      "viewerPort": { "type": "number", "description": "Memory Viewer HTTP port (default ${DEFAULT_PORT})" }
+      "viewerPort": { "type": "number", "description": "Memory Viewer HTTP port (default ${OPENCLAW_PORT})" }
     }
   }
 }
 EOF
 
-  # 5. Patch ~/.openclaw/openclaw.json.
-  info "Patching ${config_path}..."
+  step "Patching ${config_path}"
   PLUGIN_ID="${PLUGIN_ID}" \
   INSTALL_PATH="${prefix}" \
   SOURCE_KIND="${SOURCE_KIND}" \
@@ -408,6 +491,11 @@ if (fs.existsSync(configPath)) {
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) config = parsed;
   }
 }
+
+if (!config.gateway || typeof config.gateway !== 'object' || Array.isArray(config.gateway)) {
+  config.gateway = {};
+}
+if (!config.gateway.mode) config.gateway.mode = 'local';
 
 if (!config.plugins || typeof config.plugins !== 'object' || Array.isArray(config.plugins)) {
   config.plugins = {};
@@ -442,6 +530,9 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
   config.plugins.entries[pluginId] = {};
 }
 config.plugins.entries[pluginId].enabled = true;
+// Do not write hook capability flags here. Current OpenClaw validates
+// plugin entries strictly and rejects unknown hook keys.
+if (config.plugins.entries[pluginId].hooks) delete config.plugins.entries[pluginId].hooks;
 
 if (!config.plugins.installs || typeof config.plugins.installs !== 'object') config.plugins.installs = {};
 const installsEntry = {
@@ -460,59 +551,114 @@ config.plugins.installs[pluginId] = installsEntry;
 
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 NODE
-  success "openclaw.json patched (source: ${SOURCE_KIND}, slot: memory)"
+  success "openclaw.json patched"
 
-  # 6. Start gateway — surface failures instead of swallowing them.
   if [[ -z "${oc_bin}" ]]; then
     warn "openclaw CLI not on PATH — restart manually: openclaw gateway start"
     return 1
   fi
-  info "Starting OpenClaw gateway..."
+  step "Starting OpenClaw gateway"
   local start_out
   if ! start_out="$("${oc_bin}" gateway start 2>&1)"; then
-    error "openclaw gateway start failed:"
-    echo "${start_out}" | sed 's/^/  /' >&2
-    warn "Inspect ~/.openclaw/logs/gateway.err.log for the full reason."
-    return 1
+    # launchd KeepAlive may have already restarted the service after
+    # the stop above, making "gateway start" fail with a kickstart
+    # conflict. Check if the gateway is actually running before
+    # treating this as a real error.
+    if curl -fsS --max-time 2 "http://127.0.0.1:18789" >/dev/null 2>&1 \
+       || (command -v lsof >/dev/null 2>&1 && lsof -i ":18789" -t >/dev/null 2>&1); then
+      success "OpenClaw gateway already running"
+    else
+      error "openclaw gateway start failed:"
+      echo "${start_out}" | sed 's/^/       /' >&2
+      warn "Inspect ~/.openclaw/logs/gateway.err.log for the full reason."
+      return 1
+    fi
+  else
+    success "OpenClaw gateway started"
   fi
-  success "OpenClaw gateway started"
 
-  # 7. Wait for our viewer to answer.
-  if wait_for_viewer; then
+  step "Waiting for Memory Viewer"
+  if wait_for_viewer "${OPENCLAW_PORT}"; then
+    echo
+    success "OpenClaw install complete"
+    printf "       ${DIM}Plugin:${NC}    %s\n" "${HOME}/.openclaw/extensions/${PLUGIN_ID}"
+    printf "       ${DIM}Viewer:${NC}    ${CYAN}http://127.0.0.1:${OPENCLAW_PORT}/${NC}\n"
     return 0
   fi
-  warn "Memory Viewer did not respond within 30s."
-  warn "Inspect ~/.openclaw/logs/gateway.err.log for plugin init errors."
+
+  warn "Memory Viewer did not respond after service start; trying foreground gateway mode."
+  nohup "${oc_bin}" gateway >/tmp/openclaw-memos-gateway.log 2>&1 &
+  sleep 2
+  if wait_for_viewer "${OPENCLAW_PORT}"; then
+    echo
+    success "OpenClaw install complete"
+    printf "       ${DIM}Plugin:${NC}    %s\n" "${HOME}/.openclaw/extensions/${PLUGIN_ID}"
+    printf "       ${DIM}Viewer:${NC}    ${CYAN}http://127.0.0.1:${OPENCLAW_PORT}/${NC}\n"
+    return 0
+  fi
+
+  warn "Memory Viewer did not respond within 60s."
+  printf "       ${DIM}Check: /tmp/openclaw-memos-gateway.log or /tmp/openclaw/openclaw-*.log${NC}\n" >&2
   return 1
 }
 
 # ─── Hermes install ───────────────────────────────────────────────────────
 install_hermes() {
-  header "Hermes install"
+  STEP_CURRENT=0
+  header "Hermes Install"
   local prefix="${HOME}/.hermes/memos-plugin"
   local home="${prefix}"
   local config_file="${HOME}/.hermes/config.yaml"
   local adapter_dir="${prefix}/adapters/hermes"
   mkdir -p "${HOME}/.hermes"
 
-  # Stop old bridge + hermes so new config applies.
-  pkill -f "bridge.cts" >/dev/null 2>&1 || true
+  step "Stopping existing bridge daemon"
+  local bridge_pids=""
+  bridge_pids="$(pgrep -f "bridge.cts" 2>/dev/null || true)"
+  if [[ -n "${bridge_pids}" ]]; then
+    kill ${bridge_pids} >/dev/null 2>&1 || true
+    local i
+    for i in {1..10}; do
+      sleep 1
+      pgrep -f "bridge.cts" >/dev/null 2>&1 || break
+    done
+    bridge_pids="$(pgrep -f "bridge.cts" 2>/dev/null || true)"
+    if [[ -n "${bridge_pids}" ]]; then
+      kill -9 ${bridge_pids} >/dev/null 2>&1 || true
+      sleep 1
+    fi
+  fi
+  success "Bridge daemon stopped"
   local was_running="false"
   if pgrep -f "/bin/hermes" >/dev/null 2>&1; then
-    info "Stopping running hermes process..."
+    step "Stopping running Hermes process"
     pkill -f "/bin/hermes" >/dev/null 2>&1 || true
     sleep 2
     pgrep -f "/bin/hermes" >/dev/null 2>&1 && pkill -9 -f "/bin/hermes" >/dev/null 2>&1 || true
     was_running="true"
+    success "Hermes stopped"
+  fi
+
+  # Free Hermes' viewer port if something (e.g. a stale bridge from
+  # a prior install, or the OpenClaw gateway reload) left it occupied.
+  if command -v lsof >/dev/null 2>&1; then
+    local stale_pid
+    stale_pid="$(lsof -i ":${HERMES_PORT}" -t 2>/dev/null || true)"
+    if [[ -n "${stale_pid}" ]]; then
+      kill ${stale_pid} >/dev/null 2>&1 || true
+      sleep 1
+    fi
   fi
 
   deploy_tarball_to_prefix "${prefix}"
+
+  step "Configuring runtime environment"
   ensure_runtime_home "hermes" "${home}" "${prefix}"
 
   echo "${prefix}/bridge.cts" > "${adapter_dir}/bridge_path.txt"
-  success "Recorded bridge path"
+  success "Bridge path recorded"
 
-  # Locate Hermes Python venv.
+  step "Locating Hermes Python environment"
   local python_bin=""
   if command -v hermes >/dev/null 2>&1; then
     local shebang; shebang="$(head -1 "$(command -v hermes)" 2>/dev/null || true)"
@@ -524,9 +670,8 @@ install_hermes() {
   fi
   [[ -z "${python_bin}" || ! -x "${python_bin}" ]] && python_bin="$(command -v python3 || true)"
   [[ -n "${python_bin}" && -x "${python_bin}" ]] || die "Cannot locate Python for Hermes."
-  success "Hermes Python: ${python_bin}"
+  success "Python: ${python_bin}"
 
-  # plugins/memory discovery.
   local plugin_dir=""
   plugin_dir="$("${python_bin}" -c "
 from pathlib import Path
@@ -542,18 +687,18 @@ except Exception:
     done
   fi
   [[ -n "${plugin_dir}" && -d "${plugin_dir}" ]] || die "plugins/memory not found"
-  success "Hermes plugins/memory: ${plugin_dir}"
+  success "plugins/memory: ${plugin_dir}"
 
-  # Symlink memtensor provider.
+  step "Linking memtensor provider"
   local target="${plugin_dir}/memtensor"
   if [[ -L "${target}" ]]; then rm "${target}"
   elif [[ -e "${target}" ]]; then rm -rf "${target}"
   fi
   ln -s "${adapter_dir}/memos_provider" "${target}"
   cp "${adapter_dir}/plugin.yaml" "${adapter_dir}/memos_provider/plugin.yaml" 2>/dev/null || true
-  success "Symlinked memtensor provider → ${target}"
+  success "Symlinked → ${target}"
 
-  # Verify + patch config.yaml.
+  step "Verifying provider & patching config"
   local verify
   verify="$("${python_bin}" -c "
 from plugins.memory import load_memory_provider
@@ -588,14 +733,43 @@ CFGEOF
     success "Created ${config_file}"
   fi
 
+  # Smoke test — boot the bridge briefly and confirm the viewer
+  # actually answers on Hermes' fixed port.
+  if command -v lsof >/dev/null 2>&1 && lsof -i ":${HERMES_PORT}" -t >/dev/null 2>&1; then
+    warn "Port :${HERMES_PORT} already in use — skipping smoke test."
+  else
+    step "Starting Memory Viewer daemon"
+    local node_bin
+    node_bin="$(cat "${prefix}/.memos-node-bin" 2>/dev/null || command -v node || true)"
+    local tsx_bin="${prefix}/node_modules/.bin/tsx"
+    local bridge_cts="${prefix}/bridge.cts"
+    if [[ -n "${node_bin}" && -x "${node_bin}" && -x "${tsx_bin}" && -f "${bridge_cts}" ]]; then
+      local daemon_log="${prefix}/logs/daemon-start.log"
+      mkdir -p "${prefix}/logs"
+      # Launch bridge in --daemon mode (pure HTTP, no stdio).
+      # The process stays alive to serve the Memory Viewer.
+      ( cd "${prefix}" && nohup "${node_bin}" "${tsx_bin}" "${bridge_cts}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
+
+      if wait_for_viewer "${HERMES_PORT}" 120; then
+        success "Memory Viewer daemon running"
+      else
+        error "Memory Viewer did not respond within 120s."
+        warn "Re-install dependencies and re-run: cd ${prefix} && npm install"
+        return 1
+      fi
+    else
+      warn "node or tsx not found — skipping daemon start."
+    fi
+  fi
+
   echo
   success "Hermes install complete"
-  info "  Plugin:    ${prefix}"
-  info "  Viewer:    http://127.0.0.1:${PORT}/ (opens with first turn)"
+  printf "       ${DIM}Plugin:${NC}    %s\n" "${prefix}"
+  printf "       ${DIM}Viewer:${NC}    ${CYAN}http://127.0.0.1:${HERMES_PORT}/${NC}\n"
   if [[ "${was_running}" == "true" ]]; then
-    info "  Next step: ${BOLD}hermes chat${NC} ${DIM}(hermes was stopped — relaunch to apply)${NC}"
+    printf "       ${DIM}Next:${NC}      ${BOLD}hermes chat${NC}  ${DIM}(was stopped — relaunch to apply)${NC}\n"
   else
-    info "  Next step: ${BOLD}hermes chat${NC}"
+    printf "       ${DIM}Next:${NC}      ${BOLD}hermes chat${NC}\n"
   fi
   return 0
 }
@@ -615,7 +789,7 @@ if [[ "${AGENT_SELECTION}" == "auto" ]]; then
   else
     AGENT_SELECTION="hermes"
   fi
-  info "Auto-detected: ${AGENT_SELECTION}"
+  success "Auto-detected: ${AGENT_SELECTION}"
 fi
 
 case "${AGENT_SELECTION}" in
@@ -640,16 +814,41 @@ esac
 
 echo
 if (( STATUS == 0 )); then
-  printf "${BOLD}${GREEN}══════════════════════════════════════════════════${NC}\n"
-  printf "${BOLD}${GREEN}  ✨ MemOS Local installed successfully${NC}\n"
-  printf "${BOLD}${GREEN}══════════════════════════════════════════════════${NC}\n"
   echo
-  info "  Memory Viewer: http://127.0.0.1:${PORT}"
-  [[ "${AGENT_SELECTION}" != "hermes" ]] && info "  OpenClaw Web UI: http://localhost:18789"
+  printf "  ${BOLD}${GREEN}┌──────────────────────────────────────────────────┐${NC}\n"
+  printf "  ${BOLD}${GREEN}│${NC}                                                  ${BOLD}${GREEN}│${NC}\n"
+  printf "  ${BOLD}${GREEN}│${NC}   ✨  ${BOLD}${GREEN}MemOS Local installed successfully${NC}         ${BOLD}${GREEN}│${NC}\n"
+  printf "  ${BOLD}${GREEN}│${NC}                                                  ${BOLD}${GREEN}│${NC}\n"
+  printf "  ${BOLD}${GREEN}└──────────────────────────────────────────────────┘${NC}\n"
+  echo
+  case "${AGENT_SELECTION}" in
+    openclaw)
+      printf "  ${BOLD}Quick links:${NC}\n"
+      printf "    ${GREEN}●${NC}  Memory Viewer   ${CYAN}http://127.0.0.1:${OPENCLAW_PORT}${NC}  ${DIM}(openclaw)${NC}\n"
+      printf "    ${GREEN}●${NC}  OpenClaw Web UI  ${CYAN}http://localhost:18789${NC}\n"
+      ;;
+    hermes)
+      printf "  ${BOLD}Quick links:${NC}\n"
+      printf "    ${GREEN}●${NC}  Memory Viewer   ${CYAN}http://127.0.0.1:${HERMES_PORT}${NC}  ${DIM}(hermes)${NC}\n"
+      ;;
+    all)
+      printf "  ${BOLD}Quick links:${NC}\n"
+      printf "    ${GREEN}●${NC}  Memory Viewer   ${CYAN}http://127.0.0.1:${OPENCLAW_PORT}${NC}  ${DIM}(openclaw)${NC}\n"
+      printf "    ${GREEN}●${NC}  Memory Viewer   ${CYAN}http://127.0.0.1:${HERMES_PORT}${NC}  ${DIM}(hermes)${NC}\n"
+      printf "    ${GREEN}●${NC}  OpenClaw Web UI  ${CYAN}http://localhost:18789${NC}\n"
+      ;;
+  esac
+  echo
+  printf "  ${DIM}Docs: https://github.com/MemTensor/MemOS${NC}\n"
+  echo
   exit 0
 else
-  printf "${BOLD}${RED}══════════════════════════════════════════════════${NC}\n"
-  printf "${BOLD}${RED}  Install finished with errors — see ✗ lines above${NC}\n"
-  printf "${BOLD}${RED}══════════════════════════════════════════════════${NC}\n"
+  echo
+  printf "  ${BOLD}${RED}┌──────────────────────────────────────────────────┐${NC}\n"
+  printf "  ${BOLD}${RED}│${NC}                                                  ${BOLD}${RED}│${NC}\n"
+  printf "  ${BOLD}${RED}│${NC}   ${RED}Install finished with errors - see above${NC}       ${BOLD}${RED}│${NC}\n"
+  printf "  ${BOLD}${RED}│${NC}                                                  ${BOLD}${RED}│${NC}\n"
+  printf "  ${BOLD}${RED}└──────────────────────────────────────────────────┘${NC}\n"
+  echo
   exit 1
 fi

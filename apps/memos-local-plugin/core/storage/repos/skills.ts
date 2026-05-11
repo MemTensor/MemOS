@@ -7,12 +7,18 @@ import {
   fromBlob,
   fromJsonText,
   joinWhere,
+  normalizeShareForStorage,
+  ownerFieldsFromRaw,
+  ownerParamsFromRow,
   toBlob,
   toJsonText,
 } from "./_helpers.js";
 
 const COLUMNS = [
   "id",
+  "owner_agent_kind",
+  "owner_profile_id",
+  "owner_workspace_id",
   "name",
   "status",
   "invocation_guide",
@@ -32,6 +38,9 @@ const COLUMNS = [
   "share_target",
   "shared_at",
   "edited_at",
+  "evidence_anchors_json",
+  "usage_count",
+  "last_used_at",
 ];
 
 export interface SkillSearchMeta {
@@ -39,6 +48,9 @@ export interface SkillSearchMeta {
   status: SkillRow["status"];
   eta: number;
   gain: number;
+  owner_agent_kind?: string;
+  owner_profile_id?: string;
+  owner_workspace_id?: string | null;
 }
 
 export function makeSkillsRepo(db: StorageDb) {
@@ -84,7 +96,13 @@ export function makeSkillsRepo(db: StorageDb) {
       if (!row) throw new Error(`[skills] bumpTrial: not found: ${id}`);
       const trialsAttempted = row.trials_attempted + 1;
       const trialsPassed = row.trials_passed + (passed ? 1 : 0);
-      const eta = trialsAttempted === 0 ? 0 : trialsPassed / trialsAttempted;
+      const eta = trialEtaWithPrior(
+        row.eta,
+        row.trials_attempted,
+        row.trials_passed,
+        trialsAttempted,
+        trialsPassed,
+      );
       updateTrials.run({
         id,
         trials_attempted: trialsAttempted,
@@ -122,6 +140,22 @@ export function makeSkillsRepo(db: StorageDb) {
       return db.prepare<typeof params, RawSkillRow>(sql).all(params).map(mapRow);
     },
 
+    count(filter: Omit<SkillListFilter, "limit" | "offset"> = {}): number {
+      const fragments: string[] = [];
+      const params: Record<string, unknown> = {};
+      if (filter.status) {
+        fragments.push(`status = @status`);
+        params.status = filter.status;
+      }
+      if (filter.minEta !== undefined) {
+        fragments.push(`eta >= @min_eta`);
+        params.min_eta = filter.minEta;
+      }
+      const where = joinWhere(fragments);
+      const sql = `SELECT COUNT(*) AS n FROM skills ${where}`;
+      return db.prepare<typeof params, { n: number }>(sql).get(params)?.n ?? 0;
+    },
+
     searchByVector(
       query: EmbeddingVector,
       k: number,
@@ -140,7 +174,7 @@ export function makeSkillsRepo(db: StorageDb) {
       return scanAndTopK<SkillSearchMeta>(
         db,
         "skills",
-        ["name", "status", "eta", "gain"],
+        ["name", "status", "eta", "gain", "owner_agent_kind", "owner_profile_id", "owner_workspace_id"],
         query,
         k,
         {
@@ -182,19 +216,22 @@ export function makeSkillsRepo(db: StorageDb) {
                s.name AS name,
                s.status AS status,
                s.eta  AS eta,
-               s.gain AS gain
+               s.gain AS gain,
+               s.owner_agent_kind AS owner_agent_kind,
+               s.owner_profile_id AS owner_profile_id,
+               s.owner_workspace_id AS owner_workspace_id
           FROM skills_fts f
           JOIN skills      s ON s.id = f.skill_id
          WHERE skills_fts MATCH @match${extra}
          ORDER BY rank
          LIMIT @k`;
       const rows = db
-        .prepare<typeof params, { id: string; name: string; status: SkillRow["status"]; eta: number; gain: number }>(sql)
+        .prepare<typeof params, { id: string; name: string; status: SkillRow["status"]; eta: number; gain: number; owner_agent_kind: string; owner_profile_id: string; owner_workspace_id: string | null }>(sql)
         .all(params);
       return rows.map((r, idx) => ({
         id: r.id,
         score: 1 / (idx + 1),
-        meta: { name: r.name, status: r.status, eta: r.eta, gain: r.gain },
+        meta: { name: r.name, status: r.status, eta: r.eta, gain: r.gain, owner_agent_kind: r.owner_agent_kind, owner_profile_id: r.owner_profile_id, owner_workspace_id: r.owner_workspace_id },
       }));
     },
 
@@ -231,18 +268,18 @@ export function makeSkillsRepo(db: StorageDb) {
         });
       }
       const sql = `
-        SELECT id, name, status, eta, gain
+        SELECT id, name, status, eta, gain, owner_agent_kind, owner_profile_id, owner_workspace_id
           FROM skills
          WHERE ${whereParts.join(" AND ")}
          ORDER BY updated_at DESC
          LIMIT @k`;
       const rows = db
-        .prepare<typeof params, { id: string; name: string; status: SkillRow["status"]; eta: number; gain: number }>(sql)
+        .prepare<typeof params, { id: string; name: string; status: SkillRow["status"]; eta: number; gain: number; owner_agent_kind: string; owner_profile_id: string; owner_workspace_id: string | null }>(sql)
         .all(params);
       return rows.map((r, idx) => ({
         id: r.id,
         score: 1 / (idx + 1),
-        meta: { name: r.name, status: r.status, eta: r.eta, gain: r.gain },
+        meta: { name: r.name, status: r.status, eta: r.eta, gain: r.gain, owner_agent_kind: r.owner_agent_kind, owner_profile_id: r.owner_profile_id, owner_workspace_id: r.owner_workspace_id },
       }));
     },
 
@@ -257,7 +294,7 @@ export function makeSkillsRepo(db: StorageDb) {
     updateShare(
       id: SkillId,
       share: {
-        scope: "private" | "public" | "hub" | null;
+        scope: "private" | "local" | "public" | "hub" | null;
         target?: string | null;
         sharedAt?: number | null;
       },
@@ -271,7 +308,7 @@ export function makeSkillsRepo(db: StorageDb) {
         `UPDATE skills SET share_scope=@share_scope, share_target=@share_target, shared_at=@shared_at WHERE id=@id`,
       ).run({
         id,
-        share_scope: share.scope,
+        share_scope: normalizeShareForStorage(share.scope),
         share_target: share.target ?? null,
         shared_at: share.sharedAt ?? null,
       });
@@ -303,11 +340,45 @@ export function makeSkillsRepo(db: StorageDb) {
       const sql = `UPDATE skills SET ${sets.join(", ")} WHERE id = @id`;
       db.prepare<typeof params>(sql).run(params);
     },
+
+    updateVector(id: SkillId, vec: EmbeddingVector): boolean {
+      const res = db.prepare<{ id: string; vec: Buffer; updated_at: number }>(
+        `UPDATE skills SET vec=@vec, updated_at=@updated_at WHERE id=@id`,
+      ).run({ id, vec: toBlob(vec)!, updated_at: Date.now() });
+      return res.changes > 0;
+    },
+
+    recordUse(id: SkillId, usedAt: number): boolean {
+      const res = db.prepare<{ id: string; last_used_at: number }>(
+        `UPDATE skills
+            SET usage_count = COALESCE(usage_count, 0) + 1,
+                last_used_at = @last_used_at
+          WHERE id = @id`,
+      ).run({ id, last_used_at: usedAt });
+      return res.changes > 0;
+    },
   };
+}
+
+function trialEtaWithPrior(
+  currentEta: number,
+  previousAttempts: number,
+  previousPasses: number,
+  nextAttempts: number,
+  nextPasses: number,
+): number {
+  const priorStrength = 1;
+  const priorEta = clamp01(
+    currentEta * (priorStrength + previousAttempts) - previousPasses,
+  );
+  return clamp01((priorEta * priorStrength + nextPasses) / (priorStrength + nextAttempts));
 }
 
 interface RawSkillRow {
   id: string;
+  owner_agent_kind: string;
+  owner_profile_id: string;
+  owner_workspace_id: string | null;
   name: string;
   status: SkillRow["status"];
   invocation_guide: string;
@@ -327,11 +398,15 @@ interface RawSkillRow {
   share_target: string | null;
   shared_at: number | null;
   edited_at: number | null;
+  evidence_anchors_json: string;
+  usage_count: number;
+  last_used_at: number | null;
 }
 
 function rowToParams(row: SkillRow): Record<string, unknown> {
   return {
     id: row.id,
+    ...ownerParamsFromRow(row),
     name: row.name,
     status: row.status,
     invocation_guide: row.invocationGuide,
@@ -347,16 +422,27 @@ function rowToParams(row: SkillRow): Record<string, unknown> {
     created_at: row.createdAt,
     updated_at: row.updatedAt,
     version: row.version ?? 1,
-    share_scope: row.share?.scope ?? null,
+    share_scope: normalizeShareForStorage(row.share?.scope),
     share_target: row.share?.target ?? null,
     shared_at: row.share?.sharedAt ?? null,
     edited_at: row.editedAt ?? null,
+    evidence_anchors_json: toJsonText(row.evidenceAnchors),
+    usage_count: row.usageCount ?? 0,
+    last_used_at: row.lastUsedAt ?? null,
   };
+}
+
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
 }
 
 function mapRow(r: RawSkillRow): SkillRow {
   return {
     id: r.id,
+    ...ownerFieldsFromRaw(r),
     name: r.name,
     status: r.status,
     invocationGuide: r.invocation_guide,
@@ -368,6 +454,7 @@ function mapRow(r: RawSkillRow): SkillRow {
     trialsPassed: r.trials_passed,
     sourcePolicyIds: fromJsonText(r.source_policies_json, []),
     sourceWorldModelIds: fromJsonText(r.source_world_json, []),
+    evidenceAnchors: fromJsonText(r.evidence_anchors_json, []),
     vec: fromBlob(r.vec),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -375,11 +462,13 @@ function mapRow(r: RawSkillRow): SkillRow {
     share:
       r.share_scope != null
         ? {
-            scope: r.share_scope as "private" | "public" | "hub",
+            scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub",
             target: r.share_target,
             sharedAt: r.shared_at,
           }
         : null,
     editedAt: r.edited_at,
+    usageCount: r.usage_count ?? 0,
+    lastUsedAt: r.last_used_at ?? null,
   };
 }

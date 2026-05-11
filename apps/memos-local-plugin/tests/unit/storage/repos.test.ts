@@ -102,6 +102,7 @@ describe("storage/repos — happy paths", () => {
           tags: [],
           vecSummary: vec([i, 0]),
           vecAction: null,
+          turnId: 0 as never,
           schemaVersion: 1,
         });
       }
@@ -139,6 +140,7 @@ describe("storage/repos — happy paths", () => {
         status: "candidate",
         sourceEpisodeIds: [],
         inducedBy: "proto",
+        decisionGuidance: { preference: [], antiPattern: [] },
         vec: vec([1, 0]),
         createdAt: 1,
         updatedAt: 1,
@@ -155,6 +157,7 @@ describe("storage/repos — happy paths", () => {
         status: "active",
         sourceEpisodeIds: [],
         inducedBy: "proto",
+        decisionGuidance: { preference: [], antiPattern: [] },
         vec: vec([1, 0]),
         createdAt: 1,
         updatedAt: 1,
@@ -175,6 +178,16 @@ describe("storage/repos — happy paths", () => {
         statusIn: ["active"],
       });
       expect(hits.map((h) => h.id)).toEqual(["p_active"]);
+
+      const textHits = repos.policies.searchByText('"active"', 5, {
+        statusIn: ["active"],
+      });
+      expect(textHits.map((h) => h.id)).toEqual(["p_active"]);
+
+      const patternHits = repos.policies.searchByPattern(["act"], 5, {
+        statusIn: ["active"],
+      });
+      expect(patternHits.map((h) => h.id)).toEqual(["p_active"]);
     } finally {
       cleanup();
     }
@@ -196,9 +209,11 @@ describe("storage/repos — happy paths", () => {
         trialsPassed: 0,
         sourcePolicyIds: [],
         sourceWorldModelIds: [],
+        evidenceAnchors: [],
         vec: vec([1, 0]),
         createdAt: 1,
         updatedAt: 1,
+        version: 1,
       });
 
       expect(() =>
@@ -215,16 +230,18 @@ describe("storage/repos — happy paths", () => {
           trialsPassed: 0,
           sourcePolicyIds: [],
           sourceWorldModelIds: [],
+          evidenceAnchors: [],
           vec: null,
           createdAt: 1,
           updatedAt: 1,
+          version: 1,
         }),
       ).toThrow(/UNIQUE/i);
 
       const after = repos.skills.bumpTrial("sk1", true, 2);
-      expect(after).toEqual({ trialsAttempted: 1, trialsPassed: 1, eta: 1 });
+      expect(after).toEqual({ trialsAttempted: 1, trialsPassed: 1, eta: 0.5 });
       const after2 = repos.skills.bumpTrial("sk1", false, 3);
-      expect(after2.eta).toBeCloseTo(0.5);
+      expect(after2.eta).toBeCloseTo(1 / 3, 5);
     } finally {
       cleanup();
     }
@@ -299,6 +316,7 @@ describe("storage/repos — happy paths", () => {
         status: "candidate",
         sourceEpisodeIds: [],
         inducedBy: "",
+        decisionGuidance: { preference: [], antiPattern: [] },
         vec: null,
         createdAt: 0,
         updatedAt: 0,

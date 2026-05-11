@@ -85,7 +85,7 @@ function buildFullChainLlm(): LlmClient {
   const script: FakeLlmScript = {
     completeJson: {
       // Intent classifier — task-shaped for everything meaningful.
-      "session.intent.classify": (input) => {
+      "session.intent.classify": (input: unknown) => {
         const text = lastUserMessage(input).toLowerCase();
         if (/^\s*(hi|hello|你好|嗨)\s*$/.test(text)) {
           return {
@@ -106,7 +106,7 @@ function buildFullChainLlm(): LlmClient {
       // Relation classifier — decides revision / follow_up / new_task.
       // IMPORTANT: check `NEW_USER_MESSAGE` only; the system prompt itself
       // mentions "wrong" / "redo", which would otherwise always match.
-      "session.relation.classify": (input) => {
+      "session.relation.classify": (input: unknown) => {
         const newMsg = newUserSegment(lastUserMessage(input));
         if (/不对|错了|重做|改一下|\bwrong\b|\bredo\b|not quite/i.test(newMsg)) {
           return {
@@ -137,7 +137,7 @@ function buildFullChainLlm(): LlmClient {
       },
 
       // R_human scoring — treat negative keywords as a failed turn.
-      "reward.reward.r_human.v3": (input) => {
+      "reward.reward.r_human.v3": (input: unknown) => {
         const text = lastUserMessage(input);
         if (/不对|错了|没覆盖|\bwrong\b/i.test(text)) {
           return {
@@ -167,7 +167,7 @@ function buildFullChainLlm(): LlmClient {
       },
 
       // Capture summarizer — one short line per step.
-      "capture.summarize": (input) => {
+      "capture.summarize": (input: unknown) => {
         const text = lastUserMessage(input);
         if (/fib|斐波那契/i.test(text)) return { summary: "斐波那契函数实现（Python 递归/迭代）" };
         if (/test|测试/i.test(text)) return { summary: "为 Python 函数补充单元测试（含边界）" };
@@ -177,19 +177,19 @@ function buildFullChainLlm(): LlmClient {
       },
 
       // α scorer — reflection quality.
-      "capture.alpha.reflection.score.v1": (input) => {
+      "capture.alpha.reflection.score.v1": (input: unknown) => {
         const text = lastUserMessage(input);
         const alpha = /关键|识别|根因|发现/i.test(text) ? 0.75 : 0.45;
         return { alpha, rationale: "rule-of-thumb by keyword" };
       },
 
       // Capture reflection synth (only when reflection was missing).
-      "capture.reflection.synth": (input) => ({
+      "capture.reflection.synth": (input: unknown) => ({
         reflection: "Scripted fallback: summarized step outcome.",
       }),
 
       // L2 induction — distills a policy from ≥2 similar traces.
-      "l2.l2.induction.v2": (input) => {
+      "l2.l2.induction.v2": (input: unknown) => {
         const text = lastUserMessage(input);
         const isPython = /python|pip|\.py\b/i.test(text);
         return {
@@ -480,7 +480,7 @@ describe("V7 full-chain E2E (Python programming task)", () => {
       }
     });
 
-    // ── Session 1: "写一个 Python 函数" ──────────────────────────────────
+    // ── Topic 1: "写一个 Python 函数" ──────────────────────────────────
 
     // Turn 1 (bootstrap): user asks for a fibonacci function.
     const s1Ep1 = await runTurn(pipeline, {
@@ -524,7 +524,7 @@ describe("V7 full-chain E2E (Python programming task)", () => {
     });
     expect(s1Ep4.episodeId).toBe(s1Ep1.episodeId);
 
-    // ── Session 2: new task — sorting algorithm ─────────────────────────
+    // ── Topic 2: new task — sorting algorithm ─────────────────────────
 
     const s2Ep1 = await runTurn(pipeline, {
       sessionId: s1Ep1.sessionId,
@@ -533,8 +533,10 @@ describe("V7 full-chain E2E (Python programming task)", () => {
         "```python\ndef quicksort(arr):\n    if len(arr) <= 1: return arr\n    pivot = arr[len(arr)//2]\n    left = [x for x in arr if x < pivot]\n    mid = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quicksort(left) + mid + quicksort(right)\n```",
       reflection: "经典 Lomuto 的 Python 简化版, 避免原地分区",
     });
-    // new_task → new session ID (routed by orchestrator).
-    expect(s2Ep1.sessionId).not.toBe(s1Ep1.sessionId);
+    // new_task closes the previous topic and opens a fresh episode,
+    // while the adapter session stays stable.
+    expect(s2Ep1.sessionId).toBe(s1Ep1.sessionId);
+    expect(s2Ep1.episodeId).not.toBe(s1Ep1.episodeId);
 
     const s2Ep2 = await runTurn(pipeline, {
       sessionId: s2Ep1.sessionId,
@@ -553,7 +555,7 @@ describe("V7 full-chain E2E (Python programming task)", () => {
     });
     expect(s2Ep3.episodeId).toBe(s2Ep1.episodeId);
 
-    // ── Session 3: another Python scaffolding task (drives L2 support) ──
+    // ── Topic 3: another Python scaffolding task (drives L2 support) ──
 
     const s3Ep1 = await runTurn(pipeline, {
       sessionId: s2Ep1.sessionId,
@@ -562,7 +564,8 @@ describe("V7 full-chain E2E (Python programming task)", () => {
         "```python\nfrom functools import lru_cache\n@lru_cache(maxsize=128)\ndef get_expensive(k): ...\n```",
       reflection: "用内置 functools.lru_cache 省去手写",
     });
-    expect(s3Ep1.sessionId).not.toBe(s2Ep1.sessionId);
+    expect(s3Ep1.sessionId).toBe(s2Ep1.sessionId);
+    expect(s3Ep1.episodeId).not.toBe(s2Ep1.episodeId);
     await runTurn(pipeline, {
       sessionId: s3Ep1.sessionId,
       userText: "好, 再写个装饰器来统计调用次数",
@@ -577,7 +580,7 @@ describe("V7 full-chain E2E (Python programming task)", () => {
       reflection: "用户满意",
     });
 
-    // ── Session 4: tool-failure burst (drives Decision Repair) ───────
+    // ── Topic 4: tool-failure burst (drives Decision Repair) ───────
 
     const s4Ep1 = await runTurn(pipeline, {
       sessionId: s3Ep1.sessionId,
@@ -606,6 +609,7 @@ describe("V7 full-chain E2E (Python programming task)", () => {
         errorCode: "ENOENT",
       });
     }
+    pipeline.sessionManager.closeSession(s4Ep1.sessionId, "test.topic_end");
 
     // ── Drain the async chain (capture → reward → L2 → L3 → skill) ──
     // capture is fire-and-forget per episode, but we disabled the reward
@@ -619,26 +623,28 @@ describe("V7 full-chain E2E (Python programming task)", () => {
 
     const repos = pipeline.repos;
 
-    // 1) Episodes: expect 4 (one per new_task boundary). Session 1 has
-    //    4 merged turns, session 2 has 3 merged turns, session 3 has 3
-    //    merged turns, session 4 has 1 turn.
+    // 1) Episodes: expect 4 (one per new_task boundary). Topic 1 has
+    //    4 merged turns, topic 2 has 3 merged turns, topic 3 has 3
+    //    merged turns, topic 4 has 1 turn.
     const allEpisodes = repos.episodes.list({});
     expect(allEpisodes.length).toBe(4);
     const closedEpisodes = allEpisodes.filter((e) => e.status === "closed");
     expect(closedEpisodes.length).toBe(4);
 
-    // 2) L1 traces: one per user→assistant pair. 4 + 3 + 3 + 1 = 11.
+    // 2) L1 traces: one per user→assistant pair, plus tool sub-steps
+    // when present. 4 + 3 + 3 + (tool + final assistant) = 12.
     const allTraces = repos.traces.list({});
-    expect(allTraces.length).toBe(11);
+    expect(allTraces.length).toBe(12);
     for (const tr of allTraces) {
-      // Every captured trace has a summary + α populated by scripted LLM.
+      // Every captured trace has a summary. Tool-only sub-steps may keep
+      // alpha at 0 when the scorer has no useful reflection signal.
       expect(tr.summary ?? "").toMatch(/.+/);
-      expect(tr.alpha).toBeGreaterThan(0);
       // V is backpropagated from R_human. Positive turns → V > 0,
       // the "不对" revision turn gets a negative R_human → some traces
       // should have V < 0 after backprop (episode-wide R_human is
       // averaged across all turns, so we check there's value spread).
     }
+    expect(allTraces.some((tr) => tr.alpha > 0)).toBe(true);
     const positiveV = allTraces.filter((t) => t.value > 0).length;
     const negativeV = allTraces.filter((t) => t.value < 0).length;
     expect(positiveV + negativeV).toBeGreaterThan(0);

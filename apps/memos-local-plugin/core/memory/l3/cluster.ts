@@ -41,6 +41,7 @@ const TAG_REGEXES: Array<{ re: RegExp; tag: string }> = [
   { re: /\bgolang?\b/i, tag: "go" },
   { re: /\bjava\b|\bmaven\b|\bgradle\b/i, tag: "java" },
   { re: /\bpostgres|\bmysql|\bsqlite|\bredis/i, tag: "db" },
+  { re: /\b(?:sec\s*13f|13f|cusip|infotable|holdings?|accession|issuer|aum)\b/i, tag: "sec13f" },
   { re: /\bnetwork|\bdns\b|\bproxy\b|\btls\b|\bhttps?\b/i, tag: "network" },
   { re: /\bgit\b|\bgithub\b|\bgitlab\b/i, tag: "git" },
   { re: /\bkubernetes|\bk8s\b|\bhelm\b/i, tag: "k8s" },
@@ -55,6 +56,7 @@ const TOOL_REGEXES: Array<{ re: RegExp; tag: string }> = [
   { re: /\bapt(?:-get)? install|\bapk add|\byum install/i, tag: "sysdep" },
   { re: /\bdocker build|\bdocker run\b/i, tag: "docker-cli" },
   { re: /\bgit (?:clone|push|pull|checkout)\b/i, tag: "git-cli" },
+  { re: /\b(?:sec-api|edgar|filing|xml|csv|parser)\b/i, tag: "sec-tooling" },
 ];
 
 export function domainKeyOf(policy: PolicyRow): { key: PolicyClusterKey; tags: string[] } {
@@ -124,37 +126,88 @@ export function clusterPolicies(
     const vecs: Array<EmbeddingVector | null> = members.map((m) => m.policy.vec ?? null);
     const center = centroid(vecs);
 
-    const kept: PolicyWithMeta[] = [];
+    // Compute strict-admit subset (cosine ≥ clusterMinSimilarity) AND
+    // the cohesion score (mean cosine to centroid across ALL members)
+    // in one pass — cohesion is reported on the cluster regardless of
+    // which admission mode wins so downstream confidence shaping has
+    // something to work with.
+    const strict: PolicyWithMeta[] = [];
+    let cosineSum = 0;
+    let cosineCount = 0;
     if (center) {
       for (const m of members) {
         if (!m.policy.vec) {
-          kept.push(m);
+          // Members without an embedding vector pass through both modes
+          // — they have nothing to compare. They still consume an
+          // admission slot but contribute 0 to cohesion.
+          strict.push(m);
           continue;
         }
         const c = cosine(center, m.policy.vec);
-        if (c >= config.clusterMinSimilarity) kept.push(m);
+        cosineSum += c;
+        cosineCount += 1;
+        if (c >= config.clusterMinSimilarity) strict.push(m);
       }
     } else {
-      kept.push(...members);
+      // No centroid (none of the members had a vec). Trust the bucket;
+      // every member passes by default.
+      strict.push(...members);
+    }
+    const cohesion = cosineCount > 0 ? cosineSum / cosineCount : 0;
+
+    // V7 §2.4.1 originally formed clusters strictly by cosine. In
+    // practice that drops too many bucket-level groups whose LLM-
+    // generated policy titles span related sub-problems (e.g. "validate
+    // python syntax" and "register CLI subcommand" both live under the
+    // `python|_` domain key but their titles embed far apart). Two-stage
+    // admission:
+    //
+    //   1. PREFER the strict cosine subset when it is itself ≥ minPolicies
+    //      — this gives the cleanest, most-interpretable L3 abstractions.
+    //   2. Otherwise, FALL BACK to the entire domain-key bucket marked
+    //      as `admission: "loose"`. The cohesion score travels with the
+    //      cluster so `abstract.ts` can dampen its persisted confidence
+    //      and widen the abstraction prompt's expected scope.
+    //
+    // We never accept clusters smaller than `minPolicies`; the choice
+    // here is only "strict subset" vs "whole bucket".
+    let cohort: PolicyWithMeta[];
+    let admission: "strict" | "loose";
+    if (strict.length >= config.minPolicies) {
+      cohort = strict;
+      admission = "strict";
+    } else if (members.length >= config.minPolicies) {
+      cohort = members;
+      admission = "loose";
+    } else {
+      continue;
     }
 
-    if (kept.length < config.minPolicies) continue;
-
     const tags = new Set<string>();
-    for (const m of kept) for (const t of m.tags) tags.add(t);
+    for (const m of cohort) for (const t of m.tags) tags.add(t);
 
     const avgGain =
-      kept.reduce((s, m) => s + m.policy.gain, 0) / Math.max(1, kept.length);
+      cohort.reduce((s, m) => s + m.policy.gain, 0) / Math.max(1, cohort.length);
 
     out.push({
       key,
-      policies: kept.map((m) => m.policy),
+      policies: cohort.map((m) => m.policy),
       domainTags: Array.from(tags),
       centroidVec: center,
       avgGain,
+      cohesion,
+      admission,
     });
   }
 
-  out.sort((a, b) => b.avgGain - a.avgGain || b.policies.length - a.policies.length);
+  // Order clusters by gain × cohesion so strict, high-gain clusters
+  // surface first; loose clusters still ship but get last claim on
+  // any LLM budget the abstraction stage might be rate-limiting.
+  out.sort((a, b) => {
+    const aw = a.avgGain * (0.5 + 0.5 * a.cohesion);
+    const bw = b.avgGain * (0.5 + 0.5 * b.cohesion);
+    if (bw !== aw) return bw - aw;
+    return b.policies.length - a.policies.length;
+  });
   return out;
 }

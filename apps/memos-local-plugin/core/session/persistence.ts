@@ -17,6 +17,9 @@ export interface SessionRepo {
   upsertIfMissing(row: {
     id: SessionId;
     agent: AgentKind;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    ownerWorkspaceId?: string | null;
     startedAt: EpochMs;
     lastSeenAt: EpochMs;
     meta: Record<string, unknown>;
@@ -25,6 +28,9 @@ export interface SessionRepo {
   getById(id: SessionId): {
     id: SessionId;
     agent: AgentKind;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    ownerWorkspaceId?: string | null;
     startedAt: EpochMs;
     lastSeenAt: EpochMs;
     meta: Record<string, unknown>;
@@ -32,6 +38,9 @@ export interface SessionRepo {
   listRecent(limit?: number): Array<{
     id: SessionId;
     agent: AgentKind;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    ownerWorkspaceId?: string | null;
     startedAt: EpochMs;
     lastSeenAt: EpochMs;
     meta: Record<string, unknown>;
@@ -43,6 +52,9 @@ export interface EpisodesRepo {
   insert(row: {
     id: EpisodeId;
     sessionId: SessionId;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    ownerWorkspaceId?: string | null;
     startedAt: EpochMs;
     endedAt: EpochMs | null;
     traceIds: string[];
@@ -51,6 +63,7 @@ export interface EpisodesRepo {
     meta: Record<string, unknown>;
   }): void;
   updateTraceIds(id: EpisodeId, traceIds: string[]): void;
+  updateMeta(id: EpisodeId, metaPatch: Record<string, unknown>): void;
   close(id: EpisodeId, endedAt: EpochMs, rTask?: number, meta?: Record<string, unknown>): void;
   /**
    * Flip a closed episode back to `open` — V7 §0.1 "revision" path.
@@ -74,6 +87,9 @@ export function adaptSessionsRepo(sqlite: SqliteSessions): SessionRepo {
       sqlite.upsert({
         id: row.id,
         agent: row.agent as AgentKind,
+        ownerAgentKind: row.ownerAgentKind,
+        ownerProfileId: row.ownerProfileId,
+        ownerWorkspaceId: row.ownerWorkspaceId,
         startedAt: row.startedAt,
         lastSeenAt: row.lastSeenAt,
         meta: row.meta,
@@ -90,6 +106,9 @@ export function adaptSessionsRepo(sqlite: SqliteSessions): SessionRepo {
       return {
         id: r.id,
         agent: r.agent,
+        ownerAgentKind: r.ownerAgentKind,
+        ownerProfileId: r.ownerProfileId,
+        ownerWorkspaceId: r.ownerWorkspaceId,
         startedAt: r.startedAt,
         lastSeenAt: r.lastSeenAt,
         meta: r.meta,
@@ -99,6 +118,9 @@ export function adaptSessionsRepo(sqlite: SqliteSessions): SessionRepo {
       return sqlite.listRecent(limit).map((r) => ({
         id: r.id,
         agent: r.agent,
+        ownerAgentKind: r.ownerAgentKind,
+        ownerProfileId: r.ownerProfileId,
+        ownerWorkspaceId: r.ownerWorkspaceId,
         startedAt: r.startedAt,
         lastSeenAt: r.lastSeenAt,
         meta: r.meta,
@@ -114,6 +136,9 @@ export function adaptEpisodesRepo(sqlite: SqliteEpisodes): EpisodesRepo {
       sqlite.insert({
         id: row.id,
         sessionId: row.sessionId,
+        ownerAgentKind: row.ownerAgentKind,
+        ownerProfileId: row.ownerProfileId,
+        ownerWorkspaceId: row.ownerWorkspaceId,
         startedAt: row.startedAt,
         endedAt: row.endedAt,
         traceIds: row.traceIds,
@@ -124,6 +149,9 @@ export function adaptEpisodesRepo(sqlite: SqliteEpisodes): EpisodesRepo {
     },
     updateTraceIds(id, traceIds) {
       sqlite.appendTrace(id, traceIds);
+    },
+    updateMeta(id, metaPatch) {
+      sqlite.updateMeta(id, metaPatch);
     },
     close(id, endedAt, rTask, meta) {
       // CRITICAL: never use `episodes.upsert` here. The repo's upsert

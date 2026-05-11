@@ -49,6 +49,7 @@ import {
   extractAlgorithmConfig,
   pipelineLogger,
 } from "./deps.js";
+import { wrapRetrievalRepos } from "./retrieval-repos.js";
 import type {
   PipelineAlgorithmConfig,
   PipelineBuses,
@@ -64,6 +65,7 @@ import type {
   InjectionPacket,
   RepairCtx,
   SessionId,
+  TraceId,
   ToolDrivenCtx,
   TurnInputDTO,
   TurnResultDTO,
@@ -72,11 +74,13 @@ import type {
   SkillInvokeCtx,
   SubAgentCtx,
 } from "../retrieval/types.js";
-import type { CoreEvent } from "../../agent-contract/events.js";
+import type { CoreEvent, CoreEventType } from "../../agent-contract/events.js";
 import type { LogRecord } from "../../agent-contract/log-record.js";
 import { memoryBuffer } from "../logger/index.js";
 import { onBroadcastLog } from "../logger/transports/sse-broadcast.js";
+import { createEmbeddingRetryWorker, systemErrorEvent } from "../embedding/index.js";
 import type { EpisodeSnapshot } from "../session/index.js";
+import type { RelationDecision } from "../session/types.js";
 
 // ─── Factory ──────────────────────────────────────────────────────────────
 
@@ -101,9 +105,8 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // Small ring buffer of the most-recent events. Late-connecting SSE
   // subscribers (e.g. the viewer's Overview panel opened after an agent
   // turn already fired) replay this buffer on connect so the "实时活动"
-  // card isn't empty by default. 100 rows is plenty — the viewer only
-  // renders the last dozen.
-  const RECENT_EVENTS_CAP = 100;
+  // dashboard isn't empty by default.
+  const RECENT_EVENTS_CAP = 160;
   const recentEvents: CoreEvent[] = [];
 
   const emitCore = (evt: CoreEvent): void => {
@@ -127,33 +130,113 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   const getRecentEvents = (): readonly CoreEvent[] =>
     recentEvents.slice();
 
+  let retryEventSeq = 1_000_000;
+  const embeddingRetryWorker = createEmbeddingRetryWorker({
+    repos: deps.repos,
+    embedder: deps.embedder,
+    log: log.child({ channel: "core.embedding.retry" }),
+    now: deps.now,
+    onSystemError: (payload, correlationId) => {
+      emitCore(systemErrorEvent(payload, retryEventSeq++, correlationId));
+    },
+  });
+  embeddingRetryWorker.start();
+
   // Hydrate the ring buffer with synthetic events derived from the
   // most-recent rows on disk. Without this, every plugin restart
   // produces an empty "实时活动" panel until the user happens to
-  // interact with the agent again — misleading, because the DB
-  // clearly has recent activity. We emit a small set of low-cost
-  // synthetic `episode.closed` + `trace.created` entries (no bus
-  // fan-out) just for the buffer, so SSE connects replay them to new
-  // clients. Seq numbers are monotone from 0 so the frontend's
-  // `key={evt.seq}` stays unique against live events that come later.
+  // interact with the agent again — misleading, because the DB clearly
+  // has recent activity. Include the same categories the overview
+  // dashboard renders (memory / experience / environment / skill /
+  // feedback), not just task/session lifecycle events.
   try {
+    const hydrated: CoreEvent[] = [];
+    const pushSynthetic = (
+      type: CoreEventType,
+      ts: number | null | undefined,
+      correlationId: string | undefined,
+      payload: unknown,
+    ): void => {
+      if (!Number.isFinite(ts)) return;
+      hydrated.push({
+        type,
+        ts: ts as number,
+        seq: 0,
+        correlationId,
+        payload,
+      });
+    };
+
     const recentEpisodes = deps.repos.episodes.list({ limit: 20 });
-    let seq = 0;
-    for (const ep of recentEpisodes.reverse()) {
+    for (const ep of recentEpisodes) {
       const ts = ep.endedAt ?? ep.startedAt;
       if (!ts) continue;
       const type = ep.status === "closed" ? "episode.closed" : "episode.opened";
+      pushSynthetic(type, ts, ep.id, {
+        episodeId: ep.id,
+        sessionId: ep.sessionId,
+        status: ep.status,
+        rTask: ep.rTask ?? null,
+      });
+    }
+
+    for (const tr of deps.repos.traces.list({ limit: 30 })) {
+      pushSynthetic("trace.created", tr.ts, tr.id, {
+        traceId: tr.id,
+        episodeId: tr.episodeId,
+        sessionId: tr.sessionId,
+      });
+    }
+
+    for (const policy of deps.repos.policies.list({ limit: 20 })) {
+      const ts = policy.updatedAt ?? policy.createdAt;
+      pushSynthetic("l2.revised", ts, policy.id, {
+        policyId: policy.id,
+        status: policy.status,
+        signature: policy.title,
+      });
+    }
+
+    for (const world of deps.repos.worldModel.list({ limit: 20 })) {
+      const ts = world.updatedAt ?? world.createdAt;
+      pushSynthetic("l3.revised", ts, world.id, {
+        worldModelId: world.id,
+        title: world.title,
+        status: world.status,
+      });
+    }
+
+    for (const skill of deps.repos.skills.list({ limit: 20 })) {
+      const ts = skill.updatedAt ?? skill.createdAt;
+      const type: CoreEventType =
+        skill.status === "archived" ? "skill.archived" : "skill.crystallized";
+      pushSynthetic(type, ts, skill.id, {
+        skillId: skill.id,
+        name: skill.name,
+        status: skill.status,
+      });
+    }
+
+    for (const fb of deps.repos.feedback.list({ limit: 20 })) {
+      pushSynthetic("feedback.classified", fb.ts, fb.id, {
+        feedbackId: fb.id,
+        episodeId: fb.episodeId,
+        traceId: fb.traceId,
+        tone: fb.polarity,
+        channel: fb.channel,
+      });
+    }
+
+    hydrated.sort((a, b) => a.ts - b.ts);
+    const keep = hydrated.slice(-RECENT_EVENTS_CAP);
+    const seqStart = -keep.length;
+    for (let i = 0; i < keep.length; i++) {
+      const evt = keep[i]!;
       recentEvents.push({
-        type,
-        ts,
-        seq: seq++,
-        correlationId: ep.id,
-        payload: {
-          episodeId: ep.id,
-          sessionId: ep.sessionId,
-          status: ep.status,
-          rTask: ep.rTask ?? null,
-        },
+        ...evt,
+        // Negative ids are reserved for replay-only synthetic rows, so
+        // live bridge events starting at seq=1 never collide in the UI.
+        seq: seqStart + i,
       });
     }
     if (recentEvents.length > RECENT_EVENTS_CAP) {
@@ -161,7 +244,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     }
     log.debug("events.ring.hydrated", {
       count: recentEvents.length,
-      source: "episodes",
+      source: "storage",
     });
   } catch (err) {
     log.debug("events.ring.hydrate_failed", {
@@ -208,14 +291,21 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
   // ─── session/episode helpers ────────────────────────────────────────────
 
-  async function ensureSession(agent: AgentKind, sessionId?: SessionId): Promise<SessionId> {
+  async function ensureSession(
+    agent: AgentKind,
+    sessionId?: SessionId,
+    meta?: Record<string, unknown>,
+  ): Promise<SessionId> {
     if (sessionId && session.sessionManager.getSession(sessionId)) {
+      if (meta && Object.keys(meta).length > 0) {
+        session.sessionManager.openSession({ id: sessionId, agent, meta });
+      }
       return sessionId;
     }
     const snap = session.sessionManager.openSession({
       id: sessionId,
       agent,
-      meta: {},
+      meta: meta ?? {},
     });
     return snap.id as SessionId;
   }
@@ -258,6 +348,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   ): Promise<{ episode: EpisodeSnapshot; sessionId: SessionId; relation?: string }> {
     const mergeMode = algorithm.session.followUpMode === "merge_follow_ups";
     const mergeCapMs = algorithm.session.mergeMaxGapMs;
+    const turnTs = timestampFromMeta(meta, "startedAtTurnTs");
 
     // ─── Case 1: there is a currently open episode ──────────────────
     const currentEpId = openEpisodeBySession.get(sessionId);
@@ -271,14 +362,17 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         // tail.
         const ctx = buildClassifierContext(open.turns);
         const lastTurnTs = open.turns[open.turns.length - 1]?.ts ?? open.startedAt;
-        const gapMs = Math.max(0, now() - lastTurnTs);
+        const gapMs = Math.max(0, (turnTs ?? now()) - lastTurnTs);
 
+        const relationStartedAt = Date.now();
         const decision = await session.relation.classify({
           prevUserText: ctx.prevUserText,
           prevAssistantText: ctx.prevAssistantText,
           newUserText: userText,
           gapMs,
+          prevEpisodeId: currentEpId,
         });
+        const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
         log.info("relation.classified", {
           sessionId,
@@ -305,6 +399,24 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           (decision.relation === "revision" ||
             decision.relation === "follow_up" ||
             decision.relation === "unknown");
+        recordRelationClassification({
+          sessionId,
+          prevEpisodeId: currentEpId,
+          source: "open_episode",
+          gapMs,
+          mergeMode,
+          withinMergeWindow,
+          prevUserText: ctx.prevUserText,
+          prevAssistantText: ctx.prevAssistantText,
+          newUserText: userText,
+          decision,
+          action: keepAppending
+            ? "append_to_open_episode"
+            : decision.relation === "new_task"
+              ? "close_open_and_start_new_task"
+              : "close_open_and_start_new_episode",
+          durationMs: relationDurationMs,
+        });
 
         if (keepAppending) {
           // Same topic — just append the new user turn to the open
@@ -313,6 +425,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           session.sessionManager.addTurn(currentEpId, {
             role: "user",
             content: userText,
+            ts: turnTs,
             meta: {
               source: "follow_up",
               classifiedRelation: decision.relation,
@@ -359,6 +472,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           const snap = await session.sessionManager.startEpisode({
             sessionId,
             userMessage: userText,
+            ts: turnTs,
             meta: { ...meta, relation: "new_task" },
           });
           openEpisodeBySession.set(sessionId, snap.id as EpisodeId);
@@ -377,6 +491,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         const fresh = await session.sessionManager.startEpisode({
           sessionId,
           userMessage: userText,
+          ts: turnTs,
           meta: { ...meta, relation: decision.relation, gapMs },
         });
         openEpisodeBySession.set(sessionId, fresh.id as EpisodeId);
@@ -390,23 +505,141 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     // ─── Case 2: there's a previously-closed episode ────────────────
     const prev = lastEpisodeBySession.get(sessionId);
     if (!prev) {
+      const recoverable = findRecoverableOpenTopic(sessionId, turnTs ?? now());
+      if (recoverable) {
+        const snapshot = session.sessionManager.hydrateEpisode(recoverable);
+        const ctx = buildClassifierContext(snapshot.turns);
+        const lastTurnTs = snapshot.turns[snapshot.turns.length - 1]?.ts ?? snapshot.startedAt;
+        const gapMs = Math.max(0, (turnTs ?? now()) - lastTurnTs);
+        const hardWindowMs = staleTopicWindowMs();
+
+        if (gapMs > hardWindowMs) {
+          log.info("episode.recovered_topic_hard_boundary", {
+            sessionId,
+            episodeId: snapshot.id,
+            gapMs,
+            hardWindowMs,
+          });
+          if (snapshot.status === "open") {
+            session.sessionManager.finalizeEpisode(snapshot.id as EpisodeId, {
+              patchMeta: {
+                topicState: "ended",
+                recoveryReason: "hard_timeout_before_new_turn",
+              },
+            });
+          }
+        } else {
+          const relationStartedAt = Date.now();
+          const decision = await session.relation.classify({
+            prevUserText: ctx.prevUserText,
+            prevAssistantText: ctx.prevAssistantText,
+            newUserText: userText,
+            gapMs,
+            prevEpisodeId: snapshot.id as EpisodeId,
+          });
+          const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
+
+          log.info("relation.classified", {
+            sessionId,
+            prevEpisodeId: snapshot.id,
+            relation: decision.relation,
+            confidence: decision.confidence,
+            reason: decision.reason,
+            gapMs,
+            source: "recovered_open_topic",
+          });
+          buses.session.emit({
+            kind: "episode.relation_classified",
+            sessionId,
+            episodeId: snapshot.id as EpisodeId,
+            relation: decision.relation,
+            confidence: decision.confidence,
+            reason: decision.reason,
+          });
+
+          const withinMergeWindow = mergeCapMs === 0 || gapMs <= mergeCapMs;
+          const keepAppending =
+            mergeMode &&
+            withinMergeWindow &&
+            (decision.relation === "revision" ||
+              decision.relation === "follow_up" ||
+              decision.relation === "unknown");
+          recordRelationClassification({
+            sessionId,
+            prevEpisodeId: snapshot.id as EpisodeId,
+            source: "recovered_open_topic",
+            gapMs,
+            mergeMode,
+            withinMergeWindow,
+            prevUserText: ctx.prevUserText,
+            prevAssistantText: ctx.prevAssistantText,
+            newUserText: userText,
+            decision,
+            action: keepAppending
+              ? "reopen_or_append_recovered_episode"
+              : "start_new_episode_after_recovered_topic",
+            durationMs: relationDurationMs,
+          });
+
+          if (keepAppending) {
+            if (snapshot.status === "closed") {
+              session.sessionManager.reopenEpisode(
+                snapshot.id as EpisodeId,
+                decision.relation === "revision" ? "revision" : "follow_up",
+              );
+            }
+            session.sessionManager.addTurn(snapshot.id as EpisodeId, {
+              role: "user",
+              content: userText,
+              ts: turnTs,
+              meta: {
+                source: "recovered_topic",
+                classifiedRelation: decision.relation,
+                previousSessionId: snapshot.sessionId,
+                ...meta,
+              },
+            });
+            openEpisodeBySession.set(sessionId, snapshot.id as EpisodeId);
+            lastEpisodeBySession.delete(sessionId);
+            return {
+              episode: session.sessionManager.getEpisode(snapshot.id as EpisodeId) ?? snapshot,
+              sessionId,
+              relation: decision.relation,
+            };
+          }
+
+          if (snapshot.status === "open") {
+            session.sessionManager.finalizeEpisode(snapshot.id as EpisodeId, {
+              patchMeta: {
+                topicState: "ended",
+                boundaryRelation: decision.relation,
+                boundaryReason: decision.reason,
+              },
+            });
+          }
+        }
+      }
       // ─── Case 3: bootstrap ──────────────────────────────────────
       const snap = await session.sessionManager.startEpisode({
         sessionId,
         userMessage: userText,
+        ts: turnTs,
         meta,
       });
       openEpisodeBySession.set(sessionId, snap.id as EpisodeId);
       return { episode: snap, sessionId, relation: "bootstrap" };
     }
 
-    const gapMs = now() - prev.endedAt;
+    const gapMs = Math.max(0, (turnTs ?? now()) - prev.endedAt);
+    const relationStartedAt = Date.now();
     const decision = await session.relation.classify({
       prevUserText: prev.userText,
       prevAssistantText: prev.assistantText,
       newUserText: userText,
       gapMs,
+      prevEpisodeId: prev.episodeId,
     });
+    const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
     log.info("relation.classified", {
       sessionId,
@@ -431,6 +664,24 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       decision.relation === "revision" ||
       (mergeMode && decision.relation === "follow_up" && withinMergeWindow) ||
       (mergeMode && decision.relation === "unknown" && withinMergeWindow);
+    recordRelationClassification({
+      sessionId,
+      prevEpisodeId: prev.episodeId,
+      source: "closed_episode",
+      gapMs,
+      mergeMode,
+      withinMergeWindow,
+      prevUserText: prev.userText,
+      prevAssistantText: prev.assistantText,
+      newUserText: userText,
+      decision,
+      action: shouldReopen
+        ? "reopen_previous_episode"
+        : decision.relation === "new_task"
+          ? "start_new_task_episode"
+          : "start_new_episode",
+      durationMs: relationDurationMs,
+    });
 
     if (shouldReopen) {
       const reopenReason =
@@ -439,6 +690,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       session.sessionManager.addTurn(prev.episodeId, {
         role: "user",
         content: userText,
+        ts: turnTs,
         meta: {
           source: reopenReason,
           classifiedRelation: decision.relation,
@@ -468,6 +720,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       const snap = await session.sessionManager.startEpisode({
         sessionId,
         userMessage: userText,
+        ts: turnTs,
         meta: { ...meta, relation: "new_task" },
       });
       openEpisodeBySession.set(sessionId, snap.id as EpisodeId);
@@ -477,6 +730,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     const snap = await session.sessionManager.startEpisode({
       sessionId,
       userMessage: userText,
+      ts: turnTs,
       meta: { ...meta, relation: decision.relation },
     });
     openEpisodeBySession.set(sessionId, snap.id as EpisodeId);
@@ -495,6 +749,124 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       rTask: rTask ?? null,
     });
     openEpisodeBySession.delete(sessionId);
+  }
+
+  function staleTopicWindowMs(): number {
+    return Math.max(
+      algorithm.session.mergeMaxGapMs * 2,
+      4 * 60 * 60 * 1000,
+    );
+  }
+
+  function findRecoverableOpenTopic(
+    currentSessionId: SessionId,
+    atTs: number,
+  ): EpisodeSnapshot | null {
+    const candidates = deps.repos.episodes.list({ limit: 50 });
+    for (const row of candidates) {
+      const meta = (row as { meta?: Record<string, unknown> }).meta ?? {};
+      if (meta.boundaryRelation === "new_task") continue;
+      const ageMs = Math.max(0, atTs - (row.endedAt ?? row.startedAt));
+      if (ageMs > staleTopicWindowMs()) continue;
+      if (row.status === "closed" && meta.closeReason !== "finalized") continue;
+      if (
+        row.sessionId !== currentSessionId &&
+        meta.topicState !== "paused" &&
+        meta.topicState !== "interrupted"
+      ) {
+        continue;
+      }
+      // Prefer the same session, but allow cross-session continuation
+      // after Hermes/OpenClaw restarts. New-topic classification below
+      // will close unrelated candidates before bootstrapping a fresh one.
+      if (row.sessionId !== currentSessionId && candidates.length > 1) {
+        const sameSession = candidates.some((c) => c.sessionId === currentSessionId);
+        if (sameSession) continue;
+      }
+      return snapshotFromOpenEpisodeRow(row);
+    }
+    return null;
+  }
+
+  function snapshotFromOpenEpisodeRow(
+    ep: ReturnType<typeof deps.repos.episodes.list>[number],
+  ): EpisodeSnapshot {
+    const traceIds = (ep.traceIds ?? []) as TraceId[];
+    const traces =
+      traceIds.length > 0
+        ? deps.repos.traces
+            .getManyByIds(traceIds)
+            .sort((a, b) => a.ts - b.ts)
+        : [];
+    const turns: EpisodeSnapshot["turns"] = [];
+    const meta = (ep as { meta?: Record<string, unknown> }).meta ?? {};
+    const initialUserText =
+      typeof meta.initialUserText === "string"
+        ? meta.initialUserText
+        : typeof meta.pendingUserText === "string"
+          ? meta.pendingUserText
+          : "";
+    if (initialUserText && traces.length === 0) {
+      turns.push({
+        id: `${ep.id}:initial-user`,
+        ts: ep.startedAt,
+        role: "user",
+        content: initialUserText,
+        meta: { recovered: true },
+      });
+    }
+    for (const tr of traces) {
+      if (tr.userText) {
+        turns.push({
+          id: `${tr.id}:user`,
+          ts: tr.ts,
+          role: "user",
+          content: tr.userText,
+        });
+      }
+      if (tr.toolCalls.length > 0) {
+        turns.push({
+          id: `${tr.id}:tool`,
+          ts: tr.ts,
+          role: "tool",
+          content: JSON.stringify(tr.toolCalls),
+          meta: { toolCalls: tr.toolCalls },
+        });
+      }
+      if (tr.agentText) {
+        turns.push({
+          id: `${tr.id}:assistant`,
+          ts: tr.ts,
+          role: "assistant",
+          content: tr.agentText,
+          meta: {
+            agentThinking: tr.agentThinking ?? undefined,
+            reflection: tr.reflection ?? undefined,
+          },
+        });
+      }
+    }
+    const maybeIntent = (meta as { intent?: Partial<import("../session/index.js").IntentDecision> }).intent;
+    return {
+      id: ep.id as EpisodeId,
+      sessionId: ep.sessionId as SessionId,
+      startedAt: ep.startedAt,
+      endedAt: ep.endedAt ?? null,
+      status: ep.status,
+      rTask: ep.rTask ?? null,
+      turnCount: turns.length,
+      turns,
+      traceIds,
+      meta,
+      intent: {
+        kind: maybeIntent?.kind ?? "unknown",
+        confidence: maybeIntent?.confidence ?? 0,
+        reason: maybeIntent?.reason ?? "recovered open topic",
+        retrieval: maybeIntent?.retrieval ?? { tier1: true, tier2: true, tier3: true },
+        signals: maybeIntent?.signals ?? ["recovered_open_topic"],
+        llmModel: maybeIntent?.llmModel,
+      },
+    };
   }
 
   // ─── subscribeEvents / subscribeLogs ────────────────────────────────────
@@ -533,6 +905,15 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // ─── Retrieval entry points ─────────────────────────────────────────────
 
   const retrievalDeps = buildRetrievalDeps(deps, algorithm);
+  const turnStartRetrievalStats = new Map<string, RetrievalResult["stats"]>();
+
+  function retrievalDepsFor(namespace = deps.namespace): typeof retrievalDeps {
+    return {
+      ...retrievalDeps,
+      namespace,
+      repos: wrapRetrievalRepos(deps.repos, namespace),
+    };
+  }
 
   async function retrieveTurnStart(input: TurnInputDTO): Promise<InjectionPacket> {
     const ctx = {
@@ -545,16 +926,23 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       ts: input.ts,
     };
     const result: RetrievalResult = await turnStartRetrieve(
-      retrievalDeps,
+      retrievalDepsFor(input.namespace),
       ctx,
       { events: buses.retrieval },
     );
+    turnStartRetrievalStats.set(result.packet.packetId, result.stats);
     return result.packet;
+  }
+
+  function consumeRetrievalStats(packetId: string): RetrievalResult["stats"] | null {
+    const stats = turnStartRetrievalStats.get(packetId) ?? null;
+    turnStartRetrievalStats.delete(packetId);
+    return stats;
   }
 
   async function retrieveToolDriven(ctx: ToolDrivenCtx): Promise<InjectionPacket> {
     const result = await toolDrivenRetrieve(
-      retrievalDeps,
+      retrievalDepsFor(ctx.namespace),
       { reason: "tool_driven", ...ctx },
       { events: buses.retrieval },
     );
@@ -563,7 +951,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
   async function retrieveSkillInvoke(ctx: SkillInvokeCtx): Promise<InjectionPacket> {
     const result = await skillInvokeRetrieve(
-      retrievalDeps,
+      retrievalDepsFor(ctx.namespace),
       { reason: "skill_invoke", ...ctx },
       { events: buses.retrieval },
     );
@@ -572,7 +960,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
   async function retrieveSubAgent(ctx: SubAgentCtx): Promise<InjectionPacket> {
     const result = await subAgentRetrieve(
-      retrievalDeps,
+      retrievalDepsFor(ctx.namespace),
       { reason: "sub_agent", ...ctx },
       { events: buses.retrieval },
     );
@@ -581,7 +969,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
   async function retrieveRepair(ctx: RepairCtx): Promise<InjectionPacket | null> {
     const result = await repairRetrieve(
-      retrievalDeps,
+      retrievalDepsFor(ctx.namespace),
       { reason: "decision_repair", ...ctx },
       { events: buses.retrieval },
     );
@@ -592,12 +980,17 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
   async function onTurnStart(input: TurnInputDTO): Promise<InjectionPacket> {
     const t0 = now();
-    const initialSessionId = await ensureSession(input.agent, input.sessionId);
+    const initialSessionId = await ensureSession(
+      input.agent,
+      input.sessionId,
+      input.contextHints,
+    );
 
     const routing = await openEpisodeIfNeeded(
       initialSessionId,
       input.userText,
       {
+        ...(input.contextHints ?? {}),
         contextHints: input.contextHints ?? {},
         agent: input.agent,
         startedAtTurnTs: input.ts,
@@ -651,7 +1044,11 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   }
 
   async function onTurnEnd(result: TurnResultDTO): Promise<TurnEndResult> {
-    const sessionId = await ensureSession(result.agent, result.sessionId);
+    const sessionId = await ensureSession(
+      result.agent,
+      result.sessionId,
+      result.contextHints,
+    );
     const episodeId = openEpisodeBySession.get(sessionId) ?? result.episodeId;
     if (!episodeId) {
       throw new Error(
@@ -663,6 +1060,14 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       throw new Error(
         "pipeline.onTurnEnd: episode " + episodeId + " is not open",
       );
+    }
+    if (result.contextHints && Object.keys(result.contextHints).length > 0) {
+      session.sessionManager.patchEpisodeMeta(episodeId, {
+        contextHints: {
+          ...((episode.meta.contextHints as Record<string, unknown> | undefined) ?? {}),
+          ...result.contextHints,
+        },
+      });
     }
 
     // V7 §0.1: record tool-call turns BEFORE the assistant turn so the
@@ -680,11 +1085,13 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           : tc.output != null
             ? JSON.stringify(tc.output).slice(0, 2000)
             : "",
+        ts: Number.isFinite(tc.endedAt) ? tc.endedAt : result.ts,
         meta: {
           tool: tc.name,
           name: tc.name,
           input: tc.input,
           errorCode: tc.errorCode,
+          toolCallId: tc.toolCallId,
           startedAt: tc.startedAt,
           endedAt: tc.endedAt,
           // V7 §0.1: preserve the model's "Thought for X" narration that
@@ -692,6 +1099,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           // the captured ToolCallDTO. Without this, chained tool calls
           // lose the natural-language bridge between steps.
           thinkingBefore: tc.thinkingBefore,
+          assistantTextBefore: tc.assistantTextBefore,
         },
       });
     }
@@ -699,6 +1107,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     session.sessionManager.addTurn(episodeId, {
       role: "assistant",
       content: result.agentText,
+      ts: result.ts,
       meta: {
         toolCalls: result.toolCalls,
         // V7 §0.1 split:
@@ -709,6 +1118,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         //     reflection field on the trace row.
         agentThinking: result.agentThinking ?? null,
         reflection: result.reflection ?? null,
+        contextHints: result.contextHints ?? {},
         ts: result.ts,
       },
     });
@@ -721,9 +1131,14 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     // (next turn classified as `new_task`, idle timeout, session_end,
     // or shutdown).
     const liveEpisode = session.sessionManager.getEpisode(episodeId);
+    let liteTraceIds: string[] = [];
     if (liveEpisode) {
       try {
-        await subs.captureRunner.runLite({ episode: liveEpisode });
+        const captureResult = await subs.captureRunner.runLite({ episode: liveEpisode });
+        liteTraceIds = captureResult.traceIds;
+        if (captureResult.traceIds.length > 0) {
+          session.sessionManager.attachTraceIds(episodeId, captureResult.traceIds as string[]);
+        }
       } catch (err) {
         log.warn("turn.lite_capture.failed", {
           episodeId,
@@ -755,7 +1170,8 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
     // The episode stays OPEN — finalize is deferred to topic end.
     return {
-      traceCount: liveEpisode?.turnCount ?? 0,
+      traceCount: liteTraceIds.length,
+      traceIds: liteTraceIds,
       episodeId: episodeId as EpisodeId,
       episode: liveEpisode ?? null,
       episodeFinalized: false,
@@ -794,23 +1210,32 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // ─── flush / shutdown ───────────────────────────────────────────────────
 
   async function flush(): Promise<void> {
-    // Order matters: we want capture to finish first (it writes traces),
-    // then reward (which reads them), then L2/L3/skills (which cascade).
-    // None of the downstream subscribers expose a waiter today because
-    // each one schedules work via `void processReward(...)` — so we
-    // drain the microtask queue between layers to give schedulers a
-    // chance to complete. A fixed tick count is cheap and deterministic.
+    // Order matters: capture writes traces, reward reads them and
+    // emits `reward.updated` → L2 induces policies & emits
+    // `l2.policy.induced` → L3 abstracts world models → skills
+    // crystallize. Each layer is its own subscriber, so we walk the
+    // chain explicitly. A few ticks between waits let scheduled
+    // `void run(...)` promises register in their owners' inflight
+    // sets before we ask each one to drain.
     const nextTick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
     await subs.subscriptions.capture.drain();
     await nextTick();
     await subs.subscriptions.reward.drain();
     await nextTick();
-    // L2 + L3 + skills subscribers do fire-and-forget; run a few ticks
-    // to let their chained `void` promises settle.
-    for (let i = 0; i < 4; i++) await nextTick();
+    // L2 receives `reward.updated` and runs the induce/associate
+    // pipeline (LLM call, ~5s). Without draining it here, single-
+    // shot adapters (Hermes' `chat -q`) reap the bridge before L2
+    // finishes — the candidate pool fills up but no policy is ever
+    // induced.
+    await subs.l2.drain();
+    await nextTick();
+    // L3 reacts to `l2.policy.induced`. Same problem, same fix.
+    await subs.l3.drain();
+    await nextTick();
     await subs.skills.flush();
     await subs.feedback.flush();
+    await embeddingRetryWorker.flush();
   }
 
   async function shutdown(reason: string = "shutdown"): Promise<void> {
@@ -829,6 +1254,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     subs.l3.detach();
     subs.skills.dispose();
     subs.feedback.dispose();
+    embeddingRetryWorker.stop();
     bridge.dispose();
     logSubscription();
     session.sessionManager.shutdown(reason);
@@ -837,6 +1263,63 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
   function now(): number {
     return (deps.now ?? Date.now)();
+  }
+
+  function recordRelationClassification(input: {
+    sessionId: SessionId;
+    prevEpisodeId: EpisodeId;
+    source: "open_episode" | "recovered_open_topic" | "closed_episode";
+    gapMs: number;
+    mergeMode: boolean;
+    withinMergeWindow: boolean;
+    prevUserText: string;
+    prevAssistantText: string;
+    newUserText: string;
+    decision: RelationDecision;
+    action: string;
+    durationMs: number;
+  }): void {
+    try {
+      deps.repos.apiLogs.insert({
+        toolName: "session_relation_classify",
+        input: {
+          sessionId: input.sessionId,
+          prevEpisodeId: input.prevEpisodeId,
+          source: input.source,
+          gapMs: input.gapMs,
+          mergeMode: input.mergeMode,
+          withinMergeWindow: input.withinMergeWindow,
+          prevUserText: truncateForLog(input.prevUserText, 600),
+          prevAssistantText: truncateForLog(input.prevAssistantText, 900),
+          newUserText: truncateForLog(input.newUserText, 600),
+        },
+        output: {
+          relation: input.decision.relation,
+          confidence: input.decision.confidence,
+          reason: input.decision.reason,
+          signals: input.decision.signals,
+          llmModel: input.decision.llmModel,
+          action: input.action,
+        },
+        durationMs: input.durationMs,
+        success: true,
+        calledAt: Date.now(),
+      });
+    } catch (err) {
+      log.debug("apiLogs.session_relation_classify.skipped", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  function truncateForLog(text: string, maxChars: number): string {
+    if (text.length <= maxChars) return text;
+    return `${text.slice(0, maxChars)}...`;
+  }
+
+  function timestampFromMeta(meta: Record<string, unknown>, key: string): number | undefined {
+    const ts = meta[key];
+    return typeof ts === "number" && Number.isFinite(ts) ? ts : undefined;
   }
 
   /**
@@ -883,9 +1366,11 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     home: deps.home,
     config: deps.config,
     algorithm,
+    namespace: deps.namespace,
     db: deps.db,
     repos: deps.repos,
     llm: deps.llm,
+    reflectLlm: deps.reflectLlm,
     embedder: deps.embedder,
     sessionManager: session.sessionManager,
     episodeManager: session.episodeManager,
@@ -902,6 +1387,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     getRecentEvents,
     subscribeLogs,
     onTurnStart,
+    consumeRetrievalStats,
     onTurnEnd,
     recordToolOutcome,
     retrieveToolDriven,

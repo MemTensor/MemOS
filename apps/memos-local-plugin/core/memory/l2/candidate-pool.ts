@@ -70,6 +70,9 @@ export function makeCandidatePool(deps: CandidatePoolDeps) {
       // Refresh TTL + similarity (in case reward changed V).
       repos.candidatePool.upsert({
         id,
+        ownerAgentKind: input.trace.ownerAgentKind,
+        ownerProfileId: input.trace.ownerProfileId,
+        ownerWorkspaceId: input.trace.ownerWorkspaceId,
         policyId: existing.policyId,
         evidenceTraceIds: unique([...existing.evidenceTraceIds, input.trace.id]),
         signature,
@@ -81,6 +84,9 @@ export function makeCandidatePool(deps: CandidatePoolDeps) {
 
     repos.candidatePool.insert({
       id,
+      ownerAgentKind: input.trace.ownerAgentKind,
+      ownerProfileId: input.trace.ownerProfileId,
+      ownerWorkspaceId: input.trace.ownerWorkspaceId,
       policyId: null,
       evidenceTraceIds: [input.trace.id],
       signature,

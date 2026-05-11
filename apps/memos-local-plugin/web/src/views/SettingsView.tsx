@@ -18,7 +18,7 @@ import { t, locale, setLocale } from "../stores/i18n";
 import { theme, setTheme } from "../stores/theme";
 import { Icon } from "../components/Icon";
 import { HubAdminPanel } from "../components/HubAdminPanel";
-import { triggerRestart } from "../stores/restart";
+import { triggerRestart, triggerCleared } from "../stores/restart";
 
 type Tab = "models" | "hub" | "general";
 
@@ -46,33 +46,27 @@ interface ResolvedConfig {
     userToken?: string;
   };
   telemetry?: { enabled?: boolean };
-  logging?: { level?: string };
+  logging?: { level?: string; detailedView?: boolean };
 }
 
 const EMBEDDING_PROVIDERS = [
   "local",
   "openai_compatible",
   "gemini",
-  "cohere",
-  "voyage",
-  "mistral",
 ];
 
 const LLM_PROVIDERS = [
-  "local_only",
+  "", // inherit from agent
   "openai_compatible",
-  "anthropic",
   "gemini",
-  "bedrock",
-  "host",
+  "anthropic",
 ];
 
 const SKILL_PROVIDERS = [
   "", // inherit from llm
   "openai_compatible",
-  "anthropic",
   "gemini",
-  "bedrock",
+  "anthropic",
 ];
 
 export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
@@ -108,8 +102,9 @@ export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
     try {
       await api.patch<ResolvedConfig>("/api/v1/config", dirty);
       setDirty({});
-      // Kick off the restart overlay — it handles the poll loop + reload.
       await triggerRestart();
+      // For Hermes/generic the page stays; reset the button state.
+      setSaving("idle");
     } catch (err) {
       setError((err as Error).message);
       setSaving("idle");
@@ -212,7 +207,9 @@ export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
       {tab === "general" && (
         <GeneralTab
           telemetry={(get("telemetry") ?? {}) as NonNullable<ResolvedConfig["telemetry"]>}
+          logging={(get("logging") ?? {}) as NonNullable<ResolvedConfig["logging"]>}
           onPatchTelemetry={(p) => patch("telemetry", p)}
+          onPatchLogging={(p) => patch("logging", p)}
         />
       )}
     </>
@@ -267,20 +264,7 @@ function ModelsTab({
         block={embedding}
         providers={EMBEDDING_PROVIDERS}
         type="embedding"
-        extra={
-          <Field label="Dimensions">
-            <input
-              class="input"
-              type="number"
-              value={embedding.dimensions ?? ""}
-              onInput={(e) =>
-                onPatchEmbedding({
-                  dimensions: Number((e.target as HTMLInputElement).value) || undefined,
-                })
-              }
-            />
-          </Field>
-        }
+        localHint={t("settings.embedding.localHint")}
         onPatch={onPatchEmbedding}
       />
 
@@ -290,8 +274,8 @@ function ModelsTab({
         desc={t("settings.summarizer.desc")}
         block={llm}
         providers={LLM_PROVIDERS}
-        withTemperature
         type="summarizer"
+        inheritsLabel={t("settings.summarizer.inherit")}
         onPatch={onPatchLlm}
       />
 
@@ -301,7 +285,6 @@ function ModelsTab({
         desc={t("settings.skillEvolver.desc")}
         block={skillEvolver}
         providers={SKILL_PROVIDERS}
-        withTemperature
         type="skillEvolver"
         inheritsLabel={t("settings.skillEvolver.inherit")}
         onPatch={onPatchSkillEvolver}
@@ -322,6 +305,7 @@ function ModelCard({
   extra,
   withTemperature,
   inheritsLabel,
+  localHint,
   onPatch,
 }: {
   icon: "plug" | "sparkles" | "wand-sparkles";
@@ -333,6 +317,7 @@ function ModelCard({
   extra?: preact.ComponentChildren;
   withTemperature?: boolean;
   inheritsLabel?: string;
+  localHint?: string;
   onPatch: (p: Partial<ProviderBlock>) => void;
 }) {
   const [testing, setTesting] = useState(false);
@@ -378,7 +363,8 @@ function ModelCard({
     }
   };
 
-  const inherits = type === "skillEvolver" && !block.provider;
+  const inherits = (type === "skillEvolver" || type === "summarizer") && !block.provider;
+  const isLocal = type === "embedding" && block.provider === "local";
 
   return (
     <section class="card">
@@ -406,11 +392,18 @@ function ModelCard({
         </button>
       </div>
 
-      {inherits && (
+      {inherits && inheritsLabel && (
         <div
           style="font-size:var(--fs-xs);color:var(--fg-muted);margin-bottom:var(--sp-3);padding:var(--sp-2) var(--sp-3);background:var(--bg-canvas);border-radius:var(--radius-sm);border:1px dashed var(--border)"
         >
           {inheritsLabel}
+        </div>
+      )}
+      {isLocal && localHint && (
+        <div
+          style="font-size:var(--fs-xs);color:var(--fg-muted);margin-bottom:var(--sp-3);padding:var(--sp-2) var(--sp-3);background:var(--bg-canvas);border-radius:var(--radius-sm);border:1px dashed var(--border)"
+        >
+          {localHint}
         </div>
       )}
 
@@ -530,7 +523,7 @@ function HubTab({
         <div>
           <h3 class="card__title">{t("settings.hub.enabled")}</h3>
           <p class="card__subtitle">
-            Share your skills and (optionally) memories with teammates.
+            {t("settings.hub.subtitle")}
           </p>
         </div>
         <ToggleSwitch
@@ -540,60 +533,80 @@ function HubTab({
       </div>
 
       {hub.enabled && (
-        <div
-          style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--sp-4)"
-        >
-          <Field label={t("settings.hub.role")}>
-            <div class="segmented">
-              {(["hub", "client"] as const).map((r) => (
-                <button
-                  key={r}
-                  class="segmented__item"
-                  aria-pressed={hub.role === r}
-                  onClick={() => onPatch({ role: r })}
-                >
-                  {t(`settings.hub.role.${r}` as "settings.hub.role.hub")}
-                </button>
-              ))}
+        <>
+          <div
+            class="card card--flat"
+            style="margin-bottom:var(--sp-4);border-left:3px solid var(--accent)"
+          >
+            <div class="hstack" style="gap:var(--sp-2);align-items:flex-start">
+              <Icon name="info" size={14} style="margin-top:3px;color:var(--accent);flex-shrink:0" />
+              <div style="font-size:var(--fs-sm);line-height:1.7">
+                <div style="font-weight:var(--fw-semi);margin-bottom:4px">
+                  {t("settings.hub.help.title")}
+                </div>
+                <div class="muted">{t("settings.hub.help.role")}</div>
+                <div class="muted">{t("settings.hub.help.tokens")}</div>
+              </div>
             </div>
-          </Field>
+          </div>
 
-          {hub.role === "client" && (
-            <Field label={t("settings.hub.address")}>
+          <div
+            style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--sp-4)"
+          >
+            <Field label={t("settings.hub.role")}>
+              <div class="segmented">
+                {(["hub", "client"] as const).map((r) => (
+                  <button
+                    key={r}
+                    class="segmented__item"
+                    aria-pressed={hub.role === r}
+                    onClick={() => onPatch({ role: r })}
+                  >
+                    {t(`settings.hub.role.${r}` as "settings.hub.role.hub")}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            {hub.role === "client" && (
+              <Field label={t("settings.hub.address")}>
+                <input
+                  class="input"
+                  type="url"
+                  value={hub.address ?? ""}
+                  placeholder="http://10.0.0.12:18912"
+                  onInput={(e) =>
+                    onPatch({ address: (e.target as HTMLInputElement).value })
+                  }
+                />
+              </Field>
+            )}
+
+            <Field label={t("settings.hub.teamToken")}>
               <input
                 class="input"
-                type="url"
-                value={hub.address ?? ""}
-                placeholder="http://10.0.0.12:18912"
+                type="password"
+                value={hub.teamToken ?? ""}
+                placeholder={t("settings.hub.teamToken.placeholder")}
                 onInput={(e) =>
-                  onPatch({ address: (e.target as HTMLInputElement).value })
+                  onPatch({ teamToken: (e.target as HTMLInputElement).value })
                 }
               />
             </Field>
-          )}
 
-          <Field label={t("settings.hub.teamToken")}>
-            <input
-              class="input"
-              type="password"
-              value={hub.teamToken ?? ""}
-              onInput={(e) =>
-                onPatch({ teamToken: (e.target as HTMLInputElement).value })
-              }
-            />
-          </Field>
-
-          <Field label={t("settings.hub.userToken")}>
-            <input
-              class="input"
-              type="password"
-              value={hub.userToken ?? ""}
-              onInput={(e) =>
-                onPatch({ userToken: (e.target as HTMLInputElement).value })
-              }
-            />
-          </Field>
-        </div>
+            <Field label={t("settings.hub.userToken")}>
+              <input
+                class="input"
+                type="password"
+                value={hub.userToken ?? ""}
+                placeholder={t("settings.hub.userToken.placeholder")}
+                onInput={(e) =>
+                  onPatch({ userToken: (e.target as HTMLInputElement).value })
+                }
+              />
+            </Field>
+          </div>
+        </>
       )}
 
       {/*
@@ -623,11 +636,17 @@ function HubTab({
 
 function GeneralTab({
   telemetry,
+  logging,
   onPatchTelemetry,
+  onPatchLogging,
 }: {
   telemetry: NonNullable<ResolvedConfig["telemetry"]>;
+  logging: NonNullable<ResolvedConfig["logging"]>;
   onPatchTelemetry: (
     p: Partial<NonNullable<ResolvedConfig["telemetry"]>>,
+  ) => void;
+  onPatchLogging: (
+    p: Partial<NonNullable<ResolvedConfig["logging"]>>,
   ) => void;
 }) {
   return (
@@ -678,6 +697,19 @@ function GeneralTab({
       </section>
 
       <AccountSection />
+
+      <section class="card">
+        <div class="hstack" style="justify-content:space-between;margin-bottom:var(--sp-2)">
+          <div>
+            <h3 class="card__title">{t("settings.general.detailedLogs")}</h3>
+            <p class="card__subtitle">{t("settings.general.detailedLogs.desc")}</p>
+          </div>
+          <ToggleSwitch
+            checked={!!logging.detailedView}
+            onChange={(v) => onPatchLogging({ detailedView: v })}
+          />
+        </div>
+      </section>
 
       <section class="card">
         <div class="hstack" style="justify-content:space-between;margin-bottom:var(--sp-2)">
@@ -823,17 +855,14 @@ function DangerZoneSection() {
   const clearAllData = async () => {
     setClearing(true);
     try {
-      // The server handles "clear data" by wiping SQLite + calling
-      // `process.exit(0)` itself, so we don't need to also POST to
-      // `/admin/restart`. Hand off to the shared restart overlay so
-      // the user sees the same spinner + subtitle they get when
-      // changing config — instead of a blank `location.reload()` that
-      // probes against the still-dying HTTP server.
+      // The server wipes SQLite + cleanly tears down its core; the
+      // next agent boot will recreate an empty DB. We don't try to
+      // restart the agent process from here — the toast tells the
+      // user to do it manually (see `stores/restart.ts` for why).
       await api.post("/api/v1/admin/clear-data", {});
       setConfirming(false);
-      // Fire-and-forget: the overlay keeps itself on screen until the
-      // health poll succeeds, then reloads the page.
-      void triggerRestart({ kick: "skip" });
+      setClearing(false);
+      await triggerCleared();
     } catch {
       setClearing(false);
       setConfirming(false);

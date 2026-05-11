@@ -21,6 +21,7 @@ function trace(part: Partial<TimelineTrace>): TimelineTrace {
   return {
     id: part.id ?? "tr_x",
     ts: part.ts ?? T0,
+    turnId: part.turnId,
     userText: part.userText ?? "",
     agentText: part.agentText ?? "",
     agentThinking: part.agentThinking ?? null,
@@ -31,7 +32,7 @@ function trace(part: Partial<TimelineTrace>): TimelineTrace {
 }
 
 describe("flattenChat", () => {
-  it("emits user → [thinking+tool pairs] → assistant; reflection is dropped", () => {
+  it("emits user → tool cards with thinking → assistant; reflection is dropped", () => {
     const t = trace({
       id: "tr1",
       userText: "go fix the deploy",
@@ -60,20 +61,19 @@ describe("flattenChat", () => {
     const msgs = flattenChat([t]);
     expect(msgs.map((m) => m.role)).toEqual([
       "user",
-      "thinking",
       "tool",
       "tool",
       "assistant",
     ]);
-    expect(msgs[1]!.text).toContain("pg_config is missing");
-    expect(msgs[1]!.text).not.toContain("INTERNAL: scoring note");
-    expect(msgs[2]!.traceId).toBe("tr1");
-    expect(msgs[2]!.toolName).toBe("bash");
-    expect(msgs[2]!.toolInput).toContain("pip install psycopg2");
-    expect(msgs[2]!.toolOutput).toContain("pg_config not found");
-    expect(msgs[2]!.errorCode).toBe("EXIT_1");
-    expect(msgs[2]!.toolDurationMs).toBe(190);
-    expect(msgs[4]!.text).toBe("done — see PR #42");
+    expect(msgs[1]!.traceId).toBe("tr1");
+    expect(msgs[1]!.toolName).toBe("bash");
+    expect(msgs[1]!.toolThinking).toContain("pg_config is missing");
+    expect(msgs[1]!.toolThinking).not.toContain("INTERNAL: scoring note");
+    expect(msgs[1]!.toolInput).toContain("pip install psycopg2");
+    expect(msgs[1]!.toolOutput).toContain("pg_config not found");
+    expect(msgs[1]!.errorCode).toBe("EXIT_1");
+    expect(msgs[1]!.toolDurationMs).toBe(190);
+    expect(msgs[3]!.text).toBe("done — see PR #42");
     for (const m of msgs) {
       expect(m.text).not.toContain("INTERNAL: scoring note");
     }
@@ -109,7 +109,45 @@ describe("flattenChat", () => {
     expect(toolOrder).toEqual(["first", "second", "third"]);
   });
 
-  it("falls back to trace.ts when a tool call has no startedAt", () => {
+  it("timestamps the user bubble with turnId when trace ts belongs to a later step", () => {
+    const t = trace({
+      id: "tr_turn",
+      ts: T0 + 70_000,
+      turnId: T0,
+      userText: "analyse this dataset",
+      toolCalls: [{ name: "todo" }],
+    });
+
+    const user = flattenChat([t]).find((m) => m.role === "user")!;
+
+    expect(user.ts).toBe(T0);
+  });
+
+  it("renders the turn user message before tools even when a later trace carries userText", () => {
+    const skill = trace({
+      id: "tr_skill",
+      ts: T0 + 1_000,
+      turnId: T0,
+      toolCalls: [{ name: "skill_get", input: { id: "sk_1" } }],
+    });
+    const delegate = trace({
+      id: "tr_delegate",
+      ts: T0 + 2_000,
+      turnId: T0,
+      userText: "今年杭州五一游客多吗",
+      toolCalls: [{ name: "delegate_task", input: { goal: "查杭州五一游客数据" } }],
+    });
+
+    const msgs = flattenChat([skill, delegate]);
+
+    expect(msgs.map((m) => m.role)).toEqual(["user", "tool", "tool"]);
+    expect(msgs[0]!.text).toBe("今年杭州五一游客多吗");
+    expect(msgs[0]!.traceId).toBe("tr_delegate");
+    expect(msgs[1]!.toolName).toBe("skill_get");
+    expect(msgs[2]!.toolName).toBe("delegate_task");
+  });
+
+  it("keeps tool calls without startedAt untimed", () => {
     const t = trace({
       id: "tr3",
       ts: T0 + 9_000,
@@ -121,10 +159,10 @@ describe("flattenChat", () => {
       ],
     });
     const msgs = flattenChat([t]).filter((m) => m.role === "tool");
-    // `early` (1000) sorts before `no-time` (which fell back to trace.ts=9000).
+    // `early` (1000) sorts before `no-time` (which is sorted by trace.ts only).
     expect(msgs.map((m) => m.toolName)).toEqual(["early", "no-time"]);
-    // The fallback message uses the trace ts too.
-    expect(msgs[1]!.ts).toBe(T0 + 9_000);
+    // The fallback is only for ordering; the rendered tool bubble has no time.
+    expect(msgs[1]!.ts).toBeUndefined();
     // No duration when startedAt/endedAt are missing.
     expect(msgs[1]!.toolDurationMs).toBeUndefined();
   });
@@ -203,7 +241,7 @@ describe("flattenChat", () => {
     ]);
   });
 
-  it("interleaves per-tool thinking when thinkingBefore is present", () => {
+  it("attaches per-tool thinking when thinkingBefore is present", () => {
     const t = trace({
       id: "tr_interleave",
       userText: "fix the build",
@@ -239,17 +277,37 @@ describe("flattenChat", () => {
     const msgs = flattenChat([t]);
     expect(msgs.map((m) => m.role)).toEqual([
       "user",
-      "thinking",   // before tool 0
       "tool",
-      "thinking",   // before tool 1
       "tool",
-      "thinking",   // before tool 2
       "tool",
       "assistant",
     ]);
-    expect(msgs[1]!.text).toBe("Check error log.");
-    expect(msgs[3]!.text).toBe("Need libpq-dev.");
-    expect(msgs[5]!.text).toBe("Retry the build.");
+    expect(msgs[1]!.toolThinking).toBe("Check error log.");
+    expect(msgs[2]!.toolThinking).toBe("Need libpq-dev.");
+    expect(msgs[3]!.toolThinking).toBe("Retry the build.");
+  });
+
+  it("preserves visible assistant text before a tool call separately from thinking", () => {
+    const t = trace({
+      id: "tr_tool_preamble",
+      userText: "分析房价数据集",
+      agentText: "计划已创建。",
+      toolCalls: [
+        {
+          name: "todo",
+          assistantTextBefore: "好的，这是经典的 Kaggle 房价预测数据集。先创建计划。",
+          thinkingBefore: "用户要元数据清单，先列 todo。",
+          startedAt: T0 + 10,
+          endedAt: T0 + 20,
+        },
+      ],
+    });
+    const msgs = flattenChat([t]);
+    const tool = msgs.find((m) => m.role === "tool")!;
+    expect(tool.toolAssistantTextBefore).toBe(
+      "好的，这是经典的 Kaggle 房价预测数据集。先创建计划。",
+    );
+    expect(tool.toolThinking).toBe("用户要元数据清单，先列 todo。");
   });
 
   it("no thinking bubbles when tools lack thinkingBefore (agentThinking only shown for no-tool turns)", () => {
@@ -296,15 +354,226 @@ describe("flattenChat", () => {
     const msgs = flattenChat([t]);
     expect(msgs.map((m) => m.role)).toEqual([
       "user",
-      "thinking",   // before tool_a
       "tool",
       "tool",       // no thinking before tool_b
       "assistant",
     ]);
-    expect(msgs[1]!.text).toBe("initial");
+    expect(msgs[1]!.toolThinking).toBe("initial");
   });
 
   it("returns empty array for empty input", () => {
     expect(flattenChat([])).toEqual([]);
+  });
+});
+
+// ─── parallel-batch detection ─────────────────────────────────────────────
+//
+// We verify the heuristic in `assignParallelBatches`:
+//   - Three tools whose `startedAt` are within ~10ms of each other (typical
+//     pi-agent-core parallel dispatch) → all three carry `parallelBatchKey`
+//     with `parallelBatchSize === 3`.
+//   - Two tools separated by a gap > 500ms (LLM round-trip) → no batch
+//     metadata; each renders standalone.
+//   - Mixed: a parallel pair followed by a serial single → only the pair
+//     gets metadata.
+//   - A single tool inside a trace → no batch metadata even if it's the
+//     only tool emitted that turn.
+
+describe("flattenChat / parallel-batch detection", () => {
+  it("groups three tools dispatched within ms of each other", () => {
+    const t = trace({
+      id: "tr_par",
+      userText: "查 cpu 内存 硬盘",
+      agentText: "8 核 16G",
+      toolCalls: [
+        {
+          name: "lscpu",
+          startedAt: T0 + 1,
+          endedAt: T0 + 13,
+          thinkingBefore: "我同时查",
+        },
+        { name: "free -h", startedAt: T0 + 3, endedAt: T0 + 11 },
+        { name: "df -h", startedAt: T0 + 5, endedAt: T0 + 29 },
+      ],
+    });
+    const msgs = flattenChat([t]);
+    const tools = msgs.filter((m) => m.role === "tool");
+    expect(tools).toHaveLength(3);
+    const key = tools[0]!.parallelBatchKey;
+    expect(key).toBeDefined();
+    for (const m of tools) {
+      expect(m.parallelBatchKey).toBe(key);
+      expect(m.parallelBatchSize).toBe(3);
+      // wall-clock span = max(endedAt) − min(startedAt) = 29 − 1 = 28
+      expect(m.parallelBatchTotalMs).toBe(28);
+    }
+  });
+
+  it("does not batch two tools separated by an LLM round-trip", () => {
+    // tool_1 ends at T0+5, tool_2 starts at T0+1500 → gap 1495ms ≫ 500ms
+    // threshold → these are clearly two separate LLM turns, not a batch.
+    const t = trace({
+      id: "tr_serial",
+      userText: "ls then cat",
+      agentText: "done",
+      toolCalls: [
+        {
+          name: "ls",
+          startedAt: T0 + 1,
+          endedAt: T0 + 5,
+          thinkingBefore: "list dir",
+        },
+        {
+          name: "cat foo",
+          startedAt: T0 + 1_500,
+          endedAt: T0 + 1_510,
+          thinkingBefore: "found foo, cat it",
+        },
+      ],
+    });
+    const msgs = flattenChat([t]);
+    const tools = msgs.filter((m) => m.role === "tool");
+    expect(tools).toHaveLength(2);
+    expect(tools[0]!.parallelBatchKey).toBeUndefined();
+    expect(tools[1]!.parallelBatchKey).toBeUndefined();
+    expect(tools[0]!.parallelBatchSize).toBeUndefined();
+    expect(tools[1]!.parallelBatchSize).toBeUndefined();
+  });
+
+  it("does not batch fast sequential helper tools whose windows do not overlap", () => {
+    const t = trace({
+      id: "tr_fast_serial",
+      userText: "inspect csv headers",
+      toolCalls: [
+        { name: "wc train", startedAt: T0 + 1, endedAt: T0 + 240 },
+        { name: "wc test", startedAt: T0 + 242, endedAt: T0 + 480 },
+        { name: "wc sample", startedAt: T0 + 482, endedAt: T0 + 720 },
+      ],
+    });
+
+    const tools = flattenChat([t]).filter((m) => m.role === "tool");
+
+    expect(tools).toHaveLength(3);
+    expect(tools.every((m) => m.parallelBatchKey == null)).toBe(true);
+  });
+
+  it("mixes a parallel pair followed by a serial single tool", () => {
+    const t = trace({
+      id: "tr_mix",
+      userText: "查 cpu 内存,然后看 disk",
+      agentText: "ok",
+      toolCalls: [
+        // Parallel pair (within 10ms of each other)
+        {
+          name: "lscpu",
+          startedAt: T0 + 1,
+          endedAt: T0 + 12,
+          thinkingBefore: "并查",
+        },
+        { name: "free", startedAt: T0 + 3, endedAt: T0 + 8 },
+        // Serial single — fired after a 1s gap (LLM round-trip)
+        {
+          name: "df",
+          startedAt: T0 + 1_200,
+          endedAt: T0 + 1_240,
+          thinkingBefore: "再看 disk",
+        },
+      ],
+    });
+    const msgs = flattenChat([t]);
+    const tools = msgs.filter((m) => m.role === "tool");
+    expect(tools).toHaveLength(3);
+    // First two share a batch key, size 2
+    expect(tools[0]!.parallelBatchKey).toBeDefined();
+    expect(tools[0]!.parallelBatchKey).toBe(tools[1]!.parallelBatchKey);
+    expect(tools[0]!.parallelBatchSize).toBe(2);
+    expect(tools[1]!.parallelBatchSize).toBe(2);
+    // Third stands alone
+    expect(tools[2]!.parallelBatchKey).toBeUndefined();
+  });
+
+  it("does not batch a single tool", () => {
+    const t = trace({
+      id: "tr_single",
+      userText: "go",
+      agentText: "done",
+      toolCalls: [
+        {
+          name: "echo",
+          startedAt: T0 + 1,
+          endedAt: T0 + 5,
+          thinkingBefore: "say hi",
+        },
+      ],
+    });
+    const msgs = flattenChat([t]);
+    const tools = msgs.filter((m) => m.role === "tool");
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.parallelBatchKey).toBeUndefined();
+    expect(tools[0]!.parallelBatchSize).toBeUndefined();
+  });
+
+  it("does not group tools when the later call has visible pre-tool text", () => {
+    const t = trace({
+      id: "tr_pretool_text_breaks_batch",
+      userText: "查 cpu 内存",
+      toolCalls: [
+        { name: "lscpu", startedAt: T0 + 1, endedAt: T0 + 12 },
+        {
+          name: "free",
+          assistantTextBefore: "CPU 看完了，接着查内存。",
+          startedAt: T0 + 3,
+          endedAt: T0 + 8,
+        },
+      ],
+    });
+    const tools = flattenChat([t]).filter((m) => m.role === "tool");
+    expect(tools).toHaveLength(2);
+    expect(tools[0]!.parallelBatchKey).toBeUndefined();
+    expect(tools[1]!.parallelBatchKey).toBeUndefined();
+  });
+
+  it("crosses trace boundaries when sub-steps share an LLM dispatch", () => {
+    // step-extractor splits one user turn into N sub-step traces (one per
+    // tool). When those sub-steps came from the same parallel dispatch
+    // their startedAt timestamps still cluster within ms of each other,
+    // so the cross-trace heuristic must still detect the batch.
+    const t1 = trace({
+      id: "tr_a",
+      userText: "查 cpu 内存 硬盘",
+      agentText: "",
+      toolCalls: [
+        {
+          name: "lscpu",
+          startedAt: T0 + 1,
+          endedAt: T0 + 12,
+          thinkingBefore: "并查",
+        },
+      ],
+    });
+    const t2 = trace({
+      id: "tr_b",
+      userText: "",
+      agentText: "",
+      ts: T0 + 3,
+      toolCalls: [{ name: "free", startedAt: T0 + 3, endedAt: T0 + 8 }],
+    });
+    const t3 = trace({
+      id: "tr_c",
+      userText: "",
+      agentText: "8 核 16G",
+      ts: T0 + 5,
+      toolCalls: [{ name: "df", startedAt: T0 + 5, endedAt: T0 + 29 }],
+    });
+    const msgs = flattenChat([t1, t2, t3]);
+    const tools = msgs.filter((m) => m.role === "tool");
+    expect(tools).toHaveLength(3);
+    // All three share the same batch key + size 3 even though they came
+    // from three different traces.
+    const key = tools[0]!.parallelBatchKey;
+    expect(key).toBeDefined();
+    expect(tools[1]!.parallelBatchKey).toBe(key);
+    expect(tools[2]!.parallelBatchKey).toBe(key);
+    expect(tools[0]!.parallelBatchSize).toBe(3);
   });
 });

@@ -3,11 +3,14 @@ import { describe, it, expect, afterEach } from "vitest";
 import { rootLogger } from "../../../core/logger/index.js";
 import {
   applySkillFeedback,
+  attachSkillSubscriber,
   createSkillEventBus,
   runSkill,
   type RunSkillDeps,
   type SkillEvent,
 } from "../../../core/skill/index.js";
+import { createRewardEventBus } from "../../../core/reward/index.js";
+import { createL2EventBus } from "../../../core/memory/l2/index.js";
 import { fakeLlm } from "../../helpers/fake-llm.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import type { EpisodeId, PolicyId, SkillId } from "../../../core/types.js";
@@ -15,6 +18,7 @@ import {
   makeDraft,
   makeSkillConfig,
   seedPolicy,
+  seedSkill,
   seedSessionOnly,
   seedTrace,
   vec,
@@ -144,6 +148,38 @@ describe("skill/runSkill (integration)", () => {
     );
   });
 
+  it("emits policy and model details when skill crystallization is refused by the model", async () => {
+    const h = open();
+    const { policyId } = seedFullCandidate(h);
+    const { deps, events } = makeDeps(h, {
+      llm: fakeLlm({
+        servedBy: "anthropic",
+        model: "claude-test",
+        completeJson: {
+          "skill.crystallize": makeDraft({
+            summary: "I am Claude, made by Anthropic. I cannot process this request.",
+          }),
+        },
+      }),
+    });
+
+    const r = await runSkill({ trigger: "manual", policyId }, deps);
+    expect(r.rejected).toBe(1);
+    expect(r.crystallized).toBe(0);
+    const failed = events.find(
+      (e) => e.kind === "skill.failed" && e.stage === "crystallize",
+    );
+    expect(failed).toMatchObject({
+      policyId,
+      reason: "llm-refusal",
+      modelRefusal: {
+        provider: "openai_compatible",
+        model: "claude-test",
+        content: expect.stringContaining("I cannot process this request"),
+      },
+    });
+  });
+
   it("applySkillFeedback updates η + status and emits", async () => {
     const h = open();
     const { policyId } = seedFullCandidate(h);
@@ -158,6 +194,86 @@ describe("skill/runSkill (integration)", () => {
     const post = h.repos.skills.getById(sk.id as SkillId)!;
     expect(post.eta).toBeGreaterThan(sk.eta);
     expect(events.some((e) => e.kind === "skill.eta.updated")).toBe(true);
+  });
+
+  it("resolves pending skill trials from reward.updated", async () => {
+    const h = open();
+    const episodeId = "ep_trial" as EpisodeId;
+    const sessionId = "s_trial";
+    seedSessionOnly(h, sessionId);
+    seedTrace(h, {
+      episodeId,
+      sessionId,
+      userText: "use the learned skill",
+      agentText: "task completed successfully",
+      value: 0.8,
+    });
+    const skill = seedSkill(h, { id: "sk_trial" as SkillId });
+    h.repos.skillTrials.createPending({
+      id: "st_trial",
+      skillId: skill.id,
+      sessionId,
+      episodeId,
+      traceId: null,
+      turnId: null,
+      toolCallId: "call_1",
+      status: "pending",
+      createdAt: Date.now(),
+      resolvedAt: null,
+      evidence: { source: "test" },
+    });
+    const skillBus = createSkillEventBus();
+    const events: SkillEvent[] = [];
+    skillBus.onAny((e) => events.push(e));
+    const rewardBus = createRewardEventBus();
+    const sub = attachSkillSubscriber({
+      repos: h.repos,
+      embedder: null,
+      llm: null,
+      log: rootLogger.child({ channel: "core.skill" }),
+      bus: skillBus,
+      l2Bus: createL2EventBus(),
+      rewardBus,
+      config: makeSkillConfig({ candidateTrials: 1 }),
+    });
+
+    rewardBus.emit({
+      kind: "reward.updated",
+      result: {
+        episodeId,
+        sessionId,
+        rHuman: 0.8,
+        humanScore: {
+          rHuman: 0.8,
+          axes: { goalAchievement: 1, processQuality: 1, userSatisfaction: 1 },
+          reason: "success",
+          source: "heuristic",
+          model: null,
+        },
+        feedbackCount: 0,
+        backprop: {
+          updates: [],
+          meanAbsValue: 0,
+          maxPriority: 0,
+          echoParams: { gamma: 0.9, decayHalfLifeDays: 30, now: Date.now() },
+        },
+        traceIds: [],
+        timings: { summary: 0, score: 0, backprop: 0, persist: 0, total: 0 },
+        warnings: [],
+        startedAt: Date.now(),
+        completedAt: Date.now(),
+      },
+    });
+    await sub.flush();
+    sub.dispose();
+
+    const updated = h.repos.skills.getById(skill.id)!;
+    expect(updated.trialsAttempted).toBe(1);
+    expect(updated.trialsPassed).toBe(1);
+    expect(updated.status).toBe("active");
+    expect(events.some((e) => e.kind === "skill.eta.updated" && e.reason === "trial.pass"))
+      .toBe(true);
+    expect(h.repos.skillTrials.listPendingForEpisode(episodeId)).toHaveLength(0);
   });
 
   it("emits skill.failed when evidence is empty (e.g. redacted)", async () => {

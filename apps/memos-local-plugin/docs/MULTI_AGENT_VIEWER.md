@@ -8,97 +8,95 @@ Each plugin instance:
 - Has its **own** storage directory under `~/.<agent>/memos-plugin/`.
 - Has its **own** SQLite database with disjoint session / episode /
   trace / skill namespaces.
-- Starts its own HTTP viewer.
+- Wants to expose its memory viewer at a stable URL.
 
-The default viewer port `18799` is therefore claimed twice. Two
-options were considered:
+## Current design (2026-04 onwards)
 
-1. **Single viewer, shared DB** — route every plugin's writes through
-   one process that owns the port and one merged SQLite file. This
-   breaks V7 §0.3's per-agent isolation guarantee (reward signals
-   from agent A must not influence agent B's skill weights) and
-   requires invasive bridge work.
-2. **One viewer per agent, with cross-linking** — keep each instance
-   sovereign, but surface the "other" agent in the header so users
-   can jump between viewers without hunting for a port.
+### One agent, one port — period
 
-We chose **option 2**. The implementation lives in three files.
+Each agent runs its own viewer on its own well-known port:
 
-## Implementation
+| Agent     | Viewer URL                  |
+| --------- | --------------------------- |
+| openclaw  | `http://127.0.0.1:18799`    |
+| hermes    | `http://127.0.0.1:18800`    |
 
-### 1. Automatic port fallback
+The ports are **fixed** in the templates that ship with the installer
+(`templates/config.openclaw.yaml`, `templates/config.hermes.yaml`)
+and cannot be changed via `install.sh` (no `--port` flag). Users who
+truly need a different port can edit `~/.<agent>/memos-plugin/config.yaml`
+and restart that agent — but they take responsibility for the port
+collision themselves.
 
-`server/http.ts::startHttpServer` now walks the configured port and
-the next 10 ports until it finds a free one:
+### Why we deleted the previous "single port, hub/peer" design
 
-```
-for (let i = 0; i <= 10; i++) {
-  const candidate = port + i;
-  try {
-    await server.listen(candidate, host);
-    break;
-  } catch (e) {
-    if (e.code !== 'EADDRINUSE') throw e;
-    // try next port
-  }
-}
-```
+An earlier revision of this plugin tried to put both agents behind a
+single `:18799`:
 
-The actually-bound port is logged and reflected back via `/api/v1/health`.
+- Whichever bridge bound the port first became "the hub" and reverse-
+  proxied for the loser; the loser ran headless.
+- A `HubPromoter` polled every 5 s so the loser could take over when
+  the hub exited.
+- A read-only `peer-core` opened the peer's SQLite (WAL) so
+  `/openclaw/*` and `/hermes/*` both rendered live data from one
+  process.
 
-### 2. Agent identity on `/api/v1/health`
+This worked, but it produced a steady stream of subtle bugs:
 
-Each core knows its own agent (`handle.agent`). The health endpoint
-returns:
+- **Mutation white-listing.** Every "looks like a write but doesn't
+  touch SQLite" endpoint (`/api/v1/auth/*`, `/api/v1/config`,
+  `/api/v1/models/test`) needed a hand-curated exemption from a 405
+  guard. Forgetting one made the panel silently broken (Sign Out
+  no-op, "测试" rejected, settings unsaved).
+- **Wrong `home` everywhere.** Route handlers that read disk state
+  (`loadConfig(home)`, e.g. for masked-secret resolution) ran with
+  the *hub's* home unless we threaded the peer's home through
+  `peerDeps`. Easy to miss; the failure mode was "settings page
+  silently uses the wrong agent's apiKey".
+- **Misleading status.** The peer panel had no live LLM / embedder
+  client to query, so the sidebar status dot relied on disk-derived
+  heuristics (config provider + most-recent trace ts). Fragile.
+- **Restart-required UX.** Editing peer config wrote `config.yaml` on
+  disk but the peer process only re-reads it on boot; users saw "I
+  changed the model and nothing happened".
 
-```json
-{
-  "ok": true,
-  "agent": "openclaw",
-  "version": "2.0.0-beta.1",
-  "paths": { … }
-}
-```
+The complexity grew faster than the value. Two well-known ports is
+boring, but boring is the goal.
 
-### 3. Peer discovery in the viewer
-
-`web/src/stores/peers.ts` probes the ±10 ports around the current
-tab's port, calling each candidate's `/api/v1/health`. Any response
-whose `agent` differs from this tab's becomes a **peer** listed in
-the header:
+### URL layout
 
 ```
-[MemOS logo]  MemOS Local   reflect2evolve   [openclaw] [↗ hermes]
+http://127.0.0.1:18799/         → openclaw viewer SPA
+http://127.0.0.1:18800/         → hermes viewer SPA
 ```
 
-The peer pill is a plain `<a href>` that opens the other viewer in
-a new tab. No cross-origin cookies, no shared auth — each viewer
-keeps its own session.
+Both servers also accept the legacy prefixed forms (`/openclaw/...`,
+`/hermes/...`) and respond with a 302 to the right port — so existing
+bookmarks from the previous design keep working.
 
-## Non-goals
+### No picker page
 
-- We don't aggregate memories from both agents into one search.
-  Different agents' memory namespaces are deliberately isolated.
-- We don't relay writes from one agent's process through another.
-  Every agent continues to persist to its own `memos.db`.
+The root path on either viewer goes **straight to that agent's SPA**.
+There is no "choose an agent" landing page — :18799 is openclaw,
+:18800 is hermes, period. Each port is a self-contained app.
 
-## Installing both agents today
+### Header switcher (the only cross-port surface)
 
-```bash
-bash install.sh --version path-to.tgz   # interactive: pick "both"
-```
+The viewer SPA also probes the peer's well-known port once on load
+(`web/src/stores/peers.ts`) and surfaces a small pill in the top bar
+linking to it (when reachable). That's the only piece of cross-port
+discovery in the whole system, and it's a single-shot `fetch` against
+`http://127.0.0.1:<peer port>/api/v1/health`.
 
-With the auto-fallback in place:
+## Trade-off accepted
 
-- First plugin to boot grabs `:18799`.
-- Second plugin logs `server.port_fallback { requested: 18799, bound: 18800 }`
-  and the header of **either** viewer shows a pill linking to the
-  other one.
-
-## Future: Hub mode
-
-If a user wants a **single URL** for both agents (e.g. for nginx),
-the cleanest path is to add a `viewer.peersFromConfig: [{...}]`
-array to `config.yaml`, point agent B at agent A's URL, and disable
-agent B's own HTTP listener. That becomes a superset of today's
-peer-discovery UI and is slotted for a later phase.
+- **Two URLs to remember / bookmark.** That's the whole cost. We
+  argue it's a one-time UX cost (users bookmark once) versus a
+  recurring engineering tax that the hub/peer model imposed on every
+  new feature.
+- **No "view both panels in one tab".** There never really was — the
+  peer panel was read-only and missed live SSE anyway. Now you open
+  two browser tabs.
+- **No login sharing across ports.** Browser cookies are scoped per
+  `host:port`. If you enable password protection on both agents, you
+  log in twice. Acceptable for a localhost-only viewer.

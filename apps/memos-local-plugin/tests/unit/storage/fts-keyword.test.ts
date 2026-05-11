@@ -1,6 +1,5 @@
 /**
- * Tests for the FTS5 trigram + LIKE pattern keyword channels added in
- * migration 010.
+ * Tests for the FTS5 trigram + LIKE pattern keyword channels.
  *
  * Coverage targets:
  *   - traces / skills / world_model all gain `searchByText` + `searchByPattern`
@@ -66,6 +65,7 @@ describe("storage/keyword channels — traces", () => {
       tags: opts.tags ?? [],
       vecSummary: vec([1, 0, 0]),
       vecAction: null,
+      turnId: 0 as never,
       schemaVersion: 1,
     });
   }
@@ -186,6 +186,7 @@ describe("storage/keyword channels — skills", () => {
       trialsPassed: 1,
       sourcePolicyIds: [],
       sourceWorldModelIds: [],
+      evidenceAnchors: [],
       vec: vec([1, 0, 0]),
       createdAt: 0,
       updatedAt: 0,
@@ -283,6 +284,7 @@ describe("storage/keyword channels — world model", () => {
       vec: vec([1, 0, 0]),
       createdAt: 0,
       updatedAt: 0,
+      version: 1,
       status: "active",
     });
   }

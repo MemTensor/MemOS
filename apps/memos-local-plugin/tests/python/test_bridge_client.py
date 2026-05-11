@@ -105,6 +105,21 @@ class _ServerStream(io.StringIO):
                     "result": {"sessionId": "hermes:session:1"},
                 }
             )
+        elif method == "turn.start":
+            q = (req.get("params") or {}).get("userText", "")
+            self._enqueue(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "result": {
+                        "query": {
+                            "sessionId": "hermes:session:1",
+                            "episodeId": "ep-1",
+                        },
+                        "injectedContext": f"- remembered context for {q}",
+                    },
+                }
+            )
         elif method == "boom":
             self._enqueue(
                 {
@@ -136,6 +151,89 @@ class _ServerStream(io.StringIO):
             self._event.clear()
             if self._pos >= len(self.getvalue()) and hasattr(self, "_done") and self._done:
                 return
+
+
+class RecordingBridge:
+    """Small fake for MemTensorProvider.handle_tool_call tests."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def request(self, method: str, params: dict | None = None) -> dict | None:
+        payload = params or {}
+        self.calls.append((method, payload))
+        if method == "memory.search":
+            return {
+                "hits": [
+                    {
+                        "tier": 2,
+                        "refKind": "trace",
+                        "refId": "tr-1",
+                        "score": 0.9,
+                        "snippet": f"hit for {payload.get('query')}",
+                    }
+                ]
+            }
+        if method == "memory.get_trace":
+            return {
+                "id": payload["id"],
+                "episodeId": "ep-1",
+                "ts": 123,
+                "value": 0.5,
+                "userText": "remember HERMES_MEMOS_E2E_0428",
+                "agentText": "recorded",
+                "reflection": "useful",
+                "toolCalls": [{"name": "terminal"}],
+            }
+        if method == "memory.get_policy":
+            return {
+                "id": payload["id"],
+                "title": "Hermes validation",
+                "procedure": "Check source and ~/.hermes/memos-plugin.",
+                "trigger": "memos test",
+                "verification": "six tools exposed",
+                "boundary": "",
+                "gain": 0.2,
+                "support": 1,
+                "status": "candidate",
+            }
+        if method == "memory.get_world":
+            return {
+                "id": payload["id"],
+                "title": "Hermes MemOS environment",
+                "body": "Hermes viewer runs on 18800.",
+                "policyIds": ["p-1"],
+            }
+        if method == "memory.timeline":
+            return {"traces": [{"id": "tr-1"}, {"id": "tr-2"}]}
+        if method == "skill.list":
+            return {
+                "skills": [
+                    {
+                        "id": "sk-1",
+                        "name": "verify-hermes-memos",
+                        "status": payload.get("status", "active"),
+                    }
+                ]
+            }
+        if method == "skill.get":
+            return {
+                "id": payload["id"],
+                "name": "verify-hermes-memos",
+                "invocationGuide": "Run the Hermes MemOS checklist.",
+            }
+        if method == "memory.list_world_models":
+            return {
+                "worldModels": [
+                    {
+                        "id": "wm-1",
+                        "title": "Hermes install",
+                        "body": "Install path is ~/.hermes/memos-plugin.",
+                        "policyIds": [],
+                    }
+                ]
+            }
+        return {}
 
 
 class BridgeClientTests(unittest.TestCase):
@@ -224,8 +322,17 @@ class MemTensorProviderTests(unittest.TestCase):
         p = self._provider_mod.MemTensorProvider()
         schemas = p.get_tool_schemas()
         names = {s["name"] for s in schemas}
-        self.assertIn("memory_search", names)
-        self.assertIn("memory_timeline", names)
+        self.assertSetEqual(
+            names,
+            {
+                "memory_search",
+                "memory_get",
+                "memory_timeline",
+                "skill_list",
+                "memory_environment",
+                "skill_get",
+            },
+        )
 
     def test_handle_tool_call_fails_gracefully_without_bridge(self) -> None:
         p = self._provider_mod.MemTensorProvider()
@@ -234,9 +341,111 @@ class MemTensorProviderTests(unittest.TestCase):
         parsed = json.loads(res)
         self.assertIn("error", parsed)
 
-    def test_prefetch_returns_empty_without_bridge(self) -> None:
+    def test_handle_tool_call_routes_all_exposed_tools(self) -> None:
         p = self._provider_mod.MemTensorProvider()
-        self.assertEqual(p.prefetch("anything"), "")
+        bridge = RecordingBridge()
+        p._bridge = bridge
+        p._session_id = "hermes:session:1"
+        p._episode_id = "ep-1"
+
+        search = json.loads(
+            p.handle_tool_call(
+                "memory_search",
+                {"query": "HERMES_MEMOS_E2E_0428", "maxResults": 7, "sessionScope": True},
+            )
+        )
+        self.assertEqual(search["hits"][0]["refId"], "tr-1")
+        self.assertEqual(bridge.calls[-1][0], "memory.search")
+        self.assertEqual(bridge.calls[-1][1]["sessionId"], "hermes:session:1")
+        self.assertEqual(bridge.calls[-1][1]["topK"]["tier1"], 7)
+
+        got_trace = json.loads(p.handle_tool_call("memory_get", {"id": "tr-1"}))
+        self.assertTrue(got_trace["found"])
+        self.assertEqual(got_trace["kind"], "trace")
+        self.assertIn("HERMES_MEMOS_E2E_0428", got_trace["meta"]["userText"])
+        self.assertEqual(bridge.calls[-1][0], "memory.get_trace")
+
+        got_policy = json.loads(p.handle_tool_call("memory_get", {"id": "p-1", "kind": "policy"}))
+        self.assertEqual(got_policy["kind"], "policy")
+        self.assertIn("Hermes validation", got_policy["body"])
+        self.assertEqual(bridge.calls[-1][0], "memory.get_policy")
+
+        got_world = json.loads(
+            p.handle_tool_call("memory_get", {"id": "wm-1", "kind": "world_model"})
+        )
+        self.assertEqual(got_world["kind"], "world_model")
+        self.assertEqual(got_world["meta"]["policyIds"], ["p-1"])
+        self.assertEqual(bridge.calls[-1][0], "memory.get_world")
+
+        timeline = json.loads(p.handle_tool_call("memory_timeline", {"episodeId": "ep-1"}))
+        self.assertEqual(len(timeline["traces"]), 2)
+        self.assertEqual(bridge.calls[-1][0], "memory.timeline")
+
+        skills = json.loads(p.handle_tool_call("skill_list", {"status": "active", "limit": 3}))
+        self.assertEqual(skills["skills"][0]["id"], "sk-1")
+        self.assertEqual(bridge.calls[-1][0], "skill.list")
+        self.assertEqual(bridge.calls[-1][1]["limit"], 3)
+        self.assertEqual(bridge.calls[-1][1]["status"], "active")
+        self.assertEqual(bridge.calls[-1][1]["namespace"]["agentKind"], "hermes")
+
+        env = json.loads(p.handle_tool_call("memory_environment", {"limit": 2}))
+        self.assertFalse(env["queried"])
+        self.assertEqual(env["worldModels"][0]["id"], "wm-1")
+        self.assertEqual(bridge.calls[-1][0], "memory.list_world_models")
+
+        env_query = json.loads(
+            p.handle_tool_call("memory_environment", {"query": "Hermes install", "limit": 2})
+        )
+        self.assertTrue(env_query["queried"])
+        self.assertEqual(bridge.calls[-1][0], "memory.search")
+        self.assertEqual(bridge.calls[-1][1]["topK"], {"tier1": 0, "tier2": 0, "tier3": 2})
+
+        skill = json.loads(p.handle_tool_call("skill_get", {"id": "sk-1"}))
+        self.assertTrue(skill["found"])
+        self.assertEqual(skill["skill"]["id"], "sk-1")
+        self.assertEqual(bridge.calls[-1][0], "skill.get")
+        self.assertEqual(bridge.calls[-1][1]["id"], "sk-1")
+        self.assertTrue(bridge.calls[-1][1]["recordTrial"])
+
+    def test_handle_tool_call_validates_required_arguments(self) -> None:
+        p = self._provider_mod.MemTensorProvider()
+        p._bridge = RecordingBridge()
+
+        self.assertIn("missing query", p.handle_tool_call("memory_search", {}))
+        self.assertIn("missing id", p.handle_tool_call("memory_get", {}))
+        self.assertIn(
+            "unknown memory kind",
+            p.handle_tool_call("memory_get", {"id": "x", "kind": "bad"}),
+        )
+        self.assertIn("missing id", p.handle_tool_call("skill_get", {}))
+        self.assertIn("unknown tool", p.handle_tool_call("not_a_tool", {}))
+
+    def test_prefetch_lazily_reconnects_when_bridge_is_missing(self) -> None:
+        class PrefetchBridge:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, dict]] = []
+
+            def register_host_handler(self, *_args, **_kwargs) -> None:
+                pass
+
+            def request(self, method: str, params: dict | None = None, **_kwargs) -> dict:
+                payload = params or {}
+                self.calls.append((method, payload))
+                if method == "session.open":
+                    return {"sessionId": "hermes:session:1"}
+                if method == "turn.start":
+                    return {
+                        "query": {"episodeId": "ep-1"},
+                        "injectedContext": "- remembered context for anything",
+                    }
+                return {}
+
+        p = self._provider_mod.MemTensorProvider()
+        bridge = PrefetchBridge()
+        with patch("memos_provider.MemosBridgeClient", return_value=bridge):
+            self.assertIn("Recalled Memories", p.prefetch("anything"))
+        self.assertIsNotNone(p._bridge)
+        self.assertEqual([c[0] for c in bridge.calls], ["session.open", "turn.start"])
 
     def test_on_turn_start_stashes_message(self) -> None:
         p = self._provider_mod.MemTensorProvider()
@@ -254,6 +463,112 @@ class MemTensorProviderTests(unittest.TestCase):
         p = self._provider_mod.MemTensorProvider()
         p.on_turn_start(1, "earlier user text")
         self.assertEqual(p.on_pre_compress([{"role": "user", "content": "x"}]), "")
+
+    def test_sync_turn_transport_closed_logs_error_if_retry_fails(self) -> None:
+        """Retry failures are surfaced explicitly instead of silent loss."""
+
+        class BrokenBridge:
+            def close(self):
+                pass
+
+            def request(self, method, params=None, **_kwargs):
+                if method == "turn.end":
+                    raise BridgeError("transport_closed", "[Errno 32] Broken pipe")
+                return {}
+
+        class RetryFailBridge:
+            def request(self, method, params=None):
+                if method == "session.open":
+                    return {"sessionId": (params or {}).get("sessionId", "sess")}
+                if method == "turn.start":
+                    return {"query": {"episodeId": "ep_after_reconnect"}}
+                if method == "turn.end":
+                    raise BridgeError("internal", "still down")
+                return {}
+
+        p = self._provider_mod.MemTensorProvider()
+        p._bridge = BrokenBridge()
+        p._session_id = "sess_tui_long_running"
+        p._episode_id = "ep_tui_long_running"
+
+        with (
+            patch("memos_provider.MemosBridgeClient", return_value=RetryFailBridge()),
+            self.assertLogs("memos_provider", level="ERROR") as logs,
+        ):
+            p.sync_turn(
+                "帮我检索一下最近关于中东的事件，以及分析下局势",
+                "最近有关中东的事件和局势如下...",
+            )
+
+        joined = "\n".join(logs.output)
+        self.assertIn("failed after bridge reconnect", joined)
+        self.assertIn("memory turn was not persisted", joined)
+
+    def test_sync_turn_reconnects_and_retries_after_transport_closed(self) -> None:
+        """Reconnect and retry once after a stale bridge pipe."""
+
+        class BrokenBridge:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+            def request(self, method, params=None):
+                if method == "turn.end":
+                    raise BridgeError("transport_closed", "[Errno 32] Broken pipe")
+                return {}
+
+        class HealthyBridge:
+            def __init__(self):
+                self.calls = []
+
+            def register_host_handler(self, _method, _handler):
+                return None
+
+            def request(self, method, params=None, **_kwargs):
+                self.calls.append((method, params or {}))
+                if method == "session.open":
+                    return {"sessionId": (params or {}).get("sessionId", "sess")}
+                if method == "turn.start":
+                    return {"query": {"episodeId": "ep_after_reconnect"}}
+                if method == "turn.end":
+                    return {"traceId": "tr_after_reconnect"}
+                return {}
+
+        broken = BrokenBridge()
+        replacement = HealthyBridge()
+        p = self._provider_mod.MemTensorProvider()
+        p._bridge = broken
+        p._session_id = "sess_tui_long_running"
+        p._episode_id = "ep_tui_long_running"
+        p._hermes_home = "/tmp/hermes-home"
+        p._platform = "tui"
+        p._agent_identity = "hermes-test"
+        p._tool_calls = [{"name": "search_files", "input": "{}", "output": "ok"}]
+
+        with patch("memos_provider.MemosBridgeClient", return_value=replacement):
+            p.sync_turn(
+                "帮我检索一下最近关于中东的事件，以及分析下局势",
+                "最近有关中东的事件和局势如下...",
+            )
+
+        methods = [method for method, _params in replacement.calls]
+        self.assertEqual(methods, ["session.open", "turn.start", "turn.end"])
+        self.assertTrue(broken.closed)
+        self.assertEqual(p._episode_id, "ep_after_reconnect")
+
+        session_params = replacement.calls[0][1]
+        self.assertEqual(session_params["sessionId"], "sess_tui_long_running")
+        self.assertEqual(session_params["meta"]["platform"], "tui")
+        self.assertEqual(session_params["meta"]["agentIdentity"], "hermes-test")
+
+        retry_payload = replacement.calls[-1][1]
+        self.assertEqual(retry_payload["sessionId"], "sess_tui_long_running")
+        self.assertEqual(retry_payload["episodeId"], "ep_after_reconnect")
+        self.assertIn("中东", retry_payload["userText"])
+        self.assertIn("局势", retry_payload["agentText"])
+        self.assertEqual(retry_payload["toolCalls"][0]["name"], "search_files")
 
     def test_get_config_schema_describes_known_fields(self) -> None:
         p = self._provider_mod.MemTensorProvider()

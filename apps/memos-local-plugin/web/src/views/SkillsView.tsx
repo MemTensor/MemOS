@@ -1,3 +1,4 @@
+/** @jsxImportSource preact */
 /**
  * Skills view — browse + archive + download crystallized skills.
  *
@@ -9,12 +10,18 @@
  *   - Archive
  */
 import { useEffect, useState } from "preact/hooks";
-import { api, withAgentPrefix } from "../api/client";
+import { api } from "../api/client";
+import { openSse } from "../api/sse";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
+import { Pager } from "../components/Pager";
+import { ShareScopePill } from "../components/ShareScopePill";
+import { Markdown } from "../components/Markdown";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
-import type { SkillDTO } from "../api/types";
+import type { CoreEvent, SkillDTO } from "../api/types";
+import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
+import { loadHubSharingEnabled } from "../utils/share";
 
 interface SkillUsage {
   sourcePolicies: Array<{
@@ -28,7 +35,25 @@ interface SkillUsage {
 
 type StatusFilter = "" | "active" | "candidate" | "archived";
 
-const PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE = 20;
+
+interface SkillModelRefusalPayload {
+  kind?: string;
+  policyId?: string;
+  modelRefusal?: {
+    provider?: string;
+    model?: string;
+    servedBy?: string;
+    content?: string;
+  };
+}
+
+interface SkillRefusalNotice {
+  id: number;
+  policyId: string;
+  model: string;
+  content: string;
+}
 
 export function SkillsView() {
   const [query, setQuery] = useState("");
@@ -37,8 +62,12 @@ export function SkillsView() {
   const [detail, setDetail] = useState<SkillDTO | null>(null);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [refusalNotices, setRefusalNotices] = useState<SkillRefusalNotice[]>([]);
+  const [showRefusalNotices, setShowRefusalNotices] = useState(false);
   const toggleSel = (id: string) => {
     setSelected((prev) => {
       const n = new Set(prev);
@@ -48,29 +77,61 @@ export function SkillsView() {
     });
   };
 
+  useEffect(() => {
+    const ctrl = new AbortController();
+    void loadHubSharingEnabled({ force: true, signal: ctrl.signal });
+    return () => ctrl.abort();
+  }, []);
+
   const load = async (nextPage: number = 0) => {
     setLoading(true);
     try {
       const qs = new URLSearchParams();
-      qs.set("limit", String(PAGE_SIZE));
-      qs.set("offset", String(nextPage * PAGE_SIZE));
+      qs.set("limit", String(pageSize));
+      qs.set("offset", String(nextPage * pageSize));
       if (status) qs.set("status", status);
-      const r = await api.get<{ skills: SkillDTO[]; nextOffset?: number }>(
+      const r = await api.get<{ skills: SkillDTO[]; nextOffset?: number; total?: number }>(
         `/api/v1/skills?${qs.toString()}`,
       );
       setSkills(r.skills ?? []);
       setHasMore(r.nextOffset != null);
+      setTotal(r.total ?? 0);
       setPage(nextPage);
     } catch {
       setSkills([]);
       setHasMore(false);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
   };
   useEffect(() => {
     void load(0);
-  }, [status]);
+  }, [status, pageSize]);
+
+  useEffect(() => {
+    const handle = openSse("/api/v1/events", (_, data) => {
+      try {
+        const evt = JSON.parse(data) as CoreEvent<SkillModelRefusalPayload>;
+        if (evt.type !== "system.error") return;
+        const payload = evt.payload;
+        if (payload?.kind !== "skill.model_refusal") return;
+        const refusal = payload.modelRefusal ?? {};
+        setRefusalNotices((prev) => [
+          {
+            id: evt.seq,
+            policyId: payload.policyId ?? "unknown",
+            model: [refusal.provider, refusal.model].filter(Boolean).join("/") || "unknown model",
+            content: refusal.content ?? "",
+          },
+          ...prev,
+        ].slice(0, 20));
+      } catch {
+        /* Ignore malformed SSE payloads. */
+      }
+    });
+    return () => handle.close();
+  }, []);
 
   // Deep-link: `#/skills?id=sk_xxx` auto-opens the drawer.
   useEffect(() => {
@@ -98,6 +159,8 @@ export function SkillsView() {
       s.invocationGuide.toLowerCase().includes(q)
     );
   });
+  const pageIds = filtered.map((s) => s.id);
+  const isPageSelected = areAllIdsSelected(selected, pageIds);
 
   return (
     <>
@@ -107,6 +170,15 @@ export function SkillsView() {
           <p>{t("skills.subtitle")}</p>
         </div>
         <div class="view-header__actions">
+          <SkillRefusalDropdown
+            notices={refusalNotices}
+            open={showRefusalNotices}
+            onToggle={() => setShowRefusalNotices((v) => !v)}
+            onClear={() => {
+              setRefusalNotices([]);
+              setShowRefusalNotices(false);
+            }}
+          />
           {/*
            * Refresh — matches MemoriesView / TasksView / PoliciesView /
            * WorldModelsView. Clears search + status filter, drops
@@ -207,6 +279,7 @@ export function SkillsView() {
                 <div class="mem-card__body">
                   <div class="mem-card__title">{s.name}</div>
                   <div class="mem-card__meta">
+                    <ShareScopePill scope={s.share?.scope} />
                     <span class={`pill pill--${s.status}`}>
                       {t(`status.${s.status}` as "status.active")}
                     </span>
@@ -216,6 +289,23 @@ export function SkillsView() {
                     <span>η {(s.eta ?? 0).toFixed(2)}</span>
                     <span>gain {(s.gain ?? 0).toFixed(2)}</span>
                     <span>support {s.support ?? 0}</span>
+                    <span>
+                      {t("skills.trials.pass", {
+                        count: String(s.trialsPassed ?? 0),
+                      })}
+                    </span>
+                    <span>
+                      {t("skills.usage.count", {
+                        count: String(s.usageCount ?? 0),
+                      })}
+                    </span>
+                    {s.lastUsedAt && (
+                      <span>
+                        {t("skills.usage.lastUsed", {
+                          at: formatWhen(s.lastUsedAt),
+                        })}
+                      </span>
+                    )}
                     <span>
                       {t("skills.updated.ago", {
                         at: formatWhen(s.updatedAt),
@@ -233,25 +323,17 @@ export function SkillsView() {
       )}
 
       {(page > 0 || hasMore) && (
-        <div class="pager">
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page === 0 || loading}
-            onClick={() => void load(page - 1)}
-          >
-            <Icon name="chevron-left" size={14} />
-            {t("common.prev")}
-          </button>
-          <span class="pager__info">{t("pager.page", { n: page + 1 })}</span>
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={!hasMore || loading}
-            onClick={() => void load(page + 1)}
-          >
-            {t("common.next")}
-            <Icon name="chevron-right" size={14} />
-          </button>
-        </div>
+        <Pager
+          page={page}
+          totalItems={total}
+          pageSize={pageSize}
+          hasMore={hasMore}
+          loading={loading}
+          onPageSizeChange={setPageSize}
+          onPageChange={(nextPage) => {
+            void load(nextPage);
+          }}
+        />
       )}
 
       {detail && (
@@ -276,10 +358,10 @@ export function SkillsView() {
           </span>
           <button
             class="btn btn--sm"
-            onClick={() => setSelected(new Set(filtered.map((s) => s.id)))}
+            onClick={() => setSelected((prev) => toggleIdsInSelection(prev, pageIds))}
           >
             <Icon name="check-square" size={14} />
-            {t("common.selectPage")}
+            {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
           </button>
           <button
             class="btn btn--danger btn--sm"
@@ -309,6 +391,66 @@ export function SkillsView() {
   );
 }
 
+function SkillRefusalDropdown({
+  notices,
+  open,
+  onToggle,
+  onClear,
+}: {
+  notices: SkillRefusalNotice[];
+  open: boolean;
+  onToggle: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div class="skill-refusal-menu">
+      <button
+        class="btn btn--ghost btn--sm skill-refusal-menu__trigger"
+        onClick={onToggle}
+        aria-expanded={open}
+        title="Skill 沉淀模型拒答提醒"
+      >
+        <Icon name="bell" size={14} />
+        <span>提醒</span>
+        {notices.length > 0 && (
+          <span class="skill-refusal-menu__badge">{notices.length}</span>
+        )}
+        <Icon name={open ? "chevron-up" : "chevron-down"} size={12} />
+      </button>
+      {open && (
+        <div class="skill-refusal-menu__panel">
+          <div class="skill-refusal-menu__head">
+            <strong>Skill 沉淀提醒</strong>
+            <button
+              class="btn btn--ghost btn--icon"
+              onClick={onClear}
+              aria-label="清空提醒"
+              title="清空提醒"
+            >
+              <Icon name="x" size={14} />
+            </button>
+          </div>
+          {notices.length === 0 ? (
+            <div class="skill-refusal-menu__empty">暂无模型拒答提醒</div>
+          ) : (
+            <div class="skill-refusal-menu__list">
+              {notices.map((item) => (
+                <div class="skill-refusal-menu__item" key={item.id}>
+                  <div class="skill-refusal-menu__meta">
+                    <span>Policy: {item.policyId}</span>
+                    <span>Model: {item.model}</span>
+                  </div>
+                  <div class="skill-refusal-menu__content">{item.content}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface TimelineEntry {
   ts: number;
   kind: string;
@@ -330,12 +472,18 @@ function SkillDrawer({
   const [mode, setMode] = useState<"view" | "edit" | "share">("view");
   const [name, setName] = useState(skill.name);
   const [guide, setGuide] = useState(skill.invocationGuide ?? "");
-  const [scope, setScope] = useState<"private" | "public" | "hub">(
+  const [scope, setScope] = useState<"private" | "local" | "public" | "hub">(
     skill.share?.scope ?? "public",
   );
   const [busy, setBusy] = useState(false);
   const [timeline, setTimeline] = useState<TimelineEntry[] | null>(null);
   const [usage, setUsage] = useState<SkillUsage | null>(null);
+  const decisionGuidance = normalizeDecisionGuidance(
+    (skill as { decisionGuidance?: unknown }).decisionGuidance,
+  );
+  const evidenceAnchors = normalizeEvidenceAnchors(
+    (skill as { evidenceAnchors?: unknown }).evidenceAnchors,
+  );
 
   useEffect(() => {
     setName(skill.name);
@@ -414,7 +562,7 @@ function SkillDrawer({
     }
   };
 
-  const submitShare = async (s: "private" | "public" | "hub" | null) => {
+  const submitShare = async (s: "private" | "local" | "public" | "hub" | null) => {
     setBusy(true);
     try {
       await api.post(`/api/v1/skills/${encodeURIComponent(skill.id)}/share`, {
@@ -426,16 +574,23 @@ function SkillDrawer({
     }
   };
 
-  const downloadZip = () => {
-    const url = withAgentPrefix(
-      `/api/v1/skills/${encodeURIComponent(skill.id)}/download`,
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${skill.name.replace(/[^\w.-]+/g, "_") || "skill"}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const downloadZip = async () => {
+    setBusy(true);
+    try {
+      const blob = await api.blob(
+        `/api/v1/skills/${encodeURIComponent(skill.id)}/download`,
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${skill.name.replace(/[^\w.-]+/g, "_") || "skill"}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -475,6 +630,8 @@ function SkillDrawer({
                   {t(`status.${skill.status}` as "status.active")}
                 </span>
               </dd>
+              <dt class="muted">{t("memories.field.share")}</dt>
+              <dd><ShareScopePill scope={skill.share?.scope} /></dd>
               <dt class="muted">{t("skills.detail.version")}</dt>
               <dd>v{skill.version ?? 1}</dd>
               <dt class="muted">{t("memories.field.eta")}</dt>
@@ -483,6 +640,17 @@ function SkillDrawer({
               <dd>{(skill.gain ?? 0).toFixed(3)}</dd>
               <dt class="muted">{t("memories.field.support")}</dt>
               <dd>{skill.support ?? 0}</dd>
+              <dt class="muted">{t("skills.trials.pass.label")}</dt>
+              <dd>
+                {t("skills.trials.pass.detail", {
+                  passed: String(skill.trialsPassed ?? 0),
+                  attempted: String(skill.trialsAttempted ?? 0),
+                })}
+              </dd>
+              <dt class="muted">{t("skills.usage.count.label")}</dt>
+              <dd>{skill.usageCount ?? 0}</dd>
+              <dt class="muted">{t("skills.usage.lastUsed.label")}</dt>
+              <dd>{skill.lastUsedAt ? formatWhen(skill.lastUsedAt) : t("common.never")}</dd>
               <dt class="muted">{t("memories.field.updatedAt")}</dt>
               <dd>{formatWhen(skill.updatedAt)}</dd>
             </dl>
@@ -492,12 +660,13 @@ function SkillDrawer({
             <h3 class="card__title" style="font-size:var(--fs-md)">
               {t("skills.detail.desc")}
             </h3>
-            <pre
-              class="mono"
-              style="white-space:pre-wrap;font-size:var(--fs-sm);margin:0;color:var(--fg)"
-            >
-              {skill.invocationGuide || "(empty)"}
-            </pre>
+            {skill.invocationGuide ? (
+              <Markdown text={skill.invocationGuide} />
+            ) : (
+              <div class="muted" style="font-size:var(--fs-sm)">
+                (empty)
+              </div>
+            )}
           </section>
 
           {(usage?.sourcePolicies.length ?? 0) > 0 && (
@@ -540,6 +709,80 @@ function SkillDrawer({
                     title={w.id}
                   >
                     {w.title ?? w.id.slice(0, 10)}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/*
+           * V7 §2.4.6 — decision guidance distilled by the crystallizer
+           * from past failures + user feedback. Empty arrays mean
+           * "nothing was learned yet"; we hide the section in that case
+           * so the drawer stays uncluttered.
+           */}
+          {(decisionGuidance.preference.length > 0 ||
+            decisionGuidance.antiPattern.length > 0) && (
+            <section class="card card--flat">
+              <h3 class="card__title" style="font-size:var(--fs-md);margin-bottom:var(--sp-3)">
+                {t("skills.detail.decisionGuidance")}
+              </h3>
+              {decisionGuidance.preference.length > 0 && (
+                <div style="margin-bottom:var(--sp-3)">
+                  <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
+                    {t("skills.detail.decisionGuidance.prefer")}
+                  </div>
+                  <ul style="margin:0;padding-left:18px;font-size:var(--fs-sm);line-height:1.55">
+                    {decisionGuidance.preference.map((p, i) => (
+                      <li key={`p-${i}`}>{p}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {decisionGuidance.antiPattern.length > 0 && (
+                <div>
+                  <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">
+                    {t("skills.detail.decisionGuidance.avoid")}
+                  </div>
+                  <ul style="margin:0;padding-left:18px;font-size:var(--fs-sm);line-height:1.55">
+                    {decisionGuidance.antiPattern.map((a, i) => (
+                      <li key={`a-${i}`}>{a}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/*
+           * V7 §2.1 evidence_anchors — direct trace-level provenance.
+           * Click-through chips deep-link into MemoriesView so the user
+           * can audit "which memories justified this skill?".
+           */}
+          {evidenceAnchors.length > 0 && (
+            <section class="card card--flat">
+              <h3 class="card__title" style="font-size:var(--fs-md);margin-bottom:var(--sp-3)">
+                {t("skills.detail.evidenceAnchors", {
+                  n: evidenceAnchors.length,
+                })}
+              </h3>
+              <div class="hstack" style="flex-wrap:wrap;gap:var(--sp-2)">
+                {evidenceAnchors.map((anchor) => (
+                  <button
+                    key={anchor.key}
+                    class="pill pill--link mono"
+                    style={`cursor:${anchor.memoryId ? "pointer" : "default"};border:0;font-family:var(--font-mono);font-size:var(--fs-xs)`}
+                    // Trace ids open the Memories tab — traces surface
+                    // there one-row-per-step (collapsed by turnId into
+                    // memory cards). The cross-link store doesn't have
+                    // a "trace" entity kind because the user-facing
+                    // unit is "memory", not "trace".
+                    onClick={() => {
+                      if (anchor.memoryId) linkTo("memory", anchor.memoryId);
+                    }}
+                    title={anchor.title}
+                  >
+                    {anchor.label}
                   </button>
                 ))}
               </div>
@@ -626,7 +869,7 @@ function SkillDrawer({
               <div class="modal__field">
                 <label>{t("memories.share.scope")}</label>
                 <div class="vstack" style="gap:var(--sp-2)">
-                  {(["private", "public", "hub"] as const).map((v) => (
+                  {(["private", "local", "public", "hub"] as const).map((v) => (
                     <label
                       key={v}
                       class="hstack"
@@ -748,6 +991,130 @@ function formatWhen(ts: number | undefined): string {
     return new Date(ts).toLocaleString();
   } catch {
     return "—";
+  }
+}
+
+interface EvidenceAnchorView {
+  key: string;
+  label: string;
+  title: string;
+  memoryId?: string;
+}
+
+function normalizeDecisionGuidance(raw: unknown): {
+  preference: string[];
+  antiPattern: string[];
+} {
+  const source = parseJsonString(raw);
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return { preference: [], antiPattern: [] };
+  }
+  const obj = source as { preference?: unknown; antiPattern?: unknown };
+  return {
+    preference: stringArray(obj.preference),
+    antiPattern: stringArray(obj.antiPattern),
+  };
+}
+
+function normalizeEvidenceAnchors(raw: unknown): EvidenceAnchorView[] {
+  const source = parseJsonString(raw);
+  const list = Array.isArray(source) ? source : source == null ? [] : [source];
+  return list
+    .map((item, index) => normalizeEvidenceAnchor(item, index))
+    .filter((item): item is EvidenceAnchorView => item !== null);
+}
+
+function normalizeEvidenceAnchor(
+  raw: unknown,
+  index: number,
+): EvidenceAnchorView | null {
+  const value = parseJsonString(raw);
+  if (typeof value === "string") {
+    const id = value.trim();
+    if (!id) return null;
+    return {
+      key: `${index}:${id}`,
+      label: compactAnchorLabel(id),
+      title: id,
+      memoryId: id,
+    };
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const obj = value as Record<string, unknown>;
+  const directId =
+    firstString(obj.traceId, obj.trace_id, obj.memoryId, obj.memory_id, obj.id, obj.refId) ??
+    null;
+  const label = anchorObjectLabel(obj, directId);
+  if (!label) return null;
+
+  return {
+    key: `${index}:${directId ?? label}`,
+    label: compactAnchorLabel(label),
+    title: safeJsonTitle(obj) ?? label,
+    memoryId: directId ?? undefined,
+  };
+}
+
+function anchorObjectLabel(
+  obj: Record<string, unknown>,
+  directId: string | null,
+): string | null {
+  if (directId) return directId;
+
+  const kind = firstString(obj.kind, obj.type, obj.source);
+  const task = firstString(obj.task, obj.taskId, obj.task_id);
+  const skill = firstString(obj.skill, obj.skillId, obj.skill_id, obj.name);
+  if (kind && task && skill) return `${kind}:${task}/${skill}`;
+  if (kind && task) return `${kind}:${task}`;
+  if (task && skill) return `${task}/${skill}`;
+
+  return firstString(obj.label, obj.title, obj.path) ?? safeJsonTitle(obj);
+}
+
+function parseJsonString(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (!/^[\[{"]/.test(trimmed)) return value;
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function stringArray(value: unknown): string[] {
+  const parsed = parseJsonString(value);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .map((item) => {
+      const v = parseJsonString(item);
+      return typeof v === "string" ? v.trim() : "";
+    })
+    .filter(Boolean);
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const parsed = parseJsonString(value);
+    if (typeof parsed === "string" && parsed.trim()) return parsed.trim();
+  }
+  return null;
+}
+
+function compactAnchorLabel(value: string): string {
+  return value.length > 32 ? `${value.slice(0, 29)}...` : value;
+}
+
+function safeJsonTitle(value: unknown): string | null {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
   }
 }
 

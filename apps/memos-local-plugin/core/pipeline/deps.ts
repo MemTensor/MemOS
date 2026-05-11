@@ -201,6 +201,7 @@ export function buildPipelineSubscribers(
 
   const captureRunner = createCaptureRunner({
     tracesRepo: deps.repos.traces,
+    embeddingRetryQueue: deps.repos.embeddingRetryQueue,
     episodesRepo: adaptEpisodesRepo(deps.repos.episodes),
     embedder: deps.embedder,
     llm: deps.llm,
@@ -217,6 +218,12 @@ export function buildPipelineSubscribers(
     llm: deps.llm,
     bus: buses.reward,
     cfg: algorithm.reward,
+    evaluator: {
+      reflectionProvider: deps.reflectLlm?.provider,
+      reflectionModel: deps.reflectLlm?.model,
+      scorerProvider: deps.llm?.provider,
+      scorerModel: deps.llm?.model,
+    },
     now: deps.now,
     // Wire the live episode snapshot so the R_human scorer sees the
     // real user / assistant turns of the episode. Without this, the
@@ -340,7 +347,7 @@ export function buildRetrievalDeps(
 ): RetrievalDeps {
   const embedder = deps.embedder;
   return {
-    repos: wrapRetrievalRepos(deps.repos),
+    repos: wrapRetrievalRepos(deps.repos, deps.namespace),
     embedder: embedder
       ? {
           embed: (text, role) =>
@@ -353,6 +360,7 @@ export function buildRetrievalDeps(
             new Float32Array(0) as unknown as import("../types.js").EmbeddingVector,
         },
     config: algorithm.retrieval,
+    namespace: deps.namespace,
     now: deps.now ?? Date.now,
     llm: deps.llm,
   };

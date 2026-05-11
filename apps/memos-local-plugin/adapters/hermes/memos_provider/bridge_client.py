@@ -30,6 +30,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _installed_node_binary(plugin_root: Path) -> str | None:
+    marker = plugin_root / ".memos-node-bin"
+    try:
+        candidate = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return candidate
+    return None
+
+
 class BridgeError(RuntimeError):
     """Raised when the bridge returns a JSON-RPC error object."""
 
@@ -66,21 +77,55 @@ class MemosBridgeClient:
         self._pending: dict[int, dict[str, Any]] = {}
         self._events: list[Callable[[dict[str, Any]], None]] = []
         self._logs: list[Callable[[dict[str, Any]], None]] = []
+        # Reverse-direction handlers: the bridge can send us a
+        # JSON-RPC request via `serverRequest(...)` (e.g.
+        # `host.llm.complete` for fallback LLM calls). Registered
+        # methods run on the dedicated reader thread; long-running
+        # work should spawn its own worker if it needs to. Each
+        # handler returns a JSON-serialisable value or raises to
+        # surface a JSON-RPC error back to the bridge.
+        self._host_handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
         self._closed = False
 
-        node = node_binary or shutil.which("node") or "node"
-        script = bridge_path or str(
-            Path(__file__).resolve().parent.parent.parent.parent / "bridge.cts"
+        plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+        node = (
+            node_binary
+            or os.environ.get("MEMOS_NODE_BINARY")
+            or _installed_node_binary(plugin_root)
+            or shutil.which("node")
+            or "node"
         )
+        script = bridge_path or str(plugin_root / "bridge.cts")
         env = {**os.environ, **(extra_env or {})}
+
+        # The plugin ships raw TypeScript (no precompiled `dist/`). Node's
+        # own `--experimental-strip-types` strips type annotations but does
+        # not rewrite `.js` import specifiers to the corresponding `.ts`
+        # files on disk — and the source tree uses `.js` extensions in
+        # every import per the TSC / bundler convention. We therefore
+        # launch the bridge via the bundled `tsx` binary, which handles
+        # both jobs (strip types + extension rewrite). `tsx` is declared
+        # as a production dependency in package.json so it's always present
+        # under node_modules/.bin after `npm install`.
+        tsx_bin = plugin_root / "node_modules" / ".bin" / "tsx"
+        if tsx_bin.exists():
+            cmd = [node, str(tsx_bin), script, f"--agent={agent}"]
+        else:
+            # Fallback path: `node --import tsx` reproduces the same loader
+            # inline. Requires tsx to be resolvable as a package from the
+            # plugin root — true whenever node_modules exists. If tsx is
+            # genuinely missing the child will fail fast with a loader
+            # error the stderr reader will surface.
+            cmd = [node, "--import", "tsx", script, f"--agent={agent}"]
         self._proc = subprocess.Popen(
-            [node, "--experimental-strip-types", script, f"--agent={agent}"],
+            cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
             env=env,
+            cwd=str(plugin_root),
         )
         self._reader = threading.Thread(
             target=self._read_loop,
@@ -153,16 +198,33 @@ class MemosBridgeClient:
     def on_log(self, cb: Callable[[dict[str, Any]], None]) -> None:
         self._logs.append(cb)
 
+    def register_host_handler(
+        self,
+        method: str,
+        handler: Callable[[dict[str, Any]], Any],
+    ) -> None:
+        """Register a handler for bridge → adapter (reverse) requests.
+
+        The Node-side bridge calls these via ``stdio.serverRequest``.
+        Most-recent registration wins. The handler runs on the reader
+        thread; if it blocks for a long time it stalls every other
+        bridge → adapter notification, so handlers that need to do
+        heavy work (e.g. an LLM call) are still expected to return
+        within the bridge-side timeout (default 60 s).
+        """
+        self._host_handlers[method] = handler
+
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         with contextlib.suppress(Exception):
             self._proc.stdin.close()
-        try:
-            self._proc.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            self._proc.kill()
+        # DON'T wait() or kill() the bridge process. If it has an
+        # active viewer (HTTP server), it will stay alive as a daemon
+        # so the memory panel remains accessible between `hermes chat`
+        # sessions. If it's headless (viewer port was taken), it will
+        # notice stdin EOF and exit on its own.
         # unblock any pending waiters
         with self._lock:
             for entry in list(self._pending.values()):
@@ -204,6 +266,68 @@ class MemosBridgeClient:
                     except Exception:
                         logger.debug("log listener threw", exc_info=True)
                 continue
+            # Reverse-direction request: the bridge is asking the
+            # adapter to do something (e.g. run a fallback LLM call
+            # via `host.llm.complete`). Dispatch to the registered
+            # handler and write the response back synchronously.
+            method = msg.get("method")
+            rpc_id = msg.get("id")
+            if (
+                isinstance(method, str)
+                and rpc_id is not None
+                and "result" not in msg
+                and "error" not in msg
+            ):
+                handler = self._host_handlers.get(method)
+                if handler is None:
+                    self._send_response(
+                        rpc_id,
+                        error={
+                            "code": -32601,
+                            "message": f"method not found: {method}",
+                            "data": {"code": "unknown_method"},
+                        },
+                    )
+                    continue
+                params = msg.get("params") or {}
+                if not isinstance(params, dict):
+                    params = {}
+                try:
+                    result = handler(params)
+                    self._send_response(rpc_id, result=result)
+                except Exception as err:
+                    logger.warning("host handler %s failed: %s", method, err)
+                    self._send_response(
+                        rpc_id,
+                        error={
+                            "code": -32000,
+                            "message": str(err) or err.__class__.__name__,
+                            "data": {"code": "host_handler_failed"},
+                        },
+                    )
+                continue
+
+    def _send_response(
+        self,
+        rpc_id: Any,
+        *,
+        result: Any = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        """Write a JSON-RPC response for a reverse-direction request."""
+        if self._closed:
+            return
+        payload: dict[str, Any] = {"jsonrpc": "2.0", "id": rpc_id}
+        if error is not None:
+            payload["error"] = error
+        else:
+            payload["result"] = result
+        with self._lock:
+            try:
+                self._proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                self._proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass
 
     def _stderr_loop(self) -> None:
         assert self._proc.stderr is not None

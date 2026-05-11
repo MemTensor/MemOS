@@ -11,9 +11,11 @@ import { useEffect, useState } from "preact/hooks";
 import { api } from "../api/client";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
+import { Pager } from "../components/Pager";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import { ChatLog, flattenChat, type TimelineTrace } from "./tasks-chat";
+import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
 
 type TaskStatus = "" | "active" | "completed" | "skipped" | "failed";
 
@@ -36,9 +38,16 @@ interface EpisodeRow {
     | "skipped"
     | null;
   skillReason?: string | null;
+  skillReasonKey?: string | null;
+  skillReasonParams?: Record<string, string> | null;
   linkedSkillId?: string | null;
   closeReason?: "finalized" | "abandoned" | null;
+  topicState?: "active" | "paused" | "interrupted" | "ended" | null;
+  pauseReason?: string | null;
   abandonReason?: string | null;
+  rewardSkipped?: boolean;
+  rewardReason?: string | null;
+  hasAssistantReply?: boolean;
 }
 
 interface Timeline {
@@ -46,7 +55,13 @@ interface Timeline {
   traces: TimelineTrace[];
 }
 
-const PAGE_SIZE = 20;
+interface EpisodeListResponse {
+  episodes: EpisodeRow[];
+  nextOffset?: number;
+  total?: number;
+}
+
+const DEFAULT_PAGE_SIZE = 20;
 
 export function TasksView() {
   const [query, setQuery] = useState("");
@@ -54,7 +69,9 @@ export function TasksView() {
   const [rows, setRows] = useState<EpisodeRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [detail, setDetail] = useState<EpisodeRow | null>(null);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -71,31 +88,71 @@ export function TasksView() {
     const ctrl = new AbortController();
     setLoading(true);
     const qs = new URLSearchParams();
-    qs.set("limit", String(PAGE_SIZE));
-    qs.set("offset", String(nextPage * PAGE_SIZE));
+    qs.set("limit", String(pageSize));
+    qs.set("offset", String(nextPage * pageSize));
     api
-      .get<{ episodes: EpisodeRow[]; nextOffset?: number }>(
+      .get<EpisodeListResponse>(
         `/api/v1/episodes?${qs.toString()}`,
         { signal: ctrl.signal },
       )
       .then((r) => {
         setRows(r.episodes ?? []);
         setHasMore(r.nextOffset != null);
+        setTotal(r.total ?? 0);
         setPage(nextPage);
       })
       .catch(() => {
         setRows([]);
         setHasMore(false);
+        setTotal(0);
       })
       .finally(() => setLoading(false));
     return ctrl;
   };
 
   useEffect(() => {
+    if (route.value.params.id) return;
     const ctrl = loadPage(0);
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [pageSize, route.value.params.id]);
+
+  useEffect(() => {
+    const id = route.value.params.id;
+    if (!id) return;
+    const ctrl = new AbortController();
+    void openLinkedEpisode(id, ctrl.signal);
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.value.params.id, pageSize]);
+
+  const openLinkedEpisode = async (id: string, signal: AbortSignal) => {
+    setQuery("");
+    setStatus("");
+    setLoading(true);
+    try {
+      const pageSizeForLookup = pageSize;
+      const targetPage = await findEpisodePage(id, pageSizeForLookup, signal);
+      const qs = new URLSearchParams();
+      qs.set("limit", String(pageSizeForLookup));
+      qs.set("offset", String(targetPage * pageSizeForLookup));
+      const res = await api.get<EpisodeListResponse>(
+        `/api/v1/episodes?${qs.toString()}`,
+        { signal },
+      );
+      const nextRows = res.episodes ?? [];
+      setRows(nextRows);
+      setHasMore(res.nextOffset != null);
+      setTotal(res.total ?? 0);
+      setPage(targetPage);
+      const match = nextRows.find((r) => r.id === id);
+      if (match) setDetail(match);
+    } catch {
+      // Ignore aborted or stale deep links; the list stays as-is.
+    } finally {
+      if (!signal.aborted) setLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!detail) {
@@ -124,25 +181,13 @@ export function TasksView() {
     }
     return true;
   });
+  const pageIds = filtered.map((r) => r.id);
+  const isPageSelected = areAllIdsSelected(selected, pageIds);
 
-  const selectPage = () => {
-    setSelected(new Set(filtered.map((r) => r.id)));
+  const togglePageSelection = () => {
+    setSelected((prev) => toggleIdsInSelection(prev, pageIds));
   };
   const deselectAll = () => setSelected(new Set());
-  const bulkDelete = async () => {
-    if (selected.size === 0) return;
-    if (!confirm(t("common.bulkDelete.confirm", { n: selected.size }))) return;
-    const ids = [...selected];
-    await Promise.all(
-      ids.map((id) =>
-        api
-          .del(`/api/v1/episodes?episodeId=${encodeURIComponent(id)}`)
-          .catch(() => null),
-      ),
-    );
-    setSelected(new Set());
-    loadPage(page);
-  };
 
   return (
     <>
@@ -269,7 +314,9 @@ export function TasksView() {
                     {showSkillStatus && (
                       <span
                         class={`pill pill--skill-${r.skillStatus}`}
-                        title={r.skillReason ?? undefined}
+                        title={r.skillReasonKey
+                          ? t(r.skillReasonKey as any, r.skillReasonParams ?? undefined)
+                          : r.skillReason ?? undefined}
                       >
                         {t(`tasks.skill.${r.skillStatus}` as never)}
                       </span>
@@ -299,32 +346,27 @@ export function TasksView() {
       )}
 
       {(page > 0 || hasMore) && (
-        <div class="pager">
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={page === 0 || loading}
-            onClick={() => loadPage(page - 1)}
-          >
-            <Icon name="chevron-left" size={14} />
-            {t("common.prev")}
-          </button>
-          <span class="pager__info">{t("pager.page", { n: page + 1 })}</span>
-          <button
-            class="btn btn--ghost btn--sm"
-            disabled={!hasMore || loading}
-            onClick={() => loadPage(page + 1)}
-          >
-            {t("common.next")}
-            <Icon name="chevron-right" size={14} />
-          </button>
-        </div>
+        <Pager
+          page={page}
+          totalItems={total}
+          pageSize={pageSize}
+          hasMore={hasMore}
+          loading={loading}
+          onPageSizeChange={setPageSize}
+          onPageChange={(nextPage) => {
+            loadPage(nextPage);
+          }}
+        />
       )}
 
       {detail && (
         <TaskDrawer
           episode={detail}
           timeline={timeline}
-          onClose={() => setDetail(null)}
+          onClose={() => {
+            setDetail(null);
+            clearEntryId();
+          }}
         />
       )}
 
@@ -333,13 +375,9 @@ export function TasksView() {
           <span class="batch-bar__count">
             {t("common.selected", { n: selected.size })}
           </span>
-          <button class="btn btn--sm" onClick={selectPage}>
+          <button class="btn btn--sm" onClick={togglePageSelection}>
             <Icon name="check-square" size={14} />
-            {t("common.selectPage")}
-          </button>
-          <button class="btn btn--danger btn--sm" onClick={bulkDelete}>
-            <Icon name="trash-2" size={14} />
-            {t("common.bulkDelete")}
+            {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
           </button>
           <div class="batch-bar__spacer" />
           <button class="btn btn--ghost btn--sm" onClick={deselectAll}>
@@ -349,6 +387,29 @@ export function TasksView() {
       )}
     </>
   );
+}
+
+async function findEpisodePage(
+  id: string,
+  pageSize: number,
+  signal: AbortSignal,
+): Promise<number> {
+  const scanLimit = 5_000;
+  let offset = 0;
+  while (true) {
+    const qs = new URLSearchParams();
+    qs.set("shape", "ids");
+    qs.set("limit", String(scanLimit));
+    qs.set("offset", String(offset));
+    const res = await api.get<{
+      episodeIds: string[];
+      nextOffset?: number;
+    }>(`/api/v1/episodes?${qs.toString()}`, { signal });
+    const index = (res.episodeIds ?? []).indexOf(id);
+    if (index >= 0) return Math.floor((offset + index) / pageSize);
+    if (res.nextOffset == null) return 0;
+    offset = res.nextOffset;
+  }
 }
 
 // Keep this in lockstep with `core/pipeline/memory-core.ts::deriveSkillStatus`:
@@ -369,6 +430,7 @@ function deriveStatus(r: EpisodeRow): "active" | "completed" | "skipped" | "fail
   // they were closed (finalized or abandoned).
   if (r.rTask != null && r.rTask <= R_NEGATIVE_FLOOR) return "failed";
   if (r.rTask != null) return "completed";
+  if (r.rewardSkipped) return "skipped";
   // If the skill pipeline produced a skill for this episode (via L2
   // policy linkage), the task contributed meaningful knowledge — show
   // "completed" even when rTask is null (e.g. plugin crashed after
@@ -383,33 +445,45 @@ function deriveStatus(r: EpisodeRow): "active" | "completed" | "skipped" | "fail
  * Human-readable explanation for a non-active task status.
  *
  * Resolution order (most specific first):
- *   1. `abandonReason` from the pipeline (pre-localised).
+ *   1. `abandonReason` from the pipeline.
  *   2. Explicit `closeReason === "abandoned"` without a specific
  *      `abandonReason` — e.g. relation classifier closed the old
  *      session via `new_task` and the pipeline is waiting for a
  *      future turn.
- *   3. `turnCount < 2` — the user turn landed but the assistant turn
- *      never arrived. This is almost always a bridge / host issue
- *      (agent crashed, bootstrap filter hit, `/new` routed weirdly),
- *      *not* a "too brief to summarize" problem.
- *   4. `turnCount >= 2` + `rTask == null` — reward pipeline hasn't
- *      scored it yet or the LLM scorer failed silently.
- *   5. `failed` branch — R_task < 0.
- *   6. Generic fallback.
+ *   3. Reward skip reason from the reward pipeline (tool-heavy,
+ *      trivial, too short, etc.) — authoritative when present.
+ *   4. `hasAssistantReply === false` — the user turn landed but the
+ *      assistant turn never arrived. This is almost always a bridge /
+ *      host issue, *not* a "too brief to summarize" problem.
+ *   5. `rTask == null` — reward pipeline hasn't scored it yet or the
+ *      LLM scorer failed silently.
+ *   6. `failed` branch — R_task < 0.
+ *   7. Generic fallback.
  */
 function statusReason(r: EpisodeRow): string | null {
   const s = deriveStatus(r);
-  if (s === "active" || s === "completed") return null;
+  if (s === "active") {
+    if (r.topicState === "interrupted") return t("tasks.active.reason.interrupted" as any);
+    if (r.topicState === "paused") return t("tasks.active.reason.paused" as any);
+    return null;
+  }
+  if (s === "completed") return null;
 
   if (r.abandonReason && r.abandonReason.trim().length > 0) {
-    return r.abandonReason;
+    if (r.abandonReason.includes("插件上次未正常退出")) {
+      return t("tasks.abandonReason.uncleanExit" as any);
+    }
+    return localizeKnownSystemReason(r.abandonReason);
   }
 
   if (s === "skipped") {
     if (r.closeReason === "abandoned") {
       return t("tasks.skip.reason.abandoned");
     }
-    if ((r.turnCount ?? 0) < 2) {
+    if (r.rewardReason && r.rewardReason.trim().length > 0) {
+      return localizeKnownSystemReason(r.rewardReason);
+    }
+    if (r.hasAssistantReply === false) {
       return t("tasks.skip.reason.noAssistant");
     }
     if (r.rTask == null) {
@@ -426,6 +500,52 @@ function statusReason(r: EpisodeRow): string | null {
   }
 
   return null;
+}
+
+function localizeKnownSystemReason(reason: string): string {
+  const text = reason.trim();
+  let match = /^对话轮次不足（(\d+) 轮），需要至少 (\d+) 轮完整的问答交互才能生成摘要。$/.exec(text);
+  if (match) {
+    return t("tasks.skip.reason.tooFewExchanges", {
+      exchanges: match[1]!,
+      min: match[2]!,
+    });
+  }
+
+  if (text === "该任务没有用户消息，仅包含系统或工具自动生成的内容。") {
+    return t("tasks.skip.reason.noUserMessages");
+  }
+
+  match = /^对话内容过短（(\d+) 字符），信息量不足以生成有意义的摘要。$/.exec(text);
+  if (match) {
+    return t("tasks.skip.reason.contentTooShort", { chars: match[1]! });
+  }
+
+  if (text === "对话内容为简单问候或测试数据（如 hello、test、ok），无需生成摘要。") {
+    return t("tasks.skip.reason.trivialUserContent");
+  }
+
+  if (text === "对话内容（用户和助手双方）为简单问候或测试数据，无需生成摘要。") {
+    return t("tasks.skip.reason.trivialBothSides");
+  }
+
+  match = /^该任务主要由工具执行结果组成（(\d+)\/(\d+) 条），缺少足够的用户交互内容。$/.exec(text);
+  if (match) {
+    return t("tasks.skip.reason.toolHeavy", {
+      tools: match[1]!,
+      total: match[2]!,
+    });
+  }
+
+  match = /^对话中存在大量重复内容（(\d+) 条独立消息 \/ (\d+) 条用户消息），无法提取有效信息。$/.exec(text);
+  if (match) {
+    return t("tasks.skip.reason.repeatedContent", {
+      unique: match[1]!,
+      total: match[2]!,
+    });
+  }
+
+  return reason;
 }
 
 function skillBorder(status: NonNullable<EpisodeRow["skillStatus"]>): string {
@@ -585,12 +705,14 @@ function TaskDrawer({
                   </button>
                 )}
               </div>
-              {episode.skillReason && (
+              {(episode.skillReasonKey || episode.skillReason) && (
                 <p
                   class="muted"
                   style="font-size:var(--fs-sm);line-height:1.6;margin:0"
                 >
-                  {episode.skillReason}
+                  {episode.skillReasonKey
+                    ? t(episode.skillReasonKey as any, episode.skillReasonParams ?? undefined)
+                    : episode.skillReason}
                 </p>
               )}
             </section>

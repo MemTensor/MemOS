@@ -13,6 +13,7 @@
 import { MemosError } from "../../agent-contract/errors.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
+import { sanitizeDerivedText } from "../safety/content.js";
 import type { NormalizedStep } from "./types.js";
 
 const SYSTEM = `You are reviewing a single step of an AI agent's decision.
@@ -31,6 +32,7 @@ export interface SynthesizedReflection {
 export async function synthesizeReflection(
   llm: LlmClient,
   step: NormalizedStep,
+  context?: { episodeId?: string; phase?: string },
 ): Promise<SynthesizedReflection> {
   const log = rootLogger.child({ channel: "core.capture.reflection" });
 
@@ -63,9 +65,14 @@ export async function synthesizeReflection(
         { role: "system", content: SYSTEM },
         { role: "user", content: userPayload },
       ],
-      { op: "capture.reflection.synth", temperature: 0.1 },
+      {
+        op: "capture.reflection.synth",
+        episodeId: context?.episodeId,
+        phase: context?.phase,
+        temperature: 0.1,
+      },
     );
-    const raw = rsp.text.trim();
+    const raw = sanitizeDerivedText(rsp.text);
     if (raw === "" || raw === "NO_REFLECTION") {
       log.debug("synth.no_reflection", { key: step.key });
       return { text: null, model: rsp.servedBy };

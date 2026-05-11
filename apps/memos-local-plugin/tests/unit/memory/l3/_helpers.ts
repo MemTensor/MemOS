@@ -63,6 +63,7 @@ export function seedPolicy(handle: TmpDbHandle, args: SeedPolicyArgs = {}): Poli
     status: args.status ?? "active",
     sourceEpisodeIds: [...(args.sourceEpisodeIds ?? [])],
     inducedBy: "l2.l2.induction.v1",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: args.vec ?? vec([1, 0, 0]),
     createdAt: now,
     updatedAt: now,
@@ -102,6 +103,7 @@ export function seedTrace(handle: TmpDbHandle, args: SeedTraceArgs): TraceRow {
     tags: args.tags ?? [],
     vecSummary: args.vec ?? vec([1, 0, 0]),
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
   };
   handle.repos.traces.insert(row);
@@ -148,6 +150,7 @@ export function seedWorldModel(
     vec: args.vec ?? vec([1, 0, 0]),
     createdAt: NOW,
     updatedAt: NOW,
+    version: 1,
     status: "active",
   };
   handle.repos.worldModel.upsert(row);

@@ -28,6 +28,7 @@ cd "$PREFIX"
 
 # ── 1. node_modules ───────────────────────────────────────────────────────────
 if command -v npm >/dev/null 2>&1; then
+  command -v node > .memos-node-bin
   if [[ -d "node_modules" ]]; then
     log "node_modules already present — skipping install"
   else
@@ -38,12 +39,10 @@ else
   warn "npm not found on PATH; bridge.cts requires Node.js ≥ 20."
 fi
 
-# ── 2. viewer + site bundles ──────────────────────────────────────────────────
+# ── 2. viewer bundle ──────────────────────────────────────────────────────────
 if [[ -x "./node_modules/.bin/vite" ]]; then
   log "Building viewer bundle → web/dist/"
   ./node_modules/.bin/vite build --config vite.config.ts >/dev/null
-  log "Building site bundle → site/dist/"
-  ( cd site && ../node_modules/.bin/vite build >/dev/null )
 else
   warn "vite not found in node_modules; skipping bundle build"
 fi

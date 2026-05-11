@@ -22,6 +22,11 @@
   box-sizing: border-box;
 }
 
+button {
+  color: inherit;
+  font: inherit;
+}
+
 html,
 body,
 #app {
@@ -67,10 +72,17 @@ body {
 
 .shell {
   display: grid;
-  grid-template-rows: var(--topbar-h) 1fr;
+  /*
+   * Three rows: topbar (fixed) / banner (auto, may be 0) / main (fills).
+   * The banner row collapses cleanly when ModelSetupBanner returns
+   * null, so users with all model slots configured see the original
+   * two-row layout.
+   */
+  grid-template-rows: var(--topbar-h) auto 1fr;
   grid-template-columns: var(--sidebar-w) 1fr;
   grid-template-areas:
-    "topbar topbar"
+    "topbar  topbar"
+    "banner  banner"
     "sidebar main";
   min-height: 100vh;
 }
@@ -140,13 +152,17 @@ body {
   text-transform: uppercase;
 }
 
-.sidebar__version {
+.sidebar__status {
   position: sticky;
   bottom: 0;
   margin: var(--sp-3) 0 0;
   padding: var(--sp-3) var(--sp-3) var(--sp-2);
   border-top: 1px solid var(--border);
   background: var(--bg-sidebar);
+}
+
+.sidebar__version,
+.sidebar__bridge {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -155,19 +171,34 @@ body {
   font-family: var(--font-mono);
   font-weight: var(--fw-med);
 }
-.sidebar__version-text { white-space: nowrap; }
+
+.sidebar__bridge {
+  margin-top: 6px;
+}
+
+.sidebar__version-text,
+.sidebar__bridge-text {
+  white-space: nowrap;
+}
+
 @media (max-width: 960px) {
-  .sidebar__version-text { display: none; }
-  .sidebar__version { justify-content: center; }
+  .sidebar__version-text,
+  .sidebar__bridge-text {
+    display: none;
+  }
+  .sidebar__version,
+  .sidebar__bridge {
+    justify-content: center;
+  }
 }
 
 .topbar__center {
   flex: 1;
   min-width: 0;
   display: flex;
-  justify-content: center;
   align-items: center;
-  padding: 0 var(--sp-8);
+  padding: 0 var(--sp-3);
+  position: relative;
 }
 
 .topbar__search-form {
@@ -180,7 +211,6 @@ body {
 .topbar__search {
   position: relative;
   display: block;
-  max-width: 420px;
   width: 100%;
 }
 .topbar__search input {
@@ -220,6 +250,97 @@ body {
   display: block;
   /* Lucide “search” mass sits slightly above the 24×24 optical center. */
   transform: translateY(1px);
+}
+
+/* ─── Search Dropdown ─── */
+.search-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 480px;
+  overflow-y: auto;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg, 0 8px 32px rgba(0,0,0,.12));
+  z-index: 1000;
+  padding: var(--sp-2) 0;
+}
+.search-dropdown__loading,
+.search-dropdown__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  color: var(--fg-dim);
+  font-size: var(--fs-sm);
+}
+.search-dropdown__loading .icon {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.search-dropdown__section {
+  padding: var(--sp-1) 0;
+}
+.search-dropdown__section + .search-dropdown__section {
+  border-top: 1px solid var(--border);
+}
+.search-dropdown__section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.search-dropdown__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.search-dropdown__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-2) var(--sp-4) var(--sp-2) calc(var(--sp-4) + 14px + var(--sp-2));
+  background: none;
+  border: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background var(--dur-xs);
+  line-height: 1.4;
+}
+.search-dropdown__item:hover {
+  background: var(--bg-hover);
+}
+.search-dropdown__item-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.search-dropdown__more {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-1) var(--sp-4) var(--sp-1) calc(var(--sp-4) + 14px + var(--sp-2));
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: opacity var(--dur-xs);
+}
+.search-dropdown__more:hover {
+  opacity: 0.8;
 }
 
 .topbar__actions {
@@ -397,6 +518,10 @@ body {
   color: var(--fg-muted);
   font-size: var(--fs-md);
   max-width: 560px;
+  /* Keep CJK words like "含义" / "认知" together — `keep-all` only
+     breaks at spaces and punctuation for CJK and is a no-op for
+     non-CJK text, so it's safe to apply globally to view headers. */
+  word-break: keep-all;
 }
 .view-header__actions {
   display: flex;
@@ -404,3 +529,4 @@ body {
   align-items: center;
   flex-wrap: wrap;
 }
+

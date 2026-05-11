@@ -38,10 +38,12 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
     const status = isValidPolicyStatus(statusRaw) ? statusRaw : undefined;
     const q = params.get("q") || undefined;
     const policies = await deps.core.listPolicies({ status, limit, offset, q });
+    const total = await deps.core.countPolicies({ status, q });
     return {
       policies,
       limit,
       offset,
+      total,
       nextOffset: policies.length === limit ? offset + limit : undefined,
     };
   });
@@ -150,7 +152,7 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       return;
     }
     const body = parseJson<{
-      scope?: "private" | "public" | "hub" | null;
+      scope?: "private" | "local" | "public" | "hub" | null;
       target?: string | null;
     }>(ctx);
     const scope = body.scope === undefined ? "public" : body.scope;
@@ -259,10 +261,12 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const q = params.get("q") || undefined;
     const worldModels = await deps.core.listWorldModels({ limit, offset, q });
+    const total = await deps.core.countWorldModels({ q });
     return {
       worldModels,
       limit,
       offset,
+      total,
       nextOffset: worldModels.length === limit ? offset + limit : undefined,
     };
   });
@@ -369,7 +373,7 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       return;
     }
     const body = parseJson<{
-      scope?: "private" | "public" | "hub" | null;
+      scope?: "private" | "local" | "public" | "hub" | null;
       target?: string | null;
     }>(ctx);
     const scope = body.scope === undefined ? "public" : body.scope;

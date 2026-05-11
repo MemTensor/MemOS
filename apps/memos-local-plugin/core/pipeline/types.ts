@@ -64,6 +64,7 @@ import type {
   TurnInputDTO,
   TurnResultDTO,
   TurnStartCtx,
+  RuntimeNamespace,
 } from "../../agent-contract/dto.js";
 import type {
   SkillInvokeCtx,
@@ -134,6 +135,7 @@ export interface PipelineDeps {
   reflectLlm: LlmClient | null;
   embedder: Embedder | null;
   log: Logger;
+  namespace: RuntimeNamespace;
   /** Injection hook so tests can provide a fake clock. */
   now?: () => number;
 }
@@ -147,11 +149,21 @@ export interface PipelineHandle {
   readonly home: ResolvedHome;
   readonly config: ResolvedConfig;
   readonly algorithm: PipelineAlgorithmConfig;
+  readonly namespace: RuntimeNamespace;
 
   // Infrastructure (adapters that want direct access).
   readonly db: StorageDb;
   readonly repos: Repos;
   readonly llm: LlmClient | null;
+  /**
+   * Dedicated client for skill-evolution reflection. When the operator
+   * leaves `skillEvolver.*` blank, this is the same instance as `llm`
+   * (so call sites can blindly read whichever is non-null). When they
+   * configure their own model it carries its own `stats()` so the
+   * Overview / health endpoint reports the *actual* skill-evolver
+   * status instead of falling back to the summary LLM.
+   */
+  readonly reflectLlm: LlmClient | null;
   readonly embedder: Embedder | null;
 
   // Subscribers / runners.
@@ -181,6 +193,7 @@ export interface PipelineHandle {
 
   // Orchestrator entry points (turn lifecycle).
   onTurnStart(input: TurnInputDTO): Promise<InjectionPacket>;
+  consumeRetrievalStats(packetId: string): RetrievalResult["stats"] | null;
   onTurnEnd(result: TurnResultDTO): Promise<TurnEndResult>;
 
   // Tool-level signals.
@@ -236,6 +249,8 @@ export interface RecordToolOutcomeInput {
 
 export interface TurnEndResult {
   traceCount: number;
+  /** Trace ids actually persisted by the per-turn lite capture pass. */
+  traceIds: string[];
   /** The episode we wrote this turn into. */
   episodeId: EpisodeId;
   /**
@@ -276,8 +291,7 @@ export interface DerivedTurnStartCtx extends TurnStartCtx {
 
 /**
  * The rolled-up retrieval outcome used both by adapters and by the
- * viewer. The pipeline always returns an `InjectionPacket` — tests that
- * want richer stats should use `pipeline.retrievalDeps()` directly.
+ * viewer. The packet is what adapters inject; stats are kept for logs.
  */
 export interface PipelineRetrievalResult extends RetrievalResult {
   /** For logging: why the retrieval ran. */

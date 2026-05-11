@@ -197,6 +197,18 @@ export function bridgeToCoreEvents(deps: EventBridgeDeps): EventBridgeHandle {
           return send("skill.archived", evt, evt.skillId);
         case "skill.rebuilt":
           return send("skill.repaired", evt, evt.skillId);
+        case "skill.failed":
+          if (evt.stage === "crystallize" && evt.modelRefusal) {
+            return send("system.error", {
+              kind: "skill.model_refusal",
+              message: `Skill crystallization model refusal for policy ${evt.policyId ?? "unknown"}`,
+              policyId: evt.policyId,
+              stage: evt.stage,
+              reason: evt.reason,
+              modelRefusal: evt.modelRefusal,
+            }, evt.policyId);
+          }
+          return;
       }
     }),
   );
@@ -222,6 +234,16 @@ export function bridgeToCoreEvents(deps: EventBridgeDeps): EventBridgeHandle {
         case "retrieval.started":
           return send("retrieval.triggered", evt, evt.sessionId);
         case "retrieval.done":
+          if (evt.stats.embedding?.degraded) {
+            send("system.error", {
+              kind: "embedding.query_degraded",
+              message: evt.stats.embedding.errorMessage ?? "Query embedding failed; retrieval degraded",
+              reason: evt.reason,
+              sessionId: evt.sessionId,
+              episodeId: evt.episodeId,
+              errorCode: evt.stats.embedding.errorCode,
+            }, evt.sessionId);
+          }
           if (evt.stats.emptyPacket) {
             return send("retrieval.empty", evt, evt.sessionId);
           }

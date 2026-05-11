@@ -57,6 +57,7 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
 
   routes.set("GET /api/v1/episodes", async (ctx) => {
     const sessionId = (ctx.url.searchParams.get("sessionId") as SessionId | null) ?? undefined;
+    const q = (ctx.url.searchParams.get("q") || "").trim().toLowerCase();
     const rawLimit = numberOrUndefined(ctx.url.searchParams.get("limit"));
     const rawOffset = numberOrUndefined(ctx.url.searchParams.get("offset"));
     const limit = rawLimit && rawLimit > 0 ? rawLimit : 50;
@@ -65,20 +66,40 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
     // session id / status / turn count / preview. The old `ids`-only
     // variant is still available under the `episode.list` JSON-RPC
     // method and via `?shape=ids`.
+    const total = await deps.core.countEpisodes({ sessionId });
     if (ctx.url.searchParams.get("shape") === "ids") {
       const episodeIds = await deps.core.listEpisodes({ sessionId, limit, offset });
       return {
         episodeIds,
         limit,
         offset,
+        total,
         nextOffset: episodeIds.length === limit ? offset + limit : undefined,
       };
     }
-    const episodes = await deps.core.listEpisodeRows({ sessionId, limit, offset });
+    let episodes = await deps.core.listEpisodeRows({
+      sessionId,
+      limit: q ? 200 : limit,
+      offset: q ? 0 : offset,
+    });
+    if (q) {
+      episodes = episodes.filter(
+        (ep: { preview?: string }) => ep.preview && ep.preview.toLowerCase().includes(q),
+      );
+      const paged = episodes.slice(offset, offset + limit);
+      return {
+        episodes: paged,
+        limit,
+        offset,
+        total: episodes.length,
+        nextOffset: episodes.length > offset + limit ? offset + limit : undefined,
+      };
+    }
     return {
       episodes,
       limit,
       offset,
+      total,
       nextOffset: episodes.length === limit ? offset + limit : undefined,
     };
   });

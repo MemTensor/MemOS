@@ -4,6 +4,7 @@ import { toPacket } from "../../../core/retrieval/injector.js";
 import type { RankedCandidate } from "../../../core/retrieval/ranker.js";
 import type {
   EpisodeCandidate,
+  ExperienceCandidate,
   SkillCandidate,
   TraceCandidate,
   WorldModelCandidate,
@@ -72,6 +73,38 @@ function episode(id: string): EpisodeCandidate {
   };
 }
 
+function experience(id: string): ExperienceCandidate {
+  return {
+    tier: "tier2",
+    refKind: "experience",
+    refId: id as never,
+    cosine: 0.8,
+    ts: NOW as never,
+    vec: null,
+    title: "SEC 13F extraction lesson",
+    trigger: "similar SEC 13F parsing task",
+    procedure: "Use holdings table columns directly.",
+    verification: "Issuer/CUSIP come from the row fields.",
+    boundary: "SEC 13F holdings extraction only.",
+    support: 1,
+    gain: 0.5,
+    status: "active",
+    experienceType: "failure_avoidance",
+    evidencePolarity: "negative",
+    salience: 0.9,
+    confidence: 0.8,
+    skillEligible: false,
+    sourceEpisodeIds: [],
+    sourceFeedbackIds: ["fb1" as never],
+    sourceTraceIds: [],
+    decisionGuidance: {
+      preference: [],
+      antiPattern: ["Do not infer issuer from filename."],
+    },
+    updatedAt: NOW as never,
+  };
+}
+
 function world(id: string): WorldModelCandidate {
   return {
     tier: "tier3",
@@ -92,6 +125,7 @@ describe("retrieval/injector", () => {
       rc(skill("s1")),
       rc(trace("t1")),
       rc(episode("e1")),
+      rc(experience("p1")),
       rc(world("w1")),
     ];
     const { packet, mapping } = toPacket({
@@ -102,15 +136,60 @@ describe("retrieval/injector", () => {
       sessionId: "sess_t1" as never,
       episodeId: "ep_t1" as never,
     });
-    expect(packet.snippets.length).toBe(4);
+    expect(packet.snippets.length).toBe(5);
     const kinds = packet.snippets.map((s) => s.refKind).sort();
-    expect(kinds).toEqual(["episode", "skill", "trace", "world-model"]);
+    expect(kinds).toEqual([
+      "episode",
+      "experience",
+      "skill",
+      "trace",
+      "world-model",
+    ]);
     expect(packet.reason).toBe("turn_start");
     expect(mapping.length).toBe(packet.snippets.length);
     expect(packet.packetId).toMatch(/[a-z0-9_]+/);
   });
 
-  it("renders LLM-actionable prose (header, MUST-treat instructions, refId footer)", () => {
+  it("renders experiences as a top-level section without internal metadata", () => {
+    const { packet } = toPacket({
+      ranked: [
+        rc(trace("t_mem")),
+        rc(experience("p_exp")),
+        rc(world("w_env")),
+      ],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_sections" as never,
+      episodeId: "ep_sections" as never,
+    });
+
+    expect(packet.rendered).toContain("## Memories");
+    expect(packet.rendered).toContain("## Experiences");
+    expect(packet.rendered).toContain("## Environment Knowledge");
+    expect(packet.rendered.indexOf("## Memories")).toBeLessThan(
+      packet.rendered.indexOf("## Experiences"),
+    );
+    expect(packet.rendered.indexOf("## Experiences")).toBeLessThan(
+      packet.rendered.indexOf("## Environment Knowledge"),
+    );
+    expect(packet.rendered).toContain("Trigger: similar SEC 13F parsing task");
+    expect(packet.rendered).toContain("Do: Use holdings table columns directly.");
+    expect(packet.rendered).toContain("Avoid: Do not infer issuer from filename.");
+    expect(packet.rendered).toContain("Scope: SEC 13F holdings extraction only.");
+    expect(packet.rendered).toContain(
+      "Check: Issuer/CUSIP come from the row fields.",
+    );
+    expect(packet.rendered).not.toContain("p_exp");
+    expect(packet.rendered).not.toContain("Type:");
+    expect(packet.rendered).not.toContain("confidence=");
+    expect(packet.rendered).not.toContain("evidence=");
+    expect(packet.rendered).not.toContain("support");
+    expect(packet.rendered).not.toContain("gain");
+    expect(packet.rendered).not.toContain("score");
+  });
+
+  it("renders LLM-actionable prose without noisy refId footers", () => {
     const { packet } = toPacket({
       ranked: [rc(skill("sA"), 0.9, 0.9)],
       reason: "turn_start",
@@ -124,9 +203,10 @@ describe("retrieval/injector", () => {
     expect(packet.rendered).toContain("MUST treat");
     // Trailing tool reminder so the model knows how to re-query.
     expect(packet.rendered).toContain("memory_search");
-    // Every snippet must carry its `refId` so downstream tool calls
-    // (memory_get / memory_timeline) can round-trip to the row.
-    expect(packet.rendered).toContain('refId="sA"');
+    // Row ids stay on the structured packet, but are not injected into
+    // the model-facing prose unless a tool hint explicitly needs one.
+    expect(packet.snippets[0]?.refId).toBe("sA");
+    expect(packet.rendered).not.toContain('refId="sA"');
   });
 
   it("default skill rendering is summary mode (descriptor + skill_get hint, no full guide)", () => {
@@ -148,9 +228,10 @@ describe("retrieval/injector", () => {
       episodeId: "ep_summary" as never,
     });
     const skillSnippet = packet.snippets.find((s) => s.refKind === "skill")!;
-    // Descriptor line carries name + η + status — short metadata, not a guide.
-    expect(skillSnippet.body).toContain("Skill sk_summary");
-    expect(skillSnippet.body).toContain("η=0.85");
+    // Prompt-facing body omits internal skill metadata.
+    expect(skillSnippet.title).toBe("Skill sk_summary");
+    expect(skillSnippet.body).not.toContain("η=0.85");
+    expect(skillSnippet.body).not.toContain("status=active");
     // First paragraph survives as the summary line.
     expect(skillSnippet.body).toContain("Fix Alpine container pip install");
     // Procedure steps must NOT be inlined (those live behind skill_get).
@@ -161,7 +242,7 @@ describe("retrieval/injector", () => {
     // Section heading + footer also advertise the call-on-demand workflow.
     expect(packet.rendered).toContain("Candidate skills");
     expect(packet.rendered).toContain("`skill_get(id)`");
-    expect(packet.rendered).toContain("`skill_list");
+    expect(packet.rendered).not.toContain("`skill_list");
   });
 
   it("summary mode clamps long first paragraphs to skillSummaryChars", () => {
@@ -197,6 +278,7 @@ describe("retrieval/injector", () => {
     });
     const skillSnippet = packet.snippets.find((s) => s.refKind === "skill")!;
     expect(skillSnippet.body).toContain("RUN docker compose up -d");
+    expect(skillSnippet.body).not.toContain("η=");
     expect(skillSnippet.body).not.toContain("skill_get(id=");
     // The footer should not surface the skill call hints in full mode.
     expect(packet.rendered).not.toContain("`skill_get(id)`");

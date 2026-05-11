@@ -68,14 +68,41 @@ export function createLlmClientWithProvider(
   let totalPromptTokens = 0;
   let totalCompletionTokens = 0;
   let lastOkAt: number | null = null;
+  let lastFallbackAt: number | null = null;
   let lastError: { at: number; message: string } | null = null;
 
-  function markOk(): void {
+  /**
+   * Mark a successful primary-provider call. We **do not** clear
+   * `lastError` / `lastFallbackAt` here — the viewer picks the most
+   * recent event by timestamp to colour the overview card, so an
+   * earlier failure that already produced a `system_error` row stays
+   * visible until a later success out-dates it.
+   */
+  function markOk(): number {
     lastOkAt = Date.now();
-    lastError = null;
+    return lastOkAt;
   }
-  function markFail(err: unknown): void {
-    lastError = { at: Date.now(), message: summarizeErrMessage(err) };
+  /**
+   * Mark a primary-provider failure that was rescued by the host LLM
+   * bridge (yellow card). The original primary error is still kept on
+   * `lastError` so the viewer can show *why* fallback kicked in, and
+   * `lastFallbackAt` tracks when fallback happened so the timestamp
+   * comparison renders yellow instead of red.
+   */
+  function markFallback(err: unknown): number {
+    const at = Date.now();
+    lastFallbackAt = at;
+    lastError = { at, message: summarizeErrMessage(err) };
+    return at;
+  }
+  /**
+   * Mark a terminal failure — either no fallback configured or the
+   * host fallback also failed (red card).
+   */
+  function markFail(err: unknown): number {
+    const at = Date.now();
+    lastError = { at, message: summarizeErrMessage(err) };
+    return at;
   }
 
   function normalizeMessages(input: LlmMessage[] | string): LlmMessage[] {
@@ -125,6 +152,7 @@ export function createLlmClientWithProvider(
     op: string,
   ): Promise<{ completion: LlmCompletion }> {
     requests++;
+    const startedAt = Date.now();
     try {
       const raw = await provider.complete(messages, input, makeCtx(opts, asProviderLog(providerLog)));
       const completion: LlmCompletion = {
@@ -137,7 +165,17 @@ export function createLlmClientWithProvider(
         durationMs: raw.durationMs,
       };
       record(completion, op, messages);
-      markOk();
+      const okAt = markOk();
+      notifyStatus({
+        status: "ok",
+        provider: provider.name,
+        model: config.model,
+        at: okAt,
+        durationMs: completion.durationMs,
+        op,
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
+      });
       return { completion };
     } catch (err) {
       if (shouldFallback(err, config, provider.name)) {
@@ -160,14 +198,46 @@ export function createLlmClientWithProvider(
             durationMs: res.durationMs,
           };
           record(completion, op, messages);
-          markOk();
+          // The primary provider is still broken even though the host
+          // bridge saved this call. Tag the slot yellow (`lastFallbackAt`)
+          // and surface the upstream error to the user via the
+          // system_error log so they can see *why* fallback engaged.
+          const fallbackAt = markFallback(err);
+          notifyOnError(err);
+          notifyStatus({
+            status: "fallback",
+            provider: provider.name,
+            model: config.model,
+            message: summarizeErrMessage(err),
+            code: err instanceof MemosError ? err.code : undefined,
+            at: fallbackAt,
+            durationMs: completion.durationMs,
+            fallbackProvider: "host",
+            op,
+            episodeId: opts?.episodeId,
+            phase: opts?.phase,
+          });
           return { completion };
         } catch (hostErr) {
           failures++;
-          markFail(hostErr);
+          const failAt = markFail(hostErr);
           facadeLog.error("host.fallback_failed", {
             primary: summarizeErr(err),
             host: summarizeErr(hostErr),
+          });
+          notifyOnError(hostErr);
+          notifyStatus({
+            status: "error",
+            provider: provider.name,
+            model: config.model,
+            message: summarizeErrMessage(hostErr),
+            code: hostErr instanceof MemosError ? hostErr.code : undefined,
+            at: failAt,
+            durationMs: Date.now() - startedAt,
+            fallbackProvider: "host",
+            op,
+            episodeId: opts?.episodeId,
+            phase: opts?.phase,
           });
           throw hostErr instanceof MemosError
             ? hostErr
@@ -178,7 +248,20 @@ export function createLlmClientWithProvider(
         }
       }
       failures++;
-      markFail(err);
+      const failAt = markFail(err);
+      notifyOnError(err);
+      notifyStatus({
+        status: "error",
+        provider: provider.name,
+        model: config.model,
+        message: summarizeErrMessage(err),
+        code: err instanceof MemosError ? err.code : undefined,
+        at: failAt,
+        durationMs: Date.now() - startedAt,
+        op,
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
+      });
       throw err instanceof MemosError
         ? err
         : new MemosError(
@@ -186,6 +269,48 @@ export function createLlmClientWithProvider(
             `${provider.name} failed: ${(err as Error).message ?? String(err)}`,
             { provider: provider.name },
           );
+    }
+  }
+
+  /**
+   * Forward a terminal failure to the bootstrap-supplied sink (if any).
+   * Wrapped so a buggy sink can never replace the original error the
+   * caller is about to receive. Skipped silently when no sink is set.
+   */
+  function notifyOnError(err: unknown): void {
+    if (!config.onError) return;
+    try {
+      config.onError({
+        provider: provider.name,
+        model: config.model,
+        message: summarizeErrMessage(err),
+        code: err instanceof MemosError ? err.code : undefined,
+        at: Date.now(),
+      });
+    } catch {
+      /* sink errors are non-fatal */
+    }
+  }
+
+  function notifyStatus(detail: {
+    status: "ok" | "fallback" | "error";
+    provider: string;
+    model: string;
+    message?: string;
+    code?: string;
+    at?: number;
+    durationMs?: number;
+    fallbackProvider?: string;
+    fallbackModel?: string;
+    op?: string;
+    episodeId?: string;
+    phase?: string;
+  }): void {
+    if (!config.onStatus) return;
+    try {
+      config.onStatus(detail);
+    } catch {
+      /* status sink errors are non-fatal */
     }
   }
 
@@ -322,11 +447,34 @@ export function createLlmClientWithProvider(
       });
       if (usage?.promptTokens) totalPromptTokens += usage.promptTokens;
       if (usage?.completionTokens) totalCompletionTokens += usage.completionTokens;
-      markOk();
+      const okAt = markOk();
+      notifyStatus({
+        status: "ok",
+        provider: provider.name,
+        model: config.model,
+        at: okAt,
+        durationMs: Date.now() - start,
+        op: opts?.op ?? "stream",
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
+      });
     } catch (err) {
       failures++;
-      markFail(err);
+      const failAt = markFail(err);
       facadeLog.error("stream.failed", { err: summarizeErr(err) });
+      notifyOnError(err);
+      notifyStatus({
+        status: "error",
+        provider: provider.name,
+        model: config.model,
+        message: summarizeErrMessage(err),
+        code: err instanceof MemosError ? err.code : undefined,
+        at: failAt,
+        durationMs: Date.now() - start,
+        op: opts?.op ?? "stream",
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
+      });
       throw err;
     }
   }
@@ -347,6 +495,7 @@ export function createLlmClientWithProvider(
         totalPromptTokens,
         totalCompletionTokens,
         lastOkAt,
+        lastFallbackAt,
         lastError,
       };
     },
@@ -358,6 +507,7 @@ export function createLlmClientWithProvider(
       totalPromptTokens = 0;
       totalCompletionTokens = 0;
       lastOkAt = null;
+      lastFallbackAt = null;
       lastError = null;
     },
     async close(): Promise<void> {

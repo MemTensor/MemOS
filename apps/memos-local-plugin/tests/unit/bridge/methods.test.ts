@@ -25,6 +25,7 @@ function stubCore(overrides: Partial<MemoryCore> = {}): MemoryCore {
         provider: "",
         model: "",
         lastOkAt: null,
+        lastFallbackAt: null,
         lastError: null,
       },
       embedder: {
@@ -33,6 +34,7 @@ function stubCore(overrides: Partial<MemoryCore> = {}): MemoryCore {
         model: "",
         dim: 0,
         lastOkAt: null,
+        lastFallbackAt: null,
         lastError: null,
       },
       skillEvolver: {
@@ -41,6 +43,7 @@ function stubCore(overrides: Partial<MemoryCore> = {}): MemoryCore {
         model: "",
         inherited: true,
         lastOkAt: null,
+        lastFallbackAt: null,
         lastError: null,
       },
     })),
@@ -80,6 +83,7 @@ function stubCore(overrides: Partial<MemoryCore> = {}): MemoryCore {
     shareTrace: vi.fn(async () => null),
     getPolicy: vi.fn(async () => null),
     listPolicies: vi.fn(async () => []),
+    countPolicies: vi.fn(async () => 0),
     setPolicyStatus: vi.fn(async () => null),
     deletePolicy: vi.fn(async () => ({ deleted: false })),
     editPolicyGuidance: vi.fn(async () => null),
@@ -87,6 +91,7 @@ function stubCore(overrides: Partial<MemoryCore> = {}): MemoryCore {
     updatePolicy: vi.fn(async () => null),
     getWorldModel: vi.fn(async () => null),
     listWorldModels: vi.fn(async () => []),
+    countWorldModels: vi.fn(async () => 0),
     deleteWorldModel: vi.fn(async () => ({ deleted: false })),
     shareWorldModel: vi.fn(async () => null),
     updateWorldModel: vi.fn(async () => null),
@@ -94,10 +99,13 @@ function stubCore(overrides: Partial<MemoryCore> = {}): MemoryCore {
     unarchiveWorldModel: vi.fn(async () => null),
     listEpisodes: vi.fn(async () => ["e-1", "e-2"]),
     listEpisodeRows: vi.fn(async () => []),
+    countEpisodes: vi.fn(async () => 0),
     timeline: vi.fn(async () => []),
     listTraces: vi.fn(async () => []),
+    countTraces: vi.fn(async () => 0),
     listApiLogs: vi.fn(async () => ({ logs: [], total: 0 })),
     listSkills: vi.fn(async () => []),
+    countSkills: vi.fn(async () => 0),
     getSkill: vi.fn(async () => null),
     archiveSkill: vi.fn(async () => {}),
     deleteSkill: vi.fn(async () => ({ deleted: false })),
@@ -212,6 +220,41 @@ describe("makeDispatcher", () => {
     );
   });
 
+  it("routes subagent.record to the core subagent outcome recorder", async () => {
+    const core = stubCore();
+    (core as any).recordSubagentOutcome = vi.fn(async () => ({
+      traceId: "tr-sub-1",
+      episodeId: "ep-sub-1",
+    }));
+    const dispatch = makeDispatcher(core);
+
+    await expect(
+      dispatch("subagent.record", {
+        agent: "hermes",
+        sessionId: "s-parent",
+        episodeId: "ep-parent",
+        childSessionId: "s-child",
+        task: "run focused tests",
+        result: "all green",
+        outcome: "ok",
+        ts: 123,
+      }),
+    ).resolves.toEqual({ traceId: "tr-sub-1", episodeId: "ep-sub-1" });
+
+    expect((core as any).recordSubagentOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "hermes",
+        sessionId: "s-parent",
+        episodeId: "ep-parent",
+        childSessionId: "s-child",
+        task: "run focused tests",
+        result: "all green",
+        outcome: "ok",
+        ts: 123,
+      }),
+    );
+  });
+
   it("raises protocol_error for transport-only methods", async () => {
     const core = stubCore();
     const dispatch = makeDispatcher(core);
@@ -258,5 +301,17 @@ describe("makeDispatcher", () => {
         traceId: "tr-1",
       }),
     );
+  });
+
+  it("skill.get records real tool usage", async () => {
+    const core = stubCore();
+    const dispatch = makeDispatcher(core);
+    await dispatch("skill.get", { id: "sk-1", sessionId: "s-1", episodeId: "ep-1" });
+    expect(core.getSkill).toHaveBeenCalledWith("sk-1", {
+      recordUse: true,
+      recordTrial: true,
+      sessionId: "s-1",
+      episodeId: "ep-1",
+    });
   });
 });

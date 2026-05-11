@@ -3,8 +3,8 @@
 # Keep this file short. Most plugin behavior is controlled by sensible
 # defaults baked into the code; only the fields below are likely to change
 # per user. If you need to tune an advanced option (algorithm thresholds,
-# log rotation, retrieval budgets, etc.) see docs/CONFIG-ADVANCED.md —
-# any field there can be added to this file and will take effect on reload.
+# log rotation, retrieval budgets, etc.) see docs/CONFIG-ADVANCED.md in
+# the source repo; any field there can be added here and will take effect.
 #
 # Sensitive fields (apiKey, teamToken, userToken) live HERE — there is no
 # .env file. install.sh sets this file's mode to 600.
@@ -12,6 +12,9 @@
 version: 1
 
 viewer:
+  # OpenClaw owns :18799. Hermes (if installed) runs its viewer on
+  # :18800. Each agent serves its own panel from its own process —
+  # there is no port sharing or read-only "peer" view.
   port: 18799
 
 embedding:
@@ -34,3 +37,4 @@ telemetry:
 
 logging:
   level: info             # trace | debug | info | warn | error | fatal
+  detailedView: false     # show advanced log filters / chain view in the viewer

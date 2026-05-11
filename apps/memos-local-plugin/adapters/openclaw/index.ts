@@ -23,6 +23,7 @@
  *   - We import **types only** from `./openclaw-api.ts`; the real SDK is
  *     injected by the host at load time.
  */
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,76 +37,63 @@ import type {
 
 import { bootstrapMemoryCoreFull } from "../../core/pipeline/index.js";
 import { rootLogger, memoryBuffer } from "../../core/logger/index.js";
-import { startHttpServer, type ServerHandle } from "../../server/index.js";
 import type { MemoryCore } from "../../agent-contract/memory-core.js";
+import { startHttpServer } from "../../server/http.js";
+import type { ServerHandle } from "../../server/types.js";
 
 // ─── Plugin metadata ───────────────────────────────────────────────────────
 
 export const PLUGIN_ID = "memos-local-plugin";
-export const PLUGIN_VERSION = "2.0.0-beta.1";
+export const PLUGIN_VERSION = readPluginPackageVersion();
+
+function readPluginPackageVersion(): string {
+  try {
+    const thisFile = fileURLToPath(import.meta.url);
+    const adapterDir = path.dirname(thisFile); // .../adapters/openclaw or .../dist/adapters/openclaw
+    const candidates = [
+      path.resolve(adapterDir, "..", "..", "..", "package.json"),
+      path.resolve(adapterDir, "..", "..", "package.json"),
+    ];
+    const packageJsonPath = candidates.find((candidate) => existsSync(candidate));
+    if (!packageJsonPath) return "dev";
+    const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+      version?: unknown;
+    };
+    return typeof pkg.version === "string" && pkg.version.trim()
+      ? pkg.version
+      : "dev";
+  } catch {
+    return "dev";
+  }
+}
 
 // ─── Runtime state (per plugin load) ───────────────────────────────────────
 
 interface PluginRuntime {
   core: MemoryCore;
   bridge: BridgeHandle;
-  server: ServerHandle | null;
+  /**
+   * The viewer HTTP server. May be `null` if the configured port was
+   * already in use at boot — in that case OpenClaw runs headless
+   * (memory still works, just no UI). We don't retry: the user can
+   * free the port and restart the gateway.
+   */
+  viewer: ServerHandle | null;
   shutdown: () => Promise<void>;
 }
 
 /** Locate the bundled viewer static assets relative to the plugin root. */
-/**
- * Announce our fallback port to the hub running on `hubPort`. The
- * hub uses this to reverse-proxy `/openclaw/*` requests to us.
- * Retry a few times because hub boot may race us slightly.
- */
-async function tryHubRegister(opts: {
-  hubPort: number;
-  selfPort: number;
-  selfAgent: "openclaw" | "hermes";
-  version: string;
-  log: { info: (msg: string, ctx?: Record<string, unknown>) => void; warn: (msg: string, ctx?: Record<string, unknown>) => void };
-}): Promise<void> {
-  const { hubPort, selfPort, selfAgent, version, log } = opts;
-  const body = JSON.stringify({ agent: selfAgent, port: selfPort, version });
-  for (let attempt = 0; attempt < 6; attempt++) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${hubPort}/api/v1/hub/register`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
-      });
-      if (res.ok) {
-        log.info(
-          `memos-local: registered with hub @ :${hubPort} as ${selfAgent} (self port ${selfPort})`,
-        );
-        return;
-      }
-      log.warn(
-        `memos-local: hub register returned ${res.status}; retrying in 2 s`,
-      );
-    } catch (err) {
-      log.warn(
-        `memos-local: hub unreachable (${(err as Error).message}); retrying…`,
-      );
-    }
-    await new Promise((r) => setTimeout(r, 2_000 * (attempt + 1)));
-  }
-  log.warn(
-    `memos-local: could not reach hub @ :${hubPort} after retries; the /${selfAgent}/ URL on the hub port will not work`,
-  );
-}
-
 function resolveViewerStaticRoot(): string | undefined {
-  // When the plugin ships as an npm tarball the built viewer sits at
-  // `<plugin>/web/dist/` (included via `package.json::files`). During local
-  // development `web/dist` is only present after `npm run build:web`.
-  // Either way we resolve relative to this file's directory.
+  // Built packages load from `<plugin>/dist/adapters`; source tests load
+  // from `<plugin>/adapters`. The viewer bundle remains at `web/dist`.
   try {
     const thisFile = fileURLToPath(import.meta.url);
     const adapterDir = path.dirname(thisFile); // .../adapters/openclaw
-    const candidate = path.resolve(adapterDir, "..", "..", "web", "dist");
-    return candidate;
+    const candidates = [
+      path.resolve(adapterDir, "..", "..", "..", "web", "dist"),
+      path.resolve(adapterDir, "..", "..", "web", "dist"),
+    ];
+    return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
   } catch {
     return undefined;
   }
@@ -119,6 +107,7 @@ async function createRuntime(api: OpenClawPluginApi): Promise<PluginRuntime> {
   // viewer port to bind.
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: "openclaw",
+    namespace: { agentKind: "openclaw", profileId: "main" },
     pkgVersion: PLUGIN_VERSION,
   });
   await core.init();
@@ -129,59 +118,55 @@ async function createRuntime(api: OpenClawPluginApi): Promise<PluginRuntime> {
     log: api.logger,
   });
 
-  // Start the HTTP viewer on the configured port. Failure here is
-  // non-fatal — memory still works without the UI.
-  let server: ServerHandle | null = null;
+  // OpenClaw's viewer port is fixed at :18799 (hermes uses :18800).
+  // We ignore `config.viewer.port` for the same reason `bridge.cts`
+  // does: old config.yaml files baked in the legacy single-port
+  // :18799 used by both agents, and we don't want hermes to collide
+  // with us because of stale YAML.
+  const OPENCLAW_VIEWER_PORT = 18799;
+  let viewer: ServerHandle | null = null;
   try {
-    server = await startHttpServer(
+    viewer = await startHttpServer(
       {
         core,
         home,
         logTail: () => memoryBuffer().tail({ limit: 200 }),
       },
       {
-        port: config.viewer.port,
+        port: OPENCLAW_VIEWER_PORT,
         host: config.viewer.bindHost,
         staticRoot: resolveViewerStaticRoot(),
-        // Declare this agent so the server applies the
-        // /{agent}/… path prefix + reverse proxy (see
-        // `docs/MULTI_AGENT_VIEWER.md`).
         agent: "openclaw",
       },
     );
-    api.logger.info(`memos-local: Memory Viewer → ${server.url}`);
-
-    // If we ended up on a fallback port (because the configured
-    // hub port was already taken by another agent's viewer),
-    // register ourselves with the hub so it can route
-    // `/openclaw/*` to us.
-    if (server.port !== config.viewer.port) {
-      await tryHubRegister({
-        hubPort: config.viewer.port,
-        selfPort: server.port,
-        selfAgent: "openclaw",
-        version: PLUGIN_VERSION,
-        log: api.logger,
+    api.logger.info(`memos-local: viewer live at ${viewer.url}`);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e?.code === "EADDRINUSE") {
+      api.logger.warn(
+        `memos-local: viewer port :${OPENCLAW_VIEWER_PORT} is already in use — ` +
+          `running headless. Free the port and restart the gateway to expose it.`,
+      );
+    } else {
+      api.logger.error("memos-local: viewer failed to start", {
+        err: e?.message ?? String(err),
       });
     }
-  } catch (err) {
-    api.logger.warn(
-      `memos-local: viewer failed to start on port ${config.viewer.port}: ` +
-        (err instanceof Error ? err.message : String(err)),
-    );
   }
 
   return {
     core,
     bridge,
-    server,
+    viewer,
     async shutdown() {
-      try {
-        if (server) await server.close();
-      } catch (err) {
-        api.logger.warn("memos-local: viewer close error", {
-          err: err instanceof Error ? err.message : String(err),
-        });
+      if (viewer) {
+        try {
+          await viewer.close();
+        } catch (err) {
+          api.logger.warn("memos-local: viewer close error", {
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
       try {
         await core.shutdown();
@@ -235,20 +220,14 @@ function register(api: OpenClawPluginApi): void {
     },
   });
 
-  // 2. Kick off core bootstrap. We register tools + hooks against the
-  //    resulting runtime. Hooks proxy to the bridge and gracefully no-op
-  //    while bootstrap is in-flight — the host must still register them
-  //    before any turn can fire.
+  // 2. Kick off core bootstrap. OpenClaw only accepts tool / hook
+  //    registration during the synchronous `register(api)` window, so
+  //    tools register a shell now and wait for runtime inside execute().
   let runtime: PluginRuntime | null = null;
   let bootstrapError: Error | null = null;
   const bootstrapPromise = createRuntime(api)
     .then((r) => {
       runtime = r;
-      registerOpenClawTools(api, {
-        agent: "openclaw",
-        core: r.core,
-        log: api.logger,
-      });
       api.logger.info("memos-local: plugin ready");
     })
     .catch((err) => {
@@ -263,6 +242,12 @@ function register(api: OpenClawPluginApi): void {
     await bootstrapPromise;
     return runtime;
   };
+
+  registerOpenClawTools(api, {
+    agent: "openclaw",
+    getCore: async () => (await ensureRuntime())?.core ?? null,
+    log: api.logger,
+  });
 
   // 3. Hooks — every handler matches the upstream `PluginHookHandlerMap`
   //    signature so OpenClaw's type-check passes in a monorepo install.
@@ -300,6 +285,18 @@ function register(api: OpenClawPluginApi): void {
     const r = await ensureRuntime();
     if (!r) return;
     await r.bridge.handleSessionEnd(event, ctx);
+  });
+
+  api.on("subagent_spawned", async (event, ctx) => {
+    const r = await ensureRuntime();
+    if (!r) return;
+    r.bridge.handleSubagentSpawned(event, ctx);
+  });
+
+  api.on("subagent_ended", async (event, ctx) => {
+    const r = await ensureRuntime();
+    if (!r) return;
+    await r.bridge.handleSubagentEnded(event, ctx);
   });
 
   // 4. Service — lets the host flush + wait for ready and shut us down.

@@ -20,6 +20,7 @@ import type {
   TraceId,
   ValueScore,
   WorldModelId,
+  ShareScope,
 } from "../agent-contract/dto.js";
 
 // ─── Re-exports for convenience ──────────────────────────────────────────────
@@ -40,7 +41,15 @@ export type {
   TraceId,
   ValueScore,
   WorldModelId,
+  RuntimeNamespace,
+  ShareScope,
 } from "../agent-contract/dto.js";
+
+export interface OwnedRow {
+  ownerAgentKind?: string;
+  ownerProfileId?: string;
+  ownerWorkspaceId?: string | null;
+}
 
 // ─── Embeddings ──────────────────────────────────────────────────────────────
 
@@ -55,7 +64,7 @@ export interface Embedded<T> {
 
 // ─── Memory rows (storage-shaped, before being serialized to DTO) ────────────
 
-export interface TraceRow {
+export interface TraceRow extends OwnedRow {
   id: TraceId;
   episodeId: EpisodeId;
   sessionId: SessionId;
@@ -65,19 +74,18 @@ export interface TraceRow {
   /**
    * Short LLM-generated summary of this trace — the form the Memories
    * viewer surfaces (and the form retrieval embeddings index, when
-   * present). Falls back to `userText` in both places when null
-   * (backwards compat for rows written before migration 005).
+   * present). Falls back to `userText` in both places when null (the
+   * summarizer occasionally fails open; rendering side handles that).
    */
   summary?: string | null;
   /**
-   * Sharing state (migration 006). `null` = private/not-shared.
-   * `share.scope` mirrors the old viewer's `private | public | hub`
-   * tri-state. Nothing in the pipeline depends on this — it exists
-   * purely so the viewer can annotate rows and make the Hub sync
-   * round-trippable.
+   * Sharing state. `null` = private / not-shared. `share.scope`
+   * mirrors the viewer's `private | public | hub` tri-state. Nothing
+   * in the pipeline depends on this — it exists purely so the viewer
+   * can annotate rows and make the Hub sync round-trippable.
    */
   share?: {
-    scope: "private" | "public" | "hub";
+    scope: ShareScope;
     target?: string | null;
     sharedAt?: EpochMs | null;
   } | null;
@@ -87,10 +95,7 @@ export interface TraceRow {
    * message (Claude extended-thinking / pi-ai `ThinkingContent`). Part
    * of the conversation log surfaced in the viewer. NEVER conflated
    * with `reflection`, which is the MemOS plugin's own scoring signal.
-   *
-   * Optional on the write side (rows written before migration 011 are
-   * nullable; legacy fixtures may omit it). Always read back as
-   * `string | null` from `mapRow`.
+   * Nullable because not every provider / every turn produces thinking.
    */
   agentThinking?: string | null;
   /**
@@ -132,17 +137,13 @@ export interface TraceRow {
    * `(episodeId, turnId)` into a single "one round = one memory"
    * card. Algorithm-side machinery (V/α/L2/Tier 2) ignores this
    * field — it is purely a UI grouping anchor.
-   *
-   * Optional on the read side: rows written before migration 013
-   * (`013-trace-turn-id`) are NULL and the viewer falls back to
-   * per-row rendering for them.
    */
-  turnId?: EpochMs | null;
+  turnId: EpochMs;
   /** Schema version that wrote this row (helps with migrations). */
   schemaVersion: number;
 }
 
-export interface PolicyRow {
+export interface PolicyRow extends OwnedRow {
   id: PolicyId;
   title: string;
   trigger: string;
@@ -152,16 +153,51 @@ export interface PolicyRow {
   support: number;
   gain: number;
   status: "candidate" | "active" | "archived";
+  /**
+   * User-facing "experience" classification. The Policies tab is the storage
+   * backing for the viewer's "经验" surface; these fields distinguish success
+   * patterns from feedback-derived avoid/repair notes.
+   */
+  experienceType?:
+    | "success_pattern"
+    | "repair_validated"
+    | "failure_avoidance"
+    | "repair_instruction"
+    | "preference"
+    | "verifier_feedback"
+    | "procedural";
+  evidencePolarity?: "positive" | "negative" | "neutral" | "mixed";
+  /** Recall/ranking hints for direct experience retrieval. */
+  salience?: number;
+  confidence?: number;
   /** Source episodes that contributed evidence. */
   sourceEpisodeIds: EpisodeId[];
+  /** Direct feedback rows that created or refined this experience. */
+  sourceFeedbackIds?: FeedbackId[];
+  /** Trace rows that grounded this experience, when available. */
+  sourceTraceIds?: TraceId[];
   /** Inducer prompt id, helpful for re-running with newer prompts. */
   inducedBy: string;
+  /**
+   * V7 §2.4.6 — preference / anti-pattern lines distilled by the
+   * decision-repair pipeline. Stored in its own column
+   * (`decision_guidance_json`) since migration 001; the repo
+   * deserialises directly into this shape, no ad-hoc parsing needed.
+   * Empty arrays mean "no guidance learned yet".
+   */
+  decisionGuidance: { preference: string[]; antiPattern: string[] };
+  verifierMeta?: Record<string, unknown> | null;
+  /**
+   * False for failure-only avoidance experiences. They are still recallable,
+   * but skill crystallization needs at least one success-backed source.
+   */
+  skillEligible?: boolean;
   vec: EmbeddingVector | null;
   createdAt: EpochMs;
   updatedAt: EpochMs;
   /** Sharing state (migration 009). Mirrors `TraceRow.share`. */
   share?: {
-    scope: "private" | "public" | "hub";
+    scope: ShareScope;
     target?: string | null;
     sharedAt?: EpochMs | null;
   } | null;
@@ -191,7 +227,7 @@ export interface WorldModelStructureEntry {
   evidenceIds?: string[];
 }
 
-export interface WorldModelRow {
+export interface WorldModelRow extends OwnedRow {
   id: WorldModelId;
   title: string;
   /** Rendered markdown summary, used by prompts + viewer + embedding. */
@@ -211,6 +247,8 @@ export interface WorldModelRow {
   vec: EmbeddingVector | null;
   createdAt: EpochMs;
   updatedAt: EpochMs;
+  /** L3 abstraction version. Starts at 1 and increments on every L3 merge/rebuild. */
+  version: number;
   /**
    * Lifecycle state. `'archived'` rows are kept on disk so the viewer
    * can offer "归档 / 取消归档" without deleting evidence.
@@ -220,7 +258,7 @@ export interface WorldModelRow {
   archivedAt?: EpochMs | null;
   /** Sharing state (migration 009). */
   share?: {
-    scope: "private" | "public" | "hub";
+    scope: ShareScope;
     target?: string | null;
     sharedAt?: EpochMs | null;
   } | null;
@@ -228,7 +266,7 @@ export interface WorldModelRow {
   editedAt?: EpochMs | null;
 }
 
-export interface SkillRow {
+export interface SkillRow extends OwnedRow {
   id: SkillId;
   name: string;
   status: "candidate" | "active" | "archived";
@@ -243,6 +281,13 @@ export interface SkillRow {
   trialsPassed: number;
   sourcePolicyIds: PolicyId[];
   sourceWorldModelIds: WorldModelId[];
+  /**
+   * V7 §2.1 `evidence_anchors` — the L1 traces that justified this
+   * skill at crystallisation time. Best-first ordering (matches what
+   * `gatherEvidence()` returned). Persisted in `evidence_anchors_json`
+   * (migration 014). Always present (default `[]`).
+   */
+  evidenceAnchors: TraceId[];
   vec: EmbeddingVector | null;
   createdAt: EpochMs;
   updatedAt: EpochMs;
@@ -254,17 +299,40 @@ export interface SkillRow {
   version: number;
   /** Sharing state (migration 009). */
   share?: {
-    scope: "private" | "public" | "hub";
+    scope: ShareScope;
     target?: string | null;
     sharedAt?: EpochMs | null;
   } | null;
   /** Last user edit through the viewer's edit modal (migration 009). */
   editedAt?: EpochMs | null;
+  /** Number of successful `skill_get` calls that loaded this skill. */
+  usageCount?: number;
+  /** Last successful `skill_get` time, or null when never loaded. */
+  lastUsedAt?: EpochMs | null;
 }
 
-export interface EpisodeRow {
+export interface SkillTrialRow extends OwnedRow {
+  id: string;
+  skillId: SkillId;
+  sessionId: SessionId | null;
+  episodeId: EpisodeId;
+  traceId: TraceId | null;
+  turnId: EpochMs | null;
+  toolCallId: string | null;
+  status: "pending" | "pass" | "fail" | "unknown";
+  createdAt: EpochMs;
+  resolvedAt: EpochMs | null;
+  evidence: Record<string, unknown>;
+}
+
+export interface EpisodeRow extends OwnedRow {
   id: EpisodeId;
   sessionId: SessionId;
+  share?: {
+    scope: ShareScope;
+    target?: string | null;
+    sharedAt?: EpochMs | null;
+  } | null;
   startedAt: EpochMs;
   endedAt: EpochMs | null;
   traceIds: TraceId[];
@@ -273,7 +341,7 @@ export interface EpisodeRow {
   status: "open" | "closed";
 }
 
-export interface FeedbackRow {
+export interface FeedbackRow extends OwnedRow {
   id: FeedbackId;
   ts: EpochMs;
   episodeId: EpisodeId | null;
@@ -285,7 +353,7 @@ export interface FeedbackRow {
   raw: unknown;
 }
 
-export interface CandidatePoolRow {
+export interface CandidatePoolRow extends OwnedRow {
   id: string;
   policyId: PolicyId | null;        // null until promoted
   evidenceTraceIds: TraceId[];
@@ -294,7 +362,7 @@ export interface CandidatePoolRow {
   expiresAt: EpochMs;
 }
 
-export interface DecisionRepairRow {
+export interface DecisionRepairRow extends OwnedRow {
   id: string;
   ts: EpochMs;
   contextHash: string;

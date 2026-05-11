@@ -36,6 +36,7 @@ function mkTrace(id: string, v: EmbeddingVector | null, partial: Partial<TraceRo
     tags: ["docker", "pip"],
     vecSummary: v,
     vecAction: null,
+    turnId: 0 as never,
     schemaVersion: 1,
     ...partial,
   };
@@ -54,6 +55,7 @@ function mkPolicy(id: string, v: EmbeddingVector, status: PolicyRow["status"] = 
     status,
     sourceEpisodeIds: [],
     inducedBy: "unit-test",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: v,
     createdAt: 0 as PolicyRow["createdAt"],
     updatedAt: 0 as PolicyRow["updatedAt"],

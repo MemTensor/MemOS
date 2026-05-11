@@ -7,6 +7,12 @@
 import { rootLogger } from "../../logger/index.js";
 import { decodeVector, encodeVector } from "../vector.js";
 import type { EmbeddingVector } from "../../types.js";
+import type { RuntimeNamespace } from "../../../agent-contract/dto.js";
+import {
+  normalizeShareScope,
+  ownerFromNamespace,
+  visibilityWhere as runtimeVisibilityWhere,
+} from "../../runtime/namespace.js";
 import type { PageOptions, RawRow, TimeRange } from "../types.js";
 
 export const repoLog = rootLogger.child({ channel: "storage.repos" });
@@ -75,6 +81,61 @@ export function joinWhere(fragments: Array<string | undefined>): string {
   const parts = fragments.filter((p): p is string => Boolean(p && p.trim()));
   if (parts.length === 0) return "";
   return `WHERE ${parts.join(" AND ")}`;
+}
+
+export function ownerColumns(): string[] {
+  return ["owner_agent_kind", "owner_profile_id", "owner_workspace_id"];
+}
+
+export function ownerParamsFromRow(row: {
+  ownerAgentKind?: string;
+  ownerProfileId?: string;
+  ownerWorkspaceId?: string | null;
+}): Record<string, unknown> {
+  return {
+    owner_agent_kind: row.ownerAgentKind ?? "unknown",
+    owner_profile_id: row.ownerProfileId ?? "default",
+    owner_workspace_id: row.ownerWorkspaceId ?? null,
+  };
+}
+
+export function ownerFieldsFromRaw(r: {
+  owner_agent_kind?: string | null;
+  owner_profile_id?: string | null;
+  owner_workspace_id?: string | null;
+}): {
+  ownerAgentKind: string;
+  ownerProfileId: string;
+  ownerWorkspaceId: string | null;
+} {
+  return {
+    ownerAgentKind: r.owner_agent_kind || "unknown",
+    ownerProfileId: r.owner_profile_id || "default",
+    ownerWorkspaceId: r.owner_workspace_id ?? null,
+  };
+}
+
+export function defaultOwnerFields(ns?: RuntimeNamespace | null): {
+  ownerAgentKind: string;
+  ownerProfileId: string;
+  ownerWorkspaceId: string | null;
+} {
+  return ns ? ownerFromNamespace(ns) : {
+    ownerAgentKind: "unknown",
+    ownerProfileId: "default",
+    ownerWorkspaceId: null,
+  };
+}
+
+export function visibilityWhere(ns: RuntimeNamespace, alias = ""): {
+  sql: string;
+  params: Record<string, unknown>;
+} {
+  return runtimeVisibilityWhere(ns, alias);
+}
+
+export function normalizeShareForStorage(scope: unknown): string {
+  return normalizeShareScope(scope);
 }
 
 export function rowOr<T>(row: RawRow | undefined, map: (r: RawRow) => T): T | null {

@@ -24,7 +24,7 @@ import type { L2Config, L2EventBus } from "./types.js";
 
 export interface L2SubscriberDeps {
   db: StorageDb;
-  repos: Pick<Repos, "candidatePool" | "policies" | "traces">;
+  repos: Pick<Repos, "candidatePool" | "embeddingRetryQueue" | "policies" | "traces">;
   rewardBus: RewardEventBus;
   l2Bus: L2EventBus;
   llm: LlmClient | null;
@@ -37,6 +37,15 @@ export interface L2SubscriberHandle {
   detach(): void;
   /** Force-run L2 for a given episode id (used by tests and the viewer). */
   runOnce(episodeId: EpisodeId, opts?: { trigger?: "manual" | "rebuild" }): Promise<void>;
+  /**
+   * Wait for every in-flight L2 run to complete. Called from the
+   * pipeline's `flush()` so that adapters whose process exits right
+   * after `episode.close` (e.g. Hermes' single-shot `chat -q`) don't
+   * lose the induction step. Without this, `runL2` (which may take
+   * 5–10s for the LLM `l2.induction` call) gets reaped mid-flight,
+   * leaving the candidate pool full but no policies ever induced.
+   */
+  drain(): Promise<void>;
 }
 
 export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
@@ -45,6 +54,9 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
 
   let active = 0;
   let closed = false;
+  const inflight = new Set<Promise<unknown>>();
+  const inflightByEpisode = new Map<EpisodeId, Promise<unknown>>();
+  const pendingByEpisode = new Map<EpisodeId, RewardResult>();
 
   async function processReward(result: RewardResult): Promise<void> {
     if (closed) return;
@@ -93,16 +105,54 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
     }
   }
 
+  async function processEpisodeQueue(initial: RewardResult): Promise<void> {
+    let next: RewardResult | undefined = initial;
+    while (next && !closed) {
+      pendingByEpisode.delete(next.episodeId);
+      await processReward(next);
+      next = pendingByEpisode.get(next.episodeId);
+    }
+  }
+
+  function scheduleReward(result: RewardResult): void {
+    if (closed) return;
+    const existing = inflightByEpisode.get(result.episodeId);
+    if (existing) {
+      // Keep only the latest reward snapshot for this episode. OpenClaw
+      // can emit several reward.updated events while reflect/lite passes
+      // are still settling; serialising them prevents parallel induction
+      // over the same candidate buckets while still preserving the newest
+      // trace set for a follow-up pass.
+      pendingByEpisode.set(result.episodeId, result);
+      return;
+    }
+    const p: Promise<unknown> = processEpisodeQueue(result).finally(() => {
+      inflightByEpisode.delete(result.episodeId);
+      inflight.delete(p);
+    });
+    inflightByEpisode.set(result.episodeId, p);
+    inflight.add(p);
+  }
+
   const off = rewardBus.on("reward.updated", (evt) => {
     if (evt.kind !== "reward.updated") return;
-    // Fire-and-forget; reward subscriber's completion doesn't block on us.
-    void processReward(evt.result);
+    // Fire-and-forget for the producer (reward subscriber must not
+    // block on us), but track/coalesce the promise so `drain()` can wait
+    // for the L2 induction to actually finish before the process
+    // shuts down.
+    scheduleReward(evt.result);
   });
 
   return {
     detach(): void {
       closed = true;
       off();
+      pendingByEpisode.clear();
+    },
+    async drain(): Promise<void> {
+      while (inflight.size > 0) {
+        await Promise.all(Array.from(inflight));
+      }
     },
     async runOnce(episodeId, opts): Promise<void> {
       const ep = deps.repos.traces; // just to silence TS unused check

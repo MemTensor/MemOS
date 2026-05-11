@@ -29,6 +29,7 @@ function mkPolicy(partial: Partial<PolicyRow> & { id: PolicyId }): PolicyRow {
     status: partial.status ?? "active",
     sourceEpisodeIds: partial.sourceEpisodeIds ?? [],
     inducedBy: partial.inducedBy ?? "test",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: partial.vec ?? vec([1, 0, 0]),
     createdAt: NOW,
     updatedAt: NOW,
@@ -183,6 +184,51 @@ describe("memory/l3/cluster", () => {
       expect(keys.some((k) => k.includes("node") || k.includes("npm"))).toBe(true);
     });
 
+    it("falls back to loose admission when strict subset is too small but bucket survives", () => {
+      // All three policies share the same domain key (`python|_`) but
+      // their vectors point in mutually-orthogonal directions, so the
+      // strict (cosine ≥ minSimilarity) subset would be empty. The
+      // bucket itself satisfies minPolicies, so `cluster.ts` should
+      // fall back to admitting the WHOLE bucket as a `loose` cluster.
+      const policies = [
+        mkPolicy({
+          id: "po_validate" as PolicyId,
+          title: "validate python syntax",
+          trigger: "after writing python files",
+          procedure: "python -m py_compile <file>",
+          vec: vec([1, 0, 0]),
+        }),
+        mkPolicy({
+          id: "po_cli" as PolicyId,
+          title: "register python CLI subcommand",
+          trigger: "adding a new task verb",
+          procedure: "register(subparsers) + handler() -> int",
+          vec: vec([0, 1, 0]),
+        }),
+        mkPolicy({
+          id: "po_storage" as PolicyId,
+          title: "implement python storage backend",
+          trigger: "new persistence format requested",
+          procedure: "implement load/save with UTF-8",
+          vec: vec([0, 0, 1]),
+        }),
+      ];
+      const clusters = clusterPolicies(
+        { policies },
+        { config: { clusterMinSimilarity: 0.6, minPolicies: 2 } },
+      );
+      expect(clusters.length).toBe(1);
+      const c = clusters[0]!;
+      expect(c.admission).toBe("loose");
+      expect(c.policies.length).toBe(3);
+      // Centroid of three orthogonal unit vectors gives mean cosine
+      // 1/sqrt(3) ≈ 0.577 — strictly less than 0.6 (the strict floor),
+      // confirming we landed in the loose fallback for the right
+      // reason and not because of a bug elsewhere.
+      expect(c.cohesion).toBeLessThan(0.6);
+      expect(c.cohesion).toBeGreaterThan(0.5);
+    });
+
     it("filters outliers below clusterMinSimilarity", () => {
       const policies = [
         mkPolicy({
@@ -219,7 +265,14 @@ describe("memory/l3/cluster", () => {
         { config: { clusterMinSimilarity: 0.6, minPolicies: 3 } },
       );
       expect(clusters.length).toBe(1);
-      expect(clusters[0]!.policies.map((p) => String(p.id))).not.toContain("po_outlier");
+      const c = clusters[0]!;
+      // The strict subset (3 normals, all cosine ≥ 0.6) is itself
+      // ≥ minPolicies, so we should land in `strict` admission and
+      // the outlier must be excluded — not folded back via the loose
+      // fallback.
+      expect(c.admission).toBe("strict");
+      expect(c.policies.map((p) => String(p.id))).not.toContain("po_outlier");
+      expect(c.cohesion).toBeGreaterThan(0.5);
     });
   });
 });
