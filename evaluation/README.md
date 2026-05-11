@@ -64,6 +64,12 @@ First prepare the dataset `longmemeval_s` from https://huggingface.co/datasets/x
 ./scripts/run_lme_eval.sh
 ```
 
+#### Question date and `reference_time`
+
+LongMemEval gives each question a **question date**; evaluation should use that as the reference “now”, not the time when you run the script. The LongMemEval search script passes `question_date` as **`reference_time`** where the backend supports it.
+
+**MemOS Cloud** currently does not support supplying question date on search the same way, so LongMemEval scores there may differ from a spec-faithful run. **Prefer evaluating LongMemEval against the open-source MemOS server** when you need comparable numbers.
+
 ### PrefEval Evaluation
 Downloading benchmark_dataset/filtered_inter_turns.json from https://github.com/amazon-science/PrefEval/blob/main/benchmark_dataset/filtered_inter_turns.json and save it as `./data/prefeval/filtered_inter_turns.json`.
 To evaluate the **Prefeval** dataset — run the following [script](./scripts/run_prefeval_eval.sh):

@@ -438,6 +438,14 @@ class APISearchRequest(BaseRequest):
     )
 
     # ==== Context ====
+    reference_time: str | None = Field(
+        None,
+        description=(
+            "Optional reference time for time-sensitive search parsing. "
+            "If omitted, search uses the current server time."
+        ),
+    )
+
     chat_history: MessageList | None = Field(
         None,
         description=(
@@ -606,6 +614,17 @@ class APIADDRequest(BaseRequest):
     is_feedback: bool = Field(
         False,
         description=("Whether this request represents user feedback. Default: False."),
+    )
+
+    # ==== Upload skill flag ====
+    is_upload_skill: bool = Field(
+        False,
+        description=(
+            "Whether this request is an upload skill request. "
+            "When True, the messages field should contain file items "
+            "with zip file download URLs for pre-built skill packages. "
+            "Default: False."
+        ),
     )
 
     # ==== Backward compatibility fields (will delete later) ====
