@@ -58,13 +58,13 @@ try {
 
 # Agent detection
 $HasOpenClaw = Test-Path "$env:USERPROFILE\.openclaw"
-$HasHermes = Test-Path "$env:USERPROFILE\.hermes"
+$HasHermes = Test-Path "$env:LOCALAPPDATA\hermes"
 
 Write-Host "`n  Detected agents:" -ForegroundColor White
 if ($HasOpenClaw) { Write-Host "    - OpenClaw   (~/.openclaw)" -ForegroundColor Green }
 else { Write-Host "    - OpenClaw   (not installed)" -ForegroundColor DarkGray }
 
-if ($HasHermes) { Write-Host "    - Hermes     (~/.hermes)" -ForegroundColor Green }
+if ($HasHermes) { Write-Host "    - Hermes     (~/AppData/Local/hermes)" -ForegroundColor Green }
 else { Write-Host "    - Hermes     (not installed)" -ForegroundColor DarkGray }
 
 Write-Host "`n  Install into which agent?"
@@ -88,7 +88,7 @@ switch ($Choice) {
 }
 
 if ($AgentSelection -eq "auto") {
-    if (-not $HasOpenClaw -and -not $HasHermes) { Stop-Die "Neither ~/.openclaw nor ~/.hermes exists. Install one first." }
+    if (-not $HasOpenClaw -and -not $HasHermes) { Stop-Die "Neither ~/.openclaw nor ~/AppData/Local/hermes exists. Install one first." }
     if ($HasOpenClaw -and $HasHermes) { $AgentSelection = "all" }
     elseif ($HasOpenClaw) { $AgentSelection = "openclaw" }
     else { $AgentSelection = "hermes" }
@@ -379,9 +379,9 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 
 function Install-Hermes {
     Write-Host "`n=== Hermes Install ===" -ForegroundColor Cyan
-    $Prefix = Join-Path $env:USERPROFILE ".hermes\memos-plugin"
+    $Prefix = Join-Path $env:LOCALAPPDATA "hermes\memos-plugin"
     $HomeDir = $Prefix
-    $ConfigFile = Join-Path $env:USERPROFILE ".hermes\config.yaml"
+    $ConfigFile = Join-Path $env:LOCALAPPDATA "hermes\config.yaml"
     $AdapterDir = Join-Path $Prefix "adapters\hermes"
     
     Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match "bridge.cts" } | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -393,7 +393,7 @@ function Install-Hermes {
     Set-Content -Path (Join-Path $AdapterDir "bridge_path.txt") -Value (Join-Path $Prefix "bridge.cts") -Encoding UTF8
     
     $PythonBin = ""
-    $VenvPy = Join-Path $env:USERPROFILE ".hermes\hermes-agent\venv\Scripts\python.exe"
+    $VenvPy = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\venv\Scripts\python.exe"
     if (Test-Path $VenvPy) { $PythonBin = $VenvPy }
     else { $PythonBin = (Get-Command "python.exe" -ErrorAction SilentlyContinue).Source }
     
@@ -401,7 +401,7 @@ function Install-Hermes {
     Write-Success "Python: $PythonBin"
     
     $PluginDir = ""
-    $DefaultPluginDir = Join-Path $env:USERPROFILE ".hermes\hermes-agent\plugins\memory"
+    $DefaultPluginDir = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\plugins\memory"
     if (Test-Path $DefaultPluginDir) { $PluginDir = $DefaultPluginDir }
     else {
         # Fallback to python detection
@@ -424,14 +424,14 @@ function Install-Hermes {
         $PyScript = @"
 import sys, yaml
 path = sys.argv[1]
-with open(path) as f: cfg = yaml.safe_load(f) or {}
+with open(path, encoding='utf-8') as f: cfg = yaml.safe_load(f) or {}
 mem = cfg.get('memory')
 if isinstance(mem, dict):
     mem['provider'] = 'memtensor'
     mem.setdefault('memory_enabled', True)
 else:
     cfg['memory'] = {'provider': 'memtensor', 'memory_enabled': True}
-with open(path, 'w') as f:
+with open(path, 'w', encoding='utf-8') as f:
     yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 "@
         $PyFile = Join-Path $env:TEMP "patch_config.py"
@@ -455,7 +455,8 @@ memory:
     
     if ((Test-Path $TsxBin) -and (Test-Path $BridgeCts)) {
         $DaemonLog = Join-Path $Prefix "logs\daemon-start.log"
-        Start-Process -FilePath $TsxBin -ArgumentList "$BridgeCts --agent=hermes --daemon" -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLog
+        $DaemonLogErr = Join-Path $Prefix "logs\daemon-start-err.log"
+        Start-Process -FilePath $TsxBin -ArgumentList "$BridgeCts --agent=hermes --daemon" -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
         
         if (Wait-ForViewer -Port $HermesPort -Timeout 120) {
             Write-Success "Memory Viewer daemon running"
