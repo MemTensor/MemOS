@@ -545,6 +545,31 @@ class Searcher:
             return 2
         return KEYWORD_EXTRACT_TOP_K
 
+    @classmethod
+    def _rank_english_keyword_terms(cls, terms: list[str]) -> list[str]:
+        term_stats: dict[str, dict[str, int | str]] = {}
+        for index, term in enumerate(terms):
+            normalized_term = cls._normalize_keyword_term(term)
+            if cls._is_keyword_stopword(normalized_term):
+                continue
+            key = normalized_term.lower()
+            if key not in term_stats:
+                term_stats[key] = {"term": normalized_term, "index": index, "count": 0}
+            term_stats[key]["count"] = int(term_stats[key]["count"]) + 1
+
+        def score(item: tuple[str, dict[str, int | str]]) -> tuple[float, int]:
+            _, data = item
+            term = str(data["term"])
+            count = int(data["count"])
+            term_score = count * 3.0 + min(len(term), 16) * 0.1
+            if any(ch.isdigit() for ch in term):
+                term_score += 1.0
+            if len(term) <= 2:
+                term_score -= 0.5
+            return (-term_score, int(data["index"]))
+
+        return [str(data["term"]) for _, data in sorted(term_stats.items(), key=score)]
+
     def _extract_weighted_keyword_terms(self, query: str) -> list[str]:
         language = detect_lang(query)
         keyword_top_k = self._keyword_extract_top_k(query, language)
@@ -561,7 +586,7 @@ class Searcher:
             )
         else:
             tokenizer = self.tokenizer or FastTokenizer()
-            weighted_terms = tokenizer.tokenize_english(query)
+            weighted_terms = self._rank_english_keyword_terms(tokenizer.tokenize_english(query))
 
         query_words: list[str] = []
         seen_words: set[str] = set()
