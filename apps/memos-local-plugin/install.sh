@@ -530,9 +530,16 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
   config.plugins.entries[pluginId] = {};
 }
 config.plugins.entries[pluginId].enabled = true;
-// Do not write hook capability flags here. Current OpenClaw validates
-// plugin entries strictly and rejects unknown hook keys.
-if (config.plugins.entries[pluginId].hooks) delete config.plugins.entries[pluginId].hooks;
+if (
+  !config.plugins.entries[pluginId].hooks ||
+  typeof config.plugins.entries[pluginId].hooks !== 'object' ||
+  Array.isArray(config.plugins.entries[pluginId].hooks)
+) {
+  config.plugins.entries[pluginId].hooks = {};
+}
+// OpenClaw gates transcript-bearing hooks for non-bundled plugins. Without
+// this, `agent_end` is blocked, so turns are recalled but never captured.
+config.plugins.entries[pluginId].hooks.allowConversationAccess = true;
 
 if (!config.plugins.installs || typeof config.plugins.installs !== 'object') config.plugins.installs = {};
 const installsEntry = {

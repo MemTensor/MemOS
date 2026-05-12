@@ -157,6 +157,39 @@ describe("flattenMessages", () => {
     expect(toolResult.isError).toBe(false);
   });
 
+  it("accepts OpenClaw lowercase/alias tool-call content blocks", () => {
+    const flat = flattenMessages([
+      { role: "user", content: "read two files" },
+      {
+        role: "assistant",
+        toolCallId: "fallback-id",
+        content: [
+          { type: "toolcall", id: "call_1", name: "read", arguments: { path: "a.md" } },
+          { type: "tool_use", toolUseId: "call_2", name: "read", input: { path: "b.md" } },
+          { type: "functionCall", name: "exec", args: { command: "pwd" } },
+        ],
+      },
+    ]);
+
+    const calls = flat.filter((m) => m.role === "tool_call");
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toMatchObject({
+      toolCallId: "call_1",
+      toolName: "read",
+      toolInput: { path: "a.md" },
+    });
+    expect(calls[1]).toMatchObject({
+      toolCallId: "call_2",
+      toolName: "read",
+      toolInput: { path: "b.md" },
+    });
+    expect(calls[2]).toMatchObject({
+      toolCallId: "fallback-id",
+      toolName: "exec",
+      toolInput: { command: "pwd" },
+    });
+  });
+
   it("accepts OpenAI-legacy assistant.tool_calls + role: 'tool' for results", () => {
     // Older bridges and our own historical tests use this shape — keep
     // it working so we don't regress on multi-host setups.
@@ -298,6 +331,7 @@ describe("extractTurn", () => {
     expect(turn!.toolCalls[0].name).toBe("sh");
     expect(turn!.toolCalls[0].input).toEqual({ cmd: "ls" });
     expect(turn!.toolCalls[0].output).toContain("a.txt");
+    expect(turn!.toolCalls[0].toolCallId).toBe("c1");
     expect(turn!.toolCalls[0].thinkingBefore).toBe("running ls");
   });
 
@@ -553,6 +587,30 @@ describe("extractTurn", () => {
     expect(turn!.toolCalls).toHaveLength(1);
     expect(turn!.toolCalls[0].name).toBe("x");
     expect(turn!.toolCalls[0].output).toBeUndefined();
+  });
+
+  it("keeps parallel same-name tool calls when ids are missing", () => {
+    const flat = flattenMessages([
+      { role: "user", content: "read both files" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolcall", name: "read", arguments: { path: "a.md" } },
+          { type: "toolcall", name: "read", arguments: { path: "b.md" } },
+        ],
+      },
+      { role: "toolResult", toolName: "read", content: "A" },
+      { role: "toolResult", toolName: "read", content: "B" },
+      { role: "assistant", content: [{ type: "text", text: "done" }] },
+    ]);
+
+    const turn = extractTurn(flat, 0);
+    expect(turn!.toolCalls).toHaveLength(2);
+    expect(turn!.toolCalls.map((tc) => tc.input)).toEqual([
+      { path: "a.md" },
+      { path: "b.md" },
+    ]);
+    expect(turn!.toolCalls.map((tc) => tc.output)).toEqual(["A", "B"]);
   });
 
   it("returns null when the list has no user message", () => {
@@ -956,6 +1014,59 @@ describe("createOpenClawBridge", () => {
     // new topic. We assert the trace was captured, not the closure.
     expect(events).toContain("trace.created");
     expect(events).not.toContain("episode.closed");
+  });
+
+  it("uses tool hook observations when agent_end transcript omits tool blocks", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const runCtx = hookCtx({ sessionKey: "s-cached-tools", runId: "run-cached-tools" });
+    const toolCtx: PluginHookToolContext = {
+      toolName: "sh",
+      toolCallId: "call_cached",
+      agentId: "main",
+      sessionKey: "s-cached-tools",
+      sessionId: "host-s-cached-tools",
+      runId: "run-cached-tools",
+    };
+
+    await bridge.handleBeforePrompt({ prompt: "deploy with hooks", messages: [] }, runCtx);
+    bridge.handleBeforeToolCall(
+      { toolName: "sh", params: { cmd: "deploy" }, toolCallId: "call_cached" },
+      toolCtx,
+    );
+    await bridge.handleAfterToolCall(
+      {
+        toolName: "sh",
+        params: { cmd: "deploy" },
+        toolCallId: "call_cached",
+        result: "ok",
+        durationMs: 25,
+      },
+      toolCtx,
+    );
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "deploy with hooks" },
+          { role: "assistant", content: [{ type: "text", text: "done" }] },
+        ],
+        durationMs: 50,
+      },
+      runCtx,
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const traces = await mc.listTraces({ groupByTurn: true });
+    expect(traces).toHaveLength(2);
+    expect(traces.some((tr) => tr.toolCalls?.[0]?.name === "sh")).toBe(true);
+    expect(traces.some((tr) => tr.agentText === "done")).toBe(true);
   });
 
   it("handleAgentEnd works even when before_prompt_build was never called (lazy episode open)", async () => {
