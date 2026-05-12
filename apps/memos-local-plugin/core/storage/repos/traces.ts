@@ -121,6 +121,14 @@ export function makeTracesRepo(db: StorageDb) {
         fragments.push(`episode_id = @episode_id`);
         params.episode_id = filter.episodeId;
       }
+      if (filter.ownerAgentKind) {
+        fragments.push(`owner_agent_kind = @owner_agent_kind`);
+        params.owner_agent_kind = filter.ownerAgentKind;
+      }
+      if (filter.ownerProfileId) {
+        fragments.push(`owner_profile_id = @owner_profile_id`);
+        params.owner_profile_id = filter.ownerProfileId;
+      }
       if (filter.minAbsValue !== undefined) {
         fragments.push(`abs(value) >= @min_abs_value`);
         params.min_abs_value = filter.minAbsValue;
@@ -147,6 +155,14 @@ export function makeTracesRepo(db: StorageDb) {
       if (filter.episodeId) {
         fragments.push(`episode_id = @episode_id`);
         params.episode_id = filter.episodeId;
+      }
+      if (filter.ownerAgentKind) {
+        fragments.push(`owner_agent_kind = @owner_agent_kind`);
+        params.owner_agent_kind = filter.ownerAgentKind;
+      }
+      if (filter.ownerProfileId) {
+        fragments.push(`owner_profile_id = @owner_profile_id`);
+        params.owner_profile_id = filter.ownerProfileId;
       }
       if (filter.minAbsValue !== undefined) {
         fragments.push(`abs(value) >= @min_abs_value`);
@@ -175,6 +191,14 @@ export function makeTracesRepo(db: StorageDb) {
         fragments.push(`episode_id = @episode_id`);
         params.episode_id = filter.episodeId;
       }
+      if (filter.ownerAgentKind) {
+        fragments.push(`owner_agent_kind = @owner_agent_kind`);
+        params.owner_agent_kind = filter.ownerAgentKind;
+      }
+      if (filter.ownerProfileId) {
+        fragments.push(`owner_profile_id = @owner_profile_id`);
+        params.owner_profile_id = filter.ownerProfileId;
+      }
       const where = joinWhere(fragments);
       const sql = `SELECT COUNT(*) AS n FROM (SELECT DISTINCT episode_id, turn_id FROM traces ${where})`;
       const row = db.prepare<typeof params, { n: number }>(sql).get(params);
@@ -196,6 +220,14 @@ export function makeTracesRepo(db: StorageDb) {
       if (filter.episodeId) {
         fragments.push(`episode_id = @episode_id`);
         params.episode_id = filter.episodeId;
+      }
+      if (filter.ownerAgentKind) {
+        fragments.push(`owner_agent_kind = @owner_agent_kind`);
+        params.owner_agent_kind = filter.ownerAgentKind;
+      }
+      if (filter.ownerProfileId) {
+        fragments.push(`owner_profile_id = @owner_profile_id`);
+        params.owner_profile_id = filter.ownerProfileId;
       }
       const where = joinWhere(fragments);
       const limit = Math.max(1, Math.min(500, filter.limit ?? 50));

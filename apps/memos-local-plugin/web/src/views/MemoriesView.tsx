@@ -54,6 +54,7 @@ import { Icon } from "../components/Icon";
 import { Pager } from "../components/Pager";
 import { ShareScopePill } from "../components/ShareScopePill";
 import { Markdown } from "../components/Markdown";
+import { NamespaceSelect, agentClass, appendNamespaceParams, namespaceLabel } from "../components/NamespaceSelect";
 import { route } from "../stores/router";
 import { clearEntryId } from "../stores/cross-link";
 import type { TraceDTO } from "../api/types";
@@ -89,6 +90,8 @@ interface MemoryGroup {
   aggValue: number;
   aggAlpha: number;
   hasReflection: boolean;
+  ownerAgentKind: string;
+  ownerProfileId: string;
   scope: "private" | "local" | "public" | "hub";
   shared: boolean;
 }
@@ -101,6 +104,7 @@ export function MemoriesView() {
   // navigate here with a pending query.
   const [query, setQuery] = useState(() => route.value.params.q ?? "");
   const [role, setRole] = useState<RoleFilter>("");
+  const [namespaceFilter, setNamespaceFilter] = useState("");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(false);
@@ -131,6 +135,7 @@ export function MemoriesView() {
       qs.set("offset", String(roleFilterActive ? 0 : opts.page * pageSize));
       qs.set("groupByTurn", "true");
       if (opts.q) qs.set("q", opts.q);
+      appendNamespaceParams(qs, namespaceFilter);
       const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`);
       setTraces(res.traces);
       setHasMore(roleFilterActive ? false : res.nextOffset != null);
@@ -153,7 +158,7 @@ export function MemoriesView() {
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, pageSize, role, route.value.params.id]);
+  }, [query, pageSize, role, namespaceFilter, route.value.params.id]);
 
   useEffect(() => {
     const id = route.value.params.id;
@@ -167,6 +172,7 @@ export function MemoriesView() {
   const openLinkedMemory = async (id: string, signal: AbortSignal) => {
     setQuery("");
     setRole("");
+    setNamespaceFilter("");
     setLoading(true);
     try {
       const targetTrace = await api.get<TraceDTO>(
@@ -424,6 +430,7 @@ export function MemoriesView() {
             class="btn btn--ghost btn--sm"
             onClick={() => {
               setQuery("");
+              setNamespaceFilter("");
               setSelected(new Set());
               void loadPage({ q: "", page: 0 });
             }}
@@ -467,6 +474,7 @@ export function MemoriesView() {
             </button>
           ))}
         </div>
+        <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
       </div>
 
       {/*
@@ -566,6 +574,13 @@ export function MemoriesView() {
                 <div class="mem-card__body">
                   <div class="mem-card__title">{line}</div>
                   <div class="mem-card__meta">
+                    <span class={`pill pill--agent pill--agent-${agentClass(g.ownerAgentKind)}`}>
+                      {namespaceLabel({
+                        agentKind: g.ownerAgentKind,
+                        profileId: g.ownerProfileId,
+                        count: g.ids.length,
+                      })}
+                    </span>
                     <ShareScopePill scope={g.scope} />
                     <span>{formatTs(g.ts)}</span>
                     <span class="mono">{groupScoreLabel(g)}</span>
@@ -934,6 +949,8 @@ function buildGroups(traces: readonly TraceDTO[]): MemoryGroup[] {
       aggValue: bucket.length === 0 ? 0 : sumV / bucket.length,
       aggAlpha: bucket.length === 0 ? 0 : sumA / bucket.length,
       hasReflection: bucket.some((t) => Boolean((t.reflection ?? "").trim())),
+      ownerAgentKind: pickGroupAgent(bucket),
+      ownerProfileId: pickGroupProfile(bucket),
       scope,
       shared: scope !== "private",
     };
@@ -954,6 +971,14 @@ function detectGroupRole(g: MemoryGroup): "user" | "assistant" | "tool" | "" {
 
 function flattenToolCallList(g: MemoryGroup): { name: string }[] {
   return g.traces.flatMap((t) => t.toolCalls ?? []);
+}
+
+function pickGroupAgent(traces: readonly TraceDTO[]): string {
+  return traces.find((t) => t.ownerAgentKind && t.ownerAgentKind !== "unknown")?.ownerAgentKind ?? "unknown";
+}
+
+function pickGroupProfile(traces: readonly TraceDTO[]): string {
+  return traces.find((t) => t.ownerProfileId && t.ownerProfileId !== "unknown")?.ownerProfileId ?? "default";
 }
 
 function truncateForExport(tc: { input?: unknown; output?: unknown; errorCode?: string }): string {

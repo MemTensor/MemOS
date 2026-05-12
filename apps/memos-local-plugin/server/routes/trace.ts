@@ -17,6 +17,8 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
    *   ?limit=50         (max 500)
    *   &offset=0
    *   &sessionId=<id>   (optional filter)
+   *   &ownerAgentKind=<kind>   (optional namespace filter)
+   *   &ownerProfileId=<id>     (optional namespace filter)
    *   &q=<substring>    (optional case-insensitive summary/text filter)
    *
    * Returns: { traces: TraceDTO[], limit, offset, nextOffset? }
@@ -32,6 +34,9 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
     const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50;
     const offset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const sessionId = params.get("sessionId") || undefined;
+    const namespace = parseNamespace(params.get("namespace"));
+    const ownerAgentKind = params.get("ownerAgentKind") || namespace?.ownerAgentKind || undefined;
+    const ownerProfileId = params.get("ownerProfileId") || namespace?.ownerProfileId || undefined;
     const q = params.get("q") || undefined;
     // When `groupByTurn=true`, pagination treats each (episodeId, turnId)
     // pair as one "memory" — matching the viewer's grouped display where
@@ -41,13 +46,19 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       limit,
       offset,
       sessionId: sessionId as SessionId | undefined,
+      ownerAgentKind,
+      ownerProfileId,
       q,
       groupByTurn,
+      includeAllNamespaces: true,
     });
     const total = await deps.core.countTraces({
       sessionId: sessionId as SessionId | undefined,
+      ownerAgentKind,
+      ownerProfileId,
       q,
       groupByTurn,
+      includeAllNamespaces: true,
     });
     // When grouping, `traces.length === limit` is no longer a reliable
     // "has more" signal (a single turn can yield many traces). Use the
@@ -169,7 +180,14 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const traces = await deps.core.timeline({ episodeId: id });
+    const traces = await deps.core.timeline({ episodeId: id, includeAllNamespaces: true });
     return { episodeId: id, traces };
   });
+}
+
+function parseNamespace(value: string | null): { ownerAgentKind: string; ownerProfileId: string } | null {
+  if (!value) return null;
+  const [ownerAgentKind, ownerProfileId] = value.split("/", 2).map((part) => part.trim());
+  if (!ownerAgentKind || !ownerProfileId) return null;
+  return { ownerAgentKind, ownerProfileId };
 }

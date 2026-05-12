@@ -12,6 +12,7 @@ import { api } from "../api/client";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
 import { Pager } from "../components/Pager";
+import { NamespaceSelect, appendNamespaceParams } from "../components/NamespaceSelect";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import { ChatLog, flattenChat, type TimelineTrace } from "./tasks-chat";
@@ -66,6 +67,7 @@ const DEFAULT_PAGE_SIZE = 20;
 export function TasksView() {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<TaskStatus>("");
+  const [namespaceFilter, setNamespaceFilter] = useState("");
   const [rows, setRows] = useState<EpisodeRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
@@ -90,6 +92,7 @@ export function TasksView() {
     const qs = new URLSearchParams();
     qs.set("limit", String(pageSize));
     qs.set("offset", String(nextPage * pageSize));
+    appendNamespaceParams(qs, namespaceFilter);
     api
       .get<EpisodeListResponse>(
         `/api/v1/episodes?${qs.toString()}`,
@@ -115,7 +118,7 @@ export function TasksView() {
     const ctrl = loadPage(0);
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageSize, route.value.params.id]);
+  }, [pageSize, namespaceFilter, route.value.params.id]);
 
   useEffect(() => {
     const id = route.value.params.id;
@@ -136,6 +139,7 @@ export function TasksView() {
       const qs = new URLSearchParams();
       qs.set("limit", String(pageSizeForLookup));
       qs.set("offset", String(targetPage * pageSizeForLookup));
+      appendNamespaceParams(qs, namespaceFilter);
       const res = await api.get<EpisodeListResponse>(
         `/api/v1/episodes?${qs.toString()}`,
         { signal },
@@ -208,6 +212,7 @@ export function TasksView() {
             onClick={() => {
               setQuery("");
               setStatus("");
+              setNamespaceFilter("");
               setSelected(new Set());
               loadPage(0);
             }}
@@ -250,6 +255,7 @@ export function TasksView() {
             </button>
           ))}
         </div>
+        <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
       </div>
 
       {loading && (

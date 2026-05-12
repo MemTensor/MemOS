@@ -57,6 +57,8 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
 
   routes.set("GET /api/v1/episodes", async (ctx) => {
     const sessionId = (ctx.url.searchParams.get("sessionId") as SessionId | null) ?? undefined;
+    const ownerAgentKind = ctx.url.searchParams.get("ownerAgentKind") || undefined;
+    const ownerProfileId = ctx.url.searchParams.get("ownerProfileId") || undefined;
     const q = (ctx.url.searchParams.get("q") || "").trim().toLowerCase();
     const rawLimit = numberOrUndefined(ctx.url.searchParams.get("limit"));
     const rawOffset = numberOrUndefined(ctx.url.searchParams.get("offset"));
@@ -66,7 +68,12 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
     // session id / status / turn count / preview. The old `ids`-only
     // variant is still available under the `episode.list` JSON-RPC
     // method and via `?shape=ids`.
-    const total = await deps.core.countEpisodes({ sessionId });
+    const total = await deps.core.countEpisodes({
+      sessionId,
+      ownerAgentKind,
+      ownerProfileId,
+      includeAllNamespaces: true,
+    });
     if (ctx.url.searchParams.get("shape") === "ids") {
       const episodeIds = await deps.core.listEpisodes({ sessionId, limit, offset });
       return {
@@ -81,6 +88,9 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
       sessionId,
       limit: q ? 200 : limit,
       offset: q ? 0 : offset,
+      ownerAgentKind,
+      ownerProfileId,
+      includeAllNamespaces: true,
     });
     if (q) {
       episodes = episodes.filter(

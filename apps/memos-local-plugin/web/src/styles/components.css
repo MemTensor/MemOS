@@ -160,6 +160,22 @@
   border-color: var(--border-focus);
   box-shadow: var(--shadow-focus);
 }
+.namespace-select {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.select--namespace {
+  width: auto;
+  min-width: 150px;
+  max-width: 240px;
+  height: 28px;
+  padding: 0 32px 0 12px;
+  border-radius: var(--radius-pill);
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-med);
+}
 .textarea {
   height: auto;
   padding: 10px var(--sp-3);

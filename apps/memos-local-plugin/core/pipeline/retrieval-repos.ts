@@ -32,6 +32,8 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
           name: row.name,
           status: row.status,
           invocationGuide: row.invocationGuide,
+          procedureJson: row.procedureJson,
+          decisionGuidance: normaliseSkillDecisionGuidance(row.procedureJson),
           eta: row.eta,
           sourcePolicyIds: row.sourcePolicyIds,
           updatedAt: row.updatedAt,
@@ -167,5 +169,30 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
         };
       },
     },
+  };
+}
+
+function normaliseSkillDecisionGuidance(
+  procedureJson: unknown,
+): { preference: string[]; antiPattern: string[] } {
+  const proc = (procedureJson ?? {}) as {
+    decisionGuidance?: { preference?: unknown; antiPattern?: unknown };
+    decision_guidance?: { preference?: unknown; anti_pattern?: unknown };
+  };
+  const dg = proc.decisionGuidance;
+  const snakeDg = proc.decision_guidance;
+  return {
+    preference:
+      dg && Array.isArray(dg.preference)
+        ? dg.preference.map((s) => String(s)).filter(Boolean)
+        : snakeDg && Array.isArray(snakeDg.preference)
+          ? snakeDg.preference.map((s) => String(s)).filter(Boolean)
+        : [],
+    antiPattern:
+      dg && Array.isArray(dg.antiPattern)
+        ? dg.antiPattern.map((s) => String(s)).filter(Boolean)
+        : snakeDg && Array.isArray(snakeDg.anti_pattern)
+          ? snakeDg.anti_pattern.map((s) => String(s)).filter(Boolean)
+        : [],
   };
 }

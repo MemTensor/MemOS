@@ -1671,11 +1671,16 @@ export function createMemoryCore(
         .length > 0;
       if (!childHasEpisode) {
         try {
-          await openSession({ agent: outcome.agent, sessionId: childSessionId });
+          await openSession({ agent: outcome.agent, sessionId: childSessionId, namespace: ns });
           const childTurn = await onTurnStart({
             agent: outcome.agent,
+            namespace: ns,
             sessionId: childSessionId,
             userText: `Subagent task: ${task}`,
+            contextHints: {
+              ...(outcome.meta ?? {}),
+              ...namespaceMeta(ns),
+            },
             ts,
           });
           const childEpisodeId = childTurn.query.episodeId;
@@ -1684,10 +1689,15 @@ export function createMemoryCore(
           }
           childRecorded = await onTurnEnd({
             agent: outcome.agent,
+            namespace: ns,
             sessionId: childSessionId,
             episodeId: childEpisodeId,
             agentText: `Subagent result: ${result}`,
             toolCalls: childToolCalls,
+            contextHints: {
+              ...(outcome.meta ?? {}),
+              ...namespaceMeta(ns),
+            },
             ts: ts + 1,
           });
           await closeEpisode(childEpisodeId);
@@ -2150,11 +2160,15 @@ export function createMemoryCore(
       : null;
   }
 
-  async function getPolicy(id: string, namespace?: RuntimeNamespace): Promise<PolicyDTO | null> {
+  async function getPolicy(
+    id: string,
+    namespace?: RuntimeNamespace,
+    opts?: { includeAllNamespaces?: boolean },
+  ): Promise<PolicyDTO | null> {
     ensureLive();
     if (namespace) activeNamespace = namespace;
     const row = handle.repos.policies.getById(id);
-    return row && visibleToCurrent(row) ? policyRowToDTO(row) : null;
+    return row && (opts?.includeAllNamespaces || visibleToCurrent(row)) ? policyRowToDTO(row) : null;
   }
 
   async function listPolicies(input?: {
@@ -2162,17 +2176,23 @@ export function createMemoryCore(
     limit?: number;
     offset?: number;
     q?: string;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    includeAllNamespaces?: boolean;
   }): Promise<PolicyDTO[]> {
     ensureLive();
     const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
     const offset = Math.max(0, input?.offset ?? 0);
     const needle = (input?.q ?? "").trim().toLowerCase();
+    const namespaceFiltered = Boolean(input?.ownerAgentKind || input?.ownerProfileId);
     const rows = handle.repos.policies.list({
       status: input?.status,
-      limit: limit + offset + (needle ? 200 : 0),
+      limit: namespaceFiltered ? 100_000 : limit + offset + (needle ? 200 : 0),
       offset: 0,
     });
-    const visibleRows = rows.filter((r) => visibleToCurrent(r));
+    const visibleRows = rows.filter((r) =>
+      (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+    );
     const filtered = needle
       ? visibleRows.filter((r) =>
           (r.title + "\n" + r.trigger + "\n" + r.procedure)
@@ -2186,16 +2206,23 @@ export function createMemoryCore(
   async function countPolicies(input?: {
     status?: PolicyDTO["status"];
     q?: string;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    includeAllNamespaces?: boolean;
   }): Promise<number> {
     ensureLive();
     const needle = (input?.q ?? "").trim().toLowerCase();
     if (!needle) {
-      return handle.repos.policies.list({ status: input?.status, limit: 100_000 }).filter((r) => visibleToCurrent(r)).length;
+      return handle.repos.policies.list({ status: input?.status, limit: 100_000 }).filter((r) =>
+        (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+      ).length;
     }
     // q is a client-side substring match; mirror `listPolicies` and
     // walk the full filtered result. Caller passes no limit/offset
     // so the natural list pages through everything.
-    const rows = handle.repos.policies.list({ status: input?.status }).filter((r) => visibleToCurrent(r));
+    const rows = handle.repos.policies.list({ status: input?.status }).filter((r) =>
+      (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+    );
     return rows.filter((r) =>
       (r.title + "\n" + r.trigger + "\n" + r.procedure)
         .toLowerCase()
@@ -2254,17 +2281,23 @@ export function createMemoryCore(
     return updated ? policyRowToDTO(updated) : null;
   }
 
-  async function getWorldModel(id: string, namespace?: RuntimeNamespace): Promise<WorldModelDTO | null> {
+  async function getWorldModel(
+    id: string,
+    namespace?: RuntimeNamespace,
+    opts?: { includeAllNamespaces?: boolean },
+  ): Promise<WorldModelDTO | null> {
     ensureLive();
     if (namespace) activeNamespace = namespace;
     const row = handle.repos.worldModel.getById(id);
-    return row && visibleToCurrent(row) ? worldModelRowToDTO(row) : null;
+    return row && (opts?.includeAllNamespaces || visibleToCurrent(row)) ? worldModelRowToDTO(row) : null;
   }
 
-  async function countWorldModels(input?: { q?: string }): Promise<number> {
+  async function countWorldModels(input?: { q?: string; ownerAgentKind?: AgentKind; ownerProfileId?: string; includeAllNamespaces?: boolean }): Promise<number> {
     ensureLive();
     const needle = (input?.q ?? "").trim().toLowerCase();
-    const rows = handle.repos.worldModel.list({ limit: 100_000 }).filter((r) => visibleToCurrent(r));
+    const rows = handle.repos.worldModel.list({ limit: 100_000 }).filter((r) =>
+      (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+    );
     if (!needle) return rows.length;
     return rows.filter((r) =>
       (r.title + "\n" + r.body).toLowerCase().includes(needle),
@@ -2276,17 +2309,23 @@ export function createMemoryCore(
     offset?: number;
     q?: string;
     namespace?: RuntimeNamespace;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    includeAllNamespaces?: boolean;
   }): Promise<WorldModelDTO[]> {
     ensureLive();
     if (input?.namespace) activeNamespace = input.namespace;
     const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
     const offset = Math.max(0, input?.offset ?? 0);
     const needle = (input?.q ?? "").trim().toLowerCase();
+    const namespaceFiltered = Boolean(input?.ownerAgentKind || input?.ownerProfileId);
     const rows = handle.repos.worldModel.list({
-      limit: limit + offset + (needle ? 200 : 0),
+      limit: namespaceFiltered ? 100_000 : limit + offset + (needle ? 200 : 0),
       offset: 0,
     });
-    const visibleRows = rows.filter((r) => visibleToCurrent(r));
+    const visibleRows = rows.filter((r) =>
+      (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+    );
     const filtered = needle
       ? visibleRows.filter((r) =>
           (r.title + "\n" + r.body).toLowerCase().includes(needle),
@@ -2411,15 +2450,23 @@ export function createMemoryCore(
 
   async function countEpisodes(input?: {
     sessionId?: SessionId;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    includeAllNamespaces?: boolean;
   }): Promise<number> {
     ensureLive();
-    return handle.repos.episodes.list({ sessionId: input?.sessionId, limit: 100_000 }).filter((r) => visibleToCurrent(r)).length;
+    return handle.repos.episodes.list({ sessionId: input?.sessionId, limit: 100_000 }).filter((r) =>
+      (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+    ).length;
   }
 
   async function listEpisodeRows(input?: {
     sessionId?: SessionId;
     limit?: number;
     offset?: number;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    includeAllNamespaces?: boolean;
   }): Promise<Parameters<MemoryCore["listEpisodeRows"]> extends unknown[] ? Awaited<ReturnType<MemoryCore["listEpisodeRows"]>> : never> {
     ensureLive();
 
@@ -2431,9 +2478,14 @@ export function createMemoryCore(
 
     const rows = handle.repos.episodes.list({
       sessionId: input?.sessionId,
-      limit: input?.limit ?? 50,
-      offset: input?.offset ?? 0,
-    }).filter((r) => visibleToCurrent(r));
+      limit: input?.ownerAgentKind || input?.ownerProfileId ? 100_000 : input?.limit ?? 50,
+      offset: input?.ownerAgentKind || input?.ownerProfileId ? 0 : input?.offset ?? 0,
+    }).filter((r) =>
+      (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+    );
+    const pagedRows = input?.ownerAgentKind || input?.ownerProfileId
+      ? rows.slice(input?.offset ?? 0, (input?.offset ?? 0) + (input?.limit ?? 50))
+      : rows;
 
     // Build reverse indexes for the skill-status derivation. Rebuilt
     // per call rather than cached because the base table volumes are
@@ -2462,7 +2514,7 @@ export function createMemoryCore(
     // For each row, fetch the episode's traces once. We need the rows
     // for both preview/tags and turn counting: Tasks should count user
     // turns (`turnId` groups), not step-level L1 traces.
-    const out = rows.map((r: EpisodeRow) => {
+    const out = pagedRows.map((r: EpisodeRow) => {
       const firstTraceId = r.traceIds[0];
       const episodeTraces = r.traceIds.length > 0
         ? handle.repos.traces.getManyByIds(r.traceIds as TraceId[])
@@ -2573,16 +2625,17 @@ export function createMemoryCore(
   async function timeline(input: {
     episodeId: EpisodeId;
     namespace?: RuntimeNamespace;
+    includeAllNamespaces?: boolean;
   }): Promise<TraceDTO[]> {
     ensureLive();
     if (input.namespace) activeNamespace = input.namespace;
     const episode = handle.repos.episodes.getById(input.episodeId);
-    if (episode && !visibleToCurrent(episode)) return [];
+    if (episode && !input.includeAllNamespaces && !visibleToCurrent(episode)) return [];
     const rows = handle.repos.traces.list({
       episodeId: input.episodeId,
       limit: 500,
       newestFirst: false,
-    }).filter((r) => visibleToCurrent(r));
+    }).filter((r) => input.includeAllNamespaces || visibleToCurrent(r));
     return orderTraceRowsForEpisode(rows, episode?.traceIds ?? []).map((row) =>
       traceRowToDTO(row, episode),
     );
@@ -2623,14 +2676,25 @@ export function createMemoryCore(
 
   async function countTraces(input?: {
     sessionId?: SessionId;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
     q?: string;
     groupByTurn?: boolean;
+    includeAllNamespaces?: boolean;
   }): Promise<number> {
     ensureLive();
     const needle = (input?.q ?? "").trim().toLowerCase();
-    const visible = (r: TraceRow) => visibleToCurrent(r);
+    const visible = (r: TraceRow) => input?.includeAllNamespaces || visibleToCurrent(r);
+    const byNamespace = (r: TraceRow) =>
+      (!input?.ownerAgentKind || r.ownerAgentKind === input.ownerAgentKind) &&
+      (!input?.ownerProfileId || r.ownerProfileId === input.ownerProfileId);
     if (!needle) {
-      const rows = handle.repos.traces.list({ sessionId: input?.sessionId, limit: 100_000 }).filter(visible);
+      const rows = handle.repos.traces.list({
+        sessionId: input?.sessionId,
+        ownerAgentKind: input?.ownerAgentKind,
+        ownerProfileId: input?.ownerProfileId,
+        limit: 100_000,
+      }).filter((r) => visible(r) && byNamespace(r));
       if (!input?.groupByTurn) return rows.length;
       const turnKeys = new Set<string>();
       for (const r of rows) turnKeys.add(`${r.episodeId ?? "_"}:${r.turnId}`);
@@ -2638,7 +2702,11 @@ export function createMemoryCore(
     }
     // q substring scan — mirror `listTraces`. Walk all matching
     // traces from the repo (no limit) and apply the same filter.
-    const rows = handle.repos.traces.list({ sessionId: input?.sessionId }).filter(visible);
+    const rows = handle.repos.traces.list({
+      sessionId: input?.sessionId,
+      ownerAgentKind: input?.ownerAgentKind,
+      ownerProfileId: input?.ownerProfileId,
+    }).filter((r) => visible(r) && byNamespace(r));
     const matched = rows.filter((r) => {
       return traceSearchHaystack(r).includes(needle);
     });
@@ -2652,8 +2720,11 @@ export function createMemoryCore(
     limit?: number;
     offset?: number;
     sessionId?: SessionId;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
     q?: string;
     groupByTurn?: boolean;
+    includeAllNamespaces?: boolean;
   }): Promise<TraceDTO[]> {
     ensureLive();
     const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
@@ -2666,11 +2737,15 @@ export function createMemoryCore(
       if (!needle) {
         const turnKeys = handle.repos.traces.listTurnKeys({
           sessionId: input?.sessionId,
+          ownerAgentKind: input?.ownerAgentKind,
+          ownerProfileId: input?.ownerProfileId,
           limit,
           offset,
         });
         const rows = handle.repos.traces.listByTurnKeys(turnKeys);
-        const visibleRows = rows.filter((r) => visibleToCurrent(r));
+        const visibleRows = rows.filter((r) =>
+          (input.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+        );
         // The frontend's `buildGroups` preserves first-encounter order
         // when bucketing traces by turnKey. We need newest turn first
         // (matching `listTurnKeys` DESC order), with the episode's
@@ -2691,7 +2766,11 @@ export function createMemoryCore(
         return traceRowsToDTOs(visibleRows);
       }
       // Search + group: scan, filter, then paginate by distinct turn key.
-      const allRows = handle.repos.traces.list({ sessionId: input?.sessionId }).filter((r) => visibleToCurrent(r));
+      const allRows = handle.repos.traces.list({
+        sessionId: input?.sessionId,
+        ownerAgentKind: input?.ownerAgentKind,
+        ownerProfileId: input?.ownerProfileId,
+      }).filter((r) => input?.includeAllNamespaces || visibleToCurrent(r));
       const matched = allRows.filter((r) => {
         return traceSearchHaystack(r).includes(needle);
       });
@@ -2712,7 +2791,9 @@ export function createMemoryCore(
       );
       // Once a turn matches the search, return the whole turn so the
       // Memories card uses the same step list as the Tasks timeline.
-      const rows = handle.repos.traces.listByTurnKeys(orderedKeys).filter((r) => visibleToCurrent(r));
+      const rows = handle.repos.traces.listByTurnKeys(orderedKeys).filter((r) =>
+        (input.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+      );
       const traceOrder = traceOrderLookup(rows);
       const traces = rows
         .sort((a, b) => {
@@ -2729,9 +2810,11 @@ export function createMemoryCore(
     if (!needle) {
       const rows = handle.repos.traces.list({
         sessionId: input?.sessionId,
+        ownerAgentKind: input?.ownerAgentKind,
+        ownerProfileId: input?.ownerProfileId,
         limit: limit + offset + 500,
         offset: 0,
-      }).filter((r) => visibleToCurrent(r));
+      }).filter((r) => input?.includeAllNamespaces || visibleToCurrent(r));
       return traceRowsToDTOs(rows.slice(offset, offset + limit));
     }
     // Substring search: SQLite LIKE would need an index. For the
@@ -2740,14 +2823,26 @@ export function createMemoryCore(
     const batchSize = Math.min(2_000, (limit + offset) * 5);
     const rows = handle.repos.traces.list({
       sessionId: input?.sessionId,
+      ownerAgentKind: input?.ownerAgentKind,
+      ownerProfileId: input?.ownerProfileId,
       limit: batchSize,
       offset: 0,
     });
     const filtered = rows.filter((r) => {
-      if (!visibleToCurrent(r)) return false;
+      if (!input?.includeAllNamespaces && !visibleToCurrent(r)) return false;
       return traceSearchHaystack(r).includes(needle);
     });
     return traceRowsToDTOs(filtered.slice(offset, offset + limit));
+  }
+
+  function matchesNamespaceFilter(
+    row: { ownerAgentKind?: AgentKind; ownerProfileId?: string },
+    input?: { ownerAgentKind?: AgentKind; ownerProfileId?: string },
+  ): boolean {
+    return (
+      (!input?.ownerAgentKind || row.ownerAgentKind === input.ownerAgentKind) &&
+      (!input?.ownerProfileId || row.ownerProfileId === input.ownerProfileId)
+    );
   }
 
   function traceSearchHaystack(row: TraceRow): string {
@@ -2791,7 +2886,7 @@ export function createMemoryCore(
 
   // ─── Skills ──
   async function listSkills(
-    input?: { status?: SkillDTO["status"]; limit?: number; namespace?: RuntimeNamespace },
+    input?: { status?: SkillDTO["status"]; limit?: number; namespace?: RuntimeNamespace; ownerAgentKind?: AgentKind; ownerProfileId?: string; includeAllNamespaces?: boolean },
   ): Promise<SkillDTO[]> {
     ensureLive();
     if (input?.namespace) activeNamespace = input.namespace;
@@ -2799,14 +2894,21 @@ export function createMemoryCore(
       status: input?.status,
       limit: 5_000,
     });
-    return rows.filter((r) => visibleToCurrent(r)).slice(0, input?.limit ?? 50).map(skillRowToDTO);
+    return rows.filter((r) =>
+      (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+    ).slice(0, input?.limit ?? 50).map(skillRowToDTO);
   }
 
   async function countSkills(input?: {
     status?: SkillDTO["status"];
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    includeAllNamespaces?: boolean;
   }): Promise<number> {
     ensureLive();
-    return handle.repos.skills.list({ status: input?.status, limit: 5_000 }).filter((r) => visibleToCurrent(r)).length;
+    return handle.repos.skills.list({ status: input?.status, limit: 5_000 }).filter((r) =>
+      (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+    ).length;
   }
 
   async function getSkill(
@@ -2820,12 +2922,13 @@ export function createMemoryCore(
       turnId?: number;
       toolCallId?: string;
       namespace?: RuntimeNamespace;
+      includeAllNamespaces?: boolean;
     },
   ): Promise<SkillDTO | null> {
     ensureLive();
     if (opts?.namespace) activeNamespace = opts.namespace;
     const row = handle.repos.skills.getById(id);
-    if (!row || !visibleToCurrent(row)) return null;
+    if (!row || (!opts?.includeAllNamespaces && !visibleToCurrent(row))) return null;
     if (opts?.recordUse) {
       handle.repos.skills.recordUse(id, Date.now());
       if (opts.recordTrial) {
