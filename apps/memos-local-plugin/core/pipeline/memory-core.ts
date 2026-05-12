@@ -96,6 +96,7 @@ import {
   normalizeNamespace,
   ownerFromNamespace,
   isVisibleTo,
+  visibilityWhere,
 } from "../runtime/namespace.js";
 import type { RetrievalConfig } from "../retrieval/types.js";
 import type { UserFeedback } from "../reward/types.js";
@@ -2651,16 +2652,20 @@ export function createMemoryCore(
   }): Promise<number> {
     ensureLive();
     const needle = (input?.q ?? "").trim().toLowerCase();
-    const visible = (r: TraceRow) => visibleToCurrent(r);
+    const vis = visibilityWhere(activeNamespace);
+
     if (!needle) {
-      const rows = handle.repos.traces.list({ sessionId: input?.sessionId, limit: 100_000 }).filter(visible);
-      if (!input?.groupByTurn) return rows.length;
-      const turnKeys = new Set<string>();
-      for (const r of rows) turnKeys.add(`${r.episodeId ?? "_"}:${r.turnId}`);
-      return turnKeys.size;
+      if (input?.groupByTurn) {
+        return handle.repos.traces.countTurns(
+          { sessionId: input?.sessionId },
+          vis,
+        );
+      }
+      return handle.repos.traces.count({ sessionId: input?.sessionId });
     }
     // q substring scan — mirror `listTraces`. Walk all matching
     // traces from the repo (no limit) and apply the same filter.
+    const visible = (r: TraceRow) => visibleToCurrent(r);
     const rows = handle.repos.traces.list({ sessionId: input?.sessionId }).filter(visible);
     const matched = rows.filter((r) => {
       return traceSearchHaystack(r).includes(needle);
@@ -2686,12 +2691,12 @@ export function createMemoryCore(
     if (input?.groupByTurn) {
       // Group-by-turn: paginate at the (episodeId, turnId) level so each
       // "memory" on the Memories page corresponds to one user turn.
+      const vis = visibilityWhere(activeNamespace);
       if (!needle) {
-        const turnKeys = handle.repos.traces.listTurnKeys({
-          sessionId: input?.sessionId,
-          limit,
-          offset,
-        });
+        const turnKeys = handle.repos.traces.listTurnKeys(
+          { sessionId: input?.sessionId, limit, offset },
+          vis,
+        );
         const rows = handle.repos.traces.listByTurnKeys(turnKeys);
         const visibleRows = rows.filter((r) => visibleToCurrent(r));
         // The frontend's `buildGroups` preserves first-encounter order
@@ -3048,7 +3053,11 @@ export function createMemoryCore(
     // the Overview "memories" metric matches what the Memories page
     // shows: 1 user turn = 1 memory (regardless of how many tool calls
     // / sub-steps were captured for that turn).
-    const totalTurns = handle.repos.traces.countTurns();
+    // Apply namespace visibility so the count matches the filtered list.
+    const totalTurns = handle.repos.traces.countTurns(
+      {},
+      visibilityWhere(activeNamespace),
+    );
 
     return {
       total: totalTurns,
