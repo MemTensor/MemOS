@@ -43,6 +43,14 @@ interface NativeImportBatchResult {
   done: boolean;
 }
 
+interface EmbeddingRepairResult {
+  updated: number;
+  failed: number;
+  done: boolean;
+  statsAfter: { needsRepair: number };
+  error?: string;
+}
+
 const NATIVE_IMPORT_CONFIGS = {
   hermes: {
     endpoint: "/api/v1/import/hermes-native",
@@ -220,6 +228,7 @@ function ImportCard() {
           {status.text}
         </div>
       )}
+      {status?.kind === "ok" && <EmbeddingRepairButton />}
     </section>
   );
 }
@@ -410,6 +419,7 @@ function NativeImportCard({ kind }: { kind: NativeImportKind }) {
           {status.text}
         </div>
       )}
+      {status?.kind === "ok" && <EmbeddingRepairButton />}
     </section>
   );
 }
@@ -572,6 +582,75 @@ function MigrateCard() {
           {result}
         </div>
       )}
+      {result?.startsWith("Imported ") && <EmbeddingRepairButton />}
     </section>
+  );
+}
+
+function EmbeddingRepairButton() {
+  const [running, setRunning] = useState(false);
+  const [status, setStatus] = useState<{ kind: "ok" | "error" | "muted"; text: string } | null>(null);
+
+  const run = async () => {
+    setRunning(true);
+    setStatus({ kind: "muted", text: t("import.embeddingRepair.running") });
+    let updated = 0;
+    let failed = 0;
+    try {
+      for (;;) {
+        const r = await api.post<EmbeddingRepairResult>(
+          "/api/v1/embeddings/rebuild",
+          { mode: "repair", limit: 100 },
+        );
+        updated += r.updated;
+        failed += r.failed;
+        if (r.error) {
+          setStatus({ kind: "error", text: r.error });
+          break;
+        }
+        if (r.done) {
+          setStatus({
+            kind: failed > 0 ? "error" : "ok",
+            text: t("import.embeddingRepair.done", { updated, failed }),
+          });
+          break;
+        }
+        setStatus({
+          kind: "muted",
+          text: t("import.embeddingRepair.progress", {
+            updated,
+            failed,
+            remaining: r.statsAfter.needsRepair,
+          }),
+        });
+      }
+    } catch (err) {
+      setStatus({ kind: "error", text: (err as Error).message });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div style="margin-top:var(--sp-3)">
+      <button class="btn btn--sm" onClick={run} disabled={running}>
+        <Icon name={running ? "loader-2" : "plug"} size={14} class={running ? "spin" : ""} />
+        {t("import.embeddingRepair.btn")}
+      </button>
+      {status && (
+        <span
+          role="status"
+          style={`margin-left:var(--sp-2);font-size:var(--fs-xs);color:${
+            status.kind === "ok"
+              ? "var(--success)"
+              : status.kind === "error"
+                ? "var(--danger)"
+                : "var(--fg-muted)"
+          }`}
+        >
+          {status.text}
+        </span>
+      )}
+    </div>
   );
 }

@@ -44,6 +44,7 @@ import { registerAdminRoutes } from "./admin.js";
 import { registerModelsRoutes } from "./models.js";
 import { registerApiLogsRoutes } from "./api-logs.js";
 import { registerDiagRoutes } from "./diag.js";
+import { registerEmbeddingRoutes } from "./embeddings.js";
 
 export interface RouteContext {
   req: IncomingMessage;
@@ -177,6 +178,7 @@ export function buildRoutes(
   registerAuthRoutes(routes, deps, options);
   registerAdminRoutes(routes, deps, options);
   registerModelsRoutes(routes, deps);
+  registerEmbeddingRoutes(routes, deps);
   registerApiLogsRoutes(routes, deps);
   registerDiagRoutes(routes, deps);
   return routes;

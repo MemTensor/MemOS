@@ -780,6 +780,11 @@ const en = {
   "import.native.stat.imported": "Imported",
   "import.native.stat.skipped": "Skipped",
   "import.native.stat.processed": "Processed",
+  "import.embeddingRepair.btn": "Repair embeddings",
+  "import.embeddingRepair.running": "Repairing missing embeddings…",
+  "import.embeddingRepair.progress":
+    "Updated {updated}, failed {failed}, remaining {remaining}.",
+  "import.embeddingRepair.done": "Embedding repair complete: updated {updated}, failed {failed}.",
 
   // Admin.
   "admin.title": "Team administration",
@@ -811,6 +816,17 @@ const en = {
   "settings.embedding.desc": "Vector embedding model used by retrieval and deduplication.",
   "settings.embedding.localHint":
     "Currently using built-in MiniLM-L6-v2 (384-dim, ~23 MB). Select another provider for better retrieval accuracy.",
+  "settings.embedding.maintenance.title": "Embedding maintenance",
+  "settings.embedding.maintenance.stats":
+    "Ready {ready}/{total}; missing {missing}; dimension mismatch {mismatch}; current dim {dim}.",
+  "settings.embedding.maintenance.unavailable":
+    "Configure an embedding provider before repairing or rebuilding vectors.",
+  "settings.embedding.repair": "Repair missing/mismatched",
+  "settings.embedding.rebuild": "Rebuild all vectors",
+  "settings.embedding.rebuild.running": "Rebuilding embeddings…",
+  "settings.embedding.rebuild.progress":
+    "Updated {updated}, failed {failed}, remaining repairs {remaining}.",
+  "settings.embedding.rebuild.done": "Embedding rebuild complete: updated {updated}, failed {failed}.",
   "settings.summarizer.title": "Summarizer",
   "settings.summarizer.desc":
     "Model that turns your conversations into short task summaries and the takeaways the agent keeps.",
@@ -1563,6 +1579,10 @@ const zh: Record<TranslationKey, string> = {
   "import.native.stat.imported": "已导入",
   "import.native.stat.skipped": "跳过",
   "import.native.stat.processed": "已处理",
+  "import.embeddingRepair.btn": "修复向量",
+  "import.embeddingRepair.running": "正在修复缺失向量…",
+  "import.embeddingRepair.progress": "已更新 {updated}，失败 {failed}，剩余 {remaining}。",
+  "import.embeddingRepair.done": "向量修复完成：已更新 {updated}，失败 {failed}。",
 
   "admin.title": "团队管理",
   "admin.subtitle": "管理团队分享的用户、群组与待审批。",
@@ -1589,6 +1609,15 @@ const zh: Record<TranslationKey, string> = {
   "settings.embedding.desc": "用于记忆检索与去重的向量嵌入模型。",
   "settings.embedding.localHint":
     "当前使用内置 MiniLM-L6-v2（384 维，约 23 MB）。选择其他 Provider 可获得更精准的检索效果。",
+  "settings.embedding.maintenance.title": "向量维护",
+  "settings.embedding.maintenance.stats":
+    "可用 {ready}/{total}；缺失 {missing}；维度不匹配 {mismatch}；当前维度 {dim}。",
+  "settings.embedding.maintenance.unavailable": "请先配置嵌入模型，再修复或重建向量。",
+  "settings.embedding.repair": "修复缺失/错维",
+  "settings.embedding.rebuild": "全量重建向量",
+  "settings.embedding.rebuild.running": "正在重建向量…",
+  "settings.embedding.rebuild.progress": "已更新 {updated}，失败 {failed}，待修复 {remaining}。",
+  "settings.embedding.rebuild.done": "向量重建完成：已更新 {updated}，失败 {failed}。",
   "settings.summarizer.title": "摘要模型",
   "settings.summarizer.desc": "把原始对话压缩成任务摘要和要点的模型。",
   "settings.summarizer.inherit":

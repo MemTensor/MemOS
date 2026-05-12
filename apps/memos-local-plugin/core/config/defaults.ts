@@ -26,7 +26,6 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     provider: "local",
     endpoint: "",
     model: "Xenova/all-MiniLM-L6-v2",
-    dimensions: 384,
     apiKey: "",
     cache: {
       enabled: true,

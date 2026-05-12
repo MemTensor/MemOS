@@ -81,7 +81,6 @@ function semanticFakeEmbedder(dims = 64): Embedder {
 
 function testConfig(): ResolvedConfig {
   const cfg = structuredClone(DEFAULT_CONFIG) as ResolvedConfig;
-  cfg.embedding.dimensions = 64;
   cfg.algorithm.capture.alphaScoring = false;
   cfg.algorithm.capture.synthReflections = false;
   cfg.algorithm.reward.llmScoring = false;
@@ -122,7 +121,7 @@ function buildCore(root: string, version: string): {
     repos,
     llm: null,
     reflectLlm: null,
-    embedder: semanticFakeEmbedder(config.embedding.dimensions),
+    embedder: semanticFakeEmbedder(64),
     log: rootLogger.child({ channel: "test.adapters.hermes.persistence" }),
     namespace: { agentKind: "hermes", profileId: "default" },
     now: () => 1_700_000_000_000,
