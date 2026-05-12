@@ -178,6 +178,12 @@ function Deploy-Tarball {
     } finally {
         Pop-Location
     }
+    
+    $SystemNode = Join-Path $env:ProgramFiles "nodejs\node.exe"
+    $NodeForBridge = if (Test-Path $SystemNode) { $SystemNode } else { (Get-Command "node.exe" -ErrorAction SilentlyContinue).Source }
+    if ($NodeForBridge) {
+        Set-Content -Path (Join-Path $Prefix ".memos-node-bin") -Value $NodeForBridge -Encoding UTF8
+    }
     Write-Success "Dependencies ready"
 }
 
