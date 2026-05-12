@@ -2630,22 +2630,54 @@ export function createMemoryCore(
     const needle = (input?.q ?? "").trim().toLowerCase();
     const visible = (r: TraceRow) => visibleToCurrent(r);
     if (!needle) {
-      const rows = handle.repos.traces.list({ sessionId: input?.sessionId, limit: 100_000 }).filter(visible);
-      if (!input?.groupByTurn) return rows.length;
-      const turnKeys = new Set<string>();
-      for (const r of rows) turnKeys.add(`${r.episodeId ?? "_"}:${r.turnId}`);
-      return turnKeys.size;
+      // Use a dedicated SELECT COUNT(*) instead of `list().length`.
+      // The previous implementation called `repos.traces.list({ limit: 100_000 })`
+      // and counted the returned rows, but `buildPageClauses` silently clamps
+      // every list `limit` to 500. That capped the Memories total at 500
+      // even when the database held 1400+ traces (#1593). The repo's
+      // `count` / `countTurns` issue real COUNT queries with no page-size
+      // cap, so they return the actual total.
+      //
+      // Pass the active namespace so the COUNT applies the SAME visibility
+      // predicate that `list` does — otherwise the total can include rows
+      // owned by other profiles/namespaces and break pagination math
+      // (#1674 review).
+      return input?.groupByTurn
+        ? handle.repos.traces.countTurns({
+            sessionId: input?.sessionId,
+            namespace: activeNamespace,
+          })
+        : handle.repos.traces.count({
+            sessionId: input?.sessionId,
+            namespace: activeNamespace,
+          });
     }
     // q substring scan — mirror `listTraces`. Walk all matching
-    // traces from the repo (no limit) and apply the same filter.
-    const rows = handle.repos.traces.list({ sessionId: input?.sessionId }).filter(visible);
-    const matched = rows.filter((r) => {
-      return traceSearchHaystack(r).includes(needle);
-    });
-    if (!input?.groupByTurn) return matched.length;
-    const turnKeys = new Set<string>();
-    for (const r of matched) turnKeys.add(`${r.episodeId ?? "_"}:${r.turnId}`);
-    return turnKeys.size;
+    // traces from the repo and apply the same filter. We page through
+    // explicitly because the underlying `list` clamps each call at
+    // 500 rows, which would otherwise silently truncate the count.
+    const matchedTurnKeys = new Set<string>();
+    let matchedCount = 0;
+    const PAGE = 500;
+    for (let offset = 0; ; offset += PAGE) {
+      const page = handle.repos.traces.list({
+        sessionId: input?.sessionId,
+        namespace: activeNamespace,
+        limit: PAGE,
+        offset,
+      });
+      if (page.length === 0) break;
+      for (const r of page) {
+        if (!visible(r)) continue;
+        if (!traceSearchHaystack(r).includes(needle)) continue;
+        matchedCount++;
+        if (input?.groupByTurn) {
+          matchedTurnKeys.add(`${r.episodeId ?? "_"}:${r.turnId}`);
+        }
+      }
+      if (page.length < PAGE) break;
+    }
+    return input?.groupByTurn ? matchedTurnKeys.size : matchedCount;
   }
 
   async function listTraces(input?: {
@@ -3025,7 +3057,11 @@ export function createMemoryCore(
     // the Overview "memories" metric matches what the Memories page
     // shows: 1 user turn = 1 memory (regardless of how many tool calls
     // / sub-steps were captured for that turn).
-    const totalTurns = handle.repos.traces.countTurns();
+    //
+    // Pass the active namespace so the Overview metric stays consistent
+    // with what the current profile actually sees on the Memories page;
+    // otherwise it would aggregate turns owned by other profiles too.
+    const totalTurns = handle.repos.traces.countTurns({ namespace: activeNamespace });
 
     return {
       total: totalTurns,

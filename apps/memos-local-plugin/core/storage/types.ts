@@ -8,6 +8,7 @@
 
 import type BetterSqlite3 from "better-sqlite3";
 
+import type { RuntimeNamespace } from "../../agent-contract/dto.js";
 import type { EpochMs, EpisodeId, TraceId } from "../types.js";
 
 // ─── Database handle ─────────────────────────────────────────────────────────
@@ -91,6 +92,14 @@ export interface TraceListFilter extends PageOptions, TimeRange {
   /** Only traces with |value| >= this (absolute). */
   minAbsValue?: number;
   traceIds?: TraceId[];
+  /**
+   * If provided, restrict results to rows visible to this namespace —
+   * either owned by the namespace's (agentKind, profileId) or shared with
+   * scope `local`/`public`/`hub`. Mirrors the in-memory `isVisibleTo`
+   * predicate but pushes it into SQL so `count`/`countTurns` agree with
+   * `list`.
+   */
+  namespace?: RuntimeNamespace;
 }
 
 export interface PolicyListFilter extends PageOptions, TimeRange {

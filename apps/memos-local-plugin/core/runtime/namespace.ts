@@ -103,12 +103,22 @@ export function visibilityWhere(
 ): VisibilityWhere {
   const col = (name: string) => `${alias ? `${alias}.` : ""}${name}`;
   const normalized = normalizeNamespace(ns, ns?.agentKind ?? "unknown");
+  // Mirrors `isVisibleTo` exactly so SQL list/count and in-memory filters
+  // agree. A row is visible iff:
+  //   1. it's owned by the current (agentKind, profileId), OR
+  //   2. it has been shared with scope local/public/hub, OR
+  //   3. it has no recorded owner (legacy seed rows: agent_kind = 'unknown'
+  //      AND profile_id = 'default'). Without this branch, pushing the
+  //      predicate into SQL would silently drop pre-namespace rows that
+  //      `isVisibleTo` would have surfaced.
   return {
     sql:
       `((` +
       `${col("owner_agent_kind")} = @vis_owner_agent_kind AND ` +
       `${col("owner_profile_id")} = @vis_owner_profile_id` +
-      `) OR COALESCE(${col("share_scope")}, 'private') IN ('local', 'public', 'hub'))`,
+      `) OR COALESCE(${col("share_scope")}, 'private') IN ('local', 'public', 'hub')` +
+      ` OR (COALESCE(${col("owner_agent_kind")}, 'unknown') = 'unknown' AND ` +
+      `COALESCE(${col("owner_profile_id")}, 'default') = 'default'))`,
     params: {
       vis_owner_agent_kind: normalized.agentKind,
       vis_owner_profile_id: normalized.profileId,
