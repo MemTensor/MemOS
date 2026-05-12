@@ -132,7 +132,7 @@ function silentLogger(): HostLogger {
   };
 }
 
-function buildDeps(h: TmpDbHandle, embedder: Embedder | null = semanticFakeEmbedder(DEFAULT_CONFIG.embedding.dimensions)): PipelineDeps {
+function buildDeps(h: TmpDbHandle, embedder: Embedder | null = semanticFakeEmbedder(384)): PipelineDeps {
   return {
     agent: "openclaw",
     home: resolveHome("openclaw", "/tmp/memos-e2e-test"),
