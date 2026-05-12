@@ -421,11 +421,11 @@ function dedupChannels(channels: readonly ChannelRank[]): ChannelRank[] {
   return Array.from(best.values());
 }
 
-function renderEpisodeSummary(best: TraceCandidate, members: readonly TraceCandidate[]): string {
-  const header = `episode ${members.length} steps · best V=${best.value.toFixed(2)} · goal-sim=${best.cosine.toFixed(2)}`;
+function renderEpisodeSummary(_best: TraceCandidate, members: readonly TraceCandidate[]): string {
+  const header = "Past similar episode";
   const MAX_STEPS = 6;
   const steps = members.slice(0, MAX_STEPS).map((m, idx) => {
-    const parts: string[] = [`step ${idx + 1} (V=${m.value.toFixed(2)})`];
+    const parts: string[] = [`step ${idx + 1}`];
     const s = m.summary?.trim().replace(/\s+/g, " ") ?? "";
     if (s) {
       parts.push(`summary: ${s.slice(0, 160)}`);
