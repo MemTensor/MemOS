@@ -30,6 +30,7 @@ class FakeBridge:
         self.calls: list[tuple[str, dict]] = []
         self.closed = False
         self.host_handlers: dict[str, object] = {}
+        self.running = True
 
     def register_host_handler(self, method: str, handler: object) -> None:
         self.host_handlers[method] = handler
@@ -57,12 +58,17 @@ class FakeBridge:
 
     def close(self) -> None:
         self.closed = True
+        self.running = False
+
+    def is_running(self) -> bool:
+        return self.running
 
 
 class FailingSessionOpenBridge(FakeBridge):
     def request(self, method: str, params: dict | None = None, **_kwargs: object) -> dict:
         if method == "session.open":
             self.closed = True
+            self.running = False
             raise RuntimeError("session.open did not respond")
         return super().request(method, params, **_kwargs)
 
@@ -154,6 +160,52 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertEqual(turn_end["sessionId"], "slow-start-session")
         self.assertEqual(turn_end["episodeId"], "episode-from-turn-start")
         self.assertEqual(turn_end["toolCalls"][0]["name"], "read_file")
+
+    def test_sync_turn_recreates_dead_bridge_before_turn_end(self) -> None:
+        dead_bridge = FakeBridge()
+        dead_bridge.running = False
+        recovered_bridge = FakeBridge()
+
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=recovered_bridge),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider._bridge = dead_bridge
+            provider._session_id = "host-session"
+            provider._episode_id = "episode-old"
+            provider.sync_turn("检查 viewer", "viewer 正常")
+
+        self.assertTrue(dead_bridge.closed)
+        methods = [method for method, _params in recovered_bridge.calls]
+        self.assertEqual(methods, ["session.open", "turn.end"])
+
+    def test_sync_turn_ignores_feedback_submit_timeout(self) -> None:
+        class FeedbackFailBridge(FakeBridge):
+            def request(self, method: str, params: dict | None = None, **_kwargs: object) -> dict:
+                if method == "feedback.submit":
+                    self.calls.append((method, params or {}))
+                    raise RuntimeError("feedback timeout")
+                return super().request(method, params, **_kwargs)
+
+        bridge = FeedbackFailBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+            self.assertLogs("memos_provider", level="WARNING") as logs,
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("host-session")
+            provider.on_turn_start(1, "r <= -0.5 verifier feedback: 这次路径错了")
+            provider.prefetch("r <= -0.5 verifier feedback: 这次路径错了")
+            provider.sync_turn(
+                "r <= -0.5 verifier feedback: 这次路径错了",
+                "收到，下次避免这个路径。",
+            )
+
+        methods = [method for method, _params in bridge.calls]
+        self.assertEqual(methods, ["session.open", "turn.start", "turn.end", "feedback.submit"])
+        self.assertIn("verifier feedback submit failed", "\n".join(logs.output))
 
     def test_delegation_recovers_when_initial_bridge_open_timed_out(self) -> None:
         recovered_bridge = FakeBridge()

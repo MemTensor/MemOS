@@ -14,6 +14,7 @@ import io
 import json
 import sys
 import threading
+import time
 import unittest
 
 from pathlib import Path
@@ -43,6 +44,8 @@ class FakePopen:
         self._stdin_lines: list[str] = []
         self.stdout = _ServerStream()
         self.stderr = io.StringIO()
+        self._terminated = False
+        self._killed = False
 
         # Patch the write path so writes accumulate in `_stdin_lines`
         # and the server can peek at incoming requests.
@@ -57,10 +60,18 @@ class FakePopen:
 
     # The client just needs wait/kill to exist; they are no-ops here.
     def wait(self, timeout: float | None = None) -> int:
+        if timeout is not None and not self._terminated and not self._killed:
+            raise TimeoutError("fake process still running")
         return 0
 
+    def poll(self) -> int | None:
+        return 0 if (self._terminated or self._killed) else None
+
+    def terminate(self) -> None:
+        self._terminated = True
+
     def kill(self) -> None:
-        pass
+        self._killed = True
 
 
 class _ServerStream(io.StringIO):
@@ -289,6 +300,21 @@ class BridgeClientTests(unittest.TestCase):
         client.close()
         client.close()  # second call must not raise
 
+    def test_close_terminates_stdio_bridge_process(self) -> None:
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+        started = time.time()
+        client.close()
+        self.assertLess(time.time() - started, 3.5)
+        self.assertTrue(self._fake._terminated or self._fake._killed)
+
+    def test_is_running_reflects_subprocess_state(self) -> None:
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+        self.assertTrue(client.is_running())
+        self._fake.terminate()
+        self.assertFalse(client.is_running())
+
 
 class MemTensorProviderTests(unittest.TestCase):
     """Exercise `MemTensorProvider` against a mocked bridge."""
@@ -468,6 +494,9 @@ class MemTensorProviderTests(unittest.TestCase):
         """Retry failures are surfaced explicitly instead of silent loss."""
 
         class BrokenBridge:
+            def is_running(self):
+                return True
+
             def close(self):
                 pass
 
@@ -477,6 +506,9 @@ class MemTensorProviderTests(unittest.TestCase):
                 return {}
 
         class RetryFailBridge:
+            def is_running(self):
+                return True
+
             def request(self, method, params=None):
                 if method == "session.open":
                     return {"sessionId": (params or {}).get("sessionId", "sess")}
@@ -511,6 +543,9 @@ class MemTensorProviderTests(unittest.TestCase):
             def __init__(self):
                 self.closed = False
 
+            def is_running(self):
+                return True
+
             def close(self):
                 self.closed = True
 
@@ -522,6 +557,9 @@ class MemTensorProviderTests(unittest.TestCase):
         class HealthyBridge:
             def __init__(self):
                 self.calls = []
+
+            def is_running(self):
+                return True
 
             def register_host_handler(self, _method, _handler):
                 return None

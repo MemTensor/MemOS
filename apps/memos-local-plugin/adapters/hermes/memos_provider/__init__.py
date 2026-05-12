@@ -830,8 +830,11 @@ class MemTensorProvider(MemoryProvider):
                 agent_thinking=thinking,
             )
             if _is_verifier_feedback_prompt(user):
-                self._submit_verifier_feedback(user, assistant, ts_ms)
-                feedback_submitted = True
+                try:
+                    self._submit_verifier_feedback(user, assistant, ts_ms)
+                    feedback_submitted = True
+                except Exception as err:
+                    logger.warning("MemOS: verifier feedback submit failed — %s", err)
         except Exception as err:
             if not self._is_transport_closed(err):
                 logger.warning("MemOS: sync_turn turn.end failed — %s", err)
@@ -853,8 +856,11 @@ class MemTensorProvider(MemoryProvider):
                         agent_thinking=thinking,
                     )
                     if _is_verifier_feedback_prompt(user) and not feedback_submitted:
-                        self._submit_verifier_feedback(user, assistant, ts_ms)
-                        feedback_submitted = True
+                        try:
+                            self._submit_verifier_feedback(user, assistant, ts_ms)
+                            feedback_submitted = True
+                        except Exception as err:
+                            logger.warning("MemOS: verifier feedback submit failed — %s", err)
                 except Exception:
                     logger.exception(
                         "MemOS: sync_turn failed after bridge reconnect; "
@@ -1603,6 +1609,10 @@ class MemTensorProvider(MemoryProvider):
         self._open_session(session_id, timeout=timeout)
 
     def _ensure_bridge(self, session_id: str = "", *, timeout: float = 30.0) -> bool:
+        if self._bridge and not self._bridge.is_running():
+            with contextlib.suppress(Exception):
+                self._bridge.close()
+            self._bridge = None
         if self._bridge:
             return True
         try:
@@ -1708,7 +1718,7 @@ class MemTensorProvider(MemoryProvider):
         }
         if agent_thinking:
             payload["agentThinking"] = agent_thinking
-        result = self._bridge.request("turn.end", payload)
+        result = self._bridge.request("turn.end", payload, timeout=75.0)
         # Capture the trace ID for feedback submission
         if result and isinstance(result, dict):
             trace_ids = result.get("traceIds", [])
@@ -1743,7 +1753,7 @@ class MemTensorProvider(MemoryProvider):
         # Include the last trace ID if available
         if self._last_trace_id:
             payload["traceId"] = self._last_trace_id
-        self._bridge.request("feedback.submit", payload)
+        self._bridge.request("feedback.submit", payload, timeout=10.0)
 
 
 # ─── Discovery entry points ───────────────────────────────────────────────

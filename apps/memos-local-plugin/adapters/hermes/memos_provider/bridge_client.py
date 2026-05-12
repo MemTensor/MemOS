@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -220,11 +221,24 @@ class MemosBridgeClient:
         self._closed = True
         with contextlib.suppress(Exception):
             self._proc.stdin.close()
-        # DON'T wait() or kill() the bridge process. If it has an
-        # active viewer (HTTP server), it will stay alive as a daemon
-        # so the memory panel remains accessible between `hermes chat`
-        # sessions. If it's headless (viewer port was taken), it will
-        # notice stdin EOF and exit on its own.
+        # This client owns a non-daemon stdio bridge process. Let it
+        # drain briefly on stdin EOF, then terminate it so reconnect
+        # storms do not accumulate orphaned `bridge.cts --agent=hermes`
+        # workers. The long-lived viewer daemon is started elsewhere
+        # with `--daemon`, so killing this child does not remove the UI.
+        deadline = time.time() + 1.5
+        while self._proc.poll() is None and time.time() < deadline:
+            time.sleep(0.05)
+        if self._proc.poll() is None:
+            with contextlib.suppress(Exception):
+                self._proc.terminate()
+            try:
+                self._proc.wait(timeout=2.0)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    self._proc.kill()
+                with contextlib.suppress(Exception):
+                    self._proc.wait(timeout=1.0)
         # unblock any pending waiters
         with self._lock:
             for entry in list(self._pending.values()):
@@ -235,6 +249,9 @@ class MemosBridgeClient:
                 }
                 entry["event"].set()
             self._pending.clear()
+
+    def is_running(self) -> bool:
+        return self._proc.poll() is None
 
     # ─── Internals ──
 
