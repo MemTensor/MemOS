@@ -241,8 +241,8 @@ export interface MemoryCore {
       sharedAt?: number | null;
     },
   ): Promise<TraceDTO | null>;
-  getPolicy(id: string, namespace?: RuntimeNamespace): Promise<PolicyDTO | null>;
-  getWorldModel(id: string, namespace?: RuntimeNamespace): Promise<WorldModelDTO | null>;
+  getPolicy(id: string, namespace?: RuntimeNamespace, opts?: { includeAllNamespaces?: boolean }): Promise<PolicyDTO | null>;
+  getWorldModel(id: string, namespace?: RuntimeNamespace, opts?: { includeAllNamespaces?: boolean }): Promise<WorldModelDTO | null>;
   /**
    * List L2 policies ("经验") — newest-first. The viewer uses this
    * for the Experiences panel.
@@ -252,11 +252,17 @@ export interface MemoryCore {
     limit?: number;
     offset?: number;
     q?: string;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    includeAllNamespaces?: boolean;
   }): Promise<PolicyDTO[]>;
   /** Total policy rows matching the same filter (no limit/offset). */
   countPolicies(input?: {
     status?: PolicyDTO["status"];
     q?: string;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    includeAllNamespaces?: boolean;
   }): Promise<number>;
   /**
    * List L3 world models ("世界环境知识") — newest-first.
@@ -266,9 +272,12 @@ export interface MemoryCore {
     offset?: number;
     q?: string;
     namespace?: RuntimeNamespace;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    includeAllNamespaces?: boolean;
   }): Promise<WorldModelDTO[]>;
   /** Total world-model rows matching the same filter. */
-  countWorldModels(input?: { q?: string }): Promise<number>;
+  countWorldModels(input?: { q?: string; ownerAgentKind?: AgentKind; ownerProfileId?: string; includeAllNamespaces?: boolean }): Promise<number>;
   /** Transition a policy through candidate → active → archived. */
   setPolicyStatus(
     id: string,
@@ -353,10 +362,13 @@ export interface MemoryCore {
     sessionId?: SessionId;
     limit?: number;
     offset?: number;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    includeAllNamespaces?: boolean;
   }): Promise<EpisodeListItemDTO[]>;
   /** Total episode rows matching the same filter (no limit/offset). */
-  countEpisodes(input?: { sessionId?: SessionId }): Promise<number>;
-  timeline(input: { episodeId: EpisodeId; namespace?: RuntimeNamespace }): Promise<TraceDTO[]>;
+  countEpisodes(input?: { sessionId?: SessionId; ownerAgentKind?: AgentKind; ownerProfileId?: string; includeAllNamespaces?: boolean }): Promise<number>;
+  timeline(input: { episodeId: EpisodeId; namespace?: RuntimeNamespace; includeAllNamespaces?: boolean }): Promise<TraceDTO[]>;
   /**
    * Reverse-chronological trace listing for the Memories viewer.
    *
@@ -376,7 +388,16 @@ export interface MemoryCore {
     limit?: number;
     offset?: number;
     sessionId?: SessionId;
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
     q?: string;
+    /**
+     * Viewer/admin listing mode. Retrieval still respects namespace
+     * visibility; the local viewer needs to browse every profile stored in
+     * the same agent DB so users can switch between Hermes profiles /
+     * OpenClaw agents.
+     */
+    includeAllNamespaces?: boolean;
     /**
      * When true, paginate by distinct `(episodeId, turnId)` groups so
      * one user turn (query + tool sub-steps + reply) counts as one
@@ -385,7 +406,7 @@ export interface MemoryCore {
     groupByTurn?: boolean;
   }): Promise<TraceDTO[]>;
   /** Total trace rows matching the same filter (no limit/offset). */
-  countTraces(input?: { sessionId?: SessionId; q?: string; groupByTurn?: boolean }): Promise<number>;
+  countTraces(input?: { sessionId?: SessionId; ownerAgentKind?: AgentKind; ownerProfileId?: string; q?: string; groupByTurn?: boolean; includeAllNamespaces?: boolean }): Promise<number>;
 
   /**
    * Paged listing of the rich api_logs table ({@link ApiLogDTO}).
@@ -400,9 +421,9 @@ export interface MemoryCore {
   }): Promise<{ logs: ApiLogDTO[]; total: number }>;
 
   // ── skills ──
-  listSkills(input?: { status?: SkillDTO["status"]; limit?: number; namespace?: RuntimeNamespace }): Promise<SkillDTO[]>;
+  listSkills(input?: { status?: SkillDTO["status"]; limit?: number; namespace?: RuntimeNamespace; ownerAgentKind?: AgentKind; ownerProfileId?: string; includeAllNamespaces?: boolean }): Promise<SkillDTO[]>;
   /** Total skill rows matching the same filter (no limit). */
-  countSkills(input?: { status?: SkillDTO["status"] }): Promise<number>;
+  countSkills(input?: { status?: SkillDTO["status"]; ownerAgentKind?: AgentKind; ownerProfileId?: string; includeAllNamespaces?: boolean }): Promise<number>;
   getSkill(id: SkillId, opts?: {
     recordUse?: boolean;
     recordTrial?: boolean;
@@ -412,6 +433,7 @@ export interface MemoryCore {
     turnId?: EpochMs;
     toolCallId?: string;
     namespace?: RuntimeNamespace;
+    includeAllNamespaces?: boolean;
   }): Promise<SkillDTO | null>;
   archiveSkill(id: SkillId, reason?: string): Promise<void>;
   /**

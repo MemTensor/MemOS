@@ -107,6 +107,7 @@ export interface SkillCandidate extends TierCandidateBase {
   eta: number;
   status: SkillStatus;
   invocationGuide: string;
+  decisionGuidance?: { preference: string[]; antiPattern: string[] };
   sourcePolicyIds?: PolicyId[];
   updatedAt?: EpochMs;
 }
@@ -381,6 +382,8 @@ export interface RetrievalRepos {
       name: string;
       status: SkillStatus;
       invocationGuide: string;
+      procedureJson?: unknown;
+      decisionGuidance?: { preference: string[]; antiPattern: string[] };
       eta: number;
       sourcePolicyIds?: PolicyId[];
       updatedAt?: EpochMs;

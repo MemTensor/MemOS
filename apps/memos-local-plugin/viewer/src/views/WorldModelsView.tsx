@@ -16,6 +16,7 @@ import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
 import { Pager } from "../components/Pager";
 import { ShareScopePill } from "../components/ShareScopePill";
+import { NamespaceSelect, appendNamespaceParams } from "../components/NamespaceSelect";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import type { WorldModelDTO } from "../api/types";
@@ -43,6 +44,7 @@ interface ListResponse {
 
 export function WorldModelsView() {
   const [query, setQuery] = useState("");
+  const [namespaceFilter, setNamespaceFilter] = useState("");
   const [rows, setRows] = useState<WorldModelDTO[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
@@ -74,6 +76,7 @@ export function WorldModelsView() {
       qs.set("limit", String(pageSize));
       qs.set("offset", String(opts.page * pageSize));
       if (opts.q) qs.set("q", opts.q);
+      appendNamespaceParams(qs, namespaceFilter);
       const res = await api.get<ListResponse>(`/api/v1/world-models?${qs.toString()}`);
       setRows(res.worldModels);
       setHasMore(res.nextOffset != null);
@@ -94,7 +97,7 @@ export function WorldModelsView() {
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, pageSize]);
+  }, [query, pageSize, namespaceFilter]);
 
   // Deep-link: `#/world-models?id=wm_xxx` auto-opens the drawer.
   useEffect(() => {
@@ -144,6 +147,7 @@ export function WorldModelsView() {
             class="btn btn--ghost btn--sm"
             onClick={() => {
               setQuery("");
+              setNamespaceFilter("");
               setSelected(new Set());
               void load({ q: "", page: 0 });
             }}
@@ -165,6 +169,10 @@ export function WorldModelsView() {
             onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
           />
         </label>
+      </div>
+
+      <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
+        <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
       </div>
 
       {loading && rows.length === 0 && (

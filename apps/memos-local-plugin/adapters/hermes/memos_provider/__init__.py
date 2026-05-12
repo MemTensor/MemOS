@@ -386,6 +386,24 @@ class MemTensorProvider(MemoryProvider):
             "profileLabel": profile_id,
         }
 
+    def _record_namespace(self) -> dict[str, Any]:
+        """Namespace used for write-path records.
+
+        Hermes delegation hooks can be global and occasionally arrive through
+        a provider instance whose `profileId` fell back to `default` while
+        `agent_identity` still carries the real profile label (for example
+        coder10). For writes, prefer the concrete non-default label so
+        subagent outcome traces inherit the parent profile instead of leaking
+        into hermes/default.
+        """
+        ns = dict(self._runtime_namespace())
+        label = (self._agent_identity or ns.get("profileLabel") or "").strip()
+        profile_id = str(ns.get("profileId") or "").strip()
+        if profile_id in ("", "default", "hermes") and label and label not in ("default", "hermes"):
+            ns["profileId"] = label
+            ns["profileLabel"] = label
+        return ns
+
     def _register_tool_call_hook(self) -> None:
         if self._hook_registered:
             return
@@ -818,20 +836,25 @@ class MemTensorProvider(MemoryProvider):
             len(thinking),
         )
         ts_ms = int(time.time() * 1000)
+        is_feedback_turn = _is_verifier_feedback_prompt(user)
         feedback_submitted = False
         try:
             if user and not self._episode_id:
                 self._turn_start(user, session_id=session_id or self._session_id)
-            self._turn_end(
+            current_trace_id = self._turn_end(
                 user,
                 assistant,
                 tool_calls,
                 ts_ms,
                 agent_thinking=thinking,
             )
-            if _is_verifier_feedback_prompt(user):
-                self._submit_verifier_feedback(user, assistant, ts_ms)
-                feedback_submitted = True
+            if is_feedback_turn:
+                feedback_submitted = self._try_submit_verifier_feedback(
+                    user,
+                    assistant,
+                    ts_ms,
+                    trace_id=current_trace_id,
+                )
         except Exception as err:
             if not self._is_transport_closed(err):
                 logger.warning("MemOS: sync_turn turn.end failed — %s", err)
@@ -845,21 +868,36 @@ class MemTensorProvider(MemoryProvider):
                     self._reconnect_bridge(session_id or self._session_id, timeout=75.0)
                     if user:
                         self._turn_start(user, session_id=session_id or self._session_id)
-                    self._turn_end(
+                    current_trace_id = self._turn_end(
                         user,
                         assistant,
                         tool_calls,
                         ts_ms,
                         agent_thinking=thinking,
                     )
-                    if _is_verifier_feedback_prompt(user) and not feedback_submitted:
-                        self._submit_verifier_feedback(user, assistant, ts_ms)
-                        feedback_submitted = True
+                    if is_feedback_turn and not feedback_submitted:
+                        feedback_submitted = self._try_submit_verifier_feedback(
+                            user,
+                            assistant,
+                            ts_ms,
+                            trace_id=current_trace_id,
+                        )
                 except Exception:
                     logger.exception(
                         "MemOS: sync_turn failed after bridge reconnect; "
                         "memory turn was not persisted"
                     )
+        if is_feedback_turn and not feedback_submitted:
+            # turn.end may time out while the bridge continues lite capture in
+            # the background. Preserve the user's explicit signal at episode
+            # scope instead of dropping Decision Repair entirely.
+            self._try_submit_verifier_feedback(
+                user,
+                assistant,
+                ts_ms,
+                trace_id="",
+                fallback=True,
+            )
         if user_content:
             self._last_user_text = user_content
 
@@ -883,12 +921,16 @@ class MemTensorProvider(MemoryProvider):
         try:
             if not self._episode_id and self._last_user_text:
                 self._turn_start(self._last_user_text, session_id=self._session_id)
+            namespace = self._record_namespace()
             hook_meta = {
                 "hookKwargs": kwargs,
+                "namespace": namespace,
             }
             self._bridge.request(
                 "subagent.record",
                 {
+                    "agent": "hermes",
+                    "namespace": namespace,
                     "sessionId": self._session_id,
                     "episodeId": self._episode_id or None,
                     "childSessionId": child_session_id or None,
@@ -897,6 +939,11 @@ class MemTensorProvider(MemoryProvider):
                     "toolCalls": self._extract_child_tool_calls(child_session_id),
                     "ts": int(time.time() * 1000),
                     "meta": hook_meta,
+                    "contextHints": {
+                        "agentIdentity": self._agent_identity,
+                        "namespace": namespace,
+                        **self._host_runtime_context(),
+                    },
                 },
             )
         except Exception as err:
@@ -1684,9 +1731,9 @@ class MemTensorProvider(MemoryProvider):
         ts_ms: int,
         *,
         agent_thinking: str = "",
-    ) -> None:
+    ) -> str:
         if not self._bridge:
-            return
+            return ""
         # Strip private book-keeping fields before sending.
         clean_tool_calls = [
             {k: v for k, v in tc.items() if k not in {"_id", "_ids"}} for tc in tool_calls
@@ -1713,16 +1760,44 @@ class MemTensorProvider(MemoryProvider):
         if result and isinstance(result, dict):
             trace_ids = result.get("traceIds", [])
             if trace_ids and len(trace_ids) > 0:
-                self._last_trace_id = trace_ids[-1]  # Last trace is the current turn
+                trace_id = trace_ids[-1]  # Last trace is the current turn
+                self._last_trace_id = trace_id
+                return trace_id
+        return ""
+
+    def _try_submit_verifier_feedback(
+        self,
+        user_content: str,
+        assistant_content: str,
+        ts_ms: int,
+        *,
+        trace_id: str = "",
+        fallback: bool = False,
+    ) -> bool:
+        try:
+            submitted = self._submit_verifier_feedback(
+                user_content,
+                assistant_content,
+                ts_ms,
+                trace_id=trace_id,
+            )
+            if submitted and fallback:
+                logger.info("MemOS: submitted verifier feedback without trace binding")
+            return submitted
+        except Exception as err:
+            logger.warning("MemOS: verifier feedback submit failed — %s", err)
+            return False
 
     def _submit_verifier_feedback(
         self,
         user_content: str,
         assistant_content: str,
         ts_ms: int,
-    ) -> None:
+        *,
+        trace_id: str = "",
+    ) -> bool:
         if not self._bridge or not self._episode_id:
-            return
+            return False
         polarity = _feedback_polarity(user_content)
         magnitude = _feedback_magnitude(user_content, polarity)
         raw = {
@@ -1740,10 +1815,10 @@ class MemTensorProvider(MemoryProvider):
             "raw": raw,
             "ts": ts_ms,
         }
-        # Include the last trace ID if available
-        if self._last_trace_id:
-            payload["traceId"] = self._last_trace_id
-        self._bridge.request("feedback.submit", payload)
+        if trace_id:
+            payload["traceId"] = trace_id
+        self._bridge.request("feedback.submit", payload, timeout=75.0)
+        return True
 
 
 # ─── Discovery entry points ───────────────────────────────────────────────

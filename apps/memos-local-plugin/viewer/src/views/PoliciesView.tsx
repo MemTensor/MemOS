@@ -16,6 +16,7 @@ import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
 import { Pager } from "../components/Pager";
 import { ShareScopePill } from "../components/ShareScopePill";
+import { NamespaceSelect, appendNamespaceParams } from "../components/NamespaceSelect";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import type { PolicyDTO } from "../api/types";
@@ -43,6 +44,7 @@ interface ListResponse {
 export function PoliciesView() {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("");
+  const [namespaceFilter, setNamespaceFilter] = useState("");
   const [rows, setRows] = useState<PolicyDTO[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
@@ -75,6 +77,7 @@ export function PoliciesView() {
       qs.set("offset", String(opts.page * pageSize));
       if (opts.q) qs.set("q", opts.q);
       if (opts.status) qs.set("status", opts.status);
+      appendNamespaceParams(qs, namespaceFilter);
       const res = await api.get<ListResponse>(`/api/v1/policies?${qs.toString()}`);
       setRows(res.policies);
       setHasMore(res.nextOffset != null);
@@ -95,7 +98,7 @@ export function PoliciesView() {
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, status, pageSize]);
+  }, [query, status, pageSize, namespaceFilter]);
 
   // Deep-link: `#/policies?id=po_xxx` auto-opens the row's drawer.
   // Lets other views (Skills / WorldModels / Tasks) link straight
@@ -174,6 +177,7 @@ export function PoliciesView() {
             onClick={() => {
               setQuery("");
               setStatus("");
+              setNamespaceFilter("");
               setSelected(new Set());
               void load({ q: "", status: "", page: 0 });
             }}
@@ -212,6 +216,7 @@ export function PoliciesView() {
             </button>
           ))}
         </div>
+        <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
       </div>
 
       {loading && rows.length === 0 && (

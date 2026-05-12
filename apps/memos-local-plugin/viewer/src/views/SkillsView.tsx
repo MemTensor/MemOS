@@ -16,6 +16,7 @@ import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
 import { Pager } from "../components/Pager";
 import { ShareScopePill } from "../components/ShareScopePill";
+import { NamespaceSelect, appendNamespaceParams } from "../components/NamespaceSelect";
 import { Markdown } from "../components/Markdown";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
@@ -58,6 +59,7 @@ interface SkillRefusalNotice {
 export function SkillsView() {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("");
+  const [namespaceFilter, setNamespaceFilter] = useState("");
   const [skills, setSkills] = useState<SkillDTO[] | null>(null);
   const [detail, setDetail] = useState<SkillDTO | null>(null);
   const [loading, setLoading] = useState(false);
@@ -90,6 +92,7 @@ export function SkillsView() {
       qs.set("limit", String(pageSize));
       qs.set("offset", String(nextPage * pageSize));
       if (status) qs.set("status", status);
+      appendNamespaceParams(qs, namespaceFilter);
       const r = await api.get<{ skills: SkillDTO[]; nextOffset?: number; total?: number }>(
         `/api/v1/skills?${qs.toString()}`,
       );
@@ -107,7 +110,7 @@ export function SkillsView() {
   };
   useEffect(() => {
     void load(0);
-  }, [status, pageSize]);
+  }, [status, pageSize, namespaceFilter]);
 
   useEffect(() => {
     const handle = openSse("/api/v1/events", (_, data) => {
@@ -193,6 +196,7 @@ export function SkillsView() {
             onClick={() => {
               setQuery("");
               setStatus("");
+              setNamespaceFilter("");
               setSelected(new Set());
               void load(0);
             }}
@@ -234,6 +238,7 @@ export function SkillsView() {
             </button>
           ))}
         </div>
+        <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
       </div>
 
       {loading && (

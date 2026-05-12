@@ -78,7 +78,7 @@ export function registerMemoryRoutes(
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const policy = await deps.core.getPolicy(id);
+    const policy = await deps.core.getPolicy(id, undefined, { includeAllNamespaces: true });
     if (policy === null) {
       writeError(ctx, 404, "not_found", `policy not found: ${id}`);
       return;
@@ -92,7 +92,7 @@ export function registerMemoryRoutes(
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const wm = await deps.core.getWorldModel(id);
+    const wm = await deps.core.getWorldModel(id, undefined, { includeAllNamespaces: true });
     if (wm === null) {
       writeError(ctx, 404, "not_found", `world model not found: ${id}`);
       return;

@@ -73,6 +73,7 @@ export interface SessionManager {
   addTurn(episodeId: EpisodeId, turn: EpisodeTurnInput): EpisodeTurn;
   finalizeEpisode(episodeId: EpisodeId, input?: EpisodeFinalizeInput): EpisodeSnapshot;
   abandonEpisode(episodeId: EpisodeId, reason: string): EpisodeSnapshot;
+  discardEmptyEpisode(episodeId: EpisodeId, reason: string): EpisodeSnapshot | null;
   /** V7 §0.1 "revision" path — reopen a previously-closed episode. */
   reopenEpisode(
     episodeId: EpisodeId,
@@ -173,6 +174,10 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
         epm.finalize(ep.id, {
           patchMeta: { sessionCloseReason: reason },
         });
+        continue;
+      }
+      if (isDiscardableEmptyEpisode(ep)) {
+        epm.discardEmpty(ep.id, `session_closed:${reason}`);
         continue;
       }
       epm.patchMeta(ep.id, {
@@ -293,6 +298,13 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     return snap;
   }
 
+  function discardEmptyEpisode(id: EpisodeId, reason: string): EpisodeSnapshot | null {
+    const before = epm.get(id);
+    const snap = epm.discardEmpty(id, reason);
+    if (before) decrementOpenCount(before.sessionId);
+    return snap;
+  }
+
   function reopenEpisode(
     id: EpisodeId,
     reason: import("./types.js").TurnRelation,
@@ -339,6 +351,10 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
           });
           continue;
         }
+        if (isDiscardableEmptyEpisode(ep)) {
+          epm.discardEmpty(ep.id, `shutdown:${reason}`);
+          continue;
+        }
         epm.patchMeta(ep.id, {
           topicState: "paused",
           pauseReason: `shutdown:${reason}`,
@@ -371,6 +387,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     addTurn: epm.addTurn,
     finalizeEpisode,
     abandonEpisode,
+    discardEmptyEpisode,
     reopenEpisode,
     hydrateEpisode,
     attachTraceIds: epm.attachTraceIds,
@@ -387,6 +404,11 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
 function stringMeta(meta: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = meta?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isDiscardableEmptyEpisode(ep: EpisodeSnapshot): boolean {
+  if (ep.traceIds.length > 0) return false;
+  return !ep.turns.some((t) => t.role === "assistant" && t.content.trim().length > 0);
 }
 
 // Re-export helpers tests will want to use.
