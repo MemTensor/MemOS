@@ -103,13 +103,15 @@ class MemosBridgeClient:
         # not rewrite `.js` import specifiers to the corresponding `.ts`
         # files on disk — and the source tree uses `.js` extensions in
         # every import per the TSC / bundler convention. We therefore
-        # launch the bridge via the bundled `tsx` binary, which handles
-        # both jobs (strip types + extension rewrite). `tsx` is declared
-        # as a production dependency in package.json so it's always present
-        # under node_modules/.bin after `npm install`.
-        tsx_bin = plugin_root / "node_modules" / ".bin" / "tsx"
-        if tsx_bin.exists():
-            cmd = [node, str(tsx_bin), script, f"--agent={agent}"]
+        # launch the bridge via the bundled `tsx` CLI, which handles
+        # both jobs (strip types + extension rewrite). On Windows the
+        # `.bin/tsx` file is a POSIX shell shim; invoking it as
+        # `node .bin/tsx` makes Node parse shell syntax as JavaScript.
+        # Use tsx's real JS entrypoint when we are launching through a
+        # specific Node binary.
+        tsx_cli = plugin_root / "node_modules" / "tsx" / "dist" / "cli.mjs"
+        if tsx_cli.exists():
+            cmd = [node, str(tsx_cli), script, f"--agent={agent}"]
         else:
             # Fallback path: `node --import tsx` reproduces the same loader
             # inline. Requires tsx to be resolvable as a package from the
@@ -123,6 +125,8 @@ class MemosBridgeClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             env=env,
             cwd=str(plugin_root),
