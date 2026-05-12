@@ -164,7 +164,10 @@ export function makeTracesRepo(db: StorageDb) {
      * where one user query + its tool sub-steps + final reply are
      * counted as 1. Used by the Memories viewer for accurate pagination.
      */
-    countTurns(filter: Omit<TraceListFilter, "limit" | "offset"> = {}): number {
+    countTurns(
+      filter: Omit<TraceListFilter, "limit" | "offset"> = {},
+      visibility?: { sql: string; params: Record<string, unknown> },
+    ): number {
       const fragments: string[] = [];
       const params: Record<string, unknown> = {};
       if (filter.sessionId) {
@@ -174,6 +177,10 @@ export function makeTracesRepo(db: StorageDb) {
       if (filter.episodeId) {
         fragments.push(`episode_id = @episode_id`);
         params.episode_id = filter.episodeId;
+      }
+      if (visibility) {
+        fragments.push(visibility.sql);
+        Object.assign(params, visibility.params);
       }
       const where = joinWhere(fragments);
       const sql = `SELECT COUNT(*) AS n FROM (SELECT DISTINCT episode_id, turn_id FROM traces ${where})`;
@@ -186,7 +193,10 @@ export function makeTracesRepo(db: StorageDb) {
      * turn's most recent trace timestamp DESC. The viewer uses this to
      * fetch a page of "memories" (1 turn = 1 memory).
      */
-    listTurnKeys(filter: TraceListFilter = {}): Array<{ episodeId: string | null; turnId: number; maxTs: number }> {
+    listTurnKeys(
+      filter: TraceListFilter = {},
+      visibility?: { sql: string; params: Record<string, unknown> },
+    ): Array<{ episodeId: string | null; turnId: number; maxTs: number }> {
       const fragments: string[] = [];
       const params: Record<string, unknown> = {};
       if (filter.sessionId) {
@@ -196,6 +206,10 @@ export function makeTracesRepo(db: StorageDb) {
       if (filter.episodeId) {
         fragments.push(`episode_id = @episode_id`);
         params.episode_id = filter.episodeId;
+      }
+      if (visibility) {
+        fragments.push(visibility.sql);
+        Object.assign(params, visibility.params);
       }
       const where = joinWhere(fragments);
       const limit = Math.max(1, Math.min(500, filter.limit ?? 50));
