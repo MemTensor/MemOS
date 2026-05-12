@@ -352,6 +352,70 @@ describe("HTTP server — REST routes", () => {
     expect(body.episodeIds).toEqual(["e1", "e2"]);
   });
 
+  it("GET /api/v1/episodes?status=failed filters by derived status", async () => {
+    // Mix of failed (rTask <= -0.5) and completed/active rows so the
+    // server has to actually filter — the viewer used to do this in
+    // the browser on top of one paginated page, which broke pagination.
+    (core.listEpisodeRows as any).mockResolvedValueOnce([
+      { id: "f1", sessionId: "s1", startedAt: 1, endedAt: 2, status: "closed", rTask: -0.8, turnCount: 2 },
+      { id: "c1", sessionId: "s1", startedAt: 3, endedAt: 4, status: "closed", rTask: 0.5, turnCount: 2 },
+      { id: "f2", sessionId: "s1", startedAt: 5, endedAt: 6, status: "closed", rTask: -0.7, turnCount: 2 },
+    ]);
+    const r = await fetch(`${handle.url}/api/v1/episodes?status=failed`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { episodes: Array<{ id: string }>; total: number };
+    expect(body.episodes.map((e) => e.id)).toEqual(["f1", "f2"]);
+    expect(body.total).toBe(2);
+  });
+
+  it("GET /api/v1/episodes?status=failed paginates over the filtered set", async () => {
+    // 4 failed + 2 completed; pageSize=2 so the test exercises
+    // limit/offset on the filter result, not on the raw scan window.
+    (core.listEpisodeRows as any).mockResolvedValue([
+      { id: "f1", sessionId: "s1", startedAt: 1, endedAt: 2, status: "closed", rTask: -0.8, turnCount: 2 },
+      { id: "c1", sessionId: "s1", startedAt: 3, endedAt: 4, status: "closed", rTask: 0.5, turnCount: 2 },
+      { id: "f2", sessionId: "s1", startedAt: 5, endedAt: 6, status: "closed", rTask: -0.7, turnCount: 2 },
+      { id: "f3", sessionId: "s1", startedAt: 7, endedAt: 8, status: "closed", rTask: -0.6, turnCount: 2 },
+      { id: "c2", sessionId: "s1", startedAt: 9, endedAt: 10, status: "closed", rTask: 0.5, turnCount: 2 },
+      { id: "f4", sessionId: "s1", startedAt: 11, endedAt: 12, status: "closed", rTask: -0.7, turnCount: 2 },
+    ]);
+
+    const r1 = await fetch(`${handle.url}/api/v1/episodes?status=failed&limit=2&offset=0`);
+    const b1 = (await r1.json()) as { episodes: Array<{ id: string }>; total: number; nextOffset?: number };
+    expect(b1.episodes.map((e) => e.id)).toEqual(["f1", "f2"]);
+    expect(b1.total).toBe(4);
+    expect(b1.nextOffset).toBe(2);
+
+    const r2 = await fetch(`${handle.url}/api/v1/episodes?status=failed&limit=2&offset=2`);
+    const b2 = (await r2.json()) as { episodes: Array<{ id: string }>; total: number; nextOffset?: number };
+    expect(b2.episodes.map((e) => e.id)).toEqual(["f3", "f4"]);
+    expect(b2.total).toBe(4);
+    expect(b2.nextOffset).toBeUndefined();
+  });
+
+  it("GET /api/v1/episodes?status=garbage falls back to no filter", async () => {
+    // Unknown status slugs must not 400 — the viewer's chip group
+    // uses `""` for "all", and any future slug should degrade
+    // gracefully rather than break the entire list.
+    const r = await fetch(`${handle.url}/api/v1/episodes?status=garbage`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { episodes: Array<{ id: string }>; total: number };
+    expect(body.episodes.map((e) => e.id)).toEqual(["e1", "e2"]);
+    expect(body.total).toBe(2);
+  });
+
+  it("GET /api/v1/episodes?status=…&q=… combines status + preview search", async () => {
+    (core.listEpisodeRows as any).mockResolvedValue([
+      { id: "f1", sessionId: "s1", startedAt: 1, endedAt: 2, status: "closed", rTask: -0.8, turnCount: 2, preview: "deploy failed twice" },
+      { id: "f2", sessionId: "s1", startedAt: 3, endedAt: 4, status: "closed", rTask: -0.6, turnCount: 2, preview: "another failure" },
+      { id: "c1", sessionId: "s1", startedAt: 5, endedAt: 6, status: "closed", rTask: 0.5, turnCount: 2, preview: "deploy succeeded" },
+    ]);
+    const r = await fetch(`${handle.url}/api/v1/episodes?status=failed&q=deploy`);
+    const body = (await r.json()) as { episodes: Array<{ id: string }>; total: number };
+    expect(body.episodes.map((e) => e.id)).toEqual(["f1"]);
+    expect(body.total).toBe(1);
+  });
+
   it("POST /api/v1/feedback accepts explicit polarity", async () => {
     const r = await fetch(`${handle.url}/api/v1/feedback`, {
       method: "POST",

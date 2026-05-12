@@ -17,8 +17,18 @@ import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import { ChatLog, flattenChat, type TimelineTrace } from "./tasks-chat";
 import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
+import {
+  deriveEpisodeStatus,
+  type DerivedTaskStatus,
+  type TaskStatusFilter,
+} from "../../../agent-contract/episode-status";
 
-type TaskStatus = "" | "active" | "completed" | "skipped" | "failed";
+/**
+ * Debounce window for the search box. Enough to coalesce a typical
+ * keystroke burst into one request without making the chip-group
+ * filter feel sluggish.
+ */
+const SEARCH_DEBOUNCE_MS = 250;
 
 interface EpisodeRow {
   id: string;
@@ -66,7 +76,11 @@ const DEFAULT_PAGE_SIZE = 20;
 
 export function TasksView() {
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<TaskStatus>("");
+  // Coalesce search-box keystrokes so we don't slam the server with
+  // a request per character. The chip-group filter (`status`) feels
+  // discrete to the user and triggers a request immediately.
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [status, setStatus] = useState<TaskStatusFilter>("");
   const [namespaceFilter, setNamespaceFilter] = useState("");
   const [rows, setRows] = useState<EpisodeRow[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -86,12 +100,19 @@ export function TasksView() {
     });
   };
 
+  useEffect(() => {
+    const handle = window.setTimeout(() => setDebouncedQuery(query), SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
+  }, [query]);
+
   const loadPage = (nextPage: number) => {
     const ctrl = new AbortController();
     setLoading(true);
     const qs = new URLSearchParams();
     qs.set("limit", String(pageSize));
     qs.set("offset", String(nextPage * pageSize));
+    if (status) qs.set("status", status);
+    if (debouncedQuery) qs.set("q", debouncedQuery);
     appendNamespaceParams(qs, namespaceFilter);
     api
       .get<EpisodeListResponse>(
@@ -118,7 +139,7 @@ export function TasksView() {
     const ctrl = loadPage(0);
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageSize, namespaceFilter, route.value.params.id]);
+  }, [pageSize, status, debouncedQuery, namespaceFilter, route.value.params.id]);
 
   useEffect(() => {
     const id = route.value.params.id;
@@ -173,20 +194,15 @@ export function TasksView() {
     return () => ctrl.abort();
   }, [detail?.id]);
 
-  const filtered = (rows ?? []).filter((r) => {
-    if (query) {
-      const q = query.toLowerCase();
-      const hay = `${r.preview ?? ""} ${r.id}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    if (status) {
-      const derived = deriveStatus(r);
-      if (derived !== status) return false;
-    }
-    return true;
-  });
+  // The server is now the single source of truth for filtering — the
+  // viewer used to do a per-page `Array.filter` that left the pager
+  // showing stale page counts when the chip-group filter zeroed out
+  // the visible rows. We keep the local alias so the rest of the
+  // render code stays expressive.
+  const filtered = rows ?? [];
   const pageIds = filtered.map((r) => r.id);
   const isPageSelected = areAllIdsSelected(selected, pageIds);
+  const filterActive = !!status || debouncedQuery.length > 0;
 
   const togglePageSelection = () => {
     setSelected((prev) => toggleIdsInSelection(prev, pageIds));
@@ -210,11 +226,15 @@ export function TasksView() {
           <button
             class="btn btn--ghost btn--sm"
             onClick={() => {
+              // Clearing the chips and the search box already
+              // triggers a reload via the [status, debouncedQuery]
+              // useEffect — we deliberately don't call loadPage(0)
+              // here to avoid two overlapping requests.
               setQuery("");
               setStatus("");
               setNamespaceFilter("");
               setSelected(new Set());
-              loadPage(0);
+              if (!status && !query) loadPage(0);
             }}
           >
             <Icon name="refresh-cw" size={14} />
@@ -239,11 +259,11 @@ export function TasksView() {
       <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
         <div class="toolbar__group" role="group" aria-label={t("common.filter")}>
           {[
-            { v: "" as TaskStatus, k: "common.all" as const },
-            { v: "active" as TaskStatus, k: "status.active" as const },
-            { v: "completed" as TaskStatus, k: "status.completed" as const },
-            { v: "skipped" as TaskStatus, k: "status.skipped" as const },
-            { v: "failed" as TaskStatus, k: "status.failed" as const },
+            { v: "" as TaskStatusFilter, k: "common.all" as const },
+            { v: "active" as TaskStatusFilter, k: "status.active" as const },
+            { v: "completed" as TaskStatusFilter, k: "status.completed" as const },
+            { v: "skipped" as TaskStatusFilter, k: "status.skipped" as const },
+            { v: "failed" as TaskStatusFilter, k: "status.failed" as const },
           ].map((opt) => (
             <button
               key={opt.v}
@@ -271,7 +291,9 @@ export function TasksView() {
           <div class="empty__icon">
             <Icon name="list-checks" size={22} />
           </div>
-          <div class="empty__title">{t("tasks.empty")}</div>
+          <div class="empty__title">
+            {filterActive ? t("tasks.empty.filtered") : t("tasks.empty")}
+          </div>
         </div>
       )}
 
@@ -351,7 +373,14 @@ export function TasksView() {
         </div>
       )}
 
-      {(page > 0 || hasMore) && (
+      {/*
+       * Hide the pager when the current view has nothing to show.
+       * Without this the pager kept rendering "1/2/3 of 45" while
+       * the list above said "no matches" — every navigation button
+       * would just reload the same empty filter result, which made
+       * users think the data was lost.
+       */}
+      {filtered.length > 0 && (page > 0 || hasMore) && (
         <Pager
           page={page}
           totalItems={total}
@@ -418,33 +447,14 @@ async function findEpisodePage(
   }
 }
 
-// Keep this in lockstep with `core/pipeline/memory-core.ts::deriveSkillStatus`:
-// only a clearly-negative reward is shown as "failed / 反例". Slight
-// negatives or below-threshold positives still read as "completed" in
-// the task list — the soft-fail framing (未达沉淀阈值) lives on the
-// skill pipeline pill, not the main task status.
-const R_NEGATIVE_FLOOR = -0.5;
-
-function deriveStatus(r: EpisodeRow): "active" | "completed" | "skipped" | "failed" {
-  if (r.status === "open") return "active";
-  // Recently-finalized grace window: the user may still be chatting.
-  if (r.closeReason === "finalized" && r.endedAt) {
-    const ageMs = Date.now() - r.endedAt;
-    if (ageMs < 2 * 60 * 1000) return "active";
-  }
-  // Reward-scored episodes are classified by R_task regardless of how
-  // they were closed (finalized or abandoned).
-  if (r.rTask != null && r.rTask <= R_NEGATIVE_FLOOR) return "failed";
-  if (r.rTask != null) return "completed";
-  if (r.rewardSkipped) return "skipped";
-  // If the skill pipeline produced a skill for this episode (via L2
-  // policy linkage), the task contributed meaningful knowledge — show
-  // "completed" even when rTask is null (e.g. plugin crashed after
-  // skill generation but before rTask was persisted to the episode).
-  if (r.skillStatus === "generated" || r.skillStatus === "upgraded") return "completed";
-  if (r.closeReason === "abandoned") return "skipped";
-  if ((r.turnCount ?? 0) >= 2) return "completed";
-  return "skipped";
+/**
+ * Local adapter around the shared episode-status derivation. The
+ * server uses the exact same function under the hood when applying
+ * `?status=…` filtering, so the chip selection above and the pill
+ * rendered on each row can never disagree.
+ */
+function deriveStatus(r: EpisodeRow): DerivedTaskStatus {
+  return deriveEpisodeStatus(r as unknown as Parameters<typeof deriveEpisodeStatus>[0]);
 }
 
 /**
