@@ -1,3 +1,4 @@
+import importlib
 import json
 import re
 
@@ -95,6 +96,7 @@ def find_project_root(marker=".git"):
 
 class StopwordManager:
     _stopwords = None
+    _search_stopwords = None
 
     @classmethod
     def _load_stopwords(cls):
@@ -107,6 +109,80 @@ class StopwordManager:
 
         cls._stopwords = stopwords
         return stopwords
+
+    @classmethod
+    def _load_search_stopwords(cls):
+        """load stopwords used by search keyword extraction"""
+        if cls._search_stopwords is not None:
+            return cls._search_stopwords
+
+        search_query_stop_words = {
+            "用户",
+            "帮我",
+            "请",
+            "查询",
+            "一下",
+            "一点",
+            "是否",
+            "可以",
+            "需要",
+            "现在",
+            "当前",
+            "官方",
+            "相关",
+            "历史记录",
+            "输出",
+            "要求",
+            "信息",
+            "内容",
+            "平台",
+            "时间",
+            "图片",
+            "私聊",
+            "群聊",
+            "群名",
+            "今天",
+            "谢谢",
+            "问题",
+            "事情",
+            "东西",
+            "情况",
+            "习惯",
+            "地点",
+            "场面",
+            "进行",
+            "根据",
+            "推荐",
+            "提供",
+            "帮助",
+            "告诉",
+            "觉得",
+            "感觉",
+            "比较",
+            "看看",
+            "知道",
+            "记得",
+            "喜欢",
+            "if",
+            "then",
+            "else",
+            "please",
+            "tell",
+            "about",
+            "help",
+            "what",
+            "when",
+            "where",
+            "why",
+            "how",
+            "can",
+            "could",
+            "would",
+            "should",
+            "need",
+        }
+        cls._search_stopwords = cls._load_stopwords() | search_query_stop_words
+        return cls._search_stopwords
 
     @classmethod
     def _load_default_stopwords(cls):
@@ -358,6 +434,12 @@ class StopwordManager:
             cls._load_stopwords()
         return word in cls._stopwords
 
+    @classmethod
+    def is_search_stopword(cls, word):
+        if cls._search_stopwords is None:
+            cls._load_search_stopwords()
+        return word in cls._search_stopwords or word.lower() in cls._search_stopwords
+
 
 class FastTokenizer:
     def __init__(self, use_jieba=True, use_stopwords=True):
@@ -373,6 +455,10 @@ class FastTokenizer:
         else:
             return self._tokenize_english(text)
 
+    def tokenize_english(self, text):
+        """Tokenize text as English without language auto-detection."""
+        return self._tokenize_english(text)
+
     def _is_chinese(self, text):
         """check if chinese"""
         chinese_chars = sum(1 for char in text if "\u4e00" <= char <= "\u9fff")
@@ -385,7 +471,7 @@ class FastTokenizer:
     )
     def _tokenize_chinese(self, text):
         """split zh jieba"""
-        import jieba
+        jieba = importlib.import_module("jieba")
 
         tokens = jieba.lcut(text) if self.use_jieba else list(text)
         tokens = [token.strip() for token in tokens if token.strip()]
@@ -395,7 +481,7 @@ class FastTokenizer:
         return tokens
 
     def _tokenize_english(self, text):
-        """split zh regex"""
+        """split en regex"""
         tokens = re.findall(r"\b[a-zA-Z0-9]+\b", text.lower())
         if self.use_stopwords:
             return self.stopword_manager.filter_words(tokens)
