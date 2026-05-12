@@ -1023,6 +1023,58 @@ describe("HTTP server — REST routes", () => {
     const r = await fetch(`${handle.url}/api/v1/ping`, { method: "DELETE" });
     expect(r.status).toBe(405);
   });
+
+  // ─── Telemetry side-channel ────────────────────────────────────
+  // Replaces the previous "first GET /overview wins" trigger with
+  // a dedicated SPA-mount endpoint. See `server/routes/telemetry.ts`
+  // and `viewer/src/components/App.tsx` for the wiring rationale.
+
+  it("POST /api/v1/telemetry/viewer-opened invokes telemetry.trackViewerOpened", async () => {
+    const trackViewerOpened = vi.fn();
+    const local = await startHttpServer(
+      { core, telemetry: { trackViewerOpened } },
+      { port: 0 },
+    );
+    try {
+      const r = await fetch(`${local.url}/api/v1/telemetry/viewer-opened`, {
+        method: "POST",
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { ok: boolean };
+      expect(body.ok).toBe(true);
+      expect(trackViewerOpened).toHaveBeenCalledTimes(1);
+    } finally {
+      await local.close();
+    }
+  });
+
+  it("POST /api/v1/telemetry/viewer-opened still returns 200 when telemetry is unbound", async () => {
+    // No telemetry on `deps` — endpoint must remain a no-op success
+    // so the SPA's fire-and-forget call never surfaces an error.
+    const r = await fetch(`${handle.url}/api/v1/telemetry/viewer-opened`, {
+      method: "POST",
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+  });
+
+  it("GET /api/v1/overview no longer triggers viewer_opened (regressed to manual ping)", async () => {
+    const trackViewerOpened = vi.fn();
+    const local = await startHttpServer(
+      { core, telemetry: { trackViewerOpened } },
+      { port: 0 },
+    );
+    try {
+      // Two GETs (the viewer used to poll this) — neither should
+      // count as a viewer-mount event under the new scheme.
+      await fetch(`${local.url}/api/v1/overview`);
+      await fetch(`${local.url}/api/v1/overview`);
+      expect(trackViewerOpened).not.toHaveBeenCalled();
+    } finally {
+      await local.close();
+    }
+  });
 });
 
 describe("HTTP server — static files", () => {

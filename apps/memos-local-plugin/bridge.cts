@@ -170,6 +170,44 @@ async function main(): Promise<void> {
   (core as { bindTelemetry?: (t: InstanceType<typeof Telemetry>) => void }).bindTelemetry?.(telemetry);
   telemetry.trackPluginStarted(args.agent);
 
+  // Process-level error reporting. Without these handlers a crash in
+  // a background task (capture / reward / L2 inducer) silently kills
+  // the bridge process and never surfaces in ARMS — making "0
+  // plugin_error events" actively misleading. Both handlers are
+  // best-effort and re-emit (or `process.exit(1)`) so we don't
+  // alter the existing crash semantics, only add observability.
+  // Only registered for `bridge.cts` (the dedicated process); the
+  // OpenClaw adapter runs inside the host process and must not steal
+  // its global error hooks.
+  process.on("uncaughtException", (err) => {
+    try {
+      telemetry.trackError("uncaught_exception", classifyErrorCode(err));
+    } catch {
+      /* swallow — telemetry must never widen the crash */
+    }
+    process.stderr.write(
+      `bridge: uncaughtException: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
+    );
+    // Mirror Node's default behaviour so existing supervisors that
+    // expect non-zero exit on crash keep working.
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    try {
+      telemetry.trackError("unhandled_rejection", classifyErrorCode(reason));
+    } catch {
+      /* swallow — telemetry must never widen the crash */
+    }
+    process.stderr.write(
+      `bridge: unhandledRejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`,
+    );
+    // Don't exit: per-promise rejections are usually recoverable
+    // (failed flush, dropped SSE client). The default Node 20+
+    // behaviour is to exit, but for a long-running bridge that
+    // would be too aggressive — surface to telemetry + stderr and
+    // continue.
+  });
+
   // Per-agent fixed viewer port.
   const AGENT_DEFAULT_PORTS = { openclaw: 18799, hermes: 18800 } as const;
   const viewerPort = AGENT_DEFAULT_PORTS[args.agent];
@@ -337,6 +375,31 @@ async function main(): Promise<void> {
 function pathToEsmUrl(abs: string): string {
   const u = abs.startsWith("/") ? `file://${abs}` : `file:///${abs}`;
   return u;
+}
+
+/**
+ * Best-effort error classification for ARMS `plugin_error.error_type`.
+ *
+ * Priority order:
+ *   1. `MemosError.code` and Node `errno` (`ENOENT`, `EADDRINUSE`, …)
+ *      — both surface as a `code` string property.
+ *   2. The constructor name when it's something more specific than
+ *      the generic `Error` (e.g. `TypeError`, `SyntaxError`).
+ *   3. `unknown` as a sentinel.
+ *
+ * Never returns the message — those can carry user paths or query
+ * fragments and would defeat the redaction the rest of the telemetry
+ * pipeline guarantees.
+ */
+function classifyErrorCode(err: unknown): string {
+  if (err && typeof err === "object" && "code" in err) {
+    const code = (err as { code: unknown }).code;
+    if (typeof code === "string" && code.length > 0) return code;
+  }
+  if (err instanceof Error && err.name && err.name !== "Error") {
+    return err.name;
+  }
+  return "unknown";
 }
 
 function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
