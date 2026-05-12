@@ -1,6 +1,6 @@
 # MemReader Examples
 
-This directory contains examples and sample code demonstrating how to use the `MemReader` module in MemOS. `MemReader` is responsible for parsing various types of input data (text, chat history, files, images) into structured memory formats.
+This page documents the examples and sample code (located in [`examples/mem_reader/`](../../../../examples/mem_reader/)) demonstrating how to use the `MemReader` module in MemOS. `MemReader` is responsible for parsing various types of input data (text, chat history, files, images) into structured memory formats.
 
 ## 📂 Directory Structure
 

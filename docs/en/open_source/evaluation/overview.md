@@ -7,7 +7,7 @@ This repository provides tools and scripts for evaluating the `LoCoMo`, `LongMem
 1. Set the `PYTHONPATH` environment variable:
    ```bash
    export PYTHONPATH=../src
-   cd evaluation
+   cd evaluation  # run from the repository root
    ```
 
 2. Install the required dependencies:
@@ -44,24 +44,24 @@ And give unofficial implementations for the following memory frameworks:`zep`, `
 ## Evaluation Scripts
 
 ### LoCoMo Evaluation
-⚙️ To evaluate the **LoCoMo** dataset using one of the supported memory frameworks — run the following [script](./scripts/run_locomo_eval.sh):
+⚙️ To evaluate the **LoCoMo** dataset using one of the supported memory frameworks — run the following [script](../../../../evaluation/scripts/run_locomo_eval.sh):
 
 ```bash
 # Edit the configuration in ./scripts/run_locomo_eval.sh
 # Specify the model and memory backend you want to use (e.g., mem0, zep, etc.)
-./scripts/run_locomo_eval.sh
+evaluation/scripts/run_locomo_eval.sh
 ```
 
-✍️ For evaluating OpenAI's native memory feature with the LoCoMo dataset, please refer to the detailed guide: [OpenAI Memory on LoCoMo - Evaluation Guide](./scripts/locomo/openai_memory_locomo_eval_guide.md).
+✍️ For evaluating OpenAI's native memory feature with the LoCoMo dataset, please refer to the detailed guide: [OpenAI Memory on LoCoMo - Evaluation Guide](./openai_memory_locomo_eval_guide.md).
 
 ### LongMemEval Evaluation
 First prepare the dataset `longmemeval_s` from https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned
 , and save it as `data/longmemeval/longmemeval_s.json`
 
 ```bash
-# Edit the configuration in ./scripts/run_lme_eval.sh
+# Edit the configuration in evaluation/scripts/run_lme_eval.sh
 # Specify the model and memory backend you want to use (e.g., mem0, zep, etc.)
-./scripts/run_lme_eval.sh
+evaluation/scripts/run_lme_eval.sh
 ```
 
 #### Question date and `reference_time`
@@ -72,19 +72,19 @@ LongMemEval gives each question a **question date**; evaluation should use that 
 
 ### PrefEval Evaluation
 Downloading benchmark_dataset/filtered_inter_turns.json from https://github.com/amazon-science/PrefEval/blob/main/benchmark_dataset/filtered_inter_turns.json and save it as `./data/prefeval/filtered_inter_turns.json`.
-To evaluate the **Prefeval** dataset — run the following [script](./scripts/run_prefeval_eval.sh):
+To evaluate the **Prefeval** dataset — run the following [script](evaluation/scripts/run_prefeval_eval.sh):
 
 ```bash
-# Edit the configuration in ./scripts/run_prefeval_eval.sh
+# Edit the configuration in evaluation/scripts/run_prefeval_eval.sh
 # Specify the model and memory backend you want to use (e.g., mem0, zep, etc.)
-./scripts/run_prefeval_eval.sh
+evaluation/scripts/run_prefeval_eval.sh
 ```
 
 ### PersonaMem Evaluation
 get `questions_32k.csv` and `shared_contexts_32k.jsonl` from https://huggingface.co/datasets/bowen-upenn/PersonaMem and save them at `data/personamem/`
 ```bash
-# Edit the configuration in ./scripts/run_pm_eval.sh
+# Edit the configuration in evaluation/scripts/run_pm_eval.sh
 # Specify the model and memory backend you want to use (e.g., mem0, zep, etc.)
-# If you want to use MIRIX, edit the the configuration in ./scripts/personamem/config.yaml
-./scripts/run_pm_eval.sh
+# If you want to use MIRIX, edit the the configuration in evaluation/scripts/personamem/config.yaml
+evaluation/scripts/run_pm_eval.sh
 ```

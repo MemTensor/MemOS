@@ -102,11 +102,11 @@ The memories are currently saved per session. You need to write a simple script 
 
 ### Step 2.4: Automated Evaluation
 
-Once the memories for all conversations have been extracted and saved, you can run the automated [evaluation script](../run_openai_eval.sh). This script will handle the process of generating answers, evaluating them, and calculating metrics.
+Once the memories for all conversations have been extracted and saved, you can run the automated [evaluation script](../../../../evaluation/scripts/run_openai_eval.sh). This script will handle the process of generating answers, evaluating them, and calculating metrics.
 
 ```bash
-# Edit the configuration in ./scripts/run_openai_eval.sh
-./scripts/run_openai_eval.sh
+# Edit the configuration in evaluation/scripts/run_openai_eval.sh
+evaluation/scripts/run_openai_eval.sh
 ```
 
 ## 3. Considerations
