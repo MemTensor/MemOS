@@ -1,0 +1,1264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>MemOS Local Plugin | OpenClaw / Hermes 本地进化记忆</title>
+<meta name="description" content="MemOS Local Plugin 为 OpenClaw 与 Hermes 提供同一套 Reflect2Evolve 本地记忆核心、Viewer 可视化和可选团队共享配置。">
+<link rel="icon" href="https://statics.memtensor.com.cn/logo/color-m.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#06080f;
+  --bg-card:rgba(14,18,32,.7);
+  --bg-card-hover:rgba(20,26,48,.8);
+  --border:rgba(99,140,255,.1);
+  --border-glow:rgba(99,140,255,.25);
+  --text:#eef1ff;
+  --text-sec:rgba(200,210,255,.55);
+  --text-thr:rgba(160,175,220,.3);
+  --cyan:#00e5ff;
+  --blue:#638cff;
+  --purple:#b16cff;
+  --magenta:#ff3cac;
+  --green:#00e676;
+  --amber:#ffca28;
+  --grad-main:linear-gradient(135deg,#00e5ff,#638cff,#b16cff);
+  --grad-hot:linear-gradient(135deg,#ff3cac,#b16cff,#638cff);
+  --grad-subtle:linear-gradient(135deg,rgba(0,229,255,.12),rgba(177,108,255,.12));
+  --glow-cyan:0 0 30px rgba(0,229,255,.15);
+  --glow-purple:0 0 30px rgba(177,108,255,.15);
+  --font:'Inter',system-ui,-apple-system,sans-serif;
+  --mono:'SF Mono','Fira Code','JetBrains Mono',monospace;
+  --radius:14px;
+}
+::selection{background:rgba(99,140,255,.3);color:#fff}
+html{scroll-behavior:smooth}
+body{font-family:var(--font);color:var(--text);background:var(--bg);line-height:1.6;overflow-x:hidden}
+a{color:var(--text);text-decoration:none;transition:all .2s}
+
+.container{max-width:1200px;margin:0 auto;padding:0 24px}
+
+/* ── Grid Overlay ── */
+.grid-bg{position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:
+    linear-gradient(rgba(99,140,255,.03) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(99,140,255,.03) 1px,transparent 1px);
+  background-size:60px 60px;
+}
+
+/* ── Floating Orbs ── */
+.orb{position:fixed;border-radius:50%;filter:blur(80px);pointer-events:none;z-index:0}
+.orb-1{width:600px;height:600px;background:radial-gradient(circle,rgba(0,229,255,.08),transparent 70%);top:-200px;left:-100px;animation:orbFloat 20s ease-in-out infinite}
+.orb-2{width:500px;height:500px;background:radial-gradient(circle,rgba(177,108,255,.07),transparent 70%);bottom:-150px;right:-100px;animation:orbFloat 25s ease-in-out infinite reverse}
+.orb-3{width:400px;height:400px;background:radial-gradient(circle,rgba(255,60,172,.05),transparent 70%);top:40%;left:50%;animation:orbFloat 18s ease-in-out infinite 5s}
+@keyframes orbFloat{0%,100%{transform:translate(0,0)}25%{transform:translate(30px,-40px)}50%{transform:translate(-20px,30px)}75%{transform:translate(40px,20px)}}
+
+/* ── Nav ── */
+nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:0 24px;backdrop-filter:blur(24px) saturate(1.4);background:rgba(6,8,15,.75);border-bottom:1px solid var(--border)}
+nav .inner{max-width:1200px;margin:0 auto;display:flex;align-items:center;height:60px}
+nav .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:17px;letter-spacing:-.02em;color:var(--text);text-decoration:none}
+nav .brand:hover{color:var(--text)}
+nav .brand .icon{font-size:24px}
+nav .brand .sub{font-size:10px;color:var(--text-sec);font-weight:400;display:block;line-height:1.1}
+nav .links{margin-left:auto;display:flex;align-items:center;gap:4px}
+nav .links a{color:var(--text-sec);font-size:13px;font-weight:500;padding:6px 12px;border-radius:8px;transition:all .2s}
+nav .links a:hover{color:var(--text);background:rgba(99,140,255,.06)}
+nav .btn-nav{background:transparent;color:var(--text-sec);font-weight:600;border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:13px;transition:all .2s}
+nav .btn-nav:hover{border-color:rgba(99,140,255,.35);color:var(--text);background:rgba(99,140,255,.06)}
+
+/* ── Buttons ── */
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 32px;border-radius:12px;font-size:14px;font-weight:700;border:none;cursor:pointer;transition:all .25s;text-decoration:none;letter-spacing:.01em}
+.btn-glow{background:var(--grad-main);color:#06080f;box-shadow:0 0 24px rgba(0,229,255,.2),0 0 60px rgba(99,140,255,.1);position:relative;overflow:hidden}
+.btn-glow::after{content:'';position:absolute;inset:-1px;background:var(--grad-main);filter:blur(12px);opacity:.4;z-index:-1;transition:opacity .3s}
+.btn-glow:hover{transform:translateY(-2px);box-shadow:0 0 32px rgba(0,229,255,.3),0 0 80px rgba(99,140,255,.15);color:#06080f}
+.btn-glow:hover::after{opacity:.6}
+.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border);backdrop-filter:blur(8px)}
+.btn-outline:hover{border-color:var(--blue);background:rgba(99,140,255,.06);box-shadow:var(--glow-cyan)}
+
+/* ── Section ── */
+.section{padding:120px 0;position:relative;z-index:1}
+.section-header{text-align:center;margin-bottom:64px}
+.section h2{font-size:clamp(28px,4.5vw,48px);font-weight:900;letter-spacing:-.04em;margin-bottom:14px;line-height:1.1}
+.section h2 .hl{background:var(--grad-main);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.section .section-desc{color:var(--text-sec);font-size:15px;max-width:560px;margin:0 auto;line-height:1.8}
+
+/* ── Glowing Line Divider ── */
+.glow-line{height:1px;background:linear-gradient(90deg,transparent,var(--blue),var(--cyan),var(--blue),transparent);opacity:.3;margin:0}
+
+/* ── Magic Badge ── */
+.magic-badge{display:inline-flex;align-items:center;gap:8px;padding:6px 18px;border-radius:24px;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.06);font-size:12px;font-weight:600;color:var(--cyan);margin-bottom:28px;backdrop-filter:blur(8px);animation:badgePulse 3s ease-in-out infinite}
+@keyframes badgePulse{0%,100%{box-shadow:0 0 0 rgba(0,229,255,0)}50%{box-shadow:0 0 20px rgba(0,229,255,.1)}}
+
+/* ── Hero ── */
+.hero{padding:160px 0 80px;text-align:center;position:relative;overflow:hidden;z-index:1}
+.hero>*{position:relative;z-index:1}
+.hero h1{font-size:clamp(40px,7vw,80px);font-weight:900;letter-spacing:-.05em;line-height:1.05;margin-bottom:24px;animation:fadeUp .7s ease .1s both}
+.hero h1 .grad{background:var(--grad-main);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;position:relative}
+.hero h1 .grad::after{content:'';position:absolute;bottom:-4px;left:0;right:0;height:3px;background:var(--grad-main);border-radius:2px;opacity:.6}
+.hero .desc{font-size:clamp(15px,1.6vw,18px);color:var(--text-sec);max-width:620px;margin:0 auto 14px;line-height:1.85;animation:fadeUp .7s ease .2s both}
+.hero .sub-line{font-size:14px;color:var(--text-thr);margin-bottom:36px;animation:fadeUp .7s ease .28s both;letter-spacing:.03em}
+.hero .ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-bottom:56px;animation:fadeUp .7s ease .35s both}
+@keyframes fadeUp{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+@keyframes clawFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@keyframes clawBlink{0%,90%,100%{opacity:1}95%{opacity:.3}}
+@keyframes clawWiggle{0%,100%{transform:rotate(0)}25%{transform:rotate(-3deg)}75%{transform:rotate(3deg)}}
+@keyframes clawSnap{0%,85%,100%{transform:rotate(0)}90%{transform:rotate(-8deg)}95%{transform:rotate(0)}}
+.claw-icon{animation:clawFloat 4s ease-in-out infinite;cursor:pointer;transition:transform .3s ease}
+.claw-icon:hover{transform:scale(1.1);animation:none}
+.claw-icon svg{filter:drop-shadow(0 0 20px rgba(255,77,77,.4));transition:filter .3s ease}
+.claw-icon:hover svg{filter:drop-shadow(0 0 30px rgba(0,229,204,.6))}
+.claw-icon .eye-glow{animation:clawBlink 3s ease-in-out infinite}
+.claw-icon .antenna{animation:clawWiggle 2s ease-in-out infinite;transform-origin:center}
+.claw-icon .claw-left{animation:clawSnap 4s ease-in-out infinite;transform-origin:right center}
+.claw-icon .claw-right{animation:clawSnap 4s ease-in-out infinite .2s;transform-origin:left center}
+
+/* ── Hermes Mascot ── */
+@keyframes hermesFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@keyframes hermesWingFlapL{0%,100%{transform:translateX(0) scaleX(1)}50%{transform:translateX(-2px) scaleX(1.1)}}
+@keyframes hermesWingFlapR{0%,100%{transform:translateX(0) scaleX(1)}50%{transform:translateX(2px) scaleX(1.1)}}
+@keyframes hermesPlume{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.18)}}
+.hermes-icon{animation:hermesFloat 4s ease-in-out infinite -2s;cursor:pointer;transition:transform .3s ease}
+.hermes-icon:hover{transform:scale(1.1);animation:none}
+.hermes-icon svg{filter:drop-shadow(0 0 20px rgba(0,229,255,.45));transition:filter .3s ease}
+.hermes-icon:hover svg{filter:drop-shadow(0 0 30px rgba(99,140,255,.7))}
+.hermes-icon .hermes-eye-glow{animation:clawBlink 3s ease-in-out infinite}
+.hermes-icon .hermes-wing-left{animation:hermesWingFlapL 1.8s ease-in-out infinite;transform-origin:right center;transform-box:fill-box}
+.hermes-icon .hermes-wing-right{animation:hermesWingFlapR 1.8s ease-in-out infinite .15s;transform-origin:left center;transform-box:fill-box}
+.hermes-icon .hermes-plume{animation:hermesPlume 2.5s ease-in-out infinite;transform-origin:center bottom;transform-box:fill-box}
+
+/* ── Hero Mascots Layout ── */
+.hero-mascots{display:flex;justify-content:center;align-items:center;gap:56px;margin:0 auto 28px}
+.hero-mascots>div{flex-shrink:0}
+.cta-mascots{gap:32px}
+@media(max-width:520px){
+  .hero-mascots{gap:28px}
+  .hero-mascots:not(.cta-mascots)>div{width:78px!important;height:78px!important}
+  .cta-mascots{gap:18px}
+  .cta-mascots>div{width:54px!important;height:54px!important}
+}
+
+/* ── Terminal ── */
+.hero-visual{max-width:700px;margin:0 auto;animation:fadeUp .7s ease .45s both}
+.terminal{background:rgba(10,14,28,.85);border:1px solid var(--border);border-radius:16px;overflow:hidden;backdrop-filter:blur(12px);box-shadow:0 20px 60px rgba(0,0,0,.4),0 0 40px rgba(99,140,255,.05)}
+.terminal-bar{display:flex;align-items:center;gap:7px;padding:14px 18px;border-bottom:1px solid var(--border)}
+.terminal-dot{width:12px;height:12px;border-radius:50%}
+.terminal-dot.r{background:#ff5f57}.terminal-dot.y{background:#ffbd2e}.terminal-dot.g{background:#28ca42}
+.terminal-title{flex:1;text-align:center;font-size:11px;color:var(--text-thr);letter-spacing:.05em}
+.terminal-body{padding:22px;font-family:var(--mono);font-size:12.5px;line-height:2.1;color:var(--text-sec);text-align:left}
+.terminal-body .prompt{color:var(--green)}.terminal-body .cmd{color:var(--text)}.terminal-body .ok{color:var(--green)}.terminal-body .hl{color:var(--cyan)}.terminal-body .dim{color:var(--text-thr)}
+.terminal-cmd-row{display:flex;align-items:center;gap:8px;position:relative;z-index:2}
+.terminal-cmd-row .cmd{flex:1;white-space:nowrap;overflow:auto;scrollbar-width:none}
+.terminal-cmd-row .cmd::-webkit-scrollbar{display:none}
+.terminal-note{color:var(--text-thr);line-height:1.6;margin-bottom:8px}
+.copy-btn{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:rgba(99,140,255,.08);border:1px solid var(--border);color:var(--cyan);border-radius:8px;cursor:pointer;transition:all .2s;flex-shrink:0;padding:0}
+.copy-btn:hover{border-color:var(--border-glow);background:rgba(0,229,255,.12);color:var(--text)}
+.copy-btn .copy-icon,.copy-btn .check-icon{width:14px;height:14px;display:block}
+.copy-btn .check-icon{display:none;color:var(--green)}
+/* ── OS Tabs ── */
+.os-tabs{display:flex;gap:0;margin-bottom:0}
+.os-tab{padding:8px 20px;font-size:12px;font-weight:600;color:var(--text-thr);cursor:pointer;border:none;background:none;border-bottom:2px solid transparent;transition:all .2s}
+.os-tab.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+.os-tab:hover{color:var(--text-sec)}
+.os-pane{display:none}
+.os-pane.active{display:block}
+.copy-btn.copied{border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.12);color:var(--green)}
+.copy-btn.copied .copy-icon{display:none}
+.copy-btn.copied .check-icon{display:block}
+.install-switcher{background:rgba(10,14,28,.85);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;backdrop-filter:blur(12px);box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.install-switcher-header{display:flex;align-items:center;gap:7px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.install-switcher-header .dot{width:10px;height:10px;border-radius:50%}
+.install-os-switch{margin-left:auto;display:flex;align-items:center;gap:6px;padding:3px;background:rgba(99,140,255,.08);border:1px solid var(--border);border-radius:999px}
+.install-os-switch .os-btn{background:transparent;color:var(--text-sec);border:none;font-size:11px;font-weight:700;padding:6px 10px;border-radius:999px;cursor:pointer;transition:all .2s}
+.install-os-switch .os-btn:hover{color:var(--text)}
+.install-os-switch .os-btn.active{background:var(--grad-main);color:#06080f}
+.install-switcher-body{padding:18px;text-align:left}
+.install-switcher-note{font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--text-thr);margin-bottom:10px}
+.install-switcher-row{display:flex;align-items:center;gap:8px}
+.install-switcher-row .prompt{color:var(--green)}
+.install-switcher-row .cmd{flex:1;white-space:nowrap;overflow:auto;scrollbar-width:none;font-family:var(--mono);font-size:12px;color:var(--text)}
+.install-switcher-row .cmd::-webkit-scrollbar{display:none}
+
+/* ── Glass Cards ── */
+.value-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.value-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:30px;transition:all .35s;backdrop-filter:blur(12px);position:relative;overflow:hidden}
+.value-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad-main);opacity:0;transition:opacity .35s}
+.value-card:hover{border-color:var(--border-glow);background:var(--bg-card-hover);transform:translateY(-4px);box-shadow:var(--glow-cyan)}
+.value-card:hover::before{opacity:1}
+.value-card h3{font-size:15px;font-weight:700;margin-bottom:6px}
+.value-card p{font-size:13px;color:var(--text-sec);line-height:1.75;margin:0}
+.value-card .vc-icon{font-size:32px;margin-bottom:16px;display:block}
+
+/* ── Showcase ── */
+.showcase{display:flex;flex-direction:column;gap:80px}
+.showcase-item{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center}
+#quickstart .showcase-item{grid-template-columns:minmax(420px,1.05fr) minmax(0,.95fr);gap:42px}
+.showcase-item.reverse{direction:rtl}
+.showcase-item.reverse>*{direction:ltr}
+.showcase-text h3{font-size:24px;font-weight:800;margin-bottom:12px;line-height:1.25}
+.showcase-text h3 .hl{background:var(--grad-main);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.showcase-text p{color:var(--text-sec);font-size:14px;line-height:1.9;margin-bottom:16px}
+.stag{display:inline-block;font-size:11px;font-weight:600;padding:4px 12px;border-radius:8px;background:rgba(99,140,255,.08);color:var(--blue);margin:0 5px 5px 0;border:1px solid rgba(99,140,255,.1)}
+
+/* ── Code Block ── */
+.code-block{background:rgba(10,14,28,.85);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;backdrop-filter:blur(12px);box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.code-block .code-header{display:flex;align-items:center;gap:7px;padding:12px 16px;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-thr)}
+.code-block .code-header .dot{width:10px;height:10px;border-radius:50%}
+.code-block pre{padding:18px;font-family:var(--mono);font-size:11.5px;line-height:1.9;color:var(--text-sec);overflow-x:auto}
+.code-block .kw{color:var(--cyan)}.code-block .str{color:var(--green)}.code-block .cmt{color:rgba(200,210,255,.2)}.code-block .fn{color:var(--amber)}.code-block .num{color:#fde68a}
+
+/* ── Config Tabs ── */
+.config-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);background:rgba(10,14,28,.5)}
+.config-tab{padding:11px 26px;font-size:13px;font-weight:600;color:var(--text-thr);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .2s;background:none;border-top:none;border-left:none;border-right:none}
+.config-tab.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+.config-tab:hover{color:var(--text-sec)}
+.config-pane{display:none;animation:fadeUp .3s ease}
+.config-pane.active{display:block}
+
+/* ── Viewer Mock ── */
+.viewer-mock{background:rgba(10,14,28,.85);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;backdrop-filter:blur(12px);box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.viewer-mock-bar{display:flex;align-items:center;gap:7px;padding:11px 16px;border-bottom:1px solid var(--border)}
+.viewer-mock-bar .dots{display:flex;gap:6px}
+.viewer-mock-bar .dots span{width:10px;height:10px;border-radius:50%}
+.viewer-mock-bar .url{flex:1;text-align:center;font-size:10px;color:var(--text-thr);font-family:var(--mono)}
+.viewer-mock-body{padding:16px;min-height:260px}
+.vm-nav{display:flex;gap:3px;margin-bottom:14px;padding-bottom:11px;border-bottom:1px solid var(--border)}
+.vm-nav span{font-size:10px;padding:5px 12px;border-radius:8px;color:var(--text-thr);cursor:default;transition:all .2s}
+.vm-nav span.active{background:var(--grad-main);color:#06080f;font-weight:700}
+.vm-cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.vm-card{background:rgba(99,140,255,.04);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:10px}
+.vm-card .vm-label{color:var(--text-thr);margin-bottom:4px;font-weight:500}
+.vm-card .vm-value{font-size:18px;font-weight:800;color:var(--text)}
+.vm-list{margin-top:12px}
+.vm-row{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:10px;color:var(--text-sec);border-bottom:1px solid rgba(99,140,255,.05);transition:background .2s}
+.vm-row:hover{background:rgba(99,140,255,.04)}
+.vm-row .vm-role{font-size:8px;font-weight:700;padding:2px 6px;border-radius:4px;text-transform:uppercase}
+.vm-role-u{background:rgba(0,229,255,.1);color:var(--cyan)}
+.vm-role-a{background:rgba(0,230,118,.1);color:var(--green)}
+.vm-row .vm-time{margin-left:auto;color:var(--text-thr);font-size:9px}
+
+/* ── Architecture ── */
+.arch-container{max-width:960px;margin:0 auto}
+.arch-svg-wrap{width:100%;overflow-x:auto;padding:12px 0}
+.arch-svg-wrap svg{display:block;margin:0 auto}
+.arch-svg-wrap svg text{font-family:var(--font)}
+.arch-svg-wrap svg .nd{fill:rgba(10,14,28,.85);stroke:rgba(99,140,255,.12);stroke-width:1;rx:10;ry:10}
+.arch-svg-wrap svg .nd:hover{stroke:rgba(99,140,255,.3);filter:drop-shadow(0 0 8px rgba(99,140,255,.1))}
+.arch-svg-wrap svg .fl-s{stroke:rgba(99,140,255,.25);stroke-width:1.5;fill:none;marker-end:url(#aW)}
+.arch-svg-wrap svg .fl-d{stroke:var(--cyan);stroke-width:1.5;fill:none;stroke-dasharray:6 3;marker-end:url(#aO)}
+.arch-svg-wrap svg .fl-b{stroke:rgba(99,140,255,.25);stroke-width:1.5;fill:none;marker-end:url(#aW)}
+.arch-svg-wrap svg .fl-r{stroke:rgba(177,108,255,.15);stroke-width:1;fill:none;stroke-dasharray:5 3;marker-end:url(#aG)}
+.arch-svg-wrap svg .lbl-bg{fill:var(--bg);stroke:none;rx:4;ry:4}
+
+/* ── Highlight Box ── */
+.hbox{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:36px;margin-top:40px;backdrop-filter:blur(12px);position:relative;overflow:hidden}
+.hbox::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad-hot);opacity:.6}
+.hbox h4{font-size:17px;font-weight:800;margin-bottom:18px}
+.hgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.hitem{display:flex;gap:12px;align-items:flex-start;padding:14px;border-radius:10px;background:rgba(99,140,255,.03);border:1px solid var(--border);transition:all .25s}
+.hitem:hover{border-color:var(--border-glow);background:rgba(99,140,255,.06);box-shadow:var(--glow-cyan)}
+.hitem .hico{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;background:rgba(99,140,255,.08);border:1px solid rgba(99,140,255,.1)}
+.hitem h5{font-size:13px;font-weight:700;margin-bottom:3px}
+.hitem p{font-size:11px;color:var(--text-sec);line-height:1.6;margin:0}
+
+/* ── Providers ── */
+.provider-grid{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;padding:12px 0}
+.provider{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 22px;font-size:13px;font-weight:600;color:var(--text-sec);transition:all .25s;backdrop-filter:blur(8px)}
+.provider:hover{border-color:var(--cyan);color:var(--text);box-shadow:0 0 16px rgba(0,229,255,.08)}
+
+/* ── Tools ── */
+.tool-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.tool-card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center;transition:all .3s;backdrop-filter:blur(8px);position:relative;overflow:hidden}
+.tool-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad-main);opacity:0;transition:opacity .3s}
+.tool-card:hover{border-color:var(--border-glow);transform:translateY(-3px);box-shadow:var(--glow-cyan)}
+.tool-card:hover::before{opacity:1}
+.tool-card .ticon{font-size:26px;margin-bottom:10px}
+.tool-card h4{font-size:12px;font-weight:700;font-family:var(--mono);margin-bottom:3px;color:var(--text)}
+.tool-card p{font-size:10px;color:var(--text-sec)}
+
+/* ── CTA ── */
+.cta-section{text-align:center;padding:120px 0;position:relative;overflow:hidden;z-index:1}
+.cta-section::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 60% 50% at 50% 100%,rgba(0,229,255,.04),transparent),radial-gradient(ellipse 40% 50% at 50% 80%,rgba(177,108,255,.03),transparent);pointer-events:none}
+.cta-section h2{font-size:clamp(28px,4.5vw,48px);font-weight:900;margin-bottom:14px;line-height:1.1;position:relative}
+.cta-section .desc{color:var(--text-sec);font-size:14px;max-width:500px;margin:0 auto 36px;line-height:1.8;position:relative}
+
+footer{border-top:1px solid var(--border);padding:36px 0;position:relative;z-index:1}
+footer .inner{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px}
+footer .brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px;color:var(--text-sec)}
+footer .links{display:flex;gap:20px}
+footer .links a{color:var(--text-thr);font-size:12px}
+footer .links a:hover{color:var(--cyan)}
+footer .copy{color:var(--text-thr);font-size:10px;width:100%;text-align:center;margin-top:12px}
+
+/* ── Lang ── */
+.lang-switch{display:inline-flex;align-items:stretch;margin-left:8px;padding:2px;border:1px solid var(--border);border-radius:8px}
+.lang-switch .lang-btn{background:transparent;border:none;color:var(--text-thr);padding:5px 11px;font-size:12px;font-weight:500;cursor:pointer;border-radius:6px;transition:all .2s}
+.lang-switch .lang-btn:hover{color:var(--text-sec)}
+.lang-switch .lang-btn.active{background:rgba(99,140,255,.08);color:var(--text)}
+body.lang-en .lang-zh{display:none !important}
+body.lang-zh .lang-en{display:none !important}
+
+/* ── Animated Gradient Border (for hero terminal) ── */
+.glow-border{position:relative;border-radius:16px}
+.glow-border::before{content:'';position:absolute;inset:-1px;border-radius:17px;padding:1px;background:var(--grad-main);-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.5;animation:borderRotate 4s linear infinite;pointer-events:none}
+@keyframes borderRotate{from{filter:hue-rotate(0deg)}to{filter:hue-rotate(360deg)}}
+
+/* ── Migration Section ── */
+.mig-features{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:36px}
+.mig-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:28px 22px;text-align:center;transition:all .35s;backdrop-filter:blur(12px);position:relative;overflow:hidden}
+.mig-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--grad-hot);opacity:0;transition:opacity .35s}
+.mig-card:hover{border-color:var(--border-glow);background:var(--bg-card-hover);transform:translateY(-4px);box-shadow:var(--glow-purple)}
+.mig-card:hover::before{opacity:1}
+.mig-card .mig-icon{font-size:36px;margin-bottom:14px;display:block}
+.mig-card h4{font-size:14px;font-weight:700;margin-bottom:6px}
+.mig-card p{font-size:12px;color:var(--text-sec);line-height:1.7;margin:0}
+
+.demo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:40px}
+.demo-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:0;overflow:hidden;transition:all .35s;backdrop-filter:blur(12px);position:relative}
+.demo-card:hover{border-color:var(--border-glow);transform:translateY(-4px);box-shadow:0 20px 60px rgba(0,0,0,.3),var(--glow-cyan)}
+.demo-card .demo-visual{height:160px;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+.demo-card .demo-visual::before{content:'';position:absolute;inset:0;opacity:.6}
+.demo-card:nth-child(1) .demo-visual::before{background:linear-gradient(135deg,rgba(255,60,172,.08),rgba(177,108,255,.12))}
+.demo-card:nth-child(2) .demo-visual::before{background:linear-gradient(135deg,rgba(0,229,255,.08),rgba(99,140,255,.12))}
+.demo-card:nth-child(3) .demo-visual::before{background:linear-gradient(135deg,rgba(0,230,118,.08),rgba(255,202,40,.08))}
+.demo-card .demo-body{padding:22px}
+.demo-card .demo-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--cyan);margin-bottom:8px}
+.demo-card h4{font-size:16px;font-weight:800;margin-bottom:8px}
+.demo-card .demo-desc{font-size:12px;color:var(--text-sec);line-height:1.7;margin-bottom:16px}
+.demo-card .demo-steps{display:flex;flex-direction:column;gap:6px;margin-bottom:18px}
+.demo-card .demo-step{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-sec)}
+.demo-card .demo-step .step-num{width:20px;height:20px;border-radius:50%;background:rgba(99,140,255,.1);color:var(--blue);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0;border:1px solid rgba(99,140,255,.15)}
+.demo-card .demo-cta{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--cyan);transition:all .2s}
+.demo-card .demo-cta:hover{color:var(--text);transform:translateX(4px)}
+
+.demo-mock{width:90%;max-width:200px}
+.demo-mock-bar{height:10px;display:flex;align-items:center;gap:3px;padding:0 6px;border-bottom:1px solid var(--border);background:rgba(10,14,28,.5);border-radius:8px 8px 0 0}
+.demo-mock-bar span{width:4px;height:4px;border-radius:50%}
+.demo-mock-content{background:rgba(10,14,28,.7);border:1px solid var(--border);border-radius:0 0 8px 8px;padding:10px;min-height:80px}
+
+/* ── Ecosystem Section ── */
+.eco-wrap{display:flex;flex-direction:column;gap:18px}
+.eco-top-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+.eco-main-card{display:block;background:linear-gradient(180deg,rgba(10,18,40,.94),rgba(13,24,55,.92));border:1px solid rgba(99,140,255,.28);border-radius:20px;padding:28px;transition:all .3s;position:relative;overflow:hidden}
+.eco-main-card:hover{border-color:rgba(99,140,255,.55);transform:translateY(-4px);box-shadow:0 20px 56px rgba(0,0,0,.35),0 0 26px rgba(0,229,255,.1)}
+.eco-main-icon{width:64px;height:64px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#fff;margin-bottom:20px;overflow:hidden}
+.eco-main-icon.clawforce{background:rgba(241,98,61,.2);color:#f1623d}
+.eco-main-icon.minddock{background:rgba(99,102,241,.2);color:#818cf8}
+.eco-main-icon img{display:block;object-fit:contain}
+.eco-main-icon .icon-clawforce{width:40px;height:40px}
+.eco-main-icon .icon-minddock{width:44px;height:40px}
+.eco-main-title{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:24px;font-weight:800;color:#f8faff}
+.eco-main-badge{padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;line-height:1.4}
+.eco-main-badge.enterprise{color:#f1623d;background:rgba(241,98,61,.2)}
+.eco-main-badge.personal{color:#818cf8;background:rgba(99,102,241,.2)}
+.eco-main-desc{font-size:15px;font-weight:600;margin-bottom:8px}
+.eco-main-desc.clawforce{color:#f1623d}
+.eco-main-desc.minddock{color:#818cf8}
+.eco-main-content{font-size:13px;color:var(--text-sec);line-height:1.85}
+.eco-mid-line{display:flex;align-items:center;gap:12px}
+.eco-mid-line .line{height:1px;flex:1}
+.eco-mid-line .line.l{background:linear-gradient(90deg,rgba(0,194,255,0),rgba(0,194,255,.42))}
+.eco-mid-line .line.r{background:linear-gradient(90deg,rgba(0,194,255,.42),rgba(0,194,255,0))}
+.eco-mid-line .label{font-size:15px;font-weight:700;white-space:nowrap;background:linear-gradient(270deg,#1D4ED8 15%,#01C6FA 118%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.eco-platform{position:relative;border:2px solid transparent;border-radius:20px;padding:28px;background:linear-gradient(#080F21,#080F21) padding-box,linear-gradient(180deg,rgba(133,166,220,.8) 0%,rgba(29,78,216,.8) 30%,rgba(1,198,250,.8) 67%,rgba(29,78,216,.8) 100%) border-box;box-shadow:0 -12px 10px rgba(50,106,255,.06);overflow:hidden}
+.eco-platform::after{content:'';position:absolute;right:0;top:-12px;width:280px;height:220px;pointer-events:none;background:radial-gradient(66% 66% at 80% 10%,rgba(59,130,246,.18) 0%,rgba(59,130,246,0) 100%)}
+.eco-platform>*{position:relative;z-index:1}
+.eco-platform-bg-image{position:absolute;top:2px;right:0;width:162px;height:162px;object-fit:contain;opacity:.6;transform:rotate(-8.79deg);z-index:0;pointer-events:none}
+.eco-platform-head{display:flex;align-items:center;gap:14px;margin-bottom:20px}
+.eco-platform-logo{width:66px;height:66px;border-radius:18px;display:flex;align-items:center;justify-content:center;background:linear-gradient(270deg,#1D4ED8 15%,#01C6FA 118%)}
+.eco-platform-logo img{width:75%;height:75%;object-fit:contain;display:block}
+.eco-platform-title{font-size:30px;font-weight:900;letter-spacing:-.02em;line-height:1;color:#f8faff}
+.eco-platform-sub{font-size:14px;color:var(--text-sec);margin-top:5px}
+.eco-upper-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.eco-card-border{border:1px solid rgba(25,154,144,.5)!important}
+.eco-sub-card{display:block;padding:22px;border-radius:16px;background:rgba(10,19,45,.8);border:1px solid rgba(255,255,255,.1);transition:all .25s}
+.eco-sub-card:hover{border-color:rgba(99,140,255,.5);background:rgba(13,27,63,.95)}
+.eco-sub-card .name{font-size:20px;font-weight:700;color:#f8faff;margin-bottom:8px}
+.eco-sub-card .desc{font-size:14px;line-height:1.7}
+.eco-sub-card .desc .prefix{color:#c5d2ff}
+.eco-sub-card .desc .highlight.cloud{color:#3B82F6}
+.eco-sub-card .desc .highlight.local{color:#14B8A6}
+.eco-bridge{margin:10px 0 12px;display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.eco-bridge-item{display:flex;align-items:center;gap:8px}
+.eco-bridge-item .line{height:1px;flex:1}
+.eco-bridge-item .text{font-size:12px;font-weight:700;white-space:nowrap}
+.eco-bridge-item.cloud .line.l{background:linear-gradient(90deg,rgba(0,194,255,0),#3B82F6)}
+.eco-bridge-item.cloud .line.r{background:linear-gradient(90deg,#3B82F6,rgba(0,194,255,0))}
+.eco-bridge-item.cloud .text{color:#3B82F6}
+.eco-bridge-item.lite .line.l{background:linear-gradient(90deg,rgba(0,194,255,0),#14B8A6)}
+.eco-bridge-item.lite .line.r{background:linear-gradient(90deg,#14B8A6,rgba(0,194,255,0))}
+.eco-bridge-item.lite .text{color:#14B8A6}
+.eco-lower-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.eco-mini-card{display:block;padding:16px;border-radius:14px;background:rgba(10,19,45,.8);border:1px solid rgba(255,255,255,.1);transition:all .25s}
+.eco-mini-card:hover{border-color:rgba(99,140,255,.5);background:rgba(13,27,63,.95)}
+.eco-mini-card .name{font-size:22px;font-weight:700;color:#f8faff;line-height:1.2}
+.eco-mini-card .line1{margin-top:6px;font-size:16px;line-height:1.5}
+.eco-mini-card .line1.cloud{color:#3B82F6}
+.eco-mini-card .line1.lite{color:#14B8A6}
+.eco-mini-card .line1.official{color:#6366F1}
+.eco-mini-card .line2{margin-top:4px;font-size:14px;color:var(--text-sec);line-height:1.55}
+
+/* ── Responsive ── */
+@media(max-width:900px){
+  .value-grid{grid-template-columns:1fr}
+  .showcase-item,.showcase-item.reverse{grid-template-columns:1fr;gap:28px;direction:ltr}
+  .hgrid{grid-template-columns:1fr}
+  .tool-grid{grid-template-columns:repeat(2,1fr)}
+  .arch-svg-wrap svg{min-width:680px}
+  .mig-features{grid-template-columns:repeat(2,1fr)}
+  .demo-grid{grid-template-columns:1fr}
+  .eco-top-grid,.eco-upper-grid,.eco-lower-grid{grid-template-columns:1fr}
+  .eco-bridge{grid-template-columns:1fr;gap:8px}
+}
+@media(max-width:600px){
+  nav .links a:not(.btn-nav):not(.lang-switch){display:none}
+  .hero{padding:120px 0 50px}
+  .tool-grid{grid-template-columns:1fr}
+  .mig-features{grid-template-columns:1fr}
+  .eco-main-card{padding:22px}
+  .eco-platform{padding:20px}
+  .eco-platform-title{font-size:24px}
+  .eco-platform-sub{font-size:13px}
+}
+</style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+<div class="orb orb-1"></div>
+<div class="orb orb-2"></div>
+<div class="orb orb-3"></div>
+
+<nav>
+<div class="inner">
+  <a class="brand" href="./index.html"><img src="https://statics.memtensor.com.cn/logo/white-memos.svg" alt="MemOS" style="width:36px;height:36px"><span>MemOS<span class="sub lang-zh">OpenClaw / Hermes 本地插件</span><span class="sub lang-en">OpenClaw / Hermes Local Plugin</span></span></a>
+  <div class="links">
+    <a href="#why" class="lang-zh">亮点</a><a href="#why" class="lang-en">Highlights</a>
+    <a href="#features" class="lang-zh">能力</a><a href="#features" class="lang-en">Features</a>
+    <a href="#architecture" class="lang-zh">架构</a><a href="#architecture" class="lang-en">Architecture</a>
+    <a href="#quickstart" class="lang-zh">快速开始</a><a href="#quickstart" class="lang-en">Get Started</a>
+    <a href="#team-sharing" class="lang-zh">团队共享</a><a href="#team-sharing" class="lang-en">Team Sharing</a>
+    <a href="#migration" class="lang-zh">记忆迁移</a><a href="#migration" class="lang-en">Migration</a>
+    <a href="#ecoSystem" class="lang-zh">相关产品</a><a href="#ecoSystem" class="lang-en">Related</a>
+    <a href="./docs/index.html" class="btn-nav lang-zh">文档</a><a href="./docs/index.html" class="btn-nav lang-en">Docs</a>
+    <span class="lang-switch"><button type="button" class="lang-btn active" data-lang="zh">中</button><button type="button" class="lang-btn" data-lang="en">EN</button></span>
+  </div>
+</div>
+</nav>
+
+<!-- ════════ Hero ════════ -->
+<section class="hero">
+<div class="container">
+  <div class="hero-mascots" style="animation:fadeUp .7s ease .05s both">
+    <div class="hero-mascot claw-icon" style="width:100px;height:100px" title="OpenClaw">
+      <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
+        <defs><linearGradient id="hLG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs>
+        <path d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z" fill="url(#hLG)" class="claw-body"/>
+        <path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#hLG)" class="claw-left"/>
+        <path d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z" fill="url(#hLG)" class="claw-right"/>
+        <path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round" class="antenna"/>
+        <path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round" class="antenna"/>
+        <circle cx="45" cy="35" r="6" fill="#050810" class="eye"/>
+        <circle cx="75" cy="35" r="6" fill="#050810" class="eye"/>
+        <circle cx="46" cy="34" r="2" fill="#00e5cc" class="eye-glow"/>
+        <circle cx="76" cy="34" r="2" fill="#00e5cc" class="eye-glow"/>
+      </svg>
+    </div>
+    <div class="hero-mascot hermes-icon" style="width:100px;height:100px" title="Hermes">
+      <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
+        <defs>
+          <linearGradient id="hHG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#1d4ed8"/></linearGradient>
+          <linearGradient id="hHGsoft" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff" stop-opacity=".75"/><stop offset="100%" stop-color="#1d4ed8" stop-opacity=".75"/></linearGradient>
+        </defs>
+        <!-- Wings (left) -->
+        <g class="hermes-wing-left">
+          <path d="M30 54 Q12 47 4 58 Q9 62 30 60 Z" fill="url(#hHG)" opacity=".9"/>
+          <path d="M30 62 Q10 60 0 71 Q7 73 30 68 Z" fill="url(#hHGsoft)" opacity=".7"/>
+          <path d="M30 70 Q14 73 6 83 Q13 82 30 76 Z" fill="url(#hHGsoft)" opacity=".5"/>
+        </g>
+        <!-- Wings (right) -->
+        <g class="hermes-wing-right">
+          <path d="M90 54 Q108 47 116 58 Q111 62 90 60 Z" fill="url(#hHG)" opacity=".9"/>
+          <path d="M90 62 Q110 60 120 71 Q113 73 90 68 Z" fill="url(#hHGsoft)" opacity=".7"/>
+          <path d="M90 70 Q106 73 114 83 Q107 82 90 76 Z" fill="url(#hHGsoft)" opacity=".5"/>
+        </g>
+        <!-- Helmet body -->
+        <path d="M60 14C32 14 18 38 18 58C18 78 32 96 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C88 96 102 78 102 58C102 38 88 14 60 14Z" fill="url(#hHG)" class="hermes-body"/>
+        <!-- Crest / plume -->
+        <path d="M50 18 Q60 2 70 18 Q60 12 50 18 Z" fill="url(#hHG)" class="hermes-plume"/>
+        <path d="M58 8 Q60 0 62 8" stroke="#00e5ff" stroke-width="2" stroke-linecap="round" fill="none" class="hermes-plume" opacity=".75"/>
+        <!-- Eyes -->
+        <circle cx="45" cy="40" r="6" fill="#050810"/>
+        <circle cx="75" cy="40" r="6" fill="#050810"/>
+        <circle cx="46" cy="39" r="2" fill="#00e5cc" class="hermes-eye-glow"/>
+        <circle cx="76" cy="39" r="2" fill="#00e5cc" class="hermes-eye-glow"/>
+      </svg>
+    </div>
+  </div>
+  <div class="magic-badge">
+    <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--cyan);box-shadow:0 0 6px var(--cyan);animation:blink 2s infinite"></span>
+    <span class="lang-zh">OpenClaw / Hermes 本地插件 · MIT 开源</span><span class="lang-en">OpenClaw / Hermes Local Plugin · MIT</span>
+  </div>
+  <h1>
+    <span class="lang-zh">让 OpenClaw 与 Hermes<br><span class="grad">越用越聪明</span></span>
+    <span class="lang-en">Give OpenClaw and Hermes<br><span class="grad">Lasting Intelligence</span></span>
+  </h1>
+  <p class="desc">
+    <span class="lang-zh">同一套 Reflect2Evolve 核心，同时接入 OpenClaw 和 Hermes<br>本地存储  分层记忆  技能结晶  Viewer 可观测</span>
+    <span class="lang-en">One Reflect2Evolve core for both OpenClaw and Hermes.<br>Local storage, layered memory, skill crystallization, and an observable Viewer.</span>
+  </p>
+  <p class="sub-line"><span class="lang-zh">宿主适配器隔离，算法核心共享，运行时数据按 agent 分开保存</span><span class="lang-en">Isolated host adapters, shared algorithm core, per-agent runtime data</span></p>
+  <div class="ctas">
+    <a href="#quickstart" class="btn btn-glow lang-zh">立即安装 →</a><a href="#quickstart" class="btn btn-glow lang-en">Get Started →</a>
+    <a href="https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin" class="btn btn-outline" target="_blank" rel="noopener">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+      GitHub
+    </a>
+  </div>
+
+  <!-- ── Multi-Agent Hero Visual ── -->
+  <div class="hero-agents" style="max-width:780px;margin:36px auto 40px;animation:fadeUp .7s ease .4s both">
+    <svg viewBox="0 0 780 200" width="780" height="200" xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;height:auto">
+      <defs>
+        <linearGradient id="hgHub" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(0,229,255,.18)"/><stop offset="100%" stop-color="rgba(99,140,255,.18)"/></linearGradient>
+        <linearGradient id="hgCli" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(177,108,255,.14)"/><stop offset="100%" stop-color="rgba(99,140,255,.14)"/></linearGradient>
+        <linearGradient id="hgClaw" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient>
+        <linearGradient id="hgHermes" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#1d4ed8"/></linearGradient>
+      </defs>
+      <!-- Hub (center) -->
+      <rect x="280" y="10" width="220" height="80" rx="12" fill="url(#hgHub)" stroke="rgba(0,229,255,.3)" stroke-width="1.5"><animate attributeName="stroke-opacity" values=".3;.6;.3" dur="3s" repeatCount="indefinite"/></rect>
+      <path d="M306 42c-4-2-6 0-5 5s4 3 5 0c1-2 1-4 0-5z" fill="url(#hgClaw)"/><path d="M322 42c4-2 6 0 5 5s-4 3-5 0c-1-2-1-4 0-5z" fill="url(#hgClaw)"/>
+      <circle cx="314" cy="38" r="9" fill="url(#hgClaw)"/>
+      <circle cx="311" cy="36" r="1.8" fill="#050810"/><circle cx="317" cy="36" r="1.8" fill="#050810"/>
+      <circle cx="311.5" cy="35.4" r=".7" fill="#00e5cc"><animate attributeName="opacity" values="1;.3;1" dur="3s" repeatCount="indefinite"/></circle>
+      <circle cx="317.5" cy="35.4" r=".7" fill="#00e5cc"><animate attributeName="opacity" values="1;.3;1" dur="3s" repeatCount="indefinite" begin=".1s"/></circle>
+      <text x="334" y="40" font-size="13" font-weight="800" fill="#00e5ff" font-family="var(--font)">Hub</text>
+      <text x="334" y="55" font-size="9" fill="rgba(200,210,255,.5)" font-family="var(--font)"><tspan class="lang-zh">团队服务端 · 共享记忆/技能</tspan><tspan class="lang-en">Team Server · Shared Memory/Skills</tspan></text>
+      <rect x="334" y="64" width="40" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/><text x="340" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="var(--mono)">🧠 86</text>
+      <rect x="380" y="64" width="40" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/><text x="386" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="var(--mono)">📋 12</text>
+      <rect x="426" y="64" width="36" height="14" rx="4" fill="rgba(0,229,255,.1)" stroke="rgba(0,229,255,.15)" stroke-width=".5"/><text x="432" y="74" font-size="7" font-weight="600" fill="#00e5ff" font-family="var(--mono)">⚡ 5</text>
+      <!-- Client A -->
+      <rect x="20" y="120" width="200" height="70" rx="10" fill="url(#hgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+      <path d="M44 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#hgClaw)"/><path d="M56 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#hgClaw)"/>
+      <circle cx="50" cy="145" r="7" fill="url(#hgClaw)"/><circle cx="47.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="52.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="48" cy="143" r=".5" fill="#00e5cc"/><circle cx="53" cy="143" r=".5" fill="#00e5cc"/>
+      <text x="66" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="var(--font)">OpenClaw</text>
+      <text x="66" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="var(--font)"><tspan class="lang-zh">前端开发 · 234 记忆</tspan><tspan class="lang-en">Frontend · 234 Memories</tspan></text>
+      <circle cx="182" cy="142" r="4" fill="#00e676"/><text x="192" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="var(--mono)">online</text>
+      <rect x="40" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/><text x="48" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">L1/L2/L3</text>
+      <!-- Client B (Hermes) -->
+      <rect x="250" y="120" width="200" height="70" rx="10" fill="url(#hgCli)" stroke="rgba(0,229,255,.3)" stroke-width="1"/>
+      <!-- Hermes winged helmet icon -->
+      <path d="M271 145 Q263 142 260 147 Q266 149 272 147 Z" fill="url(#hgHermes)" opacity=".85"/>
+      <path d="M289 145 Q297 142 300 147 Q294 149 288 147 Z" fill="url(#hgHermes)" opacity=".85"/>
+      <path d="M280 137C275 137 272 141 272 146C272 150 275 152 278 152L278 154L280 154L280 152C281 152 282 152 282 152L282 154L284 154L284 152C287 152 288 150 288 146C288 141 285 137 280 137Z" fill="url(#hgHermes)"/>
+      <path d="M278 138 Q280 134 282 138" stroke="#00e5ff" stroke-width=".9" fill="none" opacity=".8"/>
+      <circle cx="277.5" cy="145" r="1.3" fill="#050810"/><circle cx="282.5" cy="145" r="1.3" fill="#050810"/>
+      <circle cx="278" cy="144.5" r=".55" fill="#00e5cc"><animate attributeName="opacity" values="1;.3;1" dur="3s" repeatCount="indefinite"/></circle>
+      <circle cx="283" cy="144.5" r=".55" fill="#00e5cc"><animate attributeName="opacity" values="1;.3;1" dur="3s" repeatCount="indefinite" begin=".15s"/></circle>
+      <text x="296" y="148" font-size="10" font-weight="700" fill="#00e5ff" font-family="var(--font)">Hermes</text>
+      <text x="296" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="var(--font)"><tspan class="lang-zh">后端开发 · 158 记忆</tspan><tspan class="lang-en">Backend · 158 Memories</tspan></text>
+      <circle cx="412" cy="142" r="4" fill="#00e676"/><text x="422" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="var(--mono)">online</text>
+      <rect x="270" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/><text x="278" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">JSON-RPC</text>
+      <!-- Client C -->
+      <rect x="480" y="120" width="200" height="70" rx="10" fill="url(#hgCli)" stroke="rgba(177,108,255,.25)" stroke-width="1"/>
+      <path d="M504 148c-3-1.5-5 0-4 4s3 2 4 0c.8-1.5.8-3 0-4z" fill="url(#hgClaw)"/><path d="M516 148c3-1.5 5 0 4 4s-3 2-4 0c-.8-1.5-.8-3 0-4z" fill="url(#hgClaw)"/>
+      <circle cx="510" cy="145" r="7" fill="url(#hgClaw)"/><circle cx="507.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="512.5" cy="143.5" r="1.2" fill="#050810"/><circle cx="508" cy="143" r=".5" fill="#00e5cc"/><circle cx="513" cy="143" r=".5" fill="#00e5cc"/>
+      <text x="526" y="148" font-size="10" font-weight="700" fill="#b16cff" font-family="var(--font)">Viewer</text>
+      <text x="526" y="161" font-size="8" fill="rgba(200,210,255,.4)" font-family="var(--font)"><tspan class="lang-zh">测试工程 · 89 记忆</tspan><tspan class="lang-en">QA/Testing · 89 Memories</tspan></text>
+      <circle cx="642" cy="142" r="4" fill="#00e676"/><text x="652" y="146" font-size="7" fill="rgba(0,230,118,.7)" font-family="var(--mono)">online</text>
+      <rect x="500" y="170" width="80" height="13" rx="4" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.1)" stroke-width=".5"/><text x="508" y="180" font-size="6.5" fill="rgba(0,229,255,.6)" font-family="var(--mono)">HTTP/SSE</text>
+      <!-- ...N -->
+      <rect x="710" y="130" width="56" height="50" rx="10" fill="rgba(99,140,255,.06)" stroke="rgba(99,140,255,.15)" stroke-width="1" stroke-dasharray="4 3"/>
+      <text x="738" y="153" text-anchor="middle" font-size="16" font-weight="800" fill="rgba(99,140,255,.3)" font-family="var(--font)">…N</text>
+      <text x="738" y="170" text-anchor="middle" font-size="7" fill="rgba(200,210,255,.25)" font-family="var(--font)"><tspan class="lang-zh">更多实例</tspan><tspan class="lang-en">More</tspan></text>
+      <!-- Connections -->
+      <path d="M340,90 C300,105 170,110 120,118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5"><animate attributeName="stroke-dasharray" values="0,200;200,0" dur="2s" repeatCount="indefinite"/></path>
+      <line x1="390" y1="90" x2="350" y2="118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5"><animate attributeName="stroke-dasharray" values="0,100;100,0" dur="2s" repeatCount="indefinite" begin=".3s"/></line>
+      <path d="M440,90 C480,105 530,110 580,118" fill="none" stroke="#00e5ff" stroke-width="1.2" opacity=".5"><animate attributeName="stroke-dasharray" values="0,200;200,0" dur="2s" repeatCount="indefinite" begin=".6s"/></path>
+      <path d="M490,90 C550,100 680,110 710,148" fill="none" stroke="rgba(99,140,255,.2)" stroke-width="1" stroke-dasharray="4 4" opacity=".4"/>
+      <!-- Particles up -->
+      <circle r="2" fill="#00e5ff" opacity=".6"><animateMotion dur="3s" repeatCount="indefinite" path="M120,170 C170,130 300,100 340,50"/><animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite"/></circle>
+      <circle r="2" fill="#b16cff" opacity=".6"><animateMotion dur="3s" repeatCount="indefinite" begin="1s" path="M350,170 C360,130 370,100 390,50"/><animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite" begin="1s"/></circle>
+      <circle r="2" fill="#00e5ff" opacity=".6"><animateMotion dur="3s" repeatCount="indefinite" begin="2s" path="M580,170 C530,130 480,100 440,50"/><animate attributeName="opacity" values="0;.8;0" dur="3s" repeatCount="indefinite" begin="2s"/></circle>
+      <!-- Particles down -->
+      <circle r="1.5" fill="#00e676" opacity=".5"><animateMotion dur="2.5s" repeatCount="indefinite" begin=".5s" path="M440,50 C480,100 530,130 570,170"/><animate attributeName="opacity" values="0;.7;0" dur="2.5s" repeatCount="indefinite" begin=".5s"/></circle>
+      <circle r="1.5" fill="#ffca28" opacity=".5"><animateMotion dur="2.5s" repeatCount="indefinite" begin="1.5s" path="M340,50 C300,100 170,130 120,170"/><animate attributeName="opacity" values="0;.7;0" dur="2.5s" repeatCount="indefinite" begin="1.5s"/></circle>
+    </svg>
+  </div>
+
+  <div class="hero-visual">
+    <div class="install-switcher glow-border" data-install-switcher>
+      <div class="install-switcher-header">
+        <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span>
+        <div class="install-os-switch">
+          <button type="button" class="os-btn active" data-os="unix"><span class="lang-zh">macOS/Linux</span><span class="lang-en">macOS/Linux</span></button>
+        </div>
+      </div>
+      <div class="install-switcher-body">
+        <div class="install-switcher-note"><span class="lang-zh"># macOS/Linux installer. Auto-detects OpenClaw and Hermes.</span><span class="lang-en"># macOS/Linux installer. Auto-detects OpenClaw and Hermes.</span></div>
+        <div class="install-switcher-row"><span class="prompt">$</span><span class="cmd" data-os-cmd="unix">curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash</span><button type="button" class="copy-btn install-copy-btn" data-copy-unix="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" data-copy="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Why ════════ -->
+<section class="section" id="why">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">没有记忆的 Agent，每次都<span class="hl">从零开始</span></span><span class="lang-en">Without Memory, Every Task <span class="hl">Starts from Zero</span></span></h2>
+    <p class="section-desc"><span class="lang-zh">MemOS 为 OpenClaw 与 Hermes 提供同一套本地优先的分层记忆核心。</span><span class="lang-en">MemOS gives both OpenClaw and Hermes the same local-first layered memory core.</span></p>
+  </div>
+  <div class="value-grid">
+    <div class="value-card"><div class="vc-icon">💻</div><h3><span class="lang-zh">完全本地化</span><span class="lang-en">Fully Local</span></h3><p><span class="lang-zh">记忆、技能、日志和配置都保存在本机运行时目录。</span><span class="lang-en">Memory, skills, logs, and config stay in the local runtime directory.</span></p></div>
+    <div class="value-card"><div class="vc-icon">🧠</div><h3><span class="lang-zh">全量可视化管理</span><span class="lang-en">Full Visualization</span></h3><p><span class="lang-zh">Viewer 可查看 trace、policy、world model、skill、日志与配置。</span><span class="lang-en">The Viewer exposes traces, policies, world models, skills, logs, and settings.</span></p></div>
+    <div class="value-card"><div class="vc-icon">⚡</div><h3><span class="lang-zh">策略与技能进化</span><span class="lang-en">Policy & Skill Evolution</span></h3><p><span class="lang-zh">高价值 trace 归纳成 L2 policy，成熟策略再结晶为可调用 Skill。</span><span class="lang-en">High-value traces induce L2 policies, and mature policies crystallize into callable Skills.</span></p></div>
+    <div class="value-card"><div class="vc-icon">💰</div><h3><span class="lang-zh">多模型后端</span><span class="lang-en">Multiple Model Backends</span></h3><p><span class="lang-zh">Embedding 与 LLM 可分别选择本地、OpenAI 兼容、Gemini、Anthropic、Bedrock 等提供方。</span><span class="lang-en">Embedding and LLM backends can be configured independently across local and cloud providers.</span></p></div>
+    <div class="value-card"><div class="vc-icon">🤝</div><h3><span class="lang-zh">可选团队生态</span><span class="lang-en">Optional Team Ecosystem</span></h3><p><span class="lang-zh">配置中保留 Hub 能力入口；默认关闭，不影响本地记忆主流程。</span><span class="lang-en">Hub configuration is available as an optional surface and stays out of the local memory path by default.</span></p></div>
+    <div class="value-card"><div class="vc-icon">🧬</div><h3><span class="lang-zh">宿主数据隔离</span><span class="lang-en">Per-Host Isolation</span></h3><p><span class="lang-zh">OpenClaw 与 Hermes 使用独立运行时目录和 Viewer 端口，避免数据归属混淆。</span><span class="lang-en">OpenClaw and Hermes use separate runtime homes and Viewer ports to keep ownership clear.</span></p></div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Features ════════ -->
+<section class="section" id="features">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">核心能力，驱动 Agent <span class="hl">持续进化</span></span><span class="lang-en">Core Capabilities for <span class="hl">Continuous Evolution</span></span></h2>
+  </div>
+  <div class="showcase">
+    <div class="showcase-item">
+      <div class="showcase-text">
+        <h3><span class="lang-zh">Reflect2Evolve 分层<span class="hl">记忆</span></span><span class="lang-en">Reflect2Evolve Layered <span class="hl">Memory</span></span></h3>
+        <p><span class="lang-zh">每个回合先沉淀为 L1 trace，再由反馈信号驱动 L2 policy、L3 world model 和 Skill 生成。算法核心与宿主无关，因此 OpenClaw 和 Hermes 使用同一套演化逻辑。</span><span class="lang-en">Turns become L1 traces first; feedback then drives L2 policies, L3 world models, and Skills. The algorithm core is host-agnostic, so OpenClaw and Hermes share the same evolution loop.</span></p>
+        <div><span class="stag">L1 Trace</span><span class="stag">L2 Policy</span><span class="stag">L3 World Model</span><span class="stag">Skill</span><span class="stag"><span class="lang-zh">反馈回传</span><span class="lang-en">Reward Backprop</span></span></div>
+      </div>
+      <div class="showcase-visual">
+        <div class="code-block">
+          <div class="code-header"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span><span style="flex:1"></span>Task → Skill Evolution</div>
+          <pre><span class="fn">L1 trace:</span> action + observation + reflection + value
+<span class="fn">Reward:</span> V_t = alpha_t * R + (1-alpha_t) * gamma * V_{t+1}
+
+<span class="fn">L2 policy:</span> trigger + procedure + verification + boundary
+<span class="fn">L3 world:</span> project/environment knowledge from L2 + L1
+<span class="fn">Skill:</span> invocation guide + procedureJson
+
+<span style="color:var(--green)">✓ Retrieval injects Skill → Trace/Episode → World Model</span></pre>
+        </div>
+      </div>
+    </div>
+    <div class="showcase-item">
+      <div class="showcase-text">
+        <h3><span class="lang-zh">两个宿主，<span class="hl">一个核心</span></span><span class="lang-en">Two Hosts, <span class="hl">One Core</span></span></h3>
+        <p><span class="lang-zh">OpenClaw 适配器在 TypeScript 进程内直接调用 core；Hermes 适配器通过 Python MemoryProvider 和 JSON-RPC bridge 访问同一个 core。适配器只处理宿主协议，算法、存储、检索和技能生命周期都留在共享核心里。</span><span class="lang-en">The OpenClaw adapter calls core in-process from TypeScript; the Hermes adapter reaches the same core through a Python MemoryProvider and JSON-RPC bridge. Adapters handle host protocol only; storage, retrieval, and skill lifecycle stay shared.</span></p>
+        <div><span class="stag">OpenClaw TS</span><span class="stag">Hermes Python</span><span class="stag">JSON-RPC Bridge</span></div>
+      </div>
+      <div class="showcase-visual">
+        <div class="code-block">
+          <div class="code-header"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span><span style="flex:1"></span>Host Adapters</div>
+          <pre><span class="fn">OpenClaw:</span>
+  <span class="kw">before_prompt_build</span> → core.onTurnStart()
+  <span class="kw">agent_end</span>           → core.onTurnEnd()
+
+<span class="fn">Hermes:</span>
+  <span class="kw">prefetch</span>  → JSON-RPC turn.start
+  <span class="kw">sync_turn</span> → JSON-RPC turn.end
+
+<span style="color:var(--green)">✓ Same SQLite schema and retrieval pipeline</span></pre>
+        </div>
+      </div>
+    </div>
+    <div class="showcase-item reverse">
+      <div class="showcase-text">
+        <h3><span class="lang-zh">全量记忆<span class="hl">可视化</span>管理</span><span class="lang-en">Full Memory <span class="hl">Visualization</span></span></h3>
+        <p><span class="lang-zh">内置 Web 管理面板可查看 trace、policy、world model、skill、日志、配置和导入状态。OpenClaw 默认端口 18799，Hermes 默认端口 18800。</span><span class="lang-en">The built-in dashboard shows traces, policies, world models, skills, logs, settings, and import state. OpenClaw uses port 18799; Hermes uses 18800.</span></p>
+      </div>
+      <div class="showcase-visual">
+        <div class="viewer-mock">
+          <div class="viewer-mock-bar"><div class="dots"><span style="background:#ff5f57"></span><span style="background:#ffbd2e"></span><span style="background:#28ca42"></span></div><div class="url">127.0.0.1:18799</div></div>
+          <div class="viewer-mock-body">
+            <div class="vm-nav"><span class="active">Traces</span><span>Policies</span><span>World</span><span>Skills</span><span>Logs</span><span>Settings</span></div>
+            <div class="vm-cards">
+              <div class="vm-card"><div class="vm-label"><span class="lang-zh">总记忆</span><span class="lang-en">Total</span></div><div class="vm-value">1,284</div></div>
+              <div class="vm-card"><div class="vm-label"><span class="lang-zh">今日</span><span class="lang-en">Today</span></div><div class="vm-value" style="color:var(--green)">+47</div></div>
+              <div class="vm-card"><div class="vm-label"><span class="lang-zh">任务</span><span class="lang-en">Tasks</span></div><div class="vm-value">12</div></div>
+              <div class="vm-card"><div class="vm-label"><span class="lang-zh">技能</span><span class="lang-en">Skills</span></div><div class="vm-value" style="color:var(--cyan)">8</div></div>
+            </div>
+            <div class="vm-list">
+              <div class="vm-row"><span class="vm-role vm-role-u">user</span><span class="lang-zh">帮我配置 Nginx 反向代理到 3000 端口</span><span class="lang-en">Set up Nginx proxy to port 3000</span><span class="vm-time">2m</span></div>
+              <div class="vm-row"><span class="vm-role vm-role-a">asst</span><span class="lang-zh">好的，创建 nginx 配置文件并写入 upstream 配置。</span><span class="lang-en">Creating nginx config file and writing upstream block.</span><span class="vm-time">2m</span></div>
+              <div class="vm-row"><span class="vm-role vm-role-u">user</span><span class="lang-zh">还需要加 SSL 证书</span><span class="lang-en">Also add SSL cert</span><span class="vm-time">5m</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Architecture ════════ -->
+<section class="section" id="architecture">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">从宿主事件到记忆注入的<span class="hl">共享架构</span></span><span class="lang-en">A <span class="hl">Shared Architecture</span> from Host Event to Memory Injection</span></h2>
+    <p class="section-desc"><span class="lang-zh">OpenClaw 与 Hermes 的差异只存在于 adapter 层；core、server、viewer、SQLite schema 和算法事件保持一致。</span><span class="lang-en">OpenClaw and Hermes differ only at the adapter layer; core, server, viewer, SQLite schema, and algorithm events stay shared.</span></p>
+  </div>
+  <div class="arch-container">
+    <div class="hbox">
+      <h4><span class="lang-zh">架构层次</span><span class="lang-en">Architecture Layers</span></h4>
+      <div class="hgrid">
+        <div class="hitem"><div class="hico">1</div><div><h5><span class="lang-zh">Host Adapter</span><span class="lang-en">Host Adapter</span></h5><p><span class="lang-zh">OpenClaw 使用进程内 TS 插件；Hermes 使用 Python provider + bridge。</span><span class="lang-en">OpenClaw uses an in-process TS plugin; Hermes uses a Python provider plus bridge.</span></p></div></div>
+        <div class="hitem"><div class="hico">2</div><div><h5>agent-contract</h5><p><span class="lang-zh">DTO、事件、错误码和 JSON-RPC 方法名在这里稳定下来。</span><span class="lang-en">DTOs, events, errors, and JSON-RPC method names live here.</span></p></div></div>
+        <div class="hitem"><div class="hico">3</div><div><h5>core</h5><p><span class="lang-zh">capture、reward、L1/L2/L3、skill、retrieval、storage、logger 都在共享核心里。</span><span class="lang-en">Capture, reward, L1/L2/L3, skills, retrieval, storage, and logging live in the shared core.</span></p></div></div>
+        <div class="hitem"><div class="hico">4</div><div><h5>server / viewer</h5><p><span class="lang-zh">HTTP + SSE 提供 Viewer 与调试入口，每个宿主有独立端口。</span><span class="lang-en">HTTP + SSE power the Viewer and diagnostics, with one port per host.</span></p></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Quick Start ════════ -->
+<section class="section" id="quickstart">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">60 秒<span class="hl">上手</span></span><span class="lang-en">Up and Running in <span class="hl">60 Seconds</span></span></h2>
+    <p class="section-desc"><span class="lang-zh">macOS / Linux 安装器会自动检测 OpenClaw 与 Hermes，并写入对应运行时目录。</span><span class="lang-en">The macOS/Linux installer auto-detects OpenClaw and Hermes and writes each runtime home.</span></p>
+  </div>
+  <div class="showcase">
+    <div class="showcase-item">
+      <div class="showcase-text">
+        <h3><span class="lang-zh">1. 一键安装/升级</span><span class="lang-en">1. Install</span></h3>
+        <p><span class="lang-zh">安装脚本会下载 npm 包、安装生产依赖、生成 <code>config.yaml</code>，并为 OpenClaw / Hermes 启动各自的 Viewer。<br><a href="./docs/troubleshooting.html" style="color:var(--cyan);font-size:12px">遇到安装问题？查看排查指南 →</a></span><span class="lang-en">The script downloads the npm package, installs production dependencies, writes <code>config.yaml</code>, and starts the per-host Viewer.<br><a href="./docs/troubleshooting.html" style="color:var(--cyan);font-size:12px">Install issues? See troubleshooting guide →</a></span></p>
+      </div>
+      <div class="showcase-visual">
+        <div class="install-switcher" data-install-switcher>
+          <div class="install-switcher-header">
+            <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span>
+            <div class="install-os-switch">
+              <button type="button" class="os-btn active" data-os="unix"><span class="lang-zh">macOS/Linux</span><span class="lang-en">macOS/Linux</span></button>
+            </div>
+          </div>
+          <div class="install-switcher-body">
+            <div class="install-switcher-note"><span class="lang-zh"># Step 1: 安装插件 & 启动（macOS/Linux）</span><span class="lang-en"># Step 1: Install plugin & start (macOS/Linux)</span></div>
+            <div class="install-switcher-row">
+              <span class="prompt">$</span>
+              <span class="cmd" data-os-cmd="unix">curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash</span>
+              <button type="button" class="copy-btn install-copy-btn" data-copy-unix="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" data-copy="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="showcase-item reverse">
+      <div class="showcase-text">
+        <h3><span class="lang-zh">2. 配置</span><span class="lang-en">2. Config</span></h3>
+        <p><span class="lang-zh">网页面板：OpenClaw 默认 <code>http://127.0.0.1:18799</code>，Hermes 默认 <code>http://127.0.0.1:18800</code>。运行时配置写在各自的 <code>config.yaml</code>。</span><span class="lang-en">Web panel: OpenClaw defaults to <code>http://127.0.0.1:18799</code>, Hermes to <code>http://127.0.0.1:18800</code>. Runtime config lives in each host's <code>config.yaml</code>.</span></p>
+      </div>
+      <div class="showcase-visual">
+        <div class="config-tabs">
+          <button class="config-tab active" onclick="switchConfigTab(this,'cw')"><span class="lang-zh">网页面板</span><span class="lang-en">Web Panel</span></button>
+          <button class="config-tab" onclick="switchConfigTab(this,'cf')"><span class="lang-zh">配置文件</span><span class="lang-en">Config File</span></button>
+        </div>
+        <div id="cw" class="config-pane active">
+          <div class="viewer-mock" style="border-top:none;border-radius:0 0 var(--radius) var(--radius)">
+            <div class="viewer-mock-bar"><div class="dots"><span style="background:#ff5f57"></span><span style="background:#ffbd2e"></span><span style="background:#28ca42"></span></div><div class="url">127.0.0.1:18799</div></div>
+            <div class="viewer-mock-body" style="min-height:auto;padding:14px;max-height:200px;overflow-y:auto">
+              <div class="vm-nav"><span>Traces</span><span>Policies</span><span>World</span><span>Skills</span><span>Logs</span><span class="active">Settings</span></div>
+              <div style="font-size:11px;color:var(--text-sec);line-height:1.8;font-family:var(--mono)">
+                <div style="padding:6px 10px;border-bottom:1px solid var(--border)"><span style="color:var(--text-thr)">Embedding</span></div>
+                <div style="padding:6px 10px;display:grid;grid-template-columns:80px 1fr;gap:4px 8px;font-size:10px">
+                  <span style="color:var(--text-thr)">Provider</span><span>local</span>
+                  <span style="color:var(--text-thr)">Cloud</span><span style="color:var(--text)">optional</span>
+                  <span style="color:var(--text-thr)">API Key</span><span>configured only for cloud providers</span>
+                </div>
+                <div style="padding:6px 10px;border-top:1px solid var(--border);border-bottom:1px solid var(--border)"><span style="color:var(--text-thr)">LLM</span></div>
+                <div style="padding:6px 10px;display:grid;grid-template-columns:80px 1fr;gap:4px 8px;font-size:10px">
+                  <span style="color:var(--text-thr)">OpenClaw</span><span>host</span>
+                  <span style="color:var(--text-thr)">Hermes</span><span style="color:var(--text)">openai_compatible</span>
+                  <span style="color:var(--text-thr)">API Key</span><span>required for cloud providers</span>
+                </div>
+                <div style="padding:6px 10px;border-top:1px solid var(--border);border-bottom:1px solid var(--border)"><span style="color:var(--text-thr)">Runtime</span></div>
+                <div style="padding:6px 10px;display:grid;grid-template-columns:80px 1fr;gap:4px 8px;font-size:10px">
+                  <span style="color:var(--text-thr)">OpenClaw</span><span style="color:var(--cyan)">~/.openclaw/memos-plugin</span>
+                  <span style="color:var(--text-thr)">Hermes</span><span>~/.hermes/memos-plugin</span>
+                </div>
+                <div style="padding:6px 10px;border-top:1px solid var(--border);display:grid;grid-template-columns:80px 1fr;gap:4px 8px;font-size:10px">
+                  <span style="color:var(--text-thr)">Viewer Port</span><span style="color:var(--text)">18799</span>
+                </div>
+              </div>
+              <div style="text-align:center;margin-top:10px;font-size:10px;color:var(--text-thr)"><span class="lang-zh">保存即生效</span><span class="lang-en">Save to apply</span></div>
+            </div>
+          </div>
+        </div>
+        <div id="cf" class="config-pane">
+          <div class="code-block" style="border-top:none;border-radius:0 0 var(--radius) var(--radius);max-height:260px;overflow-y:auto">
+            <pre>version: 1
+viewer:
+  port: 18799  <span class="cmt"># OpenClaw; Hermes uses 18800</span>
+embedding:
+  provider: local
+  apiKey: ""
+llm:
+  provider: host  <span class="cmt"># Hermes: openai_compatible or another real provider</span>
+  apiKey: ""
+  model: ""
+hub:
+  enabled: false
+telemetry:
+  enabled: true
+logging:
+  level: info</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Providers ════════ -->
+<section class="section">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">适配你的<span class="hl">技术栈</span></span><span class="lang-en">Works with Your <span class="hl">Preferred Stack</span></span></h2>
+    <p class="section-desc"><span class="lang-zh">Embedding 与 LLM 后端独立配置；无云端 key 时仍可使用本地 embedding 和宿主模型能力。</span><span class="lang-en">Embedding and LLM backends are configured independently; local embedding and host LLM paths remain available where supported.</span></p>
+  </div>
+  <div class="provider-grid">
+    <div class="provider">OpenAI</div><div class="provider">Anthropic</div><div class="provider">Gemini</div><div class="provider">Bedrock</div><div class="provider">Cohere</div><div class="provider">Voyage</div><div class="provider">Mistral</div><div class="provider"><span class="lang-zh">本地</span><span class="lang-en">Local</span></div>
+  </div>
+</div>
+</section>
+
+<!-- ════════ Tools ════════ -->
+<section class="section">
+<div class="container">
+  <div class="section-header"><h2><span class="lang-zh">宿主工具与<span class="hl">Viewer 能力</span></span><span class="lang-en">Host Tools and <span class="hl">Viewer Capabilities</span></span></h2></div>
+  <div class="tool-grid">
+    <div class="tool-card"><div class="ticon">🔍</div><h4>memory_search</h4><p><span class="lang-zh">三层检索</span><span class="lang-en">Three-tier search</span></p></div>
+    <div class="tool-card"><div class="ticon">📄</div><h4>memory_get</h4><p><span class="lang-zh">读取 trace / policy / world model</span><span class="lang-en">Fetch trace / policy / world model</span></p></div>
+    <div class="tool-card"><div class="ticon">📜</div><h4>memory_timeline</h4><p><span class="lang-zh">查看 episode 时间线</span><span class="lang-en">Episode timeline</span></p></div>
+    <div class="tool-card"><div class="ticon">🌎</div><h4>memory_environment</h4><p><span class="lang-zh">查询 L3 环境认知</span><span class="lang-en">Query L3 world models</span></p></div>
+    <div class="tool-card"><div class="ticon">⚡</div><h4>skill_list</h4><p><span class="lang-zh">列出候选和活跃技能</span><span class="lang-en">List candidate and active skills</span></p></div>
+    <div class="tool-card"><div class="ticon">📘</div><h4>skill_get</h4><p><span class="lang-zh">获取技能调用指南</span><span class="lang-en">Fetch invocation guide</span></p></div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Team Sharing ════════ -->
+<section class="section" id="team-sharing">
+<div class="container">
+  <div class="section-header">
+    <div class="magic-badge">
+      <span>Team</span>
+      <span class="lang-zh">团队共享中心</span><span class="lang-en">Team Sharing Hub</span>
+    </div>
+    <h2><span class="lang-zh">多实例协作 —<br>让团队的 Agent <span class="hl">共同进化</span></span><span class="lang-en">Multi-Instance Collaboration —<br>Your Team's Agents <span class="hl">Evolve Together</span></span></h2>
+    <p class="section-desc"><span class="lang-zh">OpenClaw 与 Hermes 默认各自本地隔离。显式开启 Team Sharing 后，多个实例可以通过 Hub 共享技能和可选 Trace 摘要；私有数据库、配置与日志仍留在本机。</span><span class="lang-en">OpenClaw and Hermes stay isolated by default. When Team Sharing is explicitly enabled, multiple instances can share skills and optional trace excerpts through a Hub while private DBs, config, and logs remain local.</span></p>
+  </div>
+
+  <div class="arch-container" style="margin-bottom:34px">
+    <div class="arch-svg-wrap">
+      <svg viewBox="0 0 960 460" width="960" height="460" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="teamHub" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(0,229,255,.16)"/><stop offset="100%" stop-color="rgba(99,140,255,.16)"/></linearGradient>
+          <linearGradient id="teamClient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="rgba(177,108,255,.14)"/><stop offset="100%" stop-color="rgba(99,140,255,.12)"/></linearGradient>
+          <linearGradient id="teamClaw" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient>
+          <linearGradient id="teamHermes" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#1d4ed8"/></linearGradient>
+          <marker id="teamArrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#00e5ff" opacity=".72"/></marker>
+        </defs>
+
+        <rect x="300" y="24" width="360" height="156" rx="18" fill="url(#teamHub)" stroke="rgba(0,229,255,.32)" stroke-width="1.5"/>
+        <rect x="300" y="24" width="360" height="42" rx="18" fill="rgba(0,229,255,.06)"/>
+        <rect x="300" y="48" width="360" height="18" rx="0" fill="rgba(0,229,255,.06)"/>
+        <path d="M326 48c-4-2-6 0-5 4s4 3 5 0c1-2 1-3 0-4z" fill="url(#teamClaw)"/>
+        <path d="M342 48c4-2 6 0 5 4s-4 3-5 0c-1-2-1-3 0-4z" fill="url(#teamClaw)"/>
+        <circle cx="334" cy="44" r="8" fill="url(#teamClaw)"/>
+        <circle cx="331" cy="42" r="1.5" fill="#050810"/><circle cx="337" cy="42" r="1.5" fill="#050810"/>
+        <circle cx="331.5" cy="41.5" r=".6" fill="#00e5cc"><animate attributeName="opacity" values="1;.35;1" dur="3s" repeatCount="indefinite"/></circle>
+        <circle cx="337.5" cy="41.5" r=".6" fill="#00e5cc"><animate attributeName="opacity" values="1;.35;1" dur="3s" repeatCount="indefinite" begin=".15s"/></circle>
+        <text x="356" y="51" font-size="15" font-weight="800" fill="#00e5ff">Team Hub</text>
+        <text x="332" y="88" font-size="10" fill="rgba(200,210,255,.58)"><tspan class="lang-zh">可选开启 · 局域网 / VPN 内共享</tspan><tspan class="lang-en">Optional · LAN / VPN sharing</tspan></text>
+        <rect x="332" y="104" width="92" height="24" rx="7" fill="rgba(0,229,255,.08)" stroke="rgba(0,229,255,.18)"/>
+        <text x="350" y="120" font-size="10" fill="#00e5ff">Skills</text>
+        <rect x="438" y="104" width="132" height="24" rx="7" fill="rgba(0,229,255,.08)" stroke="rgba(0,229,255,.18)"/>
+        <text x="456" y="120" font-size="10" fill="#00e5ff">Trace excerpts</text>
+        <rect x="584" y="104" width="44" height="24" rx="7" fill="rgba(0,229,255,.08)" stroke="rgba(0,229,255,.18)"/>
+        <text x="598" y="120" font-size="10" fill="#00e5ff">ACL</text>
+        <text x="332" y="152" font-size="8" fill="rgba(200,210,255,.38)" font-family="var(--mono)">hub.enabled=true · teamToken · userToken</text>
+
+        <rect x="40" y="298" width="240" height="128" rx="16" fill="url(#teamClient)" stroke="rgba(177,108,255,.24)"/>
+        <rect x="40" y="298" width="240" height="34" rx="16" fill="rgba(177,108,255,.05)"/>
+        <rect x="40" y="318" width="240" height="14" rx="0" fill="rgba(177,108,255,.05)"/>
+        <path d="M62 318c-3-1.5-5 0-4 3s3 2.5 4 0c.8-1.5.8-2.5 0-3z" fill="url(#teamClaw)"/>
+        <path d="M76 318c3-1.5 5 0 4 3s-3 2.5-4 0c-.8-1.5-.8-2.5 0-3z" fill="url(#teamClaw)"/>
+        <circle cx="69" cy="315" r="7" fill="url(#teamClaw)"/>
+        <circle cx="66.5" cy="313.5" r="1.2" fill="#050810"/><circle cx="71.5" cy="313.5" r="1.2" fill="#050810"/>
+        <circle cx="67" cy="313" r=".5" fill="#00e5cc"/><circle cx="72" cy="313" r=".5" fill="#00e5cc"/>
+        <text x="88" y="322" font-size="13" font-weight="800" fill="#b16cff">OpenClaw</text>
+        <text x="66" y="354" font-size="10" fill="rgba(200,210,255,.54)"><tspan class="lang-zh">本地 DB：~/.openclaw/memos-plugin</tspan><tspan class="lang-en">Local DB: ~/.openclaw/memos-plugin</tspan></text>
+        <rect x="66" y="374" width="78" height="18" rx="5" fill="rgba(99,140,255,.08)" stroke="rgba(99,140,255,.12)"/><text x="78" y="387" font-size="8" fill="rgba(200,210,255,.58)">private</text>
+        <rect x="154" y="374" width="84" height="18" rx="5" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.12)"/><text x="166" y="387" font-size="8" fill="#00e5ff">share skill</text>
+
+        <rect x="360" y="298" width="240" height="128" rx="16" fill="url(#teamClient)" stroke="rgba(0,229,255,.28)"/>
+        <rect x="360" y="298" width="240" height="34" rx="16" fill="rgba(0,229,255,.05)"/>
+        <rect x="360" y="318" width="240" height="14" rx="0" fill="rgba(0,229,255,.05)"/>
+        <!-- Hermes winged helmet icon -->
+        <path d="M380 315 Q372 312 369 317 Q375 319 381 317 Z" fill="url(#teamHermes)" opacity=".85"/>
+        <path d="M398 315 Q406 312 409 317 Q403 319 397 317 Z" fill="url(#teamHermes)" opacity=".85"/>
+        <path d="M389 307C384 307 381 311 381 316C381 320 384 322 387 322L387 324L389 324L389 322C390 322 391 322 391 322L391 324L393 324L393 322C396 322 397 320 397 316C397 311 394 307 389 307Z" fill="url(#teamHermes)"/>
+        <path d="M387 308 Q389 304 391 308" stroke="#00e5ff" stroke-width="1" fill="none" opacity=".8"/>
+        <circle cx="386.5" cy="315" r="1.3" fill="#050810"/><circle cx="391.5" cy="315" r="1.3" fill="#050810"/>
+        <circle cx="387" cy="314.5" r=".55" fill="#00e5cc"><animate attributeName="opacity" values="1;.35;1" dur="3s" repeatCount="indefinite"/></circle>
+        <circle cx="392" cy="314.5" r=".55" fill="#00e5cc"><animate attributeName="opacity" values="1;.35;1" dur="3s" repeatCount="indefinite" begin=".15s"/></circle>
+        <text x="408" y="322" font-size="13" font-weight="800" fill="#00e5ff">Hermes</text>
+        <text x="386" y="354" font-size="10" fill="rgba(200,210,255,.54)"><tspan class="lang-zh">本地 DB：~/.hermes/memos-plugin</tspan><tspan class="lang-en">Local DB: ~/.hermes/memos-plugin</tspan></text>
+        <rect x="386" y="374" width="78" height="18" rx="5" fill="rgba(99,140,255,.08)" stroke="rgba(99,140,255,.12)"/><text x="398" y="387" font-size="8" fill="rgba(200,210,255,.58)">private</text>
+        <rect x="474" y="374" width="84" height="18" rx="5" fill="rgba(0,229,255,.06)" stroke="rgba(0,229,255,.12)"/><text x="486" y="387" font-size="8" fill="#00e5ff">pull skill</text>
+
+        <rect x="680" y="298" width="240" height="128" rx="16" fill="url(#teamClient)" stroke="rgba(177,108,255,.24)" stroke-dasharray="5 4"/>
+        <rect x="680" y="298" width="240" height="34" rx="16" fill="rgba(177,108,255,.04)"/>
+        <rect x="680" y="318" width="240" height="14" rx="0" fill="rgba(177,108,255,.04)"/>
+        <path d="M702 318c-3-1.5-5 0-4 3s3 2.5 4 0c.8-1.5.8-2.5 0-3z" fill="url(#teamClaw)" opacity=".7"/>
+        <path d="M716 318c3-1.5 5 0 4 3s-3 2.5-4 0c-.8-1.5-.8-2.5 0-3z" fill="url(#teamClaw)" opacity=".7"/>
+        <circle cx="709" cy="315" r="7" fill="url(#teamClaw)" opacity=".7"/>
+        <circle cx="706.5" cy="313.5" r="1.2" fill="#050810"/><circle cx="711.5" cy="313.5" r="1.2" fill="#050810"/>
+        <circle cx="707" cy="313" r=".5" fill="#00e5cc"/><circle cx="712" cy="313" r=".5" fill="#00e5cc"/>
+        <text x="728" y="322" font-size="13" font-weight="800" fill="#b16cff"><tspan class="lang-zh">更多实例</tspan><tspan class="lang-en">More Agents</tspan></text>
+        <text x="706" y="354" font-size="10" fill="rgba(200,210,255,.54)"><tspan class="lang-zh">OpenClaw / Hermes 均可加入</tspan><tspan class="lang-en">OpenClaw / Hermes can join</tspan></text>
+        <rect x="706" y="374" width="90" height="18" rx="5" fill="rgba(255,202,40,.06)" stroke="rgba(255,202,40,.12)"/><text x="718" y="387" font-size="8" fill="rgba(255,202,40,.78)">token gated</text>
+
+        <path d="M380,180 C330,230 210,246 162,296" fill="none" stroke="#00e5ff" stroke-width="1.6" stroke-dasharray="6 3" marker-end="url(#teamArrow)" opacity=".56"/>
+        <path d="M480,180 C480,230 480,246 480,296" fill="none" stroke="#00e5ff" stroke-width="1.6" stroke-dasharray="6 3" marker-end="url(#teamArrow)" opacity=".56"/>
+        <path d="M580,180 C640,230 760,246 800,296" fill="none" stroke="#00e5ff" stroke-width="1.6" stroke-dasharray="6 3" marker-end="url(#teamArrow)" opacity=".42"/>
+
+        <circle r="3" fill="#00e5ff" opacity=".8"><animateMotion dur="3.2s" repeatCount="indefinite" path="M162,296 C210,246 330,230 380,180"/><animate attributeName="opacity" values="0;.9;0" dur="3.2s" repeatCount="indefinite"/></circle>
+        <circle r="3" fill="#b16cff" opacity=".8"><animateMotion dur="3.2s" repeatCount="indefinite" begin=".8s" path="M480,296 C480,246 480,230 480,180"/><animate attributeName="opacity" values="0;.9;0" dur="3.2s" repeatCount="indefinite" begin=".8s"/></circle>
+        <circle r="3" fill="#00e676" opacity=".8"><animateMotion dur="3.2s" repeatCount="indefinite" begin="1.6s" path="M580,180 C640,230 760,246 800,296"/><animate attributeName="opacity" values="0;.9;0" dur="3.2s" repeatCount="indefinite" begin="1.6s"/></circle>
+      </svg>
+    </div>
+  </div>
+
+  <div class="hbox">
+    <h4><span class="lang-zh">团队共享支持的协作方式</span><span class="lang-en">How Team Sharing Fits the Local Core</span></h4>
+    <div class="hgrid">
+      <div class="hitem"><div class="hico">1</div><div><h5><span class="lang-zh">默认隔离</span><span class="lang-en">Isolated by Default</span></h5><p><span class="lang-zh">OpenClaw 与 Hermes 的数据库、技能包和日志默认互不共享。</span><span class="lang-en">OpenClaw and Hermes keep DBs, skill bundles, and logs separate by default.</span></p></div></div>
+      <div class="hitem"><div class="hico">2</div><div><h5><span class="lang-zh">显式开启</span><span class="lang-en">Explicit Opt-In</span></h5><p><span class="lang-zh"><code>hub.enabled</code>、<code>hub.address</code> 和 token 写入 <code>config.yaml</code> 后才加入团队。</span><span class="lang-en">Instances join a team only after <code>hub.enabled</code>, <code>hub.address</code>, and tokens are configured.</span></p></div></div>
+      <div class="hitem"><div class="hico">3</div><div><h5><span class="lang-zh">技能优先共享</span><span class="lang-en">Skill-First Sharing</span></h5><p><span class="lang-zh">适合共享已结晶 Skill 和可选 Trace 摘要，而不是直接合并私有数据库。</span><span class="lang-en">Designed for sharing crystallized skills and optional trace excerpts, not merging private databases.</span></p></div></div>
+      <div class="hitem"><div class="hico">4</div><div><h5><span class="lang-zh">离线可用</span><span class="lang-en">Local When Offline</span></h5><p><span class="lang-zh">Hub 不可用时，本地记忆、检索和 Skill 生命周期仍按本机流程运行。</span><span class="lang-en">If the Hub is unavailable, local memory, retrieval, and skill lifecycle continue normally.</span></p></div></div>
+    </div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Migration ════════ -->
+<section class="section" id="migration">
+<div class="container">
+  <div class="section-header">
+    <div class="magic-badge">
+      <span>Import</span>
+      <span class="lang-zh">原生记忆导入</span><span class="lang-en">Native Memory Import</span>
+    </div>
+    <h2><span class="lang-zh">再续前缘 —<br>过往的记忆，<span class="hl">不会丢失</span></span><span class="lang-en">Reconnect —<br>Your Past Memories, <span class="hl">Never Lost</span></span></h2>
+    <p class="section-desc"><span class="lang-zh">Viewer 提供导入入口：OpenClaw 读取原生 session JSONL，Hermes 读取原生 MEMORY.md；也支持 MemOS JSON bundle 的导入导出。</span><span class="lang-en">The Viewer exposes import paths for OpenClaw native session JSONL, Hermes native MEMORY.md, and MemOS JSON bundles.</span></p>
+  </div>
+
+  <div class="mig-features">
+    <div class="mig-card">
+      <span class="mig-icon">🚀</span>
+      <h4><span class="lang-zh">按宿主导入</span><span class="lang-en">Per-Host Import</span></h4>
+      <p><span class="lang-zh">OpenClaw 与 Hermes 只扫描当前 Viewer 所属宿主的数据源。</span><span class="lang-en">OpenClaw and Hermes scan only the data source for the current Viewer host.</span></p>
+    </div>
+    <div class="mig-card">
+      <span class="mig-icon">🧬</span>
+      <h4><span class="lang-zh">Bundle 往返</span><span class="lang-en">Bundle Round-Trip</span></h4>
+      <p><span class="lang-zh">导出文件可重新导入，用于迁移设备或备份本地记忆。</span><span class="lang-en">Exported bundles can be imported again for device migration or backup.</span></p>
+    </div>
+    <div class="mig-card">
+      <span class="mig-icon">⏸️</span>
+      <h4><span class="lang-zh">批量处理</span><span class="lang-en">Batched Processing</span></h4>
+      <p><span class="lang-zh">原生导入按 offset / limit 分批执行，避免一次性处理过多历史数据。</span><span class="lang-en">Native import runs in offset / limit batches to avoid processing too much history at once.</span></p>
+    </div>
+    <div class="mig-card">
+      <span class="mig-icon">⚡</span>
+      <h4><span class="lang-zh">保守写入</span><span class="lang-en">Conservative Writes</span></h4>
+      <p><span class="lang-zh">导入入口写入 trace bundle；后续价值、策略和技能由核心算法按正常流程处理。</span><span class="lang-en">Import writes trace bundles; value, policy, and skill evolution remain handled by the core pipeline.</span></p>
+    </div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ Eco System ════════ -->
+<section class="section" id="ecoSystem">
+<div class="container">
+  <div class="section-header">
+    <h2><span class="lang-zh">相关<span class="hl">产品生态</span></span><span class="lang-en">Related Product Ecosystem</span></h2>
+    <p class="section-desc"><span class="lang-zh">从企业到个人，从云端到本地，围绕 MemOS 构建完整 AI 记忆能力栈。</span><span class="lang-en">From enterprise to personal use, from cloud to local-first deployments, MemOS anchors the full AI memory stack.</span></p>
+  </div>
+
+  <div class="eco-wrap">
+    <div class="eco-top-grid">
+      <a href="https://clawforce.memtensor.cn/#home" target="_blank" rel="noopener" class="eco-main-card">
+        <div class="eco-main-icon clawforce"><img src="https://cdn.memtensor.com.cn/img/clawforce_logo_compressed.webp" alt="ClawForce" class="icon-clawforce"></div>
+        <div class="eco-main-title">
+          <span>ClawForce</span>
+          <span class="eco-main-badge enterprise"><span class="lang-zh">企业</span><span class="lang-en">Enterprise</span></span>
+        </div>
+        <p class="eco-main-desc clawforce"><span class="lang-zh">企业级 OpenClaw 智能体平台</span><span class="lang-en">Enterprise OpenClaw agent platform</span></p>
+        <p class="eco-main-content"><span class="lang-zh">面向团队与企业落地，提供智能体编排、经验沉淀、治理和云电脑沙箱能力。</span><span class="lang-en">Built for teams and enterprise deployment, with agent orchestration, experience capture, governance, and cloud sandboxing.</span></p>
+      </a>
+
+      <a href="https://chromewebstore.google.com/detail/memos-minddock/jfijhogdailnomegmlopeijjehccfibp?hl=zh-CN&authuser=2&utm_source=ext_sidebar" target="_blank" rel="noopener" class="eco-main-card">
+        <div class="eco-main-icon minddock"><img src="https://statics.memtensor.com.cn/logo/color-m.svg" alt="MindDock" class="icon-minddock"></div>
+        <div class="eco-main-title">
+          <span>MindDock</span>
+          <span class="eco-main-badge personal"><span class="lang-zh">个人</span><span class="lang-en">Personal</span></span>
+        </div>
+        <p class="eco-main-desc minddock"><span class="lang-zh">个人记忆助手，支持长期会话记忆</span><span class="lang-en">Personal memory assistant with long-term conversation memory</span></p>
+        <p class="eco-main-content"><span class="lang-zh">跨 session 持久化记忆，让不同 AI 应用逐步理解你的偏好与上下文。</span><span class="lang-en">Cross-session persistent memory helps AI apps gradually understand your preferences and context.</span></p>
+      </a>
+    </div>
+
+    <div class="eco-mid-line">
+      <span class="line l"></span>
+      <span class="label"><span class="lang-zh">↑ 基于 MemOS 构建 ↑</span><span class="lang-en">^ Built on MemOS ^</span></span>
+      <span class="line r"></span>
+    </div>
+
+    <div class="eco-platform">
+      <img src="https://cdn.memtensor.com.cn/img/ecosystem-transparent-bg_compressed.webp" alt="" class="eco-platform-bg-image" aria-hidden="true">
+      <div class="eco-platform-head">
+        <div class="eco-platform-logo"><img src="https://cdn.memtensor.com.cn/img/memos-logo-white_compressed.webp" alt="MemOS logo"></div>
+        <div>
+          <div class="eco-platform-title">MemOS</div>
+          <div class="eco-platform-sub"><span class="lang-zh">面向 AI 应用的记忆管理操作系统</span><span class="lang-en">A memory management operating system for AI applications</span></div>
+        </div>
+      </div>
+
+      <div class="eco-upper-grid">
+        <a href="https://memos-docs.openmem.net/cn/openclaw/guide" target="_blank" rel="noopener" class="eco-sub-card">
+          <p class="name"><span class="lang-zh">OpenClaw 云插件</span><span class="lang-en">OpenClaw Cloud Plugin</span></p>
+          <p class="desc">
+            <span class="prefix"><span class="lang-zh">为 OpenClaw 注入云端持久记忆，</span><span class="lang-en">Inject cloud persistent memory into OpenClaw, </span></span>
+            <span class="highlight cloud"><span class="lang-zh">快速接入托管记忆服务</span><span class="lang-en">quickly connect managed memory</span></span>
+          </p>
+        </a>
+        <a href="https://memos-docs.openmem.net/cn/openclaw/local_plugin" target="_blank" rel="noopener" class="eco-sub-card eco-card-border">
+          <p class="name"><span class="lang-zh">OpenClaw / Hermes 本地插件</span><span class="lang-en">OpenClaw / Hermes Local Plugin</span></p>
+          <p class="desc">
+            <span class="prefix"><span class="lang-zh">共享 Reflect2Evolve 核心，</span><span class="lang-en">Shared Reflect2Evolve core, </span></span>
+            <span class="highlight local"><span class="lang-zh">完全本地 · 双宿主适配</span><span class="lang-en">fully local · two host adapters</span></span>
+          </p>
+        </a>
+      </div>
+
+      <div class="eco-bridge">
+        <div class="eco-bridge-item cloud">
+          <span class="line l"></span>
+          <span class="text"><span class="lang-zh">↑ 基于 MemOS Cloud ↑</span><span class="lang-en">^ Built on MemOS Cloud ^</span></span>
+          <span class="line r"></span>
+        </div>
+        <div class="eco-bridge-item lite">
+          <span class="line l"></span>
+          <span class="text"><span class="lang-zh">↑ 基于 MemOS Lite ↑</span><span class="lang-en">^ Built on MemOS Lite ^</span></span>
+          <span class="line r"></span>
+        </div>
+      </div>
+
+      <div class="eco-lower-grid">
+        <a href="https://memos.openmem.net/cn/" target="_blank" rel="noopener" class="eco-mini-card">
+          <p class="name">MemOS Cloud</p>
+          <p class="line1 cloud"><span class="lang-zh">开箱即用的云端记忆服务</span><span class="lang-en">Ready-to-use cloud memory service</span></p>
+          <p class="line2"><span class="lang-zh">适合快速接入、托管运行和跨应用记忆能力。</span><span class="lang-en">Useful for quick integration, managed runtime, and cross-app memory.</span></p>
+        </a>
+        <a href="https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin" target="_blank" rel="noopener" class="eco-mini-card eco-card-border">
+          <p class="name">MemOS Lite</p>
+          <p class="line1 lite"><span class="lang-zh">专为本地场景的轻量记忆服务</span><span class="lang-en">Lightweight memory service for local-first scenarios</span></p>
+          <p class="line2"><span class="lang-zh">零云依赖，本地全量运行，面向 Agent 工作流。</span><span class="lang-en">Zero cloud dependency, fully local runtime, built for agent workflows.</span></p>
+        </a>
+        <a href="https://github.com/MemTensor/MemOS" target="_blank" rel="noopener" class="eco-mini-card">
+          <p class="name"><span class="lang-zh">MemOS 正式版开源</span><span class="lang-en">MemOS Open Source</span></p>
+          <p class="line1 official"><span class="lang-zh">记忆管理 API 与基础设施</span><span class="lang-en">Memory APIs and infrastructure</span></p>
+          <p class="line2"><span class="lang-zh">支持深度定制、二次开发和更完整的记忆系统构建。</span><span class="lang-en">Supports deeper customization, secondary development, and full memory-system construction.</span></p>
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<div class="glow-line"></div>
+
+<!-- ════════ CTA ════════ -->
+<section class="cta-section">
+<div class="container">
+  <div class="hero-mascots cta-mascots" style="margin:0 auto 24px">
+    <div class="claw-icon" style="width:64px;height:64px" title="OpenClaw">
+      <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
+        <defs><linearGradient id="cLG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs>
+        <path d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z" fill="url(#cLG)" class="claw-body"/>
+        <path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#cLG)" class="claw-left"/>
+        <path d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z" fill="url(#cLG)" class="claw-right"/>
+        <path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round" class="antenna"/>
+        <path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round" class="antenna"/>
+        <circle cx="45" cy="35" r="6" fill="#050810" class="eye"/>
+        <circle cx="75" cy="35" r="6" fill="#050810" class="eye"/>
+        <circle cx="46" cy="34" r="2" fill="#00e5cc" class="eye-glow"/>
+        <circle cx="76" cy="34" r="2" fill="#00e5cc" class="eye-glow"/>
+      </svg>
+    </div>
+    <div class="hermes-icon" style="width:64px;height:64px" title="Hermes">
+      <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
+        <defs>
+          <linearGradient id="cHG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#1d4ed8"/></linearGradient>
+          <linearGradient id="cHGsoft" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff" stop-opacity=".75"/><stop offset="100%" stop-color="#1d4ed8" stop-opacity=".75"/></linearGradient>
+        </defs>
+        <g class="hermes-wing-left">
+          <path d="M30 54 Q12 47 4 58 Q9 62 30 60 Z" fill="url(#cHG)" opacity=".9"/>
+          <path d="M30 62 Q10 60 0 71 Q7 73 30 68 Z" fill="url(#cHGsoft)" opacity=".7"/>
+          <path d="M30 70 Q14 73 6 83 Q13 82 30 76 Z" fill="url(#cHGsoft)" opacity=".5"/>
+        </g>
+        <g class="hermes-wing-right">
+          <path d="M90 54 Q108 47 116 58 Q111 62 90 60 Z" fill="url(#cHG)" opacity=".9"/>
+          <path d="M90 62 Q110 60 120 71 Q113 73 90 68 Z" fill="url(#cHGsoft)" opacity=".7"/>
+          <path d="M90 70 Q106 73 114 83 Q107 82 90 76 Z" fill="url(#cHGsoft)" opacity=".5"/>
+        </g>
+        <path d="M60 14C32 14 18 38 18 58C18 78 32 96 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C88 96 102 78 102 58C102 38 88 14 60 14Z" fill="url(#cHG)" class="hermes-body"/>
+        <path d="M50 18 Q60 2 70 18 Q60 12 50 18 Z" fill="url(#cHG)" class="hermes-plume"/>
+        <path d="M58 8 Q60 0 62 8" stroke="#00e5ff" stroke-width="2" stroke-linecap="round" fill="none" class="hermes-plume" opacity=".75"/>
+        <circle cx="45" cy="40" r="6" fill="#050810"/>
+        <circle cx="75" cy="40" r="6" fill="#050810"/>
+        <circle cx="46" cy="39" r="2" fill="#00e5cc" class="hermes-eye-glow"/>
+        <circle cx="76" cy="39" r="2" fill="#00e5cc" class="hermes-eye-glow"/>
+      </svg>
+    </div>
+  </div>
+  <h2><span class="lang-zh">让 OpenClaw 与 Hermes<br><span class="hl">共享进化记忆</span></span><span class="lang-en">Give OpenClaw and Hermes<br><span class="hl">Shared Evolving Memory</span></span></h2>
+  <p class="desc"><span class="lang-zh">本地优先 · 分层记忆 · 策略归纳 · 技能结晶 · Viewer 可观测 · 宿主数据隔离</span><span class="lang-en">Local-first · Layered memory · Policy induction · Skill crystallization · Observable Viewer · Per-host isolation</span></p>
+  <div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;position:relative">
+    <a href="#quickstart" class="btn btn-glow"><span class="lang-zh">立即安装 →</span><span class="lang-en">Get Started →</span></a>
+    <a href="./docs/index.html" class="btn btn-outline"><span class="lang-zh">查看文档</span><span class="lang-en">Docs</span></a>
+  </div>
+</div>
+</section>
+
+<footer>
+<div class="container">
+  <div class="inner">
+    <div class="brand"><img src="https://statics.memtensor.com.cn/logo/white-memos.svg" alt="MemOS" style="width:28px;height:28px"> MemOS</div>
+    <div class="links"><a href="./docs/index.html">Docs</a><a href="https://www.npmjs.com/package/@memtensor/memos-local-plugin" target="_blank">npm</a><a href="https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin" target="_blank">GitHub</a><a href="https://github.com/MemTensor/MemOS/blob/main/LICENSE" target="_blank">MIT</a></div>
+  </div>
+  <div class="copy">© 2026 MemTensor. MemOS Local Plugin.</div>
+</div>
+</footer>
+
+<script>
+(function(){
+  var key='memos-site-lang',lang=(typeof localStorage!=='undefined'&&localStorage.getItem(key))||'zh';
+  document.body.classList.add('lang-'+lang);
+  document.querySelectorAll('.lang-btn').forEach(function(btn){
+    btn.classList.toggle('active',btn.getAttribute('data-lang')===lang);
+    btn.addEventListener('click',function(){
+      var L=this.getAttribute('data-lang');document.body.classList.remove('lang-zh','lang-en');document.body.classList.add('lang-'+L);
+      try{localStorage.setItem(key,L);}catch(e){}
+      document.querySelectorAll('.lang-btn').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-lang')===L);});
+    });
+  });
+})();
+function switchConfigTab(btn,id){
+  document.querySelectorAll('.config-tab').forEach(function(t){t.classList.remove('active')});
+  document.querySelectorAll('.config-pane').forEach(function(p){p.classList.remove('active')});
+  btn.classList.add('active');document.getElementById(id).classList.add('active');
+}
+function switchOsTab(btn,group,os){
+  var parent=btn.parentElement;
+  parent.querySelectorAll('.os-tab').forEach(function(t){t.classList.remove('active')});
+  btn.classList.add('active');
+  var container=parent.closest('.terminal,.code-block');
+  container.querySelectorAll('.os-pane').forEach(function(p){p.classList.remove('active')});
+  var pane=document.getElementById(group+'-'+os);
+  if(pane)pane.classList.add('active');
+}
+(function(){
+  function copyText(text){
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function(resolve,reject){
+      var ta=document.createElement('textarea');
+      ta.value=text;
+      ta.setAttribute('readonly','');
+      ta.style.position='fixed';
+      ta.style.opacity='0';
+      document.body.appendChild(ta);
+      ta.select();
+      try{
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        resolve();
+      }catch(err){
+        document.body.removeChild(ta);
+        reject(err);
+      }
+    });
+  }
+  document.querySelectorAll('.copy-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var text=this.getAttribute('data-copy')||'';
+      var self=this;
+      self.classList.add('copied');
+      if(self._copiedTimer){clearTimeout(self._copiedTimer);}
+      self._copiedTimer=setTimeout(function(){self.classList.remove('copied');},1200);
+      copyText(text).catch(function(){});
+    });
+  });
+})();
+(function(){
+  document.querySelectorAll('[data-install-switcher]').forEach(function(sw){
+    var buttons=sw.querySelectorAll('.os-btn');
+    var commands=sw.querySelectorAll('[data-os-cmd]');
+    var copyBtn=sw.querySelector('.install-copy-btn');
+    function setOs(os){
+      buttons.forEach(function(btn){btn.classList.toggle('active',btn.getAttribute('data-os')===os);});
+      commands.forEach(function(cmd){cmd.style.display=cmd.getAttribute('data-os-cmd')===os?'':'none';});
+      if(copyBtn){
+        copyBtn.setAttribute('data-copy',copyBtn.getAttribute('data-copy-unix')||'');
+      }
+    }
+    buttons.forEach(function(btn){btn.addEventListener('click',function(){setOs(btn.getAttribute('data-os'));});});
+    setOs('unix');
+  });
+})();
+</script>
+<style>@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}</style>
+<script>
+(function(){
+  var obs=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.style.opacity='1';e.target.style.transform='translateY(0)';}});},{threshold:0.08,rootMargin:'0px 0px -40px 0px'});
+  document.querySelectorAll('.value-card,.provider,.showcase-item,.tool-card,.hitem,.mig-card,.demo-card').forEach(function(el){
+    el.style.opacity='0';el.style.transform='translateY(24px)';el.style.transition='opacity .6s ease,transform .6s ease';obs.observe(el);
+  });
+})();
+</script>
+</body>
+</html>

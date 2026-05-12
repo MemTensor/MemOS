@@ -48,6 +48,8 @@ import type { CoreEvent } from "../../agent-contract/events.js";
 import type { LogRecord } from "../../agent-contract/log-record.js";
 import type {
   CoreHealth,
+  EmbeddingMaintenanceRunResult,
+  EmbeddingMaintenanceStats,
   MemoryCore,
   Unsubscribe,
 } from "../../agent-contract/memory-core.js";
@@ -94,6 +96,7 @@ import {
   normalizeNamespace,
   ownerFromNamespace,
   isVisibleTo,
+  visibilityWhere,
 } from "../runtime/namespace.js";
 import type { RetrievalConfig } from "../retrieval/types.js";
 import type { UserFeedback } from "../reward/types.js";
@@ -136,6 +139,10 @@ export interface BootstrapResult {
   core: MemoryCore;
   home: ResolvedHome;
   config: ResolvedConfig;
+}
+
+function initialEmbeddingDimensions(provider: string): number {
+  return provider === "local" ? 384 : 0;
 }
 
 /**
@@ -278,6 +285,7 @@ export async function bootstrapMemoryCoreFull(
   try {
     embedder = createEmbedder({
       ...(config.embedding as object),
+      dimensions: initialEmbeddingDimensions(config.embedding.provider),
       onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
         recordSystemError("embedding", d),
       onStatus: (d: {
@@ -1338,6 +1346,16 @@ export function createMemoryCore(
       };
     } catch (err) {
       ok = false;
+      // Surface terminal failures as a `plugin_error` ARMS event so
+      // the dashboards can see retrieval availability per build.
+      // Stable error code (preferred) or `unknown` — never the raw
+      // message, which can carry user/workspace text.
+      if (telemetry) {
+        telemetry.trackError(
+          "turn_start",
+          err instanceof MemosError ? err.code : "unknown",
+        );
+      }
       throw err;
     } finally {
       // Log every retrieval — not just adhoc `searchMemory` calls —
@@ -2038,6 +2056,12 @@ export function createMemoryCore(
       };
     } catch (err) {
       ok = false;
+      if (telemetry) {
+        telemetry.trackError(
+          "memory_search",
+          err instanceof MemosError ? err.code : "unknown",
+        );
+      }
       throw err;
     } finally {
       try {
@@ -2628,16 +2652,20 @@ export function createMemoryCore(
   }): Promise<number> {
     ensureLive();
     const needle = (input?.q ?? "").trim().toLowerCase();
-    const visible = (r: TraceRow) => visibleToCurrent(r);
+    const vis = visibilityWhere(activeNamespace);
+
     if (!needle) {
-      const rows = handle.repos.traces.list({ sessionId: input?.sessionId, limit: 100_000 }).filter(visible);
-      if (!input?.groupByTurn) return rows.length;
-      const turnKeys = new Set<string>();
-      for (const r of rows) turnKeys.add(`${r.episodeId ?? "_"}:${r.turnId}`);
-      return turnKeys.size;
+      if (input?.groupByTurn) {
+        return handle.repos.traces.countTurns(
+          { sessionId: input?.sessionId },
+          vis,
+        );
+      }
+      return handle.repos.traces.count({ sessionId: input?.sessionId });
     }
     // q substring scan — mirror `listTraces`. Walk all matching
     // traces from the repo (no limit) and apply the same filter.
+    const visible = (r: TraceRow) => visibleToCurrent(r);
     const rows = handle.repos.traces.list({ sessionId: input?.sessionId }).filter(visible);
     const matched = rows.filter((r) => {
       return traceSearchHaystack(r).includes(needle);
@@ -2663,12 +2691,12 @@ export function createMemoryCore(
     if (input?.groupByTurn) {
       // Group-by-turn: paginate at the (episodeId, turnId) level so each
       // "memory" on the Memories page corresponds to one user turn.
+      const vis = visibilityWhere(activeNamespace);
       if (!needle) {
-        const turnKeys = handle.repos.traces.listTurnKeys({
-          sessionId: input?.sessionId,
-          limit,
-          offset,
-        });
+        const turnKeys = handle.repos.traces.listTurnKeys(
+          { sessionId: input?.sessionId, limit, offset },
+          vis,
+        );
         const rows = handle.repos.traces.listByTurnKeys(turnKeys);
         const visibleRows = rows.filter((r) => visibleToCurrent(r));
         // The frontend's `buildGroups` preserves first-encounter order
@@ -3025,7 +3053,11 @@ export function createMemoryCore(
     // the Overview "memories" metric matches what the Memories page
     // shows: 1 user turn = 1 memory (regardless of how many tool calls
     // / sub-steps were captured for that turn).
-    const totalTurns = handle.repos.traces.countTurns();
+    // Apply namespace visibility so the count matches the filtered list.
+    const totalTurns = handle.repos.traces.countTurns(
+      {},
+      visibilityWhere(activeNamespace),
+    );
 
     return {
       total: totalTurns,
@@ -3158,8 +3190,9 @@ export function createMemoryCore(
         const existing = handle.repos.traces.getById(dto.id);
         if (existing) { skipped++; continue; }
         // The trace table requires a fuller row shape than TraceDTO.
-        // We reconstitute a stub row — vectors are dropped on purpose
-        // because we have no way to re-embed bundled text here.
+        // We reconstitute a stub row. Vectors start null here; the
+        // embedding maintenance endpoint can backfill them with the
+        // currently configured embedding model after import.
         handle.repos.traces.insert({
           id: dto.id,
           episodeId: dto.episodeId,
@@ -3282,6 +3315,312 @@ export function createMemoryCore(
     }
 
     return { imported, skipped };
+  }
+
+  async function embeddingMaintenanceStats(): Promise<EmbeddingMaintenanceStats> {
+    ensureLive();
+    await ensureEmbeddingDimensionKnown();
+    return computeEmbeddingMaintenanceStats();
+  }
+
+  async function rebuildEmbeddings(input: {
+    mode?: "repair" | "rebuild";
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<EmbeddingMaintenanceRunResult> {
+    ensureLive();
+    const mode = input.mode === "rebuild" ? "rebuild" : "repair";
+    const limit = clampEmbeddingBatchLimit(input.limit);
+    const offset = Math.max(0, Math.floor(Number(input.offset ?? 0)) || 0);
+    await ensureEmbeddingDimensionKnown();
+    const statsBefore = computeEmbeddingMaintenanceStats();
+    if (!handle.embedder) {
+      return {
+        mode,
+        processed: 0,
+        updated: 0,
+        failed: 0,
+        offset,
+        nextOffset: offset,
+        done: true,
+        statsBefore,
+        statsAfter: statsBefore,
+        error: "embedding provider is not configured",
+      };
+    }
+
+    const allSlots = collectEmbeddingSlots();
+    const targetSlots = mode === "rebuild"
+      ? allSlots
+      : allSlots.filter((slot) => slotNeedsRepair(slot, handle.embedder!.dimensions));
+    const batch = mode === "rebuild"
+      ? targetSlots.slice(offset, offset + limit)
+      : targetSlots.slice(0, limit);
+
+    let updated = 0;
+    let failed = 0;
+    let error: string | undefined;
+    if (batch.length > 0) {
+      try {
+        const vecs = await handle.embedder.embedMany(
+          batch.map((slot) => ({ text: slot.sourceText || "(empty)", role: "document" as const })),
+        );
+        for (let i = 0; i < batch.length; i++) {
+          const slot = batch[i]!;
+          const vec = vecs[i];
+          if (!vec) {
+            failed++;
+            continue;
+          }
+          try {
+            if (slot.update(vec)) updated++;
+            else failed++;
+          } catch {
+            failed++;
+          }
+        }
+      } catch (err) {
+        failed = batch.length;
+        error = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    const statsAfter = computeEmbeddingMaintenanceStats();
+    const nextOffset = mode === "rebuild" ? offset + batch.length : 0;
+    const done = mode === "rebuild"
+      ? nextOffset >= targetSlots.length || batch.length === 0
+      : statsAfter.needsRepair === 0 || batch.length === 0;
+    return {
+      mode,
+      processed: batch.length,
+      updated,
+      failed,
+      offset,
+      nextOffset,
+      done,
+      statsBefore,
+      statsAfter,
+      error,
+    };
+  }
+
+  type EmbeddingSlotKind = "trace" | "policy" | "world_model" | "skill";
+  type EmbeddingSlot = {
+    kind: EmbeddingSlotKind;
+    id: string;
+    field: "vec_summary" | "vec_action" | "vec";
+    vec: Float32Array | null;
+    sourceText: string;
+    update: (vec: Float32Array) => boolean;
+  };
+
+  function computeEmbeddingMaintenanceStats(): EmbeddingMaintenanceStats {
+    const configuredDimension = handle.embedder?.dimensions ?? 0;
+    const allSlots = collectEmbeddingSlots();
+    const dimension = configuredDimension > 0 ? configuredDimension : inferStoredEmbeddingDimension(allSlots);
+    const byKind = emptyEmbeddingStatsByKind();
+    for (const slot of allSlots) {
+      const bucket = byKind[slot.kind];
+      bucket.totalSlots++;
+      if (!slot.vec) {
+        bucket.missing++;
+      } else if (dimension > 0 && slot.vec.length !== dimension) {
+        bucket.dimMismatch++;
+      } else {
+        bucket.ready++;
+      }
+    }
+    for (const bucket of Object.values(byKind)) {
+      bucket.needsRepair = bucket.missing + bucket.dimMismatch;
+    }
+    const totalSlots = sumEmbeddingStats(byKind, "totalSlots");
+    const ready = sumEmbeddingStats(byKind, "ready");
+    const missing = sumEmbeddingStats(byKind, "missing");
+    const dimMismatch = sumEmbeddingStats(byKind, "dimMismatch");
+    return {
+      dimension,
+      available: Boolean(handle.embedder),
+      totalSlots,
+      ready,
+      missing,
+      dimMismatch,
+      needsRepair: missing + dimMismatch,
+      byKind,
+    };
+  }
+
+  async function ensureEmbeddingDimensionKnown(): Promise<void> {
+    if (!handle.embedder || handle.embedder.dimensions > 0) return;
+    try {
+      await handle.embedder.embedOne({
+        text: "MemOS embedding dimension probe",
+        role: "document",
+      });
+    } catch (err) {
+      log.warn("embedding.dimension_probe_failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  function inferStoredEmbeddingDimension(slots: readonly EmbeddingSlot[]): number {
+    const counts = new Map<number, number>();
+    for (const slot of slots) {
+      if (!slot.vec) continue;
+      counts.set(slot.vec.length, (counts.get(slot.vec.length) ?? 0) + 1);
+    }
+    let bestDim = 0;
+    let bestCount = 0;
+    for (const [dim, count] of counts) {
+      if (count > bestCount) {
+        bestDim = dim;
+        bestCount = count;
+      }
+    }
+    return bestDim;
+  }
+
+  function collectEmbeddingSlots(): EmbeddingSlot[] {
+    const slots: EmbeddingSlot[] = [];
+    const pageSize = 500;
+    for (let offset = 0;; offset += pageSize) {
+      const rows = handle.repos.traces.list({ limit: pageSize, offset, newestFirst: false });
+      for (const row of rows) {
+        slots.push({
+          kind: "trace",
+          id: row.id,
+          field: "vec_summary",
+          vec: row.vecSummary,
+          sourceText: row.summary?.trim() || row.userText.trim() || "(empty)",
+          update: (vec) => handle.repos.traces.updateVector(row.id, "vecSummary", vec),
+        });
+        slots.push({
+          kind: "trace",
+          id: row.id,
+          field: "vec_action",
+          vec: row.vecAction,
+          sourceText: traceActionEmbeddingText(row),
+          update: (vec) => handle.repos.traces.updateVector(row.id, "vecAction", vec),
+        });
+      }
+      if (rows.length < pageSize) break;
+    }
+
+    for (let offset = 0;; offset += pageSize) {
+      const rows = handle.repos.policies.list({ limit: pageSize, offset, newestFirst: false });
+      for (const row of rows) {
+        slots.push({
+          kind: "policy",
+          id: row.id,
+          field: "vec",
+          vec: row.vec,
+          sourceText: policyEmbeddingText(row),
+          update: (vec) => handle.repos.policies.updateVector(row.id, vec),
+        });
+      }
+      if (rows.length < pageSize) break;
+    }
+
+    for (let offset = 0;; offset += pageSize) {
+      const rows = handle.repos.worldModel.list({ limit: pageSize, offset, newestFirst: false });
+      for (const row of rows) {
+        slots.push({
+          kind: "world_model",
+          id: row.id,
+          field: "vec",
+          vec: row.vec,
+          sourceText: worldModelEmbeddingText(row),
+          update: (vec) => handle.repos.worldModel.updateVector(row.id, vec),
+        });
+      }
+      if (rows.length < pageSize) break;
+    }
+
+    for (let offset = 0;; offset += pageSize) {
+      const rows = handle.repos.skills.list({ limit: pageSize, offset, newestFirst: false });
+      for (const row of rows) {
+        slots.push({
+          kind: "skill",
+          id: row.id,
+          field: "vec",
+          vec: row.vec,
+          sourceText: skillEmbeddingText(row),
+          update: (vec) => handle.repos.skills.updateVector(row.id, vec),
+        });
+      }
+      if (rows.length < pageSize) break;
+    }
+    return slots.sort((a, b) =>
+      `${a.kind}:${a.id}:${a.field}`.localeCompare(`${b.kind}:${b.id}:${b.field}`),
+    );
+  }
+
+  function slotNeedsRepair(slot: EmbeddingSlot, dimension: number): boolean {
+    return !slot.vec || (dimension > 0 && slot.vec.length !== dimension);
+  }
+
+  function emptyEmbeddingStatsByKind(): EmbeddingMaintenanceStats["byKind"] {
+    const empty = () => ({
+      totalSlots: 0,
+      ready: 0,
+      missing: 0,
+      dimMismatch: 0,
+      needsRepair: 0,
+    });
+    return {
+      trace: empty(),
+      policy: empty(),
+      world_model: empty(),
+      skill: empty(),
+    };
+  }
+
+  function sumEmbeddingStats(
+    byKind: EmbeddingMaintenanceStats["byKind"],
+    key: "totalSlots" | "ready" | "missing" | "dimMismatch" | "needsRepair",
+  ): number {
+    return Object.values(byKind).reduce((sum, bucket) => sum + bucket[key], 0);
+  }
+
+  function clampEmbeddingBatchLimit(value: unknown): number {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return 100;
+    return Math.max(1, Math.min(500, Math.floor(n)));
+  }
+
+  function traceActionEmbeddingText(row: TraceRow): string {
+    const toolSig = row.toolCalls
+      .map((tool) => `${tool.name}(${safeJsonForEmbedding(tool.input).slice(0, 300)})`)
+      .join("; ");
+    return [row.agentText.trim(), toolSig].filter(Boolean).join("\n---\n") || "(empty)";
+  }
+
+  function policyEmbeddingText(row: PolicyRow): string {
+    return [
+      row.title,
+      row.trigger,
+      row.procedure,
+      row.verification,
+      row.boundary,
+    ].filter(Boolean).join("\n") || "(empty)";
+  }
+
+  function worldModelEmbeddingText(row: WorldModelRow): string {
+    return [row.title.trim(), row.body.trim()].filter(Boolean).join("\n\n") || "(empty)";
+  }
+
+  function skillEmbeddingText(row: SkillRow): string {
+    return [row.name.trim(), row.invocationGuide.trim()].filter(Boolean).join("\n\n") || "(empty)";
+  }
+
+  function safeJsonForEmbedding(value: unknown): string {
+    if (value === undefined || value === null) return "";
+    if (typeof value === "string") return value;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
   }
 
   async function getConfig(): Promise<Record<string, unknown>> {
@@ -3482,6 +3821,8 @@ export function createMemoryCore(
     metrics,
     exportBundle,
     importBundle,
+    embeddingMaintenanceStats,
+    rebuildEmbeddings,
     subscribeEvents,
     getRecentEvents,
     subscribeLogs,
@@ -3534,6 +3875,10 @@ function maskSecrets(src: Record<string, unknown>): Record<string, unknown> {
  */
 function stripEmptySecrets(patch: Record<string, unknown>): Record<string, unknown> {
   const out = JSON.parse(JSON.stringify(patch)) as Record<string, unknown>;
+  const embedding = out.embedding;
+  if (embedding && typeof embedding === "object") {
+    delete (embedding as Record<string, unknown>).dimensions;
+  }
   for (const dotted of SECRET_FIELD_PATHS) {
     const keys = dotted.split(".");
     let cursor: Record<string, unknown> | undefined = out;

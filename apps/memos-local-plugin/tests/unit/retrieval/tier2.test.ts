@@ -138,7 +138,8 @@ describe("retrieval/tier2 (with real sqlite)", () => {
     );
     if (out.traces.length >= 2) {
       expect(out.episodes.length).toBeGreaterThanOrEqual(1);
-      expect(out.episodes[0]!.summary).toContain("episode");
+      expect(out.episodes[0]!.summary).toContain("Past similar episode");
+      expect(out.episodes[0]!.summary).not.toMatch(/best V|goal-sim|V=/);
     }
   });
 });

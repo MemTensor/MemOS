@@ -38,7 +38,6 @@ const EmbeddingSchema = Type.Object({
   ], { default: "local" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault("Xenova/all-MiniLM-L6-v2"),
-  dimensions: NumberInRange(384, 1, 8192),
   apiKey: StringWithDefault(""),
   cache: Type.Object({
     enabled: Bool(true),

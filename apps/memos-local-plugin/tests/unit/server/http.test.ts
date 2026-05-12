@@ -149,6 +149,60 @@ function stubCore(): MemoryCore {
       skills: [],
     })),
     importBundle: vi.fn(async () => ({ imported: 0, skipped: 0 })),
+    embeddingMaintenanceStats: vi.fn(async () => ({
+      dimension: 8,
+      available: true,
+      totalSlots: 2,
+      ready: 1,
+      missing: 1,
+      dimMismatch: 0,
+      needsRepair: 1,
+      byKind: {
+        trace: { totalSlots: 2, ready: 1, missing: 1, dimMismatch: 0, needsRepair: 1 },
+        policy: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+        world_model: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+        skill: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+      },
+    })),
+    rebuildEmbeddings: vi.fn(async () => ({
+      mode: "repair",
+      processed: 1,
+      updated: 1,
+      failed: 0,
+      offset: 0,
+      nextOffset: 0,
+      done: true,
+      statsBefore: {
+        dimension: 8,
+        available: true,
+        totalSlots: 2,
+        ready: 1,
+        missing: 1,
+        dimMismatch: 0,
+        needsRepair: 1,
+        byKind: {
+          trace: { totalSlots: 2, ready: 1, missing: 1, dimMismatch: 0, needsRepair: 1 },
+          policy: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          world_model: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          skill: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+        },
+      },
+      statsAfter: {
+        dimension: 8,
+        available: true,
+        totalSlots: 2,
+        ready: 2,
+        missing: 0,
+        dimMismatch: 0,
+        needsRepair: 0,
+        byKind: {
+          trace: { totalSlots: 2, ready: 2, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          policy: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          world_model: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          skill: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+        },
+      },
+    })),
     subscribeEvents: vi.fn(() => () => {}),
     subscribeLogs: vi.fn(() => () => {}),
     forwardLog: vi.fn(),
@@ -431,6 +485,32 @@ describe("HTTP server — REST routes", () => {
     expect(body.imported).toBe(0);
   });
 
+  it("GET /api/v1/embeddings/maintenance returns vector health", async () => {
+    const r = await fetch(`${handle.url}/api/v1/embeddings/maintenance`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { totalSlots: number; needsRepair: number };
+    expect(body.totalSlots).toBe(2);
+    expect(body.needsRepair).toBe(1);
+    expect(core.embeddingMaintenanceStats).toHaveBeenCalled();
+  });
+
+  it("POST /api/v1/embeddings/rebuild runs a maintenance batch", async () => {
+    const r = await fetch(`${handle.url}/api/v1/embeddings/rebuild`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "rebuild", offset: 10, limit: 25 }),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { updated: number; done: boolean };
+    expect(body.updated).toBe(1);
+    expect(body.done).toBe(true);
+    expect(core.rebuildEmbeddings).toHaveBeenCalledWith({
+      mode: "rebuild",
+      offset: 10,
+      limit: 25,
+    });
+  });
+
   it("imports Hermes native MEMORY.md in batches", async () => {
     const oldHome = process.env.HOME;
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "memos-hermes-native-"));
@@ -614,7 +694,7 @@ describe("HTTP server — REST routes", () => {
   // ─── Connectivity smoke tests ─────────────────────────────────────────
   // These pin the contract between the viewer's REST client and the
   // server. Every endpoint the viewer touches (see
-  // `web/src/**/*.tsx::api.get/post/patch`) is exercised here.
+  // `viewer/src/**/*.tsx::api.get/post/patch`) is exercised here.
 
   it("GET /api/v1/overview returns the summary shape the viewer expects", async () => {
     const r = await fetch(`${handle.url}/api/v1/overview`);
@@ -942,6 +1022,58 @@ describe("HTTP server — REST routes", () => {
   it("wrong method returns 405 json", async () => {
     const r = await fetch(`${handle.url}/api/v1/ping`, { method: "DELETE" });
     expect(r.status).toBe(405);
+  });
+
+  // ─── Telemetry side-channel ────────────────────────────────────
+  // Replaces the previous "first GET /overview wins" trigger with
+  // a dedicated SPA-mount endpoint. See `server/routes/telemetry.ts`
+  // and `viewer/src/components/App.tsx` for the wiring rationale.
+
+  it("POST /api/v1/telemetry/viewer-opened invokes telemetry.trackViewerOpened", async () => {
+    const trackViewerOpened = vi.fn();
+    const local = await startHttpServer(
+      { core, telemetry: { trackViewerOpened } },
+      { port: 0 },
+    );
+    try {
+      const r = await fetch(`${local.url}/api/v1/telemetry/viewer-opened`, {
+        method: "POST",
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { ok: boolean };
+      expect(body.ok).toBe(true);
+      expect(trackViewerOpened).toHaveBeenCalledTimes(1);
+    } finally {
+      await local.close();
+    }
+  });
+
+  it("POST /api/v1/telemetry/viewer-opened still returns 200 when telemetry is unbound", async () => {
+    // No telemetry on `deps` — endpoint must remain a no-op success
+    // so the SPA's fire-and-forget call never surfaces an error.
+    const r = await fetch(`${handle.url}/api/v1/telemetry/viewer-opened`, {
+      method: "POST",
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+  });
+
+  it("GET /api/v1/overview no longer triggers viewer_opened (regressed to manual ping)", async () => {
+    const trackViewerOpened = vi.fn();
+    const local = await startHttpServer(
+      { core, telemetry: { trackViewerOpened } },
+      { port: 0 },
+    );
+    try {
+      // Two GETs (the viewer used to poll this) — neither should
+      // count as a viewer-mount event under the new scheme.
+      await fetch(`${local.url}/api/v1/overview`);
+      await fetch(`${local.url}/api/v1/overview`);
+      expect(trackViewerOpened).not.toHaveBeenCalled();
+    } finally {
+      await local.close();
+    }
   });
 });
 

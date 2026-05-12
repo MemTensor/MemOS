@@ -101,7 +101,7 @@ Tier 2 returns single-trace hits *and* episode-level summaries:
 
 1. Bucket the candidate traces by `episode_id`.
 2. For any bucket with ≥ 2 traces, emit an `EpisodeCandidate`:
-   - `summary` = "episode N steps · best V=x\n· reflection: …\n· user: …"
+   - `summary` = "Past similar episode\nstep 1\n  summary/user/agent/reflection: …"
    - `maxValue` = max of member traces
    - `meanPriority` = mean of member priorities
 3. Sort episode rollups by `(maxValue, cosine)` desc, keep top `tier2TopK`.

@@ -151,26 +151,41 @@ export function heuristicScore(feedback: readonly UserFeedback[]): HumanScore {
       model: null,
     };
   }
-  const explicit = feedback.find((f) => f.channel === "explicit") ?? feedback[0]!;
+  const explicit = feedback.filter((f) => f.channel === "explicit");
+  const scored = explicit.length > 0 ? explicit : [feedback[0]!];
   // polarity → user_satisfaction mapping; we don't try to score goal/process
-  // without an LLM (would require understanding the task).
-  const sat = mapPolarity(explicit.polarity, explicit.magnitude);
+  // without an LLM (would require understanding the task). Multiple explicit
+  // corrections are aggregated so a later thumbs-down can counter earlier praise.
+  const sat = aggregatePolarity(scored);
   const rHuman = clamp(sat, -1, 1);
+  const source = explicit.length > 0 ? "explicit" : "heuristic";
   return {
     rHuman,
     axes: { goalAchievement: 0, processQuality: 0, userSatisfaction: sat },
-    reason: `heuristic polarity=${explicit.polarity} magnitude=${explicit.magnitude.toFixed(2)}`,
-    source: explicit.channel === "explicit" ? "explicit" : "heuristic",
+    reason: `heuristic ${source} feedback_count=${scored.length}`,
+    source,
     model: null,
   };
 }
 
-function mapPolarity(polarity: UserFeedback["polarity"], magnitude: number): number {
-  const base =
-    polarity === "positive" ? 0.7 : polarity === "negative" ? -0.7 : polarity === "neutral" ? 0 : 0;
-  // magnitude ∈ [0, 1]; we treat 1 as "strongly held" and scale from ±0.3 → ±1.
-  const scale = 0.3 + 0.7 * clamp(magnitude, 0, 1);
-  return clamp(base * scale * (1 / 0.7), -1, 1);
+function aggregatePolarity(feedback: readonly UserFeedback[]): number {
+  let sum = 0;
+  let weight = 0;
+  for (const f of feedback) {
+    if (f.polarity === "neutral") continue;
+    const magnitude = clamp(f.magnitude, 0, 1);
+    if (magnitude === 0) continue;
+    sum += signedMagnitude(f.polarity, magnitude);
+    weight += magnitude;
+  }
+  if (weight === 0) return 0;
+  return clamp(sum / weight, -1, 1);
+}
+
+function signedMagnitude(polarity: UserFeedback["polarity"], magnitude: number): number {
+  if (polarity === "positive") return magnitude;
+  if (polarity === "negative") return -magnitude;
+  return 0;
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────

@@ -83,7 +83,7 @@ There is no "choose an agent" landing page — :18799 is openclaw,
 ### Header switcher (the only cross-port surface)
 
 The viewer SPA also probes the peer's well-known port once on load
-(`web/src/stores/peers.ts`) and surfaces a small pill in the top bar
+(`viewer/src/stores/peers.ts`) and surfaces a small pill in the top bar
 linking to it (when reachable). That's the only piece of cross-port
 discovery in the whole system, and it's a single-shot `fetch` against
 `http://127.0.0.1:<peer port>/api/v1/health`.

@@ -33,7 +33,7 @@ function buildDeps(h: TmpDbHandle): PipelineDeps {
     repos: h.repos,
     llm: null,
     reflectLlm: null,
-    embedder: fakeEmbedder({ dimensions: DEFAULT_CONFIG.embedding.dimensions }),
+    embedder: fakeEmbedder({ dimensions: 384 }),
     log: rootLogger.child({ channel: "test.pipeline" }),
     namespace: { agentKind: "openclaw", profileId: "main" },
     now: () => 1_700_000_000_000,

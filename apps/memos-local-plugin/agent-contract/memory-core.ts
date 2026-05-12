@@ -116,6 +116,43 @@ export interface ModelHealth {
   lastError: { at: number; message: string } | null;
 }
 
+// ─── Embedding maintenance ───────────────────────────────────────────────────
+
+export type EmbeddingMaintenanceMode = "repair" | "rebuild";
+
+export interface EmbeddingMaintenanceStats {
+  dimension: number;
+  available: boolean;
+  totalSlots: number;
+  ready: number;
+  missing: number;
+  dimMismatch: number;
+  needsRepair: number;
+  byKind: Record<
+    "trace" | "policy" | "world_model" | "skill",
+    {
+      totalSlots: number;
+      ready: number;
+      missing: number;
+      dimMismatch: number;
+      needsRepair: number;
+    }
+  >;
+}
+
+export interface EmbeddingMaintenanceRunResult {
+  mode: EmbeddingMaintenanceMode;
+  processed: number;
+  updated: number;
+  failed: number;
+  offset: number;
+  nextOffset: number;
+  done: boolean;
+  statsBefore: EmbeddingMaintenanceStats;
+  statsAfter: EmbeddingMaintenanceStats;
+  error?: string;
+}
+
 // ─── Subscriptions ────────────────────────────────────────────────────────────
 
 export type Unsubscribe = () => void;
@@ -478,6 +515,14 @@ export interface MemoryCore {
     worldModels?: unknown[];
     skills?: unknown[];
   }): Promise<{ imported: number; skipped: number }>;
+
+  // ── embedding maintenance ──
+  embeddingMaintenanceStats(): Promise<EmbeddingMaintenanceStats>;
+  rebuildEmbeddings(input?: {
+    mode?: EmbeddingMaintenanceMode;
+    limit?: number;
+    offset?: number;
+  }): Promise<EmbeddingMaintenanceRunResult>;
 
   // ── observability ──
   /** Subscribe to every CoreEvent the algorithm emits. Returns unsubscribe. */

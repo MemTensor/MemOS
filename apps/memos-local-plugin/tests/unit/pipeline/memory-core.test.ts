@@ -28,6 +28,7 @@ import type { MemosError } from "../../../agent-contract/errors.js";
 let db: TmpDbHandle | null = null;
 let pipeline: PipelineHandle | null = null;
 let core: MemoryCore | null = null;
+const TEST_EMBED_DIMENSIONS = 384;
 
 function buildDeps(h: TmpDbHandle): PipelineDeps {
   return {
@@ -38,7 +39,7 @@ function buildDeps(h: TmpDbHandle): PipelineDeps {
     repos: h.repos,
     llm: null,
     reflectLlm: null,
-    embedder: fakeEmbedder({ dimensions: DEFAULT_CONFIG.embedding.dimensions }),
+    embedder: fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS }),
     log: rootLogger.child({ channel: "test.memory-core" }),
     namespace: { agentKind: "openclaw", profileId: "main" },
     now: () => 1_700_000_000_000,
@@ -94,7 +95,7 @@ describe("MemoryCore façade", () => {
     expect(h.agent).toBe("openclaw");
     expect(h.paths.db.endsWith(".db") || h.paths.db.length > 0).toBe(true);
     expect(h.embedder.available).toBe(true);
-    expect(h.embedder.dim).toBe(DEFAULT_CONFIG.embedding.dimensions);
+    expect(h.embedder.dim).toBe(TEST_EMBED_DIMENSIONS);
     expect(h.llm.available).toBe(false);
   });
 
@@ -109,6 +110,59 @@ describe("MemoryCore façade", () => {
     const sid = await core.openSession({ agent: "openclaw" });
     expect(sid).toBeTruthy();
     await core.closeSession(sid);
+  });
+
+  it("repairs missing and wrong-dimension imported trace embeddings", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    await core.importBundle({
+      version: 1,
+      traces: [
+        {
+          id: "tr_imported",
+          episodeId: "ep_imported",
+          sessionId: "se_imported",
+          ts: 1_700_000_000_000,
+          userText: "imported memory text",
+          agentText: "assistant answer",
+          summary: "imported memory summary",
+          toolCalls: [],
+          value: 0,
+          alpha: 0,
+          priority: 0,
+          turnId: 1_700_000_000_000,
+        },
+      ],
+    });
+
+    const before = await core.embeddingMaintenanceStats();
+    expect(before.byKind.trace.missing).toBe(2);
+
+    const repaired = await core.rebuildEmbeddings({ mode: "repair", limit: 10 });
+    expect(repaired.updated).toBe(2);
+    expect(repaired.statsAfter.needsRepair).toBe(0);
+    let row = db!.repos.traces.getById("tr_imported" as never);
+    expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
+    expect(row?.vecAction?.length).toBe(TEST_EMBED_DIMENSIONS);
+
+    db!.repos.traces.updateVector(
+      "tr_imported" as never,
+      "vecSummary",
+      new Float32Array([1]),
+    );
+    const mismatch = await core.embeddingMaintenanceStats();
+    expect(mismatch.dimMismatch).toBe(1);
+
+    const fixed = await core.rebuildEmbeddings({ mode: "repair", limit: 10 });
+    expect(fixed.statsAfter.dimMismatch).toBe(0);
+    row = db!.repos.traces.getById("tr_imported" as never);
+    expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
   });
 
   it("onTurnStart returns a RetrievalResultDTO with tier latencies", async () => {
@@ -572,7 +626,7 @@ describe("MemoryCore façade", () => {
     const scored = db!.repos.traces.getById(end.traceId as never)!;
     expect(scored.value).toBeCloseTo(1 / 3);
     expect(scored.rHuman).toBeCloseTo(1 / 3);
-    expect(scored.priority).toBe(1);
+    expect(scored.priority).toBeCloseTo(1 / 3);
   });
 
   it("submitFeedback rejects unknown trace ids before SQLite FK failure", async () => {

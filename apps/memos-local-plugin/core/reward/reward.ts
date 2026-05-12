@@ -234,6 +234,7 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
         deps.tracesRepo.updateScore(u.traceId, {
           value: u.value,
           alpha: u.alpha,
+          rHuman: humanScore.rHuman,
           priority: u.priority,
         });
       }

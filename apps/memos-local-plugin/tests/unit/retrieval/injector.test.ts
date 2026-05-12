@@ -209,6 +209,30 @@ describe("retrieval/injector", () => {
     expect(packet.rendered).not.toContain('refId="sA"');
   });
 
+  it("strips episode retrieval metrics from prompt-facing memory text", () => {
+    const noisyEpisode = episode("e_noisy");
+    noisyEpisode.summary = [
+      "episode 3 steps · best V=0.82 · goal-sim=0.64",
+      "step 1 (V=0.12)",
+      "  user: install failed",
+      "step 2 (V=0.82)",
+      "  summary: install libpq-dev before retrying pip",
+    ].join("\n");
+
+    const { packet } = toPacket({
+      ranked: [rc(noisyEpisode)],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_episode_metrics" as never,
+      episodeId: "ep_episode_metrics" as never,
+    });
+
+    expect(packet.rendered).toContain("Past similar episode");
+    expect(packet.rendered).toContain("install libpq-dev");
+    expect(packet.rendered).not.toMatch(/best V|goal-sim|V=/);
+  });
+
   it("default skill rendering is summary mode (descriptor + skill_get hint, no full guide)", () => {
     // Multi-section guide: blank-line-separated paragraphs. Summary
     // mode must keep only the first paragraph and drop the procedure.
