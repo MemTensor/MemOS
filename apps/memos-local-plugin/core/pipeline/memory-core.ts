@@ -1345,6 +1345,16 @@ export function createMemoryCore(
       };
     } catch (err) {
       ok = false;
+      // Surface terminal failures as a `plugin_error` ARMS event so
+      // the dashboards can see retrieval availability per build.
+      // Stable error code (preferred) or `unknown` — never the raw
+      // message, which can carry user/workspace text.
+      if (telemetry) {
+        telemetry.trackError(
+          "turn_start",
+          err instanceof MemosError ? err.code : "unknown",
+        );
+      }
       throw err;
     } finally {
       // Log every retrieval — not just adhoc `searchMemory` calls —
@@ -2045,6 +2055,12 @@ export function createMemoryCore(
       };
     } catch (err) {
       ok = false;
+      if (telemetry) {
+        telemetry.trackError(
+          "memory_search",
+          err instanceof MemosError ? err.code : "unknown",
+        );
+      }
       throw err;
     } finally {
       try {
