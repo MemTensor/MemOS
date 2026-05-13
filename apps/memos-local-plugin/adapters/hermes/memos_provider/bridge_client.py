@@ -144,6 +144,11 @@ class MemosBridgeClient:
         )
         self._stderr_reader.start()
 
+    @property
+    def pid(self) -> int:
+        """Return the PID of the bridge subprocess."""
+        return self._proc.pid
+
     # ─── Public API ──
 
     def request(
@@ -222,14 +227,34 @@ class MemosBridgeClient:
         if self._closed:
             return
         self._closed = True
+
+        pid = self._proc.pid
+
+        # 1. Close stdin (triggers bridge's graceful exit)
         with contextlib.suppress(Exception):
             self._proc.stdin.close()
-        # DON'T wait() or kill() the bridge process. If it has an
-        # active viewer (HTTP server), it will stay alive as a daemon
-        # so the memory panel remains accessible between `hermes chat`
-        # sessions. If it's headless (viewer port was taken), it will
-        # notice stdin EOF and exit on its own.
-        # unblock any pending waiters
+
+        # 2. Wait for process to exit gracefully (up to 5 seconds)
+        try:
+            self._proc.wait(timeout=5.0)
+            logger.debug("MemOS: bridge process %d exited gracefully", pid)
+        except subprocess.TimeoutExpired:
+            # 3. If still running, send SIGTERM
+            logger.warning("MemOS: bridge process %d did not exit after stdin close, sending SIGTERM", pid)
+            try:
+                self._proc.terminate()  # Send SIGTERM
+                self._proc.wait(timeout=5.0)  # Increased from 2.0 to 5.0 for viewer cleanup
+                logger.debug("MemOS: bridge process %d terminated", pid)
+            except subprocess.TimeoutExpired:
+                # 4. Last resort: SIGKILL
+                logger.error("MemOS: bridge process %d did not respond to SIGTERM, sending SIGKILL", pid)
+                self._proc.kill()  # Send SIGKILL
+                try:
+                    self._proc.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    logger.error("MemOS: bridge process %d could not be killed", pid)
+
+        # 5. Clean up pending requests
         with self._lock:
             for entry in list(self._pending.values()):
                 entry["error"] = {
