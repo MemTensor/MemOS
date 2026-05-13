@@ -81,9 +81,13 @@ table{width:100%;border-collapse:collapse;margin:16px 0 24px;border:1px solid va
     </div>
     <section id="quickstart">
       <h2><span class="lang-zh">快速开始</span><span class="lang-en">Quick Start</span></h2>
-      <p><span class="lang-zh">安装器支持 macOS / Linux，会自动检查 Node.js 20+、下载 npm 包、重建原生依赖、写入 <code>config.yaml</code>，并按需启动宿主运行时。</span><span class="lang-en">The installer supports macOS/Linux. It checks Node.js 20+, downloads the npm package, rebuilds native dependencies, writes <code>config.yaml</code>, and starts the host runtime when needed.</span></p>
+      <p><span class="lang-zh">安装器支持 macOS / Linux / Windows，会自动检查 Node.js 20+、下载 npm 包、重建原生依赖、写入 <code>config.yaml</code>，并按需启动宿主运行时。</span><span class="lang-en">The installer supports macOS/Linux/Windows. It checks Node.js 20+, downloads the npm package, rebuilds native dependencies, writes <code>config.yaml</code>, and starts the host runtime when needed.</span></p>
+      <p><strong><span class="lang-zh">macOS / Linux：</span><span class="lang-en">macOS / Linux:</span></strong></p>
       <pre><code><span class="c"># Latest from the repository</span>
 curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash</code></pre>
+      <p><strong><span class="lang-zh">Windows (PowerShell)：</span><span class="lang-en">Windows (PowerShell):</span></strong></p>
+      <pre><code><span class="c"># Latest from the repository</span>
+irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 | iex</code></pre>
       <p><span class="lang-zh">从源码目录安装或测试指定版本：</span><span class="lang-en">Install from a source checkout or test a specific version:</span></p>
       <pre><code>cd apps/memos-local-plugin
 bash install.sh --version 2.0.0-beta.11
