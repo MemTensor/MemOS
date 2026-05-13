@@ -2959,17 +2959,35 @@ export function createMemoryCore(
   ): Promise<SkillDTO | null> {
     ensureLive();
     if (opts?.namespace) activeNamespace = opts.namespace;
-    const row = handle.repos.skills.getById(id);
+    const row = resolveSkillRowForGet(id, opts);
     if (!row || (!opts?.includeAllNamespaces && !visibleToCurrent(row))) return null;
     if (opts?.recordUse) {
-      handle.repos.skills.recordUse(id, Date.now());
+      handle.repos.skills.recordUse(row.id, Date.now());
       if (opts.recordTrial) {
-        recordSkillTrial(id, opts);
+        recordSkillTrial(row.id, opts);
       }
-      const updated = handle.repos.skills.getById(id);
+      const updated = handle.repos.skills.getById(row.id);
       return updated ? skillRowToDTO(updated) : skillRowToDTO(row);
     }
     return skillRowToDTO(row);
+  }
+
+  function resolveSkillRowForGet(
+    id: SkillId,
+    opts?: { includeAllNamespaces?: boolean },
+  ) {
+    const exact = handle.repos.skills.getById(id);
+    if (exact) return exact;
+
+    const rawId = String(id);
+    const shortId = rawId.includes(":") ? rawId.slice(rawId.lastIndexOf(":") + 1) : rawId;
+    const candidates = handle.repos.skills.list({ limit: 5_000 }).filter((row) => {
+      if (!opts?.includeAllNamespaces && !visibleToCurrent(row)) return false;
+      if (row.name === rawId || row.name === shortId) return true;
+      if (rawId.includes(":")) return row.id === shortId;
+      return row.id.endsWith(`:${rawId}`);
+    });
+    return candidates.length === 1 ? candidates[0]! : null;
   }
 
   function recordSkillTrial(
