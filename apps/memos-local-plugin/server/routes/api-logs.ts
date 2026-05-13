@@ -1,11 +1,11 @@
 /**
  * `GET /api/v1/api-logs` — paged listing of the structured `api_logs`
  * table (defined in the squashed initial schema). Fuels the viewer's
- * Logs page which renders rich per-tool templates for `memory_search`
+ * Logs page which renders rich per-tool templates for `memos_search`
  * and `memory_add`.
  *
  * Query parameters:
- *   - `tool`    optional tool-name filter (e.g. `memory_search`)
+ *   - `tool`    optional tool-name filter (e.g. `memos_search`)
  *   - `tools`   optional comma-separated tool-name filter
  *   - `limit`   default 50, capped server-side at 500
  *   - `offset`  default 0
@@ -57,7 +57,7 @@ export function registerApiLogsRoutes(routes: Routes, deps: ServerDeps): void {
     // API simple. Any tool name not in this list still appears if the
     // user passes it via `?tool=` explicitly.
     const tools = [
-      "memory_search",
+      "memos_search",
       "memory_add",
       "skill_generate",
       "skill_evolve",

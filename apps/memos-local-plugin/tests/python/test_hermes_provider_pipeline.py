@@ -217,7 +217,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
             provider.on_turn_start(10, review_prompt)
             self.assertEqual(provider.prefetch(review_prompt), "")
             provider._on_post_tool_call(
-                tool_name="memory_search",
+                tool_name="memos_search",
                 args={"query": "conversation"},
                 result="[]",
                 tool_call_id="tool-1",

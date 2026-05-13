@@ -47,7 +47,7 @@ describe("storage/end-to-end", () => {
           ts: 101,
           userText: "list skills",
           agentText: "done",
-          toolCalls: [{ name: "memory_search", input: {}, startedAt: 101, endedAt: 102 }],
+          toolCalls: [{ name: "memos_search", input: {}, startedAt: 101, endedAt: 102 }],
           reflection: "quick",
           value: 0.2,
           alpha: 0.5,

@@ -669,7 +669,7 @@ function stripOpenClawMemoryInjection(text: string): string {
     "",
   );
   cleaned = cleaned.replace(
-    /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memory_search[^\n]*)*/gi,
+    /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memos_search[^\n]*)*/gi,
     "",
   );
   return cleaned.trim();

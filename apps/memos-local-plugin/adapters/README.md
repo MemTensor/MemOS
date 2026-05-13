@@ -26,7 +26,7 @@ adapters/
 │   ├── README.md
 │   ├── openclaw-api.ts       # locally re-declared OpenClaw SDK types
 │   ├── bridge.ts             # OpenClaw events ↔ MemoryCore DTOs
-│   ├── tools.ts              # memory_search, memory_get, … tool registrations
+│   ├── tools.ts              # memos_search, memos_get, … tool registrations
 │   └── index.ts              # register(api) — plugin entry point
 └── hermes/                   # hermes-agent plugin (Python, out-of-process)
     ├── README.md

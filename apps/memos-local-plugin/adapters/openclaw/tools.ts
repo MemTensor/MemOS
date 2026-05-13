@@ -176,10 +176,10 @@ async function resolveCore(opts: ToolsOptions): Promise<MemoryCore> {
 export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions): void {
   const bodyCap = opts.maxBodyChars ?? DEFAULT_BODY_CAP;
 
-  // ── memory_search ──
+  // ── memos_search ──
   api.registerTool(
     (ctx: OpenClawPluginToolContext): AgentToolDescriptor<typeof MemorySearchParams> => ({
-      name: "memory_search",
+      name: "memos_search",
       label: "Memory Search",
       description:
         "Search the local MemOS memory (traces + policies + world models + skills). " +
@@ -213,13 +213,13 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         return textToolResult(details, formatHitList(details.hits));
       },
     }),
-    { name: "memory_search" },
+    { name: "memos_search" },
   );
 
-  // ── memory_get ──
+  // ── memos_get ──
   api.registerTool(
     (ctx: OpenClawPluginToolContext): AgentToolDescriptor<typeof MemoryGetParams> => ({
-      name: "memory_get",
+      name: "memos_get",
       label: "Memory Get",
       description:
         'Fetch the full body of a memory item by id. `kind` can be "trace" (default), ' +
@@ -291,13 +291,13 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         return textToolResult(details, `${wm.title}\n\n${details.body}`.trim());
       },
     }),
-    { name: "memory_get" },
+    { name: "memos_get" },
   );
 
-  // ── memory_timeline ──
+  // ── memos_timeline ──
   api.registerTool(
     (ctx: OpenClawPluginToolContext): AgentToolDescriptor<typeof MemoryTimelineParams> => ({
-      name: "memory_timeline",
+      name: "memos_timeline",
       label: "Memory Timeline",
       description:
         "Return the ordered traces inside a single episode. Useful for reconstructing " +
@@ -327,13 +327,13 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         return textToolResult(details, text);
       },
     }),
-    { name: "memory_timeline" },
+    { name: "memos_timeline" },
   );
 
-  // ── skill_list ──
+  // ── memos_skill_list ──
   api.registerTool(
     (ctx: OpenClawPluginToolContext): AgentToolDescriptor<typeof SkillListParams> => ({
-      name: "skill_list",
+      name: "memos_skill_list",
       label: "Skill List",
       description:
         "List callable skills the agent can invoke. Filter by status (candidate | active | archived).",
@@ -363,10 +363,10 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         return textToolResult(details, text);
       },
     }),
-    { name: "skill_list" },
+    { name: "memos_skill_list" },
   );
 
-  // ── memory_environment ──
+  // ── memos_environment ──
   //
   // Dedicated Tier-3 lookup. The turn-start injector already folds
   // environment knowledge into `prependContext`, but during a long
@@ -377,7 +377,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
   // knowledge on demand.
   api.registerTool(
     (ctx: OpenClawPluginToolContext): AgentToolDescriptor<typeof EnvironmentQueryParams> => ({
-      name: "memory_environment",
+      name: "memos_environment",
       label: "Environment Knowledge",
       description:
         "Return the agent's accumulated environment knowledge (L3 world models) — " +
@@ -437,13 +437,13 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         return textToolResult(details, text);
       },
     }),
-    { name: "memory_environment" },
+    { name: "memos_environment" },
   );
 
-  // ── skill_get ──
+  // ── memos_skill_get ──
   api.registerTool(
     (ctx: OpenClawPluginToolContext): AgentToolDescriptor<typeof SkillGetParams> => ({
-      name: "skill_get",
+      name: "memos_skill_get",
       label: "Skill Get",
       description: "Return the full invocation guide for a crystallized skill.",
       parameters: SkillGetParams,
@@ -481,7 +481,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
         return textToolResult(details, `${skill.name}\n\n${skill.invocationGuide}`.trim());
       },
     }),
-    { name: "skill_get" },
+    { name: "memos_skill_get" },
   );
 }
 
@@ -506,10 +506,10 @@ function topKParams(
 
 /** Exposed for tests + documentation. */
 export const TOOL_SCHEMAS = {
-  memory_search: MemorySearchParams,
-  memory_get: MemoryGetParams,
-  memory_timeline: MemoryTimelineParams,
-  memory_environment: EnvironmentQueryParams,
-  skill_list: SkillListParams,
-  skill_get: SkillGetParams,
+  memos_search: MemorySearchParams,
+  memos_get: MemoryGetParams,
+  memos_timeline: MemoryTimelineParams,
+  memos_environment: EnvironmentQueryParams,
+  memos_skill_list: SkillListParams,
+  memos_skill_get: SkillGetParams,
 } as const;

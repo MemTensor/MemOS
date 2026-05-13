@@ -775,7 +775,7 @@ describe("renderContextBlock", () => {
       tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
     });
     expect(block).toContain("<memos_context>");
-    expect(block).toContain("memory_search");
+    expect(block).toContain("memos_search");
     expect(block).toContain("</memos_context>");
   });
 });
@@ -1509,12 +1509,12 @@ describe("registerOpenClawTools", () => {
     });
     const names = tools.map((t) => t.descriptor.name).sort();
     expect(names).toEqual([
-      "memory_environment",
-      "memory_get",
-      "memory_search",
-      "memory_timeline",
-      "skill_get",
-      "skill_list",
+      "memos_environment",
+      "memos_get",
+      "memos_search",
+      "memos_skill_get",
+      "memos_skill_list",
+      "memos_timeline",
     ]);
     for (const t of tools) {
       expect(typeof t.descriptor.execute).toBe("function");
@@ -1522,7 +1522,7 @@ describe("registerOpenClawTools", () => {
     }
   });
 
-  it("memory_search executes against the core and returns well-formed hits", async () => {
+  it("memos_search executes against the core and returns well-formed hits", async () => {
     const mc = buildCore();
     await mc.init();
 
@@ -1532,7 +1532,7 @@ describe("registerOpenClawTools", () => {
       core: mc,
       log: silentLogger(),
     });
-    const search = tools.find((t) => t.descriptor.name === "memory_search")!;
+    const search = tools.find((t) => t.descriptor.name === "memos_search")!;
     const res = (await search.descriptor.execute("toolCall_1", {
       query: "anything",
       maxResults: 5,
@@ -1552,7 +1552,7 @@ describe("registerOpenClawTools", () => {
     expect(res.details.hits).toBe(res.hits);
   });
 
-  it("memory_search maps per-tier topK params and keeps maxResults fallback", async () => {
+  it("memos_search maps per-tier topK params and keeps maxResults fallback", async () => {
     const searchMemory = vi.fn(async () => ({
       hits: [],
       injectedContext: "",
@@ -1566,7 +1566,7 @@ describe("registerOpenClawTools", () => {
       core: mc,
       log: silentLogger(),
     });
-    const search = tools.find((t) => t.descriptor.name === "memory_search")!;
+    const search = tools.find((t) => t.descriptor.name === "memos_search")!;
 
     await search.descriptor.execute("toolCall_1", {
       query: "anything",
@@ -1608,10 +1608,10 @@ describe("registerOpenClawTools", () => {
       log: silentLogger(),
     });
 
-    expect(tools.map((t) => t.descriptor.name)).toContain("memory_search");
+    expect(tools.map((t) => t.descriptor.name)).toContain("memos_search");
     expect(requestedCore).toBe(false);
 
-    const search = tools.find((t) => t.descriptor.name === "memory_search")!;
+    const search = tools.find((t) => t.descriptor.name === "memos_search")!;
     await search.descriptor.execute("toolCall_1", {
       query: "anything",
       maxResults: 5,

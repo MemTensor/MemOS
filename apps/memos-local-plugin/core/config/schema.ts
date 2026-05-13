@@ -384,8 +384,8 @@ const AlgorithmSchema = Type.Object({
     /**
      * How Tier-1 skills are surfaced in the injected prompt:
      *   - "summary" (default): inject only `name + η + 1-line summary +
-     *     a `skill_get(id="…")` hint`. The agent decides whether to
-     *     fetch the full procedure via the `skill_get` tool. Keeps the
+     *     a `memos_skill_get(id="…")` hint`. The agent decides whether to
+     *     fetch the full procedure via the `memos_skill_get` tool. Keeps the
      *     prompt small and avoids paying for skills the agent never
      *     uses.
      *   - "full": inline the entire `invocationGuide` body (legacy

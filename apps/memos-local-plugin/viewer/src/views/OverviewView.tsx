@@ -303,7 +303,7 @@ function apiLogEventType(
   switch (log.toolName) {
     case "memory_add":
       return "trace.created";
-    case "memory_search":
+    case "memos_search":
       return hasRetrievalHits(output) ? "retrieval.tier1.hit" : "retrieval.empty";
     case "policy_generate":
       return "l2.induced";
