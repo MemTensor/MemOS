@@ -239,6 +239,7 @@ class MemTensorProvider(MemoryProvider):
 
     def __init__(self) -> None:
         self._bridge: MemosBridgeClient | None = None
+        self._reconnect_lock = threading.Lock()
         self._session_id: str = ""
         self._episode_id: str = ""
         self._hermes_home: str = ""
@@ -1426,16 +1427,16 @@ class MemTensorProvider(MemoryProvider):
     def shutdown(self) -> None:  # type: ignore[override]
         self._bridge_keepalive_stop.set()
         if self._bridge_keepalive_thread and self._bridge_keepalive_thread.is_alive():
-            self._bridge_keepalive_thread.join(timeout=2.0)
+            self._bridge_keepalive_thread.join(timeout=12.0)  # Increased to cover health check timeout (10s) + margin
         if self._prefetch_thread and self._prefetch_thread.is_alive():
             self._prefetch_thread.join(timeout=5.0)
         if self._bridge:
+            pid = self._bridge.pid
+            logger.info("MemOS: shutting down bridge (pid=%s)", pid)
             with contextlib.suppress(Exception):
                 self._bridge.close()
             self._bridge = None
-        # DON'T call shutdown_bridge() — the bridge process stays alive
-        # as a daemon if its viewer is running, so the memory panel
-        # remains accessible between `hermes chat` sessions.
+            logger.info("MemOS: bridge shutdown complete (pid=%s)", pid)
 
     # ─── Host LLM bridge (fallback for plugin-side model failures) ────────
 
@@ -1637,17 +1638,35 @@ class MemTensorProvider(MemoryProvider):
         return "broken pipe" in msg or "bridge closed" in msg or "transport_closed" in msg
 
     def _reconnect_bridge(self, session_id: str = "", *, timeout: float = 30.0) -> None:
-        old_bridge = self._bridge
-        if old_bridge:
-            with contextlib.suppress(Exception):
-                old_bridge.close()
-        ensure_bridge_running()
-        self._bridge = MemosBridgeClient()
-        self._bridge.register_host_handler(
-            "host.llm.complete",
-            self._handle_host_llm_complete,
-        )
-        self._open_session(session_id, timeout=timeout)
+        # Don't reconnect if we're shutting down
+        if self._bridge_keepalive_stop.is_set():
+            logger.debug("MemOS: skipping reconnect during shutdown")
+            return
+
+        with self._reconnect_lock:
+            # Double-check after acquiring lock
+            if self._bridge_keepalive_stop.is_set():
+                logger.debug("MemOS: skipping reconnect during shutdown (after lock)")
+                return
+
+            old_bridge = self._bridge
+            old_pid = old_bridge.pid if old_bridge else None
+
+            if old_bridge:
+                logger.info("MemOS: closing old bridge (pid=%s)", old_pid)
+                with contextlib.suppress(Exception):
+                    old_bridge.close()
+                logger.info("MemOS: old bridge closed (pid=%s)", old_pid)
+
+            ensure_bridge_running()
+            self._bridge = MemosBridgeClient()
+            logger.info("MemOS: new bridge created (pid=%s)", self._bridge.pid)
+
+            self._bridge.register_host_handler(
+                "host.llm.complete",
+                self._handle_host_llm_complete,
+            )
+            self._open_session(session_id, timeout=timeout)
 
     def _ensure_bridge(self, session_id: str = "", *, timeout: float = 30.0) -> bool:
         if self._bridge:
