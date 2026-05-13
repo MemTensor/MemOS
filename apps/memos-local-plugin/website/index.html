@@ -595,11 +595,14 @@ body.lang-zh .lang-en{display:none !important}
         <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span>
         <div class="install-os-switch">
           <button type="button" class="os-btn active" data-os="unix"><span class="lang-zh">macOS/Linux</span><span class="lang-en">macOS/Linux</span></button>
+          <button type="button" class="os-btn" data-os="windows"><span class="lang-zh">Windows</span><span class="lang-en">Windows</span></button>
         </div>
       </div>
       <div class="install-switcher-body">
         <div class="install-switcher-note"><span class="lang-zh"># macOS/Linux installer. Auto-detects OpenClaw and Hermes.</span><span class="lang-en"># macOS/Linux installer. Auto-detects OpenClaw and Hermes.</span></div>
-        <div class="install-switcher-row"><span class="prompt">$</span><span class="cmd" data-os-cmd="unix">curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash</span><button type="button" class="copy-btn install-copy-btn" data-copy-unix="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" data-copy="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button></div>
+        <div class="install-switcher-row"><span class="prompt">$</span><span class="cmd" data-os-cmd="unix">curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash</span><button type="button" class="copy-btn install-copy-btn" data-copy-unix="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" data-copy-windows="irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 | iex" data-copy="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button></div>
+        <div class="install-switcher-note" style="display:none"><span class="lang-zh"># Windows installer. Auto-detects OpenClaw and Hermes.</span><span class="lang-en"># Windows installer. Auto-detects OpenClaw and Hermes.</span></div>
+        <div class="install-switcher-row" style="display:none"><span class="prompt">$</span><span class="cmd" data-os-cmd="windows">irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 | iex</span><button type="button" class="copy-btn install-copy-btn" data-copy-unix="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" data-copy-windows="irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 | iex" data-copy="irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 | iex" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button></div>
       </div>
     </div>
   </div>
@@ -750,6 +753,7 @@ body.lang-zh .lang-en{display:none !important}
             <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#28ca42"></span>
             <div class="install-os-switch">
               <button type="button" class="os-btn active" data-os="unix"><span class="lang-zh">macOS/Linux</span><span class="lang-en">macOS/Linux</span></button>
+              <button type="button" class="os-btn" data-os="windows"><span class="lang-zh">Windows</span><span class="lang-en">Windows</span></button>
             </div>
           </div>
           <div class="install-switcher-body">
@@ -757,7 +761,13 @@ body.lang-zh .lang-en{display:none !important}
             <div class="install-switcher-row">
               <span class="prompt">$</span>
               <span class="cmd" data-os-cmd="unix">curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash</span>
-              <button type="button" class="copy-btn install-copy-btn" data-copy-unix="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" data-copy="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+              <button type="button" class="copy-btn install-copy-btn" data-copy-unix="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" data-copy-windows="irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 | iex" data-copy="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+            </div>
+            <div class="install-switcher-note" style="display:none"><span class="lang-zh"># Step 1: 安装插件 & 启动（Windows）</span><span class="lang-en"># Step 1: Install plugin & start (Windows)</span></div>
+            <div class="install-switcher-row" style="display:none">
+              <span class="prompt">$</span>
+              <span class="cmd" data-os-cmd="windows">irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 | iex</span>
+              <button type="button" class="copy-btn install-copy-btn" data-copy-unix="curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash" data-copy-windows="irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 | iex" data-copy="irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 | iex" title="Copy" aria-label="Copy"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
             </div>
           </div>
         </div>
@@ -1238,12 +1248,17 @@ function switchOsTab(btn,group,os){
   document.querySelectorAll('[data-install-switcher]').forEach(function(sw){
     var buttons=sw.querySelectorAll('.os-btn');
     var commands=sw.querySelectorAll('[data-os-cmd]');
+    var notes=sw.querySelectorAll('.install-switcher-note');
+    var rows=sw.querySelectorAll('.install-switcher-row');
     var copyBtn=sw.querySelector('.install-copy-btn');
     function setOs(os){
       buttons.forEach(function(btn){btn.classList.toggle('active',btn.getAttribute('data-os')===os);});
       commands.forEach(function(cmd){cmd.style.display=cmd.getAttribute('data-os-cmd')===os?'':'none';});
+      notes.forEach(function(note,idx){note.style.display=(os==='unix'&&idx===0)||(os==='windows'&&idx===1)?'':'none';});
+      rows.forEach(function(row,idx){row.style.display=(os==='unix'&&idx===0)||(os==='windows'&&idx===1)?'':'none';});
       if(copyBtn){
-        copyBtn.setAttribute('data-copy',copyBtn.getAttribute('data-copy-unix')||'');
+        var copyAttr=os==='windows'?'data-copy-windows':'data-copy-unix';
+        copyBtn.setAttribute('data-copy',copyBtn.getAttribute(copyAttr)||'');
       }
     }
     buttons.forEach(function(btn){btn.addEventListener('click',function(){setOs(btn.getAttribute('data-os'));});});
