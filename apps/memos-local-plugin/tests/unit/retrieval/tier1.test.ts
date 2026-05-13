@@ -29,7 +29,15 @@ const cfg: RetrievalConfig = {
 
 const qv: EmbeddingVector = Float32Array.from([1, 0, 0]);
 
-function makeRepo(rows: Array<{ id: string; status: SkillStatus; eta: number; score: number }>) {
+function makeRepo(
+  rows: Array<{
+    id: string;
+    status: SkillStatus;
+    eta: number;
+    score: number;
+    procedureJson?: unknown;
+  }>,
+) {
   const repo: RetrievalRepos["skills"] = {
     searchByVector(_vec, k, opts) {
       return rows
@@ -51,6 +59,7 @@ function makeRepo(rows: Array<{ id: string; status: SkillStatus; eta: number; sc
         name: r.id,
         status: r.status,
         invocationGuide: `run ${r.id}`,
+        procedureJson: r.procedureJson,
         eta: r.eta,
       };
     },
@@ -81,5 +90,32 @@ describe("retrieval/tier1", () => {
       { kind: "embedded", queryVec: qv, rawText: "x" },
     );
     expect(kept.length).toBe(0);
+  });
+
+  it("normalises snake_case skill decision guidance from procedure JSON", async () => {
+    const repo = makeRepo([
+      {
+        id: "a",
+        status: "active",
+        eta: 0.9,
+        score: 0.95,
+        procedureJson: {
+          decision_guidance: {
+            preference: ["Prefer format-specific parsers."],
+            anti_pattern: ["Avoid raw binary reads."],
+          },
+        },
+      },
+    ]);
+
+    const kept = await runTier1(
+      { repos: { skills: repo }, config: cfg },
+      { kind: "embedded", queryVec: qv, rawText: "parse binary document" },
+    );
+
+    expect(kept[0]?.decisionGuidance).toEqual({
+      preference: ["Prefer format-specific parsers."],
+      antiPattern: ["Avoid raw binary reads."],
+    });
   });
 });

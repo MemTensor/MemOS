@@ -37,8 +37,24 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
     const statusRaw = params.get("status");
     const status = isValidPolicyStatus(statusRaw) ? statusRaw : undefined;
     const q = params.get("q") || undefined;
-    const policies = await deps.core.listPolicies({ status, limit, offset, q });
-    const total = await deps.core.countPolicies({ status, q });
+    const ownerAgentKind = params.get("ownerAgentKind") || undefined;
+    const ownerProfileId = params.get("ownerProfileId") || undefined;
+    const policies = await deps.core.listPolicies({
+      status,
+      limit,
+      offset,
+      q,
+      ownerAgentKind,
+      ownerProfileId,
+      includeAllNamespaces: true,
+    });
+    const total = await deps.core.countPolicies({
+      status,
+      q,
+      ownerAgentKind,
+      ownerProfileId,
+      includeAllNamespaces: true,
+    });
     return {
       policies,
       limit,
@@ -54,7 +70,7 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const policy = await deps.core.getPolicy(id);
+    const policy = await deps.core.getPolicy(id, undefined, { includeAllNamespaces: true });
     if (!policy) {
       writeError(ctx, 404, "not_found", `policy not found: ${id}`);
       return;
@@ -123,7 +139,7 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
     }
     let updated = hasContent
       ? await deps.core.updatePolicy(id, contentPatch)
-      : await deps.core.getPolicy(id);
+      : await deps.core.getPolicy(id, undefined, { includeAllNamespaces: true });
     if (!updated) {
       writeError(ctx, 404, "not_found", `policy not found: ${id}`);
       return;
@@ -226,14 +242,14 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const policy = await deps.core.getPolicy(id);
+    const policy = await deps.core.getPolicy(id, undefined, { includeAllNamespaces: true });
     if (!policy) {
       writeError(ctx, 404, "not_found", `policy not found: ${id}`);
       return;
     }
     const [skills, worldModels] = await Promise.all([
-      deps.core.listSkills({ limit: 500 }),
-      deps.core.listWorldModels({ limit: 500 }),
+      deps.core.listSkills({ limit: 500, includeAllNamespaces: true }),
+      deps.core.listWorldModels({ limit: 500, includeAllNamespaces: true }),
     ]);
     return {
       skills: skills
@@ -260,8 +276,22 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
     const offset =
       Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const q = params.get("q") || undefined;
-    const worldModels = await deps.core.listWorldModels({ limit, offset, q });
-    const total = await deps.core.countWorldModels({ q });
+    const ownerAgentKind = params.get("ownerAgentKind") || undefined;
+    const ownerProfileId = params.get("ownerProfileId") || undefined;
+    const worldModels = await deps.core.listWorldModels({
+      limit,
+      offset,
+      q,
+      ownerAgentKind,
+      ownerProfileId,
+      includeAllNamespaces: true,
+    });
+    const total = await deps.core.countWorldModels({
+      q,
+      ownerAgentKind,
+      ownerProfileId,
+      includeAllNamespaces: true,
+    });
     return {
       worldModels,
       limit,
@@ -277,7 +307,7 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const model = await deps.core.getWorldModel(id);
+    const model = await deps.core.getWorldModel(id, undefined, { includeAllNamespaces: true });
     if (!model) {
       writeError(ctx, 404, "not_found", `world model not found: ${id}`);
       return;
@@ -297,14 +327,14 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const wm = await deps.core.getWorldModel(id);
+    const wm = await deps.core.getWorldModel(id, undefined, { includeAllNamespaces: true });
     if (!wm) {
       writeError(ctx, 404, "not_found", `world model not found: ${id}`);
       return;
     }
     const policies = await Promise.all(
       wm.policyIds.map(async (pid) => {
-        const p = await deps.core.getPolicy(pid);
+        const p = await deps.core.getPolicy(pid, undefined, { includeAllNamespaces: true });
         return p
           ? { id: p.id, title: p.title, status: p.status, gain: p.gain }
           : { id: pid, title: null, status: null, gain: null };

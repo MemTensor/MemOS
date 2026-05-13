@@ -170,6 +170,7 @@ export async function runTier1(
         eta: sk.eta,
         status: sk.status,
         invocationGuide: sk.invocationGuide,
+        decisionGuidance: normaliseDecisionGuidance(sk),
         sourcePolicyIds: sk.sourcePolicyIds ?? [],
         updatedAt: sk.updatedAt,
         channels: state.channels,
@@ -199,6 +200,38 @@ export async function runTier1(
     });
     return [];
   }
+}
+
+function normaliseDecisionGuidance(row: {
+  decisionGuidance?: { preference: string[]; antiPattern: string[] };
+  procedureJson?: unknown;
+}): { preference: string[]; antiPattern: string[] } {
+  if (row.decisionGuidance) {
+    return {
+      preference: row.decisionGuidance.preference.map(String).filter(Boolean),
+      antiPattern: row.decisionGuidance.antiPattern.map(String).filter(Boolean),
+    };
+  }
+  const proc = (row.procedureJson ?? {}) as {
+    decisionGuidance?: { preference?: unknown; antiPattern?: unknown };
+    decision_guidance?: { preference?: unknown; anti_pattern?: unknown };
+  };
+  const dg = proc.decisionGuidance;
+  const snakeDg = proc.decision_guidance;
+  return {
+    preference:
+      dg && Array.isArray(dg.preference)
+        ? dg.preference.map((s) => String(s)).filter(Boolean)
+        : snakeDg && Array.isArray(snakeDg.preference)
+          ? snakeDg.preference.map((s) => String(s)).filter(Boolean)
+        : [],
+    antiPattern:
+      dg && Array.isArray(dg.antiPattern)
+        ? dg.antiPattern.map((s) => String(s)).filter(Boolean)
+        : snakeDg && Array.isArray(snakeDg.anti_pattern)
+          ? snakeDg.anti_pattern.map((s) => String(s)).filter(Boolean)
+        : [],
+  };
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

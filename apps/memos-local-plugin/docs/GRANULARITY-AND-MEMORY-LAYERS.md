@@ -24,7 +24,7 @@
 
 代码中保证这一点的几处关键设计：
 - `core/capture/step-extractor.ts` 把一个用户消息触发的所有动作拆成多个小步 sub-step，全部带同一个 `turnId` 写入 `traces.turn_id`。
-- 前端 `web/src/views/MemoriesView.tsx::buildGroups` 按 `(episodeId, turnId)` 把多条小步聚合成一张卡片显示。
+- 前端 `viewer/src/views/MemoriesView.tsx::buildGroups` 按 `(episodeId, turnId)` 把多条小步聚合成一张卡片显示。
 - 检索路径 `core/retrieval/tier2-trace.ts` 永远以 `traces` 行为最小单位，从不读 `turn_id`。
 
 ---

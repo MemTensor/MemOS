@@ -38,7 +38,7 @@ const banner = [
   "      bash " + installSh + " openclaw     # or: hermes",
   "",
   "    Windows (PowerShell):",
-  "      powershell -ExecutionPolicy Bypass -File " + installPs1 + " -Agent openclaw",
+  "      powershell -ExecutionPolicy Bypass -File " + installPs1,
   "",
   "  Re-running the installer is safe; it only generates config.yaml on first run.",
   "",

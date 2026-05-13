@@ -132,7 +132,7 @@ function silentLogger(): HostLogger {
   };
 }
 
-function buildDeps(h: TmpDbHandle, embedder: Embedder | null = semanticFakeEmbedder(DEFAULT_CONFIG.embedding.dimensions)): PipelineDeps {
+function buildDeps(h: TmpDbHandle, embedder: Embedder | null = semanticFakeEmbedder(384)): PipelineDeps {
   return {
     agent: "openclaw",
     home: resolveHome("openclaw", "/tmp/memos-e2e-test"),
@@ -472,7 +472,7 @@ describe("OpenClaw adapter — end-to-end memory chain", () => {
 
   it("listTraces returns newest-first traces with a readable summary (Memories panel)", async () => {
     // What the Memories viewer actually calls (see
-    // `web/src/views/MemoriesView.tsx`). The contract for this
+    // `viewer/src/views/MemoriesView.tsx`). The contract for this
     // endpoint is:
     //   - Newest trace comes first.
     //   - Each trace has SOME renderable text — either `summary`
