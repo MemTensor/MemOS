@@ -688,7 +688,7 @@ export function createMemoryCore(
     // ─── Skill lifecycle → api_logs(skill_*) ──────────────────────────
     // Emit structured rows for the Logs page so users can watch skill
     // generation / verification / retirement events with the same JSON
-    // detail the memory_search / memory_add cards show. Event shapes
+    // detail the memos_search / memory_add cards show. Event shapes
     // vary per kind — we spread the raw event into `output` (with any
     // sensitive fields already redacted upstream) rather than hand-
     // rolling per-kind schemas.
@@ -1360,7 +1360,7 @@ export function createMemoryCore(
     } finally {
       // Log every retrieval — not just adhoc `searchMemory` calls —
       // so the viewer's Logs page can show what was recalled for
-      // each real agent turn. Without this, `memory_search` rows
+      // each real agent turn. Without this, `memos_search` rows
       // only showed up when the viewer's search box was used.
       try {
         const snippets = packet?.snippets ?? [];
@@ -1378,7 +1378,7 @@ export function createMemoryCore(
         const dropped = candidates.filter((c) => droppedIds.has(c.refId));
         const stats = packet ? handle.consumeRetrievalStats(packet.packetId) : null;
         handle.repos.apiLogs.insert({
-          toolName: "memory_search",
+          toolName: "memos_search",
           input: {
             type: "turn_start",
             agent: turn.agent,
@@ -1400,7 +1400,7 @@ export function createMemoryCore(
           calledAt: startedAt,
         });
       } catch (logErr) {
-        log.debug("apiLogs.memory_search.turn_start.skipped", {
+        log.debug("apiLogs.memos_search.turn_start.skipped", {
           err: logErr instanceof Error ? logErr.message : String(logErr),
         });
       }
@@ -2068,7 +2068,7 @@ export function createMemoryCore(
       ok = false;
       if (telemetry) {
         telemetry.trackError(
-          "memory_search",
+          "memos_search",
           err instanceof MemosError ? err.code : "unknown",
         );
       }
@@ -2076,7 +2076,7 @@ export function createMemoryCore(
     } finally {
       try {
         handle.repos.apiLogs.insert({
-          toolName: "memory_search",
+          toolName: "memos_search",
           input: {
             type: "tool_call",
             agent: query.agent,
@@ -2098,7 +2098,7 @@ export function createMemoryCore(
           calledAt: startedAt,
         });
       } catch (logErr) {
-        log.debug("apiLogs.memory_search.skipped", {
+        log.debug("apiLogs.memos_search.skipped", {
           err: logErr instanceof Error ? logErr.message : String(logErr),
         });
       }
@@ -2959,17 +2959,35 @@ export function createMemoryCore(
   ): Promise<SkillDTO | null> {
     ensureLive();
     if (opts?.namespace) activeNamespace = opts.namespace;
-    const row = handle.repos.skills.getById(id);
+    const row = resolveSkillRowForGet(id, opts);
     if (!row || (!opts?.includeAllNamespaces && !visibleToCurrent(row))) return null;
     if (opts?.recordUse) {
-      handle.repos.skills.recordUse(id, Date.now());
+      handle.repos.skills.recordUse(row.id, Date.now());
       if (opts.recordTrial) {
-        recordSkillTrial(id, opts);
+        recordSkillTrial(row.id, opts);
       }
-      const updated = handle.repos.skills.getById(id);
+      const updated = handle.repos.skills.getById(row.id);
       return updated ? skillRowToDTO(updated) : skillRowToDTO(row);
     }
     return skillRowToDTO(row);
+  }
+
+  function resolveSkillRowForGet(
+    id: SkillId,
+    opts?: { includeAllNamespaces?: boolean },
+  ) {
+    const exact = handle.repos.skills.getById(id);
+    if (exact) return exact;
+
+    const rawId = String(id);
+    const shortId = rawId.includes(":") ? rawId.slice(rawId.lastIndexOf(":") + 1) : rawId;
+    const candidates = handle.repos.skills.list({ limit: 5_000 }).filter((row) => {
+      if (!opts?.includeAllNamespaces && !visibleToCurrent(row)) return false;
+      if (row.name === rawId || row.name === shortId) return true;
+      if (rawId.includes(":")) return row.id === shortId;
+      return row.id.endsWith(`:${rawId}`);
+    });
+    return candidates.length === 1 ? candidates[0]! : null;
   }
 
   function recordSkillTrial(
@@ -3011,7 +3029,7 @@ export function createMemoryCore(
       createdAt: Date.now(),
       resolvedAt: null,
       evidence: {
-        source: "skill_get",
+        source: "memos_skill_get",
       },
     });
   }

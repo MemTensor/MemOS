@@ -287,7 +287,7 @@ describe("retrieval/integration", () => {
       reason: "tool_driven",
       agent: "openclaw",
       sessionId: "s1" as SessionId,
-      tool: "memory_search",
+      tool: "memos_search",
       args: { query: "docker compose" },
       ts: NOW as never,
     });

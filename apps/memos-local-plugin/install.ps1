@@ -267,7 +267,7 @@ function Install-OpenClaw {
   "homepage": "https://github.com/MemTensor/MemOS",
   "extensions": ["$RuntimeEntry"],
   "contracts": {
-    "tools": ["memory_search", "memory_get", "memory_timeline", "skill_list", "memory_environment", "skill_get"]
+    "tools": ["memos_search", "memos_get", "memos_timeline", "memos_skill_list", "memos_environment", "memos_skill_get"]
   },
   "configSchema": {
     "type": "object",
@@ -301,6 +301,14 @@ const {
   PLUGIN_VERSION: pluginVersion, LEGACY_JSON: legacyCsv,
 } = process.env;
 const legacyIds = (legacyCsv || '').split(',').filter(Boolean);
+const MEMOS_TOOL_NAMES = [
+  'memos_search',
+  'memos_get',
+  'memos_timeline',
+  'memos_environment',
+  'memos_skill_list',
+  'memos_skill_get',
+];
 
 let config = {};
 if (fs.existsSync(configPath)) {
@@ -315,6 +323,14 @@ if (!config.gateway || typeof config.gateway !== 'object' || Array.isArray(confi
   config.gateway = {};
 }
 if (!config.gateway.mode) config.gateway.mode = 'local';
+
+if (!config.tools || typeof config.tools !== 'object' || Array.isArray(config.tools)) {
+  config.tools = {};
+}
+if (!Array.isArray(config.tools.alsoAllow)) config.tools.alsoAllow = [];
+for (const toolName of MEMOS_TOOL_NAMES) {
+  if (!config.tools.alsoAllow.includes(toolName)) config.tools.alsoAllow.push(toolName);
+}
 
 if (!config.plugins || typeof config.plugins !== 'object' || Array.isArray(config.plugins)) {
   config.plugins = {};

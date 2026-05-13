@@ -35,7 +35,7 @@ OpenClaw before_prompt_build
 
 ```text
 <memos_context>
-No prior memories matched this query — the store may simply be cold. You can still call `memory_search` with a shorter or rephrased query if you expect there to be relevant past context.
+No prior memories matched this query — the store may simply be cold. You can still call `memos_search` with a shorter or rephrased query if you expect there to be relevant past context.
 </memos_context>
 ```
 
@@ -60,11 +60,11 @@ IMPORTANT: The following are facts from previous conversations with this user.
 You MUST treat these as established knowledge and use them directly when answering.
 Do NOT say you don't know or don't have information if the answer is in these memories.
 
-## Candidate skills (call `skill_get` to load any you decide to use)
+## Candidate skills (call `memos_skill_get` to load any you decide to use)
 
 1. {skillName}
    {skillSummary}
-   → call `skill_get(id="{skillId}")` to load the full procedure if you decide to use it
+   → call `memos_skill_get(id="{skillId}")` to load the full procedure if you decide to use it
 
 ## Memories
 
@@ -96,17 +96,17 @@ or avoid in this kind of context.
   1. {antiPatternText}
 
 Available follow-up tools:
-- `skill_get(id)` — load the full procedure/verification of a candidate skill listed above
-- `memory_search(query, maxResults?)` — re-query with a shorter / rephrased string
+- `memos_skill_get(id)` — load the full procedure/verification of a candidate skill listed above
+- `memos_search(query, maxResults?)` — re-query with a shorter / rephrased string
 ```
 
 精简点：
 
 - Skill 摘要不再注入 `η={eta}` 和 `status={status}`。
 - 通用 snippet footer 不再注入 `refId="..."`。
-- `memory_get` / `memory_timeline` / `skill_list` 不再放进注入 footer，因为删除通用 refId 后这些提示对当前回答帮助有限。
+- `memos_get` / `memos_timeline` / `memos_skill_list` 不再放进注入 footer，因为删除通用 refId 后这些提示对当前回答帮助有限。
 - `packet.snippets` 结构化数据里仍保留 `refId`，用于日志、API、调试和内部映射；只是模型可见 prompt 不再展示它。
-- `skill_get(id="...")` 保留，因为 summary-mode skill 需要它按需加载完整 procedure。
+- `memos_skill_get(id="...")` 保留，因为 summary-mode skill 需要它按需加载完整 procedure。
 
 ## 2. LLM 筛选召回内容的 Prompt
 
@@ -196,7 +196,7 @@ Decision guidance:
   without such facts should be dropped.
 - RANK a SKILL when its name / description plausibly addresses the
   user's sub-problem. The agent decides later whether to call
-  `skill_get` for the full procedure — err on the side of ranking
+  `memos_skill_get` for the full procedure — err on the side of ranking
   every candidate skill that could plausibly help.
 - RANK a WORLD-MODEL when its topic matches the domain of the query
   and the body contains structural information the agent would

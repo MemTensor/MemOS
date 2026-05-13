@@ -675,14 +675,14 @@ const en = {
   // Logs.
   "logs.title": "Logs",
   "logs.subtitle":
-    "Structured trail of memory_search and memory_add calls, including the retrieved candidates and what the LLM kept.",
+    "Structured trail of memos_search and memory_add calls, including the retrieved candidates and what the LLM kept.",
   "logs.filter.tool": "Tool",
   "logs.filter.level": "Level",
   "logs.autoRefresh": "Live",
   "logs.empty": "No log lines in this window.",
   "logs.empty.title": "No memory calls yet",
   "logs.empty.hint":
-    "Rows show up here when the agent runs memory_search or captures a turn.",
+    "Rows show up here when the agent runs memos_search or captures a turn.",
   "logs.search.placeholder": "Search logs…",
   "logs.tag.memoryAdd": "Memory add",
   "logs.tag.memorySearch": "Memory search",
@@ -1486,7 +1486,7 @@ const zh: Record<TranslationKey, string> = {
   "logs.title": "日志",
   "logs.subtitle": "记忆检索和写入的结构化轨迹：召回候选、Hub 候选、LLM 筛选后保留的记忆。",
   "logs.empty.title": "尚无记忆调用",
-  "logs.empty.hint": "Agent 触发 memory_search 或写入一轮对话后，这里会出现。",
+  "logs.empty.hint": "Agent 触发 memos_search 或写入一轮对话后，这里会出现。",
   "logs.search.placeholder": "搜索日志…",
   "logs.tag.memoryAdd": "记忆添加",
   "logs.tag.memorySearch": "记忆检索",

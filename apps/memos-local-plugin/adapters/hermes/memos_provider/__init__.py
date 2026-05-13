@@ -337,14 +337,14 @@ class MemTensorProvider(MemoryProvider):
     def system_prompt_block(self) -> str:  # type: ignore[override]
         return (
             "# MemOS Memory\n"
-            "Persistent long-term memory is active. Call `memory_search`, "
-            "`memory_get`, `memory_timeline`, `memory_environment`, "
-            "`skill_list`, or `skill_get` when prior context or learned "
+            "Persistent long-term memory is active. Call `memos_search`, "
+            "`memos_get`, `memos_timeline`, `memos_environment`, "
+            "`memos_skill_list`, or `memos_skill_get` when prior context or learned "
             "procedures would help. Relevant memories are automatically "
             "injected at the start of every turn.\n\n"
             "**Not the same as repo skills:** Hermes' `<available_skills>` / "
             "`skill_view(name=…)` load **repository SKILL.md** files. "
-            "`skill_get` / `skill_list` refer to **MemOS-crystallized** "
+            "`memos_skill_get` / `memos_skill_list` refer to **MemOS-crystallized** "
             "skills (learned from your runs). If both apply, you may use "
             "both: repo skills for product conventions, MemOS skills for "
             "workflows proven on *your* past tasks."
@@ -1060,7 +1060,7 @@ class MemTensorProvider(MemoryProvider):
     def get_tool_schemas(self) -> list[dict[str, Any]]:  # type: ignore[override]
         return [
             {
-                "name": "memory_search",
+                "name": "memos_search",
                 "description": (
                     "Search the local MemOS memory (traces, policies, world models, skills). "
                     "Prefer this before claiming prior context is unavailable."
@@ -1088,7 +1088,7 @@ class MemTensorProvider(MemoryProvider):
                 },
             },
             {
-                "name": "memory_get",
+                "name": "memos_get",
                 "description": (
                     "Fetch the full body of a memory item by id. `kind` can be "
                     '"trace" (default), "policy", or "world_model".'
@@ -1107,7 +1107,7 @@ class MemTensorProvider(MemoryProvider):
                 },
             },
             {
-                "name": "memory_timeline",
+                "name": "memos_timeline",
                 "description": "Return the ordered traces for an episode id.",
                 "parameters": {
                     "type": "object",
@@ -1119,7 +1119,7 @@ class MemTensorProvider(MemoryProvider):
                 },
             },
             {
-                "name": "skill_list",
+                "name": "memos_skill_list",
                 "description": (
                     "List callable skills the agent can invoke. Filter by status "
                     "(candidate | active | archived)."
@@ -1141,7 +1141,7 @@ class MemTensorProvider(MemoryProvider):
                 },
             },
             {
-                "name": "memory_environment",
+                "name": "memos_environment",
                 "description": (
                     "Return accumulated environment knowledge (L3 world models): "
                     "structural facts, behavioral rules, and project constraints."
@@ -1163,7 +1163,7 @@ class MemTensorProvider(MemoryProvider):
                 },
             },
             {
-                "name": "skill_get",
+                "name": "memos_skill_get",
                 "description": "Return the full invocation guide for a crystallized skill.",
                 "parameters": {
                     "type": "object",
@@ -1177,7 +1177,7 @@ class MemTensorProvider(MemoryProvider):
         if not self._bridge:
             return json.dumps({"error": "bridge not connected"})
         try:
-            if tool_name == "memory_search":
+            if tool_name == "memos_search":
                 query = (args.get("query") or "").strip()
                 if not query:
                     return json.dumps({"error": "missing query"})
@@ -1199,7 +1199,7 @@ class MemTensorProvider(MemoryProvider):
                     params,
                 )
                 return json.dumps({"hits": resp.get("hits", [])})
-            if tool_name == "memory_get":
+            if tool_name == "memos_get":
                 item_id = (args.get("id") or "").strip()
                 if not item_id:
                     return json.dumps({"error": "missing id"})
@@ -1256,7 +1256,7 @@ class MemTensorProvider(MemoryProvider):
                         "meta": meta,
                     }
                 )
-            if tool_name == "memory_timeline":
+            if tool_name == "memos_timeline":
                 resp = self._bridge.request(
                     "memory.timeline",
                     {
@@ -1267,13 +1267,13 @@ class MemTensorProvider(MemoryProvider):
                 limit = self._int_arg(args, "limit", 20, 1, 100)
                 traces = resp.get("traces", [])[:limit]
                 return json.dumps({"traces": traces})
-            if tool_name == "skill_list":
+            if tool_name == "memos_skill_list":
                 limit = self._int_arg(args, "limit", 10, 1, 50)
                 params = {"limit": limit, "namespace": self._runtime_namespace()}
                 if args.get("status"):
                     params["status"] = args["status"]
                 return json.dumps(self._bridge.request("skill.list", params))
-            if tool_name == "memory_environment":
+            if tool_name == "memos_environment":
                 query = (args.get("query") or "").strip()
                 limit = self._int_arg(args, "limit", 5, 1, 30)
                 if not query:
@@ -1322,7 +1322,7 @@ class MemTensorProvider(MemoryProvider):
                         "queried": True,
                     }
                 )
-            if tool_name == "skill_get":
+            if tool_name == "memos_skill_get":
                 skill_id = (args.get("id") or "").strip()
                 if not skill_id:
                     return json.dumps({"error": "missing id"})

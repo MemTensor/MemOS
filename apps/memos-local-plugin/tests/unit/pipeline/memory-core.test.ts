@@ -24,6 +24,7 @@ import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { makeTmpHome, type TmpHomeContext } from "../../helpers/tmp-home.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 import type { MemosError } from "../../../agent-contract/errors.js";
+import type { SkillId, SkillRow } from "../../../core/types.js";
 
 let db: TmpDbHandle | null = null;
 let pipeline: PipelineHandle | null = null;
@@ -53,6 +54,32 @@ function traceKind(trace: TraceDTO): string {
       : trace.agentText.includes("Subagent result:")
       ? "subagent_result_text"
       : "assistant");
+}
+
+function seedCoreSkill(id: string, name: string): void {
+  const row: SkillRow = {
+    id: id as SkillId,
+    ownerAgentKind: "openclaw",
+    ownerProfileId: "main",
+    ownerWorkspaceId: null,
+    name,
+    status: "active",
+    invocationGuide: `${name}\n\nFollow the proven procedure.`,
+    procedureJson: null,
+    eta: 0.9,
+    support: 3,
+    gain: 0.3,
+    trialsAttempted: 0,
+    trialsPassed: 0,
+    sourcePolicyIds: [],
+    sourceWorldModelIds: [],
+    evidenceAnchors: [],
+    vec: null,
+    createdAt: 1_700_000_000_000 as SkillRow["createdAt"],
+    updatedAt: 1_700_000_000_000 as SkillRow["updatedAt"],
+    version: 1,
+  };
+  db!.repos.skills.upsert(row);
 }
 
 beforeEach(() => {
@@ -831,6 +858,28 @@ describe("MemoryCore façade", () => {
     await core.shutdown(); // Safe.
     await expect(core.openSession({ agent: "openclaw" })).rejects.toMatchObject({
       code: "already_shut_down",
+    });
+  });
+
+  it("getSkill resolves colon-qualified skill ids and short aliases", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    seedCoreSkill("skillsbench:skill-a089bcb8e0258209", "skill-a089bcb8e0258209");
+    seedCoreSkill("skill-local-only", "local skill");
+
+    await expect(core.getSkill("skill-a089bcb8e0258209" as SkillId)).resolves.toMatchObject({
+      id: "skillsbench:skill-a089bcb8e0258209",
+      name: "skill-a089bcb8e0258209",
+    });
+    await expect(core.getSkill("skillsbench:skill-local-only" as SkillId)).resolves.toMatchObject({
+      id: "skill-local-only",
+      name: "local skill",
     });
   });
 });
