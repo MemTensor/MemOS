@@ -184,6 +184,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       failureThreshold: 3,
       failureWindow: 5,
       valueDelta: 0.5,
+      minLowValueThreshold: 0.01,
       useLlm: true,
       attachToPolicy: true,
       cooldownMs: 60_000,
