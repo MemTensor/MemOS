@@ -269,7 +269,7 @@ export interface RetrievalConfig {
   /**
    * V7 §2.6 Tier-1 rendering mode.
    *   - "summary" (default): inject `name + η + first-line summary +
-   *     a `skill_get(id="…")` invocation hint`. Lets the host model
+   *     a `memos_skill_get(id="…")` invocation hint`. Lets the host model
    *     pull the full procedure on demand instead of bloating every
    *     prompt with skills it may never use.
    *   - "full":    inline the full `invocationGuide` body (legacy).

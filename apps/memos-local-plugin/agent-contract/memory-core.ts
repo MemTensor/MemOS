@@ -389,7 +389,7 @@ export interface MemoryCore {
 
   /**
    * Paged listing of the rich api_logs table ({@link ApiLogDTO}).
-   * Fuels the viewer's Logs page — shows every memory_search and
+   * Fuels the viewer's Logs page — shows every memos_search and
    * memory_add call with the full input/output JSON.
    */
   listApiLogs(input?: {

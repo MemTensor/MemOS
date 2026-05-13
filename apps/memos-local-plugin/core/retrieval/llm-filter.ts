@@ -76,7 +76,7 @@ export interface FilterResult {
   /**
    * The LLM's self-report on whether the *kept* candidates are enough
    * to answer `query`, or whether the caller should widen recall /
-   * run a follow-up `memory_search`. `null` when the filter didn't
+   * run a follow-up `memos_search`. `null` when the filter didn't
    * run (disabled / passthrough / failure paths).
    */
   sufficient: boolean | null;

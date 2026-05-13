@@ -386,7 +386,7 @@ async function runAll(
       sessionId: sessionId ?? (`adhoc-session-${ids.span()}` as SessionId),
       episodeId: episodeId ?? (`adhoc-episode-${ids.span()}` as EpisodeId),
       // V7 §2.6 — Tier-1 default = "summary" so we surface skill
-      // descriptors + a `skill_get(...)` invocation hint instead of
+      // descriptors + a `memos_skill_get(...)` invocation hint instead of
       // inlining every full guide. Hosts without tool support can flip
       // this to "full" via `algorithm.retrieval.skillInjectionMode`.
       skillInjectionMode: deps.config.skillInjectionMode,

@@ -202,7 +202,7 @@ describe("retrieval/injector", () => {
     expect(packet.rendered).toContain("User's conversation history");
     expect(packet.rendered).toContain("MUST treat");
     // Trailing tool reminder so the model knows how to re-query.
-    expect(packet.rendered).toContain("memory_search");
+    expect(packet.rendered).toContain("memos_search");
     // Row ids stay on the structured packet, but are not injected into
     // the model-facing prose unless a tool hint explicitly needs one.
     expect(packet.snippets[0]?.refId).toBe("sA");
@@ -233,7 +233,7 @@ describe("retrieval/injector", () => {
     expect(packet.rendered).not.toMatch(/best V|goal-sim|V=/);
   });
 
-  it("default skill rendering is summary mode (descriptor + skill_get hint, no full guide)", () => {
+  it("default skill rendering is summary mode (descriptor + memos_skill_get hint, no full guide)", () => {
     // Multi-section guide: blank-line-separated paragraphs. Summary
     // mode must keep only the first paragraph and drop the procedure.
     const guide = [
@@ -252,21 +252,24 @@ describe("retrieval/injector", () => {
       episodeId: "ep_summary" as never,
     });
     const skillSnippet = packet.snippets.find((s) => s.refKind === "skill")!;
-    // Prompt-facing body omits internal skill metadata.
+    // Prompt-facing body carries the fields needed to identify candidate skills.
     expect(skillSnippet.title).toBe("Skill sk_summary");
+    expect(skillSnippet.body).toContain("Name: Skill sk_summary");
+    expect(skillSnippet.body).toContain(
+      "Description: Fix Alpine container pip install failures by adding the missing -dev system library.",
+    );
+    // But it still omits internal skill metadata.
     expect(skillSnippet.body).not.toContain("η=0.85");
     expect(skillSnippet.body).not.toContain("status=active");
-    // First paragraph survives as the summary line.
-    expect(skillSnippet.body).toContain("Fix Alpine container pip install");
-    // Procedure steps must NOT be inlined (those live behind skill_get).
+    // Procedure steps must NOT be inlined (those live behind memos_skill_get).
     expect(skillSnippet.body).not.toContain("apk add");
     expect(skillSnippet.body).not.toContain("Inspect the failing pip");
     // Body must instruct the agent how to fetch the full procedure on demand.
-    expect(skillSnippet.body).toContain('skill_get(id="sk_summary")');
+    expect(skillSnippet.body).toContain('memos_skill_get(id="sk_summary")');
     // Section heading + footer also advertise the call-on-demand workflow.
     expect(packet.rendered).toContain("Candidate skills");
-    expect(packet.rendered).toContain("`skill_get(id)`");
-    expect(packet.rendered).not.toContain("`skill_list");
+    expect(packet.rendered).toContain("`memos_skill_get(id)`");
+    expect(packet.rendered).not.toContain("`memos_skill_list");
   });
 
   it("summary mode clamps long first paragraphs to skillSummaryChars", () => {
@@ -285,7 +288,7 @@ describe("retrieval/injector", () => {
     const skillSnippet = packet.snippets.find((s) => s.refKind === "skill")!;
     // Descriptor + summary + call hint, none of which exceed the cap by much.
     expect(skillSnippet.body).toMatch(/x{60,80}…/);
-    expect(skillSnippet.body).toContain('skill_get(id="sk_clamp")');
+    expect(skillSnippet.body).toContain('memos_skill_get(id="sk_clamp")');
   });
 
   it("full mode inlines the invocation guide (legacy behaviour)", () => {
@@ -303,9 +306,9 @@ describe("retrieval/injector", () => {
     const skillSnippet = packet.snippets.find((s) => s.refKind === "skill")!;
     expect(skillSnippet.body).toContain("RUN docker compose up -d");
     expect(skillSnippet.body).not.toContain("η=");
-    expect(skillSnippet.body).not.toContain("skill_get(id=");
+    expect(skillSnippet.body).not.toContain("memos_skill_get(id=");
     // The footer should not surface the skill call hints in full mode.
-    expect(packet.rendered).not.toContain("`skill_get(id)`");
+    expect(packet.rendered).not.toContain("`memos_skill_get(id)`");
     // Subsection headings are level-2 Markdown, nested under the packet's
     // level-1 "User's conversation history" header.
     expect(packet.rendered).toContain("## Skills");

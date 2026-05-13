@@ -138,7 +138,7 @@ async function createRuntime(api: OpenClawPluginApi): Promise<PluginRuntime> {
   await core.init();
 
   // Anonymous ARMS telemetry. Mirrors `bridge.cts`'s setup so OpenClaw
-  // emits the same `plugin_started` / `daily_active` / `memory_search`
+  // emits the same `plugin_started` / `daily_active` / `memos_search`
   // / `memory_ingested` / `feedback_submitted` / `viewer_opened`
   // events under the same `memos_local_hermes_v2` group as Hermes.
   // Without this every OpenClaw user was invisible in ARMS — only the
@@ -242,29 +242,43 @@ function register(api: OpenClawPluginApi): void {
   //    fails later.
   api.registerMemoryCapability?.({
     promptBuilder: ({ availableTools }) => {
-      const hasSearch = availableTools.has("memory_search");
-      const hasGet = availableTools.has("memory_get");
-      const hasTimeline = availableTools.has("memory_timeline");
-      const hasEnv = availableTools.has("memory_environment");
-      if (!hasSearch && !hasGet && !hasTimeline && !hasEnv) return [];
+      const hasSearch = availableTools.has("memos_search");
+      const hasGet = availableTools.has("memos_get");
+      const hasTimeline = availableTools.has("memos_timeline");
+      const hasEnv = availableTools.has("memos_environment");
+      const hasSkillList = availableTools.has("memos_skill_list");
+      const hasSkillGet = availableTools.has("memos_skill_get");
+      if (!hasSearch && !hasGet && !hasTimeline && !hasEnv && !hasSkillList && !hasSkillGet) {
+        return [];
+      }
       const lines: string[] = [
         "## Memory (MemOS Local)",
         "This workspace uses MemOS Local — a self-evolving layered memory (L1/L2/L3 + Skills).",
       ];
       if (hasSearch) {
         lines.push(
-          "- `memory_search` — search prior traces, policies, world models, and skills.",
+          "- `memos_search` — search prior traces, policies, world models, and skills.",
         );
       }
       if (hasEnv) {
         lines.push(
-          "- `memory_environment` — list / query accumulated environment knowledge " +
+          "- `memos_environment` — list / query accumulated environment knowledge " +
             "(project layout, behavioural rules, constraints). Use before exploring an unfamiliar area.",
         );
       }
       if (hasGet || hasTimeline) {
         lines.push(
-          "- `memory_get` / `memory_timeline` — fetch full bodies + episode timelines.",
+          "- `memos_get` / `memos_timeline` — fetch full bodies + episode timelines.",
+        );
+      }
+      if (hasSkillList) {
+        lines.push(
+          "- `memos_skill_list` — list MemOS-crystallized skills learned from prior runs.",
+        );
+      }
+      if (hasSkillGet) {
+        lines.push(
+          "- `memos_skill_get` — load the full invocation guide for a MemOS skill.",
         );
       }
       lines.push(

@@ -483,7 +483,7 @@ function stripOpenClawUserEnvelope(raw: string): string {
     "",
   );
   text = text.replace(
-    /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memory_search[^\n]*)*/gi,
+    /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memos_search[^\n]*)*/gi,
     "",
   );
 
@@ -802,7 +802,7 @@ const CONTEXT_CLOSE = "</memos_context>";
  * When the store is cold (no hits), we still emit a short "memory
  * tools are available" hint — the legacy `memos-local-openclaw`
  * adapter does the same via `noRecallHint`, and without it the LLM
- * has no reason to call `memory_search` at the start of a
+ * has no reason to call `memos_search` at the start of a
  * conversation. The hint is kept *small* so repeated turns don't
  * bloat the system prompt.
  */
@@ -817,11 +817,11 @@ export function renderContextBlock(
   }
   if (opts.hintWhenEmpty === false) return "";
   // Cold-start hint — mirrors the legacy adapter's behaviour so the
-  // model is nudged to reach for `memory_search` even on the first
+  // model is nudged to reach for `memos_search` even on the first
   // turn of a fresh session.
   const hint = [
     "No prior memories matched this query — the store may simply be cold.",
-    "You can still call `memory_search` with a shorter or rephrased query",
+    "You can still call `memos_search` with a shorter or rephrased query",
     "if you expect there to be relevant past context.",
   ].join(" ");
   return `${CONTEXT_OPEN}\n${hint}\n${CONTEXT_CLOSE}`;

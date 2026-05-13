@@ -1,5 +1,5 @@
 /**
- * Logs view — structured trail of `memory_search` and `memory_add`
+ * Logs view — structured trail of `memos_search` and `memory_add`
  * calls. Mirrors the legacy `memos-local-openclaw` v1 logs page so
  * each row shows the retrieved / filtered candidates (with scores
  * and origin tags) for search and the per-turn stored items for
@@ -24,7 +24,7 @@ import type { ApiLogDTO } from "../api/types";
 
 type ToolFilter =
   | ""
-  | "memory_search"
+  | "memos_search"
   | "memory_add"
   | "skill_generate"
   | "skill_evolve"
@@ -48,7 +48,7 @@ type ToolFilter =
 type LogTag =
   | ""
   | "memory_add"
-  | "memory_search"
+  | "memos_search"
   | "task"
   | "skill"
   | "policy"
@@ -64,7 +64,7 @@ type LogTag =
 const LOG_TAGS: Array<{ v: LogTag; k: string }> = [
   { v: "", k: "common.all" },
   { v: "memory_add", k: "logs.tag.memoryAdd" },
-  { v: "memory_search", k: "logs.tag.memorySearch" },
+  { v: "memos_search", k: "logs.tag.memorySearch" },
   { v: "task", k: "logs.tag.task" },
   { v: "skill", k: "logs.tag.skill" },
   { v: "policy", k: "logs.tag.policy" },
@@ -74,7 +74,7 @@ const LOG_TAGS: Array<{ v: LogTag; k: string }> = [
 ];
 
 const BASIC_LOG_TAGS = LOG_TAGS.filter((tag) =>
-  tag.v === "" || tag.v === "memory_add" || tag.v === "memory_search"
+  tag.v === "" || tag.v === "memory_add" || tag.v === "memos_search"
 );
 
 /**
@@ -85,7 +85,7 @@ const BASIC_LOG_TAGS = LOG_TAGS.filter((tag) =>
 const ALLOWED_TOOLS: Record<LogTag, readonly ToolFilter[]> = {
   "": [],
   memory_add: ["memory_add"],
-  memory_search: ["memory_search"],
+  memos_search: ["memos_search"],
   task: ["task_done", "task_failed"],
   skill: ["skill_generate", "skill_evolve"],
   policy: ["policy_generate", "policy_evolve"],
@@ -96,7 +96,7 @@ const ALLOWED_TOOLS: Record<LogTag, readonly ToolFilter[]> = {
 
 const BASIC_LOG_TOOLS = [
   "memory_add",
-  "memory_search",
+  "memos_search",
 ] as const satisfies readonly ToolFilter[];
 
 interface ApiLogsResponse {
@@ -120,7 +120,7 @@ type ViewMode = "chain" | "list";
 
 function allowedToolsForTag(tag: LogTag, detailedLogs: boolean): readonly ToolFilter[] {
   if (detailedLogs) return ALLOWED_TOOLS[tag];
-  if (tag === "memory_add" || tag === "memory_search") return ALLOWED_TOOLS[tag];
+  if (tag === "memory_add" || tag === "memos_search") return ALLOWED_TOOLS[tag];
   return BASIC_LOG_TOOLS;
 }
 
@@ -154,7 +154,7 @@ export function LogsView() {
 
   useEffect(() => {
     if (detailedLogs) return;
-    if (tag !== "" && tag !== "memory_add" && tag !== "memory_search") {
+    if (tag !== "" && tag !== "memory_add" && tag !== "memos_search") {
       setTag("");
     }
     if (failuresOnly) setFailuresOnly(false);
@@ -547,7 +547,7 @@ function LogDetailBody({
   input: unknown;
   output: unknown;
 }) {
-  if (log.toolName === "memory_search") {
+  if (log.toolName === "memos_search") {
     return <MemorySearchDetail input={input} output={output} />;
   }
   if (log.toolName === "memory_add") {
@@ -573,7 +573,7 @@ function LogDetailBody({
   return <GenericDetail input={input} output={output} />;
 }
 
-// ─── memory_search template ─────────────────────────────────────────────
+// ─── memos_search template ─────────────────────────────────────────────
 
 interface SearchInput {
   query?: string;
@@ -1311,7 +1311,7 @@ function parseJson(s: string): unknown {
  * the id.
  *
  * Precedence per tool:
- *   - memory_search  → the query + kept/total counts
+ *   - memos_search  → the query + kept/total counts
  *   - memory_add     → first 3 per-turn summaries (already meaningful)
  *   - skill_*        → `output.name` (e.g. "write_python_function_with_types")
  *   - policy_*       → `output.title` (e.g. "Write Python function …")
@@ -1323,7 +1323,7 @@ function buildSummary(log: ApiLogDTO, input: unknown, output: unknown): string {
   const inp = (input ?? {}) as Record<string, unknown>;
   const out = (output ?? {}) as Record<string, unknown>;
 
-  if (log.toolName === "memory_search") {
+  if (log.toolName === "memos_search") {
     const q = (inp.query as string | undefined) ?? "(empty)";
     const kept = (out.filtered as unknown[] | undefined)?.length ?? 0;
     const totalN = (out.candidates as unknown[] | undefined)?.length ?? 0;
@@ -1528,7 +1528,7 @@ function buildChainEvent(log: ApiLogDTO): ChainEvent {
   let stagePhase: string | undefined;
   let infraKind: ChainEvent["infraKind"];
 
-  if (log.toolName === "memory_search") {
+  if (log.toolName === "memos_search") {
     stage = "retrieval";
     sessionId = pickStr(inp.sessionId);
     episodeId = pickStr(inp.episodeId);

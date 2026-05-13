@@ -52,7 +52,7 @@ export interface InjectorInput {
   episodeId: EpisodeId;
   /**
    * How Tier-1 skill candidates should be rendered. Defaults to
-   * `"summary"` — a short descriptor + `skill_get(id="…")` invocation
+   * `"summary"` — a short descriptor + `memos_skill_get(id="…")` invocation
    * hint, so the host model decides whether to pull the full guide.
    */
   skillInjectionMode?: SkillInjectionMode;
@@ -188,7 +188,7 @@ function renderSnippet(c: TierCandidate, opts: RenderOpts): InjectionSnippet | n
  * Render a Tier-1 Skill candidate.
  *
  * **Summary mode** (default): the prompt only carries a 1-line teaser
- * and a `skill_get(id="…")` hint. The host model can call that tool on
+ * and a `memos_skill_get(id="…")` hint. The host model can call that tool on
  * demand to fetch the full procedure — keeps prompts small and avoids
  * paying for skills the agent never needs.
  *
@@ -208,11 +208,13 @@ function renderSkill(c: SkillCandidate, opts: RenderOpts): InjectionSnippet {
     };
   }
 
-  const summary = firstLineSummary(c.invocationGuide, opts.skillSummaryChars);
-  const lines: string[] = [];
-  if (summary) lines.push(summary);
+  const description = firstLineSummary(c.invocationGuide, opts.skillSummaryChars);
+  const lines: string[] = [
+    `Name: ${c.skillName}`,
+    `Description: ${description || "(not provided)"}`,
+  ];
   lines.push(
-    `→ call \`skill_get(id="${c.refId}")\` to load the full procedure if you decide to use it`,
+    `→ call \`memos_skill_get(id="${c.refId}")\` to load the full procedure if you decide to use it`,
   );
   return {
     refKind: "skill",
@@ -344,7 +346,7 @@ function renderWorldModel(c: WorldModelCandidate): InjectionSnippet {
  *    When container pip fails, install -dev OS lib first …
  *
  * Available follow-up tools:
- * - call `memory_search(query=...)` for a shorter, more targeted query
+ * - call `memos_search(query=...)` for a shorter, more targeted query
  * ```
  *
  * We deliberately keep the "IMPORTANT" instructions — without them the
@@ -373,10 +375,10 @@ function renderWholePacket(
   if (skills.length > 0) {
     if (opts.skillMode === "summary") {
       // In summary mode, frame the section as "candidate skills you can
-      // call". The bodies already carry the per-skill `skill_get(...)`
+      // call". The bodies already carry the per-skill `memos_skill_get(...)`
       // hint, so the agent knows how to expand them on demand.
       parts.push(
-        "## Candidate skills (call `skill_get` to load any you decide to use)\n",
+        "## Candidate skills (call `memos_skill_get` to load any you decide to use)\n",
       );
     } else {
       parts.push("## Skills\n");
@@ -482,11 +484,11 @@ const HEADER_BY_REASON: Record<RetrievalReason, string> = {
 };
 
 const FOOTER_LINES_COMMON: readonly string[] = [
-  "- `memory_search(query, maxResults?)` — re-query with a shorter / rephrased string",
+  "- `memos_search(query, maxResults?)` — re-query with a shorter / rephrased string",
 ];
 
 const FOOTER_LINES_SKILL_SUMMARY: readonly string[] = [
-  "- `skill_get(id)` — load the full procedure/verification of a candidate skill listed above",
+  "- `memos_skill_get(id)` — load the full procedure/verification of a candidate skill listed above",
 ];
 
 function footerFor(

@@ -271,7 +271,7 @@ class BridgeClientTests(unittest.TestCase):
         self.assertIn("boom", ctx.exception.message)
         client.close()
 
-    def test_memory_search_roundtrip(self) -> None:
+    def test_memos_search_roundtrip(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
         res = client.request("memory.search", {"query": "yesterday"})
         self.assertEqual(len(res["hits"]), 1)
@@ -325,19 +325,19 @@ class MemTensorProviderTests(unittest.TestCase):
         self.assertSetEqual(
             names,
             {
-                "memory_search",
-                "memory_get",
-                "memory_timeline",
-                "skill_list",
-                "memory_environment",
-                "skill_get",
+                "memos_search",
+                "memos_get",
+                "memos_timeline",
+                "memos_skill_list",
+                "memos_environment",
+                "memos_skill_get",
             },
         )
 
     def test_handle_tool_call_fails_gracefully_without_bridge(self) -> None:
         p = self._provider_mod.MemTensorProvider()
         # bridge is None — should not crash, returns error JSON
-        res = p.handle_tool_call("memory_search", {"query": "x"})
+        res = p.handle_tool_call("memos_search", {"query": "x"})
         parsed = json.loads(res)
         self.assertIn("error", parsed)
 
@@ -350,7 +350,7 @@ class MemTensorProviderTests(unittest.TestCase):
 
         search = json.loads(
             p.handle_tool_call(
-                "memory_search",
+                "memos_search",
                 {"query": "HERMES_MEMOS_E2E_0428", "maxResults": 7, "sessionScope": True},
             )
         )
@@ -359,48 +359,48 @@ class MemTensorProviderTests(unittest.TestCase):
         self.assertEqual(bridge.calls[-1][1]["sessionId"], "hermes:session:1")
         self.assertEqual(bridge.calls[-1][1]["topK"]["tier1"], 7)
 
-        got_trace = json.loads(p.handle_tool_call("memory_get", {"id": "tr-1"}))
+        got_trace = json.loads(p.handle_tool_call("memos_get", {"id": "tr-1"}))
         self.assertTrue(got_trace["found"])
         self.assertEqual(got_trace["kind"], "trace")
         self.assertIn("HERMES_MEMOS_E2E_0428", got_trace["meta"]["userText"])
         self.assertEqual(bridge.calls[-1][0], "memory.get_trace")
 
-        got_policy = json.loads(p.handle_tool_call("memory_get", {"id": "p-1", "kind": "policy"}))
+        got_policy = json.loads(p.handle_tool_call("memos_get", {"id": "p-1", "kind": "policy"}))
         self.assertEqual(got_policy["kind"], "policy")
         self.assertIn("Hermes validation", got_policy["body"])
         self.assertEqual(bridge.calls[-1][0], "memory.get_policy")
 
         got_world = json.loads(
-            p.handle_tool_call("memory_get", {"id": "wm-1", "kind": "world_model"})
+            p.handle_tool_call("memos_get", {"id": "wm-1", "kind": "world_model"})
         )
         self.assertEqual(got_world["kind"], "world_model")
         self.assertEqual(got_world["meta"]["policyIds"], ["p-1"])
         self.assertEqual(bridge.calls[-1][0], "memory.get_world")
 
-        timeline = json.loads(p.handle_tool_call("memory_timeline", {"episodeId": "ep-1"}))
+        timeline = json.loads(p.handle_tool_call("memos_timeline", {"episodeId": "ep-1"}))
         self.assertEqual(len(timeline["traces"]), 2)
         self.assertEqual(bridge.calls[-1][0], "memory.timeline")
 
-        skills = json.loads(p.handle_tool_call("skill_list", {"status": "active", "limit": 3}))
+        skills = json.loads(p.handle_tool_call("memos_skill_list", {"status": "active", "limit": 3}))
         self.assertEqual(skills["skills"][0]["id"], "sk-1")
         self.assertEqual(bridge.calls[-1][0], "skill.list")
         self.assertEqual(bridge.calls[-1][1]["limit"], 3)
         self.assertEqual(bridge.calls[-1][1]["status"], "active")
         self.assertEqual(bridge.calls[-1][1]["namespace"]["agentKind"], "hermes")
 
-        env = json.loads(p.handle_tool_call("memory_environment", {"limit": 2}))
+        env = json.loads(p.handle_tool_call("memos_environment", {"limit": 2}))
         self.assertFalse(env["queried"])
         self.assertEqual(env["worldModels"][0]["id"], "wm-1")
         self.assertEqual(bridge.calls[-1][0], "memory.list_world_models")
 
         env_query = json.loads(
-            p.handle_tool_call("memory_environment", {"query": "Hermes install", "limit": 2})
+            p.handle_tool_call("memos_environment", {"query": "Hermes install", "limit": 2})
         )
         self.assertTrue(env_query["queried"])
         self.assertEqual(bridge.calls[-1][0], "memory.search")
         self.assertEqual(bridge.calls[-1][1]["topK"], {"tier1": 0, "tier2": 0, "tier3": 2})
 
-        skill = json.loads(p.handle_tool_call("skill_get", {"id": "sk-1"}))
+        skill = json.loads(p.handle_tool_call("memos_skill_get", {"id": "sk-1"}))
         self.assertTrue(skill["found"])
         self.assertEqual(skill["skill"]["id"], "sk-1")
         self.assertEqual(bridge.calls[-1][0], "skill.get")
@@ -411,13 +411,13 @@ class MemTensorProviderTests(unittest.TestCase):
         p = self._provider_mod.MemTensorProvider()
         p._bridge = RecordingBridge()
 
-        self.assertIn("missing query", p.handle_tool_call("memory_search", {}))
-        self.assertIn("missing id", p.handle_tool_call("memory_get", {}))
+        self.assertIn("missing query", p.handle_tool_call("memos_search", {}))
+        self.assertIn("missing id", p.handle_tool_call("memos_get", {}))
         self.assertIn(
             "unknown memory kind",
-            p.handle_tool_call("memory_get", {"id": "x", "kind": "bad"}),
+            p.handle_tool_call("memos_get", {"id": "x", "kind": "bad"}),
         )
-        self.assertIn("missing id", p.handle_tool_call("skill_get", {}))
+        self.assertIn("missing id", p.handle_tool_call("memos_skill_get", {}))
         self.assertIn("unknown tool", p.handle_tool_call("not_a_tool", {}))
 
     def test_prefetch_lazily_reconnects_when_bridge_is_missing(self) -> None:
