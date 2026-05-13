@@ -253,6 +253,14 @@ const AlgorithmSchema = Type.Object({
     failureWindow: NumberInRange(5, 2, 50),
     /** Min |mean(high) - mean(low)| to fire without an explicit user signal. */
     valueDelta: NumberInRange(0.5, 0, 2),
+    /**
+     * Minimum absolute value threshold for lowValue traces. Only traces with
+     * value < -minLowValueThreshold will be collected as failure evidence
+     * (unless they match isFailureLike patterns). This filters out trivial
+     * negative feedback (e.g., value = -0.001) and focuses on genuine failures.
+     * Default 0.01 — adjust higher (e.g., 0.1) to be more conservative.
+     */
+    minLowValueThreshold: NumberInRange(0.01, 0, 1),
     /** Let the LLM rewrite the preference / anti-pattern lines. */
     useLlm: Bool(true),
     /** Tag the L2 policies referenced by the evidence with the guidance. */

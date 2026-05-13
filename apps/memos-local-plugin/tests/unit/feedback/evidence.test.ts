@@ -220,4 +220,115 @@ describe("feedback/evidence", () => {
     expect(capped.userText.startsWith("...")).toBe(true);
     expect(capTrace(trace, 0)).toBe(trace); // no-op
   });
+
+  it("filters out trivial negative values below minLowValueThreshold", () => {
+    handle = makeTmpDb();
+    const h = handle;
+    const sessionId = "s6";
+    const episodeId = "ep6" as EpisodeId;
+
+    // Trivial negative values (should be filtered out)
+    seedTrace(h, {
+      episodeId: episodeId as string,
+      sessionId,
+      agentText: "slightly not perfect",
+      value: -0.001,
+    });
+    seedTrace(h, {
+      episodeId: episodeId as string,
+      sessionId,
+      agentText: "almost neutral",
+      value: -0.005,
+    });
+
+    // Genuine failure (should be collected)
+    seedTrace(h, {
+      episodeId: episodeId as string,
+      sessionId,
+      agentText: "real failure",
+      value: -0.2,
+    });
+
+    const res = gatherRepairEvidence(
+      { sessionId: sessionId as SessionId },
+      {
+        repos: h.repos,
+        config: makeFeedbackConfig({ minLowValueThreshold: 0.01 }),
+        log: rootLogger.child({ channel: "test.evidence" }),
+      },
+    );
+
+    // Only the genuine failure should be collected
+    expect(res.lowValue).toHaveLength(1);
+    expect(res.lowValue[0]!.value).toBe(-0.2);
+  });
+
+  it("collects traces with error keywords even if value is above threshold", () => {
+    handle = makeTmpDb();
+    const h = handle;
+    const sessionId = "s7";
+    const episodeId = "ep7" as EpisodeId;
+
+    // Small negative value but has error keyword (should be collected)
+    seedTrace(h, {
+      episodeId: episodeId as string,
+      sessionId,
+      agentText: "error: connection timeout",
+      value: -0.005,
+    });
+
+    // Small negative value without error keyword (should be filtered)
+    seedTrace(h, {
+      episodeId: episodeId as string,
+      sessionId,
+      agentText: "task completed but user slightly unhappy",
+      value: -0.005,
+    });
+
+    const res = gatherRepairEvidence(
+      { sessionId: sessionId as SessionId },
+      {
+        repos: h.repos,
+        config: makeFeedbackConfig({ minLowValueThreshold: 0.01 }),
+        log: rootLogger.child({ channel: "test.evidence" }),
+      },
+    );
+
+    // Only the one with error keyword should be collected
+    expect(res.lowValue).toHaveLength(1);
+    expect(res.lowValue[0]!.agentText).toContain("error");
+  });
+
+  it("respects custom minLowValueThreshold config", () => {
+    handle = makeTmpDb();
+    const h = handle;
+    const sessionId = "s8";
+    const episodeId = "ep8" as EpisodeId;
+
+    seedTrace(h, {
+      episodeId: episodeId as string,
+      sessionId,
+      agentText: "minor issue",
+      value: -0.05,
+    });
+    seedTrace(h, {
+      episodeId: episodeId as string,
+      sessionId,
+      agentText: "moderate failure",
+      value: -0.15,
+    });
+
+    // With threshold 0.1, only -0.15 should be collected
+    const res = gatherRepairEvidence(
+      { sessionId: sessionId as SessionId },
+      {
+        repos: h.repos,
+        config: makeFeedbackConfig({ minLowValueThreshold: 0.1 }),
+        log: rootLogger.child({ channel: "test.evidence" }),
+      },
+    );
+
+    expect(res.lowValue).toHaveLength(1);
+    expect(res.lowValue[0]!.value).toBe(-0.15);
+  });
 });
