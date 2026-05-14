@@ -381,7 +381,9 @@ class MemTensorProviderTests(unittest.TestCase):
         self.assertEqual(len(timeline["traces"]), 2)
         self.assertEqual(bridge.calls[-1][0], "memory.timeline")
 
-        skills = json.loads(p.handle_tool_call("memos_skill_list", {"status": "active", "limit": 3}))
+        skills = json.loads(
+            p.handle_tool_call("memos_skill_list", {"status": "active", "limit": 3})
+        )
         self.assertEqual(skills["skills"][0]["id"], "sk-1")
         self.assertEqual(bridge.calls[-1][0], "skill.list")
         self.assertEqual(bridge.calls[-1][1]["limit"], 3)

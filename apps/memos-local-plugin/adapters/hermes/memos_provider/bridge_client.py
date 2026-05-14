@@ -240,14 +240,18 @@ class MemosBridgeClient:
             logger.debug("MemOS: bridge process %d exited gracefully", pid)
         except subprocess.TimeoutExpired:
             # 3. If still running, send SIGTERM
-            logger.warning("MemOS: bridge process %d did not exit after stdin close, sending SIGTERM", pid)
+            logger.warning(
+                "MemOS: bridge process %d did not exit after stdin close, sending SIGTERM", pid
+            )
             try:
                 self._proc.terminate()  # Send SIGTERM
                 self._proc.wait(timeout=5.0)  # Increased from 2.0 to 5.0 for viewer cleanup
                 logger.debug("MemOS: bridge process %d terminated", pid)
             except subprocess.TimeoutExpired:
                 # 4. Last resort: SIGKILL
-                logger.error("MemOS: bridge process %d did not respond to SIGTERM, sending SIGKILL", pid)
+                logger.error(
+                    "MemOS: bridge process %d did not respond to SIGTERM, sending SIGKILL", pid
+                )
                 self._proc.kill()  # Send SIGKILL
                 try:
                     self._proc.wait(timeout=1.0)

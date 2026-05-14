@@ -1427,7 +1427,9 @@ class MemTensorProvider(MemoryProvider):
     def shutdown(self) -> None:  # type: ignore[override]
         self._bridge_keepalive_stop.set()
         if self._bridge_keepalive_thread and self._bridge_keepalive_thread.is_alive():
-            self._bridge_keepalive_thread.join(timeout=12.0)  # Increased to cover health check timeout (10s) + margin
+            self._bridge_keepalive_thread.join(
+                timeout=12.0
+            )  # Increased to cover health check timeout (10s) + margin
         if self._prefetch_thread and self._prefetch_thread.is_alive():
             self._prefetch_thread.join(timeout=5.0)
         if self._bridge:

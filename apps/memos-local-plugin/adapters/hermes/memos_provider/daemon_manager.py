@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import logging
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import threading
 import time

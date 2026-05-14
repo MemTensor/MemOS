@@ -34,6 +34,16 @@ import type {
 
 const MAX_SNIPPET_BODY_CHARS = 640;
 const DEFAULT_SKILL_SUMMARY_CHARS = 200;
+const MEMORY_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  weekday: "short",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+  timeZoneName: "shortOffset",
+});
 
 export type SkillInjectionMode = "summary" | "full";
 
@@ -258,7 +268,7 @@ function renderTrace(c: TraceCandidate): InjectionSnippet {
   if (c.agentText) parts.push(`[assistant] ${c.agentText}`);
   if (c.reflection) parts.push(`[note] ${c.reflection}`);
   const body = truncate(parts.join("\n"));
-  const when = new Date(c.ts).toISOString().slice(0, 16).replace("T", " ");
+  const when = formatMemoryTimestamp(c.ts);
   return {
     refKind: "trace",
     refId: c.refId,
@@ -272,7 +282,7 @@ function renderEpisode(c: EpisodeCandidate): InjectionSnippet {
   // (see tier2-trace.ts::renderEpisodeSummary). Keep prompt-facing text
   // free of retrieval metrics; they are useful for logs, not for answers.
   const body = truncate(stripEpisodePromptMetrics(c.summary));
-  const when = new Date(c.ts).toISOString().slice(0, 16).replace("T", " ");
+  const when = formatMemoryTimestamp(c.ts);
   return {
     refKind: "episode",
     refId: c.refId,
@@ -509,6 +519,13 @@ function indentBlock(s: string): string {
     .map((line) => (line ? "   " + line : line))
     .join("\n")
     .replace(/^ {3}/, ""); // first line flush with the bullet number
+}
+
+function formatMemoryTimestamp(ts: number): string {
+  const parts = MEMORY_TIME_FORMATTER.formatToParts(new Date(ts));
+  const get = (type: string): string =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("weekday")} ${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")} ${get("timeZoneName")}`;
 }
 
 function truncate(s: string): string {
