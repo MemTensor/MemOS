@@ -1,15 +1,23 @@
-name: Hermes Plugin — Build Prebuilds & Publish
+name: MemOS Local Plugin (V2) — Build & Publish
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish (e.g. 1.0.0 or 1.0.0-beta.1)"
+        description: "Version to publish (e.g. 2.0.2 or 2.0.2-beta.1)"
         required: true
       tag:
         description: "npm dist-tag (latest for production, beta/next/alpha for testing)"
         required: true
         default: "latest"
+      git_ref:
+        description: "Git ref to build from (branch, tag, or SHA). Leave blank to use the branch selected above."
+        required: false
+        default: ""
+
+concurrency:
+  group: memos-local-plugin-publish
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -34,6 +42,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -56,7 +66,7 @@ jobs:
       - name: Upload prebuild artifact
         uses: actions/upload-artifact@v4
         with:
-          name: prebuild-hermes-${{ matrix.platform }}
+          name: prebuild-${{ matrix.platform }}
           path: apps/memos-local-plugin/prebuilds/${{ matrix.platform }}/better_sqlite3.node
 
   publish:
@@ -64,6 +74,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -74,14 +86,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: apps/memos-local-plugin/prebuilds
-          pattern: prebuild-hermes-*
+          pattern: prebuild-*
           merge-multiple: false
 
       - name: Organize prebuilds
         run: |
           cd prebuilds
-          for dir in prebuild-hermes-*; do
-            platform="${dir#prebuild-hermes-}"
+          for dir in prebuild-*; do
+            platform="${dir#prebuild-}"
             mkdir -p "$platform"
             mv "$dir/better_sqlite3.node" "$platform/"
             rmdir "$dir"
@@ -114,7 +126,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add apps/memos-local-plugin/package.json
           if ! git diff --staged --quiet; then
-            git commit -m "release: hermes-plugin v${{ inputs.version }}"
+            git commit -m "release: @memtensor/memos-local-plugin v${{ inputs.version }}"
           fi
-          git tag "hermes-plugin-v${{ inputs.version }}"
+          git tag "memos-local-plugin-v${{ inputs.version }}"
           git push origin HEAD --tags
