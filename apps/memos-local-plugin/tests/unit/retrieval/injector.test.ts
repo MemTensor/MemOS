@@ -165,6 +165,7 @@ describe("retrieval/injector", () => {
     });
 
     expect(packet.rendered).toContain("## Memories");
+    expect(packet.rendered).toContain("### Relevant Trace Memories");
     expect(packet.rendered).toContain("## Experiences");
     expect(packet.rendered).toContain("## Environment Knowledge");
     expect(packet.rendered.indexOf("## Memories")).toBeLessThan(
@@ -180,7 +181,7 @@ describe("retrieval/injector", () => {
     expect(packet.rendered).toContain(
       "Check: Issuer/CUSIP come from the row fields.",
     );
-    expect(packet.rendered).not.toContain("p_exp");
+    expect(packet.rendered).not.toContain('refId="p_exp"');
     expect(packet.rendered).not.toContain("Type:");
     expect(packet.rendered).not.toContain("confidence=");
     expect(packet.rendered).not.toContain("evidence=");
@@ -230,7 +231,53 @@ describe("retrieval/injector", () => {
 
     expect(packet.rendered).toContain("Past similar episode");
     expect(packet.rendered).toContain("install libpq-dev");
+    expect(packet.rendered).toContain('memos_timeline(episodeId="e_noisy")');
     expect(packet.rendered).not.toMatch(/best V|goal-sim|V=/);
+  });
+
+  it("splits memories into past-task and trace subsections with per-item tool hints", () => {
+    const { packet } = toPacket({
+      ranked: [rc(episode("e1")), rc(trace("t1"))],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_mem_sections" as never,
+      episodeId: "ep_mem_sections" as never,
+    });
+
+    expect(packet.rendered).toContain("## Memories");
+    expect(packet.rendered).toContain("### Similar Past Tasks");
+    expect(packet.rendered).toContain("### Relevant Trace Memories");
+    expect(packet.rendered.indexOf("### Similar Past Tasks")).toBeLessThan(
+      packet.rendered.indexOf("### Relevant Trace Memories"),
+    );
+    expect(packet.rendered).toContain("Past task ·");
+    expect(packet.rendered).toContain("Trace ·");
+    expect(packet.rendered).not.toContain("Sub-task ·");
+    expect(packet.rendered).toContain('memos_timeline(episodeId="e1")');
+    expect(packet.rendered).toContain('memos_get(id="t1", kind="trace")');
+    expect(packet.rendered).toContain("`memos_timeline(episodeId, limit?)`");
+    expect(packet.rendered).toContain('`memos_get(id, kind="trace")`');
+  });
+
+  it("adds footer tool hints for experiences and world models", () => {
+    const { packet } = toPacket({
+      ranked: [rc(experience("p_footer")), rc(world("w_footer"))],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_footer" as never,
+      episodeId: "ep_footer" as never,
+    });
+
+    expect(packet.rendered).not.toContain("## Memories");
+    expect(packet.rendered).toContain('memos_get(id="p_footer", kind="policy")');
+    expect(packet.rendered).toContain(
+      'memos_get(id="w_footer", kind="world_model")',
+    );
+    expect(packet.rendered).toContain('`memos_get(id, kind="policy")`');
+    expect(packet.rendered).toContain('`memos_get(id, kind="world_model")`');
+    expect(packet.rendered).toContain("memos_search");
   });
 
   it("default skill rendering is summary mode (descriptor + memos_skill_get hint, no full guide)", () => {
@@ -338,7 +385,8 @@ describe("retrieval/injector", () => {
       sessionId: "sess_t4" as never,
       episodeId: "ep_t4" as never,
     });
-    expect(packet.snippets[0]!.body.length).toBeLessThanOrEqual(700);
+    expect(packet.snippets[0]!.body.length).toBeLessThanOrEqual(720);
     expect(packet.snippets[0]!.body).toContain("[truncated]");
+    expect(packet.snippets[0]!.body).toContain('memos_get(id="huge", kind="trace")');
   });
 });

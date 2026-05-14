@@ -267,7 +267,10 @@ function renderTrace(c: TraceCandidate): InjectionSnippet {
   if (c.userText) parts.push(`[user] ${c.userText}`);
   if (c.agentText) parts.push(`[assistant] ${c.agentText}`);
   if (c.reflection) parts.push(`[note] ${c.reflection}`);
-  const body = truncate(parts.join("\n"));
+  const body = withToolFollowUp(
+    truncate(parts.join("\n")),
+    `→ call \`memos_get(id="${c.refId}", kind="trace")\` for the full turn`,
+  );
   const when = formatMemoryTimestamp(c.ts);
   return {
     refKind: "trace",
@@ -281,12 +284,15 @@ function renderEpisode(c: EpisodeCandidate): InjectionSnippet {
   // Episode summary already comes with step-by-step action sequence
   // (see tier2-trace.ts::renderEpisodeSummary). Keep prompt-facing text
   // free of retrieval metrics; they are useful for logs, not for answers.
-  const body = truncate(stripEpisodePromptMetrics(c.summary));
+  const body = withToolFollowUp(
+    truncate(stripEpisodePromptMetrics(c.summary)),
+    `→ call \`memos_timeline(episodeId="${c.refId}")\` for the full step-by-step traces`,
+  );
   const when = formatMemoryTimestamp(c.ts);
   return {
     refKind: "episode",
     refId: c.refId,
-    title: `Sub-task · ${when}`,
+    title: `Past task · ${when}`,
     body,
   };
 }
@@ -314,12 +320,18 @@ function renderExperience(c: ExperienceCandidate): InjectionSnippet {
     refKind: "experience",
     refId: c.refId,
     title: c.title,
-    body: truncate(parts.join("\n")),
+    body: withToolFollowUp(
+      truncate(parts.join("\n")),
+      `→ call \`memos_get(id="${c.refId}", kind="policy")\` for the full experience`,
+    ),
   };
 }
 
 function renderWorldModel(c: WorldModelCandidate): InjectionSnippet {
-  const body = truncate(`World model: ${c.title}\n${c.body}`);
+  const body = withToolFollowUp(
+    truncate(`World model: ${c.title}\n${c.body}`),
+    `→ call \`memos_get(id="${c.refId}", kind="world_model")\` for the full environment knowledge`,
+  );
   return {
     refKind: "world-model",
     refId: c.refId,
@@ -345,6 +357,14 @@ function renderWorldModel(c: WorldModelCandidate): InjectionSnippet {
  * in these memories.
  *
  * ## Memories
+ *
+ * ### Similar Past Tasks
+ *
+ * 1. [Past task · 2026-03-05 10:12]
+ *    Past similar episode
+ *    step 1 …
+ *
+ * ### Relevant Trace Memories
  *
  * 1. [Trace · 2026-03-05 10:12]
  *    [user] 我喜欢的运动是游泳
@@ -374,11 +394,8 @@ function renderWholePacket(
   const parts: string[] = [header];
 
   const skills = snippets.filter((s) => s.refKind === "skill");
-  const traces = snippets.filter(
-    (s) =>
-      s.refKind === "trace" ||
-      s.refKind === "episode",
-  );
+  const episodes = snippets.filter((s) => s.refKind === "episode");
+  const traces = snippets.filter((s) => s.refKind === "trace");
   const experiences = snippets.filter((s) => s.refKind === "experience");
   const worlds = snippets.filter((s) => s.refKind === "world-model");
 
@@ -398,12 +415,7 @@ function renderWholePacket(
     });
   }
 
-  if (traces.length > 0) {
-    parts.push("## Memories\n");
-    traces.forEach((s, i) => {
-      parts.push(renderNumberedSnippet(s, i + 1));
-    });
-  }
+  parts.push(...renderMemoriesSection(episodes, traces));
 
   if (experiences.length > 0) {
     parts.push("## Experiences\n");
@@ -425,8 +437,30 @@ function renderWholePacket(
   // "preferred / avoided" lines distilled from past failures + fixes.
   if (guidanceBlock) parts.push(guidanceBlock);
 
-  parts.push(footerFor(opts.skillMode, skills.length > 0));
+  parts.push(footerFor(opts.skillMode, snippets));
   return parts.join("\n\n");
+}
+
+function renderMemoriesSection(
+  episodes: readonly InjectionSnippet[],
+  traces: readonly InjectionSnippet[],
+): string[] {
+  if (episodes.length === 0 && traces.length === 0) return [];
+
+  const parts: string[] = ["## Memories"];
+  if (episodes.length > 0) {
+    parts.push("### Similar Past Tasks");
+    episodes.forEach((s, i) => {
+      parts.push(renderNumberedSnippet(s, i + 1));
+    });
+  }
+  if (traces.length > 0) {
+    parts.push("### Relevant Trace Memories");
+    traces.forEach((s, i) => {
+      parts.push(renderNumberedSnippet(s, i + 1));
+    });
+  }
+  return parts;
 }
 
 /**
@@ -493,7 +527,7 @@ const HEADER_BY_REASON: Record<RetrievalReason, string> = {
     "distilled from similar past situations. Please adapt your plan accordingly.",
 };
 
-const FOOTER_LINES_COMMON: readonly string[] = [
+const FOOTER_LINES_SEARCH: readonly string[] = [
   "- `memos_search(query, maxResults?)` — re-query with a shorter / rephrased string",
 ];
 
@@ -501,16 +535,50 @@ const FOOTER_LINES_SKILL_SUMMARY: readonly string[] = [
   "- `memos_skill_get(id)` — load the full procedure/verification of a candidate skill listed above",
 ];
 
+const FOOTER_LINES_TIMELINE: readonly string[] = [
+  "- `memos_timeline(episodeId, limit?)` — expand a similar past task into step-by-step traces",
+];
+
+const FOOTER_LINES_TRACE_GET: readonly string[] = [
+  "- `memos_get(id, kind=\"trace\")` — fetch a full trace turn by id",
+];
+
+const FOOTER_LINES_POLICY_GET: readonly string[] = [
+  "- `memos_get(id, kind=\"policy\")` — fetch a full experience by id",
+];
+
+const FOOTER_LINES_WORLD_MODEL: readonly string[] = [
+  "- `memos_get(id, kind=\"world_model\")` — fetch full environment knowledge by id",
+];
+
 function footerFor(
   skillMode: SkillInjectionMode,
-  hasSkills: boolean,
+  snippets: readonly InjectionSnippet[],
 ): string {
+  const kinds = new Set(snippets.map((s) => s.refKind));
   const lines: string[] = ["Available follow-up tools:"];
-  if (skillMode === "summary" && hasSkills) {
+  if (skillMode === "summary" && kinds.has("skill")) {
     lines.push(...FOOTER_LINES_SKILL_SUMMARY);
   }
-  lines.push(...FOOTER_LINES_COMMON);
+  if (kinds.has("episode")) {
+    lines.push(...FOOTER_LINES_TIMELINE);
+  }
+  if (kinds.has("trace")) {
+    lines.push(...FOOTER_LINES_TRACE_GET);
+  }
+  if (kinds.has("experience")) {
+    lines.push(...FOOTER_LINES_POLICY_GET);
+  }
+  if (kinds.has("world-model")) {
+    lines.push(...FOOTER_LINES_WORLD_MODEL);
+  }
+  lines.push(...FOOTER_LINES_SEARCH);
   return lines.join("\n");
+}
+
+function withToolFollowUp(body: string, hint: string): string {
+  if (!hint) return body;
+  return body ? `${body}\n${hint}` : hint;
 }
 
 function indentBlock(s: string): string {
