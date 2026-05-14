@@ -15,6 +15,7 @@
   },
   "files": [
     "dist",
+    "telemetry.credentials.json",
     "openclaw.plugin.json",
     "bridge.cts",
     "bridge/**/*.ts",
