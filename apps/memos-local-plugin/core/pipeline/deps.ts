@@ -126,6 +126,7 @@ export function extractAlgorithmConfig(
       minTraceValue: alg.l2Induction.minTraceValue,
       minEpisodesForInduction: alg.l2Induction.minEpisodesForInduction,
       inductionTraceCharCap: alg.l2Induction.traceCharCap,
+      gainEmaAlpha: alg.l2Induction.gainEmaAlpha,
     },
     l3Abstraction: alg.l3Abstraction,
     skill: alg.skill,

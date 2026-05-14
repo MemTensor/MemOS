@@ -185,6 +185,8 @@ const AlgorithmSchema = Type.Object({
     useLlm: Bool(true),
     /** Character cap for traces handed into the `l2.induction` prompt. */
     traceCharCap: NumberInRange(3_000, 600, 16_000),
+    /** EMA alpha for gain updates. 1 means overwrite, lower values preserve history. */
+    gainEmaAlpha: NumberInRange(0.4, 0, 1),
     /** Archive active policies whose gain dips below this value. */
     archiveGain: NumberInRange(-0.05, -1, 1),
   }, { default: {} }),
