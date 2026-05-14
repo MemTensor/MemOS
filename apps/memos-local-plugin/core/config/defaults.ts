@@ -123,6 +123,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       minTraceValue: 0.005,
       useLlm: true,
       traceCharCap: 3_000,
+      gainEmaAlpha: 0.4,
       archiveGain: -0.05,
     },
     l3Abstraction: {

@@ -18,6 +18,7 @@ import { makePoliciesRepo } from "./policies.js";
 import { makeSessionsRepo } from "./sessions.js";
 import { makeSkillTrialsRepo } from "./skill_trials.js";
 import { makeSkillsRepo } from "./skills.js";
+import { makeTracePolicyLinksRepo } from "./trace-policy-links.js";
 import { makeTracesRepo } from "./traces.js";
 import { makeWorldModelRepo } from "./world_model.js";
 
@@ -35,6 +36,7 @@ export interface Repos {
   sessions: ReturnType<typeof makeSessionsRepo>;
   skillTrials: ReturnType<typeof makeSkillTrialsRepo>;
   skills: ReturnType<typeof makeSkillsRepo>;
+  tracePolicyLinks: ReturnType<typeof makeTracePolicyLinksRepo>;
   traces: ReturnType<typeof makeTracesRepo>;
   worldModel: ReturnType<typeof makeWorldModelRepo>;
 }
@@ -54,6 +56,7 @@ export function makeRepos(db: StorageDb): Repos {
     sessions: makeSessionsRepo(db),
     skillTrials: makeSkillTrialsRepo(db),
     skills: makeSkillsRepo(db),
+    tracePolicyLinks: makeTracePolicyLinksRepo(db),
     traces: makeTracesRepo(db),
     worldModel: makeWorldModelRepo(db),
   };
@@ -73,5 +76,6 @@ export { makePoliciesRepo } from "./policies.js";
 export { makeSessionsRepo } from "./sessions.js";
 export { makeSkillTrialsRepo } from "./skill_trials.js";
 export { makeSkillsRepo } from "./skills.js";
+export { makeTracePolicyLinksRepo } from "./trace-policy-links.js";
 export { makeTracesRepo } from "./traces.js";
 export { makeWorldModelRepo } from "./world_model.js";
