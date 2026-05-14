@@ -825,6 +825,10 @@ const en = {
     "Ready {ready}/{total}; missing {missing}; dimension mismatch {mismatch}; current dim {dim}.",
   "settings.embedding.maintenance.unavailable":
     "Configure an embedding provider before repairing or rebuilding vectors.",
+  "settings.embedding.batchSize.label": "Items per request",
+  "settings.embedding.batchSize.option": "{n} items per request",
+  "settings.embedding.batchSize.hint":
+    "Larger batches usually rebuild faster, but may hit provider limits or timeouts.",
   "settings.embedding.repair": "Repair missing/mismatched",
   "settings.embedding.rebuild": "Rebuild all vectors",
   "settings.embedding.rebuild.running": "Rebuilding embeddings…",
@@ -1621,6 +1625,9 @@ const zh: Record<TranslationKey, string> = {
   "settings.embedding.maintenance.stats":
     "可用 {ready}/{total}；缺失 {missing}；维度不匹配 {mismatch}；当前维度 {dim}。",
   "settings.embedding.maintenance.unavailable": "请先配置嵌入模型，再修复或重建向量。",
+  "settings.embedding.batchSize.label": "每次请求条数",
+  "settings.embedding.batchSize.option": "每次请求 {n} 条",
+  "settings.embedding.batchSize.hint": "每次请求条数越大通常重建越快，但可能触发模型服务限流或超时。",
   "settings.embedding.repair": "修复缺失/错维",
   "settings.embedding.rebuild": "全量重建向量",
   "settings.embedding.rebuild.running": "正在重建向量…",
