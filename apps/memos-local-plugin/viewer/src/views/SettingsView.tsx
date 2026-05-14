@@ -71,6 +71,10 @@ interface EmbeddingMaintenanceRunResult {
   error?: string;
 }
 
+const EMBEDDING_REBUILD_BATCH_STORAGE_KEY = "memos.embeddingRebuildBatchSize";
+const EMBEDDING_REBUILD_BATCH_OPTIONS = [10, 20, 50, 100, 200, 500] as const;
+type EmbeddingRebuildBatchSize = typeof EMBEDDING_REBUILD_BATCH_OPTIONS[number];
+
 const EMBEDDING_PROVIDERS = [
   "local",
   "openai_compatible",
@@ -536,6 +540,7 @@ function EmbeddingMaintenancePanel() {
   const [stats, setStats] = useState<EmbeddingMaintenanceStats | null>(null);
   const [running, setRunning] = useState<"repair" | "rebuild" | null>(null);
   const [status, setStatus] = useState<{ kind: "ok" | "error" | "muted"; text: string } | null>(null);
+  const [batchSize, setBatchSize] = useState<EmbeddingRebuildBatchSize>(() => loadEmbeddingRebuildBatchSize());
 
   const refresh = async () => {
     try {
@@ -559,7 +564,7 @@ function EmbeddingMaintenancePanel() {
       for (;;) {
         const r = await api.post<EmbeddingMaintenanceRunResult>(
           "/api/v1/embeddings/rebuild",
-          { mode, offset, limit: 100 },
+          { mode, offset, limit: batchSize },
         );
         updated += r.updated;
         failed += r.failed;
@@ -616,6 +621,33 @@ function EmbeddingMaintenancePanel() {
           <div class="muted" style="font-size:var(--fs-xs);margin-top:2px">
             {healthText}
           </div>
+          <label
+            class="hstack"
+            style="gap:var(--sp-2);align-items:center;margin-top:var(--sp-3);font-size:var(--fs-xs);color:var(--fg-muted);flex-wrap:wrap"
+          >
+            <span>{t("settings.embedding.batchSize.label")}</span>
+            <select
+              class="input"
+              value={batchSize}
+              disabled={!!running}
+              aria-label={t("settings.embedding.batchSize.label")}
+              style="width:auto;min-width:150px;height:32px;padding-top:0;padding-bottom:0;font-size:var(--fs-xs)"
+              onChange={(e) => {
+                const next = normalizeEmbeddingRebuildBatchSize((e.target as HTMLSelectElement).value);
+                setBatchSize(next);
+                localStorage.setItem(EMBEDDING_REBUILD_BATCH_STORAGE_KEY, String(next));
+              }}
+            >
+              {EMBEDDING_REBUILD_BATCH_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {t("settings.embedding.batchSize.option", { n })}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div class="muted" style="font-size:var(--fs-2xs);margin-top:4px;max-width:560px">
+            {t("settings.embedding.batchSize.hint")}
+          </div>
         </div>
         <div class="hstack" style="gap:var(--sp-2);flex-wrap:wrap">
           <button class="btn btn--sm" onClick={() => void refresh()} disabled={!!running}>
@@ -653,6 +685,17 @@ function EmbeddingMaintenancePanel() {
       )}
     </div>
   );
+}
+
+function loadEmbeddingRebuildBatchSize(): EmbeddingRebuildBatchSize {
+  return normalizeEmbeddingRebuildBatchSize(localStorage.getItem(EMBEDDING_REBUILD_BATCH_STORAGE_KEY));
+}
+
+function normalizeEmbeddingRebuildBatchSize(value: unknown): EmbeddingRebuildBatchSize {
+  const n = Number(value);
+  return EMBEDDING_REBUILD_BATCH_OPTIONS.includes(n as EmbeddingRebuildBatchSize)
+    ? n as EmbeddingRebuildBatchSize
+    : 100;
 }
 
 // ─── Hub tab ─────────────────────────────────────────────────────────────
