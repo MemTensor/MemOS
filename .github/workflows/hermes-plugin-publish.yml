@@ -1,4 +1,6 @@
-name: Hermes Plugin — Build Prebuilds & Publish
+# Publishes @memtensor/memos-local-plugin (Reflect2Evolve V2: Hermes bridge + OpenClaw adapter).
+# Legacy display name was "Hermes Plugin"; the npm package is the unified memos-local-plugin.
+name: MemOS Local Plugin (V2) — npm prebuilds & publish
 
 on:
   workflow_dispatch:
@@ -126,7 +128,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add apps/memos-local-plugin/package.json
           if ! git diff --staged --quiet; then
-            git commit -m "release: hermes-plugin v${{ inputs.version }}"
+            git commit -m "release: memos-local-plugin v${{ inputs.version }}"
           fi
           git tag "hermes-plugin-v${{ inputs.version }}"
           git push origin HEAD --tags
