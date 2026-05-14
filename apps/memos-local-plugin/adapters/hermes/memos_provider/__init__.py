@@ -64,7 +64,7 @@ if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
 from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
-from daemon_manager import ensure_bridge_running  # noqa: E402
+from daemon_manager import ensure_bridge_running, ensure_viewer_daemon  # noqa: E402
 
 
 try:  # pragma: no cover — host-provided base class, absent in unit tests
@@ -309,15 +309,21 @@ class MemTensorProvider(MemoryProvider):
             logger.warning("MemOS: failed to start bridge — %s", err)
             return
         try:
-            self._bridge = MemosBridgeClient()
+            ensure_viewer_daemon()
+        except Exception as err:
+            logger.warning("MemOS: viewer daemon check failed — %s", err)
+        new_bridge: MemosBridgeClient | None = None
+        try:
+            new_bridge = MemosBridgeClient()
             # Register the fallback LLM handler BEFORE we open the
             # session so it is available the very first time the
             # plugin's facade asks for help (e.g. on the first
             # `turn.start` retrieval call).
-            self._bridge.register_host_handler(
+            new_bridge.register_host_handler(
                 "host.llm.complete",
                 self._handle_host_llm_complete,
             )
+            self._bridge = new_bridge
             self._open_session(session_id)
             logger.info(
                 "MemOS: bridge ready session=%s platform=%s (episode deferred)",
@@ -326,6 +332,9 @@ class MemTensorProvider(MemoryProvider):
             )
         except Exception as err:
             logger.warning("MemOS: bridge init failed — %s", err)
+            if new_bridge is not None:
+                with contextlib.suppress(Exception):
+                    new_bridge.close()
             self._bridge = None
         # Register a Hermes plugin hook to capture tool calls as they
         # happen. The `post_tool_call` hook fires after every tool
@@ -1433,7 +1442,7 @@ class MemTensorProvider(MemoryProvider):
         if self._prefetch_thread and self._prefetch_thread.is_alive():
             self._prefetch_thread.join(timeout=5.0)
         if self._bridge:
-            pid = self._bridge.pid
+            pid = getattr(self._bridge, "pid", "?")
             logger.info("MemOS: shutting down bridge (pid=%s)", pid)
             with contextlib.suppress(Exception):
                 self._bridge.close()
@@ -1652,7 +1661,7 @@ class MemTensorProvider(MemoryProvider):
                 return
 
             old_bridge = self._bridge
-            old_pid = old_bridge.pid if old_bridge else None
+            old_pid = getattr(old_bridge, "pid", None) if old_bridge else None
 
             if old_bridge:
                 logger.info("MemOS: closing old bridge (pid=%s)", old_pid)
@@ -1661,14 +1670,28 @@ class MemTensorProvider(MemoryProvider):
                 logger.info("MemOS: old bridge closed (pid=%s)", old_pid)
 
             ensure_bridge_running()
-            self._bridge = MemosBridgeClient()
-            logger.info("MemOS: new bridge created (pid=%s)", self._bridge.pid)
+            try:
+                ensure_viewer_daemon()
+            except Exception as err:
+                logger.warning("MemOS: viewer daemon check failed during reconnect — %s", err)
+            new_bridge: MemosBridgeClient | None = None
+            try:
+                new_bridge = MemosBridgeClient()
+                logger.info("MemOS: new bridge created (pid=%s)", getattr(new_bridge, "pid", "?"))
 
-            self._bridge.register_host_handler(
-                "host.llm.complete",
-                self._handle_host_llm_complete,
-            )
-            self._open_session(session_id, timeout=timeout)
+                new_bridge.register_host_handler(
+                    "host.llm.complete",
+                    self._handle_host_llm_complete,
+                )
+                self._bridge = new_bridge
+                self._open_session(session_id, timeout=timeout)
+            except Exception:
+                if new_bridge is not None:
+                    with contextlib.suppress(Exception):
+                        new_bridge.close()
+                if self._bridge is new_bridge:
+                    self._bridge = None
+                raise
 
     def _ensure_bridge(self, session_id: str = "", *, timeout: float = 30.0) -> bool:
         if self._bridge:

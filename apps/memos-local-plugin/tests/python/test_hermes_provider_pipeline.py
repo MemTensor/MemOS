@@ -72,6 +72,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -132,6 +133,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", side_effect=bridge_factory),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -161,6 +163,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", side_effect=lambda: bridge_attempts.pop(0)),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -185,6 +188,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -209,6 +213,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         )
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -234,6 +239,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -251,6 +257,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -268,6 +275,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -298,6 +306,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -351,6 +360,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
             )
             with (
                 patch("memos_provider.ensure_bridge_running", return_value=True),
+                patch("memos_provider.ensure_viewer_daemon", return_value=True),
                 patch("memos_provider.MemosBridgeClient", return_value=bridge),
             ):
                 provider = memos_provider.MemTensorProvider()
@@ -373,6 +383,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -417,6 +428,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -462,6 +474,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -504,6 +517,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
