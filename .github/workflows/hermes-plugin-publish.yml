@@ -10,6 +10,14 @@ on:
         description: "npm dist-tag (latest for production, beta/next/alpha for testing)"
         required: true
         default: "latest"
+      git_ref:
+        description: "Optional Git ref to build/publish (branch, tag, or SHA), e.g. mem-agent-0512. Leave blank to use the branch selected in Run workflow."
+        required: false
+        default: ""
+
+concurrency:
+  group: hermes-plugin-publish-${{ github.workflow }}-${{ github.repository }}
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -34,6 +42,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -64,6 +74,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
