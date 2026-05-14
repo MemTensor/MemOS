@@ -412,7 +412,7 @@ export function requireSession(
   // Public: auth endpoints + health (so the viewer can tell whether
   // the backend is up BEFORE unlocking).
   if (pathname.startsWith("/api/v1/auth/")) return true;
-  if (pathname === "/api/v1/health") return true;
+  if (pathname === "/api/v1/health" || pathname === "/api/v1/ping") return true;
 
   const state = readAuthState(homeDir);
   if (!state) return true; // password protection off → open

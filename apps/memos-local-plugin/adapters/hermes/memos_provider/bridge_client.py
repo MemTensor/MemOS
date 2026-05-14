@@ -1,7 +1,7 @@
 """JSON-RPC 2.0 over stdio client for the MemOS bridge.
 
-Spawns ``node bridge.cts --agent=hermes`` as a subprocess and communicates
-via line-delimited JSON messages on its stdin/stdout. Responses are
+Spawns ``node bridge.cts --agent=hermes --no-viewer`` as a subprocess and
+communicates via line-delimited JSON messages on its stdin/stdout. Responses are
 matched by ``id``. Notifications (events + logs) are forwarded to
 registered callbacks on a reader thread.
 
@@ -70,6 +70,7 @@ class MemosBridgeClient:
         bridge_path: str | None = None,
         node_binary: str | None = None,
         agent: str = "hermes",
+        no_viewer: bool = True,
         extra_env: dict[str, str] | None = None,
     ) -> None:
         self._lock = threading.Lock()
@@ -110,15 +111,18 @@ class MemosBridgeClient:
         # Use tsx's real JS entrypoint when we are launching through a
         # specific Node binary.
         tsx_cli = plugin_root / "node_modules" / "tsx" / "dist" / "cli.mjs"
+        bridge_args = [script, f"--agent={agent}"]
+        if no_viewer:
+            bridge_args.append("--no-viewer")
         if tsx_cli.exists():
-            cmd = [node, str(tsx_cli), script, f"--agent={agent}"]
+            cmd = [node, str(tsx_cli), *bridge_args]
         else:
             # Fallback path: `node --import tsx` reproduces the same loader
             # inline. Requires tsx to be resolvable as a package from the
             # plugin root — true whenever node_modules exists. If tsx is
             # genuinely missing the child will fail fast with a loader
             # error the stderr reader will surface.
-            cmd = [node, "--import", "tsx", script, f"--agent={agent}"]
+            cmd = [node, "--import", "tsx", *bridge_args]
         self._proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -147,7 +151,7 @@ class MemosBridgeClient:
     @property
     def pid(self) -> int:
         """Return the PID of the bridge subprocess."""
-        return self._proc.pid
+        return int(getattr(self._proc, "pid", 0) or 0)
 
     # ─── Public API ──
 
@@ -228,7 +232,7 @@ class MemosBridgeClient:
             return
         self._closed = True
 
-        pid = self._proc.pid
+        pid = self.pid
 
         # 1. Close stdin (triggers bridge's graceful exit)
         with contextlib.suppress(Exception):

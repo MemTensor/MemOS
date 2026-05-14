@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import sys
+import tempfile
 import threading
 import unittest
 
@@ -27,6 +28,7 @@ for _p in (_ADAPTER_ROOT, _PLUGIN_DIR):
         sys.path.insert(0, str(_p))
 
 import bridge_client as bridge_client_mod  # noqa: E402
+import daemon_manager as daemon_manager_mod  # noqa: E402
 
 from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
 
@@ -39,6 +41,7 @@ class FakePopen:
     """
 
     def __init__(self, *_args, **_kwargs) -> None:
+        self.cmd = list(_args[0]) if _args else []
         self.stdin = io.StringIO()
         self._stdin_lines: list[str] = []
         self.stdout = _ServerStream()
@@ -289,6 +292,13 @@ class BridgeClientTests(unittest.TestCase):
         client.close()
         client.close()  # second call must not raise
 
+    def test_stdio_bridge_starts_without_viewer_by_default(self) -> None:
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+        cmd = getattr(self._fake, "cmd", [])
+        self.assertIn("--no-viewer", cmd)
+        client.close()
+
 
 class MemTensorProviderTests(unittest.TestCase):
     """Exercise `MemTensorProvider` against a mocked bridge."""
@@ -302,6 +312,7 @@ class MemTensorProviderTests(unittest.TestCase):
 
         self._patches = [
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
         ]
         for p in self._patches:
             p.start()
@@ -601,6 +612,61 @@ class MemTensorProviderTests(unittest.TestCase):
             loaded = yaml.safe_load(cfg_path.read_text())
             self.assertEqual(loaded["viewer"]["port"], 18920)
             self.assertEqual(loaded["llm"]["provider"], "openai_compatible")
+
+
+class ViewerDaemonTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        daemon_manager_mod._viewer_status = None
+        daemon_manager_mod._viewer_last_probe_at = 0.0
+        daemon_manager_mod._viewer_process = None
+
+    def test_existing_memos_viewer_is_reused(self) -> None:
+        with (
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="running_memos"),
+            patch.object(daemon_manager_mod.subprocess, "Popen") as popen,
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_viewer_daemon())
+            popen.assert_not_called()
+
+    def test_non_memos_port_occupant_blocks_daemon_start(self) -> None:
+        with (
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="blocked"),
+            patch.object(daemon_manager_mod.subprocess, "Popen") as popen,
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_viewer_daemon())
+            popen.assert_not_called()
+
+    def test_free_port_starts_daemon_once(self) -> None:
+        class FakeDaemon:
+            returncode = None
+
+            def poll(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge_path = Path(tmp) / "bridge.cts"
+            bridge_path.write_text("", encoding="utf-8")
+            with (
+                patch.object(
+                    daemon_manager_mod,
+                    "_probe_viewer",
+                    side_effect=["free", "running_memos"],
+                ),
+                patch.object(daemon_manager_mod, "_bridge_script", return_value=bridge_path),
+                patch.object(daemon_manager_mod, "ensure_bridge_running", return_value=True),
+                patch.object(
+                    daemon_manager_mod,
+                    "_bridge_command",
+                    return_value=["node", "bridge.cts", "--agent=hermes", "--daemon"],
+                ),
+                patch.object(
+                    daemon_manager_mod.subprocess,
+                    "Popen",
+                    return_value=FakeDaemon(),
+                ) as popen,
+            ):
+                self.assertTrue(daemon_manager_mod.ensure_viewer_daemon())
+                popen.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
  *
  * Started by non-TypeScript hosts (e.g. the Hermes Python client) via:
  *
- *   node_modules/.bin/tsx bridge.cts --agent=hermes
+ *   node_modules/.bin/tsx bridge.cts --agent=hermes --no-viewer
  *
  * The `.cts` extension is intentional: it lets the file be required
  * from CommonJS environments that spawn Node with `require("...")`
@@ -37,6 +37,7 @@ const BRIDGE_STATUS_FILE = "bridge-status.json";
 
 interface BridgeArgs {
   daemon: boolean;
+  noViewer: boolean;
   tcpPort?: number;
   agent: "openclaw" | "hermes";
 }
@@ -51,9 +52,10 @@ interface BridgeStatusSnapshot {
 }
 
 function parseArgs(argv: readonly string[]): BridgeArgs {
-  const args: BridgeArgs = { daemon: false, agent: "openclaw" };
+  const args: BridgeArgs = { daemon: false, noViewer: false, agent: "openclaw" };
   for (const raw of argv) {
     if (raw === "--daemon") args.daemon = true;
+    else if (raw === "--no-viewer") args.noViewer = true;
     else if (raw.startsWith("--tcp=")) args.tcpPort = Number(raw.slice(6));
     else if (raw === "--agent=hermes") args.agent = "hermes";
     else if (raw === "--agent=openclaw") args.agent = "openclaw";
@@ -295,39 +297,47 @@ async function main(): Promise<void> {
     bridgeStatus?.markDisconnected("Hermes chat disconnected");
   });
 
-  // Try to bind the viewer port. EADDRINUSE → stay headless.
+  // Try to bind the viewer port unless the caller requested a pure stdio
+  // bridge. Hermes chat uses --no-viewer; the standalone --daemon process is
+  // the single owner of :18800.
   let viewer: import("./server/types.js").ServerHandle | null = null;
-  try {
-    viewer = await startHttpServer(
-      {
-        core,
-        home,
-        logTail: () => memoryBuffer().tail({ limit: 200 }),
-        bridgeStatus: bridgeStatus ? () => bridgeStatus.snapshot() : undefined,
-        telemetry,
-      },
-      {
-        port: viewerPort,
-        host: config.viewer.bindHost,
-        staticRoot: path.resolve(__dirname, "viewer/dist"),
-        agent: args.agent,
-      },
-    );
+  if (args.noViewer) {
     process.stderr.write(
-      `bridge: viewer live at ${viewer.url} (agent=${args.agent})\n`,
+      `bridge: stdio mode running without viewer (agent=${args.agent})\n`,
     );
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e?.code === "EADDRINUSE") {
-      process.stderr.write(
-        `bridge: viewer port :${viewerPort} is already in use — ` +
-          `${args.agent} will run headless (stdio only). ` +
-          `Free the port to expose the viewer.\n`,
+  } else {
+    try {
+      viewer = await startHttpServer(
+        {
+          core,
+          home,
+          logTail: () => memoryBuffer().tail({ limit: 200 }),
+          bridgeStatus: bridgeStatus ? () => bridgeStatus.snapshot() : undefined,
+          telemetry,
+        },
+        {
+          port: viewerPort,
+          host: config.viewer.bindHost,
+          staticRoot: path.resolve(__dirname, "viewer/dist"),
+          agent: args.agent,
+        },
       );
-    } else {
       process.stderr.write(
-        `bridge: viewer failed to start: ${e?.message ?? String(err)}\n`,
+        `bridge: viewer live at ${viewer.url} (agent=${args.agent})\n`,
       );
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e?.code === "EADDRINUSE") {
+        process.stderr.write(
+          `bridge: viewer port :${viewerPort} is already in use — ` +
+            `${args.agent} will run headless (stdio only). ` +
+            `Free the port to expose the viewer.\n`,
+        );
+      } else {
+        process.stderr.write(
+          `bridge: viewer failed to start: ${e?.message ?? String(err)}\n`,
+        );
+      }
     }
   }
 
