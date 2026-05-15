@@ -24,7 +24,7 @@ import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { makeTmpHome, type TmpHomeContext } from "../../helpers/tmp-home.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 import type { MemosError } from "../../../agent-contract/errors.js";
-import type { SkillId, SkillRow } from "../../../core/types.js";
+import type { SkillId, SkillRow, TraceRow } from "../../../core/types.js";
 
 let db: TmpDbHandle | null = null;
 let pipeline: PipelineHandle | null = null;
@@ -190,6 +190,83 @@ describe("MemoryCore façade", () => {
     expect(fixed.statsAfter.dimMismatch).toBe(0);
     row = db!.repos.traces.getById("tr_imported" as never);
     expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
+  });
+
+  it("does not require action vectors for lightweight memory traces", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    db!.repos.sessions.upsert({
+      id: "se_lightweight",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      lastSeenAt: 1_700_000_000_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_lightweight",
+      sessionId: "se_lightweight",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      endedAt: 1_700_000_000_001,
+      traceIds: ["tr_lightweight"] as never,
+      rTask: null,
+      status: "closed",
+      meta: { lightweightMemory: true },
+    });
+    db!.repos.traces.insert({
+      id: "tr_lightweight",
+      episodeId: "ep_lightweight",
+      sessionId: "se_lightweight",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: 1_700_000_000_000,
+      userText: "What changed in the repo?",
+      agentText: "The branch adds lightweight memory mode.",
+      summary: "Repo branch lightweight memory change",
+      share: null,
+      toolCalls: [],
+      agentThinking: null,
+      reflection: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: ["lightweight_memory"],
+      errorSignatures: [],
+      vecSummary: new Float32Array(TEST_EMBED_DIMENSIONS),
+      vecAction: null,
+      turnId: 1_700_000_000_000,
+      schemaVersion: 1,
+    } as TraceRow);
+
+    const before = await core.embeddingMaintenanceStats();
+    expect(before.byKind.trace.totalSlots).toBe(1);
+    expect(before.byKind.trace.ready).toBe(1);
+    expect(before.byKind.trace.missing).toBe(0);
+    expect(before.needsRepair).toBe(0);
+
+    const repaired = await core.rebuildEmbeddings({ mode: "repair", limit: 10 });
+    expect(repaired.processed).toBe(0);
+    expect(repaired.updated).toBe(0);
+
+    const rebuilt = await core.rebuildEmbeddings({ mode: "rebuild", limit: 10 });
+    expect(rebuilt.processed).toBe(1);
+    expect(rebuilt.updated).toBe(1);
+    const row = db!.repos.traces.getById("tr_lightweight" as never);
+    expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
+    expect(row?.vecAction).toBeNull();
   });
 
   it("onTurnStart returns a RetrievalResultDTO with tier latencies", async () => {
