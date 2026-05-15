@@ -77,6 +77,12 @@ export function buildQuery(ctx: RetrievalCtx): CompiledQuery {
       return finalize(parts.join("\n"));
     }
     case "tool_driven": {
+      if (typeof ctx.args?.query === "string" && ctx.args.query.trim()) {
+        const rest = { ...ctx.args };
+        delete rest.query;
+        const restText = Object.keys(rest).length > 0 ? renderArgs(rest) : "";
+        return finalize([ctx.args.query.trim(), restText].filter(Boolean).join("\n"));
+      }
       const args = renderArgs(ctx.args);
       return finalize(`tool:${ctx.tool}\n${args}`);
     }

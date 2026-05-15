@@ -1301,6 +1301,101 @@ describe("createOpenClawBridge", () => {
     expect(bridge.trackedToolCalls()).toBe(0);
   });
 
+  it("tool_result_persist appends memos_search hint after three same-tool failures", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const ctx: PluginHookToolContext = {
+      toolName: "sh",
+      toolCallId: "call_1",
+      agentId: "main",
+      sessionKey: "s-tools",
+      sessionId: "host-s-tools",
+      runId: "run-tools",
+    };
+
+    const fail = (toolCallId: string) =>
+      bridge.handleToolResultPersist(
+        {
+          toolName: "sh",
+          toolCallId,
+          message: {
+            role: "toolResult",
+            toolName: "sh",
+            toolCallId,
+            content: "boom",
+            isError: true,
+          },
+        },
+        { ...ctx, toolCallId },
+      );
+
+    expect(fail("call_1")).toBeUndefined();
+    expect(fail("call_2")).toBeUndefined();
+    const third = fail("call_3") as { message?: { content?: string } };
+    expect(third.message?.content).toContain("failed multiple times in a row");
+    expect(third.message?.content).toContain("memos_search");
+
+    bridge.handleToolResultPersist(
+      {
+        toolName: "sh",
+        toolCallId: "call_4",
+        message: {
+          role: "toolResult",
+          toolName: "sh",
+          toolCallId: "call_4",
+          content: "ok",
+          isError: false,
+        },
+      },
+      { ...ctx, toolCallId: "call_4" },
+    );
+    expect(fail("call_5")).toBeUndefined();
+  });
+
+  it("tool_result_persist appends hint to the final text block", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const ctx: PluginHookToolContext = {
+      toolName: "read",
+      agentId: "main",
+      sessionKey: "s-tools",
+      sessionId: "host-s-tools",
+      runId: "run-array",
+    };
+    const failure = {
+      toolName: "read",
+      message: {
+        role: "toolResult",
+        content: [
+          { type: "text", text: "first part" },
+          { type: "text", text: "last part" },
+        ],
+        isError: true,
+      },
+    };
+
+    bridge.handleToolResultPersist(failure, ctx);
+    bridge.handleToolResultPersist(failure, ctx);
+    const third = bridge.handleToolResultPersist(failure, ctx) as {
+      message?: { content?: Array<{ type: string; text?: string }> };
+    };
+    expect(third.message?.content?.[0]?.text).toBe("first part");
+    expect(third.message?.content?.[1]?.text).toContain("last part");
+    expect(third.message?.content?.[1]?.text).toContain("memos_search");
+  });
+
   it("subagent_ended does not create a synthetic parent task", async () => {
     const mc = buildCore();
     await mc.init();

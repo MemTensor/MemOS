@@ -1974,7 +1974,7 @@ export function createMemoryCore(
       namespace: ns,
       repos: wrapRetrievalRepos(handle.repos, ns),
     };
-    const { turnStartRetrieve } = await import("../retrieval/retrieve.js");
+    const { toolDrivenRetrieve } = await import("../retrieval/retrieve.js");
     const sessionId =
       query.sessionId ??
       ("adhoc-session-" + randomUUID().slice(0, 8) as SessionId);
@@ -2013,14 +2013,14 @@ export function createMemoryCore(
       };
     } | undefined;
     try {
-      const result = await turnStartRetrieve(deps, {
-        reason: "turn_start",
+      const result = await toolDrivenRetrieve(deps, {
+        reason: "tool_driven",
         agent: query.agent,
         namespace: ns,
         sessionId,
         episodeId: query.episodeId,
-        userText: query.query,
-        contextHints: query.filters ?? {},
+        tool: "memos_search",
+        args: { ...(query.filters ?? {}), query: query.query },
         ts,
       });
       let hits: RetrievalHitDTO[] = result.packet.snippets.map((snip) => ({
