@@ -164,6 +164,7 @@ describe("capture/pipeline (batched ρ+α path)", () => {
   ): CaptureRunner {
     return createCaptureRunner({
       tracesRepo: tmp.repos.traces,
+      subEpisodesRepo: tmp.repos.subEpisodes,
       episodesRepo,
       embedder: fakeEmbedder({ dimensions: 8 }),
       llm,
@@ -173,7 +174,7 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     });
   }
 
-  it("3-step episode → ONE batched LLM call (no per-step alpha/synth)", async () => {
+  it("3-step episode → no trace-level reflection LLM call", async () => {
     const llm = fakeLlm({
       completeJson: {
         [batchOp]: {
@@ -221,18 +222,16 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     const result = await runCapture(runner, ep);
 
     expect(result.traceIds).toHaveLength(3);
-    expect(result.llmCalls.batchedReflection).toBe(1);
+    expect(result.llmCalls.batchedReflection).toBe(0);
     expect(result.llmCalls.reflectionSynth).toBe(0);
     expect(result.llmCalls.alphaScoring).toBe(0);
 
     const rows = result.traceIds.map((id) => tmp.repos.traces.getById(id)!);
-    expect(rows[0]!.reflection).toContain("file list");
-    expect(rows[0]!.alpha).toBeCloseTo(0.6, 5);
-    expect(rows[1]!.alpha).toBeCloseTo(0.7, 5);
-    expect(rows[2]!.alpha).toBeCloseTo(0.5, 5);
+    expect(rows.every((row) => row.reflection === null)).toBe(true);
+    expect(rows.every((row) => row.alpha === 0)).toBe(true);
   });
 
-  it("preserves existing adapter-provided reflection verbatim (no rewrite)", async () => {
+  it("clears adapter-provided trace reflection; SubEpisode owns reflection", async () => {
     const llm = fakeLlm({
       completeJson: {
         // The LLM tries to "improve" the reflection. We must IGNORE that
@@ -265,11 +264,9 @@ describe("capture/pipeline (batched ρ+α path)", () => {
 
     const result = await runCapture(runner, ep);
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    // Original reflection survives intact.
-    expect(t.reflection).toBe("I picked the cheapest tool because user said so.");
-    // α is taken from the LLM grading.
-    expect(t.alpha).toBeCloseTo(0.8, 5);
-    expect(result.llmCalls.batchedReflection).toBe(1);
+    expect(t.reflection).toBeNull();
+    expect(t.alpha).toBe(0);
+    expect(result.llmCalls.batchedReflection).toBe(0);
   });
 
   it("synthReflections=false discards LLM-written reflections for empty steps", async () => {
@@ -305,7 +302,7 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     expect(t.alpha).toBe(0); // V7 disabledScore semantics
   });
 
-  it("auto mode falls back to per-step when stepCount > batchThreshold", async () => {
+  it("auto mode does not fall back to trace-level per-step scoring", async () => {
     const llm = fakeLlm({
       completeJson: {
         // ONLY per-step alpha mock; if batched gets called, the test fails
@@ -335,12 +332,11 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     const result = await runCapture(runner, ep);
     expect(result.traceIds).toHaveLength(3);
     expect(result.llmCalls.batchedReflection).toBe(0);
-    // 3 synth + 3 alpha calls in per-step mode.
-    expect(result.llmCalls.reflectionSynth).toBe(3);
-    expect(result.llmCalls.alphaScoring).toBe(3);
+    expect(result.llmCalls.reflectionSynth).toBe(0);
+    expect(result.llmCalls.alphaScoring).toBe(0);
   });
 
-  it("per_episode mode batches even when step count is large", async () => {
+  it("per_episode mode no longer triggers trace-level batching", async () => {
     const scores = Array.from({ length: 5 }, (_, i) => ({
       idx: i,
       reflection_text: `reflection #${i}`,
@@ -361,11 +357,11 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     const ep = episodeSnapshot({ id: "ep_1", sessionId: "se_1", turns });
     const result = await runCapture(runner, ep);
     expect(result.traceIds).toHaveLength(5);
-    expect(result.llmCalls.batchedReflection).toBe(1);
+    expect(result.llmCalls.batchedReflection).toBe(0);
     expect(result.llmCalls.alphaScoring).toBe(0);
   });
 
-  it("malformed batched response → falls back to per-step + emits warning", async () => {
+  it("malformed batched response is irrelevant because trace batch scoring is disabled", async () => {
     const llm = fakeLlm({
       completeJson: {
         // Wrong shape: scores has fewer entries than steps. Validator throws,
@@ -389,14 +385,13 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     });
     const result = await runCapture(runner, ep);
     expect(result.traceIds).toHaveLength(1);
-    expect(result.warnings.some((w) => w.stage === "batch")).toBe(true);
+    expect(result.warnings.some((w) => w.stage === "batch")).toBe(false);
     expect(result.llmCalls.batchedReflection).toBe(0);
-    // Per-step fallback ran.
-    expect(result.llmCalls.reflectionSynth).toBe(1);
-    expect(result.llmCalls.alphaScoring).toBe(1);
+    expect(result.llmCalls.reflectionSynth).toBe(0);
+    expect(result.llmCalls.alphaScoring).toBe(0);
   });
 
-  it("usable=false in batched response forces α=0 (V7 eq.5)", async () => {
+  it("batched usable=false response does not affect trace α", async () => {
     const llm = fakeLlm({
       completeJson: {
         [batchOp]: {
@@ -427,8 +422,7 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     });
     const result = await runCapture(runner, ep);
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    // Reflection text preserved (came from regex extractor), but α clamped.
-    expect(t.reflection).toContain("obvious action");
+    expect(t.reflection).toBeNull();
     expect(t.alpha).toBe(0);
   });
 

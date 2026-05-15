@@ -42,6 +42,7 @@ import type {
   RetrievalChannel,
   RetrievalConfig,
   SkillCandidate,
+  SubEpisodeCandidate,
   TierCandidate,
   TierKind,
   TraceCandidate,
@@ -51,6 +52,7 @@ import type {
 export interface RankerInput {
   tier1: readonly SkillCandidate[];
   tier2Traces: readonly TraceCandidate[];
+  tier2SubEpisodes?: readonly SubEpisodeCandidate[];
   tier2Episodes: readonly EpisodeCandidate[];
   tier2Experiences?: readonly ExperienceCandidate[];
   tier3: readonly WorldModelCandidate[];
@@ -112,6 +114,7 @@ export function rank(input: RankerInput): RankerResult {
     tier1: input.tier1.length,
     tier2:
       input.tier2Traces.length +
+      (input.tier2SubEpisodes?.length ?? 0) +
       input.tier2Episodes.length +
       (input.tier2Experiences?.length ?? 0),
     tier3: input.tier3.length,
@@ -123,6 +126,7 @@ export function rank(input: RankerInput): RankerResult {
   const bag: RankedCandidate[] = [];
   pushAll(bag, input.tier1, (c) => relevanceFor(c, input));
   pushAll(bag, input.tier2Traces, (c) => relevanceFor(c, input));
+  pushAll(bag, input.tier2SubEpisodes ?? [], (c) => relevanceFor(c, input));
   pushAll(bag, input.tier2Episodes, (c) => relevanceFor(c, input));
   pushAll(bag, input.tier2Experiences ?? [], (c) => relevanceFor(c, input));
   pushAll(bag, input.tier3, (c) => relevanceFor(c, input));
@@ -286,8 +290,8 @@ function relevanceFor(c: TierCandidate, input: RankerInput): number {
     const etaBlend = input.config.skillEtaBlend ?? DEFAULT_SKILL_ETA_BLEND;
     return base + etaBlend * clamp(sk.eta, 0, 1);
   }
-  if (c.refKind === "trace") {
-    const tc = c as TraceCandidate;
+  if (c.refKind === "trace" || c.refKind === "sub_episode") {
+    const tc = c as TraceCandidate | SubEpisodeCandidate;
     const live = priorityFor(
       tc.value,
       tc.ts,

@@ -2627,6 +2627,7 @@ export function createMemoryCore(
         status: r.status,
         rTask: r.rTask,
         turnCount: deriveTurnCount(r, episodeTraces),
+        subEpisodeCount: handle.repos.subEpisodes.listByEpisode(r.id).length,
         preview,
         tags: tagSet.size > 0 ? Array.from(tagSet).sort() : undefined,
         skillStatus: derivation.status,
@@ -4421,6 +4422,7 @@ export function inferTier(
   kind:
     | "skill"
     | "trace"
+    | "sub_episode"
     | "episode"
     | "experience"
     | "world-model"

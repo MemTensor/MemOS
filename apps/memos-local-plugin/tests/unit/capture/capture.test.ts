@@ -207,6 +207,7 @@ describe("capture/pipeline (end-to-end)", () => {
   ): CaptureRunner {
     return createCaptureRunner({
       tracesRepo: tmp.repos.traces,
+      subEpisodesRepo: tmp.repos.subEpisodes,
       embeddingRetryQueue: tmp.repos.embeddingRetryQueue,
       episodesRepo,
       embedder,
@@ -234,10 +235,9 @@ describe("capture/pipeline (end-to-end)", () => {
     expect(persisted!.reflection).toBeNull();
     expect(persisted!.alpha).toBe(0);
     expect(persisted!.value).toBe(0);
-    // Newly-captured rows seed `priority` at 0.5 so they're visible to
-    // Tier-2 retrieval even before reward backprop runs (V7 §0.6 will
-    // overwrite this once R_human lands).
-    expect(persisted!.priority).toBe(0.5);
+    // Topic-end scoring is SubEpisode-owned. This simple greeting has no
+    // learnable SubEpisode, so the trace stays neutral.
+    expect(persisted!.priority).toBe(0);
     expect(persisted!.vecSummary).toBeInstanceOf(Float32Array);
     expect(persisted!.vecAction).toBeInstanceOf(Float32Array);
   });
@@ -353,7 +353,7 @@ describe("capture/pipeline (end-to-end)", () => {
     expect(tmp.repos.episodes.getById("ep_1" as EpisodeId)!.traceIds).toEqual(lite.traceIds);
   });
 
-  it("passes through adapter-provided reflection and stores α from LLM", async () => {
+  it("does not write trace-level reflection or α from LLM", async () => {
     const llm = fakeLlm({
       completeJson: {
         [alphaOp]: { alpha: 0.8, usable: true, reason: "concrete" },
@@ -373,12 +373,12 @@ describe("capture/pipeline (end-to-end)", () => {
     const result = await runCapture(runner, ep);
 
     expect(result.traceIds).toHaveLength(1);
-    expect(result.llmCalls.alphaScoring).toBe(1);
+    expect(result.llmCalls.alphaScoring).toBe(0);
     expect(result.llmCalls.reflectionSynth).toBe(0);
 
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    expect(t.reflection).toContain("shell tool");
-    expect(t.alpha).toBeCloseTo(0.8, 5);
+    expect(t.reflection).toBeNull();
+    expect(t.alpha).toBe(0);
   });
 
   it("clamps α to 0 when LLM marks reflection unusable", async () => {
@@ -402,11 +402,11 @@ describe("capture/pipeline (end-to-end)", () => {
     });
     const result = await runCapture(runner, ep);
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    expect(t.reflection).toBeTruthy();
+    expect(t.reflection).toBeNull();
     expect(t.alpha).toBe(0);
   });
 
-  it("alpha LLM failure is non-fatal — trace still persists with neutral α", async () => {
+  it("alpha LLM path is not called — trace still persists with neutral α", async () => {
     const llm = fakeLlm({ completeJson: {} }); // no mocks → throws
     const runner = buildRunner({}, llm);
     const ep = episodeSnapshot({
@@ -420,13 +420,13 @@ describe("capture/pipeline (end-to-end)", () => {
     const result = await runCapture(runner, ep);
 
     expect(result.traceIds).toHaveLength(1);
-    expect(result.warnings.some((w) => w.stage === "alpha")).toBe(true);
+    expect(result.warnings.some((w) => w.stage === "alpha")).toBe(false);
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    expect(t.reflection).toBeTruthy();
-    expect(t.alpha).toBeCloseTo(0.5, 5); // neutral fallback from disabledScore
+    expect(t.reflection).toBeNull();
+    expect(t.alpha).toBe(0);
   });
 
-  it("synthesizes reflection when configured and extraction found nothing", async () => {
+  it("does not synthesize trace reflection when configured", async () => {
     const llm = fakeLlm({
       complete: {
         "capture.reflection.synth":
@@ -446,10 +446,10 @@ describe("capture/pipeline (end-to-end)", () => {
       ],
     });
     const result = await runCapture(runner, ep);
-    expect(result.llmCalls.reflectionSynth).toBe(1);
+    expect(result.llmCalls.reflectionSynth).toBe(0);
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    expect(t.reflection).toContain("directory listing");
-    expect(t.alpha).toBeCloseTo(0.6, 5);
+    expect(t.reflection).toBeNull();
+    expect(t.alpha).toBe(0);
   });
 
   it("updates episode.trace_ids_json with new ids", async () => {

@@ -27,6 +27,7 @@ import type {
   ExperienceCandidate,
   RankedSnippet,
   SkillCandidate,
+  SubEpisodeCandidate,
   TierCandidate,
   TraceCandidate,
   WorldModelCandidate,
@@ -182,6 +183,7 @@ function renderSnippet(c: TierCandidate, opts: RenderOpts): InjectionSnippet | n
     case "tier1":
       return renderSkill(c as SkillCandidate, opts);
     case "tier2":
+      if (c.refKind === "sub_episode") return renderSubEpisode(c as SubEpisodeCandidate);
       if (c.refKind === "trace") return renderTrace(c as TraceCandidate);
       if (c.refKind === "experience") {
         return renderExperience(c as ExperienceCandidate);
@@ -192,6 +194,26 @@ function renderSnippet(c: TierCandidate, opts: RenderOpts): InjectionSnippet | n
     default:
       return null;
   }
+}
+
+function renderSubEpisode(c: SubEpisodeCandidate): InjectionSnippet {
+  const lines = [
+    `Goal: ${c.localGoal}`,
+    `Trigger: ${c.trigger}`,
+    c.actionChain.length > 0 ? `Actions: ${c.actionChain.slice(0, 5).join(" -> ")}` : "",
+    c.observations.length > 0 ? `Observations: ${c.observations.slice(0, 4).join(" | ")}` : "",
+    `Outcome: ${c.outcome}`,
+    c.verification ? `Verification: ${c.verification}` : "",
+    c.failureMode ? `Failure mode: ${c.failureMode}` : "",
+    c.reflection ? `Reflection: ${c.reflection}` : "",
+    `Evidence traces: ${c.traceIds.join(", ")}`,
+  ].filter(Boolean);
+  return {
+    refKind: "sub_episode",
+    refId: c.refId,
+    title: c.summary,
+    body: truncate(lines.join("\n")),
+  };
 }
 
 /**

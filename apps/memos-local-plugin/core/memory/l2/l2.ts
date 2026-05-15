@@ -26,6 +26,7 @@ import type {
   EpochMs,
   PolicyId,
   PolicyRow,
+  SubEpisodeRow,
   TraceRow,
 } from "../../types.js";
 import type { Repos } from "../../storage/repos/index.js";
@@ -35,7 +36,7 @@ import { associateTraces } from "./associate.js";
 import { makeCandidatePool } from "./candidate-pool.js";
 import { buildPolicyRow, induceDraft } from "./induce.js";
 import { applyGain, computeGain, smoothGain } from "./gain.js";
-import { signatureOf } from "./signature.js";
+import { signatureOf, signatureOfSubEpisode } from "./signature.js";
 import { tracePolicySimilarity } from "./similarity.js";
 import type {
   AssociationResult,
@@ -48,7 +49,7 @@ import type {
 } from "./types.js";
 
 export interface RunL2Deps {
-  repos: Pick<Repos, "candidatePool" | "embeddingRetryQueue" | "policies" | "tracePolicyLinks" | "traces">;
+  repos: Pick<Repos, "candidatePool" | "embeddingRetryQueue" | "policies" | "subEpisodes" | "tracePolicyLinks" | "traces">;
   db: Parameters<typeof makeCandidatePool>[0]["db"];
   llm: LlmClient | null;
   log: Logger;
@@ -66,6 +67,12 @@ export async function runL2(
   const startedAt: EpochMs = Date.now();
   const warnings: L2ProcessResult["warnings"] = [];
   const timings = { associate: 0, candidate: 0, induce: 0, gain: 0, persist: 0, total: 0 };
+  const eligibleSubEpisodes = (input.subEpisodes ?? []).filter(
+    (se) => se.value >= config.minTraceValue && !!se.vecSummary,
+  );
+  if (eligibleSubEpisodes.length > 0) {
+    return runL2SubEpisodes(input, eligibleSubEpisodes, deps, startedAt, warnings, timings);
+  }
 
   const eligibleTraces = input.traces.filter((t) => t.value >= config.minTraceValue && !!(t.vecSummary ?? t.vecAction));
   log.info("run.start", {
@@ -482,6 +489,297 @@ export async function runL2(
   };
 }
 
+async function runL2SubEpisodes(
+  input: L2ProcessInput,
+  eligibleSubEpisodes: readonly SubEpisodeRow[],
+  deps: RunL2Deps,
+  startedAt: EpochMs,
+  warnings: L2ProcessResult["warnings"],
+  timings: L2ProcessResult["timings"],
+): Promise<L2ProcessResult> {
+  const { repos, log, bus, config, thresholds } = deps;
+  log.info("run.start.sub_episode", {
+    episodeId: input.episodeId,
+    sessionId: input.sessionId,
+    traceCount: input.traces.length,
+    subEpisodeCount: input.subEpisodes?.length ?? 0,
+    eligibleCount: eligibleSubEpisodes.length,
+    trigger: input.trigger,
+  });
+
+  const associations: AssociationResult[] = [];
+  const matchedBySubEpisode = new Map<string, PolicyId>();
+  const touched = new Map<PolicyId, PolicyRow>();
+  const inductionEvidenceByPolicy = new Map<PolicyId, Set<string>>();
+  const pool = makeCandidatePool({ db: deps.db, repos });
+
+  {
+    const t0 = Date.now();
+    for (const se of eligibleSubEpisodes) {
+      const match = findExistingSubEpisodeMatch(se, repos, config.minSimilarity);
+      associations.push({
+        traceId: se.startTraceId,
+        signature: signatureOfSubEpisode(se),
+        matchedPolicyId: match?.policy.id ?? null,
+        matchSimilarity: match?.similarity ?? 0,
+        addedToCandidatePool: false,
+      });
+      if (!match) continue;
+      matchedBySubEpisode.set(se.id, match.policy.id);
+      touched.set(match.policy.id, match.policy);
+      for (const traceId of se.traceIds) {
+        try {
+          repos.tracePolicyLinks.link({
+            traceId,
+            policyId: match.policy.id,
+            episodeId: se.episodeId,
+            now: input.now ?? Date.now(),
+          });
+        } catch (err) {
+          warnings.push(stageWarn("trace-policy-link", err, { traceId, policyId: match.policy.id }));
+        }
+      }
+      emit(bus, {
+        kind: "l2.trace.associated",
+        episodeId: se.episodeId,
+        traceId: se.startTraceId,
+        policyId: match.policy.id,
+        similarity: match.similarity,
+      });
+    }
+    timings.associate = Date.now() - t0;
+  }
+
+  {
+    const t0 = Date.now();
+    const ttlMs = config.candidateTtlDays * 24 * 60 * 60 * 1000;
+    for (const se of eligibleSubEpisodes) {
+      if (matchedBySubEpisode.has(se.id)) continue;
+      try {
+        const r = pool.addSubEpisodeCandidate({ subEpisode: se, ttlMs, now: input.now });
+        const a = associations.find((item) => item.traceId === se.startTraceId);
+        if (a) a.addedToCandidatePool = true;
+        emit(bus, {
+          kind: "l2.candidate.added",
+          episodeId: se.episodeId,
+          traceId: se.startTraceId,
+          signature: r.signature,
+          candidateId: r.candidateId,
+        });
+      } catch (err) {
+        warnings.push(stageWarn("candidate.sub_episode", err, { subEpisodeId: se.id }));
+      }
+    }
+    timings.candidate = Date.now() - t0;
+  }
+
+  const inductions: InductionResult[] = [];
+  {
+    const t0 = Date.now();
+    const ready = pool.bucketsReadyForInduction({
+      minDistinctEpisodes: config.minEpisodesForInduction,
+      now: input.now,
+    });
+    for (const bucket of ready) {
+      const subEpisodes = bucket.evidenceSubEpisodeIds
+        .map((id) => repos.subEpisodes.getById(id))
+        .filter((se): se is SubEpisodeRow => !!se);
+      const epIds = Array.from(new Set(subEpisodes.map((se) => se.episodeId))) as EpisodeId[];
+      if (subEpisodes.length === 0 || epIds.length < config.minEpisodesForInduction) {
+        continue;
+      }
+      const evidenceTraceIds = Array.from(new Set(subEpisodes.flatMap((se) => se.traceIds)));
+      const dup = findExistingSubEpisodeBucketMatch(subEpisodes, repos, config.minSimilarity);
+      if (dup) {
+        inductions.push({
+          signature: bucket.signature,
+          policyId: dup.id,
+          poolSize: bucket.candidateIds.length,
+          episodeIds: epIds,
+          traceIds: evidenceTraceIds,
+          skippedReason: "duplicate_of",
+          duplicateOfPolicyId: dup.id,
+        });
+        pool.promote(bucket.candidateIds, dup.id);
+        touched.set(dup.id, dup);
+        inductionEvidenceByPolicy.set(dup.id, new Set(bucket.evidenceSubEpisodeIds));
+        continue;
+      }
+
+      const draftRes = await induceDraft(
+        {
+          evidenceTraces: [],
+          evidenceSubEpisodes: pickOneSubEpisodePerEpisode(subEpisodes),
+          episodeIds: epIds,
+          signatureLabel: bucket.signature,
+          charCap: config.inductionTraceCharCap,
+          triggerEpisodeId: input.episodeId,
+        },
+        {
+          llm: config.useLlm ? deps.llm : null,
+          log: log.child({ channel: "core.memory.l2.induce" }),
+          validate: (d) => {
+            if (!d.procedure) {
+              throw new MemosError(ERROR_CODES.LLM_OUTPUT_MALFORMED, "draft missing procedure");
+            }
+          },
+        },
+      );
+      if (!draftRes.ok) {
+        inductions.push({
+          signature: bucket.signature,
+          policyId: null,
+          poolSize: bucket.candidateIds.length,
+          episodeIds: epIds,
+          traceIds: evidenceTraceIds,
+          skippedReason: draftRes.reason,
+        });
+        continue;
+      }
+
+      const policy = buildPolicyRow({
+        draft: draftRes.draft,
+        episodeIds: epIds,
+        evidenceTraces: [],
+        evidenceSubEpisodes: subEpisodes,
+        inducedBy: `${L2_INDUCTION_PROMPT.id}.v${L2_INDUCTION_PROMPT.version}`,
+        now: input.now ?? Date.now(),
+      });
+      const owner = ownerFromSubEpisodes(subEpisodes);
+      policy.ownerAgentKind = owner.ownerAgentKind;
+      policy.ownerProfileId = owner.ownerProfileId;
+      policy.ownerWorkspaceId = owner.ownerWorkspaceId;
+      const duplicate = findExistingContentDuplicate(policy, repos);
+      const targetPolicy = duplicate ? mergePolicyEvidence(duplicate, policy, input.now ?? Date.now()) : policy;
+      try {
+        if (duplicate) repos.policies.upsert(targetPolicy);
+        else repos.policies.insert(targetPolicy);
+        if (!targetPolicy.vec) {
+          repos.embeddingRetryQueue.enqueue({
+            id: `er_${ids.span()}`,
+            targetKind: "policy",
+            targetId: targetPolicy.id,
+            vectorField: "vec",
+            sourceText: policyVectorText(targetPolicy),
+            now: input.now ?? Date.now(),
+          });
+        }
+        pool.promote(bucket.candidateIds, targetPolicy.id);
+        touched.set(targetPolicy.id, targetPolicy);
+        inductionEvidenceByPolicy.set(targetPolicy.id, new Set(bucket.evidenceSubEpisodeIds));
+        for (const traceId of evidenceTraceIds) {
+          const trace = repos.traces.getById(traceId);
+          if (!trace) continue;
+          try {
+            repos.tracePolicyLinks.link({
+              traceId,
+              policyId: targetPolicy.id,
+              episodeId: trace.episodeId,
+              now: input.now ?? Date.now(),
+            });
+          } catch (err) {
+            warnings.push(stageWarn("trace-policy-link", err, { traceId, policyId: targetPolicy.id }));
+          }
+        }
+        inductions.push({
+          signature: bucket.signature,
+          policyId: targetPolicy.id,
+          poolSize: bucket.candidateIds.length,
+          episodeIds: epIds,
+          traceIds: evidenceTraceIds,
+          skippedReason: duplicate ? "duplicate_of" : null,
+          duplicateOfPolicyId: duplicate?.id,
+        });
+        if (!duplicate) {
+          emit(bus, {
+            kind: "l2.policy.induced",
+            episodeId: input.episodeId,
+            policyId: targetPolicy.id,
+            signature: bucket.signature,
+            evidenceTraceIds,
+            evidenceEpisodeIds: epIds,
+            title: targetPolicy.title,
+          });
+        }
+      } catch (err) {
+        warnings.push(stageWarn("induce.persist.sub_episode", err, { signature: bucket.signature }));
+      }
+    }
+    timings.induce = Date.now() - t0;
+  }
+
+  {
+    const t0 = Date.now();
+    for (const policy of touched.values()) {
+      const withIds = new Set<string>();
+      for (const [subEpisodeId, policyId] of matchedBySubEpisode) {
+        if (policyId === policy.id) withIds.add(subEpisodeId);
+      }
+      const inductionIds = inductionEvidenceByPolicy.get(policy.id);
+      if (inductionIds) for (const id of inductionIds) withIds.add(id);
+      const all = collectSubEpisodeScope(policy, eligibleSubEpisodes, repos);
+      const withTraces = all.filter((se) => withIds.has(se.id)).map(subEpisodeAsTrace);
+      const withoutTraces = all.filter((se) => !withIds.has(se.id)).map(subEpisodeAsTrace);
+      const rawGain = computeGain(
+        { policyId: policy.id, withTraces, withoutTraces },
+        { tauSoftmax: config.tauSoftmax },
+      );
+      const gain = {
+        ...rawGain,
+        gain: smoothGain({
+          newGain: rawGain.gain,
+          currentGain: policy.gain,
+          alpha: config.gainEmaAlpha,
+          isFirst: policy.support === 0,
+        }),
+      };
+      const persisted = applyGain({
+        gain,
+        deltaSupport: withIds.size,
+        currentStatus: policy.status,
+        thresholds,
+        currentSupport: policy.support,
+        now: input.now ?? Date.now(),
+        persist: ({ policyId, support, gain: g, status, updatedAt }) =>
+          repos.policies.updateStats(policyId, { support, gain: g, status, updatedAt }),
+      });
+      emit(bus, {
+        kind: "l2.policy.updated",
+        episodeId: input.episodeId,
+        policyId: policy.id,
+        status: persisted.status,
+        support: persisted.support,
+        gain: persisted.gain,
+      });
+    }
+    timings.gain = Date.now() - t0;
+  }
+
+  const completedAt = Date.now();
+  timings.persist = 0;
+  timings.total = completedAt - startedAt;
+  log.info("run.done.sub_episode", {
+    episodeId: input.episodeId,
+    sessionId: input.sessionId,
+    associations: associations.filter((a) => !!a.matchedPolicyId).length,
+    candidates: associations.filter((a) => a.addedToCandidatePool).length,
+    inductions: inductions.filter((i) => !!i.policyId).length,
+    touchedPolicies: touched.size,
+    timings,
+  });
+  return {
+    episodeId: input.episodeId,
+    sessionId: input.sessionId,
+    associations,
+    inductions,
+    touchedPolicyIds: Array.from(touched.keys()),
+    warnings,
+    timings,
+    startedAt,
+    completedAt,
+  };
+}
+
 function ownerFromTraces(traces: readonly TraceRow[]): {
   ownerAgentKind: string;
   ownerProfileId: string;
@@ -492,6 +790,99 @@ function ownerFromTraces(traces: readonly TraceRow[]): {
     ownerAgentKind: first?.ownerAgentKind ?? "unknown",
     ownerProfileId: first?.ownerProfileId ?? "default",
     ownerWorkspaceId: first?.ownerWorkspaceId ?? null,
+  };
+}
+
+function ownerFromSubEpisodes(subEpisodes: readonly SubEpisodeRow[]): {
+  ownerAgentKind: string;
+  ownerProfileId: string;
+  ownerWorkspaceId: string | null;
+} {
+  const first = subEpisodes[0];
+  return {
+    ownerAgentKind: first?.ownerAgentKind ?? "unknown",
+    ownerProfileId: first?.ownerProfileId ?? "default",
+    ownerWorkspaceId: first?.ownerWorkspaceId ?? null,
+  };
+}
+
+function findExistingSubEpisodeMatch(
+  subEpisode: SubEpisodeRow,
+  repos: Pick<Repos, "policies">,
+  minSimilarity: number,
+): { policy: PolicyRow; similarity: number } | null {
+  if (!subEpisode.vecSummary) return null;
+  const hits = repos.policies.searchByVector(subEpisode.vecSummary, 5, {
+    statusIn: ["active", "candidate"],
+  });
+  for (const hit of hits) {
+    const policy = repos.policies.getById(hit.id);
+    if (!policy) continue;
+    const similarity = Math.max(0, hit.score);
+    if (similarity >= minSimilarity) return { policy, similarity };
+  }
+  return null;
+}
+
+function findExistingSubEpisodeBucketMatch(
+  subEpisodes: readonly SubEpisodeRow[],
+  repos: Pick<Repos, "policies">,
+  minSimilarity: number,
+): PolicyRow | null {
+  for (const se of subEpisodes) {
+    const match = findExistingSubEpisodeMatch(se, repos, minSimilarity);
+    if (match) return match.policy;
+  }
+  return null;
+}
+
+function pickOneSubEpisodePerEpisode(subEpisodes: readonly SubEpisodeRow[]): SubEpisodeRow[] {
+  const byEp = new Map<string, SubEpisodeRow>();
+  for (const se of subEpisodes) {
+    const cur = byEp.get(se.episodeId);
+    if (!cur || se.value > cur.value) byEp.set(se.episodeId, se);
+  }
+  return Array.from(byEp.values());
+}
+
+function collectSubEpisodeScope(
+  policy: PolicyRow,
+  current: readonly SubEpisodeRow[],
+  repos: Pick<Repos, "subEpisodes">,
+): SubEpisodeRow[] {
+  const byId = new Map<string, SubEpisodeRow>();
+  for (const se of current) byId.set(se.id, se);
+  for (const episodeId of policy.sourceEpisodeIds ?? []) {
+    for (const se of repos.subEpisodes.listByEpisode(episodeId)) byId.set(se.id, se);
+  }
+  return Array.from(byId.values()).sort((a, b) => b.endTs - a.endTs || b.id.localeCompare(a.id));
+}
+
+function subEpisodeAsTrace(se: SubEpisodeRow): TraceRow {
+  return {
+    id: se.id as TraceRow["id"],
+    episodeId: se.episodeId,
+    sessionId: se.sessionId,
+    ownerAgentKind: se.ownerAgentKind,
+    ownerProfileId: se.ownerProfileId,
+    ownerWorkspaceId: se.ownerWorkspaceId,
+    ts: se.endTs,
+    userText: se.localGoal,
+    agentText: se.summary,
+    summary: se.summary,
+    toolCalls: [],
+    agentThinking: null,
+    reflection: se.reflection,
+    value: se.value,
+    alpha: se.alpha,
+    rHuman: null,
+    priority: se.priority,
+    tags: se.tags,
+    errorSignatures: se.errorSignatures,
+    vecSummary: se.vecSummary,
+    vecAction: null,
+    turnId: se.startTs,
+    schemaVersion: 1,
   };
 }
 
@@ -590,6 +981,10 @@ function mergePolicyEvidence(existing: PolicyRow, incoming: PolicyRow, now: numb
       ...existing.sourceEpisodeIds,
       ...incoming.sourceEpisodeIds,
     ]),
+    sourceTraceIds: Array.from(new Set([
+      ...(existing.sourceTraceIds ?? []),
+      ...(incoming.sourceTraceIds ?? []),
+    ])),
     vec: existing.vec ?? incoming.vec,
     updatedAt: now as PolicyRow["updatedAt"],
   };

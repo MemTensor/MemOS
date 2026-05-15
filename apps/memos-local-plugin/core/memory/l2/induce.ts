@@ -24,6 +24,7 @@ import type {
   EpisodeId,
   PolicyId,
   PolicyRow,
+  SubEpisodeRow,
   TraceId,
   TraceRow,
 } from "../../types.js";
@@ -34,6 +35,8 @@ import type { InductionDraft, InductionDraftResult } from "./types.js";
 export interface InduceInput {
   /** Traces that back the induction (one from each episode; may contain duplicates). */
   evidenceTraces: readonly TraceRow[];
+  /** Preferred evidence unit: local closed-loop experience spans. */
+  evidenceSubEpisodes?: readonly SubEpisodeRow[];
   /** Episode ids these traces came from — must be the distinct set. */
   episodeIds: readonly EpisodeId[];
   /** Human-readable signature for the bucket — appears in prompts. */
@@ -75,13 +78,19 @@ export async function induceDraft(
     return { ok: false, reason: "llm_disabled" };
   }
 
-  const userPayload = packTraces(input.evidenceTraces, input.charCap, input.signatureLabel);
+  const userPayload =
+    input.evidenceSubEpisodes && input.evidenceSubEpisodes.length > 0
+      ? packSubEpisodes(input.evidenceSubEpisodes, input.charCap, input.signatureLabel)
+      : packTraces(input.evidenceTraces, input.charCap, input.signatureLabel);
 
   // Match the induced policy's title/trigger/action/rationale to the
   // dominant language of the evidence bucket — Chinese users expect
   // their own L2 memories in 中文, English users expect English.
   const evidenceLang = detectDominantLanguage(
-    input.evidenceTraces.flatMap((t) => [t.userText, t.agentText, t.reflection]),
+    [
+      ...input.evidenceTraces.flatMap((t) => [t.userText, t.agentText, t.reflection]),
+      ...(input.evidenceSubEpisodes ?? []).flatMap((se) => [se.summary, se.reflection, se.localGoal]),
+    ],
   );
 
   try {
@@ -153,12 +162,20 @@ export function buildPolicyRow(args: {
   draft: InductionDraft;
   episodeIds: readonly EpisodeId[];
   evidenceTraces: readonly TraceRow[];
+  evidenceSubEpisodes?: readonly SubEpisodeRow[];
   inducedBy: string; // prompt id + version
   now?: number;
   id?: PolicyId;
 }): PolicyRow {
   const now = args.now ?? Date.now();
-  const vec = centroid(args.evidenceTraces.map((t) => t.vecSummary ?? t.vecAction ?? null));
+  const vec = centroid([
+    ...args.evidenceTraces.map((t) => t.vecSummary ?? t.vecAction ?? null),
+    ...(args.evidenceSubEpisodes ?? []).map((se) => se.vecSummary),
+  ]);
+  const sourceTraceIds = Array.from(new Set([
+    ...args.evidenceTraces.map((t) => t.id),
+    ...(args.evidenceSubEpisodes ?? []).flatMap((se) => se.traceIds),
+  ]));
   return {
     id: (args.id ?? (ids.policy() as PolicyId)),
     title: args.draft.title.slice(0, 120),
@@ -170,6 +187,7 @@ export function buildPolicyRow(args: {
     gain: 0,
     status: "candidate",
     sourceEpisodeIds: Array.from(new Set(args.episodeIds)),
+    sourceTraceIds,
     inducedBy: args.inducedBy,
     // Fresh policy starts without learned guidance — populated by the
     // decision-repair pipeline as user feedback / failure bursts arrive.
@@ -178,6 +196,41 @@ export function buildPolicyRow(args: {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function packSubEpisodes(
+  subEpisodes: readonly SubEpisodeRow[],
+  charCap: number,
+  label: string,
+): string {
+  const header = `PATTERN_SIGNATURE: ${label}\nSUB_EPISODES (one local closed-loop experience per block):`;
+  const blocks: string[] = [];
+  let budget = Math.max(600, charCap - header.length - 100);
+  for (const se of subEpisodes) {
+    const block = [
+      `---`,
+      `id: ${se.id}`,
+      `episode: ${se.episodeId}`,
+      `trace_ids: ${se.traceIds.join(",")}`,
+      `tags: ${(se.tags ?? []).join(",") || "-"}`,
+      `local_goal: ${truncate(se.localGoal, 220)}`,
+      `trigger: ${truncate(se.trigger, 180)}`,
+      `action_chain: ${se.actionChain.map((a) => truncate(a, 100)).join(" -> ") || "-"}`,
+      `observations: ${se.observations.map((o) => truncate(o, 120)).join(" | ") || "-"}`,
+      `outcome: ${truncate(se.outcome, 160)}`,
+      `verification: ${truncate(se.verification || "-", 180)}`,
+      `failure_mode: ${truncate(se.failureMode ?? "-", 120)}`,
+      `reflection: ${truncate(se.reflection ?? "-", 260)}`,
+      `V: ${se.value.toFixed(2)}  alpha: ${se.alpha.toFixed(2)}  learnability: ${se.learnabilityScore.toFixed(2)}`,
+    ].join("\n");
+    if (block.length > budget) {
+      blocks.push(block.slice(0, budget));
+      break;
+    }
+    blocks.push(block);
+    budget -= block.length;
+  }
+  return `${header}\n${blocks.join("\n")}`;
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────

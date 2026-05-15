@@ -10,6 +10,7 @@ const COLUMNS = [
   "owner_workspace_id",
   "policy_id",
   "evidence_trace_ids_json",
+  "evidence_sub_episode_ids_json",
   "signature",
   "similarity",
   "expires_at",
@@ -20,7 +21,7 @@ export function makeCandidatePoolRepo(db: StorageDb) {
   const update = db.prepare(
     buildUpdate({
       table: "l2_candidate_pool",
-      columns: ["id", "policy_id", "evidence_trace_ids_json", "similarity", "expires_at"],
+      columns: ["id", "policy_id", "evidence_trace_ids_json", "evidence_sub_episode_ids_json", "similarity", "expires_at"],
     }),
   );
   const selectBySignature = db.prepare<{ sig: string }, RawCandidateRow>(
@@ -46,6 +47,7 @@ export function makeCandidatePoolRepo(db: StorageDb) {
         ...ownerParamsFromRow(row),
         policy_id: row.policyId,
         evidence_trace_ids_json: toJsonText(row.evidenceTraceIds),
+        evidence_sub_episode_ids_json: toJsonText(row.evidenceSubEpisodeIds ?? []),
         signature: row.signature,
         similarity: row.similarity,
         expires_at: row.expiresAt,
@@ -59,6 +61,7 @@ export function makeCandidatePoolRepo(db: StorageDb) {
           id: row.id,
           policy_id: row.policyId,
           evidence_trace_ids_json: toJsonText(row.evidenceTraceIds),
+          evidence_sub_episode_ids_json: toJsonText(row.evidenceSubEpisodeIds ?? []),
           similarity: row.similarity,
           expires_at: row.expiresAt,
         });
@@ -107,6 +110,7 @@ interface RawCandidateRow {
   owner_workspace_id: string | null;
   policy_id: string | null;
   evidence_trace_ids_json: string;
+  evidence_sub_episode_ids_json: string;
   signature: string;
   similarity: number;
   expires_at: number;
@@ -118,6 +122,7 @@ function mapRow(r: RawCandidateRow): CandidatePoolRow {
     ...ownerFieldsFromRaw(r),
     policyId: r.policy_id,
     evidenceTraceIds: fromJsonText(r.evidence_trace_ids_json, []),
+    evidenceSubEpisodeIds: fromJsonText(r.evidence_sub_episode_ids_json, []),
     signature: r.signature,
     similarity: r.similarity,
     expiresAt: r.expires_at,

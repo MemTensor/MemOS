@@ -143,6 +143,43 @@ export interface TraceRow extends OwnedRow {
   schemaVersion: number;
 }
 
+export interface SubEpisodeRow extends OwnedRow {
+  id: string;
+  episodeId: EpisodeId;
+  sessionId: SessionId;
+  traceIds: TraceId[];
+  startTraceId: TraceId;
+  endTraceId: TraceId;
+  startTs: EpochMs;
+  endTs: EpochMs;
+  localGoal: string;
+  trigger: string;
+  actionChain: string[];
+  observations: string[];
+  outcome: string;
+  verification: string;
+  failureMode: string | null;
+  reflection: string | null;
+  alpha: ReflectionAlpha;
+  value: ValueScore;
+  priority: number;
+  learnabilityScore: number;
+  learnabilityReasons: string[];
+  tags: string[];
+  errorSignatures: string[];
+  completeness: number;
+  transferability: number;
+  meanValue: number;
+  maxValue: number;
+  minValue: number;
+  polarity: "positive" | "negative" | "mixed" | "neutral";
+  summary: string;
+  vecSummary: EmbeddingVector | null;
+  createdAt: EpochMs;
+  updatedAt: EpochMs;
+  meta?: Record<string, unknown>;
+}
+
 export interface PolicyRow extends OwnedRow {
   id: PolicyId;
   title: string;
@@ -357,6 +394,7 @@ export interface CandidatePoolRow extends OwnedRow {
   id: string;
   policyId: PolicyId | null;        // null until promoted
   evidenceTraceIds: TraceId[];
+  evidenceSubEpisodeIds?: string[];
   signature: string;                // semantic fingerprint
   similarity: number;
   expiresAt: EpochMs;

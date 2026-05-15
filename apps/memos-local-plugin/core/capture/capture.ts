@@ -21,8 +21,10 @@ import { rootLogger } from "../logger/index.js";
 import { ids } from "../id.js";
 import type { EpisodeRow, TraceRow, TraceId } from "../types.js";
 import type { makeEmbeddingRetryQueueRepo } from "../storage/repos/embedding_retry_queue.js";
+import type { makeSubEpisodesRepo } from "../storage/repos/sub_episodes.js";
 import type { makeTracesRepo } from "../storage/repos/traces.js";
 import type { EpisodesRepo } from "../session/persistence.js";
+import { buildSubEpisodes, traceScoreUpdatesFromSubEpisodes } from "../subepisode/index.js";
 import { disabledScore, scoreReflection } from "./alpha-scorer.js";
 import { batchScoreReflections, type BatchScoreInput } from "./batch-scorer.js";
 import { embedSteps, type VecPair } from "./embedder.js";
@@ -30,7 +32,6 @@ import { normalizeSteps } from "./normalizer.js";
 import { extractReflection } from "./reflection-extractor.js";
 import { synthesizeReflection } from "./reflection-synth.js";
 import { extractSteps } from "./step-extractor.js";
-import { createSummarizer, type Summarizer } from "./summarizer.js";
 import { tagsForStep } from "./tagger.js";
 import { extractErrorSignatures } from "./error-signature.js";
 import type {
@@ -47,10 +48,12 @@ import type {
 } from "./types.js";
 
 type TracesRepo = ReturnType<typeof makeTracesRepo>;
+type SubEpisodesRepo = ReturnType<typeof makeSubEpisodesRepo>;
 type EmbeddingRetryQueueRepo = ReturnType<typeof makeEmbeddingRetryQueueRepo>;
 
 export interface CaptureDeps {
   tracesRepo: TracesRepo;
+  subEpisodesRepo?: SubEpisodesRepo;
   embeddingRetryQueue?: EmbeddingRetryQueueRepo;
   episodesRepo: EpisodesRepo;
   embedder: Embedder | null;
@@ -80,16 +83,11 @@ export interface CaptureRunner {
    */
   runLite(input: CaptureInput): Promise<CaptureResult>;
   /**
-   * Topic-end "reflect" capture. Runs the batch reflection scorer over
-   * EVERY step of the (now-finalized) episode in one LLM call so the
-   * model sees the full causal chain, then writes
-   * `reflection + alpha` back onto each existing trace via
-   * `tracesRepo.updateReflection`. Emits `capture.done` so the reward
-   * subscriber can run `R_human` + V backprop afterwards.
-   *
-   * Falls back to per-step scoring when the episode exceeds
-   * `cfg.batchThreshold` so the prompt can't overflow the model's
-   * context window.
+   * Topic-end capture. Extracts learnable SubEpisodes from the finalized
+   * trace chain, persists them, then mirrors each SubEpisode's score back
+   * onto its member traces. Traces outside every SubEpisode stay neutral
+   * (`alpha/value/priority=0`). Emits `capture.done` so reward can compute
+   * `R_human` and refresh SubEpisode values.
    */
   runReflect(input: CaptureInput): Promise<CaptureResult>;
 }
@@ -97,11 +95,6 @@ export interface CaptureRunner {
 export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
   const log = rootLogger.child({ channel: "core.capture" });
   const now = deps.now ?? Date.now;
-  const summarizer: Summarizer = createSummarizer({
-    llm: deps.llm ?? null,
-    log: log.child({ channel: "core.capture.summarizer" }),
-  });
-
   function emit(evt: CaptureEvent): void {
     deps.bus.emit(evt);
   }
@@ -232,11 +225,10 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
   }
 
   /**
-   * Topic-end reflect pass — see `CaptureRunner.runReflect` for contract.
-   * Reads every trace already written for this episode, batch-scores
-   * reflection + α across the full causal chain, and patches each
-   * trace row with the result. Then fires `capture.done` so the
-   * reward subscriber computes R_human + back-propagates V.
+   * Topic-end pass — see `CaptureRunner.runReflect` for contract. The
+   * learning unit is now SubEpisode, so this phase extracts SubEpisodes
+   * and mirrors their initial scores onto member traces instead of
+   * scoring each trace independently.
    */
   async function runReflect(input: CaptureInput): Promise<CaptureResult> {
     const startedAt = now();
@@ -306,65 +298,85 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       return result;
     }
 
-    // Batch reflection + α across every step of the now-closed
-    // episode. Falls back to per-step scoring when over the threshold
-    // or when batching fails / no LLM is wired. The reflect pass uses
-    // `reflectLlm` (skill-evolver model when configured) for higher
-    // quality reflections; per-turn lite capture still uses `llm`.
+    // Extract SubEpisodes across the full trace chain. This replaces the
+    // older trace-level reflection/alpha pass: traces inherit scores only
+    // from the SubEpisode they belong to.
     const reflectStart = now();
-    const rLlm = deps.reflectLlm ?? deps.llm;
-    const useBatch = shouldBatch(deps.cfg, normalized.length, rLlm !== null);
-    let scored: ScoredStep[] = [];
-    if (useBatch) {
-      scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id);
-    }
-    if (!useBatch || scored.length === 0) {
-      scored = await runPerStepScoring(normalized, rLlm, deps, warnings, llmCalls, input.episode.id);
-    }
+    const allTraceRows = deps.tracesRepo.list({
+      episodeId: input.episode.id,
+      newestFirst: false,
+      limit: 500,
+    });
+    const subEpisodes = await buildSubEpisodes(
+      {
+        episodeId: input.episode.id,
+        traces: allTraceRows,
+        // Capture does not know R_human yet. Reward refreshes value/priority
+        // once the episode-level score lands; alpha is independent of R_human.
+        rHuman: 0,
+        gamma: 1,
+        decayHalfLifeDays: 30,
+        now: startedAt,
+      },
+      { embedder: deps.embedder },
+    );
     const reflectMs = now() - reflectStart;
 
-    // Patch each existing trace with the freshly-computed reflection +
-    // α. Steps that lack a matching trace (shouldn't happen after the
-    // orphan-fallback above) are skipped with a warning.
+    if (deps.subEpisodesRepo) {
+      try {
+        deps.subEpisodesRepo.replaceForEpisode(input.episode.id, subEpisodes);
+      } catch (err) {
+        warnings.push({
+          stage: "persist.sub_episodes",
+          message: "reflect: failed to persist sub-episodes",
+          detail: errDetail(err),
+        });
+      }
+    }
+
+    // Mirror SubEpisode scores back onto traces. Uncovered traces become
+    // neutral so the viewer does not show independent trace-level α.
     const persistStart = now();
     const patchedTraceIds: string[] = [];
-    for (const s of scored) {
-      const row = traceByTs.get(s.ts);
-      if (!row) {
-        warnings.push({
-          stage: "persist",
-          message: "reflect: no trace row for step ts; skipping",
-          detail: { ts: s.ts, key: s.key },
-        });
-        continue;
-      }
+    const traceScoreUpdates = traceScoreUpdatesFromSubEpisodes(allTraceRows, subEpisodes);
+    for (const update of traceScoreUpdates) {
       try {
-        deps.tracesRepo.updateReflection(row.id, {
-          reflection: s.reflection.text,
-          alpha: s.reflection.alpha ?? 0,
+        deps.tracesRepo.updateReflection(update.traceId, {
+          reflection: null,
+          alpha: update.alpha,
         });
-        patchedTraceIds.push(row.id);
+        deps.tracesRepo.updateScore(update.traceId, {
+          value: update.value,
+          alpha: update.alpha,
+          rHuman: update.rHuman,
+          priority: update.priority,
+        });
+        patchedTraceIds.push(update.traceId);
       } catch (err) {
         warnings.push({
           stage: "persist",
-          message: "reflect: updateReflection failed",
+          message: "reflect: failed to sync trace score from sub-episode",
           detail: errDetail(err),
         });
       }
     }
     const persistMs = now() - persistStart;
 
-    // Build traces[] mirroring the schema downstream subscribers
-    // expect (reward / L2 induction reads `traces` to seed credit
-    // assignment). For reflect-phase rows we re-emit ScoredStep-shaped
-    // candidates carrying the freshly computed reflection + α; the
-    // already-existing trace ids come from the matched DB rows.
-    const traces: TraceCandidate[] = scored.map((s) => {
+    const scoreByTraceId = new Map(traceScoreUpdates.map((u) => [u.traceId, u]));
+    const traces: TraceCandidate[] = normalized.map((s) => {
       const row = traceByTs.get(s.ts);
+      const update = row ? scoreByTraceId.get(row.id) : undefined;
+      const reflection: ReflectionScore = {
+        text: null,
+        alpha: update?.alpha ?? 0,
+        usable: Boolean(update?.subEpisodeId),
+        source: "none",
+      };
+      const scoredStep: ScoredStep = { ...s, reflection };
       return {
-        ...s,
+        ...scoredStep,
         traceId: (row?.id ?? "") as TraceId,
-        tags: row?.tags ?? tagsForStep(s),
+        tags: row?.tags ?? tagsForStep(scoredStep),
         vecSummary: row?.vecSummary ?? null,
         vecAction: row?.vecAction ?? null,
       };
@@ -456,24 +468,14 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     warnings: CaptureResult["warnings"],
     context: { episodeId?: string; phase?: string },
   ): Promise<{ summaries: string[]; summarizeMs: number }> {
-    const concurrency = Math.max(1, deps.cfg.llmConcurrency);
-    const summaries = await runConcurrently(
-      scored,
-      concurrency,
-      async (step) => {
-        try {
-          const s = await summarizer.summarize(step, context);
-          llmCalls.summarize += 1;
-          return s;
-        } catch (err) {
-          warnings.push({
-            stage: "summarize",
-            message: "summarizer threw; falling back to userText",
-            detail: errDetail(err),
-          });
-          return (step.userText ?? step.agentText ?? "").slice(0, 140);
-        }
-      },
+    void context;
+    void llmCalls;
+    void warnings;
+    // Trace rows remain the full factual log, but SubEpisode is now the
+    // smallest learnable/retrievable unit. Avoid per-trace LLM summaries here;
+    // keep a cheap line only for legacy viewer/debug surfaces.
+    const summaries = scored.map((step) =>
+      oneLine(step.userText || step.agentText || "(empty turn)").slice(0, 140),
     );
     return { summaries, summarizeMs: now() - summarizeStart };
   }
@@ -1009,6 +1011,10 @@ function errDetail(err: unknown): Record<string, unknown> {
   if (err instanceof MemosError) return { code: err.code, message: err.message, ...(err.details ?? {}) };
   if (err instanceof Error) return { name: err.name, message: err.message };
   return { value: String(err) };
+}
+
+function oneLine(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
 }
 
 function traceActionText(row: Pick<TraceRow, "agentText" | "toolCalls">): string {

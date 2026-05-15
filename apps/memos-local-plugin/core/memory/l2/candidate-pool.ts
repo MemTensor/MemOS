@@ -14,11 +14,11 @@
  *   - promote (write `policy_id`) when induction succeeds
  */
 
-import type { TraceId, TraceRow } from "../../types.js";
+import type { SubEpisodeRow, TraceId, TraceRow } from "../../types.js";
 import type { Repos } from "../../storage/repos/index.js";
 import type { StorageDb } from "../../storage/types.js";
 import type { PatternSignature } from "./types.js";
-import { signatureOf } from "./signature.js";
+import { signatureOf, signatureOfSubEpisode } from "./signature.js";
 
 interface CandidatePoolDeps {
   db: StorageDb;
@@ -29,11 +29,19 @@ export interface CandidateBucket {
   signature: PatternSignature;
   candidateIds: string[];
   evidenceTraceIds: TraceId[];
+  evidenceSubEpisodeIds: string[];
   episodeIds: string[]; // unique, preserved insertion order
 }
 
 export interface AddCandidateInput {
   trace: TraceRow;
+  ttlMs: number;
+  similarity?: number;
+  now?: number;
+}
+
+export interface AddSubEpisodeCandidateInput {
+  subEpisode: SubEpisodeRow;
   ttlMs: number;
   similarity?: number;
   now?: number;
@@ -50,6 +58,10 @@ export function signatureHash(sig: PatternSignature): string {
 
 export function candidateIdFor(sig: PatternSignature, traceId: TraceId): string {
   return `cand_${signatureHash(sig)}_${traceId.replace(/[^a-zA-Z0-9_-]+/g, "").slice(0, 24)}`;
+}
+
+export function subEpisodeCandidateIdFor(sig: PatternSignature, subEpisodeId: string): string {
+  return `cand_${signatureHash(sig)}_${subEpisodeId.replace(/[^a-zA-Z0-9_-]+/g, "").slice(0, 24)}`;
 }
 
 export function makeCandidatePool(deps: CandidatePoolDeps) {
@@ -96,6 +108,48 @@ export function makeCandidatePool(deps: CandidatePoolDeps) {
     return { candidateId: id, signature, created: true };
   }
 
+  function addSubEpisodeCandidate(input: AddSubEpisodeCandidateInput): {
+    candidateId: string;
+    signature: PatternSignature;
+    created: boolean;
+  } {
+    const now = input.now ?? Date.now();
+    const signature = signatureOfSubEpisode(input.subEpisode);
+    const id = subEpisodeCandidateIdFor(signature, input.subEpisode.id);
+    const existing = repos.candidatePool.getById(id);
+    const expiresAt = now + input.ttlMs;
+
+    if (existing) {
+      repos.candidatePool.upsert({
+        id,
+        ownerAgentKind: input.subEpisode.ownerAgentKind,
+        ownerProfileId: input.subEpisode.ownerProfileId,
+        ownerWorkspaceId: input.subEpisode.ownerWorkspaceId,
+        policyId: existing.policyId,
+        evidenceTraceIds: unique([...existing.evidenceTraceIds, ...input.subEpisode.traceIds]),
+        evidenceSubEpisodeIds: unique([...(existing.evidenceSubEpisodeIds ?? []), input.subEpisode.id]),
+        signature,
+        similarity: Math.max(existing.similarity, input.similarity ?? 0),
+        expiresAt,
+      });
+      return { candidateId: id, signature, created: false };
+    }
+
+    repos.candidatePool.insert({
+      id,
+      ownerAgentKind: input.subEpisode.ownerAgentKind,
+      ownerProfileId: input.subEpisode.ownerProfileId,
+      ownerWorkspaceId: input.subEpisode.ownerWorkspaceId,
+      policyId: null,
+      evidenceTraceIds: input.subEpisode.traceIds,
+      evidenceSubEpisodeIds: [input.subEpisode.id],
+      signature,
+      similarity: input.similarity ?? 0,
+      expiresAt,
+    });
+    return { candidateId: id, signature, created: true };
+  }
+
   function bucketsReadyForInduction(opts: {
     minDistinctEpisodes: number;
     now?: number;
@@ -106,11 +160,12 @@ export function makeCandidatePool(deps: CandidatePoolDeps) {
         id: string;
         policy_id: string | null;
         evidence_trace_ids_json: string;
+        evidence_sub_episode_ids_json: string;
         signature: string;
         similarity: number;
         expires_at: number;
       }>(
-        `SELECT id, policy_id, evidence_trace_ids_json, signature, similarity, expires_at
+        `SELECT id, policy_id, evidence_trace_ids_json, evidence_sub_episode_ids_json, signature, similarity, expires_at
          FROM l2_candidate_pool
          WHERE policy_id IS NULL AND expires_at >= @now`,
       )
@@ -121,12 +176,16 @@ export function makeCandidatePool(deps: CandidatePoolDeps) {
       const sig = r.signature;
       let b = bySig.get(sig);
       if (!b) {
-        b = { signature: sig, candidateIds: [], evidenceTraceIds: [], episodeIds: [] };
+        b = { signature: sig, candidateIds: [], evidenceTraceIds: [], evidenceSubEpisodeIds: [], episodeIds: [] };
         bySig.set(sig, b);
       }
       b.candidateIds.push(r.id);
       const traceIds: TraceId[] = safeArray<string>(r.evidence_trace_ids_json) as TraceId[];
       for (const tid of traceIds) if (!b.evidenceTraceIds.includes(tid)) b.evidenceTraceIds.push(tid);
+      const subEpisodeIds = safeArray<string>(r.evidence_sub_episode_ids_json);
+      for (const id of subEpisodeIds) {
+        if (!b.evidenceSubEpisodeIds.includes(id)) b.evidenceSubEpisodeIds.push(id);
+      }
     }
 
     // Enrich each bucket with distinct episodeIds so the induction threshold
@@ -174,7 +233,7 @@ export function makeCandidatePool(deps: CandidatePoolDeps) {
     return rows.length;
   }
 
-  return { addCandidate, bucketsReadyForInduction, promote, prune, deleteBucket };
+  return { addCandidate, addSubEpisodeCandidate, bucketsReadyForInduction, promote, prune, deleteBucket };
 }
 
 function unique<T>(xs: readonly T[]): T[] {

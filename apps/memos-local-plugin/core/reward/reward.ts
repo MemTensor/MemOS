@@ -18,15 +18,18 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
+import type { Embedder } from "../embedding/index.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
 import type { EpisodeId, EpochMs, TraceRow } from "../types.js";
 import type { makeEpisodesRepo } from "../storage/repos/episodes.js";
 import type { makeFeedbackRepo } from "../storage/repos/feedback.js";
+import type { makeSubEpisodesRepo } from "../storage/repos/sub_episodes.js";
 import type { makeTracesRepo } from "../storage/repos/traces.js";
 import { backprop } from "./backprop.js";
 import { scoreHuman } from "./human-scorer.js";
 import { buildTaskSummary } from "./task-summary.js";
+import { buildSubEpisodes, traceScoreUpdatesFromSubEpisodes } from "../subepisode/index.js";
 import type {
   RewardConfig,
   RewardEventBus,
@@ -38,12 +41,15 @@ import type {
 type TracesRepo = ReturnType<typeof makeTracesRepo>;
 type EpisodesRepo = ReturnType<typeof makeEpisodesRepo>;
 type FeedbackRepo = ReturnType<typeof makeFeedbackRepo>;
+type SubEpisodesRepo = ReturnType<typeof makeSubEpisodesRepo>;
 
 export interface RewardDeps {
   tracesRepo: TracesRepo;
+  subEpisodesRepo?: SubEpisodesRepo;
   episodesRepo: EpisodesRepo;
   feedbackRepo: FeedbackRepo;
   llm: LlmClient | null;
+  embedder?: Embedder | null;
   bus: RewardEventBus;
   cfg: RewardConfig;
   evaluator?: {
@@ -218,30 +224,82 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
 
     // Step 3: backprop.
     const tBackStart = now();
-    const bp = backprop({
-      traces,
-      rHuman: humanScore.rHuman,
-      gamma: deps.cfg.gamma,
-      decayHalfLifeDays: deps.cfg.decayHalfLifeDays,
-      now: startedAt,
-    });
+    const subEpisodes = deps.subEpisodesRepo
+      ? await buildSubEpisodes(
+          {
+            episodeId: input.episodeId,
+            traces,
+            rHuman: humanScore.rHuman,
+            gamma: deps.cfg.gamma,
+            decayHalfLifeDays: deps.cfg.decayHalfLifeDays,
+            now: startedAt,
+          },
+          { embedder: deps.embedder ?? null },
+        )
+      : [];
+    const traceSubEpisodeUpdates = deps.subEpisodesRepo
+      ? traceScoreUpdatesFromSubEpisodes(traces, subEpisodes, {
+          rHuman: humanScore.rHuman,
+        })
+      : [];
+    const bp = deps.subEpisodesRepo
+      ? {
+          updates: traceSubEpisodeUpdates.map((u) => ({
+            traceId: u.traceId,
+            value: u.value,
+            alpha: u.alpha,
+            priority: u.priority,
+          })),
+          meanAbsValue:
+            traceSubEpisodeUpdates.length > 0
+              ? traceSubEpisodeUpdates.reduce((sum, u) => sum + Math.abs(u.value), 0) /
+                traceSubEpisodeUpdates.length
+              : 0,
+          maxPriority: traceSubEpisodeUpdates.reduce((max, u) => Math.max(max, u.priority), 0),
+          echoParams: {
+            gamma: deps.cfg.gamma,
+            decayHalfLifeDays: deps.cfg.decayHalfLifeDays,
+            now: startedAt,
+          },
+        }
+      : backprop({
+          traces,
+          rHuman: humanScore.rHuman,
+          gamma: deps.cfg.gamma,
+          decayHalfLifeDays: deps.cfg.decayHalfLifeDays,
+          now: startedAt,
+        });
     tMetrics.backprop = now() - tBackStart;
 
     // Step 4: persist.
     const tPersistStart = now();
     try {
-      for (const u of bp.updates) {
-        deps.tracesRepo.updateScore(u.traceId, {
-          value: u.value,
-          alpha: u.alpha,
-          rHuman: humanScore.rHuman,
-          priority: u.priority,
-        });
+      if (deps.subEpisodesRepo) {
+        deps.subEpisodesRepo.replaceForEpisode(input.episodeId, subEpisodes);
+        for (const u of traceSubEpisodeUpdates) {
+          deps.tracesRepo.updateScore(u.traceId, {
+            value: u.value,
+            alpha: u.alpha,
+            rHuman: u.rHuman,
+            priority: u.priority,
+          });
+        }
+      } else {
+        for (const u of bp.updates) {
+          deps.tracesRepo.updateScore(u.traceId, {
+            value: u.value,
+            alpha: u.alpha,
+            rHuman: humanScore.rHuman,
+            priority: u.priority,
+          });
+        }
       }
     } catch (err) {
       warnings.push({
-        stage: "persist.traces",
-        message: "failed to update trace scores",
+        stage: deps.subEpisodesRepo ? "persist.sub_episodes" : "persist.traces",
+        message: deps.subEpisodesRepo
+          ? "failed to persist sub-episode scores"
+          : "failed to update trace scores",
         detail: errDetail(err),
       });
     }
@@ -265,8 +323,10 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
           reason: humanScore.reason,
           scoredAt: startedAt,
           trigger: input.trigger,
-          traceCount: bp.updates.length,
-          traceIds: bp.updates.map((u) => u.traceId),
+          traceCount: traces.length,
+          traceIds: traces.map((t) => t.id),
+          subEpisodeCount: subEpisodes.length,
+          subEpisodeIds: subEpisodes.map((se) => se.id),
         },
         rewardDirty: undefined,
       });
@@ -287,7 +347,8 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
       humanScore,
       feedbackCount: mergedFeedback.length,
       backprop: bp,
-      traceIds: bp.updates.map((u) => u.traceId),
+      traceIds: traces.map((t) => t.id),
+      subEpisodeIds: subEpisodes.map((se) => se.id),
       timings: {
         summary: tMetrics.summary!,
         score: tMetrics.score!,
@@ -394,6 +455,9 @@ function decideSkipReason(
   traces: readonly TraceRow[],
   cfg: Pick<RewardConfig, "minExchangesForCompletion" | "minContentCharsForCompletion" | "toolHeavyRatio" | "minAssistantCharsForToolHeavy">,
 ): string | null {
+  if (cfg.minExchangesForCompletion <= 0 && cfg.minContentCharsForCompletion <= 0) {
+    return null;
+  }
   // Prefer the live snapshot's turn list; fall back to traces when the
   // snapshot came from a SQLite row (no turns materialised).
   let userTurns = 0;

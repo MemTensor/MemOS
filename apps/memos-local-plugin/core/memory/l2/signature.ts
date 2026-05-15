@@ -11,13 +11,17 @@
  */
 
 import type { ToolCallDTO } from "../../../agent-contract/dto.js";
-import type { TraceRow } from "../../types.js";
+import type { SubEpisodeRow, TraceRow } from "../../types.js";
 import type { PatternSignature, SignatureComponents } from "./types.js";
 
 const MISSING = "_";
 
 export function signatureOf(trace: TraceRow): PatternSignature {
   return componentsToSignature(componentsOf(trace));
+}
+
+export function signatureOfSubEpisode(subEpisode: SubEpisodeRow): PatternSignature {
+  return componentsToSignature(componentsOfSubEpisode(subEpisode));
 }
 
 export function componentsToSignature(c: SignatureComponents): PatternSignature {
@@ -33,6 +37,16 @@ export function componentsOf(trace: TraceRow): SignatureComponents {
     secondaryTag: tags[1] ?? MISSING,
     tool,
     errCode,
+  };
+}
+
+export function componentsOfSubEpisode(subEpisode: SubEpisodeRow): SignatureComponents {
+  const tags = normaliseTags(subEpisode.tags);
+  return {
+    primaryTag: tags[0] ?? MISSING,
+    secondaryTag: tags[1] ?? MISSING,
+    tool: firstActionTool(subEpisode.actionChain),
+    errCode: subEpisode.errorSignatures[0] ?? MISSING,
   };
 }
 
@@ -71,6 +85,14 @@ function normaliseTags(tags: readonly string[] | undefined): string[] {
 function firstTool(calls: readonly ToolCallDTO[] | undefined): string {
   if (!calls || calls.length === 0) return MISSING;
   const name = calls[0].name?.trim().toLowerCase();
+  if (!name) return MISSING;
+  return name.length <= 64 ? name : name.slice(0, 64);
+}
+
+function firstActionTool(actions: readonly string[] | undefined): string {
+  if (!actions || actions.length === 0) return MISSING;
+  const first = actions[0] ?? "";
+  const name = first.split("(")[0]?.trim().toLowerCase();
   if (!name) return MISSING;
   return name.length <= 64 ? name : name.slice(0, 64);
 }

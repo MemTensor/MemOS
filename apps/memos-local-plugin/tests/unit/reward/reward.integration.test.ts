@@ -87,7 +87,7 @@ function seedTrace(
     episodeId: eid as unknown as TraceRow["episodeId"],
     sessionId: sid as unknown as TraceRow["sessionId"],
     ts: NOW as EpochMs,
-    userText: "",
+    userText: partial.userText ?? "",
     agentText: partial.agentText ?? "",
     toolCalls: partial.toolCalls ?? [],
     reflection: partial.reflection ?? null,
@@ -95,7 +95,8 @@ function seedTrace(
     alpha: (partial.alpha ?? 0) as TraceRow["alpha"],
     rHuman: null,
     priority: 0,
-    tags: [],
+    tags: partial.tags ?? [],
+    errorSignatures: partial.errorSignatures ?? [],
     vecSummary: null,
     vecAction: null,
     turnId: 0 as never,
@@ -153,9 +154,25 @@ describe("reward/integration", () => {
     const sid = "s_int_1";
     const eid = "ep_int_1";
     seedEpisode(handle, eid, sid, ["tr_a", "tr_b", "tr_c"]);
-    seedTrace(handle, "tr_a", eid, sid, { alpha: 0.5, agentText: "clone repo" });
-    seedTrace(handle, "tr_b", eid, sid, { alpha: 0, agentText: "docker build" });
-    seedTrace(handle, "tr_c", eid, sid, { alpha: 0, agentText: "docker push" });
+    seedTrace(handle, "tr_a", eid, sid, {
+      alpha: 0.5,
+      userText: "deploy my docker image",
+      agentText: "clone repo",
+      toolCalls: [{ name: "git.clone", input: { repo: "app" }, output: "ok" }],
+      tags: ["docker"],
+    });
+    seedTrace(handle, "tr_b", eid, sid, {
+      alpha: 0,
+      agentText: "docker build",
+      toolCalls: [{ name: "docker.build", input: { tag: "app" }, output: "built" }],
+      tags: ["docker"],
+    });
+    seedTrace(handle, "tr_c", eid, sid, {
+      alpha: 0,
+      agentText: "docker push success",
+      toolCalls: [{ name: "docker.push", input: { tag: "app" }, output: "success" }],
+      tags: ["docker"],
+    });
 
     const fb = toUserFb(seedFeedback(handle, "fb_1", eid, { polarity: "positive" }), sid);
 
@@ -177,6 +194,7 @@ describe("reward/integration", () => {
 
     const runner = createRewardRunner({
       tracesRepo: handle.repos.traces,
+      subEpisodesRepo: handle.repos.subEpisodes,
       episodesRepo: handle.repos.episodes,
       feedbackRepo: handle.repos.feedback,
       llm,
@@ -199,14 +217,16 @@ describe("reward/integration", () => {
     const tA = handle.repos.traces.getById("tr_a" as unknown as TraceRow["id"])!;
     const tB = handle.repos.traces.getById("tr_b" as unknown as TraceRow["id"])!;
     const tC = handle.repos.traces.getById("tr_c" as unknown as TraceRow["id"])!;
-    // V_C = R_human, V_B = γ·V_C, V_A = 0.5·R + 0.5·γ·V_B.
-    const r = result.rHuman;
-    const vC = r;
-    const vB = 0.9 * vC;
-    const vA = 0.5 * r + 0.5 * 0.9 * vB;
-    expect(tC.value).toBeCloseTo(vC, 5);
-    expect(tB.value).toBeCloseTo(vB, 5);
-    expect(tA.value).toBeCloseTo(vA, 5);
+    expect(result.subEpisodeIds!.length).toBeGreaterThan(0);
+    const subs = result.subEpisodeIds!.map((id) => handle.repos.subEpisodes.getById(id)!);
+    for (const trace of [tA, tB, tC]) {
+      const owner = subs.find((sub) => sub.traceIds.includes(trace.id));
+      expect(owner).toBeDefined();
+      expect(trace.alpha).toBeCloseTo(owner!.alpha, 5);
+      expect(trace.value).toBeCloseTo(owner!.value, 5);
+      expect(trace.priority).toBeCloseTo(owner!.priority, 5);
+    }
+    const vC = subs.find((sub) => sub.traceIds.includes(tC.id))!.value;
     // Priority for all three should be positive and ≤ V (decay ≤ 1).
     expect(tC.priority).toBeGreaterThan(0);
     expect(tC.priority).toBeLessThanOrEqual(vC + 1e-9);
@@ -228,6 +248,7 @@ describe("reward/integration", () => {
 
     const runner = createRewardRunner({
       tracesRepo: handle.repos.traces,
+      subEpisodesRepo: handle.repos.subEpisodes,
       episodesRepo: handle.repos.episodes,
       feedbackRepo: handle.repos.feedback,
       llm: null,
@@ -264,6 +285,7 @@ describe("reward/integration", () => {
 
     const runner = createRewardRunner({
       tracesRepo: handle.repos.traces,
+      subEpisodesRepo: handle.repos.subEpisodes,
       episodesRepo: handle.repos.episodes,
       feedbackRepo: handle.repos.feedback,
       llm: null,
@@ -286,6 +308,7 @@ describe("reward/integration", () => {
   it("throws cleanly when episode is missing", async () => {
     const runner = createRewardRunner({
       tracesRepo: handle.repos.traces,
+      subEpisodesRepo: handle.repos.subEpisodes,
       episodesRepo: handle.repos.episodes,
       feedbackRepo: handle.repos.feedback,
       llm: null,
@@ -325,6 +348,7 @@ describe("reward/integration", () => {
 
     const runner = createRewardRunner({
       tracesRepo: handle.repos.traces,
+      subEpisodesRepo: handle.repos.subEpisodes,
       episodesRepo: handle.repos.episodes,
       feedbackRepo: handle.repos.feedback,
       llm: null,

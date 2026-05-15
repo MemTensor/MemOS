@@ -26,6 +26,7 @@ import type {
   SessionId,
   TraceId,
   TraceRow,
+  SubEpisodeRow,
 } from "../../types.js";
 
 // ─── Config mirror (algorithm.l2Induction + a few hard-coded knobs) ────────
@@ -144,6 +145,8 @@ export interface L2ProcessInput {
   sessionId: SessionId;
   /** Traces that belong to this episode — already scored. */
   traces: readonly TraceRow[];
+  /** Selectively extracted learning units for this episode. Preferred over traces. */
+  subEpisodes?: readonly SubEpisodeRow[];
   /** Monotonic anchor for candidate TTL. Defaults to `Date.now()`. */
   now?: EpochMs;
   /**

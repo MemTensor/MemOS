@@ -36,6 +36,7 @@ import { llmFilterCandidates } from "./llm-filter.js";
 import { rank, type RankedCandidate } from "./ranker.js";
 import { runTier1 } from "./tier1-skill.js";
 import { runTier2Experience } from "./tier2-experience.js";
+import { runTier2SubEpisode } from "./tier2-subepisode.js";
 import { runTier2 } from "./tier2-trace.js";
 import { runTier3 } from "./tier3-world.js";
 import type {
@@ -46,6 +47,7 @@ import type {
   RetrievalResult,
   RetrievalStats,
   SkillCandidate,
+  SubEpisodeCandidate,
   TraceCandidate,
   WorldModelCandidate,
 } from "./types.js";
@@ -273,6 +275,19 @@ async function runAll(
           )
         : Promise.resolve([]);
 
+    const tier2SubEpisodePromise: Promise<SubEpisodeCandidate[]> =
+      wantTier2 && !noUsableChannel
+        ? Promise.resolve(runTier2SubEpisode(
+            { repos: deps.repos, config: deps.config },
+            {
+              queryVec: queryVec ?? null,
+              tags: compiled.tags,
+              patternTerms: compiled.patternTerms,
+              includeLowValue: plan.includeLowValue,
+            },
+          ))
+        : Promise.resolve([]);
+
     const tier3Start = Date.now();
     const tier3Promise: Promise<WorldModelCandidate[]> =
       wantTier3 && !noUsableChannel
@@ -286,10 +301,11 @@ async function runAll(
           )
         : Promise.resolve([]);
 
-    const [tier1, tier2, tier2Experiences, tier3] = await Promise.all([
+    const [tier1, tier2, tier2Experiences, tier2SubEpisodes, tier3] = await Promise.all([
       tier1Promise,
       tier2Promise,
       tier2ExperiencePromise,
+      tier2SubEpisodePromise,
       tier3Promise,
     ]);
 
@@ -300,14 +316,18 @@ async function runAll(
     const fuseStart = Date.now();
     const rawCandidateCount =
       tier1.length +
+      tier2SubEpisodes.length +
       tier2.traces.length +
       tier2.episodes.length +
       tier2Experiences.length +
       tier3.length;
+    const tier2TracesForRanking = tier2SubEpisodes.length > 0 ? [] : tier2.traces;
+    const tier2EpisodesForRanking = tier2SubEpisodes.length > 0 ? [] : tier2.episodes;
     const ranked = rank({
       tier1,
-      tier2Traces: tier2.traces,
-      tier2Episodes: tier2.episodes,
+      tier2Traces: tier2TracesForRanking,
+      tier2SubEpisodes,
+      tier2Episodes: tier2EpisodesForRanking,
       tier2Experiences,
       tier3,
       limit: plan.limit,

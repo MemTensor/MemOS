@@ -27,6 +27,7 @@ import type {
   PolicyRow,
   SkillId,
   TraceId,
+  SubEpisodeRow,
   WorldModelId,
   ValueScore,
 } from "../types.js";
@@ -136,6 +137,29 @@ export interface TraceCandidate extends TierCandidateBase {
   tags: string[];
 }
 
+/** Tier 2a — a local closed-loop experience span. */
+export interface SubEpisodeCandidate extends TierCandidateBase {
+  tier: "tier2";
+  refKind: "sub_episode";
+  refId: string;
+  episodeId: EpisodeId;
+  sessionId: SessionId;
+  traceIds: TraceId[];
+  localGoal: string;
+  trigger: string;
+  actionChain: string[];
+  observations: string[];
+  outcome: string;
+  verification: string;
+  failureMode: string | null;
+  summary: string;
+  reflection: string | null;
+  value: ValueScore;
+  priority: number;
+  learnabilityScore: number;
+  tags: string[];
+}
+
 /** Tier 2b — a grouped episode summary (synthesised from the best trace). */
 export interface EpisodeCandidate extends TierCandidateBase {
   tier: "tier2";
@@ -189,6 +213,7 @@ export interface WorldModelCandidate extends TierCandidateBase {
 
 export type TierCandidate =
   | SkillCandidate
+  | SubEpisodeCandidate
   | TraceCandidate
   | EpisodeCandidate
   | ExperienceCandidate
@@ -491,6 +516,49 @@ export interface RetrievalRepos {
       tags: string[];
       errorSignatures?: string[];
     }>;
+  };
+
+  subEpisodes?: {
+    searchByVector: (
+      query: EmbeddingVector,
+      k: number,
+      opts?: {
+        where?: string;
+        params?: Record<string, unknown>;
+        hardCap?: number;
+        anyOfTags?: readonly string[];
+      },
+    ) => Array<{
+      id: string;
+      score: number;
+      meta?: {
+        end_ts: number;
+        priority: number;
+        value: number;
+        learnability_score: number;
+        episode_id: EpisodeId;
+        session_id: SessionId;
+        tags_json?: string;
+      };
+    }>;
+    searchByPattern?: (
+      terms: readonly string[],
+      k: number,
+      opts?: { where?: string; params?: Record<string, unknown> },
+    ) => Array<{
+      id: string;
+      score: number;
+      meta?: {
+        end_ts: number;
+        priority: number;
+        value: number;
+        learnability_score: number;
+        episode_id: EpisodeId;
+        session_id: SessionId;
+        tags_json?: string;
+      };
+    }>;
+    getById: (id: string) => SubEpisodeRow | null;
   };
 
   worldModel: {

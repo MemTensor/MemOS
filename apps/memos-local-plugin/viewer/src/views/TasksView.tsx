@@ -38,6 +38,7 @@ interface EpisodeRow {
   status: "open" | "closed";
   rTask?: number | null;
   turnCount?: number;
+  subEpisodeCount?: number;
   preview?: string;
   tags?: string[];
   skillStatus?:
@@ -352,6 +353,9 @@ export function TasksView() {
                     <span>{new Date(r.startedAt).toLocaleString()}</span>
                     {typeof r.turnCount === "number" && (
                       <span>{r.turnCount} turns</span>
+                    )}
+                    {typeof r.subEpisodeCount === "number" && (
+                      <span>{r.subEpisodeCount} subEpisodes</span>
                     )}
                     {r.rTask != null && <span>R {r.rTask.toFixed(2)}</span>}
                   </div>

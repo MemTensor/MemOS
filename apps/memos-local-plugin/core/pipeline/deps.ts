@@ -202,6 +202,7 @@ export function buildPipelineSubscribers(
 
   const captureRunner = createCaptureRunner({
     tracesRepo: deps.repos.traces,
+    subEpisodesRepo: deps.repos.subEpisodes,
     embeddingRetryQueue: deps.repos.embeddingRetryQueue,
     episodesRepo: adaptEpisodesRepo(deps.repos.episodes),
     embedder: deps.embedder,
@@ -214,9 +215,11 @@ export function buildPipelineSubscribers(
 
   const rewardRunner = createRewardRunner({
     tracesRepo: deps.repos.traces,
+    subEpisodesRepo: deps.repos.subEpisodes,
     episodesRepo: deps.repos.episodes,
     feedbackRepo: deps.repos.feedback,
     llm: deps.llm,
+    embedder: deps.embedder,
     bus: buses.reward,
     cfg: algorithm.reward,
     evaluator: {

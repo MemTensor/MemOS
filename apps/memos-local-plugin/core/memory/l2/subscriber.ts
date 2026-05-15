@@ -24,7 +24,7 @@ import type { L2Config, L2EventBus } from "./types.js";
 
 export interface L2SubscriberDeps {
   db: StorageDb;
-  repos: Pick<Repos, "candidatePool" | "embeddingRetryQueue" | "policies" | "tracePolicyLinks" | "traces">;
+  repos: Pick<Repos, "candidatePool" | "embeddingRetryQueue" | "policies" | "subEpisodes" | "tracePolicyLinks" | "traces">;
   rewardBus: RewardEventBus;
   l2Bus: L2EventBus;
   llm: LlmClient | null;
@@ -65,8 +65,14 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
       const traces = result.traceIds
         .map((id) => deps.repos.traces.getById(id))
         .filter((t): t is TraceRow => !!t);
-      if (traces.length === 0) {
-        subLog.debug("skip.no_traces", { episodeId: result.episodeId });
+      const subEpisodes =
+        result.subEpisodeIds && result.subEpisodeIds.length > 0
+          ? result.subEpisodeIds
+              .map((id) => deps.repos.subEpisodes.getById(id))
+              .filter((se): se is NonNullable<ReturnType<typeof deps.repos.subEpisodes.getById>> => !!se)
+          : deps.repos.subEpisodes.listByEpisode(result.episodeId);
+      if (traces.length === 0 && subEpisodes.length === 0) {
+        subLog.debug("skip.no_evidence", { episodeId: result.episodeId });
         return;
       }
       await runL2(
@@ -74,6 +80,7 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
           episodeId: result.episodeId,
           sessionId: result.sessionId,
           traces,
+          subEpisodes,
           trigger: "reward.updated",
         },
         {
@@ -157,6 +164,7 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
     async runOnce(episodeId, opts): Promise<void> {
       const ep = deps.repos.traces; // just to silence TS unused check
       const traces: TraceRow[] = [];
+      const subEpisodes = deps.repos.subEpisodes.listByEpisode(episodeId);
       const rows = deps.db
         .prepare<{ episode_id: string }, { id: string }>(
           `SELECT id FROM traces WHERE episode_id = @episode_id ORDER BY ts ASC`,
@@ -166,12 +174,13 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
         const t = ep.getById(r.id as unknown as Parameters<typeof ep.getById>[0]);
         if (t) traces.push(t);
       }
-      if (traces.length === 0) return;
+      if (traces.length === 0 && subEpisodes.length === 0) return;
       await runL2(
         {
           episodeId,
-          sessionId: traces[0].sessionId,
+          sessionId: (traces[0]?.sessionId ?? subEpisodes[0]!.sessionId),
           traces,
+          subEpisodes,
           trigger: opts?.trigger ?? "manual",
         },
         {

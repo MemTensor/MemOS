@@ -464,6 +464,8 @@ export interface EpisodeListItemDTO {
   rTask?: Reward | null;
   /** Number of traces attached to this episode. */
   turnCount: number;
+  /** Number of learnable SubEpisode spans extracted from this episode. */
+  subEpisodeCount?: number;
   /** First user text, truncated to 160 chars, for list preview. */
   preview?: string;
   /** Union of tags across the episode's traces (deduped, sorted). */
@@ -558,7 +560,7 @@ export interface RetrievalHitDTO {
   tier: 1 | 2 | 3;
   /** Source memory id (skillId | traceId/episodeId | worldModelId). */
   refId: string;
-  refKind: "skill" | "trace" | "episode" | "experience" | "world-model";
+  refKind: "skill" | "trace" | "sub_episode" | "episode" | "experience" | "world-model";
   score: number;
   snippet: string;
   ownerAgentKind?: AgentKind;
@@ -627,6 +629,7 @@ export interface InjectionSnippet {
   refKind:
     | "skill"
     | "trace"
+    | "sub_episode"
     | "episode"
     | "experience"
     | "world-model"

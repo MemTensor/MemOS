@@ -181,6 +181,8 @@ export interface RewardResult {
   backprop: BackpropResult;
   /** Traces that were updated (ids only). */
   traceIds: TraceId[];
+  /** SubEpisodes that were extracted and scored for learning/retrieval. */
+  subEpisodeIds?: string[];
   /** Monotonic timings for the run. */
   timings: {
     summary: number;

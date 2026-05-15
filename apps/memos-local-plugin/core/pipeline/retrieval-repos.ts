@@ -86,6 +86,20 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
       },
     },
 
+    subEpisodes: {
+      searchByVector(query, k, opts) {
+        return repos.subEpisodes.searchByVector(query, k, opts ?? {});
+      },
+      searchByPattern(terms, k, opts) {
+        return repos.subEpisodes.searchByPattern(terms, k, opts ?? {});
+      },
+      getById(id) {
+        const row = repos.subEpisodes.getById(id);
+        if (!row || !isVisibleTo(row, namespace)) return null;
+        return row;
+      },
+    },
+
     worldModel: {
       searchByVector(query, k, opts) {
         return repos.worldModel.searchByVector(query, k, opts ?? {});
