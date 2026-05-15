@@ -87,6 +87,7 @@ import type { RelationDecision } from "../session/types.js";
 export function createPipeline(deps: PipelineDeps): PipelineHandle {
   const log = pipelineLogger(deps);
   const algorithm = extractAlgorithmConfig(deps);
+  const lightweightMode = algorithm.lightweightMemory.enabled;
   const buses = buildPipelineBuses();
 
   // Session + intent.
@@ -310,6 +311,53 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     return snap.id as SessionId;
   }
 
+  function lightweightEpisodeMeta(meta: Record<string, unknown>): Record<string, unknown> {
+    if (!lightweightMode) return meta;
+    return {
+      ...meta,
+      lightweightMemory: true,
+      relation: "lightweight_memory",
+      topicState: "active",
+    };
+  }
+
+  async function startLightweightEpisode(
+    sessionId: SessionId,
+    userText: string,
+    meta: Record<string, unknown>,
+    turnTs?: number,
+  ): Promise<EpisodeSnapshot> {
+    const currentEpId = openEpisodeBySession.get(sessionId);
+    if (currentEpId) {
+      const current = session.sessionManager.getEpisode(currentEpId);
+      if (current?.status === "open") {
+        session.sessionManager.finalizeEpisode(currentEpId, {
+          patchMeta: {
+            lightweightMemory: true,
+            closeReason: "finalized",
+            recoveryReason: "lightweight_boundary_before_new_turn",
+          },
+        });
+      }
+      openEpisodeBySession.delete(sessionId);
+    }
+    lastEpisodeBySession.delete(sessionId);
+    const snap = await session.sessionManager.startEpisode({
+      sessionId,
+      userMessage: userText,
+      ts: turnTs,
+      meta: lightweightEpisodeMeta(meta),
+    });
+    openEpisodeBySession.set(sessionId, snap.id as EpisodeId);
+    return snap;
+  }
+
+  function isLightweightEpisode(
+    episode: Pick<EpisodeSnapshot, "meta"> | null | undefined,
+  ): boolean {
+    return episode?.meta?.lightweightMemory === true;
+  }
+
   /**
    * Decide whether the new turn continues the current episode, opens a
    * new episode in the same session, or requires a brand-new session.
@@ -349,6 +397,11 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     const mergeMode = algorithm.session.followUpMode === "merge_follow_ups";
     const mergeCapMs = algorithm.session.mergeMaxGapMs;
     const turnTs = timestampFromMeta(meta, "startedAtTurnTs");
+
+    if (lightweightMode) {
+      const snap = await startLightweightEpisode(sessionId, userText, meta, turnTs);
+      return { episode: snap, sessionId, relation: "lightweight_memory" };
+    }
 
     // ─── Case 1: there is a currently open episode ──────────────────
     const currentEpId = openEpisodeBySession.get(sessionId);
@@ -1134,7 +1187,9 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     let liteTraceIds: string[] = [];
     if (liveEpisode) {
       try {
-        const captureResult = await subs.captureRunner.runLite({ episode: liveEpisode });
+        const captureResult = isLightweightEpisode(liveEpisode)
+          ? await subs.captureRunner.runLightweight({ episode: liveEpisode })
+          : await subs.captureRunner.runLite({ episode: liveEpisode });
         liteTraceIds = captureResult.traceIds;
         if (captureResult.traceIds.length > 0) {
           session.sessionManager.attachTraceIds(episodeId, captureResult.traceIds as string[]);
@@ -1153,12 +1208,14 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     // even though the episode isn't closed yet — the classifier doesn't
     // care about `endedAt`, only about prev-user / prev-assistant text.
     const initialUserTurn = liveEpisode?.turns.find((t) => t.role === "user");
-    lastEpisodeBySession.set(sessionId, {
-      episodeId,
-      endedAt: now(),
-      userText: (initialUserTurn?.content ?? "").slice(0, 1000),
-      assistantText: (result.agentText ?? "").slice(0, 2000),
-    });
+    if (!lightweightMode) {
+      lastEpisodeBySession.set(sessionId, {
+        episodeId,
+        endedAt: now(),
+        userText: (initialUserTurn?.content ?? "").slice(0, 1000),
+        assistantText: (result.agentText ?? "").slice(0, 2000),
+      });
+    }
 
     log.info("turn.ended", {
       agent: result.agent,
@@ -1182,6 +1239,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // ─── Tool outcomes (decision repair) ────────────────────────────────────
 
   function recordToolOutcome(outcome: RecordToolOutcomeInput): void {
+    if (lightweightMode) return;
     const sessionId = outcome.sessionId;
     const context =
       outcome.context ??
@@ -1220,6 +1278,10 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     const nextTick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
     await subs.subscriptions.capture.drain();
+    if (lightweightMode) {
+      await embeddingRetryWorker.flush();
+      return;
+    }
     await nextTick();
     await subs.subscriptions.reward.drain();
     await nextTick();
@@ -1279,6 +1341,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     action: string;
     durationMs: number;
   }): void {
+    if (lightweightMode) return;
     try {
       deps.repos.apiLogs.insert({
         toolName: "session_relation_classify",

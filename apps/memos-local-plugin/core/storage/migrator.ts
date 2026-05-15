@@ -177,6 +177,12 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     ensureFeedbackExperienceMetadataColumns(db);
     return;
   }
+  if (file.version === 9 && file.name === "policies-fts") {
+    if (tableExists(db, "policies")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
   db.exec(fs.readFileSync(file.fullPath, "utf8"));
 }
 

@@ -304,6 +304,7 @@ function apiLogEventType(
     case "memory_add":
       return "trace.created";
     case "memos_search":
+    case "memory_search":
       return hasRetrievalHits(output) ? "retrieval.tier1.hit" : "retrieval.empty";
     case "policy_generate":
       return "l2.induced";

@@ -16,12 +16,14 @@ import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
 import { Pager } from "../components/Pager";
 import { ShareScopePill } from "../components/ShareScopePill";
+import { LightweightModeEmpty } from "../components/LightweightModeEmpty";
 import { NamespaceSelect, appendNamespaceParams } from "../components/NamespaceSelect";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import type { WorldModelDTO } from "../api/types";
 import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
 import { loadHubSharingEnabled } from "../utils/share";
+import { useLightweightMemoryMode } from "../hooks/useLightweightMemoryMode";
 
 interface WorldModelUsage {
   policies: Array<{
@@ -54,6 +56,7 @@ export function WorldModelsView() {
   const [detail, setDetail] = useState<WorldModelDTO | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const lightweight = useLightweightMemoryMode();
   const toggleSel = (id: string) => {
     setSelected((prev) => {
       const n = new Set(prev);
@@ -92,15 +95,27 @@ export function WorldModelsView() {
   };
 
   useEffect(() => {
+    if (lightweight.loading || lightweight.enabled) return;
     const h = setTimeout(() => {
       void load({ q: query.trim(), page: 0 });
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, pageSize, namespaceFilter]);
+  }, [query, pageSize, namespaceFilter, lightweight.loading, lightweight.enabled]);
+
+  useEffect(() => {
+    if (!lightweight.enabled) return;
+    setRows([]);
+    setDetail(null);
+    setSelected(new Set());
+    setHasMore(false);
+    setTotal(0);
+    setPage(0);
+  }, [lightweight.enabled]);
 
   // Deep-link: `#/world-models?id=wm_xxx` auto-opens the drawer.
   useEffect(() => {
+    if (lightweight.loading || lightweight.enabled) return;
     const id = route.value.params.id;
     if (!id) return;
     const ctrl = new AbortController();
@@ -112,7 +127,7 @@ export function WorldModelsView() {
       .then(setDetail)
       .catch(() => void 0);
     return () => ctrl.abort();
-  }, [route.value.params.id]);
+  }, [route.value.params.id, lightweight.loading, lightweight.enabled]);
 
   const deleteModel = async (m: WorldModelDTO) => {
     if (!confirm(t("worldModels.delete.confirm"))) return;
@@ -137,175 +152,196 @@ export function WorldModelsView() {
           <h1>{t("worldModels.title")}</h1>
           <p>{t("worldModels.subtitle")}</p>
         </div>
-        <div class="view-header__actions">
-          {/*
-           * Refresh — same pattern as MemoriesView / PoliciesView /
-           * TasksView so every list page behaves consistently. Clears
-           * the search box + selection and re-fetches page 0.
-           */}
-          <button
-            class="btn btn--ghost btn--sm"
-            onClick={() => {
-              setQuery("");
-              setNamespaceFilter("");
-              setSelected(new Set());
-              void load({ q: "", page: 0 });
-            }}
-          >
-            <Icon name="refresh-cw" size={14} />
-            {t("common.refresh")}
-          </button>
-        </div>
+        {!lightweight.enabled && (
+          <div class="view-header__actions">
+            {/*
+             * Refresh — same pattern as MemoriesView / PoliciesView /
+             * TasksView so every list page behaves consistently. Clears
+             * the search box + selection and re-fetches page 0.
+             */}
+            <button
+              class="btn btn--ghost btn--sm"
+              onClick={() => {
+                setQuery("");
+                setNamespaceFilter("");
+                setSelected(new Set());
+                void load({ q: "", page: 0 });
+              }}
+            >
+              <Icon name="refresh-cw" size={14} />
+              {t("common.refresh")}
+            </button>
+          </div>
+        )}
       </div>
 
-      <div class="toolbar">
-        <label class="input-search">
-          <Icon name="search" size={16} />
-          <input
-            class="input input--search"
-            type="search"
-            placeholder={t("worldModels.search.placeholder")}
-            value={query}
-            onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
-          />
-        </label>
-      </div>
-
-      <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
-        <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
-      </div>
-
-      {loading && rows.length === 0 && (
+      {lightweight.loading && (
         <div class="list">
           {[0, 1, 2].map((i) => (
             <div key={i} class="skeleton" style="height:68px" />
           ))}
         </div>
       )}
-      {!loading && rows.length === 0 && (
-        <div class="empty">
-          <div class="empty__icon"><Icon name="globe" size={22} /></div>
-          <div class="empty__title">{t("worldModels.empty")}</div>
-          <div class="empty__hint">{t("worldModels.empty.hint")}</div>
-        </div>
+
+      {!lightweight.loading && lightweight.enabled && (
+        <LightweightModeEmpty
+          icon="globe"
+          message={t("worldModels.lightweight.empty")}
+        />
       )}
 
-      {rows.length > 0 && (
-        <div class="list">
-          {rows.map((m) => {
-            const isSel = selected.has(m.id);
-            return (
-              <div
-                key={m.id}
-                class={`mem-card${isSel ? " mem-card--selected" : ""}`}
-                onClick={() => setDetail(m)}
-              >
-                <label
-                  class="mem-card__check-wrap"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <input
-                    type="checkbox"
-                    class="mem-card__check"
-                    checked={isSel}
-                    onChange={() => toggleSel(m.id)}
-                    aria-label="select"
-                  />
-                </label>
-                <div class="mem-card__body">
-                  <div class="mem-card__title">{m.title || "(untitled)"}</div>
-                  <div class="mem-card__meta">
-                    <ShareScopePill scope={m.share?.scope} />
-                    <span class="pill pill--info" title={t("worldModels.version.title")}>
-                      v{m.version ?? 1}
-                    </span>
-                    <span class="pill pill--info">
-                      {m.policyIds.length} {t("worldModels.col.policies")}
-                    </span>
-                    <span>{new Date(m.updatedAt).toLocaleString()}</span>
+      {!lightweight.loading && !lightweight.enabled && (
+        <>
+          <div class="toolbar">
+            <label class="input-search">
+              <Icon name="search" size={16} />
+              <input
+                class="input input--search"
+                type="search"
+                placeholder={t("worldModels.search.placeholder")}
+                value={query}
+                onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+              />
+            </label>
+          </div>
+
+          <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
+            <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
+          </div>
+
+          {loading && rows.length === 0 && (
+            <div class="list">
+              {[0, 1, 2].map((i) => (
+                <div key={i} class="skeleton" style="height:68px" />
+              ))}
+            </div>
+          )}
+          {!loading && rows.length === 0 && (
+            <div class="empty">
+              <div class="empty__icon"><Icon name="globe" size={22} /></div>
+              <div class="empty__title">{t("worldModels.empty")}</div>
+              <div class="empty__hint">{t("worldModels.empty.hint")}</div>
+            </div>
+          )}
+
+          {rows.length > 0 && (
+            <div class="list">
+              {rows.map((m) => {
+                const isSel = selected.has(m.id);
+                return (
+                  <div
+                    key={m.id}
+                    class={`mem-card${isSel ? " mem-card--selected" : ""}`}
+                    onClick={() => setDetail(m)}
+                  >
+                    <label
+                      class="mem-card__check-wrap"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        class="mem-card__check"
+                        checked={isSel}
+                        onChange={() => toggleSel(m.id)}
+                        aria-label="select"
+                      />
+                    </label>
+                    <div class="mem-card__body">
+                      <div class="mem-card__title">{m.title || "(untitled)"}</div>
+                      <div class="mem-card__meta">
+                        <ShareScopePill scope={m.share?.scope} />
+                        <span class="pill pill--info" title={t("worldModels.version.title")}>
+                          v{m.version ?? 1}
+                        </span>
+                        <span class="pill pill--info">
+                          {m.policyIds.length} {t("worldModels.col.policies")}
+                        </span>
+                        <span>{new Date(m.updatedAt).toLocaleString()}</span>
+                      </div>
+                    </div>
+                    {/*
+                     * Row actions intentionally omitted — destructive
+                     * operations (delete) live in the drawer footer to
+                     * match the Memories / Policies / Skills views and
+                     * give users a confirmation step instead of a one-
+                     * click delete on a list row.
+                     */}
+                    <div class="mem-card__tail">
+                      <Icon name="chevron-right" size={16} />
+                    </div>
                   </div>
-                </div>
-                {/*
-                 * Row actions intentionally omitted — destructive
-                 * operations (delete) live in the drawer footer to
-                 * match the Memories / Policies / Skills views and
-                 * give users a confirmation step instead of a one-
-                 * click delete on a list row.
-                 */}
-                <div class="mem-card__tail">
-                  <Icon name="chevron-right" size={16} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+                );
+              })}
+            </div>
+          )}
 
-      {(page > 0 || hasMore) && (
-        <Pager
-          page={page}
-          totalItems={total}
-          pageSize={pageSize}
-          hasMore={hasMore}
-          loading={loading}
-          onPageSizeChange={setPageSize}
-          onPageChange={(nextPage) => {
-            void load({ q: query.trim(), page: nextPage });
-          }}
-        />
-      )}
+          {(page > 0 || hasMore) && (
+            <Pager
+              page={page}
+              totalItems={total}
+              pageSize={pageSize}
+              hasMore={hasMore}
+              loading={loading}
+              onPageSizeChange={setPageSize}
+              onPageChange={(nextPage) => {
+                void load({ q: query.trim(), page: nextPage });
+              }}
+            />
+          )}
 
-      {detail && (
-        <WorldModelDrawer
-          worldModel={detail}
-          onClose={() => {
-            setDetail(null);
-            clearEntryId();
-          }}
-          onDelete={deleteModel}
-          onChanged={() => {
-            void load({ q: query.trim(), page });
-            setDetail(null);
-            clearEntryId();
-          }}
-        />
-      )}
+          {detail && (
+            <WorldModelDrawer
+              worldModel={detail}
+              onClose={() => {
+                setDetail(null);
+                clearEntryId();
+              }}
+              onDelete={deleteModel}
+              onChanged={() => {
+                void load({ q: query.trim(), page });
+                setDetail(null);
+                clearEntryId();
+              }}
+            />
+          )}
 
-      {selected.size > 0 && (
-        <div class="batch-bar" role="region" aria-label="bulk actions">
-          <span class="batch-bar__count">
-            {t("common.selected", { n: selected.size })}
-          </span>
-          <button
-            class="btn btn--sm"
-            onClick={() => setSelected((prev) => toggleIdsInSelection(prev, pageIds))}
-          >
-            <Icon name="check-square" size={14} />
-            {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
-          </button>
-          <button
-            class="btn btn--danger btn--sm"
-            onClick={async () => {
-              if (selected.size === 0) return;
-              if (!confirm(t("common.bulkDelete.confirm", { n: selected.size }))) return;
-              const ids = [...selected];
-              await Promise.all(
-                ids.map((id) =>
-                  api.del(`/api/v1/world-models/${encodeURIComponent(id)}`).catch(() => null),
-                ),
-              );
-              setSelected(new Set());
-              void load({ q: query.trim(), page });
-            }}
-          >
-            <Icon name="trash-2" size={14} />
-            {t("common.bulkDelete")}
-          </button>
-          <div class="batch-bar__spacer" />
-          <button class="btn btn--ghost btn--sm" onClick={() => setSelected(new Set())}>
-            {t("common.deselect")}
-          </button>
-        </div>
+          {selected.size > 0 && (
+            <div class="batch-bar" role="region" aria-label="bulk actions">
+              <span class="batch-bar__count">
+                {t("common.selected", { n: selected.size })}
+              </span>
+              <button
+                class="btn btn--sm"
+                onClick={() => setSelected((prev) => toggleIdsInSelection(prev, pageIds))}
+              >
+                <Icon name="check-square" size={14} />
+                {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
+              </button>
+              <button
+                class="btn btn--danger btn--sm"
+                onClick={async () => {
+                  if (selected.size === 0) return;
+                  if (!confirm(t("common.bulkDelete.confirm", { n: selected.size }))) return;
+                  const ids = [...selected];
+                  await Promise.all(
+                    ids.map((id) =>
+                      api.del(`/api/v1/world-models/${encodeURIComponent(id)}`).catch(() => null),
+                    ),
+                  );
+                  setSelected(new Set());
+                  void load({ q: query.trim(), page });
+                }}
+              >
+                <Icon name="trash-2" size={14} />
+                {t("common.bulkDelete")}
+              </button>
+              <div class="batch-bar__spacer" />
+              <button class="btn btn--ghost btn--sm" onClick={() => setSelected(new Set())}>
+                {t("common.deselect")}
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {toast && (

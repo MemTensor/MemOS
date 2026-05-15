@@ -74,6 +74,16 @@ export async function turnStartRetrieve(
   ctx: TurnStartRetrieveCtx,
   opts: RetrieveOptions = {},
 ): Promise<RetrievalResult> {
+  if (deps.config.lightweightMemory) {
+    return runAll(deps, ctx, opts, {
+      wantTier1: false,
+      wantTier2: true,
+      wantTier3: false,
+      includeLowValue: false,
+      limit: opts.limit ?? Math.max(1, deps.config.tier2TopK),
+      traceOnly: true,
+    });
+  }
   return runAll(deps, ctx, opts, {
     wantTier1: true,
     wantTier2: true,
@@ -98,9 +108,10 @@ export async function toolDrivenRetrieve(
   return runAll(deps, ctx, opts, {
     wantTier1: false,
     wantTier2: true,
-    wantTier3: true,
+    wantTier3: deps.config.lightweightMemory ? false : true,
     includeLowValue: false,
     limit: opts.limit ?? Math.max(1, deps.config.tier2TopK),
+    traceOnly: deps.config.lightweightMemory,
   });
 }
 
@@ -111,6 +122,16 @@ export async function skillInvokeRetrieve(
   ctx: SkillInvokeRetrieveCtx,
   opts: RetrieveOptions = {},
 ): Promise<RetrievalResult> {
+  if (deps.config.lightweightMemory) {
+    return runAll(deps, ctx, opts, {
+      wantTier1: false,
+      wantTier2: true,
+      wantTier3: false,
+      includeLowValue: false,
+      limit: opts.limit ?? Math.max(1, deps.config.tier2TopK),
+      traceOnly: true,
+    });
+  }
   // Just-in-time: the agent is about to execute a named Skill. We want
   // (a) the actual Skill's invocation guide if still fresh, and (b) a
   // handful of trace hits to double-check it's the right call.
@@ -133,9 +154,10 @@ export async function subAgentRetrieve(
   return runAll(deps, ctx, opts, {
     wantTier1: false,
     wantTier2: true,
-    wantTier3: true,
+    wantTier3: deps.config.lightweightMemory ? false : true,
     includeLowValue: false,
     limit: opts.limit ?? deps.config.tier2TopK + deps.config.tier3TopK,
+    traceOnly: deps.config.lightweightMemory,
   });
 }
 
@@ -149,6 +171,7 @@ export async function repairRetrieve(
   // Only kicks in after we've hit `failureCount ≥ threshold`. The packet
   // may be `null` when we have no relevant history — callers should treat
   // that as "don't inject anything".
+  if (deps.config.lightweightMemory) return null;
   if (ctx.failureCount <= 0) return null;
   const result = await runAll(deps, ctx, opts, {
     wantTier1: true,
@@ -169,6 +192,7 @@ interface RunPlan {
   wantTier3: boolean;
   includeLowValue: boolean;
   limit: number;
+  traceOnly?: boolean;
 }
 
 async function runAll(
@@ -229,6 +253,7 @@ async function runAll(
     const wantTier1 = plan.wantTier1 && deps.config.tier1TopK > 0;
     const wantTier2 = plan.wantTier2 && deps.config.tier2TopK > 0;
     const wantTier3 = plan.wantTier3 && deps.config.tier3TopK > 0;
+    const traceOnly = plan.traceOnly === true || deps.config.lightweightMemory === true;
 
     const tier1Start = Date.now();
     const tier1Promise: Promise<SkillCandidate[]> =
@@ -262,7 +287,7 @@ async function runAll(
         : Promise.resolve({ traces: [], episodes: [] });
 
     const tier2ExperiencePromise: Promise<ExperienceCandidate[]> =
-      wantTier2 && !noUsableChannel
+      wantTier2 && !traceOnly && !noUsableChannel
         ? runTier2Experience(
             { repos: deps.repos, config: deps.config },
             {
@@ -307,7 +332,7 @@ async function runAll(
     const ranked = rank({
       tier1,
       tier2Traces: tier2.traces,
-      tier2Episodes: tier2.episodes,
+      tier2Episodes: traceOnly ? [] : tier2.episodes,
       tier2Experiences,
       tier3,
       limit: plan.limit,
@@ -326,11 +351,12 @@ async function runAll(
     // Mechanical retrieval produces high-recall but low-precision
     // candidates. A small LLM round-trip (see `llm-filter.ts`) prunes
     // items that share surface keywords with the query but aren't
-    // actually relevant. Fails open — on any error we keep the
-    // mechanical ranking.
+    // actually relevant. Full mode fails open to preserve recall;
+    // lightweight mode fails closed because it promises LLM-screened raw
+    // memories only.
     const queryText =
       (ctx as { userText?: string }).userText ?? compiled.text ?? "";
-    const filtered = await llmFilterCandidates(
+    const filterResult = await llmFilterCandidates(
       { query: queryText, ranked: mechanicalRanked, episodeId },
       {
         llm: deps.llm ?? null,
@@ -338,8 +364,17 @@ async function runAll(
         config: deps.config,
       },
     );
+    const filtered =
+      deps.config.lightweightMemory && !llmFilterSucceeded(filterResult.outcome)
+        ? {
+            ...filterResult,
+            kept: [],
+            dropped: [...filterResult.dropped, ...filterResult.kept],
+          }
+        : filterResult;
     log.debug("llm_filter.done", {
       outcome: filtered.outcome,
+      enforced: deps.config.lightweightMemory && filtered !== filterResult,
       sufficient: filtered.sufficient,
       raw: rawCandidateCount,
       afterThreshold: mechanicalRanked.length,
@@ -355,13 +390,16 @@ async function runAll(
     // share evidence with what we just retrieved. Cheap (one bounded
     // scan of active policies) and produces nothing when there's
     // nothing to say, so it's safe to call unconditionally here.
-    const decisionGuidance = collectDecisionGuidance({
-      ranked: filtered.kept,
-      repos: deps.repos,
-    });
+    const decisionGuidance = traceOnly
+      ? undefined
+      : collectDecisionGuidance({
+          ranked: filtered.kept,
+          repos: deps.repos,
+        });
     if (
-      decisionGuidance.preference.length > 0 ||
-      decisionGuidance.antiPattern.length > 0
+      decisionGuidance &&
+      (decisionGuidance.preference.length > 0 ||
+        decisionGuidance.antiPattern.length > 0)
     ) {
       log.debug("decision_guidance.collected", {
         preference: decisionGuidance.preference.length,
@@ -406,7 +444,7 @@ async function runAll(
       sessionId,
       episodeId,
       tier1Count: tier1.length,
-      tier2Count: tier2.traces.length + tier2.episodes.length + tier2Experiences.length,
+      tier2Count: tier2.traces.length + (traceOnly ? 0 : tier2.episodes.length) + tier2Experiences.length,
       tier3Count: tier3.length,
       tier1LatencyMs,
       tier2LatencyMs,
@@ -434,7 +472,7 @@ async function runAll(
       sessionId,
       tier1: tier1.length,
       tier2: tier2.traces.length,
-      tier2Ep: tier2.episodes.length,
+      tier2Ep: traceOnly ? 0 : tier2.episodes.length,
       tier2Experience: tier2Experiences.length,
       tier3: tier3.length,
       kept: packet.snippets.length,
@@ -545,6 +583,10 @@ function round(n: number, d: number): number {
   if (!Number.isFinite(n)) return n;
   const f = 10 ** d;
   return Math.round(n * f) / f;
+}
+
+function llmFilterSucceeded(outcome: string): boolean {
+  return outcome === "llm_kept_all" || outcome === "llm_filtered";
 }
 
 /** Thin façade so pipelines can `new Retriever(deps)` if they prefer OO. */

@@ -1,12 +1,12 @@
 /**
- * Settings view — four tabs:
+ * Settings view — three tabs:
  *
  *   - AI Models   — embedding / summarizer / **skill evolver** slots,
  *                   each with a "测试" button that calls
  *                   `POST /api/v1/models/test`.
  *   - Team Sharing — hub on/off + address + tokens.
- *   - Account     — optional password protection for the viewer.
- *   - General     — theme + language + telemetry.
+ *   - General     — language, theme, lightweight memory, logging,
+ *                   telemetry, password protection, and danger zone.
  *
  * Save flow: `PATCH /api/v1/config` → show restart overlay → call
  * `POST /api/v1/admin/restart` → poll `GET /api/v1/health` until the
@@ -30,13 +30,19 @@ interface ProviderBlock {
   temperature?: number;
 }
 
+interface AlgorithmBlock {
+  lightweightMemory?: {
+    enabled?: boolean;
+  };
+}
+
 interface ResolvedConfig {
   version?: number;
   viewer?: { port: number; bindHost?: string };
   embedding?: ProviderBlock;
   llm?: ProviderBlock;
   skillEvolver?: ProviderBlock;
-  algorithm?: unknown;
+  algorithm?: AlgorithmBlock;
   hub?: {
     enabled?: boolean;
     role?: "hub" | "client";
@@ -234,8 +240,10 @@ export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
         <GeneralTab
           telemetry={(get("telemetry") ?? {}) as NonNullable<ResolvedConfig["telemetry"]>}
           logging={(get("logging") ?? {}) as NonNullable<ResolvedConfig["logging"]>}
+          algorithm={(get("algorithm") ?? {}) as AlgorithmBlock}
           onPatchTelemetry={(p) => patch("telemetry", p)}
           onPatchLogging={(p) => patch("logging", p)}
+          onPatchAlgorithm={(p) => patch("algorithm", p)}
         />
       )}
     </>
@@ -820,24 +828,26 @@ function HubTab({
   );
 }
 
-// ─── Account / password tab ──────────────────────────────────────────────
-
 // ─── General tab (merged Account + General) ─────────────────────────
 
 function GeneralTab({
   telemetry,
   logging,
+  algorithm,
   onPatchTelemetry,
   onPatchLogging,
+  onPatchAlgorithm,
 }: {
   telemetry: NonNullable<ResolvedConfig["telemetry"]>;
   logging: NonNullable<ResolvedConfig["logging"]>;
+  algorithm: AlgorithmBlock;
   onPatchTelemetry: (
     p: Partial<NonNullable<ResolvedConfig["telemetry"]>>,
   ) => void;
   onPatchLogging: (
     p: Partial<NonNullable<ResolvedConfig["logging"]>>,
   ) => void;
+  onPatchAlgorithm: (p: Partial<AlgorithmBlock>) => void;
 }) {
   return (
     <div class="vstack" style="gap:var(--sp-4)">
@@ -886,7 +896,18 @@ function GeneralTab({
         </div>
       </section>
 
-      <AccountSection />
+      <section class="card">
+        <div class="hstack" style="justify-content:space-between;margin-bottom:var(--sp-2)">
+          <div>
+            <h3 class="card__title">{t("settings.general.lightweightMemory")}</h3>
+            <p class="card__subtitle">{t("settings.general.lightweightMemory.desc")}</p>
+          </div>
+          <ToggleSwitch
+            checked={algorithm.lightweightMemory?.enabled === true}
+            onChange={(v) => onPatchAlgorithm({ lightweightMemory: { enabled: v } })}
+          />
+        </div>
+      </section>
 
       <section class="card">
         <div class="hstack" style="justify-content:space-between;margin-bottom:var(--sp-2)">
@@ -913,6 +934,8 @@ function GeneralTab({
           />
         </div>
       </section>
+
+      <AccountSection />
 
       <DangerZoneSection />
     </div>

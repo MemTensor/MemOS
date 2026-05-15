@@ -257,6 +257,7 @@ export async function bootstrapMemoryCoreFull(
       phase?: string;
     },
   ): void {
+    if (config.algorithm.lightweightMemory.enabled) return;
     try {
       repos.apiLogs.insert({
         toolName: "system_model_status",
@@ -527,6 +528,10 @@ export function createMemoryCore(
     return row.ownerAgentKind === ns.agentKind && row.ownerProfileId === ns.profileId;
   }
 
+  function isLightweightEpisode(row: { meta?: Record<string, unknown> | null }): boolean {
+    return row.meta?.lightweightMemory === true;
+  }
+
   // ─── Stale topic auto-finalize ──
   // Open topics are allowed to survive clean session closes and process
   // restarts so the next user turn can be classified against them. Once a
@@ -543,7 +548,9 @@ export function createMemoryCore(
     if (nowMs - lastStaleScan < 30_000) return;
     lastStaleScan = nowMs;
     try {
-      const openEpisodes = handle.repos.episodes.list({ status: "open", limit: 200 });
+      const openEpisodes = handle.repos.episodes
+        .list({ status: "open", limit: 200 })
+        .filter((ep) => !isLightweightEpisode(ep));
       if (openEpisodes.length === 0) return;
       const stale: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
       for (const ep of openEpisodes) {
@@ -573,7 +580,7 @@ export function createMemoryCore(
     try {
       const dirtyClosed = handle.repos.episodes
         .list({ status: "closed", limit: 500 })
-        .filter((ep) => episodeRewardIsDirty(ep));
+        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
       if (dirtyClosed.length > 0) {
         await recoverDirtyClosedEpisodes(dirtyClosed);
       }
@@ -602,13 +609,24 @@ export function createMemoryCore(
       const orphans = handle.repos.episodes.list({ status: "open", limit: 500 });
       if (orphans.length > 0) {
         const nowMs = Date.now();
-        const stale = orphans.filter(
+        const lightweight = orphans.filter((ep) => isLightweightEpisode(ep));
+        for (const ep of lightweight) {
+          handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
+          handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+            lightweightMemory: true,
+            closeReason: "finalized",
+            recoveredAtStartup: nowMs,
+            recoveryReason: "lightweight_startup_close",
+          });
+        }
+        const normalOrphans = orphans.filter((ep) => !isLightweightEpisode(ep));
+        const stale = normalOrphans.filter(
           (ep) =>
             ep.rTask != null ||
             (ep.traceIds?.length ?? 0) > 0 ||
             nowMs - (ep.endedAt ?? ep.startedAt) > STALE_EPISODE_TIMEOUT_MS,
         );
-        const recent = orphans.filter((ep) => !stale.includes(ep));
+        const recent = normalOrphans.filter((ep) => !stale.includes(ep));
         for (const ep of recent) {
           handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
             topicState: (ep.meta?.topicState as string | undefined) ?? "interrupted",
@@ -622,7 +640,7 @@ export function createMemoryCore(
       }
       const dirtyClosed = handle.repos.episodes
         .list({ status: "closed", limit: 500 })
-        .filter((ep) => episodeRewardIsDirty(ep));
+        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
       if (dirtyClosed.length > 0) {
         await recoverDirtyClosedEpisodes(dirtyClosed);
       }
@@ -855,6 +873,7 @@ export function createMemoryCore(
 
     const needsRewardFallback: EpisodeId[] = [];
     for (const ep of orphans) {
+      if (isLightweightEpisode(ep)) continue;
       try {
         const episodeId = ep.id as EpisodeId;
         const traceIds = (ep.traceIds ?? []) as TraceId[];
@@ -947,6 +966,7 @@ export function createMemoryCore(
   ): Promise<void> {
     log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
     for (const ep of episodes) {
+      if (isLightweightEpisode(ep)) continue;
       const episodeId = ep.id as EpisodeId;
       const endedAt = ep.endedAt ?? Date.now();
       handle.repos.episodes.updateMeta(episodeId, {
@@ -968,6 +988,7 @@ export function createMemoryCore(
 
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
     const meta = ep.meta ?? {};
+    if (meta.lightweightMemory === true) return false;
     if (meta.rewardDirty && typeof meta.rewardDirty === "object") return true;
 
     const reward = meta.reward;
@@ -1378,7 +1399,7 @@ export function createMemoryCore(
         const dropped = candidates.filter((c) => droppedIds.has(c.refId));
         const stats = packet ? handle.consumeRetrievalStats(packet.packetId) : null;
         handle.repos.apiLogs.insert({
-          toolName: "memos_search",
+          toolName: handle.algorithm.lightweightMemory.enabled ? "memory_search" : "memos_search",
           input: {
             type: "turn_start",
             agent: turn.agent,
@@ -1492,6 +1513,18 @@ export function createMemoryCore(
       : null;
     const sessionId = episode?.sessionId ?? trace?.sessionId ?? null;
     const text = feedbackText(row);
+    const lightweightFeedback = handle.algorithm.lightweightMemory.enabled ||
+      (episode ? isLightweightEpisode(episode) : false);
+
+    if (lightweightFeedback) {
+      if (telemetry) {
+        telemetry.trackFeedback(
+          handle.namespace.agentKind,
+          feedback.polarity,
+        );
+      }
+      return toFeedbackDTO(row);
+    }
 
     if (episode && sessionId) {
       const rewardFeedback: UserFeedback = {
@@ -2068,7 +2101,7 @@ export function createMemoryCore(
       ok = false;
       if (telemetry) {
         telemetry.trackError(
-          "memos_search",
+          handle.algorithm.lightweightMemory.enabled ? "memory_search" : "memos_search",
           err instanceof MemosError ? err.code : "unknown",
         );
       }
@@ -2076,7 +2109,7 @@ export function createMemoryCore(
     } finally {
       try {
         handle.repos.apiLogs.insert({
-          toolName: "memos_search",
+          toolName: handle.algorithm.lightweightMemory.enabled ? "memory_search" : "memos_search",
           input: {
             type: "tool_call",
             agent: query.agent,
@@ -2469,7 +2502,9 @@ export function createMemoryCore(
       limit: input.limit ?? 50,
       offset: input.offset ?? 0,
     });
-    return rows.filter((r: EpisodeRow) => visibleToCurrent(r)).map((r: EpisodeRow) => r.id as EpisodeId);
+    return rows
+      .filter((r: EpisodeRow) => visibleToCurrent(r) && !isLightweightEpisode(r))
+      .map((r: EpisodeRow) => r.id as EpisodeId);
   }
 
   async function countEpisodes(input?: {
@@ -2480,7 +2515,9 @@ export function createMemoryCore(
   }): Promise<number> {
     ensureLive();
     return handle.repos.episodes.list({ sessionId: input?.sessionId, limit: 100_000 }).filter((r) =>
-      (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+      (input?.includeAllNamespaces || visibleToCurrent(r)) &&
+      matchesNamespaceFilter(r, input) &&
+      !isLightweightEpisode(r)
     ).length;
   }
 
@@ -2505,7 +2542,9 @@ export function createMemoryCore(
       limit: input?.ownerAgentKind || input?.ownerProfileId ? 100_000 : input?.limit ?? 50,
       offset: input?.ownerAgentKind || input?.ownerProfileId ? 0 : input?.offset ?? 0,
     }).filter((r) =>
-      (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+      (input?.includeAllNamespaces || visibleToCurrent(r)) &&
+      matchesNamespaceFilter(r, input) &&
+      !isLightweightEpisode(r)
     );
     const pagedRows = input?.ownerAgentKind || input?.ownerProfileId
       ? rows.slice(input?.offset ?? 0, (input?.offset ?? 0) + (input?.limit ?? 50))

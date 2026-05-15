@@ -101,13 +101,15 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
       });
       mergeChannelHits(blended, summaryHits, "vec_summary", input.queryVec);
 
-      const actionHits = repos.traces.searchByVector(input.queryVec, vecPoolSize, {
-        kind: "action",
-        anyOfTags: tagsForStorage,
-        where: valueWhere,
-        hardCap: vecPoolSize * 4,
-      });
-      mergeChannelHits(blended, actionHits, "vec_action", input.queryVec);
+      if (!config.lightweightMemory) {
+        const actionHits = repos.traces.searchByVector(input.queryVec, vecPoolSize, {
+          kind: "action",
+          anyOfTags: tagsForStorage,
+          where: valueWhere,
+          hardCap: vecPoolSize * 4,
+        });
+        mergeChannelHits(blended, actionHits, "vec_action", input.queryVec);
+      }
 
       // If both vector channels came back empty AND tag filtering is
       // "auto", retry once without tags so a mis-tagged query never
@@ -236,7 +238,9 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
     const topTraces = traces.slice(0, config.tier2TopK);
 
     // Roll up to episode-level summaries.
-    const episodes = rollupEpisodes(topTraces, deps).slice(0, config.tier2TopK);
+    const episodes = config.lightweightMemory
+      ? []
+      : rollupEpisodes(topTraces, deps).slice(0, config.tier2TopK);
 
     log.info("done", {
       traceCount: topTraces.length,

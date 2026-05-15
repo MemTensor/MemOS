@@ -422,6 +422,7 @@ const en = {
   "policies.empty": "No experiences yet.",
   "policies.empty.hint":
     "Experiences appear after a few successful conversations share the same approach.",
+  "policies.lightweight.empty": "Lightweight mode does not generate experiences.",
   "policies.col.trigger": "Trigger",
   "policies.col.procedure": "Procedure",
   "policies.col.verification": "Verification",
@@ -463,6 +464,7 @@ const en = {
   "worldModels.empty": "Nothing here yet.",
   "worldModels.empty.hint":
     "Environment knowledge builds up once several experiences share the same structure.",
+  "worldModels.lightweight.empty": "Lightweight mode does not generate environment knowledge.",
   "worldModels.col.body": "Description",
   "worldModels.structure.title": "Structured cognition (with evidence)",
   "worldModels.structure.environment": "Environment topology (ℰ)",
@@ -482,6 +484,7 @@ const en = {
   "tasks.search.placeholder": "Search tasks…",
   "tasks.empty": "No tasks yet.",
   "tasks.empty.filtered": "No tasks match the current filter.",
+  "tasks.lightweight.empty": "Lightweight mode does not generate task views.",
   "tasks.untitled": "Untitled task",
   "tasks.detail.id": "Task {id}",
   "tasks.detail.fallbackTitle": "Task detail",
@@ -578,6 +581,7 @@ const en = {
   "skills.empty": "No skills yet.",
   "skills.empty.hint":
     "The agent turns a reliable experience into a callable skill once it's proven useful across several similar tasks.",
+  "skills.lightweight.empty": "Lightweight mode does not generate skills.",
   "skills.detail.desc": "Invocation guide",
   "skills.detail.files": "Skill files",
   "skills.detail.content": "SKILL.md content",
@@ -870,6 +874,9 @@ const en = {
   "settings.general.theme.light": "Light",
   "settings.general.theme.dark": "Dark",
   "settings.general.theme.auto": "System",
+  "settings.general.lightweightMemory": "Lightweight memory mode",
+  "settings.general.lightweightMemory.desc":
+    "Only summarize and index raw memories; skips task, experience, environment and skill evolution. Save and restart to apply.",
   "settings.general.detailedLogs": "Show detailed debug logs",
   "settings.general.detailedLogs.desc":
     "Enable chain view, failure-only filtering, and task, experience, skill, environment and system log categories.",
@@ -1255,6 +1262,7 @@ const zh: Record<TranslationKey, string> = {
   "policies.filter.archived": "已归档",
   "policies.empty": "尚未结晶出经验。",
   "policies.empty.hint": "当几次成功对话用的是同一套做法后，这里会出现相应的经验条目。",
+  "policies.lightweight.empty": "轻量模式不生成经验。",
   "policies.col.trigger": "触发",
   "policies.col.procedure": "流程",
   "policies.col.verification": "验证",
@@ -1291,6 +1299,7 @@ const zh: Record<TranslationKey, string> = {
   "worldModels.search.placeholder": "搜索环境认知…",
   "worldModels.empty": "暂无环境认知。",
   "worldModels.empty.hint": "当多条经验展现出相同的规律时，会自动凝聚成这里的环境认知。",
+  "worldModels.lightweight.empty": "轻量模式不生成环境认知。",
   "worldModels.col.body": "内容",
   "worldModels.structure.title": "结构化认知（带证据锚点）",
   "worldModels.structure.environment": "环境拓扑（ℰ）",
@@ -1309,6 +1318,7 @@ const zh: Record<TranslationKey, string> = {
   "tasks.search.placeholder": "搜索任务…",
   "tasks.empty": "暂无任务。",
   "tasks.empty.filtered": "当前筛选条件下没有匹配的任务。",
+  "tasks.lightweight.empty": "轻量模式不生成任务视图。",
   "tasks.untitled": "未命名任务",
   "tasks.detail.id": "任务 {id}",
   "tasks.detail.fallbackTitle": "任务详情",
@@ -1394,6 +1404,7 @@ const zh: Record<TranslationKey, string> = {
   "skills.filter.visibility.private": "私有",
   "skills.empty": "尚无技能。",
   "skills.empty.hint": "当一条经验在多个相似任务里都好用，插件会把它沉淀成一个可直接调用的技能。",
+  "skills.lightweight.empty": "轻量模式不生成技能。",
   "skills.detail.desc": "调用指南",
   "skills.detail.files": "技能文件",
   "skills.detail.content": "SKILL.md 内容",
@@ -1666,6 +1677,9 @@ const zh: Record<TranslationKey, string> = {
   "settings.general.theme.light": "浅色",
   "settings.general.theme.dark": "深色",
   "settings.general.theme.auto": "跟随系统",
+  "settings.general.lightweightMemory": "轻量记忆模式",
+  "settings.general.lightweightMemory.desc":
+    "仅摘要并索引原始记忆；跳过任务、经验、环境认知和技能进化。保存并重启后生效。",
   "settings.general.detailedLogs": "显示详细调试日志",
   "settings.general.detailedLogs.desc":
     "开启后显示链路视图、仅看失败筛选，以及任务、经验、技能、环境认知和系统日志分类。",

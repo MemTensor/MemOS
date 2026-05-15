@@ -339,6 +339,7 @@ export interface EpisodeRow extends OwnedRow {
   rTask: Reward | null;
   /** "open" | "closed". Open episodes accept new traces. */
   status: "open" | "closed";
+  meta?: Record<string, unknown>;
 }
 
 export interface FeedbackRow extends OwnedRow {

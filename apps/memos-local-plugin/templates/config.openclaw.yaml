@@ -26,6 +26,10 @@ llm:
   apiKey: ""              # required except for provider=host | local_only
   model: ""               # blank = let the provider pick its default
 
+algorithm:
+  lightweightMemory:
+    enabled: false         # true = only summarize + embed + recall; no tasks/skills/experiences/world models
+
 hub:
   enabled: false
   address: ""             # e.g. http://10.0.0.12:18912  (required when enabled=true and role=client)

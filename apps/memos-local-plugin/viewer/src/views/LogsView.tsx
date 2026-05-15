@@ -25,6 +25,7 @@ import type { ApiLogDTO } from "../api/types";
 type ToolFilter =
   | ""
   | "memos_search"
+  | "memory_search"
   | "memory_add"
   | "skill_generate"
   | "skill_evolve"
@@ -85,7 +86,7 @@ const BASIC_LOG_TAGS = LOG_TAGS.filter((tag) =>
 const ALLOWED_TOOLS: Record<LogTag, readonly ToolFilter[]> = {
   "": [],
   memory_add: ["memory_add"],
-  memos_search: ["memos_search"],
+  memos_search: ["memos_search", "memory_search"],
   task: ["task_done", "task_failed"],
   skill: ["skill_generate", "skill_evolve"],
   policy: ["policy_generate", "policy_evolve"],
@@ -97,6 +98,7 @@ const ALLOWED_TOOLS: Record<LogTag, readonly ToolFilter[]> = {
 const BASIC_LOG_TOOLS = [
   "memory_add",
   "memos_search",
+  "memory_search",
 ] as const satisfies readonly ToolFilter[];
 
 interface ApiLogsResponse {
@@ -547,7 +549,7 @@ function LogDetailBody({
   input: unknown;
   output: unknown;
 }) {
-  if (log.toolName === "memos_search") {
+  if (log.toolName === "memos_search" || log.toolName === "memory_search") {
     return <MemorySearchDetail input={input} output={output} />;
   }
   if (log.toolName === "memory_add") {
@@ -1323,7 +1325,7 @@ function buildSummary(log: ApiLogDTO, input: unknown, output: unknown): string {
   const inp = (input ?? {}) as Record<string, unknown>;
   const out = (output ?? {}) as Record<string, unknown>;
 
-  if (log.toolName === "memos_search") {
+  if (log.toolName === "memos_search" || log.toolName === "memory_search") {
     const q = (inp.query as string | undefined) ?? "(empty)";
     const kept = (out.filtered as unknown[] | undefined)?.length ?? 0;
     const totalN = (out.candidates as unknown[] | undefined)?.length ?? 0;
@@ -1528,7 +1530,7 @@ function buildChainEvent(log: ApiLogDTO): ChainEvent {
   let stagePhase: string | undefined;
   let infraKind: ChainEvent["infraKind"];
 
-  if (log.toolName === "memos_search") {
+  if (log.toolName === "memos_search" || log.toolName === "memory_search") {
     stage = "retrieval";
     sessionId = pickStr(inp.sessionId);
     episodeId = pickStr(inp.episodeId);
