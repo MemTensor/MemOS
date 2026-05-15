@@ -1283,6 +1283,8 @@
 .pill--skill-generating    { background: var(--pri-dim); color: var(--pri); }
 .pill--skill-generated     { background: var(--green-bg); color: var(--green); }
 .pill--skill-upgraded      { background: var(--violet-bg); color: var(--violet); }
+.pill--skill-skill_linked  { background: var(--green-bg); color: var(--green); }
+.pill--skill-policy_linked { background: var(--green-bg); color: var(--green); }
 .pill--skill-not_generated { background: var(--red-bg); color: var(--red); }
 .pill--skill-skipped       { background: var(--amber-bg); color: var(--amber); }
 

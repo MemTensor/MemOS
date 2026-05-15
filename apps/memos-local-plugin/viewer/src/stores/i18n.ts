@@ -451,7 +451,10 @@ const en = {
   "policies.guidance.avoidSection": "Avoid these actions",
   "policies.xlink.skills": "Linked skills",
   "policies.xlink.worldModels": "Linked environment knowledge",
-  "policies.xlink.sourceEpisodes": "Source tasks",
+  "policies.xlink.sourceEpisodes": "Related tasks (latest 10)",
+  "policies.xlink.episodeRelation.source": "source",
+  "policies.xlink.episodeRelation.linked": "recent support",
+  "policies.xlink.episodeRelation.both": "source + support",
   "skills.xlink.sourcePolicies": "Source experiences",
   "skills.xlink.sourceWorldModels": "Source environment knowledge",
 
@@ -544,7 +547,9 @@ const en = {
   "tasks.skill.generating": "Generating skill…",
   "tasks.skill.generated": "Skill generated",
   "tasks.skill.upgraded": "Skill upgraded",
-  "tasks.skill.not_generated": "Below induction threshold",
+  "tasks.skill.skill_linked": "Linked existing skill",
+  "tasks.skill.policy_linked": "Experience updated",
+  "tasks.skill.not_generated": "No new experience yet",
   "tasks.skill.skipped": "Scored as negative example (R ≤ -0.5)",
   "tasks.skill.openSkill": "Open skill",
   "tasks.skillReason.queued.inProgress":
@@ -564,7 +569,11 @@ const en = {
   "tasks.skillReason.generated":
     "Skill \"{skillName}\" crystallized from experience {policyId}.",
   "tasks.skillReason.upgraded":
-    "Skill \"{skillName}\" upgraded from experience {policyId}.",
+    "Skill \"{skillName}\" was updated by this task from experience {policyId}.",
+  "tasks.skillReason.skillLinked":
+    "This task matched existing skill \"{skillName}\" through experience {policyId}.",
+  "tasks.skillReason.policyLinked":
+    "This task reinforced experience {policyId}; current gain {gain}, support {support}.",
   "tasks.abandonReason.uncleanExit":
     "Plugin did not exit cleanly last time; incomplete tasks were automatically closed on startup.",
 
@@ -1282,7 +1291,10 @@ const zh: Record<TranslationKey, string> = {
   "policies.guidance.avoidSection": "避免做法",
   "policies.xlink.skills": "关联技能",
   "policies.xlink.worldModels": "关联环境认知",
-  "policies.xlink.sourceEpisodes": "来源任务",
+  "policies.xlink.sourceEpisodes": "关联任务（最近 10 个）",
+  "policies.xlink.episodeRelation.source": "源任务",
+  "policies.xlink.episodeRelation.linked": "最近支撑",
+  "policies.xlink.episodeRelation.both": "源任务+支撑",
   "skills.xlink.sourcePolicies": "来源经验",
   "skills.xlink.sourceWorldModels": "来源环境认知",
 
@@ -1361,8 +1373,10 @@ const zh: Record<TranslationKey, string> = {
   "tasks.skill.queued": "技能流水线等待中",
   "tasks.skill.generating": "技能生成中…",
   "tasks.skill.generated": "已生成技能",
-  "tasks.skill.upgraded": "已升级技能",
-  "tasks.skill.not_generated": "未达沉淀阈值",
+  "tasks.skill.upgraded": "技能已更新",
+  "tasks.skill.skill_linked": "已关联技能",
+  "tasks.skill.policy_linked": "经验已更新",
+  "tasks.skill.not_generated": "暂未生成经验",
   "tasks.skill.skipped": "本任务评为反例 (R ≤ -0.5)",
   "tasks.skill.openSkill": "打开技能",
   "tasks.skillReason.queued.inProgress":
@@ -1382,7 +1396,11 @@ const zh: Record<TranslationKey, string> = {
   "tasks.skillReason.generated":
     "技能「{skillName}」已从经验 {policyId} 结晶。",
   "tasks.skillReason.upgraded":
-    "技能「{skillName}」已从经验 {policyId} 升级。",
+    "技能「{skillName}」已根据本任务从经验 {policyId} 更新。",
+  "tasks.skillReason.skillLinked":
+    "本任务通过经验 {policyId} 命中已有技能「{skillName}」。",
+  "tasks.skillReason.policyLinked":
+    "本任务已强化经验 {policyId}；当前 gain={gain}，support={support}。",
   "tasks.abandonReason.uncleanExit":
     "插件上次未正常退出，启动时自动关闭未完成的任务。",
 

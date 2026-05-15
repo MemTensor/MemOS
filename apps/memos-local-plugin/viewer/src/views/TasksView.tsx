@@ -46,6 +46,8 @@ interface EpisodeRow {
     | "generating"
     | "generated"
     | "upgraded"
+    | "skill_linked"
+    | "policy_linked"
     | "not_generated"
     | "skipped"
     | null;
@@ -572,6 +574,8 @@ function skillBorder(status: NonNullable<EpisodeRow["skillStatus"]>): string {
   switch (status) {
     case "generated":
     case "upgraded":
+    case "skill_linked":
+    case "policy_linked":
       return "var(--green)";
     case "not_generated":
       return "var(--red)";
@@ -590,6 +594,8 @@ function skillIcon(
   switch (status) {
     case "generated":
     case "upgraded":
+    case "skill_linked":
+    case "policy_linked":
       return "check-circle-2";
     case "not_generated":
       return "circle-alert";

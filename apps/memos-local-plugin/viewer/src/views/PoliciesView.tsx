@@ -27,6 +27,13 @@ interface PolicyUsage {
   skills: Array<{ id: string; name: string; status: string; eta: number }>;
   worldModels: Array<{ id: string; title: string }>;
   sourceEpisodes: string[];
+  relatedEpisodes?: Array<{
+    id: string;
+    relation: "source" | "linked" | "both";
+    linkedAt: number | null;
+    startedAt: number;
+    endedAt: number | null;
+  }>;
 }
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -570,10 +577,15 @@ function PolicyDrawer({
           <CrossLinkSection
             title={t("policies.xlink.sourceEpisodes")}
             entries={
-              (usage?.sourceEpisodes ?? []).map((id) => ({
-                id,
-                label: `Task ${id.slice(0, 10)}`,
-              }))
+              (usage?.relatedEpisodes && usage.relatedEpisodes.length > 0
+                ? usage.relatedEpisodes.map((ep) => ({
+                    id: ep.id,
+                    label: `Task ${ep.id.slice(0, 10)} · ${policyEpisodeRelationLabel(ep.relation)}`,
+                  }))
+                : (usage?.sourceEpisodes ?? []).map((id) => ({
+                    id,
+                    label: `Task ${id.slice(0, 10)}`,
+                  })))
             }
             kind="task"
           />
@@ -906,6 +918,12 @@ function CrossLinkSection({
       </div>
     </section>
   );
+}
+
+function policyEpisodeRelationLabel(relation: "source" | "linked" | "both"): string {
+  if (relation === "both") return t("policies.xlink.episodeRelation.both" as never);
+  if (relation === "linked") return t("policies.xlink.episodeRelation.linked" as never);
+  return t("policies.xlink.episodeRelation.source" as never);
 }
 
 /**

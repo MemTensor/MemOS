@@ -23,6 +23,21 @@ import type { PolicyDTO } from "../../agent-contract/dto.js";
 import type { ServerDeps } from "../types.js";
 import { parseJson, writeError, type Routes } from "./registry.js";
 
+interface PolicyRelatedEpisode {
+  id: string;
+  relation: "source" | "linked" | "both";
+  linkedAt: number | null;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+type CoreWithPolicyRelatedEpisodes = ServerDeps["core"] & {
+  listPolicyRelatedEpisodes?: (
+    policyId: string,
+    input?: { limit?: number; includeAllNamespaces?: boolean },
+  ) => Promise<PolicyRelatedEpisode[]>;
+};
+
 export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
   // ─── Policies (L2 "经验") ────────────────────────────────────────
 
@@ -247,9 +262,13 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 404, "not_found", `policy not found: ${id}`);
       return;
     }
-    const [skills, worldModels] = await Promise.all([
+    const [skills, worldModels, relatedEpisodes] = await Promise.all([
       deps.core.listSkills({ limit: 500, includeAllNamespaces: true }),
       deps.core.listWorldModels({ limit: 500, includeAllNamespaces: true }),
+      ((deps.core as CoreWithPolicyRelatedEpisodes).listPolicyRelatedEpisodes?.(id, {
+        limit: 10,
+        includeAllNamespaces: true,
+      }) ?? Promise.resolve([])),
     ]);
     return {
       skills: skills
@@ -258,10 +277,10 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       worldModels: worldModels
         .filter((w) => w.policyIds.includes(id))
         .map((w) => ({ id: w.id, title: w.title })),
-      // Policy rows carry their source episodes directly — no join
-      // needed. Return the full list so the drawer can render every
-      // task that contributed a supporting trace.
+      // Backward-compatible raw source ids plus the richer recent union:
+      // source episodes ∪ later trace-policy links, newest first.
       sourceEpisodes: policy.sourceEpisodeIds ?? [],
+      relatedEpisodes,
     };
   });
 

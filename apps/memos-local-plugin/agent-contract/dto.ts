@@ -481,6 +481,8 @@ export interface EpisodeListItemDTO {
    *   - `"generating"`   — a skill is mid-create (rare on reload)
    *   - `"generated"`    — a skill row cites a policy from this episode
    *   - `"upgraded"`     — an existing skill was updated by this episode
+   *   - `"skill_linked"` — episode reinforced a policy that already has a skill
+   *   - `"policy_linked"`— episode reinforced an L2 policy that has no skill yet
    *   - `"not_generated"`— pipeline decided not to crystallise (see reason)
    *   - `"skipped"`      — episode didn't run the pipeline at all
    *                       (abandoned / r<0 / no policy)
@@ -491,6 +493,8 @@ export interface EpisodeListItemDTO {
     | "generating"
     | "generated"
     | "upgraded"
+    | "skill_linked"
+    | "policy_linked"
     | "not_generated"
     | "skipped"
     | null;

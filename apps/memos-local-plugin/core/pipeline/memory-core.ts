@@ -2484,6 +2484,65 @@ export function createMemoryCore(
     ).length;
   }
 
+  async function listPolicyRelatedEpisodes(
+    policyId: string,
+    input?: { limit?: number; includeAllNamespaces?: boolean },
+  ): Promise<Array<{
+    id: EpisodeId;
+    relation: "source" | "linked" | "both";
+    linkedAt: number | null;
+    startedAt: number;
+    endedAt: number | null;
+  }>> {
+    ensureLive();
+    const policy = handle.repos.policies.getById(policyId as PolicyId);
+    if (!policy) return [];
+    if (!input?.includeAllNamespaces && !visibleToCurrent(policy)) return [];
+
+    const byEpisode = new Map<EpisodeId, {
+      id: EpisodeId;
+      relation: "source" | "linked" | "both";
+      linkedAt: number | null;
+      startedAt: number;
+      endedAt: number | null;
+      sortAt: number;
+    }>();
+
+    const upsert = (
+      episodeId: EpisodeId,
+      relation: "source" | "linked",
+      linkedAt: number | null,
+    ) => {
+      const episode = handle.repos.episodes.getById(episodeId);
+      if (!episode) return;
+      if (!input?.includeAllNamespaces && !visibleToCurrent(episode)) return;
+      const current = byEpisode.get(episodeId);
+      const nextRelation = current && current.relation !== relation ? "both" : relation;
+      const nextLinkedAt = Math.max(current?.linkedAt ?? 0, linkedAt ?? 0) || null;
+      const sortAt = nextLinkedAt ?? episode.endedAt ?? episode.startedAt;
+      byEpisode.set(episodeId, {
+        id: episodeId,
+        relation: nextRelation,
+        linkedAt: nextLinkedAt,
+        startedAt: episode.startedAt,
+        endedAt: episode.endedAt,
+        sortAt,
+      });
+    };
+
+    for (const episodeId of policy.sourceEpisodeIds ?? []) {
+      upsert(episodeId as EpisodeId, "source", null);
+    }
+    for (const link of handle.repos.tracePolicyLinks.getLinkedEpisodes(policy.id)) {
+      upsert(link.episodeId, "linked", link.linkedAt);
+    }
+
+    return Array.from(byEpisode.values())
+      .sort((a, b) => b.sortAt - a.sortAt || b.id.localeCompare(a.id))
+      .slice(0, input?.limit ?? 10)
+      .map(({ sortAt: _sortAt, ...row }) => row);
+  }
+
   async function listEpisodeRows(input?: {
     sessionId?: SessionId;
     limit?: number;
@@ -2518,12 +2577,15 @@ export function createMemoryCore(
     // missing in the Tasks view.
     const allPolicies = handle.repos.policies.list({ limit: 5_000 });
     const allSkills = handle.repos.skills.list({ limit: 5_000 });
-    const policiesByEpisode = new Map<string, typeof allPolicies>();
+    const policiesById = new Map(allPolicies.map((p) => [p.id, p]));
+    const policyEvidenceByEpisode = new Map<string, EpisodePolicyEvidence[]>();
     for (const p of allPolicies) {
       for (const ep of p.sourceEpisodeIds ?? []) {
-        const bucket = policiesByEpisode.get(ep) ?? [];
-        bucket.push(p);
-        policiesByEpisode.set(ep, bucket);
+        addPolicyEvidence(policyEvidenceByEpisode, {
+          episodeId: ep,
+          policy: p,
+          relation: "source",
+        });
       }
     }
     const skillsByPolicy = new Map<string, typeof allSkills>();
@@ -2533,6 +2595,19 @@ export function createMemoryCore(
         bucket.push(s);
         skillsByPolicy.set(pid, bucket);
       }
+    }
+    const linkedPolicyRows = handle.repos.tracePolicyLinks.getLinksForEpisodes(
+      pagedRows.map((r) => r.id),
+    );
+    for (const link of linkedPolicyRows) {
+      const policy = policiesById.get(link.policyId);
+      if (!policy) continue;
+      addPolicyEvidence(policyEvidenceByEpisode, {
+        episodeId: link.episodeId,
+        policy,
+        relation: "linked",
+        linkedAt: link.linkedAt,
+      });
     }
 
     // For each row, fetch the episode's traces once. We need the rows
@@ -2560,7 +2635,7 @@ export function createMemoryCore(
 
       const derivation = deriveSkillStatus(
         r,
-        policiesByEpisode.get(r.id) ?? [],
+        policyEvidenceByEpisode.get(r.id) ?? [],
         skillsByPolicy,
         skillStatusThresholds,
       );
@@ -3927,6 +4002,7 @@ export function createMemoryCore(
     updateWorldModel,
     archiveWorldModel,
     unarchiveWorldModel,
+    listPolicyRelatedEpisodes,
     listEpisodes,
     listEpisodeRows,
     countEpisodes,
@@ -3953,7 +4029,7 @@ export function createMemoryCore(
     getRecentEvents,
     subscribeLogs,
     forwardLog,
-  };
+  } as MemoryCore & { listPolicyRelatedEpisodes: typeof listPolicyRelatedEpisodes };
 }
 
 // ─── Config helpers ──────────────────────────────────────────────────────────
@@ -4839,9 +4915,31 @@ export function deriveTurnCount(
 export const R_NEGATIVE_FLOOR = -0.5;
 export const R_BELOW_THRESHOLD = 0.15; // aligned with `algorithm.skill.minGain`
 
+export interface EpisodePolicyEvidence {
+  episodeId: string;
+  policy: PolicyRow;
+  relation: "source" | "linked" | "both";
+  linkedAt?: number;
+}
+
+function addPolicyEvidence(
+  target: Map<string, EpisodePolicyEvidence[]>,
+  evidence: EpisodePolicyEvidence,
+): void {
+  const bucket = target.get(evidence.episodeId) ?? [];
+  const existing = bucket.find((item) => item.policy.id === evidence.policy.id);
+  if (existing) {
+    existing.relation = existing.relation === evidence.relation ? existing.relation : "both";
+    existing.linkedAt = Math.max(existing.linkedAt ?? 0, evidence.linkedAt ?? 0) || undefined;
+  } else {
+    bucket.push({ ...evidence });
+  }
+  target.set(evidence.episodeId, bucket);
+}
+
 export function deriveSkillStatus(
   ep: EpisodeRow,
-  relatedPolicies: readonly PolicyRow[],
+  inputPolicyEvidence: readonly (PolicyRow | EpisodePolicyEvidence)[],
   skillsByPolicy: ReadonlyMap<string, readonly SkillRow[]>,
   thresholds: {
     minEpisodesForInduction: string;
@@ -4897,7 +4995,12 @@ export function deriveSkillStatus(
       linkedSkillId: null,
     };
   }
-  if (relatedPolicies.length === 0) {
+  const policyEvidence = inputPolicyEvidence.map((item) =>
+    isEpisodePolicyEvidence(item)
+      ? item
+      : { episodeId: ep.id, policy: item, relation: "source" as const },
+  );
+  if (policyEvidence.length === 0) {
     return {
       status: "not_generated",
       reason: "暂未归纳出 L2 经验",
@@ -4906,17 +5009,44 @@ export function deriveSkillStatus(
       linkedSkillId: null,
     };
   }
-  const best = [...relatedPolicies].sort((a, b) => b.gain - a.gain)[0]!;
+  const bestEvidence = [...policyEvidence].sort((a, b) => b.policy.gain - a.policy.gain)[0]!;
+  const best = bestEvidence.policy;
+  const isLinkedEvidence = bestEvidence.relation === "linked" || bestEvidence.relation === "both";
   const policyBucket = skillsByPolicy.get(best.id) ?? [];
   if (policyBucket.length > 0) {
     const active = policyBucket.find((s) => s.status !== "archived") ?? policyBucket[0]!;
-    const isUpgraded = best.updatedAt > active.updatedAt;
+    const isUpgraded = bestEvidence.linkedAt != null && active.updatedAt >= bestEvidence.linkedAt;
+    if (isLinkedEvidence && !isUpgraded) {
+      return {
+        status: "skill_linked",
+        reason: `本任务命中已有技能「${active.name ?? active.id}」关联的经验 ${best.id.slice(0, 8)}`,
+        reasonKey: "tasks.skillReason.skillLinked",
+        reasonParams: { skillName: active.name ?? active.id, policyId: best.id.slice(0, 8) },
+        linkedSkillId: active.id as SkillId,
+      };
+    }
     return {
       status: isUpgraded ? "upgraded" : "generated",
-      reason: `技能「${active.name ?? active.id}」已从经验 ${best.id.slice(0, 8)} 结晶`,
+      reason: isUpgraded
+        ? `技能「${active.name ?? active.id}」已根据本任务更新`
+        : `技能「${active.name ?? active.id}」已从经验 ${best.id.slice(0, 8)} 结晶`,
       reasonKey: isUpgraded ? "tasks.skillReason.upgraded" : "tasks.skillReason.generated",
       reasonParams: { skillName: active.name ?? active.id, policyId: best.id.slice(0, 8) },
       linkedSkillId: active.id as SkillId,
+    };
+  }
+  if (isLinkedEvidence) {
+    return {
+      status: "policy_linked",
+      reason: `本任务已强化经验 ${best.id.slice(0, 8)}，暂未结晶为技能`,
+      reasonKey: "tasks.skillReason.policyLinked",
+      reasonParams: {
+        ...thresholds,
+        policyId: best.id.slice(0, 8),
+        gain: best.gain.toFixed(2),
+        support: String(best.support ?? 0),
+      },
+      linkedSkillId: null,
     };
   }
   if (best.status !== "active") {
@@ -4935,6 +5065,10 @@ export function deriveSkillStatus(
     reasonParams: { ...thresholds, gain: best.gain.toFixed(2), support: String(best.support ?? 0) },
     linkedSkillId: null,
   };
+}
+
+function isEpisodePolicyEvidence(value: PolicyRow | EpisodePolicyEvidence): value is EpisodePolicyEvidence {
+  return "policy" in value;
 }
 
 function formatThreshold(n: number): string {
