@@ -295,12 +295,17 @@ describe("retrieval/integration", () => {
     expect(res.packet.snippets.every((s) => s.refKind !== "skill")).toBe(true);
   });
 
-  it("lightweight mode only returns trace memories after LLM filter succeeds", async () => {
+  it("lightweight mode only returns trace memories after summarizer filter succeeds", async () => {
+    let filterCalls = 0;
     const llm: any = {
-      completeJson: async () => ({
-        value: { selected: [1], sufficient: true },
-        servedBy: "fake",
-      }),
+      completeJson: async (_messages: unknown, opts: { op?: string }) => {
+        filterCalls++;
+        expect(opts.op).toContain("retrieval.filter");
+        return {
+          value: { selected: [1], sufficient: true },
+          servedBy: "fake",
+        };
+      },
     };
     const res = await turnStartRetrieve(
       {
@@ -328,9 +333,10 @@ describe("retrieval/integration", () => {
     expect(res.stats.tier3Count).toBe(0);
     expect(res.stats.llmFilterOutcome).toBe("llm_filtered");
     expect(res.stats.emptyPacket).toBe(false);
+    expect(filterCalls).toBe(1);
   });
 
-  it("lightweight mode returns no memories when LLM filter is unavailable", async () => {
+  it("lightweight mode returns no memories when summarizer filter is unavailable", async () => {
     const res = await turnStartRetrieve(
       {
         ...makeDeps(handle),
