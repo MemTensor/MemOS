@@ -5,7 +5,7 @@
  *                   each with a "测试" button that calls
  *                   `POST /api/v1/models/test`.
  *   - Team Sharing — hub on/off + address + tokens.
- *   - General     — language, theme, lightweight memory, logging,
+ *   - General     — language, theme, memory self-evolution, logging,
  *                   telemetry, password protection, and danger zone.
  *
  * Save flow: `PATCH /api/v1/config` → show restart overlay → call
@@ -903,8 +903,8 @@ function GeneralTab({
             <p class="card__subtitle">{t("settings.general.lightweightMemory.desc")}</p>
           </div>
           <ToggleSwitch
-            checked={algorithm.lightweightMemory?.enabled === true}
-            onChange={(v) => onPatchAlgorithm({ lightweightMemory: { enabled: v } })}
+            checked={algorithm.lightweightMemory?.enabled === false}
+            onChange={(v) => onPatchAlgorithm({ lightweightMemory: { enabled: !v } })}
           />
         </div>
       </section>

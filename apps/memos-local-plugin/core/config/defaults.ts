@@ -55,7 +55,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   },
   algorithm: {
     lightweightMemory: {
-      enabled: false,
+      enabled: true,
     },
     capture: {
       maxTextChars: 4_000,

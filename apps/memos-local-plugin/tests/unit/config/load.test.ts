@@ -81,14 +81,14 @@ viewer:
     expect(cfg.algorithm.skill.minSupport).toBe(DEFAULT_CONFIG.algorithm.skill.minSupport);
   });
 
-  it("defaults lightweight memory mode off and accepts explicit opt-in", () => {
+  it("defaults lightweight memory mode on and accepts explicit opt-out", () => {
     const base = resolveConfig({});
-    expect(base.algorithm.lightweightMemory.enabled).toBe(false);
+    expect(base.algorithm.lightweightMemory.enabled).toBe(true);
 
     const cfg = resolveConfig({
-      algorithm: { lightweightMemory: { enabled: true } },
+      algorithm: { lightweightMemory: { enabled: false } },
     });
-    expect(cfg.algorithm.lightweightMemory.enabled).toBe(true);
+    expect(cfg.algorithm.lightweightMemory.enabled).toBe(false);
   });
 
   it("does not expose embedding dimensions as user config", () => {
