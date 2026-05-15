@@ -20,6 +20,10 @@ import type { TraceDTO } from "../../../agent-contract/dto.js";
 import { rootLogger } from "../../../core/logger/index.js";
 import { DEFAULT_CONFIG } from "../../../core/config/defaults.js";
 import { resolveHome } from "../../../core/config/paths.js";
+import {
+  __resetHostLlmBridgeForTests,
+  type HostLlmBridge,
+} from "../../../core/llm/index.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { makeTmpHome, type TmpHomeContext } from "../../helpers/tmp-home.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
@@ -105,6 +109,7 @@ afterEach(async () => {
   }
   db?.cleanup();
   db = null;
+  __resetHostLlmBridgeForTests();
 });
 
 describe("MemoryCore façade", () => {
@@ -993,6 +998,67 @@ describe("bootstrapMemoryCore", () => {
     expect(h2.ok).toBe(true);
     expect(h2.paths.home).toBe(home!.home.root);
     expect(h2.paths.db).toBe(home!.home.dbFile);
+  });
+
+  it("persists lightweight summarizer model status for Hermes overview", async () => {
+    home = await makeTmpHome({
+      agent: "hermes",
+      configYaml: `
+llm:
+  provider: host
+  model: hermes-summary-test
+algorithm:
+  lightweightMemory:
+    enabled: true
+`,
+    });
+    const bridge: HostLlmBridge = {
+      id: "test-host-llm",
+      async complete() {
+        return {
+          text: JSON.stringify({ summary: "Hermes remembered the overview status fact" }),
+          model: "hermes-summary-test",
+          durationMs: 1,
+        };
+      },
+    };
+    core = await bootstrapMemoryCore({
+      agent: "hermes",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "bootstrap-test",
+      hostLlmBridge: bridge,
+      now: () => 1_700_000_000_000,
+    });
+    await core.init();
+
+    const start = await core.onTurnStart({
+      agent: "hermes",
+      sessionId: "hermes-lightweight-status",
+      userText: "请记住 Hermes 摘要模型状态应该显示已调用",
+      ts: 1_700_000_000_000,
+    });
+    await core.onTurnEnd({
+      agent: "hermes",
+      sessionId: "hermes-lightweight-status",
+      episodeId: start.query.episodeId!,
+      agentText: "已记住。",
+      toolCalls: [],
+      ts: 1_700_000_000_100,
+    });
+
+    const logs = await core.listApiLogs({ toolName: "system_model_status", limit: 10 });
+    const llmRows = logs.logs
+      .map((row) => JSON.parse(row.outputJson) as { role?: string; status?: string; op?: string })
+      .filter((row) => row.role === "llm");
+    expect(llmRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "ok",
+          op: "capture.summarize",
+        }),
+      ]),
+    );
   });
 
   it("init() recovers orphaned open episodes left behind by a previous crash", async () => {
