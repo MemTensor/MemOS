@@ -31,6 +31,7 @@ import { rootLogger } from "../logger/index.js";
 import { collectDecisionGuidance } from "./decision-guidance.js";
 import { buildQuery, type CompiledQuery } from "./query-builder.js";
 import type { RetrievalEventBus } from "./events.js";
+import { dedupeTraceEpisodeByEpisodeId } from "./dedupe-trace-episode.js";
 import { toPacket, renderSnippetForDebug } from "./injector.js";
 import { llmFilterCandidates } from "./llm-filter.js";
 import { rank, type RankedCandidate } from "./ranker.js";
@@ -109,7 +110,7 @@ export async function toolDrivenRetrieve(
     wantTier1: false,
     wantTier2: true,
     wantTier3: deps.config.lightweightMemory ? false : true,
-    includeLowValue: false,
+    includeLowValue: deps.config.includeLowValue,
     limit: opts.limit ?? Math.max(1, deps.config.tier2TopK),
     traceOnly: deps.config.lightweightMemory,
   });
@@ -282,6 +283,8 @@ async function runAll(
               ftsMatch: compiled.ftsMatch,
               patternTerms: compiled.patternTerms,
               includeLowValue: plan.includeLowValue,
+              excludeSessionId:
+                ctx.reason === "turn_start" && sessionId ? sessionId : undefined,
             },
           )
         : Promise.resolve({ traces: [], episodes: [] });
@@ -390,10 +393,13 @@ async function runAll(
     // share evidence with what we just retrieved. Cheap (one bounded
     // scan of active policies) and produces nothing when there's
     // nothing to say, so it's safe to call unconditionally here.
+    const { ranked: dedupedKept, dedupedByEpisodeCount } =
+      dedupeTraceEpisodeByEpisodeId(filtered.kept);
+
     const decisionGuidance = traceOnly
       ? undefined
       : collectDecisionGuidance({
-          ranked: filtered.kept,
+          ranked: dedupedKept,
           repos: deps.repos,
         });
     if (
@@ -409,7 +415,7 @@ async function runAll(
     }
 
     const { packet } = toPacket({
-      ranked: filtered.kept,
+      ranked: dedupedKept,
       reason: ctx.reason,
       tierLatencyMs: {
         tier1: tier1LatencyMs,
@@ -464,6 +470,8 @@ async function runAll(
       llmFilterSufficient: filtered.sufficient ?? undefined,
       llmFilterKept: filtered.kept.length,
       llmFilterDropped: filtered.dropped.length,
+      dedupedByEpisodeCount:
+        dedupedByEpisodeCount > 0 ? dedupedByEpisodeCount : undefined,
       channelHits: ranked.channelHits,
     };
 

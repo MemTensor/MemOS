@@ -22,7 +22,7 @@ describe("retrieval/query-builder", () => {
     expect(cq.truncated).toBe(false);
   });
 
-  it("tool_driven serialises args JSON + tool name", () => {
+  it("tool_driven uses explicit search query text when present", () => {
     const cq = buildQuery({
       reason: "tool_driven",
       agent: "openclaw",
@@ -31,8 +31,9 @@ describe("retrieval/query-builder", () => {
       args: { query: "past docker bugs", limit: 5 },
       ts: NOW,
     });
-    expect(cq.text).toContain("tool:memos_search");
-    expect(cq.text).toContain('"query":"past docker bugs"');
+    expect(cq.text).toContain("past docker bugs");
+    expect(cq.text).toContain('"limit":5');
+    expect(cq.text).not.toContain("tool:memos_search");
     expect(cq.tags).toContain("docker");
   });
 

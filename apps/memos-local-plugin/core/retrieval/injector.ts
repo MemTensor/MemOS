@@ -300,10 +300,12 @@ function renderEpisode(c: EpisodeCandidate): InjectionSnippet {
 function stripEpisodePromptMetrics(summary: string): string {
   return summary
     .replace(
-      /^episode\s+\d+\s+steps\s*·\s*best\s+V=[+-]?\d+(?:\.\d+)?\s*·\s*goal-sim=[+-]?\d+(?:\.\d+)?/i,
-      "Past similar episode",
+      /^episode\s+\d+\s+steps\s*·\s*best\s+V=[+-]?\d+(?:\.\d+)?\s*·\s*goal-sim=[+-]?\d+(?:\.\d+)?\s*\n?/i,
+      "",
     )
-    .replace(/\bstep\s+(\d+)\s+\(V=[+-]?\d+(?:\.\d+)?\)/gi, "step $1");
+    .replace(/^Past similar episode\s*\n?/i, "")
+    .replace(/\bstep\s+(\d+)\s+\(V=[+-]?\d+(?:\.\d+)?\)/gi, "step $1")
+    .trim();
 }
 
 function renderExperience(c: ExperienceCandidate): InjectionSnippet {
@@ -500,10 +502,42 @@ function renderDecisionGuidance(g: CollectedGuidance | undefined): string | null
 
 function renderNumberedSnippet(s: InjectionSnippet, n: number): string {
   const title = s.title ?? s.refId;
-  const block = [`${n}. ${title}`, s.body]
+  const body = stripRedundantTitleFromBody(title, s.body, s.refKind);
+  const block = [`${n}. ${title}`, body]
     .filter(Boolean)
     .join("\n");
   return indentBlock(block);
+}
+
+function normalizeSnippetLabel(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/**
+ * Drop body lines that repeat the numbered-list title (e.g. `Name: X` when
+ * the heading is already `X`, or `Trigger:` when it matches the title).
+ */
+function stripRedundantTitleFromBody(
+  title: string,
+  body: string,
+  refKind: InjectionSnippet["refKind"],
+): string {
+  const normalizedTitle = normalizeSnippetLabel(title);
+  const lines = body.split("\n");
+  const kept = lines.filter((line) => {
+    const nameMatch = line.match(/^Name:\s*(.+)\s*$/i);
+    if (nameMatch && normalizeSnippetLabel(nameMatch[1]!) === normalizedTitle) {
+      return false;
+    }
+    if (refKind === "experience") {
+      const triggerMatch = line.match(/^Trigger:\s*(.+)\s*$/i);
+      if (triggerMatch && normalizeSnippetLabel(triggerMatch[1]!) === normalizedTitle) {
+        return false;
+      }
+    }
+    return true;
+  });
+  return kept.join("\n").trim();
 }
 
 const HEADER_BY_REASON: Record<RetrievalReason, string> = {

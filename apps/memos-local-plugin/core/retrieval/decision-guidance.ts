@@ -26,6 +26,7 @@ import type { EpisodeId } from "../../agent-contract/dto.js";
 import type { RankedCandidate } from "./ranker.js";
 import type {
   RetrievalRepos,
+  EpisodeCandidate,
   ExperienceCandidate,
   SkillCandidate,
   TraceCandidate,
@@ -84,6 +85,8 @@ export function collectDecisionGuidance(input: CollectInput): CollectedGuidance 
     const c = r.candidate;
     if (c.tier === "tier2" && c.refKind === "trace") {
       traceEpisodeIds.add((c as TraceCandidate).episodeId);
+    } else if (c.tier === "tier2" && c.refKind === "episode") {
+      traceEpisodeIds.add((c as EpisodeCandidate).refId);
     } else if (c.tier === "tier2" && c.refKind === "experience") {
       policyIds.add((c as ExperienceCandidate).refId);
     } else if (c.tier === "tier1") {

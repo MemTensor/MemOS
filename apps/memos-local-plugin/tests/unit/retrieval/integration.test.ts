@@ -321,7 +321,8 @@ describe("retrieval/integration", () => {
       {
         reason: "turn_start",
         agent: "openclaw",
-        sessionId: "s1" as SessionId,
+        // Cross-session: seeded traces live in `s1`, not the active turn session.
+        sessionId: "s_current" as SessionId,
         userText: "run docker compose",
         ts: NOW as never,
       },
@@ -351,7 +352,7 @@ describe("retrieval/integration", () => {
       {
         reason: "turn_start",
         agent: "openclaw",
-        sessionId: "s1" as SessionId,
+        sessionId: "s_current" as SessionId,
         userText: "run docker compose",
         ts: NOW as never,
       },

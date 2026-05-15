@@ -83,6 +83,11 @@ logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "memos-local-hermes"
 PLUGIN_VERSION = "2.0.0-beta.1"
+_TOOL_FAILURE_REPAIR_HINT = (
+    "This tool has failed multiple times in a row. You may want to call "
+    "`memos_search` for relevant past experience before deciding what to do next."
+)
+_TOOL_FAILURE_HINT_THRESHOLD = 3
 
 _HERMES_INTERNAL_REVIEW_PREFIXES = (
     "review the conversation above and consider saving to memory if appropriate.",
@@ -272,6 +277,7 @@ class MemTensorProvider(MemoryProvider):
         self._skip_current_turn = False
         # Track the last trace ID for feedback submission
         self._last_trace_id: str = ""
+        self._tool_failure_streaks: dict[str, int] = {}
 
     # ─── Identity ─────────────────────────────────────────────────────────
 
@@ -425,10 +431,81 @@ class MemTensorProvider(MemoryProvider):
             mgr = get_plugin_manager()
             mgr._hooks.setdefault("post_tool_call", []).append(self._on_post_tool_call)
             mgr._hooks.setdefault("post_llm_call", []).append(self._on_post_llm_call)
+            mgr._hooks.setdefault("transform_tool_result", []).append(
+                self._on_transform_tool_result
+            )
             self._hook_registered = True
-            logger.debug("MemOS: registered post_tool_call + post_llm_call hooks")
+            logger.debug(
+                "MemOS: registered post_tool_call + post_llm_call + transform_tool_result hooks"
+            )
         except Exception as err:
             logger.debug("MemOS: could not register tool hook — %s", err)
+
+    def _on_transform_tool_result(
+        self,
+        tool_name: str = "",
+        arguments: dict | None = None,
+        result: str = "",
+        task_id: str | None = None,
+        **kwargs: Any,
+    ) -> str | None:
+        """Append a small repair hint after repeated same-turn tool failures."""
+        session_id = str(kwargs.get("session_id") or kwargs.get("sessionId") or "")
+        if not self._matches_session(session_id):
+            return None
+
+        tool = str(tool_name or kwargs.get("toolName") or "unknown_tool")
+        if not self._tool_result_failed(result, kwargs):
+            self._tool_failure_streaks.pop(tool, None)
+            return None
+
+        count = self._tool_failure_streaks.get(tool, 0) + 1
+        self._tool_failure_streaks[tool] = count
+        if count < _TOOL_FAILURE_HINT_THRESHOLD:
+            return None
+        if _TOOL_FAILURE_REPAIR_HINT in (result or ""):
+            return None
+        text = (result or "").rstrip()
+        return f"{text}\n\n{_TOOL_FAILURE_REPAIR_HINT}" if text else _TOOL_FAILURE_REPAIR_HINT
+
+    @staticmethod
+    def _tool_result_failed(result: str, payload: dict[str, Any]) -> bool:
+        for key in ("is_error", "isError", "error", "failed"):
+            value = payload.get(key)
+            if value is True:
+                return True
+            if isinstance(value, str) and value.strip():
+                return True
+        try:
+            parsed = json.loads(result or "")
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            error = parsed.get("error")
+            if error is True:
+                return True
+            if isinstance(error, str) and error.strip():
+                return True
+            if parsed.get("is_error") is True or parsed.get("isError") is True:
+                return True
+        normalized = " ".join((result or "").strip().lower().split())
+        if not normalized:
+            return False
+        failure_prefixes = (
+            "error:",
+            "failed:",
+            "failure:",
+            "exception:",
+            "traceback ",
+            "traceback:",
+            "command failed",
+            "tool failed",
+        )
+        if normalized.startswith(failure_prefixes):
+            return True
+        if " traceback (most recent call last)" in normalized:
+            return True
+        return False
 
     def _on_post_tool_call(
         self,
@@ -766,6 +843,7 @@ class MemTensorProvider(MemoryProvider):
         # belong only to this turn.
         self._turn_thinking = ""
         self._tool_calls = []
+        self._tool_failure_streaks = {}
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:  # type: ignore[override]
         """Inject relevant memories ahead of the next model call.

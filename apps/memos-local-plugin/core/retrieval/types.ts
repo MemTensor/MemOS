@@ -750,6 +750,8 @@ export interface RetrievalStats {
     | "structural",
     number
   >>;
+  /** Trace + episode rows dropped after rank (same `episodeId`). */
+  dedupedByEpisodeCount?: number;
 }
 
 /** Discriminated context union — one per entry point in `retrieve.ts`. */

@@ -513,6 +513,69 @@ class HermesProviderPipelineTests(unittest.TestCase):
             "好的，这是经典的 Kaggle 房价预测数据集。先创建计划。",
         )
 
+    def test_transform_tool_result_appends_memos_search_hint_after_three_failures(self) -> None:
+        provider = memos_provider.MemTensorProvider()
+        provider.on_turn_start(1, "run failing command")
+
+        self.assertIsNone(
+            provider._on_transform_tool_result(
+                tool_name="terminal",
+                result="boom",
+                is_error=True,
+            )
+        )
+        self.assertIsNone(
+            provider._on_transform_tool_result(
+                tool_name="terminal",
+                result="boom again",
+                is_error=True,
+            )
+        )
+        third = provider._on_transform_tool_result(
+            tool_name="terminal",
+            result="boom third",
+            is_error=True,
+        )
+        self.assertIsNotNone(third)
+        self.assertIn("failed multiple times in a row", third or "")
+        self.assertIn("memos_search", third or "")
+
+        provider._on_transform_tool_result(
+            tool_name="terminal",
+            result="ok",
+            is_error=False,
+        )
+        self.assertIsNone(
+            provider._on_transform_tool_result(
+                tool_name="terminal",
+                result="boom after reset",
+                is_error=True,
+            )
+        )
+
+    def test_transform_tool_result_detects_plain_error_text(self) -> None:
+        provider = memos_provider.MemTensorProvider()
+        provider.on_turn_start(1, "run failing command")
+
+        self.assertIsNone(
+            provider._on_transform_tool_result(
+                tool_name="terminal",
+                result="Error: command failed",
+            )
+        )
+        self.assertIsNone(
+            provider._on_transform_tool_result(
+                tool_name="terminal",
+                result="Error: command failed again",
+            )
+        )
+        third = provider._on_transform_tool_result(
+            tool_name="terminal",
+            result="Error: command failed third time",
+        )
+        self.assertIsNotNone(third)
+        self.assertIn("memos_search", third or "")
+
     def test_post_llm_call_orders_backfilled_tools_before_later_tool_results(self) -> None:
         bridge = FakeBridge()
         with (

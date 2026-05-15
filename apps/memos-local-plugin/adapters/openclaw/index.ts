@@ -11,6 +11,7 @@
  *        • `agent_end`           → `onTurnEnd`   (capture + reward chain)
  *        • `before_tool_call`    → duration tracker
  *        • `after_tool_call`     → `recordToolOutcome` (decision-repair)
+ *        • `tool_result_persist` → repeated-failure memos_search hint
  *        • `session_start` / `session_end` → core session lifecycle
  *   5. Register a service so the host can flush + shut down cleanly.
  *
@@ -342,6 +343,12 @@ function register(api: OpenClawPluginApi): void {
     const r = await ensureRuntime();
     if (!r) return;
     await r.bridge.handleAfterToolCall(event, ctx);
+  });
+
+  api.on("tool_result_persist", async (event, ctx) => {
+    const r = await ensureRuntime();
+    if (!r) return;
+    return r.bridge.handleToolResultPersist(event, ctx);
   });
 
   api.on("session_start", async (event, ctx) => {

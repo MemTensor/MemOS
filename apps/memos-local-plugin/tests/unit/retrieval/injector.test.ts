@@ -229,10 +229,29 @@ describe("retrieval/injector", () => {
       episodeId: "ep_episode_metrics" as never,
     });
 
-    expect(packet.rendered).toContain("Past similar episode");
+    expect(packet.rendered).not.toContain("Past similar episode");
     expect(packet.rendered).toContain("install libpq-dev");
     expect(packet.rendered).toContain('memos_timeline(episodeId="e_noisy")');
     expect(packet.rendered).not.toMatch(/best V|goal-sim|V=/);
+  });
+
+  it("omits redundant Trigger line when it matches the experience title", () => {
+    const exp = experience("p_dup");
+    exp.title = "Use holdings columns";
+    exp.trigger = "Use holdings columns";
+
+    const { packet } = toPacket({
+      ranked: [rc(exp)],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_exp_dup" as never,
+      episodeId: "ep_exp_dup" as never,
+    });
+
+    expect(packet.rendered).toContain("1. Use holdings columns");
+    expect(packet.rendered).toContain("Do:");
+    expect(packet.rendered).not.toMatch(/Trigger:\s*Use holdings columns/);
   });
 
   it("splits memories into past-task and trace subsections with per-item tool hints", () => {
@@ -317,6 +336,7 @@ describe("retrieval/injector", () => {
     expect(packet.rendered).toContain("Candidate skills");
     expect(packet.rendered).toContain("`memos_skill_get(id)`");
     expect(packet.rendered).not.toContain("`memos_skill_list");
+    expect(packet.rendered).not.toContain("Name: Skill sk_summary");
   });
 
   it("summary mode clamps long first paragraphs to skillSummaryChars", () => {
