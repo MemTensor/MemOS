@@ -20,11 +20,15 @@ import type { TraceDTO } from "../../../agent-contract/dto.js";
 import { rootLogger } from "../../../core/logger/index.js";
 import { DEFAULT_CONFIG } from "../../../core/config/defaults.js";
 import { resolveHome } from "../../../core/config/paths.js";
+import {
+  __resetHostLlmBridgeForTests,
+  type HostLlmBridge,
+} from "../../../core/llm/index.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { makeTmpHome, type TmpHomeContext } from "../../helpers/tmp-home.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 import type { MemosError } from "../../../agent-contract/errors.js";
-import type { SkillId, SkillRow } from "../../../core/types.js";
+import type { SkillId, SkillRow, TraceRow } from "../../../core/types.js";
 
 let db: TmpDbHandle | null = null;
 let pipeline: PipelineHandle | null = null;
@@ -105,6 +109,7 @@ afterEach(async () => {
   }
   db?.cleanup();
   db = null;
+  __resetHostLlmBridgeForTests();
 });
 
 describe("MemoryCore façade", () => {
@@ -190,6 +195,83 @@ describe("MemoryCore façade", () => {
     expect(fixed.statsAfter.dimMismatch).toBe(0);
     row = db!.repos.traces.getById("tr_imported" as never);
     expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
+  });
+
+  it("does not require action vectors for lightweight memory traces", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    db!.repos.sessions.upsert({
+      id: "se_lightweight",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      lastSeenAt: 1_700_000_000_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_lightweight",
+      sessionId: "se_lightweight",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      endedAt: 1_700_000_000_001,
+      traceIds: ["tr_lightweight"] as never,
+      rTask: null,
+      status: "closed",
+      meta: { lightweightMemory: true },
+    });
+    db!.repos.traces.insert({
+      id: "tr_lightweight",
+      episodeId: "ep_lightweight",
+      sessionId: "se_lightweight",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: 1_700_000_000_000,
+      userText: "What changed in the repo?",
+      agentText: "The branch adds lightweight memory mode.",
+      summary: "Repo branch lightweight memory change",
+      share: null,
+      toolCalls: [],
+      agentThinking: null,
+      reflection: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: ["lightweight_memory"],
+      errorSignatures: [],
+      vecSummary: new Float32Array(TEST_EMBED_DIMENSIONS),
+      vecAction: null,
+      turnId: 1_700_000_000_000,
+      schemaVersion: 1,
+    } as TraceRow);
+
+    const before = await core.embeddingMaintenanceStats();
+    expect(before.byKind.trace.totalSlots).toBe(1);
+    expect(before.byKind.trace.ready).toBe(1);
+    expect(before.byKind.trace.missing).toBe(0);
+    expect(before.needsRepair).toBe(0);
+
+    const repaired = await core.rebuildEmbeddings({ mode: "repair", limit: 10 });
+    expect(repaired.processed).toBe(0);
+    expect(repaired.updated).toBe(0);
+
+    const rebuilt = await core.rebuildEmbeddings({ mode: "rebuild", limit: 10 });
+    expect(rebuilt.processed).toBe(1);
+    expect(rebuilt.updated).toBe(1);
+    const row = db!.repos.traces.getById("tr_lightweight" as never);
+    expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
+    expect(row?.vecAction).toBeNull();
   });
 
   it("onTurnStart returns a RetrievalResultDTO with tier latencies", async () => {
@@ -916,6 +998,67 @@ describe("bootstrapMemoryCore", () => {
     expect(h2.ok).toBe(true);
     expect(h2.paths.home).toBe(home!.home.root);
     expect(h2.paths.db).toBe(home!.home.dbFile);
+  });
+
+  it("persists lightweight summarizer model status for Hermes overview", async () => {
+    home = await makeTmpHome({
+      agent: "hermes",
+      configYaml: `
+llm:
+  provider: host
+  model: hermes-summary-test
+algorithm:
+  lightweightMemory:
+    enabled: true
+`,
+    });
+    const bridge: HostLlmBridge = {
+      id: "test-host-llm",
+      async complete() {
+        return {
+          text: JSON.stringify({ summary: "Hermes remembered the overview status fact" }),
+          model: "hermes-summary-test",
+          durationMs: 1,
+        };
+      },
+    };
+    core = await bootstrapMemoryCore({
+      agent: "hermes",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "bootstrap-test",
+      hostLlmBridge: bridge,
+      now: () => 1_700_000_000_000,
+    });
+    await core.init();
+
+    const start = await core.onTurnStart({
+      agent: "hermes",
+      sessionId: "hermes-lightweight-status",
+      userText: "请记住 Hermes 摘要模型状态应该显示已调用",
+      ts: 1_700_000_000_000,
+    });
+    await core.onTurnEnd({
+      agent: "hermes",
+      sessionId: "hermes-lightweight-status",
+      episodeId: start.query.episodeId!,
+      agentText: "已记住。",
+      toolCalls: [],
+      ts: 1_700_000_000_100,
+    });
+
+    const logs = await core.listApiLogs({ toolName: "system_model_status", limit: 10 });
+    const llmRows = logs.logs
+      .map((row) => JSON.parse(row.outputJson) as { role?: string; status?: string; op?: string })
+      .filter((row) => row.role === "llm");
+    expect(llmRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "ok",
+          op: "capture.summarize",
+        }),
+      ]),
+    );
   });
 
   it("init() recovers orphaned open episodes left behind by a previous crash", async () => {

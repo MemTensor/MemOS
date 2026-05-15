@@ -257,7 +257,6 @@ export async function bootstrapMemoryCoreFull(
       phase?: string;
     },
   ): void {
-    if (config.algorithm.lightweightMemory.enabled) return;
     try {
       repos.apiLogs.insert({
         toolName: "system_model_status",
@@ -3658,14 +3657,16 @@ export function createMemoryCore(
           sourceText: row.summary?.trim() || row.userText.trim() || "(empty)",
           update: (vec) => handle.repos.traces.updateVector(row.id, "vecSummary", vec),
         });
-        slots.push({
-          kind: "trace",
-          id: row.id,
-          field: "vec_action",
-          vec: row.vecAction,
-          sourceText: traceActionEmbeddingText(row),
-          update: (vec) => handle.repos.traces.updateVector(row.id, "vecAction", vec),
-        });
+        if (!isLightweightMemoryTrace(row)) {
+          slots.push({
+            kind: "trace",
+            id: row.id,
+            field: "vec_action",
+            vec: row.vecAction,
+            sourceText: traceActionEmbeddingText(row),
+            update: (vec) => handle.repos.traces.updateVector(row.id, "vecAction", vec),
+          });
+        }
       }
       if (rows.length < pageSize) break;
     }
@@ -3721,6 +3722,10 @@ export function createMemoryCore(
 
   function slotNeedsRepair(slot: EmbeddingSlot, dimension: number): boolean {
     return !slot.vec || (dimension > 0 && slot.vec.length !== dimension);
+  }
+
+  function isLightweightMemoryTrace(row: TraceRow): boolean {
+    return row.tags.includes("lightweight_memory");
   }
 
   function emptyEmbeddingStatsByKind(): EmbeddingMaintenanceStats["byKind"] {

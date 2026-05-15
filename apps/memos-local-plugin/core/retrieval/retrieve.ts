@@ -355,8 +355,8 @@ async function runAll(
     // candidates. A small LLM round-trip (see `llm-filter.ts`) prunes
     // items that share surface keywords with the query but aren't
     // actually relevant. Full mode fails open to preserve recall;
-    // lightweight mode fails closed because it promises LLM-screened raw
-    // memories only.
+    // lightweight mode fails closed because it promises summarizer-LLM
+    // screened raw memories only.
     const queryText =
       (ctx as { userText?: string }).userText ?? compiled.text ?? "";
     const filterResult = await llmFilterCandidates(
