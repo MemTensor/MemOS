@@ -257,7 +257,6 @@ export async function bootstrapMemoryCoreFull(
       phase?: string;
     },
   ): void {
-    if (config.algorithm.lightweightMemory.enabled) return;
     try {
       repos.apiLogs.insert({
         toolName: "system_model_status",
