@@ -1074,6 +1074,16 @@ class APIConfig:
         return config
 
     @staticmethod
+    def get_lance_graph_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get LanceDB graph configuration."""
+        base_uri = os.getenv("LANCE_URI", "./data/lance_db")
+        return {
+            "uri": base_uri,
+            "user_name": user_id,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 2048)),
+        }
+
+    @staticmethod
     def create_user_config(user_name: str, user_id: str) -> tuple["MOSConfig", "GeneralMemCube"]:
         """Create configuration for a specific user."""
         from memos.configs.mem_cube import GeneralMemCubeConfig
@@ -1150,6 +1160,7 @@ class APIConfig:
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id)
         neo4j_config = APIConfig.get_neo4j_config(user_id)
         polardb_config = APIConfig.get_polardb_config(user_id)
+        lance_config = APIConfig.get_lance_graph_config(user_id)
         internet_config = (
             APIConfig.get_internet_config()
             if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
@@ -1161,6 +1172,7 @@ class APIConfig:
             "neo4j": neo4j_config,
             "polardb": polardb_config,
             "postgres": postgres_config,
+            "lance": lance_config,
         }
         # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
         graph_db_backend = os.getenv(
@@ -1234,11 +1246,13 @@ class APIConfig:
         neo4j_config = APIConfig.get_neo4j_config(user_id="default")
         polardb_config = APIConfig.get_polardb_config(user_id="default")
         postgres_config = APIConfig.get_postgres_config(user_id="default")
+        lance_config = APIConfig.get_lance_graph_config(user_id="default")
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "polardb": polardb_config,
             "postgres": postgres_config,
+            "lance": lance_config,
         }
         internet_config = (
             APIConfig.get_internet_config()

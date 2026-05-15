@@ -241,6 +241,28 @@ class PostgresGraphDBConfig(BaseConfig):
         return self
 
 
+class LanceGraphDBConfig(BaseConfig):
+    """
+    LanceDB-specific configuration.
+    """
+
+    uri: str = Field(..., description="The URI/path to the LanceDB dataset")
+    user_name: str | None = Field(
+        default=None,
+        description="Logical user or tenant ID for data isolation",
+    )
+    embedding_dimension: int = Field(default=768, description="Dimension of vector embedding")
+    compaction_version_threshold: int = Field(
+        default=500, description="Number of new versions to accumulate before triggering compaction"
+    )
+    compaction_interval_mins: int = Field(
+        default=30, description="Fallback interval in minutes to check and run compaction"
+    )
+    cleanup_older_than_days: int = Field(
+        default=7, description="Number of days to keep old versions before pruning"
+    )
+
+
 class GraphDBConfigFactory(BaseModel):
     backend: str = Field(..., description="Backend for graph database")
     config: dict[str, Any] = Field(..., description="Configuration for the graph database backend")
@@ -250,6 +272,7 @@ class GraphDBConfigFactory(BaseModel):
         "neo4j-community": Neo4jCommunityGraphDBConfig,
         "polardb": PolarDBGraphDBConfig,
         "postgres": PostgresGraphDBConfig,
+        "lance": LanceGraphDBConfig,
     }
 
     @field_validator("backend")

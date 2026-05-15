@@ -71,6 +71,7 @@ memos = "memos.cli:main"
 tree-mem = [
     "neo4j (>=5.28.1,<6.0.0)",  # Graph database
     "schedule (>=1.2.2,<2.0.0)",  # Task scheduling
+    "lancedb (>=0.30.1,<1.0.0)", # LanceDB
 ]
 
 # MemScheduler
@@ -100,6 +101,13 @@ pref-mem = [
 # SkillMemory
 skill-mem = [
     "alibabacloud-oss-v2 (>=1.2.2,<1.2.3)",
+]
+
+# Lance Vector DB
+lance-mem = [
+    "lancedb (>=0.17.0,<1.0.0)",  # Lance vector database
+    "pyarrow (>=18.0.0,<20.0.0)",  # Arrow format support for Lance
+    "tantivy (>=0.22.0,<1.0.0)",   # FTS engine for LanceDB
 ]
 
 # Tavily Search
@@ -135,6 +143,9 @@ all = [
     "rake-nltk (>=1.0.6,<1.1.0)",
     "alibabacloud-oss-v2 (>=1.2.2,<1.2.3)",
     "tavily-python (>=0.5.0,<1.0.0)",
+    "lancedb (>=0.17.0,<1.0.0)",
+    "pyarrow (>=18.0.0,<20.0.0)",
+    "tantivy (>=0.22.0,<1.0.0)",
 
     # Uncategorized dependencies
 ]
@@ -199,8 +210,8 @@ langgraph = "^0.5.1"
 pymysql = "^1.1.2"
 
 [[tool.poetry.source]]
-name = "mirrors"
-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+name = "volces"
+url = "https://mirrors.volces.com/pypi/simple/"
 priority = "supplemental"
 
 
