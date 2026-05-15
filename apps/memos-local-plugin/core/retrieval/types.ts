@@ -314,6 +314,8 @@ export interface RetrievalConfig {
    * window pays for itself).
    */
   llmFilterCandidateBodyChars?: number;
+  /** Low-cost mode: retrieve raw trace memories only. */
+  lightweightMemory?: boolean;
 }
 
 /**

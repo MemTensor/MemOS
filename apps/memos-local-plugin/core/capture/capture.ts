@@ -19,7 +19,7 @@ import type { Embedder } from "../embedding/index.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
 import { ids } from "../id.js";
-import type { EpisodeRow, TraceRow, TraceId } from "../types.js";
+import type { EpisodeRow, TraceRow, TraceId, EpochMs } from "../types.js";
 import type { makeEmbeddingRetryQueueRepo } from "../storage/repos/embedding_retry_queue.js";
 import type { makeTracesRepo } from "../storage/repos/traces.js";
 import type { EpisodesRepo } from "../session/persistence.js";
@@ -79,6 +79,11 @@ export interface CaptureRunner {
    * Safe to call after every `addTurn` cycle.
    */
   runLite(input: CaptureInput): Promise<CaptureResult>;
+  /**
+   * Lightweight memory capture. Writes one trace per user/assistant turn
+   * instead of per tool/action step, and never emits `capture.done`.
+   */
+  runLightweight(input: CaptureInput): Promise<CaptureResult>;
   /**
    * Topic-end "reflect" capture. Runs the batch reflection scorer over
    * EVERY step of the (now-finalized) episode in one LLM call so the
@@ -227,6 +232,127 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // Emit `capture.lite.done` so the api_logs table gets a per-turn
     // `memory_add` row. This is distinct from `capture.done` which
     // triggers the reward / L2 / L3 chain and only fires at topic end.
+    emit({ kind: "capture.lite.done", result });
+    return result;
+  }
+
+  async function runLightweight(input: CaptureInput): Promise<CaptureResult> {
+    const startedAt = now();
+    const warnings: CaptureResult["warnings"] = [];
+    const llmCalls = newLlmCounters();
+
+    emit({
+      kind: "capture.started",
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+    });
+
+    const extractStart = now();
+    const rawAll = extractSteps(input.episode);
+    const existingTraces = deps.tracesRepo.list({ episodeId: input.episode.id });
+    const seenTurnIds = new Set(
+      existingTraces
+        .map((t) => t.turnId)
+        .filter((v): v is number => typeof v === "number" && Number.isFinite(v)),
+    );
+    const rawByTurn = new Map<number, StepCandidate[]>();
+    for (const step of rawAll) {
+      const turnId = pickTurnId(step.meta, step.ts);
+      if (seenTurnIds.has(turnId)) continue;
+      const bucket = rawByTurn.get(turnId) ?? [];
+      bucket.push(step);
+      rawByTurn.set(turnId, bucket);
+    }
+    const raw = Array.from(rawByTurn.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([turnId, steps]) => mergeTurnSteps(input.episode.id, turnId, steps));
+    const extractMs = now() - extractStart;
+
+    const normStart = now();
+    const normalized = normalizeSteps(raw, deps.cfg);
+    const normalizeMs = now() - normStart;
+
+    if (normalized.length === 0) {
+      return emptyResult(input, startedAt, {
+        extract: extractMs,
+        normalize: normalizeMs,
+      }, llmCalls, warnings);
+    }
+
+    const scored: ScoredStep[] = normalized.map((s) => ({
+      ...s,
+      reflection: { text: null, alpha: 0, usable: false, source: "none" },
+    }));
+
+    const summarizeStart = now();
+    const { summaries, summarizeMs } = await runSummarize(
+      scored,
+      summarizeStart,
+      llmCalls,
+      warnings,
+      { episodeId: input.episode.id, phase: "lightweight" },
+    );
+
+    const { vecs: summaryOnlyVecs, embedMs } = await runEmbed(
+      scored,
+      summaries,
+      warnings,
+      { summaryOnly: true },
+    );
+
+    const persistStart = now();
+    const rows = buildRows(scored, summaries, summaryOnlyVecs, input.episode, {
+      lightweightMemory: true,
+    });
+    const persisted = await persistRows(rows, input, warnings, {
+      skipActionVectorRetry: true,
+    });
+    if (!persisted) {
+      return finalResult(
+        input,
+        startedAt,
+        [],
+        scored.map(toCandidate(rows)),
+        {
+          extract: extractMs,
+          normalize: normalizeMs,
+          reflect: 0,
+          alpha: 0,
+          summarize: summarizeMs,
+          embed: embedMs,
+          persist: now() - persistStart,
+        },
+        llmCalls,
+        warnings,
+      );
+    }
+    const persistMs = now() - persistStart;
+
+    const result = finalResult(
+      input,
+      startedAt,
+      rows.map((r) => r.id),
+      buildTraceCandidates(scored, rows),
+      {
+        extract: extractMs,
+        normalize: normalizeMs,
+        reflect: 0,
+        alpha: 0,
+        summarize: summarizeMs,
+        embed: embedMs,
+        persist: persistMs,
+      },
+      llmCalls,
+      warnings,
+    );
+    log.info("capture.lightweight.done", {
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+      traces: result.traceIds.length,
+      llmCalls,
+      totalMs: result.completedAt - startedAt,
+      warnings: warnings.length,
+    });
     emit({ kind: "capture.lite.done", result });
     return result;
   }
@@ -482,13 +608,14 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     scored: ScoredStep[],
     summaries: string[],
     warnings: CaptureResult["warnings"],
+    opts: { summaryOnly?: boolean } = {},
   ): Promise<{ vecs: VecPair[]; embedMs: number }> {
     const start = now();
     if (!deps.cfg.embedTraces || !deps.embedder) {
       return { vecs: scored.map(() => ({ summary: null, action: null })), embedMs: now() - start };
     }
     try {
-      const vecs = await embedSteps(deps.embedder, scored, summaries);
+      const vecs = await embedSteps(deps.embedder, scored, summaries, opts);
       return { vecs, embedMs: now() - start };
     } catch (err) {
       warnings.push({
@@ -505,6 +632,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     summaries: string[],
     vecs: VecPair[],
     episode: CaptureInput["episode"],
+    opts: { lightweightMemory?: boolean } = {},
   ): TraceRow[] {
     const owner = ownerFromEpisode(episode);
     const traces: TraceCandidate[] = scored.map((s, i) => ({
@@ -535,7 +663,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       // so retrieval can find the row immediately; reward backprop
       // overwrites it once the topic is reflected on.
       priority: 0.5,
-      tags: t.tags,
+      tags: opts.lightweightMemory ? mergeTags(t.tags, ["lightweight_memory"]) : t.tags,
       errorSignatures: extractErrorSignatures({
         toolCalls: t.toolCalls,
         agentText: t.agentText,
@@ -597,6 +725,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     rows: TraceRow[],
     input: CaptureInput,
     warnings: CaptureResult["warnings"],
+    opts: { skipActionVectorRetry?: boolean } = {},
   ): Promise<boolean> {
     const existingBeforeInsert = deps.tracesRepo.list({ episodeId: input.episode.id });
     const seenSignatures = new Set(existingBeforeInsert.map(traceIdentitySignature));
@@ -620,7 +749,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
 
     try {
       for (const row of rows) deps.tracesRepo.insert(row);
-      enqueueMissingTraceVectors(rows, warnings);
+      enqueueMissingTraceVectors(rows, warnings, opts);
     } catch (err) {
       const failure = errDetail(err);
       log.error("persist.failed", {
@@ -760,6 +889,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
   function enqueueMissingTraceVectors(
     rows: TraceRow[],
     warnings: CaptureResult["warnings"],
+    opts: { skipActionVectorRetry?: boolean } = {},
   ): void {
     if (!deps.cfg.embedTraces || !deps.embeddingRetryQueue || !deps.embedder) return;
     const queuedAt = now();
@@ -776,7 +906,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         });
         queued++;
       }
-      if (!row.vecAction) {
+      if (!opts.skipActionVectorRetry && !row.vecAction) {
         deps.embeddingRetryQueue.enqueue({
           id: `er_${ids.span()}`,
           targetKind: "trace",
@@ -795,6 +925,10 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         detail: { queued },
       });
     }
+  }
+
+  function mergeTags(existing: readonly string[], extra: readonly string[]): string[] {
+    return Array.from(new Set([...existing, ...extra])).sort();
   }
 
   function finalResult(
@@ -836,7 +970,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     });
   }
 
-  return { runLite, runReflect };
+  return { runLite, runLightweight, runReflect };
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -1031,6 +1165,51 @@ function safeStringify(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+function mergeTurnSteps(
+  episodeId: string,
+  turnId: number,
+  steps: readonly StepCandidate[],
+): StepCandidate {
+  const ordered = [...steps].sort((a, b) => a.ts - b.ts);
+  const first = ordered[0]!;
+  const userText = firstNonEmpty(ordered.map((s) => s.userText));
+  const agentText = ordered
+    .map((s) => s.agentText.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  const agentThinking = ordered
+    .map((s) => s.agentThinking?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n") || null;
+  const rawReflection = firstNonEmpty(ordered.map((s) => s.rawReflection ?? ""));
+  const toolCalls = ordered.flatMap((s) => s.toolCalls);
+  const lastTs = ordered.reduce((m, s) => Math.max(m, s.ts), first.ts);
+
+  return {
+    key: `${episodeId}:${turnId}:lightweight`,
+    ts: lastTs as EpochMs,
+    userText,
+    agentText,
+    agentThinking,
+    toolCalls,
+    rawReflection: rawReflection || null,
+    depth: Math.min(...ordered.map((s) => s.depth)),
+    isSubagent: ordered.some((s) => s.isSubagent),
+    meta: {
+      ...ordered.reduce<Record<string, unknown>>(
+        (acc, s) => ({ ...acc, ...s.meta }),
+        {},
+      ),
+      turnId,
+      lightweightMemory: true,
+    },
+  };
+}
+
+function firstNonEmpty(values: readonly string[]): string {
+  return values.map((v) => v.trim()).find(Boolean) ?? "";
 }
 
 /**

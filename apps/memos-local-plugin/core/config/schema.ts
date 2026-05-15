@@ -92,6 +92,14 @@ const SkillEvolverSchema = Type.Object({
 }, { default: {} });
 
 const AlgorithmSchema = Type.Object({
+  lightweightMemory: Type.Object({
+    /**
+     * Low-cost mode for users who only want raw conversation memory +
+     * recall. When enabled, the runtime skips task/reward/L2/L3/skill
+     * evolution and keeps only summarize + embedding + retrieval filter.
+     */
+    enabled: Bool(false),
+  }, { default: {} }),
   capture: Type.Object({
     /** Cap on agent/user text length (chars). Longer content is summarized. */
     maxTextChars: NumberInRange(4_000, 200, 64_000),

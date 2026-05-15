@@ -410,9 +410,10 @@ export function requireSession(
   agent?: string | null,
 ): boolean {
   // Public: auth endpoints + health (so the viewer can tell whether
-  // the backend is up BEFORE unlocking).
+  // the backend is up BEFORE unlocking). Other API routes, including
+  // ping, fall through and are only open when no password is configured.
   if (pathname.startsWith("/api/v1/auth/")) return true;
-  if (pathname === "/api/v1/health" || pathname === "/api/v1/ping") return true;
+  if (pathname === "/api/v1/health") return true;
 
   const state = readAuthState(homeDir);
   if (!state) return true; // password protection off → open

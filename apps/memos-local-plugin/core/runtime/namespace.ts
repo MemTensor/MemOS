@@ -105,10 +105,15 @@ export function visibilityWhere(
   const normalized = normalizeNamespace(ns, ns?.agentKind ?? "unknown");
   return {
     sql:
-      `(${col("owner_agent_kind")} = @vis_owner_agent_kind` +
+      `((` +
+      `${col("owner_agent_kind")} = @vis_owner_agent_kind AND ` +
+      `${col("owner_profile_id")} = @vis_owner_profile_id` +
+      `) OR ${col("owner_agent_kind")} IS NULL` +
+      ` OR ${col("owner_agent_kind")} = 'unknown'` +
       ` OR COALESCE(${col("share_scope")}, 'private') IN ('local', 'public', 'hub'))`,
     params: {
       vis_owner_agent_kind: normalized.agentKind,
+      vis_owner_profile_id: normalized.profileId,
     },
   };
 }
@@ -144,7 +149,8 @@ export function isVisibleTo(
     return true;
   }
   const normalized = normalizeNamespace(ns, ns.agentKind);
-  return row.ownerAgentKind === normalized.agentKind;
+  return row.ownerAgentKind === normalized.agentKind &&
+    (row.ownerProfileId ?? DEFAULT_PROFILE_ID) === normalized.profileId;
 }
 
 export function namespaceMeta(ns: RuntimeNamespace): Record<string, unknown> {

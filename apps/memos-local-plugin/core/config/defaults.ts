@@ -54,6 +54,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     timeoutMs: 60_000,
   },
   algorithm: {
+    lightweightMemory: {
+      enabled: false,
+    },
     capture: {
       maxTextChars: 4_000,
       maxToolOutputChars: 2_000,

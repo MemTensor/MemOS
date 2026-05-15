@@ -58,6 +58,7 @@ export function registerApiLogsRoutes(routes: Routes, deps: ServerDeps): void {
     // user passes it via `?tool=` explicitly.
     const tools = [
       "memos_search",
+      "memory_search",
       "memory_add",
       "skill_generate",
       "skill_evolve",

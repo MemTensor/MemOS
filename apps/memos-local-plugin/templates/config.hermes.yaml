@@ -27,6 +27,10 @@ llm:
   apiKey: ""              # REQUIRED — fill in before running
   model: ""               # blank = provider default (e.g. gpt-4o-mini for openai_compatible)
 
+algorithm:
+  lightweightMemory:
+    enabled: false         # true = only summarize + embed + recall; no tasks/skills/experiences/world models
+
 hub:
   enabled: false
   address: ""

@@ -578,7 +578,6 @@ export function MemoriesView() {
                       {namespaceLabel({
                         agentKind: g.ownerAgentKind,
                         profileId: g.ownerProfileId,
-                        count: g.ids.length,
                       })}
                     </span>
                     <ShareScopePill scope={g.scope} />

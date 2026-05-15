@@ -16,12 +16,14 @@ import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
 import { Pager } from "../components/Pager";
 import { ShareScopePill } from "../components/ShareScopePill";
+import { LightweightModeEmpty } from "../components/LightweightModeEmpty";
 import { NamespaceSelect, appendNamespaceParams } from "../components/NamespaceSelect";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import type { PolicyDTO } from "../api/types";
 import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
 import { loadHubSharingEnabled } from "../utils/share";
+import { useLightweightMemoryMode } from "../hooks/useLightweightMemoryMode";
 
 interface PolicyUsage {
   skills: Array<{ id: string; name: string; status: string; eta: number }>;
@@ -54,6 +56,7 @@ export function PoliciesView() {
   const [detail, setDetail] = useState<PolicyDTO | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const lightweight = useLightweightMemoryMode();
   const toggleSel = (id: string) => {
     setSelected((prev) => {
       const n = new Set(prev);
@@ -93,17 +96,29 @@ export function PoliciesView() {
   };
 
   useEffect(() => {
+    if (lightweight.loading || lightweight.enabled) return;
     const h = setTimeout(() => {
       void load({ q: query.trim(), status, page: 0 });
     }, 200);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, status, pageSize, namespaceFilter]);
+  }, [query, status, pageSize, namespaceFilter, lightweight.loading, lightweight.enabled]);
+
+  useEffect(() => {
+    if (!lightweight.enabled) return;
+    setRows([]);
+    setDetail(null);
+    setSelected(new Set());
+    setHasMore(false);
+    setTotal(0);
+    setPage(0);
+  }, [lightweight.enabled]);
 
   // Deep-link: `#/policies?id=po_xxx` auto-opens the row's drawer.
   // Lets other views (Skills / WorldModels / Tasks) link straight
   // into a specific policy without the user searching for it.
   useEffect(() => {
+    if (lightweight.loading || lightweight.enabled) return;
     const id = route.value.params.id;
     if (!id) return;
     const ctrl = new AbortController();
@@ -115,7 +130,7 @@ export function PoliciesView() {
       .then((p) => setDetail(p))
       .catch(() => void 0);
     return () => ctrl.abort();
-  }, [route.value.params.id]);
+  }, [route.value.params.id, lightweight.loading, lightweight.enabled]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -166,205 +181,226 @@ export function PoliciesView() {
           <h1>{t("policies.title")}</h1>
           <p>{t("policies.subtitle")}</p>
         </div>
-        <div class="view-header__actions">
-          {/*
-           * Refresh — mirrors MemoriesView. Clears search + status
-           * filter, drops selection, and re-fetches page 0 so the user
-           * sees freshly-induced policies without a full page reload.
-           */}
-          <button
-            class="btn btn--ghost btn--sm"
-            onClick={() => {
-              setQuery("");
-              setStatus("");
-              setNamespaceFilter("");
-              setSelected(new Set());
-              void load({ q: "", status: "", page: 0 });
-            }}
-          >
-            <Icon name="refresh-cw" size={14} />
-            {t("common.refresh")}
-          </button>
-        </div>
-      </div>
-
-      {/* Row 1: search box */}
-      <div class="toolbar">
-        <label class="input-search">
-          <Icon name="search" size={16} />
-          <input
-            class="input input--search"
-            type="search"
-            placeholder={t("policies.search.placeholder")}
-            value={query}
-            onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
-          />
-        </label>
-      </div>
-
-      {/* Row 2: filter chips — own row, matches TasksView / MemoriesView */}
-      <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
-        <div class="toolbar__group" role="group" aria-label={t("common.filter")}>
-          {statuses.map((s) => (
+        {!lightweight.enabled && (
+          <div class="view-header__actions">
+            {/*
+             * Refresh — mirrors MemoriesView. Clears search + status
+             * filter, drops selection, and re-fetches page 0 so the user
+             * sees freshly-induced policies without a full page reload.
+             */}
             <button
-              key={s.v}
-              class="chip"
-              aria-pressed={status === s.v}
-              onClick={() => setStatus(s.v)}
+              class="btn btn--ghost btn--sm"
+              onClick={() => {
+                setQuery("");
+                setStatus("");
+                setNamespaceFilter("");
+                setSelected(new Set());
+                void load({ q: "", status: "", page: 0 });
+              }}
             >
-              {s.k}
+              <Icon name="refresh-cw" size={14} />
+              {t("common.refresh")}
             </button>
-          ))}
-        </div>
-        <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
+          </div>
+        )}
       </div>
 
-      {loading && rows.length === 0 && (
+      {lightweight.loading && (
         <div class="list">
           {[0, 1, 2].map((i) => (
             <div key={i} class="skeleton" style="height:68px" />
           ))}
         </div>
       )}
-      {!loading && rows.length === 0 && (
-        <div class="empty">
-          <div class="empty__icon"><Icon name="sparkles" size={22} /></div>
-          <div class="empty__title">{t("policies.empty")}</div>
-          <div class="empty__hint">{t("policies.empty.hint")}</div>
-        </div>
+
+      {!lightweight.loading && lightweight.enabled && (
+        <LightweightModeEmpty
+          icon="sparkles"
+          message={t("policies.lightweight.empty")}
+        />
       )}
 
-      {rows.length > 0 && (
-        <div class="list">
-          {rows.map((p) => {
-            const isSel = selected.has(p.id);
-            return (
-            <div
-              key={p.id}
-              class={`mem-card${isSel ? " mem-card--selected" : ""}`}
-              onClick={() => setDetail(p)}
-            >
-              <label
-                class="mem-card__check-wrap"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <input
-                  type="checkbox"
-                  class="mem-card__check"
-                  checked={isSel}
-                  onChange={() => toggleSel(p.id)}
-                  aria-label="select"
-                />
-              </label>
-              <div class="mem-card__body">
-                <div class="mem-card__title">{p.title || "(untitled)"}</div>
-                <div class="mem-card__meta">
-                  <ShareScopePill scope={p.share?.scope} />
-                  <span class={`pill pill--${p.status}`}>{t(`status.${p.status}` as never)}</span>
-                  <span>support {p.support}</span>
-                  <span>gain {p.gain.toFixed(2)}</span>
-                  {(p.preference?.length ?? 0) > 0 && (
-                    <span
-                      class="pill pill--active"
-                      title={t("policies.guidance.preferTitle")}
-                    >
-                      {t("policies.guidance.prefer")} {p.preference.length}
-                    </span>
-                  )}
-                  {(p.antiPattern?.length ?? 0) > 0 && (
-                    <span
-                      class="pill pill--failed"
-                      title={t("policies.guidance.avoidTitle")}
-                    >
-                      {t("policies.guidance.avoid")} {p.antiPattern.length}
-                    </span>
-                  )}
-                  <span>{new Date(p.updatedAt).toLocaleString()}</span>
-                </div>
-              </div>
-              {/*
-               * Lifecycle actions live in the drawer footer (PolicyDrawer).
-               * The row itself stays clean with just title + meta + chevron,
-               * matching the other list views.
-               */}
-              <div class="mem-card__tail">
-                <Icon name="chevron-right" size={16} />
-              </div>
+      {!lightweight.loading && !lightweight.enabled && (
+        <>
+          {/* Row 1: search box */}
+          <div class="toolbar">
+            <label class="input-search">
+              <Icon name="search" size={16} />
+              <input
+                class="input input--search"
+                type="search"
+                placeholder={t("policies.search.placeholder")}
+                value={query}
+                onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+              />
+            </label>
+          </div>
+
+          {/* Row 2: filter chips — own row, matches TasksView / MemoriesView */}
+          <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
+            <div class="toolbar__group" role="group" aria-label={t("common.filter")}>
+              {statuses.map((s) => (
+                <button
+                  key={s.v}
+                  class="chip"
+                  aria-pressed={status === s.v}
+                  onClick={() => setStatus(s.v)}
+                >
+                  {s.k}
+                </button>
+              ))}
             </div>
-            );
-          })}
-        </div>
-      )}
+            <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
+          </div>
 
-      {(page > 0 || hasMore) && (
-        <Pager
-          page={page}
-          totalItems={total}
-          pageSize={pageSize}
-          hasMore={hasMore}
-          loading={loading}
-          onPageSizeChange={setPageSize}
-          onPageChange={(nextPage) => {
-            void load({ q: query.trim(), status, page: nextPage });
-          }}
-        />
-      )}
+          {loading && rows.length === 0 && (
+            <div class="list">
+              {[0, 1, 2].map((i) => (
+                <div key={i} class="skeleton" style="height:68px" />
+              ))}
+            </div>
+          )}
+          {!loading && rows.length === 0 && (
+            <div class="empty">
+              <div class="empty__icon"><Icon name="sparkles" size={22} /></div>
+              <div class="empty__title">{t("policies.empty")}</div>
+              <div class="empty__hint">{t("policies.empty.hint")}</div>
+            </div>
+          )}
 
-      {detail && (
-        <PolicyDrawer
-          policy={detail}
-          onClose={() => {
-            setDetail(null);
-            clearEntryId();
-          }}
-          onUpdated={(updated) => {
-            setRows((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
-            setDetail(updated);
-          }}
-          onStatusChange={async (p, next) => {
-            await setPolicyStatus(p, next);
-            // refresh the drawer with the new status.
-            setDetail((cur) => (cur ? { ...cur, status: next } : cur));
-          }}
-          onDelete={(p) => deletePolicy(p)}
-        />
-      )}
+          {rows.length > 0 && (
+            <div class="list">
+              {rows.map((p) => {
+                const isSel = selected.has(p.id);
+                return (
+                <div
+                  key={p.id}
+                  class={`mem-card${isSel ? " mem-card--selected" : ""}`}
+                  onClick={() => setDetail(p)}
+                >
+                  <label
+                    class="mem-card__check-wrap"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      class="mem-card__check"
+                      checked={isSel}
+                      onChange={() => toggleSel(p.id)}
+                      aria-label="select"
+                    />
+                  </label>
+                  <div class="mem-card__body">
+                    <div class="mem-card__title">{p.title || "(untitled)"}</div>
+                    <div class="mem-card__meta">
+                      <ShareScopePill scope={p.share?.scope} />
+                      <span class={`pill pill--${p.status}`}>{t(`status.${p.status}` as never)}</span>
+                      <span>support {p.support}</span>
+                      <span>gain {p.gain.toFixed(2)}</span>
+                      {(p.preference?.length ?? 0) > 0 && (
+                        <span
+                          class="pill pill--active"
+                          title={t("policies.guidance.preferTitle")}
+                        >
+                          {t("policies.guidance.prefer")} {p.preference.length}
+                        </span>
+                      )}
+                      {(p.antiPattern?.length ?? 0) > 0 && (
+                        <span
+                          class="pill pill--failed"
+                          title={t("policies.guidance.avoidTitle")}
+                        >
+                          {t("policies.guidance.avoid")} {p.antiPattern.length}
+                        </span>
+                      )}
+                      <span>{new Date(p.updatedAt).toLocaleString()}</span>
+                    </div>
+                  </div>
+                  {/*
+                   * Lifecycle actions live in the drawer footer (PolicyDrawer).
+                   * The row itself stays clean with just title + meta + chevron,
+                   * matching the other list views.
+                   */}
+                  <div class="mem-card__tail">
+                    <Icon name="chevron-right" size={16} />
+                  </div>
+                </div>
+                );
+              })}
+            </div>
+          )}
 
-      {selected.size > 0 && (
-        <div class="batch-bar" role="region" aria-label="bulk actions">
-          <span class="batch-bar__count">
-            {t("common.selected", { n: selected.size })}
-          </span>
-          <button
-            class="btn btn--sm"
-            onClick={() => setSelected((prev) => toggleIdsInSelection(prev, pageIds))}
-          >
-            <Icon name="check-square" size={14} />
-            {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
-          </button>
-          <button
-            class="btn btn--danger btn--sm"
-            onClick={async () => {
-              if (selected.size === 0) return;
-              if (!confirm(t("common.bulkDelete.confirm", { n: selected.size }))) return;
-              const ids = [...selected];
-              await Promise.all(
-                ids.map((id) =>
-                  api.del(`/api/v1/policies/${encodeURIComponent(id)}`).catch(() => null),
-                ),
-              );
-              setSelected(new Set());
-              void load({ q: query.trim(), status, page });
-            }}
-          >
-            <Icon name="trash-2" size={14} />
-            {t("common.bulkDelete")}
-          </button>
-          <div class="batch-bar__spacer" />
-          <button class="btn btn--ghost btn--sm" onClick={() => setSelected(new Set())}>
-            {t("common.deselect")}
-          </button>
-        </div>
+          {(page > 0 || hasMore) && (
+            <Pager
+              page={page}
+              totalItems={total}
+              pageSize={pageSize}
+              hasMore={hasMore}
+              loading={loading}
+              onPageSizeChange={setPageSize}
+              onPageChange={(nextPage) => {
+                void load({ q: query.trim(), status, page: nextPage });
+              }}
+            />
+          )}
+
+          {detail && (
+            <PolicyDrawer
+              policy={detail}
+              onClose={() => {
+                setDetail(null);
+                clearEntryId();
+              }}
+              onUpdated={(updated) => {
+                setRows((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+                setDetail(updated);
+              }}
+              onStatusChange={async (p, next) => {
+                await setPolicyStatus(p, next);
+                // refresh the drawer with the new status.
+                setDetail((cur) => (cur ? { ...cur, status: next } : cur));
+              }}
+              onDelete={(p) => deletePolicy(p)}
+            />
+          )}
+
+          {selected.size > 0 && (
+            <div class="batch-bar" role="region" aria-label="bulk actions">
+              <span class="batch-bar__count">
+                {t("common.selected", { n: selected.size })}
+              </span>
+              <button
+                class="btn btn--sm"
+                onClick={() => setSelected((prev) => toggleIdsInSelection(prev, pageIds))}
+              >
+                <Icon name="check-square" size={14} />
+                {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
+              </button>
+              <button
+                class="btn btn--danger btn--sm"
+                onClick={async () => {
+                  if (selected.size === 0) return;
+                  if (!confirm(t("common.bulkDelete.confirm", { n: selected.size }))) return;
+                  const ids = [...selected];
+                  await Promise.all(
+                    ids.map((id) =>
+                      api.del(`/api/v1/policies/${encodeURIComponent(id)}`).catch(() => null),
+                    ),
+                  );
+                  setSelected(new Set());
+                  void load({ q: query.trim(), status, page });
+                }}
+              >
+                <Icon name="trash-2" size={14} />
+                {t("common.bulkDelete")}
+              </button>
+              <div class="batch-bar__spacer" />
+              <button class="btn btn--ghost btn--sm" onClick={() => setSelected(new Set())}>
+                {t("common.deselect")}
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {toast && (

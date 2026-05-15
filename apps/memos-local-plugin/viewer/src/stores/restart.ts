@@ -93,6 +93,7 @@ export async function triggerRestart(): Promise<void> {
         window.location.pathname + "?_t=" + Date.now();
     } catch {
       restartState.value = { phase: "restartFailed" };
+      throw new Error("restart failed");
     }
     return;
   }
@@ -109,6 +110,7 @@ export async function triggerRestart(): Promise<void> {
       window.location.pathname + "?_t=" + Date.now();
   } else {
     restartState.value = { phase: "restartFailed" };
+    throw new Error("restart did not complete");
   }
 }
 

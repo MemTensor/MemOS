@@ -295,6 +295,69 @@ describe("retrieval/integration", () => {
     expect(res.packet.snippets.every((s) => s.refKind !== "skill")).toBe(true);
   });
 
+  it("lightweight mode only returns trace memories after LLM filter succeeds", async () => {
+    const llm: any = {
+      completeJson: async () => ({
+        value: { selected: [1], sufficient: true },
+        servedBy: "fake",
+      }),
+    };
+    const res = await turnStartRetrieve(
+      {
+        ...makeDeps(handle),
+        llm,
+        config: {
+          ...makeDeps(handle).config,
+          lightweightMemory: true,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+        },
+      },
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s1" as SessionId,
+        userText: "run docker compose",
+        ts: NOW as never,
+      },
+    );
+
+    expect(res.packet.snippets.length).toBeGreaterThan(0);
+    expect(res.packet.snippets.every((s) => s.refKind === "trace")).toBe(true);
+    expect(res.stats.tier1Count).toBe(0);
+    expect(res.stats.tier3Count).toBe(0);
+    expect(res.stats.llmFilterOutcome).toBe("llm_filtered");
+    expect(res.stats.emptyPacket).toBe(false);
+  });
+
+  it("lightweight mode returns no memories when LLM filter is unavailable", async () => {
+    const res = await turnStartRetrieve(
+      {
+        ...makeDeps(handle),
+        llm: null,
+        config: {
+          ...makeDeps(handle).config,
+          lightweightMemory: true,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+        },
+      },
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s1" as SessionId,
+        userText: "run docker compose",
+        ts: NOW as never,
+      },
+    );
+
+    expect(res.stats.tier2Count).toBeGreaterThan(0);
+    expect(res.stats.llmFilterOutcome).toBe("no_llm");
+    expect(res.stats.llmFilterKept).toBe(0);
+    expect(res.packet.snippets).toEqual([]);
+    expect(res.stats.emptyPacket).toBe(true);
+  });
+
   it("skill_invoke is tier1-heavy", async () => {
     const res = await skillInvokeRetrieve(makeDeps(handle), {
       reason: "skill_invoke",

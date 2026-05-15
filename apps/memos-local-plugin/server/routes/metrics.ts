@@ -100,7 +100,7 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
     // with names like "task_failed" that users don't recognise as
     // tools, and their timings reflect background work rather than
     // response latency.
-    const PUBLIC_API_LOG_TOOLS = new Set(["memos_search", "memory_add"]);
+    const PUBLIC_API_LOG_TOOLS = new Set(["memos_search", "memory_search", "memory_add"]);
     const { logs } = await deps.core.listApiLogs({ limit: 5_000, offset: 0 });
     for (const lg of logs) {
       if (lg.calledAt < sinceMs) continue;
