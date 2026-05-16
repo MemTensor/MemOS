@@ -97,8 +97,9 @@ const AlgorithmSchema = Type.Object({
      * Low-cost mode for users who only want raw conversation memory +
      * recall. When enabled, the runtime skips task/reward/L2/L3/skill
      * evolution and keeps only summarize + embedding + retrieval filter.
+     * The viewer exposes the inverse as "memory self-evolution".
      */
-    enabled: Bool(false),
+    enabled: Bool(true),
   }, { default: {} }),
   capture: Type.Object({
     /** Cap on agent/user text length (chars). Longer content is summarized. */

@@ -29,7 +29,7 @@ llm:
 
 algorithm:
   lightweightMemory:
-    enabled: false         # true = only summarize + embed + recall; no tasks/skills/experiences/world models
+    enabled: true          # true = low-cost summaries only; false = memory self-evolution with tasks/experiences/world models/skills
 
 hub:
   enabled: false
