@@ -4612,6 +4612,8 @@ function findLatestPersistedModelStatus(
 }
 
 function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats): {
+  scenarioId?: string;
+  plannedTiers?: { tier1: boolean; tier2: boolean; tier3: boolean };
   raw?: number;
   ranked?: number;
   droppedByThreshold?: number;
@@ -4629,6 +4631,8 @@ function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats
   embedding?: import("../retrieval/types.js").RetrievalStats["embedding"];
 } {
   return {
+    scenarioId: s.scenarioId,
+    plannedTiers: s.plannedTiers,
     raw: s.rawCandidateCount,
     ranked: s.rankedCount,
     droppedByThreshold: s.droppedByThresholdCount,

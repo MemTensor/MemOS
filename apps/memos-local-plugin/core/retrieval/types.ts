@@ -690,9 +690,13 @@ export interface RetrievalResult {
 
 export interface RetrievalStats {
   reason: RetrievalReason;
+  /** Injection scheduler scenario, when turn-start routing was planned. */
+  scenarioId?: string;
   agent: AgentKind;
   sessionId: SessionId;
   episodeId?: EpisodeId;
+  /** Tier gates requested by the scheduler/retrieval entry before config caps. */
+  plannedTiers?: { tier1: boolean; tier2: boolean; tier3: boolean };
   tier1Count: number;
   tier2Count: number;
   tier3Count: number;
@@ -729,6 +733,7 @@ export interface RetrievalStats {
     | "no_llm"
     | "below_threshold"
     | "empty_query"
+    | "skipped_by_scheduler"
     | "llm_kept_all"
     | "llm_filtered"
     | "llm_failed_safe_cutoff";

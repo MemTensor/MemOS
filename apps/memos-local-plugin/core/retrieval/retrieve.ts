@@ -66,6 +66,16 @@ export interface RetrieveOptions {
   events?: RetrievalEventBus;
   /** Override `limit` default (tier totals honored when unspecified). */
   limit?: number;
+  /** Turn-start scheduler override. V1 uses this for intent tier gating. */
+  plan?: RetrievePlanOverride;
+}
+
+export interface RetrievePlanOverride {
+  scenarioId?: string;
+  wantTier1?: boolean;
+  wantTier2?: boolean;
+  wantTier3?: boolean;
+  limit?: number;
 }
 
 // ─── Entry point: turn_start ────────────────────────────────────────────────
@@ -76,16 +86,16 @@ export async function turnStartRetrieve(
   opts: RetrieveOptions = {},
 ): Promise<RetrievalResult> {
   if (deps.config.lightweightMemory) {
-    return runAll(deps, ctx, opts, {
+    return runAll(deps, ctx, opts, applyPlanOverride({
       wantTier1: false,
       wantTier2: true,
       wantTier3: false,
       includeLowValue: false,
       limit: opts.limit ?? Math.max(1, deps.config.tier2TopK),
       traceOnly: true,
-    });
+    }, opts.plan));
   }
-  return runAll(deps, ctx, opts, {
+  return runAll(deps, ctx, opts, applyPlanOverride({
     wantTier1: true,
     wantTier2: true,
     wantTier3: true,
@@ -93,7 +103,7 @@ export async function turnStartRetrieve(
     limit:
       opts.limit ??
       deps.config.tier1TopK + deps.config.tier2TopK + deps.config.tier3TopK,
-  });
+  }, opts.plan));
 }
 
 // ─── Entry point: tool_driven ───────────────────────────────────────────────
@@ -188,12 +198,25 @@ export async function repairRetrieve(
 // ─── Shared pipeline ────────────────────────────────────────────────────────
 
 interface RunPlan {
+  scenarioId?: string;
   wantTier1: boolean;
   wantTier2: boolean;
   wantTier3: boolean;
   includeLowValue: boolean;
   limit: number;
   traceOnly?: boolean;
+}
+
+function applyPlanOverride(plan: RunPlan, override?: RetrievePlanOverride): RunPlan {
+  if (!override) return plan;
+  return {
+    ...plan,
+    scenarioId: override.scenarioId ?? plan.scenarioId,
+    wantTier1: override.wantTier1 ?? plan.wantTier1,
+    wantTier2: override.wantTier2 ?? plan.wantTier2,
+    wantTier3: override.wantTier3 ?? plan.wantTier3,
+    limit: override.limit ?? plan.limit,
+  };
 }
 
 async function runAll(
@@ -446,9 +469,15 @@ async function runAll(
 
     const stats: RetrievalStats = {
       reason: ctx.reason,
+      scenarioId: plan.scenarioId,
       agent,
       sessionId,
       episodeId,
+      plannedTiers: {
+        tier1: plan.wantTier1,
+        tier2: plan.wantTier2,
+        tier3: plan.wantTier3,
+      },
       tier1Count: tier1.length,
       tier2Count: tier2.traces.length + (traceOnly ? 0 : tier2.episodes.length) + tier2Experiences.length,
       tier3Count: tier3.length,
