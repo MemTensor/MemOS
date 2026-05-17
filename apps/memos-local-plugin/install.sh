@@ -705,17 +705,30 @@ except Exception:
       [[ -d "${d}" && -f "${d}/__init__.py" ]] && { plugin_dir="${d}"; break; }
     done
   fi
-  [[ -n "${plugin_dir}" && -d "${plugin_dir}" ]] || die "plugins/memory not found"
-  success "plugins/memory: ${plugin_dir}"
 
   step "Linking memtensor provider"
-  local target="${plugin_dir}/memtensor"
-  if [[ -L "${target}" ]]; then rm "${target}"
-  elif [[ -e "${target}" ]]; then rm -rf "${target}"
+  local provider_source="${adapter_dir}/memos_provider"
+  local user_plugins_dir="${HOME}/.hermes/plugins"
+  local user_target="${user_plugins_dir}/memtensor"
+  mkdir -p "${user_plugins_dir}"
+  if [[ -L "${user_target}" ]]; then rm "${user_target}"
+  elif [[ -e "${user_target}" ]]; then rm -rf "${user_target}"
   fi
-  ln -s "${adapter_dir}/memos_provider" "${target}"
-  cp "${adapter_dir}/plugin.yaml" "${adapter_dir}/memos_provider/plugin.yaml" 2>/dev/null || true
-  success "Symlinked → ${target}"
+  ln -s "${provider_source}" "${user_target}"
+  cp "${adapter_dir}/plugin.yaml" "${provider_source}/plugin.yaml" 2>/dev/null || true
+  success "Linked durable provider → ${user_target}"
+
+  if [[ -n "${plugin_dir}" && -d "${plugin_dir}" ]]; then
+    success "plugins/memory: ${plugin_dir}"
+    local target="${plugin_dir}/memtensor"
+    if [[ -L "${target}" ]]; then rm "${target}"
+    elif [[ -e "${target}" ]]; then rm -rf "${target}"
+    fi
+    ln -s "${provider_source}" "${target}"
+    success "Linked legacy source-tree provider → ${target}"
+  else
+    warn "Hermes source-tree plugins/memory not found; durable user-plugin link was still installed."
+  fi
 
   step "Verifying provider & patching config"
   local verify

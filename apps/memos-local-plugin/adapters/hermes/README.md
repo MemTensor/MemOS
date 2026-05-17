@@ -66,6 +66,14 @@ communicates over its stdin/stdout pipes. The subprocess exits when the
 provider's stdin closes (on `shutdown()`), yielding clean lifecycle
 semantics.
 
+## Provider install path
+
+The installer links the provider into `~/.hermes/plugins/memtensor`, which is
+owned by the user profile and survives Hermes source-tree upgrades. When an
+older Hermes checkout exposes `~/.hermes/hermes-agent/plugins/memory`, the
+installer also writes a compatibility link there so current and older provider
+discovery both keep working.
+
 ## Why a subprocess instead of a long-lived daemon?
 
 Earlier prototypes used a persistent HTTP daemon on a well-known port.

@@ -55,6 +55,21 @@ function traceKind(trace: TraceDTO): string {
       : "assistant");
 }
 
+async function waitFor<T>(
+  probe: () => T | null | undefined,
+  timeoutMs = 1_000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = probe();
+    if (value != null) return value;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const value = probe();
+  if (value != null) return value;
+  throw new Error("condition was not met before timeout");
+}
+
 beforeEach(() => {
   db = makeTmpDb();
 });
@@ -1082,11 +1097,26 @@ describe("bootstrapMemoryCore", () => {
     });
     await core.init();
 
-    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
-    const episode = readDb
+    const initialReadDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const initialEpisode = initialReadDb
       .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
       .get("ep_dirty") as { r_task: number | null; meta_json: string } | undefined;
-    readDb.close();
+    initialReadDb.close();
+    expect(initialEpisode?.r_task).toBe(0.7);
+
+    const episode = await waitFor(() => {
+      const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+      try {
+        const row = readDb
+          .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+          .get("ep_dirty") as { r_task: number | null; meta_json: string } | undefined;
+        if (!row || row.r_task !== 0) return null;
+        const meta = JSON.parse(row.meta_json) as { recoveryReason?: string };
+        return meta.recoveryReason === "dirty_reward_rescore" ? row : null;
+      } finally {
+        readDb.close();
+      }
+    });
 
     expect(episode).toBeDefined();
     expect(episode!.r_task).toBe(0);
@@ -1173,11 +1203,19 @@ describe("bootstrapMemoryCore", () => {
     });
     await core.init();
 
-    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
-    const episode = readDb
-      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
-      .get("ep_missing_reward") as { r_task: number | null; meta_json: string } | undefined;
-    readDb.close();
+    const episode = await waitFor(() => {
+      const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+      try {
+        const row = readDb
+          .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+          .get("ep_missing_reward") as { r_task: number | null; meta_json: string } | undefined;
+        if (!row || row.r_task !== 0) return null;
+        const meta = JSON.parse(row.meta_json) as { recoveryReason?: string };
+        return meta.recoveryReason === "dirty_reward_rescore" ? row : null;
+      } finally {
+        readDb.close();
+      }
+    });
 
     expect(episode).toBeDefined();
     expect(episode!.r_task).toBe(0);

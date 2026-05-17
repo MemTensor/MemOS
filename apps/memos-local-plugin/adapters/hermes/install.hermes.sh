@@ -8,9 +8,9 @@
 #   1. Install node_modules inside $PREFIX (idempotent).
 #   2. Build the viewer bundle so the HTTP server has static assets
 #      available.
-#   3. Symlink the Python memos_provider package into the Hermes
-#      plugins directory so `from memos_provider import MemTensorProvider`
-#      resolves from Hermes without extra path munging.
+#   3. Symlink the Python memos_provider package into Hermes' durable
+#      user-plugin directory, with an optional legacy source-tree link
+#      when HERMES_PLUGINS_DIR is supplied.
 #
 # We never modify the Hermes host process — its plugin manager picks
 # up $PREFIX on next start.
@@ -48,16 +48,20 @@ else
 fi
 
 # ── 3. wire up Python provider ────────────────────────────────────────────────
-# Hermes discovers providers from $PREFIX. Symlinking the Python package
-# to a discoverable path (if HERMES_PLUGINS_DIR is set) avoids asking the
-# user to edit PYTHONPATH manually.
+# Hermes upgrades can replace ~/.hermes/hermes-agent, so the primary link lives
+# in the user-owned plugin directory. The legacy source-tree link is still
+# written when the caller exposes it for older Hermes builds.
+provider_source="$PREFIX/adapters/hermes/memos_provider"
+user_plugins_dir="${HERMES_USER_PLUGINS_DIR:-$HOME/.hermes/plugins}"
+mkdir -p "$user_plugins_dir"
+ln -sfn "$provider_source" "$user_plugins_dir/memtensor"
+cp "$PREFIX/adapters/hermes/plugin.yaml" "$provider_source/plugin.yaml" 2>/dev/null || true
+log "Linked durable Python provider → $user_plugins_dir/memtensor"
+
 if [[ -n "${HERMES_PLUGINS_DIR:-}" ]]; then
   mkdir -p "$HERMES_PLUGINS_DIR"
-  ln -sfn "$PREFIX/adapters/hermes/memos_provider" "$HERMES_PLUGINS_DIR/memos_provider"
-  log "Linked Python provider → $HERMES_PLUGINS_DIR/memos_provider"
-else
-  log "HERMES_PLUGINS_DIR not set; skipping Python provider symlink. You can manually link:"
-  log "  ln -s \"$PREFIX/adapters/hermes/memos_provider\" <hermes-plugins>/memos_provider"
+  ln -sfn "$provider_source" "$HERMES_PLUGINS_DIR/memtensor"
+  log "Linked legacy Python provider → $HERMES_PLUGINS_DIR/memtensor"
 fi
 
 log "Hermes adapter install complete."

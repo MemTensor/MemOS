@@ -417,14 +417,23 @@ function Install-Hermes {
         } catch {}
     }
     
-    if (-not $PluginDir -or -not (Test-Path $PluginDir)) { Stop-Die "plugins\memory not found" }
-    
-    $Target = Join-Path $PluginDir "memtensor"
-    if (Test-Path $Target) { Remove-Item -Recurse -Force $Target }
-    
-    New-Item -ItemType Junction -Path $Target -Value (Join-Path $AdapterDir "memos_provider") | Out-Null
-    Copy-Item -Path (Join-Path $AdapterDir "plugin.yaml") -Destination (Join-Path $AdapterDir "memos_provider\plugin.yaml") -ErrorAction SilentlyContinue
-    Write-Success "Linked -> $Target"
+    $ProviderSource = Join-Path $AdapterDir "memos_provider"
+    $UserPluginRoot = Join-Path $env:LOCALAPPDATA "hermes\plugins"
+    $UserTarget = Join-Path $UserPluginRoot "memtensor"
+    New-Item -ItemType Directory -Path $UserPluginRoot -Force | Out-Null
+    if (Test-Path $UserTarget) { Remove-Item -Recurse -Force $UserTarget }
+    New-Item -ItemType Junction -Path $UserTarget -Value $ProviderSource | Out-Null
+    Copy-Item -Path (Join-Path $AdapterDir "plugin.yaml") -Destination (Join-Path $ProviderSource "plugin.yaml") -ErrorAction SilentlyContinue
+    Write-Success "Linked durable provider -> $UserTarget"
+
+    if ($PluginDir -and (Test-Path $PluginDir)) {
+        $Target = Join-Path $PluginDir "memtensor"
+        if (Test-Path $Target) { Remove-Item -Recurse -Force $Target }
+        New-Item -ItemType Junction -Path $Target -Value $ProviderSource | Out-Null
+        Write-Success "Linked legacy source-tree provider -> $Target"
+    } else {
+        Write-Warning "Hermes source-tree plugins\memory not found; durable user-plugin link was still installed."
+    }
     
     if (Test-Path $ConfigFile) {
         $PyScript = @"

@@ -538,6 +538,7 @@ export function createMemoryCore(
   );
   let lastStaleScan = 0;
   let lastDirtyClosedScan = 0;
+  let startupDirtyRecoveryScheduled = false;
   async function autoFinalizeStaleTasks(): Promise<void> {
     const nowMs = Date.now();
     if (nowMs - lastStaleScan < 30_000) return;
@@ -584,6 +585,22 @@ export function createMemoryCore(
     }
   }
 
+  function scheduleDirtyClosedRecovery(
+    episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
+  ): void {
+    if (startupDirtyRecoveryScheduled) return;
+    startupDirtyRecoveryScheduled = true;
+    log.info("init.dirty_closed_episodes.rescore_scheduled", { count: episodes.length });
+    setTimeout(() => {
+      if (shutDown) return;
+      void recoverDirtyClosedEpisodes(episodes).catch((err) => {
+        log.debug("dirty_closed_reward.startup_recovery_failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, 0);
+  }
+
   // ─── Lifecycle ──
   async function init(): Promise<void> {
     if (shutDown) {
@@ -624,7 +641,7 @@ export function createMemoryCore(
         .list({ status: "closed", limit: 500 })
         .filter((ep) => episodeRewardIsDirty(ep));
       if (dirtyClosed.length > 0) {
-        await recoverDirtyClosedEpisodes(dirtyClosed);
+        scheduleDirtyClosedRecovery(dirtyClosed);
       }
     } catch (err) {
       log.debug("init.orphan_scan.failed", {

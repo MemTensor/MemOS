@@ -22,6 +22,7 @@ import { readFileSync } from "node:fs";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const SCRIPT = path.join(REPO_ROOT, "install.sh");
+const WINDOWS_SCRIPT = path.join(REPO_ROOT, "install.ps1");
 const PACKAGE_JSON = path.join(REPO_ROOT, "package.json");
 
 function run(args: string[], env: Record<string, string> = {}) {
@@ -101,5 +102,17 @@ describe("install.sh — CLI surface", () => {
     expect(pkg.files).toContain("!dist/tests/**");
     expect(pkg.files).not.toContain("docs");
     expect(pkg.files).not.toContain("tests");
+  });
+
+  it("installs Hermes provider into the durable user-plugin directory", () => {
+    const script = readFileSync(SCRIPT, "utf8");
+    expect(script).toContain('${HOME}/.hermes/plugins');
+    expect(script).toContain('Linked durable provider');
+    expect(script).toContain('Linked legacy source-tree provider');
+
+    const windowsScript = readFileSync(WINDOWS_SCRIPT, "utf8");
+    expect(windowsScript).toContain('hermes\\plugins');
+    expect(windowsScript).toContain('Linked durable provider');
+    expect(windowsScript).toContain('Linked legacy source-tree provider');
   });
 });
