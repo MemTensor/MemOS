@@ -89,7 +89,8 @@ async function main(): Promise<void> {
   // non-null bridge), but `stdio` itself doesn't exist until later
   // in this function. The trick: hand a placeholder closure to
   // bootstrap that defers actual stdio access to the time of the
-  // first fallback call. By then `stdio` has been assigned.
+  // first fallback call. In stdio mode we start the server before
+  // `core.init()` so startup recovery can also use host fallback.
   //
   // Routing through `bootstrapMemoryCoreFull({ hostLlmBridge })`
   // (instead of having `bridge.cts` call `registerHostLlmBridge`
@@ -153,15 +154,6 @@ async function main(): Promise<void> {
     hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
   });
 
-  const bridgeStatus =
-    args.agent === "hermes"
-      ? createBridgeStatusTracker(
-          path.join(home.root, BRIDGE_STATUS_FILE),
-          args.daemon,
-        )
-      : null;
-  await core.init();
-
   const telemetry = new Telemetry(
     config.telemetry ?? {},
     home.root,
@@ -171,6 +163,14 @@ async function main(): Promise<void> {
   );
   (core as { bindTelemetry?: (t: InstanceType<typeof Telemetry>) => void }).bindTelemetry?.(telemetry);
   telemetry.trackPluginStarted(args.agent);
+
+  const bridgeStatus =
+    args.agent === "hermes"
+      ? createBridgeStatusTracker(
+          path.join(home.root, BRIDGE_STATUS_FILE),
+          args.daemon,
+        )
+      : null;
 
   // Process-level error reporting. Without these handlers a crash in
   // a background task (capture / reward / L2 inducer) silently kills
@@ -213,6 +213,40 @@ async function main(): Promise<void> {
   // Per-agent fixed viewer port.
   const AGENT_DEFAULT_PORTS = { openclaw: 18799, hermes: 18800 } as const;
   const viewerPort = AGENT_DEFAULT_PORTS[args.agent];
+
+  let bridgeHeartbeat:
+    | ReturnType<NonNullable<typeof bridgeStatus>["startHeartbeat"]>
+    | undefined;
+
+  // In stdio mode the host fallback path is a reverse JSON-RPC request
+  // over the same pipe as normal bridge traffic. `core.init()` may
+  // recover dirty episodes and run reflection/reward/L2/skill work; if
+  // that work hits a broken primary skill-evolver model, the LLM facade
+  // can fall back to host before init returns. Start stdio first so that
+  // fallback has a transport instead of tripping the lazy bridge guard.
+  if (!args.daemon) {
+    stdio = startStdioServer({ core });
+    bridgeStatus?.markConnected();
+    bridgeHeartbeat = bridgeStatus?.startHeartbeat();
+    void stdio.done.then(() => {
+      bridgeHeartbeat?.stop();
+      bridgeStatus?.markDisconnected("Hermes chat disconnected");
+    });
+  }
+
+  try {
+    await core.init();
+  } catch (err) {
+    bridgeHeartbeat?.stop();
+    if (stdio) {
+      try {
+        await stdio.close();
+      } catch {
+        /* best-effort */
+      }
+    }
+    throw err;
+  }
 
   // ─── Daemon mode ──────────────────────────────────────────────
   // When started with `--daemon`, skip stdio and run as a pure HTTP
@@ -286,16 +320,12 @@ async function main(): Promise<void> {
   }
 
   // ─── Normal (stdio) mode ──────────────────────────────────────
-  // Assign the stdio handle into the closure variable so the host
-  // LLM bridge (registered earlier inside bootstrap) can dispatch
-  // reverse-direction requests to the adapter.
-  stdio = startStdioServer({ core });
-  bridgeStatus?.markConnected();
-  const bridgeHeartbeat = bridgeStatus?.startHeartbeat();
-  void stdio.done.then(() => {
-    bridgeHeartbeat?.stop();
-    bridgeStatus?.markDisconnected("Hermes chat disconnected");
-  });
+  // The stdio handle was started before `core.init()` above so host
+  // fallback is available during startup recovery.
+  const activeStdio = stdio;
+  if (!activeStdio) {
+    throw new Error("internal bridge error: stdio server was not started");
+  }
 
   // Try to bind the viewer port unless the caller requested a pure stdio
   // bridge. Hermes chat uses --no-viewer; the standalone --daemon process is
@@ -350,7 +380,7 @@ async function main(): Promise<void> {
         /* best-effort */
       }
     }
-    await waitForShutdown(core, stdio!);
+    await waitForShutdown(core, activeStdio);
     process.exit(0);
   };
 
@@ -358,7 +388,7 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   // Keep the process alive until stdin ends (client disconnects).
-  await stdio.done;
+  await activeStdio.done;
 
   // If a viewer is running, keep the process alive as a daemon so the
   // memory panel stays accessible between `hermes chat` sessions.
