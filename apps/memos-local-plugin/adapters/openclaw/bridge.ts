@@ -796,6 +796,7 @@ function isExplicitOneShotSessionKey(sessionKey: string | undefined): boolean {
 
 const CONTEXT_OPEN = "<memos_context>";
 const CONTEXT_CLOSE = "</memos_context>";
+const OPENCLAW_CONTEXT_CHAR_CAP = 6_000;
 const TOOL_FAILURE_REPAIR_HINT =
   "This tool has failed multiple times in a row. You may want to call `memos_search` for relevant past experience before deciding what to do next.";
 const TOOL_FAILURE_HINT_THRESHOLD = 3;
@@ -803,12 +804,10 @@ const TOOL_FAILURE_HINT_THRESHOLD = 3;
 /**
  * Render the retrieval result as a prompt-prependable block.
  *
- * When the store is cold (no hits), we still emit a short "memory
- * tools are available" hint — the legacy `memos-local-openclaw`
- * adapter does the same via `noRecallHint`, and without it the LLM
- * has no reason to call `memos_search` at the start of a
- * conversation. The hint is kept *small* so repeated turns don't
- * bloat the system prompt.
+ * Callers may opt into a short cold-start hint when the store has no
+ * hits. The automatic OpenClaw before-prompt path disables that hint so
+ * no-hit turns continue with the user's prompt instead of injecting
+ * extra context.
  */
 export function renderContextBlock(
   packet: RetrievalResultDTO | null,
@@ -829,6 +828,21 @@ export function renderContextBlock(
     "if you expect there to be relevant past context.",
   ].join(" ");
   return `${CONTEXT_OPEN}\n${hint}\n${CONTEXT_CLOSE}`;
+}
+
+function capContextBlock(block: string): { block: string; truncated: boolean } {
+  if (block.length <= OPENCLAW_CONTEXT_CHAR_CAP) {
+    return { block, truncated: false };
+  }
+  const suffix = `\n\n[Memory context truncated to ${OPENCLAW_CONTEXT_CHAR_CAP} characters.]\n${CONTEXT_CLOSE}`;
+  const prefix = block.startsWith(`${CONTEXT_OPEN}\n`) ? `${CONTEXT_OPEN}\n` : "";
+  const bodyStart = prefix.length;
+  const bodyBudget = Math.max(0, OPENCLAW_CONTEXT_CHAR_CAP - prefix.length - suffix.length);
+  const body = block.slice(bodyStart, bodyStart + bodyBudget).trimEnd();
+  return {
+    block: `${prefix}${body}${suffix}`,
+    truncated: true,
+  };
 }
 
 // ─── Bridge factory ────────────────────────────────────────────────────────
@@ -1137,6 +1151,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     event: BeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ): Promise<BeforePromptBuildResult | void> {
+    const startedAt = now();
     try {
       // Ephemeral sub-agents (slug generator, internal probes) share
       // the plugin host and would otherwise open a throwaway episode
@@ -1217,6 +1232,16 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         }
       }
 
+      const renderedBlock = renderContextBlock(packet, {
+        // Avoid making OpenClaw do a second tool-driven search when
+        // auto-recall found nothing. A no-hit turn should simply
+        // continue with the user's prompt; tools remain available if
+        // the model independently decides to use them.
+        hintWhenEmpty: false,
+      });
+      const { block, truncated } = capContextBlock(renderedBlock);
+      const durationMs = now() - startedAt;
+
       opts.log.info("memos.onTurnStart", {
         sessionKey: ctx.sessionKey,
         agentId: ctx.agentId,
@@ -1224,9 +1249,18 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         episodeId: routedEpisodeId,
         hits: packet.hits.length,
         tierLatencyMs: packet.tierLatencyMs,
+        durationMs,
+        contextChars: block.length,
+        injected: block.length > 0,
+        truncated,
       });
+      opts.log.info(
+        `memos.onTurnStart returned hits=${packet.hits.length} ` +
+          `durationMs=${durationMs} contextChars=${block.length} ` +
+          `injected=${block.length > 0 ? "yes" : "no"} ` +
+          `truncated=${truncated ? "yes" : "no"}`,
+      );
 
-      const block = renderContextBlock(packet, { hintWhenEmpty: true });
       if (!block) return;
       return { prependContext: block + "\n\n" };
     } catch (err) {

@@ -22,7 +22,12 @@ import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import type { WorldModelDTO } from "../api/types";
 import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
-import { loadHubSharingEnabled } from "../utils/share";
+import {
+  loadHubSharingEnabled,
+  normalizeShareScope,
+  SHARE_SCOPE_OPTIONS,
+  type ShareScope,
+} from "../utils/share";
 import { useLightweightMemoryMode } from "../hooks/useLightweightMemoryMode";
 
 interface WorldModelUsage {
@@ -377,15 +382,13 @@ function WorldModelDrawer({
   const [mode, setMode] = useState<"view" | "edit" | "share">("view");
   const [title, setTitle] = useState(worldModel.title);
   const [body, setBody] = useState(worldModel.body ?? "");
-  const [scope, setScope] = useState<"private" | "local" | "public" | "hub">(
-    worldModel.share?.scope ?? "public",
-  );
+  const [scope, setScope] = useState<ShareScope>(normalizeShareScope(worldModel.share?.scope ?? "public"));
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     setTitle(worldModel.title);
     setBody(worldModel.body ?? "");
-    setScope(worldModel.share?.scope ?? "public");
+    setScope(normalizeShareScope(worldModel.share?.scope ?? "public"));
   }, [worldModel]);
 
   useEffect(() => {
@@ -439,7 +442,7 @@ function WorldModelDrawer({
     }
   };
 
-  const submitShare = async (s: "private" | "local" | "public" | "hub" | null) => {
+  const submitShare = async (s: ShareScope | null) => {
     setBusy(true);
     try {
       await api.post(
@@ -587,7 +590,7 @@ function WorldModelDrawer({
               <div class="modal__field">
                 <label>{t("memories.share.scope")}</label>
                 <div class="vstack" style="gap:var(--sp-2)">
-                  {(["private", "local", "public", "hub"] as const).map((v) => (
+                  {SHARE_SCOPE_OPTIONS.map((v) => (
                     <label
                       key={v}
                       class="hstack"

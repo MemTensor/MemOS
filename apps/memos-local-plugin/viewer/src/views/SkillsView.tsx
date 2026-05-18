@@ -23,7 +23,12 @@ import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import type { CoreEvent, SkillDTO } from "../api/types";
 import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
-import { loadHubSharingEnabled } from "../utils/share";
+import {
+  loadHubSharingEnabled,
+  normalizeShareScope,
+  SHARE_SCOPE_OPTIONS,
+  type ShareScope,
+} from "../utils/share";
 import { useLightweightMemoryMode } from "../hooks/useLightweightMemoryMode";
 
 interface SkillUsage {
@@ -513,9 +518,7 @@ function SkillDrawer({
   const [mode, setMode] = useState<"view" | "edit" | "share">("view");
   const [name, setName] = useState(skill.name);
   const [guide, setGuide] = useState(skill.invocationGuide ?? "");
-  const [scope, setScope] = useState<"private" | "local" | "public" | "hub">(
-    skill.share?.scope ?? "public",
-  );
+  const [scope, setScope] = useState<ShareScope>(normalizeShareScope(skill.share?.scope ?? "public"));
   const [busy, setBusy] = useState(false);
   const [timeline, setTimeline] = useState<TimelineEntry[] | null>(null);
   const [usage, setUsage] = useState<SkillUsage | null>(null);
@@ -529,7 +532,7 @@ function SkillDrawer({
   useEffect(() => {
     setName(skill.name);
     setGuide(skill.invocationGuide ?? "");
-    setScope(skill.share?.scope ?? "public");
+    setScope(normalizeShareScope(skill.share?.scope ?? "public"));
   }, [skill]);
 
   useEffect(() => {
@@ -603,7 +606,7 @@ function SkillDrawer({
     }
   };
 
-  const submitShare = async (s: "private" | "local" | "public" | "hub" | null) => {
+  const submitShare = async (s: ShareScope | null) => {
     setBusy(true);
     try {
       await api.post(`/api/v1/skills/${encodeURIComponent(skill.id)}/share`, {
@@ -910,7 +913,7 @@ function SkillDrawer({
               <div class="modal__field">
                 <label>{t("memories.share.scope")}</label>
                 <div class="vstack" style="gap:var(--sp-2)">
-                  {(["private", "local", "public", "hub"] as const).map((v) => (
+                  {SHARE_SCOPE_OPTIONS.map((v) => (
                     <label
                       key={v}
                       class="hstack"

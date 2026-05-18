@@ -50,7 +50,6 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       ownerProfileId,
       q,
       groupByTurn,
-      includeAllNamespaces: true,
     });
     const total = await deps.core.countTraces({
       sessionId: sessionId as SessionId | undefined,
@@ -58,7 +57,6 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       ownerProfileId,
       q,
       groupByTurn,
-      includeAllNamespaces: true,
     });
     // When grouping, `traces.length === limit` is no longer a reliable
     // "has more" signal (a single turn can yield many traces). Use the
@@ -158,7 +156,7 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       return;
     }
     const body = parseJson<{
-      scope?: "private" | "local" | "public" | "hub" | null;
+      scope?: "private" | "public" | "hub" | null;
       target?: string | null;
     }>(ctx);
     const scope = body.scope === undefined ? "public" : body.scope;
@@ -180,7 +178,7 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const traces = await deps.core.timeline({ episodeId: id, includeAllNamespaces: true });
+    const traces = await deps.core.timeline({ episodeId: id });
     return { episodeId: id, traces };
   });
 }

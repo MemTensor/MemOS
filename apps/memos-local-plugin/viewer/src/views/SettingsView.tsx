@@ -48,8 +48,9 @@ interface ResolvedConfig {
     role?: "hub" | "client";
     address?: string;
     port?: number;
+    teamName?: string;
     teamToken?: string;
-    userToken?: string;
+    nickname?: string;
   };
   telemetry?: { enabled?: boolean };
   logging?: { level?: string; detailedView?: boolean };
@@ -80,6 +81,9 @@ interface EmbeddingMaintenanceRunResult {
 const EMBEDDING_REBUILD_BATCH_STORAGE_KEY = "memos.embeddingRebuildBatchSize";
 const EMBEDDING_REBUILD_BATCH_OPTIONS = [10, 20, 50, 100, 200, 500] as const;
 type EmbeddingRebuildBatchSize = typeof EMBEDDING_REBUILD_BATCH_OPTIONS[number];
+
+const SECRET_MASKED = (s: string | undefined | null): boolean =>
+  !!s && (s === "__memos_secret__" || /^[\s•]+$/.test(s));
 
 const EMBEDDING_PROVIDERS = [
   "local",
@@ -232,6 +236,7 @@ export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
       {tab === "hub" && (
         <HubTab
           hub={(get("hub") ?? {}) as NonNullable<ResolvedConfig["hub"]>}
+          hasUnsavedChanges={!!dirty.hub}
           onPatch={(p) => patch("hub", p)}
         />
       )}
@@ -710,9 +715,11 @@ function normalizeEmbeddingRebuildBatchSize(value: unknown): EmbeddingRebuildBat
 
 function HubTab({
   hub,
+  hasUnsavedChanges,
   onPatch,
 }: {
   hub: NonNullable<ResolvedConfig["hub"]>;
+  hasUnsavedChanges: boolean;
   onPatch: (p: Partial<NonNullable<ResolvedConfig["hub"]>>) => void;
 }) {
   return (
@@ -733,17 +740,17 @@ function HubTab({
       {hub.enabled && (
         <>
           <div
-            class="card card--flat"
-            style="margin-bottom:var(--sp-4);border-left:3px solid var(--accent)"
+            style="margin-bottom:var(--sp-4);padding:var(--sp-3);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius-md);background:var(--bg-canvas)"
           >
             <div class="hstack" style="gap:var(--sp-2);align-items:flex-start">
               <Icon name="info" size={14} style="margin-top:3px;color:var(--accent);flex-shrink:0" />
               <div style="font-size:var(--fs-sm);line-height:1.7">
                 <div style="font-weight:var(--fw-semi);margin-bottom:4px">
-                  {t("settings.hub.help.title")}
+                  {hub.role === "hub" ? t("settings.hub.mode.hub.title") : t("settings.hub.mode.client.title")}
                 </div>
-                <div class="muted">{t("settings.hub.help.role")}</div>
-                <div class="muted">{t("settings.hub.help.tokens")}</div>
+                <div class="muted">
+                  {hub.role === "hub" ? t("settings.hub.mode.hub.desc") : t("settings.hub.mode.client.desc")}
+                </div>
               </div>
             </div>
           </div>
@@ -780,48 +787,78 @@ function HubTab({
               </Field>
             )}
 
+            {hub.role === "hub" && (
+              <Field label={t("settings.hub.teamName")}>
+                <input
+                  class="input"
+                  type="text"
+                  value={hub.teamName ?? ""}
+                  placeholder="MemOS Team"
+                  onInput={(e) =>
+                    onPatch({ teamName: (e.target as HTMLInputElement).value })
+                  }
+                />
+              </Field>
+            )}
+
+            {hub.role === "hub" && (
+              <Field label={t("settings.hub.port")}>
+                <input
+                  class="input"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={hub.port ?? 18912}
+                  onInput={(e) =>
+                    onPatch({ port: Number((e.target as HTMLInputElement).value) || 18912 })
+                  }
+                />
+              </Field>
+            )}
+
+            {hub.role === "client" && (
+              <Field label={t("settings.hub.nickname")}>
+                <input
+                  class="input"
+                  type="text"
+                  value={hub.nickname ?? ""}
+                  placeholder={t("settings.hub.nickname.placeholder")}
+                  onInput={(e) =>
+                    onPatch({ nickname: (e.target as HTMLInputElement).value })
+                  }
+                />
+              </Field>
+            )}
+
             <Field label={t("settings.hub.teamToken")}>
               <input
                 class="input"
                 type="password"
-                value={hub.teamToken ?? ""}
-                placeholder={t("settings.hub.teamToken.placeholder")}
+                value={SECRET_MASKED(hub.teamToken) ? "" : hub.teamToken ?? ""}
+                placeholder={
+                  SECRET_MASKED(hub.teamToken)
+                    ? t("settings.apiKey.saved")
+                    : t("settings.hub.teamToken.placeholder")
+                }
                 onInput={(e) =>
                   onPatch({ teamToken: (e.target as HTMLInputElement).value })
                 }
               />
             </Field>
 
-            <Field label={t("settings.hub.userToken")}>
-              <input
-                class="input"
-                type="password"
-                value={hub.userToken ?? ""}
-                placeholder={t("settings.hub.userToken.placeholder")}
-                onInput={(e) =>
-                  onPatch({ userToken: (e.target as HTMLInputElement).value })
-                }
-              />
-            </Field>
           </div>
         </>
       )}
 
-      {/*
-       * Admin (members / groups / pending approvals) folded inline.
-       * Previously exposed as a separate sidebar tab — users found
-       * that duplicative with this section. We only render it when
-       * hub is actually enabled; otherwise there's nothing to admin.
-       */}
       {hub.enabled && (
         <div style="margin-top:var(--sp-5);padding-top:var(--sp-4);border-top:1px solid var(--border)">
           <h4
             class="card__title"
             style="font-size:var(--fs-md);margin-bottom:var(--sp-3)"
           >
-            {t("settings.hub.admin")}
+            {hub.role === "hub" ? t("settings.hub.admin") : t("settings.hub.status")}
           </h4>
-          <HubAdminPanel />
+          <HubAdminPanel hasUnsavedHubChanges={hasUnsavedChanges} />
         </div>
       )}
     </div>

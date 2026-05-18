@@ -68,6 +68,12 @@ export interface RetrieveOptions {
   limit?: number;
   /** Turn-start scheduler override. V1 uses this for intent tier gating. */
   plan?: RetrievePlanOverride;
+  /**
+   * Return mechanically ranked candidates without the local LLM pass.
+   * Used when the caller will merge another retrieval route, then run
+   * one unified final LLM filter across all routes.
+   */
+  skipLlmFilter?: boolean;
 }
 
 export interface RetrievePlanOverride {
@@ -382,16 +388,25 @@ async function runAll(
     // screened raw memories only.
     const queryText =
       (ctx as { userText?: string }).userText ?? compiled.text ?? "";
-    const filterResult = await llmFilterCandidates(
-      { query: queryText, ranked: mechanicalRanked, episodeId },
-      {
-        llm: deps.llm ?? null,
-        log,
-        config: deps.config,
-      },
-    );
+    const filterResult = opts.skipLlmFilter
+      ? {
+          kept: mechanicalRanked,
+          dropped: [],
+          outcome: "deferred_to_final" as const,
+          sufficient: null,
+        }
+      : await llmFilterCandidates(
+          { query: queryText, ranked: mechanicalRanked, episodeId },
+          {
+            llm: deps.llm ?? null,
+            log,
+            config: deps.config,
+          },
+        );
     const filtered =
-      deps.config.lightweightMemory && !llmFilterSucceeded(filterResult.outcome)
+      !opts.skipLlmFilter &&
+      deps.config.lightweightMemory &&
+      !llmFilterSucceeded(filterResult.outcome)
         ? {
             ...filterResult,
             kept: [],

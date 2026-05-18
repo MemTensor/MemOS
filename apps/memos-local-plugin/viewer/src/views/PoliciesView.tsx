@@ -22,7 +22,12 @@ import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import type { PolicyDTO } from "../api/types";
 import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
-import { loadHubSharingEnabled } from "../utils/share";
+import {
+  loadHubSharingEnabled,
+  normalizeShareScope,
+  SHARE_SCOPE_OPTIONS,
+  type ShareScope,
+} from "../utils/share";
 import { useLightweightMemoryMode } from "../hooks/useLightweightMemoryMode";
 
 interface PolicyUsage {
@@ -433,9 +438,7 @@ function PolicyDrawer({
   const [procedure, setProcedure] = useState(policy.procedure);
   const [verification, setVerification] = useState(policy.verification);
   const [boundary, setBoundary] = useState(policy.boundary);
-  const [scope, setScope] = useState<"private" | "local" | "public" | "hub">(
-    policy.share?.scope ?? "public",
-  );
+  const [scope, setScope] = useState<ShareScope>(normalizeShareScope(policy.share?.scope ?? "public"));
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -444,7 +447,7 @@ function PolicyDrawer({
     setProcedure(policy.procedure);
     setVerification(policy.verification);
     setBoundary(policy.boundary);
-    setScope(policy.share?.scope ?? "public");
+    setScope(normalizeShareScope(policy.share?.scope ?? "public"));
   }, [policy]);
 
   const submitEdit = async () => {
@@ -467,7 +470,7 @@ function PolicyDrawer({
     }
   };
 
-  const submitShare = async (s: "private" | "local" | "public" | "hub" | null) => {
+  const submitShare = async (s: ShareScope | null) => {
     setBusy(true);
     try {
       const updated = await api.post<PolicyDTO>(
@@ -679,7 +682,7 @@ function PolicyDrawer({
               <div class="modal__field">
                 <label>{t("memories.share.scope")}</label>
                 <div class="vstack" style="gap:var(--sp-2)">
-                  {(["private", "local", "public", "hub"] as const).map((v) => (
+                  {SHARE_SCOPE_OPTIONS.map((v) => (
                     <label
                       key={v}
                       class="hstack"

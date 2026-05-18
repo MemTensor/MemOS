@@ -734,6 +734,7 @@ export interface RetrievalStats {
     | "below_threshold"
     | "empty_query"
     | "skipped_by_scheduler"
+    | "deferred_to_final"
     | "llm_kept_all"
     | "llm_filtered"
     | "llm_failed_safe_cutoff";
