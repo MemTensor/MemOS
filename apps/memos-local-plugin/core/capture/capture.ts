@@ -440,12 +440,22 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const reflectStart = now();
     const rLlm = deps.reflectLlm ?? deps.llm;
     const useBatch = shouldBatch(deps.cfg, normalized.length, rLlm !== null);
+    const taskSummary = buildTaskReflectionSummary(input.episode, normalized);
+    log.info("capture.reflect.scoring.start", {
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+      steps: normalized.length,
+      mode: useBatch ? "batch" : "per_step",
+      provider: rLlm?.provider ?? "none",
+      model: rLlm?.model ?? "none",
+      taskSummary: taskSummary ? taskSummary.slice(0, 240) : null,
+    });
     let scored: ScoredStep[] = [];
     if (useBatch) {
-      scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id);
+      scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id, taskSummary);
     }
     if (!useBatch || scored.length === 0) {
-      scored = await runPerStepScoring(normalized, rLlm, deps, warnings, llmCalls, input.episode.id);
+      scored = await runPerStepScoring(normalized, rLlm, deps, warnings, llmCalls, input.episode.id, taskSummary);
     }
     const reflectMs = now() - reflectStart;
 
@@ -465,6 +475,20 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         continue;
       }
       try {
+        log.info("capture.reflect.trace.scored", {
+          episodeId: input.episode.id,
+          sessionId: input.episode.sessionId,
+          traceId: row.id,
+          stepKey: s.key,
+          ts: s.ts,
+          turnId: pickTurnId(s.meta, s.ts),
+          alpha: s.reflection.alpha ?? 0,
+          usable: s.reflection.usable,
+          reason: s.reflection.reason ?? null,
+          source: s.reflection.source,
+          model: s.reflection.model ?? null,
+          reflection: s.reflection.text,
+        });
         deps.tracesRepo.updateReflection(row.id, {
           reflection: s.reflection.text,
           alpha: s.reflection.alpha ?? 0,
@@ -998,6 +1022,7 @@ async function runBatchScoring(
   warnings: CaptureResult["warnings"],
   llmCalls: { reflectionSynth: number; alphaScoring: number; batchedReflection: number },
   episodeId: string,
+  taskSummary: string | null,
 ): Promise<ScoredStep[]> {
   const inputs: BatchScoreInput[] = normalized.map((step) => ({
     step,
@@ -1009,6 +1034,7 @@ async function runBatchScoring(
       synthReflections: deps.cfg.synthReflections,
       episodeId,
       phase: "reflect",
+      taskSummary,
     });
     llmCalls.batchedReflection += 1;
     return normalized.map((step, i) => ({
@@ -1035,12 +1061,13 @@ async function runPerStepScoring(
   warnings: CaptureResult["warnings"],
   llmCalls: { reflectionSynth: number; alphaScoring: number },
   episodeId: string,
+  taskSummary: string | null,
 ): Promise<ScoredStep[]> {
   const concurrency = Math.max(1, deps.cfg.llmConcurrency);
   return runConcurrently(normalized, concurrency, async (step): Promise<ScoredStep> => {
-    const { score, synthCount } = await resolveReflection(step, llm, deps, warnings, episodeId);
+    const { score, synthCount } = await resolveReflection(step, llm, deps, warnings, episodeId, taskSummary);
     llmCalls.reflectionSynth += synthCount;
-    const finalScore = await resolveAlpha(step, score, llm, deps, warnings, episodeId);
+    const finalScore = await resolveAlpha(step, score, llm, deps, warnings, episodeId, taskSummary);
     if (finalScore !== score) llmCalls.alphaScoring += 1;
     return { ...step, reflection: finalScore };
   });
@@ -1052,6 +1079,7 @@ async function resolveReflection(
   deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
   episodeId: string,
+  taskSummary: string | null,
 ): Promise<{ score: ReflectionScore; synthCount: number }> {
   const adapterProvided = step.rawReflection !== null && step.rawReflection.trim().length > 0;
   const extracted = extractReflection(step);
@@ -1065,7 +1093,7 @@ async function resolveReflection(
     return { score: disabledScore(null, "none"), synthCount: 0 };
   }
   try {
-    const synth = await synthesizeReflection(llm, step, { episodeId, phase: "reflect" });
+    const synth = await synthesizeReflection(llm, step, { episodeId, phase: "reflect", taskSummary });
     if (synth.text) {
       return {
         score: { text: synth.text, alpha: null, usable: true, source: "synth", model: synth.model },
@@ -1090,6 +1118,7 @@ async function resolveAlpha(
   deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
   episodeId: string,
+  taskSummary: string | null,
 ): Promise<ReflectionScore> {
   if (!current.text) return current; // nothing to grade
   if (!deps.cfg.alphaScoring || !llm) return current;
@@ -1100,11 +1129,13 @@ async function resolveAlpha(
       reflectionText: current.text,
       episodeId,
       phase: "reflect",
+      taskSummary,
     });
     return {
       ...current,
       alpha: scored.alpha,
       usable: scored.usable,
+      reason: scored.reason,
       model: scored.model,
     };
   } catch (err) {
@@ -1152,6 +1183,28 @@ function traceActionText(row: Pick<TraceRow, "agentText" | "toolCalls">): string
   return [row.agentText.trim(), toolSig].filter((s) => s.length > 0).join("\n---\n") || "(empty)";
 }
 
+function buildTaskReflectionSummary(
+  episode: CaptureInput["episode"],
+  steps: readonly NormalizedStep[],
+): string | null {
+  const firstUser = episode.turns.find((t) => t.role === "user" && t.content.trim());
+  const finalAssistant = [...episode.turns]
+    .reverse()
+    .find((t) => t.role === "assistant" && t.content.trim());
+  const toolNames = Array.from(
+    new Set(steps.flatMap((s) => s.toolCalls.map((t) => t.name).filter(Boolean))),
+  ).slice(0, 12);
+
+  const parts = [
+    firstUser ? `Task: ${clipForPrompt(firstUser.content, 500)}` : "",
+    `Intent: ${episode.intent.kind} (${episode.intent.reason})`,
+    finalAssistant ? `Final assistant response: ${clipForPrompt(finalAssistant.content, 500)}` : "",
+    toolNames.length > 0 ? `Tools used: ${toolNames.join(", ")}` : "",
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
 function stringMeta(meta: Record<string, unknown>, key: string): string | undefined {
   const value = meta[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -1165,6 +1218,10 @@ function safeStringify(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+function clipForPrompt(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)}...` : s;
 }
 
 function mergeTurnSteps(

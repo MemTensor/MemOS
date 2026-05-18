@@ -38,6 +38,34 @@ describe("capture/reflection-synth", () => {
     expect(out.model).toBe("openai_compatible");
   });
 
+  it("injects task context and last tool outcome into the prompt", async () => {
+    let userPrompt = "";
+    const llm = fakeLlm({
+      complete: {
+        "capture.reflection.synth": (input) => {
+          const messages = input as Array<{ role: string; content: string }>;
+          userPrompt = messages.find((m) => m.role === "user")?.content ?? "";
+          return "I checked the working directory because the task needed the project path.";
+        },
+      },
+    });
+
+    await synthesizeReflection(
+      llm,
+      step({
+        userText: "where am I?",
+        agentText: "checking pwd",
+        toolCalls: [{ name: "shell", input: { command: "pwd" }, output: "/tmp/project" }],
+      }),
+      { episodeId: "ep_1", phase: "reflect", taskSummary: "Task: inspect current project" },
+    );
+
+    expect(userPrompt).toContain("TASK CONTEXT:");
+    expect(userPrompt).toContain("Task: inspect current project");
+    expect(userPrompt).toContain("OUTCOME:");
+    expect(userPrompt).toContain("/tmp/project");
+  });
+
   it("returns null on the NO_REFLECTION sentinel", async () => {
     const llm = fakeLlm({
       complete: { "capture.reflection.synth": "NO_REFLECTION" },

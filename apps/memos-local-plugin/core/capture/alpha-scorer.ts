@@ -31,6 +31,7 @@ export interface AlphaInput {
   reflectionText: string;
   episodeId?: string;
   phase?: string;
+  taskSummary?: string | null;
 }
 
 export interface AlphaOutput {
@@ -48,6 +49,9 @@ export async function scoreReflection(
 
   const thinking = (input.step.agentThinking ?? "").trim();
   const userPayload = [
+    `TASK CONTEXT:`,
+    input.taskSummary?.trim().slice(0, 1_200) || "(none)",
+    ``,
     `STATE:`,
     input.step.userText.slice(0, 1_200) || "(none)",
     ``,
@@ -130,6 +134,7 @@ export async function scoreReflection(
     usable,
     rawAlpha,
     model: rsp.servedBy,
+    reason,
   });
 
   return { alpha: finalAlpha, usable, reason, model: rsp.servedBy };

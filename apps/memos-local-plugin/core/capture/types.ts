@@ -70,6 +70,8 @@ export interface ReflectionScore {
   alpha: number | null;
   /** LLM `usable` flag: false → alpha forced to 0 per V7 eq. 5. */
   usable: boolean;
+  /** Optional LLM explanation for the α/usable decision. */
+  reason?: string | null;
   /** Source of the reflection text. */
   source: "adapter" | "extracted" | "synth" | "none";
   /** Optional LLM servedBy model label for audit. */
