@@ -29,6 +29,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+HOST_HANDLER_WAIT_SECONDS = 5.0
+
 
 def _installed_node_binary(plugin_root: Path) -> str | None:
     marker = plugin_root / ".memos-node-bin"
@@ -86,6 +88,7 @@ class MemosBridgeClient:
         # handler returns a JSON-serialisable value or raises to
         # surface a JSON-RPC error back to the bridge.
         self._host_handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
+        self._host_handlers_cv = threading.Condition()
         self._closed = False
 
         plugin_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -225,12 +228,16 @@ class MemosBridgeClient:
         heavy work (e.g. an LLM call) are still expected to return
         within the bridge-side timeout (default 60 s).
         """
-        self._host_handlers[method] = handler
+        with self._host_handlers_cv:
+            self._host_handlers[method] = handler
+            self._host_handlers_cv.notify_all()
 
     def close(self) -> None:
         if self._closed:
             return
-        self._closed = True
+        with self._host_handlers_cv:
+            self._closed = True
+            self._host_handlers_cv.notify_all()
 
         pid = self.pid
 
@@ -315,7 +322,7 @@ class MemosBridgeClient:
                 and "result" not in msg
                 and "error" not in msg
             ):
-                handler = self._host_handlers.get(method)
+                handler = self._host_handler_for(method)
                 if handler is None:
                     self._send_response(
                         rpc_id,
@@ -343,6 +350,28 @@ class MemosBridgeClient:
                         },
                     )
                 continue
+
+    def _host_handler_for(
+        self,
+        method: str,
+        *,
+        timeout: float = HOST_HANDLER_WAIT_SECONDS,
+    ) -> Callable[[dict[str, Any]], Any] | None:
+        """Return a reverse-RPC handler, waiting briefly during startup.
+
+        The Node bridge now starts stdio before ``core.init()`` so host LLM
+        fallback can run during startup recovery. On a fast machine that
+        reverse request can arrive just before ``initialize()`` registers
+        ``host.llm.complete``. Waiting here turns that sub-millisecond race
+        into the intended handshake while still returning ``unknown_method``
+        for genuinely unsupported methods.
+        """
+        with self._host_handlers_cv:
+            self._host_handlers_cv.wait_for(
+                lambda: method in self._host_handlers or self._closed,
+                timeout=timeout,
+            )
+            return self._host_handlers.get(method)
 
     def _send_response(
         self,
