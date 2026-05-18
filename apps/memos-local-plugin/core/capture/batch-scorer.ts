@@ -23,7 +23,8 @@
  *     for us, and on hard failure capture.ts falls back to per-step.
  *
  * Wire format ↔ prompt:
- *   Send `{steps: [{idx, state, action, outcome, reflection, synth_allowed}]}`.
+ *   Send `{ host_context?, task_context?, steps: [{idx, state, action, outcome, reflection, synth_allowed}] }`.
+ *   `task_context` is episode-level task summary (nullable string).
  *   Receive `{scores: [{idx, reflection_text, alpha, usable, reason}]}`.
  *   See `core/llm/prompts/reflection.ts :: BATCH_REFLECTION_PROMPT`.
  */
