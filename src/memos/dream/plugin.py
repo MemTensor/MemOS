@@ -6,6 +6,7 @@ import logging
 from functools import partial
 from typing import Any
 
+from memos.dream.contextualization import DreamContextualizer
 from memos.dream.enrichment import (
     DreamHeuristicEnricher,
     on_memory_items_after_fine_extract,
@@ -50,6 +51,7 @@ class CommunityDreamPlugin(MemOSPlugin):
         self.signal_store = DreamSignalStore()
         self.heuristic_enricher = DreamHeuristicEnricher()
         self.pipeline = AbstractDreamPipeline(
+            context_strategy=DreamContextualizer(),
             motive_strategy=MotiveFormation(),
             recall_strategy=DirectRecall(),
             reasoning_strategy=ConsolidationReasoning(),

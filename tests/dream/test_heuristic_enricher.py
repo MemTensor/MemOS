@@ -91,6 +91,27 @@ def test_heuristic_enricher_uses_batch_context_for_chunks():
         assert dream["signals"]["chunk_total"] == 2
 
 
+def test_heuristic_enricher_keeps_mixed_ingest_batches_separate():
+    item_a = _item(
+        "chunk one",
+        internal_info={"ingest_batch_id": "ingest-1", "chunk_index": 0, "chunk_total": 2},
+    )
+    item_b = _item(
+        "chunk two",
+        internal_info={"ingest_batch_id": "ingest-2", "chunk_index": 1, "chunk_total": 2},
+    )
+    enricher = DreamHeuristicEnricher(enabled=True, overwrite=False)
+
+    enricher.enrich_items(items=[item_a, item_b], user_context=None, extract_mode="fine")
+
+    dream_a = item_a.metadata.internal_info["dream"]
+    dream_b = item_b.metadata.internal_info["dream"]
+    assert "batch_context_id" not in dream_a
+    assert "batch_context_id" not in dream_b
+    assert dream_a["weak_context_id"] == "batch:ingest-1"
+    assert dream_b["weak_context_id"] == "batch:ingest-2"
+
+
 def test_heuristic_enricher_preserves_existing_semantic_fields_by_default():
     item = _item(
         internal_info={

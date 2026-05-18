@@ -18,7 +18,9 @@ class AbstractDreamPipeline:
         reasoning_strategy,
         diary_strategy,
         persistence_strategy,
+        context_strategy=None,
     ) -> None:
+        self.context_strategy = context_strategy
         self.motive_strategy = motive_strategy
         self.recall_strategy = recall_strategy
         self.reasoning_strategy = reasoning_strategy
@@ -29,12 +31,15 @@ class AbstractDreamPipeline:
     def bind_context(self, context: dict[str, Any]) -> None:
         self.context = context
         for component in (
+            self.context_strategy,
             self.motive_strategy,
             self.recall_strategy,
             self.reasoning_strategy,
             self.diary_strategy,
             self.persistence_strategy,
         ):
+            if component is None:
+                continue
             bind_context = getattr(component, "bind_context", None)
             if callable(bind_context):
                 bind_context(context)
@@ -48,6 +53,17 @@ class AbstractDreamPipeline:
         signal_snapshot,
         text_mem,
     ):
+        # Step 0: materialize Context nodes from pending memories. This stage is
+        # intentionally independent from insight reasoning; failure should not
+        # prevent the rest of Dream from running.
+        self.last_context_report = None
+        if self.context_strategy is not None:
+            self.last_context_report = self.context_strategy.run(
+                signal_snapshot=signal_snapshot,
+                text_mem=text_mem,
+                cube_id=cube_id,
+            )
+
         # Step 1: build Dream clusters from the scheduler payload.
         clusters = self.motive_strategy.form(
             signal_snapshot=signal_snapshot,

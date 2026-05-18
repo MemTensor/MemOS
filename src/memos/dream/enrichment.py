@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-import uuid
 
 from typing import Any
 
@@ -174,8 +173,6 @@ class DreamHeuristicEnricher:
                 batch_ids.add(str(internal_info["ingest_batch_id"]))
         if len(batch_ids) == 1:
             return f"batch:{next(iter(batch_ids))}"
-        if batch_ids:
-            return f"batch:{uuid.uuid4().hex}"
         return None
 
     @staticmethod
