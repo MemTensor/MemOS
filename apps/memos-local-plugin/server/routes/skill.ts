@@ -13,13 +13,22 @@ import { parseJson, writeError, type Routes } from "./registry.js";
 
 export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
   routes.set("GET /api/v1/skills", async (ctx) => {
-    const status = (ctx.url.searchParams.get("status") as SkillDTO["status"] | null) ?? undefined;
-    const q = (ctx.url.searchParams.get("q") || "").trim().toLowerCase();
+    const params = ctx.url.searchParams;
+    const status = (params.get("status") as SkillDTO["status"] | null) ?? undefined;
+    const q = (params.get("q") || "").trim().toLowerCase();
+    const ownerAgentKind = params.get("ownerAgentKind") || undefined;
+    const ownerProfileId = params.get("ownerProfileId") || undefined;
     // Viewer needs prev/next pagination — ask for one extra page so we
     // can tell the client whether there's more without a count query.
-    const pageSize = limitOrUndefined(ctx.url.searchParams.get("limit")) ?? 50;
-    const offset = Math.max(0, Number(ctx.url.searchParams.get("offset") ?? 0) || 0);
-    let all = await deps.core.listSkills({ status, limit: q ? 5000 : pageSize + offset + 1 });
+    const pageSize = limitOrUndefined(params.get("limit")) ?? 50;
+    const offset = Math.max(0, Number(params.get("offset") ?? 0) || 0);
+    let all = await deps.core.listSkills({
+      status,
+      limit: q ? 5000 : pageSize + offset + 1,
+      ownerAgentKind,
+      ownerProfileId,
+      includeAllNamespaces: true,
+    });
     if (q) {
       all = all.filter(
         (s) => s.name.toLowerCase().includes(q) || s.invocationGuide.toLowerCase().includes(q),
@@ -27,7 +36,12 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
     }
     const page = all.slice(offset, offset + pageSize);
     const hasMore = all.length > offset + pageSize;
-    const total = q ? all.length : await deps.core.countSkills({ status });
+    const total = q ? all.length : await deps.core.countSkills({
+      status,
+      ownerAgentKind,
+      ownerProfileId,
+      includeAllNamespaces: true,
+    });
     return {
       skills: page,
       limit: pageSize,
@@ -43,7 +57,7 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const skill = await deps.core.getSkill(id as SkillId);
+    const skill = await deps.core.getSkill(id as SkillId, { includeAllNamespaces: true });
     if (skill === null) {
       writeError(ctx, 404, "not_found", `skill not found: ${id}`);
       return;
@@ -57,7 +71,7 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const skill = await deps.core.getSkill(id as SkillId);
+    const skill = await deps.core.getSkill(id as SkillId, { includeAllNamespaces: true });
     if (skill === null) {
       writeError(ctx, 404, "not_found", `skill not found: ${id}`);
       return;
@@ -137,14 +151,14 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const skill = await deps.core.getSkill(id as SkillId);
+    const skill = await deps.core.getSkill(id as SkillId, { includeAllNamespaces: true });
     if (!skill) {
       writeError(ctx, 404, "not_found", `skill not found: ${id}`);
       return;
     }
     const sourcePolicies = await Promise.all(
       skill.sourcePolicyIds.map(async (pid) => {
-        const p = await deps.core.getPolicy(pid);
+        const p = await deps.core.getPolicy(pid, undefined, { includeAllNamespaces: true });
         return p
           ? { id: p.id, title: p.title, status: p.status, gain: p.gain }
           : { id: pid, title: null, status: null, gain: null };
@@ -152,7 +166,7 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
     );
     const sourceWorldModels = await Promise.all(
       skill.sourceWorldModelIds.map(async (wid) => {
-        const w = await deps.core.getWorldModel(wid);
+        const w = await deps.core.getWorldModel(wid, undefined, { includeAllNamespaces: true });
         return w ? { id: w.id, title: w.title } : { id: wid, title: null };
       }),
     );
@@ -268,7 +282,7 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const skill = await deps.core.getSkill(id as SkillId);
+    const skill = await deps.core.getSkill(id as SkillId, { includeAllNamespaces: true });
     if (!skill) {
       writeError(ctx, 404, "not_found", `skill not found: ${id}`);
       return;

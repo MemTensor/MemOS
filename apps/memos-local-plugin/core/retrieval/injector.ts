@@ -267,9 +267,9 @@ function renderTrace(c: TraceCandidate): InjectionSnippet {
 
 function renderEpisode(c: EpisodeCandidate): InjectionSnippet {
   // Episode summary already comes with step-by-step action sequence
-  // (see tier2-trace.ts::renderEpisodeSummary), so we drop the raw
-  // V-score prefix and hand the summary through as-is.
-  const body = truncate(c.summary);
+  // (see tier2-trace.ts::renderEpisodeSummary). Keep prompt-facing text
+  // free of retrieval metrics; they are useful for logs, not for answers.
+  const body = truncate(stripEpisodePromptMetrics(c.summary));
   const when = new Date(c.ts).toISOString().slice(0, 16).replace("T", " ");
   return {
     refKind: "episode",
@@ -277,6 +277,15 @@ function renderEpisode(c: EpisodeCandidate): InjectionSnippet {
     title: `Sub-task · ${when}`,
     body,
   };
+}
+
+function stripEpisodePromptMetrics(summary: string): string {
+  return summary
+    .replace(
+      /^episode\s+\d+\s+steps\s*·\s*best\s+V=[+-]?\d+(?:\.\d+)?\s*·\s*goal-sim=[+-]?\d+(?:\.\d+)?/i,
+      "Past similar episode",
+    )
+    .replace(/\bstep\s+(\d+)\s+\(V=[+-]?\d+(?:\.\d+)?\)/gi, "step $1");
 }
 
 function renderExperience(c: ExperienceCandidate): InjectionSnippet {

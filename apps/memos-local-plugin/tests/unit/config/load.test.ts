@@ -18,7 +18,7 @@ describe("config/loadConfig", () => {
     expect(result.fromDisk).toBe(false);
     expect(result.warnings.some((w) => w.includes("not found"))).toBe(true);
     expect(result.config.viewer.port).toBe(DEFAULT_CONFIG.viewer.port);
-    expect(result.config.embedding.dimensions).toBe(DEFAULT_CONFIG.embedding.dimensions);
+    expect(result.config.embedding.provider).toBe(DEFAULT_CONFIG.embedding.provider);
   });
 
   it("merges YAML over defaults and preserves unspecified branches", async () => {
@@ -79,6 +79,28 @@ viewer:
     expect(cfg.viewer.port).toBe(1234);
     expect(cfg.llm.temperature).toBe(0.7);
     expect(cfg.algorithm.skill.minSupport).toBe(DEFAULT_CONFIG.algorithm.skill.minSupport);
+  });
+
+  it("does not expose embedding dimensions as user config", () => {
+    const cfg = resolveConfig({
+      embedding: {
+        provider: "openai_compatible",
+        model: "bge-m3",
+        endpoint: "https://example.test/v1",
+      },
+    });
+    expect("dimensions" in cfg.embedding).toBe(false);
+  });
+
+  it("ignores legacy/manual embedding dimensions", () => {
+    const cfg = resolveConfig({
+      embedding: {
+        provider: "openai_compatible",
+        model: "bge-m3",
+        dimensions: 1024,
+      },
+    });
+    expect("dimensions" in cfg.embedding).toBe(false);
   });
 });
 

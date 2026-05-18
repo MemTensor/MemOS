@@ -166,4 +166,78 @@ describe("Telemetry", () => {
       });
     });
   });
+
+  // Regression: previously `dailyPingSent` was an in-memory boolean,
+  // so every `bridge.cts` subprocess (Hermes spawns one per `chat`)
+  // re-emitted `daily_active`, making the metric track process
+  // launches instead of unique active days. The fix persists the
+  // last ping date to `<stateDir>/memos-local/.last-daily-ping`.
+  describe("daily_active dedup persistence", () => {
+    beforeEach(() => {
+      fs.writeFileSync(
+        path.join(tmpDir, "telemetry.credentials.json"),
+        JSON.stringify({ endpoint: "https://arms.test/rum", pid: "p", env: "test" }),
+      );
+    });
+
+    it("emits daily_active on the first trackPluginStarted", async () => {
+      const tel = new Telemetry({ enabled: true }, tmpDir, "1.0.0", makeLogger(), tmpDir);
+      tel.trackPluginStarted("hermes");
+      await tel.shutdown();
+
+      const body = JSON.parse((fetch as any).mock.calls[0][1].body);
+      const names = body.events.map((e: any) => e.name);
+      expect(names).toContain("plugin_started");
+      expect(names).toContain("daily_active");
+    });
+
+    it("does NOT re-emit daily_active for a second instance the same day", async () => {
+      const tel1 = new Telemetry({ enabled: true }, tmpDir, "1.0.0", makeLogger(), tmpDir);
+      tel1.trackPluginStarted("hermes");
+      await tel1.shutdown();
+
+      const tel2 = new Telemetry({ enabled: true }, tmpDir, "1.0.0", makeLogger(), tmpDir);
+      tel2.trackPluginStarted("hermes");
+      await tel2.shutdown();
+
+      const calls = (fetch as any).mock.calls;
+      expect(calls).toHaveLength(2);
+      const body1 = JSON.parse(calls[0][1].body);
+      const body2 = JSON.parse(calls[1][1].body);
+
+      const names1 = body1.events.map((e: any) => e.name);
+      const names2 = body2.events.map((e: any) => e.name);
+
+      // First instance: both events.
+      expect(names1).toContain("plugin_started");
+      expect(names1).toContain("daily_active");
+
+      // Second instance same day: only plugin_started, daily_active
+      // is suppressed by the on-disk `.last-daily-ping` file.
+      expect(names2).toContain("plugin_started");
+      expect(names2).not.toContain("daily_active");
+    });
+
+    it("re-emits daily_active when the persisted date is yesterday", async () => {
+      // Pre-seed the dedup file with an older date so the "today"
+      // check fails and a fresh ping is emitted.
+      const stateSubdir = path.join(tmpDir, "memos-local");
+      fs.mkdirSync(stateSubdir, { recursive: true });
+      fs.writeFileSync(path.join(stateSubdir, ".last-daily-ping"), "2024-01-01", "utf-8");
+
+      const tel = new Telemetry({ enabled: true }, tmpDir, "1.0.0", makeLogger(), tmpDir);
+      tel.trackPluginStarted("hermes");
+      await tel.shutdown();
+
+      const body = JSON.parse((fetch as any).mock.calls[0][1].body);
+      const names = body.events.map((e: any) => e.name);
+      expect(names).toContain("daily_active");
+
+      // The file should now hold today's ISO date.
+      const today = new Date().toISOString().slice(0, 10);
+      expect(
+        fs.readFileSync(path.join(stateSubdir, ".last-daily-ping"), "utf-8").trim(),
+      ).toBe(today);
+    });
+  });
 });

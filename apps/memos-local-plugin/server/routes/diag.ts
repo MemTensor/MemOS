@@ -33,10 +33,10 @@ export function registerDiagRoutes(routes: Routes, deps: ServerDeps): void {
     const [traces, episodes, policies, worldModels, skills, logs] =
       await Promise.all([
         core.listTraces({ limit: 1, offset: 0 }),
-        core.listEpisodeRows({ limit: 1, offset: 0 }),
-        core.listPolicies({ limit: 1, offset: 0 }),
+        core.listEpisodeRows({ limit: 1, offset: 0, includeAllNamespaces: true }),
+        core.listPolicies({ limit: 1, offset: 0, includeAllNamespaces: true }),
         core.listWorldModels({ limit: 1, offset: 0 }),
-        core.listSkills({ limit: 1 }),
+        core.listSkills({ limit: 1, includeAllNamespaces: true }),
         core.listApiLogs({ limit: 1, offset: 0 }),
       ]);
     // We use `listXxx` just to get *a* row — the actual per-layer
@@ -58,11 +58,11 @@ export function registerDiagRoutes(routes: Routes, deps: ServerDeps): void {
   routes.set("GET /api/v1/diag/namespace", async () => {
     const health = await deps.core.health();
     const [traces, episodes, policies, worldModels, skills] = await Promise.all([
-      deps.core.listTraces({ limit: 200, offset: 0 }),
-      deps.core.listEpisodeRows({ limit: 200, offset: 0 }),
-      deps.core.listPolicies({ limit: 200, offset: 0 }),
+      deps.core.listTraces({ limit: 200, offset: 0, includeAllNamespaces: true }),
+      deps.core.listEpisodeRows({ limit: 200, offset: 0, includeAllNamespaces: true }),
+      deps.core.listPolicies({ limit: 200, offset: 0, includeAllNamespaces: true }),
       deps.core.listWorldModels({ limit: 200, offset: 0 }),
-      deps.core.listSkills({ limit: 200 }),
+      deps.core.listSkills({ limit: 200, includeAllNamespaces: true }),
     ]);
     const namespaces = new Map<string, { agentKind: string; profileId: string; count: number }>();
     for (const row of [...traces, ...episodes, ...policies, ...worldModels, ...skills]) {
@@ -152,11 +152,11 @@ export function registerDiagRoutes(routes: Routes, deps: ServerDeps): void {
 
 async function countEpisodes(core: ServerDeps["core"]): Promise<number> {
   return walkAll((limit, offset) =>
-    core.listEpisodeRows({ limit, offset }),
+    core.listEpisodeRows({ limit, offset, includeAllNamespaces: true }),
   );
 }
 async function countPolicies(core: ServerDeps["core"]): Promise<number> {
-  return walkAll((limit, offset) => core.listPolicies({ limit, offset }));
+  return walkAll((limit, offset) => core.listPolicies({ limit, offset, includeAllNamespaces: true }));
 }
 async function countWorldModels(core: ServerDeps["core"]): Promise<number> {
   return walkAll((limit, offset) =>
@@ -164,7 +164,7 @@ async function countWorldModels(core: ServerDeps["core"]): Promise<number> {
   );
 }
 async function countSkills(core: ServerDeps["core"]): Promise<number> {
-  return walkAll((limit, offset) => core.listSkills({ limit }));
+  return walkAll((limit, offset) => core.listSkills({ limit, includeAllNamespaces: true }));
   void countSkills; // the offset is unused for listSkills; it returns
   // everything up to `limit` — fine for our cap.
 }

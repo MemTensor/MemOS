@@ -6,8 +6,8 @@
 # extras:
 #
 #   1. Install node_modules inside $PREFIX (idempotent).
-#   2. Build the viewer + site bundles so the HTTP server has static
-#      assets available.
+#   2. Build the viewer bundle so the HTTP server has static assets
+#      available.
 #   3. Symlink the Python memos_provider package into the Hermes
 #      plugins directory so `from memos_provider import MemTensorProvider`
 #      resolves from Hermes without extra path munging.
@@ -41,7 +41,7 @@ fi
 
 # ── 2. viewer bundle ──────────────────────────────────────────────────────────
 if [[ -x "./node_modules/.bin/vite" ]]; then
-  log "Building viewer bundle → web/dist/"
+  log "Building viewer bundle → viewer/dist/"
   ./node_modules/.bin/vite build --config vite.config.ts >/dev/null
 else
   warn "vite not found in node_modules; skipping bundle build"
@@ -64,4 +64,3 @@ log "Hermes adapter install complete."
 log "  Plugin code:   $PREFIX"
 log "  Runtime data:  $HOME_DIR"
 log "  Viewer:        http://127.0.0.1:18910/"
-log "  Site:          http://127.0.0.1:18910/site/"

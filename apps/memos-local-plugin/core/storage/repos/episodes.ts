@@ -45,6 +45,9 @@ export function makeEpisodesRepo(db: StorageDb) {
   const selectById = db.prepare<{ id: string }, RawEpisodeRow>(
     `SELECT ${COLUMNS.join(", ")} FROM episodes WHERE id=@id`,
   );
+  const deleteById = db.prepare<{ id: string }>(
+    `DELETE FROM episodes WHERE id=@id`,
+  );
   const selectOpenForSession = db.prepare<{ session: string }, RawEpisodeRow>(
     `SELECT ${COLUMNS.join(", ")} FROM episodes WHERE session_id=@session AND status='open' ORDER BY started_at DESC LIMIT 1`,
   );
@@ -130,6 +133,10 @@ export function makeEpisodesRepo(db: StorageDb) {
         (traceId) => !remove.has(traceId),
       );
       appendTrace.run({ id, trace_ids_json: toJsonText(kept) });
+    },
+
+    deleteById(id: EpisodeId): void {
+      deleteById.run({ id });
     },
 
     getById(id: EpisodeId): (EpisodeRow & EpisodeMetaRow) | null {

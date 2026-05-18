@@ -1,9 +1,9 @@
 /**
  * Static-asset middleware.
  *
- * Serves the built viewer bundle + (optionally) the product site from
- * a configured directory. Directory traversal is blocked by resolving
- * every request path against the root and verifying containment.
+ * Serves the built viewer bundle from a configured directory.
+ * Directory traversal is blocked by resolving every request path
+ * against the root and verifying containment.
  *
  * Content-Type is derived from the file extension — we keep a small
  * hard-coded MIME map instead of shelling out to `mime-types`.
@@ -43,12 +43,6 @@ export async function serveStatic(
   pathname: string,
   opts: ServerOptions,
 ): Promise<boolean> {
-  // Route `/site/*` to `siteRoot` when configured.
-  if (pathname.startsWith("/site") && opts.siteRoot) {
-    const relative = pathname === "/site" ? "/index.html" : pathname.replace(/^\/site/, "") || "/index.html";
-    return await tryServe(res, opts.siteRoot, relative);
-  }
-
   if (!opts.staticRoot) return false;
   const relative = pathname === "/" || pathname === "/viewer" ? "/index.html" : pathname;
   return await tryServe(res, opts.staticRoot, relative);

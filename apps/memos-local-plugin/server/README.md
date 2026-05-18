@@ -2,9 +2,8 @@
 
 This module exposes the `MemoryCore` over HTTP. It's used by:
 
-1. the **Vite viewer** (`web/`) for rendering the local dashboard;
-2. the **product site** (`site/`) when installed side-by-side;
-3. the **bridge** (`bridge.cts`) when hosts opt into HTTP as an
+1. the **Vite viewer** (`viewer/`) for rendering the local dashboard;
+2. the **bridge** (`bridge.cts`) when hosts opt into HTTP as an
    out-of-process transport instead of JSON-RPC-over-stdio.
 
 ## Design intent
@@ -30,7 +29,7 @@ server/
 ├── middleware/
 │   ├── io.ts              # body reader + JSON writers
 │   ├── auth.ts            # api-key gate (Bearer + X-API-Key)
-│   └── static.ts          # safe static-file serving (viewer + site)
+│   └── static.ts          # safe static-file serving (viewer)
 └── routes/
     ├── registry.ts        # flat (method + path) → handler map
     ├── health.ts          # /api/v1/health, /api/v1/ping
@@ -111,9 +110,6 @@ If `staticRoot` is set, the server serves files under that directory
 for any non-`/api/*` path. Directory traversal attempts are caught by
 resolving the requested path against the root and ensuring
 containment. `/` and `/viewer` are both rewritten to `index.html`.
-
-If `siteRoot` is set, files under that directory are served at
-`/site/*`. The viewer and site thus coexist without path collisions.
 
 ## Testing
 

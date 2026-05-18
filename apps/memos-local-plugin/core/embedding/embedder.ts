@@ -72,6 +72,7 @@ export function createEmbedderWithProvider(
   let failures = 0;
   let lastOkAt: number | null = null;
   let lastError: { at: number; message: string } | null = null;
+  let actualDimensions = config.dimensions;
 
   function toInput(i: string | EmbedInput): Required<EmbedInput> {
     if (typeof i === "string") return { text: i, role: "document" };
@@ -253,11 +254,19 @@ export function createEmbedderWithProvider(
         }
         const normalize = config.normalize ?? true;
         const processed = postProcess(raw, {
-          dimensions: config.dimensions,
+          dimensions: actualDimensions,
           provider: provider.name,
           model: config.model,
           normalize,
         });
+        if (actualDimensions <= 0 && processed[0]) {
+          actualDimensions = processed[0].length;
+          logger.info("dimensions.inferred", {
+            provider: provider.name,
+            model: config.model,
+            dimensions: actualDimensions,
+          });
+        }
         for (let j = 0; j < slice.length; j++) {
           const vec = processed[j]!;
           const entry = slice[j]!;
@@ -283,7 +292,9 @@ export function createEmbedderWithProvider(
   const api: Embedder = {
     provider: provider.name,
     model: config.model,
-    dimensions: config.dimensions,
+    get dimensions() {
+      return actualDimensions;
+    },
     embedOne,
     embedMany,
     stats(): EmbedStats {
@@ -311,7 +322,7 @@ export function createEmbedderWithProvider(
   logger.info("init", {
     provider: provider.name,
     model: config.model,
-    dimensions: config.dimensions,
+    dimensions: actualDimensions > 0 ? actualDimensions : "auto",
     cacheEnabled: config.cache.enabled,
     batchSize: config.batchSize ?? 32,
   });
