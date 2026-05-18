@@ -338,20 +338,25 @@ deploy_tarball_to_prefix() {
   success "Package extracted"
 
   step "Installing npm dependencies"
-  command -v node > "${prefix}/.memos-node-bin"
-  ( cd "${prefix}" && MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
+  local node_bin node_dir node_version
+  node_bin="$(command -v node || true)"
+  [[ -n "${node_bin}" && -x "${node_bin}" ]] || die "Node.js not found after bootstrap."
+  node_dir="$(dirname "${node_bin}")"
+  node_version="$("${node_bin}" -v 2>/dev/null || echo "unknown")"
+  printf "%s\n" "${node_bin}" > "${prefix}/.memos-node-bin"
+  ( cd "${prefix}" && PATH="${node_dir}:${PATH}" MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
   [[ -d "${prefix}/node_modules" ]] || die "npm install failed in ${prefix}"
 
   if [[ -d "${prefix}/node_modules/better-sqlite3" ]]; then
-    step "Rebuilding better-sqlite3 for Node $(node -v)"
-    ( cd "${prefix}" && npm rebuild better-sqlite3 --loglevel=error >/dev/null 2>&1 ) \
-      || ( cd "${prefix}" && npm rebuild better-sqlite3 --build-from-source --loglevel=error >/dev/null 2>&1 ) \
+    step "Rebuilding better-sqlite3 for Node ${node_version}"
+    ( cd "${prefix}" && PATH="${node_dir}:${PATH}" npm rebuild better-sqlite3 --loglevel=error >/dev/null 2>&1 ) \
+      || ( cd "${prefix}" && PATH="${node_dir}:${PATH}" npm rebuild better-sqlite3 --build-from-source --loglevel=error >/dev/null 2>&1 ) \
       || warn "better-sqlite3 rebuild did not complete cleanly."
-    if ( cd "${prefix}" && node -e "require('better-sqlite3')" >/dev/null 2>&1 ); then
+    if ( cd "${prefix}" && "${node_bin}" -e "require('better-sqlite3')" >/dev/null 2>&1 ); then
       success "better-sqlite3 native module OK"
     else
       warn "better-sqlite3 not loadable — plugin will fail at startup."
-      printf "       ${DIM}Fix: cd ${prefix} && npm rebuild better-sqlite3${NC}\n" >&2
+      printf "       ${DIM}Fix: cd ${prefix} && PATH=${node_dir}:\$PATH npm rebuild better-sqlite3${NC}\n" >&2
     fi
   fi
   success "Dependencies ready"
@@ -557,9 +562,17 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
   config.plugins.entries[pluginId] = {};
 }
 config.plugins.entries[pluginId].enabled = true;
-// Older installer builds wrote plugin-owned hook policy here. Current
-// OpenClaw releases reject that key in openclaw.json, so remove it if present.
-if (config.plugins.entries[pluginId].hooks) delete config.plugins.entries[pluginId].hooks;
+// OpenClaw blocks conversation-level typed hooks for non-bundled plugins
+// unless the user config explicitly grants access. The memory plugin needs
+// agent_end to capture completed turns.
+if (
+  !config.plugins.entries[pluginId].hooks ||
+  typeof config.plugins.entries[pluginId].hooks !== 'object' ||
+  Array.isArray(config.plugins.entries[pluginId].hooks)
+) {
+  config.plugins.entries[pluginId].hooks = {};
+}
+config.plugins.entries[pluginId].hooks.allowConversationAccess = true;
 
 if (!config.plugins.installs || typeof config.plugins.installs !== 'object') config.plugins.installs = {};
 const installsEntry = {

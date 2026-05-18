@@ -987,6 +987,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       ctx,
       {
         events: buses.retrieval,
+        skipLlmFilter: input.contextHints?.__memosDeferLlmFilterToCaller === true,
         plan: plan
           ? {
               scenarioId: plan.scenarioId,

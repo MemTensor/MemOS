@@ -6,6 +6,8 @@
  * hand-built `PipelineHandle` so we control clocks + providers.
  */
 
+import net from "node:net";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -58,6 +60,18 @@ function traceKind(trace: TraceDTO): string {
       : trace.agentText.includes("Subagent result:")
       ? "subagent_result_text"
       : "assistant");
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      server.close(() => resolve(port));
+    });
+  });
 }
 
 function seedCoreSkill(id: string, name: string): void {
@@ -129,6 +143,52 @@ describe("MemoryCore façade", () => {
     expect(h.embedder.available).toBe(true);
     expect(h.embedder.dim).toBe(TEST_EMBED_DIMENSIONS);
     expect(h.llm.available).toBe(false);
+  });
+
+  it("reloads the hub runtime when hub config changes without a process restart", async () => {
+    const home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: "version: 1\nhub:\n  enabled: false\n",
+    });
+    try {
+      pipeline = createPipeline({
+        ...buildDeps(db!),
+        home: home.home,
+        config: home.config,
+      });
+      core = createMemoryCore(pipeline, home.home, "test");
+      await core.init();
+      await expect(core.hubAdminSnapshot!()).resolves.toMatchObject({ enabled: false });
+
+      const port = await freePort();
+      await core.patchConfig({
+        hub: {
+          enabled: true,
+          role: "hub",
+          port,
+          teamName: "Live Reload",
+          teamToken: "live-reload-secret",
+        },
+      });
+
+      const snapshot = await core.hubAdminSnapshot!() as Record<string, unknown>;
+      expect(snapshot).toMatchObject({
+        enabled: true,
+        role: "hub",
+        status: "running",
+        url: `http://127.0.0.1:${port}`,
+      });
+      const info = await fetch(`http://127.0.0.1:${port}/api/v1/hub/info`);
+      expect(info.status).toBe(200);
+      await expect(info.json()).resolves.toMatchObject({ teamName: "Live Reload" });
+    } finally {
+      if (core) {
+        await core.shutdown();
+        core = null;
+        pipeline = null;
+      }
+      await home.cleanup();
+    }
   });
 
   it("openSession + closeSession roundtrip", async () => {
@@ -293,7 +353,7 @@ describe("MemoryCore façade", () => {
     expect(res.query.query).toBe("how do I build this project?");
   });
 
-  it("isolates private traces by namespace and exposes local shared traces", async () => {
+  it("scopes shared traces to creator, same framework, or hub team", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(
       pipeline,
@@ -304,6 +364,7 @@ describe("MemoryCore façade", () => {
 
     const mainNs = { agentKind: "openclaw", profileId: "main" };
     const reviewerNs = { agentKind: "openclaw", profileId: "reviewer" };
+    const hermesNs = { agentKind: "hermes", profileId: "default" };
 
     const start = await core.onTurnStart({
       agent: "openclaw",
@@ -330,12 +391,26 @@ describe("MemoryCore façade", () => {
     expect(await core.listTraces({ limit: 10 })).toHaveLength(0);
 
     await core.openSession({ agent: "openclaw", sessionId: "s-main", namespace: mainNs });
-    await core.shareTrace(ownerRows[0]!.id, { scope: "local" });
+    await core.shareTrace(ownerRows[0]!.id, { scope: "public" });
 
     await core.openSession({ agent: "openclaw", sessionId: "s-reviewer", namespace: reviewerNs });
     const sharedRows = await core.listTraces({ limit: 10 });
     expect(sharedRows).toHaveLength(1);
-    expect(sharedRows[0]?.share?.scope).toBe("local");
+    expect(sharedRows[0]?.share?.scope).toBe("public");
+    expect(await core.listTraces({ limit: 10, groupByTurn: true })).toHaveLength(1);
+
+    await core.openSession({ agent: "hermes", sessionId: "s-hermes", namespace: hermesNs });
+    expect(await core.listTraces({ limit: 10 })).toHaveLength(0);
+    expect(await core.listTraces({ limit: 10, groupByTurn: true })).toHaveLength(0);
+
+    await core.openSession({ agent: "openclaw", sessionId: "s-main", namespace: mainNs });
+    await core.shareTrace(ownerRows[0]!.id, { scope: "hub" });
+
+    await core.openSession({ agent: "hermes", sessionId: "s-hermes", namespace: hermesNs });
+    const hubRows = await core.listTraces({ limit: 10 });
+    expect(hubRows).toHaveLength(1);
+    expect(hubRows[0]?.share?.scope).toBe("hub");
+    expect(await core.listTraces({ limit: 10, groupByTurn: true })).toHaveLength(1);
   });
 
   it("records visible subagent task and result in the parent episode", async () => {

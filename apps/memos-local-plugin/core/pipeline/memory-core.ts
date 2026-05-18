@@ -37,6 +37,7 @@ import type {
   RetrievalQueryDTO,
   RetrievalResultDTO,
   SessionId,
+  ShareScope,
   SkillDTO,
   SkillId,
   SubagentOutcomeDTO,
@@ -98,10 +99,18 @@ import {
   isVisibleTo,
   visibilityWhere,
 } from "../runtime/namespace.js";
-import type { RetrievalConfig } from "../retrieval/types.js";
+import { createHubRuntime, type HubMemorySearchHit, type HubRuntime } from "../hub/runtime.js";
+import { llmFilterCandidates } from "../retrieval/llm-filter.js";
+import type { RankedCandidate } from "../retrieval/ranker.js";
+import type {
+  RetrievalConfig,
+  TraceCandidate,
+} from "../retrieval/types.js";
 import type { UserFeedback } from "../reward/types.js";
 
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
+
+const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
 
 export interface BootstrapOptions {
   agent: AgentKind;
@@ -468,6 +477,8 @@ export function createMemoryCore(
   let shutDown = false;
   /** Per-episode monotonic step counter for tool outcomes. */
   const toolStepByEpisode = new Map<string, number>();
+  let hubRuntime: HubRuntime | null = null;
+  let hubRuntimeConfig: ResolvedConfig = handle.config;
   const skillStartedAtByPolicy = new Map<string, number>();
   const skillRunDurationBySkill = new Map<string, number>();
   const l2StartedAtByEpisode = new Map<string, number>();
@@ -590,6 +601,269 @@ export function createMemoryCore(
     }
   }
 
+  function makeHubRuntime(config: ResolvedConfig): HubRuntime {
+    return createHubRuntime({
+      repos: handle.repos,
+      config,
+      log: rootLogger.child({ channel: "core.hub" }),
+      agent: handle.agent,
+      version: pkgVersion,
+    });
+  }
+
+  async function searchHubMemoryHits(
+    query: string,
+    limit = 5,
+  ): Promise<RetrievalHitDTO[]> {
+    if (!hubRuntimeConfig.hub.enabled || !hubRuntime || !query.trim()) return [];
+    try {
+      const hits = await withTimeout(
+        hubRuntime.searchMemories(query, limit),
+        1_500,
+        "hub_search_timeout",
+      );
+      return hits.map(hubMemoryToRetrievalHit);
+    } catch (err) {
+      log.debug("hub.search.failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
+  }
+
+  function hubMemoryToRetrievalHit(hit: HubMemorySearchHit): RetrievalHitDTO {
+    const source = hit.sourceAgent ? ` from ${hit.sourceAgent}` : "";
+    return {
+      tier: 2,
+      refKind: "trace",
+      refId: `hub:${hit.id}`,
+      score: hit.score,
+      snippet: clipText(
+        [
+          `Team Hub memory${source}`,
+          hit.summary ? `Summary: ${hit.summary}` : "",
+          hit.content,
+        ].filter(Boolean).join("\n"),
+        900,
+      ),
+      ownerAgentKind: hit.sourceAgent || undefined,
+      ownerProfileId: hit.sourceUserId,
+      shareScope: "hub",
+      sourceTraceId: hit.sourceTraceId,
+    };
+  }
+
+  async function finalFilterMergedHits(input: {
+    query: string;
+    localHits: readonly RetrievalHitDTO[];
+    hubHits: readonly RetrievalHitDTO[];
+    localAlreadyFiltered: boolean;
+    config: RetrievalConfig;
+    episodeId?: string;
+  }): Promise<{
+    hits: RetrievalHitDTO[];
+    dropped: RetrievalHitDTO[];
+    outcome: string;
+    sufficient: boolean | null;
+    deduped: number;
+  }> {
+    const merged = dedupeMergedRetrievalHits(input.localHits, input.hubHits);
+    const deduped = input.localHits.length + input.hubHits.length - merged.length;
+    const hasHubAfterDedupe = merged.some((hit) => hit.shareScope === "hub");
+    if (merged.length === 0 || (input.localAlreadyFiltered && !hasHubAfterDedupe)) {
+      return {
+        hits: merged,
+        dropped: [],
+        outcome: input.hubHits.length === 0
+          ? "no_hub"
+          : merged.length === 0
+          ? "empty"
+          : "hub_deduped",
+        sufficient: null,
+        deduped,
+      };
+    }
+
+    const rankedPairs = merged.map((hit, index) => ({
+      hit,
+      ranked: rankedCandidateFromRetrievalHit(hit, index),
+    }));
+    let filtered = await llmFilterCandidates(
+      {
+        query: input.query,
+        ranked: rankedPairs.map((pair) => pair.ranked),
+        episodeId: input.episodeId,
+      },
+      {
+        llm: handle.retrievalDeps().llm ?? null,
+        log,
+        timeoutMs: FINAL_HUB_LLM_FILTER_TIMEOUT_MS,
+        config: input.config,
+      },
+    );
+    if (input.config.lightweightMemory && !llmFilterOutcomeSucceeded(filtered.outcome)) {
+      filtered = {
+        ...filtered,
+        kept: [],
+        dropped: [...filtered.dropped, ...filtered.kept],
+      };
+    }
+    const kept = new Set(filtered.kept);
+    const dropped = new Set(filtered.dropped);
+    return {
+      hits: rankedPairs.filter((pair) => kept.has(pair.ranked)).map((pair) => pair.hit),
+      dropped: rankedPairs.filter((pair) => dropped.has(pair.ranked)).map((pair) => pair.hit),
+      outcome: filtered.outcome,
+      sufficient: filtered.sufficient,
+      deduped,
+    };
+  }
+
+  function dedupeMergedRetrievalHits(
+    localHits: readonly RetrievalHitDTO[],
+    hubHits: readonly RetrievalHitDTO[],
+  ): RetrievalHitDTO[] {
+    const localTraceIds = new Set(localHits.map((hit) => hit.refId));
+    const out: RetrievalHitDTO[] = [];
+    const normalizedSeen: string[] = [];
+    for (const hit of [...localHits, ...hubHits]) {
+      if (hit.shareScope === "hub" && hit.sourceTraceId && localTraceIds.has(hit.sourceTraceId)) {
+        continue;
+      }
+      const normalized = normalizeRetrievedSnippet(hit.snippet);
+      if (normalized && normalizedSeen.some((seen) => retrievedTextLooksDuplicate(seen, normalized))) {
+        continue;
+      }
+      out.push(hit);
+      if (normalized) normalizedSeen.push(normalized);
+    }
+    return out;
+  }
+
+  function rankedCandidateFromRetrievalHit(hit: RetrievalHitDTO, index: number): RankedCandidate {
+    const score = Number.isFinite(hit.score) ? Math.max(0, hit.score) : 0;
+    const text = hit.snippet.trim();
+    const candidate: TraceCandidate = {
+      tier: "tier2",
+      refKind: "trace",
+      refId: hit.refId as TraceId,
+      cosine: Math.min(1, score),
+      ts: Date.now(),
+      vec: null,
+      channels: [{
+        channel: "pattern",
+        rank: index,
+        score: Math.min(1, Math.max(0.001, score)),
+      }],
+      value: 0,
+      priority: Math.min(1, score),
+      episodeId: (`final-filter:${index}`) as EpisodeId,
+      sessionId: "final-filter" as SessionId,
+      vecKind: "summary",
+      userText: text,
+      agentText: "",
+      summary: firstNonEmptyLine(text),
+      reflection: null,
+      tags: hit.shareScope === "hub" ? ["hub"] : [],
+    };
+    return {
+      candidate,
+      relevance: score,
+      rrf: 0,
+      score,
+      normSq: null,
+    };
+  }
+
+  function renderFinalHitsContext(hits: readonly RetrievalHitDTO[]): string {
+    if (hits.length === 0) return "";
+    return [
+      "## Retrieved Memories",
+      ...hits.map((hit, index) => {
+        const source = hit.shareScope === "hub" ? "Hub" : "Local";
+        const title = `${index + 1}. [${source} ${hit.refKind}]`;
+        return `${title} ${clipText(hit.snippet, 1_000).replace(/\n/g, "\n   ")}`;
+      }),
+    ].join("\n\n");
+  }
+
+  function normalizeRetrievedSnippet(text: string): string {
+    return text
+      .toLowerCase()
+      .replace(/^team hub memory[^\n]*\n?/gim, "")
+      .replace(/\bsummary:\s*/gi, "")
+      .replace(/\[(user|assistant|note)\]\s*/gi, "")
+      .replace(/\b(user|assistant|note)\s*[:：]\s*/gi, "")
+      .replace(/[《》"'“”‘’`*_#>\-:：\s]+/g, "")
+      .trim();
+  }
+
+  function retrievedTextLooksDuplicate(a: string, b: string): boolean {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const min = Math.min(a.length, b.length);
+    return min >= 12 && (a.includes(b) || b.includes(a));
+  }
+
+  function firstNonEmptyLine(text: string): string {
+    return text.split(/\n+/).map((line) => line.trim()).find(Boolean)?.slice(0, 240) ?? "";
+  }
+
+  function llmFilterOutcomeSucceeded(outcome: string): boolean {
+    return outcome === "llm_kept_all" || outcome === "llm_filtered";
+  }
+
+  function logCandidatesFromHits(hits: readonly RetrievalHitDTO[]): Array<{
+    tier: number;
+    refKind: string;
+    refId: string;
+    score: number;
+    snippet: string;
+    sourceTraceId?: string;
+  }> {
+    return hits.map((h) => ({
+      tier: h.tier,
+      refKind: h.refKind,
+      refId: h.refId,
+      score: h.score,
+      snippet: h.snippet,
+      sourceTraceId: h.sourceTraceId,
+    }));
+  }
+
+  async function ensureHubRuntimeStarted(config: ResolvedConfig): Promise<void> {
+    hubRuntimeConfig = config;
+    if (!config.hub.enabled) {
+      if (hubRuntime) {
+        await hubRuntime.stop();
+        hubRuntime = null;
+      }
+      return;
+    }
+    if (!hubRuntime) {
+      hubRuntime = makeHubRuntime(config);
+    }
+    await hubRuntime.start();
+  }
+
+  async function restartHubRuntime(config: ResolvedConfig): Promise<void> {
+    hubRuntimeConfig = config;
+    const previous = hubRuntime;
+    hubRuntime = null;
+    if (previous) {
+      try {
+        await previous.stop();
+      } catch (err) {
+        log.warn("hub.runtime.stop_failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (!config.hub.enabled) return;
+    hubRuntime = makeHubRuntime(config);
+    await hubRuntime.start();
+  }
+
   // ─── Lifecycle ──
   async function init(): Promise<void> {
     if (shutDown) {
@@ -599,6 +873,8 @@ export function createMemoryCore(
       );
     }
     initialized = true;
+
+    await ensureHubRuntimeStarted(handle.config);
 
     // Preserve recent open topics across restarts. A crash or Ctrl+C is
     // not evidence that the topic ended; the next user turn gets routed
@@ -1126,6 +1402,13 @@ export function createMemoryCore(
     if (shutDown) return;
     shutDown = true;
     try {
+      try {
+        await hubRuntime?.stop();
+      } catch (err) {
+        log.warn("hub.stop_failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
       await handle.shutdown("memory-core.shutdown");
     } finally {
       if (telemetry) {
@@ -1320,17 +1603,32 @@ export function createMemoryCore(
     const startedAt = Date.now();
     let ok = true;
     let packet: Awaited<ReturnType<typeof handle.onTurnStart>> | null = null;
+    let hubCandidates: Array<{
+      tier: number;
+      refKind: string;
+      refId: string;
+      score: number;
+      snippet: string;
+    }> = [];
+    let finalFilteredCandidates: typeof hubCandidates = [];
+    let finalDroppedCandidates: typeof hubCandidates = [];
+    let finalFilterStats: RetrievalStatsLogPayload["finalFilter"] | undefined;
+    let finalHubKept = 0;
+    let hubHits: RetrievalHitDTO[] = [];
     const ns = namespaceFor(turn.agent, turn);
     activeNamespace = ns;
-    const namespacedTurn = {
-      ...turn,
-      namespace: ns,
-      contextHints: {
-        ...(turn.contextHints ?? {}),
-        ...namespaceMeta(ns),
-      },
-    };
     try {
+      hubHits = await searchHubMemoryHits(turn.userText, 5);
+      hubCandidates = logCandidatesFromHits(hubHits);
+      const namespacedTurn = {
+        ...turn,
+        namespace: ns,
+        contextHints: {
+          ...(turn.contextHints ?? {}),
+          ...namespaceMeta(ns),
+          ...(hubHits.length > 0 ? { __memosDeferLlmFilterToCaller: true } : {}),
+        },
+      };
       packet = await handle.onTurnStart(namespacedTurn);
 
       // The orchestrator stamps the *routed* session / episode id onto the
@@ -1358,10 +1656,32 @@ export function createMemoryCore(
           snippet: snip.body,
         };
       });
+      const final = await finalFilterMergedHits({
+        query: turn.userText,
+        localHits: hits,
+        hubHits,
+        localAlreadyFiltered: hubHits.length === 0,
+        config: handle.retrievalDeps().config,
+        episodeId: packet.episodeId,
+      });
+      finalFilteredCandidates = logCandidatesFromHits(final.hits);
+      finalDroppedCandidates = logCandidatesFromHits(final.dropped);
+      finalFilterStats = hubHits.length > 0
+        ? {
+            outcome: final.outcome,
+            kept: final.hits.length,
+            dropped: final.dropped.length,
+            sufficient: final.sufficient,
+            deduped: final.deduped,
+          }
+        : undefined;
+      finalHubKept = final.hits.filter((hit) => hit.shareScope === "hub").length;
       return {
         query,
-        hits,
-        injectedContext: packet.rendered,
+        hits: final.hits,
+        injectedContext: hubHits.length > 0
+          ? renderFinalHitsContext(final.hits)
+          : packet.rendered,
         tierLatencyMs: packet.tierLatencyMs,
       };
     } catch (err) {
@@ -1394,8 +1714,14 @@ export function createMemoryCore(
         const droppedIds = new Set(
           (packet?.droppedByLlm ?? []).map((s) => s.refId as string),
         );
-        const filtered = candidates.filter((c) => !droppedIds.has(c.refId));
-        const dropped = candidates.filter((c) => droppedIds.has(c.refId));
+        const localFiltered = candidates.filter((c) => !droppedIds.has(c.refId));
+        const filtered = hubCandidates.length > 0
+          ? finalFilteredCandidates
+          : localFiltered;
+        const localDropped = candidates.filter((c) => droppedIds.has(c.refId));
+        const dropped = hubCandidates.length > 0
+          ? [...localDropped, ...finalDroppedCandidates]
+          : localDropped;
         const stats = packet ? handle.consumeRetrievalStats(packet.packetId) : null;
         handle.repos.apiLogs.insert({
           toolName: handle.algorithm.lightweightMemory.enabled ? "memory_search" : "memos_search",
@@ -1409,10 +1735,18 @@ export function createMemoryCore(
           output: ok
             ? {
                 candidates,
-                hubCandidates: [] as unknown[],
+                hubCandidates,
                 filtered,
                 droppedByLlm: dropped,
-                stats: stats ? retrievalStatsPayload(stats) : undefined,
+                stats: stats
+                  ? withHubStats(
+                      retrievalStatsPayload(stats),
+                      hubCandidates.length,
+                      filtered.length,
+                      finalHubKept,
+                      finalFilterStats,
+                    )
+                  : undefined,
               }
             : { error: "turn_start_retrieval_failed" },
           durationMs: Date.now() - startedAt,
@@ -1988,30 +2322,13 @@ export function createMemoryCore(
       snippet: string;
     }> = [];
     let filtered: typeof candidates = [];
-    let retrievalStats: {
-      raw?: number;
-      ranked?: number;
-      droppedByThreshold?: number;
-      thresholdFloor?: number;
-      topRelevance?: number;
-      llmFilter?: {
-        outcome?: string;
-        kept?: number;
-        dropped?: number;
-        sufficient?: boolean | null;
-      };
-      channelHits?: Record<string, number>;
-      queryTokens?: number;
-      queryTags?: string[];
-      embedding?: {
-        attempted: boolean;
-        ok: boolean;
-        degraded: boolean;
-        errorCode?: string;
-        errorMessage?: string;
-      };
-    } | undefined;
+    let droppedByFinalFilter: typeof candidates = [];
+    let hubCandidates: typeof candidates = [];
+    let retrievalStats: RetrievalStatsLogPayload | undefined;
+    let finalHubKept = 0;
     try {
+      const hubHits = await searchHubMemoryHits(query.query, query.topK?.tier2 ?? 5);
+      hubCandidates = logCandidatesFromHits(hubHits);
       const result = await toolDrivenRetrieve(deps, {
         reason: "tool_driven",
         agent: query.agent,
@@ -2021,7 +2338,7 @@ export function createMemoryCore(
         tool: "memos_search",
         args: { ...(query.filters ?? {}), query: query.query },
         ts,
-      });
+      }, { skipLlmFilter: hubHits.length > 0 });
       let hits: RetrievalHitDTO[] = result.packet.snippets.map((snip) => ({
         tier: inferTier(snip.refKind),
         refId: snip.refId,
@@ -2053,6 +2370,27 @@ export function createMemoryCore(
         });
       }
 
+      const final = await finalFilterMergedHits({
+        query: query.query,
+        localHits: hits,
+        hubHits,
+        localAlreadyFiltered: hubHits.length === 0,
+        config: deps.config,
+        episodeId: query.episodeId,
+      });
+      const returnedHits = final.hits;
+      const finalFilterStats: RetrievalStatsLogPayload["finalFilter"] | undefined =
+        hubHits.length > 0
+          ? {
+              outcome: final.outcome,
+              kept: final.hits.length,
+              dropped: final.dropped.length,
+              sufficient: final.sufficient,
+              deduped: final.deduped,
+            }
+          : undefined;
+      finalHubKept = final.hits.filter((hit) => hit.shareScope === "hub").length;
+
       // Build the logs-page payload BEFORE returning so the row
       // reflects the exact shape the adapter sees. `candidates` lists
       // everything tiered/retrieved; `filtered` is what the injector
@@ -2065,14 +2403,21 @@ export function createMemoryCore(
         score: h.score,
         snippet: h.snippet,
       }));
-      filtered = candidates; // post-filter is what we return → same list.
+      filtered = logCandidatesFromHits(returnedHits); // final list returned to the adapter.
+      droppedByFinalFilter = logCandidatesFromHits(final.dropped);
 
       // Three-stage observability — surfaced verbatim so the viewer's
       // Logs page can render "raw → threshold → ranked → LLM filter"
       // funnels. All fields are optional on the producer side so older
       // consumers keep working.
       const s = result.stats;
-      retrievalStats = retrievalStatsPayload(s);
+      retrievalStats = withHubStats(
+        retrievalStatsPayload(s),
+        hubCandidates.length,
+        filtered.length,
+        finalHubKept,
+        finalFilterStats,
+      );
       if (s.embedding?.degraded) {
         handle.repos.apiLogs.insert({
           toolName: "system_error",
@@ -2092,8 +2437,10 @@ export function createMemoryCore(
 
       return {
         query,
-        hits,
-        injectedContext: result.packet.rendered,
+        hits: returnedHits,
+        injectedContext: hubHits.length > 0
+          ? renderFinalHitsContext(returnedHits)
+          : result.packet.rendered,
         tierLatencyMs: result.packet.tierLatencyMs,
       };
     } catch (err) {
@@ -2120,8 +2467,9 @@ export function createMemoryCore(
           output: ok
             ? {
                 candidates,
-                hubCandidates: [] as unknown[],
+                hubCandidates,
                 filtered,
+                droppedByLlm: droppedByFinalFilter,
                 stats: retrievalStats,
               }
             : { error: "retrieval_failed" },
@@ -2174,10 +2522,14 @@ export function createMemoryCore(
     ensureLive();
     const existing = handle.repos.traces.getById(id);
     if (!existing || !ownedByCurrent(existing)) return { deleted: false };
+    const wasHubShared = existing.share?.scope === "hub";
     handle.db.tx(() => {
       handle.repos.episodes.removeTraceIds(existing.episodeId, [id]);
       handle.repos.traces.deleteById(id);
     });
+    if (wasHubShared) {
+      await runHubSync(() => hubRuntime?.unpublishTrace(id), "trace", id);
+    }
     return { deleted: true };
   }
 
@@ -2189,10 +2541,14 @@ export function createMemoryCore(
     for (const id of ids) {
       const existing = handle.repos.traces.getById(id);
       if (!existing || !ownedByCurrent(existing)) continue;
+      const wasHubShared = existing.share?.scope === "hub";
       handle.db.tx(() => {
         handle.repos.episodes.removeTraceIds(existing.episodeId, [id]);
         handle.repos.traces.deleteById(id);
       });
+      if (wasHubShared) {
+        await runHubSync(() => hubRuntime?.unpublishTrace(id), "trace", id);
+      }
       deleted++;
     }
     return { deleted };
@@ -2201,7 +2557,7 @@ export function createMemoryCore(
   async function shareTrace(
     id: string,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -2211,6 +2567,9 @@ export function createMemoryCore(
     if (!existing || !ownedByCurrent(existing)) return null;
     handle.repos.traces.updateShare(id, share);
     const updated = handle.repos.traces.getById(id);
+    if (updated) {
+      await syncHubTraceShare(traceRowToDTO(updated, handle.repos.episodes.getById(updated.episodeId)));
+    }
     return updated
       ? traceRowToDTO(updated, handle.repos.episodes.getById(updated.episodeId))
       : null;
@@ -2302,7 +2661,11 @@ export function createMemoryCore(
     ensureLive();
     const existing = handle.repos.policies.getById(id);
     if (!existing || !ownedByCurrent(existing)) return { deleted: false };
+    const wasHubShared = existing.share?.scope === "hub";
     handle.repos.policies.deleteById(id);
+    if (wasHubShared) {
+      await runHubSync(() => hubRuntime?.unpublishPolicy(id), "policy", id);
+    }
     return { deleted: true };
   }
 
@@ -2394,14 +2757,18 @@ export function createMemoryCore(
     ensureLive();
     const existing = handle.repos.worldModel.getById(id);
     if (!existing || !ownedByCurrent(existing)) return { deleted: false };
+    const wasHubShared = existing.share?.scope === "hub";
     handle.repos.worldModel.deleteById(id);
+    if (wasHubShared) {
+      await runHubSync(() => hubRuntime?.unpublishWorldModel(id), "world_model", id);
+    }
     return { deleted: true };
   }
 
   async function sharePolicy(
     id: string,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -2411,13 +2778,14 @@ export function createMemoryCore(
     if (!existing || !ownedByCurrent(existing)) return null;
     handle.repos.policies.updateShare(id, share);
     const updated = handle.repos.policies.getById(id);
+    if (updated) await syncHubPolicyShare(policyRowToDTO(updated));
     return updated ? policyRowToDTO(updated) : null;
   }
 
   async function shareWorldModel(
     id: string,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -2427,6 +2795,7 @@ export function createMemoryCore(
     if (!existing || !ownedByCurrent(existing)) return null;
     handle.repos.worldModel.updateShare(id, share);
     const updated = handle.repos.worldModel.getById(id);
+    if (updated) await syncHubWorldModelShare(worldModelRowToDTO(updated));
     return updated ? worldModelRowToDTO(updated) : null;
   }
 
@@ -2692,7 +3061,6 @@ export function createMemoryCore(
     ensureLive();
     if (input.namespace) activeNamespace = input.namespace;
     const episode = handle.repos.episodes.getById(input.episodeId);
-    if (episode && !input.includeAllNamespaces && !visibleToCurrent(episode)) return [];
     const rows = handle.repos.traces.list({
       episodeId: input.episodeId,
       limit: 500,
@@ -2764,7 +3132,7 @@ export function createMemoryCore(
         sessionId: input?.sessionId,
         ownerAgentKind: input?.ownerAgentKind,
         ownerProfileId: input?.ownerProfileId,
-      });
+      }, vis);
     }
     // q substring scan — mirror `listTraces`. Walk all matching
     // traces from the repo (no limit) and apply the same filter.
@@ -3825,6 +4193,9 @@ export function createMemoryCore(
     // empty in the UI without wiping their existing value.
     const filtered = stripEmptySecrets(patch);
     const result = await applyPatch(handle.home, filtered);
+    if (patchTouchesHub(filtered)) {
+      await restartHubRuntime(result.config);
+    }
     return maskSecrets(result.config as unknown as Record<string, unknown>);
   }
 
@@ -3904,7 +4275,7 @@ export function createMemoryCore(
   async function shareSkill(
     id: SkillId,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -3914,7 +4285,86 @@ export function createMemoryCore(
     if (!existing || !ownedByCurrent(existing)) return null;
     handle.repos.skills.updateShare(id, share);
     const updated = handle.repos.skills.getById(id);
+    if (updated) await syncHubSkillShare(skillRowToDTO(updated));
     return updated ? skillRowToDTO(updated) : null;
+  }
+
+  async function syncHubTraceShare(trace: TraceDTO): Promise<void> {
+    const row = handle.repos.traces.getById(trace.id);
+    await runHubSync(
+      trace.share?.scope === "hub"
+        ? () => hubRuntime?.publishTrace(trace, row?.vecSummary ?? null)
+        : () => hubRuntime?.unpublishTrace(trace.id),
+      "trace",
+      trace.id,
+    );
+  }
+
+  async function syncHubPolicyShare(policy: PolicyDTO): Promise<void> {
+    await runHubSync(
+      policy.share?.scope === "hub"
+        ? () => hubRuntime?.publishPolicy(policy)
+        : () => hubRuntime?.unpublishPolicy(policy.id),
+      "policy",
+      policy.id,
+    );
+  }
+
+  async function syncHubWorldModelShare(world: WorldModelDTO): Promise<void> {
+    await runHubSync(
+      world.share?.scope === "hub"
+        ? () => hubRuntime?.publishWorldModel(world)
+        : () => hubRuntime?.unpublishWorldModel(world.id),
+      "world_model",
+      world.id,
+    );
+  }
+
+  async function syncHubSkillShare(skill: SkillDTO): Promise<void> {
+    await runHubSync(
+      skill.share?.scope === "hub"
+        ? () => hubRuntime?.publishSkill(skill)
+        : () => hubRuntime?.unpublishSkill(skill.id),
+      "skill",
+      skill.id,
+    );
+  }
+
+  async function runHubSync(
+    op: () => Promise<unknown> | unknown,
+    kind: string,
+    id: string,
+  ): Promise<void> {
+    if (!hubRuntimeConfig.hub.enabled) return;
+    try {
+      await op();
+    } catch (err) {
+      log.warn("hub.sync_failed", {
+        kind,
+        id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async function hubAdminSnapshot(): Promise<unknown> {
+    ensureLive();
+    return await hubRuntime?.adminSnapshot() ?? { enabled: !!hubRuntimeConfig.hub.enabled };
+  }
+
+  async function approveHubUser(userId: string): Promise<unknown> {
+    ensureLive();
+    return await hubRuntime?.approveUser(userId) ?? { ok: false };
+  }
+
+  async function rejectHubUser(userId: string): Promise<unknown> {
+    ensureLive();
+    return await hubRuntime?.rejectUser(userId) ?? { ok: false };
+  }
+
+  async function removeHubUser(userId: string): Promise<unknown> {
+    ensureLive();
+    return await hubRuntime?.removeUser(userId) ?? { ok: false };
   }
 
   // ─── Observability ──
@@ -3985,6 +4435,10 @@ export function createMemoryCore(
     reactivateSkill,
     updateSkill,
     shareSkill,
+    hubAdminSnapshot,
+    approveHubUser,
+    rejectHubUser,
+    removeHubUser,
     getConfig,
     patchConfig,
     metrics,
@@ -4070,6 +4524,10 @@ function stripEmptySecrets(patch: Record<string, unknown>): Record<string, unkno
     }
   }
   return out;
+}
+
+function patchTouchesHub(patch: Record<string, unknown>): boolean {
+  return Object.prototype.hasOwnProperty.call(patch, "hub");
 }
 
 function orderTraceRowsForEpisode(
@@ -4611,7 +5069,7 @@ function findLatestPersistedModelStatus(
   return null;
 }
 
-function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats): {
+type RetrievalStatsLogPayload = {
   scenarioId?: string;
   plannedTiers?: { tier1: boolean; tier2: boolean; tier3: boolean };
   raw?: number;
@@ -4629,7 +5087,20 @@ function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats
   queryTokens?: number;
   queryTags?: string[];
   embedding?: import("../retrieval/types.js").RetrievalStats["embedding"];
-} {
+  localReturned?: number;
+  hubReturned?: number;
+  hubKept?: number;
+  finalReturned?: number;
+  finalFilter?: {
+    outcome?: string;
+    kept?: number;
+    dropped?: number;
+    sufficient?: boolean | null;
+    deduped?: number;
+  };
+};
+
+function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats): RetrievalStatsLogPayload {
   return {
     scenarioId: s.scenarioId,
     plannedTiers: s.plannedTiers,
@@ -4648,6 +5119,23 @@ function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats
     queryTokens: s.queryTokens,
     queryTags: s.queryTags,
     embedding: s.embedding,
+  };
+}
+
+function withHubStats(
+  stats: RetrievalStatsLogPayload,
+  hubReturned: number,
+  finalReturned: number,
+  hubKept: number,
+  finalFilter?: RetrievalStatsLogPayload["finalFilter"],
+): RetrievalStatsLogPayload {
+  return {
+    ...stats,
+    localReturned: Math.max(0, finalReturned - hubKept),
+    hubReturned,
+    hubKept,
+    finalReturned,
+    ...(finalFilter ? { finalFilter } : {}),
   };
 }
 
@@ -4986,6 +5474,20 @@ export function deriveSkillStatus(
 function formatThreshold(n: number): string {
   if (!Number.isFinite(n)) return String(n);
   return Number(n.toFixed(3)).toString();
+}
+
+function clipText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(label)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 /**

@@ -9,7 +9,7 @@
 
 export type AgentKind = "openclaw" | "hermes" | string;
 
-export type ShareScope = "private" | "local" | "public" | "hub";
+export type ShareScope = "private" | "public" | "hub";
 
 export interface RuntimeNamespace {
   agentKind: AgentKind;
@@ -565,6 +565,8 @@ export interface RetrievalHitDTO {
   ownerProfileId?: string;
   ownerWorkspaceId?: string | null;
   shareScope?: ShareScope;
+  /** Original source trace id when a result is a Hub projection of a local trace. */
+  sourceTraceId?: string;
 }
 
 export interface RetrievalResultDTO {

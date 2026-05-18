@@ -59,7 +59,12 @@ import { route } from "../stores/router";
 import { clearEntryId } from "../stores/cross-link";
 import type { TraceDTO } from "../api/types";
 import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
-import { loadHubSharingEnabled } from "../utils/share";
+import {
+  loadHubSharingEnabled,
+  normalizeShareScope,
+  SHARE_SCOPE_OPTIONS,
+  type ShareScope,
+} from "../utils/share";
 
 type RoleFilter = "" | "user" | "assistant" | "tool";
 
@@ -92,7 +97,7 @@ interface MemoryGroup {
   hasReflection: boolean;
   ownerAgentKind: string;
   ownerProfileId: string;
-  scope: "private" | "local" | "public" | "hub";
+  scope: ShareScope;
   shared: boolean;
 }
 
@@ -392,7 +397,7 @@ export function MemoriesView() {
    */
   const applyShareGroup = async (
     g: MemoryGroup,
-    scope: "private" | "local" | "public" | "hub" | null,
+    scope: ShareScope | null,
   ) => {
     try {
       const updates = await Promise.all(
@@ -935,7 +940,7 @@ function buildGroups(traces: readonly TraceDTO[]): MemoryGroup[] {
     const ids = bucket.map((t) => t.id);
     const sumV = bucket.reduce((acc, t) => acc + (t.value ?? 0), 0);
     const sumA = bucket.reduce((acc, t) => acc + (t.alpha ?? 0), 0);
-    const scope: "private" | "local" | "public" | "hub" = head.share?.scope ?? "private";
+    const scope = normalizeShareScope(head.share?.scope);
     return {
       turnKey: key,
       episodeId: head.episodeId ?? null,
@@ -1077,7 +1082,7 @@ function TraceDrawer({
       tags?: string[];
     },
   ) => Promise<void> | void;
-  onShare: (scope: "private" | "local" | "public" | "hub" | null) => Promise<void> | void;
+  onShare: (scope: ShareScope | null) => Promise<void> | void;
   onDelete: () => Promise<void> | void;
 }) {
   const head = group.head;
@@ -1087,16 +1092,14 @@ function TraceDrawer({
   const [userText, setUserText] = useState(head.userText ?? "");
   const [agentText, setAgentText] = useState(head.agentText ?? "");
   const [tags, setTags] = useState((head.tags ?? []).join(", "));
-  const [scope, setScope] = useState<"private" | "local" | "public" | "hub">(
-    head.share?.scope ?? "public",
-  );
+  const [scope, setScope] = useState<ShareScope>(normalizeShareScope(head.share?.scope ?? "public"));
 
   useEffect(() => {
     setSummary(head.summary ?? "");
     setUserText(head.userText ?? "");
     setAgentText(head.agentText ?? "");
     setTags((head.tags ?? []).join(", "));
-    setScope(head.share?.scope ?? "public");
+    setScope(normalizeShareScope(head.share?.scope ?? "public"));
   }, [head]);
 
   const title = displaySummary.slice(0, 100) || t("memories.detail.fallbackTitle");
@@ -1114,7 +1117,7 @@ function TraceDrawer({
     setMode("view");
   };
 
-  const submitShare = (s: "private" | "local" | "public" | "hub" | null) => {
+  const submitShare = (s: ShareScope | null) => {
     void onShare(s);
     setMode("view");
   };
@@ -1257,7 +1260,7 @@ function TraceDrawer({
               <div class="modal__field">
                 <label>{t("memories.share.scope")}</label>
                 <div class="vstack" style="gap:var(--sp-2)">
-                  {(["private", "local", "public", "hub"] as const).map((v) => (
+                  {SHARE_SCOPE_OPTIONS.map((v) => (
                     <label
                       key={v}
                       class="hstack"

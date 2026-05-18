@@ -607,6 +607,17 @@ interface RetrievalStatsPayload {
   channelHits?: Record<string, number>;
   queryTokens?: number;
   queryTags?: string[];
+  localReturned?: number;
+  hubReturned?: number;
+  hubKept?: number;
+  finalReturned?: number;
+  finalFilter?: {
+    outcome?: string;
+    kept?: number;
+    dropped?: number;
+    sufficient?: boolean | null;
+    deduped?: number;
+  };
   embedding?: {
     attempted?: boolean;
     ok?: boolean;
@@ -641,6 +652,7 @@ function MemorySearchDetail({
   const hub = out.hubCandidates ?? [];
   const filtered = out.filtered ?? [];
   const dropped = out.droppedByLlm ?? [];
+  const totalCandidates = candidates.length + hub.length;
   return (
     <div class="vstack" style="gap:var(--sp-4)">
       {inp.query && (
@@ -682,7 +694,7 @@ function MemorySearchDetail({
             count={filtered.length}
             rows={filtered}
             emptyLabel={
-              candidates.length > 0
+              totalCandidates > 0
                 ? t("logs.search.noneRelevant")
                 : t("logs.search.noCandidates")
             }
@@ -709,6 +721,11 @@ function RetrievalFunnel({ stats }: { stats: RetrievalStatsPayload }) {
   const lf = stats.llmFilter ?? {};
   const kept = lf.kept;
   const outcome = lf.outcome ?? "unknown";
+  const finalFilter = stats.finalFilter;
+  const localFilterDeferred = outcome === "deferred_to_final";
+  const finalLlmRan = finalFilter?.outcome === "llm_kept_all" ||
+    finalFilter?.outcome === "llm_filtered" ||
+    finalFilter?.outcome === "llm_failed_safe_cutoff";
   const fmtNum = (n: number | undefined, digits = 3) =>
     typeof n === "number" && Number.isFinite(n) ? n.toFixed(digits) : "—";
   const channelEntries = Object.entries(stats.channelHits ?? {}).filter(
@@ -736,9 +753,31 @@ function RetrievalFunnel({ stats }: { stats: RetrievalStatsPayload }) {
           <span class="pill pill--failed">dropped≥floor {dropped}</span>
         )}
         {typeof kept === "number" && (
-          <span class="pill pill--active">llm kept {kept}</span>
+          <span class="pill pill--active">
+            {localFilterDeferred ? "local candidates" : "local llm kept"} {kept}
+          </span>
         )}
+        {typeof stats.hubReturned === "number" && stats.hubReturned > 0 && (
+          <span class="pill pill--active">hub {stats.hubReturned}</span>
+        )}
+        {typeof stats.hubKept === "number" && stats.hubReturned !== stats.hubKept && (
+          <span class="pill pill--active">hub kept {stats.hubKept}</span>
+        )}
+        {typeof stats.finalReturned === "number" && (
+          <span class="pill pill--info">final {stats.finalReturned}</span>
+        )}
+        {finalFilter && (
+          <span class="pill pill--active">
+            {finalLlmRan ? "final llm kept" : "final kept"} {finalFilter.kept ?? 0}
+          </span>
+        )}
+        {finalFilter?.deduped ? (
+          <span class="pill pill--failed">deduped {finalFilter.deduped}</span>
+        ) : null}
         <span class="pill">outcome {outcome}</span>
+        {finalFilter?.outcome && finalFilter.outcome !== outcome && (
+          <span class="pill">final outcome {finalFilter.outcome}</span>
+        )}
         {lf.sufficient !== null && lf.sufficient !== undefined && (
           <span class={`pill ${lf.sufficient ? "pill--active" : "pill--failed"}`}>
             sufficient {String(lf.sufficient)}
@@ -1313,7 +1352,7 @@ function parseJson(s: string): unknown {
  * the id.
  *
  * Precedence per tool:
- *   - memos_search  → the query + kept/total counts
+ *   - memos_search  → the query + final/local+Hub counts
  *   - memory_add     → first 3 per-turn summaries (already meaningful)
  *   - skill_*        → `output.name` (e.g. "write_python_function_with_types")
  *   - policy_*       → `output.title` (e.g. "Write Python function …")
@@ -1328,7 +1367,9 @@ function buildSummary(log: ApiLogDTO, input: unknown, output: unknown): string {
   if (log.toolName === "memos_search" || log.toolName === "memory_search") {
     const q = (inp.query as string | undefined) ?? "(empty)";
     const kept = (out.filtered as unknown[] | undefined)?.length ?? 0;
-    const totalN = (out.candidates as unknown[] | undefined)?.length ?? 0;
+    const totalN =
+      ((out.candidates as unknown[] | undefined)?.length ?? 0) +
+      ((out.hubCandidates as unknown[] | undefined)?.length ?? 0);
     return `"${truncate(q, 60)}" — kept ${kept}/${totalN}`;
   }
   if (log.toolName === "memory_add") {

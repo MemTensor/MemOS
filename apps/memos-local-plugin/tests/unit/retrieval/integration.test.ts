@@ -337,6 +337,43 @@ describe("retrieval/integration", () => {
     expect(filterCalls).toBe(1);
   });
 
+  it("can defer the local LLM pass for one final merged filter", async () => {
+    let filterCalls = 0;
+    const llm: any = {
+      completeJson: async () => {
+        filterCalls++;
+        return {
+          value: { selected: [1], sufficient: true },
+          servedBy: "fake",
+        };
+      },
+    };
+    const res = await turnStartRetrieve(
+      {
+        ...makeDeps(handle),
+        llm,
+        config: {
+          ...makeDeps(handle).config,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+        },
+      },
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_current" as SessionId,
+        userText: "run docker compose",
+        ts: NOW as never,
+      },
+      { skipLlmFilter: true },
+    );
+
+    expect(filterCalls).toBe(0);
+    expect(res.packet.snippets.length).toBeGreaterThan(0);
+    expect(res.stats.llmFilterOutcome).toBe("deferred_to_final");
+    expect(res.stats.llmFilterKept).toBeGreaterThan(0);
+  });
+
   it("lightweight mode returns no memories when summarizer filter is unavailable", async () => {
     const res = await turnStartRetrieve(
       {

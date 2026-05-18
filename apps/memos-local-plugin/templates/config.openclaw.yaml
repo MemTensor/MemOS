@@ -6,7 +6,7 @@
 # log rotation, retrieval budgets, etc.) see docs/CONFIG-ADVANCED.md in
 # the source repo; any field there can be added here and will take effect.
 #
-# Sensitive fields (apiKey, teamToken, userToken) live HERE — there is no
+# Sensitive fields (apiKey, teamToken) live HERE — there is no
 # .env file. install.sh sets this file's mode to 600.
 
 version: 1
@@ -34,7 +34,6 @@ hub:
   enabled: false
   address: ""             # e.g. http://10.0.0.12:18912  (required when enabled=true and role=client)
   teamToken: ""
-  userToken: ""
 
 telemetry:
   enabled: true           # anonymous usage events; opt-out any time

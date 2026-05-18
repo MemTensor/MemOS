@@ -470,7 +470,6 @@ describe("HTTP server — REST routes", () => {
       sessionId: undefined,
       q: "hi",
       groupByTurn: false,
-      includeAllNamespaces: true,
       ownerAgentKind: undefined,
       ownerProfileId: undefined,
     });
@@ -908,9 +907,7 @@ describe("HTTP server — REST routes", () => {
     const body = (await r.json()) as { id: string; name: string };
     expect(body.id).toBe("sk_1");
     expect(body.name).toBe("test-skill");
-    expect(core.getSkill).toHaveBeenCalledWith("sk_1", {
-      includeAllNamespaces: true,
-    });
+    expect(core.getSkill).toHaveBeenCalledWith("sk_1");
   });
 
   it("POST /api/v1/skills/reactivate flips an archived skill back to active", async () => {
