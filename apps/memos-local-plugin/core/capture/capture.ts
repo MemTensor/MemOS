@@ -39,7 +39,9 @@ import type {
   CaptureEventBus,
   CaptureInput,
   CaptureResult,
+  DownstreamStepPreview,
   NormalizedStep,
+  ReflectionContext,
   ReflectionScore,
   ScoredStep,
   StepCandidate,
@@ -440,12 +442,20 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const reflectStart = now();
     const rLlm = deps.reflectLlm ?? deps.llm;
     const useBatch = shouldBatch(deps.cfg, normalized.length, rLlm !== null);
-    const taskSummary = buildTaskReflectionSummary(input.episode, normalized);
+    const contextEnabled = contextModeFor(deps.cfg, useBatch, normalized.length);
+    const taskSummary = contextEnabled.includeTask
+      ? buildTaskReflectionSummary(input.episode, normalized, deps.cfg.taskContextMaxChars)
+      : null;
+    const downstreamByStep = contextEnabled.includeDownstream
+      ? buildDownstreamStepPreviews(normalized, deps.cfg)
+      : normalized.map(() => []);
     log.info("capture.reflect.scoring.start", {
       episodeId: input.episode.id,
       sessionId: input.episode.sessionId,
       steps: normalized.length,
-      mode: useBatch ? "batch" : "per_step",
+      mode: useBatch ? "batch" : contextEnabled.includeDownstream ? "per_step_downstream" : "per_step",
+      reflectionContextMode: deps.cfg.reflectionContextMode,
+      downstreamPreview: contextEnabled.includeDownstream,
       provider: rLlm?.provider ?? "none",
       model: rLlm?.model ?? "none",
       taskSummary: taskSummary ? taskSummary.slice(0, 240) : null,
@@ -455,7 +465,15 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id, taskSummary);
     }
     if (!useBatch || scored.length === 0) {
-      scored = await runPerStepScoring(normalized, rLlm, deps, warnings, llmCalls, input.episode.id, taskSummary);
+      scored = await runPerStepScoring(
+        normalized,
+        rLlm,
+        deps,
+        warnings,
+        llmCalls,
+        input.episode.id,
+        buildReflectionContexts(normalized, taskSummary, downstreamByStep),
+      );
     }
     const reflectMs = now() - reflectStart;
 
@@ -1015,6 +1033,35 @@ function shouldBatch(cfg: CaptureConfig, stepCount: number, hasLlm: boolean): bo
   return stepCount <= cfg.batchThreshold;
 }
 
+function contextModeFor(
+  cfg: CaptureConfig,
+  useBatch: boolean,
+  stepCount: number,
+): { includeTask: boolean; includeDownstream: boolean } {
+  const mode = cfg.reflectionContextMode;
+  const includeTask = mode === "task" || mode === "task_downstream";
+  const wantsDownstream = mode === "downstream" || mode === "task_downstream";
+  const longPerStep = !useBatch && stepCount > cfg.batchThreshold;
+  const includeDownstream =
+    wantsDownstream &&
+    cfg.longEpisodeReflectMode === "per_step_downstream" &&
+    cfg.downstreamStepCount > 0 &&
+    cfg.downstreamContextMaxChars > 0 &&
+    longPerStep;
+  return { includeTask, includeDownstream };
+}
+
+function buildReflectionContexts(
+  steps: readonly NormalizedStep[],
+  taskSummary: string | null,
+  downstreamByStep: readonly DownstreamStepPreview[][],
+): ReflectionContext[] {
+  return steps.map((_, idx) => ({
+    taskSummary,
+    downstream: downstreamByStep[idx] ?? [],
+  }));
+}
+
 async function runBatchScoring(
   normalized: NormalizedStep[],
   llm: LlmClient,
@@ -1061,13 +1108,14 @@ async function runPerStepScoring(
   warnings: CaptureResult["warnings"],
   llmCalls: { reflectionSynth: number; alphaScoring: number },
   episodeId: string,
-  taskSummary: string | null,
+  contexts: ReflectionContext[],
 ): Promise<ScoredStep[]> {
   const concurrency = Math.max(1, deps.cfg.llmConcurrency);
-  return runConcurrently(normalized, concurrency, async (step): Promise<ScoredStep> => {
-    const { score, synthCount } = await resolveReflection(step, llm, deps, warnings, episodeId, taskSummary);
+  return runConcurrently(normalized, concurrency, async (step, idx): Promise<ScoredStep> => {
+    const context = contexts[idx] ?? {};
+    const { score, synthCount } = await resolveReflection(step, llm, deps, warnings, episodeId, context);
     llmCalls.reflectionSynth += synthCount;
-    const finalScore = await resolveAlpha(step, score, llm, deps, warnings, episodeId, taskSummary);
+    const finalScore = await resolveAlpha(step, score, llm, deps, warnings, episodeId, context);
     if (finalScore !== score) llmCalls.alphaScoring += 1;
     return { ...step, reflection: finalScore };
   });
@@ -1079,7 +1127,7 @@ async function resolveReflection(
   deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
   episodeId: string,
-  taskSummary: string | null,
+  context: ReflectionContext,
 ): Promise<{ score: ReflectionScore; synthCount: number }> {
   const adapterProvided = step.rawReflection !== null && step.rawReflection.trim().length > 0;
   const extracted = extractReflection(step);
@@ -1093,7 +1141,13 @@ async function resolveReflection(
     return { score: disabledScore(null, "none"), synthCount: 0 };
   }
   try {
-    const synth = await synthesizeReflection(llm, step, { episodeId, phase: "reflect", taskSummary });
+    const synth = await synthesizeReflection(llm, step, {
+      episodeId,
+      phase: "reflect",
+      taskSummary: context.taskSummary,
+      downstream: context.downstream,
+      outcomeMaxChars: deps.cfg.synthOutcomeMaxChars,
+    });
     if (synth.text) {
       return {
         score: { text: synth.text, alpha: null, usable: true, source: "synth", model: synth.model },
@@ -1118,7 +1172,7 @@ async function resolveAlpha(
   deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
   episodeId: string,
-  taskSummary: string | null,
+  context: ReflectionContext,
 ): Promise<ReflectionScore> {
   if (!current.text) return current; // nothing to grade
   if (!deps.cfg.alphaScoring || !llm) return current;
@@ -1129,7 +1183,9 @@ async function resolveAlpha(
       reflectionText: current.text,
       episodeId,
       phase: "reflect",
-      taskSummary,
+      taskSummary: context.taskSummary,
+      downstream: context.downstream,
+      outcomeMaxChars: deps.cfg.synthOutcomeMaxChars,
     });
     return {
       ...current,
@@ -1186,6 +1242,7 @@ function traceActionText(row: Pick<TraceRow, "agentText" | "toolCalls">): string
 function buildTaskReflectionSummary(
   episode: CaptureInput["episode"],
   steps: readonly NormalizedStep[],
+  maxChars = 1_200,
 ): string | null {
   const firstUser = episode.turns.find((t) => t.role === "user" && t.content.trim());
   const finalAssistant = [...episode.turns]
@@ -1196,13 +1253,101 @@ function buildTaskReflectionSummary(
   ).slice(0, 12);
 
   const parts = [
-    firstUser ? `Task: ${clipForPrompt(firstUser.content, 500)}` : "",
+    firstUser ? `Task: ${clipForPrompt(firstUser.content, Math.min(500, maxChars))}` : "",
     `Intent: ${episode.intent.kind} (${episode.intent.reason})`,
-    finalAssistant ? `Final assistant response: ${clipForPrompt(finalAssistant.content, 500)}` : "",
+    finalAssistant ? `Final assistant response: ${clipForPrompt(finalAssistant.content, Math.min(500, maxChars))}` : "",
     toolNames.length > 0 ? `Tools used: ${toolNames.join(", ")}` : "",
   ].filter(Boolean);
 
-  return parts.length > 0 ? parts.join("\n") : null;
+  const summary = parts.length > 0 ? parts.join("\n") : null;
+  return summary ? clipForPrompt(summary, maxChars) : null;
+}
+
+function buildDownstreamStepPreviews(
+  steps: readonly NormalizedStep[],
+  cfg: CaptureConfig,
+): DownstreamStepPreview[][] {
+  return steps.map((_, idx) => {
+    const out: DownstreamStepPreview[] = [];
+    let usedChars = 0;
+    const count = Math.max(0, Math.min(3, cfg.downstreamStepCount));
+    for (let offset = 1; offset <= count; offset++) {
+      const step = steps[idx + offset];
+      if (!step) break;
+      const remaining = cfg.downstreamContextMaxChars - usedChars;
+      if (remaining <= 0) break;
+      const item = downstreamPreviewForStep(
+        step,
+        offset as 1 | 2 | 3,
+        Math.min(cfg.downstreamPerStepMaxChars, remaining),
+      );
+      usedChars += previewSize(item);
+      out.push(item);
+    }
+    return out;
+  });
+}
+
+function downstreamPreviewForStep(
+  step: NormalizedStep,
+  offset: 1 | 2 | 3,
+  maxChars: number,
+): DownstreamStepPreview {
+  const existingReflection = extractReflection(step);
+  if (step.toolCalls.length > 0) {
+    return {
+      offset,
+      kind: "tooluse",
+      toolNames: step.toolCalls.map((t) => t.name).filter(Boolean),
+      toolOutput: clipForPrompt(summarizeToolOutputs(step), maxChars),
+      reflection: existingReflection ? clipForPrompt(existingReflection, Math.floor(maxChars / 2)) : null,
+    };
+  }
+  return {
+    offset,
+    kind: "text",
+    text: clipForPrompt(textPreviewForStep(step), maxChars),
+  };
+}
+
+function summarizeToolOutputs(step: NormalizedStep): string {
+  return step.toolCalls
+    .map((t) => {
+      const label = t.errorCode ? `${t.name} ERROR[${t.errorCode}]` : t.name;
+      const output = outputOfToolCall(t);
+      return `${label}: ${output || "(no output)"}`;
+    })
+    .join("\n");
+}
+
+function outputOfToolCall(t: { output?: unknown }): string {
+  if (t.output === undefined || t.output === null) return "";
+  if (typeof t.output === "string") return t.output;
+  try {
+    return JSON.stringify(t.output);
+  } catch {
+    return String(t.output);
+  }
+}
+
+function textPreviewForStep(step: NormalizedStep): string {
+  const parts = [
+    step.userText.trim() ? `state: ${step.userText.trim()}` : "",
+    step.agentText.trim() ? `action: ${step.agentText.trim()}` : "",
+  ].filter(Boolean);
+  return parts.join("\n") || "(empty)";
+}
+
+function previewSize(item: DownstreamStepPreview): number {
+  return [
+    item.kind,
+    item.text,
+    item.toolNames?.join(", "),
+    item.toolOutput,
+    item.reflection,
+  ]
+    .filter(Boolean)
+    .join("\n").length;
 }
 
 function stringMeta(meta: Record<string, unknown>, key: string): string | undefined {

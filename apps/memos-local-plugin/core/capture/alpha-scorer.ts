@@ -24,14 +24,14 @@ import {
 import { REFLECTION_SCORE_PROMPT } from "../llm/prompts/reflection.js";
 import { rootLogger } from "../logger/index.js";
 import { sanitizeDerivedText } from "../safety/content.js";
-import type { NormalizedStep, ReflectionScore } from "./types.js";
+import type { NormalizedStep, ReflectionContext, ReflectionScore } from "./types.js";
 
-export interface AlphaInput {
+export interface AlphaInput extends ReflectionContext {
   step: NormalizedStep;
   reflectionText: string;
   episodeId?: string;
   phase?: string;
-  taskSummary?: string | null;
+  outcomeMaxChars?: number;
 }
 
 export interface AlphaOutput {
@@ -72,7 +72,10 @@ export async function scoreReflection(
     ``,
     `OUTCOME:`,
     // Use the last 1 tool output as the "outcome" signal if present.
-    lastToolOutcome(input.step),
+    lastToolOutcome(input.step, input.outcomeMaxChars ?? 600),
+    ``,
+    `DOWNSTREAM STEP PREVIEW:`,
+    formatDownstreamPreview(input),
     ``,
     `REFLECTION:`,
     input.reflectionText.slice(0, 1_500),
@@ -174,12 +177,34 @@ function outputOf(t: { output?: unknown }): string {
   }
 }
 
-function lastToolOutcome(step: NormalizedStep): string {
+function lastToolOutcome(step: NormalizedStep, maxChars: number): string {
   const last = step.toolCalls[step.toolCalls.length - 1];
   if (!last) return "(assistant-only step)";
-  return (last.errorCode ? `ERROR[${last.errorCode}] ` : "") + truncate(outputOf(last), 600);
+  return (last.errorCode ? `ERROR[${last.errorCode}] ` : "") + truncate(outputOf(last), maxChars);
 }
 
 function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n) + "…" : s;
+  return s.length > n ? s.slice(0, n) + "..." : s;
+}
+
+function formatDownstreamPreview(input: AlphaInput): string {
+  const preview = input.downstream ?? [];
+  if (preview.length === 0) return "(none)";
+  return preview
+    .map((item) => {
+      const label = `step+${item.offset}`;
+      if (item.kind === "tooluse") {
+        const lines = [
+          `[${label}] type=tooluse`,
+          `tool_names: ${item.toolNames?.join(", ") || "(unknown)"}`,
+          `tool_output: ${item.toolOutput?.trim() || "(none)"}`,
+        ];
+        if (item.reflection?.trim()) {
+          lines.push(`existing_reflection: ${item.reflection.trim()}`);
+        }
+        return lines.join("\n");
+      }
+      return [`[${label}] type=text`, item.text?.trim() || "(empty)"].join("\n");
+    })
+    .join("\n\n");
 }
