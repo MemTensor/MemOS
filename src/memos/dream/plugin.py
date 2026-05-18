@@ -6,6 +6,10 @@ import logging
 from functools import partial
 from typing import Any
 
+from memos.dream.enrichment import (
+    DreamHeuristicEnricher,
+    on_memory_items_after_fine_extract,
+)
 from memos.dream.hooks import on_add_signal, on_dream_execute
 from memos.dream.pipeline import (
     AbstractDreamPipeline,
@@ -44,6 +48,7 @@ class CommunityDreamPlugin(MemOSPlugin):
     def on_load(self) -> None:
         self.context: dict[str, Any] = {"shared": {}, "configs": {}}
         self.signal_store = DreamSignalStore()
+        self.heuristic_enricher = DreamHeuristicEnricher()
         self.pipeline = AbstractDreamPipeline(
             motive_strategy=MotiveFormation(),
             recall_strategy=DirectRecall(),
@@ -56,6 +61,10 @@ class CommunityDreamPlugin(MemOSPlugin):
         # execution does not depend on FastAPI route binding.
         self.register_hook(H.DREAM_EXECUTE, partial(on_dream_execute, self))
         self.register_hook(H.ADD_AFTER, partial(on_add_signal, self))
+        self.register_hook(
+            H.MEMORY_ITEMS_AFTER_FINE_EXTRACT,
+            partial(on_memory_items_after_fine_extract, self),
+        )
         logger.info("[Dream] plugin loaded")
 
     def init_components(self, context: dict) -> None:
@@ -71,6 +80,7 @@ class CommunityDreamPlugin(MemOSPlugin):
 
     def on_shutdown(self) -> None:
         self.context = {"shared": {}, "configs": {}}
+        self.heuristic_enricher = None
         logger.info("[Dream] plugin shutdown")
 
     def submit_dream_task(
