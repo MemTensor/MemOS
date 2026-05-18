@@ -110,8 +110,21 @@ def handle_get_suggestion_queries(
         if text_mem_results:
             memories = "\n".join([m.memory[:200] for m in text_mem_results])
 
-        # Generate suggestions using LLM
-        message_list = [{"role": "system", "content": suggestion_prompt.format(memories=memories)}]
+        # Generate suggestions using LLM.
+        # The prompt is split into system+user roles so the request stays
+        # valid for backends that reject system-only payloads (e.g. MiniMax
+        # `chat content is empty (2013)`, Anthropic `messages must not be empty`).
+        # OpenAI accepts either shape, so this is a safe widening.
+        message_list = [
+            {
+                "role": "system",
+                "content": "You generate suggestion queries based on the user's recent memories.",
+            },
+            {
+                "role": "user",
+                "content": suggestion_prompt.format(memories=memories),
+            },
+        ]
         response = llm.generate(message_list)
         clean_response = clean_json_response(response)
         response_json = json.loads(clean_response)
