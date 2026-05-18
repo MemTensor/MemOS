@@ -15,6 +15,7 @@ import json
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 from pathlib import Path
@@ -42,6 +43,7 @@ class FakePopen:
 
     def __init__(self, *_args, **_kwargs) -> None:
         self.cmd = list(_args[0]) if _args else []
+        self.pid = 12345
         self.stdin = io.StringIO()
         self._stdin_lines: list[str] = []
         self.stdout = _ServerStream()
@@ -298,6 +300,47 @@ class BridgeClientTests(unittest.TestCase):
         cmd = getattr(self._fake, "cmd", [])
         self.assertIn("--no-viewer", cmd)
         client.close()
+
+    def test_reverse_request_waits_for_late_host_handler_registration(self) -> None:
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+
+        self._fake.stdout._enqueue(
+            {
+                "jsonrpc": "2.0",
+                "id": "srv-1",
+                "method": "host.llm.complete",
+                "params": {"messages": [{"role": "user", "content": "ping"}]},
+            }
+        )
+        time.sleep(0.1)
+
+        client.register_host_handler(
+            "host.llm.complete",
+            lambda params: {
+                "text": f"host:{params['messages'][-1]['content']}",
+                "model": "host-test",
+            },
+        )
+
+        response = self._wait_for_client_write(lambda msg: msg.get("id") == "srv-1")
+        self.assertEqual(response["result"]["text"], "host:ping")
+        self.assertNotIn("error", response)
+        client.close()
+
+    def _wait_for_client_write(self, predicate, timeout: float = 2.0) -> dict:
+        assert self._fake is not None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for raw in self._fake._stdin_lines:
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if predicate(msg):
+                    return msg
+            time.sleep(0.01)
+        self.fail("timed out waiting for client write")
 
 
 class MemTensorProviderTests(unittest.TestCase):
