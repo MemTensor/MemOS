@@ -1641,6 +1641,11 @@ class MemTensorProvider(MemoryProvider):
         if old_bridge:
             with contextlib.suppress(Exception):
                 old_bridge.close()
+            # Kill the old process to prevent zombie accumulation.
+            # close() alone only closes stdin — headless bridges may
+            # not notice and keep running forever.
+            with contextlib.suppress(Exception):
+                old_bridge.terminate()
         ensure_bridge_running()
         self._bridge = MemosBridgeClient()
         self._bridge.register_host_handler(

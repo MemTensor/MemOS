@@ -218,6 +218,18 @@ class MemosBridgeClient:
         """
         self._host_handlers[method] = handler
 
+    def terminate(self) -> None:
+        """Kill the bridge subprocess (SIGKILL). Use when the bridge is
+        stuck/unresponsive and must be forcefully cleaned up before
+        starting a new one."""
+        self._closed = True
+        with contextlib.suppress(Exception):
+            self._proc.stdin.close()
+        with contextlib.suppress(Exception):
+            self._proc.kill()
+        with contextlib.suppress(Exception):
+            self._proc.wait(timeout=5)
+
     def close(self) -> None:
         if self._closed:
             return
