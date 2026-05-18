@@ -14,7 +14,7 @@ import { MemosError } from "../../agent-contract/errors.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
 import { sanitizeDerivedText } from "../safety/content.js";
-import type { NormalizedStep } from "./types.js";
+import type { NormalizedStep, ReflectionContext } from "./types.js";
 
 const SYSTEM = `You are reviewing a single step of an AI agent's decision.
 
@@ -29,10 +29,10 @@ export interface SynthesizedReflection {
   model: string;
 }
 
-export interface ReflectionSynthContext {
+export interface ReflectionSynthContext extends ReflectionContext {
   episodeId?: string;
   phase?: string;
-  taskSummary?: string | null;
+  outcomeMaxChars?: number;
 }
 
 export async function synthesizeReflection(
@@ -66,7 +66,10 @@ export async function synthesizeReflection(
       : "",
     ``,
     `OUTCOME:`,
-    lastToolOutcome(step),
+    lastToolOutcome(step, context?.outcomeMaxChars ?? 600),
+    ``,
+    `DOWNSTREAM STEP PREVIEW:`,
+    formatDownstreamPreview(context),
   ]
     .filter(Boolean)
     .join("\n");
@@ -112,10 +115,10 @@ function safeStringify(v: unknown): string {
   }
 }
 
-function lastToolOutcome(step: NormalizedStep): string {
+function lastToolOutcome(step: NormalizedStep, maxChars: number): string {
   const last = step.toolCalls[step.toolCalls.length - 1];
   if (!last) return "(assistant-only step)";
-  return (last.errorCode ? `ERROR[${last.errorCode}] ` : "") + truncate(outputOf(last), 600);
+  return (last.errorCode ? `ERROR[${last.errorCode}] ` : "") + truncate(outputOf(last), maxChars);
 }
 
 function outputOf(t: { output?: unknown }): string {
@@ -129,5 +132,27 @@ function outputOf(t: { output?: unknown }): string {
 }
 
 function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n) + "…" : s;
+  return s.length > n ? s.slice(0, n) + "..." : s;
+}
+
+function formatDownstreamPreview(context?: ReflectionSynthContext): string {
+  const preview = context?.downstream ?? [];
+  if (preview.length === 0) return "(none)";
+  return preview
+    .map((item) => {
+      const label = `step+${item.offset}`;
+      if (item.kind === "tooluse") {
+        const lines = [
+          `[${label}] type=tooluse`,
+          `tool_names: ${item.toolNames?.join(", ") || "(unknown)"}`,
+          `tool_output: ${item.toolOutput?.trim() || "(none)"}`,
+        ];
+        if (item.reflection?.trim()) {
+          lines.push(`existing_reflection: ${item.reflection.trim()}`);
+        }
+        return lines.join("\n");
+      }
+      return [`[${label}] type=text`, item.text?.trim() || "(empty)"].join("\n");
+    })
+    .join("\n\n");
 }

@@ -130,6 +130,38 @@ const AlgorithmSchema = Type.Object({
      * to per-step calls so the batched prompt cannot overflow context.
      */
     batchThreshold: NumberInRange(12, 1, 64),
+    /**
+     * Optional context blocks for per-step reflection and α prompts.
+     * Defaults to "task" to preserve the current task-summary enrichment;
+     * downstream preview remains opt-in.
+     */
+    reflectionContextMode: Type.Union(
+      [
+        Type.Literal("none"),
+        Type.Literal("task"),
+        Type.Literal("downstream"),
+        Type.Literal("task_downstream"),
+      ],
+      { default: "task" },
+    ),
+    /**
+     * Long-episode fallback mode after batch auto-threshold is exceeded.
+     * `per_step_downstream` keeps parallelism but adds step+1..step+3 preview.
+     */
+    longEpisodeReflectMode: Type.Union(
+      [Type.Literal("per_step_parallel"), Type.Literal("per_step_downstream")],
+      { default: "per_step_parallel" },
+    ),
+    /** Max downstream steps attached to a per-step prompt. */
+    downstreamStepCount: NumberInRange(3, 0, 3),
+    /** Character cap for the task-context block. */
+    taskContextMaxChars: NumberInRange(800, 100, 4_000),
+    /** Total character cap for all downstream preview blocks. */
+    downstreamContextMaxChars: NumberInRange(1_200, 0, 8_000),
+    /** Character cap per downstream preview block. */
+    downstreamPerStepMaxChars: NumberInRange(400, 100, 2_000),
+    /** Character cap for current-step tool outcome in synth / α prompts. */
+    synthOutcomeMaxChars: NumberInRange(600, 100, 4_000),
   }, { default: {} }),
   reward: Type.Object({
     /** V7 §0.6 eq. 4/5: discount factor γ for reflection-weighted backprop. */
