@@ -57,6 +57,7 @@ export interface BatchScoreOptions {
   synthReflections: boolean;
   episodeId?: string;
   phase?: string;
+  taskSummary?: string | null;
   /**
    * Cap per-field text we shovel into the prompt. Default 1_200 chars per
    * `state`/`outcome`, 1_500 per `action`. Mirrors per-step prompts.
@@ -122,6 +123,7 @@ export async function batchScoreReflections(
 
   const payload = {
     host_context: batchHostContext(inputs, llm),
+    task_context: opts.taskSummary?.trim().slice(0, 1_200) || null,
     steps: inputs.map((input, i) => ({
       idx: i,
       state: clip(input.step.userText, fieldChars.state),
@@ -188,6 +190,7 @@ export async function batchScoreReflections(
     const usable = Boolean(raw.usable);
     const rawAlpha = clamp01(numOrZero(raw.alpha));
     const alpha = usable ? rawAlpha : 0;
+    const reason = typeof raw.reason === "string" ? sanitizeDerivedText(raw.reason) : null;
 
     let finalText: string | null;
     let source: ReflectionScore["source"];
@@ -210,6 +213,7 @@ export async function batchScoreReflections(
       text: finalText,
       alpha,
       usable: usable && finalText !== null,
+      reason,
       source,
       model: rsp.servedBy,
     };

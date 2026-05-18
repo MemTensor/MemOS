@@ -29,15 +29,24 @@ export interface SynthesizedReflection {
   model: string;
 }
 
+export interface ReflectionSynthContext {
+  episodeId?: string;
+  phase?: string;
+  taskSummary?: string | null;
+}
+
 export async function synthesizeReflection(
   llm: LlmClient,
   step: NormalizedStep,
-  context?: { episodeId?: string; phase?: string },
+  context?: ReflectionSynthContext,
 ): Promise<SynthesizedReflection> {
   const log = rootLogger.child({ channel: "core.capture.reflection" });
 
   const thinking = (step.agentThinking ?? "").trim();
   const userPayload = [
+    `TASK CONTEXT:`,
+    context?.taskSummary?.trim().slice(0, 1_200) || "(none)",
+    ``,
     `USER/OBSERVATION:`,
     step.userText.slice(0, 1_200) || "(none)",
     ``,
@@ -55,6 +64,9 @@ export async function synthesizeReflection(
           )
           .join("\n")}`
       : "",
+    ``,
+    `OUTCOME:`,
+    lastToolOutcome(step),
   ]
     .filter(Boolean)
     .join("\n");
@@ -98,4 +110,24 @@ function safeStringify(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+function lastToolOutcome(step: NormalizedStep): string {
+  const last = step.toolCalls[step.toolCalls.length - 1];
+  if (!last) return "(assistant-only step)";
+  return (last.errorCode ? `ERROR[${last.errorCode}] ` : "") + truncate(outputOf(last), 600);
+}
+
+function outputOf(t: { output?: unknown }): string {
+  if (t.output === undefined || t.output === null) return "";
+  if (typeof t.output === "string") return t.output;
+  try {
+    return JSON.stringify(t.output);
+  } catch {
+    return String(t.output);
+  }
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n) + "…" : s;
 }

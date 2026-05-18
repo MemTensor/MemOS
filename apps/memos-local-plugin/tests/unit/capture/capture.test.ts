@@ -423,6 +423,7 @@ describe("capture/pipeline (end-to-end)", () => {
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
     expect(t.reflection).toContain("shell tool");
     expect(t.alpha).toBeCloseTo(0.8, 5);
+    expect(result.traces[0]?.reflection.reason).toBe("concrete");
   });
 
   it("clamps α to 0 when LLM marks reflection unusable", async () => {
