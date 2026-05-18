@@ -33,5 +33,31 @@
       "If better-sqlite3 fails to build, ensure you have C++ build tools: xcode-select --install (macOS) or build-essential (Linux)"
     ]
   },
-  "extensions": ["./index.ts"]
+  "extensions": [
+    "./index.ts"
+  ],
+  "contracts": {
+    "tools": [
+      "memory_get",
+      "memory_search",
+      "memory_share",
+      "memory_timeline",
+      "memory_unshare",
+      "memory_viewer",
+      "memory_write_public",
+      "network_memory_detail",
+      "network_skill_pull",
+      "network_team_info",
+      "skill_file_get",
+      "skill_files",
+      "skill_get",
+      "skill_install",
+      "skill_publish",
+      "skill_search",
+      "skill_unpublish",
+      "task_share",
+      "task_summary",
+      "task_unshare"
+    ]
+  }
 }
