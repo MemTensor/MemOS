@@ -32,7 +32,7 @@ def _item(
 
 
 def test_heuristic_enricher_writes_dream_subdict_for_project_context():
-    item = _item("Actually, the Dream v1 plan should use plugins. Can we do that?")
+    item = _item("Can we make the Dream v1 plan use plugins?")
     enricher = DreamHeuristicEnricher(enabled=True, overwrite=False)
 
     enriched = enricher.enrich_items(
@@ -46,10 +46,46 @@ def test_heuristic_enricher_writes_dream_subdict_for_project_context():
     assert dream["weak_context_id"] == "project:project-a"
     assert dream["signals"]["source_roles"] == ["user"]
     assert dream["signals"]["has_question"] is True
-    assert dream["signals"]["has_correction"] is True
+    assert dream["signals"]["has_correction"] is False
     assert dream["signals"]["is_chunk"] is False
-    assert dream["salience"]["has_feedback"] is True
+    assert dream["salience"]["has_feedback"] is False
     assert dream["enriched_by"]["heuristic"] == "0.1.0"
+
+
+def test_heuristic_enricher_ignores_common_clarification_markers():
+    examples = [
+        "其实是我想用 Context summary 做背景。",
+        "不对称的设计会引入噪声。",
+        "这不是为了生成漂亮反思，而是为了提升 search。",
+        "Actually, I want Context recall to be gated.",
+        "I mean the search path should return summaries.",
+    ]
+    enricher = DreamHeuristicEnricher(enabled=True, overwrite=False)
+
+    for text in examples:
+        item = _item(text)
+        enricher.enrich_items(items=[item], user_context=None, extract_mode="fine")
+        dream = item.metadata.internal_info["dream"]
+        assert dream["signals"]["has_correction"] is False
+        assert dream["salience"]["has_feedback"] is False
+
+
+def test_heuristic_enricher_detects_strong_agent_feedback():
+    examples = [
+        "你刚才说错了，我不是要展开 memory_ids。",
+        "你的回答不对，我说的是 Context summary。",
+        "你没有理解我的意思，我要默认关闭。",
+        "Your answer is wrong; context recall should be gated.",
+        "You misunderstood me: do not expand the raw memories.",
+    ]
+    enricher = DreamHeuristicEnricher(enabled=True, overwrite=False)
+
+    for text in examples:
+        item = _item(text)
+        enricher.enrich_items(items=[item], user_context=None, extract_mode="fine")
+        dream = item.metadata.internal_info["dream"]
+        assert dream["signals"]["has_correction"] is True
+        assert dream["salience"]["has_feedback"] is True
 
 
 def test_heuristic_enricher_falls_back_to_non_default_session():

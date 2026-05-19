@@ -16,23 +16,19 @@ _ENV_ENRICH_OVERWRITE = "MEMOS_DREAM_ENRICH_OVERWRITE"
 _QUESTION_RE = re.compile(
     r"[?？]|(?:\b(?:what|why|how|when|where|who|which|can|could|should)\b)", re.I
 )
-_CORRECTION_RE = re.compile(
+_AGENT_FEEDBACK_RE = re.compile(
     "|".join(
         [
-            r"不对",
-            r"不是",
-            r"错了",
-            r"说错",
-            r"其实是",
-            r"应该是",
-            r"更正",
-            r"纠正",
-            r"\bactually\b",
+            r"(?:你|您|助手|助理|agent|Agent|模型|系统).{0,12}(?:说错|弄错|搞错|理解错|误解|答错|回答错)",
+            r"(?:你|您|助手|助理|agent|Agent|模型|系统).{0,12}(?:回答|回复|理解).{0,8}(?:不对|错误|有误|不准确)",
+            r"(?:刚才|上面|前面|上一条).{0,12}(?:回答|回复|说法|理解).{0,8}(?:不对|错了|错误|有误|不准确)",
+            r"(?:这|那).{0,6}(?:不是|并不是).{0,8}(?:我说的意思|我的意思|我要的|我想要的)",
+            r"(?:你|您).{0,8}(?:没|没有).{0,6}(?:理解|明白|懂).{0,8}(?:我|我的意思)",
             r"\bnot quite\b",
-            r"\bthat's wrong\b",
+            r"\bthat(?:'s| is) (?:wrong|incorrect|not right)\b",
             r"\byou(?:'re| are)? wrong\b",
-            r"\bno,\s*i mean\b",
-            r"\bi mean\b",
+            r"\byou (?:misunderstood|got it wrong)\b",
+            r"\byour (?:answer|response|reply|understanding) (?:is|was) (?:wrong|incorrect|not right|inaccurate)\b",
         ]
     ),
     re.I,
@@ -123,7 +119,7 @@ class DreamHeuristicEnricher:
             is_chunk=is_chunk,
         )
         correction_text = user_text or all_text
-        has_correction = bool(_CORRECTION_RE.search(correction_text))
+        has_correction = _has_agent_feedback(correction_text)
 
         self._set_if_missing(dream_info, "weak_context_id", weak_context_id)
         if batch_context_id:
@@ -249,6 +245,19 @@ def _joined_source_text(sources: list[Any], roles: set[str] | None = None) -> st
         if content:
             parts.append(str(content))
     return "\n".join(parts)
+
+
+def _has_agent_feedback(text: str) -> bool:
+    """Detect only high-confidence user feedback about the agent's response.
+
+    This intentionally avoids broad discourse markers such as "不对", "其实是",
+    "actually", or "I mean". Those are common in ordinary user statements and
+    cause false feedback signals. Dream can afford to miss weak signals here;
+    strong feedback should explicitly target the assistant/answer/understanding.
+    """
+    if not text:
+        return False
+    return bool(_AGENT_FEEDBACK_RE.search(text))
 
 
 def _first_source_value(sources: list[Any], key: str) -> Any:
