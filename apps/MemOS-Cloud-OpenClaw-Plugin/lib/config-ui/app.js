@@ -50,7 +50,7 @@ const elements = {
   pathBox: document.getElementById("pathBox"),
   copyPathButton: document.getElementById("copyPathButton"),
   saveButton: document.getElementById("saveButton"),
-  
+
   reloadButton: document.getElementById("reloadButton"),
   layout: document.getElementById("layout"),
   overlay: document.getElementById("overlay"),
@@ -340,7 +340,7 @@ function applyLanguageUi() {
   elements.copyPathButton.setAttribute("aria-label", uiText("copyPath"));
   elements.copyPathButton.setAttribute("title", uiText("copyPath"));
   elements.saveButton.textContent = uiText("save");
-  
+
   elements.reloadButton.textContent = uiText("reload");
   elements.overlayTitle.textContent = uiText("overlayTitle");
   elements.overlayText.textContent = uiText("overlayText");
@@ -1037,7 +1037,7 @@ function renderForm() {
   installSectionObserver(groups);
 
   elements.saveButton.disabled = hasErrors || !isDirty();
-  
+
   elements.reloadButton.disabled = !remoteState;
   refreshChrome();
 }
@@ -1045,7 +1045,7 @@ function renderForm() {
 function refreshChrome() {
   const { errors } = collectDraft();
   elements.saveButton.disabled = Object.keys(errors).length > 0 || !isDirty();
-  
+
   elements.reloadButton.disabled = !remoteState;
   if (externalRefreshQueued) {
     setBanner("warn", uiText("bannerExternal"));
@@ -1184,7 +1184,7 @@ async function loadRemote(initial = false) {
       }
       externalRefreshQueued = true;
         refreshChrome();
-      
+
     }
 
     refreshChrome();
@@ -1218,9 +1218,9 @@ async function saveConfig() {
     remoteState = result.state;
     draft = createDraftFromRemote(result.state);
     baselineSnapshot = getDraftSnapshot();
-    
-    
-    
+
+
+
     externalRefreshQueued = false;
     renderForm();
     setOverlay(false, "", "");

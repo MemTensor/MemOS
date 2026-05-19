@@ -1439,7 +1439,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
         <h3><span class="icon">\u{1F4CA}</span> <span data-i18n="chart.writes">Memory Writes per Day</span></h3>
         <div class="chart-bars" id="chartWrites"></div>
       </div>
-      
+
       <div class="analytics-section" id="toolPerfSection" style="position:relative">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
           <h3 style="margin-bottom:0"><span class="icon">\u26A1</span> <span data-i18n="chart.toolperf">Tool Response Time</span> <span style="font-size:10px;color:var(--text-muted);font-weight:500;text-transform:none;letter-spacing:0;margin-left:4px">(per minute avg)</span></h3>
@@ -1471,7 +1471,7 @@ input,textarea,select{font-family:inherit;font-size:inherit}
           <select id="logToolFilter" onchange="onLogFilterChange()" style="font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);min-width:120px">
             <option value="" data-i18n="logs.allTools">All Tools</option>
           </select>
-          
+
         </div>
         <div class="logs-toolbar-right">
           <input type="checkbox" id="logAutoRefresh" style="display:none">
@@ -7205,7 +7205,7 @@ async function loadConfig(){
     const embProv=(cfg.embedding||{}).provider;
     const sumProv=(cfg.summarizer||{}).provider;
     const skProv=((cfg.skillEvolution||{}).summarizer||{}).provider;
-    
+
 
     document.getElementById('cfgSharingEnabled').checked=!!sharing.enabled;
     _sharingRole=sharing.role||'client';
@@ -7881,7 +7881,7 @@ function renderToolChart(data){
       return '<linearGradient id="tg'+i+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="'+c+'" stop-opacity=".08"/><stop offset="1" stop-color="'+c+'" stop-opacity="0"/></linearGradient>'+
         '';
     }).join('')+'</defs>'+
-    
+
     gridHtml+labelsHtml+pathsHtml+dotsHtml+
     '<line class="crosshair" x1="0" y1="'+pad.t+'" x2="0" y2="'+(pad.t+ch)+'" stroke="var(--text-muted)" stroke-width="0.5" stroke-dasharray="3 3" opacity="0" />'+
     '<rect class="hover-rect" x="'+pad.l+'" y="'+pad.t+'" width="'+cw+'" height="'+ch+'" fill="transparent" />'+

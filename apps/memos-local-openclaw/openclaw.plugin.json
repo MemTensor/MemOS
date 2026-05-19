@@ -33,5 +33,7 @@
       "If better-sqlite3 fails to build, ensure you have C++ build tools: xcode-select --install (macOS) or build-essential (Linux)"
     ]
   },
-  "extensions": ["./index.ts"]
+  "extensions": [
+    "./index.ts"
+  ]
 }

@@ -8,11 +8,11 @@ memos:
     repository: memos/memos
     tag: "2.0.9"
     pullPolicy: IfNotPresent
-  
+
   service:
     type: ClusterIP
     port: 8000
-  
+
   resources:
     limits:
       cpu: 2000m
@@ -20,7 +20,7 @@ memos:
     requests:
       cpu: 500m
       memory: 1Gi
-  
+
   env:
     TZ: "Asia/Taipei"
     MOS_CUBE_PATH: "/tmp/data_test"
@@ -67,23 +67,23 @@ neo4j:
     repository: neo4j
     tag: "5.26.4"
     pullPolicy: IfNotPresent
-  
+
   service:
     type: ClusterIP
     httpPort: 7474
     boltPort: 7687
-  
+
   auth:
     enabled: true
     user: neo4j
     password: "memos123456"
     acceptLicense: "yes"
-  
+
   persistence:
     enabled: true
     size: 10Gi
     storageClass: ""
-  
+
   resources:
     limits:
       cpu: 2000m
@@ -99,17 +99,17 @@ qdrant:
     repository: qdrant/qdrant
     tag: "v1.15.3"
     pullPolicy: IfNotPresent
-  
+
   service:
     type: ClusterIP
     httpPort: 6333
     grpcPort: 6334
-  
+
   persistence:
     enabled: true
     size: 10Gi
     storageClass: ""
-  
+
   resources:
     limits:
       cpu: 1000m

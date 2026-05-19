@@ -20,11 +20,11 @@ const filesToUpdate = [
 
 filesToUpdate.forEach(fileName => {
   const filePath = path.resolve(__dirname, '..', fileName);
-  
+
   if (fs.existsSync(filePath)) {
     try {
       const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-      
+
       if (content.version !== newVersion) {
         content.version = newVersion;
         // Write back with 2 spaces indentation and a newline at the end
