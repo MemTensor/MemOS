@@ -31,6 +31,7 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
+import { withTimeout } from "./src/shared/with-timeout";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -1895,7 +1896,25 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
               .catch((err: any) => { ctx.log.debug(`auto-recall: hub search failed (${err})`); return { hits: [] as any[], meta: {} }; })
           : Promise.resolve({ hits: [] as any[], meta: {} });
 
-        const [result, arHubResult] = await Promise.all([arLocalP, arHubP]);
+        // #1452: hard timeout around the parallel recall fan-out so a slow
+        // embedder/LLM can never block the prompt-build critical path. On
+        // timeout we fail open with no candidates and the hook returns
+        // without injecting memories.
+        const autoRecallTimeoutMs =
+          ctx.config.recall?.autoRecallTimeoutMs ?? DEFAULTS.autoRecallTimeoutMs;
+        const phase1 = await withTimeout(
+          Promise.all([arLocalP, arHubP]),
+          autoRecallTimeoutMs,
+          "auto-recall.search",
+          ctx.log,
+        );
+        if (phase1 === null) {
+          const dur = performance.now() - recallT0;
+          store.recordToolCall("memory_search", dur, false);
+          try { store.recordApiLog("memory_search", { type: "auto_recall", query }, `timeout after ${autoRecallTimeoutMs}ms`, dur, false); } catch (_) { /* best-effort */ }
+          return;
+        }
+        const [result, arHubResult] = phase1;
 
         const localHits = result.hits.filter((h) => h.origin !== "hub-memory");
         const hubLocalHits = result.hits.filter((h) => h.origin === "hub-memory");
@@ -1986,7 +2005,16 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         let filteredHits = allRawHits;
         let sufficient = false;
 
-        const filterResult = await summarizer.filterRelevant(query, mergedForFilter);
+        // #1452: hard timeout around the recall LLM filter so a slow model
+        // can never block the prompt-build critical path. Fail open with the
+        // unfiltered candidate set; the deduper + later prompt size guards
+        // still apply.
+        const filterResult = await withTimeout(
+          summarizer.filterRelevant(query, mergedForFilter),
+          autoRecallTimeoutMs,
+          "auto-recall.filter",
+          ctx.log,
+        );
         if (filterResult !== null) {
           sufficient = filterResult.sufficient;
           if (filterResult.relevant.length > 0) {
