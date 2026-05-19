@@ -4,6 +4,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+import { findPluginRoot } from "../shared/plugin-root";
 
-const skillPath = path.join(__dirname, "..", "..", "skill", "memos-memory-guide", "SKILL.md");
+const skillPath = path.join(findPluginRoot(import.meta.url), "skill", "memos-memory-guide", "SKILL.md");
 export const MEMORY_GUIDE_SKILL_MD: string = fs.readFileSync(skillPath, "utf-8");

@@ -527,7 +527,7 @@ const memosLocalPlugin = {
     // ─── Tool: memory_search ───
 
     api.registerTool(
-      (context) => ({
+      (context: any) => ({
         name: "memory_search",
         label: "Memory Search",
         description:
@@ -758,7 +758,7 @@ const memosLocalPlugin = {
     // ─── Tool: memory_timeline ───
 
     api.registerTool(
-      (context) => ({
+      (context: any) => ({
         name: "memory_timeline",
         label: "Memory Timeline",
         description:
@@ -819,7 +819,7 @@ const memosLocalPlugin = {
     // ─── Tool: memory_get ───
 
     api.registerTool(
-      (context) => ({
+      (context: any) => ({
         name: "memory_get",
         label: "Memory Get",
         description:
@@ -1124,7 +1124,7 @@ ${detail.content}`,
             };
           }
 
-          const groupNames = status.user.groups.map((group) => group.name);
+          const groupNames = (status.user.groups ?? []).map((group: { name: string }) => group.name);
           return {
             content: [{
               type: "text",
@@ -1382,7 +1382,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     const viewerPort = (pluginCfg as any).viewerPort ?? (gatewayPort + 10);
 
     api.registerTool(
-      (context) => ({
+      (context: any) => ({
         name: "memory_viewer",
         label: "Open Memory Viewer",
         description:
@@ -1646,7 +1646,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     // ─── Tool: skill_search ───
 
     api.registerTool(
-      (context) => ({
+      (context: any) => ({
         name: "skill_search",
         label: "Skill Search",
         description:

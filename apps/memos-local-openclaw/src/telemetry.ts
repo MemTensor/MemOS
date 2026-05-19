@@ -13,6 +13,7 @@ import * as path from "path";
 import * as os from "os";
 import { v4 as uuidv4 } from "uuid";
 import type { Logger } from "./types";
+import { findPluginRoot } from "./shared/plugin-root";
 
 export interface TelemetryConfig {
   enabled?: boolean;
@@ -27,7 +28,7 @@ function loadTelemetryCredentials(pluginDir?: string): { endpoint: string; pid: 
     };
   }
   const bases = pluginDir ? [pluginDir, path.join(pluginDir, "src")] : [];
-  if (typeof __dirname === "string") bases.push(path.resolve(__dirname, ".."), __dirname);
+  try { bases.push(findPluginRoot(import.meta.url)); } catch { /* not in a memos-local install */ }
   const candidates = bases.map(b => path.join(b, "telemetry.credentials.json"));
   for (const credPath of candidates) {
     try {

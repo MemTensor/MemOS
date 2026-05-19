@@ -2,6 +2,10 @@ import { existsSync, mkdirSync, copyFileSync } from "fs";
 import { execSync } from "child_process";
 import path from "path";
 import { createRequire } from "module";
+import { fileURLToPath } from "node:url";
+import { findPluginRoot } from "../shared/plugin-root";
+
+const __filename = fileURLToPath(import.meta.url);
 
 /**
  * Ensure the better-sqlite3 native binary is available.
@@ -19,7 +23,7 @@ export function ensureSqliteBinding(log?: { info: (msg: string) => void; warn: (
   if (existsSync(bindingPath)) return;
 
   const platform = `${process.platform}-${process.arch}`;
-  const pluginRoot = path.resolve(__dirname, "..", "..");
+  const pluginRoot = findPluginRoot(import.meta.url);
   const prebuildSrc = path.join(pluginRoot, "prebuilds", platform, "better_sqlite3.node");
 
   if (existsSync(prebuildSrc)) {
