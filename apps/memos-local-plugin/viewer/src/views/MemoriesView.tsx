@@ -113,6 +113,7 @@ export function MemoriesView() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [traces, setTraces] = useState<TraceDTO[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState(0);
@@ -139,17 +140,26 @@ export function MemoriesView() {
       qs.set("limit", String(roleFilterActive ? ROLE_FILTER_FETCH_LIMIT : pageSize));
       qs.set("offset", String(roleFilterActive ? 0 : opts.page * pageSize));
       qs.set("groupByTurn", "true");
+      qs.set("includeTotal", "false");
       if (opts.q) qs.set("q", opts.q);
       appendNamespaceParams(qs, namespaceFilter);
       const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`);
+      const pageGroupCount = buildGroups(res.traces ?? []).length;
       setTraces(res.traces);
       setHasMore(roleFilterActive ? false : res.nextOffset != null);
-      setTotal(res.total ?? 0);
+      setTotal(
+        res.total ??
+          opts.page * pageSize +
+            pageGroupCount +
+            (res.nextOffset != null ? pageSize : 0),
+      );
       setPage(opts.page);
-    } catch {
+      setLoadError(null);
+    } catch (err) {
       setTraces([]);
       setHasMore(false);
       setTotal(0);
+      setLoadError((err as Error).message || "Failed to load memories");
     } finally {
       setLoading(false);
     }
@@ -437,6 +447,7 @@ export function MemoriesView() {
               setQuery("");
               setNamespaceFilter("");
               setSelected(new Set());
+              setLoadError(null);
               void loadPage({ q: "", page: 0 });
             }}
           >
@@ -523,7 +534,17 @@ export function MemoriesView() {
         </div>
       )}
 
-      {loading && groups.length === 0 && (
+      {!loading && loadError && (
+        <div class="empty">
+          <div class="empty__icon">
+            <Icon name="circle-alert" size={22} />
+          </div>
+          <div class="empty__title">Failed to load memories</div>
+          <div class="empty__hint">{loadError}</div>
+        </div>
+      )}
+
+      {loading && groups.length === 0 && !loadError && (
         <div class="list">
           {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} class="skeleton" style="height:82px" />
@@ -531,7 +552,7 @@ export function MemoriesView() {
         </div>
       )}
 
-      {!loading && groups.length === 0 && (
+      {!loading && !loadError && groups.length === 0 && (
         <div class="empty">
           <div class="empty__icon">
             <Icon name="brain-circuit" size={22} />

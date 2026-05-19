@@ -57,7 +57,7 @@ export function Header() {
     const fetchers = [
       api
         .get<{ traces: { id: string; summary?: string; userText?: string }[] }>(
-          `/api/v1/traces?q=${encodeURIComponent(q)}&limit=${limit}`,
+          `/api/v1/traces?q=${encodeURIComponent(q)}&limit=${limit}&includeTotal=false`,
           { signal },
         )
         .then((r) =>
