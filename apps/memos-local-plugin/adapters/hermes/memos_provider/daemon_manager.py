@@ -43,7 +43,18 @@ VIEWER_PROBE_TTL_SEC = 30.0
 
 
 def _bridge_script() -> Path:
-    return Path(__file__).resolve().parent.parent.parent.parent / "bridge.cts"
+    plugin_root = _plugin_root()
+    compiled = plugin_root / "dist" / "bridge.cjs"
+    if compiled.exists():
+        return compiled
+    return plugin_root / "bridge.cts"
+
+
+def _plugin_root() -> Path:
+    plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+    if plugin_root.name == "dist":
+        return plugin_root.parent
+    return plugin_root
 
 
 def _node_available() -> bool:
@@ -69,7 +80,7 @@ def _installed_node_binary(plugin_root: Path) -> str | None:
 
 
 def _node_binary() -> str | None:
-    plugin_root = _bridge_script().parent
+    plugin_root = _plugin_root()
     return (
         os.environ.get("MEMOS_NODE_BINARY")
         or _installed_node_binary(plugin_root)
@@ -78,15 +89,18 @@ def _node_binary() -> str | None:
 
 
 def _bridge_command(*, daemon: bool) -> list[str]:
-    plugin_root = _bridge_script().parent
+    plugin_root = _plugin_root()
     node = _node_binary()
     if not node:
         raise RuntimeError("Node.js not found on PATH")
-    script = str(_bridge_script())
+    script_path = _bridge_script()
+    script = str(script_path)
     tsx_cli = plugin_root / "node_modules" / "tsx" / "dist" / "cli.mjs"
     bridge_args = [script, "--agent=hermes"]
     if daemon:
         bridge_args.append("--daemon")
+    if script_path.suffix == ".cjs":
+        return [node, *bridge_args]
     if tsx_cli.exists():
         return [node, str(tsx_cli), *bridge_args]
     return [node, "--import", "tsx", *bridge_args]
@@ -208,7 +222,7 @@ def ensure_viewer_daemon(*, probe_only: bool = False) -> bool:
         if not ensure_bridge_running():
             return False
 
-        plugin_root = _bridge_script().parent
+        plugin_root = _plugin_root()
         logs_dir = plugin_root / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         log_file = logs_dir / "daemon-start.log"

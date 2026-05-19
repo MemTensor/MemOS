@@ -30,6 +30,8 @@ const path = require("node:path") as typeof import("node:path");
 const fs = require("node:fs") as typeof import("node:fs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const childProcess = require("node:child_process") as typeof import("node:child_process");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const url = require("node:url") as typeof import("node:url");
 
 const BRIDGE_STATUS_HEARTBEAT_MS = 5_000;
 const BRIDGE_STATUS_STALE_MS = 20_000;
@@ -68,20 +70,21 @@ async function main(): Promise<void> {
 
   // Lazy-import ESM core. Using dynamic import so this file remains
   // CommonJS and stays `require`-able.
-  const { bootstrapMemoryCoreFull } = (await import(
-    pathToEsmUrl(path.resolve(__dirname, "core/pipeline/index.ts"))
+  const { bootstrapMemoryCoreFull } = (await importEsm(
+    runtimeModule("core/pipeline/index.ts", "dist/core/pipeline/index.js")
   )) as typeof import("./core/pipeline/index.js");
-  const { startStdioServer, waitForShutdown } = (await import(
-    pathToEsmUrl(path.resolve(__dirname, "bridge/stdio.ts"))
+  const { startStdioServer, waitForShutdown } = (await importEsm(
+    runtimeModule("bridge/stdio.ts", "dist/bridge/stdio.js")
   )) as typeof import("./bridge/stdio.js");
-  const { memoryBuffer, rootLogger } = (await import(
-    pathToEsmUrl(path.resolve(__dirname, "core/logger/index.ts"))
+  const { memoryBuffer, rootLogger } = (await importEsm(
+    runtimeModule("core/logger/index.ts", "dist/core/logger/index.js")
   )) as typeof import("./core/logger/index.js");
-  const { startHttpServer } = (await import(
-    pathToEsmUrl(path.resolve(__dirname, "server/http.ts"))
+  const { startHttpServer } = (await importEsm(
+    runtimeModule("server/http.ts", "dist/server/http.js")
   )) as typeof import("./server/http.js");
 
-  const pkgVersion = require("./package.json").version;
+  const rootDir = pluginRoot();
+  const pkgVersion = require(path.join(rootDir, "package.json")).version;
 
   // ─── Host LLM bridge (reverse RPC, lazy-bound to stdio) ────────
   // We need to register the bridge BEFORE bootstrap creates the
@@ -143,8 +146,8 @@ async function main(): Promise<void> {
       },
     };
 
-  const { Telemetry } = (await import(
-    pathToEsmUrl(path.resolve(__dirname, "core/telemetry/index.ts"))
+  const { Telemetry } = (await importEsm(
+    runtimeModule("core/telemetry/index.ts", "dist/core/telemetry/index.js")
   )) as typeof import("./core/telemetry/index.js");
 
   const { core, config, home } = await bootstrapMemoryCoreFull({
@@ -159,7 +162,7 @@ async function main(): Promise<void> {
     home.root,
     pkgVersion,
     rootLogger.child({ channel: "core.telemetry" }),
-    __dirname,
+    rootDir,
   );
   (core as { bindTelemetry?: (t: InstanceType<typeof Telemetry>) => void }).bindTelemetry?.(telemetry);
   telemetry.trackPluginStarted(args.agent);
@@ -275,7 +278,7 @@ async function main(): Promise<void> {
           {
             port: viewerPort,
             host: config.viewer.bindHost,
-            staticRoot: path.resolve(__dirname, "viewer/dist"),
+            staticRoot: path.resolve(rootDir, "viewer/dist"),
             agent: args.agent,
           },
         );
@@ -348,7 +351,7 @@ async function main(): Promise<void> {
         {
           port: viewerPort,
           host: config.viewer.bindHost,
-          staticRoot: path.resolve(__dirname, "viewer/dist"),
+          staticRoot: path.resolve(rootDir, "viewer/dist"),
           agent: args.agent,
         },
       );
@@ -412,10 +415,29 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-function pathToEsmUrl(abs: string): string {
-  const u = abs.startsWith("/") ? `file://${abs}` : `file:///${abs}`;
-  return u;
+function pluginRoot(): string {
+  // Source entry: <root>/bridge.cts. Built entry: <root>/dist/bridge.cjs.
+  if (fs.existsSync(path.join(__dirname, "package.json"))) return __dirname;
+  const parent = path.resolve(__dirname, "..");
+  if (fs.existsSync(path.join(parent, "package.json"))) return parent;
+  return __dirname;
 }
+
+function runtimeModule(sourceRel: string, distRel: string): string {
+  const root = pluginRoot();
+  const distAbs = path.resolve(root, distRel);
+  const sourceAbs = path.resolve(root, sourceRel);
+  return pathToEsmUrl(fs.existsSync(distAbs) ? distAbs : sourceAbs);
+}
+
+function pathToEsmUrl(abs: string): string {
+  return url.pathToFileURL(abs).href;
+}
+
+const importEsm = new Function(
+  "specifier",
+  "return import(specifier)",
+) as (specifier: string) => Promise<unknown>;
 
 /**
  * Best-effort error classification for ARMS `plugin_error.error_type`.
@@ -569,8 +591,9 @@ function isHermesChatRunning(): boolean {
 }
 
 void main().catch((err) => {
+  const detail = err instanceof Error ? err.stack ?? err.message : String(err);
   process.stderr.write(
-    `bridge: fatal: ${err instanceof Error ? err.message : String(err)}\n`,
+    `bridge: fatal: ${detail}\n`,
   );
   process.exit(1);
 });

@@ -1,9 +1,10 @@
 """JSON-RPC 2.0 over stdio client for the MemOS bridge.
 
-Spawns ``node bridge.cts --agent=hermes --no-viewer`` as a subprocess and
-communicates via line-delimited JSON messages on its stdin/stdout. Responses are
-matched by ``id``. Notifications (events + logs) are forwarded to
-registered callbacks on a reader thread.
+Spawns the packaged bridge subprocess (compiled ``dist/bridge.cjs`` when
+available, otherwise the source ``bridge.cts`` through ``tsx``) and communicates
+via line-delimited JSON messages on its stdin/stdout. Responses are matched by
+``id``. Notifications (events + logs) are forwarded to registered callbacks on a
+reader thread.
 
 The client is *blocking* by design — callers wanting async behaviour
 should wrap requests in a thread pool.
@@ -41,6 +42,13 @@ def _installed_node_binary(plugin_root: Path) -> str | None:
     if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
         return candidate
     return None
+
+
+def _bridge_script(plugin_root: Path) -> Path:
+    compiled = plugin_root / "dist" / "bridge.cjs"
+    if compiled.exists():
+        return compiled
+    return plugin_root / "bridge.cts"
 
 
 class BridgeError(RuntimeError):
@@ -99,25 +107,22 @@ class MemosBridgeClient:
             or shutil.which("node")
             or "node"
         )
-        script = bridge_path or str(plugin_root / "bridge.cts")
+        script_path = Path(bridge_path) if bridge_path else _bridge_script(plugin_root)
+        script = str(script_path)
         env = {**os.environ, **(extra_env or {})}
 
-        # The plugin ships raw TypeScript (no precompiled `dist/`). Node's
-        # own `--experimental-strip-types` strips type annotations but does
-        # not rewrite `.js` import specifiers to the corresponding `.ts`
-        # files on disk — and the source tree uses `.js` extensions in
-        # every import per the TSC / bundler convention. We therefore
-        # launch the bridge via the bundled `tsx` CLI, which handles
-        # both jobs (strip types + extension rewrite). On Windows the
-        # `.bin/tsx` file is a POSIX shell shim; invoking it as
-        # `node .bin/tsx` makes Node parse shell syntax as JavaScript.
-        # Use tsx's real JS entrypoint when we are launching through a
-        # specific Node binary.
+        # Prefer the compiled CommonJS bridge from packaged installs. The raw
+        # TypeScript entry remains as a development fallback and needs `tsx`
+        # for stripping types plus `.js` → `.ts` import resolution. On Windows
+        # the `.bin/tsx` file is a shell shim, so use tsx's real JS entrypoint
+        # whenever we have to launch the source entry through a specific Node.
         tsx_cli = plugin_root / "node_modules" / "tsx" / "dist" / "cli.mjs"
         bridge_args = [script, f"--agent={agent}"]
         if no_viewer:
             bridge_args.append("--no-viewer")
-        if tsx_cli.exists():
+        if script_path.suffix == ".cjs":
+            cmd = [node, *bridge_args]
+        elif tsx_cli.exists():
             cmd = [node, str(tsx_cli), *bridge_args]
         else:
             # Fallback path: `node --import tsx` reproduces the same loader

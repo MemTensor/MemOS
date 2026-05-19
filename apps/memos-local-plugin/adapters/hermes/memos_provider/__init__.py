@@ -4,7 +4,7 @@ Implements the ``agent.memory_provider.MemoryProvider`` interface exposed
 by the hermes-agent host (see
 ``hermes-agent/agent/memory_provider.py``). All heavy lifting lives in the
 Node.js ``memos-local-plugin`` core; this adapter is a thin Python client
-that speaks JSON-RPC 2.0 over stdio to ``bridge.cts``.
+that speaks JSON-RPC 2.0 over stdio to the packaged Node bridge.
 
 Discovery
 ---------
@@ -503,9 +503,7 @@ class MemTensorProvider(MemoryProvider):
         )
         if normalized.startswith(failure_prefixes):
             return True
-        if " traceback (most recent call last)" in normalized:
-            return True
-        return False
+        return " traceback (most recent call last)" in normalized
 
     def _on_post_tool_call(
         self,
