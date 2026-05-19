@@ -654,15 +654,15 @@ install_hermes() {
 
   step "Stopping existing bridge daemon"
   local bridge_pids=""
-  bridge_pids="$(pgrep -f "bridge.cts" 2>/dev/null || true)"
+  bridge_pids="$(pgrep -f "bridge\\.(cts|cjs)" 2>/dev/null || true)"
   if [[ -n "${bridge_pids}" ]]; then
     kill ${bridge_pids} >/dev/null 2>&1 || true
     local i
     for i in {1..10}; do
       sleep 1
-      pgrep -f "bridge.cts" >/dev/null 2>&1 || break
+      pgrep -f "bridge\\.(cts|cjs)" >/dev/null 2>&1 || break
     done
-    bridge_pids="$(pgrep -f "bridge.cts" 2>/dev/null || true)"
+    bridge_pids="$(pgrep -f "bridge\\.(cts|cjs)" 2>/dev/null || true)"
     if [[ -n "${bridge_pids}" ]]; then
       kill -9 ${bridge_pids} >/dev/null 2>&1 || true
       sleep 1
@@ -695,7 +695,9 @@ install_hermes() {
   step "Configuring runtime environment"
   ensure_runtime_home "hermes" "${home}" "${prefix}"
 
-  echo "${prefix}/bridge.cts" > "${adapter_dir}/bridge_path.txt"
+  local bridge_entry="${prefix}/dist/bridge.cjs"
+  [[ -f "${bridge_entry}" ]] || bridge_entry="${prefix}/bridge.cts"
+  echo "${bridge_entry}" > "${adapter_dir}/bridge_path.txt"
   success "Bridge path recorded"
 
   step "Locating Hermes Python environment"
@@ -976,14 +978,21 @@ CFGEOF
     step "Starting Memory Viewer daemon"
     local node_bin
     node_bin="$(cat "${prefix}/.memos-node-bin" 2>/dev/null || command -v node || true)"
-    local tsx_bin="${prefix}/node_modules/.bin/tsx"
+    local tsx_bin="${prefix}/node_modules/tsx/dist/cli.mjs"
     local bridge_cts="${prefix}/bridge.cts"
-    if [[ -n "${node_bin}" && -x "${node_bin}" && -x "${tsx_bin}" && -f "${bridge_cts}" ]]; then
+    local bridge_cjs="${prefix}/dist/bridge.cjs"
+    local bridge_entry="${bridge_cjs}"
+    [[ -f "${bridge_entry}" ]] || bridge_entry="${bridge_cts}"
+    if [[ -n "${node_bin}" && -x "${node_bin}" && -f "${bridge_entry}" && ( "${bridge_entry}" == *.cjs || -f "${tsx_bin}" ) ]]; then
       local daemon_log="${prefix}/logs/daemon-start.log"
       mkdir -p "${prefix}/logs"
       # Launch bridge in --daemon mode (pure HTTP, no stdio).
       # The process stays alive to serve the Memory Viewer.
-      ( cd "${prefix}" && nohup "${node_bin}" "${tsx_bin}" "${bridge_cts}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
+      if [[ "${bridge_entry}" == *.cjs ]]; then
+        ( cd "${prefix}" && nohup "${node_bin}" "${bridge_entry}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
+      else
+        ( cd "${prefix}" && nohup "${node_bin}" "${tsx_bin}" "${bridge_entry}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
+      fi
 
       if wait_for_viewer "${HERMES_PORT}" 120; then
         success "Memory Viewer daemon running"
@@ -993,7 +1002,7 @@ CFGEOF
         return 1
       fi
     else
-      warn "node or tsx not found — skipping daemon start."
+      warn "node or bridge runtime not found — skipping daemon start."
     fi
   fi
 

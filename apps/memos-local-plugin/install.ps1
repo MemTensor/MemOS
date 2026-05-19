@@ -406,13 +406,15 @@ function Install-Hermes {
     $ConfigFile = Join-Path $env:LOCALAPPDATA "hermes\config.yaml"
     $AdapterDir = Join-Path $Prefix "adapters\hermes"
     
-    Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match "bridge.cts" } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match "bridge\.(cts|cjs)" } | Stop-Process -Force -ErrorAction SilentlyContinue
     Get-Process -Name "hermes" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     
     Deploy-Tarball -Prefix $Prefix
     Ensure-RuntimeHome -Agent "hermes" -HomeDir $HomeDir -Prefix $Prefix
     
-    Set-Content -Path (Join-Path $AdapterDir "bridge_path.txt") -Value (Join-Path $Prefix "bridge.cts") -Encoding UTF8
+    $BridgeEntry = Join-Path $Prefix "dist\bridge.cjs"
+    if (-not (Test-Path $BridgeEntry)) { $BridgeEntry = Join-Path $Prefix "bridge.cts" }
+    Set-Content -Path (Join-Path $AdapterDir "bridge_path.txt") -Value $BridgeEntry -Encoding UTF8
     
     $PythonBin = ""
     $VenvPy = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\venv\Scripts\python.exe"
@@ -472,13 +474,22 @@ memory:
     }
     
     Write-Info "Starting Memory Viewer daemon"
-    $TsxBin = Join-Path $Prefix "node_modules\.bin\tsx.cmd"
+    $NodeBin = Get-Content -Path (Join-Path $Prefix ".memos-node-bin") -ErrorAction SilentlyContinue
+    if (-not $NodeBin) { $NodeBin = (Get-Command "node.exe" -ErrorAction SilentlyContinue).Source }
+    $TsxBin = Join-Path $Prefix "node_modules\tsx\dist\cli.mjs"
     $BridgeCts = Join-Path $Prefix "bridge.cts"
+    $BridgeCjs = Join-Path $Prefix "dist\bridge.cjs"
+    $BridgeEntry = $BridgeCjs
+    if (-not (Test-Path $BridgeEntry)) { $BridgeEntry = $BridgeCts }
     
-    if ((Test-Path $TsxBin) -and (Test-Path $BridgeCts)) {
+    if ($NodeBin -and (Test-Path $BridgeEntry) -and ($BridgeEntry.EndsWith(".cjs") -or (Test-Path $TsxBin))) {
         $DaemonLog = Join-Path $Prefix "logs\daemon-start.log"
         $DaemonLogErr = Join-Path $Prefix "logs\daemon-start-err.log"
-        Start-Process -FilePath $TsxBin -ArgumentList "$BridgeCts --agent=hermes --daemon" -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
+        if ($BridgeEntry.EndsWith(".cjs")) {
+            Start-Process -FilePath $NodeBin -ArgumentList "$BridgeEntry --agent=hermes --daemon" -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
+        } else {
+            Start-Process -FilePath $NodeBin -ArgumentList "$TsxBin $BridgeEntry --agent=hermes --daemon" -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
+        }
         
         if (Wait-ForViewer -Port $HermesPort -Timeout 120) {
             Write-Success "Memory Viewer daemon running"
@@ -486,7 +497,7 @@ memory:
             Write-Warn "Memory Viewer did not respond within 120s."
         }
     } else {
-        Write-Warn "tsx not found - skipping daemon start."
+        Write-Warn "node or bridge runtime not found - skipping daemon start."
     }
 }
 
