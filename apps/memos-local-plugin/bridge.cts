@@ -63,8 +63,89 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
   return args;
 }
 
+// ─── PID file singleton guard ───────────────────────────────────────────
+// Prevents bridge process accumulation: each new bridge that wants to
+// own the viewer port kills the previous holder via its PID file.
+// `--no-viewer` (headless) bridges skip the kill — they don't need the
+// port and should coexist with the daemon that owns it.
+
+const PID_FILENAME = "bridge.pid";
+
+function pidFilePath(agent: string): string {
+  const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
+  return path.join(
+    process.env.HOME ?? "/tmp",
+    agentHome,
+    "memos-plugin",
+    "daemon",
+    PID_FILENAME,
+  );
+}
+
+function readPidFile(pidPath: string): number | null {
+  try {
+    const raw = fs.readFileSync(pidPath, "utf8").trim();
+    const pid = parseInt(raw, 10);
+    if (isNaN(pid) || pid <= 0) return null;
+    process.kill(pid, 0); // throws if not alive
+    return pid;
+  } catch {
+    return null;
+  }
+}
+
+function writePidFile(pidPath: string): void {
+  fs.mkdirSync(path.dirname(pidPath), { recursive: true });
+  fs.writeFileSync(pidPath, String(process.pid), "utf8");
+}
+
+function removePidFile(pidPath: string): void {
+  try {
+    const content = fs.readFileSync(pidPath, "utf8").trim();
+    if (content === String(process.pid)) fs.unlinkSync(pidPath);
+  } catch {
+    /* best-effort; another bridge may have overwritten */
+  }
+}
+
+function killExistingBridge(pidPath: string, timeoutMs = 5000): void {
+  const existingPid = readPidFile(pidPath);
+  if (existingPid === null || existingPid === process.pid) return;
+
+  process.stderr.write(
+    `bridge: killing stale bridge pid=${existingPid} before startup\n`,
+  );
+  try {
+    process.kill(existingPid, "SIGTERM");
+  } catch {
+    return; // already dead
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(existingPid, 0);
+    } catch {
+      return; // gone
+    }
+    childProcess.spawnSync("sleep", ["0.5"]);
+  }
+  try {
+    process.kill(existingPid, "SIGKILL");
+  } catch {
+    /* already dead */
+  }
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  // ─── Singleton: kill previous bridge that owns the viewer port ───
+  const pidPath = pidFilePath(args.agent);
+  if (!args.noViewer) {
+    killExistingBridge(pidPath);
+  }
+  writePidFile(pidPath);
 
   // Lazy-import ESM core. Using dynamic import so this file remains
   // CommonJS and stays `require`-able.
@@ -275,6 +356,7 @@ async function main(): Promise<void> {
 
     const shutdownDaemon = async (sig: string) => {
       process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
+      removePidFile(pidPath);
       try { await viewer!.close(); } catch { /* best-effort */ }
       await core.shutdown();
       process.exit(0);
@@ -343,6 +425,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (sig: string) => {
     process.stderr.write(`bridge: received ${sig}, shutting down\n`);
+    removePidFile(pidPath);
     if (viewer) {
       try {
         await viewer.close();
@@ -370,6 +453,7 @@ async function main(): Promise<void> {
     const keepalive = setInterval(() => {
       if (viewer!.closed) {
         clearInterval(keepalive);
+        removePidFile(pidPath);
         void core.shutdown().then(() => process.exit(0));
       }
     }, 5_000);
@@ -378,6 +462,7 @@ async function main(): Promise<void> {
   }
 
   // No viewer (headless bridge) — clean exit.
+  removePidFile(pidPath);
   await core.shutdown();
   process.exit(0);
 }
