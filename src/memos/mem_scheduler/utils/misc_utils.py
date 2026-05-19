@@ -1,7 +1,6 @@
 import json
 import re
 import traceback
-
 from collections import defaultdict
 from functools import wraps
 from pathlib import Path
@@ -22,12 +21,7 @@ PLAYGROUND_CHAT_STREAM_PATH = "/product/chat/stream/playground"
 
 def is_playground_api() -> bool:
     """
-    Determine whether the scheduler should use old 9002/playground behavior.
-
-    After merging the 9002/9005 Python services, this is request-path based:
-    - /product/chat/stream/playground keeps the old 9002/playground behavior.
-    - Every other API path uses the old 9005/memory-change behavior.
-    - Background/no-context work also defaults to memory-change behavior.
+    Determine whether the scheduler should use old playground behavior.
     """
     api_path = get_current_api_path()
     return api_path == PLAYGROUND_CHAT_STREAM_PATH
