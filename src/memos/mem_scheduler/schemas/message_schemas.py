@@ -53,6 +53,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         description="user name / display name (optional)",
     )
     info: dict | None = Field(default=None, description="user custom info")
+    api_path: str | None = Field(default=None, description="source HTTP API path")
     task_id: str | None = Field(
         default=None,
         description="Optional business-level task ID. Multiple items can share the same task_id.",
@@ -94,6 +95,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             "timestamp": self.timestamp.isoformat(),
             "user_name": self.user_name,
             "task_id": self.task_id if self.task_id is not None else "",
+            "api_path": self.api_path if self.api_path is not None else "",
             "chat_history": self.chat_history if self.chat_history is not None else [],
             "user_context": self.user_context.model_dump(exclude_none=True)
             if self.user_context
@@ -152,6 +154,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             timestamp=timestamp,
             user_name=_decode(data.get("user_name")),
             task_id=_decode(data.get("task_id")),
+            api_path=_decode(data.get("api_path")),
             chat_history=chat_history,
             user_context=UserContext.model_validate(raw_user_context) if raw_user_context else None,
         )
@@ -209,6 +212,7 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
     )
     source_doc_id: str | None = Field(default=None, description="Source document ID")
     chat_history: list | None = Field(default=None, description="user chat history")
+    api_path: str | None = Field(default=None, description="source HTTP API path")
 
     def debug_info(self) -> dict[str, Any]:
         """Return structured debug information for logging purposes."""
