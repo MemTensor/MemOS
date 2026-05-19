@@ -111,6 +111,7 @@ import type { UserFeedback } from "../reward/types.js";
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
+const IMPORT_WRITE_BATCH_SIZE = 500;
 
 export interface BootstrapOptions {
   agent: AgentKind;
@@ -3663,186 +3664,254 @@ export function createMemoryCore(
     // deterministic for the user — they opt in via a de-duplicating
     // pre-pass if they want merging.
     const traces = Array.isArray(bundle.traces) ? bundle.traces : [];
-
-    // Phase 0 — ensure every referenced (sessionId, episodeId) row
-    // exists before we try to `traces.insert`. Without this the FK
-    // constraint on `traces.episode_id REFERENCES episodes(id)` makes
-    // every legacy/external row bounce with "FOREIGN KEY constraint
-    // failed". This was the "Imported 0 traces, 0 skills, 0 tasks"
-    // bug the user reported on the legacy import button.
+    const defaultOwner = ownerFromNamespace(activeNamespace);
     const seenSessions = new Set<string>();
     const seenEpisodes = new Set<string>();
-    for (const raw of traces) {
-      const dto = raw as TraceDTO;
-      if (!dto?.id || !dto.episodeId || !dto.sessionId) continue;
-      if (!seenSessions.has(dto.sessionId)) {
-        try {
-          if (!handle.repos.sessions.getById(dto.sessionId)) {
-            handle.repos.sessions.upsert({
-              id: dto.sessionId,
-              agent: handle.agent,
-              startedAt: dto.ts ?? Date.now(),
-              lastSeenAt: dto.ts ?? Date.now(),
-              meta: { source: "import" },
-            } as never);
-          }
-        } catch {
-          // If the synthetic session row is rejected, the FK insert
-          // below will fail and be counted as `skipped`. Don't abort
-          // the entire import batch for one bad session.
-        }
-        seenSessions.add(dto.sessionId);
-      }
-      if (!seenEpisodes.has(dto.episodeId)) {
-        try {
-          if (!handle.repos.episodes.getById(dto.episodeId)) {
-            handle.repos.episodes.upsert({
-              id: dto.episodeId,
-              sessionId: dto.sessionId,
-              startedAt: dto.ts ?? Date.now(),
-              endedAt: dto.ts ?? Date.now(),
-              traceIds: [],
-              rTask: null,
-              status: "closed",
-              meta: { source: "import" },
-            } as never);
-          }
-        } catch {
-          /* see comment above */
-        }
-        seenEpisodes.add(dto.episodeId);
-      }
-    }
 
-    for (const raw of traces) {
-      try {
-        const dto = raw as TraceDTO;
-        if (!dto?.id) { skipped++; continue; }
-        const existing = handle.repos.traces.getById(dto.id);
-        if (existing) { skipped++; continue; }
-        // The trace table requires a fuller row shape than TraceDTO.
-        // We reconstitute a stub row. Vectors start null here; the
-        // embedding maintenance endpoint can backfill them with the
-        // currently configured embedding model after import.
-        handle.repos.traces.insert({
-          id: dto.id,
-          episodeId: dto.episodeId,
-          sessionId: dto.sessionId,
-          ts: dto.ts,
-          userText: dto.userText,
-          agentText: dto.agentText,
-          toolCalls: dto.toolCalls ?? [],
-          reflection: dto.reflection ?? null,
-          value: dto.value ?? 0,
-          alpha: dto.alpha ?? 0,
-          rHuman: dto.rHuman ?? null,
-          priority: dto.priority ?? 0,
-          tags: [],
-          vecSummary: null,
-          vecAction: null,
-          turnId: dto.turnId,
-          schemaVersion: 1,
-        } as TraceRow);
-        imported++;
-      } catch {
-        skipped++;
-      }
+    for (const batch of chunkArray(traces, IMPORT_WRITE_BATCH_SIZE)) {
+      const result = handle.db.tx(() => {
+        let batchImported = 0;
+        let batchSkipped = 0;
+        const valid = batch
+          .map((raw) => raw as TraceDTO)
+          .filter((dto) => dto?.id && dto.episodeId && dto.sessionId);
+        batchSkipped += batch.length - valid.length;
+
+        // Phase 0 — ensure every referenced (sessionId, episodeId) row
+        // exists before `traces.insert`, otherwise the FK constraint would
+        // bounce imported legacy/external rows.
+        for (const dto of valid) {
+          const owner = importOwnerFields(dto, defaultOwner);
+          const ts = Number.isFinite(dto.ts) ? dto.ts : Date.now();
+          if (!seenSessions.has(dto.sessionId)) {
+            try {
+              if (!handle.repos.sessions.getById(dto.sessionId)) {
+                handle.repos.sessions.upsert({
+                  id: dto.sessionId,
+                  agent: dto.ownerAgentKind ?? handle.agent,
+                  ...owner,
+                  startedAt: ts,
+                  lastSeenAt: ts,
+                  meta: { source: "import" },
+                } as never);
+              }
+            } catch {
+              // If the synthetic session row is rejected, the FK insert
+              // below will fail and be counted as `skipped`.
+            }
+            seenSessions.add(dto.sessionId);
+          }
+          if (!seenEpisodes.has(dto.episodeId)) {
+            try {
+              if (!handle.repos.episodes.getById(dto.episodeId)) {
+                handle.repos.episodes.upsert({
+                  id: dto.episodeId,
+                  sessionId: dto.sessionId,
+                  ...owner,
+                  share: dto.share ?? null,
+                  startedAt: ts,
+                  endedAt: ts,
+                  traceIds: [],
+                  rTask: null,
+                  status: "closed",
+                  meta: { source: "import" },
+                } as never);
+              }
+            } catch {
+              /* see comment above */
+            }
+            seenEpisodes.add(dto.episodeId);
+          }
+        }
+
+        const existingIds = new Set(
+          handle.repos.traces
+            .getManyByIds(valid.map((dto) => dto.id as TraceId))
+            .map((row) => row.id),
+        );
+        const addedByEpisode = new Map<EpisodeId, TraceId[]>();
+        for (const dto of valid) {
+          try {
+            if (existingIds.has(dto.id)) { batchSkipped++; continue; }
+            const owner = importOwnerFields(dto, defaultOwner);
+            const ts = Number.isFinite(dto.ts) ? dto.ts : Date.now();
+            const turnId = Number.isFinite(dto.turnId) ? dto.turnId : ts;
+            handle.repos.traces.insert({
+              ...owner,
+              id: dto.id,
+              episodeId: dto.episodeId,
+              sessionId: dto.sessionId,
+              ts,
+              userText: dto.userText ?? "",
+              agentText: dto.agentText ?? "",
+              summary: dto.summary ?? null,
+              share: dto.share ?? null,
+              toolCalls: dto.toolCalls ?? [],
+              agentThinking: dto.agentThinking ?? null,
+              reflection: dto.reflection ?? null,
+              value: dto.value ?? 0,
+              alpha: dto.alpha ?? 0,
+              rHuman: dto.rHuman ?? null,
+              priority: dto.priority ?? 0,
+              tags: dto.tags ?? [],
+              vecSummary: null,
+              vecAction: null,
+              turnId,
+              schemaVersion: 1,
+            } as TraceRow);
+            existingIds.add(dto.id);
+            if (!addedByEpisode.has(dto.episodeId)) addedByEpisode.set(dto.episodeId, []);
+            addedByEpisode.get(dto.episodeId)!.push(dto.id as TraceId);
+            batchImported++;
+          } catch {
+            batchSkipped++;
+          }
+        }
+        for (const [episodeId, ids] of addedByEpisode) {
+          const episode = handle.repos.episodes.getById(episodeId);
+          if (!episode) continue;
+          handle.repos.episodes.appendTrace(
+            episodeId,
+            dedupeTraceIds([...episode.traceIds, ...ids]) as string[],
+          );
+        }
+        return { imported: batchImported, skipped: batchSkipped };
+      });
+      imported += result.imported;
+      skipped += result.skipped;
+      await yieldToEventLoop();
     }
 
     // Policies / world models / skills use existing repo.insert shape.
-    for (const raw of bundle.policies ?? []) {
-      try {
-        const dto = raw as PolicyDTO;
-        if (!dto?.id || handle.repos.policies.getById(dto.id)) { skipped++; continue; }
-        handle.repos.policies.insert({
-          id: dto.id,
-          title: dto.title,
-          trigger: dto.trigger,
-          procedure: dto.procedure,
-          verification: dto.verification,
-          boundary: dto.boundary,
-          support: dto.support ?? 0,
-          gain: dto.gain ?? 0,
-          status: dto.status,
-          experienceType: dto.experienceType ?? "success_pattern",
-          evidencePolarity: dto.evidencePolarity ?? "positive",
-          salience: dto.salience ?? 0,
-          confidence: dto.confidence ?? 0.5,
-          skillEligible: dto.skillEligible !== false,
-          sourceEpisodeIds: dto.sourceEpisodeIds ?? [],
-          sourceFeedbackIds: dto.sourceFeedbackIds ?? [],
-          sourceTraceIds: dto.sourceTraceIds ?? [],
-          inducedBy: "import",
-          decisionGuidance: {
-            preference: [...(dto.preference ?? [])],
-            antiPattern: [...(dto.antiPattern ?? [])],
-          },
-          verifierMeta: dto.verifierMeta ?? null,
-          vec: null,
-          createdAt: dto.createdAt ?? Date.now(),
-          updatedAt: dto.updatedAt ?? Date.now(),
-        });
-        imported++;
-      } catch {
-        skipped++;
-      }
+    for (const batch of chunkArray(bundle.policies ?? [], IMPORT_WRITE_BATCH_SIZE)) {
+      const result = handle.db.tx(() => {
+        let batchImported = 0;
+        let batchSkipped = 0;
+        for (const raw of batch) {
+          try {
+            const dto = raw as PolicyDTO;
+            if (!dto?.id || handle.repos.policies.getById(dto.id)) { batchSkipped++; continue; }
+            handle.repos.policies.insert({
+              ...importOwnerFields(dto, defaultOwner),
+              id: dto.id,
+              title: dto.title,
+              trigger: dto.trigger,
+              procedure: dto.procedure,
+              verification: dto.verification,
+              boundary: dto.boundary,
+              support: dto.support ?? 0,
+              gain: dto.gain ?? 0,
+              status: dto.status,
+              experienceType: dto.experienceType ?? "success_pattern",
+              evidencePolarity: dto.evidencePolarity ?? "positive",
+              salience: dto.salience ?? 0,
+              confidence: dto.confidence ?? 0.5,
+              skillEligible: dto.skillEligible !== false,
+              sourceEpisodeIds: dto.sourceEpisodeIds ?? [],
+              sourceFeedbackIds: dto.sourceFeedbackIds ?? [],
+              sourceTraceIds: dto.sourceTraceIds ?? [],
+              inducedBy: "import",
+              decisionGuidance: {
+                preference: [...(dto.preference ?? [])],
+                antiPattern: [...(dto.antiPattern ?? [])],
+              },
+              verifierMeta: dto.verifierMeta ?? null,
+              share: dto.share ?? null,
+              vec: null,
+              createdAt: dto.createdAt ?? Date.now(),
+              updatedAt: dto.updatedAt ?? Date.now(),
+            });
+            batchImported++;
+          } catch {
+            batchSkipped++;
+          }
+        }
+        return { imported: batchImported, skipped: batchSkipped };
+      });
+      imported += result.imported;
+      skipped += result.skipped;
+      await yieldToEventLoop();
     }
 
-    for (const raw of bundle.skills ?? []) {
-      try {
-        const dto = raw as SkillDTO;
-        if (!dto?.id || handle.repos.skills.getById(dto.id)) { skipped++; continue; }
-        handle.repos.skills.insert({
-          id: dto.id,
-          name: dto.name,
-          status: dto.status,
-          invocationGuide: dto.invocationGuide,
-          eta: dto.eta ?? 0,
-          support: dto.support ?? 0,
-          gain: dto.gain ?? 0,
-          trialsAttempted: 0,
-          trialsPassed: 0,
-          sourcePolicyIds: dto.sourcePolicyIds ?? [],
-          sourceWorldModelIds: dto.sourceWorldModelIds ?? [],
-          evidenceAnchors: dto.evidenceAnchors ?? [],
-          procedureJson: {},
-          vec: null,
-          createdAt: dto.createdAt ?? Date.now(),
-          updatedAt: dto.updatedAt ?? Date.now(),
-          version: dto.version ?? 1,
-          usageCount: dto.usageCount ?? 0,
-          lastUsedAt: dto.lastUsedAt ?? null,
-        } as SkillRow);
-        imported++;
-      } catch {
-        skipped++;
-      }
+    for (const batch of chunkArray(bundle.skills ?? [], IMPORT_WRITE_BATCH_SIZE)) {
+      const result = handle.db.tx(() => {
+        let batchImported = 0;
+        let batchSkipped = 0;
+        for (const raw of batch) {
+          try {
+            const dto = raw as SkillDTO;
+            if (!dto?.id || handle.repos.skills.getById(dto.id)) { batchSkipped++; continue; }
+            handle.repos.skills.insert({
+              ...importOwnerFields(dto, defaultOwner),
+              id: dto.id,
+              name: dto.name,
+              status: dto.status,
+              invocationGuide: dto.invocationGuide,
+              eta: dto.eta ?? 0,
+              support: dto.support ?? 0,
+              gain: dto.gain ?? 0,
+              trialsAttempted: 0,
+              trialsPassed: 0,
+              sourcePolicyIds: dto.sourcePolicyIds ?? [],
+              sourceWorldModelIds: dto.sourceWorldModelIds ?? [],
+              evidenceAnchors: dto.evidenceAnchors ?? [],
+              procedureJson: {},
+              share: dto.share ?? null,
+              vec: null,
+              createdAt: dto.createdAt ?? Date.now(),
+              updatedAt: dto.updatedAt ?? Date.now(),
+              version: dto.version ?? 1,
+              usageCount: dto.usageCount ?? 0,
+              lastUsedAt: dto.lastUsedAt ?? null,
+            } as SkillRow);
+            batchImported++;
+          } catch {
+            batchSkipped++;
+          }
+        }
+        return { imported: batchImported, skipped: batchSkipped };
+      });
+      imported += result.imported;
+      skipped += result.skipped;
+      await yieldToEventLoop();
     }
 
-    for (const raw of bundle.worldModels ?? []) {
-      try {
-        const dto = raw as WorldModelDTO;
-        if (!dto?.id || handle.repos.worldModel.getById(dto.id)) { skipped++; continue; }
-        handle.repos.worldModel.insert({
-          id: dto.id,
-          title: dto.title,
-          body: dto.body,
-          structure: { environment: [], inference: [], constraints: [] },
-          domainTags: [],
-          confidence: 0.5,
-          policyIds: dto.policyIds ?? [],
-          sourceEpisodeIds: [],
-          inducedBy: "import",
-          vec: null,
-          createdAt: dto.createdAt ?? Date.now(),
-          updatedAt: dto.updatedAt ?? Date.now(),
-          version: dto.version ?? 1,
-          status: dto.status ?? "active",
-        } as WorldModelRow);
-        imported++;
-      } catch {
-        skipped++;
-      }
+    for (const batch of chunkArray(bundle.worldModels ?? [], IMPORT_WRITE_BATCH_SIZE)) {
+      const result = handle.db.tx(() => {
+        let batchImported = 0;
+        let batchSkipped = 0;
+        for (const raw of batch) {
+          try {
+            const dto = raw as WorldModelDTO;
+            if (!dto?.id || handle.repos.worldModel.getById(dto.id)) { batchSkipped++; continue; }
+            handle.repos.worldModel.insert({
+              ...importOwnerFields(dto, defaultOwner),
+              id: dto.id,
+              title: dto.title,
+              body: dto.body,
+              structure: { environment: [], inference: [], constraints: [] },
+              domainTags: [],
+              confidence: 0.5,
+              policyIds: dto.policyIds ?? [],
+              sourceEpisodeIds: [],
+              inducedBy: "import",
+              share: dto.share ?? null,
+              vec: null,
+              createdAt: dto.createdAt ?? Date.now(),
+              updatedAt: dto.updatedAt ?? Date.now(),
+              version: dto.version ?? 1,
+              status: dto.status ?? "active",
+            } as WorldModelRow);
+            batchImported++;
+          } catch {
+            batchSkipped++;
+          }
+        }
+        return { imported: batchImported, skipped: batchSkipped };
+      });
+      imported += result.imported;
+      skipped += result.skipped;
+      await yieldToEventLoop();
     }
 
     return { imported, skipped };
@@ -4742,6 +4811,48 @@ function compareTraceRowsForEpisodeOrder(
     }
   }
   return a.ts - b.ts;
+}
+
+function importOwnerFields(
+  row: {
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    ownerWorkspaceId?: string | null;
+  },
+  fallback: ReturnType<typeof ownerFromNamespace>,
+): {
+  ownerAgentKind: AgentKind;
+  ownerProfileId: string;
+  ownerWorkspaceId: string | null;
+} {
+  return {
+    ownerAgentKind: row.ownerAgentKind ?? fallback.ownerAgentKind,
+    ownerProfileId: row.ownerProfileId ?? fallback.ownerProfileId,
+    ownerWorkspaceId: row.ownerWorkspaceId ?? fallback.ownerWorkspaceId ?? null,
+  };
+}
+
+function dedupeTraceIds(ids: readonly TraceId[]): TraceId[] {
+  const seen = new Set<TraceId>();
+  const out: TraceId[] = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function chunkArray<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 // ─── Row → DTO mappers ───────────────────────────────────────────────────────
