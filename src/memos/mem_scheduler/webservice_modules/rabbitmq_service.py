@@ -157,7 +157,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
             if env_exchange_type:
                 self.rabbitmq_exchange_type = env_exchange_type
                 logger.info(f"Using env exchange type override: {self.rabbitmq_exchange_type}")
-                
+
             playground_exchange_name = os.getenv(
                 "MEMSCHEDULER_RABBITMQ_PLAYGROUND_CHAT_EXCHANGE_NAME", ""
             ).strip()
@@ -178,7 +178,6 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
             else:
                 self.rabbitmq_playground_chat_exchange_name = None
                 self.rabbitmq_playground_chat_exchange_type = FANOUT_EXCHANGE_TYPE
-
 
             # Start connection process
             parameters = self.get_rabbitmq_connection_param()
@@ -334,10 +333,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
 
     def resolve_publish_route(self, message: dict) -> tuple[str, str]:
         api_path = message.get("api_path")
-        if (
-            api_path == PLAYGROUND_CHAT_STREAM_PATH
-            and self.rabbitmq_playground_chat_exchange_name
-        ):
+        if api_path == PLAYGROUND_CHAT_STREAM_PATH and self.rabbitmq_playground_chat_exchange_name:
             return self.rabbitmq_playground_chat_exchange_name, ""
 
         return self.rabbitmq_exchange_name, ""
@@ -382,7 +378,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
 
         exchange_name, routing_key = self.resolve_publish_route(message)
         label = message.get("label")
-    
+
         logger.info(
             "[DIAGNOSTIC] Publishing %s message. api_path=%s Exchange: %s, Routing Key: '%s'.",
             label,

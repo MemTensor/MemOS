@@ -1,5 +1,4 @@
 import json
-import os
 import re
 import traceback
 
@@ -9,8 +8,8 @@ from pathlib import Path
 
 import yaml
 
-from memos.log import get_logger
 from memos.context.context import get_current_api_path
+from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import (
     ScheduleMessageItem,
 )
@@ -19,7 +18,6 @@ from memos.mem_scheduler.schemas.message_schemas import (
 logger = get_logger(__name__)
 
 PLAYGROUND_CHAT_STREAM_PATH = "/product/chat/stream/playground"
-
 
 
 def is_playground_api() -> bool:

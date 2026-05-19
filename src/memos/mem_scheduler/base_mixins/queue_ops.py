@@ -50,7 +50,6 @@ class BaseSchedulerQueueMixin:
             if current_api_path and not getattr(msg, "api_path", None):
                 msg.api_path = current_api_path
 
-
             with suppress(Exception):
                 self.metrics.task_enqueued(user_id=msg.user_id, task_type=msg.label)
 
