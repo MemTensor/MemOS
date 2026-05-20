@@ -188,7 +188,11 @@ def test_contextualizer_uses_short_ids_for_llm_binding_and_maps_back_to_real_ids
     ]
     assert ["uuid-alpha-1", "uuid-alpha-3"] in grouped_ids
     assert ["uuid-beta-2"] not in grouped_ids
-    assert any(ctx["strategy"] == "llm" for ctx in report.contexts)
+    assert any(ctx["binding_strategy"] == "llm" for ctx in report.contexts)
+    assert report.contexts[0]["label"] == "Summary Key"
+    assert report.contexts[0]["summary"] == "Summary text"
+    assert report.contexts[0]["source_memory_ids"] == ["uuid-alpha-1", "uuid-alpha-3"]
+    assert report.contexts[0]["summary_strategy"] == "llm"
     assert "uuid-alpha-1" in llm.calls[0]
     assert "ids" in llm.calls[0]
 

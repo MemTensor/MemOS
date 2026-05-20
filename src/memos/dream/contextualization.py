@@ -174,26 +174,19 @@ class DreamContextualizer:
                 report.skipped_memory_count += len(group.memory_ids)
                 continue
             context_node = self._match_existing_context(group, existing_contexts)
-            context_id, action, key = self._persist_group(
+            context_event = self._persist_group(
                 graph_db=graph_db,
                 group=group,
                 context_node=context_node,
                 cube_id=cube_id,
             )
+            action = context_event["action"]
             if action == "created":
                 report.created_context_count += 1
             else:
                 report.updated_context_count += 1
             report.bound_memory_count += len(group.memory_ids)
-            report.contexts.append(
-                {
-                    "context_id": context_id,
-                    "key": key,
-                    "memory_ids": group.memory_ids,
-                    "action": action,
-                    "strategy": group.strategy,
-                }
-            )
+            report.contexts.append(context_event)
         return report
 
     def _load_memories(
@@ -414,10 +407,26 @@ class DreamContextualizer:
 
         if context_node:
             graph_db.add_node(context_id, summary, metadata, user_name=cube_id)
-            return context_id, "updated", key
+            return _build_context_event(
+                context_id=context_id,
+                action="updated",
+                key=key,
+                summary=summary,
+                metadata=metadata,
+                group=group,
+                summary_strategy=summary_strategy,
+            )
 
         graph_db.add_node(context_id, summary, metadata, user_name=cube_id)
-        return context_id, "created", key
+        return _build_context_event(
+            context_id=context_id,
+            action="created",
+            key=key,
+            summary=summary,
+            metadata=metadata,
+            group=group,
+            summary_strategy=summary_strategy,
+        )
 
     def _summarize_group(
         self, *, group: DreamContextGroup, existing_key: str = "", existing_memory: str = ""
@@ -464,6 +473,36 @@ def _node_dream_info(node: dict[str, Any] | None) -> dict[str, Any]:
     )
     dream = internal_info.get(DREAM_INTERNAL_INFO_KEY)
     return dream if isinstance(dream, dict) else {}
+
+
+def _build_context_event(
+    *,
+    context_id: str,
+    action: str,
+    key: str,
+    summary: str,
+    metadata: dict[str, Any],
+    group: DreamContextGroup,
+    summary_strategy: str,
+) -> dict[str, Any]:
+    dream = (metadata.get("internal_info") or {}).get(DREAM_INTERNAL_INFO_KEY) or {}
+    binding = dream.get("binding") if isinstance(dream, dict) else {}
+    weak_context_ids = dream.get("weak_context_ids") if isinstance(dream, dict) else []
+    return {
+        "context_id": context_id,
+        "action": action,
+        "key": key,
+        "label": key,
+        "summary": summary,
+        "memory_ids": list(group.memory_ids),
+        "source_memory_ids": list(group.memory_ids),
+        "weak_context_ids": list(weak_context_ids or []),
+        "binding": binding if isinstance(binding, dict) else {},
+        "binding_strategy": group.strategy,
+        "binding_confidence": group.confidence,
+        "summary_strategy": summary_strategy,
+        "confidence": metadata.get("confidence"),
+    }
 
 
 def _match_context_by_memory_overlap(

@@ -90,6 +90,7 @@ class AbstractDreamPipeline:
             clusters=clusters,
             results=results,
             mem_cube_id=mem_cube_id,
+            context_report=self.last_context_report,
         )
 
         # Step 4: hand persistence over to the final strategy.
