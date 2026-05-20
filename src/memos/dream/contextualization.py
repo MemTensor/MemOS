@@ -6,7 +6,7 @@ import os
 
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -367,7 +367,7 @@ class DreamContextualizer:
             ),
             existing_memory=context_node.get("memory", "") if context_node else "",
         )
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         context_id = (
             context_node.get("id") if context_node else f"{_CONTEXT_ID_PREFIX}{uuid4().hex}"
         )
