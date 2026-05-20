@@ -89,11 +89,13 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             "user_id": self.user_id,
             "cube_id": self.mem_cube_id,
             "trace_id": self.trace_id,
+            "session_id": self.session_id,
             "label": self.label,
             "cube": "Not Applicable",  # Custom cube serialization
             "content": self.content,
             "timestamp": self.timestamp.isoformat(),
             "user_name": self.user_name,
+            "info": self.info if self.info is not None else {},
             "task_id": self.task_id if self.task_id is not None else "",
             "api_path": self.api_path if self.api_path is not None else "",
             "chat_history": self.chat_history if self.chat_history is not None else [],
@@ -132,6 +134,18 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         else:
             chat_history = raw_chat_history
 
+        raw_info = _decode(data.get("info"))
+        if isinstance(raw_info, str):
+            if raw_info:
+                try:
+                    info = json.loads(raw_info)
+                except Exception:
+                    info = None
+            else:
+                info = None
+        else:
+            info = raw_info
+
         raw_user_context = _decode(data.get("user_context"))
         if isinstance(raw_user_context, str):
             if raw_user_context:
@@ -149,11 +163,13 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             user_id=_decode(data["user_id"]),
             mem_cube_id=_decode(data["cube_id"]),
             trace_id=_decode(data.get("trace_id", generate_trace_id())),
+            session_id=_decode(data.get("session_id", "")),
             label=_decode(data["label"]),
             content=_decode(data["content"]),
             timestamp=timestamp,
             user_name=_decode(data.get("user_name")),
-            task_id=_decode(data.get("task_id")),
+            info=info,
+            task_id=_decode(data.get("task_id")) or None,
             api_path=_decode(data.get("api_path")),
             chat_history=chat_history,
             user_context=UserContext.model_validate(raw_user_context) if raw_user_context else None,
