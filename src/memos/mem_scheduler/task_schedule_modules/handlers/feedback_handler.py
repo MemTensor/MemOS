@@ -11,7 +11,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
     USER_INPUT_TYPE,
 )
 from memos.mem_scheduler.task_schedule_modules.base_handler import BaseSchedulerHandler
-from memos.mem_scheduler.utils.misc_utils import is_cloud_env
+from memos.mem_scheduler.utils.misc_utils import is_playground_api
 
 
 logger = get_logger(__name__)
@@ -75,8 +75,8 @@ class FeedbackMessageHandler(BaseSchedulerHandler):
             mem_cube_id,
         )
 
-        cloud_env = is_cloud_env()
-        if cloud_env:
+        playground_api = is_playground_api()
+        if not playground_api:
             record = feedback_result.get("record") if isinstance(feedback_result, dict) else {}
             add_records = record.get("add") if isinstance(record, dict) else []
             update_records = record.get("update") if isinstance(record, dict) else []
@@ -191,6 +191,7 @@ class FeedbackMessageHandler(BaseSchedulerHandler):
                 )
         else:
             logger.info(
-                "Skipping web log for feedback. Not in a cloud environment (is_cloud_env=%s)",
-                cloud_env,
+                "Skipping memory-change web log for feedback on playground API "
+                "(is_playground_api=%s)",
+                playground_api,
             )
