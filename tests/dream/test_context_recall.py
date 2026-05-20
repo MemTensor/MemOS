@@ -3,6 +3,9 @@ from __future__ import annotations
 from memos.api.handlers.base_handler import HandlerDependencies
 from memos.api.handlers.search_handler import SearchHandler
 from memos.api.product_models import APISearchRequest
+from memos.dream.search import DreamContextSearchExtension
+from memos.plugins.hook_defs import H
+from memos.plugins.hooks import _hooks, register_hook
 
 
 class FakeEmbedder:
@@ -76,8 +79,11 @@ def _search_req():
     )
 
 
-def test_context_recall_disabled_by_default(monkeypatch):
-    monkeypatch.delenv("MEMOS_DREAM_CONTEXT_RECALL", raising=False)
+def setup_function():
+    _hooks.clear()
+
+
+def test_context_recall_disabled_without_dream_search_hook():
     graph = FakeGraphDB(
         hits=[
             {
@@ -95,9 +101,11 @@ def test_context_recall_disabled_by_default(monkeypatch):
     assert response.data["text_mem"] == []
 
 
-def test_context_recall_searches_context_scope_and_returns_summary(monkeypatch):
-    monkeypatch.setenv("MEMOS_DREAM_CONTEXT_RECALL", "on")
-    monkeypatch.setenv("MEMOS_DREAM_CONTEXT_RECALL_TOP_K", "1")
+def test_context_recall_searches_context_scope_and_returns_summary():
+    register_hook(
+        H.SEARCH_MEMORY_RESULTS,
+        DreamContextSearchExtension(top_k=1).merge_context_recall,
+    )
     graph = FakeGraphDB(
         hits=[
             {
@@ -140,8 +148,11 @@ def test_context_recall_searches_context_scope_and_returns_summary(monkeypatch):
     assert memories[0]["metadata"]["internal_info"] == {"dream": {"memory_ids": ["m1", "m2"]}}
 
 
-def test_context_recall_gracefully_skips_without_graph_db(monkeypatch):
-    monkeypatch.setenv("MEMOS_DREAM_CONTEXT_RECALL", "on")
+def test_context_recall_gracefully_skips_without_graph_db():
+    register_hook(
+        H.SEARCH_MEMORY_RESULTS,
+        DreamContextSearchExtension(top_k=1).merge_context_recall,
+    )
     handler = _handler(graph_db=None)
 
     response = handler.handle_search_memories(_search_req())
@@ -149,8 +160,11 @@ def test_context_recall_gracefully_skips_without_graph_db(monkeypatch):
     assert response.data["text_mem"] == []
 
 
-def test_context_recall_gracefully_skips_on_embedding_failure(monkeypatch):
-    monkeypatch.setenv("MEMOS_DREAM_CONTEXT_RECALL", "on")
+def test_context_recall_gracefully_skips_on_embedding_failure():
+    register_hook(
+        H.SEARCH_MEMORY_RESULTS,
+        DreamContextSearchExtension(top_k=1).merge_context_recall,
+    )
     graph = FakeGraphDB()
     handler = _handler(graph_db=graph, embedder=FailingEmbedder())
 

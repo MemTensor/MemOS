@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import logging
+import os
 
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,17 @@ class PluginManager:
     @property
     def plugins(self) -> dict[str, MemOSPlugin]:
         return dict(self._plugins)
+
+    @staticmethod
+    def _parse_plugin_names(value: str | None) -> set[str]:
+        if not value:
+            return set()
+        return {item.strip() for item in value.split(",") if item.strip()}
+
+    @classmethod
+    def _is_plugin_enabled(cls, plugin: MemOSPlugin) -> bool:
+        disabled = cls._parse_plugin_names(os.getenv("MEMOS_DISABLED_PLUGINS"))
+        return plugin.name not in disabled
 
     @staticmethod
     def _select_plugin_winners(
@@ -107,6 +119,13 @@ class PluginManager:
 
         winners = self._select_plugin_winners(candidates)
         for plugin_name, plugin in winners.items():
+            if not self._is_plugin_enabled(plugin):
+                logger.info(
+                    "Plugin discovered but disabled: %s v%s (MEMOS_DISABLED_PLUGINS)",
+                    plugin.name,
+                    plugin.version,
+                )
+                continue
             plugin.on_load()
             self._plugins[plugin_name] = plugin
             logger.info(
