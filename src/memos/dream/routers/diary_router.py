@@ -55,7 +55,7 @@ def create_diary_router(plugin) -> APIRouter:
             return {"code": 200, "message": "Dream diary retrieved successfully", "data": items}
 
         filters = [{"field": "memory_type", "op": "=", "value": "DreamDiary"}]
-        ids = graph_db.get_by_metadata(filters, user_name=req.cube_id, status="activated")
+        ids = graph_db.get_by_metadata(filters, user_name=req.cube_id)
         if not ids:
             return {"code": 200, "message": "Dream diary retrieved successfully", "data": []}
 
@@ -88,5 +88,6 @@ def _format_item(node: dict) -> dict:
         "summary": meta.get("summary", ""),
         "dream_entry": meta.get("dream_entry", ""),
         "motive": meta.get("motive"),
+        "context_events": meta.get("context_events", []),
         "themes": meta.get("themes", []),
     }

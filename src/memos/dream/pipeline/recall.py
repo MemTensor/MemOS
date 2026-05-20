@@ -27,7 +27,8 @@ class DirectRecall:
     Scope is restricted on purpose: Dream-produced nodes (DreamDiary,
     InsightMemory, …) and short-lived WorkingMemory are excluded so that
     each Dream run reflects on the user's real daytime experiences rather
-    than its own previous outputs.
+    than its own previous outputs. Context nodes are also excluded because
+    they are intermediate indexes, not original user memories.
     """
 
     def __init__(self, *, recall_top_k: int = _RECALL_TOP_K) -> None:
