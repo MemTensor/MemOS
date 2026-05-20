@@ -40,6 +40,47 @@ _viewer_process: subprocess.Popen | None = None
 
 HERMES_VIEWER_PORT = 18800
 VIEWER_PROBE_TTL_SEC = 30.0
+VIEWER_START_LOCK_TIMEOUT_SEC = 20.0
+VIEWER_START_LOCK_STALE_SEC = 60.0
+
+
+@contextlib.contextmanager
+def _viewer_start_lock(timeout: float = VIEWER_START_LOCK_TIMEOUT_SEC):
+    """Cross-process guard for the Hermes viewer daemon startup path."""
+    lock_dir = _plugin_root() / "daemon" / "viewer-start.lock"
+    lock_dir.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + timeout
+    acquired = False
+
+    while True:
+        try:
+            lock_dir.mkdir()
+            acquired = True
+            with contextlib.suppress(Exception):
+                (lock_dir / "owner").write_text(
+                    f"pid={os.getpid()} started_at={time.time()}\n",
+                    encoding="utf-8",
+                )
+            break
+        except FileExistsError:
+            stale = False
+            with contextlib.suppress(Exception):
+                stale = time.time() - lock_dir.stat().st_mtime > VIEWER_START_LOCK_STALE_SEC
+            if stale:
+                with contextlib.suppress(Exception):
+                    shutil.rmtree(lock_dir)
+                continue
+            if time.time() >= deadline:
+                yield False
+                return
+            time.sleep(0.1)
+
+    try:
+        yield True
+    finally:
+        if acquired:
+            with contextlib.suppress(Exception):
+                shutil.rmtree(lock_dir)
 
 
 def _bridge_script() -> Path:
@@ -219,54 +260,73 @@ def ensure_viewer_daemon(*, probe_only: bool = False) -> bool:
             return False
         if probe_only:
             return False
-        if not ensure_bridge_running():
-            return False
-
-        plugin_root = _plugin_root()
-        logs_dir = plugin_root / "logs"
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        log_file = logs_dir / "daemon-start.log"
-        try:
-            log_handle = log_file.open("a", encoding="utf-8")
-            _viewer_process = subprocess.Popen(
-                _bridge_command(daemon=True),
-                cwd=str(plugin_root),
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                start_new_session=True,
-            )
-            log_handle.close()
-        except Exception as err:
-            with contextlib.suppress(Exception):
-                log_handle.close()  # type: ignore[possibly-undefined]
-            logger.warning("MemOS: failed to start viewer daemon — %s", err)
-            return False
-
-        deadline = time.time() + 15.0
-        while time.time() < deadline:
-            if _viewer_process.poll() is not None:
-                logger.warning(
-                    "MemOS: viewer daemon exited early with code %s",
-                    _viewer_process.returncode,
-                )
-                return False
+        with _viewer_start_lock() as lock_acquired:
             status = _probe_viewer()
             _viewer_status = status
             _viewer_last_probe_at = time.time()
             if status == "running_memos":
-                logger.info("MemOS: viewer daemon running on port %d", HERMES_VIEWER_PORT)
                 return True
             if status == "blocked":
                 logger.warning(
-                    "MemOS: viewer port %d became occupied by a non-MemOS service",
+                    "MemOS: viewer port %d is occupied by a non-MemOS service; "
+                    "memory capture will continue without the web panel",
                     HERMES_VIEWER_PORT,
                 )
                 return False
-            time.sleep(0.5)
-        logger.warning("MemOS: viewer daemon did not become healthy within 15s")
-        return False
+            if not lock_acquired:
+                logger.warning(
+                    "MemOS: timed out waiting for viewer daemon startup lock; "
+                    "memory capture will continue without the web panel",
+                )
+                return False
+            if not ensure_bridge_running():
+                return False
+
+            plugin_root = _plugin_root()
+            logs_dir = plugin_root / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            log_file = logs_dir / "daemon-start.log"
+            try:
+                log_handle = log_file.open("a", encoding="utf-8")
+                _viewer_process = subprocess.Popen(
+                    _bridge_command(daemon=True),
+                    cwd=str(plugin_root),
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    start_new_session=True,
+                )
+                log_handle.close()
+            except Exception as err:
+                with contextlib.suppress(Exception):
+                    log_handle.close()  # type: ignore[possibly-undefined]
+                logger.warning("MemOS: failed to start viewer daemon — %s", err)
+                return False
+
+            deadline = time.time() + 15.0
+            while time.time() < deadline:
+                if _viewer_process.poll() is not None:
+                    logger.warning(
+                        "MemOS: viewer daemon exited early with code %s",
+                        _viewer_process.returncode,
+                    )
+                    return False
+                status = _probe_viewer()
+                _viewer_status = status
+                _viewer_last_probe_at = time.time()
+                if status == "running_memos":
+                    logger.info("MemOS: viewer daemon running on port %d", HERMES_VIEWER_PORT)
+                    return True
+                if status == "blocked":
+                    logger.warning(
+                        "MemOS: viewer port %d became occupied by a non-MemOS service",
+                        HERMES_VIEWER_PORT,
+                    )
+                    return False
+                time.sleep(0.5)
+            logger.warning("MemOS: viewer daemon did not become healthy within 15s")
+            return False
 
 
 def shutdown_bridge() -> None:

@@ -10,6 +10,7 @@ Run:
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import sys
@@ -693,7 +694,7 @@ class ViewerDaemonTests(unittest.TestCase):
                 patch.object(
                     daemon_manager_mod,
                     "_probe_viewer",
-                    side_effect=["free", "running_memos"],
+                    side_effect=["free", "free", "running_memos"],
                 ),
                 patch.object(daemon_manager_mod, "_bridge_script", return_value=bridge_path),
                 patch.object(daemon_manager_mod, "ensure_bridge_running", return_value=True),
@@ -710,6 +711,36 @@ class ViewerDaemonTests(unittest.TestCase):
             ):
                 self.assertTrue(daemon_manager_mod.ensure_viewer_daemon())
                 popen.assert_called_once()
+
+    def test_start_lock_reprobes_before_spawning_daemon(self) -> None:
+        @contextlib.contextmanager
+        def acquired_lock():
+            yield True
+
+        with (
+            patch.object(
+                daemon_manager_mod,
+                "_probe_viewer",
+                side_effect=["free", "running_memos"],
+            ),
+            patch.object(daemon_manager_mod, "_viewer_start_lock", acquired_lock),
+            patch.object(daemon_manager_mod.subprocess, "Popen") as popen,
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_viewer_daemon())
+            popen.assert_not_called()
+
+    def test_start_lock_timeout_does_not_spawn_daemon(self) -> None:
+        @contextlib.contextmanager
+        def busy_lock():
+            yield False
+
+        with (
+            patch.object(daemon_manager_mod, "_probe_viewer", side_effect=["free", "free"]),
+            patch.object(daemon_manager_mod, "_viewer_start_lock", busy_lock),
+            patch.object(daemon_manager_mod.subprocess, "Popen") as popen,
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_viewer_daemon())
+            popen.assert_not_called()
 
 
 if __name__ == "__main__":

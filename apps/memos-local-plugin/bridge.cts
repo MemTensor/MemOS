@@ -68,8 +68,8 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
 // ─── PID file singleton guard ───────────────────────────────────────────
 // Prevents bridge process accumulation: each new bridge that wants to
 // own the viewer port kills the previous holder via its PID file.
-// `--no-viewer` (headless) bridges skip the kill — they don't need the
-// port and should coexist with the daemon that owns it.
+// `--no-viewer` (headless) bridges skip this PID file entirely — they don't
+// need the port and should coexist with the daemon that owns it.
 
 const PID_FILENAME = "bridge.pid";
 
@@ -144,10 +144,14 @@ async function main(): Promise<void> {
 
   // ─── Singleton: kill previous bridge that owns the viewer port ───
   const pidPath = pidFilePath(args.agent);
-  if (!args.noViewer) {
+  const ownsViewerPort = args.daemon || !args.noViewer;
+  const removeOwnedPidFile = () => {
+    if (ownsViewerPort) removePidFile(pidPath);
+  };
+  if (ownsViewerPort) {
     killExistingBridge(pidPath);
+    writePidFile(pidPath);
   }
-  writePidFile(pidPath);
 
   // Lazy-import ESM core. Using dynamic import so this file remains
   // CommonJS and stays `require`-able.
@@ -393,7 +397,7 @@ async function main(): Promise<void> {
 
     const shutdownDaemon = async (sig: string) => {
       process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
-      removePidFile(pidPath);
+      removeOwnedPidFile();
       try { await viewer!.close(); } catch { /* best-effort */ }
       await core.shutdown();
       process.exit(0);
@@ -458,7 +462,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (sig: string) => {
     process.stderr.write(`bridge: received ${sig}, shutting down\n`);
-    removePidFile(pidPath);
+    removeOwnedPidFile();
     if (viewer) {
       try {
         await viewer.close();
@@ -486,7 +490,7 @@ async function main(): Promise<void> {
     const keepalive = setInterval(() => {
       if (viewer!.closed) {
         clearInterval(keepalive);
-        removePidFile(pidPath);
+        removeOwnedPidFile();
         void core.shutdown().then(() => process.exit(0));
       }
     }, 5_000);
@@ -495,7 +499,7 @@ async function main(): Promise<void> {
   }
 
   // No viewer (headless bridge) — clean exit.
-  removePidFile(pidPath);
+  removeOwnedPidFile();
   await core.shutdown();
   process.exit(0);
 }
