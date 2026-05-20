@@ -1,12 +1,12 @@
 /**
- * Settings view — four tabs:
+ * Settings view — three tabs:
  *
  *   - AI Models   — embedding / summarizer / **skill evolver** slots,
  *                   each with a "测试" button that calls
  *                   `POST /api/v1/models/test`.
  *   - Team Sharing — hub on/off + address + tokens.
- *   - Account     — optional password protection for the viewer.
- *   - General     — theme + language + telemetry.
+ *   - General     — language, theme, memory self-evolution, logging,
+ *                   telemetry, password protection, and danger zone.
  *
  * Save flow: `PATCH /api/v1/config` → show restart overlay → call
  * `POST /api/v1/admin/restart` → poll `GET /api/v1/health` until the
@@ -30,20 +30,27 @@ interface ProviderBlock {
   temperature?: number;
 }
 
+interface AlgorithmBlock {
+  lightweightMemory?: {
+    enabled?: boolean;
+  };
+}
+
 interface ResolvedConfig {
   version?: number;
   viewer?: { port: number; bindHost?: string };
   embedding?: ProviderBlock;
   llm?: ProviderBlock;
   skillEvolver?: ProviderBlock;
-  algorithm?: unknown;
+  algorithm?: AlgorithmBlock;
   hub?: {
     enabled?: boolean;
     role?: "hub" | "client";
     address?: string;
     port?: number;
+    teamName?: string;
     teamToken?: string;
-    userToken?: string;
+    nickname?: string;
   };
   telemetry?: { enabled?: boolean };
   logging?: { level?: string; detailedView?: boolean };
@@ -70,6 +77,13 @@ interface EmbeddingMaintenanceRunResult {
   statsAfter: EmbeddingMaintenanceStats;
   error?: string;
 }
+
+const EMBEDDING_REBUILD_BATCH_STORAGE_KEY = "memos.embeddingRebuildBatchSize";
+const EMBEDDING_REBUILD_BATCH_OPTIONS = [10, 20, 50, 100, 200, 500] as const;
+type EmbeddingRebuildBatchSize = typeof EMBEDDING_REBUILD_BATCH_OPTIONS[number];
+
+const SECRET_MASKED = (s: string | undefined | null): boolean =>
+  !!s && (s === "__memos_secret__" || /^[\s•]+$/.test(s));
 
 const EMBEDDING_PROVIDERS = [
   "local",
@@ -222,6 +236,7 @@ export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
       {tab === "hub" && (
         <HubTab
           hub={(get("hub") ?? {}) as NonNullable<ResolvedConfig["hub"]>}
+          hasUnsavedChanges={!!dirty.hub}
           onPatch={(p) => patch("hub", p)}
         />
       )}
@@ -230,8 +245,10 @@ export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
         <GeneralTab
           telemetry={(get("telemetry") ?? {}) as NonNullable<ResolvedConfig["telemetry"]>}
           logging={(get("logging") ?? {}) as NonNullable<ResolvedConfig["logging"]>}
+          algorithm={(get("algorithm") ?? {}) as AlgorithmBlock}
           onPatchTelemetry={(p) => patch("telemetry", p)}
           onPatchLogging={(p) => patch("logging", p)}
+          onPatchAlgorithm={(p) => patch("algorithm", p)}
         />
       )}
     </>
@@ -536,6 +553,7 @@ function EmbeddingMaintenancePanel() {
   const [stats, setStats] = useState<EmbeddingMaintenanceStats | null>(null);
   const [running, setRunning] = useState<"repair" | "rebuild" | null>(null);
   const [status, setStatus] = useState<{ kind: "ok" | "error" | "muted"; text: string } | null>(null);
+  const [batchSize, setBatchSize] = useState<EmbeddingRebuildBatchSize>(() => loadEmbeddingRebuildBatchSize());
 
   const refresh = async () => {
     try {
@@ -559,7 +577,7 @@ function EmbeddingMaintenancePanel() {
       for (;;) {
         const r = await api.post<EmbeddingMaintenanceRunResult>(
           "/api/v1/embeddings/rebuild",
-          { mode, offset, limit: 100 },
+          { mode, offset, limit: batchSize },
         );
         updated += r.updated;
         failed += r.failed;
@@ -616,6 +634,33 @@ function EmbeddingMaintenancePanel() {
           <div class="muted" style="font-size:var(--fs-xs);margin-top:2px">
             {healthText}
           </div>
+          <label
+            class="hstack"
+            style="gap:var(--sp-2);align-items:center;margin-top:var(--sp-3);font-size:var(--fs-xs);color:var(--fg-muted);flex-wrap:wrap"
+          >
+            <span>{t("settings.embedding.batchSize.label")}</span>
+            <select
+              class="input"
+              value={batchSize}
+              disabled={!!running}
+              aria-label={t("settings.embedding.batchSize.label")}
+              style="width:auto;min-width:150px;height:32px;padding-top:0;padding-bottom:0;font-size:var(--fs-xs)"
+              onChange={(e) => {
+                const next = normalizeEmbeddingRebuildBatchSize((e.target as HTMLSelectElement).value);
+                setBatchSize(next);
+                localStorage.setItem(EMBEDDING_REBUILD_BATCH_STORAGE_KEY, String(next));
+              }}
+            >
+              {EMBEDDING_REBUILD_BATCH_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {t("settings.embedding.batchSize.option", { n })}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div class="muted" style="font-size:var(--fs-2xs);margin-top:4px;max-width:560px">
+            {t("settings.embedding.batchSize.hint")}
+          </div>
         </div>
         <div class="hstack" style="gap:var(--sp-2);flex-wrap:wrap">
           <button class="btn btn--sm" onClick={() => void refresh()} disabled={!!running}>
@@ -655,13 +700,26 @@ function EmbeddingMaintenancePanel() {
   );
 }
 
+function loadEmbeddingRebuildBatchSize(): EmbeddingRebuildBatchSize {
+  return normalizeEmbeddingRebuildBatchSize(localStorage.getItem(EMBEDDING_REBUILD_BATCH_STORAGE_KEY));
+}
+
+function normalizeEmbeddingRebuildBatchSize(value: unknown): EmbeddingRebuildBatchSize {
+  const n = Number(value);
+  return EMBEDDING_REBUILD_BATCH_OPTIONS.includes(n as EmbeddingRebuildBatchSize)
+    ? n as EmbeddingRebuildBatchSize
+    : 100;
+}
+
 // ─── Hub tab ─────────────────────────────────────────────────────────────
 
 function HubTab({
   hub,
+  hasUnsavedChanges,
   onPatch,
 }: {
   hub: NonNullable<ResolvedConfig["hub"]>;
+  hasUnsavedChanges: boolean;
   onPatch: (p: Partial<NonNullable<ResolvedConfig["hub"]>>) => void;
 }) {
   return (
@@ -682,17 +740,17 @@ function HubTab({
       {hub.enabled && (
         <>
           <div
-            class="card card--flat"
-            style="margin-bottom:var(--sp-4);border-left:3px solid var(--accent)"
+            style="margin-bottom:var(--sp-4);padding:var(--sp-3);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius-md);background:var(--bg-canvas)"
           >
             <div class="hstack" style="gap:var(--sp-2);align-items:flex-start">
               <Icon name="info" size={14} style="margin-top:3px;color:var(--accent);flex-shrink:0" />
               <div style="font-size:var(--fs-sm);line-height:1.7">
                 <div style="font-weight:var(--fw-semi);margin-bottom:4px">
-                  {t("settings.hub.help.title")}
+                  {hub.role === "hub" ? t("settings.hub.mode.hub.title") : t("settings.hub.mode.client.title")}
                 </div>
-                <div class="muted">{t("settings.hub.help.role")}</div>
-                <div class="muted">{t("settings.hub.help.tokens")}</div>
+                <div class="muted">
+                  {hub.role === "hub" ? t("settings.hub.mode.hub.desc") : t("settings.hub.mode.client.desc")}
+                </div>
               </div>
             </div>
           </div>
@@ -729,72 +787,104 @@ function HubTab({
               </Field>
             )}
 
+            {hub.role === "hub" && (
+              <Field label={t("settings.hub.teamName")}>
+                <input
+                  class="input"
+                  type="text"
+                  value={hub.teamName ?? ""}
+                  placeholder="MemOS Team"
+                  onInput={(e) =>
+                    onPatch({ teamName: (e.target as HTMLInputElement).value })
+                  }
+                />
+              </Field>
+            )}
+
+            {hub.role === "hub" && (
+              <Field label={t("settings.hub.port")}>
+                <input
+                  class="input"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={hub.port ?? 18912}
+                  onInput={(e) =>
+                    onPatch({ port: Number((e.target as HTMLInputElement).value) || 18912 })
+                  }
+                />
+              </Field>
+            )}
+
+            {hub.role === "client" && (
+              <Field label={t("settings.hub.nickname")}>
+                <input
+                  class="input"
+                  type="text"
+                  value={hub.nickname ?? ""}
+                  placeholder={t("settings.hub.nickname.placeholder")}
+                  onInput={(e) =>
+                    onPatch({ nickname: (e.target as HTMLInputElement).value })
+                  }
+                />
+              </Field>
+            )}
+
             <Field label={t("settings.hub.teamToken")}>
               <input
                 class="input"
                 type="password"
-                value={hub.teamToken ?? ""}
-                placeholder={t("settings.hub.teamToken.placeholder")}
+                value={SECRET_MASKED(hub.teamToken) ? "" : hub.teamToken ?? ""}
+                placeholder={
+                  SECRET_MASKED(hub.teamToken)
+                    ? t("settings.apiKey.saved")
+                    : t("settings.hub.teamToken.placeholder")
+                }
                 onInput={(e) =>
                   onPatch({ teamToken: (e.target as HTMLInputElement).value })
                 }
               />
             </Field>
 
-            <Field label={t("settings.hub.userToken")}>
-              <input
-                class="input"
-                type="password"
-                value={hub.userToken ?? ""}
-                placeholder={t("settings.hub.userToken.placeholder")}
-                onInput={(e) =>
-                  onPatch({ userToken: (e.target as HTMLInputElement).value })
-                }
-              />
-            </Field>
           </div>
         </>
       )}
 
-      {/*
-       * Admin (members / groups / pending approvals) folded inline.
-       * Previously exposed as a separate sidebar tab — users found
-       * that duplicative with this section. We only render it when
-       * hub is actually enabled; otherwise there's nothing to admin.
-       */}
       {hub.enabled && (
         <div style="margin-top:var(--sp-5);padding-top:var(--sp-4);border-top:1px solid var(--border)">
           <h4
             class="card__title"
             style="font-size:var(--fs-md);margin-bottom:var(--sp-3)"
           >
-            {t("settings.hub.admin")}
+            {hub.role === "hub" ? t("settings.hub.admin") : t("settings.hub.status")}
           </h4>
-          <HubAdminPanel />
+          <HubAdminPanel hasUnsavedHubChanges={hasUnsavedChanges} />
         </div>
       )}
     </div>
   );
 }
 
-// ─── Account / password tab ──────────────────────────────────────────────
-
 // ─── General tab (merged Account + General) ─────────────────────────
 
 function GeneralTab({
   telemetry,
   logging,
+  algorithm,
   onPatchTelemetry,
   onPatchLogging,
+  onPatchAlgorithm,
 }: {
   telemetry: NonNullable<ResolvedConfig["telemetry"]>;
   logging: NonNullable<ResolvedConfig["logging"]>;
+  algorithm: AlgorithmBlock;
   onPatchTelemetry: (
     p: Partial<NonNullable<ResolvedConfig["telemetry"]>>,
   ) => void;
   onPatchLogging: (
     p: Partial<NonNullable<ResolvedConfig["logging"]>>,
   ) => void;
+  onPatchAlgorithm: (p: Partial<AlgorithmBlock>) => void;
 }) {
   return (
     <div class="vstack" style="gap:var(--sp-4)">
@@ -843,7 +933,18 @@ function GeneralTab({
         </div>
       </section>
 
-      <AccountSection />
+      <section class="card">
+        <div class="hstack" style="justify-content:space-between;margin-bottom:var(--sp-2)">
+          <div>
+            <h3 class="card__title">{t("settings.general.lightweightMemory")}</h3>
+            <p class="card__subtitle">{t("settings.general.lightweightMemory.desc")}</p>
+          </div>
+          <ToggleSwitch
+            checked={algorithm.lightweightMemory?.enabled === false}
+            onChange={(v) => onPatchAlgorithm({ lightweightMemory: { enabled: !v } })}
+          />
+        </div>
+      </section>
 
       <section class="card">
         <div class="hstack" style="justify-content:space-between;margin-bottom:var(--sp-2)">
@@ -870,6 +971,8 @@ function GeneralTab({
           />
         </div>
       </section>
+
+      <AccountSection />
 
       <DangerZoneSection />
     </div>
