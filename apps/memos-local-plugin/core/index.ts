@@ -8,6 +8,23 @@
 
 export * from "./id.js";
 export * from "./time.js";
+export {
+  assessCompatibility,
+  buildIntegrationPlan,
+  getAgentProfile,
+  listAgentProfiles,
+  listCompatibilityCapabilities,
+  supportMatrixFor,
+  type AgentIntegrationPlan,
+  type AgentProfile,
+  type CapabilityPoint,
+  type CapabilitySupport,
+  type CompatibilityAssessment,
+  type CompatibilityAssessmentInput,
+  type CompatibilitySignals,
+  type CompatibilityLevel,
+  type IntegrationMode,
+} from "../agent-contract/compatibility.js";
 
 export {
   loadConfig,
