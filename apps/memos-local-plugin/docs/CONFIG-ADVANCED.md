@@ -154,9 +154,9 @@ algorithm:
     smartSeed: true         # MMR seed-by-tier only when tier's best clears the relative floor
     skillInjectionMode: summary  # summary (default) | full
     # summary  → Tier-1 skills land in the prompt as `name + η + 1-line
-    #            description + a `skill_get(id="…")` invocation hint`. The
+    #            description + a `memos_skill_get(id="…")` invocation hint`. The
     #            host model loads the full procedure on demand by calling
-    #            the `skill_get` tool. Keeps prompts small.
+    #            the `memos_skill_get` tool. Keeps prompts small.
     # full     → Inline the entire `invocationGuide` body (legacy). Use
     #            this if your host doesn't support tool / function calls.
     skillSummaryChars: 200  # char cap for the per-skill summary line

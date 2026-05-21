@@ -47,6 +47,8 @@ export interface L2Config {
   minEpisodesForInduction: number;
   /** Character cap for traces passed into the induction prompt. */
   inductionTraceCharCap: number;
+  /** EMA alpha for gain smoothing. */
+  gainEmaAlpha: number;
 }
 
 // ─── Pattern signature ─────────────────────────────────────────────────────
@@ -129,6 +131,10 @@ export interface GainResult {
   withoutCount: number;
   /** V7 §0.6 eq. 3: softmax(V/τ) mean. Used when `withCount ≥ 3`. */
   weightedWith: number;
+  /** Mean value across with + without traces; used to derive the adaptive baseline. */
+  poolMean: number;
+  /** Shrinkage baseline after adapting to the participating trace pool. */
+  baseline: number;
 }
 
 // ─── Inputs / outputs for the orchestrator ─────────────────────────────────

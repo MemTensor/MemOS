@@ -1,3 +1,4 @@
+from memos.dream.contextualization import DreamContextualizer
 from memos.dream.pipeline.base import AbstractDreamPipeline
 from memos.dream.pipeline.diary import StructuredDiarySummary
 from memos.dream.pipeline.motive import MotiveFormation
@@ -10,6 +11,7 @@ __all__ = [
     "AbstractDreamPipeline",
     "ConsolidationReasoning",
     "DirectRecall",
+    "DreamContextualizer",
     "DreamPersistence",
     "MotiveFormation",
     "StructuredDiarySummary",

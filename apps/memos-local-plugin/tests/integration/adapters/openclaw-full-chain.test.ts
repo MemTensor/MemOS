@@ -343,6 +343,7 @@ function buildPipeline(db: TmpDbHandle, llm: LlmClient): PipelineHandle {
     embedding: { ...DEFAULT_CONFIG.embedding, dimensions: DIMS },
     algorithm: {
       ...DEFAULT_CONFIG.algorithm,
+      lightweightMemory: { enabled: false },
       // Disable the 30 s fallback timer — we'll call the reward
       // runner synchronously at the end of the test so tests stay
       // deterministic.
@@ -445,6 +446,25 @@ class OpenClawSimulator {
     );
     tick(2_000);
   }
+
+  async close(): Promise<void> {
+    const sessionId = this.agentCtx.sessionId as string;
+    await this.bridge.handleSessionEnd(
+      {
+        sessionId,
+        sessionKey: this.sessionKey,
+        messageCount: this.messages.length,
+        durationMs: 1_000,
+        reason: "idle",
+      },
+      {
+        agentId: "main",
+        sessionId,
+        sessionKey: this.sessionKey,
+      },
+    );
+    tick(1_000);
+  }
 }
 
 // ─── Test ────────────────────────────────────────────────────────────────
@@ -499,6 +519,7 @@ describe("OpenClaw adapter integration — multi-session full V7 chain", () => {
       "太好了, 再加一个 unittest 测试, 覆盖前 10 项",
       '```python\nimport unittest\n\nclass FibTest(unittest.TestCase):\n    def test_small(self):\n        self.assertEqual([fib(i) for i in range(10)], [0,1,1,2,3,5,8,13,21,34])\n```',
     );
+    await s1.close();
 
     // Session 2 — quicksort
     const s2 = new OpenClawSimulator({ bridge, sessionKey: "s2-sort" });
@@ -510,6 +531,7 @@ describe("OpenClaw adapter integration — multi-session full V7 chain", () => {
       "好的, 再写个 pytest 测试",
       '```python\nimport pytest\n\ndef test_quicksort_small():\n    assert quicksort([3,1,4,1,5,9,2,6]) == [1,1,2,3,4,5,6,9]\n```',
     );
+    await s2.close();
 
     // Session 3 — binary search + lru cache
     const s3 = new OpenClawSimulator({ bridge, sessionKey: "s3-misc" });
@@ -521,6 +543,7 @@ describe("OpenClaw adapter integration — multi-session full V7 chain", () => {
       "再写个 lru_cache 装饰器示例",
       '```python\nfrom functools import lru_cache\n\n@lru_cache(maxsize=128)\ndef get_expensive(k: str) -> int:\n    """Memoised expensive call."""\n    return hash(k) % 1000\n\nprint(get_expensive("hello"))\n```',
     );
+    await s3.close();
 
     // Drain the async capture pipeline first.
     await pipeline!.flush();

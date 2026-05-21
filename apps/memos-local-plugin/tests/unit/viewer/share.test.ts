@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { effectiveShareScope } from "../../../viewer/src/utils/share";
+import {
+  effectiveShareScope,
+  normalizeShareScope,
+  SHARE_SCOPE_OPTIONS,
+} from "../../../viewer/src/utils/share";
 
 describe("effectiveShareScope", () => {
   it("shows private when the global sharing switch is off", () => {
@@ -15,5 +19,14 @@ describe("effectiveShareScope", () => {
     expect(effectiveShareScope("public", true)).toBe("public");
     expect(effectiveShareScope("private", true)).toBe("private");
     expect(effectiveShareScope(undefined, true)).toBe("private");
+  });
+
+  it("exposes only the three supported UI scopes", () => {
+    expect(SHARE_SCOPE_OPTIONS).toEqual(["private", "public", "hub"]);
+  });
+
+  it("normalizes the legacy local scope to public", () => {
+    expect(normalizeShareScope("local")).toBe("public");
+    expect(effectiveShareScope("local", true)).toBe("public");
   });
 });

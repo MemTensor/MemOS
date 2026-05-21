@@ -47,6 +47,8 @@ export interface SessionManagerDeps {
   bus?: SessionEventBus;
   /** Injected episode manager (for tests). */
   episodeManager?: EpisodeManager;
+  /** Lightweight memory mode closes technical episodes without reflect/reward semantics. */
+  lightweightMemory?: boolean;
 }
 
 export interface StartEpisodeInput {
@@ -170,14 +172,27 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
       // confusion. True crash-orphans get a separate recovery path
       // at plugin bootstrap (see `recoverOrphanedEpisodes` in
       // `core/pipeline/memory-core.ts`).
+      if (deps.lightweightMemory && ep.meta.lightweightMemory === true) {
+        epm.finalize(ep.id, {
+          patchMeta: {
+            lightweightMemory: true,
+            sessionCloseReason: reason,
+          },
+        });
+        continue;
+      }
+      if (reason.startsWith("shutdown:")) {
+        epm.patchMeta(ep.id, {
+          topicState: "paused",
+          pauseReason: `session_closed:${reason}`,
+          sessionCloseReason: reason,
+        });
+        continue;
+      }
       if (isCompletedExchange(ep)) {
         epm.finalize(ep.id, {
           patchMeta: { sessionCloseReason: reason },
         });
-        continue;
-      }
-      if (isDiscardableEmptyEpisode(ep)) {
-        epm.discardEmpty(ep.id, `session_closed:${reason}`);
         continue;
       }
       epm.patchMeta(ep.id, {
@@ -346,6 +361,15 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     for (const ep of epm.listOpen()) {
       if (!live.has(ep.sessionId)) {
         if (isCompletedExchange(ep)) {
+          if (deps.lightweightMemory && ep.meta.lightweightMemory === true) {
+            finalizeEpisode(ep.id, {
+              patchMeta: {
+                lightweightMemory: true,
+                sessionCloseReason: `shutdown:${reason}`,
+              },
+            });
+            continue;
+          }
           finalizeEpisode(ep.id, {
             patchMeta: { sessionCloseReason: `shutdown:${reason}` },
           });
