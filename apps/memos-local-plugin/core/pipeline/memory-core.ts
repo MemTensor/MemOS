@@ -600,7 +600,7 @@ export function createMemoryCore(
     try {
       const dirtyClosed = handle.repos.episodes
         .list({ status: "closed", limit: 500 })
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+        .filter((ep) => episodeRewardIsDirty(ep));
       if (dirtyClosed.length > 0) {
         await recoverDirtyClosedEpisodes(dirtyClosed);
       }
@@ -914,7 +914,7 @@ export function createMemoryCore(
       }
       const dirtyClosed = handle.repos.episodes
         .list({ status: "closed", limit: 500 })
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+        .filter((ep) => episodeRewardIsDirty(ep));
       if (dirtyClosed.length > 0) {
         await recoverDirtyClosedEpisodes(dirtyClosed);
       }
@@ -1259,7 +1259,7 @@ export function createMemoryCore(
   ): Promise<void> {
     log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
     for (const ep of episodes) {
-      if (isLightweightEpisode(ep)) continue;
+      if (isLightweightEpisode(ep) && handle.algorithm.lightweightMemory.enabled) continue;
       const episodeId = ep.id as EpisodeId;
       const endedAt = ep.endedAt ?? Date.now();
       handle.repos.episodes.updateMeta(episodeId, {
@@ -1270,6 +1270,12 @@ export function createMemoryCore(
       const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
         recoveryReason: "dirty_reward_rescore",
       });
+      // If the episode was tagged lightweight during a prior session but
+      // lightweight mode is now off, clear the flag so the capture subscriber
+      // doesn't skip it.
+      if (snapshot.meta?.lightweightMemory === true && !handle.algorithm.lightweightMemory.enabled) {
+        delete (snapshot.meta as Record<string, unknown>).lightweightMemory;
+      }
       handle.buses.session.emit({
         kind: "episode.finalized",
         episode: snapshot,
@@ -1281,7 +1287,7 @@ export function createMemoryCore(
 
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
     const meta = ep.meta ?? {};
-    if (meta.lightweightMemory === true) return false;
+    if (meta.lightweightMemory === true && handle.algorithm.lightweightMemory.enabled) return false;
     if (meta.rewardDirty && typeof meta.rewardDirty === "object") return true;
 
     const reward = meta.reward;
