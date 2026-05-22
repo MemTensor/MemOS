@@ -404,8 +404,10 @@ class APISearchRequest(BaseRequest):
         None,
         description=(
             "Optional structured metadata filter for narrowing memory search results. "
-            "Supports logical operators such as `and` and `or`, and field conditions "
-            "such as id and created_at ranges. None means no metadata filter is applied."
+            "Supports logical operators such as `and` and `or`, plus field-level "
+            "operator objects. Example: "
+            '`{"and": [{"field_name": {"eq": "value"}}, {"other_field": {"gte": 10}}]}`. '
+            "None means no metadata filter is applied."
         ),
     )
 
