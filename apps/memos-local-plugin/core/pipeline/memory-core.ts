@@ -926,6 +926,24 @@ export function createMemoryCore(
       });
     }
 
+    // Periodic rescore: the daemon bridge sits idle after bootstrap with no
+    // turn traffic to drive pipeline events. Any episodes closed (abandoned
+    // or finalized) by the --no-viewer JSON-RPC bridge after bootstrap will
+    // have their reward scored by that bridge's own pipeline — but episodes
+    // that were already closed before this init ran (and missed by the
+    // startup scan due to the abandoned-closeReason bug, or due to a crash
+    // mid-reward) need a periodic retry. 10-minute interval matches the
+    // `autoRescoreDirtyClosedEpisodes` 30 s guard so it's safe to call
+    // frequently; the guard prevents redundant DB scans.
+    const rescoreInterval = setInterval(() => {
+      void autoRescoreDirtyClosedEpisodes().catch((err) => {
+        log.debug("periodic_rescore.error", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, 10 * 60 * 1000);
+    (rescoreInterval as unknown as { unref?: () => void }).unref?.();
+
     // Wire `memory_add` into the api_logs table on EVERY turn so the
     // Logs viewer shows per-turn capture activity. `capture.lite.done`
     // fires once per `onTurnEnd` (the per-turn lite capture path);
@@ -1274,7 +1292,9 @@ export function createMemoryCore(
     if (
       ep.rTask == null &&
       (ep.traceIds?.length ?? 0) > 0 &&
-      (meta.closeReason === "finalized" || meta.recoveryReason === "missed_session_end")
+      (meta.closeReason === "finalized" ||
+        meta.closeReason === "abandoned" ||
+        meta.recoveryReason === "missed_session_end")
     ) {
       return true;
     }
