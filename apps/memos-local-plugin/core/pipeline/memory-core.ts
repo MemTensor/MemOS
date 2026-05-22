@@ -1287,7 +1287,16 @@ export function createMemoryCore(
 
     const reward = meta.reward;
     if (reward && typeof reward === "object" && (reward as { skipped?: unknown }).skipped === true) {
-      return false;
+      // Abandoned episodes with no prior recovery attempt get one retry: the
+      // skip decision may have been made with incomplete data before the session
+      // ended. recoverDirtyClosedEpisodes() patches closeReason → "finalized"
+      // after processing, so if reward skips again the next check sees
+      // closeReason !== "abandoned" and stops retrying (no loop).
+      const isAbandonedNoRecovery =
+        meta.closeReason === "abandoned" && meta.recoveryReason == null;
+      if (!isAbandonedNoRecovery) {
+        return false;
+      }
     }
     if (
       ep.rTask == null &&
