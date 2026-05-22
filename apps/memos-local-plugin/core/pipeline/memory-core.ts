@@ -924,9 +924,15 @@ export function createMemoryCore(
       });
     }
 
-    // Periodic rescore timer for episodes that miss the startup scan or
-    // retry of failed reward runs. 10-minute interval is safe because
-    // autoRescoreDirtyClosedEpisodes has its own 30-second dedup guard.
+    // Periodic rescore: the daemon bridge sits idle after bootstrap with no
+    // turn traffic to drive pipeline events. Any episodes closed (abandoned
+    // or finalized) by the --no-viewer JSON-RPC bridge after bootstrap will
+    // have their reward scored by that bridge's own pipeline — but episodes
+    // that were already closed before this init ran (and missed by the
+    // startup scan due to the abandoned-closeReason bug, or due to a crash
+    // mid-reward) need a periodic retry. 10-minute interval matches the
+    // `autoRescoreDirtyClosedEpisodes` 30 s guard so it's safe to call
+    // frequently; the guard prevents redundant DB scans.
     const rescoreInterval = setInterval(() => {
       void autoRescoreDirtyClosedEpisodes().catch((err) => {
         log.debug("periodic_rescore.error", {
