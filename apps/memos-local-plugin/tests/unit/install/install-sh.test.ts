@@ -76,12 +76,16 @@ describe("install.sh — CLI surface", () => {
     expect(script).toContain('OPENCLAW_RUNTIME_ENTRY="./dist/adapters/openclaw/index.js"');
     expect(script).toContain('"extensions": ["${OPENCLAW_RUNTIME_ENTRY}"]');
     expect(script).toContain('"contracts": {');
-    expect(script).toContain('"memory_search"');
-    expect(script).toContain("if (config.plugins.entries[pluginId].hooks) delete config.plugins.entries[pluginId].hooks");
+    expect(script).toContain('"memos_search"');
+    expect(script).toContain("const MEMOS_TOOL_NAMES = [");
+    expect(script).toContain("if (!Array.isArray(config.tools.alsoAllow)) config.tools.alsoAllow = []");
+    expect(script).toContain("config.tools.alsoAllow.push(toolName)");
+    expect(script).toContain("delete config.plugins.entries[pluginId].hooks");
+    expect(script).not.toContain("config.plugins.entries[pluginId].hooks.allowConversationAccess = true");
     expect(script).not.toContain('"extensions": ["./adapters/openclaw/index.ts"]');
   });
 
-  it("publishes package runtime output without docs, tests, or site", () => {
+  it("publishes package runtime output without docs or tests", () => {
     const pkg = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as {
       files?: string[];
       main?: string;
@@ -92,8 +96,8 @@ describe("install.sh — CLI surface", () => {
     expect(pkg.scripts?.build).toContain("scripts/copy-runtime-assets.cjs");
     expect(pkg.openclaw?.extensions).toContain("./dist/adapters/openclaw/index.js");
     expect(pkg.files).toContain("dist");
-    expect(pkg.files).toContain("web/dist");
-    expect(pkg.files).not.toContain("web");
+    expect(pkg.files).toContain("viewer/dist");
+    expect(pkg.files).not.toContain("viewer");
     expect(pkg.files).not.toContain("ARCHITECTURE.md");
     expect(pkg.files).not.toContain("CHANGELOG.md");
     expect(pkg.files).toContain("!**/ALGORITHMS.md");
@@ -101,7 +105,5 @@ describe("install.sh — CLI surface", () => {
     expect(pkg.files).toContain("!dist/tests/**");
     expect(pkg.files).not.toContain("docs");
     expect(pkg.files).not.toContain("tests");
-    expect(pkg.files).not.toContain("site");
-    expect(pkg.files).not.toContain("site/dist");
   });
 });

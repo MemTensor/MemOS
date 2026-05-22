@@ -149,6 +149,60 @@ function stubCore(): MemoryCore {
       skills: [],
     })),
     importBundle: vi.fn(async () => ({ imported: 0, skipped: 0 })),
+    embeddingMaintenanceStats: vi.fn(async () => ({
+      dimension: 8,
+      available: true,
+      totalSlots: 2,
+      ready: 1,
+      missing: 1,
+      dimMismatch: 0,
+      needsRepair: 1,
+      byKind: {
+        trace: { totalSlots: 2, ready: 1, missing: 1, dimMismatch: 0, needsRepair: 1 },
+        policy: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+        world_model: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+        skill: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+      },
+    })),
+    rebuildEmbeddings: vi.fn(async () => ({
+      mode: "repair",
+      processed: 1,
+      updated: 1,
+      failed: 0,
+      offset: 0,
+      nextOffset: 0,
+      done: true,
+      statsBefore: {
+        dimension: 8,
+        available: true,
+        totalSlots: 2,
+        ready: 1,
+        missing: 1,
+        dimMismatch: 0,
+        needsRepair: 1,
+        byKind: {
+          trace: { totalSlots: 2, ready: 1, missing: 1, dimMismatch: 0, needsRepair: 1 },
+          policy: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          world_model: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          skill: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+        },
+      },
+      statsAfter: {
+        dimension: 8,
+        available: true,
+        totalSlots: 2,
+        ready: 2,
+        missing: 0,
+        dimMismatch: 0,
+        needsRepair: 0,
+        byKind: {
+          trace: { totalSlots: 2, ready: 2, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          policy: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          world_model: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          skill: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+        },
+      },
+    })),
     subscribeEvents: vi.fn(() => () => {}),
     subscribeLogs: vi.fn(() => () => {}),
     forwardLog: vi.fn(),
@@ -298,6 +352,70 @@ describe("HTTP server — REST routes", () => {
     expect(body.episodeIds).toEqual(["e1", "e2"]);
   });
 
+  it("GET /api/v1/episodes?status=failed filters by derived status", async () => {
+    // Mix of failed (rTask <= -0.5) and completed/active rows so the
+    // server has to actually filter — the viewer used to do this in
+    // the browser on top of one paginated page, which broke pagination.
+    (core.listEpisodeRows as any).mockResolvedValueOnce([
+      { id: "f1", sessionId: "s1", startedAt: 1, endedAt: 2, status: "closed", rTask: -0.8, turnCount: 2 },
+      { id: "c1", sessionId: "s1", startedAt: 3, endedAt: 4, status: "closed", rTask: 0.5, turnCount: 2 },
+      { id: "f2", sessionId: "s1", startedAt: 5, endedAt: 6, status: "closed", rTask: -0.7, turnCount: 2 },
+    ]);
+    const r = await fetch(`${handle.url}/api/v1/episodes?status=failed`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { episodes: Array<{ id: string }>; total: number };
+    expect(body.episodes.map((e) => e.id)).toEqual(["f1", "f2"]);
+    expect(body.total).toBe(2);
+  });
+
+  it("GET /api/v1/episodes?status=failed paginates over the filtered set", async () => {
+    // 4 failed + 2 completed; pageSize=2 so the test exercises
+    // limit/offset on the filter result, not on the raw scan window.
+    (core.listEpisodeRows as any).mockResolvedValue([
+      { id: "f1", sessionId: "s1", startedAt: 1, endedAt: 2, status: "closed", rTask: -0.8, turnCount: 2 },
+      { id: "c1", sessionId: "s1", startedAt: 3, endedAt: 4, status: "closed", rTask: 0.5, turnCount: 2 },
+      { id: "f2", sessionId: "s1", startedAt: 5, endedAt: 6, status: "closed", rTask: -0.7, turnCount: 2 },
+      { id: "f3", sessionId: "s1", startedAt: 7, endedAt: 8, status: "closed", rTask: -0.6, turnCount: 2 },
+      { id: "c2", sessionId: "s1", startedAt: 9, endedAt: 10, status: "closed", rTask: 0.5, turnCount: 2 },
+      { id: "f4", sessionId: "s1", startedAt: 11, endedAt: 12, status: "closed", rTask: -0.7, turnCount: 2 },
+    ]);
+
+    const r1 = await fetch(`${handle.url}/api/v1/episodes?status=failed&limit=2&offset=0`);
+    const b1 = (await r1.json()) as { episodes: Array<{ id: string }>; total: number; nextOffset?: number };
+    expect(b1.episodes.map((e) => e.id)).toEqual(["f1", "f2"]);
+    expect(b1.total).toBe(4);
+    expect(b1.nextOffset).toBe(2);
+
+    const r2 = await fetch(`${handle.url}/api/v1/episodes?status=failed&limit=2&offset=2`);
+    const b2 = (await r2.json()) as { episodes: Array<{ id: string }>; total: number; nextOffset?: number };
+    expect(b2.episodes.map((e) => e.id)).toEqual(["f3", "f4"]);
+    expect(b2.total).toBe(4);
+    expect(b2.nextOffset).toBeUndefined();
+  });
+
+  it("GET /api/v1/episodes?status=garbage falls back to no filter", async () => {
+    // Unknown status slugs must not 400 — the viewer's chip group
+    // uses `""` for "all", and any future slug should degrade
+    // gracefully rather than break the entire list.
+    const r = await fetch(`${handle.url}/api/v1/episodes?status=garbage`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { episodes: Array<{ id: string }>; total: number };
+    expect(body.episodes.map((e) => e.id)).toEqual(["e1", "e2"]);
+    expect(body.total).toBe(2);
+  });
+
+  it("GET /api/v1/episodes?status=…&q=… combines status + preview search", async () => {
+    (core.listEpisodeRows as any).mockResolvedValue([
+      { id: "f1", sessionId: "s1", startedAt: 1, endedAt: 2, status: "closed", rTask: -0.8, turnCount: 2, preview: "deploy failed twice" },
+      { id: "f2", sessionId: "s1", startedAt: 3, endedAt: 4, status: "closed", rTask: -0.6, turnCount: 2, preview: "another failure" },
+      { id: "c1", sessionId: "s1", startedAt: 5, endedAt: 6, status: "closed", rTask: 0.5, turnCount: 2, preview: "deploy succeeded" },
+    ]);
+    const r = await fetch(`${handle.url}/api/v1/episodes?status=failed&q=deploy`);
+    const body = (await r.json()) as { episodes: Array<{ id: string }>; total: number };
+    expect(body.episodes.map((e) => e.id)).toEqual(["f1"]);
+    expect(body.total).toBe(1);
+  });
+
   it("POST /api/v1/feedback accepts explicit polarity", async () => {
     const r = await fetch(`${handle.url}/api/v1/feedback`, {
       method: "POST",
@@ -352,6 +470,8 @@ describe("HTTP server — REST routes", () => {
       sessionId: undefined,
       q: "hi",
       groupByTurn: false,
+      ownerAgentKind: undefined,
+      ownerProfileId: undefined,
     });
   });
 
@@ -366,12 +486,12 @@ describe("HTTP server — REST routes", () => {
 
   it("GET /api/v1/api-logs supports multi-tool filtering", async () => {
     const r = await fetch(
-      `${handle.url}/api/v1/api-logs?tools=memory_add,memory_search&limit=10&offset=5`,
+      `${handle.url}/api/v1/api-logs?tools=memory_add,memos_search&limit=10&offset=5`,
     );
     expect(r.status).toBe(200);
     expect(core.listApiLogs).toHaveBeenCalledWith({
       toolName: undefined,
-      toolNames: ["memory_add", "memory_search"],
+      toolNames: ["memory_add", "memos_search"],
       limit: 10,
       offset: 5,
     });
@@ -429,6 +549,32 @@ describe("HTTP server — REST routes", () => {
     expect(r.status).toBe(200);
     const body = (await r.json()) as { imported: number; skipped: number };
     expect(body.imported).toBe(0);
+  });
+
+  it("GET /api/v1/embeddings/maintenance returns vector health", async () => {
+    const r = await fetch(`${handle.url}/api/v1/embeddings/maintenance`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { totalSlots: number; needsRepair: number };
+    expect(body.totalSlots).toBe(2);
+    expect(body.needsRepair).toBe(1);
+    expect(core.embeddingMaintenanceStats).toHaveBeenCalled();
+  });
+
+  it("POST /api/v1/embeddings/rebuild runs a maintenance batch", async () => {
+    const r = await fetch(`${handle.url}/api/v1/embeddings/rebuild`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "rebuild", offset: 10, limit: 25 }),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { updated: number; done: boolean };
+    expect(body.updated).toBe(1);
+    expect(body.done).toBe(true);
+    expect(core.rebuildEmbeddings).toHaveBeenCalledWith({
+      mode: "rebuild",
+      offset: 10,
+      limit: 25,
+    });
   });
 
   it("imports Hermes native MEMORY.md in batches", async () => {
@@ -614,7 +760,7 @@ describe("HTTP server — REST routes", () => {
   // ─── Connectivity smoke tests ─────────────────────────────────────────
   // These pin the contract between the viewer's REST client and the
   // server. Every endpoint the viewer touches (see
-  // `web/src/**/*.tsx::api.get/post/patch`) is exercised here.
+  // `viewer/src/**/*.tsx::api.get/post/patch`) is exercised here.
 
   it("GET /api/v1/overview returns the summary shape the viewer expects", async () => {
     const r = await fetch(`${handle.url}/api/v1/overview`);
@@ -942,6 +1088,58 @@ describe("HTTP server — REST routes", () => {
   it("wrong method returns 405 json", async () => {
     const r = await fetch(`${handle.url}/api/v1/ping`, { method: "DELETE" });
     expect(r.status).toBe(405);
+  });
+
+  // ─── Telemetry side-channel ────────────────────────────────────
+  // Replaces the previous "first GET /overview wins" trigger with
+  // a dedicated SPA-mount endpoint. See `server/routes/telemetry.ts`
+  // and `viewer/src/components/App.tsx` for the wiring rationale.
+
+  it("POST /api/v1/telemetry/viewer-opened invokes telemetry.trackViewerOpened", async () => {
+    const trackViewerOpened = vi.fn();
+    const local = await startHttpServer(
+      { core, telemetry: { trackViewerOpened } },
+      { port: 0 },
+    );
+    try {
+      const r = await fetch(`${local.url}/api/v1/telemetry/viewer-opened`, {
+        method: "POST",
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { ok: boolean };
+      expect(body.ok).toBe(true);
+      expect(trackViewerOpened).toHaveBeenCalledTimes(1);
+    } finally {
+      await local.close();
+    }
+  });
+
+  it("POST /api/v1/telemetry/viewer-opened still returns 200 when telemetry is unbound", async () => {
+    // No telemetry on `deps` — endpoint must remain a no-op success
+    // so the SPA's fire-and-forget call never surfaces an error.
+    const r = await fetch(`${handle.url}/api/v1/telemetry/viewer-opened`, {
+      method: "POST",
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+  });
+
+  it("GET /api/v1/overview no longer triggers viewer_opened (regressed to manual ping)", async () => {
+    const trackViewerOpened = vi.fn();
+    const local = await startHttpServer(
+      { core, telemetry: { trackViewerOpened } },
+      { port: 0 },
+    );
+    try {
+      // Two GETs (the viewer used to poll this) — neither should
+      // count as a viewer-mount event under the new scheme.
+      await fetch(`${local.url}/api/v1/overview`);
+      await fetch(`${local.url}/api/v1/overview`);
+      expect(trackViewerOpened).not.toHaveBeenCalled();
+    } finally {
+      await local.close();
+    }
   });
 });
 

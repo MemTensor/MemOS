@@ -287,12 +287,119 @@ describe("retrieval/integration", () => {
       reason: "tool_driven",
       agent: "openclaw",
       sessionId: "s1" as SessionId,
-      tool: "memory_search",
+      tool: "memos_search",
       args: { query: "docker compose" },
       ts: NOW as never,
     });
     expect(res.stats.tier1Count).toBe(0);
     expect(res.packet.snippets.every((s) => s.refKind !== "skill")).toBe(true);
+  });
+
+  it("lightweight mode only returns trace memories after summarizer filter succeeds", async () => {
+    let filterCalls = 0;
+    const llm: any = {
+      completeJson: async (_messages: unknown, opts: { op?: string }) => {
+        filterCalls++;
+        expect(opts.op).toContain("retrieval.filter");
+        return {
+          value: { selected: [1], sufficient: true },
+          servedBy: "fake",
+        };
+      },
+    };
+    const res = await turnStartRetrieve(
+      {
+        ...makeDeps(handle),
+        llm,
+        config: {
+          ...makeDeps(handle).config,
+          lightweightMemory: true,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+        },
+      },
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        // Cross-session: seeded traces live in `s1`, not the active turn session.
+        sessionId: "s_current" as SessionId,
+        userText: "run docker compose",
+        ts: NOW as never,
+      },
+    );
+
+    expect(res.packet.snippets.length).toBeGreaterThan(0);
+    expect(res.packet.snippets.every((s) => s.refKind === "trace")).toBe(true);
+    expect(res.stats.tier1Count).toBe(0);
+    expect(res.stats.tier3Count).toBe(0);
+    expect(res.stats.llmFilterOutcome).toBe("llm_filtered");
+    expect(res.stats.emptyPacket).toBe(false);
+    expect(filterCalls).toBe(1);
+  });
+
+  it("can defer the local LLM pass for one final merged filter", async () => {
+    let filterCalls = 0;
+    const llm: any = {
+      completeJson: async () => {
+        filterCalls++;
+        return {
+          value: { selected: [1], sufficient: true },
+          servedBy: "fake",
+        };
+      },
+    };
+    const res = await turnStartRetrieve(
+      {
+        ...makeDeps(handle),
+        llm,
+        config: {
+          ...makeDeps(handle).config,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+        },
+      },
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_current" as SessionId,
+        userText: "run docker compose",
+        ts: NOW as never,
+      },
+      { skipLlmFilter: true },
+    );
+
+    expect(filterCalls).toBe(0);
+    expect(res.packet.snippets.length).toBeGreaterThan(0);
+    expect(res.stats.llmFilterOutcome).toBe("deferred_to_final");
+    expect(res.stats.llmFilterKept).toBeGreaterThan(0);
+  });
+
+  it("lightweight mode returns no memories when summarizer filter is unavailable", async () => {
+    const res = await turnStartRetrieve(
+      {
+        ...makeDeps(handle),
+        llm: null,
+        config: {
+          ...makeDeps(handle).config,
+          lightweightMemory: true,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+        },
+      },
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_current" as SessionId,
+        userText: "run docker compose",
+        ts: NOW as never,
+      },
+    );
+
+    expect(res.stats.tier2Count).toBeGreaterThan(0);
+    expect(res.stats.llmFilterOutcome).toBe("no_llm");
+    expect(res.stats.llmFilterKept).toBe(0);
+    expect(res.packet.snippets).toEqual([]);
+    expect(res.stats.emptyPacket).toBe(true);
   });
 
   it("skill_invoke is tier1-heavy", async () => {

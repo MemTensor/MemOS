@@ -19,6 +19,7 @@ import type {
   FeedbackRow,
   TraceRow,
 } from "../../../core/types.js";
+import type { EpisodeSnapshot } from "../../../core/session/types.js";
 import type { SessionRow } from "../../../core/storage/repos/sessions.js";
 import { fakeLlm } from "../../helpers/fake-llm.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
@@ -87,8 +88,12 @@ function seedTrace(
     episodeId: eid as unknown as TraceRow["episodeId"],
     sessionId: sid as unknown as TraceRow["sessionId"],
     ts: NOW as EpochMs,
-    userText: "",
-    agentText: partial.agentText ?? "",
+    userText:
+      partial.userText ??
+      `please deploy my docker image to the registry, verify step ${id}, and report the result`,
+    agentText:
+      partial.agentText ??
+      "completed the requested deployment step and verified the resulting service",
     toolCalls: partial.toolCalls ?? [],
     reflection: partial.reflection ?? null,
     value: 0,
@@ -102,6 +107,36 @@ function seedTrace(
     schemaVersion: 1,
   };
   handle.repos.traces.insert(row);
+}
+
+function rewardSnapshot(eid: string, sid: string, traceIds: string[] = []): EpisodeSnapshot {
+  return {
+    id: eid as unknown as EpisodeSnapshot["id"],
+    sessionId: sid as unknown as EpisodeSnapshot["sessionId"],
+    startedAt: NOW,
+    endedAt: NOW,
+    status: "closed",
+    rTask: null,
+    traceIds: traceIds as unknown as EpisodeSnapshot["traceIds"],
+    turnCount: 2,
+    turns: [
+      {
+        role: "user",
+        content:
+          "please review the docker deployment result and explain what went wrong",
+        ts: NOW,
+        meta: {},
+      },
+      {
+        role: "assistant",
+        content:
+          "I made the wrong deployment choice and need to retry with corrected settings.",
+        ts: NOW,
+        meta: {},
+      },
+    ],
+    meta: {},
+  };
 }
 
 function seedFeedback(
@@ -266,6 +301,7 @@ describe("reward/integration", () => {
       tracesRepo: handle.repos.traces,
       episodesRepo: handle.repos.episodes,
       feedbackRepo: handle.repos.feedback,
+      getEpisodeSnapshot: () => rewardSnapshot(eid, sid),
       llm: null,
       bus: createRewardEventBus(),
       cfg: cfg(),

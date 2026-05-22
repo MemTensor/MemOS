@@ -91,21 +91,32 @@ OPENCLAW_RUNTIME_ENTRY="./dist/adapters/openclaw/index.js"
 # memory slot. We never touch the old plugin's data.
 LEGACY_PLUGIN_IDS=("memos-local-openclaw-plugin")
 
-# ─── Args — one flag, period ──────────────────────────────────────────────
+# ─── Args ─────────────────────────────────────────────────────────────────
 VERSION_ARG=""
+AGENT_SELECTION=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) VERSION_ARG="${2:-}"; shift 2 ;;
+    --agent|--target)
+      AGENT_SELECTION="${2:-}"
+      case "${AGENT_SELECTION}" in
+        auto|openclaw|hermes|all) ;;
+        *) die "--agent must be one of: auto, openclaw, hermes, all" ;;
+      esac
+      shift 2
+      ;;
     --port)
       die "--port is no longer supported. Each agent uses a fixed port: \
 openclaw → :${OPENCLAW_PORT}, hermes → :${HERMES_PORT}." ;;
     -h|--help)
       cat <<EOF
 Usage:
-  bash install.sh                     # latest from npm
-  bash install.sh --version X.Y.Z     # specific npm version
-  bash install.sh --version ./pkg.tgz # local tarball
+  bash install.sh                                # latest from npm
+  bash install.sh --version X.Y.Z                # specific npm version
+  bash install.sh --version ./pkg.tgz            # local tarball
+  bash install.sh --agent hermes                 # install one target
+  bash install.sh --agent openclaw|hermes|all
 
 Each agent runs its viewer on a fixed port:
   openclaw → http://127.0.0.1:${OPENCLAW_PORT}
@@ -208,8 +219,8 @@ find_openclaw_cli() {
 }
 
 # ─── Interactive picker ───────────────────────────────────────────────────
-AGENT_SELECTION=""
 pick_agents_interactively() {
+  [[ -n "${AGENT_SELECTION}" ]] && return 0
   echo
   printf "  ${BOLD}Detected agents:${NC}\n"
   if [[ "${HAS_OPENCLAW}" == "true" ]]; then
@@ -327,20 +338,25 @@ deploy_tarball_to_prefix() {
   success "Package extracted"
 
   step "Installing npm dependencies"
-  command -v node > "${prefix}/.memos-node-bin"
-  ( cd "${prefix}" && MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
+  local node_bin node_dir node_version
+  node_bin="$(command -v node || true)"
+  [[ -n "${node_bin}" && -x "${node_bin}" ]] || die "Node.js not found after bootstrap."
+  node_dir="$(dirname "${node_bin}")"
+  node_version="$("${node_bin}" -v 2>/dev/null || echo "unknown")"
+  printf "%s\n" "${node_bin}" > "${prefix}/.memos-node-bin"
+  ( cd "${prefix}" && PATH="${node_dir}:${PATH}" MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
   [[ -d "${prefix}/node_modules" ]] || die "npm install failed in ${prefix}"
 
   if [[ -d "${prefix}/node_modules/better-sqlite3" ]]; then
-    step "Rebuilding better-sqlite3 for Node $(node -v)"
-    ( cd "${prefix}" && npm rebuild better-sqlite3 --loglevel=error >/dev/null 2>&1 ) \
-      || ( cd "${prefix}" && npm rebuild better-sqlite3 --build-from-source --loglevel=error >/dev/null 2>&1 ) \
+    step "Rebuilding better-sqlite3 for Node ${node_version}"
+    ( cd "${prefix}" && PATH="${node_dir}:${PATH}" npm rebuild better-sqlite3 --loglevel=error >/dev/null 2>&1 ) \
+      || ( cd "${prefix}" && PATH="${node_dir}:${PATH}" npm rebuild better-sqlite3 --build-from-source --loglevel=error >/dev/null 2>&1 ) \
       || warn "better-sqlite3 rebuild did not complete cleanly."
-    if ( cd "${prefix}" && node -e "require('better-sqlite3')" >/dev/null 2>&1 ); then
+    if ( cd "${prefix}" && "${node_bin}" -e "require('better-sqlite3')" >/dev/null 2>&1 ); then
       success "better-sqlite3 native module OK"
     else
       warn "better-sqlite3 not loadable — plugin will fail at startup."
-      printf "       ${DIM}Fix: cd ${prefix} && npm rebuild better-sqlite3${NC}\n" >&2
+      printf "       ${DIM}Fix: cd ${prefix} && PATH=${node_dir}:\$PATH npm rebuild better-sqlite3${NC}\n" >&2
     fi
   fi
   success "Dependencies ready"
@@ -447,12 +463,12 @@ install_openclaw() {
   "extensions": ["${OPENCLAW_RUNTIME_ENTRY}"],
   "contracts": {
     "tools": [
-      "memory_search",
-      "memory_get",
-      "memory_timeline",
-      "skill_list",
-      "memory_environment",
-      "skill_get"
+      "memos_search",
+      "memos_get",
+      "memos_timeline",
+      "memos_skill_list",
+      "memos_environment",
+      "memos_skill_get"
     ]
   },
   "configSchema": {
@@ -482,6 +498,14 @@ const {
   PLUGIN_VERSION: pluginVersion, LEGACY_JSON: legacyCsv,
 } = process.env;
 const legacyIds = (legacyCsv || '').split(',').filter(Boolean);
+const MEMOS_TOOL_NAMES = [
+  'memos_search',
+  'memos_get',
+  'memos_timeline',
+  'memos_environment',
+  'memos_skill_list',
+  'memos_skill_get',
+];
 
 let config = {};
 if (fs.existsSync(configPath)) {
@@ -496,6 +520,14 @@ if (!config.gateway || typeof config.gateway !== 'object' || Array.isArray(confi
   config.gateway = {};
 }
 if (!config.gateway.mode) config.gateway.mode = 'local';
+
+if (!config.tools || typeof config.tools !== 'object' || Array.isArray(config.tools)) {
+  config.tools = {};
+}
+if (!Array.isArray(config.tools.alsoAllow)) config.tools.alsoAllow = [];
+for (const toolName of MEMOS_TOOL_NAMES) {
+  if (!config.tools.alsoAllow.includes(toolName)) config.tools.alsoAllow.push(toolName);
+}
 
 if (!config.plugins || typeof config.plugins !== 'object' || Array.isArray(config.plugins)) {
   config.plugins = {};
@@ -530,9 +562,17 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
   config.plugins.entries[pluginId] = {};
 }
 config.plugins.entries[pluginId].enabled = true;
-// Do not write hook capability flags here. Current OpenClaw validates
-// plugin entries strictly and rejects unknown hook keys.
-if (config.plugins.entries[pluginId].hooks) delete config.plugins.entries[pluginId].hooks;
+// OpenClaw blocks conversation-level typed hooks for non-bundled plugins
+// unless the user config explicitly grants access. The memory plugin needs
+// agent_end to capture completed turns.
+if (
+  !config.plugins.entries[pluginId].hooks ||
+  typeof config.plugins.entries[pluginId].hooks !== 'object' ||
+  Array.isArray(config.plugins.entries[pluginId].hooks)
+) {
+  config.plugins.entries[pluginId].hooks = {};
+}
+config.plugins.entries[pluginId].hooks.allowConversationAccess = true;
 
 if (!config.plugins.installs || typeof config.plugins.installs !== 'object') config.plugins.installs = {};
 const installsEntry = {
@@ -614,15 +654,15 @@ install_hermes() {
 
   step "Stopping existing bridge daemon"
   local bridge_pids=""
-  bridge_pids="$(pgrep -f "bridge.cts" 2>/dev/null || true)"
+  bridge_pids="$(pgrep -f "bridge\\.(cts|cjs)" 2>/dev/null || true)"
   if [[ -n "${bridge_pids}" ]]; then
     kill ${bridge_pids} >/dev/null 2>&1 || true
     local i
     for i in {1..10}; do
       sleep 1
-      pgrep -f "bridge.cts" >/dev/null 2>&1 || break
+      pgrep -f "bridge\\.(cts|cjs)" >/dev/null 2>&1 || break
     done
-    bridge_pids="$(pgrep -f "bridge.cts" 2>/dev/null || true)"
+    bridge_pids="$(pgrep -f "bridge\\.(cts|cjs)" 2>/dev/null || true)"
     if [[ -n "${bridge_pids}" ]]; then
       kill -9 ${bridge_pids} >/dev/null 2>&1 || true
       sleep 1
@@ -655,7 +695,9 @@ install_hermes() {
   step "Configuring runtime environment"
   ensure_runtime_home "hermes" "${home}" "${prefix}"
 
-  echo "${prefix}/bridge.cts" > "${adapter_dir}/bridge_path.txt"
+  local bridge_entry="${prefix}/dist/bridge.cjs"
+  [[ -f "${bridge_entry}" ]] || bridge_entry="${prefix}/bridge.cts"
+  echo "${bridge_entry}" > "${adapter_dir}/bridge_path.txt"
   success "Bridge path recorded"
 
   step "Locating Hermes Python environment"
@@ -708,27 +750,222 @@ print('OK' if p and p.name == 'memtensor' else 'FAIL')
   [[ "${verify}" == "OK" ]] && success "Provider verification passed" \
     || warn "Provider verification didn't return OK"
 
-  if [[ -f "${config_file}" ]]; then
-    "${python_bin}" - "${config_file}" <<'PYEOF' || warn "config.yaml auto-patch failed"
-import sys, yaml
-path = sys.argv[1]
-with open(path) as f: cfg = yaml.safe_load(f) or {}
-mem = cfg.get("memory")
-if isinstance(mem, dict):
+  step "Installing Hermes profile defaults hook"
+  "${python_bin}" - <<'PYEOF' || warn "Hermes profile defaults hook install failed"
+import site
+from pathlib import Path
+
+site_dirs = site.getsitepackages()
+if not site_dirs:
+    raise SystemExit("no site-packages directory found")
+site_dir = Path(site_dirs[0])
+site_dir.mkdir(parents=True, exist_ok=True)
+
+module_path = site_dir / "memos_hermes_profile_defaults.py"
+module_path.write_text(
+    r'''
+"""MemOS profile defaults for Hermes.
+
+This module is imported from a .pth file in the Hermes Python environment.
+It wraps hermes_cli.profiles.create_profile so profiles created after the
+MemOS plugin is installed inherit the memtensor memory provider even when the
+user runs bare `hermes profile create <name>` without --clone.
+"""
+
+from __future__ import annotations
+
+import importlib
+import importlib.abc
+import importlib.machinery
+import sys
+from pathlib import Path
+from typing import Any
+
+try:
+    import yaml
+except Exception:  # pragma: no cover
+    yaml = None  # type: ignore[assignment]
+
+
+def _patch_config(profile_dir: Any) -> None:
+    if yaml is None:
+        return
+    path = Path(profile_dir) / "config.yaml"
+    if path.exists():
+        with path.open() as f:
+            cfg = yaml.safe_load(f) or {}
+    else:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+
+    mem = cfg.get("memory")
+    if not isinstance(mem, dict):
+        mem = {}
+        cfg["memory"] = mem
     mem["provider"] = "memtensor"
     mem.setdefault("memory_enabled", True)
-else:
-    cfg["memory"] = {"provider": "memtensor", "memory_enabled": True}
-with open(path, "w") as f:
-    yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    mem.setdefault("user_profile_enabled", True)
+
+    plugins = cfg.get("plugins")
+    if not isinstance(plugins, dict):
+        plugins = {}
+        cfg["plugins"] = plugins
+    enabled = plugins.get("enabled")
+    if enabled is True:
+        enabled = ["memtensor"]
+    elif isinstance(enabled, list):
+        enabled = [item for item in enabled if item != "memtensor"]
+        enabled.append("memtensor")
+    else:
+        enabled = ["memtensor"]
+    plugins["enabled"] = enabled
+
+    disabled = plugins.get("disabled")
+    if isinstance(disabled, list):
+        plugins["disabled"] = [item for item in disabled if item != "memtensor"]
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
+def _wrap_profiles_module(module: Any) -> None:
+    if getattr(module, "_memos_profile_defaults_wrapped", False):
+        return
+    original = getattr(module, "create_profile", None)
+    if not callable(original):
+        return
+
+    def create_profile(*args: Any, **kwargs: Any) -> Any:
+        profile_dir = original(*args, **kwargs)
+        try:
+            _patch_config(profile_dir)
+        except Exception:
+            pass
+        return profile_dir
+
+    module.create_profile = create_profile
+    module._memos_profile_defaults_wrapped = True
+
+
+class _ProfilesImportHook(importlib.abc.MetaPathFinder):
+    _target = "hermes_cli.profiles"
+
+    def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> Any:
+        if fullname != self._target:
+            return None
+        for finder in sys.meta_path:
+            if finder is self:
+                continue
+            spec = finder.find_spec(fullname, path, target) if hasattr(finder, "find_spec") else None
+            if spec and spec.loader:
+                spec.loader = _ProfilesLoader(spec.loader)
+                return spec
+        return None
+
+
+class _ProfilesLoader(importlib.abc.Loader):
+    def __init__(self, loader: Any) -> None:
+        self.loader = loader
+
+    def create_module(self, spec: Any) -> Any:
+        if hasattr(self.loader, "create_module"):
+            return self.loader.create_module(spec)
+        return None
+
+    def exec_module(self, module: Any) -> None:
+        self.loader.exec_module(module)
+        _wrap_profiles_module(module)
+
+
+existing = sys.modules.get("hermes_cli.profiles")
+if existing is not None:
+    _wrap_profiles_module(existing)
+elif not any(isinstance(finder, _ProfilesImportHook) for finder in sys.meta_path):
+    sys.meta_path.insert(0, _ProfilesImportHook())
+'''.lstrip(),
+    encoding="utf-8",
+)
+
+pth_path = site_dir / "memos_hermes_profile_defaults.pth"
+pth_path.write_text("import memos_hermes_profile_defaults\n", encoding="utf-8")
+print(module_path)
+print(pth_path)
 PYEOF
-    success "config.yaml: memory.provider = memtensor"
+  success "Hermes profile defaults hook installed"
+
+  if [[ -f "${config_file}" ]]; then
+    local patched_configs
+    patched_configs="$("${python_bin}" - "${HOME}/.hermes" 2>/dev/null <<'PYEOF'
+import sys
+from pathlib import Path
+
+import yaml
+
+hermes_home = Path(sys.argv[1])
+paths = [hermes_home / "config.yaml"]
+profiles_dir = hermes_home / "profiles"
+if profiles_dir.is_dir():
+    paths.extend(sorted(profiles_dir.glob("*/config.yaml")))
+
+patched: list[str] = []
+for path in paths:
+    if not path.is_file():
+        continue
+    with path.open() as f:
+        cfg = yaml.safe_load(f) or {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+
+    mem = cfg.get("memory")
+    if not isinstance(mem, dict):
+        mem = {}
+        cfg["memory"] = mem
+    mem["provider"] = "memtensor"
+    mem.setdefault("memory_enabled", True)
+    mem.setdefault("user_profile_enabled", True)
+
+    plugins = cfg.get("plugins")
+    if not isinstance(plugins, dict):
+        plugins = {}
+        cfg["plugins"] = plugins
+    enabled = plugins.get("enabled")
+    if enabled is True:
+        enabled = ["memtensor"]
+    elif isinstance(enabled, list):
+        enabled = [item for item in enabled if item != "memtensor"]
+        enabled.append("memtensor")
+    else:
+        enabled = ["memtensor"]
+    plugins["enabled"] = enabled
+
+    disabled = plugins.get("disabled")
+    if isinstance(disabled, list):
+        plugins["disabled"] = [item for item in disabled if item != "memtensor"]
+
+    with path.open("w") as f:
+        yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    patched.append(str(path))
+
+print("\n".join(patched))
+PYEOF
+)" || warn "Hermes config auto-patch failed"
+    if [[ -n "${patched_configs}" ]]; then
+      success "Hermes configs patched:"
+      while IFS= read -r patched_config; do
+        [[ -n "${patched_config}" ]] && printf "       ${DIM}%s${NC}\n" "${patched_config}"
+      done <<< "${patched_configs}"
+    fi
   else
     cat > "${config_file}" <<'CFGEOF'
 memory:
   memory_enabled: true
   user_profile_enabled: true
   provider: memtensor
+plugins:
+  enabled:
+  - memtensor
 CFGEOF
     success "Created ${config_file}"
   fi
@@ -741,14 +978,21 @@ CFGEOF
     step "Starting Memory Viewer daemon"
     local node_bin
     node_bin="$(cat "${prefix}/.memos-node-bin" 2>/dev/null || command -v node || true)"
-    local tsx_bin="${prefix}/node_modules/.bin/tsx"
+    local tsx_bin="${prefix}/node_modules/tsx/dist/cli.mjs"
     local bridge_cts="${prefix}/bridge.cts"
-    if [[ -n "${node_bin}" && -x "${node_bin}" && -x "${tsx_bin}" && -f "${bridge_cts}" ]]; then
+    local bridge_cjs="${prefix}/dist/bridge.cjs"
+    local bridge_entry="${bridge_cjs}"
+    [[ -f "${bridge_entry}" ]] || bridge_entry="${bridge_cts}"
+    if [[ -n "${node_bin}" && -x "${node_bin}" && -f "${bridge_entry}" && ( "${bridge_entry}" == *.cjs || -f "${tsx_bin}" ) ]]; then
       local daemon_log="${prefix}/logs/daemon-start.log"
       mkdir -p "${prefix}/logs"
       # Launch bridge in --daemon mode (pure HTTP, no stdio).
       # The process stays alive to serve the Memory Viewer.
-      ( cd "${prefix}" && nohup "${node_bin}" "${tsx_bin}" "${bridge_cts}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
+      if [[ "${bridge_entry}" == *.cjs ]]; then
+        ( cd "${prefix}" && nohup "${node_bin}" "${bridge_entry}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
+      else
+        ( cd "${prefix}" && nohup "${node_bin}" "${tsx_bin}" "${bridge_entry}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
+      fi
 
       if wait_for_viewer "${HERMES_PORT}" 120; then
         success "Memory Viewer daemon running"
@@ -758,7 +1002,7 @@ CFGEOF
         return 1
       fi
     else
-      warn "node or tsx not found — skipping daemon start."
+      warn "node or bridge runtime not found — skipping daemon start."
     fi
   fi
 

@@ -11,6 +11,7 @@
  *        • `agent_end`           → `onTurnEnd`   (capture + reward chain)
  *        • `before_tool_call`    → duration tracker
  *        • `after_tool_call`     → `recordToolOutcome` (decision-repair)
+ *        • `tool_result_persist` → repeated-failure memos_search hint
  *        • `session_start` / `session_end` → core session lifecycle
  *   5. Register a service so the host can flush + shut down cleanly.
  *
@@ -40,6 +41,7 @@ import { rootLogger, memoryBuffer } from "../../core/logger/index.js";
 import type { MemoryCore } from "../../agent-contract/memory-core.js";
 import { startHttpServer } from "../../server/http.js";
 import type { ServerHandle } from "../../server/types.js";
+import { Telemetry } from "../../core/telemetry/index.js";
 
 // ─── Plugin metadata ───────────────────────────────────────────────────────
 
@@ -82,16 +84,40 @@ interface PluginRuntime {
   shutdown: () => Promise<void>;
 }
 
-/** Locate the bundled viewer static assets relative to the plugin root. */
-function resolveViewerStaticRoot(): string | undefined {
-  // Built packages load from `<plugin>/dist/adapters`; source tests load
-  // from `<plugin>/adapters`. The viewer bundle remains at `web/dist`.
+/**
+ * Locate the plugin source root (the directory holding `package.json`,
+ * `bridge.cts`, etc.). Two layouts to support: built tarball
+ * (`<plugin>/dist/adapters/openclaw`) and source/tests
+ * (`<plugin>/adapters/openclaw`). Returned path is the one used by
+ * `Telemetry` to find `telemetry.credentials.json` (CI writes it
+ * here pre-publish via `scripts/generate-telemetry-credentials.cjs`).
+ */
+function resolvePluginRoot(): string | undefined {
   try {
     const thisFile = fileURLToPath(import.meta.url);
     const adapterDir = path.dirname(thisFile); // .../adapters/openclaw
     const candidates = [
-      path.resolve(adapterDir, "..", "..", "..", "web", "dist"),
-      path.resolve(adapterDir, "..", "..", "web", "dist"),
+      path.resolve(adapterDir, "..", "..", ".."),
+      path.resolve(adapterDir, "..", ".."),
+    ];
+    return candidates.find((candidate) =>
+      existsSync(path.join(candidate, "package.json")),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/** Locate the bundled viewer static assets relative to the plugin root. */
+function resolveViewerStaticRoot(): string | undefined {
+  // Built packages load from `<plugin>/dist/adapters`; source tests load
+  // from `<plugin>/adapters`. The viewer bundle remains at `viewer/dist`.
+  try {
+    const thisFile = fileURLToPath(import.meta.url);
+    const adapterDir = path.dirname(thisFile); // .../adapters/openclaw
+    const candidates = [
+      path.resolve(adapterDir, "..", "..", "..", "viewer", "dist"),
+      path.resolve(adapterDir, "..", "..", "viewer", "dist"),
     ];
     return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
   } catch {
@@ -112,6 +138,35 @@ async function createRuntime(api: OpenClawPluginApi): Promise<PluginRuntime> {
   });
   await core.init();
 
+  // Anonymous ARMS telemetry. Mirrors `bridge.cts`'s setup so OpenClaw
+  // emits the same `plugin_started` / `daily_active` / `memos_search`
+  // / `memory_ingested` / `feedback_submitted` / `viewer_opened`
+  // events under the same `memos_local_hermes_v2` group as Hermes.
+  // Without this every OpenClaw user was invisible in ARMS — only the
+  // hermes-side `bridge.cts` was emitting events.
+  //
+  // Order matters:
+  //   1. `new Telemetry` reads `config.telemetry` and the credentials
+  //      file under the plugin source root.
+  //   2. `bindTelemetry` must run before any turn so that
+  //      `memory-core.ts`'s `if (telemetry)` guards see a non-null
+  //      instance on the very first `onTurnStart`.
+  //   3. `trackPluginStarted` immediately after also fires
+  //      `daily_active` (with persistent dedup; see sender.ts).
+  // `core.shutdown()` flushes telemetry as part of its `finally`
+  // block, so we don't need to await `telemetry.shutdown()` here.
+  const telemetry = new Telemetry(
+    config.telemetry ?? {},
+    home.root,
+    PLUGIN_VERSION,
+    rootLogger.child({ channel: "core.telemetry" }),
+    resolvePluginRoot(),
+  );
+  (
+    core as { bindTelemetry?: (t: InstanceType<typeof Telemetry>) => void }
+  ).bindTelemetry?.(telemetry);
+  telemetry.trackPluginStarted("openclaw");
+
   const bridge = createOpenClawBridge({
     agent: "openclaw",
     core,
@@ -131,6 +186,7 @@ async function createRuntime(api: OpenClawPluginApi): Promise<PluginRuntime> {
         core,
         home,
         logTail: () => memoryBuffer().tail({ limit: 200 }),
+        telemetry,
       },
       {
         port: OPENCLAW_VIEWER_PORT,
@@ -187,29 +243,43 @@ function register(api: OpenClawPluginApi): void {
   //    fails later.
   api.registerMemoryCapability?.({
     promptBuilder: ({ availableTools }) => {
-      const hasSearch = availableTools.has("memory_search");
-      const hasGet = availableTools.has("memory_get");
-      const hasTimeline = availableTools.has("memory_timeline");
-      const hasEnv = availableTools.has("memory_environment");
-      if (!hasSearch && !hasGet && !hasTimeline && !hasEnv) return [];
+      const hasSearch = availableTools.has("memos_search");
+      const hasGet = availableTools.has("memos_get");
+      const hasTimeline = availableTools.has("memos_timeline");
+      const hasEnv = availableTools.has("memos_environment");
+      const hasSkillList = availableTools.has("memos_skill_list");
+      const hasSkillGet = availableTools.has("memos_skill_get");
+      if (!hasSearch && !hasGet && !hasTimeline && !hasEnv && !hasSkillList && !hasSkillGet) {
+        return [];
+      }
       const lines: string[] = [
         "## Memory (MemOS Local)",
         "This workspace uses MemOS Local — a self-evolving layered memory (L1/L2/L3 + Skills).",
       ];
       if (hasSearch) {
         lines.push(
-          "- `memory_search` — search prior traces, policies, world models, and skills.",
+          "- `memos_search` — search prior traces, policies, world models, and skills.",
         );
       }
       if (hasEnv) {
         lines.push(
-          "- `memory_environment` — list / query accumulated environment knowledge " +
+          "- `memos_environment` — list / query accumulated environment knowledge " +
             "(project layout, behavioural rules, constraints). Use before exploring an unfamiliar area.",
         );
       }
       if (hasGet || hasTimeline) {
         lines.push(
-          "- `memory_get` / `memory_timeline` — fetch full bodies + episode timelines.",
+          "- `memos_get` / `memos_timeline` — fetch full bodies + episode timelines.",
+        );
+      }
+      if (hasSkillList) {
+        lines.push(
+          "- `memos_skill_list` — list MemOS-crystallized skills learned from prior runs.",
+        );
+      }
+      if (hasSkillGet) {
+        lines.push(
+          "- `memos_skill_get` — load the full invocation guide for a MemOS skill.",
         );
       }
       lines.push(
@@ -273,6 +343,12 @@ function register(api: OpenClawPluginApi): void {
     const r = await ensureRuntime();
     if (!r) return;
     await r.bridge.handleAfterToolCall(event, ctx);
+  });
+
+  api.on("tool_result_persist", async (event, ctx) => {
+    const r = await ensureRuntime();
+    if (!r) return;
+    return r.bridge.handleToolResultPersist(event, ctx);
   });
 
   api.on("session_start", async (event, ctx) => {

@@ -45,6 +45,9 @@ export function makeEpisodesRepo(db: StorageDb) {
   const selectById = db.prepare<{ id: string }, RawEpisodeRow>(
     `SELECT ${COLUMNS.join(", ")} FROM episodes WHERE id=@id`,
   );
+  const deleteById = db.prepare<{ id: string }>(
+    `DELETE FROM episodes WHERE id=@id`,
+  );
   const selectOpenForSession = db.prepare<{ session: string }, RawEpisodeRow>(
     `SELECT ${COLUMNS.join(", ")} FROM episodes WHERE session_id=@session AND status='open' ORDER BY started_at DESC LIMIT 1`,
   );
@@ -132,6 +135,10 @@ export function makeEpisodesRepo(db: StorageDb) {
       appendTrace.run({ id, trace_ids_json: toJsonText(kept) });
     },
 
+    deleteById(id: EpisodeId): void {
+      deleteById.run({ id });
+    },
+
     getById(id: EpisodeId): (EpisodeRow & EpisodeMetaRow) | null {
       const r = selectById.get({ id });
       if (!r) return null;
@@ -203,7 +210,7 @@ function mapRow(r: RawEpisodeRow): EpisodeRow & EpisodeMetaRow {
     id: r.id,
     sessionId: r.session_id,
     ...ownerFieldsFromRaw(r),
-    share: { scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub" },
+    share: { scope: normalizeShareForStorage(r.share_scope) },
     startedAt: r.started_at,
     endedAt: r.ended_at,
     traceIds: fromJsonText<string[]>(r.trace_ids_json, []),

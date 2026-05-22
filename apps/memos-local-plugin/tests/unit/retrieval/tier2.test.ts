@@ -127,6 +127,60 @@ describe("retrieval/tier2 (with real sqlite)", () => {
     expect(ids).toContain("zeroV");
   });
 
+  it("excludeSessionId omits traces from that session", async () => {
+    handle.repos.sessions.upsert({
+      id: "s2" as SessionId,
+      agent: "openclaw",
+      startedAt: NOW,
+      lastSeenAt: NOW,
+      meta: {},
+    });
+    handle.repos.episodes.upsert({
+      id: "ep2" as EpisodeId,
+      sessionId: "s2" as SessionId,
+      startedAt: NOW as never,
+      endedAt: null,
+      traceIds: [],
+      rTask: null,
+      status: "open",
+    });
+    handle.repos.traces.insert({
+      id: "otherSess" as TraceId,
+      episodeId: "ep2" as EpisodeId,
+      sessionId: "s2" as SessionId,
+      ts: NOW as never,
+      userText: "other session docker query",
+      agentText: "reply",
+      toolCalls: [],
+      reflection: "ref",
+      value: 0.95 as never,
+      alpha: 0.5 as never,
+      rHuman: null,
+      priority: 0.95 as never,
+      tags: ["docker"],
+      vecSummary: vec([1, 0, 0]),
+      vecAction: null,
+      turnId: 0 as never,
+      schemaVersion: 1,
+    });
+
+    const withoutExclude = await runTier2(
+      { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
+      { queryVec: vec([1, 0, 0]), tags: ["docker"] },
+    );
+    expect(withoutExclude.traces.map((t) => String(t.refId))).toContain("otherSess");
+
+    const withExclude = await runTier2(
+      { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
+      {
+        queryVec: vec([1, 0, 0]),
+        tags: ["docker"],
+        excludeSessionId: "s2" as SessionId,
+      },
+    );
+    expect(withExclude.traces.map((t) => String(t.refId))).not.toContain("otherSess");
+  });
+
   it("rolls up episodes when ≥2 traces share episode_id", async () => {
     const out = await runTier2(
       {
@@ -138,7 +192,8 @@ describe("retrieval/tier2 (with real sqlite)", () => {
     );
     if (out.traces.length >= 2) {
       expect(out.episodes.length).toBeGreaterThanOrEqual(1);
-      expect(out.episodes[0]!.summary).toContain("episode");
+      expect(out.episodes[0]!.summary).toContain("Past similar episode");
+      expect(out.episodes[0]!.summary).not.toMatch(/best V|goal-sim|V=/);
     }
   });
 });

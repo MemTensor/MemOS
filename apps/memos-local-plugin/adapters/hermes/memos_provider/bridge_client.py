@@ -1,9 +1,10 @@
 """JSON-RPC 2.0 over stdio client for the MemOS bridge.
 
-Spawns ``node bridge.cts --agent=hermes`` as a subprocess and communicates
-via line-delimited JSON messages on its stdin/stdout. Responses are
-matched by ``id``. Notifications (events + logs) are forwarded to
-registered callbacks on a reader thread.
+Spawns the packaged bridge subprocess (compiled ``dist/bridge.cjs`` when
+available, otherwise the source ``bridge.cts`` through ``tsx``) and communicates
+via line-delimited JSON messages on its stdin/stdout. Responses are matched by
+``id``. Notifications (events + logs) are forwarded to registered callbacks on a
+reader thread.
 
 The client is *blocking* by design — callers wanting async behaviour
 should wrap requests in a thread pool.
@@ -29,6 +30,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+HOST_HANDLER_WAIT_SECONDS = 5.0
+
 
 def _installed_node_binary(plugin_root: Path) -> str | None:
     marker = plugin_root / ".memos-node-bin"
@@ -39,6 +42,13 @@ def _installed_node_binary(plugin_root: Path) -> str | None:
     if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
         return candidate
     return None
+
+
+def _bridge_script(plugin_root: Path) -> Path:
+    compiled = plugin_root / "dist" / "bridge.cjs"
+    if compiled.exists():
+        return compiled
+    return plugin_root / "bridge.cts"
 
 
 class BridgeError(RuntimeError):
@@ -70,6 +80,7 @@ class MemosBridgeClient:
         bridge_path: str | None = None,
         node_binary: str | None = None,
         agent: str = "hermes",
+        no_viewer: bool = True,
         extra_env: dict[str, str] | None = None,
     ) -> None:
         self._lock = threading.Lock()
@@ -85,6 +96,7 @@ class MemosBridgeClient:
         # handler returns a JSON-serialisable value or raises to
         # surface a JSON-RPC error back to the bridge.
         self._host_handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
+        self._host_handlers_cv = threading.Condition()
         self._closed = False
 
         plugin_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -95,34 +107,38 @@ class MemosBridgeClient:
             or shutil.which("node")
             or "node"
         )
-        script = bridge_path or str(plugin_root / "bridge.cts")
+        script_path = Path(bridge_path) if bridge_path else _bridge_script(plugin_root)
+        script = str(script_path)
         env = {**os.environ, **(extra_env or {})}
 
-        # The plugin ships raw TypeScript (no precompiled `dist/`). Node's
-        # own `--experimental-strip-types` strips type annotations but does
-        # not rewrite `.js` import specifiers to the corresponding `.ts`
-        # files on disk — and the source tree uses `.js` extensions in
-        # every import per the TSC / bundler convention. We therefore
-        # launch the bridge via the bundled `tsx` binary, which handles
-        # both jobs (strip types + extension rewrite). `tsx` is declared
-        # as a production dependency in package.json so it's always present
-        # under node_modules/.bin after `npm install`.
-        tsx_bin = plugin_root / "node_modules" / ".bin" / "tsx"
-        if tsx_bin.exists():
-            cmd = [node, str(tsx_bin), script, f"--agent={agent}"]
+        # Prefer the compiled CommonJS bridge from packaged installs. The raw
+        # TypeScript entry remains as a development fallback and needs `tsx`
+        # for stripping types plus `.js` → `.ts` import resolution. On Windows
+        # the `.bin/tsx` file is a shell shim, so use tsx's real JS entrypoint
+        # whenever we have to launch the source entry through a specific Node.
+        tsx_cli = plugin_root / "node_modules" / "tsx" / "dist" / "cli.mjs"
+        bridge_args = [script, f"--agent={agent}"]
+        if no_viewer:
+            bridge_args.append("--no-viewer")
+        if script_path.suffix == ".cjs":
+            cmd = [node, *bridge_args]
+        elif tsx_cli.exists():
+            cmd = [node, str(tsx_cli), *bridge_args]
         else:
             # Fallback path: `node --import tsx` reproduces the same loader
             # inline. Requires tsx to be resolvable as a package from the
             # plugin root — true whenever node_modules exists. If tsx is
             # genuinely missing the child will fail fast with a loader
             # error the stderr reader will surface.
-            cmd = [node, "--import", "tsx", script, f"--agent={agent}"]
+            cmd = [node, "--import", "tsx", *bridge_args]
         self._proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             env=env,
             cwd=str(plugin_root),
@@ -139,6 +155,11 @@ class MemosBridgeClient:
             name="memos-bridge-stderr",
         )
         self._stderr_reader.start()
+
+    @property
+    def pid(self) -> int:
+        """Return the PID of the bridge subprocess."""
+        return int(getattr(self._proc, "pid", 0) or 0)
 
     # ─── Public API ──
 
@@ -212,20 +233,48 @@ class MemosBridgeClient:
         heavy work (e.g. an LLM call) are still expected to return
         within the bridge-side timeout (default 60 s).
         """
-        self._host_handlers[method] = handler
+        with self._host_handlers_cv:
+            self._host_handlers[method] = handler
+            self._host_handlers_cv.notify_all()
 
     def close(self) -> None:
         if self._closed:
             return
-        self._closed = True
+        with self._host_handlers_cv:
+            self._closed = True
+            self._host_handlers_cv.notify_all()
+
+        pid = self.pid
+
+        # 1. Close stdin (triggers bridge's graceful exit)
         with contextlib.suppress(Exception):
             self._proc.stdin.close()
-        # DON'T wait() or kill() the bridge process. If it has an
-        # active viewer (HTTP server), it will stay alive as a daemon
-        # so the memory panel remains accessible between `hermes chat`
-        # sessions. If it's headless (viewer port was taken), it will
-        # notice stdin EOF and exit on its own.
-        # unblock any pending waiters
+
+        # 2. Wait for process to exit gracefully (up to 5 seconds)
+        try:
+            self._proc.wait(timeout=5.0)
+            logger.debug("MemOS: bridge process %d exited gracefully", pid)
+        except subprocess.TimeoutExpired:
+            # 3. If still running, send SIGTERM
+            logger.warning(
+                "MemOS: bridge process %d did not exit after stdin close, sending SIGTERM", pid
+            )
+            try:
+                self._proc.terminate()  # Send SIGTERM
+                self._proc.wait(timeout=5.0)  # Increased from 2.0 to 5.0 for viewer cleanup
+                logger.debug("MemOS: bridge process %d terminated", pid)
+            except subprocess.TimeoutExpired:
+                # 4. Last resort: SIGKILL
+                logger.error(
+                    "MemOS: bridge process %d did not respond to SIGTERM, sending SIGKILL", pid
+                )
+                self._proc.kill()  # Send SIGKILL
+                try:
+                    self._proc.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    logger.error("MemOS: bridge process %d could not be killed", pid)
+
+        # 5. Clean up pending requests
         with self._lock:
             for entry in list(self._pending.values()):
                 entry["error"] = {
@@ -278,7 +327,7 @@ class MemosBridgeClient:
                 and "result" not in msg
                 and "error" not in msg
             ):
-                handler = self._host_handlers.get(method)
+                handler = self._host_handler_for(method)
                 if handler is None:
                     self._send_response(
                         rpc_id,
@@ -306,6 +355,28 @@ class MemosBridgeClient:
                         },
                     )
                 continue
+
+    def _host_handler_for(
+        self,
+        method: str,
+        *,
+        timeout: float = HOST_HANDLER_WAIT_SECONDS,
+    ) -> Callable[[dict[str, Any]], Any] | None:
+        """Return a reverse-RPC handler, waiting briefly during startup.
+
+        The Node bridge now starts stdio before ``core.init()`` so host LLM
+        fallback can run during startup recovery. On a fast machine that
+        reverse request can arrive just before ``initialize()`` registers
+        ``host.llm.complete``. Waiting here turns that sub-millisecond race
+        into the intended handshake while still returning ``unknown_method``
+        for genuinely unsupported methods.
+        """
+        with self._host_handlers_cv:
+            self._host_handlers_cv.wait_for(
+                lambda: method in self._host_handlers or self._closed,
+                timeout=timeout,
+            )
+            return self._host_handlers.get(method)
 
     def _send_response(
         self,

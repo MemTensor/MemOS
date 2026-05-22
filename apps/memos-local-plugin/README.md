@@ -34,8 +34,7 @@ apps/memos-local-plugin/
 ├── adapters/openclaw/   # In-process TS adapter for OpenClaw
 ├── adapters/hermes/     # Python adapter that talks to bridge.cts
 ├── templates/           # config.yaml templates copied to the user's home on install
-├── web/                 # Runtime viewer (Vite, served by server/)
-├── site/                # Local-only marketing site + docs + release notes
+├── viewer/              # Runtime viewer (Vite, served by server/)
 ├── docs/                # Developer-facing docs (algorithm, data model, prompts, …)
 ├── scripts/             # Build / packaging / release helpers
 └── tests/               # unit / integration / e2e (vitest)

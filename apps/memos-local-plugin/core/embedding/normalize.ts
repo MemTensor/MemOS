@@ -17,6 +17,7 @@ export function toFloat32(v: number[]): EmbeddingVector {
 /**
  * Enforce the configured dimensionality.
  *
+ * - `expected <= 0` means "auto": preserve the provider's native length.
  * - If the provider returns *more* dimensions than configured, truncate (the
  *   old project did this so callers could safely switch to a smaller model).
  * - If fewer, throw. Silently zero-padding would poison downstream cosine.
@@ -26,6 +27,7 @@ export function enforceDim(
   expected: number,
   ctx: { provider: string; model: string; index?: number },
 ): number[] {
+  if (expected <= 0) return v;
   if (v.length === expected) return v;
   if (v.length > expected) return v.slice(0, expected);
   throw new MemosError(
@@ -59,8 +61,22 @@ export function postProcess(
   },
 ): EmbeddingVector[] {
   const out: EmbeddingVector[] = [];
+  const inferred = opts.dimensions <= 0 ? (raw[0]?.length ?? 0) : opts.dimensions;
   for (let i = 0; i < raw.length; i++) {
-    const dimed = enforceDim(raw[i]!, opts.dimensions, {
+    if (opts.dimensions <= 0 && raw[i]!.length !== inferred) {
+      throw new MemosError(
+        ERROR_CODES.EMBEDDING_UNAVAILABLE,
+        `Provider ${opts.provider}/${opts.model} returned inconsistent vector dimensions in one batch`,
+        {
+          provider: opts.provider,
+          model: opts.model,
+          got: raw[i]!.length,
+          expected: inferred,
+          index: i,
+        },
+      );
+    }
+    const dimed = enforceDim(raw[i]!, inferred, {
       provider: opts.provider,
       model: opts.model,
       index: i,

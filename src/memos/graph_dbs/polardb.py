@@ -1956,15 +1956,20 @@ class PolarDBGraphDB(BaseGraphDB):
         filter: dict | None = None,
         knowledgebase_ids: list | None = None,
         user_name_flag: bool = True,
+        status: str | None = None,
     ) -> list[str]:
         start_time = time.perf_counter()
         logger.info(
-            f" get_by_metadata user_name:{user_name},filter: {filter}, knowledgebase_ids: {knowledgebase_ids},filters:{filters}"
+            f" get_by_metadata user_name:{user_name},filter: {filter}, knowledgebase_ids: {knowledgebase_ids},filters:{filters},status:{status}"
         )
 
         user_name = user_name if user_name else self._get_config_value("user_name")
 
         where_conditions = []
+
+        if status:
+            escaped_status = status.replace("'", "\\'")
+            where_conditions.append(f"n.status = '{escaped_status}'")
 
         for f in filters:
             field = f["field"]

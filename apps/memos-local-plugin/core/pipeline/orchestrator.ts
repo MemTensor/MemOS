@@ -40,6 +40,7 @@ import {
   repairRetrieve,
 } from "../retrieval/retrieve.js";
 import type { RetrievalResult } from "../retrieval/types.js";
+import { scheduleInjection, type RetrievePlan } from "../injection/scheduler.js";
 
 import {
   buildPipelineBuses,
@@ -80,13 +81,14 @@ import { memoryBuffer } from "../logger/index.js";
 import { onBroadcastLog } from "../logger/transports/sse-broadcast.js";
 import { createEmbeddingRetryWorker, systemErrorEvent } from "../embedding/index.js";
 import type { EpisodeSnapshot } from "../session/index.js";
-import type { RelationDecision } from "../session/types.js";
+import type { IntentDecision, RelationDecision, TurnRelation } from "../session/types.js";
 
 // ─── Factory ──────────────────────────────────────────────────────────────
 
 export function createPipeline(deps: PipelineDeps): PipelineHandle {
   const log = pipelineLogger(deps);
   const algorithm = extractAlgorithmConfig(deps);
+  const lightweightMode = algorithm.lightweightMemory.enabled;
   const buses = buildPipelineBuses();
 
   // Session + intent.
@@ -310,6 +312,53 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     return snap.id as SessionId;
   }
 
+  function lightweightEpisodeMeta(meta: Record<string, unknown>): Record<string, unknown> {
+    if (!lightweightMode) return meta;
+    return {
+      ...meta,
+      lightweightMemory: true,
+      relation: "lightweight_memory",
+      topicState: "active",
+    };
+  }
+
+  async function startLightweightEpisode(
+    sessionId: SessionId,
+    userText: string,
+    meta: Record<string, unknown>,
+    turnTs?: number,
+  ): Promise<EpisodeSnapshot> {
+    const currentEpId = openEpisodeBySession.get(sessionId);
+    if (currentEpId) {
+      const current = session.sessionManager.getEpisode(currentEpId);
+      if (current?.status === "open") {
+        session.sessionManager.finalizeEpisode(currentEpId, {
+          patchMeta: {
+            lightweightMemory: true,
+            closeReason: "finalized",
+            recoveryReason: "lightweight_boundary_before_new_turn",
+          },
+        });
+      }
+      openEpisodeBySession.delete(sessionId);
+    }
+    lastEpisodeBySession.delete(sessionId);
+    const snap = await session.sessionManager.startEpisode({
+      sessionId,
+      userMessage: userText,
+      ts: turnTs,
+      meta: lightweightEpisodeMeta(meta),
+    });
+    openEpisodeBySession.set(sessionId, snap.id as EpisodeId);
+    return snap;
+  }
+
+  function isLightweightEpisode(
+    episode: Pick<EpisodeSnapshot, "meta"> | null | undefined,
+  ): boolean {
+    return episode?.meta?.lightweightMemory === true;
+  }
+
   /**
    * Decide whether the new turn continues the current episode, opens a
    * new episode in the same session, or requires a brand-new session.
@@ -349,6 +398,11 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     const mergeMode = algorithm.session.followUpMode === "merge_follow_ups";
     const mergeCapMs = algorithm.session.mergeMaxGapMs;
     const turnTs = timestampFromMeta(meta, "startedAtTurnTs");
+
+    if (lightweightMode) {
+      const snap = await startLightweightEpisode(sessionId, userText, meta, turnTs);
+      return { episode: snap, sessionId, relation: "lightweight_memory" };
+    }
 
     // ─── Case 1: there is a currently open episode ──────────────────
     const currentEpId = openEpisodeBySession.get(sessionId);
@@ -915,7 +969,10 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     };
   }
 
-  async function retrieveTurnStart(input: TurnInputDTO): Promise<InjectionPacket> {
+  async function retrieveTurnStart(
+    input: TurnInputDTO,
+    plan?: RetrievePlan,
+  ): Promise<InjectionPacket> {
     const ctx = {
       reason: "turn_start" as const,
       agent: input.agent,
@@ -928,7 +985,18 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     const result: RetrievalResult = await turnStartRetrieve(
       retrievalDepsFor(input.namespace),
       ctx,
-      { events: buses.retrieval },
+      {
+        events: buses.retrieval,
+        skipLlmFilter: input.contextHints?.__memosDeferLlmFilterToCaller === true,
+        plan: plan
+          ? {
+              scenarioId: plan.scenarioId,
+              wantTier1: plan.wantTier1,
+              wantTier2: plan.wantTier2,
+              wantTier3: plan.wantTier3,
+            }
+          : undefined,
+      },
     );
     turnStartRetrievalStats.set(result.packet.packetId, result.stats);
     return result.packet;
@@ -1007,9 +1075,47 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       sessionId,
       episodeId: episode.id as EpisodeId,
     };
+    const schedulerIntent = await intentForCurrentTurn({
+      episode,
+      userText: input.userText,
+      ts: input.ts,
+    });
+    const retrievePlan = scheduleInjection({
+      userText: input.userText,
+      sessionId,
+      episodeId: episode.id as EpisodeId,
+      intent: schedulerIntent,
+      relation: schedulerRelation(routing.relation),
+    });
 
     try {
-      const packet = await retrieveTurnStart(normalized);
+      if (retrievePlan.entry === "turn_start_skip") {
+        const packet = emptyInjectionPacket(input.agent, sessionId, episode.id as EpisodeId, input.ts);
+        turnStartRetrievalStats.set(
+          packet.packetId,
+          skippedRetrievalStats({
+            agent: input.agent,
+            sessionId,
+            episodeId: episode.id as EpisodeId,
+            scenarioId: retrievePlan.scenarioId,
+            userText: input.userText,
+            elapsedMs: now() - t0,
+          }),
+        );
+        log.info("turn.started", {
+          agent: input.agent,
+          sessionId,
+          episodeId: episode.id,
+          userChars: input.userText.length,
+          retrievalScenario: retrievePlan.scenarioId,
+          retrievalSkipped: true,
+          retrievalTotalMs: 0,
+          elapsedMs: now() - t0,
+        });
+        return packet;
+      }
+
+      const packet = await retrieveTurnStart(normalized, retrievePlan);
       // Always stamp the routed sessionId + episodeId on the packet so
       // adapters can correlate the subsequent `agent_end` / `turn.end`
       // call without needing a separate round-trip to the session
@@ -1026,6 +1132,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         sessionId,
         episodeId: episode.id,
         userChars: input.userText.length,
+        retrievalScenario: retrievePlan.scenarioId,
         retrievalTotalMs: packet.tierLatencyMs.tier1 +
           packet.tierLatencyMs.tier2 +
           packet.tierLatencyMs.tier3,
@@ -1134,7 +1241,9 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     let liteTraceIds: string[] = [];
     if (liveEpisode) {
       try {
-        const captureResult = await subs.captureRunner.runLite({ episode: liveEpisode });
+        const captureResult = isLightweightEpisode(liveEpisode)
+          ? await subs.captureRunner.runLightweight({ episode: liveEpisode })
+          : await subs.captureRunner.runLite({ episode: liveEpisode });
         liteTraceIds = captureResult.traceIds;
         if (captureResult.traceIds.length > 0) {
           session.sessionManager.attachTraceIds(episodeId, captureResult.traceIds as string[]);
@@ -1153,12 +1262,14 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     // even though the episode isn't closed yet — the classifier doesn't
     // care about `endedAt`, only about prev-user / prev-assistant text.
     const initialUserTurn = liveEpisode?.turns.find((t) => t.role === "user");
-    lastEpisodeBySession.set(sessionId, {
-      episodeId,
-      endedAt: now(),
-      userText: (initialUserTurn?.content ?? "").slice(0, 1000),
-      assistantText: (result.agentText ?? "").slice(0, 2000),
-    });
+    if (!lightweightMode) {
+      lastEpisodeBySession.set(sessionId, {
+        episodeId,
+        endedAt: now(),
+        userText: (initialUserTurn?.content ?? "").slice(0, 1000),
+        assistantText: (result.agentText ?? "").slice(0, 2000),
+      });
+    }
 
     log.info("turn.ended", {
       agent: result.agent,
@@ -1182,6 +1293,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // ─── Tool outcomes (decision repair) ────────────────────────────────────
 
   function recordToolOutcome(outcome: RecordToolOutcomeInput): void {
+    if (lightweightMode) return;
     const sessionId = outcome.sessionId;
     const context =
       outcome.context ??
@@ -1220,6 +1332,10 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     const nextTick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
     await subs.subscriptions.capture.drain();
+    if (lightweightMode) {
+      await embeddingRetryWorker.flush();
+      return;
+    }
     await nextTick();
     await subs.subscriptions.reward.drain();
     await nextTick();
@@ -1279,6 +1395,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     action: string;
     durationMs: number;
   }): void {
+    if (lightweightMode) return;
     try {
       deps.repos.apiLogs.insert({
         toolName: "session_relation_classify",
@@ -1320,6 +1437,27 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   function timestampFromMeta(meta: Record<string, unknown>, key: string): number | undefined {
     const ts = meta[key];
     return typeof ts === "number" && Number.isFinite(ts) ? ts : undefined;
+  }
+
+  async function intentForCurrentTurn(input: {
+    episode: EpisodeSnapshot;
+    userText: string;
+    ts?: number;
+  }): Promise<IntentDecision> {
+    const firstTurn = input.episode.turns[0];
+    const isFreshEpisodeForThisTurn =
+      input.episode.turns.length === 1 &&
+      firstTurn?.role === "user" &&
+      firstTurn.content === input.userText &&
+      (input.ts == null || firstTurn.ts === input.ts);
+
+    if (isFreshEpisodeForThisTurn) {
+      return input.episode.intent;
+    }
+
+    return session.intent.classify(input.userText, {
+      episodeId: input.episode.id as EpisodeId,
+    });
   }
 
   /**
@@ -1435,6 +1573,66 @@ function emptyInjectionPacket(
     sessionId,
     episodeId,
   };
+}
+
+function skippedRetrievalStats(input: {
+  agent: AgentKind;
+  sessionId: SessionId;
+  episodeId: EpisodeId;
+  scenarioId: string;
+  userText: string;
+  elapsedMs: number;
+}): RetrievalResult["stats"] {
+  return {
+    reason: "turn_start",
+    scenarioId: input.scenarioId,
+    agent: input.agent,
+    sessionId: input.sessionId,
+    episodeId: input.episodeId,
+    plannedTiers: { tier1: false, tier2: false, tier3: false },
+    tier1Count: 0,
+    tier2Count: 0,
+    tier3Count: 0,
+    tier1LatencyMs: 0,
+    tier2LatencyMs: 0,
+    tier3LatencyMs: 0,
+    fuseLatencyMs: 0,
+    totalLatencyMs: Math.max(0, input.elapsedMs),
+    queryTokens: Math.ceil(input.userText.length / 4),
+    queryTags: [],
+    emptyPacket: true,
+    embedding: {
+      attempted: false,
+      ok: false,
+      degraded: false,
+    },
+    rawCandidateCount: 0,
+    droppedByThresholdCount: 0,
+    thresholdFloor: 0,
+    topRelevance: 0,
+    rankedCount: 0,
+    llmFilterOutcome: "skipped_by_scheduler",
+    llmFilterSufficient: true,
+    llmFilterKept: 0,
+    llmFilterDropped: 0,
+    channelHits: {},
+  };
+}
+
+function schedulerRelation(
+  relation: string | undefined,
+): TurnRelation | "bootstrap" | "lightweight_memory" | undefined {
+  if (
+    relation === "revision" ||
+    relation === "follow_up" ||
+    relation === "new_task" ||
+    relation === "unknown" ||
+    relation === "bootstrap" ||
+    relation === "lightweight_memory"
+  ) {
+    return relation;
+  }
+  return undefined;
 }
 
 function _assertConfigShape(

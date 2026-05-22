@@ -1,4 +1,6 @@
 import copy
+import importlib
+import re
 import traceback
 
 from concurrent.futures import as_completed
@@ -12,6 +14,7 @@ from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, T
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
     FastTokenizer,
+    StopwordManager,
     cosine_similarity_matrix,
     detect_lang,
     find_best_unrelated_subgroup,
@@ -32,6 +35,8 @@ from .task_goal_parser import TaskGoalParser
 
 
 logger = get_logger(__name__)
+KEYWORD_EXTRACT_TOP_K = 3
+KEYWORD_ALLOW_POS = ("n", "nr", "nrt", "ns", "nt", "nz", "vn", "v", "t", "eng", "m")
 COT_DICT = {
     "fine": {"en": COT_PROMPT, "zh": COT_PROMPT_ZH},
     "fast": {"en": SIMPLE_COT_PROMPT, "zh": SIMPLE_COT_PROMPT_ZH},
@@ -278,7 +283,7 @@ class Searcher:
 
             # retrieve related nodes by embedding
             related_nodes = [
-                self.graph_store.get_node(n["id"])
+                self.graph_store.get_node(n["id"], user_name=user_name)
                 for n in self.graph_store.search_by_embedding(
                     query_embedding,
                     top_k=top_k,
@@ -505,6 +510,97 @@ class Searcher:
             search_filter=search_filter,
         )
 
+    @staticmethod
+    def _require_keyword_user_name(user_name: str | None) -> str:
+        normalized_user_name = user_name.strip() if isinstance(user_name, str) else ""
+        if not normalized_user_name:
+            raise ValueError(
+                "[PATH-KEYWORD] user_name is required for PolarDB fulltext keyword search"
+            )
+        return normalized_user_name
+
+    @staticmethod
+    def _is_keyword_stopword(term: str) -> bool:
+        normalized = term.strip()
+        return not normalized or StopwordManager.is_search_stopword(normalized)
+
+    @staticmethod
+    def _normalize_keyword_term(term: str) -> str:
+        normalized = str(term).strip()
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9]*(?:[._+\-/][A-Za-z0-9]+)*", normalized):
+            return normalized.lower()
+        return normalized
+
+    @staticmethod
+    def _keyword_extract_top_k(query: str, language: str) -> int:
+        cleaned_query = query.strip()
+        if not cleaned_query:
+            return 0
+        if len(cleaned_query) <= 12:
+            return 1
+        if language != "zh":
+            token_count = len(re.findall(r"\b[a-zA-Z0-9]+\b", cleaned_query))
+            return 2 if token_count <= 8 else KEYWORD_EXTRACT_TOP_K
+        if len(cleaned_query) <= 120:
+            return 2
+        return KEYWORD_EXTRACT_TOP_K
+
+    @classmethod
+    def _rank_english_keyword_terms(cls, terms: list[str]) -> list[str]:
+        term_stats: dict[str, dict[str, int | str]] = {}
+        for index, term in enumerate(terms):
+            normalized_term = cls._normalize_keyword_term(term)
+            if cls._is_keyword_stopword(normalized_term):
+                continue
+            key = normalized_term.lower()
+            if key not in term_stats:
+                term_stats[key] = {"term": normalized_term, "index": index, "count": 0}
+            term_stats[key]["count"] = int(term_stats[key]["count"]) + 1
+
+        def score(item: tuple[str, dict[str, int | str]]) -> tuple[float, int]:
+            _, data = item
+            term = str(data["term"])
+            count = int(data["count"])
+            term_score = count * 3.0 + min(len(term), 16) * 0.1
+            if any(ch.isdigit() for ch in term):
+                term_score += 1.0
+            if len(term) <= 2:
+                term_score -= 0.5
+            return (-term_score, int(data["index"]))
+
+        return [str(data["term"]) for _, data in sorted(term_stats.items(), key=score)]
+
+    def _extract_weighted_keyword_terms(self, query: str) -> list[str]:
+        language = detect_lang(query)
+        keyword_top_k = self._keyword_extract_top_k(query, language)
+        if keyword_top_k <= 0:
+            return []
+
+        if language == "zh":
+            jieba_analyse = importlib.import_module("jieba.analyse")
+
+            weighted_terms = jieba_analyse.extract_tags(
+                query,
+                topK=keyword_top_k,
+                allowPOS=KEYWORD_ALLOW_POS,
+            )
+        else:
+            tokenizer = self.tokenizer or FastTokenizer()
+            weighted_terms = self._rank_english_keyword_terms(tokenizer.tokenize_english(query))
+
+        query_words: list[str] = []
+        seen_words: set[str] = set()
+        for term in weighted_terms:
+            normalized_term = self._normalize_keyword_term(term)
+            dedupe_key = normalized_term.lower()
+            if self._is_keyword_stopword(normalized_term) or dedupe_key in seen_words:
+                continue
+            seen_words.add(dedupe_key)
+            query_words.append(normalized_term)
+            if len(query_words) >= keyword_top_k:
+                break
+        return query_words
+
     @timed
     def _retrieve_from_keyword(
         self,
@@ -524,22 +620,21 @@ class Searcher:
             return []
         if not query_embedding:
             return []
+        user_name = self._require_keyword_user_name(user_name)
 
-        query_words: list[str] = []
-        if self.tokenizer:
-            query_words = self.tokenizer.tokenize_mixed(query)
-        else:
-            query_words = query.strip().split()
-        # Use unique tokens; avoid passing the raw query into `to_tsquery(...)` because it may contain
-        # spaces/operators that cause tsquery parsing errors.
-        query_words = list(dict.fromkeys(query_words))
-        if len(query_words) > 64:
-            query_words = query_words[:64]
+        query_words = self._extract_weighted_keyword_terms(query)
         if not query_words:
             return []
+        # Quote weighted terms before `to_tsquery(...)` to avoid parsing operators from user input.
         tsquery_terms = ["'" + w.replace("'", "''") + "'" for w in query_words if w and w.strip()]
         if not tsquery_terms:
             return []
+        logger.info(
+            "[PATH-KEYWORD] weighted query_words=%s top_k=%s user_name=%s",
+            query_words,
+            top_k,
+            user_name,
+        )
 
         scopes = [memory_type] if memory_type != "All" else ["LongTermMemory", "UserMemory"]
 
@@ -548,7 +643,7 @@ class Searcher:
             try:
                 hits = self.graph_store.search_by_fulltext(
                     query_words=tsquery_terms,
-                    top_k=top_k * 2,
+                    top_k=top_k,
                     status="activated",
                     scope=scope,
                     search_filter=None,

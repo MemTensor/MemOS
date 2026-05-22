@@ -46,6 +46,7 @@ export interface EpisodeManager {
   addTurn(id: EpisodeId, turn: EpisodeTurnInput): EpisodeTurn;
   finalize(id: EpisodeId, input?: EpisodeFinalizeInput): EpisodeSnapshot;
   abandon(id: EpisodeId, reason: string): EpisodeSnapshot;
+  discardEmpty(id: EpisodeId, reason: string): EpisodeSnapshot | null;
   attachTraceIds(id: EpisodeId, traceIds: string[]): void;
   hydrate(snapshot: EpisodeSnapshot): EpisodeSnapshot;
   patchMeta(id: EpisodeId, metaPatch: Record<string, unknown>): EpisodeSnapshot;
@@ -283,6 +284,25 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
       });
       deps.bus.emit({ kind: "episode.finalized", episode: cloneSnapshot(snap), closedBy: "abandoned" });
       deps.bus.emit({ kind: "episode.abandoned", episodeId: id, reason });
+      return cloneSnapshot(snap);
+    },
+
+    discardEmpty(id, reason) {
+      const snap = get(id);
+      if (!snap) return null;
+      if (snap.traceIds.length > 0 || snap.turns.some((t) => t.role === "assistant" && t.content.trim())) {
+        throw new MemosError(ERROR_CODES.CONFLICT, `episode ${id} is not empty`, {
+          episodeId: id,
+          status: snap.status,
+        });
+      }
+      byId.delete(id);
+      deps.episodesRepo.deleteById(id);
+      log.info("episode.discarded_empty", {
+        episodeId: id,
+        sessionId: snap.sessionId,
+        reason,
+      });
       return cloneSnapshot(snap);
     },
 

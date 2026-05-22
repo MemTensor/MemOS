@@ -57,7 +57,7 @@ function buildDeps(h: TmpDbHandle): PipelineDeps {
     repos: h.repos,
     llm: null,
     reflectLlm: null,
-    embedder: fakeEmbedder({ dimensions: DEFAULT_CONFIG.embedding.dimensions }),
+    embedder: fakeEmbedder({ dimensions: 384 }),
     log: rootLogger.child({ channel: "test.adapters.openclaw" }),
     namespace: { agentKind: "openclaw", profileId: "main" },
     now: () => 1_700_000_000_000,
@@ -155,6 +155,39 @@ describe("flattenMessages", () => {
     expect(toolResult.toolCallId).toBe("call_1");
     expect(toolResult.content).toBe("file.txt");
     expect(toolResult.isError).toBe(false);
+  });
+
+  it("accepts OpenClaw lowercase/alias tool-call content blocks", () => {
+    const flat = flattenMessages([
+      { role: "user", content: "read two files" },
+      {
+        role: "assistant",
+        toolCallId: "fallback-id",
+        content: [
+          { type: "toolcall", id: "call_1", name: "read", arguments: { path: "a.md" } },
+          { type: "tool_use", toolUseId: "call_2", name: "read", input: { path: "b.md" } },
+          { type: "functionCall", name: "exec", args: { command: "pwd" } },
+        ],
+      },
+    ]);
+
+    const calls = flat.filter((m) => m.role === "tool_call");
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toMatchObject({
+      toolCallId: "call_1",
+      toolName: "read",
+      toolInput: { path: "a.md" },
+    });
+    expect(calls[1]).toMatchObject({
+      toolCallId: "call_2",
+      toolName: "read",
+      toolInput: { path: "b.md" },
+    });
+    expect(calls[2]).toMatchObject({
+      toolCallId: "fallback-id",
+      toolName: "exec",
+      toolInput: { command: "pwd" },
+    });
   });
 
   it("accepts OpenAI-legacy assistant.tool_calls + role: 'tool' for results", () => {
@@ -298,6 +331,7 @@ describe("extractTurn", () => {
     expect(turn!.toolCalls[0].name).toBe("sh");
     expect(turn!.toolCalls[0].input).toEqual({ cmd: "ls" });
     expect(turn!.toolCalls[0].output).toContain("a.txt");
+    expect(turn!.toolCalls[0].toolCallId).toBe("c1");
     expect(turn!.toolCalls[0].thinkingBefore).toBe("running ls");
   });
 
@@ -555,6 +589,30 @@ describe("extractTurn", () => {
     expect(turn!.toolCalls[0].output).toBeUndefined();
   });
 
+  it("keeps parallel same-name tool calls when ids are missing", () => {
+    const flat = flattenMessages([
+      { role: "user", content: "read both files" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolcall", name: "read", arguments: { path: "a.md" } },
+          { type: "toolcall", name: "read", arguments: { path: "b.md" } },
+        ],
+      },
+      { role: "toolResult", toolName: "read", content: "A" },
+      { role: "toolResult", toolName: "read", content: "B" },
+      { role: "assistant", content: [{ type: "text", text: "done" }] },
+    ]);
+
+    const turn = extractTurn(flat, 0);
+    expect(turn!.toolCalls).toHaveLength(2);
+    expect(turn!.toolCalls.map((tc) => tc.input)).toEqual([
+      { path: "a.md" },
+      { path: "b.md" },
+    ]);
+    expect(turn!.toolCalls.map((tc) => tc.output)).toEqual(["A", "B"]);
+  });
+
   it("returns null when the list has no user message", () => {
     const flat = flattenMessages([
       { role: "assistant", content: [{ type: "text", text: "nothing yet" }] },
@@ -717,7 +775,7 @@ describe("renderContextBlock", () => {
       tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
     });
     expect(block).toContain("<memos_context>");
-    expect(block).toContain("memory_search");
+    expect(block).toContain("memos_search");
     expect(block).toContain("</memos_context>");
   });
 });
@@ -958,6 +1016,59 @@ describe("createOpenClawBridge", () => {
     expect(events).not.toContain("episode.closed");
   });
 
+  it("uses tool hook observations when agent_end transcript omits tool blocks", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const runCtx = hookCtx({ sessionKey: "s-cached-tools", runId: "run-cached-tools" });
+    const toolCtx: PluginHookToolContext = {
+      toolName: "sh",
+      toolCallId: "call_cached",
+      agentId: "main",
+      sessionKey: "s-cached-tools",
+      sessionId: "host-s-cached-tools",
+      runId: "run-cached-tools",
+    };
+
+    await bridge.handleBeforePrompt({ prompt: "deploy with hooks", messages: [] }, runCtx);
+    bridge.handleBeforeToolCall(
+      { toolName: "sh", params: { cmd: "deploy" }, toolCallId: "call_cached" },
+      toolCtx,
+    );
+    await bridge.handleAfterToolCall(
+      {
+        toolName: "sh",
+        params: { cmd: "deploy" },
+        toolCallId: "call_cached",
+        result: "ok",
+        durationMs: 25,
+      },
+      toolCtx,
+    );
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "deploy with hooks" },
+          { role: "assistant", content: [{ type: "text", text: "done" }] },
+        ],
+        durationMs: 50,
+      },
+      runCtx,
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const traces = await mc.listTraces({ groupByTurn: true });
+    expect(traces).toHaveLength(2);
+    expect(traces.some((tr) => tr.toolCalls?.[0]?.name === "sh")).toBe(true);
+    expect(traces.some((tr) => tr.agentText === "done")).toBe(true);
+  });
+
   it("handleAgentEnd works even when before_prompt_build was never called (lazy episode open)", async () => {
     // V7 §0.1 regression: some hosts skip `before_prompt_build` (e.g.
     // OpenClaw's `/new` flow replays an old session without re-building
@@ -1190,6 +1301,101 @@ describe("createOpenClawBridge", () => {
     expect(bridge.trackedToolCalls()).toBe(0);
   });
 
+  it("tool_result_persist appends memos_search hint after three same-tool failures", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const ctx: PluginHookToolContext = {
+      toolName: "sh",
+      toolCallId: "call_1",
+      agentId: "main",
+      sessionKey: "s-tools",
+      sessionId: "host-s-tools",
+      runId: "run-tools",
+    };
+
+    const fail = (toolCallId: string) =>
+      bridge.handleToolResultPersist(
+        {
+          toolName: "sh",
+          toolCallId,
+          message: {
+            role: "toolResult",
+            toolName: "sh",
+            toolCallId,
+            content: "boom",
+            isError: true,
+          },
+        },
+        { ...ctx, toolCallId },
+      );
+
+    expect(fail("call_1")).toBeUndefined();
+    expect(fail("call_2")).toBeUndefined();
+    const third = fail("call_3") as { message?: { content?: string } };
+    expect(third.message?.content).toContain("failed multiple times in a row");
+    expect(third.message?.content).toContain("memos_search");
+
+    bridge.handleToolResultPersist(
+      {
+        toolName: "sh",
+        toolCallId: "call_4",
+        message: {
+          role: "toolResult",
+          toolName: "sh",
+          toolCallId: "call_4",
+          content: "ok",
+          isError: false,
+        },
+      },
+      { ...ctx, toolCallId: "call_4" },
+    );
+    expect(fail("call_5")).toBeUndefined();
+  });
+
+  it("tool_result_persist appends hint to the final text block", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const ctx: PluginHookToolContext = {
+      toolName: "read",
+      agentId: "main",
+      sessionKey: "s-tools",
+      sessionId: "host-s-tools",
+      runId: "run-array",
+    };
+    const failure = {
+      toolName: "read",
+      message: {
+        role: "toolResult",
+        content: [
+          { type: "text", text: "first part" },
+          { type: "text", text: "last part" },
+        ],
+        isError: true,
+      },
+    };
+
+    bridge.handleToolResultPersist(failure, ctx);
+    bridge.handleToolResultPersist(failure, ctx);
+    const third = bridge.handleToolResultPersist(failure, ctx) as {
+      message?: { content?: Array<{ type: string; text?: string }> };
+    };
+    expect(third.message?.content?.[0]?.text).toBe("first part");
+    expect(third.message?.content?.[1]?.text).toContain("last part");
+    expect(third.message?.content?.[1]?.text).toContain("memos_search");
+  });
+
   it("subagent_ended does not create a synthetic parent task", async () => {
     const mc = buildCore();
     await mc.init();
@@ -1398,12 +1604,12 @@ describe("registerOpenClawTools", () => {
     });
     const names = tools.map((t) => t.descriptor.name).sort();
     expect(names).toEqual([
-      "memory_environment",
-      "memory_get",
-      "memory_search",
-      "memory_timeline",
-      "skill_get",
-      "skill_list",
+      "memos_environment",
+      "memos_get",
+      "memos_search",
+      "memos_skill_get",
+      "memos_skill_list",
+      "memos_timeline",
     ]);
     for (const t of tools) {
       expect(typeof t.descriptor.execute).toBe("function");
@@ -1411,7 +1617,7 @@ describe("registerOpenClawTools", () => {
     }
   });
 
-  it("memory_search executes against the core and returns well-formed hits", async () => {
+  it("memos_search executes against the core and returns well-formed hits", async () => {
     const mc = buildCore();
     await mc.init();
 
@@ -1421,7 +1627,7 @@ describe("registerOpenClawTools", () => {
       core: mc,
       log: silentLogger(),
     });
-    const search = tools.find((t) => t.descriptor.name === "memory_search")!;
+    const search = tools.find((t) => t.descriptor.name === "memos_search")!;
     const res = (await search.descriptor.execute("toolCall_1", {
       query: "anything",
       maxResults: 5,
@@ -1441,7 +1647,7 @@ describe("registerOpenClawTools", () => {
     expect(res.details.hits).toBe(res.hits);
   });
 
-  it("memory_search maps per-tier topK params and keeps maxResults fallback", async () => {
+  it("memos_search maps per-tier topK params and keeps maxResults fallback", async () => {
     const searchMemory = vi.fn(async () => ({
       hits: [],
       injectedContext: "",
@@ -1455,7 +1661,7 @@ describe("registerOpenClawTools", () => {
       core: mc,
       log: silentLogger(),
     });
-    const search = tools.find((t) => t.descriptor.name === "memory_search")!;
+    const search = tools.find((t) => t.descriptor.name === "memos_search")!;
 
     await search.descriptor.execute("toolCall_1", {
       query: "anything",
@@ -1497,10 +1703,10 @@ describe("registerOpenClawTools", () => {
       log: silentLogger(),
     });
 
-    expect(tools.map((t) => t.descriptor.name)).toContain("memory_search");
+    expect(tools.map((t) => t.descriptor.name)).toContain("memos_search");
     expect(requestedCore).toBe(false);
 
-    const search = tools.find((t) => t.descriptor.name === "memory_search")!;
+    const search = tools.find((t) => t.descriptor.name === "memos_search")!;
     await search.descriptor.execute("toolCall_1", {
       query: "anything",
       maxResults: 5,

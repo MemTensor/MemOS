@@ -30,14 +30,12 @@
     "bridge/**/*.ts",
     "adapters/openclaw/**/*.ts",
     "scripts/**/*.ts",
-    "site/scripts/**/*.ts",
     "bridge.cts"
   ],
   "exclude": [
     "node_modules",
     "dist",
-    "web",
-    "site/src",
+    "viewer",
     "adapters/hermes"
   ]
 }

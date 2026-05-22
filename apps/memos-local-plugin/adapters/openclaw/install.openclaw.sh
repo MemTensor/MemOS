@@ -6,8 +6,8 @@
 # specific bits:
 #
 #   1. Install node_modules inside $PREFIX (one-time, idempotent).
-#   2. Build the viewer + site bundles so the HTTP server has static
-#      assets to serve.
+#   2. Build the viewer bundle so the HTTP server has static assets
+#      to serve.
 #
 # We never touch the OpenClaw host process itself — the plugin loads
 # on demand when the host's plugin manager discovers $PREFIX.
@@ -37,7 +37,7 @@ fi
 
 # ── 2. viewer bundle ──────────────────────────────────────────────────────────
 if [[ -x "./node_modules/.bin/vite" ]]; then
-  log "Building viewer bundle → web/dist/"
+  log "Building viewer bundle → viewer/dist/"
   ./node_modules/.bin/vite build --config vite.config.ts >/dev/null
 else
   warn "vite not found in node_modules; skipping bundle build"

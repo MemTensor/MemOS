@@ -1,4 +1,4 @@
-import type { EmbeddingVector, EpisodeId, SessionId, TraceId, TraceRow } from "../../types.js";
+import type { EmbeddingVector, EpisodeId, SessionId, ShareScope, TraceId, TraceRow } from "../../types.js";
 import type { StorageDb, TraceListFilter } from "../types.js";
 import { buildInClause, buildInsert, buildUpdate } from "../tx.js";
 import { scanAndTopK, topKCosine, type VectorHit, type VectorRow } from "../vector.js";
@@ -121,6 +121,14 @@ export function makeTracesRepo(db: StorageDb) {
         fragments.push(`episode_id = @episode_id`);
         params.episode_id = filter.episodeId;
       }
+      if (filter.ownerAgentKind) {
+        fragments.push(`owner_agent_kind = @owner_agent_kind`);
+        params.owner_agent_kind = filter.ownerAgentKind;
+      }
+      if (filter.ownerProfileId) {
+        fragments.push(`owner_profile_id = @owner_profile_id`);
+        params.owner_profile_id = filter.ownerProfileId;
+      }
       if (filter.minAbsValue !== undefined) {
         fragments.push(`abs(value) >= @min_abs_value`);
         params.min_abs_value = filter.minAbsValue;
@@ -136,7 +144,10 @@ export function makeTracesRepo(db: StorageDb) {
      * Total row count matching the same filter (no limit/offset).
      * Used by list endpoints so the viewer can show "Page N of M".
      */
-    count(filter: Omit<TraceListFilter, "limit" | "offset"> = {}): number {
+    count(
+      filter: Omit<TraceListFilter, "limit" | "offset"> = {},
+      visibility?: { sql: string; params: Record<string, unknown> },
+    ): number {
       const tr = timeRangeWhere(filter, "ts");
       const fragments: string[] = [];
       const params: Record<string, unknown> = { ...tr.params };
@@ -148,9 +159,21 @@ export function makeTracesRepo(db: StorageDb) {
         fragments.push(`episode_id = @episode_id`);
         params.episode_id = filter.episodeId;
       }
+      if (filter.ownerAgentKind) {
+        fragments.push(`owner_agent_kind = @owner_agent_kind`);
+        params.owner_agent_kind = filter.ownerAgentKind;
+      }
+      if (filter.ownerProfileId) {
+        fragments.push(`owner_profile_id = @owner_profile_id`);
+        params.owner_profile_id = filter.ownerProfileId;
+      }
       if (filter.minAbsValue !== undefined) {
         fragments.push(`abs(value) >= @min_abs_value`);
         params.min_abs_value = filter.minAbsValue;
+      }
+      if (visibility) {
+        fragments.push(visibility.sql);
+        Object.assign(params, visibility.params);
       }
       if (tr.sql) fragments.push(tr.sql);
       const where = joinWhere(fragments);
@@ -164,7 +187,10 @@ export function makeTracesRepo(db: StorageDb) {
      * where one user query + its tool sub-steps + final reply are
      * counted as 1. Used by the Memories viewer for accurate pagination.
      */
-    countTurns(filter: Omit<TraceListFilter, "limit" | "offset"> = {}): number {
+    countTurns(
+      filter: Omit<TraceListFilter, "limit" | "offset"> = {},
+      visibility?: { sql: string; params: Record<string, unknown> },
+    ): number {
       const fragments: string[] = [];
       const params: Record<string, unknown> = {};
       if (filter.sessionId) {
@@ -174,6 +200,18 @@ export function makeTracesRepo(db: StorageDb) {
       if (filter.episodeId) {
         fragments.push(`episode_id = @episode_id`);
         params.episode_id = filter.episodeId;
+      }
+      if (filter.ownerAgentKind) {
+        fragments.push(`owner_agent_kind = @owner_agent_kind`);
+        params.owner_agent_kind = filter.ownerAgentKind;
+      }
+      if (filter.ownerProfileId) {
+        fragments.push(`owner_profile_id = @owner_profile_id`);
+        params.owner_profile_id = filter.ownerProfileId;
+      }
+      if (visibility) {
+        fragments.push(visibility.sql);
+        Object.assign(params, visibility.params);
       }
       const where = joinWhere(fragments);
       const sql = `SELECT COUNT(*) AS n FROM (SELECT DISTINCT episode_id, turn_id FROM traces ${where})`;
@@ -186,7 +224,10 @@ export function makeTracesRepo(db: StorageDb) {
      * turn's most recent trace timestamp DESC. The viewer uses this to
      * fetch a page of "memories" (1 turn = 1 memory).
      */
-    listTurnKeys(filter: TraceListFilter = {}): Array<{ episodeId: string | null; turnId: number; maxTs: number }> {
+    listTurnKeys(
+      filter: TraceListFilter = {},
+      visibility?: { sql: string; params: Record<string, unknown> },
+    ): Array<{ episodeId: string | null; turnId: number; maxTs: number }> {
       const fragments: string[] = [];
       const params: Record<string, unknown> = {};
       if (filter.sessionId) {
@@ -196,6 +237,18 @@ export function makeTracesRepo(db: StorageDb) {
       if (filter.episodeId) {
         fragments.push(`episode_id = @episode_id`);
         params.episode_id = filter.episodeId;
+      }
+      if (filter.ownerAgentKind) {
+        fragments.push(`owner_agent_kind = @owner_agent_kind`);
+        params.owner_agent_kind = filter.ownerAgentKind;
+      }
+      if (filter.ownerProfileId) {
+        fragments.push(`owner_profile_id = @owner_profile_id`);
+        params.owner_profile_id = filter.ownerProfileId;
+      }
+      if (visibility) {
+        fragments.push(visibility.sql);
+        Object.assign(params, visibility.params);
       }
       const where = joinWhere(fragments);
       const limit = Math.max(1, Math.min(500, filter.limit ?? 50));
@@ -564,7 +617,7 @@ export function makeTracesRepo(db: StorageDb) {
     updateShare(
       id: TraceId,
       share: {
-        scope: "private" | "local" | "public" | "hub" | null;
+        scope: ShareScope | null;
         target?: string | null;
         sharedAt?: number | null;
       },
@@ -705,7 +758,7 @@ function mapRow(r: RawTraceRow): TraceRow {
     share:
       r.share_scope != null
         ? {
-            scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub",
+            scope: normalizeShareForStorage(r.share_scope) as ShareScope,
             target: r.share_target,
             sharedAt: r.shared_at,
           }
