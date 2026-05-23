@@ -262,6 +262,106 @@ Your lobsters and Hermes Agents now have **the best** memory system — choose *
     
 <br>
 
+
+## FAQ
+
+### What is MemOS?
+
+MemOS is a **Memory Operating System** for LLMs and AI agents that unifies store/retrieve/manage for long-term memory. It enables context-aware and personalized interactions with knowledge base (KB), multi-modal memory, tool memory, and enterprise-grade optimizations.
+
+### What are the benchmark results?
+
+| Benchmark | MemOS Result |
+|-----------|--------------|
+| LoCoMo | 75.80 |
+| LongMemEval | +40.43% vs baseline |
+| PrefEval-10 | +2568% |
+| PersonaMem | +40.75% |
+| vs OpenAI Memory | **+43.70% Accuracy** |
+| Token Savings | **35.24%** |
+
+### How does MemOS compare to other memory solutions?
+
+| Feature | MemOS | mem0 | LangChain Memory |
+|---------|-------|------|------------------|
+| Multi-Modal Memory | ✅ Text/Images/Tools | ❌ Text only | ❌ Text only |
+| Knowledge Base | ✅ Multi-Cube KB | ❌ No KB | ⚠️ RAG only |
+| Memory Feedback | ✅ Natural language | ❌ No | ❌ No |
+| Graph Memory | ✅ Inspectable | ❌ Black-box | ❌ Black-box |
+| Async Ingestion | ✅ MemScheduler | ❌ No | ❌ No |
+| Open Source | ✅ Apache 2.0 | ✅ MIT | ✅ Apache |
+| ArXiv Paper | ✅ 2507.03724 | ❌ No | ❌ No |
+
+### What are the key features?
+
+| Feature | Description |
+|---------|-------------|
+| **Unified Memory API** | Single API for add/retrieve/edit/delete |
+| **Multi-Modal Memory** | Text, images, tool traces, personas |
+| **Multi-Cube KB** | Composable memory cubes |
+| **Async Ingestion** | MemScheduler with millisecond latency |
+| **Memory Feedback** | Natural-language correction |
+| **Self-evolving Memory** | L1 traces, L2 policies, L3 world model |
+
+### What deployment options are available?
+
+| Option | Description |
+|--------|-------------|
+| **Cloud API** | Hosted service at memos.openmem.net |
+| **Self-Hosted** | Local/private via Docker |
+| **Quick Mode** | Lightweight deployment |
+| **Full Mode** | Complete deployment |
+
+### How do I self-host MemOS?
+
+```bash
+git clone https://github.com/MemTensor/MemOS.git
+cd MemOS
+pip install -r ./docker/requirements.txt
+cp docker/.env.example MemOS/.env
+# Configure OPENAI_API_KEY, etc.
+```
+
+### What LLM providers are supported?
+
+| Provider | Config |
+|----------|--------|
+| OpenAI | `MOS_CHAT_MODEL_PROVIDER=openai` |
+| Azure | `MOS_CHAT_MODEL_PROVIDER=azure` |
+| Qwen | `MOS_CHAT_MODEL_PROVIDER=qwen` |
+| DeepSeek | `MOS_CHAT_MODEL_PROVIDER=deepseek` |
+| MiniMax | `MOS_CHAT_MODEL_PROVIDER=minimax` |
+| Ollama | `MOS_CHAT_MODEL_PROVIDER=ollama` |
+
+### What plugins are available?
+
+| Plugin | Purpose |
+|--------|---------|
+| memos-local-plugin 2.0 | Local memory for Hermes Agent & OpenClaw |
+| OpenClaw Cloud Plugin | Hosted memory, 72% token reduction |
+
+### What is the memory architecture?
+
+| Layer | Purpose |
+|-------|---------|
+| L1 Traces | Raw interaction history |
+| L2 Policies | Learned preferences |
+| L3 World Model | User understanding |
+| Crystallized Skills | Reusable patterns |
+
+### What license does MemOS use?
+
+Apache 2.0 License.
+
+### Where can I get help?
+
+| Resource | Link |
+|----------|------|
+| Docs | [memos-docs.openmem.net](https://memos-docs.openmem.net/) |
+| Paper | [arxiv 2507.03724](https://arxiv.org/abs/2507.03724) |
+| Discord | [discord.gg/Txbx3gebZR](https://discord.gg/Txbx3gebZR) |
+| X | [@MemOS_dev](https://x.com/MemOS_dev) |
+
 ## 📚 Resources
 
 - **Awesome-AI-Memory**
