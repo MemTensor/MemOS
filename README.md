@@ -262,6 +262,126 @@ Your lobsters and Hermes Agents now have **the best** memory system — choose *
     
 <br>
 
+
+## FAQ
+
+### What is MemOS?
+
+MemOS is a **Memory Operating System** for LLMs and AI agents that unifies store/retrieve/manage for long-term memory. It enables context-aware and personalized interactions with knowledge base (KB), multi-modal memory, tool memory, and enterprise-grade optimizations built in.
+
+### What are the benchmark results?
+
+| Benchmark | MemOS Result | Improvement |
+|-----------|--------------|-------------|
+| LoCoMo | 75.80 | - |
+| LongMemEval | +40.43% vs baseline | - |
+| PrefEval-10 | +2568% | - |
+| PersonaMem | +40.75% | - |
+| **vs OpenAI Memory** | +43.70% Accuracy | - |
+| **Token Savings** | 35.24% | - |
+
+### How does MemOS compare to other memory solutions?
+
+| Feature | MemOS | mem0 | LangChain Memory | Letta |
+|---------|-------|------|------------------|-------|
+| Multi-Modal Memory | ✅ Text/Images/Tools | ❌ Text only | ❌ Text only | ❌ Text only |
+| Knowledge Base | ✅ Multi-Cube KB | ❌ No KB | ⚠️ RAG only | ❌ No KB |
+| Memory Feedback | ✅ Natural language | ❌ No | ❌ No | ❌ No |
+| Graph Memory | ✅ Inspectable/Editable | ❌ Black-box | ❌ Black-box | ❌ Limited |
+| Async Ingestion | ✅ MemScheduler | ❌ No | ❌ No | ❌ No |
+| Open Source | ✅ Apache 2.0 | ✅ MIT | ✅ Apache | ✅ MIT |
+| ArXiv Paper | ✅ 2507.03724 | ❌ No | ❌ No | ❌ No |
+
+### What are the key features?
+
+| Feature | Description |
+|---------|-------------|
+| **Unified Memory API** | Single API for add/retrieve/edit/delete, graph-structured, inspectable |
+| **Multi-Modal Memory** | Text, images, tool traces, personas retrieved together |
+| **Multi-Cube KB** | Composable memory cubes for users/projects/agents |
+| **Async Ingestion** | MemScheduler with millisecond latency |
+| **Memory Feedback** | Natural-language correction/supplement/replacement |
+| **Self-evolving Memory** | L1 traces, L2 policies, L3 world model, crystallized Skills |
+
+### What deployment options are available?
+
+| Option | Description |
+|--------|-------------|
+| **Cloud API** | Hosted service at memos.openmem.net |
+| **Self-Hosted** | Local/private deployment via Docker |
+| **Quick Mode** | Lightweight deployment |
+| **Full Mode** | Complete deployment |
+
+### How do I get started with Cloud API?
+
+1. Sign up at [MemOS dashboard](https://memos-dashboard.openmem.net/)
+2. Go to **API Keys** and copy your key
+3. Use the Cloud API for memory operations
+
+See [Cloud Getting Started](https://memos-docs.openmem.net/memos_cloud/quick_start/).
+
+### How do I self-host MemOS?
+
+```bash
+# Clone
+git clone https://github.com/MemTensor/MemOS.git
+cd MemOS
+
+# Install dependencies
+pip install -r ./docker/requirements.txt
+
+# Configure .env (OPENAI_API_KEY, etc.)
+cp docker/.env.example MemOS/.env
+
+# Start service
+# See docs for full setup
+```
+
+### What LLM providers are supported?
+
+| Provider | Setting |
+|----------|---------|
+| OpenAI | `MOS_CHAT_MODEL_PROVIDER=openai` |
+| Azure OpenAI | `MOS_CHAT_MODEL_PROVIDER=azure` |
+| Qwen (DashScope) | `MOS_CHAT_MODEL_PROVIDER=qwen` |
+| DeepSeek | `MOS_CHAT_MODEL_PROVIDER=deepseek` |
+| MiniMax | `MOS_CHAT_MODEL_PROVIDER=minimax` |
+| Ollama | `MOS_CHAT_MODEL_PROVIDER=ollama` |
+| HuggingFace | `MOS_CHAT_MODEL_PROVIDER=huggingface` |
+| vLLM | `MOS_CHAT_MODEL_PROVIDER=vllm` |
+
+### What plugins are available?
+
+| Plugin | Purpose |
+|--------|---------|
+| **memos-local-plugin 2.0** | Local-first memory for Hermes Agent & OpenClaw |
+| **OpenClaw Cloud Plugin** | Hosted memory service, 72% token reduction |
+| **OpenClaw Local Plugin** | 100% on-device SQLite memory |
+
+### What is the memory architecture?
+
+| Layer | Purpose |
+|-------|---------|
+| **L1 Traces** | Raw interaction history |
+| **L2 Policies** | Learned preferences/behaviors |
+| **L3 World Model** | User understanding |
+| **Crystallized Skills** | Reusable patterns |
+
+### What license does MemOS use?
+
+Apache 2.0 License (see [LICENSE](./LICENSE)).
+
+### Where can I get help?
+
+| Resource | Link |
+|----------|------|
+| Documentation | [memos-docs.openmem.net](https://memos-docs.openmem.net/home/overview/) |
+| ArXiv Paper | [2507.03724](https://arxiv.org/abs/2507.03724) |
+| Discord | [Join Server](https://discord.gg/Txbx3gebZR) |
+| X/Twitter | [@MemOS_dev](https://x.com/MemOS_dev) |
+| GitHub Issues | [Submit issues](https://github.com/MemTensor/MemOS/issues) |
+| Awesome-AI-Memory | [IAAR-Shanghai/Awesome-AI-Memory](https://github.com/IAAR-Shanghai/Awesome-AI-Memory) |
+
 ## 📚 Resources
 
 - **Awesome-AI-Memory**
@@ -340,148 +460,3 @@ We welcome contributions from the community! Please read our [contribution guide
 ## 📄 License
 
 MemOS is licensed under the [Apache 2.0 License](./LICENSE).
-
-## ❓ FAQ
-
-### General
-
-**Q: What is MemOS?**
-
-A: MemOS is a Memory Operating System for LLMs and AI agents that unifies **store / retrieve / manage** for long-term memory. It enables context-aware and personalized interactions with KB (knowledge base), multi-modal, tool memory, and enterprise-grade optimizations. Think of it as the memory layer that makes your AI agents truly remember and evolve.
-
-**Q: How is MemOS different from embedding-based memory solutions?**
-
-A: Traditional memory solutions are black-box embedding stores. MemOS provides:
-- **Unified Memory API**: Single API for add/retrieve/edit/delete — structured as a graph, inspectable and editable
-- **Multi-Modal Memory**: Natively supports text, images, tool traces, and personas in one system
-- **Self-Evolving Memory**: L1 traces → L2 policies → L3 world models → crystallized Skills (driven by feedback)
-- **Knowledge Base Integration**: Multi-Cube KB management with isolation and controlled sharing
-- **Memory Feedback & Correction**: Refine memory with natural-language feedback over time
-
-**Q: What LLM providers does MemOS support?**
-
-A: MemOS supports multiple LLM providers:
-- **OpenAI** (default)
-- **Azure OpenAI**
-- **Qwen (DashScope/阿里云百炼)**
-- **DeepSeek**
-- **MiniMax**
-- **Ollama** (local models)
-- **HuggingFace**
-- **vLLM**
-
-Set `MOS_CHAT_MODEL_PROVIDER` in `.env` to select the backend (e.g., `openai`, `qwen`, `deepseek`, `minimax`).
-
-### Getting Started
-
-**Q: How do I get started quickly?**
-
-A: Two options:
-
-1. **Cloud API (Hosted)** — Sign up on [MemOS Dashboard](https://memos-dashboard.openmem.net), get your API key, and start using the API immediately. See [Cloud Quick Start](https://memos-docs.openmem.net/memos_cloud/quick_start/).
-
-2. **Self-Hosted** — Clone the repo, configure `.env`, and start via Docker or uvicorn:
-   ```bash
-   git clone https://github.com/MemTensor/MemOS.git
-   cd MemOS && pip install -r ./docker/requirements.txt
-   # Configure .env with API keys (OPENAI_API_KEY, MOS_EMBEDDER_API_KEY, etc.)
-   cd docker && docker compose up
-   ```
-
-**Q: What are the differences between Cloud and Self-Hosted?**
-
-A:
-- **Cloud**: Hosted service, 72% lower token usage, multi-agent memory sharing, no infrastructure management. Ideal for production.
-- **Self-Hosted**: Full control over data, 100% local storage with SQLite, hybrid search (FTS5 + vector), suitable for privacy-sensitive scenarios.
-
-### Core Features
-
-**Q: What is Multi-Modal Memory?**
-
-A: MemOS natively supports multiple memory types in one system:
-- **Text memory**: Conversation history, facts, preferences
-- **Image memory**: Charts, diagrams, screenshots
-- **Tool memory**: Tool usage history for agent planning
-- **Persona memory**: User profiles and agent personality
-
-All types are retrieved and reasoned together through unified search.
-
-**Q: What is Multi-Cube Knowledge Base Management?**
-
-A: Knowledge Bases are managed as composable **memory cubes**, enabling:
-- **Isolation**: Separate KBs for different projects/users
-- **Controlled sharing**: Share KBs across agents with permissions
-- **Dynamic composition**: Combine multiple KBs in queries
-
-This is useful for multi-agent collaboration and enterprise deployments.
-
-**Q: How does Memory Feedback & Correction work?**
-
-A: You can refine existing memories with natural language:
-- **Correct**: "Actually, I prefer vanilla, not strawberry"
-- **Supplement**: "Also add that I'm allergic to peanuts"
-- **Replace**: "Replace my old address with the new one"
-
-MemOS updates the memory graph intelligently based on your feedback.
-
-**Q: What is MemScheduler?**
-
-A: MemScheduler runs memory operations asynchronously with millisecond-level latency, ensuring production stability under high concurrency. It uses Redis Streams and queue isolation with task priority, auto-recovery, and quota-based scheduling.
-
-### Plugins & Integration
-
-**Q: Does MemOS integrate with AI agent frameworks?**
-
-A: Yes! MemOS provides official plugins:
-- **OpenClaw Plugin**: Cloud + Local versions. Reduces token usage by 72% and enables multi-agent memory sharing. See [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin).
-- **Hermes Agent Plugin**: `memos-local-plugin 2.0` provides self-evolving memory for Hermes Agent and OpenClaw. 100% local-first storage.
-
-**Q: Does MemOS support MCP?**
-
-A: Yes, MemOS provides MCP (Model Context Protocol) support for memory operations, including memory deletion and feedback.
-
-### Performance & Metrics
-
-**Q: What accuracy improvements does MemOS provide?**
-
-A: MemOS achieves significant improvements over baseline solutions:
-- **+43.70% Accuracy vs. OpenAI Memory** on LoCoMo benchmark (75.80 score)
-- **+40.43% on LongMemEval**
-- **+2568% on PrefEval-10**
-- **+40.75% on PersonaMem**
-- **Saves 35.24% Memory Tokens**
-
-### Troubleshooting
-
-**Q: I'm getting "API key not found" error. What should I do?**
-
-A: Make sure you've configured the required API keys in `.env`:
-- `OPENAI_API_KEY` (or equivalent for your chosen provider)
-- `MOS_EMBEDDER_API_KEY`
-- `MEMRADER_API_KEY` (optional)
-
-For BaiLian (阿里云百炼), apply through the [BaiLian Console](https://bailian.console.aliyun.com/).
-
-**Q: Docker compose failed to start. What should I check?**
-
-A:
-1. Ensure Docker Compose is installed
-2. Navigate to the `docker` directory before running `docker compose up`
-3. Check that ports (8001, etc.) are not in use
-4. Verify `.env` is properly configured
-
-**Q: Local plugin not working with OpenClaw/Hermes Agent?**
-
-A:
-1. Ensure `@memtensor/memos-local-plugin` is installed via NPM
-2. Check that SQLite database is accessible
-3. Review the [Local Plugin Docs](https://memos-docs.openmem.net/cn/openclaw/local_plugin) for configuration
-
-### Help & Resources
-
-- **Documentation**: [memos-docs.openmem.net](https://memos-docs.openmem.net/home/overview/)
-- **ArXiv Paper**: [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724)
-- **Awesome-AI-Memory**: [IAAR-Shanghai/Awesome-AI-Memory](https://github.com/IAAR-Shanghai/Awesome-AI-Memory)
-- **GitHub Discussions**: [MemTensor/MemOS/discussions](https://github.com/MemTensor/MemOS/discussions)
-- **Discord**: [Join Server](https://discord.gg/Txbx3gebZR)
-- **X (Twitter)**: [@MemOS_dev](https://x.com/MemOS_dev)
