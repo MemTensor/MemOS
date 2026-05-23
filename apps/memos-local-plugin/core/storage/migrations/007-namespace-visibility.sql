@@ -1,2 +1,4 @@
--- Namespace + visibility migration is implemented idempotently in migrator.ts
--- because fresh installs may already get these columns from 001-initial.sql.
+-- Namespace + visibility migration is implemented programmatically in migrator.ts.
+-- See ensureNamespaceColumns() (phase 1: fast DDL, runs inside transaction) and
+-- ensureNamespaceIndexesAndBackfill() (phase 2: batched backfill + index creation,
+-- runs outside transaction so the bridge can be safely interrupted and restarted).
