@@ -30,6 +30,11 @@ import type {
   TurnResultDTO,
 } from "../../agent-contract/dto.js";
 import type { MemoryCore } from "../../agent-contract/memory-core.js";
+import {
+  MATH_FINAL_ANSWER_PROTOCOL_TITLE,
+  renderMathFinalAnswerProtocol,
+} from "../../core/retrieval/math-task.js";
+export { isStandaloneMathFinalAnswerTask } from "../../core/retrieval/math-task.js";
 
 import type {
   AfterToolCallEvent,
@@ -801,7 +806,6 @@ const BEFORE_PROMPT_SOFT_TIMEOUT_MS = Number.parseInt(
   process.env.MEMOS_BEFORE_PROMPT_SOFT_TIMEOUT_MS ?? "12000",
   10,
 );
-const MATH_TASK_GUARDRAIL_TITLE = "## Standalone math task guardrails";
 const TOOL_FAILURE_REPAIR_HINT =
   "This tool has failed multiple times in a row. You may want to call `memos_search` for relevant past experience before deciding what to do next.";
 const TOOL_FAILURE_HINT_THRESHOLD = 3;
@@ -835,29 +839,13 @@ export function renderContextBlock(
   return `${CONTEXT_OPEN}\n${hint}\n${CONTEXT_CLOSE}`;
 }
 
-export function isStandaloneMathFinalAnswerTask(text: string | undefined): boolean {
-  if (!text) return false;
-  const normalized = text.toLowerCase();
-  const mathSignals = [
-    /\\boxed|\\frac|\\sqrt|\\sum|\\prod|\\binom/,
-    /\bmath(?:ematics)?\b|\bolympiad\b|\bcompetition\b/,
-    /\bcombinatorics?\b|\bprobability\b|\bpermutation\b|\bcombination\b|\bcount(?:ing)?\b/,
-    /\bnumber theory\b|\bmod(?:ulo|ular)?\b|\bprime\b|\bdivisib(?:le|ility)\b|\bcongruence\b/,
-    /\balgebra\b|\bpolynomials?\b|\bequations?\b|\bfunctional equation\b/,
-    /\bgeometry\b|\btriangle\b|\bcircle\b|\bpolygon\b|\bangle\b|\bmidpoint\b/,
-    /\bintegers?\b|\breal numbers?\b|\bpositive numbers?\b/,
-  ].filter((re) => re.test(normalized)).length;
-  if (mathSignals < 2) return false;
-  return /\b(final answer|answer in|compute|find|determine|evaluate|solve|prove)\b|\\boxed/.test(normalized);
-}
-
 export function renderMathTaskGuardrailBlock(): string {
-  return `${CONTEXT_OPEN}\n${renderMathTaskGuardrails()}\n${CONTEXT_CLOSE}`;
+  return `${CONTEXT_OPEN}\n${renderMathFinalAnswerProtocol()}\n${CONTEXT_CLOSE}`;
 }
 
 export function mergeMathTaskGuardrails(block: string): string {
-  if (block.includes(MATH_TASK_GUARDRAIL_TITLE)) return block;
-  const guardrails = renderMathTaskGuardrails();
+  if (block.includes(MATH_FINAL_ANSWER_PROTOCOL_TITLE)) return block;
+  const guardrails = renderMathFinalAnswerProtocol();
   if (!block.trim()) return `${CONTEXT_OPEN}\n${guardrails}\n${CONTEXT_CLOSE}`;
   const closeIdx = block.lastIndexOf(CONTEXT_CLOSE);
   if (closeIdx >= 0) {
@@ -866,25 +854,6 @@ export function mergeMathTaskGuardrails(block: string): string {
     return `${head}\n\n${guardrails}\n${tail}`;
   }
   return `${block.trimEnd()}\n\n${guardrails}`;
-}
-
-function renderMathTaskGuardrails(): string {
-  return [
-    MATH_TASK_GUARDRAIL_TITLE,
-    "",
-    "This is a standalone math task. Finish the solution in this reply; never answer with a plan, next step, placeholder, or request for more information.",
-    "Use injected memories if they contain concrete relevant facts. If this block only contains guardrails and no specific memory, do not call `memos_search`; solve directly from the problem statement.",
-    "Final-answer contract: output exactly one real final answer in `\\boxed{...}`. Do not output a literal placeholder such as `\\boxed{...}`. Do not stop after a progress summary or a sentence about what you will do next.",
-    "Do not emit `<think>` tags, hidden-reasoning wrappers, section-by-section progress summaries, or meta commentary. Write the concise solution steps needed to justify the answer, then end with the boxed answer.",
-    "If uncertain, still compute to the best supported final answer instead of asking for more information or deferring the calculation.",
-    "",
-    "Use this compact checklist before finalizing:",
-    "- First model the mathematical object structurally; do not reduce the task to an aggregate count until the construction is proved sufficient.",
-    "- For counting/probability, define the sample space, condition on the exact event stated, and check overcount/undercount. For cyclic routes, decide explicitly whether the start point, direction, and rotation are fixed before multiplying.",
-    "- For algebra/number theory, verify every candidate solution, boundary case, and divisibility or parity condition before finalizing. For polynomial or functional identities, check low-degree exceptional families after any leading-term argument.",
-    "- For geometry, reconstruct only the relations stated in text. If a diagram is absent, do not ask for it; solve from the textual constraints and state the best determined answer.",
-    "- Before writing the final answer, run one quick consistency check against the original constraints, then give exactly one boxed answer.",
-  ].join("\n");
 }
 
 async function withSoftTimeout<T>(
@@ -1266,7 +1235,6 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       }
       const prompt = stripOpenClawUserEnvelope(rawPrompt);
       if (!prompt) return;
-      const standaloneMathTask = isStandaloneMathFinalAnswerTask(prompt);
 
       const namespace = namespaceFromAgentCtx(ctx);
       const sessionId = await ensureSession(ctx.agentId, ctx.sessionKey, namespace);
@@ -1290,12 +1258,6 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           sessionId: ctx.sessionId,
           runId: ctx.runId,
           workspaceDir: ctx.workspaceDir,
-          ...(standaloneMathTask
-            ? {
-                taskKind: "standalone_math_final_answer",
-                finalAnswerMode: "single_turn",
-              }
-            : {}),
         },
       };
 
@@ -1315,7 +1277,6 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           sessionKey: ctx.sessionKey,
           agentId: ctx.agentId,
           timeoutMs: BEFORE_PROMPT_SOFT_TIMEOUT_MS,
-          standaloneMathTask,
         });
       }
       // The pipeline orchestrator (V7 §0.1) may have migrated the
@@ -1339,11 +1300,9 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         // the model independently decides to use them.
         hintWhenEmpty: false,
       });
-      const blockSource = standaloneMathTask
-        ? mergeMathTaskGuardrails(renderedBlock)
-        : renderedBlock;
-      const { block, truncated } = capContextBlock(blockSource);
+      const { block, truncated } = capContextBlock(renderedBlock);
       const durationMs = now() - startedAt;
+      const mathProtocolInjected = block.includes(MATH_FINAL_ANSWER_PROTOCOL_TITLE);
 
       opts.log.info("memos.onTurnStart", {
         sessionKey: ctx.sessionKey,
@@ -1356,7 +1315,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         contextChars: block.length,
         injected: block.length > 0,
         truncated,
-        standaloneMathTask,
+        mathProtocolInjected,
         softTimedOut: !turnStartResult.ok,
       });
       opts.log.info(
@@ -1364,7 +1323,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           `durationMs=${durationMs} contextChars=${block.length} ` +
           `injected=${block.length > 0 ? "yes" : "no"} ` +
           `truncated=${truncated ? "yes" : "no"} ` +
-          `standaloneMathTask=${standaloneMathTask ? "yes" : "no"} ` +
+          `mathProtocolInjected=${mathProtocolInjected ? "yes" : "no"} ` +
           `softTimedOut=${turnStartResult.ok ? "no" : "yes"}`,
       );
 
