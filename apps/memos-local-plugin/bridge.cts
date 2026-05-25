@@ -393,13 +393,13 @@ async function main(): Promise<void> {
           process.stderr.write(
             `bridge: daemon port :${viewerPort} still in use after ${maxBindAttempts}s — exiting.\n`,
           );
-          await core.shutdown();
+          await withShutdownTimeout(core.shutdown());
           process.exit(1);
         }
         process.stderr.write(
           `bridge: daemon viewer failed: ${(err as Error)?.message ?? String(err)}\n`,
         );
-        await core.shutdown();
+        await withShutdownTimeout(core.shutdown());
         process.exit(1);
       }
     }
@@ -500,7 +500,7 @@ async function main(): Promise<void> {
       if (viewer!.closed) {
         clearInterval(keepalive);
         removeOwnedPidFile();
-        void core.shutdown().then(() => process.exit(0));
+        void withShutdownTimeout(core.shutdown()).then(() => process.exit(0));
       }
     }, 5_000);
     (keepalive as unknown as { unref?: () => void }).unref?.();
