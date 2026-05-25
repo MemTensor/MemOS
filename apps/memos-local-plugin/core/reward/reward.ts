@@ -128,6 +128,7 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
             trigger: input.trigger,
             skipped: true,
           },
+          rewardDirty: undefined,
         });
       } catch (err) {
         warnings.push({
