@@ -21,22 +21,36 @@ class SentenceChunker(BaseChunker):
 
         self.config = config
 
-        # Try new API first (v1.4.0+)
-        try:
-            self.chunker = ChonkieSentenceChunker(
-                tokenizer=config.tokenizer_or_token_counter,
-                chunk_size=config.chunk_size,
-                chunk_overlap=config.chunk_overlap,
-                min_sentences_per_chunk=config.min_sentences_per_chunk,
+        common_kwargs = {
+            "chunk_size": config.chunk_size,
+            "chunk_overlap": config.chunk_overlap,
+            "min_sentences_per_chunk": config.min_sentences_per_chunk,
+        }
+        self.chunker = None
+        last_error: Exception | None = None
+        # Try chonkie >=1.4.0 API first, then the pre-1.4 signature.
+        for kwarg in ("tokenizer", "tokenizer_or_token_counter"):
+            try:
+                self.chunker = ChonkieSentenceChunker(
+                    **{kwarg: config.tokenizer_or_token_counter}, **common_kwargs
+                )
+                break
+            except (TypeError, AttributeError, ValueError) as e:
+                last_error = e
+                continue
+
+        # If the configured tokenizer can't be loaded (no tiktoken, no
+        # HuggingFace access, etc.), fall back to chonkie's built-in
+        # 'character' counter so the chunker still works offline. Note:
+        # chunk_size semantics change from token count to character count
+        # for fallback runs.
+        if self.chunker is None:
+            logger.warning(
+                f"Tokenizer '{config.tokenizer_or_token_counter}' unavailable "
+                f"({last_error!r}); falling back to 'character'"
             )
-        except (TypeError, AttributeError) as e:
-            # Fallback to old API (<v1.4.0)
-            logger.debug(f"Falling back to old chonkie API: {e}")
             self.chunker = ChonkieSentenceChunker(
-                tokenizer_or_token_counter=config.tokenizer_or_token_counter,
-                chunk_size=config.chunk_size,
-                chunk_overlap=config.chunk_overlap,
-                min_sentences_per_chunk=config.min_sentences_per_chunk,
+                tokenizer_or_token_counter="character", **common_kwargs
             )
 
         logger.info(f"Initialized SentenceChunker with config: {config}")
