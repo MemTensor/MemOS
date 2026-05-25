@@ -340,3 +340,6 @@ We welcome contributions from the community! Please read our [contribution guide
 ## 📄 License
 
 MemOS is licensed under the [Apache 2.0 License](./LICENSE).
+
+<!-- AutoDev smoke test marker: issue #1802 -->
+
