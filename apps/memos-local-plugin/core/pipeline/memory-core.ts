@@ -589,9 +589,7 @@ export function createMemoryCore(
     if (nowMs - lastDirtyClosedScan < 30_000) return;
     lastDirtyClosedScan = nowMs;
     try {
-      const dirtyClosed = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+      const dirtyClosed = collectDirtyClosedEpisodes();
       if (dirtyClosed.length > 0) {
         await recoverDirtyClosedEpisodes(dirtyClosed);
       }
@@ -914,9 +912,7 @@ export function createMemoryCore(
           await recoverOpenEpisodesAsSessionEnd(stale);
         }
       }
-      const dirtyClosed = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+      const dirtyClosed = collectDirtyClosedEpisodes();
       if (dirtyClosed.length > 0) {
         await recoverDirtyClosedEpisodes(dirtyClosed);
       }
@@ -1260,6 +1256,21 @@ export function createMemoryCore(
       });
     }
     await handle.flush();
+  }
+
+  function collectDirtyClosedEpisodes(): (EpisodeRow & { meta?: Record<string, unknown> })[] {
+    const dirty: (EpisodeRow & { meta?: Record<string, unknown> })[] = [];
+    let offset = 0;
+    const pageSize = 500;
+    while (true) {
+      const page = handle.repos.episodes.list({ status: "closed", limit: pageSize, offset });
+      for (const ep of page) {
+        if (episodeRewardIsDirty(ep)) dirty.push(ep);
+      }
+      if (page.length < pageSize) break;
+      offset += pageSize;
+    }
+    return dirty;
   }
 
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
