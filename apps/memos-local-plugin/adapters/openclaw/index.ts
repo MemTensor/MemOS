@@ -258,7 +258,7 @@ function register(api: OpenClawPluginApi): void {
       ];
       if (hasSearch) {
         lines.push(
-          "- `memos_search` — search prior traces, policies, world models, and skills.",
+          "- `memos_search` — search prior traces, policies, world models, and skills when prior experience is likely relevant.",
         );
       }
       if (hasEnv) {
@@ -283,7 +283,7 @@ function register(api: OpenClawPluginApi): void {
         );
       }
       lines.push(
-        "- Prefer recalled memory over assuming prior context is unavailable.",
+        "- Prefer concrete recalled memory when it is present. For standalone math tasks with no recalled memory, solve directly instead of searching an empty store.",
         "",
       );
       return lines;

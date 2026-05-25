@@ -797,6 +797,11 @@ function isExplicitOneShotSessionKey(sessionKey: string | undefined): boolean {
 const CONTEXT_OPEN = "<memos_context>";
 const CONTEXT_CLOSE = "</memos_context>";
 const OPENCLAW_CONTEXT_CHAR_CAP = 6_000;
+const BEFORE_PROMPT_SOFT_TIMEOUT_MS = Number.parseInt(
+  process.env.MEMOS_BEFORE_PROMPT_SOFT_TIMEOUT_MS ?? "12000",
+  10,
+);
+const MATH_TASK_GUARDRAIL_TITLE = "## Standalone math task guardrails";
 const TOOL_FAILURE_REPAIR_HINT =
   "This tool has failed multiple times in a row. You may want to call `memos_search` for relevant past experience before deciding what to do next.";
 const TOOL_FAILURE_HINT_THRESHOLD = 3;
@@ -819,15 +824,85 @@ export function renderContextBlock(
     return `${CONTEXT_OPEN}\n${rendered}\n${CONTEXT_CLOSE}`;
   }
   if (opts.hintWhenEmpty === false) return "";
-  // Cold-start hint — mirrors the legacy adapter's behaviour so the
-  // model is nudged to reach for `memos_search` even on the first
-  // turn of a fresh session.
+  // Cold-start hint for interactive sessions. The automatic OpenClaw
+  // before-prompt path disables this hint; task-specific guardrails can
+  // still be added without pretending an empty memory store has matches.
   const hint = [
     "No prior memories matched this query — the store may simply be cold.",
-    "You can still call `memos_search` with a shorter or rephrased query",
-    "if you expect there to be relevant past context.",
+    "Call `memos_search` only if you have a specific reason to expect",
+    "relevant past context; otherwise continue with the current task.",
   ].join(" ");
   return `${CONTEXT_OPEN}\n${hint}\n${CONTEXT_CLOSE}`;
+}
+
+export function isStandaloneMathFinalAnswerTask(text: string | undefined): boolean {
+  if (!text) return false;
+  const normalized = text.toLowerCase();
+  const mathSignals = [
+    /\\boxed|\\frac|\\sqrt|\\sum|\\prod|\\binom/,
+    /\bmath(?:ematics)?\b|\bolympiad\b|\bcompetition\b/,
+    /\bcombinatorics?\b|\bprobability\b|\bpermutation\b|\bcombination\b|\bcount(?:ing)?\b/,
+    /\bnumber theory\b|\bmod(?:ulo|ular)?\b|\bprime\b|\bdivisib(?:le|ility)\b|\bcongruence\b/,
+    /\balgebra\b|\bpolynomials?\b|\bequations?\b|\bfunctional equation\b/,
+    /\bgeometry\b|\btriangle\b|\bcircle\b|\bpolygon\b|\bangle\b|\bmidpoint\b/,
+    /\bintegers?\b|\breal numbers?\b|\bpositive numbers?\b/,
+  ].filter((re) => re.test(normalized)).length;
+  if (mathSignals < 2) return false;
+  return /\b(final answer|answer in|compute|find|determine|evaluate|solve|prove)\b|\\boxed/.test(normalized);
+}
+
+export function renderMathTaskGuardrailBlock(): string {
+  return `${CONTEXT_OPEN}\n${renderMathTaskGuardrails()}\n${CONTEXT_CLOSE}`;
+}
+
+export function mergeMathTaskGuardrails(block: string): string {
+  if (block.includes(MATH_TASK_GUARDRAIL_TITLE)) return block;
+  const guardrails = renderMathTaskGuardrails();
+  if (!block.trim()) return `${CONTEXT_OPEN}\n${guardrails}\n${CONTEXT_CLOSE}`;
+  const closeIdx = block.lastIndexOf(CONTEXT_CLOSE);
+  if (closeIdx >= 0) {
+    const head = block.slice(0, closeIdx).trimEnd();
+    const tail = block.slice(closeIdx);
+    return `${head}\n\n${guardrails}\n${tail}`;
+  }
+  return `${block.trimEnd()}\n\n${guardrails}`;
+}
+
+function renderMathTaskGuardrails(): string {
+  return [
+    MATH_TASK_GUARDRAIL_TITLE,
+    "",
+    "This is a standalone math task. Finish the solution in this reply; never answer with a plan, next step, placeholder, or request for more information.",
+    "Use injected memories if they contain concrete relevant facts. If this block only contains guardrails and no specific memory, do not call `memos_search`; solve directly from the problem statement.",
+    "Final-answer contract: output exactly one real final answer in `\\boxed{...}`. Do not output a literal placeholder such as `\\boxed{...}`. Do not stop after a progress summary or a sentence about what you will do next.",
+    "Do not emit `<think>` tags, hidden-reasoning wrappers, section-by-section progress summaries, or meta commentary. Write the concise solution steps needed to justify the answer, then end with the boxed answer.",
+    "If uncertain, still compute to the best supported final answer instead of asking for more information or deferring the calculation.",
+    "",
+    "Use this compact checklist before finalizing:",
+    "- First model the mathematical object structurally; do not reduce the task to an aggregate count until the construction is proved sufficient.",
+    "- For counting/probability, define the sample space, condition on the exact event stated, and check overcount/undercount. For cyclic routes, decide explicitly whether the start point, direction, and rotation are fixed before multiplying.",
+    "- For algebra/number theory, verify every candidate solution, boundary case, and divisibility or parity condition before finalizing. For polynomial or functional identities, check low-degree exceptional families after any leading-term argument.",
+    "- For geometry, reconstruct only the relations stated in text. If a diagram is absent, do not ask for it; solve from the textual constraints and state the best determined answer.",
+    "- Before writing the final answer, run one quick consistency check against the original constraints, then give exactly one boxed answer.",
+  ].join("\n");
+}
+
+async function withSoftTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<{ ok: true; value: T } | { ok: false; timedOut: true }> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return { ok: true, value: await promise };
+  }
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    promise.then((value) => ({ ok: true as const, value })),
+    new Promise<{ ok: false; timedOut: true }>((resolve) => {
+      timer = setTimeout(() => resolve({ ok: false, timedOut: true }), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 function capContextBlock(block: string): { block: string; truncated: boolean } {
@@ -1191,6 +1266,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       }
       const prompt = stripOpenClawUserEnvelope(rawPrompt);
       if (!prompt) return;
+      const standaloneMathTask = isStandaloneMathFinalAnswerTask(prompt);
 
       const namespace = namespaceFromAgentCtx(ctx);
       const sessionId = await ensureSession(ctx.agentId, ctx.sessionKey, namespace);
@@ -1214,16 +1290,40 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           sessionId: ctx.sessionId,
           runId: ctx.runId,
           workspaceDir: ctx.workspaceDir,
+          ...(standaloneMathTask
+            ? {
+                taskKind: "standalone_math_final_answer",
+                finalAnswerMode: "single_turn",
+              }
+            : {}),
         },
       };
 
-      const packet = await opts.core.onTurnStart(turn);
+      const turnStartPromise = opts.core.onTurnStart(turn);
+      turnStartPromise.catch((err) => {
+        opts.log.warn("memos.onTurnStart.late_failure", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+      const turnStartResult = await withSoftTimeout(
+        turnStartPromise,
+        BEFORE_PROMPT_SOFT_TIMEOUT_MS,
+      );
+      const packet = turnStartResult.ok ? turnStartResult.value : null;
+      if (!turnStartResult.ok) {
+        opts.log.warn("memos.onTurnStart.soft_timeout", {
+          sessionKey: ctx.sessionKey,
+          agentId: ctx.agentId,
+          timeoutMs: BEFORE_PROMPT_SOFT_TIMEOUT_MS,
+          standaloneMathTask,
+        });
+      }
       // The pipeline orchestrator (V7 §0.1) may have migrated the
       // session id (new-task → new session) or reopened a closed
       // episode (revision). We trust the ids returned in the packet,
       // not our own derivation, so `onTurnEnd` lands on the same row.
-      const routedSessionId = (packet.query.sessionId ?? sessionId) as SessionId;
-      const routedEpisodeId = packet.query.episodeId as EpisodeId | undefined;
+      const routedSessionId = (packet?.query.sessionId ?? sessionId) as SessionId;
+      const routedEpisodeId = packet?.query.episodeId as EpisodeId | undefined;
       if (routedEpisodeId) {
         const seq = ++episodeBindingSeq;
         rememberEpisodeBinding(routedSessionId, routedEpisodeId, ctx, prompt, seq);
@@ -1239,7 +1339,10 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         // the model independently decides to use them.
         hintWhenEmpty: false,
       });
-      const { block, truncated } = capContextBlock(renderedBlock);
+      const blockSource = standaloneMathTask
+        ? mergeMathTaskGuardrails(renderedBlock)
+        : renderedBlock;
+      const { block, truncated } = capContextBlock(blockSource);
       const durationMs = now() - startedAt;
 
       opts.log.info("memos.onTurnStart", {
@@ -1247,18 +1350,22 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         agentId: ctx.agentId,
         sessionId: routedSessionId,
         episodeId: routedEpisodeId,
-        hits: packet.hits.length,
-        tierLatencyMs: packet.tierLatencyMs,
+        hits: packet?.hits.length ?? 0,
+        tierLatencyMs: packet?.tierLatencyMs ?? { tier1: 0, tier2: 0, tier3: 0 },
         durationMs,
         contextChars: block.length,
         injected: block.length > 0,
         truncated,
+        standaloneMathTask,
+        softTimedOut: !turnStartResult.ok,
       });
       opts.log.info(
-        `memos.onTurnStart returned hits=${packet.hits.length} ` +
+        `memos.onTurnStart returned hits=${packet?.hits.length ?? 0} ` +
           `durationMs=${durationMs} contextChars=${block.length} ` +
           `injected=${block.length > 0 ? "yes" : "no"} ` +
-          `truncated=${truncated ? "yes" : "no"}`,
+          `truncated=${truncated ? "yes" : "no"} ` +
+          `standaloneMathTask=${standaloneMathTask ? "yes" : "no"} ` +
+          `softTimedOut=${turnStartResult.ok ? "no" : "yes"}`,
       );
 
       if (!block) return;

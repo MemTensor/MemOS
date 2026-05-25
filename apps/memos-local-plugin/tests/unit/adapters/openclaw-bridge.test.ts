@@ -29,6 +29,9 @@ import {
   createOpenClawBridge,
   extractTurn,
   flattenMessages,
+  isStandaloneMathFinalAnswerTask,
+  mergeMathTaskGuardrails,
+  renderMathTaskGuardrailBlock,
   renderContextBlock,
 } from "../../../adapters/openclaw/bridge.js";
 import { registerOpenClawTools } from "../../../adapters/openclaw/tools.js";
@@ -776,7 +779,40 @@ describe("renderContextBlock", () => {
     });
     expect(block).toContain("<memos_context>");
     expect(block).toContain("memos_search");
+    expect(block).toContain("only if you have a specific reason");
     expect(block).toContain("</memos_context>");
+  });
+
+  it("detects standalone math final-answer tasks and can render fallback guardrails", () => {
+    expect(
+      isStandaloneMathFinalAnswerTask(
+        "Please solve this olympiad-style combinatorics problem and give the final answer in \\boxed{...} format.",
+      ),
+    ).toBe(true);
+    const block = renderMathTaskGuardrailBlock();
+    expect(block).toContain("<memos_context>");
+    expect(block).toContain("Standalone math task guardrails");
+    expect(block).toContain("counting/probability");
+    expect(block).toContain("standalone math task");
+    expect(block).toContain("Do not output a literal placeholder");
+    expect(block).toContain("do not call `memos_search`");
+    expect(block).toContain("Do not emit `<think>` tags");
+    expect(block).toContain("Do not stop after a progress summary");
+    expect(block).toContain("</memos_context>");
+  });
+
+  it("merges math task guardrails into an existing context block once", () => {
+    const block = renderContextBlock({
+      query: { agent: "openclaw", query: "" },
+      hits: [],
+      injectedContext: "remembered skill",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+    });
+    const merged = mergeMathTaskGuardrails(block);
+    expect(merged).toContain("remembered skill");
+    expect(merged).toContain("Standalone math task guardrails");
+    expect(merged).toContain("</memos_context>");
+    expect(mergeMathTaskGuardrails(merged)).toBe(merged);
   });
 });
 

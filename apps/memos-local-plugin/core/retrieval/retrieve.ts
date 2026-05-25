@@ -386,8 +386,7 @@ async function runAll(
     // actually relevant. Full mode fails open to preserve recall;
     // lightweight mode fails closed because it promises summarizer-LLM
     // screened raw memories only.
-    const queryText =
-      (ctx as { userText?: string }).userText ?? compiled.text ?? "";
+    const queryText = (ctx as { userText?: string }).userText ?? compiled.text ?? "";
     const filterResult = opts.skipLlmFilter
       ? {
           kept: mechanicalRanked,
@@ -638,7 +637,10 @@ function round(n: number, d: number): number {
 }
 
 function llmFilterSucceeded(outcome: string): boolean {
-  return outcome === "llm_kept_all" || outcome === "llm_filtered";
+  return (
+    outcome === "llm_kept_all" ||
+    outcome === "llm_filtered"
+  );
 }
 
 /** Thin façade so pipelines can `new Retriever(deps)` if they prefer OO. */
