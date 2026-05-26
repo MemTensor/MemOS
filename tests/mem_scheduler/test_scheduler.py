@@ -256,3 +256,55 @@ class TestGeneralScheduler(unittest.TestCase):
             # If layers attribute doesn't exist, verify our fix handles this case
             print("⚠️  DynamicCache doesn't have 'layers' attribute in this transformers version")
             print("✅ Test passed - our code should handle this gracefully")
+
+    def test_log_working_memory_replacement_uses_total_size(self):
+        """`memory_len` must report the total size of the new working memory,
+        not just the count of newly added (delta) items.
+
+        Regression for #1790: previously this method passed
+        `memory_len=len(memcube_content)` (the delta), causing the scheduler UI
+        to show change counts instead of output working-memory size.
+        """
+        from memos.memories.textual.item import (
+            TextualMemoryItem,
+            TreeNodeTextualMemoryMetadata,
+        )
+
+        def _make_item(text: str) -> TextualMemoryItem:
+            return TextualMemoryItem(
+                memory=text,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    memory_type="WorkingMemory",
+                    key=text,
+                ),
+            )
+
+        # Original [A, B, C] -> New [A, B, D]: delta is just {D} (1 item),
+        # but total output working-memory size is 3.
+        original_memory = [_make_item(t) for t in ("A", "B", "C")]
+        new_memory = [_make_item(t) for t in ("A", "B", "D")]
+
+        captured: list[ScheduleLogForWebItem] = []
+
+        self.scheduler.log_working_memory_replacement(
+            original_memory=original_memory,
+            new_memory=new_memory,
+            user_id="test_user",
+            mem_cube_id="test_cube",
+            mem_cube=self.mem_cube,
+            log_func_callback=lambda events: captured.extend(events),
+        )
+
+        self.assertEqual(len(captured), 1, "Expected exactly one log event")
+        event = captured[0]
+        # The bug: memory_len used to be 1 (delta). The fix: it should be 3 (total).
+        self.assertEqual(
+            event.memory_len,
+            len(new_memory),
+            "memory_len should reflect total new working-memory size, not delta size",
+        )
+        self.assertNotEqual(
+            event.memory_len,
+            1,
+            "memory_len should not equal the number of added items (delta)",
+        )
