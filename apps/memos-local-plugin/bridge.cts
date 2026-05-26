@@ -306,48 +306,14 @@ async function main(): Promise<void> {
     | ReturnType<NonNullable<typeof bridgeStatus>["startHeartbeat"]>
     | undefined;
 
-  // In stdio mode the host fallback path is a reverse JSON-RPC request
-  // over the same pipe as normal bridge traffic. `core.init()` may
-  // recover dirty episodes and run reflection/reward/L2/skill work; if
-  // that work hits a broken primary skill-evolver model, the LLM facade
-  // can fall back to host before init returns. Start stdio first so that
-  // fallback has a transport instead of tripping the lazy bridge guard.
-  if (!args.daemon) {
-    stdio = startStdioServer({ core });
-    bridgeStatus?.markConnected();
-    bridgeHeartbeat = bridgeStatus?.startHeartbeat();
-    void stdio.done.then(() => {
-      bridgeHeartbeat?.stop();
-      bridgeStatus?.markDisconnected("Hermes chat disconnected");
-    });
-  }
-
-  try {
-    await core.init();
-  } catch (err) {
-    bridgeHeartbeat?.stop();
-    if (stdio) {
-      try {
-        await stdio.close();
-      } catch {
-        /* best-effort */
-      }
-    }
-    throw err;
-  }
-
   // ─── Daemon mode ──────────────────────────────────────────────
-  // When started with `--daemon`, skip stdio and run as a pure HTTP
-  // viewer daemon. Used by install.sh (post-install) and admin/restart
-  // (self-restart) to keep the Memory Viewer always available.
+  // When started with `--daemon`, bind the viewer port BEFORE running
+  // core.init() so that ensure_viewer_daemon()'s 15-second health probe
+  // succeeds immediately. Without this, a lengthy dirty-episode rescore
+  // inside core.init() keeps the port unbound past the probe deadline,
+  // causing ensure_viewer_daemon() to give up and spawn a replacement
+  // daemon — which kills this one and restarts the cycle.
   if (args.daemon) {
-    // Daemon mode is the target of `POST /api/v1/admin/restart`,
-    // which re-spawns the bridge after a short sleep. On busy
-    // machines the previous bridge's listening socket can take a
-    // moment longer than expected to release, so we retry the bind
-    // a few times before giving up. Without this the user sees
-    // "重启超时" in the viewer because the new daemon raced its
-    // predecessor and lost.
     let viewer: import("./server/types.js").ServerHandle | null = null;
     const maxBindAttempts = 10;
     for (let attempt = 1; attempt <= maxBindAttempts; attempt++) {
@@ -404,8 +370,49 @@ async function main(): Promise<void> {
     };
     process.on("SIGINT", () => void shutdownDaemon("SIGINT"));
     process.on("SIGTERM", () => void shutdownDaemon("SIGTERM"));
+
+    // Run core.init() in the background. A dirty-episode rescore can
+    // take minutes; keeping it async lets the HTTP server stay responsive
+    // to health probes throughout and prevents ensure_viewer_daemon()
+    // from timing out and spawning a replacement daemon.
+    void core.init().catch((err) => {
+      process.stderr.write(
+        `bridge: daemon core.init error: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
+      );
+      void shutdownDaemon("init.error");
+    });
+
     // Process stays alive via the HTTP server's ref'd socket.
     return;
+  }
+
+  // ─── Non-daemon setup ─────────────────────────────────────────
+  // In stdio mode the host fallback path is a reverse JSON-RPC request
+  // over the same pipe as normal bridge traffic. `core.init()` may
+  // recover dirty episodes and run reflection/reward/L2/skill work; if
+  // that work hits a broken primary skill-evolver model, the LLM facade
+  // can fall back to host before init returns. Start stdio first so that
+  // fallback has a transport instead of tripping the lazy bridge guard.
+  stdio = startStdioServer({ core });
+  bridgeStatus?.markConnected();
+  bridgeHeartbeat = bridgeStatus?.startHeartbeat();
+  void stdio.done.then(() => {
+    bridgeHeartbeat?.stop();
+    bridgeStatus?.markDisconnected("Hermes chat disconnected");
+  });
+
+  try {
+    await core.init();
+  } catch (err) {
+    bridgeHeartbeat?.stop();
+    if (stdio) {
+      try {
+        await stdio.close();
+      } catch {
+        /* best-effort */
+      }
+    }
+    throw err;
   }
 
   // ─── Normal (stdio) mode ──────────────────────────────────────

@@ -119,6 +119,7 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
       try {
         const existingMeta = episode.meta ?? {};
         const wasFinalized = existingMeta.closeReason === "finalized";
+        deps.episodesRepo.setRTask(input.episodeId, 0);
         deps.episodesRepo.updateMeta(input.episodeId, {
           ...(wasFinalized ? {} : { closeReason: "abandoned", abandonReason: skipReason }),
           reward: {
@@ -128,6 +129,7 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
             trigger: input.trigger,
             skipped: true,
           },
+          rewardDirty: undefined,
         });
       } catch (err) {
         warnings.push({

@@ -589,9 +589,7 @@ export function createMemoryCore(
     if (nowMs - lastDirtyClosedScan < 30_000) return;
     lastDirtyClosedScan = nowMs;
     try {
-      const dirtyClosed = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+      const dirtyClosed = collectDirtyClosedEpisodes();
       if (dirtyClosed.length > 0) {
         await recoverDirtyClosedEpisodes(dirtyClosed);
       }
@@ -914,9 +912,7 @@ export function createMemoryCore(
           await recoverOpenEpisodesAsSessionEnd(stale);
         }
       }
-      const dirtyClosed = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+      const dirtyClosed = collectDirtyClosedEpisodes();
       if (dirtyClosed.length > 0) {
         await recoverDirtyClosedEpisodes(dirtyClosed);
       }
@@ -925,6 +921,24 @@ export function createMemoryCore(
         err: err instanceof Error ? err.message : String(err),
       });
     }
+
+    // Periodic rescore: the daemon bridge sits idle after bootstrap with no
+    // turn traffic to drive pipeline events. Any episodes closed (abandoned
+    // or finalized) by the --no-viewer JSON-RPC bridge after bootstrap will
+    // have their reward scored by that bridge's own pipeline — but episodes
+    // that were already closed before this init ran (and missed by the
+    // startup scan due to the abandoned-closeReason bug, or due to a crash
+    // mid-reward) need a periodic retry. 10-minute interval matches the
+    // `autoRescoreDirtyClosedEpisodes` 30 s guard so it's safe to call
+    // frequently; the guard prevents redundant DB scans.
+    const rescoreInterval = setInterval(() => {
+      void autoRescoreDirtyClosedEpisodes().catch((err) => {
+        log.debug("periodic_rescore.error", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, 10 * 60 * 1000);
+    (rescoreInterval as unknown as { unref?: () => void }).unref?.();
 
     // Wire `memory_add` into the api_logs table on EVERY turn so the
     // Logs viewer shows per-turn capture activity. `capture.lite.done`
@@ -1242,7 +1256,7 @@ export function createMemoryCore(
   ): Promise<void> {
     log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
     for (const ep of episodes) {
-      if (isLightweightEpisode(ep)) continue;
+      if (isLightweightEpisode(ep) && handle.algorithm.lightweightMemory.enabled) continue;
       const episodeId = ep.id as EpisodeId;
       const endedAt = ep.endedAt ?? Date.now();
       handle.repos.episodes.updateMeta(episodeId, {
@@ -1253,6 +1267,12 @@ export function createMemoryCore(
       const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
         recoveryReason: "dirty_reward_rescore",
       });
+      // If the episode was tagged lightweight during a prior session but
+      // lightweight mode is now off, clear the flag so the capture subscriber
+      // doesn't skip it.
+      if (snapshot.meta?.lightweightMemory === true && !handle.algorithm.lightweightMemory.enabled) {
+        delete (snapshot.meta as Record<string, unknown>).lightweightMemory;
+      }
       handle.buses.session.emit({
         kind: "episode.finalized",
         episode: snapshot,
@@ -1262,19 +1282,45 @@ export function createMemoryCore(
     await handle.flush();
   }
 
+  function collectDirtyClosedEpisodes(): (EpisodeRow & { meta?: Record<string, unknown> })[] {
+    const dirty: (EpisodeRow & { meta?: Record<string, unknown> })[] = [];
+    let offset = 0;
+    const pageSize = 500;
+    while (true) {
+      const page = handle.repos.episodes.list({ status: "closed", limit: pageSize, offset });
+      for (const ep of page) {
+        if (episodeRewardIsDirty(ep)) dirty.push(ep);
+      }
+      if (page.length < pageSize) break;
+      offset += pageSize;
+    }
+    return dirty;
+  }
+
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
     const meta = ep.meta ?? {};
-    if (meta.lightweightMemory === true) return false;
+    if (meta.lightweightMemory === true && handle.algorithm.lightweightMemory.enabled) return false;
     if (meta.rewardDirty && typeof meta.rewardDirty === "object") return true;
 
     const reward = meta.reward;
     if (reward && typeof reward === "object" && (reward as { skipped?: unknown }).skipped === true) {
-      return false;
+      // Abandoned episodes with no prior recovery attempt get one retry: the
+      // skip decision may have been made with incomplete data before the session
+      // ended. recoverDirtyClosedEpisodes() patches closeReason → "finalized"
+      // after processing, so if reward skips again the next check sees
+      // closeReason !== "abandoned" and stops retrying (no loop).
+      const isAbandonedNoRecovery =
+        meta.closeReason === "abandoned" && meta.recoveryReason == null;
+      if (!isAbandonedNoRecovery) {
+        return false;
+      }
     }
     if (
       ep.rTask == null &&
       (ep.traceIds?.length ?? 0) > 0 &&
-      (meta.closeReason === "finalized" || meta.recoveryReason === "missed_session_end")
+      (meta.closeReason === "finalized" ||
+        meta.closeReason === "abandoned" ||
+        meta.recoveryReason === "missed_session_end")
     ) {
       return true;
     }
