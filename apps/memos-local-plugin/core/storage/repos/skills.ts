@@ -1,4 +1,4 @@
-import type { EmbeddingVector, SkillId, SkillRow } from "../../types.js";
+import type { EmbeddingVector, ShareScope, SkillId, SkillRow } from "../../types.js";
 import type { SkillListFilter, StorageDb } from "../types.js";
 import { buildInsert, buildUpdate } from "../tx.js";
 import { scanAndTopK, type VectorHit } from "../vector.js";
@@ -294,7 +294,7 @@ export function makeSkillsRepo(db: StorageDb) {
     updateShare(
       id: SkillId,
       share: {
-        scope: "private" | "local" | "public" | "hub" | null;
+        scope: ShareScope | null;
         target?: string | null;
         sharedAt?: number | null;
       },
@@ -462,7 +462,7 @@ function mapRow(r: RawSkillRow): SkillRow {
     share:
       r.share_scope != null
         ? {
-            scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub",
+            scope: normalizeShareForStorage(r.share_scope) as ShareScope,
             target: r.share_target,
             sharedAt: r.shared_at,
           }

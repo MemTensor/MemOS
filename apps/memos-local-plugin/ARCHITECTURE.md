@@ -167,7 +167,7 @@ heavyweight client today.
 Standard OpenClaw plugin. Imports `core/` directly. Provides:
 
 - `plugin.ts` — `definePluginEntry` wiring; passes config + paths into `createMemoryCore`.
-- `tools.ts` — `memory_search`, `memory_get`, `memory_timeline` tool definitions.
+- `tools.ts` — `memos_search`, `memos_get`, `memos_timeline` tool definitions.
 - `hooks.ts` — `onConversationTurn`, `onShutdown`, etc.
 - `host-llm-bridge.ts` — when `llm.fallback_to_host: true`, route LLM calls
   through the OpenClaw host's LLM rather than failing.
@@ -237,7 +237,7 @@ to this codebase:
 | Trigger                                           | What runs                                  | Where it lands                             |
 |---------------------------------------------------|--------------------------------------------|--------------------------------------------|
 | New user turn arrives (`onConversationTurn`)      | `turnStartRetrieve` — full Tier-1+2+3      | Prepended as `memos_context` to this turn  |
-| LLM asks for `memory_search` / `memory_timeline`  | `toolDrivenRetrieve` — Tier-1+2, no Tier-3 | Returned as the tool's result               |
+| LLM asks for `memos_search` / `memos_timeline`  | `toolDrivenRetrieve` — Tier-1+2, no Tier-3 | Returned as the tool's result               |
 | LLM asks for `skill.<name>` directly              | `skillInvokeRetrieve` — the named skill    | Returned as the tool's result (cached)      |
 | SubAgent starts (`onSubAgentStart`)               | `subAgentRetrieve` — Tier-1+2 scoped to sub-agent role | Prepended to the sub-agent's first turn |
 | Decision-repair signal fires (see §4.3)           | `repairRetrieve` — targeted preference/anti-pattern lookup | Prepended to the **next** LLM step |
@@ -275,7 +275,7 @@ agent.turn(input)
               │     └── tier3 (world-model, top-K=2)
               └── returns InjectionPacket to adapter
    ─── agent.execute
-         ├── (optional) tool call: memory_search
+         ├── (optional) tool call: memos_search
          │     └── orchestrator.toolDrivenRetrieve (lightweight; no tier3)
          ├── (optional) tool call: skill.<name>
          │     └── orchestrator.skillInvokeRetrieve (single skill, cached)

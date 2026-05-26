@@ -272,7 +272,7 @@ export class Telemetry {
   }
 
   trackTurnStart(agentName: string, latencyMs: number, hitCount: number): void {
-    this.capture("memory_search", {
+    this.capture("memos_search", {
       agent_name: agentName,
       type: "turn_start",
       latency_ms: Math.round(latencyMs),
@@ -288,7 +288,7 @@ export class Telemetry {
   }
 
   trackMemorySearch(agentName: string, latencyMs: number, hitCount: number): void {
-    this.capture("memory_search", {
+    this.capture("memos_search", {
       agent_name: agentName,
       type: "adhoc",
       latency_ms: Math.round(latencyMs),

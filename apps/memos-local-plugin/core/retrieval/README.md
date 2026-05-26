@@ -33,7 +33,7 @@ All five return a `RetrievalResult = { packet, stats }`:
 ```ts
 import {
   turnStartRetrieve,     // onConversationTurn — full Tier 1+2+3
-  toolDrivenRetrieve,    // memory_search / memory_timeline / …
+  toolDrivenRetrieve,    // memos_search / memos_timeline / …
   skillInvokeRetrieve,   // agent is about to call skill.<name>
   subAgentRetrieve,      // sub-agent spawned with mission prompt
   repairRetrieve,        // N tool failures → anti-pattern recall
@@ -75,7 +75,7 @@ prompt with content the agent may never use. We support two modes via
 
 | Mode      | What lands in the prompt                                                   | When to use                                     |
 |-----------|----------------------------------------------------------------------------|-------------------------------------------------|
-| `summary` (default) | `name`, `η`, `status`, a 1-line summary, plus a `skill_get(id="…")` invocation hint. The footer also lists `skill_get` / `skill_list`. | Tool-calling hosts (OpenClaw, Hermes). Keeps prompts small; the agent calls `skill_get` only for skills it actually wants. |
+| `summary` (default) | `name`, `η`, `status`, a 1-line summary, plus a `memos_skill_get(id="…")` invocation hint. The footer also lists `memos_skill_get` / `memos_skill_list`. | Tool-calling hosts (OpenClaw, Hermes). Keeps prompts small; the agent calls `memos_skill_get` only for skills it actually wants. |
 | `full`    | Legacy: full `invocationGuide` body per skill (truncated to 640 chars).    | Hosts without function-calling support.         |
 
 The summary text is the first paragraph of `invocationGuide` (clamped to

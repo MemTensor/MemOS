@@ -163,8 +163,12 @@ export function attachRewardSubscriber(
       // Skill induction of any positive evidence).
       const flushed: PendingEpisode[] = [];
       for (const entry of pending.values()) {
-        if (entry.timer) clearTimeout(entry.timer);
-        flushed.push(entry);
+        if (entry.timer) {
+          clearTimeout(entry.timer);
+          flushed.push(entry);
+        } else if (entry.feedback.length > 0) {
+          flushed.push(entry);
+        }
       }
       pending.clear();
       for (const entry of flushed) {

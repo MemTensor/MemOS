@@ -22,6 +22,7 @@ import { captureMessages } from "../src/capture";
 
 let plugin: MemosLocalPlugin;
 let tmpDir: string;
+const embeddingApiKey = process.env.INFINI_AI_EMBEDDING_API_KEY ?? "";
 
 const noopLog = {
   debug: () => {},
@@ -38,7 +39,7 @@ beforeAll(async () => {
       embedding: {
         provider: "openai_compatible" as any,
         endpoint: "https://cloud.infini-ai.com/AIStudio/inference/api/if-dchmmprfd5jlyvsa/v1",
-        apiKey: "sk-g3k5fclhdufjlzr3",
+        apiKey: embeddingApiKey,
         model: "bge-embedding-m3",
       },
     },

@@ -93,7 +93,8 @@ export function ownerParams(ns: RuntimeNamespace, prefix = "owner"): Record<stri
 }
 
 export function normalizeShareScope(scope: unknown): ShareScope {
-  if (scope === "local" || scope === "public" || scope === "hub") return scope;
+  if (scope === "local") return "public";
+  if (scope === "public" || scope === "hub") return scope;
   return "private";
 }
 
@@ -103,12 +104,22 @@ export function visibilityWhere(
 ): VisibilityWhere {
   const col = (name: string) => `${alias ? `${alias}.` : ""}${name}`;
   const normalized = normalizeNamespace(ns, ns?.agentKind ?? "unknown");
+  const ownerKind = col("owner_agent_kind");
+  const ownerProfile = col("owner_profile_id");
+  const shareScope = `COALESCE(${col("share_scope")}, 'private')`;
   return {
     sql:
-      `(${col("owner_agent_kind")} = @vis_owner_agent_kind` +
-      ` OR COALESCE(${col("share_scope")}, 'private') IN ('local', 'public', 'hub'))`,
+      `((` +
+      `${ownerKind} = @vis_owner_agent_kind AND ` +
+      `COALESCE(${ownerProfile}, @vis_default_profile_id) = @vis_owner_profile_id` +
+      `) OR ${ownerKind} IS NULL` +
+      ` OR ${ownerKind} = 'unknown'` +
+      ` OR (${shareScope} IN ('local', 'public') AND ${ownerKind} = @vis_owner_agent_kind)` +
+      ` OR ${shareScope} = 'hub')`,
     params: {
       vis_owner_agent_kind: normalized.agentKind,
+      vis_owner_profile_id: normalized.profileId,
+      vis_default_profile_id: DEFAULT_PROFILE_ID,
     },
   };
 }
@@ -139,12 +150,18 @@ export function isVisibleTo(
   ns: RuntimeNamespace,
 ): boolean {
   const scope = normalizeShareScope(row.share?.scope);
-  if (scope === "local" || scope === "public" || scope === "hub") return true;
   if (!row.ownerAgentKind || row.ownerAgentKind === "unknown") {
     return true;
   }
   const normalized = normalizeNamespace(ns, ns.agentKind);
-  return row.ownerAgentKind === normalized.agentKind;
+  const sameAgentFramework = row.ownerAgentKind === normalized.agentKind;
+  const sameAgent =
+    sameAgentFramework &&
+    (row.ownerProfileId ?? DEFAULT_PROFILE_ID) === normalized.profileId;
+  if (sameAgent) return true;
+  if (scope === "public") return sameAgentFramework;
+  if (scope === "hub") return true;
+  return false;
 }
 
 export function namespaceMeta(ns: RuntimeNamespace): Record<string, unknown> {
