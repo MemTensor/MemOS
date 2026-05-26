@@ -3,6 +3,7 @@ import hashlib
 from collections.abc import Callable
 
 from memos.log import get_logger
+from memos.context.context import get_current_api_path
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
@@ -125,6 +126,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
             log_content=log_content,
             current_memory_sizes=current_memory_sizes,
             memory_capacities=memory_capacities,
+            api_path=get_current_api_path(),
         )
         return log_message
 

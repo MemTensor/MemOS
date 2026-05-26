@@ -12,7 +12,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
 )
 from memos.mem_scheduler.task_schedule_modules.base_handler import BaseSchedulerHandler
 from memos.mem_scheduler.utils.filter_utils import transform_name_to_key
-from memos.mem_scheduler.utils.misc_utils import is_cloud_env
+from memos.mem_scheduler.utils.misc_utils import is_playground_api
 
 
 if TYPE_CHECKING:
@@ -38,14 +38,14 @@ class AddMessageHandler(BaseSchedulerHandler):
                 prepared_add_items,
                 prepared_update_items_with_original,
             )
-            cloud_env = is_cloud_env()
+            playground_api = is_playground_api()
 
-            if cloud_env:
-                self.send_add_log_messages_to_cloud_env(
+            if playground_api:
+                self.send_add_log_messages_to_local_env(
                     msg, prepared_add_items, prepared_update_items_with_original
                 )
             else:
-                self.send_add_log_messages_to_local_env(
+                self.send_add_log_messages_to_memory_change(
                     msg, prepared_add_items, prepared_update_items_with_original
                 )
 
@@ -231,10 +231,10 @@ class AddMessageHandler(BaseSchedulerHandler):
         logger.info("send_add_log_messages_to_local_env: %s", len(events))
         if events:
             self.scheduler_context.services.submit_web_logs(
-                events, additional_log_info="send_add_log_messages_to_cloud_env"
+                events, additional_log_info="send_add_log_messages_to_local_env"
             )
 
-    def send_add_log_messages_to_cloud_env(
+    def send_add_log_messages_to_memory_change(
         self,
         msg: ScheduleMessageItem,
         prepared_add_items,
@@ -278,7 +278,7 @@ class AddMessageHandler(BaseSchedulerHandler):
 
         if kb_log_content:
             logger.info(
-                "[DIAGNOSTIC] add_handler.send_add_log_messages_to_cloud_env: Creating event log for KB update. Label: knowledgeBaseUpdate, user_id: %s, mem_cube_id: %s, task_id: %s. KB content: %s",
+                "[DIAGNOSTIC] add_handler.send_add_log_messages_to_memory_change: Creating event log for KB update. Label: knowledgeBaseUpdate, user_id: %s, mem_cube_id: %s, task_id: %s. KB content: %s",
                 msg.user_id,
                 msg.mem_cube_id,
                 msg.task_id,
