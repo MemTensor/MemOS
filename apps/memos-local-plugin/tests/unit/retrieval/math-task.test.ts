@@ -31,6 +31,12 @@ describe("retrieval/math-task", () => {
     expect(protocol).toContain("Standalone math task guardrails");
     expect(protocol).toContain("do not call `memos_search` just to look around");
     expect(protocol).toContain("exactly one real final answer");
+    expect(protocol).toContain("code/execution tool");
+    expect(protocol).toContain("exact DFS/DP/enumeration");
+    expect(protocol).toContain("larger bound");
+    expect(protocol).toContain("prints no useful result");
+    expect(protocol).toContain("finite vector-space or parity subset counts");
+    expect(protocol).toContain("boundary or degenerate positions");
     const forbiddenTerms = [
       "REASONING" + "_BENCHMARK",
       "om" + "ni_",

@@ -76,6 +76,13 @@ export interface InjectorInput {
    * found for the current retrieval — the section is then omitted.
    */
   decisionGuidance?: CollectedGuidance;
+  /**
+   * Standalone math final-answer turns are usually single-shot: the host
+   * model rarely follows up with `memos_skill_get`, and weakly matched
+   * method memories can distract from the problem statement. Render these
+   * packets as advisory method recall rather than established user facts.
+   */
+  standaloneMathFinalAnswer?: boolean;
 }
 
 export interface InjectorResult {
@@ -88,11 +95,16 @@ export function toPacket(input: InjectorInput): InjectorResult {
   const skillMode: SkillInjectionMode = input.skillInjectionMode ?? "summary";
   const skillSummaryChars =
     input.skillSummaryChars ?? DEFAULT_SKILL_SUMMARY_CHARS;
+  const standaloneMathFinalAnswer = input.standaloneMathFinalAnswer === true;
   const mapping: RankedSnippet[] = [];
-  for (const r of suppressExperiencesCoveredBySkills(input.ranked)) {
+  const ranked = standaloneMathFinalAnswer
+    ? suppressIsolatedMathSkill(suppressExperiencesCoveredBySkills(input.ranked))
+    : suppressExperiencesCoveredBySkills(input.ranked);
+  for (const r of ranked) {
     const snippet = renderSnippet(r.candidate, {
       skillMode,
       skillSummaryChars,
+      standaloneMathFinalAnswer,
     });
     if (!snippet) continue;
     snippet.score = round(r.score, 4);
@@ -108,6 +120,7 @@ export function toPacket(input: InjectorInput): InjectorResult {
   const rendered = renderWholePacket(snippets, input.reason, {
     skillMode,
     decisionGuidance: input.decisionGuidance,
+    standaloneMathFinalAnswer,
   });
 
   const packet: InjectionPacket = {
@@ -137,6 +150,7 @@ export function renderSnippetForDebug(c: TierCandidate): InjectionSnippet | null
   return renderSnippet(c, {
     skillMode: "summary",
     skillSummaryChars: DEFAULT_SKILL_SUMMARY_CHARS,
+    standaloneMathFinalAnswer: false,
   });
 }
 
@@ -170,11 +184,45 @@ function suppressExperiencesCoveredBySkills(
   });
 }
 
+function suppressIsolatedMathSkill(
+  ranked: readonly RankedCandidate[],
+): RankedCandidate[] {
+  const skillSlots = ranked.filter((r) => r.candidate.refKind === "skill");
+  if (skillSlots.length !== 1) return [...ranked];
+  const onlySkill = skillSlots[0]?.candidate as SkillCandidate | undefined;
+  if (onlySkill && shouldKeepIsolatedMathSkill(onlySkill)) return [...ranked];
+  const hasGrounding = ranked.some((r) => {
+    const kind = r.candidate.refKind;
+    return kind === "trace" || kind === "episode" || kind === "experience";
+  });
+  if (hasGrounding) return [...ranked];
+  return ranked.filter((r) => r.candidate.refKind !== "skill");
+}
+
+function shouldKeepIsolatedMathSkill(skill: SkillCandidate): boolean {
+  const text = `${skill.skillName}\n${firstLineSummary(skill.invocationGuide, 700)}`.toLowerCase();
+  const isGeometryScaffold =
+    /\b(geometry|triangle|circle|angle|circumcenter|incenter|barycentric)\b/.test(
+      text,
+    ) &&
+    /\b(set\s*up|setup|coordinate|coordinates|place|placing|align|axis|origin|model)\b/.test(
+      text,
+    );
+  if (!isGeometryScaffold) return false;
+
+  // Keep low-risk modeling scaffolds, but continue suppressing isolated
+  // skills that look like a full solution recipe for a different math target.
+  return !/\b(count|compute|sum|probability|expected|recurrence|polynomial|permutation|sequence)\b/.test(
+    text,
+  );
+}
+
 // ─── Per-candidate renderers ────────────────────────────────────────────────
 
 interface RenderOpts {
   skillMode: SkillInjectionMode;
   skillSummaryChars: number;
+  standaloneMathFinalAnswer: boolean;
 }
 
 function renderSnippet(c: TierCandidate, opts: RenderOpts): InjectionSnippet | null {
@@ -223,9 +271,11 @@ function renderSkill(c: SkillCandidate, opts: RenderOpts): InjectionSnippet {
     `Name: ${c.skillName}`,
     `Description: ${description || "(not provided)"}`,
   ];
-  lines.push(
-    `→ call \`memos_skill_get(id="${c.refId}")\` to load the full procedure if you decide to use it`,
-  );
+  if (!opts.standaloneMathFinalAnswer) {
+    lines.push(
+      `→ call \`memos_skill_get(id="${c.refId}")\` to load the full procedure if you decide to use it`,
+    );
+  }
   return {
     refKind: "skill",
     refId: c.refId,
@@ -387,12 +437,22 @@ function renderWorldModel(c: WorldModelCandidate): InjectionSnippet {
 function renderWholePacket(
   snippets: readonly InjectionSnippet[],
   reason: RetrievalReason,
-  opts: { skillMode: SkillInjectionMode; decisionGuidance?: CollectedGuidance },
+  opts: {
+    skillMode: SkillInjectionMode;
+    decisionGuidance?: CollectedGuidance;
+    standaloneMathFinalAnswer?: boolean;
+  },
 ): string {
-  const guidanceBlock = renderDecisionGuidance(opts.decisionGuidance);
+  const standaloneMathFinalAnswer = opts.standaloneMathFinalAnswer === true;
+  const guidanceBlock = renderDecisionGuidance(
+    opts.decisionGuidance,
+    standaloneMathFinalAnswer,
+  );
   if (snippets.length === 0 && !guidanceBlock) return "";
 
-  const header = HEADER_BY_REASON[reason] ?? HEADER_BY_REASON.turn_start;
+  const header = standaloneMathFinalAnswer
+    ? MATH_HEADER_BY_REASON[reason] ?? MATH_HEADER_BY_REASON.turn_start
+    : HEADER_BY_REASON[reason] ?? HEADER_BY_REASON.turn_start;
   const parts: string[] = [header];
 
   const skills = snippets.filter((s) => s.refKind === "skill");
@@ -402,7 +462,9 @@ function renderWholePacket(
   const worlds = snippets.filter((s) => s.refKind === "world-model");
 
   if (skills.length > 0) {
-    if (opts.skillMode === "summary") {
+    if (standaloneMathFinalAnswer) {
+      parts.push("## Candidate method memories\n");
+    } else if (opts.skillMode === "summary") {
       // In summary mode, frame the section as "candidate skills you can
       // call". The bodies already carry the per-skill `memos_skill_get(...)`
       // hint, so the agent knows how to expand them on demand.
@@ -439,7 +501,7 @@ function renderWholePacket(
   // "preferred / avoided" lines distilled from past failures + fixes.
   if (guidanceBlock) parts.push(guidanceBlock);
 
-  parts.push(footerFor(opts.skillMode, snippets));
+  parts.push(footerFor(opts.skillMode, snippets, standaloneMathFinalAnswer));
   return parts.join("\n\n");
 }
 
@@ -474,17 +536,27 @@ function renderMemoriesSection(
  * list) so the agent perceives it as part of the same memory packet,
  * not a foreign block.
  */
-function renderDecisionGuidance(g: CollectedGuidance | undefined): string | null {
+function renderDecisionGuidance(
+  g: CollectedGuidance | undefined,
+  standaloneMathFinalAnswer = false,
+): string | null {
   if (!g) return null;
   if (g.preference.length === 0 && g.antiPattern.length === 0) return null;
 
-  const lines: string[] = [
-    "## Decision guidance (distilled from past similar situations)",
-    "",
-    "Apply these BEFORE choosing your next action. Each line was learned",
-    "from one or more past episodes where the user told us what to prefer",
-    "or avoid in this kind of context.",
-  ];
+  const lines: string[] = standaloneMathFinalAnswer
+    ? [
+        "## Method guidance (distilled from past similar math tasks)",
+        "",
+        "Treat these as advisory heuristics, not facts about the current problem.",
+        "Apply a line only after it matches the original problem constraints.",
+      ]
+    : [
+        "## Decision guidance (distilled from past similar situations)",
+        "",
+        "Apply these BEFORE choosing your next action. Each line was learned",
+        "from one or more past episodes where the user told us what to prefer",
+        "or avoid in this kind of context.",
+      ];
   if (g.preference.length > 0) {
     lines.push("", "**Prefer**");
     g.preference.forEach((p, i) => {
@@ -561,6 +633,25 @@ const HEADER_BY_REASON: Record<RetrievalReason, string> = {
     "distilled from similar past situations. Please adapt your plan accordingly.",
 };
 
+const MATH_HEADER_BY_REASON: Record<RetrievalReason, string> = {
+  turn_start:
+    "# Retrieved prior problem-solving memories\n\n" +
+    "These are candidate methods and guidance learned from previous tasks, not facts about the current problem.\n" +
+    "Use them only when their assumptions match the original problem statement; ignore mismatched memories.",
+  tool_driven:
+    "# Memory search results\n\n" +
+    "The memory tool returned candidate methods and prior examples. Verify fit before using them.",
+  skill_invoke:
+    "# Invoked method memory\n\n" +
+    "Follow the procedure only if its assumptions match the current problem.",
+  sub_agent:
+    "# Parent-agent context\n\n" +
+    "Relevant memory surfaced for this sub-agent's mission.",
+  decision_repair:
+    "# Decision repair — please read before your next action\n\n" +
+    "Use the guidance below only when it matches the current math constraints.",
+};
+
 const FOOTER_LINES_SEARCH: readonly string[] = [
   "- `memos_search(query, maxResults?)` — re-query with a shorter / rephrased string",
 ];
@@ -588,7 +679,14 @@ const FOOTER_LINES_WORLD_MODEL: readonly string[] = [
 function footerFor(
   skillMode: SkillInjectionMode,
   snippets: readonly InjectionSnippet[],
+  standaloneMathFinalAnswer = false,
 ): string {
+  if (standaloneMathFinalAnswer) {
+    return [
+      "MemOS memory tools remain available when a concrete prior method is needed.",
+      "Do not call them merely to browse when the original problem can be solved directly.",
+    ].join("\n");
+  }
   const kinds = new Set(snippets.map((s) => s.refKind));
   const lines: string[] = ["Available follow-up tools:"];
   if (skillMode === "summary" && kinds.has("skill")) {
