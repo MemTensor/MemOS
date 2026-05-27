@@ -102,17 +102,28 @@ class TestSentenceChunker(unittest.TestCase):
         )
 
     def test_sentence_chunker_no_warning_when_character_configured(self):
-        """When 'character' is explicitly configured, no fallback warning is emitted.
+        """When 'character' is explicitly configured, the initial build
+        succeeds and no fallback warning is emitted.
 
-        Guards against a regression where the fallback warning fires for
-        users who deliberately picked the character counter.
+        Mock setup: only ``character`` is accepted; any other value raises
+        ``ValueError``. With ``character`` configured, the first iteration
+        of the build loop succeeds, so the fallback branch is never
+        entered — proving that a user who explicitly picked the character
+        counter does not see the "Tokenizer 'character' unavailable;
+        falling back to 'character'" warning.
         """
         import logging
 
         def side_effect(*args, **kwargs):
             if "tokenizer" in kwargs:
-                raise TypeError("unexpected keyword argument 'tokenizer'")
-            return MagicMock()
+                value = kwargs["tokenizer"]
+            elif "tokenizer_or_token_counter" in kwargs:
+                value = kwargs["tokenizer_or_token_counter"]
+            else:
+                raise TypeError("no tokenizer kwarg")
+            if value == "character":
+                return MagicMock()
+            raise ValueError(f"Tokenizer not found: {value}")
 
         records: list[logging.LogRecord] = []
 
@@ -124,7 +135,7 @@ class TestSentenceChunker(unittest.TestCase):
         logger_under_test = logging.getLogger("memos.chunkers.sentence_chunker")
         logger_under_test.addHandler(handler)
         try:
-            with patch("chonkie.SentenceChunker", side_effect=side_effect):
+            with patch("chonkie.SentenceChunker", side_effect=side_effect) as mock_cls:
                 config = ChunkerConfigFactory.model_validate(
                     {
                         "backend": "sentence",
@@ -138,9 +149,87 @@ class TestSentenceChunker(unittest.TestCase):
         finally:
             logger_under_test.removeHandler(handler)
 
+        # Sanity: chonkie was called exactly once (first build-loop
+        # iteration succeeded), so the fallback path was never entered.
+        self.assertEqual(mock_cls.call_count, 1)
         fallback_warnings = [r for r in records if "falling back to 'character'" in r.getMessage()]
         self.assertEqual(
             fallback_warnings,
             [],
             f"Unexpected fallback warning when 'character' was configured: {fallback_warnings}",
         )
+
+    def test_sentence_chunker_fallback_uses_new_api_for_character(self):
+        """Fallback is itself version-resilient: on chonkie >=1.4.0 the
+        ``character`` fallback must use the new ``tokenizer=`` kwarg.
+
+        Regression: a previous version unconditionally called
+        ``ChonkieSentenceChunker(tokenizer_or_token_counter="character", ...)``
+        in the fallback path, which raises ``TypeError`` on chonkie
+        >=1.4.0 because the keyword was removed.
+        """
+
+        def side_effect(*args, **kwargs):
+            # Simulate chonkie >=1.4.0: legacy keyword is gone.
+            if "tokenizer_or_token_counter" in kwargs:
+                raise TypeError("unexpected keyword argument 'tokenizer_or_token_counter'")
+            value = kwargs.get("tokenizer")
+            if value == "character":
+                return MagicMock()
+            raise ValueError(f"Tokenizer not found: {value}")
+
+        with patch("chonkie.SentenceChunker", side_effect=side_effect) as mock_cls:
+            config = ChunkerConfigFactory.model_validate(
+                {
+                    "backend": "sentence",
+                    "config": {
+                        "tokenizer_or_token_counter": "gpt2",
+                        "chunk_size": 10,
+                        "chunk_overlap": 2,
+                    },
+                }
+            )
+            chunker = ChunkerFactory.from_config(config)
+
+        self.assertIsNotNone(chunker.chunker)
+        # Last attempt must be the new-API ``tokenizer="character"`` call.
+        last_kwargs = mock_cls.call_args.kwargs
+        self.assertEqual(last_kwargs.get("tokenizer"), "character")
+        self.assertNotIn("tokenizer_or_token_counter", last_kwargs)
+
+    def test_sentence_chunker_raises_when_fallback_also_fails(self):
+        """If chonkie rejects every attempt — including the ``character``
+        fallback — a clear ``RuntimeError`` chained to the original
+        tokenizer-load error is raised instead of an opaque chonkie
+        exception leaking out.
+        """
+
+        original_error = ValueError("Tokenizer not found: gpt2")
+
+        def side_effect(*args, **kwargs):
+            # Re-raise the same class but vary the message so we can
+            # distinguish the original vs. fallback failure.
+            if kwargs.get("tokenizer") == "character" or kwargs.get(
+                "tokenizer_or_token_counter"
+            ) == "character":
+                raise ValueError("character also unavailable")
+            raise original_error
+
+        with patch("chonkie.SentenceChunker", side_effect=side_effect):
+            config = ChunkerConfigFactory.model_validate(
+                {
+                    "backend": "sentence",
+                    "config": {
+                        "tokenizer_or_token_counter": "gpt2",
+                        "chunk_size": 10,
+                        "chunk_overlap": 2,
+                    },
+                }
+            )
+            with self.assertRaises(RuntimeError) as ctx:
+                ChunkerFactory.from_config(config)
+
+        self.assertIn("character", str(ctx.exception))
+        # The original tokenizer-load error is preserved via __cause__.
+        self.assertIsInstance(ctx.exception.__cause__, ValueError)
+        self.assertIn("gpt2", str(ctx.exception.__cause__))
