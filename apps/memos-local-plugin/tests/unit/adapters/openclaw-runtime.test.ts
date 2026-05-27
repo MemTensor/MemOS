@@ -8,12 +8,14 @@ import { DEFAULT_CONFIG } from "../../../core/config/defaults.js";
 import { resolveHome, type ResolvedHome } from "../../../core/config/index.js";
 import type {
   HostLogger,
+  MemoryPluginCapability,
   OpenClawPluginApi,
   ServiceDescriptor,
 } from "../../../adapters/openclaw/openclaw-api.js";
 
 interface MockApi extends OpenClawPluginApi {
   services: ServiceDescriptor[];
+  memoryCapabilities: MemoryPluginCapability[];
   logger: HostLogger & {
     info: ReturnType<typeof vi.fn>;
     warn: ReturnType<typeof vi.fn>;
@@ -55,6 +57,7 @@ function makeCore() {
 
 function makeApi(): MockApi {
   const services: ServiceDescriptor[] = [];
+  const memoryCapabilities: MemoryPluginCapability[] = [];
   const logger = {
     trace: vi.fn(),
     debug: vi.fn(),
@@ -67,8 +70,11 @@ function makeApi(): MockApi {
     name: "MemOS Local",
     logger,
     services,
+    memoryCapabilities,
     registerTool: vi.fn(),
-    registerMemoryCapability: vi.fn(),
+    registerMemoryCapability: vi.fn((capability: MemoryPluginCapability) => {
+      memoryCapabilities.push(capability);
+    }),
     on: vi.fn(),
     registerService: vi.fn((svc: ServiceDescriptor) => {
       services.push(svc);
@@ -108,6 +114,40 @@ function deferred<T>() {
 }
 
 describe("OpenClaw adapter runtime lifecycle", () => {
+  it("does not inject MemOS prompt text when memory_search is disabled", async () => {
+    useTempMemosHome();
+    const bootstrapMemoryCoreFull = vi.fn(async () => ({
+      core: makeCore(),
+      config: DEFAULT_CONFIG,
+      home: resolveHome("openclaw"),
+    }));
+    const startHttpServer = vi.fn(async () => ({
+      url: "http://127.0.0.1:18799",
+      port: 18799,
+      closed: false,
+      close: vi.fn(async () => {}),
+    }));
+    const plugin = await loadPluginWithMocks(bootstrapMemoryCoreFull, startHttpServer);
+
+    const api = makeApi();
+    api.pluginConfig = { memory_search: { enabled: false }, memory_add: { enabled: true } };
+    plugin.register(api);
+
+    const prompt = api.memoryCapabilities[0]?.promptBuilder?.({
+      availableTools: new Set([
+        "memos_get",
+        "memos_timeline",
+        "memos_environment",
+        "memos_skill_list",
+        "memos_skill_get",
+      ]),
+    });
+
+    expect(prompt).toEqual([]);
+    await api.services[0]!.start?.();
+    await api.services[0]!.stop?.();
+  });
+
   it("blocks a duplicate register before the second runtime bootstraps", async () => {
     const home = useTempMemosHome();
     const firstCore = makeCore();

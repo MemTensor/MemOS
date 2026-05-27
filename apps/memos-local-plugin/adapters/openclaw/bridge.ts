@@ -851,6 +851,10 @@ export interface BridgeOptions {
   agent: AgentKind;
   core: MemoryCore;
   log: HostLogger;
+  /** Disable turn-start retrieval / prompt injection when OpenClaw config opts out. */
+  memorySearchEnabled?: boolean;
+  /** Disable memory_add capture when OpenClaw config opts out. */
+  memoryAddEnabled?: boolean;
   /** Override the wall-clock source (tests). */
   now?: () => number;
 }
@@ -990,6 +994,8 @@ function appendFailureHint(content: string): string {
 
 export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   const now = opts.now ?? (() => Date.now());
+  const memorySearchEnabled = opts.memorySearchEnabled !== false;
+  const memoryAddEnabled = opts.memoryAddEnabled !== false;
 
   // Per-session cursor so we don't re-capture messages across turns.
   const messageCursor = new Map<SessionId, number>();
@@ -1189,6 +1195,13 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         });
         return;
       }
+      if (!memorySearchEnabled && !memoryAddEnabled) {
+        opts.log.debug("memos.onTurnStart.skipped_disabled", {
+          sessionKey: ctx.sessionKey,
+          agentId: ctx.agentId,
+        });
+        return;
+      }
       const prompt = stripOpenClawUserEnvelope(rawPrompt);
       if (!prompt) return;
 
@@ -1217,7 +1230,10 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         },
       };
 
-      const packet = await opts.core.onTurnStart(turn);
+      const packet = await opts.core.onTurnStart({
+        ...turn,
+        skipRetrieval: !memorySearchEnabled,
+      });
       // The pipeline orchestrator (V7 §0.1) may have migrated the
       // session id (new-task → new session) or reopened a closed
       // episode (revision). We trust the ids returned in the packet,
@@ -1261,6 +1277,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           `truncated=${truncated ? "yes" : "no"}`,
       );
 
+      if (!memorySearchEnabled) return;
       if (!block) return;
       return { prependContext: block + "\n\n" };
     } catch (err) {
@@ -1278,6 +1295,14 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     if (isEphemeralSessionKey(ctx.sessionKey)) {
       // Mirror `handleBeforePrompt` — slug-generator & co. don't get a
       // trace / episode, so there's nothing to persist here either.
+      return;
+    }
+    if (!memoryAddEnabled) {
+      opts.log.info("memos.agent_end.skipped", {
+        reason: "memory_add_disabled",
+        sessionKey: ctx.sessionKey,
+        agentId: ctx.agentId,
+      });
       return;
     }
     const namespace = namespaceFromAgentCtx(ctx);
@@ -1436,6 +1461,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     event: BeforeToolCallEvent,
     ctx: PluginHookToolContext,
   ): void {
+    if (!memoryAddEnabled) return;
     const toolCallId = ctx.toolCallId ?? event.toolCallId;
     if (!toolCallId) return;
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
@@ -1453,6 +1479,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     event: AfterToolCallEvent,
     ctx: PluginHookToolContext,
   ): Promise<void> {
+    if (!memoryAddEnabled) return;
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     try {
       const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
@@ -1520,6 +1547,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     event: SessionStartEvent,
     ctx: PluginHookSessionContext,
   ): Promise<void> {
+    if (!memorySearchEnabled && !memoryAddEnabled) return;
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     try {
       await ensureSession(ctx.agentId, ctx.sessionKey, namespaceFromAgentCtx(ctx));
@@ -1539,6 +1567,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     event: SessionEndEvent,
     ctx: PluginHookSessionContext,
   ): Promise<void> {
+    if (!memorySearchEnabled && !memoryAddEnabled) return;
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     try {
       const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");

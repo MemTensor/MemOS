@@ -34,6 +34,11 @@ import {
   DuplicateOpenClawRuntimeError,
   type OpenClawRuntimeLockHandle,
 } from "./runtime-lock.js";
+import {
+  OPENCLAW_PLUGIN_CONFIG_SCHEMA,
+  type OpenClawPluginFeatureConfig,
+  resolveOpenClawPluginConfig,
+} from "./plugin-config.js";
 import { registerOpenClawTools } from "./tools.js";
 import type {
   DefinedPluginEntry,
@@ -135,6 +140,7 @@ const OPENCLAW_VIEWER_PORT = 18799;
 async function createRuntime(
   api: OpenClawPluginApi,
   runtimeLock: OpenClawRuntimeLockHandle,
+  featureConfig: OpenClawPluginFeatureConfig,
 ): Promise<PluginRuntime> {
   const log = rootLogger.child({ channel: "adapters.openclaw" });
   log.info("plugin.bootstrap", { version: PLUGIN_VERSION });
@@ -187,6 +193,8 @@ async function createRuntime(
       agent: "openclaw",
       core,
       log: api.logger,
+      memorySearchEnabled: featureConfig.memorySearchEnabled,
+      memoryAddEnabled: featureConfig.memoryAddEnabled,
     });
 
     // OpenClaw's viewer port is fixed at :18799 (hermes uses :18800).
@@ -279,6 +287,7 @@ async function closeViewerAfterFailedBootstrap(
 // ─── Registration ──────────────────────────────────────────────────────────
 
 function register(api: OpenClawPluginApi): void {
+  const featureConfig = resolveOpenClawPluginConfig(api.pluginConfig);
   let runtimeLock: OpenClawRuntimeLockHandle;
   try {
     runtimeLock = acquireOpenClawRuntimeLock({
@@ -301,6 +310,7 @@ function register(api: OpenClawPluginApi): void {
   //    fails later.
   api.registerMemoryCapability?.({
     promptBuilder: ({ availableTools }) => {
+      if (!featureConfig.memorySearchEnabled) return [];
       const hasSearch = availableTools.has("memos_search");
       const hasGet = availableTools.has("memos_get");
       const hasTimeline = availableTools.has("memos_timeline");
@@ -353,7 +363,7 @@ function register(api: OpenClawPluginApi): void {
   //    tools register a shell now and wait for runtime inside execute().
   let runtime: PluginRuntime | null = null;
   let bootstrapError: Error | null = null;
-  const bootstrapPromise = createRuntime(api, runtimeLock)
+  const bootstrapPromise = createRuntime(api, runtimeLock, featureConfig)
     .then((r) => {
       runtime = r;
       api.logger.info("memos-local: plugin ready");
@@ -377,6 +387,7 @@ function register(api: OpenClawPluginApi): void {
     agent: "openclaw",
     getCore: async () => (await ensureRuntime())?.core ?? null,
     log: api.logger,
+    memorySearchEnabled: featureConfig.memorySearchEnabled,
   });
 
   // 3. Hooks — every handler matches the upstream `PluginHookHandlerMap`
@@ -470,6 +481,7 @@ const plugin: DefinedPluginEntry = {
   description:
     "Reflect2Evolve memory plugin — L1 traces, L2 policies, L3 world models, " +
     "skill crystallization, three-tier retrieval, decision repair.",
+  configSchema: OPENCLAW_PLUGIN_CONFIG_SCHEMA,
   register,
 };
 
@@ -483,6 +495,7 @@ export function defineMemosLocalOpenClawPlugin(
     id: overrides?.id ?? PLUGIN_ID,
     name: overrides?.name ?? "MemOS Local",
     description: overrides?.description ?? plugin.description,
+    configSchema: overrides?.configSchema ?? OPENCLAW_PLUGIN_CONFIG_SCHEMA,
     register: overrides?.register ?? register,
   };
 }

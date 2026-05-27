@@ -85,6 +85,10 @@ NPM_PACKAGE="@memtensor/memos-local-plugin"
 # Per-agent viewer ports are fixed (see header design notes).
 OPENCLAW_PORT="18799"
 HERMES_PORT="18800"
+# How long install.sh probes for the viewer HTTP port after starting the
+# gateway/daemon. Cold starts (plugin load, native modules) can exceed 60s;
+# override with VIEWER_READY_TIMEOUT_SEC if needed.
+VIEWER_READY_TIMEOUT_SEC="${VIEWER_READY_TIMEOUT_SEC:-120}"
 REQUIRED_NODE_MAJOR=20
 OPENCLAW_RUNTIME_ENTRY="./dist/adapters/openclaw/index.js"
 # Older plugin IDs disabled on install so they don't fight for the
@@ -474,9 +478,33 @@ install_openclaw() {
   "configSchema": {
     "type": "object",
     "additionalProperties": true,
-    "description": "Edit ${home}/config.yaml to tune LLM / embedding / viewer.",
+    "description": "Edit ${home}/config.yaml to tune LLM / embedding / viewer. Edit openclaw.json plugin config for runtime switches.",
     "properties": {
-      "viewerPort": { "type": "number", "description": "Memory Viewer HTTP port (default ${OPENCLAW_PORT})" }
+      "viewerPort": { "type": "number", "description": "Memory Viewer HTTP port (default ${OPENCLAW_PORT})" },
+      "memory_search": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Control whether MemOS Local exposes and performs memory_search.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable memory_search tool registration and automatic turn-start retrieval."
+          }
+        }
+      },
+      "memory_add": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Control whether MemOS Local writes conversation turns into memory.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable memory_add capture on agent_end."
+          }
+        }
+      }
     }
   }
 }
@@ -566,6 +594,27 @@ config.plugins.entries[pluginId].enabled = true;
 // unless the user config explicitly grants access. The memory plugin needs
 // agent_end to capture completed turns.
 if (
+  !config.plugins.entries[pluginId].config ||
+  typeof config.plugins.entries[pluginId].config !== 'object' ||
+  Array.isArray(config.plugins.entries[pluginId].config)
+) {
+  config.plugins.entries[pluginId].config = {};
+}
+function ensureFeatureSwitch(key) {
+  const cfg = config.plugins.entries[pluginId].config;
+  if (typeof cfg[key] === 'boolean') {
+    cfg[key] = { enabled: cfg[key] };
+  }
+  if (!cfg[key] || typeof cfg[key] !== 'object' || Array.isArray(cfg[key])) {
+    cfg[key] = {};
+  }
+  if (typeof cfg[key].enabled !== 'boolean') {
+    cfg[key].enabled = true;
+  }
+}
+ensureFeatureSwitch('memory_search');
+ensureFeatureSwitch('memory_add');
+if (
   !config.plugins.entries[pluginId].hooks ||
   typeof config.plugins.entries[pluginId].hooks !== 'object' ||
   Array.isArray(config.plugins.entries[pluginId].hooks)
@@ -618,7 +667,7 @@ NODE
   fi
 
   step "Waiting for Memory Viewer"
-  if wait_for_viewer "${OPENCLAW_PORT}"; then
+  if wait_for_viewer "${OPENCLAW_PORT}" "${VIEWER_READY_TIMEOUT_SEC}"; then
     echo
     success "OpenClaw install complete"
     printf "       ${DIM}Plugin:${NC}    %s\n" "${HOME}/.openclaw/extensions/${PLUGIN_ID}"
@@ -629,7 +678,7 @@ NODE
   warn "Memory Viewer did not respond after service start; trying foreground gateway mode."
   nohup "${oc_bin}" gateway >/tmp/openclaw-memos-gateway.log 2>&1 &
   sleep 2
-  if wait_for_viewer "${OPENCLAW_PORT}"; then
+  if wait_for_viewer "${OPENCLAW_PORT}" "${VIEWER_READY_TIMEOUT_SEC}"; then
     echo
     success "OpenClaw install complete"
     printf "       ${DIM}Plugin:${NC}    %s\n" "${HOME}/.openclaw/extensions/${PLUGIN_ID}"
@@ -637,7 +686,7 @@ NODE
     return 0
   fi
 
-  warn "Memory Viewer did not respond within 60s."
+  warn "Memory Viewer did not respond within ${VIEWER_READY_TIMEOUT_SEC}s."
   printf "       ${DIM}Check: /tmp/openclaw-memos-gateway.log or /tmp/openclaw/openclaw-*.log${NC}\n" >&2
   return 1
 }
@@ -994,10 +1043,10 @@ CFGEOF
         ( cd "${prefix}" && nohup "${node_bin}" "${tsx_bin}" "${bridge_entry}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
       fi
 
-      if wait_for_viewer "${HERMES_PORT}" 120; then
+      if wait_for_viewer "${HERMES_PORT}" "${VIEWER_READY_TIMEOUT_SEC}"; then
         success "Memory Viewer daemon running"
       else
-        error "Memory Viewer did not respond within 120s."
+        error "Memory Viewer did not respond within ${VIEWER_READY_TIMEOUT_SEC}s."
         warn "Re-install dependencies and re-run: cd ${prefix} && npm install"
         return 1
       fi

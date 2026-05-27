@@ -93,6 +93,11 @@ export interface TurnInputDTO {
   episodeId?: EpisodeId;
   /** Free-form text the user said this turn. */
   userText: string;
+  /**
+   * Open/route the turn without running turn-start retrieval. Used when a
+   * host disables memory_search but still wants memory_add task continuity.
+   */
+  skipRetrieval?: boolean;
   /** Anything the agent already decided before calling MemoryCore. */
   contextHints?: Record<string, unknown>;
   /** Wall-clock when the turn began. */

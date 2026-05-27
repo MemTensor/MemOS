@@ -31,6 +31,7 @@ import {
   flattenMessages,
   renderContextBlock,
 } from "../../../adapters/openclaw/bridge.js";
+import { resolveOpenClawPluginConfig } from "../../../adapters/openclaw/plugin-config.js";
 import { registerOpenClawTools } from "../../../adapters/openclaw/tools.js";
 import type {
   AgentToolDescriptor,
@@ -788,6 +789,25 @@ describe("bridgeSessionId", () => {
   });
 });
 
+describe("OpenClaw plugin feature config", () => {
+  it("defaults memory_search and memory_add to enabled", () => {
+    expect(resolveOpenClawPluginConfig(undefined)).toEqual({
+      memorySearchEnabled: true,
+      memoryAddEnabled: true,
+    });
+  });
+
+  it("reads nested openclaw.json switches", () => {
+    expect(resolveOpenClawPluginConfig({
+      memory_search: { enabled: false },
+      memory_add: { enabled: false },
+    })).toEqual({
+      memorySearchEnabled: false,
+      memoryAddEnabled: false,
+    });
+  });
+});
+
 describe("ephemeral-session filter", () => {
   // Regression: OpenClaw's slug-generator sub-agent shares the plugin
   // host via `sessionKey: "temp:slug-generator"`. Before this filter,
@@ -933,6 +953,146 @@ function hookCtx(overrides: Partial<PluginHookAgentContext> = {}): PluginHookAge
 }
 
 describe("createOpenClawBridge", () => {
+  it("skips turn-start lifecycle when both memory_search and memory_add are disabled", async () => {
+    const onTurnStart = vi.fn();
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: { onTurnStart } as unknown as MemoryCore,
+      log: silentLogger(),
+      memorySearchEnabled: false,
+      memoryAddEnabled: false,
+    });
+
+    const result = await bridge.handleBeforePrompt(
+      { prompt: "help me write tests", messages: [] },
+      hookCtx(),
+    );
+
+    expect(result).toBeUndefined();
+    expect(onTurnStart).not.toHaveBeenCalled();
+  });
+
+  it("keeps task routing when memory_search is disabled but memory_add is enabled", async () => {
+    const sessionId = bridgeSessionId("main", "s-search-off");
+    const episodeId = "ep_search_off";
+    const openSession = vi.fn();
+    const onTurnStart = vi.fn(async (turn) => ({
+      query: {
+        agent: "openclaw",
+        query: turn.userText,
+        sessionId,
+        episodeId,
+      },
+      sessionId,
+      episodeId,
+      hits: [],
+      injectedContext: "",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+    }));
+    const onTurnEnd = vi.fn(async () => ({ traceId: "tr_search_off", episodeId }));
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: { openSession, onTurnStart, onTurnEnd } as unknown as MemoryCore,
+      log: silentLogger(),
+      memorySearchEnabled: false,
+      memoryAddEnabled: true,
+    });
+    const ctx = hookCtx({ sessionKey: "s-search-off", agentId: "main" });
+
+    const firstPrelude = await bridge.handleBeforePrompt(
+      { prompt: "帮我写一个安装脚本", messages: [] },
+      ctx,
+    );
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "帮我写一个安装脚本" },
+          { role: "assistant", content: [{ type: "text", text: "可以，用 bash 写。" }] },
+        ],
+        durationMs: 50,
+      },
+      ctx,
+    );
+
+    expect(firstPrelude).toBeUndefined();
+    expect(onTurnStart).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId,
+      skipRetrieval: true,
+      userText: "帮我写一个安装脚本",
+    }));
+    expect(onTurnEnd).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId,
+      episodeId,
+      agentText: "可以，用 bash 写。",
+    }));
+  });
+
+  it("skips turn capture when memory_add is disabled", async () => {
+    const onTurnEnd = vi.fn();
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: { onTurnEnd } as unknown as MemoryCore,
+      log: silentLogger(),
+      memoryAddEnabled: false,
+    });
+
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "normal user request" },
+          { role: "assistant", content: [{ type: "text", text: "ok" }] },
+        ],
+        durationMs: 50,
+      },
+      hookCtx(),
+    );
+
+    expect(onTurnEnd).not.toHaveBeenCalled();
+  });
+
+  it("keeps turn-start injection path when memory_add is disabled", async () => {
+    const sessionId = bridgeSessionId("main", "s-1");
+    const episodeId = "ep_memory_add_off";
+    const onTurnStart = vi.fn(async (turn) => ({
+      query: {
+        agent: "openclaw",
+        query: turn.userText,
+        sessionId,
+        episodeId,
+      },
+      sessionId,
+      episodeId,
+      hits: [],
+      injectedContext: "Shared operating prompt",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+    }));
+    const openSession = vi.fn();
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: { onTurnStart, openSession } as unknown as MemoryCore,
+      log: silentLogger(),
+      memoryAddEnabled: false,
+    });
+
+    const result = await bridge.handleBeforePrompt(
+      { prompt: "help me write tests", messages: [] },
+      hookCtx(),
+    );
+
+    expect(openSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId,
+    }));
+    expect(onTurnStart).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId,
+      skipRetrieval: false,
+      userText: "help me write tests",
+    }));
+    expect(result).toEqual({ prependContext: expect.stringContaining("Shared operating prompt") });
+  });
+
   it("handleBeforePrompt calls core.onTurnStart and returns a prependContext result", async () => {
     const mc = buildCore();
     await mc.init();
@@ -1615,6 +1775,22 @@ describe("registerOpenClawTools", () => {
       expect(typeof t.descriptor.execute).toBe("function");
       expect(t.descriptor.parameters).toBeDefined();
     }
+  });
+
+  it("does not register memos_search when the OpenClaw memory_search switch is disabled", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const { api, tools } = collectTools();
+    registerOpenClawTools(api, {
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      memorySearchEnabled: false,
+    });
+
+    expect(tools.map((t) => t.descriptor.name)).not.toContain("memos_search");
+    expect(tools.map((t) => t.descriptor.name)).toContain("memos_get");
   });
 
   it("memos_search executes against the core and returns well-formed hits", async () => {

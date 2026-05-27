@@ -32,6 +32,8 @@ export interface ToolsOptions {
   core?: MemoryCore;
   getCore?: () => MemoryCore | null | Promise<MemoryCore | null>;
   log: HostLogger;
+  /** Disable the memory_search tool when OpenClaw config opts out. */
+  memorySearchEnabled?: boolean;
   /** Cap on how many characters we return per snippet. */
   maxBodyChars?: number;
 }
@@ -177,43 +179,45 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
   const bodyCap = opts.maxBodyChars ?? DEFAULT_BODY_CAP;
 
   // ── memos_search ──
-  api.registerTool(
-    (ctx: OpenClawPluginToolContext): AgentToolDescriptor<typeof MemorySearchParams> => ({
-      name: "memos_search",
-      label: "Memory Search",
-      description:
-        "Search MemOS memory (local traces + policies + world models + skills, plus connected Team Hub memories). " +
-        "Returns a ranked list of grounded snippets. Prefer this before claiming prior context is unavailable.",
-      parameters: MemorySearchParams,
-      async execute(_toolCallId: string, params: MemorySearchParamsT) {
-        const started = Date.now();
-        const core = await resolveCore(opts);
-        const sessionId = params.sessionScope ? sessionFromCtx(ctx) : undefined;
-        const maxResults = params.maxResults !== undefined
-          ? Math.min(params.maxResults, 50)
-          : undefined;
-        const result = await core.searchMemory({
-          agent: opts.agent,
-          namespace: namespaceFromCtx(ctx),
-          sessionId: sessionId as never,
-          query: params.query,
-          topK: topKParams(params, maxResults),
-        });
-        const details = {
-          hits: result.hits.map((h) => ({
-            tier: h.tier,
-            refKind: h.refKind,
-            refId: h.refId,
-            score: h.score,
-            snippet: clip(h.snippet, bodyCap),
-          })),
-          totalMs: Date.now() - started,
-        };
-        return textToolResult(details, formatHitList(details.hits));
-      },
-    }),
-    { name: "memos_search" },
-  );
+  if (opts.memorySearchEnabled !== false) {
+    api.registerTool(
+      (ctx: OpenClawPluginToolContext): AgentToolDescriptor<typeof MemorySearchParams> => ({
+        name: "memos_search",
+        label: "Memory Search",
+        description:
+          "Search MemOS memory (local traces + policies + world models + skills, plus connected Team Hub memories). " +
+          "Returns a ranked list of grounded snippets. Prefer this before claiming prior context is unavailable.",
+        parameters: MemorySearchParams,
+        async execute(_toolCallId: string, params: MemorySearchParamsT) {
+          const started = Date.now();
+          const core = await resolveCore(opts);
+          const sessionId = params.sessionScope ? sessionFromCtx(ctx) : undefined;
+          const maxResults = params.maxResults !== undefined
+            ? Math.min(params.maxResults, 50)
+            : undefined;
+          const result = await core.searchMemory({
+            agent: opts.agent,
+            namespace: namespaceFromCtx(ctx),
+            sessionId: sessionId as never,
+            query: params.query,
+            topK: topKParams(params, maxResults),
+          });
+          const details = {
+            hits: result.hits.map((h) => ({
+              tier: h.tier,
+              refKind: h.refKind,
+              refId: h.refId,
+              score: h.score,
+              snippet: clip(h.snippet, bodyCap),
+            })),
+            totalMs: Date.now() - started,
+          };
+          return textToolResult(details, formatHitList(details.hits));
+        },
+      }),
+      { name: "memos_search" },
+    );
+  }
 
   // ── memos_get ──
   api.registerTool(

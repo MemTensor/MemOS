@@ -1089,7 +1089,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     });
 
     try {
-      if (retrievePlan.entry === "turn_start_skip") {
+      if (input.skipRetrieval || retrievePlan.entry === "turn_start_skip") {
         const packet = emptyInjectionPacket(input.agent, sessionId, episode.id as EpisodeId, input.ts);
         turnStartRetrievalStats.set(
           packet.packetId,
@@ -1136,6 +1136,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         retrievalTotalMs: packet.tierLatencyMs.tier1 +
           packet.tierLatencyMs.tier2 +
           packet.tierLatencyMs.tier3,
+        retrievalSkipped: false,
         elapsedMs: now() - t0,
       });
       return stamped;
