@@ -80,6 +80,8 @@ describe("install.sh — CLI surface", () => {
     expect(script).toContain("const MEMOS_TOOL_NAMES = [");
     expect(script).toContain("if (!Array.isArray(config.tools.alsoAllow)) config.tools.alsoAllow = []");
     expect(script).toContain("config.tools.alsoAllow.push(toolName)");
+    expect(script).toContain("ensureFeatureSwitch('memory_search')");
+    expect(script).toContain("ensureFeatureSwitch('memory_add')");
     expect(script).toContain("config.plugins.entries[pluginId].hooks.allowConversationAccess = true");
     expect(script).not.toContain('"extensions": ["./adapters/openclaw/index.ts"]');
   });

@@ -272,8 +272,33 @@ function Install-OpenClaw {
   "configSchema": {
     "type": "object",
     "additionalProperties": true,
+    "description": "Edit OpenClaw plugin config for MemOS Local runtime switches.",
     "properties": {
-      "viewerPort": { "type": "number", "description": "Memory Viewer HTTP port (default $OpenClawPort)" }
+      "viewerPort": { "type": "number", "description": "Memory Viewer HTTP port (default $OpenClawPort)" },
+      "memory_search": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Control whether MemOS Local exposes and performs memory_search.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable memory_search tool registration and automatic turn-start retrieval."
+          }
+        }
+      },
+      "memory_add": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Control whether MemOS Local writes conversation turns into memory.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable memory_add capture on agent_end."
+          }
+        }
+      }
     }
   }
 }
@@ -361,7 +386,35 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
   config.plugins.entries[pluginId] = {};
 }
 config.plugins.entries[pluginId].enabled = true;
-if (config.plugins.entries[pluginId].hooks) delete config.plugins.entries[pluginId].hooks;
+if (
+  !config.plugins.entries[pluginId].config ||
+  typeof config.plugins.entries[pluginId].config !== 'object' ||
+  Array.isArray(config.plugins.entries[pluginId].config)
+) {
+  config.plugins.entries[pluginId].config = {};
+}
+function ensureFeatureSwitch(key) {
+  const cfg = config.plugins.entries[pluginId].config;
+  if (typeof cfg[key] === 'boolean') {
+    cfg[key] = { enabled: cfg[key] };
+  }
+  if (!cfg[key] || typeof cfg[key] !== 'object' || Array.isArray(cfg[key])) {
+    cfg[key] = {};
+  }
+  if (typeof cfg[key].enabled !== 'boolean') {
+    cfg[key].enabled = true;
+  }
+}
+ensureFeatureSwitch('memory_search');
+ensureFeatureSwitch('memory_add');
+if (
+  !config.plugins.entries[pluginId].hooks ||
+  typeof config.plugins.entries[pluginId].hooks !== 'object' ||
+  Array.isArray(config.plugins.entries[pluginId].hooks)
+) {
+  config.plugins.entries[pluginId].hooks = {};
+}
+config.plugins.entries[pluginId].hooks.allowConversationAccess = true;
 
 if (!config.plugins.installs || typeof config.plugins.installs !== 'object') config.plugins.installs = {};
 const installsEntry = {
