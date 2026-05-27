@@ -121,14 +121,28 @@ function applyThumbs(
   magnitudeOverride: number | undefined,
 ): LifecycleUpdate {
   const delta = (magnitudeOverride ?? cfg.etaDelta) * sign;
-  const eta = clamp01(skill.eta + delta);
+  let eta = clamp01(skill.eta + delta);
   let status = skill.status;
   let transition: SkillLifecycleTransition | undefined;
+
+  // An unproven repair candidate's fate is decided by real trials, not by a
+  // thumbs-down (which often targets the whole response, not this specific
+  // fix). On a down-vote: deduct η but keep it at/above the retrieval floor so
+  // it stays surfaceable (η below the floor = invisible = de-facto dead), and
+  // never auto-archive it here. A failing trial can still archive it.
+  const protectRepairCandidate = skill.repairOrigin === true && skill.status === "candidate";
+  if (protectRepairCandidate && sign < 0) {
+    eta = Math.max(eta, cfg.minEtaForRetrieval);
+  }
 
   if (skill.status === "archived" && eta >= cfg.minEtaForRetrieval) {
     status = "candidate";
     transition = "promoted";
-  } else if (skill.status !== "archived" && eta < cfg.archiveEta) {
+  } else if (
+    !protectRepairCandidate &&
+    skill.status !== "archived" &&
+    eta < cfg.archiveEta
+  ) {
     status = "archived";
     transition = "archived";
   }

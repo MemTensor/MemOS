@@ -159,11 +159,15 @@ function slugName(raw: string): string {
 
 function renderRepairGuide(policy: PolicyRow, fix: string): string {
   const lines: string[] = [];
-  // Keep the "[unverified repair]" marker in the SAME paragraph as the title
-  // (no blank line) so it also surfaces in the Tier-1 teaser, not just the
-  // full procedure the agent loads on demand.
+  // Invitational framing, kept in the SAME paragraph as the title (no blank
+  // line) so it surfaces in the Tier-1 teaser too. Natural relevance recall is
+  // the only thing that gets this candidate validated, so the wording must
+  // encourage trying it — frame applying it as double-value (solve + confirm),
+  // not as a "low-confidence, avoid" warning that would starve it of trials.
   lines.push(`# ${stripPrefix(policy.title) || "Repair candidate"}`);
-  lines.push("[unverified repair] distilled from a failure — validate by re-running before trusting.");
+  lines.push(
+    "Candidate fix distilled from a past failure on a similar task — applying it here both solves the task and confirms the fix.",
+  );
   lines.push("");
   if (policy.trigger?.trim()) {
     lines.push("**When to use**");
