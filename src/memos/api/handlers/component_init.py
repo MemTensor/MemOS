@@ -157,6 +157,7 @@ def init_server() -> dict[str, Any]:
     graph_db_config = build_graph_db_config()
     llm_config = build_llm_config()
     chat_llm_config = build_chat_llm_config()
+    playground_chat_llm_config = build_chat_llm_config("PLAYGROUND_CHAT_MODEL_LIST")
     embedder_config = build_embedder_config()
     nli_client_config = build_nli_client_config()
     mem_reader_config = build_mem_reader_config()
@@ -173,6 +174,11 @@ def init_server() -> dict[str, Any]:
         _init_chat_llms(chat_llm_config)
         if os.getenv("ENABLE_CHAT_API", "false") == "true"
         else None
+    )
+    playground_chat_llms = (
+        _init_chat_llms(playground_chat_llm_config)
+        if os.getenv("ENABLE_CHAT_API", "false") == "true" and playground_chat_llm_config
+        else chat_llms
     )
     embedder = EmbedderFactory.from_config(embedder_config)
 
@@ -317,6 +323,7 @@ def init_server() -> dict[str, Any]:
         "mem_reader": mem_reader,
         "llm": llm,
         "chat_llms": chat_llms,
+        "playground_chat_llms": playground_chat_llms,
         "embedder": embedder,
         "reranker": reranker,
         "internet_retriever": internet_retriever,
