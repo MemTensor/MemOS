@@ -19,7 +19,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
 )
 from memos.mem_scheduler.task_schedule_modules.base_handler import BaseSchedulerHandler
 from memos.mem_scheduler.utils.filter_utils import transform_name_to_key
-from memos.mem_scheduler.utils.misc_utils import is_cloud_env
+from memos.mem_scheduler.utils.misc_utils import is_playground_api
 from memos.memories.textual.tree import TreeTextMemory
 
 
@@ -268,8 +268,8 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                                     "[Scheduler] merged_from provided but graph_db is unavailable; skip archiving."
                                 )
 
-                    cloud_env = is_cloud_env()
-                    if cloud_env:
+                    playground_api = is_playground_api()
+                    if not playground_api:
                         kb_log_content = []
                         for item in flattened_memories:
                             metadata = getattr(item, "metadata", None)
@@ -448,8 +448,8 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                 exc_info=True,
             )
             with contextlib.suppress(Exception):
-                cloud_env = is_cloud_env()
-                if cloud_env:
+                playground_api = is_playground_api()
+                if not playground_api:
                     if not kb_log_content:
                         trigger_source = (
                             info.get("trigger_source", "Messages") if info else "Messages"

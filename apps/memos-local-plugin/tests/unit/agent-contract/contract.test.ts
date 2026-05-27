@@ -70,7 +70,7 @@ describe("agent-contract", () => {
     const toolDriven: ToolDrivenCtx = {
       agent: "openclaw",
       sessionId: "s1",
-      tool: "memory_search",
+      tool: "memos_search",
       args: { q: "x" },
       ts,
     };
@@ -100,7 +100,7 @@ describe("agent-contract", () => {
     };
 
     expect(turnStart.userText).toBe("hi");
-    expect(toolDriven.tool).toBe("memory_search");
+    expect(toolDriven.tool).toBe("memos_search");
     expect(repair.failureCount).toBe(3);
     expect(reasons.length).toBe(5);
     expect(packet.packetId).toBe("pkt_1");

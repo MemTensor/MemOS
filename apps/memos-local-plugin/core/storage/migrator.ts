@@ -133,6 +133,7 @@ export function runMigrations(db: StorageDb, dir: string = defaultMigrationsDir(
     if (needsUnsafe) db.raw.unsafeMode(false);
   }
 
+  ensureHubSharingSearchColumns(db);
   markReady(db);
 
   log.info("migrations.summary", {
@@ -175,6 +176,12 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
   }
   if (file.version === 8 && file.name === "feedback-experience-metadata") {
     ensureFeedbackExperienceMetadataColumns(db);
+    return;
+  }
+  if (file.version === 9 && file.name === "policies-fts") {
+    if (tableExists(db, "policies")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
     return;
   }
   db.exec(fs.readFileSync(file.fullPath, "utf8"));
@@ -306,6 +313,24 @@ function ensureFeedbackExperienceMetadataColumns(db: StorageDb): void {
   );
   db.exec(`CREATE INDEX IF NOT EXISTS idx_policies_experience ON policies(experience_type, evidence_polarity, updated_at DESC)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_policies_skill_eligible ON policies(skill_eligible, status, updated_at DESC)`);
+}
+
+function ensureHubSharingSearchColumns(db: StorageDb): void {
+  if (!tableExists(db, "hub_shared_memories")) return;
+  ensureColumn(db, "hub_shared_memories", "embedding", "BLOB");
+  ensureColumn(db, "hub_shared_memories", "embedding_norm2", "REAL");
+  ensureColumn(
+    db,
+    "hub_shared_memories",
+    "visible",
+    "INTEGER NOT NULL DEFAULT 1 CHECK (visible IN (0,1))",
+  );
+  ensureColumn(db, "hub_shared_memories", "deleted_at", "INTEGER");
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_hub_shared_memories_deleted
+       ON hub_shared_memories(visible, deleted_at)
+       WHERE visible = 0 AND deleted_at IS NOT NULL`,
+  );
 }
 
 function execIfTable(db: StorageDb, table: string, sql: string): void {

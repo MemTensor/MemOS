@@ -134,7 +134,7 @@ describe("Telemetry", () => {
 
       const body = JSON.parse((fetch as any).mock.calls[0][1].body);
       const event = body.events[0];
-      expect(event.name).toBe("memory_search");
+      expect(event.name).toBe("memos_search");
       expect(event.properties.agent_name).toBe("hermes");
       expect(event.properties.type).toBe("turn_start");
       expect(event.properties.latency_ms).toBe(100);

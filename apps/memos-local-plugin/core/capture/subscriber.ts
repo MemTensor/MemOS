@@ -47,6 +47,10 @@ export function attachCaptureSubscriber(
       log.debug("subscriber.skip_abandoned", { episodeId: evt.episode.id });
       return;
     }
+    if (evt.episode.meta?.lightweightMemory === true) {
+      log.debug("subscriber.skip_lightweight", { episodeId: evt.episode.id });
+      return;
+    }
     // Topic ended → batch reflect across every step + emit
     // `capture.done` so the reward subscriber kicks off R_human + V
     // backprop. Per-turn lite captures already wrote the trace rows;

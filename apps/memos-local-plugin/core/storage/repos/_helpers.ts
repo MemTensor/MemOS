@@ -7,7 +7,7 @@
 import { rootLogger } from "../../logger/index.js";
 import { decodeVector, encodeVector } from "../vector.js";
 import type { EmbeddingVector } from "../../types.js";
-import type { RuntimeNamespace } from "../../../agent-contract/dto.js";
+import type { RuntimeNamespace, ShareScope } from "../../../agent-contract/dto.js";
 import {
   normalizeShareScope,
   ownerFromNamespace,
@@ -134,7 +134,7 @@ export function visibilityWhere(ns: RuntimeNamespace, alias = ""): {
   return runtimeVisibilityWhere(ns, alias);
 }
 
-export function normalizeShareForStorage(scope: unknown): string {
+export function normalizeShareForStorage(scope: unknown): ShareScope {
   return normalizeShareScope(scope);
 }
 

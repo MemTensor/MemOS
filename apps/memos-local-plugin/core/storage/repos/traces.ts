@@ -1,4 +1,4 @@
-import type { EmbeddingVector, EpisodeId, SessionId, TraceId, TraceRow } from "../../types.js";
+import type { EmbeddingVector, EpisodeId, SessionId, ShareScope, TraceId, TraceRow } from "../../types.js";
 import type { StorageDb, TraceListFilter } from "../types.js";
 import { buildInClause, buildInsert, buildUpdate } from "../tx.js";
 import { scanAndTopK, topKCosine, type VectorHit, type VectorRow } from "../vector.js";
@@ -144,7 +144,10 @@ export function makeTracesRepo(db: StorageDb) {
      * Total row count matching the same filter (no limit/offset).
      * Used by list endpoints so the viewer can show "Page N of M".
      */
-    count(filter: Omit<TraceListFilter, "limit" | "offset"> = {}): number {
+    count(
+      filter: Omit<TraceListFilter, "limit" | "offset"> = {},
+      visibility?: { sql: string; params: Record<string, unknown> },
+    ): number {
       const tr = timeRangeWhere(filter, "ts");
       const fragments: string[] = [];
       const params: Record<string, unknown> = { ...tr.params };
@@ -167,6 +170,10 @@ export function makeTracesRepo(db: StorageDb) {
       if (filter.minAbsValue !== undefined) {
         fragments.push(`abs(value) >= @min_abs_value`);
         params.min_abs_value = filter.minAbsValue;
+      }
+      if (visibility) {
+        fragments.push(visibility.sql);
+        Object.assign(params, visibility.params);
       }
       if (tr.sql) fragments.push(tr.sql);
       const where = joinWhere(fragments);
@@ -610,7 +617,7 @@ export function makeTracesRepo(db: StorageDb) {
     updateShare(
       id: TraceId,
       share: {
-        scope: "private" | "local" | "public" | "hub" | null;
+        scope: ShareScope | null;
         target?: string | null;
         sharedAt?: number | null;
       },
@@ -751,7 +758,7 @@ function mapRow(r: RawTraceRow): TraceRow {
     share:
       r.share_scope != null
         ? {
-            scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub",
+            scope: normalizeShareForStorage(r.share_scope) as ShareScope,
             target: r.share_target,
             sharedAt: r.shared_at,
           }

@@ -8,7 +8,7 @@
  *   GET /api/v1/metrics/tools?minutes=N  (alias: ?days=N)
  *     Per-tool call latency + success-rate table. Data source: the
  *     `api_logs` table, which records every plugin internal operation
- *     (memory_search / memory_add / policy_generate / skill_generate /
+ *     (memos_search / memory_add / policy_generate / skill_generate /
  *     world_model_generate / task_done / task_failed) with its
  *     `durationMs` and `success` flag. We also fold in any agent-side
  *     tool invocations recorded on `traces.tool_calls_json` so the
@@ -92,7 +92,7 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
 
     // 1. Plugin internal operations — from api_logs. We only surface
     // entries that represent **actual tool/handler calls the agent
-    // made or the user cares about latency for**: `memory_search`
+    // made or the user cares about latency for**: `memos_search`
     // and `memory_add`. Purely internal pipeline lifecycle events
     // (`task_done`, `task_failed`, `skill_generate`, `skill_evolve`,
     // `policy_generate`, `policy_evolve`, `world_model_generate`,
@@ -100,7 +100,7 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
     // with names like "task_failed" that users don't recognise as
     // tools, and their timings reflect background work rather than
     // response latency.
-    const PUBLIC_API_LOG_TOOLS = new Set(["memory_search", "memory_add"]);
+    const PUBLIC_API_LOG_TOOLS = new Set(["memos_search", "memory_search", "memory_add"]);
     const { logs } = await deps.core.listApiLogs({ limit: 5_000, offset: 0 });
     for (const lg of logs) {
       if (lg.calledAt < sinceMs) continue;
