@@ -111,17 +111,12 @@ class ChatRequest(BaseRequest):
     # ==== Filter conditions ====
     filter: dict[str, Any] | None = Field(
         None,
-        description="""
-        Optional metadata filter applied to recalled memories. Supports nested
-        "and" / "or" conditions and comparison operators such as "gt" for fields
-        like "id", "created_at", or other indexed metadata. Example:
-        {
-            "and": [
-                {"id": "uuid-xxx"},
-                {"created_at": {"gt": "2024-01-01"}},
-            ]
-        }
-        """,
+        description=(
+            "Optional metadata filter applied to recalled memories. Supports nested "
+            '"and" / "or" conditions and comparison operators such as "gt" for fields '
+            'like "id", "created_at", or other indexed metadata. Example: '
+            '{"and": [{"id": "uuid-xxx"}, {"created_at": {"gt": "2024-01-01"}}]}'
+        ),
     )
 
     # ==== Extended capabilities ====
@@ -407,17 +402,12 @@ class APISearchRequest(BaseRequest):
     # ==== Filter conditions ====
     filter: dict[str, Any] | None = Field(
         None,
-        description="""
-        Optional metadata filter applied to memory search results. Supports nested
-        "and" / "or" conditions and comparison operators such as "gt" for fields
-        like "id", "created_at", or other indexed metadata. Example:
-        {
-            "and": [
-                {"id": "uuid-xxx"},
-                {"created_at": {"gt": "2024-01-01"}},
-            ]
-        }
-        """,
+        description=(
+            "Optional metadata filter applied to memory search results. Supports nested "
+            '"and" / "or" conditions and comparison operators such as "gt" for fields '
+            'like "id", "created_at", or other indexed metadata. Example: '
+            '{"and": [{"id": "uuid-xxx"}, {"created_at": {"gt": "2024-01-01"}}]}'
+        ),
     )
 
     # ==== Extended capabilities ====
@@ -830,17 +820,12 @@ class APIChatCompleteRequest(BaseRequest):
     # ==== Filter conditions ====
     filter: dict[str, Any] | None = Field(
         None,
-        description="""
-        Optional metadata filter applied to recalled memories. Supports nested
-        "and" / "or" conditions and comparison operators such as "gt" for fields
-        like "id", "created_at", or other indexed metadata. Example:
-        {
-            "and": [
-                {"id": "uuid-xxx"},
-                {"created_at": {"gt": "2024-01-01"}},
-            ]
-        }
-        """,
+        description=(
+            "Optional metadata filter applied to recalled memories. Supports nested "
+            '"and" / "or" conditions and comparison operators such as "gt" for fields '
+            'like "id", "created_at", or other indexed metadata. Example: '
+            '{"and": [{"id": "uuid-xxx"}, {"created_at": {"gt": "2024-01-01"}}]}'
+        ),
     )
 
     # ==== Extended capabilities ====
