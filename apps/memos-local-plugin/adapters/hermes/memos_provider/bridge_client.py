@@ -19,6 +19,9 @@ import os
 import shutil
 import subprocess
 import threading
+import time
+import urllib.error
+import urllib.request
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -419,4 +422,123 @@ class MemosBridgeClient:
             entry["error"] = msg["error"]
         else:
             entry["result"] = msg.get("result")
-        entry["event"].set()
+
+
+class MemosHttpClient:
+    """JSON-RPC 2.0 client that talks to the daemon bridge over HTTP.
+
+    Drop-in replacement for ``MemosBridgeClient`` when a daemon is already
+    running on the viewer port. Instead of spawning a new subprocess, this
+    client POSTs JSON-RPC envelopes to ``/api/v1/rpc`` on the daemon's HTTP
+    server. This eliminates zombie bridge accumulation.
+
+    Limitations vs. stdio client:
+    - No reverse-direction RPC (``host.llm.complete``). The daemon's own
+      stdio bridge handles host LLM fallback internally.
+    - No ``notify()`` (notifications have no response; use ``request()``
+      for all calls — the daemon handles both).
+    """
+
+    def __init__(
+        self,
+        *,
+        port: int = 18800,
+        host: str = "127.0.0.1",
+        api_key: str | None = None,
+    ) -> None:
+        self._base_url = f"http://{host}:{port}/api/v1/rpc"
+        self._lock = threading.Lock()
+        self._next_id = 1
+        self._closed = False
+        self._api_key = api_key
+        self._host_handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
+
+    @property
+    def pid(self) -> int:
+        """Return 0 — HTTP client has no subprocess."""
+        return 0
+
+    # ─── Public API (matches MemosBridgeClient) ──
+
+    def request(
+        self,
+        method: str,
+        params: Any = None,
+        *,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        if self._closed:
+            raise BridgeError("transport_closed", "HTTP client is closed")
+        with self._lock:
+            rpc_id = self._next_id
+            self._next_id += 1
+
+        envelope = {
+            "jsonrpc": "2.0",
+            "id": rpc_id,
+            "method": method,
+            "params": params,
+        }
+        payload = json.dumps(envelope, ensure_ascii=False).encode("utf-8")
+
+        req = urllib.request.Request(
+            self._base_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        if self._api_key:
+            req.add_header("Authorization", f"Bearer {self._api_key}")
+
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read(4_194_304)  # 4 MiB safety cap
+        except urllib.error.HTTPError as exc:
+            # Try to read the JSON-RPC error body
+            try:
+                err_body = exc.read(4_194_304)
+                err_json = json.loads(err_body.decode("utf-8", errors="replace"))
+                err_obj = err_json.get("error") or {}
+                raise BridgeError(
+                    err_obj.get("data", {}).get("code") or str(err_obj.get("code", "internal")),
+                    err_obj.get("message", f"HTTP {exc.code}"),
+                    err_obj.get("data"),
+                ) from exc
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise BridgeError("internal", f"HTTP {exc.code}: {exc.reason}") from exc
+        except urllib.error.URLError as exc:
+            raise BridgeError("transport_closed", str(exc)) from exc
+
+        result = json.loads(body.decode("utf-8", errors="replace"))
+        if "error" in result:
+            e = result["error"]
+            raise BridgeError(
+                (e.get("data") or {}).get("code") or str(e.get("code", "internal")),
+                e.get("message", "unknown error"),
+                e.get("data"),
+            )
+        return result.get("result") or {}
+
+    def notify(self, method: str, params: Any = None) -> None:
+        """No-op for HTTP — use request() for all calls."""
+        try:
+            self.request(method, params, timeout=5.0)
+        except Exception:
+            pass
+
+    def on_event(self, cb: Callable[[dict[str, Any]], None]) -> None:
+        """No-op — SSE events not supported over HTTP transport."""
+
+    def on_log(self, cb: Callable[[dict[str, Any]], None]) -> None:
+        """No-op — SSE logs not supported over HTTP transport."""
+
+    def register_host_handler(
+        self,
+        method: str,
+        handler: Callable[[dict[str, Any]], Any],
+    ) -> None:
+        """Store the handler but it won't be called (daemon handles host LLM internally)."""
+        self._host_handlers[method] = handler
+
+    def close(self) -> None:
+        self._closed = True

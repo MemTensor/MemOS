@@ -410,10 +410,13 @@ export function requireSession(
   agent?: string | null,
 ): boolean {
   // Public: auth endpoints + health (so the viewer can tell whether
-  // the backend is up BEFORE unlocking). Other API routes, including
-  // ping, fall through and are only open when no password is configured.
+  // the backend is up BEFORE unlocking). RPC endpoint is exempt
+  // because it's used by the local Python adapter (same machine, no
+  // browser session). Other API routes, including ping, fall through
+  // and are only open when no password is configured.
   if (pathname.startsWith("/api/v1/auth/")) return true;
   if (pathname === "/api/v1/health") return true;
+  if (pathname === "/api/v1/rpc") return true;
 
   const state = readAuthState(homeDir);
   if (!state) return true; // password protection off → open

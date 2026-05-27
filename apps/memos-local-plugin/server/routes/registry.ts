@@ -46,6 +46,7 @@ import { registerApiLogsRoutes } from "./api-logs.js";
 import { registerDiagRoutes } from "./diag.js";
 import { registerEmbeddingRoutes } from "./embeddings.js";
 import { registerTelemetryRoutes } from "./telemetry.js";
+import { registerRpcRoutes } from "./rpc.js";
 
 export interface RouteContext {
   req: IncomingMessage;
@@ -183,6 +184,7 @@ export function buildRoutes(
   registerApiLogsRoutes(routes, deps);
   registerDiagRoutes(routes, deps);
   registerTelemetryRoutes(routes, deps);
+  registerRpcRoutes(routes, deps);
   return routes;
 }
 
