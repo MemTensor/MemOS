@@ -20,6 +20,7 @@ import type { L2Event, L2EventBus } from "../memory/l2/types.js";
 import type { Logger } from "../logger/types.js";
 import type { RewardEvent, RewardEventBus } from "../reward/types.js";
 import { rootLogger } from "../logger/index.js";
+import { objectiveOutcome } from "../experience/feedback-builder.js";
 import {
   applySkillFeedback,
   runSkill,
@@ -32,7 +33,7 @@ import type {
   SkillFeedbackKind,
   SkillTrigger,
 } from "./types.js";
-import type { SkillId } from "../types.js";
+import type { EpisodeId, SkillId } from "../types.js";
 
 export interface SkillSubscriberDeps
   extends Omit<RunSkillDeps, "log" | "bus"> {
@@ -157,20 +158,41 @@ export function attachSkillSubscriber(
 
   function resolveTrialsForReward(evt: Extract<RewardEvent, { kind: "reward.updated" }>): void {
     const rTask = evt.result.rHuman;
-    const outcome =
+    const looseOutcome =
       rTask >= 0.5 ? "pass" :
       rTask <= -0.5 ? "fail" :
       "unknown";
     const trials = deps.repos.skillTrials.listPendingForEpisode(evt.result.episodeId);
     if (trials.length === 0) return;
+
+    // Strict (verifier-origin repair) trials judge by full credit only — never
+    // the loose rTask threshold. Computed lazily (and once) since most trials
+    // are loose.
+    let strictMemo: "pass" | "fail" | "unknown" | undefined;
+    const strictOutcome = (): "pass" | "fail" | "unknown" => {
+      if (strictMemo === undefined) {
+        strictMemo = computeStrictOutcome(evt.result.episodeId);
+      }
+      return strictMemo;
+    };
+
     for (const trial of trials) {
+      const skill = deps.repos.skills.getById(trial.skillId);
+      const strict = skill?.strictTrial === true;
+      const outcome = strict ? strictOutcome() : looseOutcome;
       const evidence = {
         source: "reward.updated",
         episodeId: evt.result.episodeId,
         rTask,
-        threshold: { pass: 0.5, fail: -0.5 },
-        reason:
-          outcome === "pass"
+        mode: strict ? "strict-full-pass" : "loose-threshold",
+        threshold: strict ? { fullPassOnly: true } : { pass: 0.5, fail: -0.5 },
+        reason: strict
+          ? outcome === "pass"
+            ? "verifier full pass"
+            : outcome === "fail"
+              ? "verifier not a full pass"
+              : "no verifier signal on this episode"
+          : outcome === "pass"
             ? "rTask >= 0.5"
             : outcome === "fail"
               ? "rTask <= -0.5"
@@ -195,9 +217,25 @@ export function attachSkillSubscriber(
         skillId: trial.skillId,
         episodeId: evt.result.episodeId,
         outcome,
+        mode: strict ? "strict" : "loose",
         rTask,
       });
     }
+  }
+
+  /**
+   * Verifier-only verdict for a strict repair trial: scan the episode's
+   * feedback for an objective verifier signal and require a full pass. Returns
+   * "unknown" when no verifier payload exists — strict trials never pass on a
+   * loose reward.
+   */
+  function computeStrictOutcome(episodeId: EpisodeId): "pass" | "fail" | "unknown" {
+    const rows = deps.repos.feedback.list({ episodeId });
+    for (const fb of rows) {
+      const o = objectiveOutcome(fb.raw, null);
+      if (o !== "unknown") return o;
+    }
+    return "unknown";
   }
 
   async function flush(): Promise<void> {

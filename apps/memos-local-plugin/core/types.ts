@@ -309,6 +309,19 @@ export interface SkillRow extends OwnedRow {
   usageCount?: number;
   /** Last successful `memos_skill_get` time, or null when never loaded. */
   lastUsedAt?: EpochMs | null;
+  /**
+   * Migration 013 — unvalidated repair candidate, minted from a constructive
+   * negative (a failure whose feedback named a fix). Uses the stricter
+   * promotion bar (`repairCandidate.minEtaForPromotion`) and is surfaced as
+   * "unverified" in retrieval until trials validate it. Defaults to false.
+   */
+  repairOrigin?: boolean;
+  /**
+   * Migration 013 — trials for this skill judge a pass by full credit only
+   * (verifier origin: passed===total / reward>=1), not the loose
+   * `r_task >= 0.5` threshold. Defaults to false (loose, soft-feedback origin).
+   */
+  strictTrial?: boolean;
 }
 
 export interface SkillTrialRow extends OwnedRow {

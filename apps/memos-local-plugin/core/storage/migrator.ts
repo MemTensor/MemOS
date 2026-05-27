@@ -202,7 +202,27 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     }
     return;
   }
+  if (file.version === 13 && file.name === "skill-repair-origin") {
+    ensureSkillRepairOriginColumns(db);
+    return;
+  }
   db.exec(fs.readFileSync(file.fullPath, "utf8"));
+}
+
+function ensureSkillRepairOriginColumns(db: StorageDb): void {
+  if (!tableExists(db, "skills")) return;
+  ensureColumn(
+    db,
+    "skills",
+    "repair_origin",
+    "INTEGER NOT NULL DEFAULT 0 CHECK (repair_origin IN (0,1))",
+  );
+  ensureColumn(
+    db,
+    "skills",
+    "strict_trial",
+    "INTEGER NOT NULL DEFAULT 0 CHECK (strict_trial IN (0,1))",
+  );
 }
 
 function ensureEmbeddingRetryLeaseColumns(db: StorageDb): void {

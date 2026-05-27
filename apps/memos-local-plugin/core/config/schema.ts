@@ -288,6 +288,14 @@ const AlgorithmSchema = Type.Object({
     archiveEta: NumberInRange(0.1, 0, 1),
     /** Hide Tier-1 skills whose η is below this. Mirrors retrieval.minSkillEta. */
     minEtaForRetrieval: NumberInRange(0.1, 0, 1),
+    /**
+     * Graduation floor for *repair-origin* candidates (unproven fixes minted
+     * from a failure). Higher than `minEtaForRetrieval` on purpose: a repair
+     * has no success anchor, so promotion must require a majority of real
+     * trial passes, not a single lucky one. With η birth at the 0.1 floor and
+     * `candidateTrials` trials, 0.5 demands ~2-of-3 genuine passes.
+     */
+    repairCandidateMinEta: NumberInRange(0.5, 0, 1),
   }, { default: {} }),
   feedback: Type.Object({
     /** Raise a burst after this many failures of the same tool in-window. */

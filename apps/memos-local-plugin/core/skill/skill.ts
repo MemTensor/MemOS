@@ -205,7 +205,14 @@ export async function runSkill(
     // reset η toward the recomputed value — existing practitioner skills
     // lose credibility when the underlying policy shifts materially.
     if (decision.action === "rebuild" && decision.existingSkill) {
-      row.eta = recomputeEta(decision.existingSkill, decision.policy, config);
+      const recomputed = recomputeEta(decision.existingSkill, decision.policy, config);
+      // Q4: a repair candidate that earned trust via real trials must not have
+      // it wiped when a later positive feedback rebuilds it into a success-
+      // backed skill — take the higher of earned vs. recomputed η. (The
+      // rebuilt row drops `repairOrigin`, so it graduates on normal thresholds.)
+      row.eta = decision.existingSkill.repairOrigin
+        ? Math.max(recomputed, decision.existingSkill.eta)
+        : recomputed;
     }
 
     repos.skills.upsert(row);

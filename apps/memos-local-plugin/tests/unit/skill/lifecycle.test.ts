@@ -23,6 +23,8 @@ function mkSkill(partial: Partial<SkillRow> = {}): SkillRow {
     createdAt: partial.createdAt ?? NOW,
     updatedAt: partial.updatedAt ?? NOW,
     version: partial.version ?? 1,
+    repairOrigin: partial.repairOrigin,
+    strictTrial: partial.strictTrial,
   };
 }
 
@@ -57,6 +59,41 @@ describe("skill/lifecycle", () => {
     expect(fifth.eta).toBeLessThan(0.1);
     expect(fifth.status).toBe("archived");
     expect(fifth.transition).toBe("archived");
+  });
+
+  it("holds repair-origin candidates to a stricter promotion floor (1-of-3 archives where a normal candidate promotes)", () => {
+    const cfg = makeSkillConfig({
+      candidateTrials: 3,
+      minEtaForRetrieval: 0.1,
+      repairCandidateMinEta: 0.5,
+      archiveEta: 0.1,
+    });
+    // 1 pass, 2 fails → η ≈ 0.275 after 3 trials.
+    const run = (repairOrigin: boolean) => {
+      let s = mkSkill({ status: "candidate", eta: 0.1, repairOrigin });
+      s = { ...s, ...applyFeedback(s, "trial.pass", cfg) };
+      s = { ...s, ...applyFeedback(s, "trial.fail", cfg) };
+      return applyFeedback(s, "trial.fail", cfg);
+    };
+    // A normal candidate clears the 0.1 floor and promotes...
+    expect(run(false).status).toBe("active");
+    // ...but the unproven repair needs a majority of real passes — 1-of-3 archives.
+    expect(run(true).status).toBe("archived");
+  });
+
+  it("promotes a repair-origin candidate once a majority of trials pass (2-of-3)", () => {
+    const cfg = makeSkillConfig({
+      candidateTrials: 3,
+      minEtaForRetrieval: 0.1,
+      repairCandidateMinEta: 0.5,
+      archiveEta: 0.1,
+    });
+    let s = mkSkill({ status: "candidate", eta: 0.1, repairOrigin: true });
+    s = { ...s, ...applyFeedback(s, "trial.pass", cfg) };
+    s = { ...s, ...applyFeedback(s, "trial.pass", cfg) };
+    const after = applyFeedback(s, "trial.fail", cfg);
+    expect(after.status).toBe("active");
+    expect(after.transition).toBe("promoted");
   });
 
   it("promotes candidate → active once enough passing trials accrue", () => {

@@ -206,6 +206,11 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       etaDelta: 0.1,
       archiveEta: 0.1,
       minEtaForRetrieval: 0.1,
+      // Unproven repair candidates graduate at a higher η than normal
+      // candidates: with η born at the 0.1 floor, 0.5 means a candidate must
+      // genuinely (full-)pass its trial(s) — a single fail (η→0.05) archives
+      // it rather than letting a weak signal promote it.
+      repairCandidateMinEta: 0.5,
     },
     feedback: {
       failureThreshold: 3,

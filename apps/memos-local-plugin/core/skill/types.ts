@@ -118,6 +118,12 @@ export interface SkillConfig {
   archiveEta: number;
   /** Below this η, skills never surface in Tier-1 — matches retrieval config. */
   minEtaForRetrieval: number;
+  /**
+   * Graduation floor for repair-origin candidates (unproven fixes minted from
+   * a failure). Higher than `minEtaForRetrieval` so promotion needs a majority
+   * of real trial passes. Falls back to `minEtaForRetrieval` when unset.
+   */
+  repairCandidateMinEta?: number;
 }
 
 /**

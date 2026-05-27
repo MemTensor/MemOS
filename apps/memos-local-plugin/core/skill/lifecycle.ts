@@ -73,8 +73,14 @@ function applyTrial(
   let status: SkillRow["status"] = skill.status;
   let transition: SkillLifecycleTransition | undefined;
 
+  // Repair-origin candidates have no success anchor, so they graduate at a
+  // stricter η floor — promotion must be earned by real (full-pass) trials,
+  // not a single lucky one (Q3).
+  const promoteFloor = skill.repairOrigin
+    ? cfg.repairCandidateMinEta ?? cfg.minEtaForRetrieval
+    : cfg.minEtaForRetrieval;
   if (status === "candidate" && trialsAttempted >= cfg.candidateTrials) {
-    if (eta >= cfg.minEtaForRetrieval) {
+    if (eta >= promoteFloor) {
       status = "active";
       transition = "promoted";
     } else {

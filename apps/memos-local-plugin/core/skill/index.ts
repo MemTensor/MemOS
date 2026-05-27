@@ -40,6 +40,13 @@ export {
   runSkill,
   type RunSkillDeps,
 } from "./skill.js";
+export {
+  isRepairCandidatePolicy,
+  deriveStrictTrial,
+  mintRepairCandidate,
+  REPAIR_CANDIDATE_INITIAL_ETA,
+  type MintRepairCandidateDeps,
+} from "./repair-candidate.js";
 export { attachSkillSubscriber, type SkillSubscriberDeps, type SkillSubscriberHandle } from "./subscriber.js";
 export { createSkillEventBus } from "./events.js";
 export { extractToolNames } from "./tool-names.js";

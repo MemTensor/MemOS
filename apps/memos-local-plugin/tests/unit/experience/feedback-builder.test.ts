@@ -156,6 +156,56 @@ describe("feedback experience builder", () => {
     expect(row?.skillEligible).toBe(false);
   });
 
+  it("records the suggested fix as a preference on a constructive negative (avoid + do-Y in one record)", async () => {
+    const result = await runFeedbackExperience(
+      {
+        feedback: feedback({
+          id: "fb_fix" as FeedbackRow["id"],
+          polarity: "neutral",
+          // Failed, but the feedback names a concrete corrective direction.
+          rationale:
+            "Verifier feedback: failed, Time Limit Exceeded on the O(n^2) bitset. Instead use FFT/autocorrelation to count the triplets in O(n log n).",
+          raw: { source: "verifier", verifier: { reward: 0, passed: 3, total: 4 } },
+        }),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: -0.51 },
+        trace,
+      },
+      { repos: handle.repos, embedder: fakeEmbedder(), namespace, now: () => NOW },
+    );
+
+    expect(result.policyId).toBeTruthy();
+    const row = handle.repos.policies.getById(result.policyId!);
+    // Stays a negative, non-skill-eligible record...
+    expect(row?.evidencePolarity).toBe("negative");
+    expect(row?.skillEligible).toBe(false);
+    // ...but now also carries the suggested fix as a preference.
+    expect(row?.decisionGuidance.preference.join("\n").toLowerCase()).toContain("fft");
+  });
+
+  it("does NOT record a fix on a bare-verdict negative (no constructive direction)", async () => {
+    const result = await runFeedbackExperience(
+      {
+        feedback: feedback({
+          id: "fb_bare" as FeedbackRow["id"],
+          polarity: "neutral",
+          rationale:
+            "Verifier feedback for the previous attempt. Verifier reward: 0.0. passed: 3, total: 4. TimeoutException(): Time Limit Exceeded. Please briefly reflect on what you would keep and what you would improve next time.",
+          raw: { source: "verifier", verifier: { reward: 0, passed: 3, total: 4 } },
+        }),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: -0.51 },
+        trace,
+      },
+      { repos: handle.repos, embedder: fakeEmbedder(), namespace, now: () => NOW },
+    );
+
+    expect(result.policyId).toBeTruthy();
+    const row = handle.repos.policies.getById(result.policyId!);
+    expect(row?.evidencePolarity).toBe("negative");
+    expect(row?.skillEligible).toBe(false);
+    // Pure warning: the avoidance is present, no fabricated fix.
+    expect(row?.decisionGuidance.preference).toEqual([]);
+  });
+
   it("merges later avoidance feedback into a success-backed experience without losing skill eligibility", async () => {
     const ok = await runFeedbackExperience(
       {

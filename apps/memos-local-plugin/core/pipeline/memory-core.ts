@@ -75,6 +75,7 @@ import type {
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import { loadConfig, resolveHome, SECRET_FIELD_PATHS } from "../config/index.js";
 import { feedbackText, runFeedbackExperience } from "../experience/feedback-builder.js";
+import { isRepairCandidatePolicy, mintRepairCandidate } from "../skill/repair-candidate.js";
 import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
@@ -1915,6 +1916,27 @@ export function createMemoryCore(
     try {
       await handle.l2.drain();
       if (policyId) {
+        // A constructive negative (failure + named fix) mints an unproven
+        // repair *candidate* skill that earns trust via trials. The normal
+        // crystallization below skips negatives, so there is no conflict; the
+        // candidate dedups against it via sourcePolicyIds.
+        const pol = handle.repos.policies.getById(policyId);
+        if (pol && isRepairCandidatePolicy(pol)) {
+          // Best-effort: a mint failure must never block crystallization / L3.
+          try {
+            mintRepairCandidate(pol, {
+              repos: handle.repos,
+              embedder: handle.embedder,
+              now: Date.now,
+              log,
+            });
+          } catch (err) {
+            log.warn("feedback.repair_candidate_failed", {
+              policyId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
         await handle.skills.runOnce({ trigger: "manual", policyId });
       }
       if (episode) {
