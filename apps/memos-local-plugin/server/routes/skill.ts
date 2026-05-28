@@ -14,10 +14,10 @@ import { parseJson, writeError, type Routes } from "./registry.js";
 export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
   routes.set("GET /api/v1/skills", async (ctx) => {
     const params = ctx.url.searchParams;
-    const status = (params.get("status") as SkillDTO["status"] | null) ?? undefined;
+    const status = parseSkillStatus(params.get("status"));
     const q = (params.get("q") || "").trim().toLowerCase();
-    const ownerAgentKind = params.get("ownerAgentKind") || undefined;
-    const ownerProfileId = params.get("ownerProfileId") || undefined;
+    const ownerAgentKind = parseOwnerFilter(params.get("ownerAgentKind"));
+    const ownerProfileId = parseOwnerFilter(params.get("ownerProfileId"));
     // Viewer needs prev/next pagination — ask for one extra page so we
     // can tell the client whether there's more without a count query.
     const pageSize = limitOrUndefined(params.get("limit")) ?? 50;
@@ -27,10 +27,14 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       limit: q ? 5000 : pageSize + offset + 1,
       ownerAgentKind,
       ownerProfileId,
+      includeAllNamespaces: true,
     });
     if (q) {
       all = all.filter(
-        (s) => s.name.toLowerCase().includes(q) || s.invocationGuide.toLowerCase().includes(q),
+        (s) =>
+          s.id.toLowerCase().includes(q) ||
+          s.name.toLowerCase().includes(q) ||
+          s.invocationGuide.toLowerCase().includes(q),
       );
     }
     const page = all.slice(offset, offset + pageSize);
@@ -39,13 +43,30 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       status,
       ownerAgentKind,
       ownerProfileId,
+      includeAllNamespaces: true,
     });
+    const debug = params.get("debug") === "1";
     return {
       skills: page,
       limit: pageSize,
       offset,
       total,
       nextOffset: hasMore ? offset + pageSize : undefined,
+      ...(debug
+        ? {
+            _debug: {
+              q,
+              status: params.get("status"),
+              parsedStatus: status,
+              ownerAgentKind: params.get("ownerAgentKind"),
+              parsedOwnerAgentKind: ownerAgentKind,
+              ownerProfileId: params.get("ownerProfileId"),
+              parsedOwnerProfileId: ownerProfileId,
+              allCount: all.length,
+              pageCount: page.length,
+            },
+          }
+        : {}),
     };
   });
 
@@ -296,6 +317,18 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
     });
     ctx.res.end(buf);
   });
+}
+
+function parseSkillStatus(raw: string | null): SkillDTO["status"] | undefined {
+  if (raw === "active" || raw === "candidate" || raw === "archived") return raw;
+  return undefined;
+}
+
+function parseOwnerFilter(raw: string | null): string | undefined {
+  if (!raw) return undefined;
+  const v = raw.trim().toLowerCase();
+  if (!v || v === "all" || v === "*") return undefined;
+  return raw;
 }
 
 function renderSkillMarkdown(skill: SkillDTO): string {

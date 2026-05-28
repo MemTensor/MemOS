@@ -1150,7 +1150,7 @@ function TraceDrawer({
           <div style="min-width:0">
             <div class="muted" style="font-size:var(--fs-xs);margin-bottom:2px">
               {group.episodeId
-                ? t("memories.detail.fromTask", { id: group.episodeId.slice(0, 10) })
+                ? t("memories.detail.fromTask", { id: group.episodeId })
                 : t("memories.detail.oneMemory")}
             </div>
             <h2 class="drawer__title truncate">{title}</h2>

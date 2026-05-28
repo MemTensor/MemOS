@@ -265,6 +265,19 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // `addTurn` calls without a repo round-trip.
   const openEpisodeBySession = new Map<SessionId, EpisodeId>();
 
+  // Paused/interrupted episodes serve as restart-recovery hooks for
+  // `findRecoverableOpenTopic`. Without a time cap they linger forever
+  // and steal turns from genuinely-new dashboard sessions (because the
+  // recovery path explicitly ignores sessionId for paused candidates).
+  // 1 minute keeps the "user reopened openclaw mid-task" intent intact
+  // while a brand-new dashboard session 60s+ later gets a fresh episode.
+  const PAUSED_AUTO_FINALIZE_MS = 60_000;
+  // Cap the sweep cost to once per N seconds — we trigger it from every
+  // `onTurnStart`, so without throttling a burst of turns scans the
+  // episodes table repeatedly.
+  const PAUSED_SWEEP_THROTTLE_MS = 30_000;
+  let lastPausedSweepAt = 0;
+
   // Track the most-recently-closed episode per session so V7 §0.1
   // "revision" can reopen it. Cleared on `new_task`.
   const lastEpisodeBySession = new Map<
@@ -812,6 +825,60 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     );
   }
 
+  /**
+   * Finalize any episode that has been `topicState: paused | interrupted`
+   * for longer than `PAUSED_AUTO_FINALIZE_MS`. Legacy paused rows without a
+   * `pausedAt` stamp are treated as immediately stale (they predate this
+   * cleanup and should be closed on the first opportunity).
+   *
+   * Hooked into `onTurnStart` so a new dashboard session — the common case
+   * the user actually sees — cannot accidentally graft itself onto a
+   * weeks-old paused episode via `findRecoverableOpenTopic`.
+   */
+  function sweepStalePausedEpisodes(nowMs: number): void {
+    if (nowMs - lastPausedSweepAt < PAUSED_SWEEP_THROTTLE_MS) return;
+    lastPausedSweepAt = nowMs;
+    try {
+      const rows = deps.repos.episodes.list({ status: "open", limit: 200 });
+      for (const ep of rows) {
+        const meta = (ep as { meta?: Record<string, unknown> }).meta ?? {};
+        const topicState = meta.topicState;
+        if (topicState !== "paused" && topicState !== "interrupted") continue;
+        const pausedAt = typeof meta.pausedAt === "number" ? meta.pausedAt : null;
+        const fallbackStamp = ep.endedAt ?? ep.startedAt;
+        const stamp = pausedAt ?? fallbackStamp;
+        const ageMs = nowMs - stamp;
+        if (ageMs < PAUSED_AUTO_FINALIZE_MS) continue;
+        log.info("episode.paused_auto_finalized", {
+          episodeId: ep.id,
+          sessionId: ep.sessionId,
+          topicState,
+          ageMs,
+          thresholdMs: PAUSED_AUTO_FINALIZE_MS,
+          pausedAt,
+        });
+        try {
+          session.sessionManager.finalizeEpisode(ep.id as EpisodeId, {
+            patchMeta: {
+              topicState: "ended",
+              closeReason: "auto_finalized_after_pause",
+              pausedExceededMs: ageMs,
+            },
+          });
+        } catch (err) {
+          log.debug("paused_auto_finalize.finalize_failed", {
+            episodeId: ep.id,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    } catch (err) {
+      log.debug("paused_auto_finalize.scan_failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   function findRecoverableOpenTopic(
     currentSessionId: SessionId,
     atTs: number,
@@ -1048,6 +1115,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
   async function onTurnStart(input: TurnInputDTO): Promise<InjectionPacket> {
     const t0 = now();
+    sweepStalePausedEpisodes(t0);
     const initialSessionId = await ensureSession(
       input.agent,
       input.sessionId,

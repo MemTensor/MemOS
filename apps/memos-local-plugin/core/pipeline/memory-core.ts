@@ -473,6 +473,8 @@ export function createMemoryCore(
   pkgVersion: string,
   options: CreateMemoryCoreOptions = {},
 ): MemoryCore {
+  // "经验" 列表的 q 过滤是内存子串匹配；扫描深度不足会导致"展示全部"漏项。
+  const POLICY_SCAN_LIMIT = 100_000;
   const bootAt = Date.now();
   const log = rootLogger.child({ channel: "core.pipeline.memory-core" });
   let telemetry = options.telemetry ?? null;
@@ -899,6 +901,7 @@ export function createMemoryCore(
             topicState: (ep.meta?.topicState as string | undefined) ?? "interrupted",
             pauseReason: (ep.meta?.pauseReason as string | undefined) ?? "startup_recovered_open_topic",
             recoveredAtStartup: nowMs,
+            pausedAt: typeof ep.meta?.pausedAt === "number" ? ep.meta.pausedAt : nowMs,
           });
         }
         if (stale.length > 0) {
@@ -2613,9 +2616,10 @@ export function createMemoryCore(
     const offset = Math.max(0, input?.offset ?? 0);
     const needle = (input?.q ?? "").trim().toLowerCase();
     const namespaceFiltered = Boolean(input?.ownerAgentKind || input?.ownerProfileId);
+    const shouldDeepScan = namespaceFiltered || needle.length > 0;
     const rows = handle.repos.policies.list({
       status: input?.status,
-      limit: namespaceFiltered ? 100_000 : limit + offset + (needle ? 200 : 0),
+      limit: shouldDeepScan ? POLICY_SCAN_LIMIT : limit + offset,
       offset: 0,
     });
     const visibleRows = rows.filter((r) =>
@@ -2623,7 +2627,7 @@ export function createMemoryCore(
     );
     const filtered = needle
       ? visibleRows.filter((r) =>
-          (r.title + "\n" + r.trigger + "\n" + r.procedure)
+          (r.id + "\n" + r.title + "\n" + r.trigger + "\n" + r.procedure)
             .toLowerCase()
             .includes(needle),
         )
@@ -2648,11 +2652,11 @@ export function createMemoryCore(
     // q is a client-side substring match; mirror `listPolicies` and
     // walk the full filtered result. Caller passes no limit/offset
     // so the natural list pages through everything.
-    const rows = handle.repos.policies.list({ status: input?.status }).filter((r) =>
+    const rows = handle.repos.policies.list({ status: input?.status, limit: POLICY_SCAN_LIMIT }).filter((r) =>
       (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
     );
     return rows.filter((r) =>
-      (r.title + "\n" + r.trigger + "\n" + r.procedure)
+      (r.id + "\n" + r.title + "\n" + r.trigger + "\n" + r.procedure)
         .toLowerCase()
         .includes(needle),
     ).length;
@@ -5555,7 +5559,7 @@ export function deriveSkillStatus(
   if (relatedPolicies.length === 0) {
     return {
       status: "not_generated",
-      reason: "L2 经验归纳尚未产出（可能仍在异步处理中）",
+      reason: "暂未归纳出 L2 经验",
       reasonKey: "tasks.skillReason.not_generated.noPolicy",
       reasonParams: thresholds,
       linkedSkillId: null,
