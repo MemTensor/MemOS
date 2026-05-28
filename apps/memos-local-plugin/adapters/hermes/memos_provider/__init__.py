@@ -336,7 +336,7 @@ class MemTensorProvider(MemoryProvider):
                     self._handle_host_llm_complete,
                 )
                 self._bridge = http_bridge
-                self._open_session(session_id)
+                self._open_session(session_id, timeout=60.0)
                 logger.info(
                     "MemOS: bridge ready (HTTP) session=%s platform=%s (episode deferred)",
                     self._session_id,
@@ -348,6 +348,30 @@ class MemTensorProvider(MemoryProvider):
                     http_bridge.close()  # type: ignore[union-attr]
                 self._bridge = None
                 viewer_status = "free"  # force stdio fallback below
+        elif viewer_status == "free":
+            # The daemon might be mid-startup from a concurrent session.
+            # Wait briefly and re-probe before spawning a second daemon.
+            time.sleep(1.0)
+            viewer_status = probe_viewer_status()
+            if viewer_status == "running_memos":
+                try:
+                    http_bridge_late: MemosHttpClient | None = MemosHttpClient()
+                    http_bridge_late.register_host_handler(
+                        "host.llm.complete",
+                        self._handle_host_llm_complete,
+                    )
+                    self._bridge = http_bridge_late
+                    self._open_session(session_id, timeout=60.0)
+                    logger.info(
+                        "MemOS: bridge ready (HTTP, late probe) session=%s platform=%s (episode deferred)",
+                        self._session_id,
+                        self._platform,
+                    )
+                except Exception as err:
+                    logger.warning("MemOS: HTTP bridge (late probe) failed, falling back to stdio — %s", err)
+                    with contextlib.suppress(Exception):
+                        http_bridge_late.close()  # type: ignore[union-attr]
+                    self._bridge = None
 
         if self._bridge is None:
             try:
@@ -366,7 +390,7 @@ class MemTensorProvider(MemoryProvider):
                     self._handle_host_llm_complete,
                 )
                 self._bridge = new_bridge
-                self._open_session(session_id)
+                self._open_session(session_id, timeout=60.0)
                 logger.info(
                     "MemOS: bridge ready (stdio) session=%s platform=%s (episode deferred)",
                     self._session_id,
