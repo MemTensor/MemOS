@@ -23,7 +23,8 @@ from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
-from memos.plugins.hooks import hookable
+from memos.plugins.hook_defs import H
+from memos.plugins.hooks import hookable, trigger_hook
 
 
 logger = get_logger(__name__)
@@ -88,7 +89,14 @@ class SearchHandler(BaseHandler):
         # Search and deduplicate
         cube_view = self._build_cube_view(search_req_local)
         results = cube_view.search_memories(search_req_local)
-        self._merge_context_recall(results=results, search_req=search_req_local)
+        hooked_results = trigger_hook(
+            H.SEARCH_MEMORY_RESULTS,
+            handler=self,
+            search_req=search_req_local,
+            results=results,
+        )
+        if hooked_results is not None:
+            results = hooked_results
         if not search_req_local.relativity:
             search_req_local.relativity = 0
         self.logger.info(f"[SearchHandler] Relativity filter: {search_req_local.relativity}")
