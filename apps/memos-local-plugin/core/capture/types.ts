@@ -70,6 +70,7 @@ export interface NormalizedStep extends StepCandidate {
  */
 export const REFLECTION_ENUM_LABELS = new Set<string>([
   "RELATED",
+  "PIVOTAL",
   "IRRELEVANT",
   "RELATED_DEFAULT",
 ]);

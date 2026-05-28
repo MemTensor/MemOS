@@ -159,6 +159,8 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
           maxPriority: 0,
           echoParams: {
             gamma: deps.cfg.gamma,
+            lambda: deps.cfg.lambda,
+            delta: deps.cfg.delta,
             decayHalfLifeDays: deps.cfg.decayHalfLifeDays,
             now: startedAt,
           },
@@ -222,6 +224,8 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
       traces,
       rHuman: humanScore.rHuman,
       gamma: deps.cfg.gamma,
+      lambda: deps.cfg.lambda,
+      delta: deps.cfg.delta,
       decayHalfLifeDays: deps.cfg.decayHalfLifeDays,
       now: startedAt,
     });

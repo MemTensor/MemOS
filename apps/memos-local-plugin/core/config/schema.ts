@@ -147,6 +147,10 @@ const AlgorithmSchema = Type.Object({
   reward: Type.Object({
     /** V7 §0.6 eq. 4/5: discount factor γ for reflection-weighted backprop. */
     gamma: NumberInRange(0.9, 0, 1),
+    /** Position-bias mix λ: 0 => flat, 1 => pure γ^(T-t). */
+    lambda: NumberInRange(0.5, 0, 1),
+    /** Recovery boost δ for first non-zero step after an IRRELEVANT step. */
+    delta: NumberInRange(0.1, 0, 10),
     /** V7 §2.4.5 eq. 3: temperature τ for softmax reweighting in L2 induction. */
     tauSoftmax: NumberInRange(0.5, 0.01, 10),
     /** V7 §3.3: priority decay half-life in days. */

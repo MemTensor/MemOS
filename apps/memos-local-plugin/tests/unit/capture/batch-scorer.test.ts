@@ -53,8 +53,8 @@ describe("batchScoreReflections", () => {
       completeJson: {
         [BATCH_OP_TAG]: {
           scores: [
-            { idx: 1, alpha: 0, relevance: "IRRELEVANT" },
-            { idx: 0, alpha: 1, relevance: "RELATED" },
+            { idx: 1, relevance: "IRRELEVANT", reason: "DETOUR" },
+            { idx: 0, relevance: "PIVOTAL", reason: "TURNING_POINT" },
           ],
         },
       },
@@ -67,7 +67,7 @@ describe("batchScoreReflections", () => {
       ],
       {},
     );
-    expect(out.scores[0]!.text).toBe("RELATED");
+    expect(out.scores[0]!.text).toBe("PIVOTAL");
     expect(out.scores[0]!.alpha).toBe(1);
     expect(out.scores[1]!.text).toBe("IRRELEVANT");
     expect(out.scores[1]!.alpha).toBe(0);
@@ -76,7 +76,7 @@ describe("batchScoreReflections", () => {
   it("rejects responses with mismatched length", async () => {
     const llm = fakeLlm({
       completeJson: {
-        [BATCH_OP_TAG]: { scores: [{ idx: 0, reflection_text: "x", alpha: 0.5, usable: true }] },
+        [BATCH_OP_TAG]: { scores: [{ idx: 0, relevance: "IRRELEVANT", reason: "DETOUR" }] },
       },
     });
     await expect(
@@ -91,17 +91,35 @@ describe("batchScoreReflections", () => {
     ).rejects.toThrow(/length mismatch/);
   });
 
-  it("rejects entries with non-number alpha", async () => {
+  it("keeps (relevance, alpha) when reason is missing — no MALFORMED throw", async () => {
     const llm = fakeLlm({
       completeJson: {
         [BATCH_OP_TAG]: {
-          scores: [{ idx: 0, reflection_text: "x", alpha: "bad", usable: true }],
+          scores: [{ idx: 0, relevance: "PIVOTAL" }],
+        },
+      },
+    });
+    const out = await batchScoreReflections(
+      llm,
+      [input(step({ userText: "u", agentText: "a" }), "x")],
+      {},
+    );
+    expect(out.scores[0]!.text).toBe("PIVOTAL");
+    expect(out.scores[0]!.alpha).toBe(1);
+    expect(out.scores[0]!.reason).toBeNull();
+  });
+
+  it("rejects entries with illegal relevance", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [BATCH_OP_TAG]: {
+          scores: [{ idx: 0, relevance: "RELATED_DEFAULT", reason: "BAD_ENUM" }],
         },
       },
     });
     await expect(
       batchScoreReflections(llm, [input(step({ userText: "u", agentText: "a" }), "x")], {}),
-    ).rejects.toThrow(/alpha must be number/);
+    ).rejects.toThrow(/relevance must be IRRELEVANT\/RELATED\/PIVOTAL/);
   });
 
   it("maps IRRELEVANT to alpha=0", async () => {
@@ -111,8 +129,8 @@ describe("batchScoreReflections", () => {
           scores: [
             {
               idx: 0,
-              alpha: 0,
               relevance: "IRRELEVANT",
+              reason: "DETOUR",
             },
           ],
         },
@@ -128,15 +146,15 @@ describe("batchScoreReflections", () => {
     expect(out.scores[0]!.source).toBe("synth");
   });
 
-  it("maps RELATED to alpha=1", async () => {
+  it("maps RELATED to alpha=0.5", async () => {
     const llm = fakeLlm({
       completeJson: {
         [BATCH_OP_TAG]: {
           scores: [
             {
               idx: 0,
-              alpha: 1,
               relevance: "RELATED",
+              reason: "ON_PATH",
             },
           ],
         },
@@ -149,6 +167,23 @@ describe("batchScoreReflections", () => {
     );
     expect(out.scores[0]!.text).toBe("RELATED");
     expect(out.scores[0]!.source).toBe("synth");
+    expect(out.scores[0]!.alpha).toBe(0.5);
+  });
+
+  it("maps PIVOTAL to alpha=1", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [BATCH_OP_TAG]: {
+          scores: [{ idx: 0, relevance: "PIVOTAL", reason: "RECOVERY" }],
+        },
+      },
+    });
+    const out = await batchScoreReflections(
+      llm,
+      [input(step({ userText: "u", agentText: "a" }), null)],
+      {},
+    );
+    expect(out.scores[0]!.text).toBe("PIVOTAL");
     expect(out.scores[0]!.alpha).toBe(1);
   });
 });

@@ -1005,15 +1005,15 @@ async function runEpisodeBatchScoring(
   taskSummary: string | null,
   log: Logger,
 ): Promise<ScoredStep[]> {
-  const fallbackAllOne = (): ScoredStep[] =>
+  const fallbackRelatedDefault = (): ScoredStep[] =>
     normalized.map((step) => ({
       ...step,
       reflection: {
         text: "RELATED_DEFAULT",
-        alpha: 1,
+        alpha: 0.5,
         usable: true,
         source: "none",
-        reason: "FALLBACK_ALL_ONE",
+        reason: "FALLBACK_RELATED_DEFAULT",
       },
     }));
 
@@ -1022,14 +1022,14 @@ async function runEpisodeBatchScoring(
       stage: "batch",
       message: "no reflect llm; using episode-wide RELATED_DEFAULT fallback",
     });
-    log.warn("reflection_fallback_all_one", {
+    log.warn("reflection_fallback_related_default", {
       degraded: true,
       episodeId,
       stepsCount: normalized.length,
       failedWindows: normalized.length > 0 ? 1 : 0,
       reason: "no_llm",
     });
-    return fallbackAllOne();
+    return fallbackRelatedDefault();
   }
 
   const primary = await runWindowPass({
@@ -1064,7 +1064,7 @@ async function runEpisodeBatchScoring(
   });
   if (degraded.success) return mergeWindowScores(normalized, degraded.results);
 
-  log.error("reflection_fallback_all_one", {
+  log.error("reflection_fallback_related_default", {
     degraded: true,
     episodeId,
     stepsCount: normalized.length,
@@ -1075,7 +1075,7 @@ async function runEpisodeBatchScoring(
     message: "all window retries exhausted; force RELATED_DEFAULT for episode",
     detail: { failedWindows: degraded.failedWindows },
   });
-  return fallbackAllOne();
+  return fallbackRelatedDefault();
 }
 
 async function runWindowPass(args: {
@@ -1140,9 +1140,7 @@ function mergeWindowScores(
         merged.set(idx, next);
         continue;
       }
-      const prevAlpha = prev.alpha === 1 ? 1 : 0;
-      const nextAlpha = next.alpha === 1 ? 1 : 0;
-      if (nextAlpha > prevAlpha) merged.set(idx, next);
+      if (reflectionRank(next) > reflectionRank(prev)) merged.set(idx, next);
     }
   }
   return normalized.map((step, idx) => {
@@ -1152,13 +1150,20 @@ function mergeWindowScores(
       ...step,
       reflection: {
         text: "RELATED_DEFAULT",
-        alpha: 1,
+        alpha: 0.5,
         usable: true,
         source: "none",
         reason: "MISSING_WINDOW_DEFAULT",
       },
     };
   });
+}
+
+function reflectionRank(score: ReflectionScore): number {
+  const label = (score.text ?? "").trim();
+  if (label === "PIVOTAL") return 2;
+  if (label === "RELATED" || label === "RELATED_DEFAULT") return 1;
+  return 0;
 }
 
 function buildWindows(length: number, windowSize: number, overlap: number): Array<{ start: number; end: number }> {

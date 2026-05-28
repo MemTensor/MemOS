@@ -34,13 +34,13 @@ episode.turns  ──►  step-extractor             one StepCandidate per decis
                     normalizer                 truncate / dedup / drop empty
                         │
                         ▼
-            batch-scorer (windowed binary)     primary {batch=20, overlap=3, 1 retry}
+                    batch-scorer (windowed relevance)  primary {batch=20, overlap=3, 1 retry}
                         │                      ↓ on any failed window
                         │                      degrade {batch=9, overlap=3, 2 retries}
                         │                      ↓ on any failed window
                         │                      episode-wide RELATED_DEFAULT fallback
                         ▼
-                    merge by global_idx        1-over-0; missing window → RELATED_DEFAULT
+                    merge by global_idx        PIVOTAL > RELATED/RELATED_DEFAULT > IRRELEVANT
                         │
                         ▼
                     embedder                   vec_summary + vec_action (Phase 3)
@@ -50,7 +50,7 @@ episode.turns  ──►  step-extractor             one StepCandidate per decis
                   tracesRepo.updateReflection
 ```
 
-`traces.reflection` is always one of `RELATED | IRRELEVANT |
+`traces.reflection` is always one of `PIVOTAL | RELATED | IRRELEVANT |
 RELATED_DEFAULT` after `runReflect`. There is no natural-language
 reflection text; downstream consumers use `reflectionAsText` (exported
 from `core/capture/types.ts`) to filter the fixed labels out of prompts
@@ -114,7 +114,7 @@ directly (tests and integration tests do this).
   turn still produces one skeletal trace so Phase 7 has somewhere to
   assign R_task.
 
-## 5. Windowed binary reflection (V7 §3.2)
+## 5. Windowed reflection (V7 §3.2)
 
 Per-step reflection / α scoring was replaced by a path-relevance
 judgement. See [ALGORITHMS.md](./ALGORITHMS.md) for the full derivation;
@@ -122,19 +122,21 @@ the highlights:
 
 - Each window is `≤ batch_size` consecutive steps, sliced with a fixed
   `overlap` so seam steps appear in two windows.
-- The batch scorer returns `{ alpha: 0|1, relevance: "RELATED" |
-  "IRRELEVANT" }` per step. Validator rejects any other shape.
-- Overlap merge: any window calling a step `RELATED` (`alpha=1`) wins.
+- The batch scorer returns per-step `relevance` in
+  `IRRELEVANT | RELATED | PIVOTAL` plus a short `reason` code.
+- Reflection→alpha mapping is fixed: `IRRELEVANT=0`,
+  `RELATED=0.5`, `PIVOTAL=1`, `RELATED_DEFAULT=0.5`.
+- Overlap merge uses priority: `PIVOTAL > RELATED/RELATED_DEFAULT > IRRELEVANT`.
 - If a step has no window result after both passes, it is written as
-  `RELATED_DEFAULT` (the safe default).
+  `RELATED_DEFAULT + alpha=0.5` (the safe default).
 - If any window in both passes failed, the whole episode is overwritten
-  with `RELATED_DEFAULT`.
+  with `RELATED_DEFAULT + alpha=0.5`.
 - The dispatcher never throws on reflection failure — only a DB
   `INSERT` is fatal.
 
 ## 6. α scoring
 
-`α_t ∈ {0, 1}` only. There is no continuous score, no
+`α_t ∈ {0, 0.5, 1}` only. There is no continuous score, no
 `alphaScoring=false` neutral path, and no LLM-quality rubric. The
 `alphaScoring` config flag is preserved for back-compat but has no
 effect.
@@ -197,9 +199,8 @@ Top-level events to watch:
   alpha + reflection label + reason.
 - `capture.reflect.done` / `capture.lite.done` /
   `capture.lightweight.done` — phase completion summaries.
-- `reflection_fallback_all_one` — episode-wide fallback was triggered.
-  Includes `degraded=true`, `episodeId`, `stepsCount`,
-  `failedWindows`.
+- `reflection_fallback_related_default` — episode-wide fallback was triggered.
+  Includes `degraded=true`, `episodeId`, `stepsCount`, `failedWindows`.
 
 ## 12. Testing
 

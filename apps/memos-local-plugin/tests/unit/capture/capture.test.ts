@@ -261,7 +261,7 @@ describe("capture/pipeline (end-to-end)", () => {
   it("writes one trace per step with binary reflection fields", async () => {
     const llm = fakeLlm({
       completeJson: {
-        [batchOp]: { scores: [{ idx: 0, alpha: 0, relevance: "IRRELEVANT" }] },
+        [batchOp]: { scores: [{ idx: 0, relevance: "IRRELEVANT", reason: "DETOUR" }] },
       },
     });
     const runner = buildRunner({ alphaScoring: false }, llm);
@@ -402,7 +402,7 @@ describe("capture/pipeline (end-to-end)", () => {
   it("stores binary alpha/reflection from batch scorer", async () => {
     const llm = fakeLlm({
       completeJson: {
-        [batchOp]: { scores: [{ idx: 0, alpha: 1, relevance: "RELATED", reason: "ON_PATH" }] },
+        [batchOp]: { scores: [{ idx: 0, relevance: "RELATED", reason: "ON_PATH" }] },
       },
     });
     const runner = buildRunner({}, llm);
@@ -423,14 +423,14 @@ describe("capture/pipeline (end-to-end)", () => {
 
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
     expect(t.reflection).toBe("RELATED");
-    expect(t.alpha).toBe(1);
+    expect(t.alpha).toBe(0.5);
     expect(result.traces[0]?.reflection.reason).toBe("ON_PATH");
   });
 
   it("sets alpha=0 when batch returns IRRELEVANT", async () => {
     const llm = fakeLlm({
       completeJson: {
-        [batchOp]: { scores: [{ idx: 0, alpha: 0, relevance: "IRRELEVANT" }] },
+        [batchOp]: { scores: [{ idx: 0, relevance: "IRRELEVANT", reason: "DETOUR" }] },
       },
     });
     const runner = buildRunner({}, llm);
@@ -469,13 +469,13 @@ describe("capture/pipeline (end-to-end)", () => {
     expect(result.warnings.some((w) => w.stage === "batch")).toBe(true);
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
     expect(t.reflection).toBe("RELATED_DEFAULT");
-    expect(t.alpha).toBe(1);
+    expect(t.alpha).toBe(0.5);
   });
 
   it("reflect phase writes binary enums without synthesis", async () => {
     const llm = fakeLlm({
       completeJson: {
-        [batchOp]: { scores: [{ idx: 0, alpha: 1, relevance: "RELATED" }] },
+        [batchOp]: { scores: [{ idx: 0, relevance: "RELATED", reason: "ON_PATH" }] },
       },
     });
     const runner = buildRunner({ synthReflections: true }, llm);
@@ -491,7 +491,7 @@ describe("capture/pipeline (end-to-end)", () => {
     expect(result.llmCalls.batchedReflection).toBe(1);
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
     expect(t.reflection).toBe("RELATED");
-    expect(t.alpha).toBe(1);
+    expect(t.alpha).toBe(0.5);
   });
 
   it("updates episode.trace_ids_json with new ids", async () => {

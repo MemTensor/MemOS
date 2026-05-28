@@ -255,7 +255,7 @@ describe("skill/runSkill (integration)", () => {
           updates: [],
           meanAbsValue: 0,
           maxPriority: 0,
-          echoParams: { gamma: 0.9, decayHalfLifeDays: 30, now: Date.now() },
+          echoParams: { gamma: 0.9, lambda: 0.5, delta: 0.1, decayHalfLifeDays: 30, now: Date.now() },
         },
         traceIds: [],
         timings: { summary: 0, score: 0, backprop: 0, persist: 0, total: 0 },

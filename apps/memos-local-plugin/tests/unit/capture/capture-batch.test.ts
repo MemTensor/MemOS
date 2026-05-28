@@ -171,9 +171,9 @@ describe("capture/pipeline (windowed binary path)", () => {
       completeJson: {
         [batchOp]: {
           scores: [
-            { idx: 0, alpha: 1, relevance: "RELATED", reason: "ON_PATH" },
-            { idx: 1, alpha: 0, relevance: "IRRELEVANT", reason: "DETOUR" },
-            { idx: 2, alpha: 1, relevance: "RELATED", reason: "ON_PATH" },
+            { idx: 0, relevance: "RELATED", reason: "ON_PATH" },
+            { idx: 1, relevance: "IRRELEVANT", reason: "DETOUR" },
+            { idx: 2, relevance: "PIVOTAL", reason: "TURNING_POINT" },
           ],
         },
       },
@@ -202,10 +202,10 @@ describe("capture/pipeline (windowed binary path)", () => {
 
     const rows = result.traceIds.map((id) => tmp.repos.traces.getById(id)!);
     expect(rows[0]!.reflection).toBe("RELATED");
-    expect(rows[0]!.alpha).toBe(1);
+    expect(rows[0]!.alpha).toBe(0.5);
     expect(rows[1]!.reflection).toBe("IRRELEVANT");
     expect(rows[1]!.alpha).toBe(0);
-    expect(rows[2]!.reflection).toBe("RELATED");
+    expect(rows[2]!.reflection).toBe("PIVOTAL");
     expect(rows[2]!.alpha).toBe(1);
   });
 
@@ -218,9 +218,9 @@ describe("capture/pipeline (windowed binary path)", () => {
             steps: Array<{ idx: number }>;
           };
           if (payload.steps.length === 20) {
-            return { scores: payload.steps.map((s) => ({ idx: s.idx, alpha: 0, relevance: "IRRELEVANT" })) };
+            return { scores: payload.steps.map((s) => ({ idx: s.idx, relevance: "IRRELEVANT", reason: "DETOUR" })) };
           }
-          return { scores: payload.steps.map((s) => ({ idx: s.idx, alpha: 1, relevance: "RELATED" })) };
+          return { scores: payload.steps.map((s) => ({ idx: s.idx, relevance: "PIVOTAL", reason: "RECOVERY" })) };
         },
       },
     });
@@ -233,13 +233,13 @@ describe("capture/pipeline (windowed binary path)", () => {
     const result = await runCapture(runner, episodeSnapshot({ id: "ep_1", sessionId: "se_1", turns }));
     expect(result.llmCalls.batchedReflection).toBe(2);
     const rows = result.traceIds.map((id) => tmp.repos.traces.getById(id)!);
-    // idx 17..19 are overlap, should be upgraded to RELATED (alpha=1).
+    // idx 17..19 are overlap, should be upgraded to PIVOTAL (alpha=1).
     expect(rows[17]!.alpha).toBe(1);
     expect(rows[18]!.alpha).toBe(1);
     expect(rows[19]!.alpha).toBe(1);
   });
 
-  it("all retries failed => episode fallback RELATED_DEFAULT + alpha=1", async () => {
+  it("all retries failed => episode fallback RELATED_DEFAULT + alpha=0.5", async () => {
     const llm = fakeLlm({
       completeJson: {},
     });
@@ -254,7 +254,7 @@ describe("capture/pipeline (windowed binary path)", () => {
     const result = await runCapture(runner, ep);
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
     expect(t.reflection).toBe("RELATED_DEFAULT");
-    expect(t.alpha).toBe(1);
+    expect(t.alpha).toBe(0.5);
     expect(result.warnings.some((w) => w.message.includes("force RELATED_DEFAULT"))).toBe(true);
   });
 
@@ -267,7 +267,7 @@ describe("capture/pipeline (windowed binary path)", () => {
             steps: Array<{ idx: number }>;
           };
           if (payload.steps.length === 20) throw new Error("fail primary window");
-          return { scores: payload.steps.map((s) => ({ idx: s.idx, alpha: 1, relevance: "RELATED" })) };
+          return { scores: payload.steps.map((s) => ({ idx: s.idx, relevance: "RELATED", reason: "ON_PATH" })) };
         },
       },
     });
@@ -284,7 +284,7 @@ describe("capture/pipeline (windowed binary path)", () => {
     const result = await runCapture(runner, ep);
     expect(result.warnings.some((w) => w.message.includes("degrading to smaller windows"))).toBe(true);
     expect(result.traceIds).toHaveLength(25);
-    expect(result.traceIds.every((id) => tmp.repos.traces.getById(id)!.alpha === 1)).toBe(true);
+    expect(result.traceIds.every((id) => tmp.repos.traces.getById(id)!.alpha === 0.5)).toBe(true);
   });
   it("no LLM available => directly fallback to RELATED_DEFAULT", async () => {
     const runner = buildRunner({ alphaScoring: false }, null);
@@ -297,6 +297,6 @@ describe("capture/pipeline (windowed binary path)", () => {
     expect(result.traceIds).toHaveLength(1);
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
     expect(t.reflection).toBe("RELATED_DEFAULT");
-    expect(t.alpha).toBe(1);
+    expect(t.alpha).toBe(0.5);
   });
 });

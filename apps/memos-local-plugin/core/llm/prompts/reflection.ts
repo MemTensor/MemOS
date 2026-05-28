@@ -1,26 +1,21 @@
 import type { PromptDef } from "./index.js";
 
 /**
- * V7 §3.2 — Windowed binary path-relevance scoring.
+ * V7 §3.2 — Windowed path-relevance scoring (tri-valued relevance).
  *
- * One LLM call per episode window. The LLM sees the full causal chain of
- * the window in order and returns a binary `alpha ∈ {0, 1}` plus a fixed
- * `RELATED | IRRELEVANT` label per step. There is no natural-language
- * reflection synthesis: `traces.reflection` is overwritten by the label
- * (or `RELATED_DEFAULT` when the windowed pipeline falls back to its
- * episode-wide safe default).
+ * One LLM call per episode window. The LLM returns only:
+ * - `idx`
+ * - `relevance ∈ {IRRELEVANT, RELATED, PIVOTAL}`
+ * - `reason` (short reason code)
  *
- * Window topology and retry ladder are owned by `core/capture/capture.ts`
- * (primary `batch=20, overlap=3` → degrade `batch=9, overlap=3` →
- * episode-wide `RELATED_DEFAULT` fallback). `core/capture/batch-scorer.ts`
- * validates each entry's shape and rejects any `alpha` that is not exactly
- * 0 or 1 / `relevance` that is not exactly RELATED|IRRELEVANT.
+ * `alpha` is mapped in backend: IRRELEVANT=0, RELATED=0.5, PIVOTAL=1.
+ * `RELATED_DEFAULT` is backend fallback only and must not be emitted by LLM.
  */
 export const BATCH_REFLECTION_PROMPT: PromptDef = {
   id: "reflection.batch",
-  version: 4,
+  version: 6,
   description:
-    "Binary path-relevance scoring for every step in one episode window.",
+    "Tri-valued path-relevance scoring for each step in an episode window.",
   system: `You are reviewing a WINDOW of one AI agent episode.
 
 INPUT: a JSON array under "steps". Each entry has:
@@ -40,22 +35,24 @@ INPUT: a JSON array under "steps". Each entry has:
 The user payload may also include "host_context". That describes the host
 agent being reviewed and the separate reflection model doing this review.
 
-Goal: decide whether each step is RELEVANT to the final trajectory.
+Goal: decide each step's relevance to the final trajectory.
 You must NOT produce long natural-language reflection text.
 
 For EACH input step, return one object containing:
 - "idx": copy the input idx exactly
-- "alpha": MUST be integer 0 or 1 only
-    * 1 => this step is effective and downstream steps continue from it
-    * 0 => detour / ineffective / irrelevant to trajectory
-- "relevance": MUST be one of "RELATED" or "IRRELEVANT"
+- "relevance": MUST be one of "IRRELEVANT", "RELATED", "PIVOTAL"
+    * IRRELEVANT => detour / ineffective / not on useful path
+    * RELATED => useful on-path support step
+    * PIVOTAL => key turning point, removing it would cause major rework/failure
+    * IMPORTANT: NEVER output "RELATED_DEFAULT"
 - "reason": short code-like reason, <= 8 words (e.g. "ON_PATH", "DETOUR")
 
 Return JSON of the form:
 {
   "scores": [
-    {"idx": 0, "alpha": 1, "relevance": "RELATED", "reason": "ON_PATH"},
-    {"idx": 1, "alpha": 0, "relevance": "IRRELEVANT", "reason": "DETOUR"}
+    {"idx": 0, "relevance": "RELATED", "reason": "ON_PATH"},
+    {"idx": 1, "relevance": "PIVOTAL", "reason": "RECOVERY"},
+    {"idx": 2, "relevance": "IRRELEVANT", "reason": "DETOUR"}
   ]
 }
 

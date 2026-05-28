@@ -1,18 +1,20 @@
 /**
- * `batch-scorer` — windowed binary path-relevance scoring for one episode
+ * `batch-scorer` — windowed tri-valued path-relevance scoring for one episode
  * window. Always invoked through `capture.ts :: runEpisodeBatchScoring`,
  * which owns the primary/degrade window topology and retry ladder.
  *
  * Wire format ↔ prompt:
  *   Send `{ host_context?, task_context?, steps: [{idx, state, thinking,
  *           action, tool_calls, outcome}] }`.
- *   Receive `{ scores: [{idx, alpha: 0|1, relevance: "RELATED" |
- *           "IRRELEVANT", reason: str}] }`.
+ *   Receive `{ scores: [{idx,
+ *           relevance: "IRRELEVANT" | "RELATED" | "PIVOTAL", reason: str}] }`.
  *   See `core/llm/prompts/reflection.ts :: BATCH_REFLECTION_PROMPT`.
  *
- * Validation is strict: any non-{0,1} alpha or relevance outside
- * {RELATED, IRRELEVANT} raises `LLM_OUTPUT_MALFORMED` so the caller's
- * window retry ladder can take over.
+ * Validation: relevance outside {IRRELEVANT, RELATED, PIVOTAL} raises
+ * `LLM_OUTPUT_MALFORMED` so the caller's window retry ladder can take over.
+ * A missing/empty `reason` is downgraded to a per-window warn — we keep the
+ * (relevance, alpha) signal rather than fall the whole episode into
+ * `RELATED_DEFAULT` just because the model dropped the reason code.
  */
 
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
@@ -46,7 +48,6 @@ export interface BatchScoreResult {
 
 interface RawScoreEntry {
   idx: number;
-  alpha: unknown;
   relevance: unknown;
   reason?: unknown;
 }
@@ -65,7 +66,7 @@ const DEFAULT_FIELD_CHARS = {
 export const BATCH_OP_TAG = `capture.${BATCH_REFLECTION_PROMPT.id}.v${BATCH_REFLECTION_PROMPT.version}`;
 
 /**
- * One LLM call → binary relevance + α(0/1) for every input step.
+ * One LLM call → tri-valued relevance; backend maps α for every input step.
  *
  * Throws `MemosError` with `LLM_OUTPUT_MALFORMED` when the LLM returns a
  * shape we cannot parse even after the facade's malformed-retry. Caller
@@ -112,7 +113,7 @@ export async function batchScoreReflections(
       episodeId: opts.episodeId,
       phase: opts.phase,
       schemaHint:
-        '{"scores": [{"idx": int, "alpha": 0|1, "relevance": "RELATED|IRRELEVANT", "reason": "str"}]}',
+        '{"scores": [{"idx": int, "relevance": "IRRELEVANT|RELATED|PIVOTAL", "reason": "str"}]}',
       validate: (v) => validateBatchPayload(v, inputs.length),
       malformedRetries: 1,
       temperature: 0,
@@ -124,6 +125,7 @@ export async function batchScoreReflections(
   const byIdx = new Map<number, RawScoreEntry>();
   for (const entry of rsp.value.scores) byIdx.set(Number(entry.idx), entry);
 
+  let missingReasonCount = 0;
   const scores: ReflectionScore[] = inputs.map((input, i) => {
     const raw = byIdx.get(i);
     if (!raw) {
@@ -134,18 +136,29 @@ export async function batchScoreReflections(
         source: "none",
       };
     }
-    const alpha = clamp01(numOrZero(raw.alpha)) >= 0.5 ? 1 : 0;
-    const relevance = raw.relevance === "RELATED" ? "RELATED" : "IRRELEVANT";
-    const reason = typeof raw.reason === "string" ? sanitizeDerivedText(raw.reason) : null;
+    const label = mapRawRelevance(raw.relevance);
+    const alpha = alphaForReflection(label);
+    const reason = sanitizeReason(raw.reason);
+    if (reason === null) missingReasonCount += 1;
     return {
-      text: relevance,
+      text: label,
       alpha,
-      usable: alpha === 1,
+      usable: alpha > 0,
       reason,
       source: "synth",
       model: rsp.servedBy,
     };
   });
+
+  if (missingReasonCount > 0) {
+    log.warn("batch.reason_missing", {
+      episodeId: opts.episodeId,
+      phase: opts.phase,
+      steps: inputs.length,
+      missingReasonCount,
+      model: rsp.servedBy,
+    });
+  }
 
   log.debug("batch.scored", {
     steps: inputs.length,
@@ -203,22 +216,10 @@ function validateBatchPayload(v: unknown, expected: number): void {
         got: entry.idx,
       });
     }
-    if (typeof entry.alpha !== "number" || !Number.isFinite(entry.alpha)) {
-      throw new MemosError(ERROR_CODES.LLM_OUTPUT_MALFORMED, "batch reflection: alpha must be number", {
-        idx: entry.idx,
-        got: entry.alpha,
-      });
-    }
-    if (entry.alpha !== 0 && entry.alpha !== 1) {
-      throw new MemosError(ERROR_CODES.LLM_OUTPUT_MALFORMED, "batch reflection: alpha must be 0 or 1", {
-        idx: entry.idx,
-        got: entry.alpha,
-      });
-    }
-    if (entry.relevance !== "RELATED" && entry.relevance !== "IRRELEVANT") {
+    if (entry.relevance !== "IRRELEVANT" && entry.relevance !== "RELATED" && entry.relevance !== "PIVOTAL") {
       throw new MemosError(
         ERROR_CODES.LLM_OUTPUT_MALFORMED,
-        "batch reflection: relevance must be RELATED or IRRELEVANT",
+        "batch reflection: relevance must be IRRELEVANT/RELATED/PIVOTAL",
         { idx: entry.idx, got: entry.relevance },
       );
     }
@@ -257,11 +258,21 @@ function clip(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
-function clamp01(v: number): number {
-  if (!Number.isFinite(v)) return 0;
-  return Math.max(0, Math.min(1, v));
+function alphaForReflection(label: ReflectionScore["text"]): number {
+  if (label === "PIVOTAL") return 1;
+  if (label === "RELATED" || label === "RELATED_DEFAULT") return 0.5;
+  return 0;
 }
 
-function numOrZero(v: unknown): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+function mapRawRelevance(relevance: unknown): ReflectionScore["text"] {
+  if (relevance === "PIVOTAL") return "PIVOTAL";
+  if (relevance === "RELATED") return "RELATED";
+  return "IRRELEVANT";
+}
+
+function sanitizeReason(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const cleaned = sanitizeDerivedText(value).trim();
+  if (!cleaned) return null;
+  return cleaned.slice(0, 80);
 }

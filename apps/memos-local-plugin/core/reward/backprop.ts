@@ -1,30 +1,18 @@
 /**
- * `backprop` — V7 §0.6 eq. 4+5 + §3.3 priority formula.
+ * `backprop` — normalized credit assignment with position smoothing.
  *
- * Given traces in chronological order and a terminal reward `rHuman`,
- * compute `V_t` for each step by walking RIGHT-TO-LEFT:
+ * For traces in chronological order (t = 1..T):
  *
- *   V_T = R_human
- *   V_t = α_t · R_human + (1 − α_t) · γ · V_{t+1}
+ *   f_t = (1-λ) + λ·γ^(T-t)
+ *   recovery_t = 1 if α_t>0 and α_{t-1}=0 else 0
+ *   r_t = 1 + δ·recovery_t
+ *   w_t = α_t·f_t·r_t
+ *   V_t = (w_t / Σw)·R_human            when Σw>0
+ *   V_t = 0                              when Σw=0
  *
- * Then compute priority with exponential time decay:
- *
+ * Priority stays:
  *   priority(f1_t) = max(V_t, 0) · decay(Δt)
  *   decay(Δt)     = 0.5 ^ (Δt_days / halfLifeDays)
- *
- * Pure function — no I/O. The caller persists via `tracesRepo.updateScore`.
- *
- * Design notes:
- *  - `alpha` is already clamped to [0, 1] by capture, but we clamp again
- *    defensively in case a downstream rescoring widened it.
- *  - `rHuman` is clamped to [-1, 1] to guarantee `V_t` stays in range.
- *  - A trace with no reflection (α=0) gets V_t via pure γ-discount, which
- *    matches V7 §0.6: "pure trial-and-error steps propagate by γ only".
- *  - Priority uses `max(V, 0)` because V7 §3.3 says negative value traces
- *    sink to the bottom but MUST remain on disk — they can still be
- *    surfaced by Decision Repair.
- *  - We do NOT touch `r_human` or `alpha` on the trace row: α stays
- *    capture-owned; r_human is episode-level and lives in `episodes.r_task`.
  */
 
 import { rootLogger } from "../logger/index.js";
@@ -36,6 +24,8 @@ export function backprop(input: BackpropInput): BackpropResult {
   const log = rootLogger.child({ channel: "core.reward.backprop" });
 
   const gamma = clamp(input.gamma, 0, 1);
+  const lambda = clamp(input.lambda, 0, 1);
+  const delta = Math.max(0, Number.isFinite(input.delta) ? input.delta : 0);
   const rHuman = clamp(input.rHuman, -1, 1);
   const now = input.now ?? Date.now();
   const halfLife = Math.max(1, input.decayHalfLifeDays);
@@ -46,21 +36,36 @@ export function backprop(input: BackpropInput): BackpropResult {
       updates: [],
       meanAbsValue: 0,
       maxPriority: 0,
-      echoParams: { gamma, decayHalfLifeDays: halfLife, now },
+      echoParams: { gamma, lambda, delta, decayHalfLifeDays: halfLife, now },
     };
   }
 
-  // Walk last → first so V_{t+1} is always available.
-  let nextV = rHuman;
+  const effectiveAlpha: number[] = input.traces.map((trace) => alphaFromTrace(trace));
+  const weights: number[] = new Array(input.traces.length).fill(0);
+  let sumW = 0;
+  let fallbackAlphaCount = 0;
+  let unknownReflectionCount = 0;
+  for (let i = 0; i < input.traces.length; i++) {
+    const alpha = effectiveAlpha[i]!;
+    const prevAlpha = i > 0 ? effectiveAlpha[i - 1]! : 0;
+    const recovery = i > 0 && alpha > 0 && prevAlpha === 0 ? 1 : 0;
+    const positional = (1 - lambda) + lambda * Math.pow(gamma, input.traces.length - 1 - i);
+    const boost = 1 + delta * recovery;
+    const w = alpha * positional * boost;
+    weights[i] = w;
+    sumW += w;
+    const reflection = input.traces[i]!.reflection;
+    if (!reflection || !reflection.trim()) fallbackAlphaCount += 1;
+    else if (!KNOWN_REFLECTION_LABELS.has(reflection.trim())) unknownReflectionCount += 1;
+  }
+
   let sumAbsV = 0;
   let maxPriority = 0;
 
-  for (let i = input.traces.length - 1; i >= 0; i--) {
+  for (let i = 0; i < input.traces.length; i++) {
     const t = input.traces[i]!;
-    const alpha = clamp(t.alpha, 0, 1);
-    const V = i === input.traces.length - 1
-      ? rHuman // V_T = R_human (V7 §0.6 boundary case)
-      : alpha * rHuman + (1 - alpha) * gamma * nextV;
+    const alpha = effectiveAlpha[i]!;
+    const V = sumW > 0 ? (weights[i]! / sumW) * rHuman : 0;
 
     const dtDays = Math.max(0, (now - t.ts) / MS_PER_DAY);
     const decay = Math.pow(0.5, dtDays / halfLife);
@@ -74,7 +79,6 @@ export function backprop(input: BackpropInput): BackpropResult {
     };
     sumAbsV += Math.abs(V);
     if (priority > maxPriority) maxPriority = priority;
-    nextV = V;
   }
 
   const meanAbsValue = sumAbsV / updates.length;
@@ -83,6 +87,11 @@ export function backprop(input: BackpropInput): BackpropResult {
     traces: updates.length,
     rHuman,
     gamma,
+    lambda,
+    delta,
+    sumW,
+    fallbackAlphaCount,
+    unknownReflectionCount,
     meanAbsValue,
     maxPriority,
   });
@@ -91,7 +100,7 @@ export function backprop(input: BackpropInput): BackpropResult {
     updates,
     meanAbsValue,
     maxPriority,
-    echoParams: { gamma, decayHalfLifeDays: halfLife, now },
+    echoParams: { gamma, lambda, delta, decayHalfLifeDays: halfLife, now },
   };
 }
 
@@ -115,4 +124,19 @@ export function priorityFor(
 function clamp(v: number, lo: number, hi: number): number {
   if (!Number.isFinite(v)) return 0;
   return Math.max(lo, Math.min(hi, v));
+}
+
+const KNOWN_REFLECTION_LABELS = new Set([
+  "IRRELEVANT",
+  "RELATED",
+  "PIVOTAL",
+  "RELATED_DEFAULT",
+]);
+
+function alphaFromTrace(trace: BackpropInput["traces"][number]): number {
+  const reflection = trace.reflection?.trim();
+  if (reflection === "IRRELEVANT") return 0;
+  if (reflection === "RELATED" || reflection === "RELATED_DEFAULT") return 0.5;
+  if (reflection === "PIVOTAL") return 1;
+  return clamp(trace.alpha, 0, 1);
 }

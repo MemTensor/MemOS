@@ -85,6 +85,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     },
     reward: {
       gamma: 0.9,
+      lambda: 0.5,
+      delta: 0.1,
       tauSoftmax: 0.5,
       decayHalfLifeDays: 30,
       llmScoring: true,
