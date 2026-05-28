@@ -11,38 +11,50 @@ sessionBus.on("episode.finalized")
     ↓
 attachCaptureSubscriber(...)   ← this module
     ↓
-createCaptureRunner.run({ episode, closedBy })
+captureRunner.runReflect({ episode, closedBy })
     ↓
-INSERT INTO traces ... (×N)
+INSERT INTO traces ... (×N)  /  UPDATE traces SET reflection, alpha
     ↓
-sessionBus.emit({ kind: "capture.done", result })
+captureBus.emit({ kind: "capture.done", result })
 ```
 
-- One episode → 0..N trace rows (one per agent step).
-- Abandoned episodes are captured too (V7 treats them as R_task=−1, which
-  Phase 7 assigns). Toggle with `captureAbandoned: false` if you need to.
-- Fire-and-forget by default; tests call `drain()` to await all pending.
+- Per-turn `runLite` writes trace rows with `reflection=null` /
+  `alpha=0` immediately, so the viewer sees the memory card.
+- Topic-end `runReflect` re-runs the windowed binary scorer over the
+  whole (now-closed) episode and patches each existing row.
+- Abandoned episodes go through the same pipeline; Phase 7 still
+  assigns `R_task = −1`.
 
 ## 2. Data flow
 
 ```
-episode.turns  ──►  step-extractor         one StepCandidate per decision point
+episode.turns  ──►  step-extractor             one StepCandidate per decision point
                         │
                         ▼
-                    normalizer             truncate / dedup / drop empty
+                    normalizer                 truncate / dedup / drop empty
                         │
                         ▼
-               reflection-extractor        prefer adapter-provided; else regex
-                        │ ←─ (optional) reflection-synth (LLM)
+            batch-scorer (windowed binary)     primary {batch=20, overlap=3, 1 retry}
+                        │                      ↓ on any failed window
+                        │                      degrade {batch=9, overlap=3, 2 retries}
+                        │                      ↓ on any failed window
+                        │                      episode-wide RELATED_DEFAULT fallback
                         ▼
-                  alpha-scorer             REFLECTION_SCORE_PROMPT → α ∈ [0,1]
-                        │                  usable=false ⇒ α = 0
-                        ▼
-                    embedder               vec_summary + vec_action (Phase 3)
+                    merge by global_idx        1-over-0; missing window → RELATED_DEFAULT
                         │
                         ▼
-                  tracesRepo.insert        + episodesRepo.updateTraceIds
+                    embedder                   vec_summary + vec_action (Phase 3)
+                        │
+                        ▼
+                  tracesRepo.insert /          + episodesRepo.updateTraceIds
+                  tracesRepo.updateReflection
 ```
+
+`traces.reflection` is always one of `RELATED | IRRELEVANT |
+RELATED_DEFAULT` after `runReflect`. There is no natural-language
+reflection text; downstream consumers use `reflectionAsText` (exported
+from `core/capture/types.ts`) to filter the fixed labels out of prompts
+and keyword blobs.
 
 ## 3. Public API
 
@@ -57,17 +69,22 @@ const runner = createCaptureRunner({
   tracesRepo,
   episodesRepo,
   embedder,           // nullable (then vec is null)
-  llm,                // nullable (then α stays neutral 0.5 if reflection exists)
+  llm,                // main LLM, used by the summariser
+  reflectLlm,         // dedicated reflect LLM; falls back to `llm`
   bus: captureBus,
   cfg: {
     maxTextChars: 4000,
     maxToolOutputChars: 2000,
     embedTraces: true,
+    llmConcurrency: 4,
+    // Windowed binary reflection is the only supported mode.
+    batchMode: "windowed",
+    // alphaScoring / synthReflections / batchThreshold /
+    // reflectionContextMode / longEpisodeReflectMode are retained for
+    // backward config compatibility but ignored by the windowed
+    // pipeline.
     alphaScoring: true,
     synthReflections: false,
-    llmConcurrency: 4,
-    // V7 §3.2 batched variant — one LLM call per episode. See §6a.
-    batchMode: "auto",
     batchThreshold: 12,
   },
 });
@@ -79,8 +96,8 @@ sub.stop();
 await sub.drain();
 ```
 
-You can also call `runner.run({episode, closedBy})` synchronously (tests
-and integration tests do this).
+You can also call `runner.runLite(...)` / `runner.runReflect(...)`
+directly (tests and integration tests do this).
 
 ## 4. Step extraction rules (V7 §3.2.1)
 
@@ -89,104 +106,51 @@ and integration tests do this).
 - **Merge tool turns** into the assistant step that preceded them within
   the same segment. `tool` turns emit `ToolCallDTO` entries with inputs,
   outputs, errors, and timing.
-- **Sub-agent depth**: passed through from `turn.meta.depth` / `turn.meta.isSubagent`.
-  The extractor doesn't create new episodes for sub-agents — they are
-  extra traces under the same episode with `isSubagent=true`.
+- **Sub-agent depth**: passed through from `turn.meta.depth` /
+  `turn.meta.isSubagent`. The extractor doesn't create new episodes for
+  sub-agents — they are extra traces under the same episode with
+  `isSubagent=true`.
 - **Synthetic fallback**: an episode with a user turn but no assistant
   turn still produces one skeletal trace so Phase 7 has somewhere to
   assign R_task.
 
-## 5. Reflection resolution
+## 5. Windowed binary reflection (V7 §3.2)
 
-Order (highest-precedence first):
+Per-step reflection / α scoring was replaced by a path-relevance
+judgement. See [ALGORITHMS.md](./ALGORITHMS.md) for the full derivation;
+the highlights:
 
-1. `step.rawReflection` (from `turn.meta.reflection`, set by the adapter
-   when the host agent emits self-reflections natively). Source: `adapter`.
-2. `extractReflection(step)` — regex over `agentText` for Markdown
-   `### Reasoning:` blocks, `<reflection>...</reflection>` tags, and a
-   small Chinese/English heuristic set. Source: `extracted`.
-3. `synthesizeReflection(llm, step)` — only when
-   `config.capture.synthReflections=true`. Source: `synth`.
-4. Otherwise `reflection.text = null`, `alpha = 0`, `usable = false`.
-   Source: `none`.
+- Each window is `≤ batch_size` consecutive steps, sliced with a fixed
+  `overlap` so seam steps appear in two windows.
+- The batch scorer returns `{ alpha: 0|1, relevance: "RELATED" |
+  "IRRELEVANT" }` per step. Validator rejects any other shape.
+- Overlap merge: any window calling a step `RELATED` (`alpha=1`) wins.
+- If a step has no window result after both passes, it is written as
+  `RELATED_DEFAULT` (the safe default).
+- If any window in both passes failed, the whole episode is overwritten
+  with `RELATED_DEFAULT`.
+- The dispatcher never throws on reflection failure — only a DB
+  `INSERT` is fatal.
 
-## 6. α scoring (V7 §3.2.3, eq. 5)
+## 6. α scoring
 
-When a reflection exists:
-
-- If `config.capture.alphaScoring=false`: α defaults to `0.5` (neutral),
-  `usable=true`. Phase 7 will backprop but weighted half-strength.
-- Otherwise: call `REFLECTION_SCORE_PROMPT` with
-  `{state, action, outcome, reflection}` and parse JSON `{alpha, usable, reason}`.
-  When `usable=false`, we clamp `α=0` before persisting.
-
-LLM failures fall back to neutral α (same as "scoring disabled") plus a
-warning in `CaptureResult.warnings`. Capture NEVER throws on LLM failure
-alone — only a DB `INSERT` failure is fatal.
-
-## 6a. Batched ρ+α (V7 §3.2 batched variant)
-
-Per-step calls are expensive on long episodes (2N LLM calls for N steps).
-`batch-scorer.ts` collapses synth + α into ONE LLM call covering every
-step. Activated by `algorithm.capture.batchMode`:
-
-| value | behavior |
-|-------|----------|
-| `per_step` | legacy path; one synth + one α call per step (`llmConcurrency` workers in parallel) |
-| `per_episode` | always batch; one call per episode |
-| `auto` (default) | batch when `stepCount ≤ batchThreshold` (default 12); else fall back to per-step |
-
-Batched mode also gives the LLM access to the **full causal chain** of the
-episode in one shot, so reflections it writes can credit-attribute across
-steps (V7 §3.2.3 axes `causal_insight` / `transferability` benefit).
-
-Bookkeeping is split across `CaptureResult.llmCalls`:
-- `batchedReflection`: 0 or 1 per episode (1 on a clean batched call).
-- `reflectionSynth` / `alphaScoring`: only nonzero in per-step mode.
-
-Failures in the batched call (LLM throw, malformed JSON, length mismatch)
-are logged as a `stage: "batch"` warning and capture **automatically falls
-back** to the per-step path — no traces are lost.
-
-## 6b. Downstream preview for long per-step reflection
-
-For long episodes, `batchMode: "auto"` still falls back to per-step scoring
-when `stepCount > batchThreshold`. Operators can enrich that fallback without
-making it serial:
-
-```yaml
-algorithm:
-  capture:
-    reflectionContextMode: task_downstream
-    longEpisodeReflectMode: per_step_downstream
-```
-
-This keeps `runConcurrently(...)` intact. Before launching the per-step work,
-capture precomputes a read-only preview for each step from the already
-normalized episode:
-
-- up to `downstreamStepCount` following steps, capped at 3;
-- labels are always `step+1`, `step+2`, `step+3`;
-- `text` steps are inserted as standalone downstream text blocks;
-- `tooluse` steps include tool names and tool output;
-- if a downstream tool step already has adapter/extracted reflection, that
-  existing reflection is included; newly synthesized reflections from the
-  same run are not used, so there is no reverse-order dependency.
-
-`reflectionContextMode: task` is the default, preserving task-summary
-enrichment while leaving downstream preview opt-in.
+`α_t ∈ {0, 1}` only. There is no continuous score, no
+`alphaScoring=false` neutral path, and no LLM-quality rubric. The
+`alphaScoring` config flag is preserved for back-compat but has no
+effect.
 
 ## 7. Embedding
 
 - When `config.capture.embedTraces=true` and `embedder` is non-null, we
   build two texts per step — "state" (userText) and "action" (agentText +
   tool signatures) — and batch them through `embedder.embedMany(...)`.
-- Failures fall back to `vecSummary=null / vecAction=null`. Vector search
-  will just skip these rows.
+- Failures fall back to `vecSummary=null / vecAction=null`. Vector
+  search will just skip these rows.
 
 ## 8. Priority (V7 §3.3)
 
-Initial `priority = 0` for every new trace. The formula
+Initial `priority = 0.5` for every new trace so retrieval can find it
+before reward backprop runs. The formula
 `priority(f1) ∝ max(V, 0) · decay(Δt)` activates in Phase 7 after
 backprop, when `tracesRepo.updateScore` runs.
 
@@ -197,11 +161,12 @@ Capture runs on a dedicated `CaptureEventBus` (create via
 stable. The orchestrator (Phase 15) bridges session.* and capture.*
 into one unified stream for the viewer.
 
-| Event                | Payload                                     | When                                       |
-|----------------------|---------------------------------------------|--------------------------------------------|
-| `capture.started`    | `{episodeId, sessionId}`                    | Before stage 1.                            |
-| `capture.done`       | `{result: CaptureResult}`                   | After all rows are persisted (happy path). |
-| `capture.failed`     | `{episodeId, sessionId, stage, error}`      | DB insert failed; throws afterwards.       |
+| Event                | Payload                                     | When                                                                  |
+|----------------------|---------------------------------------------|-----------------------------------------------------------------------|
+| `capture.started`    | `{episodeId, sessionId}`                    | Before stage 1.                                                       |
+| `capture.lite.done`  | `{result: CaptureResult}`                   | After each per-turn `runLite` (no reward trigger).                    |
+| `capture.done`       | `{result: CaptureResult}`                   | After `runReflect` completes; gates the reward / L2 / Skill cascade.  |
+| `capture.failed`     | `{episodeId, sessionId, stage, error}`      | DB insert failed; throws afterwards.                                  |
 
 Subscribers:
 - **Phase 7 reward orchestrator** listens for `capture.done` to run
@@ -213,29 +178,38 @@ Subscribers:
 
 - `internal` — DB insert raw throw.
 - `llm_unavailable` / `llm_timeout` / `llm_output_malformed` — surfaced
-  from alpha / synth stages but converted to warnings (non-fatal).
+  from the windowed scorer but converted to warnings (non-fatal). The
+  episode-wide fallback writes `RELATED_DEFAULT` and the chain
+  continues.
 
 ## 11. Logging channels
 
 - `core.capture` — top-level run summary, warnings, timings.
 - `core.capture.extractor` — extractor debug (segment counts, synthetic fallbacks).
-- `core.capture.reflection` — extraction/synth details.
-- `core.capture.alpha` — α scores per step, model id, reason.
-- `core.capture.batch` — batched ρ+α run summary (steps, synthAccepted, model).
+- `core.capture.batch` — per-window batch run summary (steps, model, durationMs).
+- `core.capture.summarizer` — per-turn summariser fallbacks.
 - `core.capture.embed` — embed failures (1 line per batch).
+
+Top-level events to watch:
+- `capture.reflect.scoring.start` — kicks off `runEpisodeBatchScoring`
+  for an episode.
+- `capture.reflect.trace.scored` — per-trace patch result with final
+  alpha + reflection label + reason.
+- `capture.reflect.done` / `capture.lite.done` /
+  `capture.lightweight.done` — phase completion summaries.
+- `reflection_fallback_all_one` — episode-wide fallback was triggered.
+  Includes `degraded=true`, `episodeId`, `stepsCount`,
+  `failedWindows`.
 
 ## 12. Testing
 
 Under `tests/unit/capture/`:
 - `step-extractor.test.ts` — split rules, tool merging, sub-agent depth, synthetic fallback.
 - `normalizer.test.ts` — truncation, dedup, drop-empty.
-- `reflection-extractor.test.ts` — adapter-priority, regex matches per language, length cap.
-- `alpha-scorer.test.ts` — JSON parse, clamp, `usable=false → α=0`, LLM error path.
-- `reflection-synth.test.ts` — happy path, `NO_REFLECTION` sentinel, LLM error.
-- `batch-scorer.test.ts` — batched ρ+α validator, order-independence, synth-disabled fallback.
+- `batch-scorer.test.ts` — binary validator, order-independence, payload shape.
 - `embedder.test.ts` — pair interleaving, failure → null vectors.
-- `capture.test.ts` (integration) — end-to-end with in-memory repos (per-step path).
-- `capture-batch.test.ts` — end-to-end with batched ρ+α + auto-mode threshold fallback.
+- `capture.test.ts` (integration) — end-to-end with in-memory repos.
+- `capture-batch.test.ts` — end-to-end with the windowed binary scorer.
 - `subscriber.test.ts` — finalized→run wiring, abandoned opt-out, drain.
 
 See `ALGORITHMS.md` for V7 formula derivations and prompt fingerprints.

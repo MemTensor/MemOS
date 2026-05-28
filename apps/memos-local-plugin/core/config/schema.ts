@@ -114,27 +114,11 @@ const AlgorithmSchema = Type.Object({
     synthReflections: Bool(false),
     /** Concurrency for α scoring + synth LLM calls (per_step mode only). */
     llmConcurrency: NumberInRange(4, 1, 32),
-    /**
-     * V7 §3.2 batched variant. When/how to fold per-step reflection synth +
-     * α scoring into one episode-level LLM call:
-     *   - "per_step"    : legacy path, N per-step LLM calls
-     *   - "per_episode" : always batch
-     *   - "auto"        : batch when stepCount ≤ batchThreshold, else per-step
-     */
-    batchMode: Type.Union(
-      [Type.Literal("per_step"), Type.Literal("per_episode"), Type.Literal("auto")],
-      { default: "auto" },
-    ),
-    /**
-     * Step-count cap for "auto" mode. Episodes above this limit fall back
-     * to per-step calls so the batched prompt cannot overflow context.
-     */
+    /** Windowed-only reflection mode (per-step path removed). */
+    batchMode: Type.Literal("windowed", { default: "windowed" }),
+    /** Retained for backward compatibility; ignored by windowed mode. */
     batchThreshold: NumberInRange(12, 1, 64),
-    /**
-     * Optional context blocks for per-step reflection and α prompts.
-     * Defaults to "task" to preserve the current task-summary enrichment;
-     * downstream preview remains opt-in.
-     */
+    /** Retained for compatibility; no effect in windowed binary mode. */
     reflectionContextMode: Type.Union(
       [
         Type.Literal("none"),
@@ -144,10 +128,7 @@ const AlgorithmSchema = Type.Object({
       ],
       { default: "task" },
     ),
-    /**
-     * Long-episode fallback mode after batch auto-threshold is exceeded.
-     * `per_step_downstream` keeps parallelism but adds step+1..step+3 preview.
-     */
+    /** Retained for compatibility; no effect in windowed binary mode. */
     longEpisodeReflectMode: Type.Union(
       [Type.Literal("per_step_parallel"), Type.Literal("per_step_downstream")],
       { default: "per_step_parallel" },

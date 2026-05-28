@@ -21,6 +21,7 @@ import type { Logger } from "../logger/types.js";
 import { DECISION_REPAIR_PROMPT } from "../llm/prompts/decision-repair.js";
 import { sanitizeDerivedMarkdown, sanitizeDerivedText } from "../safety/content.js";
 import type { PolicyId, PolicyRow, TraceId, TraceRow } from "../types.js";
+import { reflectionAsText } from "../capture/types.js";
 import { capTrace } from "./evidence.js";
 import type {
   ClassifiedFeedback,
@@ -134,7 +135,10 @@ function packPrompt(
       `value: ${t.value.toFixed(2)}`,
       `user: ${capped.userText.trim()}`,
       `agent: ${capped.agentText.trim()}`,
-      capped.reflection ? `reflection: ${capped.reflection.trim()}` : "",
+      (() => {
+        const r = reflectionAsText(capped.reflection);
+        return r ? `reflection: ${r.trim()}` : "";
+      })(),
     ]
       .filter(Boolean)
       .join("\n");
@@ -214,8 +218,8 @@ function templateDraft(
   const best = input.highValue.slice().sort((a, b) => b.value - a.value)[0];
   const worst = input.lowValue.slice().sort((a, b) => a.value - b.value)[0];
   const hint = input.classifiedFeedback;
-  const preferText = sanitizeDerivedMarkdown(hint?.prefer) || sanitizeDerivedMarkdown(firstNonEmpty(best?.reflection, best?.agentText));
-  const avoidText = sanitizeDerivedMarkdown(hint?.avoid) || sanitizeDerivedMarkdown(firstNonEmpty(worst?.reflection, worst?.agentText));
+  const preferText = sanitizeDerivedMarkdown(hint?.prefer) || sanitizeDerivedMarkdown(firstNonEmpty(reflectionAsText(best?.reflection), best?.agentText));
+  const avoidText = sanitizeDerivedMarkdown(hint?.avoid) || sanitizeDerivedMarkdown(firstNonEmpty(reflectionAsText(worst?.reflection), worst?.agentText));
   if (!preferText && !avoidText) return null;
   return {
     contextHash: input.contextHash,

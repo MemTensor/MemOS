@@ -17,7 +17,7 @@ export interface PromptDef {
   system: string;
 }
 
-export { REFLECTION_SCORE_PROMPT, BATCH_REFLECTION_PROMPT } from "./reflection.js";
+export { BATCH_REFLECTION_PROMPT } from "./reflection.js";
 export { REWARD_R_HUMAN_PROMPT } from "./reward.js";
 export { L2_INDUCTION_PROMPT } from "./l2-induction.js";
 export { L3_ABSTRACTION_PROMPT } from "./l3-abstraction.js";

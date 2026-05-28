@@ -74,6 +74,7 @@ import type {
 } from "../types.js";
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import { loadConfig, resolveHome, SECRET_FIELD_PATHS } from "../config/index.js";
+import { reflectionAsText } from "../capture/types.js";
 import { feedbackText, runFeedbackExperience } from "../experience/feedback-builder.js";
 import { isRepairCandidatePolicy, mintRepairCandidate } from "../skill/repair-candidate.js";
 import { rootLogger } from "../logger/index.js";
@@ -934,7 +935,7 @@ export function createMemoryCore(
         const details = r.traces.map((tc) => ({
           role: inferTurnRole(tc),
           action: phase === "lite" ? ("stored" as const) : ("reflected" as const),
-          summary: tc.reflection?.text ?? null,
+          summary: reflectionAsText(tc.reflection?.text ?? null),
           content: (
             tc.userText ||
             tc.agentText ||
@@ -5554,7 +5555,7 @@ export function deriveSkillStatus(
   if (relatedPolicies.length === 0) {
     return {
       status: "not_generated",
-      reason: "暂未归纳出 L2 经验",
+      reason: "L2 经验归纳尚未产出（可能仍在异步处理中）",
       reasonKey: "tasks.skillReason.not_generated.noPolicy",
       reasonParams: thresholds,
       linkedSkillId: null,

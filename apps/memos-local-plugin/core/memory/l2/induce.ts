@@ -16,6 +16,7 @@ import {
   languageSteeringLine,
 } from "../../llm/prompts/index.js";
 import { L2_INDUCTION_PROMPT } from "../../llm/prompts/l2-induction.js";
+import { reflectionAsText } from "../../capture/types.js";
 import type { LlmClient } from "../../llm/index.js";
 import type { Logger } from "../../logger/types.js";
 import { sanitizeDerivedMarkdown, sanitizeDerivedMarkdownList, sanitizeDerivedText } from "../../safety/content.js";
@@ -81,7 +82,7 @@ export async function induceDraft(
   // dominant language of the evidence bucket — Chinese users expect
   // their own L2 memories in 中文, English users expect English.
   const evidenceLang = detectDominantLanguage(
-    input.evidenceTraces.flatMap((t) => [t.userText, t.agentText, t.reflection]),
+    input.evidenceTraces.flatMap((t) => [t.userText, t.agentText, reflectionAsText(t.reflection)]),
   );
 
   try {
@@ -199,7 +200,7 @@ function packTraces(
       `user: ${truncate(t.userText, 200)}`,
       `agent: ${truncate(t.agentText, 300)}`,
       `tools: ${formatTools(t.toolCalls)}`,
-      `reflection: ${truncate(t.reflection ?? "-", 300)}`,
+      `reflection: ${truncate(reflectionAsText(t.reflection) ?? "-", 300)}`,
       `V: ${t.value.toFixed(2)}  alpha: ${t.alpha.toFixed(2)}`,
     ].join("\n");
     if (block.length > budget) {

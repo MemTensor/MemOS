@@ -13,9 +13,6 @@ export {
 export { createCaptureEventBus } from "./events.js";
 export { extractSteps } from "./step-extractor.js";
 export { normalizeSteps } from "./normalizer.js";
-export { extractReflection } from "./reflection-extractor.js";
-export { synthesizeReflection } from "./reflection-synth.js";
-export { scoreReflection, disabledScore } from "./alpha-scorer.js";
 export {
   batchScoreReflections,
   type BatchScoreInput,
@@ -24,6 +21,7 @@ export {
   BATCH_OP_TAG as CAPTURE_BATCH_OP_TAG,
 } from "./batch-scorer.js";
 export { embedSteps } from "./embedder.js";
+export { REFLECTION_ENUM_LABELS, reflectionAsText } from "./types.js";
 export type {
   CaptureConfig,
   CaptureEvent,

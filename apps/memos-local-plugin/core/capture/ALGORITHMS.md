@@ -26,103 +26,101 @@ Edge cases:
   The V7 spec keeps all sub-agent traces under the root episode so
   `R_task` backprops correctly up the decision tree.
 
-## V7 §3.2.2 — Reflection extraction
+## V7 §3.2 — Windowed binary path-relevance scoring
 
-Procedure `ExtractReflection(τ_t)`:
-
-```
-if τ_t.meta.reflection is non-empty:
-    return τ_t.meta.reflection          # adapter-native
-elif regex_match(τ_t.agentText):
-    return cleaned_match(…)             # inline reasoning
-elif config.synthReflections:
-    return LLM(Synthesis, τ_t)          # synthesized
-else:
-    return ∅
-```
-
-Implemented by `reflection-extractor.ts` (steps 1-2) +
-`reflection-synth.ts` (step 3). Prompt for synthesis is minimal and
-temperature=0.1 — we want a terse, agent-voiced explanation, never a
-judgment.
-
-## V7 §3.2.3 — α scoring
-
-V7 defines the "reflection utility" α via a four-axis rubric:
+The original per-step reflection scorer (`reflection-extractor` →
+`reflection-synth` → `alpha-scorer`) was removed in the 2026-05 redesign
+(see [docs/superpowers/specs/2026-05-27-l1-batch-reflection-binary-design.md](../../docs/superpowers/specs/2026-05-27-l1-batch-reflection-binary-design.md)).
+Reflection no longer produces free-form natural-language text and `α` is
+no longer a continuous quality score. Instead, every step gets a binary
+"is this step on the final trajectory?" judgement:
 
 ```
-α_t = judge(state_t, action_t, outcome_t, reflection_t)
-    = weighted_mean(faithfulness, causal_insight,
-                    transferability, concreteness)
-usable_t = 1 iff α_t ≥ 0.4 AND non_tautological(reflection_t)
-if usable_t = 0:
-    α_t ← 0          # equation 5: unusable reflections cannot skew backprop
+α_t ∈ {0, 1}
+reflection_t ∈ { "RELATED", "IRRELEVANT", "RELATED_DEFAULT" }
 ```
 
-The judge is `REFLECTION_SCORE_PROMPT` (see
-`core/llm/prompts/reflection.ts`), which returns a JSON object. Our
-implementation clamps α to [0, 1], applies the `usable` mask, and
-guarantees finite values.
+with the semantics:
+- `α_t = 1` / `RELATED` — the step is effective and downstream actions
+  continue from it.
+- `α_t = 0` / `IRRELEVANT` — the step is a detour / dead-end that did
+  not influence the final path.
+- `RELATED_DEFAULT` — episode-level safe default written by the fallback
+  path when the windowed scorer never produced a usable result for a
+  step (or for the whole episode).
 
-When `alphaScoring=false` OR the LLM fails:
+### Window topology
+
+Windows are owned by `runEpisodeBatchScoring` in `capture.ts`. Two passes:
+
+| Pass    | `windowSize` | `overlap` | per-window retries |
+|---------|--------------|-----------|--------------------|
+| primary | 20           | 3         | 1                  |
+| degrade | 9            | 3         | 2                  |
+
+Stride is `windowSize − overlap` (17 for primary, 6 for degrade). The
+last window of either pass is allowed to be shorter than `windowSize`.
+`buildWindows(length, windowSize, overlap)` returns half-open `[start,
+end)` pairs in ascending order.
+
+### Merge rule
+
+`mergeWindowScores` aggregates per-window results by absolute
+`global_idx = win.start + i`. Per-step combination is:
 
 ```
-α_t = 0.5    # neutral; Phase 7 backprop still runs, half-weighted
-usable_t = 1
+if any window assigned alpha=1 → final alpha = 1, label = RELATED
+elif any window assigned alpha=0 → final alpha = 0, label = IRRELEVANT
+else                              → final alpha = 1, label = RELATED_DEFAULT
+                                    (MISSING_WINDOW_DEFAULT)
 ```
 
-This preserves the "graceful degradation" property V7 asks for: a local
-setup without a paid LLM still accrues L1 traces with meaningful
-priority once reward arrives.
+The "1-over-0" rule is intentional: overlapping windows often disagree
+about a borderline step at the seam; counting it as RELATED is the
+safer default because the downstream reward/L2/Skill chain treats
+`α = 0` as a hard mask.
 
-## V7 §3.2 batched variant — `batch-scorer.ts`
+### Failure ladder
 
-The per-step path (`reflection-synth.ts` + `alpha-scorer.ts`) issues 2N
-LLM calls per N-step episode. `batch-scorer.ts` collapses them into ONE:
+1. **Per-window** — up to `maxRetries+1` calls (1 attempt + retries).
+   A malformed payload from the LLM is one of: array length ≠ window
+   length, non-numeric / non-{0,1} `alpha`, `relevance` outside
+   {RELATED, IRRELEVANT}, missing `idx`. The validator in
+   `batch-scorer.ts :: validateBatchPayload` raises
+   `LLM_OUTPUT_MALFORMED` and the facade's own malformed-retry triggers
+   once before our outer retry kicks in.
+2. **Window pass** — if every window in the primary pass eventually
+   succeeded, we accept its results. Otherwise we discard the partial
+   primary results and re-run with the degrade pass over the whole
+   episode.
+3. **Episode-wide fallback** — if the degrade pass also has any failed
+   window, every step in the episode is overwritten with
+   `{ alpha: 1, text: "RELATED_DEFAULT", reason: "FALLBACK_ALL_ONE" }`
+   and we log `reflection_fallback_all_one` at error level with
+   `{ degraded: true, episodeId, stepsCount, failedWindows }`.
+4. **No reflect LLM wired** — short-circuits straight to the
+   episode-wide fallback (`reason: "no_llm"`).
+
+The downstream reward / L2 / Skill chain runs in every case; the
+fallback is meant to keep the pipeline available, not to gate it.
+
+### Bookkeeping (`CaptureResult.llmCalls`)
+
+- `batchedReflection` — number of successful batch calls this episode.
+  One per window that actually returned a usable payload (so a long
+  episode can be >1, and the degrade pass can add more).
+- `reflectionSynth` / `alphaScoring` — permanently `0`. Retained on the
+  `CaptureResult` interface for backward-compatible analytics consumers.
+
+### Stable prompt fingerprint
 
 ```
-inputs   = [{idx, state, action, outcome, reflection, synth_allowed}, …]
-                              ↓ BATCH_REFLECTION_PROMPT
-outputs  = {scores: [{idx, reflection_text, alpha, usable, reason}, …]}
+op = capture.reflection.batch.v<BATCH_REFLECTION_PROMPT.version>
 ```
 
-Dispatch (in `capture.ts`):
-
-| `cfg.batchMode`   | `cfg.batchThreshold` | behavior |
-|-------------------|----------------------|----------|
-| `per_step`        | (ignored)            | legacy: 2N calls |
-| `per_episode`     | (ignored)            | always batch |
-| `auto` (default)  | `12`                 | batch when `N ≤ 12`; else per-step |
-
-The dispatcher also refuses to batch when no LLM is wired — same fallback
-path as missing-LLM in per-step mode.
-
-Why batched mode tends to produce **better** reflections (not just cheaper):
-the prompt sees the full episode timeline including the final outcome, so
-it can credit-attribute across steps. V7 §3.2.3's `causal_insight` and
-`transferability` axes both benefit from the wider context. Per-step
-synth, in contrast, can only rationalize from local `(s, a, o)`.
-
-Failure handling:
-
-- LLM throws / facade gives up after `malformedRetries=1` → capture
-  catches in `runBatchScoring`, surfaces a `{stage: "batch"}` warning,
-  and the per-step path runs as a fallback.
-- Validator rejects on length mismatch, missing/non-numeric `alpha`,
-  non-boolean `usable`, non-string `reflection_text`. Same fallback.
-
-Bookkeeping (`CaptureResult.llmCalls`):
-
-- `batchedReflection`: 0 or 1 per episode (1 on a successful batch).
-- `reflectionSynth` / `alphaScoring`: only nonzero when the per-step path
-  ran (either selected directly, or as fallback after a batch failure).
-
-Stable prompt fingerprint:
-
-- `op = capture.reflection.batch.v3` (see `BATCH_OP_TAG` constant; version
-  matches `BATCH_REFLECTION_PROMPT.version`).
-  Bumping `BATCH_REFLECTION_PROMPT.version` changes the op tag so audit
-  rows remain attributable.
+Bumping `BATCH_REFLECTION_PROMPT.version` in
+`core/llm/prompts/reflection.ts` rolls the op tag automatically so audit
+rows stay attributable to a specific prompt revision.
 
 ## V7 §3.2.4 — Reward wiring
 
@@ -131,8 +129,8 @@ Capture does NOT compute `r_step` or `V_t`. It writes:
 ```
 trace.value    = 0            # V_t will be filled by Phase 7
 trace.r_human  = null         # assigned on feedback (Phase 7 R_human path)
-trace.alpha    = α_t          # from §3.2.3
-trace.priority = 0            # recomputed after backprop
+trace.alpha    = α_t          # binary {0, 1} from the windowed scorer
+trace.priority = 0.5          # seeded so retrieval can find it pre-reward
 ```
 
 Phase 7 updates these via `tracesRepo.updateScore` once the
@@ -148,7 +146,7 @@ priority(f¹_t) ∝ max(V_t, 0) · decay(Δt)
 - `decay(Δt)` = half-life ≈ 30 days (Phase 7 constant)
 - `V_t` = backpropagated value from the R_task + step rewards (Phase 7)
 
-Capture initialises `priority=0`. The formula activates in
+Capture initialises `priority=0.5`. The formula activates in
 `core/reward/backprop.ts` (Phase 7).
 
 ## Text & vector conventions
@@ -171,26 +169,31 @@ marker. Rationale:
 - Tail keeps "what the agent concluded with" — often the most useful
   sentence for Tier 2 recall.
 - Dropping the middle rarely hurts (that's usually thinking + tool
-  rationales that the reflection already summarises).
+  rationales that the windowed scorer already collapses into a binary
+  judgement).
 
 Per-tool-call outputs use the same clamp with `maxToolOutputChars`.
 
 ## Concurrency
 
-Reflection + α stages iterate per-step. We run them with
-`config.capture.llmConcurrency` workers (default 4). The embedding stage
-uses the embedder's own batching — one call for ALL steps.
+The windowed scorer is sequential per episode (windows run in order,
+not in parallel) because the merge rule benefits from short feedback
+loops on failures — a failing primary pass is detected before the
+degrade pass starts. Summariser and embedder stages still use
+`config.capture.llmConcurrency` workers (default 4).
 
-Typical budget for a 10-step episode with alpha scoring on and an
-external LLM: 10 α calls ÷ 4 workers ≈ 3 batches, plus one embed call.
-Wall clock usually 3-10s on a mid-tier OpenAI-compat endpoint.
+Typical budget for a 60-step episode with the primary pass succeeding:
+`ceil((60 - 3) / 17) = 4` batch calls, plus one embed call. Wall clock
+is dominated by the batch latency of the reflect model.
 
-## Stable prompt fingerprints
+## Downstream consumers and the enum reflection field
 
-Every LLM call carries:
-- `op = capture.alpha.reflection.score.v1` (alpha scorer)
-- `op = capture.reflection.synth` (reflection synth)
-
-Bumping `REFLECTION_SCORE_PROMPT.version` in `core/llm/prompts/reflection.ts`
-changes the op tag automatically, so historical α values remain
-attributable to their scoring prompt generation.
+`traces.reflection` is now one of `RELATED | IRRELEVANT |
+RELATED_DEFAULT` (plus legacy free-form text from pre-2026-05 traces).
+Downstream modules that previously fed the reflection string into LLM
+prompts, error-signature heuristics, or keyword blobs use the
+`reflectionAsText` helper exported from `core/capture/types.ts` to
+filter the three fixed labels back to `null`. That keeps the L2
+signature bucket, L2/L3 induction prompts, skill crystallisation /
+verification, feedback evidence, and feedback-builder notes from
+treating `RELATED_DEFAULT` as natural language.

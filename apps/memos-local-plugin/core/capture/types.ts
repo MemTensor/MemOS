@@ -2,8 +2,8 @@
  * Internal DTOs for `core/capture`.
  *
  * These are the stage-to-stage contracts between:
- *   step-extractor → normalizer → reflection-extractor → (reflection-synth?)
- *                 → alpha-scorer → embedder → traces repo
+ *   step-extractor → normalizer → batch-scorer (windowed binary) →
+ *   embedder → traces repo
  *
  * Not exported through the plugin's public surface (adapters don't care).
  * Exposed to Phase 15 via the pipeline event bus as `CaptureResult` so the
@@ -62,6 +62,30 @@ export interface NormalizedStep extends StepCandidate {
 }
 
 // ─── Stage 3: with a scored reflection ──────────────────────────────────────
+
+/**
+ * Fixed-enum values written into `traces.reflection` by the windowed binary
+ * reflection pipeline. Anything outside this set is legacy natural-language
+ * reflection text from before the 2026-05 redesign.
+ */
+export const REFLECTION_ENUM_LABELS = new Set<string>([
+  "RELATED",
+  "IRRELEVANT",
+  "RELATED_DEFAULT",
+]);
+
+/**
+ * Return the reflection value only when it carries free-form natural-language
+ * signal — the three fixed labels are converted to `null` so downstream
+ * consumers don't feed `RELATED_DEFAULT` (or similar) into LLM prompts,
+ * keyword blobs, or error-signature heuristics.
+ */
+export function reflectionAsText(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return REFLECTION_ENUM_LABELS.has(trimmed) ? null : value;
+}
 
 export interface ReflectionScore {
   /** The final reflection text (may differ from `rawReflection` if synthed). */
@@ -193,27 +217,9 @@ export interface CaptureConfig {
   alphaScoring: boolean;
   synthReflections: boolean;
   llmConcurrency: number;
-  /**
-   * V7 §3.2 batched variant. Controls when reflection synthesis + α scoring
-   * collapse into ONE LLM call per episode instead of N per-step calls.
-   *
-   *   - "per_step"    — legacy path; one synth/α call per step. Predictable
-   *                     prompt size, slow & costly on long episodes.
-   *   - "per_episode" — always batch the entire episode into one call.
-   *                     Long episodes risk overflowing the model context.
-   *   - "auto"        — batch when `stepCount ≤ batchThreshold`; otherwise
-   *                     fall back to per-step. Recommended default.
-   *
-   * Either way, `R_human` (the terminal reward) is computed independently
-   * by `core/reward` after user feedback arrives — batching only affects
-   * capture-stage LLM usage.
-   */
-  batchMode: "per_step" | "per_episode" | "auto";
-  /**
-   * In `batchMode: "auto"`, episodes with strictly more than this many
-   * normalized steps fall back to the per-step path. Acts as a guard
-   * against prompt-window overflow on very long agent traces.
-   */
+  /** Reflection mode. "windowed" enforces fixed-size episode windows only. */
+  batchMode: "windowed";
+  /** Retained for backward config compatibility; ignored by windowed mode. */
   batchThreshold: number;
   /**
    * Controls which extra context is included in per-step reflection and α

@@ -18,17 +18,15 @@ import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type { Embedder } from "../embedding/index.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
+import type { Logger } from "../logger/types.js";
 import { ids } from "../id.js";
 import type { EpisodeRow, TraceRow, TraceId, EpochMs } from "../types.js";
 import type { makeEmbeddingRetryQueueRepo } from "../storage/repos/embedding_retry_queue.js";
 import type { makeTracesRepo } from "../storage/repos/traces.js";
 import type { EpisodesRepo } from "../session/persistence.js";
-import { disabledScore, scoreReflection } from "./alpha-scorer.js";
 import { batchScoreReflections, type BatchScoreInput } from "./batch-scorer.js";
 import { embedSteps, type VecPair } from "./embedder.js";
 import { normalizeSteps } from "./normalizer.js";
-import { extractReflection } from "./reflection-extractor.js";
-import { synthesizeReflection } from "./reflection-synth.js";
 import { extractSteps } from "./step-extractor.js";
 import { createSummarizer, type Summarizer } from "./summarizer.js";
 import { tagsForStep } from "./tagger.js";
@@ -39,9 +37,7 @@ import type {
   CaptureEventBus,
   CaptureInput,
   CaptureResult,
-  DownstreamStepPreview,
   NormalizedStep,
-  ReflectionContext,
   ReflectionScore,
   ScoredStep,
   StepCandidate,
@@ -434,47 +430,30 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       return result;
     }
 
-    // Batch reflection + α across every step of the now-closed
-    // episode. Falls back to per-step scoring when over the threshold
-    // or when batching fails / no LLM is wired. The reflect pass uses
-    // `reflectLlm` (skill-evolver model when configured) for higher
-    // quality reflections; per-turn lite capture still uses `llm`.
+    // Episode-level binary reflection/alpha scoring with fixed windows.
+    // Per-step scoring is removed; all failures degrade through the
+    // window retry ladder and finally default to RELATED_DEFAULT.
     const reflectStart = now();
     const rLlm = deps.reflectLlm ?? deps.llm;
-    const useBatch = shouldBatch(deps.cfg, normalized.length, rLlm !== null);
-    const contextEnabled = contextModeFor(deps.cfg, useBatch, normalized.length);
-    const taskSummary = contextEnabled.includeTask
-      ? buildTaskReflectionSummary(input.episode, normalized, deps.cfg.taskContextMaxChars)
-      : null;
-    const downstreamByStep = contextEnabled.includeDownstream
-      ? buildDownstreamStepPreviews(normalized, deps.cfg)
-      : normalized.map(() => []);
+    const taskSummary = buildTaskReflectionSummary(input.episode, normalized, deps.cfg.taskContextMaxChars);
     log.info("capture.reflect.scoring.start", {
       episodeId: input.episode.id,
       sessionId: input.episode.sessionId,
       steps: normalized.length,
-      mode: useBatch ? "batch" : contextEnabled.includeDownstream ? "per_step_downstream" : "per_step",
-      reflectionContextMode: deps.cfg.reflectionContextMode,
-      downstreamPreview: contextEnabled.includeDownstream,
+      mode: "batch_windowed_binary",
       provider: rLlm?.provider ?? "none",
       model: rLlm?.model ?? "none",
       taskSummary: taskSummary ? taskSummary.slice(0, 240) : null,
     });
-    let scored: ScoredStep[] = [];
-    if (useBatch) {
-      scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id, taskSummary);
-    }
-    if (!useBatch || scored.length === 0) {
-      scored = await runPerStepScoring(
-        normalized,
-        rLlm,
-        deps,
-        warnings,
-        llmCalls,
-        input.episode.id,
-        buildReflectionContexts(normalized, taskSummary, downstreamByStep),
-      );
-    }
+    const scored = await runEpisodeBatchScoring(
+      normalized,
+      rLlm,
+      warnings,
+      llmCalls,
+      input.episode.id,
+      taskSummary,
+      log,
+    );
     const reflectMs = now() - reflectStart;
 
     // Patch each existing trace with the freshly-computed reflection +
@@ -1017,191 +996,183 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-/**
- * Decide whether to use the batched reflection+α path.
- *
- * `per_step`     → never (legacy path).
- * `per_episode`  → always, when an LLM is available.
- * `auto`         → batch when step count fits inside `batchThreshold`.
- */
-function shouldBatch(cfg: CaptureConfig, stepCount: number, hasLlm: boolean): boolean {
-  if (!hasLlm) return false;
-  if (stepCount === 0) return false;
-  if (cfg.batchMode === "per_step") return false;
-  if (cfg.batchMode === "per_episode") return true;
-  // "auto"
-  return stepCount <= cfg.batchThreshold;
-}
-
-function contextModeFor(
-  cfg: CaptureConfig,
-  useBatch: boolean,
-  stepCount: number,
-): { includeTask: boolean; includeDownstream: boolean } {
-  const mode = cfg.reflectionContextMode;
-  const includeTask = mode === "task" || mode === "task_downstream";
-  const wantsDownstream = mode === "downstream" || mode === "task_downstream";
-  const longPerStep = !useBatch && stepCount > cfg.batchThreshold;
-  const includeDownstream =
-    wantsDownstream &&
-    cfg.longEpisodeReflectMode === "per_step_downstream" &&
-    cfg.downstreamStepCount > 0 &&
-    cfg.downstreamContextMaxChars > 0 &&
-    longPerStep;
-  return { includeTask, includeDownstream };
-}
-
-function buildReflectionContexts(
-  steps: readonly NormalizedStep[],
-  taskSummary: string | null,
-  downstreamByStep: readonly DownstreamStepPreview[][],
-): ReflectionContext[] {
-  return steps.map((_, idx) => ({
-    taskSummary,
-    downstream: downstreamByStep[idx] ?? [],
-  }));
-}
-
-async function runBatchScoring(
-  normalized: NormalizedStep[],
-  llm: LlmClient,
-  deps: CaptureDeps,
-  warnings: CaptureResult["warnings"],
-  llmCalls: { reflectionSynth: number; alphaScoring: number; batchedReflection: number },
-  episodeId: string,
-  taskSummary: string | null,
-): Promise<ScoredStep[]> {
-  const inputs: BatchScoreInput[] = normalized.map((step) => ({
-    step,
-    existingReflection: extractReflection(step),
-  }));
-
-  try {
-    const out = await batchScoreReflections(llm, inputs, {
-      synthReflections: deps.cfg.synthReflections,
-      episodeId,
-      phase: "reflect",
-      taskSummary,
-    });
-    llmCalls.batchedReflection += 1;
-    return normalized.map((step, i) => ({
-      ...step,
-      reflection: out.scores[i] ?? disabledScore(null, "none"),
-    }));
-  } catch (err) {
-    // Single failure mode: the batched call (or its validator) threw.
-    // Fall back to per-step in the caller. We surface a warning so the
-    // viewer can show "batch path degraded" without crashing capture.
-    warnings.push({
-      stage: "batch",
-      message: "batched reflection scoring failed; falling back to per-step",
-      detail: errDetail(err),
-    });
-    return [];
-  }
-}
-
-async function runPerStepScoring(
+async function runEpisodeBatchScoring(
   normalized: NormalizedStep[],
   llm: LlmClient | null,
-  deps: CaptureDeps,
   warnings: CaptureResult["warnings"],
-  llmCalls: { reflectionSynth: number; alphaScoring: number },
+  llmCalls: { batchedReflection: number },
   episodeId: string,
-  contexts: ReflectionContext[],
+  taskSummary: string | null,
+  log: Logger,
 ): Promise<ScoredStep[]> {
-  const concurrency = Math.max(1, deps.cfg.llmConcurrency);
-  return runConcurrently(normalized, concurrency, async (step, idx): Promise<ScoredStep> => {
-    const context = contexts[idx] ?? {};
-    const { score, synthCount } = await resolveReflection(step, llm, deps, warnings, episodeId, context);
-    llmCalls.reflectionSynth += synthCount;
-    const finalScore = await resolveAlpha(step, score, llm, deps, warnings, episodeId, context);
-    if (finalScore !== score) llmCalls.alphaScoring += 1;
-    return { ...step, reflection: finalScore };
+  const fallbackAllOne = (): ScoredStep[] =>
+    normalized.map((step) => ({
+      ...step,
+      reflection: {
+        text: "RELATED_DEFAULT",
+        alpha: 1,
+        usable: true,
+        source: "none",
+        reason: "FALLBACK_ALL_ONE",
+      },
+    }));
+
+  if (!llm) {
+    warnings.push({
+      stage: "batch",
+      message: "no reflect llm; using episode-wide RELATED_DEFAULT fallback",
+    });
+    log.warn("reflection_fallback_all_one", {
+      degraded: true,
+      episodeId,
+      stepsCount: normalized.length,
+      failedWindows: normalized.length > 0 ? 1 : 0,
+      reason: "no_llm",
+    });
+    return fallbackAllOne();
+  }
+
+  const primary = await runWindowPass({
+    normalized,
+    llm,
+    episodeId,
+    taskSummary,
+    windowSize: 20,
+    overlap: 3,
+    maxRetries: 1,
+    warnings,
+    llmCalls,
+  });
+  if (primary.success) return mergeWindowScores(normalized, primary.results);
+
+  warnings.push({
+    stage: "batch",
+    message: "primary window pass failed; degrading to smaller windows",
+    detail: { windowSize: 9, overlap: 3 },
+  });
+
+  const degraded = await runWindowPass({
+    normalized,
+    llm,
+    episodeId,
+    taskSummary,
+    windowSize: 9,
+    overlap: 3,
+    maxRetries: 2,
+    warnings,
+    llmCalls,
+  });
+  if (degraded.success) return mergeWindowScores(normalized, degraded.results);
+
+  log.error("reflection_fallback_all_one", {
+    degraded: true,
+    episodeId,
+    stepsCount: normalized.length,
+    failedWindows: degraded.failedWindows,
+  });
+  warnings.push({
+    stage: "batch",
+    message: "all window retries exhausted; force RELATED_DEFAULT for episode",
+    detail: { failedWindows: degraded.failedWindows },
+  });
+  return fallbackAllOne();
+}
+
+async function runWindowPass(args: {
+  normalized: NormalizedStep[];
+  llm: LlmClient;
+  episodeId: string;
+  taskSummary: string | null;
+  windowSize: number;
+  overlap: number;
+  maxRetries: number;
+  warnings: CaptureResult["warnings"];
+  llmCalls: { batchedReflection: number };
+}): Promise<{ success: boolean; results: Map<number, ReflectionScore[]>; failedWindows: number }> {
+  const windows = buildWindows(args.normalized.length, args.windowSize, args.overlap);
+  const results = new Map<number, ReflectionScore[]>();
+  let failedWindows = 0;
+  for (const win of windows) {
+    let ok = false;
+    for (let attempt = 0; attempt <= args.maxRetries; attempt++) {
+      try {
+        const inputs: BatchScoreInput[] = args.normalized
+          .slice(win.start, win.end)
+          .map((step) => ({ step }));
+        const out = await batchScoreReflections(args.llm, inputs, {
+          episodeId: args.episodeId,
+          phase: "reflect",
+          taskSummary: args.taskSummary,
+        });
+        args.llmCalls.batchedReflection += 1;
+        results.set(win.start, out.scores);
+        ok = true;
+        break;
+      } catch (err) {
+        if (attempt === args.maxRetries) {
+          args.warnings.push({
+            stage: "batch",
+            message: "window batch scoring failed",
+            detail: { ...errDetail(err), windowStart: win.start, windowEnd: win.end, attempts: attempt + 1 },
+          });
+        }
+      }
+    }
+    if (!ok) failedWindows += 1;
+  }
+  return { success: failedWindows === 0, results, failedWindows };
+}
+
+function mergeWindowScores(
+  normalized: NormalizedStep[],
+  windowScores: Map<number, ReflectionScore[]>,
+): ScoredStep[] {
+  const merged = new Map<number, ReflectionScore>();
+  const starts = [...windowScores.keys()].sort((a, b) => a - b);
+  for (const start of starts) {
+    const scores = windowScores.get(start) ?? [];
+    for (let i = 0; i < scores.length; i++) {
+      const idx = start + i;
+      const next = scores[i];
+      if (!next) continue;
+      const prev = merged.get(idx);
+      if (!prev) {
+        merged.set(idx, next);
+        continue;
+      }
+      const prevAlpha = prev.alpha === 1 ? 1 : 0;
+      const nextAlpha = next.alpha === 1 ? 1 : 0;
+      if (nextAlpha > prevAlpha) merged.set(idx, next);
+    }
+  }
+  return normalized.map((step, idx) => {
+    const score = merged.get(idx);
+    if (score) return { ...step, reflection: score };
+    return {
+      ...step,
+      reflection: {
+        text: "RELATED_DEFAULT",
+        alpha: 1,
+        usable: true,
+        source: "none",
+        reason: "MISSING_WINDOW_DEFAULT",
+      },
+    };
   });
 }
 
-async function resolveReflection(
-  step: NormalizedStep,
-  llm: LlmClient | null,
-  deps: CaptureDeps,
-  warnings: CaptureResult["warnings"],
-  episodeId: string,
-  context: ReflectionContext,
-): Promise<{ score: ReflectionScore; synthCount: number }> {
-  const adapterProvided = step.rawReflection !== null && step.rawReflection.trim().length > 0;
-  const extracted = extractReflection(step);
-  if (extracted) {
-    return {
-      score: disabledScore(extracted, adapterProvided ? "adapter" : "extracted"),
-      synthCount: 0,
-    };
+function buildWindows(length: number, windowSize: number, overlap: number): Array<{ start: number; end: number }> {
+  if (length <= 0) return [];
+  const out: Array<{ start: number; end: number }> = [];
+  const stride = Math.max(1, windowSize - overlap);
+  let start = 0;
+  while (start < length) {
+    const end = Math.min(length, start + windowSize);
+    out.push({ start, end });
+    if (end >= length) break;
+    start += stride;
   }
-  if (!deps.cfg.synthReflections || !llm) {
-    return { score: disabledScore(null, "none"), synthCount: 0 };
-  }
-  try {
-    const synth = await synthesizeReflection(llm, step, {
-      episodeId,
-      phase: "reflect",
-      taskSummary: context.taskSummary,
-      downstream: context.downstream,
-      outcomeMaxChars: deps.cfg.synthOutcomeMaxChars,
-    });
-    if (synth.text) {
-      return {
-        score: { text: synth.text, alpha: null, usable: true, source: "synth", model: synth.model },
-        synthCount: 1,
-      };
-    }
-    return { score: disabledScore(null, "none"), synthCount: 1 };
-  } catch (err) {
-    warnings.push({
-      stage: "reflection.synth",
-      message: "synth failed",
-      detail: errDetail(err),
-    });
-    return { score: disabledScore(null, "none"), synthCount: 0 };
-  }
-}
-
-async function resolveAlpha(
-  step: NormalizedStep,
-  current: ReflectionScore,
-  llm: LlmClient | null,
-  deps: CaptureDeps,
-  warnings: CaptureResult["warnings"],
-  episodeId: string,
-  context: ReflectionContext,
-): Promise<ReflectionScore> {
-  if (!current.text) return current; // nothing to grade
-  if (!deps.cfg.alphaScoring || !llm) return current;
-
-  try {
-    const scored = await scoreReflection(llm, {
-      step,
-      reflectionText: current.text,
-      episodeId,
-      phase: "reflect",
-      taskSummary: context.taskSummary,
-      downstream: context.downstream,
-      outcomeMaxChars: deps.cfg.synthOutcomeMaxChars,
-    });
-    return {
-      ...current,
-      alpha: scored.alpha,
-      usable: scored.usable,
-      reason: scored.reason,
-      model: scored.model,
-    };
-  } catch (err) {
-    warnings.push({
-      stage: "alpha",
-      message: "alpha scoring failed; keeping neutral α",
-      detail: errDetail(err),
-    });
-    return current;
-  }
+  return out;
 }
 
 async function runConcurrently<T, R>(
@@ -1261,93 +1232,6 @@ function buildTaskReflectionSummary(
 
   const summary = parts.length > 0 ? parts.join("\n") : null;
   return summary ? clipForPrompt(summary, maxChars) : null;
-}
-
-function buildDownstreamStepPreviews(
-  steps: readonly NormalizedStep[],
-  cfg: CaptureConfig,
-): DownstreamStepPreview[][] {
-  return steps.map((_, idx) => {
-    const out: DownstreamStepPreview[] = [];
-    let usedChars = 0;
-    const count = Math.max(0, Math.min(3, cfg.downstreamStepCount));
-    for (let offset = 1; offset <= count; offset++) {
-      const step = steps[idx + offset];
-      if (!step) break;
-      const remaining = cfg.downstreamContextMaxChars - usedChars;
-      if (remaining <= 0) break;
-      const item = downstreamPreviewForStep(
-        step,
-        offset as 1 | 2 | 3,
-        Math.min(cfg.downstreamPerStepMaxChars, remaining),
-      );
-      usedChars += previewSize(item);
-      out.push(item);
-    }
-    return out;
-  });
-}
-
-function downstreamPreviewForStep(
-  step: NormalizedStep,
-  offset: 1 | 2 | 3,
-  maxChars: number,
-): DownstreamStepPreview {
-  const existingReflection = extractReflection(step);
-  if (step.toolCalls.length > 0) {
-    return {
-      offset,
-      kind: "tooluse",
-      toolNames: step.toolCalls.map((t) => t.name).filter(Boolean),
-      toolOutput: clipForPrompt(summarizeToolOutputs(step), maxChars),
-      reflection: existingReflection ? clipForPrompt(existingReflection, Math.floor(maxChars / 2)) : null,
-    };
-  }
-  return {
-    offset,
-    kind: "text",
-    text: clipForPrompt(textPreviewForStep(step), maxChars),
-  };
-}
-
-function summarizeToolOutputs(step: NormalizedStep): string {
-  return step.toolCalls
-    .map((t) => {
-      const label = t.errorCode ? `${t.name} ERROR[${t.errorCode}]` : t.name;
-      const output = outputOfToolCall(t);
-      return `${label}: ${output || "(no output)"}`;
-    })
-    .join("\n");
-}
-
-function outputOfToolCall(t: { output?: unknown }): string {
-  if (t.output === undefined || t.output === null) return "";
-  if (typeof t.output === "string") return t.output;
-  try {
-    return JSON.stringify(t.output);
-  } catch {
-    return String(t.output);
-  }
-}
-
-function textPreviewForStep(step: NormalizedStep): string {
-  const parts = [
-    step.userText.trim() ? `state: ${step.userText.trim()}` : "",
-    step.agentText.trim() ? `action: ${step.agentText.trim()}` : "",
-  ].filter(Boolean);
-  return parts.join("\n") || "(empty)";
-}
-
-function previewSize(item: DownstreamStepPreview): number {
-  return [
-    item.kind,
-    item.text,
-    item.toolNames?.join(", "),
-    item.toolOutput,
-    item.reflection,
-  ]
-    .filter(Boolean)
-    .join("\n").length;
 }
 
 function stringMeta(meta: Record<string, unknown>, key: string): string | undefined {

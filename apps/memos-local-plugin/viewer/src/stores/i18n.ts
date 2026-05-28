@@ -569,7 +569,7 @@ const en = {
   "tasks.skillReason.not_generated.belowThreshold":
     "Task score R={rTask} is below the induction threshold (≥ {threshold}) — the conversation was normal, but not strong enough to generalize into an L2 experience; similar tasks will accumulate over time.",
   "tasks.skillReason.not_generated.noPolicy":
-    "No L2 experience induced yet — requires at least {minEpisodesForInduction} similar task(s) (minEpisodesForInduction) with V ≥ {minTraceValue} to trigger L2 induction, then support ≥ {skillMinSupport} and gain ≥ {skillMinGain} to crystallize into a skill.",
+    "No L2 experience is linked to this task yet — induction may still be processing asynchronously. Refresh in a moment to see the latest status.",
   "tasks.skillReason.generated":
     "Skill \"{skillName}\" crystallized from experience {policyId}.",
   "tasks.skillReason.upgraded":
@@ -1425,7 +1425,7 @@ const zh: Record<TranslationKey, string> = {
   "tasks.skillReason.not_generated.belowThreshold":
     "任务评分 R={rTask} 未达到沉淀阈值 (≥ {threshold})——对话本身正常，只是还不够强到能泛化成 L2 经验；多做几个相似任务后会自动积累。",
   "tasks.skillReason.not_generated.noPolicy":
-    "暂未归纳出 L2 经验——需要至少 {minEpisodesForInduction} 个相似任务（minEpisodesForInduction），且 V 值 ≥ {minTraceValue} 才能触发 L2 诱导，之后 support ≥ {skillMinSupport} 且 gain ≥ {skillMinGain} 才会结晶为技能。",
+    "该任务暂未关联到 L2 经验——可能仍在异步归纳处理中。稍后刷新可查看最新状态。",
   "tasks.skillReason.generated":
     "技能「{skillName}」已从经验 {policyId} 结晶。",
   "tasks.skillReason.upgraded":

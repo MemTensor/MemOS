@@ -30,6 +30,11 @@ llm:
 algorithm:
   lightweightMemory:
     enabled: true          # true = low-cost summaries only; false = memory self-evolution with tasks/experiences/world models/skills
+  capture:
+    # reflection/alpha now runs in windowed batch mode only.
+    # fixed strategy: primary window 20 (overlap 3), degrade to 9 (overlap 3),
+    # then episode-level fallback writes RELATED_DEFAULT + alpha=1.
+    batchMode: windowed
 
 hub:
   enabled: false

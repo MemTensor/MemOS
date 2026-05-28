@@ -16,6 +16,7 @@ import {
   languageSteeringLine,
 } from "../llm/prompts/index.js";
 import { SKILL_CRYSTALLIZE_PROMPT } from "../llm/prompts/skill-crystallize.js";
+import { reflectionAsText } from "../capture/types.js";
 import type { Logger } from "../logger/types.js";
 import {
   sanitizeDerivedList,
@@ -108,7 +109,7 @@ export async function crystallizeDraft(
     input.policy.title,
     input.policy.trigger,
     input.policy.procedure,
-    ...input.evidence.flatMap((t) => [t.userText, t.agentText, t.reflection]),
+    ...input.evidence.flatMap((t) => [t.userText, t.agentText, reflectionAsText(t.reflection)]),
   ]);
 
   try {
@@ -222,7 +223,7 @@ function packPrompt(input: CrystallizeInput, config: SkillConfig): string {
   const evidence = input.evidence.slice(0, config.evidenceLimit).map((t) => ({
     id: t.id,
     episodeId: t.episodeId,
-    reflection: t.reflection,
+    reflection: reflectionAsText(t.reflection),
     user: capString(t.userText, config.traceCharCap),
     agent: capString(t.agentText, config.traceCharCap),
     value: Number.isFinite(t.value) ? t.value : 0,
@@ -235,7 +236,7 @@ function packPrompt(input: CrystallizeInput, config: SkillConfig): string {
     .map((t) => ({
       id: t.id,
       episodeId: t.episodeId,
-      reflection: t.reflection,
+      reflection: reflectionAsText(t.reflection),
       user: capString(t.userText, config.traceCharCap),
       agent: capString(t.agentText, config.traceCharCap),
       value: Number.isFinite(t.value) ? t.value : 0,

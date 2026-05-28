@@ -11,6 +11,7 @@ import type {
 import type { Embedder } from "../embedding/types.js";
 import type { LlmClient } from "../llm/index.js";
 import { classifyFeedback } from "../feedback/classifier.js";
+import { reflectionAsText } from "../capture/types.js";
 import { createFeedbackRefiner } from "./feedback-refiner.js";
 import { ids } from "../id.js";
 import { ownerFromNamespace } from "../runtime/namespace.js";
@@ -690,7 +691,10 @@ function traceHint(trace: TraceRow): string {
   const parts = [
     trace.summary ? `summary=${cleanLine(trace.summary, 140)}` : null,
     trace.userText ? `user=${cleanLine(trace.userText, 140)}` : null,
-    trace.reflection ? `note=${cleanLine(trace.reflection, 140)}` : null,
+    (() => {
+      const refl = reflectionAsText(trace.reflection);
+      return refl ? `note=${cleanLine(refl, 140)}` : null;
+    })(),
   ];
   return parts.filter(Boolean).join(" | ");
 }

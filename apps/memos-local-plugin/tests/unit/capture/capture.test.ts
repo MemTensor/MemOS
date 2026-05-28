@@ -11,7 +11,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createCaptureEventBus } from "../../../core/capture/events.js";
 import { createCaptureRunner, type CaptureRunner } from "../../../core/capture/capture.js";
 import type { Embedder } from "../../../core/embedding/types.js";
-import { REFLECTION_SCORE_PROMPT } from "../../../core/llm/prompts/reflection.js";
+import { BATCH_REFLECTION_PROMPT } from "../../../core/llm/prompts/reflection.js";
 import type {
   CaptureConfig,
   CaptureEvent,
@@ -32,7 +32,7 @@ import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 import { fakeLlm } from "../../helpers/fake-llm.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 
-const alphaOp = `capture.alpha.${REFLECTION_SCORE_PROMPT.id}.v${REFLECTION_SCORE_PROMPT.version}`;
+const batchOp = `capture.${BATCH_REFLECTION_PROMPT.id}.v${BATCH_REFLECTION_PROMPT.version}`;
 
 /**
  * End-to-end test helper: runs the lite-phase capture (which writes
@@ -87,10 +87,7 @@ function baseConfig(overrides: Partial<CaptureConfig> = {}): CaptureConfig {
     alphaScoring: true,
     synthReflections: false,
     llmConcurrency: 2,
-    // Default to per-step here so the existing assertions on
-    // `llmCalls.alphaScoring`/`reflectionSynth` continue to hold. The
-    // batched path has its own dedicated test file.
-    batchMode: "per_step",
+    batchMode: "windowed",
     batchThreshold: 12,
     ...overrides,
   };
@@ -261,8 +258,13 @@ describe("capture/pipeline (end-to-end)", () => {
     expect(seen.map((e) => e.kind)).toEqual(["capture.started", "capture.lite.done"]);
   });
 
-  it("writes one trace per step with α=0 when alpha disabled and no reflection present", async () => {
-    const runner = buildRunner({ alphaScoring: false });
+  it("writes one trace per step with binary reflection fields", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [batchOp]: { scores: [{ idx: 0, alpha: 0, relevance: "IRRELEVANT" }] },
+      },
+    });
+    const runner = buildRunner({ alphaScoring: false }, llm);
     const ep = episodeSnapshot({
       id: "ep_1",
       sessionId: "se_1",
@@ -275,7 +277,7 @@ describe("capture/pipeline (end-to-end)", () => {
     expect(persisted).not.toBeNull();
     expect(persisted!.userText).toBe("say hi");
     expect(persisted!.agentText).toBe("hi");
-    expect(persisted!.reflection).toBeNull();
+    expect(persisted!.reflection).toBe("IRRELEVANT");
     expect(persisted!.alpha).toBe(0);
     expect(persisted!.value).toBe(0);
     // Newly-captured rows seed `priority` at 0.5 so they're visible to
@@ -397,10 +399,10 @@ describe("capture/pipeline (end-to-end)", () => {
     expect(tmp.repos.episodes.getById("ep_1" as EpisodeId)!.traceIds).toEqual(lite.traceIds);
   });
 
-  it("passes through adapter-provided reflection and stores α from LLM", async () => {
+  it("stores binary alpha/reflection from batch scorer", async () => {
     const llm = fakeLlm({
       completeJson: {
-        [alphaOp]: { alpha: 0.8, usable: true, reason: "concrete" },
+        [batchOp]: { scores: [{ idx: 0, alpha: 1, relevance: "RELATED", reason: "ON_PATH" }] },
       },
     });
     const runner = buildRunner({}, llm);
@@ -417,19 +419,18 @@ describe("capture/pipeline (end-to-end)", () => {
     const result = await runCapture(runner, ep);
 
     expect(result.traceIds).toHaveLength(1);
-    expect(result.llmCalls.alphaScoring).toBe(1);
-    expect(result.llmCalls.reflectionSynth).toBe(0);
+    expect(result.llmCalls.batchedReflection).toBe(1);
 
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    expect(t.reflection).toContain("shell tool");
-    expect(t.alpha).toBeCloseTo(0.8, 5);
-    expect(result.traces[0]?.reflection.reason).toBe("concrete");
+    expect(t.reflection).toBe("RELATED");
+    expect(t.alpha).toBe(1);
+    expect(result.traces[0]?.reflection.reason).toBe("ON_PATH");
   });
 
-  it("clamps α to 0 when LLM marks reflection unusable", async () => {
+  it("sets alpha=0 when batch returns IRRELEVANT", async () => {
     const llm = fakeLlm({
       completeJson: {
-        [alphaOp]: { alpha: 0.9, usable: false, reason: "tautology" },
+        [batchOp]: { scores: [{ idx: 0, alpha: 0, relevance: "IRRELEVANT" }] },
       },
     });
     const runner = buildRunner({}, llm);
@@ -447,11 +448,11 @@ describe("capture/pipeline (end-to-end)", () => {
     });
     const result = await runCapture(runner, ep);
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    expect(t.reflection).toBeTruthy();
+    expect(t.reflection).toBe("IRRELEVANT");
     expect(t.alpha).toBe(0);
   });
 
-  it("alpha LLM failure is non-fatal — trace still persists with neutral α", async () => {
+  it("batch LLM failure is non-fatal and falls back to RELATED_DEFAULT", async () => {
     const llm = fakeLlm({ completeJson: {} }); // no mocks → throws
     const runner = buildRunner({}, llm);
     const ep = episodeSnapshot({
@@ -465,20 +466,16 @@ describe("capture/pipeline (end-to-end)", () => {
     const result = await runCapture(runner, ep);
 
     expect(result.traceIds).toHaveLength(1);
-    expect(result.warnings.some((w) => w.stage === "alpha")).toBe(true);
+    expect(result.warnings.some((w) => w.stage === "batch")).toBe(true);
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    expect(t.reflection).toBeTruthy();
-    expect(t.alpha).toBeCloseTo(0.5, 5); // neutral fallback from disabledScore
+    expect(t.reflection).toBe("RELATED_DEFAULT");
+    expect(t.alpha).toBe(1);
   });
 
-  it("synthesizes reflection when configured and extraction found nothing", async () => {
+  it("reflect phase writes binary enums without synthesis", async () => {
     const llm = fakeLlm({
-      complete: {
-        "capture.reflection.synth":
-          "I decided to run ls because the user requested a directory listing.",
-      },
       completeJson: {
-        [alphaOp]: { alpha: 0.6, usable: true, reason: "ok" },
+        [batchOp]: { scores: [{ idx: 0, alpha: 1, relevance: "RELATED" }] },
       },
     });
     const runner = buildRunner({ synthReflections: true }, llm);
@@ -491,10 +488,10 @@ describe("capture/pipeline (end-to-end)", () => {
       ],
     });
     const result = await runCapture(runner, ep);
-    expect(result.llmCalls.reflectionSynth).toBe(1);
+    expect(result.llmCalls.batchedReflection).toBe(1);
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    expect(t.reflection).toContain("directory listing");
-    expect(t.alpha).toBeCloseTo(0.6, 5);
+    expect(t.reflection).toBe("RELATED");
+    expect(t.alpha).toBe(1);
   });
 
   it("updates episode.trace_ids_json with new ids", async () => {

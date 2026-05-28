@@ -61,42 +61,20 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       maxTextChars: 4_000,
       maxToolOutputChars: 2_000,
       embedTraces: true,
+      // alphaScoring / synthReflections are no-ops under the windowed
+      // binary pipeline (kept for backward config compatibility).
       alphaScoring: true,
-      // OpenClaw's tool messages don't include explicit "reflection"
-      // blocks; without synthesis the alpha scorer sees an empty
-      // reflection and forces α = 0 (see `core/capture/alpha-scorer.ts`
-      // line 97). That makes reflection-weighted backprop degenerate
-      // into pure γ-discount and produces flat V distributions —
-      // L2 association + skill crystallization both starve. Enable
-      // synth by default so even turns without explicit reflections
-      // still contribute useful α values.
       synthReflections: true,
       llmConcurrency: 4,
-      // V7 §3.2 batched variant. With "auto" we issue a single LLM call
-      // per episode for both reflection synth and α scoring as long as
-      // the episode is short enough — this collapses 2N per-step calls
-      // (N synth + N α) into 1 batched call. Long episodes (>12 steps)
-      // automatically fall back to the per-step path so the prompt
-      // never overflows the model's context window. R_human + backprop
-      // remain task-end events handled by `core/reward`, unchanged.
-      batchMode: "auto",
+      // Windowed binary reflection mode is the only supported value.
+      // Fixed strategy: primary window 20 (overlap 3), degrade to 9
+      // (overlap 3), then episode-level fallback writes
+      // RELATED_DEFAULT + alpha=1. See core/capture/capture.ts.
+      batchMode: "windowed",
       batchThreshold: 12,
-      // `reflectionContextMode` controls which extra prompt context blocks
-      // topic-end reflection receives:
-      //   - "none": no TASK CONTEXT and no DOWNSTREAM STEP PREVIEW
-      //   - "task": inject TASK CONTEXT only
-      //   - "downstream": inject DOWNSTREAM STEP PREVIEW only
-      //   - "task_downstream": inject both blocks
-      // `longEpisodeReflectMode` controls the fallback used when an episode is
-      // too long for batch scoring:
-      //   - "per_step_parallel": keep the current parallel per-step path. Each
-      //     step is reflected independently, using only the context blocks
-      //     enabled by `reflectionContextMode` that are available without
-      //     downstream preview.
-      //   - "per_step_downstream": still run per-step work in parallel, but
-      //     prebuild a bounded DOWNSTREAM STEP PREVIEW for each step (step+1
-      //     through step+N, capped by `downstreamStepCount`) and inject it when
-      //     `reflectionContextMode` includes "downstream".
+      // reflectionContextMode / longEpisodeReflectMode are retained for
+      // backward config compatibility but have no effect on the windowed
+      // binary reflection pipeline.
       reflectionContextMode: "task_downstream",
       longEpisodeReflectMode: "per_step_downstream",
       downstreamStepCount: 3,

@@ -77,9 +77,18 @@ algorithm:
     maxTextChars: 4000        # per-turn text cap before truncation
     maxToolOutputChars: 2000  # per-tool-call output cap
     embedTraces: true         # vectorize state+action with the embedder
-    alphaScoring: true        # ask the LLM to grade each reflection (α ∈ [0,1])
-    synthReflections: false   # ask the LLM to WRITE a reflection when missing
-    llmConcurrency: 4         # parallel LLM calls per episode
+    alphaScoring: true        # binary alpha enabled (0/1 only)
+    synthReflections: false   # retained for compatibility (windowed mode ignores synthesis)
+    llmConcurrency: 4         # retained for compatibility
+    batchMode: windowed       # only supported mode
+    batchThreshold: 12        # retained for compatibility; ignored in windowed mode
+    reflectionContextMode: task_downstream      # retained for compatibility
+    longEpisodeReflectMode: per_step_downstream # retained for compatibility
+    downstreamStepCount: 3                      # retained for compatibility
+    taskContextMaxChars: 800                    # used as prompt context cap
+    downstreamContextMaxChars: 1200             # retained for compatibility
+    downstreamPerStepMaxChars: 400              # retained for compatibility
+    synthOutcomeMaxChars: 600                   # retained for compatibility
   reward:
     gamma: 0.9                # γ discount factor (V7 §0.6 eq. 4/5)
     tauSoftmax: 0.5           # τ for softmax reweighting in Phase 9 L2 induction
@@ -164,6 +173,21 @@ algorithm:
     # is not user-tunable; it's documented in ARCHITECTURE.md §4 and
     # core/retrieval/README.md.)
 ```
+
+### Reflection batching (current behavior)
+
+`algorithm.capture.batchMode` 现在固定为 `windowed`，per-step 反思链路已删除。
+
+- 主窗口：`20`，`overlap=3`，每窗重试 1 次
+- 降级窗口：`9`，`overlap=3`，每窗重试 2 次
+- 全部失败：整集 episode 强制写入 `reflection=RELATED_DEFAULT`、`alpha=1`
+- overlap 冲突合并：`alpha=1` 覆盖 `alpha=0`
+
+`traces.reflection` 为固定枚举：
+
+- `RELATED`
+- `IRRELEVANT`
+- `RELATED_DEFAULT`
 
 #### Tuning cheat-sheet
 
