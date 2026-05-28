@@ -304,7 +304,10 @@ def ensure_viewer_daemon(*, probe_only: bool = False) -> bool:
                 logger.warning("MemOS: failed to start viewer daemon — %s", err)
                 return False
 
-            deadline = time.time() + 15.0
+            # 45s is generous for cold Node.js starts (tsx compile + SQLite
+            # open + FTS warmup). Fast probes for the first 15s, then back
+            # off to 2s to avoid hammering a slow-starting daemon.
+            deadline = time.time() + 45.0
             while time.time() < deadline:
                 if _viewer_process.poll() is not None:
                     logger.warning(
@@ -324,8 +327,8 @@ def ensure_viewer_daemon(*, probe_only: bool = False) -> bool:
                         HERMES_VIEWER_PORT,
                     )
                     return False
-                time.sleep(0.5)
-            logger.warning("MemOS: viewer daemon did not become healthy within 15s")
+                time.sleep(0.5 if (deadline - time.time()) > 30 else 2.0)
+            logger.warning("MemOS: viewer daemon did not become healthy within 45s")
             return False
 
 
