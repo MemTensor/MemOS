@@ -64,7 +64,7 @@ if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
 from bridge_client import BridgeError, MemosBridgeClient, MemosHttpClient  # noqa: E402
-from daemon_manager import ensure_bridge_running, ensure_viewer_daemon, probe_viewer_status, kill_zombie_bridges  # noqa: E402
+from daemon_manager import ensure_bridge_running, ensure_viewer_daemon, probe_viewer_status, kill_zombie_bridges, startup_lock_active  # noqa: E402
 
 
 try:  # pragma: no cover — host-provided base class, absent in unit tests
@@ -293,6 +293,23 @@ class MemTensorProvider(MemoryProvider):
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
+    def _connect_http_bridge(self, session_id: str, *, timeout: float = 60.0) -> bool:
+        """Try to connect via HTTP bridge. Sets self._bridge on success."""
+        http_bridge: MemosHttpClient | None = None
+        try:
+            http_bridge = MemosHttpClient()
+            http_bridge.register_host_handler("host.llm.complete", self._handle_host_llm_complete)
+            self._bridge = http_bridge
+            self._open_session(session_id, timeout=timeout)
+            return True
+        except Exception as err:
+            logger.warning("MemOS: HTTP bridge failed, falling back to stdio — %s", err)
+            if http_bridge is not None:
+                with contextlib.suppress(Exception):
+                    http_bridge.close()
+            self._bridge = None
+            return False
+
     def initialize(self, session_id: str, **kwargs: Any) -> None:  # type: ignore[override]
         """Called once at agent startup.
 
@@ -329,25 +346,28 @@ class MemTensorProvider(MemoryProvider):
         # eliminates zombie bridge accumulation.
         viewer_status = probe_viewer_status()
         if viewer_status == "running_memos":
-            try:
-                http_bridge: MemosHttpClient | None = MemosHttpClient()
-                http_bridge.register_host_handler(
-                    "host.llm.complete",
-                    self._handle_host_llm_complete,
-                )
-                self._bridge = http_bridge
-                self._open_session(session_id)
+            if self._connect_http_bridge(session_id):
                 logger.info(
                     "MemOS: bridge ready (HTTP) session=%s platform=%s (episode deferred)",
                     self._session_id,
                     self._platform,
                 )
-            except Exception as err:
-                logger.warning("MemOS: HTTP bridge failed, falling back to stdio — %s", err)
-                with contextlib.suppress(Exception):
-                    http_bridge.close()  # type: ignore[union-attr]
-                self._bridge = None
+            else:
                 viewer_status = "free"  # force stdio fallback below
+        elif viewer_status == "free":
+            # Re-probe after a short wait only when another process may be
+            # mid-startup (startup lock is held). On a cold first-launch the
+            # lock doesn't exist, so we skip the delay entirely.
+            if startup_lock_active():
+                time.sleep(1.0)
+                viewer_status = probe_viewer_status()
+            if viewer_status == "running_memos":
+                if self._connect_http_bridge(session_id):
+                    logger.info(
+                        "MemOS: bridge ready (HTTP, late probe) session=%s platform=%s (episode deferred)",
+                        self._session_id,
+                        self._platform,
+                    )
 
         if self._bridge is None:
             try:
@@ -366,7 +386,7 @@ class MemTensorProvider(MemoryProvider):
                     self._handle_host_llm_complete,
                 )
                 self._bridge = new_bridge
-                self._open_session(session_id)
+                self._open_session(session_id, timeout=60.0)
                 logger.info(
                     "MemOS: bridge ready (stdio) session=%s platform=%s (episode deferred)",
                     self._session_id,
@@ -1785,21 +1805,9 @@ class MemTensorProvider(MemoryProvider):
             # Try HTTP first if daemon is running
             viewer_status = probe_viewer_status()
             if viewer_status == "running_memos":
-                try:
-                    http_bridge: MemosHttpClient | None = MemosHttpClient()
-                    http_bridge.register_host_handler(
-                        "host.llm.complete",
-                        self._handle_host_llm_complete,
-                    )
-                    self._bridge = http_bridge
-                    self._open_session(session_id, timeout=timeout)
+                if self._connect_http_bridge(session_id, timeout=timeout):
                     logger.info("MemOS: reconnected via HTTP")
                     return
-                except Exception as err:
-                    logger.warning("MemOS: HTTP reconnect failed, falling back to stdio — %s", err)
-                    with contextlib.suppress(Exception):
-                        http_bridge.close()  # type: ignore[union-attr]
-                    self._bridge = None
 
             try:
                 ensure_viewer_daemon()
