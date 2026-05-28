@@ -547,8 +547,7 @@ function renderDecisionGuidance(
     ? [
         "## Method guidance (distilled from past similar math tasks)",
         "",
-        "Treat these as advisory heuristics, not facts about the current problem.",
-        "Apply a line only after it matches the original problem constraints.",
+        "Advisory heuristics only; apply a line only if it matches the current constraints.",
       ]
     : [
         "## Decision guidance (distilled from past similar situations)",
@@ -636,8 +635,7 @@ const HEADER_BY_REASON: Record<RetrievalReason, string> = {
 const MATH_HEADER_BY_REASON: Record<RetrievalReason, string> = {
   turn_start:
     "# Retrieved prior problem-solving memories\n\n" +
-    "These are candidate methods and guidance learned from previous tasks, not facts about the current problem.\n" +
-    "Use them only when their assumptions match the original problem statement; ignore mismatched memories.",
+    "Candidate method hints from prior tasks, not facts about the current problem. Use only when assumptions match; ignore mismatches.",
   tool_driven:
     "# Memory search results\n\n" +
     "The memory tool returned candidate methods and prior examples. Verify fit before using them.",
@@ -682,10 +680,7 @@ function footerFor(
   standaloneMathFinalAnswer = false,
 ): string {
   if (standaloneMathFinalAnswer) {
-    return [
-      "MemOS memory tools remain available when a concrete prior method is needed.",
-      "Do not call them merely to browse when the original problem can be solved directly.",
-    ].join("\n");
+    return "MemOS memory tools remain available for a concrete prior method, not browsing.";
   }
   const kinds = new Set(snippets.map((s) => s.refKind));
   const lines: string[] = ["Available follow-up tools:"];
