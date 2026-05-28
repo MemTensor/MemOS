@@ -30,11 +30,6 @@ import type {
   TurnResultDTO,
 } from "../../agent-contract/dto.js";
 import type { MemoryCore } from "../../agent-contract/memory-core.js";
-import {
-  MATH_FINAL_ANSWER_PROTOCOL_TITLE,
-  renderMathFinalAnswerProtocol,
-} from "../../core/retrieval/math-task.js";
-export { isStandaloneMathFinalAnswerTask } from "../../core/retrieval/math-task.js";
 
 import type {
   AfterToolCallEvent,
@@ -839,23 +834,6 @@ export function renderContextBlock(
   return `${CONTEXT_OPEN}\n${hint}\n${CONTEXT_CLOSE}`;
 }
 
-export function renderMathTaskGuardrailBlock(): string {
-  return `${CONTEXT_OPEN}\n${renderMathFinalAnswerProtocol()}\n${CONTEXT_CLOSE}`;
-}
-
-export function mergeMathTaskGuardrails(block: string): string {
-  if (block.includes(MATH_FINAL_ANSWER_PROTOCOL_TITLE)) return block;
-  const guardrails = renderMathFinalAnswerProtocol();
-  if (!block.trim()) return `${CONTEXT_OPEN}\n${guardrails}\n${CONTEXT_CLOSE}`;
-  const closeIdx = block.lastIndexOf(CONTEXT_CLOSE);
-  if (closeIdx >= 0) {
-    const head = block.slice(0, closeIdx).trimEnd();
-    const tail = block.slice(closeIdx);
-    return `${head}\n\n${guardrails}\n${tail}`;
-  }
-  return `${block.trimEnd()}\n\n${guardrails}`;
-}
-
 async function withSoftTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -1302,7 +1280,6 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       });
       const { block, truncated } = capContextBlock(renderedBlock);
       const durationMs = now() - startedAt;
-      const mathProtocolInjected = block.includes(MATH_FINAL_ANSWER_PROTOCOL_TITLE);
 
       opts.log.info("memos.onTurnStart", {
         sessionKey: ctx.sessionKey,
@@ -1315,7 +1292,6 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         contextChars: block.length,
         injected: block.length > 0,
         truncated,
-        mathProtocolInjected,
         softTimedOut: !turnStartResult.ok,
       });
       opts.log.info(
@@ -1323,7 +1299,6 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           `durationMs=${durationMs} contextChars=${block.length} ` +
           `injected=${block.length > 0 ? "yes" : "no"} ` +
           `truncated=${truncated ? "yes" : "no"} ` +
-          `mathProtocolInjected=${mathProtocolInjected ? "yes" : "no"} ` +
           `softTimedOut=${turnStartResult.ok ? "no" : "yes"}`,
       );
 
@@ -1346,12 +1321,156 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       // trace / episode, so there's nothing to persist here either.
       return;
     }
-    opts.log.info("memos.agent_end.skipped", {
-      reason: "memory_add_disabled_for_eval",
+    const namespace = namespaceFromAgentCtx(ctx);
+    const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
+    const allMessages = Array.isArray(event.messages) ? event.messages : [];
+
+    // Always acknowledge the hook at INFO level so the user can
+    // confirm agent_end fired at all (without this, bugs like "my
+    // memories never got written" are impossible to triage from the
+    // gateway log alone).
+    opts.log.info("memos.agent_end.received", {
       sessionKey: ctx.sessionKey,
       agentId: ctx.agentId,
       success: event.success,
+      messageCount: allMessages.length,
+      hasError: !!event.error,
     });
+
+
+    try {
+      // Legacy adapter parity: even when `success === false` we still
+      // enqueue the user's message (and whatever the assistant managed
+      // to produce) so the capture / reward chain has a complete
+      // record for decision-repair. The legacy plugin never dropped
+      // failed turns and neither should we.
+      if (allMessages.length === 0) {
+        opts.log.info("memos.agent_end.skipped", { reason: "no_messages" });
+        return;
+      }
+
+      // Process only messages appended since the last call — OpenClaw
+      // ships the full transcript with every `agent_end`, not the delta.
+      // We subtract one from the cursor so the overlap rule catches a
+      // multi-part assistant reply spanning the boundary.
+      const cursor = messageCursor.get(sessionId) ?? 0;
+      const novel =
+        cursor >= allMessages.length
+          ? allMessages.slice()
+          : allMessages.slice(Math.max(0, cursor - 1));
+      messageCursor.set(sessionId, allMessages.length);
+
+      const flat = flattenMessages(novel);
+      const turn = extractTurn(flat, now());
+      if (!turn || !turn.userText) {
+        // Elevated to WARN so unexpected skips show up in the gateway
+        // log. `flat.length` / `novel.length` help diagnose whether the
+        // envelope stripper or the role detector is at fault.
+        opts.log.warn("memos.agent_end.skipped", {
+          reason: "no_user_turn",
+          novel: novel.length,
+          flat: flat.length,
+          firstRole: flat[0]?.role,
+          hasUserText: !!turn?.userText,
+        });
+        return;
+      }
+
+      // V7 parity with legacy adapter: suppress system-level bootstrap
+      // turns and boot checks. `extractTurn` strips the envelope but
+      // doesn't know these are sentinel system messages dressed up as
+      // user turns. Without this guard, every `/new` /// `/reset`
+      // creates a bogus episode with a multi-paragraph "Bootstrap
+      // files like SOUL.md…" body — exactly what the user saw in the
+      // Memories panel.
+      if (isOpenClawBootstrapMessage(turn.userText)) {
+        opts.log.info("memos.agent_end.skipped", {
+          reason: "bootstrap_turn",
+          head: turn.userText.slice(0, 60),
+        });
+        return;
+      }
+      const toolCalls = mergeToolCalls(
+        turn.toolCalls,
+        takeObservedToolCalls(sessionId, ctx.runId),
+      );
+      const isSubagentAnnouncement = isOpenClawSubagentAnnouncementPrompt(turn.userText);
+      const hasSubagentSpawn = toolCalls.some((tc) => tc.name === "sessions_spawn");
+
+      // Resolve (or lazily open) the target episode. Three cases:
+      //   1. `before_prompt_build` already ran this turn → we have the
+      //      routed episode binding for this run/user turn.
+      //   2. The host skipped `before_prompt_build` (e.g. /new with no
+      //      prompt build) → create an episode on the fly so the write
+      //      path has a real row to hang traces on.
+      //   3. Any failure here falls back to opening a new episode —
+      //      better to capture under a fresh id than to drop the turn.
+      let binding = findEpisodeBinding(sessionId, ctx, turn.userText);
+      let episodeId = binding?.episodeId;
+      if (!episodeId) {
+        if (isSubagentAnnouncement) {
+          opts.log.info("memos.agent_end.skipped", {
+            reason: "subagent_announcement_without_parent_episode",
+            sessionKey: ctx.sessionKey,
+          });
+          return;
+        }
+        await opts.core.openSession({ agent: opts.agent, sessionId, namespace, meta: { namespace } });
+        episodeId = await opts.core.openEpisode({
+          sessionId,
+          userMessage: turn.userText,
+        });
+        binding = rememberEpisodeBinding(sessionId, episodeId, ctx, turn.userText);
+      }
+
+      const turnResult: TurnResultDTO = {
+        agent: opts.agent,
+        namespace,
+        sessionId,
+        episodeId,
+        agentText: turn.agentText,
+        agentThinking: turn.agentThinking,
+        toolCalls,
+        reflection: turn.reflection,
+        contextHints: { namespace },
+        ts: now(),
+      };
+
+      const res = await opts.core.onTurnEnd(turnResult);
+      opts.log.info("memos.onTurnEnd", {
+        sessionKey: ctx.sessionKey,
+        agentId: ctx.agentId,
+        sessionId,
+        traceId: res.traceId,
+        episodeId: res.episodeId,
+        tools: toolCalls.length,
+        success: event.success,
+        durationMs: event.durationMs,
+      });
+
+      // Close the episode mapping so the next turn opens a fresh one
+      // (V7 §0.1 routes multi-turn continuation through the relation
+      // classifier, not through stickiness in this cache).
+      if (hasSubagentSpawn) {
+        pendingSubagentSessions.add(sessionId);
+      } else {
+        pendingSubagentSessions.delete(sessionId);
+        forgetEpisodeBinding(binding);
+      }
+
+      if (isExplicitOneShotSessionKey(ctx.sessionKey) && !hasSubagentSpawn) {
+        await opts.core.closeSession(sessionId);
+        messageCursor.delete(sessionId);
+        forgetSessionBindings(sessionId);
+        observedToolCallsBySession.delete(sessionId);
+        lastUserTextBySession.delete(sessionId);
+      }
+    } catch (err) {
+      opts.log.warn("memos.onTurnEnd.failed", {
+        err: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+    }
   }
 
   function handleBeforeToolCall(
