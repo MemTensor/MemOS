@@ -179,6 +179,12 @@ def timed_with_status(
                 if fallback is not None and callable(fallback):
                     result = fallback(e, *args, **kwargs)
                     return result
+                # No fallback: re-raise so callers see the real error instead of
+                # an implicit `None`. Without this, decorated functions silently
+                # swallow exceptions and return `None`, which downstream code
+                # then crashes on (e.g. `AttributeError: 'NoneType' object has
+                # no attribute ...`), hiding the real failure cause.
+                raise
             finally:
                 elapsed_ms = (time.perf_counter() - start) * 1000.0
 

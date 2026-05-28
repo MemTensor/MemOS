@@ -313,16 +313,38 @@ class TestTimedWithStatusRegression:
         assert "ok_func" in logs[0]
 
     def test_failure_logging_no_fallback(self, caplog):
+        """Without a fallback, the original exception must propagate (fail-fast)
+        and the FAILED log line must still be emitted by the finally block.
+
+        Regression test for the bug where `timed_with_status` silently swallowed
+        exceptions and returned `None` when no fallback was configured, masking
+        the real error and causing confusing `AttributeError: 'NoneType' ...`
+        crashes downstream.
+        """
+
         @timed_with_status
         def fail_func():
             raise RuntimeError("bad")
 
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.INFO), pytest.raises(RuntimeError, match="bad"):
             fail_func()
         logs = _collect_timer_with_status_logs(caplog)
         assert len(logs) == 1
         assert "status: FAILED" in logs[0]
         assert "RuntimeError" in logs[0]
+
+    def test_no_fallback_does_not_return_none(self, caplog):
+        """Explicit fail-fast check: a decorated function with no fallback
+        must not return `None` when the wrapped callable raises."""
+
+        @timed_with_status
+        def fail_func():
+            raise ValueError("explicit")
+
+        with caplog.at_level(logging.INFO), pytest.raises(ValueError, match="explicit"):
+            # If the decorator silently swallows the exception, the call would
+            # return `None` and pytest.raises would fail the test for us.
+            fail_func()
 
     def test_failure_with_fallback(self, caplog):
         @timed_with_status(fallback=lambda e, *a, **kw: "fallback_val")
