@@ -414,6 +414,11 @@ export function requireSession(
   // loopback callers only (local Python adapter, same machine, no
   // browser session). Remote callers on the hub's 0.0.0.0 binding
   // must still hold a valid session cookie.
+  //
+  // ASSUMPTION: the server binds directly (no reverse proxy). If a
+  // reverse proxy is ever added, socket.remoteAddress will be the
+  // proxy address and X-Forwarded-For must be consulted instead, or
+  // this loopback exemption will bypass auth for all proxy traffic.
   if (pathname.startsWith("/api/v1/auth/")) return true;
   if (pathname === "/api/v1/health") return true;
   if (pathname === "/api/v1/rpc") {

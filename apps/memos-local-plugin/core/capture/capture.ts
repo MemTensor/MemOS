@@ -33,6 +33,7 @@ import { extractSteps } from "./step-extractor.js";
 import { createSummarizer, type Summarizer } from "./summarizer.js";
 import { tagsForStep } from "./tagger.js";
 import { extractErrorSignatures } from "./error-signature.js";
+import { RECOVERY_REASONS } from "../pipeline/recovery-constants.js";
 import type {
   CaptureConfig,
   CaptureEvent,
@@ -402,7 +403,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       // genuinely missing traces. Inserting them would grow trace_ids_json,
       // keep reward.traceCount !== traceIds.length, and restart the recovery
       // loop on every bridge start.
-      if (input.episode.meta?.recoveryReason === "dirty_reward_rescore") {
+      if (input.episode.meta?.recoveryReason === RECOVERY_REASONS.DIRTY_REWARD_RESCORE) {
         log.warn("reflect.orphan_steps_skipped_recovery", {
           episodeId: input.episode.id,
           count: orphan.length,

@@ -26,6 +26,7 @@ import {
   __resetHostLlmBridgeForTests,
   type HostLlmBridge,
 } from "../../../core/llm/index.js";
+import { RECOVERY_REASONS } from "../../../core/pipeline/recovery-constants.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { makeTmpHome, type TmpHomeContext } from "../../helpers/tmp-home.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
@@ -1409,7 +1410,7 @@ algorithm:
       reward?: { traceCount?: number; traceIds?: string[] };
     };
     expect(meta.rewardDirty).toBeUndefined();
-    expect(meta.recoveryReason).toBe("dirty_reward_rescore");
+    expect(meta.recoveryReason).toBe(RECOVERY_REASONS.DIRTY_REWARD_RESCORE);
     expect(meta.reward?.traceCount).toBe(1);
     expect(meta.reward?.traceIds).toEqual(["tr_dirty"]);
   });
@@ -1501,7 +1502,7 @@ algorithm:
       recoveryReason?: string;
       reward?: { traceCount?: number; traceIds?: string[] };
     };
-    expect(meta.recoveryReason).toBe("dirty_reward_rescore");
+    expect(meta.recoveryReason).toBe(RECOVERY_REASONS.DIRTY_REWARD_RESCORE);
     expect(meta.reward?.traceCount).toBe(1);
     expect(meta.reward?.traceIds).toEqual(["tr_missing_reward"]);
   });

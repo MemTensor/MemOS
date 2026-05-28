@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -337,6 +338,108 @@ def shutdown_bridge() -> None:
     global _bridge_ok
     with _lock:
         _bridge_ok = None
+
+
+def probe_viewer_status() -> str:
+    """Return the current viewer daemon status without side effects.
+
+    Returns one of: ``"running_memos"``, ``"free"``, ``"blocked"``.
+    This is a cheap, lock-free probe suitable for deciding whether to
+    spawn a new stdio bridge or connect to the existing daemon over HTTP.
+    """
+    return _probe_viewer()
+
+
+def startup_lock_active() -> bool:
+    """Return True when the viewer-start.lock directory exists.
+
+    Used by the provider to skip the cold-start sleep when there is no
+    concurrent daemon launch in progress.
+    """
+    return (_plugin_root() / "daemon" / "viewer-start.lock").exists()
+
+
+def kill_zombie_bridges() -> int:
+    """Kill all bridge.cjs processes that are NOT the daemon on port 18800.
+
+    Returns the number of zombies killed. The daemon (the process that
+    owns port 18800) is left alone. This should be called early in the
+    provider's lifecycle to clean up leftovers from crashed sessions.
+    """
+    # Find the PID that owns port 18800 (the real daemon).
+    # ss(8) is Linux-only; fall back to lsof on macOS.
+    daemon_pid: int | None = None
+    try:
+        ss_out = subprocess.check_output(
+            ["ss", "-tlnp"],
+            timeout=2.0,
+            text=True,
+        )
+        for line in ss_out.splitlines():
+            if ":18800" in line:
+                # ss output: users:(("node",pid=21246,fd=24))
+                m = re.search(r"pid=(\d+)", line)
+                if m:
+                    daemon_pid = int(m.group(1))
+                    break
+    except Exception:
+        pass
+
+    if daemon_pid is None:
+        # macOS fallback — lsof is available on both Linux and macOS.
+        try:
+            lsof_out = subprocess.check_output(
+                ["lsof", "-iTCP:18800", "-sTCP:LISTEN", "-n", "-P"],
+                timeout=2.0,
+                text=True,
+            )
+            for line in lsof_out.splitlines()[1:]:  # skip header
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        daemon_pid = int(parts[1])
+                        break
+                    except ValueError:
+                        continue
+        except Exception:
+            pass
+
+    # If we still can't identify the daemon PID, skip killing entirely to
+    # avoid terminating the daemon itself.
+    if daemon_pid is None:
+        logger.debug("MemOS: zombie scan skipped — could not identify daemon PID on port 18800")
+        return 0
+
+    # Find all bridge.cjs processes
+    killed = 0
+    try:
+        ps_out = subprocess.check_output(
+            ["ps", "aux"],
+            timeout=2.0,
+            text=True,
+        )
+        for line in ps_out.splitlines():
+            if "bridge.cjs" not in line or "grep" in line:
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                pid = int(parts[1])
+            except ValueError:
+                continue
+            if pid == daemon_pid:
+                continue
+            try:
+                os.kill(pid, signal.SIGTERM)
+                killed += 1
+                logger.info("MemOS: killed zombie bridge pid=%d", pid)
+            except (OSError, ProcessLookupError):
+                pass
+    except Exception as err:
+        logger.debug("MemOS: zombie scan failed — %s", err)
+
+    return killed
 
 
 def wait_for_process_exit(pid: int, timeout: float = 5.0) -> bool:
