@@ -27,14 +27,17 @@ describe("retrieval/math-task", () => {
   });
 
   it("renders a non-benchmark-specific final-answer protocol", () => {
-    const protocol = renderMathFinalAnswerProtocol();
+    const protocol = renderMathFinalAnswerProtocol(
+      "How many routes are there in this finite graph? Compute the final answer.",
+    );
     expect(protocol).toContain("Standalone math task guardrails");
     expect(protocol).toContain("do not call `memos_search` just to look around");
     expect(protocol).toContain("exactly one real final answer");
     expect(protocol).toContain("code/execution tool");
     expect(protocol).toContain("exact DFS/DP/enumeration");
-    expect(protocol).toContain("larger bound");
-    expect(protocol).toContain("prints no useful result");
+    expect(protocol).toContain("larger bound only if both runs finish immediately");
+    expect(protocol).toContain("run at most one short exact script");
+    expect(protocol).toContain("Poll at most once");
     expect(protocol).toContain("finite vector-space or parity subset counts");
     expect(protocol).toContain("boundary or degenerate positions");
     const forbiddenTerms = [

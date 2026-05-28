@@ -1701,7 +1701,7 @@ export function createMemoryCore(
         query,
         hits: final.hits,
         injectedContext: standaloneMathFinalAnswer
-          ? mergeMathFinalAnswerProtocol(recalledContext)
+          ? mergeMathFinalAnswerProtocol(recalledContext, turn.userText)
           : recalledContext,
         tierLatencyMs: packet.tierLatencyMs,
       };

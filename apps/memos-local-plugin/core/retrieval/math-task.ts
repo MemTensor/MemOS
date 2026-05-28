@@ -17,7 +17,8 @@ export function isStandaloneMathFinalAnswerTask(text: string | undefined): boole
   return /\b(final answer|answer in|compute|find|determine|evaluate|solve|prove|what is)\b|\\boxed/.test(normalized);
 }
 
-export function renderMathFinalAnswerProtocol(): string {
+export function renderMathFinalAnswerProtocol(text?: string): string {
+  void text;
   return [
     MATH_FINAL_ANSWER_PROTOCOL_TITLE,
     "",
@@ -26,11 +27,12 @@ export function renderMathFinalAnswerProtocol(): string {
     "Final-answer contract: output exactly one real final answer in `\\boxed{...}`. Do not output a literal placeholder such as `\\boxed{...}`. Do not stop after a progress summary or a sentence about what you will do next.",
     "Do not emit `<think>` tags, hidden-reasoning wrappers, section-by-section progress summaries, or meta commentary. Write the concise solution steps needed to justify the answer, then end with the boxed answer.",
     "If uncertain, still compute to the best supported final answer instead of asking for more information or deferring the calculation.",
-    "If the host environment offers a code/execution tool and the task is a finite exact computation, run one short exact script or symbolic calculation before finalizing. This applies especially to explicit finite sums/products, small graph or route counts, reachability under deterministic operations, subset/vector-space counts, interpolation, recurrences, and large arithmetic. Do not use tools for broad browsing; use them only to compute or check the current problem.",
+    "If the host environment offers a code/execution tool and the task is a finite exact computation, run at most one short exact script or symbolic calculation before finalizing. This applies especially to explicit finite sums/products, small graph or route counts, reachability under deterministic operations, subset/vector-space counts, interpolation, recurrences, and large arithmetic. Do not use tools for broad browsing; use them only to compute or check the current problem.",
+    "The script must use only local computation, print the needed value, and be small enough to finish immediately. Do not launch broad brute-force searches over large state spaces.",
+    "If a script errors, times out, reports that it is still running, or prints no useful result, do not treat it as verification. Poll at most once, then kill or abandon it and finish by a checked manual derivation; do not start a second exploratory script.",
     "For finite graph/path/route tasks, do not rely only on symmetry or invariants; first verify with exact DFS/DP/enumeration when the state space is small enough, then explain the resulting count.",
-    "For reachability problems where intermediate states may exceed the target range, prefer a forward bounded search and repeat with a larger bound to check that the count inside the target range has stabilized; do not conclude all states are reachable from a reverse move that is only a preimage generator.",
+    "For reachability problems where intermediate states may exceed the target range, prefer a forward bounded search and repeat with a larger bound only if both runs finish immediately; do not conclude all states are reachable from a reverse move that is only a preimage generator.",
     "For explicit finite sums, products, or polynomial interpolation, compute the exact rational/symbolic value with a small script first, then give the algebraic justification.",
-    "If a verification script errors, times out, or prints no useful result, do not treat it as verification; fix the script or proceed with a clearly checked manual derivation.",
     "",
     "Use this compact checklist before finalizing:",
     "- First model the mathematical object structurally; do not reduce the task to an aggregate count until the construction is proved sufficient.",
@@ -42,9 +44,9 @@ export function renderMathFinalAnswerProtocol(): string {
   ].join("\n");
 }
 
-export function mergeMathFinalAnswerProtocol(context: string): string {
+export function mergeMathFinalAnswerProtocol(context: string, text?: string): string {
   if (context.includes(MATH_FINAL_ANSWER_PROTOCOL_TITLE)) return context;
-  const protocol = renderMathFinalAnswerProtocol();
+  const protocol = renderMathFinalAnswerProtocol(text);
   const trimmed = context.trim();
   if (!trimmed) return protocol;
   return `${trimmed}\n\n${protocol}`;
