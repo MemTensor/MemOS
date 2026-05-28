@@ -77,10 +77,15 @@ export function registerRpcRoutes(routes: Routes, deps: ServerDeps): void {
 
     // Batch support
     if (Array.isArray(parsed)) {
-      const results = await Promise.all(
+      const all = await Promise.all(
         parsed.map((item) => handleSingle(item, dispatch)),
       );
-      return results;
+      // Per JSON-RPC 2.0 §6: notifications produce no response object.
+      // Filter out undefined so they don't serialize as null.
+      const results = all.filter((r): r is JsonRpcResponse => r !== undefined);
+      // If every item was a notification, return nothing (204).
+      if (results.length === 0) return undefined as unknown as JsonRpcResponse;
+      return results as unknown as JsonRpcResponse;
     }
 
     return await handleSingle(parsed, dispatch);

@@ -253,4 +253,3 @@ apps/memos-local-plugin/bridge-status.json
 apps/memos-local-plugin/prod_check.cjs
 data.stale-backup/
 scripts/trigger-scoring.py
-data
