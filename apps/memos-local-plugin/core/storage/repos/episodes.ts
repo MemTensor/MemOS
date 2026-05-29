@@ -120,6 +120,18 @@ export function makeEpisodesRepo(db: StorageDb) {
       ).run({ id, meta: toJsonText(merged) });
     },
 
+    /**
+     * Lower the episode's `started_at` to an earlier value. Used by capture
+     * after a manual-replay path inserts trace rows whose historical `ts`
+     * predates the wall-clock `started_at` that was stamped when the
+     * gateway opened the episode. Never moves `started_at` forward.
+     */
+    setStartedAt(id: EpisodeId, ts: number): void {
+      db.prepare<{ id: string; ts: number }>(
+        `UPDATE episodes SET started_at=@ts WHERE id=@id AND started_at > @ts`,
+      ).run({ id, ts });
+    },
+
     appendTrace(id: EpisodeId, traceIds: string[]): void {
       appendTrace.run({ id, trace_ids_json: toJsonText(traceIds) });
     },

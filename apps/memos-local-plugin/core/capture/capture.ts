@@ -109,6 +109,29 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     deps.bus.emit(evt);
   }
 
+  // Per-episode serialization. Without this, two near-simultaneous
+  // callers (e.g. lite at turn.end + reflect at episode close, or two
+  // gateway workers racing on the same episode) each read the existing
+  // traces list BEFORE the other inserts — both compute the same "novel"
+  // step set and both insert, producing duplicate rows. Signature dedup
+  // closes most of this gap, but the mutex turns "mostly safe" into
+  // "actually safe" without paying for a DB unique index.
+  const episodeLocks = new Map<string, Promise<unknown>>();
+  function withEpisodeLock<T>(
+    episodeId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const prev = episodeLocks.get(episodeId) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    episodeLocks.set(
+      episodeId,
+      next.finally(() => {
+        if (episodeLocks.get(episodeId) === next) episodeLocks.delete(episodeId);
+      }),
+    );
+    return next;
+  }
+
   /**
    * Per-turn lite capture — see `CaptureRunner.runLite` for contract.
    * Extracts new steps from the episode, summarises + embeds them,
@@ -127,11 +150,17 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     });
 
     // ─── Extract + dedup (skip steps we've already written this episode) ──
+    //
+    // Dedup MUST read the full episode (listAllForEpisode, no pagination)
+    // and key on signature — not on `ts` alone. The previous (ts, list-50)
+    // combo silently re-inserted everything past the 50-row cap and any
+    // multi-step turn that collided on the same ms, producing triplet rows
+    // in the traces table (one per re-entry from lite / reflect / recovery).
     const extractStart = now();
     const rawAll = extractSteps(input.episode);
-    const existingTraces = deps.tracesRepo.list({ episodeId: input.episode.id });
-    const seenTs = new Set<number>(existingTraces.map((t) => t.ts));
-    const raw = rawAll.filter((s) => !seenTs.has(s.ts));
+    const existingTraces = deps.tracesRepo.listAllForEpisode(input.episode.id);
+    const seenSignatures = new Set<string>(existingTraces.map(traceIdentitySignature));
+    const raw = rawAll.filter((s) => !seenSignatures.has(stepIdentitySignature(s)));
     const extractMs = now() - extractStart;
     log.debug("stage.extract.done", {
       phase: "lite",
@@ -247,7 +276,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
 
     const extractStart = now();
     const rawAll = extractSteps(input.episode);
-    const existingTraces = deps.tracesRepo.list({ episodeId: input.episode.id });
+    const existingTraces = deps.tracesRepo.listAllForEpisode(input.episode.id);
     const seenTurnIds = new Set(
       existingTraces
         .map((t) => t.turnId)
@@ -384,13 +413,16 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const normalized = normalizeSteps(rawAll, deps.cfg);
     const normalizeMs = now() - normStart;
 
-    // Pair each normalized step with its already-persisted trace row
-    // (matched by ts). If runLite was skipped for any step, fall back
-    // to a fresh insert path so we don't lose data.
-    const existing = deps.tracesRepo.list({ episodeId: input.episode.id });
-    const traceByTs = new Map<number, (typeof existing)[number]>();
-    for (const tr of existing) traceByTs.set(tr.ts, tr);
-    const orphan = normalized.filter((s) => !traceByTs.has(s.ts));
+    // Pair each normalized step with its already-persisted trace row,
+    // matched by signature (NOT by ts — two trace rows can share a ts in
+    // multi-tool turns). If runLite was skipped for any step, fall back
+    // to a fresh insert path so we don't lose data. Full list (no pagination)
+    // is required: a 50-row cap caused the recovery path to mis-flag
+    // every step past row 50 as "orphan" and re-insert it.
+    const existing = deps.tracesRepo.listAllForEpisode(input.episode.id);
+    const traceBySignature = new Map<string, (typeof existing)[number]>();
+    for (const tr of existing) traceBySignature.set(traceIdentitySignature(tr), tr);
+    const orphan = normalized.filter((s) => !traceBySignature.has(stepIdentitySignature(s)));
     if (orphan.length > 0) {
       log.warn("reflect.orphan_steps", {
         episodeId: input.episode.id,
@@ -418,7 +450,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       const { vecs } = await runEmbed(orphanScored, summaries, warnings);
       const orphanRows = buildRows(orphanScored, summaries, vecs, input.episode);
       await persistRows(orphanRows, input, warnings);
-      for (const r of orphanRows) traceByTs.set(r.ts, r);
+      for (const r of orphanRows) traceBySignature.set(traceIdentitySignature(r), r);
     }
 
     if (normalized.length === 0) {
@@ -462,11 +494,11 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const persistStart = now();
     const patchedTraceIds: string[] = [];
     for (const s of scored) {
-      const row = traceByTs.get(s.ts);
+      const row = traceBySignature.get(stepIdentitySignature(s));
       if (!row) {
         warnings.push({
           stage: "persist",
-          message: "reflect: no trace row for step ts; skipping",
+          message: "reflect: no trace row for step signature; skipping",
           detail: { ts: s.ts, key: s.key },
         });
         continue;
@@ -507,7 +539,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // candidates carrying the freshly computed reflection + α; the
     // already-existing trace ids come from the matched DB rows.
     const traces: TraceCandidate[] = scored.map((s) => {
-      const row = traceByTs.get(s.ts);
+      const row = traceBySignature.get(stepIdentitySignature(s));
       return {
         ...s,
         traceId: (row?.id ?? "") as TraceId,
@@ -748,7 +780,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     warnings: CaptureResult["warnings"],
     opts: { skipActionVectorRetry?: boolean } = {},
   ): Promise<boolean> {
-    const existingBeforeInsert = deps.tracesRepo.list({ episodeId: input.episode.id });
+    const existingBeforeInsert = deps.tracesRepo.listAllForEpisode(input.episode.id);
     const seenSignatures = new Set(existingBeforeInsert.map(traceIdentitySignature));
     const uniqueRows = rows.filter((row) => {
       const signature = traceIdentitySignature(row);
@@ -791,13 +823,15 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         ? err
         : new MemosError(ERROR_CODES.INTERNAL, "capture.persist failed", failure);
     }
+    let canonicalIds: TraceId[] | null = null;
     try {
       const current = deps.episodesRepo.getById(input.episode.id) as EpisodeRow | null;
       const currentTraceIds = current?.traceIds ?? input.episode.traceIds;
-      deps.episodesRepo.updateTraceIds(
-        input.episode.id,
-        reconcileTraceIds([...currentTraceIds, ...rows.map((r) => r.id)], input.episode),
+      canonicalIds = reconcileTraceIds(
+        [...currentTraceIds, ...rows.map((r) => r.id)],
+        input.episode,
       );
+      deps.episodesRepo.updateTraceIds(input.episode.id, canonicalIds);
     } catch (err) {
       warnings.push({
         stage: "persist",
@@ -805,7 +839,174 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         detail: errDetail(err),
       });
     }
+    if (canonicalIds) {
+      try {
+        deleteOrphanTraces(input.episode.id, canonicalIds, warnings);
+      } catch (err) {
+        warnings.push({
+          stage: "persist",
+          message: "orphan-trace cleanup failed",
+          detail: errDetail(err),
+        });
+      }
+    }
+    // Manual-replay (gateway) opens the episode with a wall-clock
+    // `started_at` but writes trace rows whose `ts` is the historical
+    // tool-call time. Without this, the viewer shows "episode started 13:30"
+    // with traces stamped 13:17, which looks like the timeline is broken.
+    // Pull `started_at` back to the earliest persisted trace ts. Plain repo
+    // method `setStartedAt` only moves backwards, so live episodes keep
+    // their original opening time.
+    try {
+      const earliestTs = rows.reduce<number | null>(
+        (min, r) => (min == null || r.ts < min ? r.ts : min),
+        null,
+      );
+      if (earliestTs != null) {
+        deps.episodesRepo.setStartedAt(input.episode.id, earliestTs);
+      }
+    } catch (err) {
+      warnings.push({
+        stage: "persist",
+        message: "failed to backfill episode.started_at to earliest trace ts",
+        detail: errDetail(err),
+      });
+    }
     return true;
+  }
+
+  /**
+   * Remove trace rows belonging to `episodeId` that are NOT in the canonical
+   * `trace_ids_json` list. Such orphans arise from earlier capture-side bugs
+   * where dedup paginated to 50 rows and re-inserted everything past the cap.
+   * `reconcileTraceIds` already collapses them in the in-memory id list, but
+   * the underlying rows stay on disk and pollute viewer / retrieval. Logs
+   * every deletion so post-incident audits can quantify the cleanup.
+   */
+  function deleteOrphanTraces(
+    episodeId: CaptureInput["episode"]["id"],
+    canonicalIds: TraceId[],
+    warnings: CaptureResult["warnings"],
+  ): void {
+    const allRows = deps.tracesRepo.listAllForEpisode(episodeId);
+
+    // Guard 1 — empty canonical + non-empty DB. Most likely a transient
+    // `getManyByIds` failure inside `reconcileTraceIds`. Refuse to delete
+    // everything; the next capture pass will reconcile correctly.
+    if (canonicalIds.length === 0 && allRows.length > 0) {
+      log.warn("capture.orphan_traces.skipped_empty_canonical", {
+        episodeId,
+        existingRowCount: allRows.length,
+        reason: "canonical list empty but DB has traces — refusing to delete all",
+      });
+      warnings.push({
+        stage: "persist",
+        message: "skipped orphan cleanup: canonical list empty, DB non-empty",
+        detail: { episodeId, existingRowCount: allRows.length },
+      });
+      return;
+    }
+
+    const canonical = new Set<string>(canonicalIds);
+    const nonCanonical = allRows.filter((row) => !canonical.has(row.id));
+    if (nonCanonical.length === 0) return;
+
+    // Guard 2 — signature gate. Only delete a non-canonical row when its
+    // signature is ALREADY represented by some canonical row. That row is
+    // then provably a duplicate produced by the legacy pagination bug
+    // (lite/reflect re-inserted past row 50). Non-canonical rows with a
+    // unique signature might be legitimate steps that an earlier reconcile
+    // failed to register — preserve those and log so an operator can
+    // investigate / manually re-attach.
+    const canonicalSignatures = new Set<string>(
+      allRows
+        .filter((row) => canonical.has(row.id))
+        .map((row) => traceIdentitySignature(row)),
+    );
+    const orphans: typeof nonCanonical = [];
+    const preserved: typeof nonCanonical = [];
+    for (const row of nonCanonical) {
+      const sig = traceIdentitySignature(row);
+      if (canonicalSignatures.has(sig)) orphans.push(row);
+      else preserved.push(row);
+    }
+
+    if (preserved.length > 0) {
+      log.warn("capture.orphan_traces.preserved_unique", {
+        episodeId,
+        preservedCount: preserved.length,
+        canonicalCount: canonicalIds.length,
+        preservedIds: preserved.slice(0, 20).map((r) => r.id),
+        truncated: preserved.length > 20,
+        hint: "non-canonical rows with unique signatures kept; consider re-attaching",
+      });
+      warnings.push({
+        stage: "persist",
+        message: "preserved non-canonical traces with unique signatures",
+        detail: { episodeId, preserved: preserved.length },
+      });
+    }
+
+    if (orphans.length === 0) return;
+
+    // Guard 3 — mass-delete circuit breaker. If a future bug makes most
+    // rows look like duplicates, refuse to delete and force operator
+    // attention. Triplet recovery on a typical episode deletes < 60% of
+    // the episode (e.g. 85/178 in the django__django-16082 case = 48%).
+    // Anything above 80% is suspicious enough to halt and ask.
+    const totalRows = allRows.length;
+    const deleteRatio = orphans.length / totalRows;
+    const MAX_DELETE_RATIO = 0.8;
+    if (deleteRatio > MAX_DELETE_RATIO) {
+      log.error("capture.orphan_traces.refused_mass_delete", {
+        episodeId,
+        wouldDelete: orphans.length,
+        totalRows,
+        canonicalCount: canonicalIds.length,
+        deleteRatio,
+        threshold: MAX_DELETE_RATIO,
+        sampleOrphanIds: orphans.slice(0, 20).map((r) => r.id),
+      });
+      warnings.push({
+        stage: "persist",
+        message: "refused orphan cleanup: delete ratio exceeds safety threshold",
+        detail: {
+          episodeId,
+          wouldDelete: orphans.length,
+          totalRows,
+          deleteRatio,
+          threshold: MAX_DELETE_RATIO,
+        },
+      });
+      return;
+    }
+
+    log.warn("capture.orphan_traces.cleanup", {
+      episodeId,
+      orphanCount: orphans.length,
+      canonicalCount: canonicalIds.length,
+      totalRows,
+      orphanIds: orphans.slice(0, 20).map((r) => r.id),
+      truncated: orphans.length > 20,
+    });
+    let deleted = 0;
+    for (const row of orphans) {
+      try {
+        deps.tracesRepo.deleteById(row.id);
+        deleted += 1;
+      } catch (err) {
+        log.warn("capture.orphan_traces.delete_failed", {
+          episodeId,
+          traceId: row.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    warnings.push({
+      stage: "persist",
+      message: "deleted duplicate trace rows not in canonical list",
+      detail: { episodeId, deleted, attempted: orphans.length },
+    });
   }
 
   function reconcileTraceIds(traceIds: TraceId[], episode: CaptureInput["episode"]): TraceId[] {
@@ -991,7 +1192,11 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     });
   }
 
-  return { runLite, runLightweight, runReflect };
+  return {
+    runLite: (input) => withEpisodeLock(input.episode.id, () => runLite(input)),
+    runLightweight: (input) => withEpisodeLock(input.episode.id, () => runLightweight(input)),
+    runReflect: (input) => withEpisodeLock(input.episode.id, () => runReflect(input)),
+  };
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
