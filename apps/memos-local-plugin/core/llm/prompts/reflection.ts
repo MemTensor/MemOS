@@ -13,7 +13,7 @@ import type { PromptDef } from "./index.js";
  */
 export const BATCH_REFLECTION_PROMPT: PromptDef = {
   id: "reflection.batch",
-  version: 9,
+  version: 10,
   description:
     "Tri-valued path-relevance scoring for each step in an episode window.",
   system: `You are reviewing a WINDOW of one AI agent episode.
@@ -44,18 +44,32 @@ Scoring rubric (apply in order: IRRELEVANT vs on-path, then RELATED vs PIVOTAL):
 - RELATED => any step that is useful and on the task path. This is the default
   for on-path work. Do NOT reserve RELATED only for "deletable" steps; many
   RELATED steps are necessary, and deletion cost is NOT the criterion.
-- PIVOTAL => a strict subset of RELATED: mark PIVOTAL only when the step is
-  a path-critical turning point or foundational decision for the episode.
-  Prefer few PIVOTAL labels per window. Typical PIVOTAL cases:
+- PIVOTAL => a strict subset of RELATED. Prefer few PIVOTAL labels per window.
+  Mark PIVOTAL when the step establishes or turns the episode's working
+  direction — the idea, tone, or technical approach that LATER steps actually
+  run on. Ask: "Did this step set or redirect how the agent proceeded afterward?"
+  Typical PIVOTAL cases:
     * Prior exploration failed or stalled; this step finds the correct
       approach, root cause, or workable fix that later steps build on.
-    * The step establishes the episode's core plan, architecture, constraints,
-      or governing principles that shape how the rest of the task runs.
+    * The step locks in the episode's core plan, architecture, constraints,
+      or governing principles before substantial execution continues.
+    * The step is a genuine turning point: afterward the trajectory is
+      materially different because of what was decided or discovered here.
   Do NOT use counterfactual deletion ("if removed, major rework/failure") as
   the main test — many RELATED steps would also be costly to remove. Reserve
-  PIVOTAL for steps that change direction or set the backbone of the solution,
+  PIVOTAL for direction-setting or turning points with downstream influence,
   not for routine on-path execution (reading files, minor edits, status updates,
   generic tool calls that merely continue an already-correct plan).
+
+  Final assistant text is NOT banned from PIVOTAL. A closing assistant-only
+  step CAN be PIVOTAL when it is the step that first commits the approach
+  (plan anchor, key constraint, or decisive strategy) that the rest of the
+  episode then executes. Label it RELATED instead when earlier steps in the
+  SAME window already did the substantive work (edits, patches, tests, file
+  writes) and this step mainly narrates, summarizes, or marks completion
+  (e.g. "Changes made:", "TASK_COMPLETE") without being the basis the run
+  was built on. In that pattern the pivotal work usually lives in an earlier
+  tool or decision step, not the recap at the end.
 
 Calibration examples (PIVOTAL is RELATIVE to prior steps in the window —
 look at the sequence, not the step in isolation):
@@ -91,6 +105,16 @@ Sequence C — routine on-path, NO PIVOTAL needed:
           -> RELATED, reason "VERIFY"
   (Linear execution with no turning point. A window can legitimately
   contain zero PIVOTAL steps — do NOT force one.)
+
+Sequence D — post-hoc recap after execution (do NOT PIVOTAL the recap):
+  steps 0–29: many tool calls — read files, apply patch, run tests
+          -> RELATED, reason "EXECUTION"
+  step 30: assistant-only text summarizing the fix already made and
+            listing "Changes made:" / TASK_COMPLETE
+          -> RELATED, reason "SUMMARY"
+          (the run was already carried out by prior tool steps; this text
+          does not establish the approach — it reports it. PIVOTAL belongs
+          on the step that first introduced the fix, e.g. the patch/write.)
 
 Output: a JSON object \`{"scores": [...]}\` with exactly one entry per input
 step, in input order — no skips, no extras. Each entry:
