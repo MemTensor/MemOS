@@ -64,7 +64,7 @@ if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
 from bridge_client import BridgeError, MemosBridgeClient, MemosHttpClient  # noqa: E402
-from daemon_manager import ensure_bridge_running, ensure_viewer_daemon, probe_viewer_status, kill_zombie_bridges, startup_lock_active  # noqa: E402
+from daemon_manager import ensure_bridge_running, ensure_viewer_daemon, probe_viewer_status, kill_zombie_bridges  # noqa: E402
 
 
 try:  # pragma: no cover — host-provided base class, absent in unit tests
@@ -355,12 +355,9 @@ class MemTensorProvider(MemoryProvider):
             else:
                 viewer_status = "free"  # force stdio fallback below
         elif viewer_status == "free":
-            # Re-probe after a short wait only when another process may be
-            # mid-startup (startup lock is held). On a cold first-launch the
-            # lock doesn't exist, so we skip the delay entirely.
-            if startup_lock_active():
-                time.sleep(1.0)
-                viewer_status = probe_viewer_status()
+            # Brief wait: another process may be about to bind the port.
+            time.sleep(0.5)
+            viewer_status = probe_viewer_status()
             if viewer_status == "running_memos":
                 if self._connect_http_bridge(session_id):
                     logger.info(
@@ -374,30 +371,38 @@ class MemTensorProvider(MemoryProvider):
                 ensure_viewer_daemon()
             except Exception as err:
                 logger.warning("MemOS: viewer daemon check failed — %s", err)
-            new_bridge: MemosBridgeClient | None = None
-            try:
-                new_bridge = MemosBridgeClient()
-                # Register the fallback LLM handler BEFORE we open the
-                # session so it is available the very first time the
-                # plugin's facade asks for help (e.g. on the first
-                # `turn.start` retrieval call).
-                new_bridge.register_host_handler(
-                    "host.llm.complete",
-                    self._handle_host_llm_complete,
-                )
-                self._bridge = new_bridge
-                self._open_session(session_id, timeout=60.0)
-                logger.info(
-                    "MemOS: bridge ready (stdio) session=%s platform=%s (episode deferred)",
-                    self._session_id,
-                    self._platform,
-                )
-            except Exception as err:
-                logger.warning("MemOS: bridge init failed — %s", err)
-                if new_bridge is not None:
-                    with contextlib.suppress(Exception):
-                        new_bridge.close()
-                self._bridge = None
+
+            # Re-probe: daemon may have just started — try HTTP before stdio.
+            if self._bridge is None:
+                viewer_status = probe_viewer_status()
+                if viewer_status == "running_memos":
+                    self._connect_http_bridge(session_id)
+
+            if self._bridge is None:
+                new_bridge: MemosBridgeClient | None = None
+                try:
+                    new_bridge = MemosBridgeClient()
+                    # Register the fallback LLM handler BEFORE we open the
+                    # session so it is available the very first time the
+                    # plugin's facade asks for help (e.g. on the first
+                    # `turn.start` retrieval call).
+                    new_bridge.register_host_handler(
+                        "host.llm.complete",
+                        self._handle_host_llm_complete,
+                    )
+                    self._bridge = new_bridge
+                    self._open_session(session_id, timeout=60.0)
+                    logger.info(
+                        "MemOS: bridge ready (stdio) session=%s platform=%s (episode deferred)",
+                        self._session_id,
+                        self._platform,
+                    )
+                except Exception as err:
+                    logger.warning("MemOS: bridge init failed — %s", err)
+                    if new_bridge is not None:
+                        with contextlib.suppress(Exception):
+                            new_bridge.close()
+                    self._bridge = None
         # Register a Hermes plugin hook to capture tool calls as they
         # happen. The `post_tool_call` hook fires after every tool
         # dispatch (write_file, terminal, search_files, etc.) with the
@@ -1813,6 +1818,14 @@ class MemTensorProvider(MemoryProvider):
                 ensure_viewer_daemon()
             except Exception as err:
                 logger.warning("MemOS: viewer daemon check failed during reconnect — %s", err)
+
+            # Re-probe: daemon may have just started — try HTTP before stdio.
+            viewer_status = probe_viewer_status()
+            if viewer_status == "running_memos":
+                if self._connect_http_bridge(session_id, timeout=timeout):
+                    logger.info("MemOS: reconnected via HTTP (post-daemon start)")
+                    return
+
             new_bridge: MemosBridgeClient | None = None
             try:
                 new_bridge = MemosBridgeClient()
