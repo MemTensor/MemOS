@@ -136,7 +136,9 @@ export async function batchScoreReflections(
         source: "none",
       };
     }
-    const label = mapRawRelevance(raw.relevance);
+    const baseLabel = mapRawRelevance(raw.relevance);
+    const socialOnly = isSocialOnlyStep(input.step);
+    const label: ReflectionScore["text"] = socialOnly ? "IRRELEVANT" : baseLabel;
     const alpha = alphaForReflection(label);
     const reason = sanitizeReason(raw.reason);
     if (reason === null) missingReasonCount += 1;
@@ -144,7 +146,7 @@ export async function batchScoreReflections(
       text: label,
       alpha,
       usable: alpha > 0,
-      reason,
+      reason: socialOnly ? "SOCIAL_ONLY" : reason,
       source: "synth",
       model: rsp.servedBy,
     };
@@ -275,4 +277,17 @@ function sanitizeReason(value: unknown): string | null {
   const cleaned = sanitizeDerivedText(value).trim();
   if (!cleaned) return null;
   return cleaned.slice(0, 80);
+}
+
+function isSocialOnlyStep(step: NormalizedStep): boolean {
+  if (step.toolCalls.length > 0) return false;
+  const combined = `${step.userText}\n${step.agentText}\n${step.agentThinking ?? ""}`.toLowerCase();
+  if (!combined.trim()) return false;
+
+  const socialPattern =
+    /(谢谢|感谢|辛苦|棒|很好|很对|厉害|夸奖|客气|不用谢|再见|拜拜|你好|您好|早上好|晚上好|thank(s| you)?|appreciate|great job|well done|awesome|nice|you're welcome|no problem|bye|goodbye|hello|hi)/i;
+  const taskSignalPattern =
+    /(修复|实现|改|更新|测试|报错|错误|命令|脚本|代码|函数|文件|数据库|sql|trace|episode|reward|reflection|alpha|value|fix|implement|update|test|error|command|script|code|function|file|db|database|query|bug|issue|task)/i;
+
+  return socialPattern.test(combined) && !taskSignalPattern.test(combined);
 }

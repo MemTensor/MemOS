@@ -166,7 +166,7 @@ describe("capture/pipeline (windowed binary path)", () => {
     });
   }
 
-  it("single window writes RELATED/IRRELEVANT with alpha 1/0", async () => {
+  it("single window writes tri-valued reflections and social fallback", async () => {
     const llm = fakeLlm({
       completeJson: {
         [batchOp]: {
@@ -205,8 +205,8 @@ describe("capture/pipeline (windowed binary path)", () => {
     expect(rows[0]!.alpha).toBe(0.5);
     expect(rows[1]!.reflection).toBe("IRRELEVANT");
     expect(rows[1]!.alpha).toBe(0);
-    expect(rows[2]!.reflection).toBe("PIVOTAL");
-    expect(rows[2]!.alpha).toBe(1);
+    expect(rows[2]!.reflection).toBe("IRRELEVANT");
+    expect(rows[2]!.alpha).toBe(0);
   });
 
   it("window overlap conflict uses alpha=1 override", async () => {

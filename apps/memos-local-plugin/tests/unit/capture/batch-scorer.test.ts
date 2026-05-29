@@ -186,4 +186,31 @@ describe("batchScoreReflections", () => {
     expect(out.scores[0]!.text).toBe("PIVOTAL");
     expect(out.scores[0]!.alpha).toBe(1);
   });
+
+  it("forces social-only turns to IRRELEVANT as fallback", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [BATCH_OP_TAG]: {
+          scores: [{ idx: 0, relevance: "PIVOTAL", reason: "TURNING_POINT" }],
+        },
+      },
+    });
+    const out = await batchScoreReflections(
+      llm,
+      [
+        input(
+          step({
+            userText: "你做的很对，运行起来也很流畅，棒！",
+            agentText: "谢谢夸奖！有需要随时说。",
+            toolCalls: [],
+          }),
+          null,
+        ),
+      ],
+      {},
+    );
+    expect(out.scores[0]!.text).toBe("IRRELEVANT");
+    expect(out.scores[0]!.alpha).toBe(0);
+    expect(out.scores[0]!.reason).toBe("SOCIAL_ONLY");
+  });
 });
