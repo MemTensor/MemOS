@@ -322,24 +322,27 @@ async function main(): Promise<void> {
     });
   }
 
-  try {
-    await core.init();
-  } catch (err) {
-    bridgeHeartbeat?.stop();
-    if (stdio) {
-      try {
-        await stdio.close();
-      } catch {
-        /* best-effort */
-      }
-    }
-    throw err;
-  }
-
   // ─── Daemon mode ──────────────────────────────────────────────
   // When started with `--daemon`, skip stdio and run as a pure HTTP
   // viewer daemon. Used by install.sh (post-install) and admin/restart
   // (self-restart) to keep the Memory Viewer always available.
+  //
+  // IMPORTANT: The HTTP server is started BEFORE `core.init()` so that
+  // health probes (`/api/v1/ping`, `/api/v1/health`) are answered
+  // immediately. `core.init()` may block on LLM-backed recovery tasks
+  // (dirty closed episode rescoring) for tens of seconds or longer when
+  // the API is rate-limited. If the server doesn't bind its port in
+  // time, the Hermes daemon manager sees the port as "free" and spawns
+  // a replacement — which kills this process and repeats the cycle,
+  // creating a zombie process avalanche that exhausts the LLM API
+  // rate limit across all concurrent processes.
+  //
+  // By starting the server first:
+  //   1. The daemon manager's port probe succeeds immediately
+  //   2. The viewer serves cached data from the bootstrapped SQLite DB
+  //   3. Background recovery completes asynchronously and becomes
+  //      visible in the viewer when done
+  //   4. Only one bridge process exists at a time
   if (args.daemon) {
     // Daemon mode is the target of `POST /api/v1/admin/restart`,
     // which re-spawns the bridge after a short sleep. On busy
@@ -395,6 +398,28 @@ async function main(): Promise<void> {
       }
     }
 
+    // Run core.init() in the background. The server is already
+    // listening and can serve cached data from the bootstrapped
+    // SQLite database. Background recovery (orphan episode
+    // finalization, dirty episode rescoring) runs asynchronously
+    // and its results become visible in the viewer when complete.
+    // If init fails, the viewer continues in degraded mode — cached
+    // data is still available, but new capture/recovery won't run.
+    void core
+      .init()
+      .then(() => {
+        process.stderr.write(
+          `bridge: daemon core.init() completed (background recovery done)\n`,
+        );
+      })
+      .catch((err) => {
+        const detail =
+          err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          `bridge: daemon core.init() failed — viewer continues in degraded mode: ${detail}\n`,
+        );
+      });
+
     const shutdownDaemon = async (sig: string) => {
       process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
       removeOwnedPidFile();
@@ -406,6 +431,24 @@ async function main(): Promise<void> {
     process.on("SIGTERM", () => void shutdownDaemon("SIGTERM"));
     // Process stays alive via the HTTP server's ref'd socket.
     return;
+  }
+
+  // ─── Normal (stdio) mode: await core.init() ───────────────────
+  // In stdio mode we await init so that host fallback is available
+  // during startup recovery. The stdio server was already started
+  // above so the fallback transport is ready.
+  try {
+    await core.init();
+  } catch (err) {
+    bridgeHeartbeat?.stop();
+    if (stdio) {
+      try {
+        await stdio.close();
+      } catch {
+        /* best-effort */
+      }
+    }
+    throw err;
   }
 
   // ─── Normal (stdio) mode ──────────────────────────────────────
