@@ -2,7 +2,7 @@
 Unit tests for MOSMCPServer — specifically the search_memories tool.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -74,9 +74,7 @@ async def test_search_memories_no_filter_arg(mcp_server, mock_mos):
 async def test_search_memories_passes_user_and_cube_ids(mcp_server, mock_mos):
     """search_memories forwards user_id and cube_ids to mos_core.search."""
     search_fn = mcp_server._tools["search_memories"]
-    result = await search_fn(
-        query="q", user_id="u1", cube_ids=["c1", "c2"], filter={}
-    )
+    result = await search_fn(query="q", user_id="u1", cube_ids=["c1", "c2"], filter={})
 
     mock_mos.search.assert_called_once_with("q", "u1", ["c1", "c2"])
     assert "error" not in result
