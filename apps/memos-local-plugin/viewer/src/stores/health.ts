@@ -42,6 +42,8 @@ export interface ModelCallStatus {
 
 export interface HealthPayload {
   ok: boolean;
+  /** True only after core.init() has fully wired all pipeline subscribers. */
+  pipelineReady?: boolean;
   version?: string;
   uptimeMs?: number;
   agent?: string;
@@ -77,7 +79,7 @@ async function tick(): Promise<void> {
   try {
     const data = await api.get<HealthPayload>("/api/v1/health");
     health.value = data;
-    healthStatus.value = data.ok ? "ok" : "degraded";
+    healthStatus.value = !data.ok ? "degraded" : data.pipelineReady === false ? "degraded" : "ok";
   } catch {
     health.value = null;
     healthStatus.value = "down";
