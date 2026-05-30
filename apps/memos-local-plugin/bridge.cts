@@ -414,7 +414,7 @@ async function main(): Promise<void> {
     // INIT_WATCHDOG_MS, the bridge appears healthy (HTTP serving) but the
     // scoring pipeline is never wired. Force-exit so the gateway respawns
     // a fresh bridge rather than silently dropping all scoring for hours.
-    const INIT_WATCHDOG_MS = 120_000;
+    const INIT_WATCHDOG_MS = config.bridge.initWatchdogMs;
     void (async () => {
       const result = await Promise.race([
         core.init().then(() => "done" as const),

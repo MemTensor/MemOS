@@ -21,6 +21,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   bridge: {
     port: 18911,
     mode: "stdio",
+    initWatchdogMs: 120_000,
   },
   embedding: {
     provider: "local",
