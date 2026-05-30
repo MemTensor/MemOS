@@ -1237,6 +1237,7 @@ export function createMemoryCore(
     episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
     log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
+    const rescored: EpisodeId[] = [];
     for (const ep of episodes) {
       if (isLightweightEpisode(ep)) continue;
       const episodeId = ep.id as EpisodeId;
@@ -1254,6 +1255,17 @@ export function createMemoryCore(
         episode: snapshot,
         closedBy: "finalized",
       });
+      rescored.push(episodeId);
+    }
+    // Drain the capture pass (patches reflections + α onto existing traces).
+    await handle.flush();
+    // In lightweight mode flush() returns before draining the reward
+    // subscriber. Explicitly run reward for any episode whose trace count
+    // still mismatches — mirrors the pattern in recoverOpenEpisodesAsSessionEnd.
+    for (const episodeId of rescored) {
+      if (episodeRewardIsDirty(handle.repos.episodes.getById(episodeId) ?? {} as never)) {
+        await handle.rewardRunner.run({ episodeId, feedback: [], trigger: "manual" });
+      }
     }
     await handle.flush();
   }
