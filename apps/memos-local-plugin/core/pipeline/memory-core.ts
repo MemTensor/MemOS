@@ -1246,6 +1246,7 @@ export function createMemoryCore(
         closeReason: "finalized",
         recoveredAtStartup: endedAt,
         recoveryReason: "dirty_reward_rescore",
+        rewardDirty: undefined,
       });
       const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
         recoveryReason: "dirty_reward_rescore",
