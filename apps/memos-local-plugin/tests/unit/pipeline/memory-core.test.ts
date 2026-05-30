@@ -1505,4 +1505,189 @@ algorithm:
     expect(meta.reward?.traceCount).toBe(1);
     expect(meta.reward?.traceIds).toEqual(["tr_missing_reward"]);
   });
+
+  it("dirty-reward recovery does not insert orphan traces (regression: rescore loop guard)", async () => {
+    // Regression test for the rescore loop:
+    // When recoverDirtyClosedEpisodes re-emits episode.finalized, capture's
+    // runReflect used to insert new trace rows for "orphan steps" — steps
+    // whose timestamps didn't match any existing DB row.  For recovered
+    // episodes this happens whenever a trace has tool calls with endedAt
+    // timestamps different from the trace's own ts, because the snapshot
+    // rebuilds a separate tool-role turn for each call.
+    //
+    // Without the guard the orphan insert grows trace_ids_json, keeping
+    // reward.traceCount != traceIds.length forever and looping on every
+    // bridge restart.  The guard (meta.recoveryReason === "dirty_reward_rescore")
+    // skips the insert, so trace_ids_json stays stable and the episode
+    // stops appearing dirty after a single recovery pass.
+
+    home = await makeTmpHome({ agent: "openclaw" });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "rescore-loop-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const BASE = Date.now() - 5_000;
+
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_loop", "openclaw", BASE, BASE, "{}");
+
+    // Episode is dirty: traceCount=1 but trace_ids_json has 2 IDs.
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_loop",
+        "se_loop",
+        BASE,
+        BASE + 1,
+        JSON.stringify(["tr_loop_a", "tr_loop_b"]),
+        0.5,
+        JSON.stringify({
+          closeReason: "finalized",
+          reward: { rHuman: 0.5, scoredAt: BASE - 1000, traceCount: 1 },
+        }),
+      );
+
+    // tr_loop_a: plain text trace — no orphan risk.
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_loop_a",
+        "ep_loop",
+        "se_loop",
+        BASE,
+        "帮我分析一下这段Python代码的性能瓶颈，并给出优化建议。",
+        "这段代码的主要性能问题在于嵌套循环，时间复杂度是O(n²)，可以用哈希表将其优化到O(n)。",
+        "Python代码性能分析",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        BASE,
+        1,
+      );
+
+    // tr_loop_b: trace with a tool call whose endedAt differs from the trace ts.
+    // snapshotFromRecoveredEpisode creates a tool-role turn with ts=BASE+300,
+    // which does NOT appear in traceByTs (only BASE and BASE+100 are in the map).
+    // Without the guard this step is treated as an orphan and a new trace is
+    // inserted, growing trace_ids_json from 2 to 3 and keeping the episode dirty.
+    const toolCallWithDifferentTs = JSON.stringify([
+      {
+        name: "bash",
+        input: { command: "python -c 'import cProfile; cProfile.run(\"main()\")'"},
+        output: "ncalls tottime ... main 1 0.003",
+        endedAt: BASE + 300,
+      },
+    ]);
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_loop_b",
+        "ep_loop",
+        "se_loop",
+        BASE + 100,
+        "请用cProfile验证一下",
+        "运行结果确认了瓶颈在内层循环，优化后耗时减少了约80%。",
+        "cProfile性能验证",
+        toolCallWithDifferentTs,
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        BASE + 100,
+        1,
+      );
+    writeDb.close();
+
+    // First recovery: episode is dirty (traceCount=1 != ids_len=2).
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "rescore-loop-recover-1",
+    });
+    await core.init();
+    await core.shutdown();
+    core = null;
+
+    const readDb1 = new Sqlite(home.home.dbFile, { readonly: true });
+    const ep1 = readDb1
+      .prepare("SELECT trace_ids_json, meta_json, r_task FROM episodes WHERE id = ?")
+      .get("ep_loop") as { trace_ids_json: string; meta_json: string; r_task: number | null } | undefined;
+    readDb1.close();
+
+    expect(ep1).toBeDefined();
+    const ids1 = JSON.parse(ep1!.trace_ids_json) as string[];
+    // Guard: no orphan trace was inserted during dirty-reward recovery.
+    expect(ids1.length).toBe(2);
+    const meta1 = JSON.parse(ep1!.meta_json) as {
+      recoveryReason?: string;
+      reward?: { traceCount?: number };
+    };
+    expect(meta1.recoveryReason).toBe(RECOVERY_REASONS.DIRTY_REWARD_RESCORE);
+    // After recovery traceCount matches ids_len: episode is no longer dirty.
+    expect(meta1.reward?.traceCount).toBe(2);
+
+    // Second recovery (simulates next bridge restart): episode should not
+    // be re-scored because traceCount(2) == trace_ids_json.length(2).
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "rescore-loop-recover-2",
+    });
+    await core.init();
+
+    const readDb2 = new Sqlite(home.home.dbFile, { readonly: true });
+    const ep2 = readDb2
+      .prepare("SELECT trace_ids_json, meta_json FROM episodes WHERE id = ?")
+      .get("ep_loop") as { trace_ids_json: string; meta_json: string } | undefined;
+    readDb2.close();
+
+    expect(ep2).toBeDefined();
+    const ids2 = JSON.parse(ep2!.trace_ids_json) as string[];
+    // Still 2 — no new orphan inserts on the second restart.
+    expect(ids2.length).toBe(2);
+    const meta2 = JSON.parse(ep2!.meta_json) as {
+      reward?: { traceCount?: number };
+    };
+    // traceCount unchanged: the episode was not re-scored.
+    expect(meta2.reward?.traceCount).toBe(2);
+  });
 });
