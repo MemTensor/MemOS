@@ -110,6 +110,18 @@ export interface SessionRoutingConfig {
    * new-episode boundary even for revision/follow_up verdicts.
    */
   mergeMaxGapMs: number;
+  /**
+   * Hard cap on turns in a merged episode. Once reached, the next turn
+   * forces a topic boundary before appending to keep topic-end work bounded.
+   */
+  maxTurnsPerEpisode: number;
+  /**
+   * Max time to wait for relation classification before defaulting to
+   * a conservative new-task boundary.
+   */
+  classifyTimeoutMs: number;
+  /** Shared LLM concurrency budget for async background subscribers. */
+  bgLlmConcurrency: number;
 }
 
 // ─── Dependency graph ─────────────────────────────────────────────────────
