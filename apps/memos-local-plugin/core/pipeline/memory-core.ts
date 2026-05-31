@@ -1171,7 +1171,15 @@ export function createMemoryCore(
           continue;
         }
 
-        const snapshot = snapshotFromRecoveredEpisode(ep, endedAt);
+        // Pre-stamp before emitting finalized: if the watchdog fires mid-scoring,
+        // the next startup's condition-4 check will see DIRTY_REWARD_RESCORE and
+        // skip this episode rather than looping indefinitely.
+        handle.repos.episodes.updateMeta(episodeId, {
+          recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
+        });
+        const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
+          recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
+        });
         debugStartupRecovery("H3", "startup_recovery_emit_finalized", {
           episodeId,
           sessionId: ep.sessionId,
@@ -1298,7 +1306,14 @@ export function createMemoryCore(
     if (
       ep.rTask == null &&
       (ep.traceIds?.length ?? 0) > 0 &&
-      (meta.closeReason === "finalized" || meta.recoveryReason === "missed_session_end")
+      // Episodes already attempted by a recovery path carry recoveryReason "dirty_reward_rescore".
+      // Excluding them prevents a crash-respawn loop when the watchdog fires
+      // mid-scoring and leaves rTask null: without this guard the next startup
+      // would re-pick the episode via closeReason="finalized" indefinitely.
+      meta.recoveryReason !== "dirty_reward_rescore" &&
+      (meta.closeReason === "finalized" ||
+        meta.closeReason === "abandoned" ||
+        meta.recoveryReason === "missed_session_end")
     ) {
       return true;
     }
