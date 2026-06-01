@@ -101,6 +101,11 @@ import {
 } from "../runtime/namespace.js";
 import { createHubRuntime, type HubMemorySearchHit, type HubRuntime } from "../hub/runtime.js";
 import { llmFilterCandidates } from "../retrieval/llm-filter.js";
+import {
+  isStandaloneMathFinalAnswerTask,
+  mergeMathFinalAnswerProtocol,
+  STANDALONE_MATH_FINAL_ANSWER_TASK_KIND,
+} from "../retrieval/math-task.js";
 import type { RankedCandidate } from "../retrieval/ranker.js";
 import type {
   RetrievalConfig,
@@ -819,6 +824,11 @@ export function createMemoryCore(
       snippet: h.snippet,
       sourceTraceId: h.sourceTraceId,
     }));
+  }
+
+  function isStandaloneMathFinalAnswerTurn(turn: Parameters<MemoryCore["onTurnStart"]>[0]): boolean {
+    return turn.contextHints?.taskKind === STANDALONE_MATH_FINAL_ANSWER_TASK_KIND ||
+      isStandaloneMathFinalAnswerTask(turn.userText);
   }
 
   async function ensureHubRuntimeStarted(config: ResolvedConfig): Promise<void> {
@@ -1610,11 +1620,18 @@ export function createMemoryCore(
     try {
       hubHits = await searchHubMemoryHits(turn.userText, 5);
       hubCandidates = logCandidatesFromHits(hubHits);
+      const standaloneMathFinalAnswer = isStandaloneMathFinalAnswerTurn(turn);
       const namespacedTurn = {
         ...turn,
         namespace: ns,
         contextHints: {
           ...(turn.contextHints ?? {}),
+          ...(standaloneMathFinalAnswer
+            ? {
+                taskKind: STANDALONE_MATH_FINAL_ANSWER_TASK_KIND,
+                finalAnswerMode: "single_turn",
+              }
+            : {}),
           ...namespaceMeta(ns),
           ...(hubHits.length > 0 ? { __memosDeferLlmFilterToCaller: true } : {}),
         },
@@ -1666,12 +1683,15 @@ export function createMemoryCore(
           }
         : undefined;
       finalHubKept = final.hits.filter((hit) => hit.shareScope === "hub").length;
+      const recalledContext = hubHits.length > 0
+        ? renderFinalHitsContext(final.hits)
+        : packet.rendered;
       return {
         query,
         hits: final.hits,
-        injectedContext: hubHits.length > 0
-          ? renderFinalHitsContext(final.hits)
-          : packet.rendered,
+        injectedContext: standaloneMathFinalAnswer
+          ? mergeMathFinalAnswerProtocol(recalledContext, turn.userText)
+          : recalledContext,
         tierLatencyMs: packet.tierLatencyMs,
       };
     } catch (err) {

@@ -104,4 +104,55 @@ describe("retrieval/query-builder", () => {
   it("dedupes tags (case insensitive)", () => {
     expect(extractTags("Docker container DOCKER")).toEqual(["docker"]);
   });
+
+  it("extracts math reasoning tags for standalone math prompts", () => {
+    const cq = buildQuery({
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s_math" as unknown as never,
+      userText:
+        "Please solve this olympiad-style combinatorics problem. Compute the number of paths in a circle modulo 42.",
+      contextHints: {
+        domain: "Mathematics -> Discrete Mathematics -> Combinatorics",
+      },
+      ts: NOW,
+    });
+    expect(cq.tags).toContain("math");
+    expect(cq.tags).toContain("reasoning");
+    expect(cq.tags).toContain("combinatorics");
+    expect(cq.tags).toContain("number_theory");
+  });
+
+  it("uses the markdown problem body for keyword retrieval", () => {
+    const cq = buildQuery({
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s_math_problem" as unknown as never,
+      userText:
+        "new task\n\nPlease solve this olympiad-style problem and give the final answer.\n\n" +
+        "**Problem:**\nThere are 42 stepping stones in a pond arranged along a circle. You may jump by 1 or 7 stones.\n\n" +
+        "**Formatting:** Give a concise solution and finish with \\boxed{...}.",
+      ts: NOW,
+    });
+    expect(cq.text).toContain("42 stepping stones");
+    expect(cq.text).not.toContain("new task");
+    expect(cq.ftsMatch).toContain('"stepping"');
+    expect(cq.ftsMatch).not.toContain('"following"');
+  });
+
+  it("does not synthesize benchmark-specific keywords for structured math prompts", () => {
+    const cq = buildQuery({
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s_math_cycle" as unknown as never,
+      userText:
+        "There are 42 stepping stones in a pond, arranged along a circle. " +
+        "You jump by either 1 stone or 7 stones and visit each stone exactly once before returning.",
+      ts: NOW,
+    });
+    expect(cq.ftsMatch).toContain('"stepping"');
+    expect(cq.ftsMatch).toContain('"circle"');
+    expect(cq.ftsMatch).not.toContain('"hamiltonian"');
+    expect(cq.ftsMatch).not.toContain('"modular"');
+  });
 });

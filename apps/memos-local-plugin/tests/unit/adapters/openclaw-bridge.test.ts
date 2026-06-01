@@ -31,6 +31,11 @@ import {
   flattenMessages,
   renderContextBlock,
 } from "../../../adapters/openclaw/bridge.js";
+import {
+  isStandaloneMathFinalAnswerTask,
+  mergeMathFinalAnswerProtocol,
+  renderMathFinalAnswerProtocol,
+} from "../../../core/retrieval/math-task.js";
 import { registerOpenClawTools } from "../../../adapters/openclaw/tools.js";
 import type {
   AgentToolDescriptor,
@@ -776,7 +781,31 @@ describe("renderContextBlock", () => {
     });
     expect(block).toContain("<memos_context>");
     expect(block).toContain("memos_search");
+    expect(block).toContain("only if you have a specific reason");
     expect(block).toContain("</memos_context>");
+  });
+
+  it("uses the shared core math final-answer protocol", () => {
+    expect(
+      isStandaloneMathFinalAnswerTask(
+        "Please solve this olympiad-style combinatorics problem and give the final answer in \\boxed{...} format.",
+      ),
+    ).toBe(true);
+    const protocol = renderMathFinalAnswerProtocol();
+    expect(protocol).toContain("Standalone math task guardrails");
+    expect(protocol).toContain("counting/probability");
+    expect(protocol).toContain("standalone math task");
+    expect(protocol).toContain("Do not output a literal placeholder");
+    expect(protocol).toContain("do not call `memos_search`");
+    expect(protocol).toContain("Do not emit `<think>` tags");
+    expect(protocol).toContain("Do not stop after a progress summary");
+  });
+
+  it("merges math task guardrails through the shared core renderer", () => {
+    const merged = mergeMathFinalAnswerProtocol("remembered skill");
+    expect(merged).toContain("remembered skill");
+    expect(merged).toContain("Standalone math task guardrails");
+    expect(mergeMathFinalAnswerProtocol(merged)).toBe(merged);
   });
 });
 

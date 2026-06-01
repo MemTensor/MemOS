@@ -390,6 +390,54 @@ describe("MemoryCore façade", () => {
     expect(res.query.query).toBe("how do I build this project?");
   });
 
+  it("adds the shared math final-answer protocol for OpenClaw and Hermes", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const prompt =
+      "Please solve this olympiad-style geometry problem. Find the angle in the triangle and give the final answer in \\boxed{...}.";
+    const openclaw = await core.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-math-openclaw",
+      userText: prompt,
+      ts: 1_700_000_000_000,
+    });
+    const hermes = await core.onTurnStart({
+      agent: "hermes",
+      sessionId: "s-math-hermes",
+      userText: prompt,
+      ts: 1_700_000_000_001,
+    });
+
+    for (const res of [openclaw, hermes]) {
+      expect(res.injectedContext).toContain("Standalone math task guardrails");
+      expect(res.injectedContext).toContain("do not call `memos_search` just to look around");
+      expect(res.injectedContext).not.toContain("No prior memories matched");
+    }
+  });
+
+  it("does not add the math protocol to ordinary empty-memory turns", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    const res = await core.onTurnStart({
+      agent: "hermes",
+      sessionId: "s-non-math",
+      userText: "Summarize yesterday's project notes.",
+      ts: 1_700_000_000_000,
+    });
+    expect(res.injectedContext).not.toContain("Standalone math task guardrails");
+  });
+
   it("scopes shared traces to creator, same framework, or hub team", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(

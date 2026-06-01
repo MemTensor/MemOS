@@ -183,7 +183,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
       label: "Memory Search",
       description:
         "Search MemOS memory (local traces + policies + world models + skills, plus connected Team Hub memories). " +
-        "Returns a ranked list of grounded snippets. Prefer this before claiming prior context is unavailable.",
+        "Returns a ranked list of grounded snippets. Use when prior experience is likely relevant; for standalone math tasks with no recalled memory, solve directly instead of probing an empty store.",
       parameters: MemorySearchParams,
       async execute(_toolCallId: string, params: MemorySearchParamsT) {
         const started = Date.now();

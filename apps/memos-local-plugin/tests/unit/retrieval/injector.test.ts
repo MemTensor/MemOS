@@ -339,6 +339,93 @@ describe("retrieval/injector", () => {
     expect(packet.rendered).not.toContain("Name: Skill sk_summary");
   });
 
+  it("standalone math rendering treats multiple skills as advisory methods without call hints", () => {
+    const { packet } = toPacket({
+      ranked: [
+        rc(skill("sk_math_a", { invocationGuide: "Use parity when a grid coloring invariant is present." }), 0.9, 0.9),
+        rc(skill("sk_math_b", { invocationGuide: "Use modular arithmetic when residues are explicit." }), 0.8, 0.8),
+      ],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_math_multi" as never,
+      episodeId: "ep_math_multi" as never,
+      standaloneMathFinalAnswer: true,
+    });
+
+    expect(packet.snippets).toHaveLength(2);
+    expect(packet.rendered).toContain("Retrieved prior problem-solving memories");
+    expect(packet.rendered).toContain("Candidate method memories");
+    expect(packet.rendered).toContain("not facts about the current problem");
+    expect(packet.rendered).not.toContain("MUST treat these as established knowledge");
+    expect(packet.rendered).not.toContain("memos_skill_get");
+    expect(packet.rendered).toContain("MemOS memory tools remain available");
+  });
+
+  it("standalone math suppresses an isolated single solution skill but keeps advisory guidance", () => {
+    const { packet } = toPacket({
+      ranked: [
+        rc(skill("sk_single", { invocationGuide: "Use random walk recurrence." }), 0.9, 0.9),
+      ],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_math_single" as never,
+      episodeId: "ep_math_single" as never,
+      standaloneMathFinalAnswer: true,
+      decisionGuidance: {
+        preference: [{
+          kind: "preference",
+          text: "Prefer checking modular constraints.",
+          sourcePolicyIds: ["p1"],
+          sourceSkillIds: [],
+        }],
+        antiPattern: [{
+          kind: "antiPattern",
+          text: "Avoid treating a cycle as a line.",
+          sourcePolicyIds: ["p2"],
+          sourceSkillIds: [],
+        }],
+        policyIdsTouched: ["p1" as never, "p2" as never],
+        skillIdsTouched: [],
+      },
+    });
+
+    expect(packet.snippets).toHaveLength(0);
+    expect(packet.rendered).toContain("Method guidance");
+    expect(packet.rendered).toContain("Prefer checking modular constraints");
+    expect(packet.rendered).toContain("Avoid treating a cycle as a line");
+    expect(packet.rendered).not.toContain("Skill sk_single");
+    expect(packet.rendered).not.toContain("memos_skill_get");
+  });
+
+  it("standalone math keeps isolated geometry setup skills as advisory scaffolding", () => {
+    const { packet } = toPacket({
+      ranked: [
+        rc(skill("sk_geometry", {
+          invocationGuide: [
+            "Set up triangle geometry coordinates by placing a vertex at the origin and aligning a side with an axis.",
+            "",
+            "**Examples**",
+            "- Expected: Vertex A placed at (0, 0).",
+          ].join("\n"),
+        }), 0.9, 0.9),
+      ],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_math_geometry" as never,
+      episodeId: "ep_math_geometry" as never,
+      standaloneMathFinalAnswer: true,
+    });
+
+    expect(packet.snippets).toHaveLength(1);
+    expect(packet.rendered).toContain("Candidate method memories");
+    expect(packet.rendered).toContain("Skill sk_geometry");
+    expect(packet.rendered).toContain("not facts about the current problem");
+    expect(packet.rendered).not.toContain("memos_skill_get");
+  });
+
   it("summary mode clamps long first paragraphs to skillSummaryChars", () => {
     const longFirstPara = "x".repeat(800);
     const { packet } = toPacket({

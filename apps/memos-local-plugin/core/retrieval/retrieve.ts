@@ -34,6 +34,7 @@ import type { RetrievalEventBus } from "./events.js";
 import { dedupeTraceEpisodeByEpisodeId } from "./dedupe-trace-episode.js";
 import { toPacket, renderSnippetForDebug } from "./injector.js";
 import { llmFilterCandidates } from "./llm-filter.js";
+import { STANDALONE_MATH_FINAL_ANSWER_TASK_KIND } from "./math-task.js";
 import { rank, type RankedCandidate } from "./ranker.js";
 import { runTier1 } from "./tier1-skill.js";
 import { runTier2Experience } from "./tier2-experience.js";
@@ -237,6 +238,7 @@ async function runAll(
   const ts = deps.now();
 
   const compiled = buildQuery(ctx);
+  const standaloneMathFinalAnswer = isStandaloneMathFinalAnswerContext(ctx);
   opts.events?.emit({
     kind: "retrieval.started",
     reason: ctx.reason,
@@ -466,6 +468,7 @@ async function runAll(
       skillInjectionMode: deps.config.skillInjectionMode,
       skillSummaryChars: deps.config.skillSummaryChars,
       decisionGuidance,
+      standaloneMathFinalAnswer,
     });
     // Surface the dropped-by-LLM candidates so the Logs page can show
     // "initial N → kept M" without the viewer having to re-run the
@@ -554,6 +557,12 @@ async function runAll(
     });
     return emptyResult(ctx.reason, agent, sessionId, episodeId, ts, deps.now());
   }
+}
+
+function isStandaloneMathFinalAnswerContext(ctx: RetrievalCtx): boolean {
+  if (ctx.reason !== "turn_start") return false;
+  const hints = (ctx as { contextHints?: Record<string, unknown> }).contextHints;
+  return hints?.taskKind === STANDALONE_MATH_FINAL_ANSWER_TASK_KIND;
 }
 
 function emptyResult(

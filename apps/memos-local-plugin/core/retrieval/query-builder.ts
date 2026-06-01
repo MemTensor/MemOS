@@ -17,6 +17,12 @@ const MAX_QUERY_CHARS = 1_500;
 
 /** Public tag list kept in sync with `capture/tagger.ts#KEYWORD_TAGS`. */
 const KEYWORD_TAGS: ReadonlyArray<{ re: RegExp; tag: string }> = [
+  { re: /\bmath(?:ematics)?\b|\bolympiad\b|\bcompetition\b/i, tag: "math" },
+  { re: /\breason(?:ing)?\b|\bproblem[-\s]?solving\b|\bderive\b|\bprove\b|\bcompute\b/i, tag: "reasoning" },
+  { re: /\bcombinatorics?\b|\bcount(?:ing)?\b|\bprobability\b|\bpermutation\b|\bcombination\b|\bbijection\b/i, tag: "combinatorics" },
+  { re: /\bgeometry\b|\btriangle\b|\bcircle\b|\bpolygon\b|\bangle\b|\bmidpoint\b|\bray\b|\bparallel\b/i, tag: "geometry" },
+  { re: /\bnumber theory\b|\bmod(?:ulo|ular)?\b|\bprime\b|\bfactor(?:ization)?\b|\bdivisib(?:le|ility)\b|\bcongruence\b/i, tag: "number_theory" },
+  { re: /\balgebra\b|\bpolynomial\b|\bequation\b|\bfunctional equation\b|\bsystem of equations\b/i, tag: "algebra" },
   { re: /\bdocker\b|\bcontainer\b/i, tag: "docker" },
   { re: /\bkubernetes\b|\bkubectl\b|\bk8s\b/i, tag: "kubernetes" },
   { re: /\bpip\b|\brequirements\.txt\b/i, tag: "pip" },
@@ -127,7 +133,7 @@ export function extractTags(text: string): string[] {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function finalize(raw: string): CompiledQuery {
-  const trimmed = (raw ?? "").trim();
+  const trimmed = normalizePromptText(raw ?? "").trim();
   if (!trimmed) {
     return {
       text: "",
@@ -172,6 +178,19 @@ function finalize(raw: string): CompiledQuery {
     patternTerms,
     truncated: true,
   };
+}
+
+function normalizePromptText(raw: string): string {
+  const text = String(raw ?? "");
+  const problemMatch = text.match(/\*\*Problem:\*\*([\s\S]*?)(?:\n\s*\*\*[^*\n]+:\*\*|$)/i);
+  if (problemMatch?.[1]?.trim()) {
+    const hints = text
+      .split("\n")
+      .filter((line) => /^(domain|difficulty):/i.test(line.trim()))
+      .join("\n");
+    return [problemMatch[1].trim(), hints].filter(Boolean).join("\n");
+  }
+  return text.replace(/^new task\s*/i, "").trim();
 }
 
 function renderArgs(args: Record<string, unknown> | undefined): string {
