@@ -39,6 +39,9 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
     const q = params.get("q") || undefined;
     const ownerAgentKind = params.get("ownerAgentKind") || undefined;
     const ownerProfileId = params.get("ownerProfileId") || undefined;
+    // Viewer 的实例切换（包含“全部实例”与显式实例）应以筛选条件为准，
+    // 不能再被当前会话命名空间二次裁剪，否则会出现“选了 default 但空列表”。
+    const includeAllNamespaces = true;
     const policies = await deps.core.listPolicies({
       status,
       limit,
@@ -46,12 +49,14 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       q,
       ownerAgentKind,
       ownerProfileId,
+      includeAllNamespaces,
     });
     const total = await deps.core.countPolicies({
       status,
       q,
       ownerAgentKind,
       ownerProfileId,
+      includeAllNamespaces,
     });
     return {
       policies,

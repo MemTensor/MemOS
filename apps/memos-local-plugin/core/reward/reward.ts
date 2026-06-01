@@ -24,6 +24,12 @@ import type { EpisodeId, EpochMs, TraceRow } from "../types.js";
 import type { makeEpisodesRepo } from "../storage/repos/episodes.js";
 import type { makeFeedbackRepo } from "../storage/repos/feedback.js";
 import type { makeTracesRepo } from "../storage/repos/traces.js";
+import {
+  computeEpisodeOutcome,
+  DEFAULT_OUTCOME_THRESHOLDS,
+  extractEpisodeVerifierPassed,
+  type OutcomeThresholds,
+} from "../episode/outcome.js";
 import { backprop } from "./backprop.js";
 import { scoreHuman } from "./human-scorer.js";
 import { buildTaskSummary } from "./task-summary.js";
@@ -46,6 +52,8 @@ export interface RewardDeps {
   llm: LlmClient | null;
   bus: RewardEventBus;
   cfg: RewardConfig;
+  /** Episode outcome thresholds (from `algorithm.skill`). */
+  outcomeThresholds?: OutcomeThresholds;
   evaluator?: {
     reflectionProvider?: string;
     reflectionModel?: string;
@@ -159,6 +167,8 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
           maxPriority: 0,
           echoParams: {
             gamma: deps.cfg.gamma,
+            lambda: deps.cfg.lambda,
+            delta: deps.cfg.delta,
             decayHalfLifeDays: deps.cfg.decayHalfLifeDays,
             now: startedAt,
           },
@@ -222,6 +232,8 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
       traces,
       rHuman: humanScore.rHuman,
       gamma: deps.cfg.gamma,
+      lambda: deps.cfg.lambda,
+      delta: deps.cfg.delta,
       decayHalfLifeDays: deps.cfg.decayHalfLifeDays,
       now: startedAt,
     });
@@ -252,6 +264,26 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
       warnings.push({
         stage: "persist.episode",
         message: "failed to update episode r_task",
+        detail: errDetail(err),
+      });
+    }
+
+    const outcomeCfg = deps.outcomeThresholds ?? DEFAULT_OUTCOME_THRESHOLDS;
+    try {
+      const verifierPassed = extractEpisodeVerifierPassed(
+        deps.feedbackRepo.getForEpisode(input.episodeId),
+      );
+      const outcome = computeEpisodeOutcome(
+        humanScore.rHuman,
+        verifierPassed,
+        outcomeCfg,
+      );
+      deps.episodesRepo.setVerifierPassed(input.episodeId, verifierPassed);
+      deps.episodesRepo.setOutcome(input.episodeId, outcome);
+    } catch (err) {
+      warnings.push({
+        stage: "persist.episode.outcome",
+        message: "failed to persist episode outcome",
         detail: errDetail(err),
       });
     }
@@ -312,6 +344,8 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
       warnings: warnings.length,
     });
 
+    // Outcome columns must be persisted before emit so async skill.gatherEvidence
+    // reads the same reward run's classification (spec §2.1 SSOT).
     deps.bus.emit({ kind: "reward.updated", result });
     return result;
   }

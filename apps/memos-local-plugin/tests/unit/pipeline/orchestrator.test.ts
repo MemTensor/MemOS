@@ -258,6 +258,99 @@ describe("pipeline/orchestrator", () => {
     expect(packet.tierLatencyMs).toBeDefined();
   });
 
+  it("auto-finalizes paused episodes older than 60s so a new session starts fresh", async () => {
+    // Reproduces the bug where a new dashboard session was silently grafted
+    // onto a previous session's paused-but-open episode after openclaw
+    // restart. With the fix, the per-turn sweep finalizes paused episodes
+    // older than 60s so `findRecoverableOpenTopic` cannot grab them.
+    let nowMs = 1_700_000_000_000;
+    const deps: PipelineDeps = { ...buildDeps(dbHandle!), now: () => nowMs };
+    pipeline = createPipeline(deps);
+
+    // Session A — one full turn so the episode has real content.
+    const sidA = "s-prev-session";
+    const startA = await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: sidA,
+      userText: "fix the broken build",
+      ts: nowMs,
+    });
+    await pipeline.onTurnEnd({
+      agent: "openclaw",
+      sessionId: sidA,
+      episodeId: startA.episodeId ?? "ep-ignored",
+      agentText: "Running make…",
+      toolCalls: [],
+      ts: nowMs + 5_000,
+    });
+    const epA = startA.episodeId!;
+
+    // Simulate openclaw shutdown — pauses (not finalizes) the open episode.
+    pipeline.sessionManager.closeSession(sidA, "shutdown:test");
+    const pausedRow = dbHandle!.repos.episodes.getById(epA);
+    expect(pausedRow!.status).toBe("open");
+    const pausedMeta = (pausedRow as unknown as { meta: Record<string, unknown> }).meta;
+    expect(pausedMeta.topicState).toBe("paused");
+    expect(typeof pausedMeta.pausedAt).toBe("number");
+
+    // 95s later — past the 60s pause window. A brand-new dashboard session
+    // arrives. Sweep should finalize epA BEFORE `findRecoverableOpenTopic`
+    // looks at it, so the new session starts its own episode.
+    nowMs += 95_000;
+    const sidB = "s-new-session";
+    const startB = await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: sidB,
+      userText: "starting fresh",
+      ts: nowMs,
+    });
+    expect(dbHandle!.repos.episodes.getById(epA)!.status).toBe("closed");
+    expect(startB.episodeId).toBeDefined();
+    expect(startB.episodeId).not.toBe(epA);
+    const epB = dbHandle!.repos.episodes.getById(startB.episodeId!);
+    expect(epB!.sessionId).toBe(sidB);
+  });
+
+  it("preserves recovery when a new session arrives within the 60s pause window", async () => {
+    // Conjugate of the test above: if openclaw restarts and the user picks
+    // up within 60s, `findRecoverableOpenTopic` should still graft the new
+    // turn onto the prior open episode — the recovery feature is intact.
+    let nowMs = 1_700_000_000_000;
+    const deps: PipelineDeps = { ...buildDeps(dbHandle!), now: () => nowMs };
+    pipeline = createPipeline(deps);
+
+    const sidA = "s-prior";
+    const startA = await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: sidA,
+      userText: "hello",
+      ts: nowMs,
+    });
+    await pipeline.onTurnEnd({
+      agent: "openclaw",
+      sessionId: sidA,
+      episodeId: startA.episodeId ?? "ep-ignored",
+      agentText: "hi",
+      toolCalls: [],
+      ts: nowMs + 1_000,
+    });
+    const epA = startA.episodeId!;
+    pipeline.sessionManager.closeSession(sidA, "shutdown:test");
+    expect((dbHandle!.repos.episodes.getById(epA)! as unknown as { meta: Record<string, unknown> }).meta.topicState).toBe("paused");
+
+    // 31s later — within the 60s window. New session recovers epA.
+    nowMs += 31_000;
+    const sidB = "s-resumed";
+    const startB = await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: sidB,
+      userText: "i'm back",
+      ts: nowMs,
+    });
+    expect(startB.episodeId).toBe(epA);
+    expect(dbHandle!.repos.episodes.getById(epA)!.status).toBe("open");
+  });
+
   it("shutdown drains async work before detaching subscribers", async () => {
     pipeline = createPipeline(buildDeps(dbHandle!));
     await pipeline.onTurnStart({

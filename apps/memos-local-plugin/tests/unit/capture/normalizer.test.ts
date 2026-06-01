@@ -11,7 +11,7 @@ const cfg: CaptureConfig = {
   alphaScoring: false,
   synthReflections: false,
   llmConcurrency: 1,
-  batchMode: "per_step",
+  batchMode: "windowed",
   batchThreshold: 12,
 };
 

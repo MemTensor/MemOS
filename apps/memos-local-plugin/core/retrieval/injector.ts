@@ -20,6 +20,7 @@ import type {
   SessionId,
 } from "../../agent-contract/dto.js";
 import { ids } from "../id.js";
+import { reflectionAsText } from "../capture/types.js";
 import type { CollectedGuidance } from "./decision-guidance.js";
 import type { RankedCandidate } from "./ranker.js";
 import type {
@@ -316,7 +317,10 @@ function renderTrace(c: TraceCandidate): InjectionSnippet {
   if (summaryLine) parts.push(summaryLine);
   if (c.userText) parts.push(`[user] ${c.userText}`);
   if (c.agentText) parts.push(`[assistant] ${c.agentText}`);
-  if (c.reflection) parts.push(`[note] ${c.reflection}`);
+  {
+    const refl = reflectionAsText(c.reflection);
+    if (refl) parts.push(`[note] ${refl}`);
+  }
   const body = withToolFollowUp(
     truncate(parts.join("\n")),
     `→ call \`memos_get(id="${c.refId}", kind="trace")\` for the full turn`,

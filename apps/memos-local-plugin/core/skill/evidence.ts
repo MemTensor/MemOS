@@ -1,73 +1,260 @@
 /**
  * Gathers supporting L1 traces for a crystallization candidate.
  *
- * Strategy (V7 §2.3 / §2.5.1):
- *   1. Take the policy's `sourceEpisodeIds` as the canonical evidence cone.
- *   2. For each episode, pull its traces and score them by `value` (V).
- *   3. Apply a blended cosine score against the policy vector — high-V
- *      traces that are also semantically aligned with the policy are the
- *      strongest evidence.
- *   4. Return the top `evidenceLimit` traces, char-capped, sorted by score.
- *
- * This module does **not** call the LLM. It's a pure read-side helper over
- * the storage repos, so it's cheap to run on every reward tick.
+ * Reads episode **canonical** `traceIds` when present, otherwise a high
+ * `limit` list, then dedupes by `traceIdentitySignature` before scoring.
  */
 
-import type { EpisodeId, PolicyRow, TraceRow } from "../types.js";
+import type { EpisodeOutcome } from "../episode/outcome.js";
+import type { EpisodeId, PolicyRow, SkillRow, TraceId, TraceRow } from "../types.js";
 import type { Repos } from "../storage/repos/index.js";
+import { traceIdentitySignature } from "../trace/trace-identity.js";
 import type { SkillConfig } from "./types.js";
 
+/** Match `traces.list` cap — long episodes must not truncate to the default 50. */
+export const EPISODE_TRACE_POOL_LIMIT = 500;
+
+export interface AnnotatedTrace {
+  trace: TraceRow;
+  episodeOutcome: EpisodeOutcome;
+  episodeRTask: number | null;
+  episodeVerifierPassed: boolean | null;
+}
+
 export interface EvidenceResult {
-  traces: TraceRow[];
+  traces: AnnotatedTrace[];
   episodeIds: EpisodeId[];
-  /** Median V across the kept traces — used for logging only. */
   medianValue: number;
+  /** Traces considered before top-N slice (after signature dedupe). */
+  poolAfterDedupe: number;
+  /** Traces dropped because episode.outcome === failure (hard exclude). */
+  excludedFailureCount: number;
+  outcomeCounts: { success: number; failure: number; unknown: number };
 }
 
 export interface EvidenceDeps {
-  repos: Pick<Repos, "traces">;
+  repos: Pick<Repos, "traces" | "episodes">;
   config: Pick<SkillConfig, "evidenceLimit" | "traceCharCap">;
 }
 
-export function gatherEvidence(
-  policy: PolicyRow,
-  deps: EvidenceDeps,
-): EvidenceResult {
+interface EpisodeMeta {
+  outcome: EpisodeOutcome;
+  rTask: number | null;
+  verifierPassed: boolean | null;
+}
+
+export function gatherEvidence(policy: PolicyRow, deps: EvidenceDeps): EvidenceResult {
   const episodeIds = policy.sourceEpisodeIds.slice();
   if (episodeIds.length === 0) {
-    return { traces: [], episodeIds, medianValue: 0 };
+    return emptyEvidenceResult(episodeIds);
   }
 
   const pool: TraceRow[] = [];
   for (const episodeId of episodeIds) {
-    const traces = deps.repos.traces.list({ episodeId, limit: 20 });
-    for (const t of traces) pool.push(t);
+    pool.push(...loadEpisodeTraces(episodeId, deps.repos));
   }
 
-  pool.sort((a, b) => {
-    const av = scoreTrace(a, policy);
-    const bv = scoreTrace(b, policy);
-    if (bv !== av) return bv - av;
-    return b.ts - a.ts;
-  });
+  const epMeta = batchEpisodeMeta(pool, deps.repos);
+  const excludedFailureCount = pool.filter(
+    (t) => epMeta.get(t.episodeId)!.outcome === "failure",
+  ).length;
 
-  const kept = pool
+  const evidencePool = pool.filter(
+    (t) => epMeta.get(t.episodeId)!.outcome !== "failure",
+  );
+
+  const deduped = dedupeTracesBySignature(
+    evidencePool,
+    (t, p) => scoreTrace(t, policy) - scoreTrace(p, policy),
+  );
+  const sorted = deduped
     .filter((t) => !isRedacted(t))
-    .slice(0, Math.max(1, deps.config.evidenceLimit))
-    .map((t) => capTrace(t, deps.config.traceCharCap));
+    .sort((a, b) => {
+      const av = scoreTrace(a, policy);
+      const bv = scoreTrace(b, policy);
+      if (bv !== av) return bv - av;
+      return b.ts - a.ts;
+    });
 
-  const median = medianValueOf(kept);
+  const kept = sorted
+    .slice(0, Math.max(1, deps.config.evidenceLimit))
+    .map((t) => annotateTrace(t, epMeta, deps.config.traceCharCap));
 
   const keptEpisodeIds: EpisodeId[] = [];
   const seen = new Set<string>();
-  for (const t of kept) {
-    if (!seen.has(t.episodeId)) {
-      seen.add(t.episodeId);
-      keptEpisodeIds.push(t.episodeId);
+  for (const a of kept) {
+    if (!seen.has(a.trace.episodeId)) {
+      seen.add(a.trace.episodeId);
+      keptEpisodeIds.push(a.trace.episodeId);
     }
   }
 
-  return { traces: kept, episodeIds: keptEpisodeIds, medianValue: median };
+  return {
+    traces: kept,
+    episodeIds: keptEpisodeIds,
+    medianValue: medianValueOf(kept.map((a) => a.trace)),
+    poolAfterDedupe: deduped.length,
+    excludedFailureCount,
+    outcomeCounts: countOutcomes(kept),
+  };
+}
+
+export interface IncrementalEvidenceResult {
+  traces: AnnotatedTrace[];
+  poolAfterDedupe: number;
+}
+
+/**
+ * Canonical traces whose ids are not yet in `skill.evidenceAnchors`, after
+ * signature dedupe (ignores orphan duplicate rows).
+ */
+export function gatherIncrementalEvidence(
+  policy: PolicyRow,
+  existingSkill: SkillRow,
+  deps: EvidenceDeps,
+): IncrementalEvidenceResult {
+  const anchors = new Set<string>((existingSkill.evidenceAnchors ?? []) as string[]);
+  const pool: TraceRow[] = [];
+
+  for (const episodeId of policy.sourceEpisodeIds) {
+    for (const t of loadEpisodeTraces(episodeId, deps.repos)) {
+      if (!anchors.has(t.id)) pool.push(t);
+    }
+  }
+
+  const epMeta = batchEpisodeMeta(pool, deps.repos);
+  const evidencePool = pool.filter(
+    (t) => epMeta.get(t.episodeId)!.outcome !== "failure",
+  );
+
+  const deduped = dedupeTracesBySignature(evidencePool, (a, b) => b.value - a.value);
+  const sorted = deduped
+    .filter((t) => !isRedacted(t))
+    .sort((a, b) => {
+      if (b.value !== a.value) return b.value - a.value;
+      return b.ts - a.ts;
+    });
+
+  return {
+    traces: sorted
+      .slice(0, Math.max(1, deps.config.evidenceLimit))
+      .map((t) => annotateTrace(t, epMeta, deps.config.traceCharCap)),
+    poolAfterDedupe: deduped.length,
+  };
+}
+
+export function gatherCounterExamples(
+  policy: PolicyRow,
+  deps: EvidenceDeps,
+): AnnotatedTrace[] {
+  if (policy.sourceEpisodeIds.length === 0) return [];
+  const pool: TraceRow[] = [];
+  for (const episodeId of policy.sourceEpisodeIds) {
+    pool.push(...loadEpisodeTraces(episodeId, deps.repos));
+  }
+  const epMeta = batchEpisodeMeta(pool, deps.repos);
+
+  const failurePool = pool.filter(
+    (t) => epMeta.get(t.episodeId)!.outcome === "failure",
+  );
+  const negativeInFailure = failurePool.filter(
+    (t) => Number.isFinite(t.value) && t.value < 0,
+  );
+  // Prefer self-certified bad steps (V < 0); if the task failed but every
+  // trace still has positive V, fall back to the lowest-V traces in that
+  // failure cone only — never promote high-V "pretty" intermediates.
+  const counterSource =
+    negativeInFailure.length > 0
+      ? negativeInFailure
+      : failurePool.length > 0
+        ? failurePool
+        : pool.filter((t) => Number.isFinite(t.value) && t.value < 0);
+
+  const deduped = dedupeTracesBySignature(counterSource, (a, b) => a.value - b.value);
+  deduped.sort((a, b) => a.value - b.value);
+  return deduped
+    .slice(0, 5)
+    .map((t) => annotateTrace(t, epMeta, deps.config.traceCharCap));
+}
+
+function batchEpisodeMeta(
+  pool: TraceRow[],
+  repos: Pick<Repos, "episodes">,
+): Map<string, EpisodeMeta> {
+  const epMeta = new Map<string, EpisodeMeta>();
+  for (const epId of new Set(pool.map((t) => t.episodeId))) {
+    const ep = repos.episodes.getById(epId as EpisodeId);
+    epMeta.set(epId, {
+      outcome: (ep?.outcome ?? "unknown") as EpisodeOutcome,
+      rTask: ep?.rTask ?? null,
+      verifierPassed: ep?.verifierPassed ?? null,
+    });
+  }
+  return epMeta;
+}
+
+function annotateTrace(
+  t: TraceRow,
+  epMeta: Map<string, EpisodeMeta>,
+  charCap: number,
+): AnnotatedTrace {
+  const meta = epMeta.get(t.episodeId)!;
+  const trace = capTrace(t, charCap);
+  return {
+    trace,
+    episodeOutcome: meta.outcome,
+    episodeRTask: meta.rTask,
+    episodeVerifierPassed: meta.verifierPassed,
+  };
+}
+
+function countOutcomes(kept: AnnotatedTrace[]): EvidenceResult["outcomeCounts"] {
+  const counts = { success: 0, failure: 0, unknown: 0 };
+  for (const a of kept) {
+    counts[a.episodeOutcome] += 1;
+  }
+  return counts;
+}
+
+function emptyEvidenceResult(episodeIds: EpisodeId[]): EvidenceResult {
+  return {
+    traces: [],
+    episodeIds,
+    medianValue: 0,
+    poolAfterDedupe: 0,
+    excludedFailureCount: 0,
+    outcomeCounts: { success: 0, failure: 0, unknown: 0 },
+  };
+}
+
+function loadEpisodeTraces(
+  episodeId: EpisodeId,
+  repos: Pick<Repos, "traces" | "episodes">,
+): TraceRow[] {
+  const episode = repos.episodes.getById(episodeId);
+  const canonicalIds = episode?.traceIds ?? [];
+  if (canonicalIds.length > 0) {
+    const rows: TraceRow[] = [];
+    for (const id of canonicalIds) {
+      const row = repos.traces.getById(id as TraceId);
+      if (row) rows.push(row);
+    }
+    if (rows.length > 0) return rows;
+  }
+  return repos.traces.list({ episodeId, limit: EPISODE_TRACE_POOL_LIMIT });
+}
+
+function dedupeTracesBySignature(
+  traces: TraceRow[],
+  prefer: (a: TraceRow, b: TraceRow) => number,
+): TraceRow[] {
+  const best = new Map<string, TraceRow>();
+  for (const t of traces) {
+    const sig = traceIdentitySignature(t);
+    const prev = best.get(sig);
+    if (!prev || prefer(t, prev) < 0) best.set(sig, t);
+  }
+  return Array.from(best.values());
 }
 
 function scoreTrace(trace: TraceRow, policy: PolicyRow): number {

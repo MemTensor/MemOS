@@ -29,6 +29,8 @@ const NOW = 1_700_000_000_000 as EpochMs;
 function cfg(): RewardConfig {
   return {
     gamma: 0.9,
+    lambda: 0.5,
+    delta: 0.1,
     tauSoftmax: 0.5,
     decayHalfLifeDays: 30,
     llmScoring: true,
@@ -217,6 +219,7 @@ describe("reward/integration", () => {
       llm,
       bus,
       cfg: cfg(),
+      outcomeThresholds: { successThreshold: 0.5, failureThreshold: -0.5 },
       now: () => NOW,
     });
 
@@ -234,20 +237,19 @@ describe("reward/integration", () => {
     const tA = handle.repos.traces.getById("tr_a" as unknown as TraceRow["id"])!;
     const tB = handle.repos.traces.getById("tr_b" as unknown as TraceRow["id"])!;
     const tC = handle.repos.traces.getById("tr_c" as unknown as TraceRow["id"])!;
-    // V_C = R_human, V_B = γ·V_C, V_A = 0.5·R + 0.5·γ·V_B.
+    // With normalized credit + reflection/alpha fallback:
+    // alphas are [0.5, 0, 0] => only tr_a gets non-zero weight.
     const r = result.rHuman;
-    const vC = r;
-    const vB = 0.9 * vC;
-    const vA = 0.5 * r + 0.5 * 0.9 * vB;
-    expect(tC.value).toBeCloseTo(vC, 5);
-    expect(tB.value).toBeCloseTo(vB, 5);
-    expect(tA.value).toBeCloseTo(vA, 5);
+    expect(tA.value).toBeCloseTo(r, 5);
+    expect(tB.value).toBeCloseTo(0, 5);
+    expect(tC.value).toBeCloseTo(0, 5);
     // Priority for all three should be positive and ≤ V (decay ≤ 1).
-    expect(tC.priority).toBeGreaterThan(0);
-    expect(tC.priority).toBeLessThanOrEqual(vC + 1e-9);
+    expect(tA.priority).toBeGreaterThan(0);
+    expect(tA.priority).toBeLessThanOrEqual(r + 1e-9);
 
     const ep = handle.repos.episodes.getById(eid as unknown as EpisodeRow["id"])!;
     expect(ep.rTask).toBeCloseTo(result.rHuman, 5);
+    expect(ep.outcome).toBe("success");
     expect((ep as unknown as { meta: Record<string, unknown> }).meta.reward).toBeDefined();
 
     // events order: scheduled → scored → updated

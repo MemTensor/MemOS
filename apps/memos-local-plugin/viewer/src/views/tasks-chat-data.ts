@@ -40,6 +40,7 @@ export interface TimelineTrace {
    */
   reflection?: string | null;
   value: number;
+  alpha?: number;
   toolCalls?: TimelineToolCall[];
 }
 
@@ -54,6 +55,12 @@ export interface ChatMsg {
   key: string;
   /** Trace id this message originates from (so we can deep-link later). */
   traceId: string;
+  /** Per-trace score label rendered in message meta (e.g. V 0.83 · α 0.41). */
+  scoreLabel?: string;
+  /** MemOS reflection label (e.g. PIVOTAL / IRRELEVANT). */
+  relatedLabel?: string;
+  /** Localized relatedness title chosen by trace query language. */
+  relatedTitle?: string;
   // Tool-only fields:
   toolName?: string;
   /** Visible assistant narration emitted before this tool call. */
@@ -107,11 +114,8 @@ const TOOL_OUTPUT_PREVIEW_CHARS = 1_600;
  *      inside the corresponding tool card.
  *   3. `assistant`  — the assistant's final text reply (if non-empty).
  *
- * `trace.reflection` is **deliberately not** turned into a chat bubble.
- * Reflection is the MemOS plugin's own post-hoc note used to compute
- * α + R_human backprop — an internal scoring signal, not part of the
- * user↔agent conversation. The trace drawer surfaces it under a
- * dedicated "Reflection" panel.
+ * `trace.reflection` is attached as per-trace metadata (`relatedLabel`)
+ * and rendered in each trace bubble footer rather than a standalone bubble.
  *
  * The function never throws on malformed input — missing fields are
  * dropped silently, unknown JSON is best-effort serialised, and tool
@@ -123,12 +127,18 @@ export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
     const userTrace = group.find((tr) => (tr.userText ?? "").trim().length > 0);
     const userText = (userTrace?.userText ?? "").trim();
     if (userTrace && userText) {
+      const userScoreLabel = formatTraceScore(userTrace);
+      const userRelated = (userTrace.reflection ?? "").trim();
+      const userRelatedTitle = pickRelatedTitleByTrace(userTrace);
       out.push({
         role: "user",
         text: userText,
         ts: userTrace.turnId ?? userTrace.ts,
         key: `${userTrace.id}:user`,
         traceId: userTrace.id,
+        scoreLabel: userScoreLabel,
+        relatedLabel: userRelated || undefined,
+        relatedTitle: userRelatedTitle,
       });
     }
 
@@ -168,6 +178,9 @@ function groupTracesByTurn(traces: readonly TimelineTrace[]): TimelineTrace[][] 
 }
 
 function appendTraceMessages(out: ChatMsg[], tr: TimelineTrace): void {
+    const scoreLabel = formatTraceScore(tr);
+    const relatedLabel = (tr.reflection ?? "").trim() || undefined;
+    const relatedTitle = pickRelatedTitleByTrace(tr);
     const tools = [...(tr.toolCalls ?? [])].sort((a, b) => {
       const at = a.startedAt ?? Number.POSITIVE_INFINITY;
       const bt = b.startedAt ?? Number.POSITIVE_INFINITY;
@@ -186,6 +199,9 @@ function appendTraceMessages(out: ChatMsg[], tr: TimelineTrace): void {
           ts: tr.ts,
           key: `${tr.id}:thinking`,
           traceId: tr.id,
+          scoreLabel,
+          relatedLabel,
+          relatedTitle,
         });
       }
     }
@@ -205,6 +221,9 @@ function appendTraceMessages(out: ChatMsg[], tr: TimelineTrace): void {
         ts: tc.startedAt,
         key: `${tr.id}:tool:${idx}`,
         traceId: tr.id,
+        scoreLabel,
+        relatedLabel,
+        relatedTitle,
         toolName: tc.name,
         toolAssistantTextBefore: assistantBefore || undefined,
         toolThinking: tb || undefined,
@@ -223,6 +242,9 @@ function appendTraceMessages(out: ChatMsg[], tr: TimelineTrace): void {
         ts: tr.ts,
         key: `${tr.id}:assistant`,
         traceId: tr.id,
+        scoreLabel,
+        relatedLabel,
+        relatedTitle,
       });
     }
 }
@@ -333,4 +355,16 @@ function serializeToolPayload(v: unknown): string {
 
 function clip(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n)}…` : s;
+}
+
+function formatTraceScore(tr: TimelineTrace): string {
+  const value = Number.isFinite(tr.value) ? tr.value : 0;
+  const alpha = tr.alpha;
+  if (Number.isFinite(alpha)) return `V ${value.toFixed(2)} · α ${alpha!.toFixed(2)}`;
+  return `V ${value.toFixed(2)}`;
+}
+
+function pickRelatedTitleByTrace(tr: TimelineTrace): string {
+  const basis = `${tr.userText ?? ""}\n${tr.agentText ?? ""}`;
+  return /[\u3400-\u9fff]/.test(basis) ? "相关性" : "related";
 }

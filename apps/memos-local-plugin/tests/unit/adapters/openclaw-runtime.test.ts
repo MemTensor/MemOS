@@ -108,7 +108,7 @@ function deferred<T>() {
 }
 
 describe("OpenClaw adapter runtime lifecycle", () => {
-  it("blocks a duplicate register before the second runtime bootstraps", async () => {
+  it("reuses the in-process runtime across repeated register() calls", async () => {
     const home = useTempMemosHome();
     const firstCore = makeCore();
     const boot = deferred<{ core: ReturnType<typeof makeCore>; config: typeof DEFAULT_CONFIG; home: ResolvedHome }>();
@@ -126,14 +126,17 @@ describe("OpenClaw adapter runtime lifecycle", () => {
     expect(bootstrapMemoryCoreFull).toHaveBeenCalledTimes(1);
 
     const api2 = makeApi();
-    expect(() => plugin.register(api2)).toThrow(/already active/);
+    expect(() => plugin.register(api2)).not.toThrow();
     expect(bootstrapMemoryCoreFull).toHaveBeenCalledTimes(1);
-    expect(api2.registerTool).not.toHaveBeenCalled();
-    expect(api2.on).not.toHaveBeenCalled();
+    expect(api2.registerTool).toHaveBeenCalled();
+    expect(api2.on).toHaveBeenCalled();
 
     boot.resolve({ core: firstCore, config: DEFAULT_CONFIG, home });
     await api1.services[0]!.start?.();
+    await api2.services[0]!.start?.();
     await api1.services[0]!.stop?.();
+    expect(fs.existsSync(path.join(home.daemonDir, "openclaw-runtime.lock"))).toBe(true);
+    await api2.services[0]!.stop?.();
 
     expect(fs.existsSync(path.join(home.daemonDir, "openclaw-runtime.lock"))).toBe(false);
   });

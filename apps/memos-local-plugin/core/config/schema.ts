@@ -114,27 +114,11 @@ const AlgorithmSchema = Type.Object({
     synthReflections: Bool(false),
     /** Concurrency for α scoring + synth LLM calls (per_step mode only). */
     llmConcurrency: NumberInRange(4, 1, 32),
-    /**
-     * V7 §3.2 batched variant. When/how to fold per-step reflection synth +
-     * α scoring into one episode-level LLM call:
-     *   - "per_step"    : legacy path, N per-step LLM calls
-     *   - "per_episode" : always batch
-     *   - "auto"        : batch when stepCount ≤ batchThreshold, else per-step
-     */
-    batchMode: Type.Union(
-      [Type.Literal("per_step"), Type.Literal("per_episode"), Type.Literal("auto")],
-      { default: "auto" },
-    ),
-    /**
-     * Step-count cap for "auto" mode. Episodes above this limit fall back
-     * to per-step calls so the batched prompt cannot overflow context.
-     */
+    /** Windowed-only reflection mode (per-step path removed). */
+    batchMode: Type.Literal("windowed", { default: "windowed" }),
+    /** Retained for backward compatibility; ignored by windowed mode. */
     batchThreshold: NumberInRange(12, 1, 64),
-    /**
-     * Optional context blocks for per-step reflection and α prompts.
-     * Defaults to "task" to preserve the current task-summary enrichment;
-     * downstream preview remains opt-in.
-     */
+    /** Retained for compatibility; no effect in windowed binary mode. */
     reflectionContextMode: Type.Union(
       [
         Type.Literal("none"),
@@ -144,10 +128,7 @@ const AlgorithmSchema = Type.Object({
       ],
       { default: "task" },
     ),
-    /**
-     * Long-episode fallback mode after batch auto-threshold is exceeded.
-     * `per_step_downstream` keeps parallelism but adds step+1..step+3 preview.
-     */
+    /** Retained for compatibility; no effect in windowed binary mode. */
     longEpisodeReflectMode: Type.Union(
       [Type.Literal("per_step_parallel"), Type.Literal("per_step_downstream")],
       { default: "per_step_parallel" },
@@ -166,6 +147,10 @@ const AlgorithmSchema = Type.Object({
   reward: Type.Object({
     /** V7 §0.6 eq. 4/5: discount factor γ for reflection-weighted backprop. */
     gamma: NumberInRange(0.9, 0, 1),
+    /** Position-bias mix λ: 0 => flat, 1 => pure γ^(T-t). */
+    lambda: NumberInRange(0.5, 0, 1),
+    /** Recovery boost δ for first non-zero step after an IRRELEVANT step. */
+    delta: NumberInRange(0.1, 0, 10),
     /** V7 §2.4.5 eq. 3: temperature τ for softmax reweighting in L2 induction. */
     tauSoftmax: NumberInRange(0.5, 0.01, 10),
     /** V7 §3.3: priority decay half-life in days. */
@@ -288,6 +273,27 @@ const AlgorithmSchema = Type.Object({
     archiveEta: NumberInRange(0.1, 0, 1),
     /** Hide Tier-1 skills whose η is below this. Mirrors retrieval.minSkillEta. */
     minEtaForRetrieval: NumberInRange(0.1, 0, 1),
+    /**
+     * Graduation floor for *repair-origin* candidates (unproven fixes minted
+     * from a failure). Higher than `minEtaForRetrieval` on purpose: a repair
+     * has no success anchor, so promotion must require a majority of real
+     * trial passes, not a single lucky one. With η birth at the 0.1 floor and
+     * `candidateTrials` trials, 0.5 demands ~2-of-3 genuine passes.
+     */
+    repairCandidateMinEta: NumberInRange(0.5, 0, 1),
+    /**
+     * Language strategy for skill text:
+     * - follow_policy: infer from policy text (default)
+     * - zh/en: force one language
+     */
+    outputLanguageMode: Type.Union(
+      [Type.Literal("follow_policy"), Type.Literal("zh"), Type.Literal("en")],
+      { default: "follow_policy" },
+    ),
+    outcomeRTaskSuccessThreshold: NumberInRange(0.5, -1, 1),
+    outcomeRTaskFailureThreshold: NumberInRange(-0.5, -1, 1),
+    failureEpisodeScorePenalty: NumberInRange(0, 0, 2),
+    failureEpisodeMaxRatio: NumberInRange(0.4, 0, 1),
   }, { default: {} }),
   feedback: Type.Object({
     /** Raise a burst after this many failures of the same tool in-window. */

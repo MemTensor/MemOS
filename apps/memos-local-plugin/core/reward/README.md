@@ -1,9 +1,9 @@
-# core/reward — Phase 7 (R_human + reflection-weighted backprop)
+# core/reward — Phase 7 (R_human + normalized credit backprop)
 
 > V7 §0.6 / §2.4.2 / §3.3. Converts user feedback into a per-episode
-> scalar `R_human ∈ [-1, 1]`, then distributes credit backward over the
-> episode's L1 traces using reflection weights `α_t` (from capture) and
-> an exponential time-decay for the retrieval `priority`.
+> scalar `R_human ∈ [-1, 1]`, then distributes credit over the
+> episode's L1 traces using normalized weights (`alpha + gamma + lambda + delta`)
+> and an exponential time-decay for the retrieval `priority`.
 
 ## 1. When it runs
 
@@ -56,10 +56,14 @@ run is not aborted.
 
   `R_human = 0.45·goal_achievement + 0.30·process_quality + 0.25·user_satisfaction`
 
-- **Reflection-weighted backprop** (V7 §0.6 eq. 4/5):
+- **Normalized credit backprop**:
 
-  `V_T = R_human`
-  `V_t = α_t · R_human + (1 − α_t) · γ · V_{t+1}`
+  `f_t = (1 − λ) + λ · γ^(T − t)`
+  `recovery_t = 1 if α_t>0 and t>0 and α_{t−1}=0 else 0`
+  `r_t = 1 + δ · recovery_t`
+  `w_t = α_t · f_t · r_t`
+  `S = Σ_t w_t`
+  `V_t = 0 (if S=0) else (w_t/S) · R_human`
 
 - **Priority with time decay** (V7 §3.3):
 
@@ -73,7 +77,9 @@ backprop.
 
 | Key                    | Default | Meaning                                         |
 |------------------------|---------|-------------------------------------------------|
-| `gamma`                | 0.9     | γ discount factor                               |
+| `gamma`                | 0.9     | γ 衰减因子，范围 `[0,1]`                           |
+| `lambda`               | 0.5     | λ 混合系数（平坦分配 vs 时间衰减），范围 `[0,1]`       |
+| `delta`                | 0.1     | δ recovery 增益，范围 `>=0`                         |
 | `tauSoftmax`           | 0.5     | τ for softmax reweighting in L2 induction (Phase 9 uses) |
 | `decayHalfLifeDays`    | 30      | Half-life for priority decay                    |
 | `llmScoring`           | true    | Use LLM rubric (v2); off = heuristic only       |
@@ -83,6 +89,9 @@ backprop.
 | `llmConcurrency`       | 2       | Max parallel R_human LLM calls (reserved for pool scheduler) |
 
 All documented in `docs/CONFIG-ADVANCED.md`.
+
+> 旧递推口径 `V_t = α_t · R_human + (1 − α_t) · γ · V_{t+1}` 已废弃，
+> 文档与实现以当前归一化信用分配公式为准。
 
 ## 6. Public API
 

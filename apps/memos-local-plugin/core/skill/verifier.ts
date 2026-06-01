@@ -21,6 +21,7 @@
 
 import type { Logger } from "../logger/types.js";
 import type { TraceRow } from "../types.js";
+import { reflectionAsText } from "../capture/types.js";
 import type { SkillCrystallizationDraft } from "./types.js";
 import { extractToolNames } from "./tool-names.js";
 
@@ -118,7 +119,7 @@ function computeResonance(
   if (draftTokens.size === 0) return 0;
   let hit = 0;
   for (const t of evidence) {
-    const txt = `${t.userText}\n${t.agentText}\n${t.reflection ?? ""}`.toLowerCase();
+    const txt = `${t.userText}\n${t.agentText}\n${reflectionAsText(t.reflection) ?? ""}`.toLowerCase();
     const toks = tokensOf(txt);
     let overlap = 0;
     for (const tok of draftTokens) if (toks.has(tok)) overlap += 1;

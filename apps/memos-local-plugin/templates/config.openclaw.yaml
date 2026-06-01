@@ -29,6 +29,17 @@ llm:
 algorithm:
   lightweightMemory:
     enabled: true          # true = low-cost summaries only; false = memory self-evolution with tasks/experiences/world models/skills
+  capture:
+    # reflection/alpha now runs in windowed batch mode only.
+    # fixed strategy: primary window 20 (overlap 3), degrade to 9 (overlap 3),
+    # then episode-level fallback writes RELATED_DEFAULT + alpha=0.5.
+    # merge priority: PIVOTAL > RELATED/RELATED_DEFAULT > IRRELEVANT.
+    # batch output may include pivotal(0/1); pivotal=1 only when alpha=1.
+    batchMode: windowed
+  reward:
+    gamma: 0.9                # γ in [0,1], temporal decay term in backprop weight
+    lambda: 0.5               # λ in [0,1], mixes flat vs gamma^(T-t) weighting
+    delta: 0.1                # δ >= 0, recovery boost when alpha transitions 0 -> >0
 
 hub:
   enabled: false

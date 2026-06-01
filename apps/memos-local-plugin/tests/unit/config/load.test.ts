@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 
+import { MemosError } from "../../../agent-contract/errors.js";
 import { DEFAULT_CONFIG, loadConfig, resolveConfig, resolveHome } from "../../../core/config/index.js";
 import { makeTmpHome } from "../../helpers/tmp-home.js";
 
@@ -111,6 +112,33 @@ viewer:
       },
     });
     expect("dimensions" in cfg.embedding).toBe(false);
+  });
+
+  it("rejects inverted outcome rTask thresholds", () => {
+    expect(() =>
+      resolveConfig({
+        algorithm: {
+          skill: {
+            outcomeRTaskSuccessThreshold: -0.2,
+            outcomeRTaskFailureThreshold: 0.3,
+          },
+        },
+      }),
+    ).toThrow(/must be > outcomeRTaskFailureThreshold/);
+
+    try {
+      resolveConfig({
+        algorithm: {
+          skill: {
+            outcomeRTaskSuccessThreshold: 0.5,
+            outcomeRTaskFailureThreshold: 0.5,
+          },
+        },
+      });
+    } catch (err) {
+      expect(MemosError.is(err)).toBe(true);
+      expect((err as MemosError).code).toBe("config_invalid");
+    }
   });
 });
 

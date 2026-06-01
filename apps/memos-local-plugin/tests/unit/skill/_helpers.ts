@@ -17,7 +17,11 @@ import type {
   TraceId,
   TraceRow,
 } from "../../../core/types.js";
-import type { SkillConfig, SkillCrystallizationDraft } from "../../../core/skill/types.js";
+import type {
+  SkillConfig,
+  SkillCrystallizationDraft,
+  SkillProcedure,
+} from "../../../core/skill/types.js";
 import { ids as idHelpers } from "../../../core/id.js";
 import type { TmpDbHandle } from "../../helpers/tmp-db.js";
 import { ensureEpisode, ensureSession } from "../memory/l2/_helpers.js";
@@ -40,6 +44,10 @@ export function makeSkillConfig(partial: Partial<SkillConfig> = {}): SkillConfig
     etaDelta: 0.1,
     archiveEta: 0.1,
     minEtaForRetrieval: 0.1,
+    outcomeRTaskSuccessThreshold: 0.5,
+    outcomeRTaskFailureThreshold: -0.5,
+    failureEpisodeScorePenalty: 0,
+    failureEpisodeMaxRatio: 0.4,
     ...partial,
   };
 }
@@ -145,6 +153,8 @@ export interface SeedSkillArgs {
   trialsPassed?: number;
   sourcePolicyIds?: readonly PolicyId[];
   invocationGuide?: string;
+  procedureJson?: SkillProcedure | null;
+  evidenceAnchors?: TraceId[];
   updatedAt?: EpochMs;
   vec?: EmbeddingVector | null;
 }
@@ -155,7 +165,7 @@ export function seedSkill(handle: TmpDbHandle, args: SeedSkillArgs = {}): SkillR
     name: args.name ?? "alpine_pip_system_libs",
     status: args.status ?? "candidate",
     invocationGuide: args.invocationGuide ?? "# placeholder",
-    procedureJson: null,
+    procedureJson: args.procedureJson ?? null,
     eta: args.eta ?? 0.5,
     support: args.support ?? 3,
     gain: args.gain ?? 0.3,
@@ -163,7 +173,7 @@ export function seedSkill(handle: TmpDbHandle, args: SeedSkillArgs = {}): SkillR
     trialsPassed: args.trialsPassed ?? 0,
     sourcePolicyIds: [...(args.sourcePolicyIds ?? [])],
     sourceWorldModelIds: [],
-    evidenceAnchors: [],
+    evidenceAnchors: [...(args.evidenceAnchors ?? [])],
     vec: args.vec ?? vec([1, 0, 0]),
     createdAt: (args.updatedAt ?? NOW) as SkillRow["createdAt"],
     updatedAt: (args.updatedAt ?? NOW) as SkillRow["updatedAt"],
@@ -180,7 +190,8 @@ export function makeDraft(
 ): SkillCrystallizationDraft {
   return {
     name: "alpine_pip_system_libs",
-    displayTitle: "Alpine pip install with system deps",
+    retrievalBlurb:
+      "Use when pip install fails on Alpine with missing .so errors; user says pip install cryptography or apk add dev headers.",
     summary: "Ensure system libs exist before pip install on alpine.",
     parameters: [
       { name: "package", type: "string", required: true, description: "pip package to install" },

@@ -144,6 +144,7 @@ export function ChatBubble({ msg }: { msg: ChatMsg }) {
     (msg.role === "user" || msg.role === "assistant") &&
     msg.text.length > threshold;
   const [expanded, setExpanded] = useState(false);
+  const footer = traceFooter(msg);
 
   return (
     <div class={`chat-item chat-item--${msg.role}`}>
@@ -154,6 +155,9 @@ export function ChatBubble({ msg }: { msg: ChatMsg }) {
         <div class="chat-item__meta">
           <span class="chat-item__role">{roleLabel(msg)}</span>
           <span class="chat-item__time">{time}</span>
+          {msg.scoreLabel && (
+            <span class="chat-item__time mono">{msg.scoreLabel}</span>
+          )}
           {msg.role === "tool" && msg.toolDurationMs != null && (
             <span class="chat-item__time mono">{msg.toolDurationMs}ms</span>
           )}
@@ -166,12 +170,22 @@ export function ChatBubble({ msg }: { msg: ChatMsg }) {
         ) : msg.role === "thinking" ? (
           <div class="chat-item__bubble chat-item__bubble--thinking">
             <Markdown text={msg.text} />
+            {footer && (
+              <div class="mono muted" style="margin-top:8px;font-size:var(--fs-xs)">
+                {footer}
+              </div>
+            )}
           </div>
         ) : (
           <div
             class={`chat-item__bubble${collapsible && !expanded ? " chat-item__bubble--collapsed" : ""}`}
           >
             <Markdown text={msg.text} />
+            {footer && (
+              <div class="mono muted" style="margin-top:8px;font-size:var(--fs-xs)">
+                {footer}
+              </div>
+            )}
             {collapsible && !expanded && (
               <div class="chat-item__fade" />
             )}
@@ -196,6 +210,7 @@ function ToolBubble({ msg }: { msg: ChatMsg }) {
   const klass =
     "chat-item__bubble chat-item__bubble--tool" +
     (errored ? " chat-item__bubble--error" : "");
+  const footer = traceFooter(msg);
   return (
     <div class={klass}>
       <div class="chat-item__tool-header">
@@ -256,6 +271,11 @@ function ToolBubble({ msg }: { msg: ChatMsg }) {
           {t("tasks.chat.tool.noPayload")}
         </div>
       )}
+      {footer && (
+        <div class="mono muted" style="margin-top:8px;font-size:var(--fs-xs)">
+          {footer}
+        </div>
+      )}
     </div>
   );
 }
@@ -265,6 +285,15 @@ function roleLabel(msg: ChatMsg): string {
     return `${t("tasks.chat.role.tool" as "tasks.chat.role.user")} · ${msg.toolName}`;
   }
   return t(`tasks.chat.role.${msg.role}` as "tasks.chat.role.user");
+}
+
+function traceFooter(msg: ChatMsg): string {
+  const parts: string[] = [];
+  if (msg.relatedLabel) {
+    parts.push(`${msg.relatedTitle ?? t("tasks.chat.role.reflection" as "tasks.chat.role.user")}: ${msg.relatedLabel}`);
+  }
+  if (msg.scoreLabel) parts.push(msg.scoreLabel);
+  return parts.join(" · ");
 }
 
 function formatTime(ts?: number): string {

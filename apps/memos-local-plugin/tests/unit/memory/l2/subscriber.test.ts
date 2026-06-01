@@ -88,7 +88,7 @@ function fakeRewardResult(episodeId: string, traceIds: string[]): RewardResult {
       updates: [],
       meanAbsValue: 0.8,
       maxPriority: 0.8,
-      echoParams: { gamma: 0.9, decayHalfLifeDays: 30, now: NOW },
+      echoParams: { gamma: 0.9, lambda: 0.5, delta: 0.1, decayHalfLifeDays: 30, now: NOW },
     },
     traceIds: traceIds as RewardResult["traceIds"],
     timings: { summary: 0, score: 0, backprop: 0, persist: 0, total: 0 },

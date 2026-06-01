@@ -35,8 +35,8 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
     const offset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const sessionId = params.get("sessionId") || undefined;
     const namespace = parseNamespace(params.get("namespace"));
-    const ownerAgentKind = params.get("ownerAgentKind") || namespace?.ownerAgentKind || undefined;
-    const ownerProfileId = params.get("ownerProfileId") || namespace?.ownerProfileId || undefined;
+    const ownerAgentKind = parseOwnerFilter(params.get("ownerAgentKind")) || namespace?.ownerAgentKind || undefined;
+    const ownerProfileId = parseOwnerFilter(params.get("ownerProfileId")) || namespace?.ownerProfileId || undefined;
     const q = params.get("q") || undefined;
     // When `groupByTurn=true`, pagination treats each (episodeId, turnId)
     // pair as one "memory" — matching the viewer's grouped display where
@@ -223,4 +223,11 @@ function parseNamespace(value: string | null): { ownerAgentKind: string; ownerPr
   const [ownerAgentKind, ownerProfileId] = value.split("/", 2).map((part) => part.trim());
   if (!ownerAgentKind || !ownerProfileId) return null;
   return { ownerAgentKind, ownerProfileId };
+}
+
+function parseOwnerFilter(raw: string | null): string | undefined {
+  if (!raw) return undefined;
+  const v = raw.trim().toLowerCase();
+  if (!v || v === "all" || v === "*") return undefined;
+  return raw;
 }

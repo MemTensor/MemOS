@@ -30,6 +30,8 @@ import type {
   SkillCrystallizationDraft,
   SkillProcedure,
 } from "./types.js";
+import { policyContentHash } from "./rebuild-level.js";
+import type { SkillOutputLanguage } from "./language.js";
 
 export interface PackagerInput {
   draft: SkillCrystallizationDraft;
@@ -46,9 +48,12 @@ export interface PackagerInput {
    * small and the JSON roundtrip cheap.
    */
   evidenceTraceIds?: TraceId[];
+  /** User query lines from top evidence traces — boosts embedding recall. */
+  evidenceUserTexts?: string[];
   worldModelIds?: WorldModelId[];
   /** When rebuilding, we keep the existing skill id + accumulated trials. */
   existing?: SkillRow | null;
+  outputLanguage?: SkillOutputLanguage;
 }
 
 /** Hard cap on `SkillRow.evidenceAnchors` so the JSON column stays small. */
@@ -78,14 +83,16 @@ export async function buildSkillRow(
   const freshMint = !existing;
   const id: SkillId = (existing?.id ?? ids.skill()) as SkillId;
 
-  const procedure = buildProcedure(draft);
-  const invocationGuide = renderInvocationGuide(draft, policy);
+  const outputLanguage = input.outputLanguage ?? "en";
+  const existingProcedure = readExistingProcedure(existing);
+  const procedure = buildProcedure(draft, policy, outputLanguage, existingProcedure);
+  const invocationGuide = renderInvocationGuide(draft, outputLanguage);
 
   const trialsAttempted = existing?.trialsAttempted ?? 0;
   const trialsPassed = existing?.trialsPassed ?? 0;
   const initialEta = deriveInitialEta(policy, existing ?? null, deps.config);
 
-  const vecSource = buildVecSource(draft, policy);
+  const vecSource = buildVecSource(draft, outputLanguage, input.evidenceUserTexts);
   const vec = await tryEmbed(deps, vecSource);
 
   // Merge new evidence with whatever the previous skill version had,
@@ -126,14 +133,29 @@ export async function buildSkillRow(
     version: existing ? (existing.version ?? 1) + 1 : 1,
     usageCount: existing?.usageCount ?? 0,
     lastUsedAt: existing?.lastUsedAt ?? null,
+    // `repairOrigin` is intentionally dropped on rebuild — once a candidate
+    // is rebuilt from real evidence we promote on the normal η threshold.
+    // `strictTrial`, in contrast, governs *how* trials are judged (verifier
+    // full-pass vs loose rTask>=0.5) and reflects the verifier-origin of the
+    // source policy. New evidence does not change that, so we preserve it.
+    strictTrial: existing?.strictTrial ?? false,
   };
 
   return { row, vecSource, freshMint };
 }
 
-function buildProcedure(draft: SkillCrystallizationDraft): SkillProcedure {
-  return {
+function buildProcedure(
+  draft: SkillCrystallizationDraft,
+  policy: PolicyRow,
+  outputLanguage: SkillOutputLanguage,
+  existing: SkillProcedure | null,
+): SkillProcedure {
+  const proc: SkillProcedure = {
     summary: draft.summary,
+    retrievalBlurb: draft.retrievalBlurb,
+    triggerContext: draft.triggerContext ?? "",
+    policyContentHash: policyContentHash(policy),
+    outputLanguage,
     parameters: draft.parameters,
     preconditions: draft.preconditions,
     steps: draft.steps,
@@ -142,29 +164,52 @@ function buildProcedure(draft: SkillCrystallizationDraft): SkillProcedure {
     tags: draft.tags,
     tools: draft.tools ?? [],
   };
+  // §12 A — once a repair-origin skill graduates to its canonical name we
+  // must keep the flag so subsequent rebuilds (which no longer carry
+  // `repairOrigin`) still recognise the single-use rename has been spent.
+  if (existing?.graduatedFromRepairName) proc.graduatedFromRepairName = true;
+  return proc;
+}
+
+function readExistingProcedure(
+  existing: SkillRow | null | undefined,
+): SkillProcedure | null {
+  if (!existing) return null;
+  const proc = existing.procedureJson;
+  if (!proc || typeof proc !== "object") return null;
+  return proc as SkillProcedure;
 }
 
 function renderInvocationGuide(
   draft: SkillCrystallizationDraft,
-  policy: PolicyRow,
+  outputLanguage: SkillOutputLanguage,
 ): string {
+  const i18n = sectionI18n(outputLanguage);
   const lines: string[] = [];
-  lines.push(`# ${draft.displayTitle}`);
+  lines.push(`# ${draft.name}`);
   lines.push("");
+  if (draft.retrievalBlurb) {
+    lines.push(`**${i18n.retrieval}**`);
+    lines.push(draft.retrievalBlurb);
+    lines.push("");
+  }
   if (draft.summary) {
+    lines.push(`**${i18n.summary}**`);
     lines.push(draft.summary);
     lines.push("");
   }
-  lines.push(`**When to use**`);
-  lines.push(policy.trigger.trim() || "(derived from policy)");
-  lines.push("");
+  if (draft.triggerContext?.trim()) {
+    lines.push(`**${i18n.context}**`);
+    lines.push(draft.triggerContext.trim());
+    lines.push("");
+  }
   if (draft.preconditions.length) {
-    lines.push(`**Preconditions**`);
+    lines.push(`**${i18n.preconditions}**`);
     for (const p of draft.preconditions) lines.push(`- ${p}`);
     lines.push("");
   }
   if (draft.parameters.length) {
-    lines.push(`**Parameters**`);
+    lines.push(`**${i18n.parameters}**`);
     for (const p of draft.parameters) {
       const req = p.required ? " _(required)_" : "";
       lines.push(`- \`${p.name}\`: ${p.type}${req} — ${p.description || ""}`);
@@ -172,34 +217,34 @@ function renderInvocationGuide(
     lines.push("");
   }
   if (draft.steps.length) {
-    lines.push(`**Procedure**`);
+    lines.push(`**${i18n.procedure}**`);
     draft.steps.forEach((s, i) => {
       lines.push(`${i + 1}. **${s.title}** — ${s.body}`);
     });
     lines.push("");
   }
   if (draft.examples.length) {
-    lines.push(`**Examples**`);
+    lines.push(`**${i18n.examples}**`);
     for (const e of draft.examples) {
-      lines.push(`- Input: \`${e.input}\``);
-      lines.push(`  Expected: ${e.expected}`);
+      lines.push(`- ${i18n.input}: \`${e.input}\``);
+      lines.push(`  ${i18n.expected}: ${e.expected}`);
     }
     lines.push("");
   }
   if (draft.tools && draft.tools.length > 0) {
-    lines.push(`**Tools used**`);
+    lines.push(`**${i18n.tools}**`);
     for (const t of draft.tools) lines.push(`- \`${t}\``);
     lines.push("");
   }
   const dg = draft.decisionGuidance;
   if (dg && (dg.preference.length > 0 || dg.antiPattern.length > 0)) {
-    lines.push(`**Decision guidance**`);
+    lines.push(`**${i18n.guidance}**`);
     if (dg.preference.length > 0) {
-      lines.push("Prefer:");
+      lines.push(i18n.prefer);
       for (const p of dg.preference) lines.push(`- ${p}`);
     }
     if (dg.antiPattern.length > 0) {
-      lines.push("Avoid:");
+      lines.push(i18n.avoid);
       for (const a of dg.antiPattern) lines.push(`- ${a}`);
     }
     lines.push("");
@@ -223,15 +268,70 @@ function deriveInitialEta(
 
 function buildVecSource(
   draft: SkillCrystallizationDraft,
-  policy: PolicyRow,
+  _outputLanguage: SkillOutputLanguage,
+  evidenceUserTexts?: string[],
 ): string {
-  const head = draft.summary || draft.displayTitle || draft.name;
+  const blurb = draft.retrievalBlurb?.trim() ?? "";
   const steps = draft.steps
     .slice(0, 5)
     .map((s) => `${s.title}: ${s.body}`)
     .join("\n");
-  const trigger = policy.trigger;
-  return [head, trigger, steps].filter(Boolean).join("\n");
+  const trigger = draft.triggerContext?.trim() ?? "";
+  const querySnippets = (evidenceUserTexts ?? [])
+    .map((q) => q.trim())
+    .filter((q) => q.length > 0 && q !== "[REDACTED]")
+    .slice(0, 2)
+    .join("\n");
+  return [blurb, trigger, draft.summary, steps, querySnippets].filter(Boolean).join("\n");
+}
+
+function sectionI18n(lang: SkillOutputLanguage): {
+  retrieval: string;
+  summary: string;
+  context: string;
+  preconditions: string;
+  parameters: string;
+  procedure: string;
+  examples: string;
+  tools: string;
+  guidance: string;
+  prefer: string;
+  avoid: string;
+  input: string;
+  expected: string;
+} {
+  if (lang === "zh") {
+    return {
+      retrieval: "检索与适用场景",
+      summary: "概要",
+      context: "触发上下文",
+      preconditions: "前置条件",
+      parameters: "参数",
+      procedure: "执行步骤",
+      examples: "示例",
+      tools: "涉及工具",
+      guidance: "决策指引",
+      prefer: "优先：",
+      avoid: "避免：",
+      input: "输入",
+      expected: "预期",
+    };
+  }
+  return {
+    retrieval: "Retrieval & when to use",
+    summary: "Summary",
+    context: "Context",
+    preconditions: "Preconditions",
+    parameters: "Parameters",
+    procedure: "Procedure",
+    examples: "Examples",
+    tools: "Tools used",
+    guidance: "Decision guidance",
+    prefer: "Prefer:",
+    avoid: "Avoid:",
+    input: "Input",
+    expected: "Expected",
+  };
 }
 
 async function tryEmbed(

@@ -11,6 +11,7 @@
  */
 
 import type { ToolCallDTO } from "../../../agent-contract/dto.js";
+import { reflectionAsText } from "../../capture/types.js";
 import type { TraceRow } from "../../types.js";
 import type { PatternSignature, SignatureComponents } from "./types.js";
 
@@ -86,7 +87,7 @@ function firstErrCode(trace: TraceRow): string {
       return `EXIT_${n}`;
     }
   }
-  const refl = trace.reflection ?? "";
+  const refl = reflectionAsText(trace.reflection) ?? "";
   const m2 = refl.match(/\b([A-Z][A-Z0-9_]{2,}_[A-Z0-9_]+)\b/);
   if (m2) return m2[1].slice(0, 48);
   return MISSING;

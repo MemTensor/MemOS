@@ -77,11 +77,22 @@ algorithm:
     maxTextChars: 4000        # per-turn text cap before truncation
     maxToolOutputChars: 2000  # per-tool-call output cap
     embedTraces: true         # vectorize state+action with the embedder
-    alphaScoring: true        # ask the LLM to grade each reflection (α ∈ [0,1])
-    synthReflections: false   # ask the LLM to WRITE a reflection when missing
-    llmConcurrency: 4         # parallel LLM calls per episode
+    alphaScoring: true        # binary alpha enabled (0/1 only)
+    synthReflections: false   # retained for compatibility (windowed mode ignores synthesis)
+    llmConcurrency: 4         # retained for compatibility
+    batchMode: windowed       # only supported mode
+    batchThreshold: 12        # retained for compatibility; ignored in windowed mode
+    reflectionContextMode: task_downstream      # retained for compatibility
+    longEpisodeReflectMode: per_step_downstream # retained for compatibility
+    downstreamStepCount: 3                      # retained for compatibility
+    taskContextMaxChars: 800                    # used as prompt context cap
+    downstreamContextMaxChars: 1200             # retained for compatibility
+    downstreamPerStepMaxChars: 400              # retained for compatibility
+    synthOutcomeMaxChars: 600                   # retained for compatibility
   reward:
-    gamma: 0.9                # γ discount factor (V7 §0.6 eq. 4/5)
+    gamma: 0.9                # γ 衰减因子，控制远端 step 权重衰减，范围 [0,1]
+    lambda: 0.5               # λ 混合系数：0=仅平坦分配，1=仅按 gamma^(T-t) 衰减，范围 [0,1]
+    delta: 0.1                # δ recovery 增益：当 alpha 从 0 恢复到 >0 时放大权重，范围 >=0
     tauSoftmax: 0.5           # τ for softmax reweighting in Phase 9 L2 induction
     decayHalfLifeDays: 30     # priority decay half-life (V7 §3.3)
     llmScoring: true          # use rubric LLM for R_human; off = heuristic only
@@ -164,6 +175,24 @@ algorithm:
     # is not user-tunable; it's documented in ARCHITECTURE.md §4 and
     # core/retrieval/README.md.)
 ```
+
+### Reflection batching (current behavior)
+
+`algorithm.capture.batchMode` 现在固定为 `windowed`，per-step 反思链路已删除。
+
+- 主窗口：`20`，`overlap=3`，每窗重试 1 次
+- 降级窗口：`9`，`overlap=3`，每窗重试 2 次
+- 输出字段支持 `pivotal(0/1)`；仅当 `alpha=1` 时允许 `pivotal=1`
+- 映射固定：`IRRELEVANT=0`，`RELATED=0.5`，`PIVOTAL=1`，`RELATED_DEFAULT=0.5`
+- 全部失败：整集 episode 强制写入 `reflection=RELATED_DEFAULT`、`alpha=0.5`
+- overlap 冲突合并优先级：`PIVOTAL > RELATED/RELATED_DEFAULT > IRRELEVANT`
+
+`traces.reflection` 为固定枚举：
+
+- `PIVOTAL`
+- `RELATED`
+- `IRRELEVANT`
+- `RELATED_DEFAULT`
 
 #### Tuning cheat-sheet
 

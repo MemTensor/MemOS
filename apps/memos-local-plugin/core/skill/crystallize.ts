@@ -1,21 +1,15 @@
 /**
  * V7 §2.5.2 — LLM-driven skill crystallization.
- *
- * Given a policy + its evidence, we call `SKILL_CRYSTALLIZE_PROMPT` to
- * produce a structured draft. The draft is normalised / clamped to avoid
- * surprising the packager if the LLM emits missing or weird fields.
- *
- * We never call the LLM without evidence — if the caller hands us zero
- * traces we fail fast with `skipped_reason="no-evidence"`.
  */
 
 import type { LlmClient } from "../llm/types.js";
 import { detectModelRefusal } from "../llm/refusal.js";
 import {
-  detectDominantLanguage,
   languageSteeringLine,
 } from "../llm/prompts/index.js";
 import { SKILL_CRYSTALLIZE_PROMPT } from "../llm/prompts/skill-crystallize.js";
+import { SKILL_REBUILD_PROMPT } from "../llm/prompts/skill-rebuild.js";
+import { reflectionAsText } from "../capture/types.js";
 import type { Logger } from "../logger/types.js";
 import {
   sanitizeDerivedList,
@@ -23,9 +17,15 @@ import {
   sanitizeDerivedMarkdownList,
   sanitizeDerivedText,
 } from "../safety/content.js";
-import type { EpisodeId, PolicyRow, SkillRow, TraceRow } from "../types.js";
+import type { EpisodeId, PolicyRow, SkillRow } from "../types.js";
+import type { AnnotatedTrace } from "./evidence.js";
 import { MemosError } from "../../agent-contract/errors.js";
 import { extractToolNames } from "./tool-names.js";
+import { existingSkillSnapshot } from "./merge.js";
+import type { RebuildLevel } from "./rebuild-level.js";
+import { procedureFromSkillRow } from "./merge.js";
+import { normalizeSkillName } from "./name.js";
+import type { SkillOutputLanguage } from "./language.js";
 import type {
   SkillModelRefusalDetails,
   SkillConfig,
@@ -37,46 +37,35 @@ import type {
 
 export interface CrystallizeInput {
   policy: PolicyRow;
-  evidence: TraceRow[];
-  /**
-   * Optional negative evidence: traces from the same context that scored
-   * V < 0. Surfaced to the LLM as `counter_examples` so it can write
-   * concrete `decision_guidance.anti_pattern` lines (V7 §2.4.6 step ⑤
-   * "对比 V 分布生成动作偏好"). Caller decides how to mine these — see
-   * `core/skill/skill.ts` for the live wiring.
-   */
-  counterExamples?: TraceRow[];
-  /** Names of *non-archived* skills, so the LLM can avoid collisions. */
+  evidence: AnnotatedTrace[];
+  counterExamples?: AnnotatedTrace[];
   namingSpace: string[];
-  /**
-   * Episode that triggered this crystallization, when known. Forwarded
-   * to the LLM call so the resulting `system_model_status` audit row
-   * can be grouped with the rest of that episode's pipeline activity in
-   * the Logs viewer.
-   */
   episodeId?: EpisodeId;
+  mode?: "crystallize" | "rebuild";
+  existingSkill?: SkillRow | null;
+  incrementalEvidence?: AnnotatedTrace[];
+  rebuildLevel?: RebuildLevel;
+  outputLanguage?: SkillOutputLanguage;
+  renameAllowed?: boolean;
 }
 
 export interface CrystallizeDeps {
   llm: LlmClient | null;
   log: Logger;
   config: SkillConfig;
-  /** Optional structural validator, allows tests to inject extra rules. */
   validate?: (draft: SkillCrystallizationDraft) => void;
 }
 
 export type CrystallizeResult =
-  | { ok: true; draft: SkillCrystallizationDraft }
+  | { ok: true; draft: SkillCrystallizationDraft; changedSections?: string[] }
   | { ok: false; skippedReason: string; modelRefusal?: SkillModelRefusalDetails };
 
-/**
- * Run one crystallization call and return a normalised draft.
- */
 export async function crystallizeDraft(
   input: CrystallizeInput,
   deps: CrystallizeDeps,
 ): Promise<CrystallizeResult> {
   const { llm, log, config } = deps;
+  const mode = input.mode ?? "crystallize";
 
   if (input.evidence.length === 0) {
     log.warn("skill.crystallize.skip", {
@@ -98,31 +87,25 @@ export async function crystallizeDraft(
     return { ok: false, skippedReason: "llm-disabled" };
   }
 
-  const userPayload = packPrompt(input, config);
+  const promptDef =
+    mode === "rebuild" ? SKILL_REBUILD_PROMPT : SKILL_CRYSTALLIZE_PROMPT;
+  const userPayload = packPrompt(input, config, mode);
 
-  // Detect the language of the evidence so the crystallised skill's
-  // human-facing fields (display_title, summary, preconditions, steps,
-  // examples) come out in the same language the user was using. The
-  // `name` slug stays snake_case regardless — enforced by `sanitiseName`.
-  const evidenceLang = detectDominantLanguage([
-    input.policy.title,
-    input.policy.trigger,
-    input.policy.procedure,
-    ...input.evidence.flatMap((t) => [t.userText, t.agentText, t.reflection]),
-  ]);
+  const outputLanguage = input.outputLanguage ?? "en";
 
   try {
     const rsp = await llm.completeJson<Record<string, unknown>>(
       [
-        { role: "system", content: SKILL_CRYSTALLIZE_PROMPT.system },
-        { role: "system", content: languageSteeringLine(evidenceLang) },
+        { role: "system", content: promptDef.system },
+        { role: "system", content: languageSteeringLine(outputLanguage) },
         { role: "user", content: userPayload },
       ],
       {
-        op: "skill.crystallize",
+        op: mode === "rebuild" ? "skill.rebuild" : "skill.crystallize",
         phase: "skill",
         episodeId: input.episodeId,
-        schemaHint: "skill-crystallize.v2",
+        schemaHint:
+          mode === "rebuild" ? "skill-rebuild.v3" : "skill-crystallize.v6",
       },
     );
     const rawRefusal = detectModelRefusal(rsp.raw);
@@ -135,11 +118,15 @@ export async function crystallizeDraft(
       };
       log.error("skill.crystallize.model_refusal", {
         policyId: input.policy.id,
+        mode,
         ...modelRefusal,
       });
       return { ok: false, skippedReason: "llm-refusal", modelRefusal };
     }
     const draft = normaliseDraft(rsp.value, input);
+    const changedSections = asStringArray(
+      rsp.value.changed_sections ?? rsp.value.changedSections,
+    );
     const draftRefusal = detectModelRefusal(draft);
     if (draftRefusal) {
       const modelRefusal = {
@@ -150,12 +137,17 @@ export async function crystallizeDraft(
       };
       log.error("skill.crystallize.model_refusal", {
         policyId: input.policy.id,
+        mode,
         ...modelRefusal,
       });
       return { ok: false, skippedReason: "llm-refusal", modelRefusal };
     }
     if (deps.validate) deps.validate(draft);
-    return { ok: true, draft };
+    return {
+      ok: true,
+      draft,
+      changedSections: changedSections.length > 0 ? changedSections : undefined,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const rawPreview = rawPreviewFromError(err);
@@ -169,12 +161,13 @@ export async function crystallizeDraft(
       };
       log.error("skill.crystallize.model_refusal", {
         policyId: input.policy.id,
+        mode,
         error: message,
         ...modelRefusal,
       });
       return { ok: false, skippedReason: "llm-refusal", modelRefusal };
     }
-    log.error("skill.crystallize.failed", { policyId: input.policy.id, error: message });
+    log.error("skill.crystallize.failed", { policyId: input.policy.id, mode, error: message });
     return { ok: false, skippedReason: `llm-failed: ${message}` };
   }
 }
@@ -193,19 +186,11 @@ function providerFromError(err: unknown): string | null {
   return null;
 }
 
-/**
- * Produce a deterministic JSON payload for the LLM.
- *
- * V7 §2.4.6: surface the policy's structured `decisionGuidance` as a
- * separate `repair_hints` field so the prompt schema is unambiguous —
- * the LLM never sees our internal storage shape, and the boundary text
- * stays a clean human-readable scope description.
- *
- * `counter_examples` are evidence rows with V < 0 — caller-provided
- * (see `core/skill/skill.ts::gatherCounterExamples`); the prompt
- * marks them optional so it's fine to omit.
- */
-function packPrompt(input: CrystallizeInput, config: SkillConfig): string {
+function packPrompt(
+  input: CrystallizeInput,
+  config: SkillConfig,
+  mode: "crystallize" | "rebuild",
+): string {
   const repairHints = input.policy.decisionGuidance;
 
   const policy = {
@@ -219,36 +204,42 @@ function packPrompt(input: CrystallizeInput, config: SkillConfig): string {
     gain: input.policy.gain,
   };
 
-  const evidence = input.evidence.slice(0, config.evidenceLimit).map((t) => ({
-    id: t.id,
-    episodeId: t.episodeId,
-    reflection: t.reflection,
-    user: capString(t.userText, config.traceCharCap),
-    agent: capString(t.agentText, config.traceCharCap),
-    value: Number.isFinite(t.value) ? t.value : 0,
-    alpha: typeof t.alpha === "number" ? t.alpha : null,
-    tags: t.tags,
-  }));
+  const mapTrace = (a: AnnotatedTrace) => ({
+    id: a.trace.id,
+    episodeId: a.trace.episodeId,
+    reflection: reflectionAsText(a.trace.reflection),
+    user: capString(a.trace.userText, config.traceCharCap),
+    agent: capString(a.trace.agentText, config.traceCharCap),
+    value: Number.isFinite(a.trace.value) ? a.trace.value : 0,
+    alpha: typeof a.trace.alpha === "number" ? a.trace.alpha : null,
+    tags: a.trace.tags,
+    episode_outcome: a.episodeOutcome,
+    episode_r_task: a.episodeRTask,
+  });
+
+  const evidence = input.evidence.slice(0, config.evidenceLimit).map(mapTrace);
 
   const counterExamples = (input.counterExamples ?? [])
     .slice(0, Math.max(0, config.evidenceLimit))
-    .map((t) => ({
-      id: t.id,
-      episodeId: t.episodeId,
-      reflection: t.reflection,
-      user: capString(t.userText, config.traceCharCap),
-      agent: capString(t.agentText, config.traceCharCap),
-      value: Number.isFinite(t.value) ? t.value : 0,
-      tags: t.tags,
-    }));
+    .map(mapTrace);
 
-  const evidenceTools = Array.from(extractToolNames(input.evidence));
+  const incremental = (input.incrementalEvidence ?? [])
+    .slice(0, config.evidenceLimit)
+    .map(mapTrace);
+
+  const evidenceTools = Array.from(
+    extractToolNames([
+      ...input.evidence.map((a) => a.trace),
+      ...(input.incrementalEvidence ?? []).map((a) => a.trace),
+    ]),
+  );
 
   const payload: Record<string, unknown> = {
     policy,
     evidence,
     evidence_tools: evidenceTools,
     naming_space: input.namingSpace,
+    output_language: input.outputLanguage ?? "en",
   };
   if (counterExamples.length > 0) payload.counter_examples = counterExamples;
   if (
@@ -260,23 +251,51 @@ function packPrompt(input: CrystallizeInput, config: SkillConfig): string {
       antiPattern: repairHints.antiPattern,
     };
   }
+
+  if (mode === "rebuild" && input.existingSkill) {
+    const proc = procedureFromSkillRow(input.existingSkill.procedureJson);
+    payload.existing_skill_snapshot = existingSkillSnapshot(
+      proc,
+      input.existingSkill.name,
+    );
+    payload.rebuild_level = input.rebuildLevel ?? "L1";
+    payload.repair_rename_allowed = Boolean(input.renameAllowed);
+    if (incremental.length > 0) payload.incremental_evidence = incremental;
+  }
+
   return JSON.stringify(payload);
 }
 
-/**
- * Clamp + shape-guard the LLM response. We intentionally never throw on
- * missing fields — the caller's validator decides whether a draft is good
- * enough to persist.
- */
 function normaliseDraft(
   raw: Record<string, unknown>,
   input: CrystallizeInput,
 ): SkillCrystallizationDraft {
+  // §12 A — first L2 rebuild of a repair-origin skill is allowed to rename;
+  // every other rebuild keeps the existing name verbatim. The orchestrator
+  // sets `renameAllowed=true` only when that single-use gate fires, so we
+  // honour the LLM-generated `name` exactly when it does.
+  const lockName =
+    input.mode === "rebuild" && input.existingSkill && !input.renameAllowed
+      ? input.existingSkill.name
+      : null;
   const rawName = String(raw.name ?? "").trim();
-  const name = sanitiseName(rawName || `skill_${input.policy.id.slice(-6)}`);
-  const displayTitle =
-    sanitizeDerivedText(raw.display_title ?? raw.displayTitle ?? input.policy.title ?? name) ||
-    name;
+  // Empty-rawName fallback: only reuse the existing skill name during a
+  // rename-allowed rebuild (LLM declined the rename → keep current name).
+  // Crystallize mode may receive an *archived* existingSkill from
+  // eligibility; reusing that name would collide with the
+  // (owner, name) UNIQUE index, so we always mint a fresh id-based slug
+  // there.
+  const emptyFallback =
+    input.mode === "rebuild" && input.renameAllowed && input.existingSkill
+      ? input.existingSkill.name
+      : `skill_${input.policy.id.slice(-6)}`;
+  const name = lockName ?? normalizeSkillName(rawName || emptyFallback);
+  const retrievalBlurb = sanitizeDerivedMarkdown(
+    raw.retrieval_blurb ?? raw.retrievalBlurb ?? "",
+  );
+  const triggerContext = sanitizeDerivedText(
+    raw.trigger_context ?? raw.triggerContext ?? "",
+  );
   const summary = sanitizeDerivedText(raw.summary);
 
   const parameters = asArray(raw.parameters).map(coerceParameter).filter(Boolean) as SkillParameterDraft[];
@@ -284,16 +303,13 @@ function normaliseDraft(
   const steps = asArray(raw.steps).map(coerceStep).filter(Boolean) as SkillStepDraft[];
   const examples = asArray(raw.examples).map(coerceExample).filter(Boolean) as SkillExampleDraft[];
   const tags = dedupeLc(sanitizeDerivedList(asStringArray(raw.tags)));
-  // V7 §2.4.6 — coerce both `decision_guidance` (preferred LLM key)
-  // and `decisionGuidance` (camelCase fallback). Caps at 5 entries each
-  // to keep the skill body skim-able and the prompt budget bounded.
   const decisionGuidance = coerceDecisionGuidance(raw.decision_guidance ?? raw.decisionGuidance);
-
   const tools = dedupeLc(sanitizeDerivedList(asStringArray(raw.tools)));
 
   return {
     name,
-    displayTitle,
+    retrievalBlurb,
+    triggerContext,
     summary,
     parameters,
     preconditions,
@@ -318,15 +334,6 @@ function coerceDecisionGuidance(raw: unknown): {
     sanitizeDerivedMarkdownList(asStringArray(o.anti_pattern ?? o.antiPattern)),
   ).slice(0, 5);
   return { preference: pref, antiPattern: anti };
-}
-
-function sanitiseName(raw: string): string {
-  const lower = raw.toLowerCase();
-  const out = lower
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 32);
-  return out.length > 0 ? out : "skill";
 }
 
 function asArray(x: unknown): unknown[] {
@@ -392,13 +399,12 @@ function capString(s: string, cap: number): string {
   return s.slice(0, cap) + "…";
 }
 
-/**
- * A sensible default validator used both in production and in tests.
- * Throws if the draft is structurally unusable (no name, no steps, no summary).
- */
 export function defaultDraftValidator(draft: SkillCrystallizationDraft): void {
   if (!draft.name) throw new Error("skill.crystallize.invalid: missing name");
   if (!draft.summary) throw new Error("skill.crystallize.invalid: missing summary");
+  if (!draft.retrievalBlurb) {
+    throw new Error("skill.crystallize.invalid: missing retrieval_blurb");
+  }
   if (draft.steps.length === 0)
     throw new Error("skill.crystallize.invalid: missing steps");
 }

@@ -81,6 +81,10 @@ export function makeInMemoryEpisodesRepo(): {
       const cur = rows.get(id);
       if (cur) cur.meta = { ...cur.meta, ...metaPatch };
     },
+    setStartedAt(id, ts) {
+      const cur = rows.get(id);
+      if (cur && cur.startedAt > ts) cur.startedAt = ts;
+    },
     close(id, endedAt, rTask, meta) {
       const cur = rows.get(id);
       if (!cur) return;

@@ -35,7 +35,8 @@ function step(
 }
 
 function input(s: NormalizedStep, existing: string | null = null): BatchScoreInput {
-  return { step: s, existingReflection: existing };
+  void existing;
+  return { step: s };
 }
 
 describe("batchScoreReflections", () => {
@@ -43,9 +44,8 @@ describe("batchScoreReflections", () => {
 
   it("empty inputs short-circuit without an LLM call", async () => {
     const llm = throwingLlm(new Error("would have crashed"));
-    const out = await batchScoreReflections(llm, [], { synthReflections: true });
+    const out = await batchScoreReflections(llm, [], {});
     expect(out.scores).toEqual([]);
-    expect(out.synthAccepted).toBe(0);
   });
 
   it("respects out-of-order idx in the LLM response", async () => {
@@ -53,8 +53,8 @@ describe("batchScoreReflections", () => {
       completeJson: {
         [BATCH_OP_TAG]: {
           scores: [
-            { idx: 1, reflection_text: "second", alpha: 0.4, usable: true },
-            { idx: 0, reflection_text: "first", alpha: 0.7, usable: true },
+            { idx: 1, relevance: "IRRELEVANT", reason: "DETOUR" },
+            { idx: 0, relevance: "PIVOTAL", reason: "TURNING_POINT" },
           ],
         },
       },
@@ -65,18 +65,18 @@ describe("batchScoreReflections", () => {
         input(step({ userText: "u0", agentText: "a0" }), "first"),
         input(step({ userText: "u1", agentText: "a1" }), "second"),
       ],
-      { synthReflections: true },
+      {},
     );
-    expect(out.scores[0]!.text).toBe("first");
-    expect(out.scores[0]!.alpha).toBeCloseTo(0.7, 5);
-    expect(out.scores[1]!.text).toBe("second");
-    expect(out.scores[1]!.alpha).toBeCloseTo(0.4, 5);
+    expect(out.scores[0]!.text).toBe("PIVOTAL");
+    expect(out.scores[0]!.alpha).toBe(1);
+    expect(out.scores[1]!.text).toBe("IRRELEVANT");
+    expect(out.scores[1]!.alpha).toBe(0);
   });
 
   it("rejects responses with mismatched length", async () => {
     const llm = fakeLlm({
       completeJson: {
-        [BATCH_OP_TAG]: { scores: [{ idx: 0, reflection_text: "x", alpha: 0.5, usable: true }] },
+        [BATCH_OP_TAG]: { scores: [{ idx: 0, relevance: "IRRELEVANT", reason: "DETOUR" }] },
       },
     });
     await expect(
@@ -86,36 +86,51 @@ describe("batchScoreReflections", () => {
           input(step({ userText: "u0", agentText: "a0" }), "x"),
           input(step({ userText: "u1", agentText: "a1" }), "y"),
         ],
-        { synthReflections: true },
+        {},
       ),
     ).rejects.toThrow(/length mismatch/);
   });
 
-  it("rejects entries with non-number alpha", async () => {
+  it("keeps (relevance, alpha) when reason is missing — no MALFORMED throw", async () => {
     const llm = fakeLlm({
       completeJson: {
         [BATCH_OP_TAG]: {
-          scores: [{ idx: 0, reflection_text: "x", alpha: "bad", usable: true }],
+          scores: [{ idx: 0, relevance: "PIVOTAL" }],
+        },
+      },
+    });
+    const out = await batchScoreReflections(
+      llm,
+      [input(step({ userText: "u", agentText: "a" }), "x")],
+      {},
+    );
+    expect(out.scores[0]!.text).toBe("PIVOTAL");
+    expect(out.scores[0]!.alpha).toBe(1);
+    expect(out.scores[0]!.reason).toBeNull();
+  });
+
+  it("rejects entries with illegal relevance", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [BATCH_OP_TAG]: {
+          scores: [{ idx: 0, relevance: "RELATED_DEFAULT", reason: "BAD_ENUM" }],
         },
       },
     });
     await expect(
-      batchScoreReflections(llm, [input(step({ userText: "u", agentText: "a" }), "x")], {
-        synthReflections: true,
-      }),
-    ).rejects.toThrow(/alpha must be number/);
+      batchScoreReflections(llm, [input(step({ userText: "u", agentText: "a" }), "x")], {}),
+    ).rejects.toThrow(/relevance must be IRRELEVANT\/RELATED\/PIVOTAL/);
   });
 
-  it("synth disabled + empty existing → discards LLM-written text, α=0", async () => {
+  it("maps IRRELEVANT to alpha=0", async () => {
     const llm = fakeLlm({
       completeJson: {
         [BATCH_OP_TAG]: {
           scores: [
             {
               idx: 0,
-              reflection_text: "Confidently fabricated reflection.",
-              alpha: 0.8,
-              usable: true,
+              relevance: "IRRELEVANT",
+              reason: "DETOUR",
             },
           ],
         },
@@ -124,24 +139,22 @@ describe("batchScoreReflections", () => {
     const out = await batchScoreReflections(
       llm,
       [input(step({ userText: "u", agentText: "a" }), null)],
-      { synthReflections: false },
+      {},
     );
-    expect(out.scores[0]!.text).toBeNull();
+    expect(out.scores[0]!.text).toBe("IRRELEVANT");
     expect(out.scores[0]!.alpha).toBe(0);
-    expect(out.scores[0]!.source).toBe("none");
-    expect(out.synthAccepted).toBe(0);
+    expect(out.scores[0]!.source).toBe("synth");
   });
 
-  it("synth enabled + empty existing → adopts LLM text and reports synthAccepted", async () => {
+  it("maps RELATED to alpha=0.5", async () => {
     const llm = fakeLlm({
       completeJson: {
         [BATCH_OP_TAG]: {
           scores: [
             {
               idx: 0,
-              reflection_text: "I picked tool X because the user asked for Y.",
-              alpha: 0.6,
-              usable: true,
+              relevance: "RELATED",
+              reason: "ON_PATH",
             },
           ],
         },
@@ -150,10 +163,54 @@ describe("batchScoreReflections", () => {
     const out = await batchScoreReflections(
       llm,
       [input(step({ userText: "u", agentText: "a" }), null)],
-      { synthReflections: true },
+      {},
     );
-    expect(out.scores[0]!.text).toContain("tool X");
+    expect(out.scores[0]!.text).toBe("RELATED");
     expect(out.scores[0]!.source).toBe("synth");
-    expect(out.synthAccepted).toBe(1);
+    expect(out.scores[0]!.alpha).toBe(0.5);
+  });
+
+  it("maps PIVOTAL to alpha=1", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [BATCH_OP_TAG]: {
+          scores: [{ idx: 0, relevance: "PIVOTAL", reason: "RECOVERY" }],
+        },
+      },
+    });
+    const out = await batchScoreReflections(
+      llm,
+      [input(step({ userText: "u", agentText: "a" }), null)],
+      {},
+    );
+    expect(out.scores[0]!.text).toBe("PIVOTAL");
+    expect(out.scores[0]!.alpha).toBe(1);
+  });
+
+  it("forces social-only turns to IRRELEVANT as fallback", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [BATCH_OP_TAG]: {
+          scores: [{ idx: 0, relevance: "PIVOTAL", reason: "TURNING_POINT" }],
+        },
+      },
+    });
+    const out = await batchScoreReflections(
+      llm,
+      [
+        input(
+          step({
+            userText: "你做的很对，运行起来也很流畅，棒！",
+            agentText: "谢谢夸奖！有需要随时说。",
+            toolCalls: [],
+          }),
+          null,
+        ),
+      ],
+      {},
+    );
+    expect(out.scores[0]!.text).toBe("IRRELEVANT");
+    expect(out.scores[0]!.alpha).toBe(0);
+    expect(out.scores[0]!.reason).toBe("SOCIAL_ONLY");
   });
 });

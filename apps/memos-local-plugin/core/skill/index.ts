@@ -19,10 +19,22 @@ export {
   type EligibilityResult,
 } from "./eligibility.js";
 export {
+  gatherCounterExamples,
   gatherEvidence,
+  gatherIncrementalEvidence,
+  type AnnotatedTrace,
   type EvidenceDeps,
   type EvidenceResult,
+  type IncrementalEvidenceResult,
 } from "./evidence.js";
+export {
+  computeRebuildLevel,
+  policyContentHash,
+  type RebuildLevel,
+} from "./rebuild-level.js";
+export { mergeRebuildDraft, procedureFromSkillRow } from "./merge.js";
+export { resolveSkillOutputLanguage, type SkillOutputLanguage } from "./language.js";
+export { normalizeSkillName, deriveNameFromText, uniquifySkillName } from "./name.js";
 export {
   applyFeedback,
   recomputeEta,
@@ -40,6 +52,13 @@ export {
   runSkill,
   type RunSkillDeps,
 } from "./skill.js";
+export {
+  isRepairCandidatePolicy,
+  deriveStrictTrial,
+  mintRepairCandidate,
+  REPAIR_CANDIDATE_INITIAL_ETA,
+  type MintRepairCandidateDeps,
+} from "./repair-candidate.js";
 export { attachSkillSubscriber, type SkillSubscriberDeps, type SkillSubscriberHandle } from "./subscriber.js";
 export { createSkillEventBus } from "./events.js";
 export { extractToolNames } from "./tool-names.js";

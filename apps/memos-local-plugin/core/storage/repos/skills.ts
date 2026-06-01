@@ -41,6 +41,8 @@ const COLUMNS = [
   "evidence_anchors_json",
   "usage_count",
   "last_used_at",
+  "repair_origin",
+  "strict_trial",
 ];
 
 export interface SkillSearchMeta {
@@ -401,6 +403,8 @@ interface RawSkillRow {
   evidence_anchors_json: string;
   usage_count: number;
   last_used_at: number | null;
+  repair_origin: number;
+  strict_trial: number;
 }
 
 function rowToParams(row: SkillRow): Record<string, unknown> {
@@ -429,6 +433,8 @@ function rowToParams(row: SkillRow): Record<string, unknown> {
     evidence_anchors_json: toJsonText(row.evidenceAnchors),
     usage_count: row.usageCount ?? 0,
     last_used_at: row.lastUsedAt ?? null,
+    repair_origin: row.repairOrigin ? 1 : 0,
+    strict_trial: row.strictTrial ? 1 : 0,
   };
 }
 
@@ -470,5 +476,7 @@ function mapRow(r: RawSkillRow): SkillRow {
     editedAt: r.edited_at,
     usageCount: r.usage_count ?? 0,
     lastUsedAt: r.last_used_at ?? null,
+    repairOrigin: (r.repair_origin ?? 0) !== 0,
+    strictTrial: (r.strict_trial ?? 0) !== 0,
   };
 }

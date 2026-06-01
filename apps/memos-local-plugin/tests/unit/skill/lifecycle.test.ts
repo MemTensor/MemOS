@@ -23,6 +23,8 @@ function mkSkill(partial: Partial<SkillRow> = {}): SkillRow {
     createdAt: partial.createdAt ?? NOW,
     updatedAt: partial.updatedAt ?? NOW,
     version: partial.version ?? 1,
+    repairOrigin: partial.repairOrigin,
+    strictTrial: partial.strictTrial,
   };
 }
 
@@ -59,6 +61,41 @@ describe("skill/lifecycle", () => {
     expect(fifth.transition).toBe("archived");
   });
 
+  it("holds repair-origin candidates to a stricter promotion floor (1-of-3 archives where a normal candidate promotes)", () => {
+    const cfg = makeSkillConfig({
+      candidateTrials: 3,
+      minEtaForRetrieval: 0.1,
+      repairCandidateMinEta: 0.5,
+      archiveEta: 0.1,
+    });
+    // 1 pass, 2 fails → η ≈ 0.275 after 3 trials.
+    const run = (repairOrigin: boolean) => {
+      let s = mkSkill({ status: "candidate", eta: 0.1, repairOrigin });
+      s = { ...s, ...applyFeedback(s, "trial.pass", cfg) };
+      s = { ...s, ...applyFeedback(s, "trial.fail", cfg) };
+      return applyFeedback(s, "trial.fail", cfg);
+    };
+    // A normal candidate clears the 0.1 floor and promotes...
+    expect(run(false).status).toBe("active");
+    // ...but the unproven repair needs a majority of real passes — 1-of-3 archives.
+    expect(run(true).status).toBe("archived");
+  });
+
+  it("promotes a repair-origin candidate once a majority of trials pass (2-of-3)", () => {
+    const cfg = makeSkillConfig({
+      candidateTrials: 3,
+      minEtaForRetrieval: 0.1,
+      repairCandidateMinEta: 0.5,
+      archiveEta: 0.1,
+    });
+    let s = mkSkill({ status: "candidate", eta: 0.1, repairOrigin: true });
+    s = { ...s, ...applyFeedback(s, "trial.pass", cfg) };
+    s = { ...s, ...applyFeedback(s, "trial.pass", cfg) };
+    const after = applyFeedback(s, "trial.fail", cfg);
+    expect(after.status).toBe("active");
+    expect(after.transition).toBe("promoted");
+  });
+
   it("promotes candidate → active once enough passing trials accrue", () => {
     const cfg = makeSkillConfig({ candidateTrials: 3, minEtaForRetrieval: 0.5 });
     let s = mkSkill({ status: "candidate" });
@@ -77,6 +114,37 @@ describe("skill/lifecycle", () => {
     const after = applyFeedback(s, "trial.fail", cfg);
     expect(after.status).toBe("archived");
     expect(after.transition).toBe("archived");
+  });
+
+  it("protects an unproven repair candidate from a thumbs-down (deduct but never archive/hide)", () => {
+    const cfg = makeSkillConfig({ etaDelta: 0.1, archiveEta: 0.1, minEtaForRetrieval: 0.1 });
+    // The repair candidate survives a down-vote and stays surfaceable —
+    // its fate is left to real trials.
+    const repair = applyFeedback(
+      mkSkill({ status: "candidate", eta: 0.1, repairOrigin: true }),
+      "user.negative",
+      cfg,
+    );
+    expect(repair.status).toBe("candidate");
+    expect(repair.eta).toBeGreaterThanOrEqual(0.1);
+    // A normal candidate at the same η does get archived by the down-vote.
+    const normal = applyFeedback(mkSkill({ status: "candidate", eta: 0.1 }), "user.negative", cfg);
+    expect(normal.status).toBe("archived");
+  });
+
+  it("still lets a failing trial archive a repair candidate (fate decided by trials, not thumbs)", () => {
+    const cfg = makeSkillConfig({
+      candidateTrials: 1,
+      archiveEta: 0.1,
+      minEtaForRetrieval: 0.1,
+      repairCandidateMinEta: 0.5,
+    });
+    const after = applyFeedback(
+      mkSkill({ status: "candidate", eta: 0.1, repairOrigin: true }),
+      "trial.fail",
+      cfg,
+    );
+    expect(after.status).toBe("archived");
   });
 
   it("handles user thumbs", () => {

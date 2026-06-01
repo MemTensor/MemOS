@@ -535,6 +535,22 @@ export function makeTracesRepo(db: StorageDb) {
     },
 
     /**
+     * Full episode-scoped trace fetch with NO pagination cap. The paginated
+     * `list({ episodeId })` path silently truncates to 500 rows (default 50),
+     * which breaks capture-side dedup when an episode has more than the cap
+     * worth of steps — the next runLite/runReflect re-inserts everything past
+     * the cap as "novel". Use this for any dedup / reconciliation read.
+     */
+    listAllForEpisode(episodeId: EpisodeId): TraceRow[] {
+      const sql =
+        `SELECT ${COLUMNS.join(", ")} FROM traces WHERE episode_id = @episode_id ORDER BY ts ASC`;
+      return db
+        .prepare<{ episode_id: string }, RawTraceRow>(sql)
+        .all({ episode_id: episodeId })
+        .map(mapRow);
+    },
+
+    /**
      * Partial content patch applied by the viewer's "Edit" modal.
      * Only user-facing text fields are mutable — `ts`, `value`,
      * `alpha`, `priority`, and vectors are owned by the capture /

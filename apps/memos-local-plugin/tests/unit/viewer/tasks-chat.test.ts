@@ -27,12 +27,13 @@ function trace(part: Partial<TimelineTrace>): TimelineTrace {
     agentThinking: part.agentThinking ?? null,
     reflection: part.reflection ?? null,
     value: part.value ?? 0,
+    alpha: part.alpha,
     toolCalls: part.toolCalls ?? [],
   };
 }
 
 describe("flattenChat", () => {
-  it("emits user → tool cards with thinking → assistant; reflection is dropped", () => {
+  it("emits user → tool cards with thinking → assistant and attaches reflection metadata", () => {
     const t = trace({
       id: "tr1",
       userText: "go fix the deploy",
@@ -74,15 +75,12 @@ describe("flattenChat", () => {
     expect(msgs[1]!.errorCode).toBe("EXIT_1");
     expect(msgs[1]!.toolDurationMs).toBe(190);
     expect(msgs[3]!.text).toBe("done — see PR #42");
-    for (const m of msgs) {
-      expect(m.text).not.toContain("INTERNAL: scoring note");
-    }
+    expect(msgs[1]!.relatedLabel).toContain("INTERNAL: scoring note");
+    expect(msgs[3]!.relatedLabel).toContain("INTERNAL: scoring note");
+    expect(msgs[1]!.scoreLabel).toBe("V 0.00");
   });
 
-  it("never emits a thinking bubble when the trace only has a reflection", () => {
-    // V7 §0.1 separation regression: reflection is plugin-internal
-    // scoring data and must NOT pollute the conversation log even
-    // when no agentThinking is present.
+  it("does not emit a standalone bubble when only reflection exists", () => {
     const t = trace({
       id: "tr_nothink",
       userText: "x",
@@ -91,6 +89,7 @@ describe("flattenChat", () => {
     });
     const msgs = flattenChat([t]);
     expect(msgs.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(msgs[1]!.relatedLabel).toBe("this should not appear in the chat log");
   });
 
   it("sorts tool calls within a trace by startedAt", () => {
@@ -177,6 +176,20 @@ describe("flattenChat", () => {
     });
     const msgs = flattenChat([t]);
     expect(msgs.map((m) => m.role)).toEqual(["tool"]);
+  });
+
+  it("formats score label with alpha when available", () => {
+    const t = trace({
+      id: "tr_score",
+      userText: "q",
+      agentText: "a",
+      value: 0.88,
+      alpha: 0.42,
+    });
+    const msgs = flattenChat([t]);
+    const nonUser = msgs.filter((m) => m.role !== "user");
+    expect(nonUser).toHaveLength(1);
+    expect(nonUser[0]!.scoreLabel).toBe("V 0.88 · α 0.42");
   });
 
   it("serialises object tool inputs as pretty JSON, leaves strings alone", () => {

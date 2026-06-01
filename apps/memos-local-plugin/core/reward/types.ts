@@ -23,6 +23,10 @@ import type {
 export interface RewardConfig {
   /** V7 §0.6 eq. 4/5: discount factor γ. */
   gamma: number;
+  /** Position-bias mixing factor λ: 0 => flat, 1 => pure γ^(T-t). */
+  lambda: number;
+  /** Recovery boost δ for first non-zero step after an IRRELEVANT step. */
+  delta: number;
   /** V7 §2.4.5 eq. 3: softmax τ (used downstream by L2 induction; we just expose it here). */
   tauSoftmax: number;
   /** V7 §3.3: priority decay half-life in days. */
@@ -136,6 +140,10 @@ export interface BackpropInput {
   rHuman: number;
   /** Discount factor γ ∈ [0, 1]. */
   gamma: number;
+  /** Position-bias mixing factor λ ∈ [0, 1]. */
+  lambda: number;
+  /** Recovery boost δ ∈ [0, +∞). */
+  delta: number;
   /** Decay half-life in days (for priority). */
   decayHalfLifeDays: number;
   /** Anchor time for the decay calculation (ms). Defaults to `Date.now()`. */
@@ -161,6 +169,8 @@ export interface BackpropResult {
   /** γ / half-life / anchor recorded for audit. */
   echoParams: {
     gamma: number;
+    lambda: number;
+    delta: number;
     decayHalfLifeDays: number;
     now: EpochMs;
   };

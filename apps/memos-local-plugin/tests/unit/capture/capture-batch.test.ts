@@ -1,25 +1,12 @@
 /**
- * Capture pipeline — batched reflection+α path (V7 §3.2 batched variant).
- *
- * These tests exercise `algorithm.capture.batchMode = "auto" | "per_episode"`
- * and prove that:
- *   1. one LLM call covers all step's ρ + α (no per-step calls);
- *   2. existing reflections are preserved verbatim;
- *   3. synth-disabled steps stay at α=0 even when the LLM tries to write
- *      one for them;
- *   4. `auto` mode falls back to per-step when stepCount > batchThreshold;
- *   5. a malformed batched response degrades into the per-step path
- *      instead of crashing capture.
+ * Capture pipeline — windowed binary reflection/alpha path.
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createCaptureRunner, type CaptureRunner } from "../../../core/capture/capture.js";
 import { createCaptureEventBus } from "../../../core/capture/events.js";
-import {
-  BATCH_REFLECTION_PROMPT,
-  REFLECTION_SCORE_PROMPT,
-} from "../../../core/llm/prompts/reflection.js";
+import { BATCH_REFLECTION_PROMPT } from "../../../core/llm/prompts/reflection.js";
 import type {
   CaptureConfig,
   CaptureEvent,
@@ -38,7 +25,6 @@ import { fakeLlm } from "../../helpers/fake-llm.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 
 const batchOp = `capture.${BATCH_REFLECTION_PROMPT.id}.v${BATCH_REFLECTION_PROMPT.version}`;
-const alphaOp = `capture.alpha.${REFLECTION_SCORE_PROMPT.id}.v${REFLECTION_SCORE_PROMPT.version}`;
 
 /**
  * Drives both phases of the new capture lifecycle (lite write → reflect
@@ -80,7 +66,7 @@ function baseConfig(overrides: Partial<CaptureConfig> = {}): CaptureConfig {
     alphaScoring: true,
     synthReflections: true,
     llmConcurrency: 2,
-    batchMode: "auto",
+    batchMode: "windowed",
     batchThreshold: 12,
     reflectionContextMode: "none",
     longEpisodeReflectMode: "per_step_parallel",
@@ -128,7 +114,7 @@ function episodeSnapshot(opts: {
   };
 }
 
-describe("capture/pipeline (batched ρ+α path)", () => {
+describe("capture/pipeline (windowed binary path)", () => {
   beforeAll(() => initTestLogger());
 
   let tmp: TmpDbHandle;
@@ -180,32 +166,14 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     });
   }
 
-  it("3-step episode → ONE batched LLM call (no per-step alpha/synth)", async () => {
+  it("single window writes tri-valued reflections and social fallback", async () => {
     const llm = fakeLlm({
       completeJson: {
         [batchOp]: {
           scores: [
-            {
-              idx: 0,
-              reflection_text: "I asked for the file list because it was needed.",
-              alpha: 0.6,
-              usable: true,
-              reason: "ok",
-            },
-            {
-              idx: 1,
-              reflection_text: "I narrowed the search to the src tree.",
-              alpha: 0.7,
-              usable: true,
-              reason: "good",
-            },
-            {
-              idx: 2,
-              reflection_text: "I confirmed the result and stopped.",
-              alpha: 0.5,
-              usable: true,
-              reason: "ok",
-            },
+            { idx: 0, relevance: "RELATED", reason: "ON_PATH" },
+            { idx: 1, relevance: "IRRELEVANT", reason: "DETOUR" },
+            { idx: 2, relevance: "PIVOTAL", reason: "TURNING_POINT" },
           ],
         },
       },
@@ -233,281 +201,92 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     expect(result.llmCalls.alphaScoring).toBe(0);
 
     const rows = result.traceIds.map((id) => tmp.repos.traces.getById(id)!);
-    expect(rows[0]!.reflection).toContain("file list");
-    expect(rows[0]!.alpha).toBeCloseTo(0.6, 5);
-    expect(rows[1]!.alpha).toBeCloseTo(0.7, 5);
-    expect(rows[2]!.alpha).toBeCloseTo(0.5, 5);
+    expect(rows[0]!.reflection).toBe("RELATED");
+    expect(rows[0]!.alpha).toBe(0.5);
+    expect(rows[1]!.reflection).toBe("IRRELEVANT");
+    expect(rows[1]!.alpha).toBe(0);
+    expect(rows[2]!.reflection).toBe("IRRELEVANT");
+    expect(rows[2]!.alpha).toBe(0);
   });
 
-  it("preserves existing adapter-provided reflection verbatim (no rewrite)", async () => {
+  it("window overlap conflict uses alpha=1 override", async () => {
     const llm = fakeLlm({
       completeJson: {
-        // The LLM tries to "improve" the reflection. We must IGNORE that
-        // text and copy the adapter-provided one through.
-        [batchOp]: {
-          scores: [
-            {
-              idx: 0,
-              reflection_text: "LLM-rewritten reflection that should be ignored.",
-              alpha: 0.8,
-              usable: true,
-              reason: "good",
-            },
-          ],
+        [batchOp]: (input) => {
+          const messages = input as Array<{ role: string; content: string }>;
+          const payload = JSON.parse(messages.find((m) => m.role === "user")!.content) as {
+            steps: Array<{ idx: number }>;
+          };
+          if (payload.steps.length === 20) {
+            return { scores: payload.steps.map((s) => ({ idx: s.idx, relevance: "IRRELEVANT", reason: "DETOUR" })) };
+          }
+          return { scores: payload.steps.map((s) => ({ idx: s.idx, relevance: "PIVOTAL", reason: "RECOVERY" })) };
         },
       },
     });
     const runner = buildRunner({}, llm);
-
-    const ep = episodeSnapshot({
-      id: "ep_1",
-      sessionId: "se_1",
-      turns: [
-        turn("user", "do x", 1_000),
-        turn("assistant", "done", 1_100, {
-          reflection: "I picked the cheapest tool because user said so.",
-        }),
-      ],
-    });
-
-    const result = await runCapture(runner, ep);
-    const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    // Original reflection survives intact.
-    expect(t.reflection).toBe("I picked the cheapest tool because user said so.");
-    // α is taken from the LLM grading.
-    expect(t.alpha).toBeCloseTo(0.8, 5);
-    expect(result.llmCalls.batchedReflection).toBe(1);
-  });
-
-  it("synthReflections=false discards LLM-written reflections for empty steps", async () => {
-    const llm = fakeLlm({
-      completeJson: {
-        [batchOp]: {
-          scores: [
-            // LLM tries to invent a reflection; with synth disabled we drop it.
-            {
-              idx: 0,
-              reflection_text: "Fabricated reflection by the LLM.",
-              alpha: 0.7,
-              usable: true,
-              reason: "n/a",
-            },
-          ],
-        },
-      },
-    });
-    const runner = buildRunner({ synthReflections: false }, llm);
-
-    const ep = episodeSnapshot({
-      id: "ep_1",
-      sessionId: "se_1",
-      turns: [
-        turn("user", "list files", 1_000),
-        turn("assistant", "ok", 1_100), // no reflection pattern
-      ],
-    });
-    const result = await runCapture(runner, ep);
-    const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    expect(t.reflection).toBeNull();
-    expect(t.alpha).toBe(0); // V7 disabledScore semantics
-  });
-
-  it("auto mode falls back to per-step when stepCount > batchThreshold", async () => {
-    const llm = fakeLlm({
-      completeJson: {
-        // ONLY per-step alpha mock; if batched gets called, the test fails
-        // with "no completeJson mock for op=...batch...".
-        [alphaOp]: { alpha: 0.5, usable: true, reason: "ok" },
-      },
-      complete: {
-        "capture.reflection.synth": "I made this decision deliberately.",
-      },
-    });
-    const runner = buildRunner({ batchMode: "auto", batchThreshold: 2 }, llm);
-
-    // 3 steps → above threshold → per-step path.
-    const ep = episodeSnapshot({
-      id: "ep_1",
-      sessionId: "se_1",
-      turns: [
-        turn("user", "a", 1_000),
-        turn("assistant", "1", 1_010),
-        turn("user", "b", 1_020),
-        turn("assistant", "2", 1_030),
-        turn("user", "c", 1_040),
-        turn("assistant", "3", 1_050),
-      ],
-    });
-
-    const result = await runCapture(runner, ep);
-    expect(result.traceIds).toHaveLength(3);
-    expect(result.llmCalls.batchedReflection).toBe(0);
-    // 3 synth + 3 alpha calls in per-step mode.
-    expect(result.llmCalls.reflectionSynth).toBe(3);
-    expect(result.llmCalls.alphaScoring).toBe(3);
-  });
-
-  it("long per-step downstream mode injects up to three following steps", async () => {
-    const synthPrompts: string[] = [];
-    const alphaPrompts: string[] = [];
-    const llm = fakeLlm({
-      complete: {
-        "capture.reflection.synth": (input) => {
-          const messages = input as Array<{ role: string; content: string }>;
-          synthPrompts.push(messages.find((m) => m.role === "user")?.content ?? "");
-          return "I used this step because it shaped a following decision.";
-        },
-      },
-      completeJson: {
-        [alphaOp]: (input) => {
-          const messages = input as Array<{ role: string; content: string }>;
-          alphaPrompts.push(messages.find((m) => m.role === "user")?.content ?? "");
-          return { alpha: 0.5, usable: true, reason: "ok" };
-        },
-      },
-    });
-    const runner = buildRunner(
-      {
-        batchMode: "auto",
-        batchThreshold: 2,
-        reflectionContextMode: "task_downstream",
-        longEpisodeReflectMode: "per_step_downstream",
-        downstreamStepCount: 3,
-      },
-      llm,
-    );
-
-    const ep = episodeSnapshot({
-      id: "ep_1",
-      sessionId: "se_1",
-      turns: [
-        turn("user", "step zero", 1_000),
-        turn("assistant", "inspect first", 1_010),
-        turn("user", "step one", 1_020),
-        turn("assistant", "tool follows", 1_030, {
-          toolCalls: [{ name: "shell", input: { command: "pwd" }, output: "/tmp/project" }],
-        }),
-        turn("user", "step two", 1_050),
-        turn("assistant", "### Reasoning:\nI reused the tool result.\n\nnext action", 1_060),
-        turn("user", "step three", 1_070),
-        turn("assistant", "finish", 1_080),
-      ],
-    });
-
-    const result = await runCapture(runner, ep);
-
-    expect(result.traceIds).toHaveLength(4);
-    expect(result.llmCalls.batchedReflection).toBe(0);
-    expect(result.llmCalls.reflectionSynth).toBe(3);
-    expect(result.llmCalls.alphaScoring).toBe(4);
-
-    const firstPrompt = synthPrompts[0]!;
-    expect(firstPrompt).toContain("TASK CONTEXT:");
-    expect(firstPrompt).toContain("[step+1] type=tooluse");
-    expect(firstPrompt).toContain("tool_names: shell");
-    expect(firstPrompt).toContain("tool_output: shell: /tmp/project");
-    expect(firstPrompt).toContain("[step+2] type=text");
-    expect(firstPrompt).toContain("[step+3] type=text");
-
-    const step3Prompt = alphaPrompts[2]!;
-    expect(step3Prompt).toContain("[step+1] type=text");
-    expect(step3Prompt).not.toContain("[step+2]");
-    expect(step3Prompt).not.toContain("[step+3]");
-  });
-
-  it("per_episode mode batches even when step count is large", async () => {
-    const scores = Array.from({ length: 5 }, (_, i) => ({
-      idx: i,
-      reflection_text: `reflection #${i}`,
-      alpha: 0.4,
-      usable: true,
-      reason: "ok",
-    }));
-    const llm = fakeLlm({
-      completeJson: { [batchOp]: { scores } },
-    });
-    const runner = buildRunner({ batchMode: "per_episode", batchThreshold: 2 }, llm);
-
     const turns: EpisodeTurn[] = [];
-    for (let i = 0; i < 5; i++) {
-      turns.push(turn("user", `q${i}`, 1_000 + i * 100));
-      turns.push(turn("assistant", `a${i}`, 1_050 + i * 100));
+    for (let i = 0; i < 21; i++) {
+      turns.push(turn("user", `q${i}`, 1_000 + i * 10));
+      turns.push(turn("assistant", `a${i}`, 1_005 + i * 10));
     }
-    const ep = episodeSnapshot({ id: "ep_1", sessionId: "se_1", turns });
-    const result = await runCapture(runner, ep);
-    expect(result.traceIds).toHaveLength(5);
-    expect(result.llmCalls.batchedReflection).toBe(1);
-    expect(result.llmCalls.alphaScoring).toBe(0);
+    const result = await runCapture(runner, episodeSnapshot({ id: "ep_1", sessionId: "se_1", turns }));
+    expect(result.llmCalls.batchedReflection).toBe(2);
+    const rows = result.traceIds.map((id) => tmp.repos.traces.getById(id)!);
+    // idx 17..19 are overlap, should be upgraded to PIVOTAL (alpha=1).
+    expect(rows[17]!.alpha).toBe(1);
+    expect(rows[18]!.alpha).toBe(1);
+    expect(rows[19]!.alpha).toBe(1);
   });
 
-  it("malformed batched response → falls back to per-step + emits warning", async () => {
+  it("all retries failed => episode fallback RELATED_DEFAULT + alpha=0.5", async () => {
     const llm = fakeLlm({
-      completeJson: {
-        // Wrong shape: scores has fewer entries than steps. Validator throws,
-        // capture catches and falls back to per-step.
-        [batchOp]: { scores: [] },
-        [alphaOp]: { alpha: 0.5, usable: true, reason: "ok" },
-      },
-      complete: {
-        "capture.reflection.synth": "I responded after thinking it through.",
-      },
+      completeJson: {},
     });
-    const runner = buildRunner({ batchMode: "per_episode" }, llm);
+    const runner = buildRunner({}, llm);
 
     const ep = episodeSnapshot({
       id: "ep_1",
       sessionId: "se_1",
-      turns: [
-        turn("user", "do x", 1_000),
-        turn("assistant", "done", 1_100),
-      ],
+      turns: [turn("user", "do x", 1_000), turn("assistant", "done", 1_100)],
     });
+
     const result = await runCapture(runner, ep);
-    expect(result.traceIds).toHaveLength(1);
-    expect(result.warnings.some((w) => w.stage === "batch")).toBe(true);
-    expect(result.llmCalls.batchedReflection).toBe(0);
-    // Per-step fallback ran.
-    expect(result.llmCalls.reflectionSynth).toBe(1);
-    expect(result.llmCalls.alphaScoring).toBe(1);
+    const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
+    expect(t.reflection).toBe("RELATED_DEFAULT");
+    expect(t.alpha).toBe(0.5);
+    expect(result.warnings.some((w) => w.message.includes("force RELATED_DEFAULT"))).toBe(true);
   });
 
-  it("usable=false in batched response forces α=0 (V7 eq.5)", async () => {
+  it("degraded pass uses 9-size windows after primary fail", async () => {
     const llm = fakeLlm({
       completeJson: {
-        [batchOp]: {
-          scores: [
-            {
-              idx: 0,
-              reflection_text: "I did things.",
-              alpha: 0.9,
-              usable: false,
-              reason: "tautology",
-            },
-          ],
+        [batchOp]: (input) => {
+          const messages = input as Array<{ role: string; content: string }>;
+          const payload = JSON.parse(messages.find((m) => m.role === "user")!.content) as {
+            steps: Array<{ idx: number }>;
+          };
+          if (payload.steps.length === 20) throw new Error("fail primary window");
+          return { scores: payload.steps.map((s) => ({ idx: s.idx, relevance: "RELATED", reason: "ON_PATH" })) };
         },
       },
     });
     const runner = buildRunner({}, llm);
+
     const ep = episodeSnapshot({
       id: "ep_1",
       sessionId: "se_1",
-      turns: [
-        turn("user", "q", 1_000),
-        turn(
-          "assistant",
-          "### Reasoning:\nI executed the obvious action that any agent would, period.",
-          1_100,
-        ),
-      ],
+      turns: Array.from({ length: 25 }).flatMap((_, i) => [
+        turn("user", `u${i}`, 1_000 + i * 20),
+        turn("assistant", `a${i}`, 1_010 + i * 20),
+      ]),
     });
     const result = await runCapture(runner, ep);
-    const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
-    // Reflection text preserved (came from regex extractor), but α clamped.
-    expect(t.reflection).toContain("obvious action");
-    expect(t.alpha).toBe(0);
+    expect(result.warnings.some((w) => w.message.includes("degrading to smaller windows"))).toBe(true);
+    expect(result.traceIds).toHaveLength(25);
+    expect(result.traceIds.every((id) => tmp.repos.traces.getById(id)!.alpha === 0.5)).toBe(true);
   });
-
-  it("no LLM available → batch dispatch refuses, per-step path runs as today", async () => {
+  it("no LLM available => directly fallback to RELATED_DEFAULT", async () => {
     const runner = buildRunner({ alphaScoring: false }, null);
     const ep = episodeSnapshot({
       id: "ep_1",
@@ -516,8 +295,8 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     });
     const result = await runCapture(runner, ep);
     expect(result.traceIds).toHaveLength(1);
-    expect(result.llmCalls.batchedReflection).toBe(0);
-    expect(result.llmCalls.reflectionSynth).toBe(0);
-    expect(result.llmCalls.alphaScoring).toBe(0);
+    const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
+    expect(t.reflection).toBe("RELATED_DEFAULT");
+    expect(t.alpha).toBe(0.5);
   });
 });

@@ -18,6 +18,7 @@ import { Type, type Static } from "@sinclair/typebox";
 
 import type { AgentKind, RuntimeNamespace, SkillId, TraceId } from "../../agent-contract/dto.js";
 import type { MemoryCore } from "../../agent-contract/memory-core.js";
+import { reflectionAsText } from "../../core/capture/types.js";
 
 import { bridgeSessionId } from "./bridge.js";
 import type {
@@ -242,7 +243,7 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
               episodeId: trace.episodeId,
               ts: trace.ts,
               value: trace.value,
-              reflection: clip(trace.reflection, bodyCap),
+              reflection: clip(reflectionAsText(trace.reflection) ?? undefined, bodyCap),
               userText: clip(trace.userText, bodyCap),
               toolCalls: trace.toolCalls.map((tc) => ({
                 name: tc.name,

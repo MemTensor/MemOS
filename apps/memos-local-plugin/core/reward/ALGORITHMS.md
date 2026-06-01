@@ -64,36 +64,31 @@ final outcome — "did it end well?" matters most). Deterministic, no LLM.
 
 ---
 
-## V7 §0.6 — reflection-weighted backprop
+## V7 §0.6 — normalized credit backprop
 
-> *Equations 4–5:*
-> - `V(f¹_{k,T_k}) = R_human(h_k)`     (terminal case)
-> - `V(f¹_{k,t}) = α_t · R_human(h_k) + (1 - α_t) · γ · V(f¹_{k,t+1})`
+> 当前实现口径（新公式）：
+> - `f_t = (1 - λ) + λ · γ^(T - t)`
+> - `recovery_t = 1 if α_t>0 and t>0 and α_{t-1}=0 else 0`
+> - `r_t = 1 + δ · recovery_t`
+> - `w_t = α_t · f_t · r_t`
+> - `S = Σ_t w_t`
+> - `V_t = 0 (if S=0) else (w_t / S) · R_human`
 
 ### Our implementation (`core/reward/backprop.ts`)
 
-```ts
-let nextV = rHuman;                              // V_{T+1} — sentinel
-for (let i = traces.length - 1; i >= 0; i--) {
-  const alpha = clamp(t.alpha, 0, 1);
-  const V = i === traces.length - 1
-    ? rHuman                                     // V_T = R_human
-    : alpha * rHuman + (1 - alpha) * gamma * nextV;
-  ...
-  nextV = V;
-}
-```
+Implementation computes one normalized weight per step, then scales by
+`R_human`:
 
-- **Walk direction**: right → left so `V_{t+1}` is always available.
-- **α source**: `TraceRow.alpha` filled by capture's alpha-scorer. We
-  clamp defensively to `[0, 1]` in case of bad data.
-- **γ clamp**: `gamma ∈ [0, 1]`. Outside-range values are clipped.
-- **`R_human` clamp**: `[-1, 1]`. Keeps `V_t` in range by construction.
-- **Semantics reproduced**:
-  - α=1 ("aha!" step): `V_t = R_human` — immediate credit, no γ discount.
-  - α=0 (blind trial): `V_t = γ·V_{t+1}` — pure temporal propagation.
-  - middle α: linear blend. Matches V7's "explicit distinction between
-    key findings and blind trial-and-error".
+- **α source**: `TraceRow.alpha` from capture (`0 / 0.5 / 1`), defensively
+  clamped to `[0, 1]`.
+- **fading term `f_t`**: mixes flat mass and temporal decay by `lambda`.
+- **recovery boost `r_t`**: only applies when trajectory re-enters
+  relevant path (`α: 0 → >0`).
+- **normalization**: `Σ V_t = R_human` whenever `S>0`; all values stay in
+  `[-1, 1]` after scaling.
+- **degenerate case**: `S=0` (all `α=0`) writes `V_t=0` for all steps.
+
+> 旧递推公式 `V_t = α_t·R_human + (1-α_t)·γ·V_{t+1}` 已废弃，不再作为实现口径。
 
 ---
 

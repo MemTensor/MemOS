@@ -18,6 +18,7 @@
 import type { Logger } from "../logger/types.js";
 import type { Repos } from "../storage/repos/index.js";
 import type { SessionId, TraceRow } from "../types.js";
+import { reflectionAsText } from "../capture/types.js";
 import type { FeedbackConfig } from "./types.js";
 
 export interface EvidenceInput {
@@ -111,12 +112,12 @@ function partition(
 
 function traceContains(trace: TraceRow, needle: string): boolean {
   const blob =
-    `${trace.userText}\n${trace.agentText}\n${trace.reflection ?? ""}`.toLowerCase();
+    `${trace.userText}\n${trace.agentText}\n${reflectionAsText(trace.reflection) ?? ""}`.toLowerCase();
   return blob.includes(needle);
 }
 
 function isFailureLike(trace: TraceRow): boolean {
-  const blob = `${trace.agentText}\n${trace.reflection ?? ""}`.toLowerCase();
+  const blob = `${trace.agentText}\n${reflectionAsText(trace.reflection) ?? ""}`.toLowerCase();
   return (
     /(error|failed|failure|exception|traceback|timeout|retry)/.test(blob) ||
     trace.toolCalls.some((call) => Boolean(call.errorCode))

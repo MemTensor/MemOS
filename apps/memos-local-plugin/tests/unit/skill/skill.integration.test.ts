@@ -49,6 +49,7 @@ function makeDeps(
     llm: fakeLlm({
       completeJson: {
         "skill.crystallize": makeDraft(),
+        "skill.rebuild": makeDraft(),
       },
     }),
     log: rootLogger.child({ channel: "core.skill" }),
@@ -159,6 +160,7 @@ describe("skill/runSkill (integration)", () => {
           "skill.crystallize": makeDraft({
             summary: "I am Claude, made by Anthropic. I cannot process this request.",
           }),
+          "skill.rebuild": makeDraft(),
         },
       }),
     });
@@ -255,7 +257,7 @@ describe("skill/runSkill (integration)", () => {
           updates: [],
           meanAbsValue: 0,
           maxPriority: 0,
-          echoParams: { gamma: 0.9, decayHalfLifeDays: 30, now: Date.now() },
+          echoParams: { gamma: 0.9, lambda: 0.5, delta: 0.1, decayHalfLifeDays: 30, now: Date.now() },
         },
         traceIds: [],
         timings: { summary: 0, score: 0, backprop: 0, persist: 0, total: 0 },

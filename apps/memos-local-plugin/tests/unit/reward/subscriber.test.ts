@@ -40,7 +40,7 @@ function makeRunner(spy: RunSpy, behavior: "ok" | "pending" | "error" = "ok") {
           updates: [],
           meanAbsValue: 0,
           maxPriority: 0,
-          echoParams: { gamma: 0.9, decayHalfLifeDays: 30, now: Date.now() },
+          echoParams: { gamma: 0.9, lambda: 0.5, delta: 0.1, decayHalfLifeDays: 30, now: Date.now() },
         },
         traceIds: [],
         timings: { summary: 0, score: 0, backprop: 0, persist: 0, total: 0 },
@@ -55,6 +55,8 @@ function makeRunner(spy: RunSpy, behavior: "ok" | "pending" | "error" = "ok") {
 function cfg(windowSec = 0): RewardConfig {
   return {
     gamma: 0.9,
+    lambda: 0.5,
+    delta: 0.1,
     tauSoftmax: 0.5,
     decayHalfLifeDays: 30,
     llmScoring: false,
@@ -238,7 +240,7 @@ describe("reward/subscriber", () => {
         updates: [],
         meanAbsValue: 0,
         maxPriority: 0,
-        echoParams: { gamma: 0.9, decayHalfLifeDays: 30, now: Date.now() },
+        echoParams: { gamma: 0.9, lambda: 0.5, delta: 0.1, decayHalfLifeDays: 30, now: Date.now() },
       },
       traceIds: [],
       timings: { summary: 0, score: 0, backprop: 0, persist: 0, total: 0 },

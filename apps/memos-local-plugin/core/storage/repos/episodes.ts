@@ -23,6 +23,8 @@ const COLUMNS = [
   "ended_at",
   "trace_ids_json",
   "r_task",
+  "verifier_passed",
+  "outcome",
   "status",
   "meta_json",
 ];
@@ -63,6 +65,8 @@ export function makeEpisodesRepo(db: StorageDb) {
         ended_at: row.endedAt ?? null,
         trace_ids_json: toJsonText(row.traceIds),
         r_task: row.rTask ?? null,
+        verifier_passed: triStateToDb(row.verifierPassed),
+        outcome: row.outcome ?? null,
         status: row.status,
         meta_json: toJsonText(row.meta ?? {}),
       });
@@ -78,6 +82,8 @@ export function makeEpisodesRepo(db: StorageDb) {
         ended_at: row.endedAt ?? null,
         trace_ids_json: toJsonText(row.traceIds),
         r_task: row.rTask ?? null,
+        verifier_passed: triStateToDb(row.verifierPassed),
+        outcome: row.outcome ?? null,
         status: row.status,
         meta_json: toJsonText(row.meta ?? {}),
       });
@@ -110,6 +116,18 @@ export function makeEpisodesRepo(db: StorageDb) {
       ).run({ id, r: rTask });
     },
 
+    setVerifierPassed(id: EpisodeId, verifierPassed: boolean | null): void {
+      db.prepare<{ id: string; v: number | null }>(
+        `UPDATE episodes SET verifier_passed=@v WHERE id=@id`,
+      ).run({ id, v: triStateToDb(verifierPassed) });
+    },
+
+    setOutcome(id: EpisodeId, outcome: EpisodeRow["outcome"]): void {
+      db.prepare<{ id: string; o: string | null }>(
+        `UPDATE episodes SET outcome=@o WHERE id=@id`,
+      ).run({ id, o: outcome ?? null });
+    },
+
     updateMeta(id: EpisodeId, metaPatch: Record<string, unknown>): void {
       const current = selectById.get({ id });
       if (!current) return;
@@ -118,6 +136,18 @@ export function makeEpisodesRepo(db: StorageDb) {
       db.prepare<{ id: string; meta: string }>(
         `UPDATE episodes SET meta_json=@meta WHERE id=@id`,
       ).run({ id, meta: toJsonText(merged) });
+    },
+
+    /**
+     * Lower the episode's `started_at` to an earlier value. Used by capture
+     * after a manual-replay path inserts trace rows whose historical `ts`
+     * predates the wall-clock `started_at` that was stamped when the
+     * gateway opened the episode. Never moves `started_at` forward.
+     */
+    setStartedAt(id: EpisodeId, ts: number): void {
+      db.prepare<{ id: string; ts: number }>(
+        `UPDATE episodes SET started_at=@ts WHERE id=@id AND started_at > @ts`,
+      ).run({ id, ts });
     },
 
     appendTrace(id: EpisodeId, traceIds: string[]): void {
@@ -201,8 +231,15 @@ interface RawEpisodeRow {
   ended_at: number | null;
   trace_ids_json: string;
   r_task: number | null;
+  verifier_passed: number | null;
+  outcome: string | null;
   status: "open" | "closed";
   meta_json: string;
+}
+
+function triStateToDb(v: boolean | null | undefined): number | null {
+  if (v == null) return null;
+  return v ? 1 : 0;
 }
 
 function mapRow(r: RawEpisodeRow): EpisodeRow & EpisodeMetaRow {
@@ -215,6 +252,9 @@ function mapRow(r: RawEpisodeRow): EpisodeRow & EpisodeMetaRow {
     endedAt: r.ended_at,
     traceIds: fromJsonText<string[]>(r.trace_ids_json, []),
     rTask: r.r_task,
+    verifierPassed:
+      r.verifier_passed == null ? null : Boolean(r.verifier_passed),
+    outcome: (r.outcome ?? null) as EpisodeRow["outcome"],
     status: r.status,
     meta: fromJsonText<Record<string, unknown>>(r.meta_json, {}),
   };

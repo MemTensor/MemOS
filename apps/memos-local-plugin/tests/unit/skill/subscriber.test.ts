@@ -154,4 +154,108 @@ describe("skill/subscriber", () => {
     expect(r.crystallized).toBe(1);
     sub.dispose();
   });
+
+  it("resolves a strict (repair) trial by full-pass-only while a loose trial passes on the same reward", async () => {
+    handle = makeTmpDb();
+    const h = handle;
+    const l2Bus = createL2EventBus();
+    const rewardBus = createRewardEventBus();
+    const bus = createSkillEventBus();
+
+    const { episodeId } = seedTracesForPolicy(h, "po_strict" as PolicyId);
+
+    const baseSkill = {
+      ownerAgentKind: "openclaw" as const,
+      ownerProfileId: "default",
+      ownerWorkspaceId: null,
+      invocationGuide: "guide",
+      procedureJson: null,
+      eta: 0.5,
+      support: 1,
+      gain: 0.3,
+      trialsAttempted: 0,
+      trialsPassed: 0,
+      sourcePolicyIds: [],
+      sourceWorldModelIds: [],
+      evidenceAnchors: [],
+      vec: null,
+      createdAt: 1 as never,
+      updatedAt: 1 as never,
+      version: 1,
+    };
+    h.repos.skills.insert({
+      ...baseSkill,
+      id: "sk_strict" as never,
+      name: "strict_repair",
+      status: "candidate",
+      strictTrial: true,
+      repairOrigin: true,
+    } as never);
+    h.repos.skills.insert({
+      ...baseSkill,
+      id: "sk_loose" as never,
+      name: "loose_skill",
+      status: "candidate",
+      strictTrial: false,
+    } as never);
+
+    const baseTrial = {
+      ownerAgentKind: "openclaw" as const,
+      ownerProfileId: "default",
+      ownerWorkspaceId: null,
+      sessionId: null,
+      episodeId,
+      traceId: null,
+      turnId: null,
+      toolCallId: null,
+      status: "pending" as const,
+      createdAt: 1,
+      resolvedAt: null,
+      evidence: {},
+    };
+    h.repos.skillTrials.createPending({ ...baseTrial, id: "st_strict", skillId: "sk_strict" as never } as never);
+    h.repos.skillTrials.createPending({ ...baseTrial, id: "st_loose", skillId: "sk_loose" as never } as never);
+
+    // The re-run's verifier: a PARTIAL pass (3/4, reward 0) — a failure under
+    // full-pass-only, even though r_task=0.6 would loosely pass.
+    h.repos.feedback.insert({
+      id: "fb_v" as never,
+      ts: 5,
+      episodeId: episodeId as never,
+      traceId: null,
+      channel: "explicit",
+      polarity: "neutral",
+      magnitude: 1,
+      rationale: "Verifier: passed 3/4.",
+      raw: { source: "verifier", verifier: { reward: 0, passed: 3, total: 4 } },
+    } as never);
+
+    const sub = attachSkillSubscriber({
+      l2Bus,
+      rewardBus,
+      bus,
+      repos: h.repos,
+      embedder: null,
+      llm: null,
+      log: rootLogger.child({ channel: "core.skill.subscriber" }),
+      config: makeSkillConfig({ cooldownMs: 0, candidateTrials: 5 }),
+    });
+
+    rewardBus.emit({
+      kind: "reward.updated",
+      result: { episodeId, sessionId: `s-po_strict`, rHuman: 0.6, completedAt: 10 } as never,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    await sub.flush();
+
+    const strict = h.repos.skills.getById("sk_strict" as never)!;
+    const loose = h.repos.skills.getById("sk_loose" as never)!;
+    // Strict: verifier was a partial pass → trial fails (no pass credit).
+    expect(strict.trialsAttempted).toBe(1);
+    expect(strict.trialsPassed).toBe(0);
+    // Loose: r_task 0.6 ≥ 0.5 → trial passes.
+    expect(loose.trialsAttempted).toBe(1);
+    expect(loose.trialsPassed).toBe(1);
+    sub.dispose();
+  });
 });

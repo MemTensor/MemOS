@@ -64,6 +64,8 @@ export interface EpisodesRepo {
   }): void;
   updateTraceIds(id: EpisodeId, traceIds: string[]): void;
   updateMeta(id: EpisodeId, metaPatch: Record<string, unknown>): void;
+  /** Lower `started_at` to an earlier value (never moves it forward). */
+  setStartedAt(id: EpisodeId, ts: EpochMs): void;
   deleteById(id: EpisodeId): void;
   close(id: EpisodeId, endedAt: EpochMs, rTask?: number, meta?: Record<string, unknown>): void;
   /**
@@ -153,6 +155,9 @@ export function adaptEpisodesRepo(sqlite: SqliteEpisodes): EpisodesRepo {
     },
     updateMeta(id, metaPatch) {
       sqlite.updateMeta(id, metaPatch);
+    },
+    setStartedAt(id, ts) {
+      sqlite.setStartedAt(id, ts);
     },
     deleteById(id) {
       sqlite.deleteById(id);

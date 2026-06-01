@@ -120,7 +120,9 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
       });
       if (q) {
         rows = rows.filter(
-          (ep: EpisodeListItemDTO) => !!ep.preview && ep.preview.toLowerCase().includes(q),
+          (ep: EpisodeListItemDTO) =>
+            ep.id.toLowerCase().includes(q) ||
+            (!!ep.preview && ep.preview.toLowerCase().includes(q)),
         );
       }
       if (status) {

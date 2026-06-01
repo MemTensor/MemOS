@@ -12,6 +12,7 @@ import {
   languageSteeringLine,
 } from "../../llm/prompts/index.js";
 import { L3_ABSTRACTION_PROMPT } from "../../llm/prompts/l3-abstraction.js";
+import { reflectionAsText } from "../../capture/types.js";
 import type { LlmClient } from "../../llm/index.js";
 import type { Logger } from "../../logger/types.js";
 import { sanitizeDerivedMarkdown, sanitizeDerivedText } from "../../safety/content.js";
@@ -84,7 +85,7 @@ export async function abstractDraft(
     langSamples.push(p.title, p.trigger, p.procedure, p.boundary, p.verification);
   }
   for (const traces of input.evidenceByPolicy.values()) {
-    for (const t of traces) langSamples.push(t.userText, t.agentText, t.reflection);
+    for (const t of traces) langSamples.push(t.userText, t.agentText, reflectionAsText(t.reflection));
   }
   const evidenceLang = detectDominantLanguage(langSamples);
 
@@ -248,7 +249,7 @@ function packPolicy(
         `  tags: ${(t.tags ?? []).join(",") || "-"}`,
         `  user: ${truncate(t.userText, 160)}`,
         `  agent: ${truncate(t.agentText, 240)}`,
-        `  reflection: ${truncate(t.reflection ?? "-", 200)}`,
+        `  reflection: ${truncate(reflectionAsText(t.reflection) ?? "-", 200)}`,
       ].join("\n"),
       cfg.traceCharCap,
     ),
