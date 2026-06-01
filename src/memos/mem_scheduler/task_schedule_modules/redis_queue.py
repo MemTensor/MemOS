@@ -124,7 +124,9 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         self.seen_streams = set()
 
         # Task Orchestrator — cap in-memory cache to avoid unbounded growth
-        self._cache_max_packs = int(os.getenv("MEMSCHEDULER_REDIS_CACHE_MAX_PACKS", "50") or 50)
+        self._cache_max_packs = max(
+            1, int(os.getenv("MEMSCHEDULER_REDIS_CACHE_MAX_PACKS", "50") or 50)
+        )
         self.message_pack_cache: deque[list[ScheduleMessageItem]] = deque(
             maxlen=self._cache_max_packs
         )
@@ -138,6 +140,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         self._stream_keys_lock = threading.Lock()
         self._stream_keys_refresh_thread: ContextThread | None = None
         self._stream_keys_refresh_stop_event = threading.Event()
+        self._stream_read_offset = 0
         self._initial_scan_max_keys = int(
             os.getenv("MEMSCHEDULER_REDIS_INITIAL_SCAN_MAX_KEYS", "1000") or 1000
         )
@@ -315,6 +318,20 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         stream_keys = self.get_stream_keys(stream_key_prefix=self.stream_key_prefix)
         if not stream_keys:
             return []
+        stream_key_count = len(stream_keys)
+        if stream_key_count > self._cache_max_packs:
+            start = self._stream_read_offset % stream_key_count
+            end = start + self._cache_max_packs
+            if end <= stream_key_count:
+                stream_keys = stream_keys[start:end]
+            else:
+                stream_keys = stream_keys[start:] + stream_keys[: end % stream_key_count]
+            self._stream_read_offset = (start + self._cache_max_packs) % stream_key_count
+            logger.debug(
+                "[REDIS_QUEUE] Broker stream scan capped. scanned_streams=%s cache_max_packs=%s",
+                len(stream_keys),
+                self._cache_max_packs,
+            )
 
         # Determine per-stream quotas for this cycle
         stream_quotas = self.orchestrator.get_stream_quotas(
@@ -352,6 +369,28 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
         if claimed_messages:
             messages.extend(claimed_messages)
+
+        max_cached_messages = max(consume_batch_size, consume_batch_size * self._cache_max_packs)
+        limited_messages: list[tuple[str, list[tuple[str, dict]]]] = []
+        remaining = max_cached_messages
+        for stream_key, stream_messages in messages:
+            if remaining <= 0:
+                break
+            if len(stream_messages) <= remaining:
+                limited_messages.append((stream_key, stream_messages))
+                remaining -= len(stream_messages)
+            else:
+                limited_messages.append((stream_key, stream_messages[:remaining]))
+                remaining = 0
+        if remaining == 0 and len(limited_messages) < len(messages):
+            logger.debug(
+                "[REDIS_QUEUE] Broker prefetch capped. streams=%s capped_messages=%s cache_max_packs=%s consume_batch=%s",
+                len(messages),
+                max_cached_messages,
+                self._cache_max_packs,
+                consume_batch_size,
+            )
+        messages = limited_messages
 
         cache: list[ScheduleMessageItem] = self._convert_messages(messages)
 
@@ -400,9 +439,9 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             return True
         if (time.time() - self._refill_thread_start) > self._refill_thread_timeout:
             logger.warning(
-                f"Refill thread has been running for >{self._refill_thread_timeout}s, treating as stale"
+                f"Refill thread has been running for >{self._refill_thread_timeout}s; "
+                "skip starting another refill thread to avoid duplicate memory growth"
             )
-            return True
         return False
 
     def get_messages(self, batch_size: int) -> list[ScheduleMessageItem]:

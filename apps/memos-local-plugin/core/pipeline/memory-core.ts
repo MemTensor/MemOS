@@ -707,13 +707,6 @@ export function createMemoryCore(
         config: input.config,
       },
     );
-    if (input.config.lightweightMemory && !llmFilterOutcomeSucceeded(filtered.outcome)) {
-      filtered = {
-        ...filtered,
-        kept: [],
-        dropped: [...filtered.dropped, ...filtered.kept],
-      };
-    }
     const kept = new Set(filtered.kept);
     const dropped = new Set(filtered.dropped);
     return {
@@ -813,10 +806,6 @@ export function createMemoryCore(
 
   function firstNonEmptyLine(text: string): string {
     return text.split(/\n+/).map((line) => line.trim()).find(Boolean)?.slice(0, 240) ?? "";
-  }
-
-  function llmFilterOutcomeSucceeded(outcome: string): boolean {
-    return outcome === "llm_kept_all" || outcome === "llm_filtered";
   }
 
   function logCandidatesFromHits(hits: readonly RetrievalHitDTO[]): Array<{
@@ -1745,7 +1734,7 @@ export function createMemoryCore(
           : localDropped;
         const stats = packet ? handle.consumeRetrievalStats(packet.packetId) : null;
         handle.repos.apiLogs.insert({
-          toolName: handle.algorithm.lightweightMemory.enabled ? "memory_search" : "memos_search",
+          toolName: "memos_search",
           input: {
             type: "turn_start",
             agent: turn.agent,
@@ -2476,7 +2465,7 @@ export function createMemoryCore(
     } finally {
       try {
         handle.repos.apiLogs.insert({
-          toolName: handle.algorithm.lightweightMemory.enabled ? "memory_search" : "memos_search",
+          toolName: "memos_search",
           input: {
             type: "tool_call",
             agent: query.agent,
@@ -2892,7 +2881,7 @@ export function createMemoryCore(
       offset: input.offset ?? 0,
     });
     return rows
-      .filter((r: EpisodeRow) => visibleToCurrent(r) && !isLightweightEpisode(r))
+      .filter((r: EpisodeRow) => visibleToCurrent(r))
       .map((r: EpisodeRow) => r.id as EpisodeId);
   }
 
@@ -2905,8 +2894,7 @@ export function createMemoryCore(
     ensureLive();
     return handle.repos.episodes.list({ sessionId: input?.sessionId, limit: 100_000 }).filter((r) =>
       (input?.includeAllNamespaces || visibleToCurrent(r)) &&
-      matchesNamespaceFilter(r, input) &&
-      !isLightweightEpisode(r)
+      matchesNamespaceFilter(r, input)
     ).length;
   }
 
@@ -2932,8 +2920,7 @@ export function createMemoryCore(
       offset: input?.ownerAgentKind || input?.ownerProfileId ? 0 : input?.offset ?? 0,
     }).filter((r) =>
       (input?.includeAllNamespaces || visibleToCurrent(r)) &&
-      matchesNamespaceFilter(r, input) &&
-      !isLightweightEpisode(r)
+      matchesNamespaceFilter(r, input)
     );
     const pagedRows = input?.ownerAgentKind || input?.ownerProfileId
       ? rows.slice(input?.offset ?? 0, (input?.offset ?? 0) + (input?.limit ?? 50))

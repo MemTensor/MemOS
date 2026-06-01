@@ -22,6 +22,7 @@ from memos.dream.pipeline import (
 )
 from memos.dream.routers.diary_router import create_diary_router
 from memos.dream.routers.trigger_router import create_trigger_router
+from memos.dream.search import DreamContextSearchExtension
 from memos.dream.signal_store import DreamSignalStore
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import MEM_DREAM_TASK_LABEL
@@ -50,6 +51,7 @@ class CommunityDreamPlugin(MemOSPlugin):
         self.context: dict[str, Any] = {"shared": {}, "configs": {}}
         self.signal_store = DreamSignalStore()
         self.heuristic_enricher = DreamHeuristicEnricher()
+        self.search_extension = DreamContextSearchExtension()
         self.pipeline = AbstractDreamPipeline(
             context_strategy=DreamContextualizer(),
             motive_strategy=MotiveFormation(),
@@ -62,6 +64,7 @@ class CommunityDreamPlugin(MemOSPlugin):
         # Hook registration happens at load time because scheduler-triggered Dream
         # execution does not depend on FastAPI route binding.
         self.register_hook(H.DREAM_EXECUTE, partial(on_dream_execute, self))
+        self.register_hook(H.SEARCH_MEMORY_RESULTS, self.search_extension.merge_context_recall)
         self.register_hook(H.ADD_AFTER, partial(on_add_signal, self))
         self.register_hook(
             H.MEMORY_ITEMS_AFTER_FINE_EXTRACT,
