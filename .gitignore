@@ -239,17 +239,3 @@ outputs
 evaluation/data/
 test_add_pipeline.py
 test_file_pipeline.py
-data/
-config.yaml
-
-# ── Runtime / ephemeral (Violet addition 2026-05-27) ──
-daemon/bridge.pid
-memos-local/
-bridge-status.json
-apps/memos-local-plugin/daemon/
-apps/memos-local-plugin/memos-local/
-apps/memos-local-plugin/.memos-node-bin
-apps/memos-local-plugin/bridge-status.json
-apps/memos-local-plugin/prod_check.cjs
-data.stale-backup/
-scripts/trigger-scoring.py
