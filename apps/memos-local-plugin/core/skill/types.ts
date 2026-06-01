@@ -48,6 +48,16 @@ export interface SkillExampleDraft {
  */
 export interface SkillProcedure {
   summary: string;
+  /** User-query-oriented text for Tier-1 retrieval (also embedded). */
+  retrievalBlurb?: string;
+  /** Optional same-language trigger paraphrase used in invocation guide/vector source. */
+  triggerContext?: string;
+  /** Hash of policy trigger/procedure/boundary/verification at last build. */
+  policyContentHash?: string;
+  /** Resolved language for this skill body. */
+  outputLanguage?: "zh" | "en";
+  /** Set once when a repair-origin skill graduates to its canonical name. */
+  graduatedFromRepairName?: boolean;
   parameters: SkillParameterDraft[];
   preconditions: string[];
   steps: SkillStepDraft[];
@@ -70,7 +80,10 @@ export interface SkillProcedure {
  */
 export interface SkillCrystallizationDraft {
   name: string;
-  displayTitle: string;
+  /** Search / trigger-oriented phrasing from real user queries. */
+  retrievalBlurb: string;
+  /** Optional same-language trigger paraphrase used in invocation guide/vector source. */
+  triggerContext?: string;
   summary: string;
   parameters: SkillParameterDraft[];
   preconditions: string[];
@@ -124,6 +137,12 @@ export interface SkillConfig {
    * of real trial passes. Falls back to `minEtaForRetrieval` when unset.
    */
   repairCandidateMinEta?: number;
+  /**
+   * Output language policy for skill text fields.
+   * - follow_policy: infer from policy text
+   * - zh/en: force one language for all generated fields
+   */
+  outputLanguageMode?: "follow_policy" | "zh" | "en";
 }
 
 /**

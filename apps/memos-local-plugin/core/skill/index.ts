@@ -19,10 +19,21 @@ export {
   type EligibilityResult,
 } from "./eligibility.js";
 export {
+  gatherCounterExamples,
   gatherEvidence,
+  gatherIncrementalEvidence,
   type EvidenceDeps,
   type EvidenceResult,
+  type IncrementalEvidenceResult,
 } from "./evidence.js";
+export {
+  computeRebuildLevel,
+  policyContentHash,
+  type RebuildLevel,
+} from "./rebuild-level.js";
+export { mergeRebuildDraft, procedureFromSkillRow } from "./merge.js";
+export { resolveSkillOutputLanguage, type SkillOutputLanguage } from "./language.js";
+export { normalizeSkillName, deriveNameFromText, uniquifySkillName } from "./name.js";
 export {
   applyFeedback,
   recomputeEta,

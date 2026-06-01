@@ -23,6 +23,7 @@ export { L2_INDUCTION_PROMPT } from "./l2-induction.js";
 export { L3_ABSTRACTION_PROMPT } from "./l3-abstraction.js";
 export { DECISION_REPAIR_PROMPT } from "./decision-repair.js";
 export { SKILL_CRYSTALLIZE_PROMPT } from "./skill-crystallize.js";
+export { SKILL_REBUILD_PROMPT } from "./skill-rebuild.js";
 export { RETRIEVAL_FILTER_PROMPT } from "./retrieval-filter.js";
 
 export type PromptLanguage = "auto" | "zh" | "en";

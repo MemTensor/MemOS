@@ -71,7 +71,7 @@ describe("skill/packager", () => {
     );
     expect(r.freshMint).toBe(true);
     expect(r.row.status).toBe("candidate");
-    expect(r.row.invocationGuide).toContain("Alpine");
+    expect(r.row.invocationGuide.toLowerCase()).toContain("alpine");
     expect(r.row.vec).not.toBeNull();
     expect(r.row.sourcePolicyIds).toContain("po_pkg");
     expect(r.row.eta).toBeGreaterThanOrEqual(makeSkillConfig().minEtaForRetrieval);
@@ -127,5 +127,103 @@ describe("skill/packager", () => {
       { embedder: bad, log, config: makeSkillConfig() },
     );
     expect(r.row.vec).toBeNull();
+  });
+
+  it("preserves strictTrial across rebuild (verifier-origin trial judgment must survive)", async () => {
+    const existing = {
+      id: "sk_strict" as SkillRow["id"],
+      name: "alpine_pip_apply",
+      status: "candidate",
+      invocationGuide: "",
+      procedureJson: null,
+      eta: 0.4,
+      support: 2,
+      gain: 0.3,
+      trialsAttempted: 0,
+      trialsPassed: 0,
+      sourcePolicyIds: ["po_pkg" as PolicyRow["id"]],
+      sourceWorldModelIds: [],
+      evidenceAnchors: [],
+      vec: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+      version: 1,
+      strictTrial: true,
+      repairOrigin: true,
+    } as SkillRow;
+    const r = await buildSkillRow(
+      { draft: makeDraft(), policy: mkPolicy(), evidenceEpisodeIds: [], existing },
+      { embedder: null, log, config: makeSkillConfig() },
+    );
+    expect(r.row.strictTrial).toBe(true);
+    // repairOrigin is intentionally dropped on rebuild — graduate on normal thresholds.
+    expect(r.row.repairOrigin).toBeFalsy();
+  });
+
+  it("carries graduatedFromRepairName forward so single-use rename stays spent", async () => {
+    const procedureJson = {
+      summary: "old",
+      retrievalBlurb: "old blurb",
+      triggerContext: "",
+      policyContentHash: "h0",
+      outputLanguage: "en" as const,
+      parameters: [],
+      preconditions: [],
+      steps: [{ title: "old", body: "old" }],
+      examples: [],
+      decisionGuidance: { preference: [], antiPattern: [] },
+      tags: [],
+      tools: [],
+      graduatedFromRepairName: true,
+    };
+    const existing = {
+      id: "sk_grad" as SkillRow["id"],
+      name: "alpine_pip_apply",
+      status: "active",
+      invocationGuide: "",
+      procedureJson,
+      eta: 0.6,
+      support: 3,
+      gain: 0.3,
+      trialsAttempted: 4,
+      trialsPassed: 3,
+      sourcePolicyIds: ["po_pkg" as PolicyRow["id"]],
+      sourceWorldModelIds: [],
+      evidenceAnchors: [],
+      vec: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+      version: 2,
+    } as SkillRow;
+    const r = await buildSkillRow(
+      { draft: makeDraft(), policy: mkPolicy(), evidenceEpisodeIds: [], existing },
+      { embedder: null, log, config: makeSkillConfig() },
+    );
+    expect(
+      (r.row.procedureJson as { graduatedFromRepairName?: boolean } | null)
+        ?.graduatedFromRepairName,
+    ).toBe(true);
+  });
+
+  it("renders zh invocation guide when outputLanguage is zh", async () => {
+    const r = await buildSkillRow(
+      {
+        draft: makeDraft({
+          name: "django_patch_apply",
+          retrievalBlurb: "适用于 django 补丁无法落盘的场景。",
+          triggerContext: "当补丁应用失败并需要通过 WRAPPER_PATH 修复时。",
+          summary: "通过 WRAPPER_PATH 安全应用补丁并验证结果。",
+          steps: [{ title: "应用补丁", body: "执行补丁并检查返回结果" }],
+        }),
+        policy: mkPolicy(),
+        evidenceEpisodeIds: [],
+        outputLanguage: "zh",
+      },
+      { embedder: null, log, config: makeSkillConfig() },
+    );
+    expect(r.row.invocationGuide).toContain("**检索与适用场景**");
+    expect(r.row.invocationGuide).toContain("**触发上下文**");
+    expect(r.row.invocationGuide).toContain("**执行步骤**");
+    expect(r.row.invocationGuide).not.toContain("**Summary**");
   });
 });

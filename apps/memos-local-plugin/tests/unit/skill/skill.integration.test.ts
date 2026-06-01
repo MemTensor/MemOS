@@ -49,6 +49,7 @@ function makeDeps(
     llm: fakeLlm({
       completeJson: {
         "skill.crystallize": makeDraft(),
+        "skill.rebuild": makeDraft(),
       },
     }),
     log: rootLogger.child({ channel: "core.skill" }),
@@ -159,6 +160,7 @@ describe("skill/runSkill (integration)", () => {
           "skill.crystallize": makeDraft({
             summary: "I am Claude, made by Anthropic. I cannot process this request.",
           }),
+          "skill.rebuild": makeDraft(),
         },
       }),
     });

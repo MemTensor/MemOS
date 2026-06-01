@@ -281,6 +281,15 @@ const AlgorithmSchema = Type.Object({
      * `candidateTrials` trials, 0.5 demands ~2-of-3 genuine passes.
      */
     repairCandidateMinEta: NumberInRange(0.5, 0, 1),
+    /**
+     * Language strategy for skill text:
+     * - follow_policy: infer from policy text (default)
+     * - zh/en: force one language
+     */
+    outputLanguageMode: Type.Union(
+      [Type.Literal("follow_policy"), Type.Literal("zh"), Type.Literal("en")],
+      { default: "follow_policy" },
+    ),
   }, { default: {} }),
   feedback: Type.Object({
     /** Raise a burst after this many failures of the same tool in-window. */

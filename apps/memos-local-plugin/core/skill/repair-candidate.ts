@@ -28,6 +28,7 @@ import type { Embedder } from "../embedding/types.js";
 import type { Logger } from "../logger/types.js";
 import type { Repos } from "../storage/repos/index.js";
 import type { PolicyRow, SkillId, SkillRow, TraceId } from "../types.js";
+import { deriveNameFromText, uniquifySkillName } from "./name.js";
 
 /**
  * Q3: born at the retrieval floor — visible enough to be tried, no head start.
@@ -86,12 +87,11 @@ export function mintRepairCandidate(
   if (already) return null;
 
   const fix = (policy.decisionGuidance?.preference ?? []).find((s) => s.trim().length > 0) ?? "";
-  // Build the name so the policy-id suffix always survives truncation —
-  // slicing the title *before* appending it keeps names unique even for long
-  // titles (a collision would otherwise silently drop the mint).
-  const titleSlug = slugName(stripPrefix(policy.title)).slice(0, 28) || "fix";
-  const idSuffix = slugName(policy.id.slice(-5)) || "x";
-  const name = `repair_${titleSlug}_${idSuffix}`;
+  const baseName = deriveNameFromText(stripPrefix(policy.title), fix);
+  const existingNames = new Set(
+    deps.repos.skills.list({ limit: 500 }).map((s) => s.name),
+  );
+  const name = uniquifySkillName(baseName, existingNames);
   const id = ids.skill() as SkillId;
   const invocationGuide = renderRepairGuide(policy, fix);
 
@@ -148,13 +148,6 @@ export function mintRepairCandidate(
 
 function stripPrefix(title: string): string {
   return title.replace(/^(avoid|repair|prefer|success)\s*:\s*/i, "").trim();
-}
-
-function slugName(raw: string): string {
-  return raw
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
 }
 
 function renderRepairGuide(policy: PolicyRow, fix: string): string {

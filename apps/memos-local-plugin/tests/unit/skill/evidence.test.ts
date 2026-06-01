@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { gatherEvidence } from "../../../core/skill/evidence.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import type { EpisodeId, PolicyId } from "../../../core/types.js";
+import { NOW } from "./_helpers.js";
 import {
   makeSkillConfig,
   seedPolicy,
@@ -93,6 +94,41 @@ describe("skill/evidence", () => {
     expect(r.traces.length).toBe(1);
     expect(r.traces[0]!.userText.length).toBeLessThanOrEqual(121);
     expect(r.traces[0]!.agentText.length).toBeLessThanOrEqual(121);
+  });
+
+  it("dedupes duplicate trace content by signature before scoring", () => {
+    const h = open();
+    seedSessionOnly(h, "s_ev");
+    const policy = seedPolicy(h, {
+      id: "po_ev" as PolicyId,
+      sourceEpisodeIds: ["ep_dup" as EpisodeId],
+    });
+
+    const base = {
+      episodeId: "ep_dup",
+      sessionId: "s_ev",
+      userText: "same user question",
+      agentText: "same answer",
+      value: 0.2,
+      ts: NOW,
+    };
+    seedTrace(h, { id: "tr_dup_a", ...base });
+    seedTrace(h, { id: "tr_dup_b", ...base });
+    seedTrace(h, {
+      id: "tr_unique",
+      episodeId: "ep_dup",
+      sessionId: "s_ev",
+      userText: "high value unique",
+      agentText: "best",
+      value: 0.95,
+    });
+
+    const r = gatherEvidence(policy, {
+      repos: h.repos,
+      config: makeSkillConfig({ evidenceLimit: 2 }),
+    });
+    expect(r.poolAfterDedupe).toBe(2);
+    expect(r.traces[0]!.id).toBe("tr_unique");
   });
 
   it("returns empty when the policy has no source episodes", () => {

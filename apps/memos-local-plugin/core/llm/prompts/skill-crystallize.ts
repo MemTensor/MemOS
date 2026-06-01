@@ -1,79 +1,62 @@
 import type { PromptDef } from "./index.js";
 
 /**
- * V7 §7.2 — Skill crystallization.
+ * V7 §7.2 — Skill crystallization (fresh mint).
  *
- * When a policy has accumulated enough supporting evidence (support ≥
- * skill.minSupport) and enough reward lift (gain ≥ skill.minGain), promote
- * it into a callable "Skill" with a stable name, parameter schema, and a
- * small SKILL.md authored from the evidence.
- *
- * **v3** adds an explicit `tools` output field: the LLM must declare which
- * tools/commands the skill invokes, constrained to the `EVIDENCE_TOOLS`
- * whitelist extracted from evidence trace `toolCalls`. This replaces the
- * old regex-based command-token heuristic in the verifier — coverage is now
- * a clean set-containment check (`draft.tools ⊆ evidenceTools`).
- *
- * v2 history: added `decision_guidance` (preference + anti-pattern).
+ * v5: SOP-from-episode framing, retrieval_blurb for Tier-1 search, names
+ * derived from user queries + workflow (not policy.title).
  */
 export const SKILL_CRYSTALLIZE_PROMPT: PromptDef = {
   id: "skill.crystallize",
-  version: 3,
+  version: 5,
   description:
-    "Turn a graduated L2 policy into a callable Skill definition, including decision guidance distilled from past prefer/avoid signals.",
-  system: `You crystallize a skill an agent should be able to call.
+    "Turn graduated L2 evidence into a callable SOP-style skill with retrieval-oriented metadata.",
+  system: `You crystallize a reusable SOP (standard procedure) an agent should follow.
+
+The skill is NOT a copy of the policy title — it captures the **workflow** seen across evidence episodes: what the user asked, what tools were used, and the repeatable steps that worked.
 
 Input:
-- POLICY: the L2 policy being promoted (trigger / action / rationale / caveats).
-- EVIDENCE: 3..10 successful traces that support the policy.
-- EVIDENCE_TOOLS: the exhaustive list of tool/command names that actually
-  appeared in the evidence traces' tool calls. This is the ground-truth
-  whitelist — your \`tools\` output MUST be a subset of this list.
-- COUNTER_EXAMPLES (optional): traces with V < 0 from the same context —
-  failures the policy is meant to prevent.
-- REPAIR_HINTS (optional): a JSON block { preference: [...], antiPattern: [...] }
-  attached to the policy by the decision-repair pipeline. These are concrete
-  "prefer / avoid" lines synthesised from earlier failures + user feedback;
-  treat them as authoritative seeds for \`decision_guidance\` below.
-- NAMING_SPACE: a list of existing skill names to avoid colliding with.
+- POLICY: L2 context (trigger / procedure / boundary) — background only; do not copy the policy title as the skill name.
+- EVIDENCE: successful traces (user queries, agent actions, reflections). Mine **real user phrasing** from EVIDENCE for retrieval text.
+- EVIDENCE_TOOLS: whitelist of tool names from traces — your \`tools\` output MUST be a subset.
+- COUNTER_EXAMPLES (optional): V < 0 traces for anti-patterns.
+- REPAIR_HINTS (optional): prefer / avoid seeds for \`decision_guidance\`.
+- NAMING_SPACE: existing skill names to avoid.
+- OUTPUT_LANGUAGE: "zh" | "en". All natural-language fields must use this language.
 
 Return JSON:
 {
-  "name": "snake_case_identifier, ≤ 32 chars, unique vs NAMING_SPACE",
-  "display_title": "human title in user's language",
-  "summary": "2-3 sentence description of what the skill does and when to use it",
+  "name": "snake_case, ≤48 chars, pattern <domain>_<task>_<action>, describes the SOP capability (not policy.title)",
+  "retrieval_blurb": "≤150 words: when to use this SOP + phrases users actually say (queries, file types, errors). Slightly proactive — include related intents even if the user did not name the skill. No step-by-step procedure here.",
+  "trigger_context": "1-2 sentences in OUTPUT_LANGUAGE, paraphrasing when this SOP applies",
+  "summary": "2-3 sentences: what this SOP accomplishes (execution only, no when-to-use)",
   "parameters": [
     { "name": "...", "type": "string|number|boolean|enum", "required": true|false,
       "description": "...", "enum": ["..."] }
   ],
   "preconditions": ["bullet", ...],
   "steps": [
-    { "title": "short", "body": "markdown-friendly paragraph describing the step" }
+    { "title": "short", "body": "markdown-friendly paragraph" }
   ],
   "examples": [
-    { "input": "...", "expected": "..." }
+    { "input": "user query", "expected": "outcome" }
   ],
   "tools": ["tool_or_command_name", ...],
   "decision_guidance": {
-    "preference":   ["Prefer: …", ...],   // concrete actions to favour, ≤ 5
-    "anti_pattern": ["Avoid: …", ...]     // concrete actions to avoid, ≤ 5
+    "preference":   ["Prefer: …", ...],
+    "anti_pattern": ["Avoid: …", ...]
   },
   "tags": ["optional string", ...]
 }
 
 Rules:
-- \`tools\` MUST only contain names from EVIDENCE_TOOLS. Never invent tool
-  names that are not in the whitelist. Include every tool the skill's
-  procedure actually invokes — omit tools not referenced in your steps.
-- Keep "steps" short (2-6 items).
-- \`summary\` must be self-contained so the agent can decide whether to
-  call this skill without reading the full SKILL.md.
-- For \`decision_guidance\`:
-  - If REPAIR_HINTS is non-empty, fold each line in verbatim (or lightly
-    normalised) — they are already grounded in evidence and user feedback.
-  - You MAY add 1–2 extra entries derived from contrasting EVIDENCE
-    (high-V) vs COUNTER_EXAMPLES (low-V), if they materially clarify the
-    decision. Don't invent guidance unsupported by the inputs.
-  - Each entry should be one short, actionable sentence (≤ 200 chars).
-  - Empty arrays are fine when there's nothing to say — never fabricate.`,
+- \`tools\` MUST only contain names from EVIDENCE_TOOLS.
+- Name format MUST be snake_case and fit ≤48 chars.
+- Keep "steps" short (2-6 items). Explain why when non-obvious; avoid ALL-CAPS MUST.
+- Generalize from evidence — do not overfit to a single example query.
+- \`retrieval_blurb\` must quote or paraphrase realistic user queries from EVIDENCE.
+- Keep natural-language fields (\`retrieval_blurb\`, \`trigger_context\`, \`summary\`, \`steps\`, \`decision_guidance\`) in one language (OUTPUT_LANGUAGE).
+- \`name\` stays snake_case capability identifier (<domain>_<task>_<action>), not free-form prose.
+- For \`decision_guidance\`: fold REPAIR_HINTS when present; add at most 1-2 contrast lines from EVIDENCE vs COUNTER_EXAMPLES; never fabricate.
+- Each guidance line ≤200 chars; ≤5 per array.`,
 };

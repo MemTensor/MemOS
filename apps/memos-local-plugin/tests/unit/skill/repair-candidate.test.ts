@@ -106,7 +106,7 @@ describe("repair candidate minting", () => {
     expect(handle.repos.skills.list({ limit: 50 }).length).toBe(1);
   });
 
-  it("keeps the policy-id suffix in the name even for a long title (no silent collision)", async () => {
+  it("uses structured name without policy-id suffix and keeps it readable", async () => {
     const longFix =
       "Verifier feedback failed with Time Limit Exceeded so instead use the fast fourier transform autocorrelation counting technique to avoid the quadratic blowup in this arithmetic progression triplet problem";
     const result = await runFeedbackExperience(
@@ -123,10 +123,9 @@ describe("repair candidate minting", () => {
     const skillId = mintRepairCandidate(policy, { repos: handle.repos, embedder: null, now: () => NOW });
     expect(skillId).toBeTruthy();
     const skill = handle.repos.skills.getById(skillId!)!;
-    // The last-5 of the policy id must survive truncation so names stay unique.
-    const idSuffix = policy.id.slice(-5).toLowerCase().replace(/[^a-z0-9]+/g, "");
-    expect(skill.name).toContain(idSuffix);
-    expect(skill.name.length).toBeLessThanOrEqual(41);
+    expect(skill.name).toMatch(/^[a-z0-9_]+$/);
+    expect(skill.name.length).toBeLessThanOrEqual(48);
+    expect(skill.name).not.toContain(policy.id.slice(-5).toLowerCase());
   });
 
   it("does not mint from a bare-verdict negative (no fix → not a repair candidate)", async () => {
