@@ -152,7 +152,6 @@ async function createRuntime(
     });
     core = boot.core;
     const { config, home } = boot;
-    await core.init();
 
     // Anonymous ARMS telemetry. Mirrors `bridge.cts`'s setup so OpenClaw
     // emits the same `plugin_started` / `daily_active` / `memos_search`
@@ -189,11 +188,14 @@ async function createRuntime(
       log: api.logger,
     });
 
-    // OpenClaw's viewer port is fixed at :18799 (hermes uses :18800).
-    // We ignore `config.viewer.port` for the same reason `bridge.cts`
-    // does: old config.yaml files baked in the legacy single-port
-    // :18799 used by both agents, and we don't want hermes to collide
-    // with us because of stale YAML.
+    // Start the HTTP viewer FIRST so the frontend is available
+    // immediately, even while core.init() processes leftover episodes
+    // from previous sessions (orphan recovery, dirty reward rescoring).
+    //
+    // Previously startHttpServer was called AFTER core.init(), which
+    // blocked the viewer port (:18799) until all orphan episodes were
+    // finalized and rescored — this could take minutes under API rate
+    // limits and made the viewer appear dead during startup.
     try {
       viewer = await startHttpServer(
         {
@@ -224,6 +226,16 @@ async function createRuntime(
       }
       throw err;
     }
+
+    // Now run core.init() — this processes orphan episodes and dirty
+    // reward rescoring from previous sessions. It runs in background
+    // so the viewer (already live) can serve cached data immediately
+    // and the OpenClaw hook handlers can process turns concurrently.
+    core.init().catch((err: unknown) => {
+      api.logger.error("memos-local: background core.init() failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
 
     const runtimeCore = core;
     const runtimeViewer = viewer;
