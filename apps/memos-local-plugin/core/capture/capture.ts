@@ -26,8 +26,16 @@ import type { makeTracesRepo } from "../storage/repos/traces.js";
 import type { EpisodesRepo } from "../session/persistence.js";
 import { batchScoreReflections, type BatchScoreInput } from "./batch-scorer.js";
 import { embedSteps, type VecPair } from "./embedder.js";
+import {
+  CAPTURE_LITE_TURN_CURSOR_META,
+  pickTurnId,
+  resolveAnchorTurnId,
+  stepIdentitySignature,
+  stripRepeatedEpisodeUserText,
+} from "../episode/turn-anchor.js";
+import { traceIdentitySignature } from "../trace/trace-identity.js";
 import { normalizeSteps } from "./normalizer.js";
-import { extractSteps } from "./step-extractor.js";
+import { extractIncrementalSteps, extractSteps } from "./step-extractor.js";
 import { createSummarizer, type Summarizer } from "./summarizer.js";
 import { tagsForStep } from "./tagger.js";
 import { extractErrorSignatures } from "./error-signature.js";
@@ -156,11 +164,16 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // combo silently re-inserted everything past the 50-row cap and any
     // multi-step turn that collided on the same ms, producing triplet rows
     // in the traces table (one per re-entry from lite / reflect / recovery).
+    const anchorTurnId = resolveAnchorTurnId(input.episode);
     const extractStart = now();
-    const rawAll = extractSteps(input.episode);
+    const rawAll = extractIncrementalSteps(input.episode);
     const existingTraces = deps.tracesRepo.listAllForEpisode(input.episode.id);
-    const seenSignatures = new Set<string>(existingTraces.map(traceIdentitySignature));
-    const raw = rawAll.filter((s) => !seenSignatures.has(stepIdentitySignature(s)));
+    const seenSignatures = new Set<string>(
+      existingTraces.map((row) => traceIdentitySignature(row)),
+    );
+    const raw = rawAll.filter(
+      (s) => !seenSignatures.has(stepIdentitySignature(s, anchorTurnId)),
+    );
     const extractMs = now() - extractStart;
     log.debug("stage.extract.done", {
       phase: "lite",
@@ -176,6 +189,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const normalizeMs = now() - normStart;
 
     if (normalized.length === 0) {
+      advanceLiteCaptureCursor(input);
       const result = emptyResult(input, startedAt, {
         extract: extractMs,
         normalize: normalizeMs,
@@ -260,6 +274,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // `memory_add` row. This is distinct from `capture.done` which
     // triggers the reward / L2 / L3 chain and only fires at topic end.
     emit({ kind: "capture.lite.done", result });
+    advanceLiteCaptureCursor(input);
     return result;
   }
 
@@ -274,8 +289,9 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       sessionId: input.episode.sessionId,
     });
 
+    const anchorTurnId = resolveAnchorTurnId(input.episode);
     const extractStart = now();
-    const rawAll = extractSteps(input.episode);
+    const rawAll = extractIncrementalSteps(input.episode);
     const existingTraces = deps.tracesRepo.listAllForEpisode(input.episode.id);
     const seenTurnIds = new Set(
       existingTraces
@@ -284,7 +300,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     );
     const rawByTurn = new Map<number, StepCandidate[]>();
     for (const step of rawAll) {
-      const turnId = pickTurnId(step.meta, step.ts);
+      const turnId = pickTurnId(step.meta, step.ts, anchorTurnId);
       if (seenTurnIds.has(turnId)) continue;
       const bucket = rawByTurn.get(turnId) ?? [];
       bucket.push(step);
@@ -381,6 +397,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       warnings: warnings.length,
     });
     emit({ kind: "capture.lite.done", result });
+    advanceLiteCaptureCursor(input);
     return result;
   }
 
@@ -405,8 +422,9 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // Re-derive normalized steps from the (now closed) episode so the
     // batch scorer sees state/action/outcome in the exact same shape
     // it would have seen during a per-step pass.
+    const anchorTurnId = resolveAnchorTurnId(input.episode);
     const extractStart = now();
-    const rawAll = extractSteps(input.episode);
+    const rawAll = extractSteps(input.episode, { anchorTurnId });
     const extractMs = now() - extractStart;
 
     const normStart = now();
@@ -421,8 +439,12 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // every step past row 50 as "orphan" and re-insert it.
     const existing = deps.tracesRepo.listAllForEpisode(input.episode.id);
     const traceBySignature = new Map<string, (typeof existing)[number]>();
-    for (const tr of existing) traceBySignature.set(traceIdentitySignature(tr), tr);
-    const orphan = normalized.filter((s) => !traceBySignature.has(stepIdentitySignature(s)));
+    for (const tr of existing) {
+      traceBySignature.set(traceIdentitySignature(tr), tr);
+    }
+    const orphan = normalized.filter(
+      (s) => !traceBySignature.has(stepIdentitySignature(s, anchorTurnId)),
+    );
     if (orphan.length > 0) {
       log.warn("reflect.orphan_steps", {
         episodeId: input.episode.id,
@@ -448,9 +470,12 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         reflection: { text: null, alpha: 0, usable: false, source: "none" },
       }));
       const { vecs } = await runEmbed(orphanScored, summaries, warnings);
-      const orphanRows = buildRows(orphanScored, summaries, vecs, input.episode);
+      let orphanRows = buildRows(orphanScored, summaries, vecs, input.episode);
+      orphanRows = stripRepeatedEpisodeUserText(orphanRows, existing, anchorTurnId);
       await persistRows(orphanRows, input, warnings);
-      for (const r of orphanRows) traceBySignature.set(traceIdentitySignature(r), r);
+      for (const r of orphanRows) {
+        traceBySignature.set(traceIdentitySignature(r), r);
+      }
     }
 
     if (normalized.length === 0) {
@@ -494,7 +519,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const persistStart = now();
     const patchedTraceIds: string[] = [];
     for (const s of scored) {
-      const row = traceBySignature.get(stepIdentitySignature(s));
+      const row = traceBySignature.get(stepIdentitySignature(s, anchorTurnId));
       if (!row) {
         warnings.push({
           stage: "persist",
@@ -510,7 +535,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
           traceId: row.id,
           stepKey: s.key,
           ts: s.ts,
-          turnId: pickTurnId(s.meta, s.ts),
+          turnId: pickTurnId(s.meta, s.ts, anchorTurnId),
           alpha: s.reflection.alpha ?? 0,
           usable: s.reflection.usable,
           reason: s.reflection.reason ?? null,
@@ -539,7 +564,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // candidates carrying the freshly computed reflection + α; the
     // already-existing trace ids come from the matched DB rows.
     const traces: TraceCandidate[] = scored.map((s) => {
-      const row = traceBySignature.get(stepIdentitySignature(s));
+      const row = traceBySignature.get(stepIdentitySignature(s, anchorTurnId));
       return {
         ...s,
         traceId: (row?.id ?? "") as TraceId,
@@ -680,6 +705,24 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     }
   }
 
+  function advanceLiteCaptureCursor(input: CaptureInput): void {
+    const turnCount = input.episode.turns.length;
+    try {
+      deps.episodesRepo.updateMeta(input.episode.id, {
+        [CAPTURE_LITE_TURN_CURSOR_META]: turnCount,
+      });
+      input.episode.meta = {
+        ...input.episode.meta,
+        [CAPTURE_LITE_TURN_CURSOR_META]: turnCount,
+      };
+    } catch (err) {
+      rootLogger.child({ channel: "core.capture" }).warn("capture.cursor_update_failed", {
+        episodeId: input.episode.id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   function buildRows(
     scored: ScoredStep[],
     summaries: string[],
@@ -687,6 +730,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     episode: CaptureInput["episode"],
     opts: { lightweightMemory?: boolean } = {},
   ): TraceRow[] {
+    const anchorTurnId = resolveAnchorTurnId(episode);
     const owner = ownerFromEpisode(episode);
     const traces: TraceCandidate[] = scored.map((s, i) => ({
       ...s,
@@ -729,7 +773,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       // The viewer collapses rows with identical (episodeId, turnId)
       // into a single "one round = one memory" card; algorithm-side
       // machinery ignores the field.
-      turnId: pickTurnId(t.meta, t.ts),
+      turnId: pickTurnId(t.meta, t.ts, anchorTurnId) as EpochMs,
       schemaVersion: 1,
     }));
   }
@@ -780,28 +824,37 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     warnings: CaptureResult["warnings"],
     opts: { skipActionVectorRetry?: boolean } = {},
   ): Promise<boolean> {
+    const anchorTurnId = resolveAnchorTurnId(input.episode);
     const existingBeforeInsert = deps.tracesRepo.listAllForEpisode(input.episode.id);
-    const seenSignatures = new Set(existingBeforeInsert.map(traceIdentitySignature));
-    const uniqueRows = rows.filter((row) => {
+    let rowsToInsert = stripRepeatedEpisodeUserText(
+      rows,
+      existingBeforeInsert,
+      anchorTurnId,
+    );
+    const seenSignatures = new Set(
+      existingBeforeInsert.map((row) => traceIdentitySignature(row)),
+    );
+    const uniqueRows = rowsToInsert.filter((row) => {
       const signature = traceIdentitySignature(row);
       if (seenSignatures.has(signature)) return false;
       seenSignatures.add(signature);
       return true;
     });
-    if (uniqueRows.length !== rows.length) {
+    if (uniqueRows.length !== rowsToInsert.length) {
       warnings.push({
         stage: "persist",
         message: "skipped duplicate trace rows during capture persist",
         detail: {
-          skipped: rows.length - uniqueRows.length,
+          skipped: rowsToInsert.length - uniqueRows.length,
           episodeId: input.episode.id,
         },
       });
-      rows.splice(0, rows.length, ...uniqueRows);
     }
+    rowsToInsert = uniqueRows;
 
     try {
-      for (const row of rows) deps.tracesRepo.insert(row);
+      for (const row of rowsToInsert) deps.tracesRepo.insert(row);
+      rows.splice(0, rows.length, ...rowsToInsert);
       enqueueMissingTraceVectors(rows, warnings, opts);
     } catch (err) {
       const failure = errDetail(err);
@@ -1013,9 +1066,10 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const uniqueIds = dedupeTraceIds(traceIds);
     const rowById = new Map(deps.tracesRepo.getManyByIds(uniqueIds).map((row) => [row.id, row]));
     const originalIndex = new Map(uniqueIds.map((id, idx) => [id, idx]));
+    const anchorTurnId = resolveAnchorTurnId(episode);
     const stepOrder = new Map<string, number>();
-    extractSteps(episode).forEach((step, idx) => {
-      const signature = stepIdentitySignature(step);
+    extractSteps(episode, { anchorTurnId }).forEach((step, idx) => {
+      const signature = stepIdentitySignature(step, anchorTurnId);
       if (!stepOrder.has(signature)) stepOrder.set(signature, idx);
     });
     const seenSignatures = new Set<string>();
@@ -1046,66 +1100,6 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       out.push(id);
     }
     return out;
-  }
-
-  function stepIdentitySignature(step: StepCandidate): string {
-    const tool = step.toolCalls[0];
-    const turnId = pickTurnId(step.meta, step.ts);
-    if (tool) {
-      const hasRealTiming =
-        typeof tool.startedAt === "number" || typeof tool.endedAt === "number";
-      return [
-        "tool",
-        turnId,
-        tool.name,
-        hasRealTiming ? tool.startedAt ?? "" : step.ts,
-        hasRealTiming ? tool.endedAt ?? "" : "",
-        stableJson(tool.input),
-        stableJson(tool.output),
-        tool.errorCode ?? "",
-      ].join("\x1f");
-    }
-    if (step.agentText.trim()) {
-      return ["assistant", turnId, step.ts, step.agentText.trim()].join("\x1f");
-    }
-    return ["user", turnId, step.ts, step.userText.trim()].join("\x1f");
-  }
-
-  function traceIdentitySignature(row: TraceRow): string {
-    const tool = row.toolCalls[0];
-    if (tool) {
-      const hasRealTiming =
-        typeof tool.startedAt === "number" || typeof tool.endedAt === "number";
-      return [
-        "tool",
-        row.turnId,
-        tool.name,
-        hasRealTiming ? tool.startedAt ?? "" : row.ts,
-        hasRealTiming ? tool.endedAt ?? "" : "",
-        stableJson(tool.input),
-        stableJson(tool.output),
-        tool.errorCode ?? "",
-      ].join("\x1f");
-    }
-    if (row.agentText.trim()) {
-      return ["assistant", row.turnId, row.ts, row.agentText.trim()].join("\x1f");
-    }
-    return ["user", row.turnId, row.ts, row.userText.trim()].join("\x1f");
-  }
-
-  function stableJson(value: unknown): string {
-    if (value === undefined) return "";
-    return JSON.stringify(sortJson(value));
-  }
-
-  function sortJson(value: unknown): unknown {
-    if (Array.isArray(value)) return value.map(sortJson);
-    if (!value || typeof value !== "object") return value;
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, val]) => [key, sortJson(val)]),
-    );
   }
 
   function enqueueMissingTraceVectors(
@@ -1506,15 +1500,4 @@ function mergeTurnSteps(
 
 function firstNonEmpty(values: readonly string[]): string {
   return values.map((v) => v.trim()).find(Boolean) ?? "";
-}
-
-/**
- * Pull the `turnId` stamped by `step-extractor` out of the
- * `StepCandidate.meta` blob. Falls back to the trace's own `ts` so
- * old fixtures that pre-date the field still group as a singleton
- * (one row → one card). Always returns a finite number.
- */
-function pickTurnId(meta: Record<string, unknown> | undefined, fallbackTs: number): number {
-  const raw = (meta as Record<string, unknown> | undefined)?.turnId;
-  return typeof raw === "number" && Number.isFinite(raw) ? raw : fallbackTs;
 }

@@ -8,6 +8,10 @@
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import {
+  ANCHOR_TURN_ID_META,
+  CAPTURE_LITE_TURN_CURSOR_META,
+} from "../../../core/episode/turn-anchor.js";
 import { createCaptureEventBus } from "../../../core/capture/events.js";
 import { createCaptureRunner, type CaptureRunner } from "../../../core/capture/capture.js";
 import type { Embedder } from "../../../core/embedding/types.js";
@@ -368,6 +372,60 @@ describe("capture/pipeline (end-to-end)", () => {
       lite.traceIds[0],
       finalTrace.id,
     ]);
+  });
+
+  it("multi-turn lite capture keeps one task prompt and stable turnId", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        "capture.summarize": { summary: "tool step" },
+      },
+    });
+    const runner = buildRunner({}, llm);
+    const taskPrompt = "new task: fix the failing unit test in repo X";
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", taskPrompt, 1_000),
+        turn("tool", "ok", 1_100, {
+          tool: "read",
+          input: { path: "a.ts" },
+          startedAt: 1_050,
+          endedAt: 1_100,
+        }),
+        turn("assistant", "read file", 1_200),
+      ],
+    });
+    ep.meta = {
+      ...ep.meta,
+      [ANCHOR_TURN_ID_META]: 1_000,
+      [CAPTURE_LITE_TURN_CURSOR_META]: 0,
+    };
+
+    const first = await runner.runLite({ episode: ep });
+    expect(first.traceIds.length).toBeGreaterThan(0);
+    const afterFirst = tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId });
+    const withUserText = afterFirst.filter((r) => r.userText.trim() === taskPrompt);
+    expect(withUserText).toHaveLength(1);
+    expect(afterFirst.every((r) => r.turnId === (1_000 as EpochMs))).toBe(true);
+
+    ep.turns.push(
+      turn("tool", "patched", 1_300, {
+        tool: "edit",
+        input: { path: "a.ts" },
+        startedAt: 1_250,
+        endedAt: 1_300,
+      }),
+      turn("assistant", "patched file", 1_400),
+    );
+    ep.turnCount = ep.turns.length;
+
+    const second = await runner.runLite({ episode: ep });
+    expect(second.traceIds.length).toBeGreaterThan(0);
+    const afterSecond = tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId });
+    expect(afterSecond.filter((r) => r.userText.trim() === taskPrompt)).toHaveLength(1);
+    expect(afterSecond.every((r) => r.turnId === (1_000 as EpochMs))).toBe(true);
+    expect(ep.meta[CAPTURE_LITE_TURN_CURSOR_META]).toBe(ep.turns.length);
   });
 
   it("skips duplicate tool rows with the same action signature during capture persist", async () => {

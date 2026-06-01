@@ -23,6 +23,11 @@ import { ids } from "../id.js";
 import { rootLogger } from "../logger/index.js";
 import type { EpochMs } from "../types.js";
 import type { SessionRepo, EpisodesRepo } from "./persistence.js";
+import {
+  ANCHOR_TURN_ID_META,
+  CAPTURE_LITE_TURN_CURSOR_META,
+  anchorTurnIdFromFirstUserTs,
+} from "../episode/turn-anchor.js";
 import type {
   EpisodeCloseReason,
   EpisodeFinalizeInput,
@@ -108,11 +113,14 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
         id: ids.span(),
         ts: startedAt,
       };
+      const anchorTurnId = anchorTurnIdFromFirstUserTs(startedAt);
       const meta = {
         ...(input.meta ?? {}),
         topicState: (input.meta ?? {}).topicState ?? "active",
         initialUserText: (input.meta ?? {}).initialUserText ?? input.initialTurn.content,
         pendingUserText: (input.meta ?? {}).pendingUserText ?? input.initialTurn.content,
+        [ANCHOR_TURN_ID_META]: anchorTurnId,
+        [CAPTURE_LITE_TURN_CURSOR_META]: 0,
       };
       const snap: EpisodeSnapshot = {
         id,
