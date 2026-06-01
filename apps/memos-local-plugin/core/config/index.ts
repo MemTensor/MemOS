@@ -15,6 +15,7 @@ import { Type } from "@sinclair/typebox";
 import { Value, type ValueError } from "@sinclair/typebox/value";
 
 import { MemosError } from "../../agent-contract/errors.js";
+import { assertValidOutcomeThresholds } from "../episode/outcome.js";
 import type { ResolvedHome } from "./paths.js";
 import { resolveHome } from "./paths.js";
 import { ConfigSchema, type ResolvedConfig } from "./schema.js";
@@ -79,6 +80,17 @@ export function resolveConfig(raw: unknown, warnings?: string[]): ResolvedConfig
     throw new MemosError("config_invalid", `config failed schema validation: ${head}`, {
       errorCount: errors.length,
       first: errors.slice(0, 5).map((e) => ({ path: e.path, message: e.message })),
+    });
+  }
+
+  try {
+    assertValidOutcomeThresholds({
+      successThreshold: completed.algorithm.skill.outcomeRTaskSuccessThreshold,
+      failureThreshold: completed.algorithm.skill.outcomeRTaskFailureThreshold,
+    });
+  } catch (err) {
+    throw new MemosError("config_invalid", (err as Error).message, {
+      path: "algorithm.skill",
     });
   }
 

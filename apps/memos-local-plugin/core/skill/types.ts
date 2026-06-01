@@ -137,6 +137,14 @@ export interface SkillConfig {
    * of real trial passes. Falls back to `minEtaForRetrieval` when unset.
    */
   repairCandidateMinEta?: number;
+  /** rTask threshold for episode outcome=success (loose trial shares this). */
+  outcomeRTaskSuccessThreshold: number;
+  /** rTask threshold for episode outcome=failure. */
+  outcomeRTaskFailureThreshold: number;
+  /** Legacy soft penalty; unused when hard-excluding failure episodes. */
+  failureEpisodeScorePenalty: number;
+  /** Legacy ratio cap for unknown pools; unused when hard-excluding failures. */
+  failureEpisodeMaxRatio: number;
   /**
    * Output language policy for skill text fields.
    * - follow_policy: infer from policy text

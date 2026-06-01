@@ -17,7 +17,8 @@ import {
   sanitizeDerivedMarkdownList,
   sanitizeDerivedText,
 } from "../safety/content.js";
-import type { EpisodeId, PolicyRow, SkillRow, TraceRow } from "../types.js";
+import type { EpisodeId, PolicyRow, SkillRow } from "../types.js";
+import type { AnnotatedTrace } from "./evidence.js";
 import { MemosError } from "../../agent-contract/errors.js";
 import { extractToolNames } from "./tool-names.js";
 import { existingSkillSnapshot } from "./merge.js";
@@ -36,13 +37,13 @@ import type {
 
 export interface CrystallizeInput {
   policy: PolicyRow;
-  evidence: TraceRow[];
-  counterExamples?: TraceRow[];
+  evidence: AnnotatedTrace[];
+  counterExamples?: AnnotatedTrace[];
   namingSpace: string[];
   episodeId?: EpisodeId;
   mode?: "crystallize" | "rebuild";
   existingSkill?: SkillRow | null;
-  incrementalEvidence?: TraceRow[];
+  incrementalEvidence?: AnnotatedTrace[];
   rebuildLevel?: RebuildLevel;
   outputLanguage?: SkillOutputLanguage;
   renameAllowed?: boolean;
@@ -104,7 +105,7 @@ export async function crystallizeDraft(
         phase: "skill",
         episodeId: input.episodeId,
         schemaHint:
-          mode === "rebuild" ? "skill-rebuild.v2" : "skill-crystallize.v5",
+          mode === "rebuild" ? "skill-rebuild.v3" : "skill-crystallize.v6",
       },
     );
     const rawRefusal = detectModelRefusal(rsp.raw);
@@ -203,15 +204,17 @@ function packPrompt(
     gain: input.policy.gain,
   };
 
-  const mapTrace = (t: TraceRow) => ({
-    id: t.id,
-    episodeId: t.episodeId,
-    reflection: reflectionAsText(t.reflection),
-    user: capString(t.userText, config.traceCharCap),
-    agent: capString(t.agentText, config.traceCharCap),
-    value: Number.isFinite(t.value) ? t.value : 0,
-    alpha: typeof t.alpha === "number" ? t.alpha : null,
-    tags: t.tags,
+  const mapTrace = (a: AnnotatedTrace) => ({
+    id: a.trace.id,
+    episodeId: a.trace.episodeId,
+    reflection: reflectionAsText(a.trace.reflection),
+    user: capString(a.trace.userText, config.traceCharCap),
+    agent: capString(a.trace.agentText, config.traceCharCap),
+    value: Number.isFinite(a.trace.value) ? a.trace.value : 0,
+    alpha: typeof a.trace.alpha === "number" ? a.trace.alpha : null,
+    tags: a.trace.tags,
+    episode_outcome: a.episodeOutcome,
+    episode_r_task: a.episodeRTask,
   });
 
   const evidence = input.evidence.slice(0, config.evidenceLimit).map(mapTrace);
@@ -225,7 +228,10 @@ function packPrompt(
     .map(mapTrace);
 
   const evidenceTools = Array.from(
-    extractToolNames([...input.evidence, ...(input.incrementalEvidence ?? [])]),
+    extractToolNames([
+      ...input.evidence.map((a) => a.trace),
+      ...(input.incrementalEvidence ?? []).map((a) => a.trace),
+    ]),
   );
 
   const payload: Record<string, unknown> = {

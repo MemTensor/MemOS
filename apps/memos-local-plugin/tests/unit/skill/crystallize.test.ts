@@ -6,6 +6,7 @@ import {
 } from "../../../core/skill/crystallize.js";
 import { rootLogger } from "../../../core/logger/index.js";
 import type { LlmClient, LlmJsonCompletion } from "../../../core/llm/types.js";
+import type { AnnotatedTrace } from "../../../core/skill/evidence.js";
 import type { PolicyRow, SkillRow, TraceRow } from "../../../core/types.js";
 import { fakeLlm, throwingLlm } from "../../helpers/fake-llm.js";
 import {
@@ -57,6 +58,15 @@ function mkTrace(id: string, userText: string): TraceRow {
   };
 }
 
+function mkAnnotated(id: string, userText: string): AnnotatedTrace {
+  return {
+    trace: mkTrace(id, userText),
+    episodeOutcome: "success",
+    episodeRTask: 0.8,
+    episodeVerifierPassed: true,
+  };
+}
+
 const log = rootLogger.child({ channel: "core.skill.crystallize" });
 
 function refusalLlm(raw: string): LlmClient {
@@ -105,7 +115,7 @@ describe("skill/crystallize", () => {
     });
 
     const r = await crystallizeDraft(
-      { policy, evidence: [mkTrace("tr_1", "pip fails")], namingSpace: ["other_skill"] },
+      { policy, evidence: [mkAnnotated("tr_1", "pip fails")], namingSpace: ["other_skill"] },
       { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
     );
 
@@ -157,7 +167,7 @@ describe("skill/crystallize", () => {
     });
 
     const r = await crystallizeDraft(
-      { policy, evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      { policy, evidence: [mkAnnotated("tr_1", "pip fails")], namingSpace: [] },
       { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
     );
 
@@ -183,7 +193,7 @@ describe("skill/crystallize", () => {
 
   it("skips when useLlm is false", async () => {
     const r = await crystallizeDraft(
-      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "x")], namingSpace: [] },
+      { policy: mkPolicy(), evidence: [mkAnnotated("tr_1", "x")], namingSpace: [] },
       { llm: fakeLlm(), log, config: makeSkillConfig({ useLlm: false }) },
     );
     expect(r.ok).toBe(false);
@@ -203,7 +213,7 @@ describe("skill/crystallize", () => {
 
   it("returns skipped on LLM failure", async () => {
     const r = await crystallizeDraft(
-      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "x")], namingSpace: [] },
+      { policy: mkPolicy(), evidence: [mkAnnotated("tr_1", "x")], namingSpace: [] },
       { llm: throwingLlm(new Error("boom")), log, config: makeSkillConfig() },
     );
     expect(r.ok).toBe(false);
@@ -213,7 +223,7 @@ describe("skill/crystallize", () => {
 
   it("rejects model refusals instead of persisting them as skills", async () => {
     const r = await crystallizeDraft(
-      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "x")], namingSpace: [] },
+      { policy: mkPolicy(), evidence: [mkAnnotated("tr_1", "x")], namingSpace: [] },
       {
         llm: refusalLlm("I am Claude, made by Anthropic. I cannot process this request."),
         log,
@@ -239,7 +249,7 @@ describe("skill/crystallize", () => {
       },
     });
     const r = await crystallizeDraft(
-      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "x")], namingSpace: [] },
+      { policy: mkPolicy(), evidence: [mkAnnotated("tr_1", "x")], namingSpace: [] },
       { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
     );
     expect(r.ok).toBe(false);
@@ -282,7 +292,7 @@ describe("skill/crystallize", () => {
     const r = await crystallizeDraft(
       {
         policy,
-        evidence: [mkTrace("tr_g1", "pip fails on alpine")],
+        evidence: [mkAnnotated("tr_g1", "pip fails on alpine")],
         namingSpace: [existing.name],
         mode: "rebuild",
         existingSkill: existing,
@@ -332,7 +342,7 @@ describe("skill/crystallize", () => {
     const r = await crystallizeDraft(
       {
         policy,
-        evidence: [mkTrace("tr_lk", "pip fails")],
+        evidence: [mkAnnotated("tr_lk", "pip fails")],
         namingSpace: [existing.name],
         mode: "rebuild",
         existingSkill: existing,
@@ -382,7 +392,7 @@ describe("skill/crystallize", () => {
     const r = await crystallizeDraft(
       {
         policy,
-        evidence: [mkTrace("tr_f1", "x")],
+        evidence: [mkAnnotated("tr_f1", "x")],
         namingSpace: [existing.name],
         mode: "rebuild",
         existingSkill: existing,
@@ -433,7 +443,7 @@ describe("skill/crystallize", () => {
     const r = await crystallizeDraft(
       {
         policy,
-        evidence: [mkTrace("tr_a1", "x")],
+        evidence: [mkAnnotated("tr_a1", "x")],
         namingSpace: [],
         mode: "crystallize",
         existingSkill: archived,
@@ -462,7 +472,7 @@ describe("skill/crystallize", () => {
       },
     });
     const r = await crystallizeDraft(
-      { policy, evidence: [mkTrace("tr_long", "pip fails")], namingSpace: [] },
+      { policy, evidence: [mkAnnotated("tr_long", "pip fails")], namingSpace: [] },
       { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
     );
     expect(r.ok).toBe(true);
@@ -492,7 +502,7 @@ describe("skill/crystallize", () => {
     const r = await crystallizeDraft(
       {
         policy,
-        evidence: [mkTrace("tr_zh_1", "补丁无法应用，帮我修复")],
+        evidence: [mkAnnotated("tr_zh_1", "补丁无法应用，帮我修复")],
         namingSpace: [],
         outputLanguage: "zh",
       },

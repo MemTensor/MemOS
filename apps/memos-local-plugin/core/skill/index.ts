@@ -22,6 +22,7 @@ export {
   gatherCounterExamples,
   gatherEvidence,
   gatherIncrementalEvidence,
+  type AnnotatedTrace,
   type EvidenceDeps,
   type EvidenceResult,
   type IncrementalEvidenceResult,

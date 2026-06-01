@@ -44,6 +44,10 @@ export function makeSkillConfig(partial: Partial<SkillConfig> = {}): SkillConfig
     etaDelta: 0.1,
     archiveEta: 0.1,
     minEtaForRetrieval: 0.1,
+    outcomeRTaskSuccessThreshold: 0.5,
+    outcomeRTaskFailureThreshold: -0.5,
+    failureEpisodeScorePenalty: 0,
+    failureEpisodeMaxRatio: 0.4,
     ...partial,
   };
 }

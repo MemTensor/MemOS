@@ -3,12 +3,13 @@ import type { PromptDef } from "./index.js";
 /**
  * V7 §7.2 — Skill crystallization (fresh mint).
  *
+ * v6: episode_outcome on evidence; failure traces belong in counter_examples only.
  * v5: SOP-from-episode framing, retrieval_blurb for Tier-1 search, names
  * derived from user queries + workflow (not policy.title).
  */
 export const SKILL_CRYSTALLIZE_PROMPT: PromptDef = {
   id: "skill.crystallize",
-  version: 5,
+  version: 6,
   description:
     "Turn graduated L2 evidence into a callable SOP-style skill with retrieval-oriented metadata.",
   system: `You crystallize a reusable SOP (standard procedure) an agent should follow.
@@ -19,7 +20,8 @@ Input:
 - POLICY: L2 context (trigger / procedure / boundary) — background only; do not copy the policy title as the skill name.
 - EVIDENCE: successful traces (user queries, agent actions, reflections). Mine **real user phrasing** from EVIDENCE for retrieval text.
 - EVIDENCE_TOOLS: whitelist of tool names from traces — your \`tools\` output MUST be a subset.
-- COUNTER_EXAMPLES (optional): V < 0 traces for anti-patterns.
+- COUNTER_EXAMPLES (optional): failure-episode or low-V traces for anti-patterns only.
+- Each evidence item includes episode_outcome ("success"|"failure"|"unknown") and episode_r_task.
 - REPAIR_HINTS (optional): prefer / avoid seeds for \`decision_guidance\`.
 - NAMING_SPACE: existing skill names to avoid.
 - OUTPUT_LANGUAGE: "zh" | "en". All natural-language fields must use this language.
@@ -58,5 +60,7 @@ Rules:
 - Keep natural-language fields (\`retrieval_blurb\`, \`trigger_context\`, \`summary\`, \`steps\`, \`decision_guidance\`) in one language (OUTPUT_LANGUAGE).
 - \`name\` stays snake_case capability identifier (<domain>_<task>_<action>), not free-form prose.
 - For \`decision_guidance\`: fold REPAIR_HINTS when present; add at most 1-2 contrast lines from EVIDENCE vs COUNTER_EXAMPLES; never fabricate.
+- EVIDENCE only contains success/unknown episode traces; never list a COUNTER_EXAMPLES trace as a step.
+- Prefer traces with episode_outcome="success" when choosing steps.
 - Each guidance line ≤200 chars; ≤5 per array.`,
 };

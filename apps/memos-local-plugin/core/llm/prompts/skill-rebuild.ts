@@ -5,7 +5,7 @@ import type { PromptDef } from "./index.js";
  */
 export const SKILL_REBUILD_PROMPT: PromptDef = {
   id: "skill.rebuild",
-  version: 2,
+  version: 3,
   description:
     "Update an existing skill from new evidence while preserving stable identity and controlling rewrite scope.",
   system: `You update an existing SOP skill.
@@ -32,5 +32,7 @@ Rules:
 - retrieval_blurb must incorporate fresh user queries from INCREMENTAL_EVIDENCE when present.
 - Keep natural-language fields (retrieval_blurb/trigger_context/summary/steps/decision_guidance) in one language (OUTPUT_LANGUAGE).
 - Name remains a snake_case capability identifier (<domain>_<task>_<action>), not natural-language prose.
-- tools ⊆ EVIDENCE_TOOLS; steps 2-6; generalize, no query laundry lists.`,
+- tools ⊆ EVIDENCE_TOOLS; steps 2-6; generalize, no query laundry lists.
+- EVIDENCE excludes failure-episode traces; use COUNTER_EXAMPLES for anti_pattern only.
+- Respect episode_outcome / episode_r_task on each trace when editing steps.`,
 };

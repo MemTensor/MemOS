@@ -350,6 +350,10 @@ export interface EpisodeRow extends OwnedRow {
   endedAt: EpochMs | null;
   traceIds: TraceId[];
   rTask: Reward | null;
+  /** Verifier full-pass cache; null = no verifier signal on episode. */
+  verifierPassed?: boolean | null;
+  /** Cached task outcome for skill evidence routing. */
+  outcome?: "success" | "failure" | "unknown" | null;
   /** "open" | "closed". Open episodes accept new traces. */
   status: "open" | "closed";
   meta?: Record<string, unknown>;

@@ -158,9 +158,11 @@ export function attachSkillSubscriber(
 
   function resolveTrialsForReward(evt: Extract<RewardEvent, { kind: "reward.updated" }>): void {
     const rTask = evt.result.rHuman;
+    const passTh = deps.config.outcomeRTaskSuccessThreshold;
+    const failTh = deps.config.outcomeRTaskFailureThreshold;
     const looseOutcome =
-      rTask >= 0.5 ? "pass" :
-      rTask <= -0.5 ? "fail" :
+      rTask >= passTh ? "pass" :
+      rTask <= failTh ? "fail" :
       "unknown";
     const trials = deps.repos.skillTrials.listPendingForEpisode(evt.result.episodeId);
     if (trials.length === 0) return;
@@ -185,7 +187,9 @@ export function attachSkillSubscriber(
         episodeId: evt.result.episodeId,
         rTask,
         mode: strict ? "strict-full-pass" : "loose-threshold",
-        threshold: strict ? { fullPassOnly: true } : { pass: 0.5, fail: -0.5 },
+        threshold: strict
+          ? { fullPassOnly: true }
+          : { pass: passTh, fail: failTh },
         reason: strict
           ? outcome === "pass"
             ? "verifier full pass"

@@ -219,6 +219,7 @@ describe("reward/integration", () => {
       llm,
       bus,
       cfg: cfg(),
+      outcomeThresholds: { successThreshold: 0.5, failureThreshold: -0.5 },
       now: () => NOW,
     });
 
@@ -248,6 +249,7 @@ describe("reward/integration", () => {
 
     const ep = handle.repos.episodes.getById(eid as unknown as EpisodeRow["id"])!;
     expect(ep.rTask).toBeCloseTo(result.rHuman, 5);
+    expect(ep.outcome).toBe("success");
     expect((ep as unknown as { meta: Record<string, unknown> }).meta.reward).toBeDefined();
 
     // events order: scheduled → scored → updated

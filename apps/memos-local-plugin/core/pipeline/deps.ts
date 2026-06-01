@@ -223,6 +223,10 @@ export function buildPipelineSubscribers(
     llm: deps.llm,
     bus: buses.reward,
     cfg: algorithm.reward,
+    outcomeThresholds: {
+      successThreshold: algorithm.skill.outcomeRTaskSuccessThreshold,
+      failureThreshold: algorithm.skill.outcomeRTaskFailureThreshold,
+    },
     evaluator: {
       reflectionProvider: deps.reflectLlm?.provider,
       reflectionModel: deps.reflectLlm?.model,

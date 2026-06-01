@@ -290,6 +290,10 @@ const AlgorithmSchema = Type.Object({
       [Type.Literal("follow_policy"), Type.Literal("zh"), Type.Literal("en")],
       { default: "follow_policy" },
     ),
+    outcomeRTaskSuccessThreshold: NumberInRange(0.5, -1, 1),
+    outcomeRTaskFailureThreshold: NumberInRange(-0.5, -1, 1),
+    failureEpisodeScorePenalty: NumberInRange(0, 0, 2),
+    failureEpisodeMaxRatio: NumberInRange(0.4, 0, 1),
   }, { default: {} }),
   feedback: Type.Object({
     /** Raise a burst after this many failures of the same tool in-window. */

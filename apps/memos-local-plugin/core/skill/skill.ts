@@ -43,6 +43,7 @@ import {
   gatherCounterExamples,
   gatherEvidence,
   gatherIncrementalEvidence,
+  type AnnotatedTrace,
 } from "./evidence.js";
 import { mergeRebuildDraft, procedureFromSkillRow } from "./merge.js";
 import { computeRebuildLevel, type RebuildLevel } from "./rebuild-level.js";
@@ -125,7 +126,7 @@ export async function runSkill(
         ? computeRebuildLevel({
             policy: decision.policy,
             existingSkill: decision.existingSkill,
-            incrementalEvidence: incremental.traces,
+            incrementalEvidence: incremental.traces.map((a) => a.trace),
           })
         : null;
     const outputLanguage = resolveSkillOutputLanguage(decision.policy, config);
@@ -147,6 +148,14 @@ export async function runSkill(
         incrementalCount: rebuildMeta.incrementalCount,
         evidencePoolAfterDedupe: evidence.poolAfterDedupe,
         incrementalPoolAfterDedupe: incremental.poolAfterDedupe,
+        evidence_outcome_counts: evidence.outcomeCounts,
+        evidence_pool_excluded_failure_count: evidence.excludedFailureCount,
+      });
+    } else if (decision.action === "crystallize") {
+      log.info("skill.crystallize.evidence", {
+        policyId: decision.policy.id,
+        evidence_outcome_counts: evidence.outcomeCounts,
+        evidence_pool_excluded_failure_count: evidence.excludedFailureCount,
       });
     }
 
@@ -233,7 +242,7 @@ export async function runSkill(
 
     const tVerify = nowMs();
     const verdict = verifyDraft(
-      { draft, evidence: evidence.traces },
+      { draft, evidence: evidence.traces.map((a) => a.trace) },
       { log: log.child({ channel: "core.skill.verifier" }) },
     );
     timings.verify += nowMs() - tVerify;
@@ -255,7 +264,7 @@ export async function runSkill(
 
     const tPersist = nowMs();
     const evidenceUserTexts = evidence.traces
-      .map((t) => t.userText?.trim())
+      .map((a) => a.trace.userText?.trim())
       .filter((q) => q.length > 0);
 
     const built = await buildSkillRow(
@@ -266,7 +275,7 @@ export async function runSkill(
         // V7 §2.1 — persist the L1 trace ids so the viewer can render
         // click-through "evidence" chips back to MemoriesView and
         // future audits / rebuilds don't have to re-mine evidence.
-        evidenceTraceIds: evidence.traces.map((t) => t.id),
+        evidenceTraceIds: evidence.traces.map((a) => a.trace.id),
         evidenceUserTexts,
         existing: decision.existingSkill,
         outputLanguage,
@@ -450,12 +459,12 @@ function buildSkillIndex(repos: Repos): Map<string, SkillRow> {
 
 interface RunCrystallizeArgs {
   policy: PolicyRow;
-  evidence: Parameters<typeof verifyDraft>[0]["evidence"];
-  counterExamples: Parameters<typeof verifyDraft>[0]["evidence"];
+  evidence: AnnotatedTrace[];
+  counterExamples: AnnotatedTrace[];
   skillsByPolicy: Map<string, SkillRow>;
   action: "crystallize" | "rebuild";
   existingSkill: SkillRow | null;
-  incremental: TraceRow[];
+  incremental: AnnotatedTrace[];
   rebuildLevel?: RebuildLevel;
   outputLanguage: "zh" | "en";
   renameAllowed: boolean;
