@@ -374,7 +374,7 @@ describe("retrieval/integration", () => {
     expect(res.stats.llmFilterKept).toBeGreaterThan(0);
   });
 
-  it("lightweight mode returns no memories when summarizer filter is unavailable", async () => {
+  it("lightweight mode keeps local memories when the summarizer filter is unavailable", async () => {
     const res = await turnStartRetrieve(
       {
         ...makeDeps(handle),
@@ -397,9 +397,9 @@ describe("retrieval/integration", () => {
 
     expect(res.stats.tier2Count).toBeGreaterThan(0);
     expect(res.stats.llmFilterOutcome).toBe("no_llm");
-    expect(res.stats.llmFilterKept).toBe(0);
-    expect(res.packet.snippets).toEqual([]);
-    expect(res.stats.emptyPacket).toBe(true);
+    expect(res.stats.llmFilterKept).toBeGreaterThan(0);
+    expect(res.packet.snippets.length).toBeGreaterThan(0);
+    expect(res.stats.emptyPacket).toBe(false);
   });
 
   it("skill_invoke is tier1-heavy", async () => {
