@@ -376,7 +376,8 @@ Use selectedIndex 0 when none is highly relevant.`;
     }
 
     this.installer.install(skill.id);
-    this.ctx.log.info(`SkillEvolver: auto-installed "${skill.name}" (autoInstall=true)`);
+    const manifest = SkillInstaller.buildManifest(skill.dirPath, !!skill.installed, skill.name);
+    this.ctx.log.info(`SkillEvolver: auto-installed "${skill.name}" (autoInstall=true, mode=${manifest.installMode}, ${manifest.scriptsCount} scripts, ${Math.round(manifest.totalSize / 1024)}KB)`);
   }
 
   private readSkillContent(skill: Skill): string | null {
