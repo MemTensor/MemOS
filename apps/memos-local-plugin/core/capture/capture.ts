@@ -169,7 +169,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const rawAll = extractIncrementalSteps(input.episode);
     const existingTraces = deps.tracesRepo.listAllForEpisode(input.episode.id);
     const seenSignatures = new Set<string>(
-      existingTraces.map((row) => traceIdentitySignature(row)),
+      existingTraces.map((row) => traceIdentitySignature(row, anchorTurnId)),
     );
     const raw = rawAll.filter(
       (s) => !seenSignatures.has(stepIdentitySignature(s, anchorTurnId)),
@@ -300,7 +300,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     );
     const rawByTurn = new Map<number, StepCandidate[]>();
     for (const step of rawAll) {
-      const turnId = pickTurnId(step.meta, step.ts, anchorTurnId);
+      const turnId = pickTurnId(step.meta, step.ts);
       if (seenTurnIds.has(turnId)) continue;
       const bucket = rawByTurn.get(turnId) ?? [];
       bucket.push(step);
@@ -424,7 +424,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // it would have seen during a per-step pass.
     const anchorTurnId = resolveAnchorTurnId(input.episode);
     const extractStart = now();
-    const rawAll = extractSteps(input.episode, { anchorTurnId });
+    const rawAll = extractSteps(input.episode);
     const extractMs = now() - extractStart;
 
     const normStart = now();
@@ -440,7 +440,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const existing = deps.tracesRepo.listAllForEpisode(input.episode.id);
     const traceBySignature = new Map<string, (typeof existing)[number]>();
     for (const tr of existing) {
-      traceBySignature.set(traceIdentitySignature(tr), tr);
+      traceBySignature.set(traceIdentitySignature(tr, anchorTurnId), tr);
     }
     const orphan = normalized.filter(
       (s) => !traceBySignature.has(stepIdentitySignature(s, anchorTurnId)),
@@ -474,7 +474,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       orphanRows = stripRepeatedEpisodeUserText(orphanRows, existing, anchorTurnId);
       await persistRows(orphanRows, input, warnings);
       for (const r of orphanRows) {
-        traceBySignature.set(traceIdentitySignature(r), r);
+        traceBySignature.set(traceIdentitySignature(r, anchorTurnId), r);
       }
     }
 
@@ -535,7 +535,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
           traceId: row.id,
           stepKey: s.key,
           ts: s.ts,
-          turnId: pickTurnId(s.meta, s.ts, anchorTurnId),
+          turnId: pickTurnId(s.meta, s.ts),
           alpha: s.reflection.alpha ?? 0,
           usable: s.reflection.usable,
           reason: s.reflection.reason ?? null,
@@ -730,7 +730,6 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     episode: CaptureInput["episode"],
     opts: { lightweightMemory?: boolean } = {},
   ): TraceRow[] {
-    const anchorTurnId = resolveAnchorTurnId(episode);
     const owner = ownerFromEpisode(episode);
     const traces: TraceCandidate[] = scored.map((s, i) => ({
       ...s,
@@ -773,7 +772,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       // The viewer collapses rows with identical (episodeId, turnId)
       // into a single "one round = one memory" card; algorithm-side
       // machinery ignores the field.
-      turnId: pickTurnId(t.meta, t.ts, anchorTurnId) as EpochMs,
+      turnId: pickTurnId(t.meta, t.ts) as EpochMs,
       schemaVersion: 1,
     }));
   }
@@ -832,10 +831,10 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       anchorTurnId,
     );
     const seenSignatures = new Set(
-      existingBeforeInsert.map((row) => traceIdentitySignature(row)),
+      existingBeforeInsert.map((row) => traceIdentitySignature(row, anchorTurnId)),
     );
     const uniqueRows = rowsToInsert.filter((row) => {
-      const signature = traceIdentitySignature(row);
+      const signature = traceIdentitySignature(row, anchorTurnId);
       if (seenSignatures.has(signature)) return false;
       seenSignatures.add(signature);
       return true;
@@ -894,7 +893,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     }
     if (canonicalIds) {
       try {
-        deleteOrphanTraces(input.episode.id, canonicalIds, warnings);
+        deleteOrphanTraces(input.episode.id, canonicalIds, warnings, anchorTurnId);
       } catch (err) {
         warnings.push({
           stage: "persist",
@@ -940,6 +939,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     episodeId: CaptureInput["episode"]["id"],
     canonicalIds: TraceId[],
     warnings: CaptureResult["warnings"],
+    anchorTurnId: number,
   ): void {
     const allRows = deps.tracesRepo.listAllForEpisode(episodeId);
 
@@ -974,12 +974,12 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const canonicalSignatures = new Set<string>(
       allRows
         .filter((row) => canonical.has(row.id))
-        .map((row) => traceIdentitySignature(row)),
+        .map((row) => traceIdentitySignature(row, anchorTurnId)),
     );
     const orphans: typeof nonCanonical = [];
     const preserved: typeof nonCanonical = [];
     for (const row of nonCanonical) {
-      const sig = traceIdentitySignature(row);
+      const sig = traceIdentitySignature(row, anchorTurnId);
       if (canonicalSignatures.has(sig)) orphans.push(row);
       else preserved.push(row);
     }
@@ -1068,7 +1068,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const originalIndex = new Map(uniqueIds.map((id, idx) => [id, idx]));
     const anchorTurnId = resolveAnchorTurnId(episode);
     const stepOrder = new Map<string, number>();
-    extractSteps(episode, { anchorTurnId }).forEach((step, idx) => {
+    extractSteps(episode).forEach((step, idx) => {
       const signature = stepIdentitySignature(step, anchorTurnId);
       if (!stepOrder.has(signature)) stepOrder.set(signature, idx);
     });
@@ -1076,15 +1076,15 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     return uniqueIds
       .filter((id) => rowById.has(id))
       .sort((a, b) => {
-        const ai = stepOrder.get(traceIdentitySignature(rowById.get(a)!));
-        const bi = stepOrder.get(traceIdentitySignature(rowById.get(b)!));
+        const ai = stepOrder.get(traceIdentitySignature(rowById.get(a)!, anchorTurnId));
+        const bi = stepOrder.get(traceIdentitySignature(rowById.get(b)!, anchorTurnId));
         if (ai != null && bi != null && ai !== bi) return ai - bi;
         if (ai != null && bi == null) return -1;
         if (ai == null && bi != null) return 1;
         return (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0);
       })
       .filter((id) => {
-        const signature = traceIdentitySignature(rowById.get(id)!);
+        const signature = traceIdentitySignature(rowById.get(id)!, anchorTurnId);
         if (seenSignatures.has(signature)) return false;
         seenSignatures.add(signature);
         return true;

@@ -37,8 +37,6 @@ import type { EpisodeSnapshot, EpisodeTurn } from "../session/types.js";
 import type { EpochMs } from "../types.js";
 import {
   liteCaptureTurnCursor,
-  readAnchorTurnId,
-  resolveAnchorTurnId,
 } from "../episode/turn-anchor.js";
 import type { StepCandidate } from "./types.js";
 
@@ -74,7 +72,7 @@ export function extractSteps(
   }
   if (current.length > 0) segments.push(current);
 
-  const anchorTurnId = options?.anchorTurnId ?? readAnchorTurnId(episode);
+  const anchorTurnId = options?.anchorTurnId;
 
   for (const segTurns of segments) {
     out.push(
@@ -117,9 +115,8 @@ export function extractSteps(
  */
 export function extractIncrementalSteps(episode: EpisodeSnapshot): StepCandidate[] {
   const cursor = liteCaptureTurnCursor(episode);
-  const anchorTurnId = resolveAnchorTurnId(episode);
   if (cursor <= 0) {
-    return extractSteps(episode, { anchorTurnId });
+    return extractSteps(episode);
   }
   if (cursor >= episode.turns.length) {
     return [];
@@ -129,7 +126,7 @@ export function extractIncrementalSteps(episode: EpisodeSnapshot): StepCandidate
   const syntheticTurns = firstUser ? [firstUser, ...newTurns] : newTurns;
   return extractSteps(
     { ...episode, turns: syntheticTurns },
-    { anchorTurnId, omitSegmentUserText: true },
+    { omitSegmentUserText: true },
   );
 }
 

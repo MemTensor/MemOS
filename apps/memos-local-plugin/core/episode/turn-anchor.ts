@@ -49,18 +49,11 @@ export function liteCaptureTurnCursor(episode: EpisodeSnapshot): number {
   return 0;
 }
 
-/**
- * Prefer the episode-level anchor so every sub-step in a topic shares one
- * `turnId`. Per-step meta is ignored once an anchor exists.
- */
+/** Resolve the display/grouping turn id for a concrete step/trace row. */
 export function pickTurnId(
   meta: Record<string, unknown> | undefined,
   fallbackTs: number,
-  anchorTurnId?: number,
 ): number {
-  if (typeof anchorTurnId === "number" && Number.isFinite(anchorTurnId)) {
-    return anchorTurnId;
-  }
   const raw = meta?.turnId;
   return typeof raw === "number" && Number.isFinite(raw) ? raw : fallbackTs;
 }
@@ -77,12 +70,21 @@ export function episodeAlreadyHasUserTextTrace(
 export function stripRepeatedEpisodeUserText(
   rows: TraceRow[],
   existing: readonly TraceRow[],
-  anchorTurnId: number,
+  _anchorTurnId: number,
 ): TraceRow[] {
-  if (!episodeAlreadyHasUserTextTrace(existing, anchorTurnId)) return rows;
-  return rows.map((row) =>
-    (row.userText ?? "").trim().length > 0 ? { ...row, userText: "" } : row,
+  const seenUserTexts = new Set(
+    existing
+      .map((row) => (row.userText ?? "").trim())
+      .filter((text) => text.length > 0),
   );
+  if (seenUserTexts.size === 0) return rows;
+  return rows.map((row) => {
+    const userText = (row.userText ?? "").trim();
+    if (!userText) return row;
+    if (seenUserTexts.has(userText)) return { ...row, userText: "" };
+    seenUserTexts.add(userText);
+    return row;
+  });
 }
 
 function stableJson(value: unknown): string {
@@ -105,7 +107,12 @@ export function stepIdentitySignature(
   step: Pick<StepCandidate, "toolCalls" | "ts" | "userText" | "agentText" | "meta">,
   anchorTurnId?: number,
 ): string {
-  const turnId = pickTurnId(step.meta, step.ts, anchorTurnId);
+  // Signature key can stay episode-stable (anchor) even when persisted
+  // row `turnId` is per-segment for viewer ordering/grouping.
+  const turnId =
+    typeof anchorTurnId === "number" && Number.isFinite(anchorTurnId)
+      ? anchorTurnId
+      : pickTurnId(step.meta, step.ts);
   const tool = step.toolCalls[0];
   if (tool) {
     const hasRealTiming =

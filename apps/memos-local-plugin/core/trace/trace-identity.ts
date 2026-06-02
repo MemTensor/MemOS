@@ -5,14 +5,14 @@
 
 import type { TraceRow } from "../types.js";
 
-export function traceIdentitySignature(row: TraceRow): string {
+export function traceIdentitySignature(row: TraceRow, anchorTurnId: number): string {
   const tool = row.toolCalls[0];
   if (tool) {
     const hasRealTiming =
       typeof tool.startedAt === "number" || typeof tool.endedAt === "number";
     return [
       "tool",
-      row.turnId,
+      anchorTurnId,
       tool.name,
       hasRealTiming ? tool.startedAt ?? "" : row.ts,
       hasRealTiming ? tool.endedAt ?? "" : "",
@@ -22,9 +22,9 @@ export function traceIdentitySignature(row: TraceRow): string {
     ].join("\x1f");
   }
   if (row.agentText.trim()) {
-    return ["assistant", row.turnId, row.ts, row.agentText.trim()].join("\x1f");
+    return ["assistant", anchorTurnId, row.ts, row.agentText.trim()].join("\x1f");
   }
-  return ["user", row.turnId, row.ts, row.userText.trim()].join("\x1f");
+  return ["user", anchorTurnId, row.ts, row.userText.trim()].join("\x1f");
 }
 
 function stableJson(value: unknown): string {

@@ -428,6 +428,43 @@ describe("capture/pipeline (end-to-end)", () => {
     expect(ep.meta[CAPTURE_LITE_TURN_CURSOR_META]).toBe(ep.turns.length);
   });
 
+  it("incremental lite capture keeps a new user turn text", async () => {
+    const runner = buildRunner({});
+    const firstUser = "在 ~/.openclaw/test 目录创建工具";
+    const secondUser = "不用，这样足够了";
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", firstUser, 1_000),
+        turn("assistant", "已完成", 1_100),
+      ],
+    });
+    ep.meta = {
+      ...ep.meta,
+      [ANCHOR_TURN_ID_META]: 1_000,
+      [CAPTURE_LITE_TURN_CURSOR_META]: 0,
+    };
+
+    const first = await runner.runLite({ episode: ep });
+    expect(first.traceIds.length).toBeGreaterThan(0);
+    expect(
+      tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId }).some((r) => r.userText === firstUser),
+    ).toBe(true);
+
+    ep.turns.push(
+      turn("user", secondUser, 1_200),
+      turn("assistant", "好的，收到", 1_300),
+    );
+    ep.turnCount = ep.turns.length;
+
+    const second = await runner.runLite({ episode: ep });
+    expect(second.traceIds.length).toBeGreaterThan(0);
+    const rows = tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId });
+    expect(rows.some((r) => r.userText === firstUser)).toBe(true);
+    expect(rows.some((r) => r.userText === secondUser)).toBe(true);
+  });
+
   it("skips duplicate tool rows with the same action signature during capture persist", async () => {
     const runner = buildRunner({ alphaScoring: false });
     const toolMeta = {
