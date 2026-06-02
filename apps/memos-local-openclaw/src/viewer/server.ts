@@ -3812,11 +3812,18 @@ export class ViewerServer {
       return vecs[0].length;
     }
     if (provider === "gemini") {
-      const url = `https://generativelanguage.googleapis.com/v1/models/${model || "text-embedding-004"}:embedContent?key=${apiKey}`;
+      const modelName = model || "gemini-embedding-001";
+      const baseEndpoint = endpoint || `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:batchEmbedContents`;
+      const url = `${baseEndpoint}?key=${apiKey}`;
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: { parts: [{ text: "test embedding vector" }] } }),
+        body: JSON.stringify({
+          requests: [{
+            model: `models/${modelName}`,
+            content: { parts: [{ text: "test embedding vector" }] },
+          }],
+        }),
         signal: AbortSignal.timeout(15_000),
       });
       if (!resp.ok) {
@@ -3824,7 +3831,11 @@ export class ViewerServer {
         throw new Error(`Gemini embed ${resp.status}: ${txt}`);
       }
       const json = await resp.json() as any;
-      const vec = json?.embedding?.values;
+      const embeddings = json?.embeddings;
+      if (!Array.isArray(embeddings) || embeddings.length === 0) {
+        throw new Error("Gemini returned no embeddings");
+      }
+      const vec = embeddings[0]?.values;
       if (!Array.isArray(vec) || vec.length === 0) {
         throw new Error("Gemini returned empty embedding vector");
       }
