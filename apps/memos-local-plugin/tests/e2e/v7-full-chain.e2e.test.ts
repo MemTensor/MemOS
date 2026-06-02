@@ -344,6 +344,10 @@ function buildPipeline(
     ...baseCfg,
     algorithm: {
       ...baseCfg.algorithm,
+      lightweightMemory: {
+        ...baseCfg.algorithm.lightweightMemory,
+        enabled: false,
+      },
       reward: {
         ...baseCfg.algorithm.reward,
         feedbackWindowSec: 0,

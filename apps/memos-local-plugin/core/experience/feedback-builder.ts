@@ -13,6 +13,7 @@ import type { LlmClient } from "../llm/index.js";
 import { classifyFeedback } from "../feedback/classifier.js";
 import { reflectionAsText } from "../capture/types.js";
 import { createFeedbackRefiner } from "./feedback-refiner.js";
+import { deriveMergeFamily } from "./merge-family.js";
 import { ids } from "../id.js";
 import { ownerFromNamespace } from "../runtime/namespace.js";
 import type { Repos } from "../storage/repos/index.js";
@@ -90,12 +91,18 @@ export async function runFeedbackExperience(
     repos: deps.repos,
   });
   const vec = await embedPolicy(draft.vectorText, deps);
-  const existing = findSimilarPolicy(draft, vec, deps);
+  const mergeFamily = deriveMergeFamily({
+    experienceType: draft.type,
+    evidencePolarity: draft.polarity,
+    inducedBy: "feedback.experience.v1",
+  });
+  const existing = findSimilarPolicy(draft, vec, mergeFamily, deps);
   const sourceEpisodeIds = input.feedback.episodeId ? [input.feedback.episodeId] : [];
   const sourceTraceIds = collectTraceIds(input);
   const sourceFeedbackIds = [input.feedback.id as FeedbackId];
 
-  if (existing) {
+  const hitActive = Boolean(existing && existing.status === "active");
+  if (existing && !hitActive) {
     const merged = mergePolicy(existing, draft, {
       sourceEpisodeIds,
       sourceTraceIds,
@@ -119,7 +126,7 @@ export async function runFeedbackExperience(
     boundary: draft.boundary,
     support: 1,
     gain: Math.max(0.02, draft.salience),
-    status: draft.salience >= 0.5 ? "active" : "candidate",
+    status: hitActive ? "candidate" : (draft.salience >= 0.5 ? "active" : "candidate"),
     experienceType: draft.type,
     evidencePolarity: draft.polarity,
     salience: draft.salience,
@@ -128,6 +135,7 @@ export async function runFeedbackExperience(
     sourceFeedbackIds,
     sourceTraceIds,
     inducedBy: "feedback.experience.v1",
+    mergeFamily,
     decisionGuidance: draft.decisionGuidance,
     verifierMeta: draft.verifierMeta,
     skillEligible: draft.skillEligible,
@@ -443,6 +451,7 @@ async function embedPolicy(
 function findSimilarPolicy(
   draft: DraftExperience,
   vec: EmbeddingVector | null,
+  mergeFamily: NonNullable<PolicyRow["mergeFamily"]>,
   deps: FeedbackExperienceDeps,
 ): PolicyRow | null {
   if (!vec) return null;
@@ -454,6 +463,7 @@ function findSimilarPolicy(
     if (hit.score < MERGE_SIMILARITY) continue;
     const row = deps.repos.policies.getById(hit.id as PolicyId);
     if (!row) continue;
+    if (row.mergeFamily && row.mergeFamily !== mergeFamily) continue;
     if (row.experienceType && row.experienceType !== draft.type && hit.score < 0.82) {
       continue;
     }
@@ -476,15 +486,21 @@ function mergePolicy(
   const existingSkillEligible = existing.skillEligible !== false;
   const skillEligible = existingSkillEligible || draft.skillEligible;
   const polarity = mergePolarity(existing.evidencePolarity ?? "positive", draft.polarity);
+  const nextExperienceType = skillEligible && polarity === "mixed"
+    ? "repair_validated"
+    : existing.experienceType ?? draft.type;
   return {
     ...existing,
     support: Math.max(1, existing.support) + 1,
     gain: Math.max(existing.gain, draft.salience, 0.02),
     status: existing.status === "archived" ? existing.status : "active",
-    experienceType: skillEligible && polarity === "mixed"
-      ? "repair_validated"
-      : existing.experienceType ?? draft.type,
+    experienceType: nextExperienceType,
     evidencePolarity: polarity,
+    mergeFamily: deriveMergeFamily({
+      experienceType: nextExperienceType,
+      evidencePolarity: polarity,
+      inducedBy: existing.inducedBy,
+    }),
     salience: Math.max(existing.salience ?? 0, draft.salience),
     confidence: Math.max(existing.confidence ?? 0.5, draft.confidence),
     sourceEpisodeIds: mergeIds(existing.sourceEpisodeIds ?? [], patch.sourceEpisodeIds),

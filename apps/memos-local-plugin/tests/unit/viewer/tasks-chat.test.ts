@@ -146,6 +146,31 @@ describe("flattenChat", () => {
     expect(msgs[2]!.toolName).toBe("delegate_task");
   });
 
+  it("shows multiple distinct user texts even when traces share the same turnId", () => {
+    const t1 = trace({
+      id: "tr_u1",
+      ts: T0 + 100,
+      turnId: T0,
+      userText: "第一问：插件定义是什么",
+      agentText: "先回答第一问",
+    });
+    const t2 = trace({
+      id: "tr_u2",
+      ts: T0 + 200,
+      turnId: T0,
+      userText: "第二问：我问的是插件，不是 skill",
+      agentText: "收到，改答插件",
+    });
+
+    const msgs = flattenChat([t1, t2]);
+    const users = msgs.filter((m) => m.role === "user").map((m) => m.text);
+
+    expect(users).toEqual([
+      "第一问：插件定义是什么",
+      "第二问：我问的是插件，不是 skill",
+    ]);
+  });
+
   it("keeps tool calls without startedAt untimed", () => {
     const t = trace({
       id: "tr3",

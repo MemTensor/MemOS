@@ -6,7 +6,7 @@ import {
 } from "../../../viewer/src/views/overview/model-status";
 
 describe("overview model status", () => {
-  it("renders a healthy model as Connected, not the status object", () => {
+  it("renders a healthy model as 已连接, not the status object", () => {
     const status = modelStatusFromInfo({
       available: true,
       provider: "openai_compatible",
@@ -14,8 +14,8 @@ describe("overview model status", () => {
       lastOkAt: 1_700_000_000_000,
     });
 
-    expect(status.label).toBe("Connected");
-    expect(formatModelStatusLine(status.label)).toBe("Connected");
+    expect(status.label).toBe("已连接");
+    expect(formatModelStatusLine(status.label)).toBe("已连接");
   });
 
   it("never falls back to browser object stringification in the status line", () => {

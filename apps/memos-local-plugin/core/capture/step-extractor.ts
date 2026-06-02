@@ -35,9 +35,25 @@ import type { ToolCallDTO } from "../../agent-contract/dto.js";
 import { rootLogger } from "../logger/index.js";
 import type { EpisodeSnapshot, EpisodeTurn } from "../session/types.js";
 import type { EpochMs } from "../types.js";
+import {
+  liteCaptureTurnCursor,
+} from "../episode/turn-anchor.js";
 import type { StepCandidate } from "./types.js";
 
-export function extractSteps(episode: EpisodeSnapshot): StepCandidate[] {
+export interface ExtractStepsOptions {
+  /** Episode-level stable turn key; overrides per-segment user-turn ts. */
+  anchorTurnId?: EpochMs;
+  /**
+   * When true, tool sub-steps never carry `userText` (incremental lite
+   * capture after the task prompt was already persisted).
+   */
+  omitSegmentUserText?: boolean;
+}
+
+export function extractSteps(
+  episode: EpisodeSnapshot,
+  options?: ExtractStepsOptions,
+): StepCandidate[] {
   const log = rootLogger.child({ channel: "core.capture.extractor" });
   const out: StepCandidate[] = [];
   const turns = episode.turns;
@@ -56,8 +72,15 @@ export function extractSteps(episode: EpisodeSnapshot): StepCandidate[] {
   }
   if (current.length > 0) segments.push(current);
 
+  const anchorTurnId = options?.anchorTurnId;
+
   for (const segTurns of segments) {
-    out.push(...segmentToSteps(segTurns, episode));
+    out.push(
+      ...segmentToSteps(segTurns, episode, {
+        ...options,
+        ...(anchorTurnId !== undefined ? { anchorTurnId } : {}),
+      }),
+    );
   }
 
   if (out.length === 0) {
@@ -74,12 +97,37 @@ export function extractSteps(episode: EpisodeSnapshot): StepCandidate[] {
         rawReflection: null,
         depth: depthFromMeta(episode.meta),
         isSubagent: Boolean(episode.meta.isSubagent),
-        meta: { synthetic: true, turnId: firstUser.ts },
+        meta: {
+          synthetic: true,
+          turnId: anchorTurnId ?? firstUser.ts,
+        },
       });
     }
   }
 
   return out;
+}
+
+/**
+ * Lite capture only processes turns added since the previous successful
+ * `runLite`. The first pass uses the full episode; later passes extract from
+ * new turns only and never re-attach the task prompt to tool rows.
+ */
+export function extractIncrementalSteps(episode: EpisodeSnapshot): StepCandidate[] {
+  const cursor = liteCaptureTurnCursor(episode);
+  if (cursor <= 0) {
+    return extractSteps(episode);
+  }
+  if (cursor >= episode.turns.length) {
+    return [];
+  }
+  const firstUser = episode.turns.find((t) => t.role === "user");
+  const newTurns = episode.turns.slice(cursor);
+  const syntheticTurns = firstUser ? [firstUser, ...newTurns] : newTurns;
+  return extractSteps(
+    { ...episode, turns: syntheticTurns },
+    { omitSegmentUserText: true },
+  );
 }
 
 // ─── Segment → sub-steps ────────────────────────────────────────────────────
@@ -94,6 +142,7 @@ export function extractSteps(episode: EpisodeSnapshot): StepCandidate[] {
 function segmentToSteps(
   turns: EpisodeTurn[],
   episode: EpisodeSnapshot,
+  options?: ExtractStepsOptions,
 ): StepCandidate[] {
   // ─── Classify turns ────────────────────────────────────────────
   const userTexts: string[] = [];
@@ -139,10 +188,10 @@ function segmentToSteps(
   const depth = depthFromMeta({ ...episode.meta, ...segMeta });
   const isSubagent = Boolean(segMeta.isSubagent ?? episode.meta.isSubagent);
   const fullThinking = thinkingParts.join("\n\n").trim() || null;
-  // Fallback if the segment had no user turn (assistant-only segment
-  // produced by some adapters): anchor turnId on the first turn we
-  // ever saw so downstream group_by still has something stable.
-  const segTurnId: EpochMs = (turnId ?? turns[0]!.ts);
+  // Prefer the episode anchor so gateway replay timestamps cannot fork
+  // `turnId` away from the first user message.
+  const segTurnId: EpochMs = options?.anchorTurnId ?? (turnId ?? turns[0]!.ts);
+  const attachUserText = !options?.omitSegmentUserText;
 
   // ─── No tool calls → single step ──────────────────────────────
   if (toolTurns.length === 0) {
@@ -195,7 +244,7 @@ function segmentToSteps(
       // sub-steps leave `userText` empty so the viewer's flattenChat
       // doesn't render the same user bubble N times. The turn's
       // provenance (episodeId) still links them together.
-      userText: i === 0 ? userText : "",
+      userText: attachUserText && i === 0 ? userText : "",
       agentText: "",
       agentThinking: !hasResponse && i === 0 ? fullThinking : null,
       toolCalls: [tc],

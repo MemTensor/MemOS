@@ -1,6 +1,13 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { extractSteps } from "../../../core/capture/step-extractor.js";
+import {
+  ANCHOR_TURN_ID_META,
+  CAPTURE_LITE_TURN_CURSOR_META,
+} from "../../../core/episode/turn-anchor.js";
+import {
+  extractIncrementalSteps,
+  extractSteps,
+} from "../../../core/capture/step-extractor.js";
 import { initTestLogger } from "../../../core/logger/index.js";
 import type { EpisodeSnapshot, EpisodeTurn } from "../../../core/session/types.js";
 import { retrievalFor } from "../../../core/session/heuristics.js";
@@ -289,5 +296,63 @@ describe("capture/step-extractor", () => {
     const steps = extractSteps(ep);
     expect(steps).toHaveLength(1);
     expect(steps[0]!.userText).toBe("hi");
+  });
+
+  it("incremental lite pass omits task prompt on new tool sub-steps", () => {
+    const taskPrompt = "long SWE-bench task description";
+    const ep = episode(
+      [
+        turn("user", taskPrompt, 1_000),
+        turn("tool", "ok", 1_100, {
+          tool: "shell",
+          input: { cmd: "ls" },
+          startedAt: 1_050,
+          endedAt: 1_100,
+        }),
+        turn("assistant", "step one done", 1_200),
+        turn("tool", "ok2", 1_300, {
+          tool: "shell",
+          input: { cmd: "pwd" },
+          startedAt: 1_250,
+          endedAt: 1_300,
+        }),
+        turn("assistant", "step two done", 1_400),
+      ],
+      {
+        [ANCHOR_TURN_ID_META]: 1_000,
+        [CAPTURE_LITE_TURN_CURSOR_META]: 3,
+      },
+    );
+
+    const firstPass = extractSteps(ep, { anchorTurnId: 1_000 });
+    const toolWithPrompt = firstPass.find((s) => s.toolCalls.length > 0);
+    expect(toolWithPrompt?.userText).toBe(taskPrompt);
+
+    const incremental = extractIncrementalSteps(ep);
+    expect(incremental.every((s) => s.userText === "")).toBe(true);
+    expect(incremental.some((s) => s.toolCalls[0]?.input)).toBe(true);
+    for (const step of incremental) {
+      expect(step.meta.turnId).toBe(1_000);
+    }
+  });
+
+  it("uses episode anchor turnId instead of replayed tool timestamps", () => {
+    const ep = episode(
+      [
+        turn("user", "task", 1_000),
+        turn("tool", "out", 9_999, {
+          tool: "read",
+          input: { path: "/x" },
+          startedAt: 9_990,
+          endedAt: 9_999,
+        }),
+        turn("assistant", "done", 1_100),
+      ],
+      { [ANCHOR_TURN_ID_META]: 1_000 },
+    );
+    const steps = extractSteps(ep, { anchorTurnId: 1_000 });
+    for (const step of steps) {
+      expect(step.meta.turnId).toBe(1_000);
+    }
   });
 });

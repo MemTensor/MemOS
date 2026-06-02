@@ -29,6 +29,7 @@ import type {
   TraceRow,
 } from "../../types.js";
 import { ids } from "../../id.js";
+import { deriveMergeFamily } from "../../experience/merge-family.js";
 import { centroid } from "./similarity.js";
 import type { InductionDraft, InductionDraftResult } from "./types.js";
 
@@ -172,6 +173,11 @@ export function buildPolicyRow(args: {
     status: "candidate",
     sourceEpisodeIds: Array.from(new Set(args.episodeIds)),
     inducedBy: args.inducedBy,
+    mergeFamily: deriveMergeFamily({
+      experienceType: "success_pattern",
+      evidencePolarity: "positive",
+      inducedBy: args.inducedBy,
+    }),
     // Fresh policy starts without learned guidance — populated by the
     // decision-repair pipeline as user feedback / failure bursts arrive.
     decisionGuidance: { preference: [], antiPattern: [] },

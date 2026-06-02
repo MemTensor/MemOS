@@ -266,6 +266,7 @@ export function buildPipelineSubscribers(
     llm: deps.llm,
     log: log.child({ channel: "core.memory.l2" }),
     config: algorithm.l2Induction,
+    now: deps.now,
     thresholds: {
       minSupport: algorithm.skill.minSupport,
       minGain: algorithm.skill.minGain,

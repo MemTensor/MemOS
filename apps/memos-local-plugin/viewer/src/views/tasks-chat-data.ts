@@ -124,22 +124,24 @@ const TOOL_OUTPUT_PREVIEW_CHARS = 1_600;
 export function flattenChat(traces: readonly TimelineTrace[]): ChatMsg[] {
   const out: ChatMsg[] = [];
   for (const group of groupTracesByTurn(traces)) {
-    const userTrace = group.find((tr) => (tr.userText ?? "").trim().length > 0);
-    const userText = (userTrace?.userText ?? "").trim();
-    if (userTrace && userText) {
-      const userScoreLabel = formatTraceScore(userTrace);
-      const userRelated = (userTrace.reflection ?? "").trim();
-      const userRelatedTitle = pickRelatedTitleByTrace(userTrace);
+    const seenUserTextsInGroup = new Set<string>();
+    for (const tr of group) {
+      const userText = (tr.userText ?? "").trim();
+      if (!userText || seenUserTextsInGroup.has(userText)) continue;
+      const userScoreLabel = formatTraceScore(tr);
+      const userRelated = (tr.reflection ?? "").trim();
+      const userRelatedTitle = pickRelatedTitleByTrace(tr);
       out.push({
         role: "user",
         text: userText,
-        ts: userTrace.turnId ?? userTrace.ts,
-        key: `${userTrace.id}:user`,
-        traceId: userTrace.id,
+        ts: tr.turnId ?? tr.ts,
+        key: `${tr.id}:user`,
+        traceId: tr.id,
         scoreLabel: userScoreLabel,
         relatedLabel: userRelated || undefined,
         relatedTitle: userRelatedTitle,
       });
+      seenUserTextsInGroup.add(userText);
     }
 
     for (const tr of group) {

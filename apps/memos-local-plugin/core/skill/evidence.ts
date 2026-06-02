@@ -41,6 +41,7 @@ interface EpisodeMeta {
   outcome: EpisodeOutcome;
   rTask: number | null;
   verifierPassed: boolean | null;
+  anchorTurnId: number;
 }
 
 export function gatherEvidence(policy: PolicyRow, deps: EvidenceDeps): EvidenceResult {
@@ -65,6 +66,7 @@ export function gatherEvidence(policy: PolicyRow, deps: EvidenceDeps): EvidenceR
 
   const deduped = dedupeTracesBySignature(
     evidencePool,
+    epMeta,
     (t, p) => scoreTrace(t, policy) - scoreTrace(p, policy),
   );
   const sorted = deduped
@@ -127,7 +129,7 @@ export function gatherIncrementalEvidence(
     (t) => epMeta.get(t.episodeId)!.outcome !== "failure",
   );
 
-  const deduped = dedupeTracesBySignature(evidencePool, (a, b) => b.value - a.value);
+  const deduped = dedupeTracesBySignature(evidencePool, epMeta, (a, b) => b.value - a.value);
   const sorted = deduped
     .filter((t) => !isRedacted(t))
     .sort((a, b) => {
@@ -170,7 +172,7 @@ export function gatherCounterExamples(
         ? failurePool
         : pool.filter((t) => Number.isFinite(t.value) && t.value < 0);
 
-  const deduped = dedupeTracesBySignature(counterSource, (a, b) => a.value - b.value);
+  const deduped = dedupeTracesBySignature(counterSource, epMeta, (a, b) => a.value - b.value);
   deduped.sort((a, b) => a.value - b.value);
   return deduped
     .slice(0, 5)
@@ -188,6 +190,7 @@ function batchEpisodeMeta(
       outcome: (ep?.outcome ?? "unknown") as EpisodeOutcome,
       rTask: ep?.rTask ?? null,
       verifierPassed: ep?.verifierPassed ?? null,
+      anchorTurnId: ep?.startedAt ?? 0,
     });
   }
   return epMeta;
@@ -246,11 +249,12 @@ function loadEpisodeTraces(
 
 function dedupeTracesBySignature(
   traces: TraceRow[],
+  epMeta: Map<string, EpisodeMeta>,
   prefer: (a: TraceRow, b: TraceRow) => number,
 ): TraceRow[] {
   const best = new Map<string, TraceRow>();
   for (const t of traces) {
-    const sig = traceIdentitySignature(t);
+    const sig = traceIdentitySignature(t, epMeta.get(t.episodeId)?.anchorTurnId ?? 0);
     const prev = best.get(sig);
     if (!prev || prefer(t, prev) < 0) best.set(sig, t);
   }

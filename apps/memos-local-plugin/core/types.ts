@@ -167,6 +167,7 @@ export interface PolicyRow extends OwnedRow {
     | "verifier_feedback"
     | "procedural";
   evidencePolarity?: "positive" | "negative" | "neutral" | "mixed";
+  mergeFamily?: "success_induction" | "failure_corrective" | "failure_avoidance";
   /** Recall/ranking hints for direct experience retrieval. */
   salience?: number;
   confidence?: number;
