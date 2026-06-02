@@ -29,6 +29,7 @@ const COLUMNS = [
   "gain",
   "status",
   "experience_type",
+  "merge_family",
   "evidence_polarity",
   "salience",
   "confidence",
@@ -399,6 +400,7 @@ interface RawPolicyRow {
   gain: number;
   status: "candidate" | "active" | "archived";
   experience_type: NonNullable<PolicyRow["experienceType"]> | null;
+  merge_family: NonNullable<PolicyRow["mergeFamily"]> | null;
   evidence_polarity: NonNullable<PolicyRow["evidencePolarity"]> | null;
   salience: number | null;
   confidence: number | null;
@@ -452,6 +454,7 @@ function rowToParams(row: PolicyRow): Record<string, unknown> {
     gain: row.gain,
     status: row.status,
     experience_type: row.experienceType ?? "success_pattern",
+    merge_family: row.mergeFamily ?? null,
     evidence_polarity: row.evidencePolarity ?? "positive",
     salience: row.salience ?? 0,
     confidence: row.confidence ?? 0.5,
@@ -488,6 +491,7 @@ function mapRow(r: RawPolicyRow): PolicyRow {
     gain: r.gain,
     status: r.status,
     experienceType: normalizeExperienceType(r.experience_type),
+    mergeFamily: normalizeMergeFamily(r.merge_family),
     evidencePolarity: normalizeEvidencePolarity(r.evidence_polarity),
     salience: finiteOr(r.salience, 0),
     confidence: finiteOr(r.confidence, 0.5),
@@ -585,6 +589,19 @@ function normalizeEvidencePolarity(
       return raw;
     default:
       return "positive";
+  }
+}
+
+function normalizeMergeFamily(
+  raw: NonNullable<PolicyRow["mergeFamily"]> | null | undefined,
+): NonNullable<PolicyRow["mergeFamily"]> | undefined {
+  switch (raw) {
+    case "success_induction":
+    case "failure_corrective":
+    case "failure_avoidance":
+      return raw;
+    default:
+      return undefined;
   }
 }
 

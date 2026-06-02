@@ -234,11 +234,103 @@ describe("feedback experience builder", () => {
       { repos: handle.repos, embedder: fakeEmbedder(), namespace, now: () => NOW + 1 },
     );
 
-    expect(avoid.policyId).toBe(ok.policyId);
-    const row = handle.repos.policies.getById(ok.policyId!);
-    expect(row?.experienceType).toBe("repair_validated");
+    expect(avoid.policyId).not.toBe(ok.policyId);
+    const parent = handle.repos.policies.getById(ok.policyId!);
+    const sibling = handle.repos.policies.getById(avoid.policyId!);
+    expect(parent?.status).toBe("active");
+    expect(parent?.skillEligible).toBe(true);
+    expect(["candidate", "active"]).toContain(sibling?.status);
+    expect(sibling?.sourceFeedbackIds).toContain("fb_avoid");
+  });
+
+  it("does not merge into active policy in same merge family", async () => {
+    const base = await runFeedbackExperience(
+      {
+        feedback: feedback({
+          id: "fb_base" as FeedbackRow["id"],
+          rationale: "Verifier failed: avoid wrong SEC 13F issuer field.",
+          raw: { source: "verifier", score: -1 },
+        }),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: -1 },
+        trace,
+      },
+      { repos: handle.repos, embedder: fakeEmbedder(), namespace, now: () => NOW },
+    );
+    const row = handle.repos.policies.getById(base.policyId!);
+    expect(row).toBeTruthy();
+    handle.repos.policies.upsert({
+      ...row!,
+      status: "active",
+      support: 10,
+      gain: 0.9,
+      updatedAt: NOW + 1,
+    });
+
+    const follow = await runFeedbackExperience(
+      {
+        feedback: feedback({
+          id: "fb_follow" as FeedbackRow["id"],
+          rationale: "Verifier failed again: avoid wrong SEC 13F issuer field.",
+          raw: { source: "verifier", score: -1 },
+        }),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: -1 },
+        trace,
+      },
+      { repos: handle.repos, embedder: fakeEmbedder(), namespace, now: () => NOW + 2 },
+    );
+
+    expect(follow.created).toBe(true);
+    const all = handle.repos.policies.list({ limit: 20 });
+    const activeRows = all.filter((p) => p.status === "active");
+    const candidateRows = all.filter((p) => p.status === "candidate");
+    expect(activeRows).toHaveLength(1);
+    expect(candidateRows.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("re-derives mergeFamily after polarity changes during merge", async () => {
+    handle.repos.policies.insert({
+      id: "po_merge_family" as never,
+      ownerAgentKind: "hermes",
+      ownerProfileId: "default",
+      ownerWorkspaceId: "workspace",
+      title: "SEC 13F extraction rule",
+      trigger: "when parsing 13F",
+      procedure: "prefer validated issuer field",
+      verification: "issuer matches filing",
+      boundary: "",
+      support: 1,
+      gain: 0.2,
+      status: "candidate",
+      experienceType: "success_pattern",
+      evidencePolarity: "positive",
+      mergeFamily: null,
+      sourceEpisodeIds: ["ep_feedback" as EpisodeId],
+      sourceFeedbackIds: [],
+      sourceTraceIds: [trace.id],
+      inducedBy: "feedback.experience.v1",
+      decisionGuidance: { preference: ["prefer validated issuer field"], antiPattern: [] },
+      skillEligible: true,
+      createdAt: NOW,
+      updatedAt: NOW,
+      vec: vec([1, 0, 0]),
+    });
+
+    const merged = await runFeedbackExperience(
+      {
+        feedback: feedback({
+          id: "fb_merge_family" as FeedbackRow["id"],
+          rationale: "Verifier failed: avoid wrong SEC 13F issuer field.",
+          raw: { source: "verifier", score: -1 },
+        }),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: -1 },
+        trace,
+      },
+      { repos: handle.repos, embedder: fakeEmbedder(), namespace, now: () => NOW + 3 },
+    );
+
+    expect(merged.policyId).toBe("po_merge_family");
+    const row = handle.repos.policies.getById("po_merge_family" as never);
     expect(row?.evidencePolarity).toBe("mixed");
-    expect(row?.skillEligible).toBe(true);
-    expect(row?.sourceFeedbackIds?.sort()).toEqual(["fb_avoid", "fb_ok"]);
+    expect(row?.mergeFamily).toBe("failure_corrective");
   });
 });

@@ -206,6 +206,25 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     ensureSkillRepairOriginColumns(db);
     return;
   }
+  if (file.version === 14 && file.name === "episode-outcome") {
+    if (tableExists(db, "episodes")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
+  if (file.version === 15 && file.name === "policy-merge-family") {
+    if (tableExists(db, "policies")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
+  if (file.version === 16 && file.name === "episode-policy-injections") {
+    // Legacy/minimal test DBs may not have full initial schema.
+    if (tableExists(db, "episodes") && tableExists(db, "policies")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
   db.exec(fs.readFileSync(file.fullPath, "utf8"));
 }
 

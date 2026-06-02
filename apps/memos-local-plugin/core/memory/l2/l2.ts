@@ -260,6 +260,26 @@ export async function runL2(
       policy.ownerWorkspaceId = owner.ownerWorkspaceId;
       const duplicate = findExistingContentDuplicate(policy, repos);
       if (duplicate) {
+        if (duplicate.status === "active" && policy.mergeFamily !== "success_induction") {
+          // Active policies are immutable for merge safety: keep the active
+          // row intact and write a sibling candidate.
+          repos.policies.insert(policy);
+          pool.promote(bucket.candidateIds, policy.id);
+          touched.set(policy.id, policy);
+          inductionEvidenceByPolicy.set(
+            policy.id,
+            new Set(bucket.evidenceTraceIds as string[]),
+          );
+          inductions.push({
+            signature: bucket.signature,
+            policyId: policy.id,
+            poolSize: bucket.candidateIds.length,
+            episodeIds: epIds,
+            traceIds: bucket.evidenceTraceIds,
+            skippedReason: null,
+          });
+          continue;
+        }
         const merged = mergePolicyEvidence(duplicate, policy, input.now ?? Date.now());
         repos.policies.upsert(merged);
         pool.promote(bucket.candidateIds, duplicate.id);
@@ -559,6 +579,11 @@ function findExistingContentDuplicate(
   let best: { row: PolicyRow; score: PolicyNearDuplicateScore } | null = null;
   for (const existing of repos.policies.list({ limit: 5_000 })) {
     if (!sameOwnerScope(existing, policy)) continue;
+    if (
+      existing.mergeFamily
+      && policy.mergeFamily
+      && existing.mergeFamily !== policy.mergeFamily
+    ) continue;
     if (policyContentKey(existing) === target && policyOptionalFieldsCompatible(existing, policy)) {
       return existing;
     }

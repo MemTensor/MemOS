@@ -1671,6 +1671,18 @@ export function createMemoryCore(
           }
         : undefined;
       finalHubKept = final.hits.filter((hit) => hit.shareScope === "hub").length;
+      const injectedPolicyIds = collectInjectedPolicyIds(final.hits);
+      for (const policyId of injectedPolicyIds) {
+        handle.repos.episodePolicyInjections.inject({
+          episodeId: packet.episodeId,
+          policyId: policyId as PolicyId,
+          source: "turn_start",
+          now: Date.now(),
+        });
+      }
+      handle.repos.episodes.updateMeta(packet.episodeId, {
+        injectedPolicyIds,
+      });
       return {
         query,
         hits: final.hits,
@@ -1761,6 +1773,18 @@ export function createMemoryCore(
         );
       }
     }
+  }
+
+  function collectInjectedPolicyIds(
+    hits: readonly RetrievalHitDTO[],
+  ): string[] {
+    const ids = new Set<string>();
+    for (const hit of hits) {
+      if (hit.refKind !== "experience") continue;
+      if (typeof hit.refId !== "string" || !hit.refId.trim()) continue;
+      ids.add(hit.refId);
+    }
+    return Array.from(ids);
   }
 
   async function onTurnEnd(
@@ -1877,6 +1901,24 @@ export function createMemoryCore(
         log.warn("feedback.reward_failed", {
           episodeId: episode.id,
           err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (targetTrace) {
+      // Keep explicit trace feedback as the final source of truth for that trace.
+      // Reward backprop updates episode-wide values and may dilute single-trace
+      // explicit feedback in short episodes.
+      const latest = handle.repos.traces.getById(targetTrace.id);
+      if (latest) {
+        const explicitValue = aggregateTraceFeedbackValue(
+          handle.repos.feedback.getForTrace(targetTrace.id),
+        );
+        handle.repos.traces.updateScore(targetTrace.id, {
+          value: explicitValue,
+          alpha: latest.alpha,
+          rHuman: explicitValue,
+          priority: Math.max(latest.priority, Math.abs(explicitValue)),
         });
       }
     }
