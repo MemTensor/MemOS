@@ -76,10 +76,11 @@ search_handler = SearchHandler(dependencies)
 add_handler = AddHandler(dependencies)
 chat_handler = (
     ChatHandler(
-        dependencies,
-        components["chat_llms"],
-        search_handler,
-        add_handler,
+        dependencies=dependencies,
+        chat_llms=components["chat_llms"],
+        playground_chat_llms=components.get("playground_chat_llms"),
+        search_handler=search_handler,
+        add_handler=add_handler,
         online_bot=components.get("online_bot"),
     )
     if os.getenv("ENABLE_CHAT_API", "false") == "true"

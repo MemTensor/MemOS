@@ -29,6 +29,12 @@ import { t } from "../stores/i18n";
 import { navigate } from "../stores/router";
 import type { ApiLogDTO, CoreEvent, CoreEventType } from "../api/types";
 import { ActivityDashboard } from "./overview/ActivityDashboard";
+import {
+  formatModelStatusLine,
+  modelScalarText,
+  modelStatusFromInfo,
+  type ModelInfo,
+} from "./overview/model-status";
 
 interface SkillStats {
   total: number;
@@ -41,22 +47,6 @@ interface PolicyStats {
   active: number;
   candidate: number;
   archived: number;
-}
-interface ModelInfo {
-  available?: boolean;
-  provider: string;
-  model: string;
-  dim?: number;
-  inherited?: boolean;
-  /** Epoch ms of most recent direct primary-provider success. */
-  lastOkAt?: number | null;
-  /**
-   * Epoch ms of most recent rescued-by-host-fallback call. Populates
-   * the "yellow" overview state.
-   */
-  lastFallbackAt?: number | null;
-  /** Most recent failure (sticky — see ModelHealth comment). */
-  lastError?: { at: number; message: string } | null;
 }
 interface OverviewSummary {
   ok?: boolean;
@@ -303,6 +293,7 @@ function apiLogEventType(
   switch (log.toolName) {
     case "memory_add":
       return "trace.created";
+    case "memos_search":
     case "memory_search":
       return hasRetrievalHits(output) ? "retrieval.tier1.hit" : "retrieval.empty";
     case "policy_generate":
@@ -443,96 +434,6 @@ function QuantityCard({
   );
 }
 
-type ModelDotKind = "ok" | "fallback" | "err" | "idle" | "off";
-
-/**
- * Derive the overview card status from a {@link ModelInfo}.
- *
- * The card is painted by picking the most-recent of three timestamps
- * — `lastOkAt`, `lastFallbackAt`, `lastError.at` — and mapping that
- * winner to a colour:
- *
- *   - `ok` (green)        — primary provider answered directly.
- *   - `fallback` (yellow) — primary failed but host LLM bridge
- *                           rescued the call. The card surfaces the
- *                           original error so users know *why* it
- *                           degraded.
- *   - `err` (red)         — primary failed and either there was no
- *                           fallback or the fallback also failed.
- *
- * `lastError` is sticky on the backend so it can sit alongside a
- * fresher `lastOkAt` after recovery — comparing timestamps lets the
- * UI naturally "go green again" without having to clear the message.
- */
-function modelStatusFromInfo(info: ModelInfo | undefined): {
-  kind: ModelDotKind;
-  label: string;
-  tooltip?: string;
-} {
-  if (!info || info.available === false) {
-    return { kind: "off", label: t("overview.metric.model.unconfigured") };
-  }
-
-  const okAt = info.lastOkAt ?? 0;
-  const fbAt = info.lastFallbackAt ?? 0;
-  const errAt = info.lastError?.at ?? 0;
-  const max = Math.max(okAt, fbAt, errAt);
-
-  // Nothing has happened yet — fresh process, no calls landed.
-  if (max === 0) {
-    return { kind: "idle", label: t("overview.metric.model.idle") };
-  }
-
-  // Priority order matters when timestamps tie.
-  //
-  // The backend stamps `lastFallbackAt` and `lastError.at` with the
-  // SAME `Date.now()` inside `markFallback` (the upstream error is
-  // kept on `lastError` so the viewer can show *why* fallback
-  // engaged). When that happens, a strict "errAt === max ⇒ red"
-  // check would always win over the fallback branch and the slot
-  // would never go yellow. The current call succeeded — through the
-  // host bridge — so semantically it is the fallback state, with
-  // the error only providing context. Hence: fallback wins ties
-  // against err.
-  //
-  // We also let fallback win ties against ok for the rare case where
-  // a successful primary call and a fallback rescue happen in the
-  // same millisecond — yellow is the most informative state.
-  if (fbAt > 0 && fbAt >= errAt && fbAt >= okAt) {
-    const raw = (info.lastError?.message ?? "").trim();
-    const head = t("overview.metric.model.fallback");
-    const tail = raw ? `: ${raw.length > 60 ? raw.slice(0, 59) + "…" : raw}` : "";
-    return {
-      kind: "fallback",
-      label: head + tail,
-      tooltip: raw
-        ? t("overview.metric.model.fallback.tooltip", { msg: raw })
-        : head,
-    };
-  }
-
-  // Most recent event was a terminal failure.
-  if (errAt > 0 && errAt >= okAt) {
-    const raw = (info.lastError?.message ?? "").trim();
-    const short =
-      raw.length > 80 ? raw.slice(0, 79) + "…" : raw || t("overview.metric.model.failed");
-    return {
-      kind: "err",
-      label: short,
-      tooltip: raw || t("overview.metric.model.failed"),
-    };
-  }
-
-  // okAt is the largest — primary provider is working directly.
-  return {
-    kind: "ok",
-    label: t("overview.metric.model.connected"),
-    tooltip: t("overview.metric.model.connectedAt", {
-      ts: new Date(okAt).toLocaleTimeString(),
-    }),
-  };
-}
-
 function ModelCard({
   label,
   info,
@@ -544,7 +445,7 @@ function ModelCard({
   hint?: string;
   onClick?: () => void;
 }) {
-  const model = (info?.model ?? "").trim();
+  const model = modelScalarText(info?.model).trim();
   const display = model ? model : t("overview.metric.model.unconfigured");
   const status = modelStatusFromInfo(info);
   const titleAttr = status.tooltip
@@ -573,7 +474,7 @@ function ModelCard({
         {display}
       </div>
       <div class="metric__delta">
-        {[status.label, hint].filter(Boolean).join(" · ") || info?.provider || "—"}
+        {formatModelStatusLine(status.label, hint, info?.provider)}
       </div>
     </button>
   );

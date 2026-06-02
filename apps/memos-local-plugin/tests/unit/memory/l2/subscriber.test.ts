@@ -36,6 +36,7 @@ function cfg(): L2Config {
     minTraceValue: 0.1,
     minEpisodesForInduction: 5, // keep induction off for this test
     inductionTraceCharCap: 2_000,
+    gainEmaAlpha: 0.4,
   };
 }
 

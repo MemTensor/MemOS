@@ -117,6 +117,9 @@ export function extractAlgorithmConfig(
 ): PipelineAlgorithmConfig {
   const alg = deps.config.algorithm;
   return {
+    lightweightMemory: {
+      enabled: alg.lightweightMemory.enabled,
+    },
     capture: alg.capture,
     reward: alg.reward,
     l2Induction: {
@@ -128,6 +131,7 @@ export function extractAlgorithmConfig(
       minTraceValue: alg.l2Induction.minTraceValue,
       minEpisodesForInduction: alg.l2Induction.minEpisodesForInduction,
       inductionTraceCharCap: alg.l2Induction.traceCharCap,
+      gainEmaAlpha: alg.l2Induction.gainEmaAlpha,
     },
     l3Abstraction: alg.l3Abstraction,
     skill: alg.skill,
@@ -154,10 +158,11 @@ export function extractAlgorithmConfig(
       skillInjectionMode: alg.retrieval.skillInjectionMode,
       skillSummaryChars: alg.retrieval.skillSummaryChars,
       decayHalfLifeDays: alg.reward.decayHalfLifeDays,
-      llmFilterEnabled: alg.retrieval.llmFilterEnabled,
+      llmFilterEnabled: alg.lightweightMemory.enabled ? true : alg.retrieval.llmFilterEnabled,
       llmFilterMaxKeep: alg.retrieval.llmFilterMaxKeep,
-      llmFilterMinCandidates: alg.retrieval.llmFilterMinCandidates,
+      llmFilterMinCandidates: alg.lightweightMemory.enabled ? 1 : alg.retrieval.llmFilterMinCandidates,
       llmFilterCandidateBodyChars: alg.retrieval.llmFilterCandidateBodyChars,
+      lightweightMemory: alg.lightweightMemory.enabled,
     },
     session: {
       followUpMode: alg.session.followUpMode,
@@ -328,8 +333,15 @@ export function buildPipelineSession(
   deps: PipelineDeps,
   bus: SessionEventBus,
 ): PipelineSessionSet {
-  const intent = createIntentClassifier({ llm: deps.llm ?? undefined });
-  const relation = createRelationClassifier({ llm: deps.llm ?? undefined });
+  const llmDisabled = deps.config.algorithm.lightweightMemory.enabled;
+  const intent = createIntentClassifier({
+    llm: deps.llm ?? undefined,
+    disableLlm: llmDisabled,
+  });
+  const relation = createRelationClassifier({
+    llm: deps.llm ?? undefined,
+    disableLlm: llmDisabled,
+  });
   const episodeManager = createEpisodeManager({
     sessionsRepo: adaptSessionsRepo(deps.repos.sessions),
     episodesRepo: adaptEpisodesRepo(deps.repos.episodes),
@@ -343,6 +355,7 @@ export function buildPipelineSession(
     bus,
     episodeManager,
     now: deps.now,
+    lightweightMemory: llmDisabled,
   });
   return { intent, relation, sessionManager, episodeManager };
 }

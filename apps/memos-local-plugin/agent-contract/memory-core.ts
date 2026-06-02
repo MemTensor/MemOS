@@ -29,6 +29,7 @@ import type {
   TurnResultDTO,
   WorldModelDTO,
   RuntimeNamespace,
+  ShareScope,
 } from "./dto.js";
 import type { CoreEvent } from "./events.js";
 import type { LogRecord } from "./log-record.js";
@@ -236,7 +237,7 @@ export interface MemoryCore {
   shareTrace(
     id: string,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -308,7 +309,7 @@ export interface MemoryCore {
   sharePolicy(
     id: string,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -320,7 +321,7 @@ export interface MemoryCore {
   shareWorldModel(
     id: string,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -410,7 +411,7 @@ export interface MemoryCore {
 
   /**
    * Paged listing of the rich api_logs table ({@link ApiLogDTO}).
-   * Fuels the viewer's Logs page — shows every memory_search and
+   * Fuels the viewer's Logs page — shows every memos_search and
    * memory_add call with the full input/output JSON.
    */
   listApiLogs(input?: {
@@ -458,7 +459,7 @@ export interface MemoryCore {
   shareSkill(
     id: SkillId,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -475,6 +476,12 @@ export interface MemoryCore {
    * comments). Returns the new masked config.
    */
   patchConfig(patch: Record<string, unknown>): Promise<Record<string, unknown>>;
+
+  // ── optional Hub runtime hooks (HTTP viewer uses these when present) ──
+  hubAdminSnapshot?(): Promise<unknown>;
+  approveHubUser?(userId: string): Promise<unknown>;
+  rejectHubUser?(userId: string): Promise<unknown>;
+  removeHubUser?(userId: string): Promise<unknown>;
 
   // ── analytics (viewer dashboard) ──
   /**

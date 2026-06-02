@@ -82,6 +82,7 @@ import type { LogRecord } from "../../agent-contract/log-record.js";
  * know its own defaults.
  */
 export interface PipelineAlgorithmConfig {
+  lightweightMemory: LightweightMemoryConfig;
   capture: CaptureConfig;
   reward: RewardConfig;
   l2Induction: L2Config;
@@ -90,6 +91,10 @@ export interface PipelineAlgorithmConfig {
   feedback: FeedbackConfig;
   retrieval: RetrievalConfig;
   session: SessionRoutingConfig;
+}
+
+export interface LightweightMemoryConfig {
+  enabled: boolean;
 }
 
 /**

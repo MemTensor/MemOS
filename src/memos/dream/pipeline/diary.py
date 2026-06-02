@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from memos.dream.types import DreamDiaryEntry
+from memos.dream.types import DreamDiaryEntry, DreamResult
 
 
 if TYPE_CHECKING:
-    from memos.dream.types import DreamAction, DreamCluster, DreamResult
+    from memos.dream.types import DreamAction, DreamCluster
 
 
 logger = logging.getLogger(__name__)
@@ -77,11 +77,22 @@ class StructuredDiarySummary:
         clusters: list[DreamCluster],
         results: list[DreamResult],
         mem_cube_id: str,
+        context_report: Any | None = None,
     ) -> list[DreamResult]:
         cluster_map = {c.cluster_id: c for c in clusters}
         for result in results:
             cluster = cluster_map.get(result.cluster_id)
             result.diary_entry = self._build_entry(cluster, result)
+
+        context_events = _context_events(context_report)
+        if context_events:
+            results.append(
+                DreamResult(
+                    cluster_id=f"context:{mem_cube_id}",
+                    actions=[],
+                    diary_entry=self._build_context_entry(context_report, context_events),
+                )
+            )
         return results
 
     def _build_entry(self, cluster: DreamCluster | None, result: DreamResult) -> DreamDiaryEntry:
@@ -110,6 +121,39 @@ class StructuredDiarySummary:
             },
             themes=[],
             status=status,
+        )
+
+    def _build_context_entry(
+        self, context_report: Any, context_events: list[dict[str, Any]]
+    ) -> DreamDiaryEntry:
+        created_count = getattr(context_report, "created_context_count", 0)
+        updated_count = getattr(context_report, "updated_context_count", 0)
+        bound_count = getattr(context_report, "bound_memory_count", 0)
+        skipped_count = getattr(context_report, "skipped_memory_count", 0)
+
+        labels = [event.get("label") or event.get("key") for event in context_events]
+        labels = [label for label in labels if label]
+        summary = (
+            f"Dream processed Context bindings: created {created_count}, updated {updated_count}, "
+            f"bound {bound_count} source memories, skipped {skipped_count}."
+        )
+        if labels:
+            summary = f"{summary} Labels: {', '.join(labels[:5])}."
+
+        dream_entry = "\n".join(_format_context_event_for_diary(event) for event in context_events)
+        return DreamDiaryEntry(
+            title="Dream Context Summary",
+            summary=summary,
+            dream_entry=dream_entry,
+            motive={
+                "type": "context",
+                "why_now": "Context binding and summary were produced during this Dream run.",
+                "source_memory_count": bound_count,
+                "related_memory_count": len(context_events),
+            },
+            context_events=context_events,
+            themes=["context"],
+            status="context_only",
         )
 
     @staticmethod
@@ -146,3 +190,21 @@ class StructuredDiarySummary:
         if len(first_sentence) <= _TITLE_MAX_LEN:
             return first_sentence
         return first_sentence[:_TITLE_MAX_LEN].rstrip() + "…"
+
+
+def _context_events(context_report: Any | None) -> list[dict[str, Any]]:
+    if context_report is None:
+        return []
+    contexts = getattr(context_report, "contexts", None)
+    if not isinstance(contexts, list):
+        return []
+    return [event for event in contexts if isinstance(event, dict)]
+
+
+def _format_context_event_for_diary(event: dict[str, Any]) -> str:
+    label = event.get("label") or event.get("key") or event.get("context_id", "Context")
+    action = event.get("action", "processed")
+    summary = event.get("summary", "")
+    source_ids = event.get("source_memory_ids") or event.get("memory_ids") or []
+    source_count = len(source_ids) if isinstance(source_ids, list) else 0
+    return f"- {action} Context `{label}` from {source_count} memories: {summary}"

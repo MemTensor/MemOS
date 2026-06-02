@@ -44,6 +44,7 @@ export function gatherRepairEvidence(
 ): EvidenceResult {
   const cap = input.limit ?? deps.config.evidenceLimit;
   const needle = input.keyword?.toLowerCase().trim() ?? "";
+  const minLowValueThreshold = deps.config.minLowValueThreshold;
 
   // Pull a generous recent batch and split by value sign. Limiting at the
   // SQL layer is fine because the caller passes a small `limit`.
@@ -64,7 +65,7 @@ export function gatherRepairEvidence(
   // empty we keep the filtered result — the synthesizer is designed to
   // fall back to template output in that case without needing extra
   // context.
-  const firstPass = partition(recent, cap, needle);
+  const firstPass = partition(recent, cap, needle, minLowValueThreshold);
   const firstPassEmpty =
     firstPass.highValue.length === 0 && firstPass.lowValue.length === 0;
   if (!needle || !firstPassEmpty) {
@@ -77,7 +78,7 @@ export function gatherRepairEvidence(
     });
     return firstPass;
   }
-  const relaxed = partition(recent, cap, "");
+  const relaxed = partition(recent, cap, "", minLowValueThreshold);
   deps.log.debug("evidence.gathered", {
     sessionId: input.sessionId,
     highValue: relaxed.highValue.length,
@@ -92,6 +93,7 @@ function partition(
   traces: readonly TraceRow[],
   cap: number,
   needle: string,
+  minLowValueThreshold: number,
 ): EvidenceResult {
   const highValue: TraceRow[] = [];
   const lowValue: TraceRow[] = [];
@@ -99,7 +101,7 @@ function partition(
     if (needle && !traceContains(trace, needle)) continue;
     if (trace.value > 0) {
       if (highValue.length < cap) highValue.push(trace);
-    } else if (trace.value < 0 || isFailureLike(trace)) {
+    } else if (trace.value < -minLowValueThreshold || isFailureLike(trace)) {
       if (lowValue.length < cap) lowValue.push(trace);
     }
     if (highValue.length >= cap && lowValue.length >= cap) break;
