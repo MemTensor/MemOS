@@ -470,6 +470,8 @@ describe("HTTP server — REST routes", () => {
       sessionId: undefined,
       q: "hi",
       groupByTurn: false,
+      ownerAgentKind: undefined,
+      ownerProfileId: undefined,
     });
   });
 
@@ -484,12 +486,12 @@ describe("HTTP server — REST routes", () => {
 
   it("GET /api/v1/api-logs supports multi-tool filtering", async () => {
     const r = await fetch(
-      `${handle.url}/api/v1/api-logs?tools=memory_add,memory_search&limit=10&offset=5`,
+      `${handle.url}/api/v1/api-logs?tools=memory_add,memos_search&limit=10&offset=5`,
     );
     expect(r.status).toBe(200);
     expect(core.listApiLogs).toHaveBeenCalledWith({
       toolName: undefined,
-      toolNames: ["memory_add", "memory_search"],
+      toolNames: ["memory_add", "memos_search"],
       limit: 10,
       offset: 5,
     });

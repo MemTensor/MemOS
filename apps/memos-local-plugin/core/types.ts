@@ -305,9 +305,9 @@ export interface SkillRow extends OwnedRow {
   } | null;
   /** Last user edit through the viewer's edit modal (migration 009). */
   editedAt?: EpochMs | null;
-  /** Number of successful `skill_get` calls that loaded this skill. */
+  /** Number of successful `memos_skill_get` calls that loaded this skill. */
   usageCount?: number;
-  /** Last successful `skill_get` time, or null when never loaded. */
+  /** Last successful `memos_skill_get` time, or null when never loaded. */
   lastUsedAt?: EpochMs | null;
 }
 
@@ -339,6 +339,7 @@ export interface EpisodeRow extends OwnedRow {
   rTask: Reward | null;
   /** "open" | "closed". Open episodes accept new traces. */
   status: "open" | "closed";
+  meta?: Record<string, unknown>;
 }
 
 export interface FeedbackRow extends OwnedRow {

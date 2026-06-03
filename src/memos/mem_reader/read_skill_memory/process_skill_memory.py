@@ -1022,6 +1022,10 @@ def process_skill_memory_fine(
         chat_history = []
 
     messages = _reconstruct_messages_from_memory_items(fast_memory_items)
+    tool_rounds = sum(1 for message in messages if message.get("role") == "tool")
+    if tool_rounds < 5:
+        logger.info(f"[PROCESS_SKILLS] Skip skill extraction: tool rounds {tool_rounds} < 5")
+        return []
 
     chat_history, messages = _preprocess_extract_messages(chat_history, messages)
     if not messages:

@@ -174,7 +174,7 @@ describe("Hermes MemoryCore persistence", () => {
       agentText: "已记录 Hermes MemOS 测试事实。",
       toolCalls: [
         {
-          name: "memory_search",
+          name: "memos_search",
           input: "{\"query\":\"HERMES_MEMOS_E2E_0428\"}",
           output: "[]",
           startedAt: 1_700_000_000_002,
@@ -209,7 +209,7 @@ describe("Hermes MemoryCore persistence", () => {
     expect(timeline.some((trace) => trace.agentText.includes("已记录 Hermes MemOS 测试事实"))).toBe(
       true,
     );
-    expect(timeline.some((trace) => trace.toolCalls.some((tc) => tc.name === "memory_search")))
+    expect(timeline.some((trace) => trace.toolCalls.some((tc) => tc.name === "memos_search")))
       .toBe(true);
 
     const search = await second.core.searchMemory({
@@ -221,7 +221,7 @@ describe("Hermes MemoryCore persistence", () => {
     const traceIds = new Set(traces.map((trace) => trace.id));
     expect(search.hits.some((hit) => traceIds.has(hit.refId))).toBe(true);
 
-    const logs = await second.core.listApiLogs({ toolName: "memory_search", limit: 20 });
+    const logs = await second.core.listApiLogs({ toolName: "memos_search", limit: 20 });
     expect(logs.total).toBeGreaterThan(0);
   });
 });

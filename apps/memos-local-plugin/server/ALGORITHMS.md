@@ -78,10 +78,12 @@ The router is a `Map<"METHOD /path", handler>`. This is intentional:
 
 ## S7 — Request body is size-capped
 
-Default `maxBodyBytes = 1 MiB`. A stream overflowing this throws
-during `readBody`. The outer dispatch turns that into a 500, which is
-not strictly accurate but sufficient — 4xx vs 5xx coding here matters
-less than refusing the input.
+Default `maxBodyBytes = 1 MiB`; `/api/v1/import` is allowed up to
+64 MiB so exported memory bundles can round-trip through the viewer.
+A stream overflowing its route cap throws during `readBody`. The outer
+dispatch turns that into a 500, which is not strictly accurate but
+sufficient — 4xx vs 5xx coding here matters less than refusing the
+input.
 
 ## S8 — Static files are never cached permanently
 

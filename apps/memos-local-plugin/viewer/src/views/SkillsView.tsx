@@ -16,13 +16,20 @@ import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
 import { Pager } from "../components/Pager";
 import { ShareScopePill } from "../components/ShareScopePill";
+import { LightweightModeEmpty } from "../components/LightweightModeEmpty";
 import { NamespaceSelect, appendNamespaceParams } from "../components/NamespaceSelect";
 import { Markdown } from "../components/Markdown";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import type { CoreEvent, SkillDTO } from "../api/types";
 import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
-import { loadHubSharingEnabled } from "../utils/share";
+import {
+  loadHubSharingEnabled,
+  normalizeShareScope,
+  SHARE_SCOPE_OPTIONS,
+  type ShareScope,
+} from "../utils/share";
+import { useLightweightMemoryMode } from "../hooks/useLightweightMemoryMode";
 
 interface SkillUsage {
   sourcePolicies: Array<{
@@ -70,6 +77,7 @@ export function SkillsView() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [refusalNotices, setRefusalNotices] = useState<SkillRefusalNotice[]>([]);
   const [showRefusalNotices, setShowRefusalNotices] = useState(false);
+  const lightweight = useLightweightMemoryMode();
   const toggleSel = (id: string) => {
     setSelected((prev) => {
       const n = new Set(prev);
@@ -109,8 +117,19 @@ export function SkillsView() {
     }
   };
   useEffect(() => {
+    if (lightweight.loading || lightweight.enabled) return;
     void load(0);
-  }, [status, pageSize, namespaceFilter]);
+  }, [status, pageSize, namespaceFilter, lightweight.loading, lightweight.enabled]);
+
+  useEffect(() => {
+    if (!lightweight.enabled) return;
+    setSkills([]);
+    setDetail(null);
+    setSelected(new Set());
+    setHasMore(false);
+    setTotal(0);
+    setPage(0);
+  }, [lightweight.enabled]);
 
   useEffect(() => {
     const handle = openSse("/api/v1/events", (_, data) => {
@@ -138,6 +157,7 @@ export function SkillsView() {
 
   // Deep-link: `#/skills?id=sk_xxx` auto-opens the drawer.
   useEffect(() => {
+    if (lightweight.loading || lightweight.enabled) return;
     const id = route.value.params.id;
     if (!id) return;
     const ctrl = new AbortController();
@@ -152,7 +172,7 @@ export function SkillsView() {
       })
       .catch(() => void 0);
     return () => ctrl.abort();
-  }, [route.value.params.id]);
+  }, [route.value.params.id, lightweight.loading, lightweight.enabled]);
 
   const filtered = (skills ?? []).filter((s) => {
     if (!query) return true;
@@ -172,76 +192,44 @@ export function SkillsView() {
           <h1>{t("skills.title")}</h1>
           <p>{t("skills.subtitle")}</p>
         </div>
-        <div class="view-header__actions">
-          <SkillRefusalDropdown
-            notices={refusalNotices}
-            open={showRefusalNotices}
-            onToggle={() => setShowRefusalNotices((v) => !v)}
-            onClear={() => {
-              setRefusalNotices([]);
-              setShowRefusalNotices(false);
-            }}
-          />
-          {/*
-           * Refresh — matches MemoriesView / TasksView / PoliciesView /
-           * WorldModelsView. Clears search + status filter, drops
-           * selection, and re-fetches page 0 so the list visibly
-           * snaps back to "fresh top state". The old implementation
-           * only re-queried the CURRENT page with the CURRENT filters
-           * still applied, which looked like a no-op whenever the
-           * filtered slice hadn't actually changed.
-           */}
-          <button
-            class="btn btn--ghost btn--sm"
-            onClick={() => {
-              setQuery("");
-              setStatus("");
-              setNamespaceFilter("");
-              setSelected(new Set());
-              void load(0);
-            }}
-          >
-            <Icon name="refresh-cw" size={14} />
-            {t("common.refresh")}
-          </button>
-        </div>
-      </div>
-
-      <div class="toolbar">
-        <label class="input-search">
-          <Icon name="search" size={16} />
-          <input
-            class="input input--search"
-            type="search"
-            placeholder={t("skills.search.placeholder")}
-            value={query}
-            onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
-          />
-        </label>
-      </div>
-
-      <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
-        <div class="toolbar__group" role="group" aria-label={t("common.filter")}>
-          {[
-            { v: "" as StatusFilter, k: "common.all" as const },
-            { v: "active" as StatusFilter, k: "status.active" as const },
-            { v: "candidate" as StatusFilter, k: "status.candidate" as const },
-            { v: "archived" as StatusFilter, k: "status.archived" as const },
-          ].map((opt) => (
+        {!lightweight.enabled && (
+          <div class="view-header__actions">
+            <SkillRefusalDropdown
+              notices={refusalNotices}
+              open={showRefusalNotices}
+              onToggle={() => setShowRefusalNotices((v) => !v)}
+              onClear={() => {
+                setRefusalNotices([]);
+                setShowRefusalNotices(false);
+              }}
+            />
+            {/*
+             * Refresh — matches MemoriesView / TasksView / PoliciesView /
+             * WorldModelsView. Clears search + status filter, drops
+             * selection, and re-fetches page 0 so the list visibly
+             * snaps back to "fresh top state". The old implementation
+             * only re-queried the CURRENT page with the CURRENT filters
+             * still applied, which looked like a no-op whenever the
+             * filtered slice hadn't actually changed.
+             */}
             <button
-              key={opt.v}
-              class="chip"
-              aria-pressed={status === opt.v}
-              onClick={() => setStatus(opt.v)}
+              class="btn btn--ghost btn--sm"
+              onClick={() => {
+                setQuery("");
+                setStatus("");
+                setNamespaceFilter("");
+                setSelected(new Set());
+                void load(0);
+              }}
             >
-              {t(opt.k)}
+              <Icon name="refresh-cw" size={14} />
+              {t("common.refresh")}
             </button>
-          ))}
-        </div>
-        <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
+          </div>
+        )}
       </div>
 
-      {loading && (
+      {lightweight.loading && (
         <div class="list">
           {[0, 1, 2].map((i) => (
             <div key={i} class="skeleton" style="height:64px" />
@@ -249,148 +237,201 @@ export function SkillsView() {
         </div>
       )}
 
-      {!loading && filtered.length === 0 && (
-        <div class="empty">
-          <div class="empty__icon">
-            <Icon name="wand-sparkles" size={22} />
+      {!lightweight.loading && lightweight.enabled && (
+        <LightweightModeEmpty
+          icon="wand-sparkles"
+          message={t("skills.lightweight.empty")}
+        />
+      )}
+
+      {!lightweight.loading && !lightweight.enabled && (
+        <>
+          <div class="toolbar">
+            <label class="input-search">
+              <Icon name="search" size={16} />
+              <input
+                class="input input--search"
+                type="search"
+                placeholder={t("skills.search.placeholder")}
+                value={query}
+                onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+              />
+            </label>
           </div>
-          <div class="empty__title">{t("skills.empty")}</div>
-          <div class="empty__hint">{t("skills.empty.hint")}</div>
-        </div>
-      )}
 
-      {filtered.length > 0 && (
-        <div class="list">
-          {filtered.map((s) => {
-            const isSel = selected.has(s.id);
-            return (
-              <div
-                key={s.id}
-                class={`mem-card${isSel ? " mem-card--selected" : ""}`}
-                onClick={() => setDetail(s)}
-              >
-                <label
-                  class="mem-card__check-wrap"
-                  onClick={(e) => e.stopPropagation()}
+          <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
+            <div class="toolbar__group" role="group" aria-label={t("common.filter")}>
+              {[
+                { v: "" as StatusFilter, k: "common.all" as const },
+                { v: "active" as StatusFilter, k: "status.active" as const },
+                { v: "candidate" as StatusFilter, k: "status.candidate" as const },
+                { v: "archived" as StatusFilter, k: "status.archived" as const },
+              ].map((opt) => (
+                <button
+                  key={opt.v}
+                  class="chip"
+                  aria-pressed={status === opt.v}
+                  onClick={() => setStatus(opt.v)}
                 >
-                  <input
-                    type="checkbox"
-                    class="mem-card__check"
-                    checked={isSel}
-                    onChange={() => toggleSel(s.id)}
-                    aria-label="select"
-                  />
-                </label>
-                <div class="mem-card__body">
-                  <div class="mem-card__title">{s.name}</div>
-                  <div class="mem-card__meta">
-                    <ShareScopePill scope={s.share?.scope} />
-                    <span class={`pill pill--${s.status}`}>
-                      {t(`status.${s.status}` as "status.active")}
-                    </span>
-                    <span class="pill pill--info" title={t("skills.version.title")}>
-                      v{s.version ?? 1}
-                    </span>
-                    <span>η {(s.eta ?? 0).toFixed(2)}</span>
-                    <span>gain {(s.gain ?? 0).toFixed(2)}</span>
-                    <span>support {s.support ?? 0}</span>
-                    <span>
-                      {t("skills.trials.pass", {
-                        count: String(s.trialsPassed ?? 0),
-                      })}
-                    </span>
-                    <span>
-                      {t("skills.usage.count", {
-                        count: String(s.usageCount ?? 0),
-                      })}
-                    </span>
-                    {s.lastUsedAt && (
-                      <span>
-                        {t("skills.usage.lastUsed", {
-                          at: formatWhen(s.lastUsedAt),
-                        })}
-                      </span>
-                    )}
-                    <span>
-                      {t("skills.updated.ago", {
-                        at: formatWhen(s.updatedAt),
-                      })}
-                    </span>
-                  </div>
-                </div>
-                <div class="mem-card__tail">
-                  <Icon name="chevron-right" size={16} />
-                </div>
+                  {t(opt.k)}
+                </button>
+              ))}
+            </div>
+            <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
+          </div>
+
+          {loading && (
+            <div class="list">
+              {[0, 1, 2].map((i) => (
+                <div key={i} class="skeleton" style="height:64px" />
+              ))}
+            </div>
+          )}
+
+          {!loading && filtered.length === 0 && (
+            <div class="empty">
+              <div class="empty__icon">
+                <Icon name="wand-sparkles" size={22} />
               </div>
-            );
-          })}
-        </div>
-      )}
+              <div class="empty__title">{t("skills.empty")}</div>
+              <div class="empty__hint">{t("skills.empty.hint")}</div>
+            </div>
+          )}
 
-      {(page > 0 || hasMore) && (
-        <Pager
-          page={page}
-          totalItems={total}
-          pageSize={pageSize}
-          hasMore={hasMore}
-          loading={loading}
-          onPageSizeChange={setPageSize}
-          onPageChange={(nextPage) => {
-            void load(nextPage);
-          }}
-        />
-      )}
+          {filtered.length > 0 && (
+            <div class="list">
+              {filtered.map((s) => {
+                const isSel = selected.has(s.id);
+                return (
+                  <div
+                    key={s.id}
+                    class={`mem-card${isSel ? " mem-card--selected" : ""}`}
+                    onClick={() => setDetail(s)}
+                  >
+                    <label
+                      class="mem-card__check-wrap"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        class="mem-card__check"
+                        checked={isSel}
+                        onChange={() => toggleSel(s.id)}
+                        aria-label="select"
+                      />
+                    </label>
+                    <div class="mem-card__body">
+                      <div class="mem-card__title">{s.name}</div>
+                      <div class="mem-card__meta">
+                        <ShareScopePill scope={s.share?.scope} />
+                        <span class={`pill pill--${s.status}`}>
+                          {t(`status.${s.status}` as "status.active")}
+                        </span>
+                        <span class="pill pill--info" title={t("skills.version.title")}>
+                          v{s.version ?? 1}
+                        </span>
+                        <span>η {(s.eta ?? 0).toFixed(2)}</span>
+                        <span>gain {(s.gain ?? 0).toFixed(2)}</span>
+                        <span>support {s.support ?? 0}</span>
+                        <span>
+                          {t("skills.trials.pass", {
+                            count: String(s.trialsPassed ?? 0),
+                          })}
+                        </span>
+                        <span>
+                          {t("skills.usage.count", {
+                            count: String(s.usageCount ?? 0),
+                          })}
+                        </span>
+                        {s.lastUsedAt && (
+                          <span>
+                            {t("skills.usage.lastUsed", {
+                              at: formatWhen(s.lastUsedAt),
+                            })}
+                          </span>
+                        )}
+                        <span>
+                          {t("skills.updated.ago", {
+                            at: formatWhen(s.updatedAt),
+                          })}
+                        </span>
+                      </div>
+                    </div>
+                    <div class="mem-card__tail">
+                      <Icon name="chevron-right" size={16} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
-      {detail && (
-        <SkillDrawer
-          skill={detail}
-          onClose={() => {
-            setDetail(null);
-            clearEntryId();
-          }}
-          onChanged={() => {
-            void load(page);
-            setDetail(null);
-            clearEntryId();
-          }}
-        />
-      )}
+          {(page > 0 || hasMore) && (
+            <Pager
+              page={page}
+              totalItems={total}
+              pageSize={pageSize}
+              hasMore={hasMore}
+              loading={loading}
+              onPageSizeChange={setPageSize}
+              onPageChange={(nextPage) => {
+                void load(nextPage);
+              }}
+            />
+          )}
 
-      {selected.size > 0 && (
-        <div class="batch-bar" role="region" aria-label="bulk actions">
-          <span class="batch-bar__count">
-            {t("common.selected", { n: selected.size })}
-          </span>
-          <button
-            class="btn btn--sm"
-            onClick={() => setSelected((prev) => toggleIdsInSelection(prev, pageIds))}
-          >
-            <Icon name="check-square" size={14} />
-            {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
-          </button>
-          <button
-            class="btn btn--danger btn--sm"
-            onClick={async () => {
-              if (selected.size === 0) return;
-              if (!confirm(t("common.bulkDelete.confirm", { n: selected.size }))) return;
-              const ids = [...selected];
-              await Promise.all(
-                ids.map((id) =>
-                  api.post("/api/v1/skills/archive", { skillId: id }).catch(() => null),
-                ),
-              );
-              setSelected(new Set());
-              void load(page);
-            }}
-          >
-            <Icon name="archive" size={14} />
-            {t("skills.detail.archive")}
-          </button>
-          <div class="batch-bar__spacer" />
-          <button class="btn btn--ghost btn--sm" onClick={() => setSelected(new Set())}>
-            {t("common.deselect")}
-          </button>
-        </div>
+          {detail && (
+            <SkillDrawer
+              skill={detail}
+              onClose={() => {
+                setDetail(null);
+                clearEntryId();
+              }}
+              onChanged={() => {
+                void load(page);
+                setDetail(null);
+                clearEntryId();
+              }}
+            />
+          )}
+
+          {selected.size > 0 && (
+            <div class="batch-bar" role="region" aria-label="bulk actions">
+              <span class="batch-bar__count">
+                {t("common.selected", { n: selected.size })}
+              </span>
+              <button
+                class="btn btn--sm"
+                onClick={() => setSelected((prev) => toggleIdsInSelection(prev, pageIds))}
+              >
+                <Icon name="check-square" size={14} />
+                {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
+              </button>
+              <button
+                class="btn btn--danger btn--sm"
+                onClick={async () => {
+                  if (selected.size === 0) return;
+                  if (!confirm(t("common.bulkDelete.confirm", { n: selected.size }))) return;
+                  const ids = [...selected];
+                  await Promise.all(
+                    ids.map((id) =>
+                      api.post("/api/v1/skills/archive", { skillId: id }).catch(() => null),
+                    ),
+                  );
+                  setSelected(new Set());
+                  void load(page);
+                }}
+              >
+                <Icon name="archive" size={14} />
+                {t("skills.detail.archive")}
+              </button>
+              <div class="batch-bar__spacer" />
+              <button class="btn btn--ghost btn--sm" onClick={() => setSelected(new Set())}>
+                {t("common.deselect")}
+              </button>
+            </div>
+          )}
+        </>
       )}
     </>
   );
@@ -477,9 +518,7 @@ function SkillDrawer({
   const [mode, setMode] = useState<"view" | "edit" | "share">("view");
   const [name, setName] = useState(skill.name);
   const [guide, setGuide] = useState(skill.invocationGuide ?? "");
-  const [scope, setScope] = useState<"private" | "local" | "public" | "hub">(
-    skill.share?.scope ?? "public",
-  );
+  const [scope, setScope] = useState<ShareScope>(normalizeShareScope(skill.share?.scope ?? "public"));
   const [busy, setBusy] = useState(false);
   const [timeline, setTimeline] = useState<TimelineEntry[] | null>(null);
   const [usage, setUsage] = useState<SkillUsage | null>(null);
@@ -493,7 +532,7 @@ function SkillDrawer({
   useEffect(() => {
     setName(skill.name);
     setGuide(skill.invocationGuide ?? "");
-    setScope(skill.share?.scope ?? "public");
+    setScope(normalizeShareScope(skill.share?.scope ?? "public"));
   }, [skill]);
 
   useEffect(() => {
@@ -567,7 +606,7 @@ function SkillDrawer({
     }
   };
 
-  const submitShare = async (s: "private" | "local" | "public" | "hub" | null) => {
+  const submitShare = async (s: ShareScope | null) => {
     setBusy(true);
     try {
       await api.post(`/api/v1/skills/${encodeURIComponent(skill.id)}/share`, {
@@ -874,7 +913,7 @@ function SkillDrawer({
               <div class="modal__field">
                 <label>{t("memories.share.scope")}</label>
                 <div class="vstack" style="gap:var(--sp-2)">
-                  {(["private", "local", "public", "hub"] as const).map((v) => (
+                  {SHARE_SCOPE_OPTIONS.map((v) => (
                     <label
                       key={v}
                       class="hstack"

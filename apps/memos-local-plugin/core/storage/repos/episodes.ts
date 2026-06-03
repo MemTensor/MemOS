@@ -210,7 +210,7 @@ function mapRow(r: RawEpisodeRow): EpisodeRow & EpisodeMetaRow {
     id: r.id,
     sessionId: r.session_id,
     ...ownerFieldsFromRaw(r),
-    share: { scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub" },
+    share: { scope: normalizeShareForStorage(r.share_scope) },
     startedAt: r.started_at,
     endedAt: r.ended_at,
     traceIds: fromJsonText<string[]>(r.trace_ids_json, []),

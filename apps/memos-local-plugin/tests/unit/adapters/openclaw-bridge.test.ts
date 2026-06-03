@@ -775,7 +775,7 @@ describe("renderContextBlock", () => {
       tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
     });
     expect(block).toContain("<memos_context>");
-    expect(block).toContain("memory_search");
+    expect(block).toContain("memos_search");
     expect(block).toContain("</memos_context>");
   });
 });
@@ -1064,9 +1064,9 @@ describe("createOpenClawBridge", () => {
     await (pipeline as PipelineHandle).flush();
 
     const traces = await mc.listTraces({ groupByTurn: true });
-    expect(traces).toHaveLength(2);
-    expect(traces.some((tr) => tr.toolCalls?.[0]?.name === "sh")).toBe(true);
-    expect(traces.some((tr) => tr.agentText === "done")).toBe(true);
+    expect(traces).toHaveLength(1);
+    expect(traces[0]?.toolCalls?.[0]?.name).toBe("sh");
+    expect(traces[0]?.agentText).toBe("done");
   });
 
   it("handleAgentEnd works even when before_prompt_build was never called (lazy episode open)", async () => {
@@ -1301,6 +1301,101 @@ describe("createOpenClawBridge", () => {
     expect(bridge.trackedToolCalls()).toBe(0);
   });
 
+  it("tool_result_persist appends memos_search hint after three same-tool failures", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const ctx: PluginHookToolContext = {
+      toolName: "sh",
+      toolCallId: "call_1",
+      agentId: "main",
+      sessionKey: "s-tools",
+      sessionId: "host-s-tools",
+      runId: "run-tools",
+    };
+
+    const fail = (toolCallId: string) =>
+      bridge.handleToolResultPersist(
+        {
+          toolName: "sh",
+          toolCallId,
+          message: {
+            role: "toolResult",
+            toolName: "sh",
+            toolCallId,
+            content: "boom",
+            isError: true,
+          },
+        },
+        { ...ctx, toolCallId },
+      );
+
+    expect(fail("call_1")).toBeUndefined();
+    expect(fail("call_2")).toBeUndefined();
+    const third = fail("call_3") as { message?: { content?: string } };
+    expect(third.message?.content).toContain("failed multiple times in a row");
+    expect(third.message?.content).toContain("memos_search");
+
+    bridge.handleToolResultPersist(
+      {
+        toolName: "sh",
+        toolCallId: "call_4",
+        message: {
+          role: "toolResult",
+          toolName: "sh",
+          toolCallId: "call_4",
+          content: "ok",
+          isError: false,
+        },
+      },
+      { ...ctx, toolCallId: "call_4" },
+    );
+    expect(fail("call_5")).toBeUndefined();
+  });
+
+  it("tool_result_persist appends hint to the final text block", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const ctx: PluginHookToolContext = {
+      toolName: "read",
+      agentId: "main",
+      sessionKey: "s-tools",
+      sessionId: "host-s-tools",
+      runId: "run-array",
+    };
+    const failure = {
+      toolName: "read",
+      message: {
+        role: "toolResult",
+        content: [
+          { type: "text", text: "first part" },
+          { type: "text", text: "last part" },
+        ],
+        isError: true,
+      },
+    };
+
+    bridge.handleToolResultPersist(failure, ctx);
+    bridge.handleToolResultPersist(failure, ctx);
+    const third = bridge.handleToolResultPersist(failure, ctx) as {
+      message?: { content?: Array<{ type: string; text?: string }> };
+    };
+    expect(third.message?.content?.[0]?.text).toBe("first part");
+    expect(third.message?.content?.[1]?.text).toContain("last part");
+    expect(third.message?.content?.[1]?.text).toContain("memos_search");
+  });
+
   it("subagent_ended does not create a synthetic parent task", async () => {
     const mc = buildCore();
     await mc.init();
@@ -1509,12 +1604,12 @@ describe("registerOpenClawTools", () => {
     });
     const names = tools.map((t) => t.descriptor.name).sort();
     expect(names).toEqual([
-      "memory_environment",
-      "memory_get",
-      "memory_search",
-      "memory_timeline",
-      "skill_get",
-      "skill_list",
+      "memos_environment",
+      "memos_get",
+      "memos_search",
+      "memos_skill_get",
+      "memos_skill_list",
+      "memos_timeline",
     ]);
     for (const t of tools) {
       expect(typeof t.descriptor.execute).toBe("function");
@@ -1522,7 +1617,7 @@ describe("registerOpenClawTools", () => {
     }
   });
 
-  it("memory_search executes against the core and returns well-formed hits", async () => {
+  it("memos_search executes against the core and returns well-formed hits", async () => {
     const mc = buildCore();
     await mc.init();
 
@@ -1532,7 +1627,7 @@ describe("registerOpenClawTools", () => {
       core: mc,
       log: silentLogger(),
     });
-    const search = tools.find((t) => t.descriptor.name === "memory_search")!;
+    const search = tools.find((t) => t.descriptor.name === "memos_search")!;
     const res = (await search.descriptor.execute("toolCall_1", {
       query: "anything",
       maxResults: 5,
@@ -1552,7 +1647,7 @@ describe("registerOpenClawTools", () => {
     expect(res.details.hits).toBe(res.hits);
   });
 
-  it("memory_search maps per-tier topK params and keeps maxResults fallback", async () => {
+  it("memos_search maps per-tier topK params and keeps maxResults fallback", async () => {
     const searchMemory = vi.fn(async () => ({
       hits: [],
       injectedContext: "",
@@ -1566,7 +1661,7 @@ describe("registerOpenClawTools", () => {
       core: mc,
       log: silentLogger(),
     });
-    const search = tools.find((t) => t.descriptor.name === "memory_search")!;
+    const search = tools.find((t) => t.descriptor.name === "memos_search")!;
 
     await search.descriptor.execute("toolCall_1", {
       query: "anything",
@@ -1608,10 +1703,10 @@ describe("registerOpenClawTools", () => {
       log: silentLogger(),
     });
 
-    expect(tools.map((t) => t.descriptor.name)).toContain("memory_search");
+    expect(tools.map((t) => t.descriptor.name)).toContain("memos_search");
     expect(requestedCore).toBe(false);
 
-    const search = tools.find((t) => t.descriptor.name === "memory_search")!;
+    const search = tools.find((t) => t.descriptor.name === "memos_search")!;
     await search.descriptor.execute("toolCall_1", {
       query: "anything",
       maxResults: 5,

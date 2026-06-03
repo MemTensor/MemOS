@@ -45,6 +45,14 @@ export interface FeedbackConfig {
    */
   valueDelta: number;
   /**
+   * Minimum absolute value threshold for lowValue traces. Only traces with
+   * value < -minLowValueThreshold will be collected as failure evidence
+   * (unless they match isFailureLike patterns). This filters out trivial
+   * negative feedback (e.g., value = -0.001) and focuses on genuine failures.
+   * Default 0.01 — adjust higher (e.g., 0.1) to be more conservative.
+   */
+  minLowValueThreshold: number;
+  /**
    * Call the LLM to produce the final preference / anti-pattern lines.
    * When false, fall back to a simple template using the most relevant
    * success / failure traces.

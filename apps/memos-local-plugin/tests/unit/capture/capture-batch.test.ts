@@ -82,6 +82,13 @@ function baseConfig(overrides: Partial<CaptureConfig> = {}): CaptureConfig {
     llmConcurrency: 2,
     batchMode: "auto",
     batchThreshold: 12,
+    reflectionContextMode: "none",
+    longEpisodeReflectMode: "per_step_parallel",
+    downstreamStepCount: 3,
+    taskContextMaxChars: 800,
+    downstreamContextMaxChars: 1_200,
+    downstreamPerStepMaxChars: 400,
+    synthOutcomeMaxChars: 600,
     ...overrides,
   };
 }
@@ -338,6 +345,74 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     // 3 synth + 3 alpha calls in per-step mode.
     expect(result.llmCalls.reflectionSynth).toBe(3);
     expect(result.llmCalls.alphaScoring).toBe(3);
+  });
+
+  it("long per-step downstream mode injects up to three following steps", async () => {
+    const synthPrompts: string[] = [];
+    const alphaPrompts: string[] = [];
+    const llm = fakeLlm({
+      complete: {
+        "capture.reflection.synth": (input) => {
+          const messages = input as Array<{ role: string; content: string }>;
+          synthPrompts.push(messages.find((m) => m.role === "user")?.content ?? "");
+          return "I used this step because it shaped a following decision.";
+        },
+      },
+      completeJson: {
+        [alphaOp]: (input) => {
+          const messages = input as Array<{ role: string; content: string }>;
+          alphaPrompts.push(messages.find((m) => m.role === "user")?.content ?? "");
+          return { alpha: 0.5, usable: true, reason: "ok" };
+        },
+      },
+    });
+    const runner = buildRunner(
+      {
+        batchMode: "auto",
+        batchThreshold: 2,
+        reflectionContextMode: "task_downstream",
+        longEpisodeReflectMode: "per_step_downstream",
+        downstreamStepCount: 3,
+      },
+      llm,
+    );
+
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "step zero", 1_000),
+        turn("assistant", "inspect first", 1_010),
+        turn("user", "step one", 1_020),
+        turn("assistant", "tool follows", 1_030, {
+          toolCalls: [{ name: "shell", input: { command: "pwd" }, output: "/tmp/project" }],
+        }),
+        turn("user", "step two", 1_050),
+        turn("assistant", "### Reasoning:\nI reused the tool result.\n\nnext action", 1_060),
+        turn("user", "step three", 1_070),
+        turn("assistant", "finish", 1_080),
+      ],
+    });
+
+    const result = await runCapture(runner, ep);
+
+    expect(result.traceIds).toHaveLength(4);
+    expect(result.llmCalls.batchedReflection).toBe(0);
+    expect(result.llmCalls.reflectionSynth).toBe(3);
+    expect(result.llmCalls.alphaScoring).toBe(4);
+
+    const firstPrompt = synthPrompts[0]!;
+    expect(firstPrompt).toContain("TASK CONTEXT:");
+    expect(firstPrompt).toContain("[step+1] type=tooluse");
+    expect(firstPrompt).toContain("tool_names: shell");
+    expect(firstPrompt).toContain("tool_output: shell: /tmp/project");
+    expect(firstPrompt).toContain("[step+2] type=text");
+    expect(firstPrompt).toContain("[step+3] type=text");
+
+    const step3Prompt = alphaPrompts[2]!;
+    expect(step3Prompt).toContain("[step+1] type=text");
+    expect(step3Prompt).not.toContain("[step+2]");
+    expect(step3Prompt).not.toContain("[step+3]");
   });
 
   it("per_episode mode batches even when step count is large", async () => {

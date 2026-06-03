@@ -72,6 +72,9 @@ class H:
     SEARCH_BEFORE = "search.before"
     SEARCH_AFTER = "search.after"
 
+    # Search extension point before core threshold/dedup/rerank processing.
+    SEARCH_MEMORY_RESULTS = "search.memory_results"
+
     # Custom Hook (manually triggered via trigger_hook)
     ADD_MEMORIES_POST_PROCESS = "add.memories.post_process"
 
@@ -104,6 +107,16 @@ define_hook(
     description="Customize prompt before mem_reader LLM extraction",
     params=["prompt", "prompt_type", "mem_str", "lang", "sources"],
     pipe_key="prompt",
+)
+
+define_hook(
+    H.SEARCH_MEMORY_RESULTS,
+    description=(
+        "Allow plugins to merge additional search result buckets before core "
+        "threshold, deduplication, and reranking."
+    ),
+    params=["handler", "search_req", "results"],
+    pipe_key="results",
 )
 
 define_hook(

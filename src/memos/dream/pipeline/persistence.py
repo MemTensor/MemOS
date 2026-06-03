@@ -328,6 +328,7 @@ class DreamPersistence:
             "summary": entry.summary,
             "dream_entry": entry.dream_entry,
             "motive": entry.motive,
+            "context_events": entry.context_events,
             "themes": entry.themes,
             "tags": ["dream", "diary"],
             "created_at": entry.created_at.isoformat(),

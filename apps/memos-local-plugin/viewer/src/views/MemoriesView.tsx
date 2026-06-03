@@ -59,7 +59,12 @@ import { route } from "../stores/router";
 import { clearEntryId } from "../stores/cross-link";
 import type { TraceDTO } from "../api/types";
 import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
-import { loadHubSharingEnabled } from "../utils/share";
+import {
+  loadHubSharingEnabled,
+  normalizeShareScope,
+  SHARE_SCOPE_OPTIONS,
+  type ShareScope,
+} from "../utils/share";
 
 type RoleFilter = "" | "user" | "assistant" | "tool";
 
@@ -92,7 +97,7 @@ interface MemoryGroup {
   hasReflection: boolean;
   ownerAgentKind: string;
   ownerProfileId: string;
-  scope: "private" | "local" | "public" | "hub";
+  scope: ShareScope;
   shared: boolean;
 }
 
@@ -108,6 +113,7 @@ export function MemoriesView() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [traces, setTraces] = useState<TraceDTO[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState(0);
@@ -134,17 +140,26 @@ export function MemoriesView() {
       qs.set("limit", String(roleFilterActive ? ROLE_FILTER_FETCH_LIMIT : pageSize));
       qs.set("offset", String(roleFilterActive ? 0 : opts.page * pageSize));
       qs.set("groupByTurn", "true");
+      qs.set("includeTotal", "false");
       if (opts.q) qs.set("q", opts.q);
       appendNamespaceParams(qs, namespaceFilter);
       const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`);
+      const pageGroupCount = buildGroups(res.traces ?? []).length;
       setTraces(res.traces);
       setHasMore(roleFilterActive ? false : res.nextOffset != null);
-      setTotal(res.total ?? 0);
+      setTotal(
+        res.total ??
+          opts.page * pageSize +
+            pageGroupCount +
+            (res.nextOffset != null ? pageSize : 0),
+      );
       setPage(opts.page);
-    } catch {
+      setLoadError(null);
+    } catch (err) {
       setTraces([]);
       setHasMore(false);
       setTotal(0);
+      setLoadError((err as Error).message || "Failed to load memories");
     } finally {
       setLoading(false);
     }
@@ -392,7 +407,7 @@ export function MemoriesView() {
    */
   const applyShareGroup = async (
     g: MemoryGroup,
-    scope: "private" | "local" | "public" | "hub" | null,
+    scope: ShareScope | null,
   ) => {
     try {
       const updates = await Promise.all(
@@ -432,6 +447,7 @@ export function MemoriesView() {
               setQuery("");
               setNamespaceFilter("");
               setSelected(new Set());
+              setLoadError(null);
               void loadPage({ q: "", page: 0 });
             }}
           >
@@ -518,7 +534,17 @@ export function MemoriesView() {
         </div>
       )}
 
-      {loading && groups.length === 0 && (
+      {!loading && loadError && (
+        <div class="empty">
+          <div class="empty__icon">
+            <Icon name="circle-alert" size={22} />
+          </div>
+          <div class="empty__title">Failed to load memories</div>
+          <div class="empty__hint">{loadError}</div>
+        </div>
+      )}
+
+      {loading && groups.length === 0 && !loadError && (
         <div class="list">
           {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} class="skeleton" style="height:82px" />
@@ -526,7 +552,7 @@ export function MemoriesView() {
         </div>
       )}
 
-      {!loading && groups.length === 0 && (
+      {!loading && !loadError && groups.length === 0 && (
         <div class="empty">
           <div class="empty__icon">
             <Icon name="brain-circuit" size={22} />
@@ -578,7 +604,6 @@ export function MemoriesView() {
                       {namespaceLabel({
                         agentKind: g.ownerAgentKind,
                         profileId: g.ownerProfileId,
-                        count: g.ids.length,
                       })}
                     </span>
                     <ShareScopePill scope={g.scope} />
@@ -936,7 +961,7 @@ function buildGroups(traces: readonly TraceDTO[]): MemoryGroup[] {
     const ids = bucket.map((t) => t.id);
     const sumV = bucket.reduce((acc, t) => acc + (t.value ?? 0), 0);
     const sumA = bucket.reduce((acc, t) => acc + (t.alpha ?? 0), 0);
-    const scope: "private" | "local" | "public" | "hub" = head.share?.scope ?? "private";
+    const scope = normalizeShareScope(head.share?.scope);
     return {
       turnKey: key,
       episodeId: head.episodeId ?? null,
@@ -1078,7 +1103,7 @@ function TraceDrawer({
       tags?: string[];
     },
   ) => Promise<void> | void;
-  onShare: (scope: "private" | "local" | "public" | "hub" | null) => Promise<void> | void;
+  onShare: (scope: ShareScope | null) => Promise<void> | void;
   onDelete: () => Promise<void> | void;
 }) {
   const head = group.head;
@@ -1088,16 +1113,14 @@ function TraceDrawer({
   const [userText, setUserText] = useState(head.userText ?? "");
   const [agentText, setAgentText] = useState(head.agentText ?? "");
   const [tags, setTags] = useState((head.tags ?? []).join(", "));
-  const [scope, setScope] = useState<"private" | "local" | "public" | "hub">(
-    head.share?.scope ?? "public",
-  );
+  const [scope, setScope] = useState<ShareScope>(normalizeShareScope(head.share?.scope ?? "public"));
 
   useEffect(() => {
     setSummary(head.summary ?? "");
     setUserText(head.userText ?? "");
     setAgentText(head.agentText ?? "");
     setTags((head.tags ?? []).join(", "));
-    setScope(head.share?.scope ?? "public");
+    setScope(normalizeShareScope(head.share?.scope ?? "public"));
   }, [head]);
 
   const title = displaySummary.slice(0, 100) || t("memories.detail.fallbackTitle");
@@ -1115,7 +1138,7 @@ function TraceDrawer({
     setMode("view");
   };
 
-  const submitShare = (s: "private" | "local" | "public" | "hub" | null) => {
+  const submitShare = (s: ShareScope | null) => {
     void onShare(s);
     setMode("view");
   };
@@ -1258,7 +1281,7 @@ function TraceDrawer({
               <div class="modal__field">
                 <label>{t("memories.share.scope")}</label>
                 <div class="vstack" style="gap:var(--sp-2)">
-                  {(["private", "local", "public", "hub"] as const).map((v) => (
+                  {SHARE_SCOPE_OPTIONS.map((v) => (
                     <label
                       key={v}
                       class="hstack"
