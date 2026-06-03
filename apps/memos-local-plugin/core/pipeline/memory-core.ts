@@ -5565,7 +5565,7 @@ export function deriveSkillStatus(
   if (ep.rTask < R_BELOW_THRESHOLD) {
     return {
       status: "not_generated",
-      reason: `任务评分 R=${ep.rTask.toFixed(2)} 未达到沉淀阈值`,
+      reason: `任务评分 R=${ep.rTask.toFixed(2)} 低于沉淀阈值且未达到反例阈值`,
       reasonKey: "tasks.skillReason.not_generated.belowThreshold",
       reasonParams: { rTask: ep.rTask.toFixed(2), threshold: R_BELOW_THRESHOLD.toFixed(2) },
       linkedSkillId: null,
