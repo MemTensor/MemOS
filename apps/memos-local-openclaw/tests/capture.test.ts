@@ -148,4 +148,43 @@ describe("captureMessages", () => {
     const result = captureMessages(msgs, "s1", "t1", "STORED_MEMORY", noopLog);
     expect(result[0].content).toBe("普通的用户消息");
   });
+
+  it("should skip Hermes 'Review the conversation above' injected user prompts", () => {
+    const msgs = [
+      {
+        role: "user",
+        content:
+          "Review the conversation above, consider saving any durable facts to long-term memory.",
+      },
+      { role: "user", content: "Real user message" },
+    ];
+    const result = captureMessages(msgs, "s1", "t1", "STORED_MEMORY", noopLog);
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe("Real user message");
+  });
+
+  it("should skip 'Review the conversation above' regardless of case and trim whitespace", () => {
+    const msgs = [
+      {
+        role: "user",
+        content: "   review THE conversation above and decide what to keep.   ",
+      },
+    ];
+    const result = captureMessages(msgs, "s1", "t1", "STORED_MEMORY", noopLog);
+    expect(result).toHaveLength(0);
+  });
+
+  it("should not skip 'Review the conversation above' when sent by assistant", () => {
+    // Assistant-generated text that happens to start with the same phrase
+    // is real assistant content, not an injected self-instruction. Keep it.
+    const msgs = [
+      {
+        role: "assistant",
+        content: "Review the conversation above to find the answer.",
+      },
+    ];
+    const result = captureMessages(msgs, "s1", "t1", "STORED_MEMORY", noopLog);
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe("assistant");
+  });
 });
