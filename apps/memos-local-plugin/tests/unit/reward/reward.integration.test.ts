@@ -202,7 +202,7 @@ describe("reward/integration", () => {
 
     const llm = fakeLlm({
       completeJson: {
-        "reward.reward.r_human.v3": {
+        "reward.reward.r_human.v4": {
           goal_achievement: 0.9,
           process_quality: 0.7,
           user_satisfaction: 0.8,
@@ -281,9 +281,41 @@ describe("reward/integration", () => {
     expect(res.rHuman).toBe(0);
     expect(res.humanScore.source).toBe("heuristic");
 
+    const epMeta = (handle.repos.episodes.getById(eid as unknown as EpisodeRow["id"])!
+      .meta ?? {}) as { reward?: { trigger?: string } };
+    expect(epMeta.reward?.trigger).toBe("implicit_fallback");
+
     const t = handle.repos.traces.getById("tr_x" as unknown as TraceRow["id"])!;
     expect(t.value).toBe(0);
     expect(t.priority).toBe(0);
+  });
+
+  it("overrides meta.reward.trigger to explicit_feedback when DB has feedback rows", async () => {
+    const sid = "s_int_trig";
+    const eid = "ep_int_trig";
+    seedEpisode(handle, eid, sid, ["tr_trig"]);
+    seedTrace(handle, "tr_trig", eid, sid, { alpha: 0.5 });
+    seedFeedback(handle, "fb_trig", eid, { polarity: "positive", rationale: "good" });
+
+    const runner = createRewardRunner({
+      tracesRepo: handle.repos.traces,
+      episodesRepo: handle.repos.episodes,
+      feedbackRepo: handle.repos.feedback,
+      llm: null,
+      bus: createRewardEventBus(),
+      cfg: cfg(),
+      now: () => NOW,
+    });
+
+    await runner.run({
+      episodeId: eid as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+      feedback: [],
+      trigger: "implicit_fallback",
+    });
+
+    const ep = handle.repos.episodes.getById(eid as unknown as EpisodeRow["id"])!;
+    const rewardMeta = (ep.meta ?? {}) as { reward?: { trigger?: string } };
+    expect(rewardMeta.reward?.trigger).toBe("explicit_feedback");
   });
 
   it("episodes with no traces still score R_human but skip backprop", async () => {

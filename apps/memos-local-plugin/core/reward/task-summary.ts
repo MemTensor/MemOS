@@ -89,6 +89,8 @@ export function buildTaskSummary(input: SummaryInput): TaskSummary {
     ``,
     `MOST_RECENT_AGENT_REPLY:`,
     clampAgentText(pairs.length > 0 ? pairs[pairs.length - 1]!.agentText : outcome),
+    ``,
+    formatExecutionOutcome(traces),
   ].join("\n");
 
   const { text, truncated } = clampText(body, cfg.summaryMaxChars);
@@ -278,4 +280,74 @@ function clampText(text: string, max: number): { text: string; truncated: boolea
     text: text.slice(0, headLen) + TRUNC_MARKER + text.slice(text.length - tailLen),
     truncated: true,
   };
+}
+
+// ─── execution outcome ───────────────────────────────────────────────────────
+
+interface ExecutionOutcome {
+  totalToolCalls: number;
+  successCount: number;
+  errorCount: number;
+  lastToolResult: "SUCCESS" | "ERROR" | "NONE";
+  lastToolName: string | null;
+  lastErrorCode: string | null;
+  taskCompletedByTool: "yes" | "no" | "unknown";
+}
+
+function buildExecutionOutcome(traces: readonly TraceRow[]): ExecutionOutcome {
+  let totalToolCalls = 0;
+  let successCount = 0;
+  let errorCount = 0;
+
+  const sorted = [...traces].sort((a, b) => a.ts - b.ts);
+
+  let lastTraceWithTools: TraceRow | null = null;
+  for (const trace of sorted) {
+    const calls = (trace.toolCalls ?? []) as Array<{ name?: string; errorCode?: string }>;
+    if (calls.length > 0) lastTraceWithTools = trace;
+    for (const c of calls) {
+      totalToolCalls++;
+      if (c.errorCode) errorCount++;
+      else successCount++;
+    }
+  }
+
+  if (!lastTraceWithTools) {
+    return {
+      totalToolCalls: 0, successCount: 0, errorCount: 0,
+      lastToolResult: "NONE", lastToolName: null, lastErrorCode: null,
+      taskCompletedByTool: "unknown",
+    };
+  }
+
+  const calls = (lastTraceWithTools.toolCalls ?? []) as Array<{ name?: string; errorCode?: string }>;
+  const lastCall = calls[calls.length - 1]!;
+  const lastToolResult: "SUCCESS" | "ERROR" = lastCall.errorCode ? "ERROR" : "SUCCESS";
+
+  return {
+    totalToolCalls,
+    successCount,
+    errorCount,
+    lastToolResult,
+    lastToolName: lastCall.name ?? null,
+    lastErrorCode: lastCall.errorCode ?? null,
+    taskCompletedByTool: lastToolResult === "SUCCESS" ? "yes" : "no",
+  };
+}
+
+function formatExecutionOutcome(traces: readonly TraceRow[]): string {
+  const o = buildExecutionOutcome(traces);
+  const lines = ["EXECUTION_OUTCOME:"];
+  if (o.totalToolCalls === 0) {
+    lines.push("  total_tool_calls: 0");
+    lines.push("  last_tool_result: NONE");
+    lines.push("  task_completed_by_tool: unknown");
+  } else {
+    lines.push(`  total_tool_calls: ${o.totalToolCalls}  (success: ${o.successCount}, error: ${o.errorCount})`);
+    const toolLabel = o.lastToolName ? `  [tool: ${o.lastToolName}]` : "";
+    const errLabel = o.lastErrorCode ? `, code: ${o.lastErrorCode}` : "";
+    lines.push(`  last_tool_result: ${o.lastToolResult}${toolLabel}${errLabel}`);
+    lines.push(`  task_completed_by_tool: ${o.taskCompletedByTool}`);
+  }
+  return lines.join("\n");
 }

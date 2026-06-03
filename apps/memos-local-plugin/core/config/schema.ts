@@ -160,10 +160,10 @@ const AlgorithmSchema = Type.Object({
     /** Auto-trigger backprop when R_human ≥ this from implicit signals. */
     implicitThreshold: NumberInRange(0.2, 0, 1),
     /**
-     * Seconds to wait for explicit user feedback after `capture.done` before
-     * falling back to implicit-signals scoring. 0 disables the timer.
+     * Seconds to wait after `capture.done` before episode-level scoring.
+     * Minimum 1 second; values below 1 are rejected or clamped to 1.
      */
-    feedbackWindowSec: NumberInRange(600, 0, 86_400),
+    feedbackWindowSec: NumberInRange(600, 1, 86_400),
     /** Max characters for the task summary fed into the human-scorer LLM. */
     summaryMaxChars: NumberInRange(2_000, 200, 16_000),
     /** Concurrency for human-scoring LLM calls. */

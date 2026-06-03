@@ -818,6 +818,32 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     openEpisodeBySession.delete(sessionId);
   }
 
+  /** Same authority as `onTurnEnd` fallback — adapters must not mint a second open row. */
+  function resolveOpenEpisodeId(sessionId: SessionId): EpisodeId | undefined {
+    const fromMap = openEpisodeBySession.get(sessionId);
+    if (fromMap) {
+      const snap = session.sessionManager.getEpisode(fromMap);
+      if (snap?.status === "open") return fromMap;
+    }
+    const openRows = session.sessionManager
+      .listEpisodes(sessionId)
+      .filter((e) => e.status === "open");
+    if (openRows.length === 1) {
+      return openRows[0]!.id as EpisodeId;
+    }
+    if (openRows.length > 1) {
+      if (fromMap && openRows.some((e) => e.id === fromMap)) {
+        return fromMap;
+      }
+      log.warn("resolveOpenEpisodeId.multiple_open", {
+        sessionId,
+        count: openRows.length,
+      });
+      return undefined;
+    }
+    return undefined;
+  }
+
   function staleTopicWindowMs(): number {
     return Math.max(
       algorithm.session.mergeMaxGapMs * 2,
@@ -1227,9 +1253,23 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     const explicitEpisode = result.episodeId
       ? session.sessionManager.getEpisode(result.episodeId)
       : null;
-    const episodeId = explicitEpisode
+    let episodeId = explicitEpisode
       ? result.episodeId
       : openEpisodeBySession.get(sessionId) ?? result.episodeId;
+    const canonical = resolveOpenEpisodeId(sessionId);
+    const givenSnap = episodeId
+      ? session.sessionManager.getEpisode(episodeId)
+      : null;
+    if (!episodeId || !givenSnap) {
+      if (canonical) episodeId = canonical;
+    } else if (canonical && canonical !== episodeId) {
+      log.warn("onTurnEnd.episode_id_mismatch", {
+        sessionId,
+        given: episodeId,
+        canonical,
+        givenStatus: givenSnap.status,
+      });
+    }
     if (!episodeId) {
       throw new Error(
         "pipeline.onTurnEnd: no open episode for session " + sessionId,
@@ -1620,6 +1660,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     flush,
     shutdown,
     retrievalDeps: () => retrievalDeps,
+    resolveOpenEpisodeId,
   };
 
   log.info("pipeline.ready", {

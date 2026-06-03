@@ -113,20 +113,12 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
           });
           return;
         }
-        // Failure episodes with explicit corrective feedback are handled by
-        // feedback.experience.v1; L2 induction is reserved for no-feedback sink.
-        if (hasCorrectiveSignals(feedbacks)) {
-          subLog.info("failure.route.feedback_experience", {
-            episodeId: result.episodeId,
-            feedbackCount: feedbacks.length,
-          });
-          return;
-        }
         const sink = await runL2Failure(
           {
             episodeId: result.episodeId,
             sessionId: result.sessionId,
             traces,
+            feedbacks,
           },
           {
             repos: deps.repos,
@@ -401,29 +393,6 @@ function refreshPolicyGainOnSuccess(input: {
       updatedAt: input.now(),
     });
   }
-}
-
-function hasCorrectiveSignals(feedbacks: readonly FeedbackRow[]): boolean {
-  return feedbacks.some(hasSubstantiveCorrectiveSignal);
-}
-
-function hasSubstantiveCorrectiveSignal(feedback: FeedbackRow): boolean {
-  const rationale = typeof feedback.rationale === "string" ? feedback.rationale.trim() : "";
-  if (rationale.length > 0) return true;
-
-  const raw = feedback.raw;
-  if (!raw || typeof raw !== "object") return false;
-  const record = raw as Record<string, unknown>;
-
-  const direct = ["text", "message", "reason", "content", "directive"]
-    .map((k) => record[k])
-    .find((v) => typeof v === "string" && v.trim().length > 0);
-  if (typeof direct === "string" && direct.trim().length > 0) return true;
-
-  const must = ["must", "must_not", "mustNot", "MUST", "MUST_NOT"]
-    .map((k) => record[k])
-    .find((v) => typeof v === "string" && v.trim().length > 0);
-  return typeof must === "string" && must.trim().length > 0;
 }
 
 function decideFailureGate(input: {

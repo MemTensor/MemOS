@@ -180,6 +180,17 @@ export interface MemoryCore {
     /** Optional initial user text (for adapters that know it). */
     userMessage?: string;
   }): Promise<EpisodeId>;
+  /** Current open episode for the session, if any (no new row). */
+  resolveOpenEpisodeId(sessionId: SessionId): EpisodeId | undefined;
+  /** Whether the episode exists and is still `open`. */
+  isEpisodeWritable(episodeId: EpisodeId): boolean;
+  /** Whether the episode row exists (any status). */
+  episodeExists(episodeId: EpisodeId): boolean;
+  /** Prefer orchestrator open episode; else a writable candidate. */
+  reconcileEpisodeId(
+    sessionId: SessionId,
+    candidate?: EpisodeId,
+  ): EpisodeId | undefined;
   closeEpisode(episodeId: EpisodeId): Promise<void>;
 
   // ── pipeline (per turn) ──

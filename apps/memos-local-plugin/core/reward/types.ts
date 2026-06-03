@@ -35,7 +35,7 @@ export interface RewardConfig {
   llmScoring: boolean;
   /** Magnitude threshold (|R_human|) that triggers backprop on implicit signals. */
   implicitThreshold: number;
-  /** Seconds to wait for explicit feedback. 0 disables the timer. */
+  /** Seconds to wait after capture.done before scoring (minimum 1). */
   feedbackWindowSec: number;
   /** Max chars in the task summary handed to the LLM. */
   summaryMaxChars: number;

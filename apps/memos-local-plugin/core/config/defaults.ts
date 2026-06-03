@@ -97,7 +97,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // user a short window to reply ("thanks", "no, try again") that
       // the scorer picks up as explicit feedback; when nothing
       // arrives, the implicit fallback fires promptly so downstream
-      // L2/L3/Skill stages aren't starved of signal.
+      // L2/L3/Skill stages aren't starved of signal. Must not be 0 (min 1s).
       feedbackWindowSec: 30,
       summaryMaxChars: 2_000,
       llmConcurrency: 2,

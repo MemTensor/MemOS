@@ -97,7 +97,7 @@ algorithm:
     decayHalfLifeDays: 30     # priority decay half-life (V7 §3.3)
     llmScoring: true          # use rubric LLM for R_human; off = heuristic only
     implicitThreshold: 0.2    # |R_human| threshold for implicit-feedback runs
-    feedbackWindowSec: 600    # wait this long after capture.done for explicit feedback (0 disables)
+    feedbackWindowSec: 600    # seconds after capture.done before episode scoring (minimum 1)
     summaryMaxChars: 2000     # cap on the task summary handed to the scorer LLM
     llmConcurrency: 2         # parallel R_human LLM calls
   l2Induction:

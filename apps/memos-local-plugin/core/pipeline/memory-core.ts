@@ -75,8 +75,7 @@ import type {
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import { loadConfig, resolveHome, SECRET_FIELD_PATHS } from "../config/index.js";
 import { reflectionAsText } from "../capture/types.js";
-import { feedbackText, runFeedbackExperience } from "../experience/feedback-builder.js";
-import { isRepairCandidatePolicy, mintRepairCandidate } from "../skill/repair-candidate.js";
+import { feedbackText } from "../experience/feedback-builder.js";
 import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
@@ -113,7 +112,6 @@ import type {
   RetrievalConfig,
   TraceCandidate,
 } from "../retrieval/types.js";
-import type { UserFeedback } from "../reward/types.js";
 
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
 
@@ -1563,12 +1561,50 @@ export function createMemoryCore(
     userMessage?: string;
   }): Promise<EpisodeId> {
     ensureLive();
+    const existing = handle.resolveOpenEpisodeId(input.sessionId);
+    if (existing) return existing;
     const snap = await handle.sessionManager.startEpisode({
       sessionId: input.sessionId,
       userMessage: input.userMessage?.trim() || "(adapter-initiated)",
       meta: input.episodeId ? { adapterSuppliedId: input.episodeId } : {},
     });
     return snap.id as EpisodeId;
+  }
+
+  function resolveOpenEpisodeId(sessionId: SessionId): EpisodeId | undefined {
+    ensureLive();
+    return handle.resolveOpenEpisodeId(sessionId);
+  }
+
+  function isEpisodeWritable(episodeId: EpisodeId): boolean {
+    ensureLive();
+    const snap = handle.sessionManager.getEpisode(episodeId);
+    return snap?.status === "open";
+  }
+
+  function episodeExists(episodeId: EpisodeId): boolean {
+    ensureLive();
+    return handle.sessionManager.getEpisode(episodeId) != null;
+  }
+
+  function reconcileEpisodeId(
+    sessionId: SessionId,
+    candidate?: EpisodeId,
+  ): EpisodeId | undefined {
+    ensureLive();
+    const canonical = handle.resolveOpenEpisodeId(sessionId);
+    if (canonical) {
+      if (candidate && candidate !== canonical) {
+        log.warn("reconcileEpisodeId.canonical_override", {
+          sessionId,
+          candidate,
+          canonical,
+        });
+      }
+      return canonical;
+    }
+    if (candidate && isEpisodeWritable(candidate)) return candidate;
+    return undefined;
   }
 
   async function closeEpisode(episodeId: EpisodeId): Promise<void> {
@@ -1898,33 +1934,6 @@ export function createMemoryCore(
       return toFeedbackDTO(row);
     }
 
-    if (episode && sessionId) {
-      const rewardFeedback: UserFeedback = {
-        id: row.id as UserFeedback["id"],
-        episodeId: episode.id,
-        sessionId,
-        traceId: row.traceId as TraceId | null,
-        ts: row.ts,
-        channel: row.channel,
-        polarity: row.polarity,
-        magnitude: row.magnitude,
-        text: text || null,
-        rationale: row.rationale,
-      };
-      try {
-        await handle.rewardRunner.run({
-          episodeId: episode.id,
-          feedback: [rewardFeedback],
-          trigger: "explicit_feedback",
-        });
-      } catch (err) {
-        log.warn("feedback.reward_failed", {
-          episodeId: episode.id,
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
     if (targetTrace) {
       // Keep explicit trace feedback as the final source of truth for that trace.
       // Reward backprop updates episode-wide values and may dilute single-trace
@@ -1957,66 +1966,6 @@ export function createMemoryCore(
           err: err instanceof Error ? err.message : String(err),
         });
       }
-    }
-
-    let policyId: PolicyId | undefined;
-    try {
-      const experience = await runFeedbackExperience(
-        { feedback: row, episode, trace },
-        {
-          repos: handle.repos,
-          embedder: handle.embedder,
-          llm: handle.llm ?? undefined,
-          namespace: handle.namespace,
-          now: Date.now,
-        },
-      );
-      policyId = experience.policyId;
-    } catch (err) {
-      log.warn("feedback.experience_failed", {
-        episodeId: episode?.id,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    try {
-      await handle.l2.drain();
-      if (policyId) {
-        // A constructive negative (failure + named fix) mints an unproven
-        // repair *candidate* skill that earns trust via trials. The normal
-        // crystallization below skips negatives, so there is no conflict; the
-        // candidate dedups against it via sourcePolicyIds.
-        const pol = handle.repos.policies.getById(policyId);
-        if (pol && isRepairCandidatePolicy(pol)) {
-          // Best-effort: a mint failure must never block crystallization / L3.
-          try {
-            mintRepairCandidate(pol, {
-              repos: handle.repos,
-              embedder: handle.embedder,
-              now: Date.now,
-              log,
-            });
-          } catch (err) {
-            log.warn("feedback.repair_candidate_failed", {
-              policyId,
-              err: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
-        await handle.skills.runOnce({ trigger: "manual", policyId });
-      }
-      if (episode) {
-        await handle.l3.runOnce({ trigger: "manual", episodeId: episode.id });
-      }
-      await handle.skills.flush();
-      await handle.feedback.flush();
-      await handle.l3.drain();
-    } catch (err) {
-      log.warn("feedback.downstream_flush_failed", {
-        episodeId: episode?.id,
-        policyId,
-        err: err instanceof Error ? err.message : String(err),
-      });
     }
 
     if (telemetry) {
@@ -4537,6 +4486,10 @@ export function createMemoryCore(
     openSession,
     closeSession,
     openEpisode,
+    resolveOpenEpisodeId,
+    isEpisodeWritable,
+    episodeExists,
+    reconcileEpisodeId,
     closeEpisode,
     onTurnStart,
     onTurnEnd,

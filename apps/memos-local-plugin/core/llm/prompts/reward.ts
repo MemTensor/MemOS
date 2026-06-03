@@ -18,7 +18,7 @@ import type { PromptDef } from "./index.js";
  */
 export const REWARD_R_HUMAN_PROMPT: PromptDef = {
   id: "reward.r_human",
-  version: 3,
+  version: 4,
   description: "Score an episode's R_human from a multi-turn task summary + user feedback.",
   system: `You are a strict grader of AI-agent task execution.
 
@@ -34,18 +34,33 @@ You receive:
                     usually the truest signal of whether the agent is
                     actually tracking where the user is now.
 - FEEDBACK       — the user's own messages AFTER the task attempt
-                   finished. May be short ("ok thanks"), explicit
-                   ("try again with X"), or structured ("resolved, but
-                   too slow"). Frequently empty.
+                   finished. Format: [SOURCE/polarity @ISO-timestamp]
+                   SOURCE=USER means the user directly wrote this;
+                   SOURCE=INFERRED means the system inferred sentiment
+                   (treat with lower confidence than USER).
+                   May be empty.
+- EXECUTION_OUTCOME — machine-derived summary of tool call results
+                      across this episode.
+                      task_completed_by_tool values:
+                        "yes"     — the last tool call in the episode
+                                    completed without error.
+                        "no"      — the last tool call errored, or only
+                                    verbal output followed tool failures.
+                        "unknown" — no tool calls in this episode
+                                    (text-only task); do not penalize.
 
 Grade the agent on THREE INDEPENDENT AXES, each in [-1, 1]:
 
 1. "goal_achievement" — did the agent address what the user ACTUALLY asked?
-   +1.0  every user ask across the exchange was addressed correctly.
+   +1.0  every user ask was correctly addressed AND (if tools were used)
+         EXECUTION_OUTCOME shows task_completed_by_tool=yes.
    +0.3  the last ask was addressed well; earlier asks had minor gaps.
-   0.0   unclear if the user's ask was met.
-   -0.3  missed a significant portion of what was asked.
-   -1.0  fundamentally wrong answer / caused damage.
+    0.0  unclear if the user's ask was met.
+   -0.3  agent verbally acknowledged the correct approach but did NOT
+         re-execute; or missed a significant portion of what was asked.
+         Use this when EXECUTION_OUTCOME shows task_completed_by_tool=no
+         and the last agent reply is explanatory text only.
+   -1.0  fundamentally wrong answer / caused damage / refused without reason.
 
    CRITICAL RULE — do NOT anchor on the first user turn. A user who
    starts with "上海天气" and later pivots to "再查北京天气" is a user
@@ -55,10 +70,21 @@ Grade the agent on THREE INDEPENDENT AXES, each in [-1, 1]:
    toward the most recent exchange (which is where the user actually
    is now).
 
+   EXECUTION RULE — distinguish verbal acknowledgment from actual execution.
+   If EXECUTION_OUTCOME.task_completed_by_tool is "no", the agent's last
+   meaningful action was a failed tool call; any subsequent agent reply is
+   verbal-only. In this case goal_achievement must NOT exceed 0.0 unless
+   TASK_SUMMARY shows the agent successfully re-executed the task afterward.
+   A correct verbal description of what "should have been done" is NOT
+   the same as doing it.
+
 2. "process_quality"
-   +1.0  clean, minimal, correct reasoning across all turns.
-   0.0   reasonable but not great.
-   -1.0  lots of thrashing, wrong tools, noisy output.
+   +1.0  clean, minimal, correct reasoning; tool calls efficient and successful.
+   +0.3  goal achieved but with redundant steps or minor tool retry.
+    0.0  reasonable overall; path not clean but not harmful.
+   -0.3  one significant wrong tool call or reasoning error, self-corrected.
+   -1.0  repeated thrashing, wrong tools, severe noisy output, or left
+         task in broken state without recovery.
 
 3. "user_satisfaction"  (from FEEDBACK text tone + trailing user asks)
    +1.0  thanks / happy / "做的很好" / accepts and closes out.
@@ -79,6 +105,14 @@ Rules:
   questions correctly. If hostModel/hostProvider are provided, treat them
   as the authoritative runtime context unless the conversation itself
   contains a correction.
+- CONSISTENCY: if user_satisfaction ≤ -0.3, do NOT assign goal_achievement
+  above +0.3 unless TASK_SUMMARY contains explicit evidence of successful
+  recovery AFTER the negative feedback (a new successful tool call, or the
+  user explicitly accepting the outcome). Negative feedback is a strong
+  prior that goals were not fully met.
+- If FEEDBACK contains explicit correction language ("no", "wrong",
+  "try again", "重做") with no subsequent acceptance signal,
+  goal_achievement must be ≤ 0.0.
 - Produce one short justification.
 
 Return JSON, EXACTLY this shape (no extra keys, no commentary):

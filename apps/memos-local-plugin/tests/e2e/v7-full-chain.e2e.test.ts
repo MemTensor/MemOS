@@ -325,12 +325,9 @@ function newUserSegment(userContent: string): string {
  * set to `"merge_follow_ups"` (default) so same-topic follow-ups land
  * in the same episode.
  *
- * `algorithm.reward.feedbackWindowSec` is forced to 0 so the reward
- * subscriber never enqueues a 10-minute timer we'd then have to sleep
- * through. Tests score each finalised episode explicitly via
- * `pipeline.rewardRunner.run(...)` right after `flush()`, which mirrors
- * the integration-level harness used in
- * `tests/unit/reward/reward.integration.test.ts`.
+ * `algorithm.reward.feedbackWindowSec` is set to 1 so tests do not wait on
+ * the production window. `pipeline.flush()` runs `reward.drain()`, which
+ * flushes every pending episode immediately (see `core/reward/subscriber.ts`).
  */
 function buildPipeline(
   db: TmpDbHandle,
@@ -350,7 +347,7 @@ function buildPipeline(
       },
       reward: {
         ...baseCfg.algorithm.reward,
-        feedbackWindowSec: 0,
+        feedbackWindowSec: 1,
         // Each `runTurn` is one user→assistant exchange; the e2e flow
         // deliberately tests single-turn completions so disable the
         // production triviality gate.
@@ -372,23 +369,6 @@ function buildPipeline(
     now: () => NOW,
   };
   return createPipeline(deps);
-}
-
-/**
- * Run the reward pass for every known episode. We do this manually
- * because `feedbackWindowSec = 0` disables the auto-scheduler — see
- * `core/reward/subscriber.ts`.
- */
-async function scoreAllEpisodes(pipeline: PipelineHandle): Promise<void> {
-  const episodes = pipeline.repos.episodes.list({});
-  for (const ep of episodes) {
-    if (ep.status !== "closed") continue;
-    await pipeline.rewardRunner.run({
-      episodeId: ep.id,
-      feedback: [],
-      trigger: "manual",
-    });
-  }
 }
 
 /**
@@ -616,12 +596,8 @@ describe("V7 full-chain E2E (Python programming task)", () => {
     pipeline.sessionManager.closeSession(s4Ep1.sessionId, "test.topic_end");
 
     // ── Drain the async chain (capture → reward → L2 → L3 → skill) ──
-    // capture is fire-and-forget per episode, but we disabled the reward
-    // auto-scheduler (see buildPipeline). Score every closed episode
-    // explicitly so V gets back-propagated.
+    // reward.drain() scores every pending episode (feedbackWindowSec=1).
     await pipeline.flush();
-    await scoreAllEpisodes(pipeline);
-    await pipeline.flush(); // drain downstream (L2 / L3 / skill) reactions
 
     // ── Assertions on each V7 layer ────────────────────────────────────
 

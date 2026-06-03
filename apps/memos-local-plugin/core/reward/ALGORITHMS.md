@@ -125,15 +125,15 @@ is that it must eventually happen, and preferably once per "task-level
 feedback process". We implement that with a small state machine:
 
 ```
-capture.done ──────────▶ pending{episodeId}
+capture.done ──────────▶ pending{episodeId} + schedule (windowSec ≥ 1)
        │
-       │ cfg.feedbackWindowSec > 0
        ▼
-  setTimeout(run implicit_fallback)
-       ▲
-       │ clearTimeout if submitFeedback comes first
+  setTimeout → run({ feedback: [], trigger: implicit_fallback })
        │
-explicit user feedback ▶ run explicit_feedback (merges prior pending row list)
+drain() ───────────────▶ flush ALL pending (same run shape)
+
+memory-core.submitFeedback → SQLite only (no subscriber run)
+reward.run merges feedbackRepo.getForEpisode → meta.trigger may become explicit_feedback
 ```
 
 - **`trigger` field** on the run is metadata only; downstream consumers
