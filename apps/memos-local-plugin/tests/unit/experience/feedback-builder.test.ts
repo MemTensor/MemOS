@@ -128,6 +128,34 @@ describe("feedback experience builder", () => {
     expect(recalled.map((c) => c.refId)).toContain(result.policyId);
   });
 
+  it("treats a partial verifier pass (3/4, reward 0) as a failure, not a success_pattern", async () => {
+    const result = await runFeedbackExperience(
+      {
+        feedback: feedback({
+          id: "fb_partial" as FeedbackRow["id"],
+          polarity: "neutral",
+          // The literal word "passed" appears here and used to be substring-matched
+          // as a positive signal — even though 3/4 with reward 0 is a failure.
+          rationale:
+            "Verifier feedback for the previous attempt. Verifier reward: 0.0. passed: 3, total: 4. TimeoutException(): Time Limit Exceeded. Please briefly reflect on what you would keep and what you would improve next time.",
+          raw: {
+            source: "evoagentbench_gateway_manual_feedback",
+            verifier: { reward: 0, passed: 3, total: 4, results: [1, 1, 1, -3] },
+          },
+        }),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: -0.51 },
+        trace,
+      },
+      { repos: handle.repos, embedder: fakeEmbedder(), namespace, now: () => NOW },
+    );
+
+    expect(result.policyId).toBeTruthy();
+    const row = handle.repos.policies.getById(result.policyId!);
+    expect(row?.experienceType).not.toBe("success_pattern");
+    expect(row?.evidencePolarity).toBe("negative");
+    expect(row?.skillEligible).toBe(false);
+  });
+
   it("merges later avoidance feedback into a success-backed experience without losing skill eligibility", async () => {
     const ok = await runFeedbackExperience(
       {

@@ -164,6 +164,12 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     ensureSkillUsageColumns(db);
     return;
   }
+  if (file.version === 5 && file.name === "skill-trials") {
+    if (tableExists(db, "skills") && tableExists(db, "episodes") && tableExists(db, "traces")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
   if (file.version === 6 && file.name === "world-model-version") {
     if (tableExists(db, "world_model")) {
       ensureColumn(db, "world_model", "version", "INTEGER NOT NULL DEFAULT 1");
@@ -180,6 +186,18 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
   }
   if (file.version === 9 && file.name === "policies-fts") {
     if (tableExists(db, "policies")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
+  if (file.version === 10 && file.name === "trace-policy-links") {
+    if (tableExists(db, "traces") && tableExists(db, "policies")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
+  if (file.version === 12 && file.name === "trace-turn-pagination-index") {
+    if (tableExists(db, "traces")) {
       db.exec(fs.readFileSync(file.fullPath, "utf8"));
     }
     return;
