@@ -4076,12 +4076,36 @@ export function createMemoryCore(
     return bestDim;
   }
 
+  function shouldTraceHaveEmbeddings(row: TraceRow): boolean {
+    // Skip traces where both user and agent text are very short
+    const userLen = row.userText.trim().length;
+    const agentLen = row.agentText.trim().length;
+
+    // If both are under 10 chars, definitely skip
+    if (userLen < 10 && agentLen < 10) {
+      return false;
+    }
+
+    // If total combined length is under 20 chars, skip
+    // (covers cases like "ok" / "Got it, processing..." which aren't meaningful memories)
+    if (userLen + agentLen < 20) {
+      return false;
+    }
+
+    return true;
+  }
+
   function collectEmbeddingSlots(): EmbeddingSlot[] {
     const slots: EmbeddingSlot[] = [];
     const pageSize = 500;
     for (let offset = 0;; offset += pageSize) {
       const rows = handle.repos.traces.list({ limit: pageSize, offset, newestFirst: false });
       for (const row of rows) {
+        // Skip traces that shouldn't have embeddings
+        if (!shouldTraceHaveEmbeddings(row)) {
+          continue;
+        }
+
         slots.push({
           kind: "trace",
           id: row.id,
