@@ -177,14 +177,23 @@ export async function bootstrapMemoryCoreFull(
   options: BootstrapOptions,
 ): Promise<BootstrapResult> {
   const home = options.home ?? resolveHome(options.agent);
-  const config =
-    options.config ??
-    (await loadConfig(home)).config;
+  const configResult = options.config
+    ? { config: options.config, fromDisk: true, warnings: [], source: home.configFile }
+    : await loadConfig(home);
+  const config = configResult.config;
 
   const log = rootLogger.child({
     channel: "core.pipeline.bootstrap",
     ctx: { agent: options.agent },
   });
+
+  // Log configuration warnings (e.g., missing config file)
+  if (configResult.warnings.length > 0) {
+    for (const warning of configResult.warnings) {
+      log.warn("config.warning", { message: warning });
+    }
+  }
+
   const namespace = normalizeNamespace(options.namespace, options.agent);
 
   // 1. Storage.

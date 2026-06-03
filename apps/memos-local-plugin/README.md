@@ -97,3 +97,75 @@ npm pack
 bash install.sh --version ./memtensor-memos-local-plugin-1.0.0-beta.1.tgz
 ```
 
+## Configuration
+
+The plugin reads its configuration from `config.yaml` in the runtime directory. The location is resolved in the following priority order:
+
+1. **`MEMOS_HOME` environment variable** — points to the runtime root directory (e.g., `/opt/data/.hermes/memos-plugin`)
+2. **`MEMOS_CONFIG_FILE` environment variable** — points directly to the config file (e.g., `/opt/data/.hermes/memos-plugin/config.yaml`)
+3. **`--home` CLI flag** (bridge.cts only) — specifies the runtime root directory
+4. **Default path** — `~/.hermes/memos-plugin/` or `~/.openclaw/memos-plugin/` based on the agent
+
+### Docker Deployment
+
+When running the daemon in a Docker container, you must explicitly specify the config location if it differs from the default path. There are three ways to do this:
+
+#### Option 1: Environment Variable (Recommended)
+
+Set `MEMOS_HOME` to point to the runtime directory:
+
+```dockerfile
+ENV MEMOS_HOME=/opt/data/home/.hermes/memos-plugin
+CMD ["node", "bridge.cts", "--agent=hermes", "--daemon"]
+```
+
+#### Option 2: CLI Flag
+
+Pass `--home` directly to the bridge command:
+
+```dockerfile
+CMD ["node", "bridge.cts", "--agent=hermes", "--daemon", "--home=/opt/data/home/.hermes/memos-plugin"]
+```
+
+#### Option 3: Config File Path
+
+Set `MEMOS_CONFIG_FILE` to point directly to the config file:
+
+```dockerfile
+ENV MEMOS_CONFIG_FILE=/opt/data/home/.hermes/memos-plugin/config.yaml
+CMD ["node", "bridge.cts", "--agent=hermes", "--daemon"]
+```
+
+### Example Docker Deployment
+
+For the Hermes Agent Docker image:
+
+```dockerfile
+FROM nousresearch/hermes-agent:latest
+
+# Install memos-local-plugin
+RUN bash -c "$(curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh)"
+
+# Set the config location
+ENV MEMOS_HOME=/opt/data/.hermes/memos-plugin
+
+# Start daemon in background, then run Hermes
+CMD node /opt/data/.hermes/plugins/memos-local-plugin/bridge.cts --agent=hermes --daemon && hermes chat
+```
+
+### Troubleshooting
+
+If you see warnings like:
+
+```
+config file not found at /opt/data/.hermes/memos-plugin/config.yaml; using defaults
+```
+
+This means the bridge process is looking in the wrong location. Check:
+
+1. Verify your `config.yaml` exists: `ls -la ~/.hermes/memos-plugin/config.yaml`
+2. Set `MEMOS_HOME` or use `--home` to point to the correct directory
+3. Ensure the path matches the location where `install.sh` created the config
+
+When config is missing, the plugin falls back to defaults (local embedding, no LLM provider), which will break summarization and reflection features.
+
