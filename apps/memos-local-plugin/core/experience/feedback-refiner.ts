@@ -12,6 +12,7 @@ import type { LlmClient } from "../llm/index.js";
 import type { TraceRow } from "../types.js";
 import { rootLogger } from "../logger/index.js";
 import { sanitizeDerivedText, sanitizeDerivedMarkdown, sanitizeDerivedMarkdownList } from "../safety/content.js";
+import { MemosError, ERROR_CODES } from "../../agent-contract/errors.js";
 
 const log = rootLogger.child({ channel: "core.experience.refiner" });
 
@@ -30,6 +31,8 @@ export interface RefinedGuidance {
   confidence: number;
   /** Refinement method: "llm" or "rule". */
   method: "llm" | "rule";
+  /** Why we fell back to rules (when method=rule). */
+  fallbackReason?: "llm_disabled" | "llm_timeout" | "llm_malformed" | "llm_error";
 }
 
 export interface RefineInput {
@@ -79,15 +82,24 @@ export function createFeedbackRefiner(
           });
           return result;
         } catch (err) {
+          const fallbackReason = classifyLlmFailure(err);
           log.warn("llm.failed", {
             err: err instanceof Error ? err.message : String(err),
+            fallbackReason,
           });
           // Fall through to rule-based fallback
+          return {
+            ...refineByRules(input),
+            fallbackReason,
+          };
         }
       }
 
       // Fallback to rule-based extraction
-      return refineByRules(input);
+      return {
+        ...refineByRules(input),
+        fallbackReason: "llm_disabled",
+      };
     },
   };
 }
@@ -185,7 +197,7 @@ function buildRefinementPrompt(input: RefineInput): string {
   // Use full episode context if available, otherwise fall back to single turn
   let contextSection: string;
   if (input.episodeContext) {
-    contextSection = `EPISODE CONTEXT (first turn + last 3 turns):
+    contextSection = `EPISODE CONTEXT (all traces, compressed, chronological):
 ${input.episodeContext}`;
   } else {
     const userRequest = truncate(input.userRequest ?? "", 500);
@@ -406,6 +418,18 @@ function refineByRules(input: RefineInput): RefinedGuidance {
     confidence: 0.6,
     method: "rule",
   };
+}
+
+function classifyLlmFailure(
+  err: unknown,
+): "llm_timeout" | "llm_malformed" | "llm_error" {
+  if (MemosError.is(err)) {
+    if (err.code === ERROR_CODES.LLM_TIMEOUT) return "llm_timeout";
+    if (err.code === ERROR_CODES.LLM_OUTPUT_MALFORMED) return "llm_malformed";
+    return "llm_error";
+  }
+  if (err instanceof Error && /timeout|timed out/i.test(err.message)) return "llm_timeout";
+  return "llm_error";
 }
 
 /**
