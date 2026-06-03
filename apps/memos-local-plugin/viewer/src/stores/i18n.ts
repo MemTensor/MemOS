@@ -566,7 +566,7 @@ const en = {
   "tasks.skillReason.queued.ready":
     "Experience is ready (gain={gain}, support={support}); skill crystallization will trigger automatically after the next reward scoring.",
   "tasks.skillReason.skipped":
-    "Task scored significantly negative (R={rTask}), treated as counterexample; no L2 experience or skill will be derived, but L1 traces are retained as negative examples for future Decision Repair.",
+    "Low task score (R={rTask}), recorded as a counterexample; the system will try to derive avoidance guidance from this episode's traces and will not generate an invokable skill.",
   "tasks.skillReason.not_generated.belowThreshold":
     "Task score R={rTask} is below the induction threshold (≥ {threshold}) — the conversation was normal, but not strong enough to generalize into an L2 experience; similar tasks will accumulate over time.",
   "tasks.skillReason.not_generated.noPolicy":
@@ -1423,7 +1423,7 @@ const zh: Record<TranslationKey, string> = {
   "tasks.skillReason.queued.ready":
     "经验已就绪（gain={gain}，support={support}），技能结晶将在下次 reward 评分后自动触发。",
   "tasks.skillReason.skipped":
-    "任务评分为明显负分 (R={rTask})，视为反例；不会沉淀出新的 L2 经验或技能，但原始 L1 轨迹会作为反面教材保留，在后续 Decision Repair 中生成规避建议。",
+    "任务评分较低 (R={rTask})，记为反例；系统会尝试从本次任务轨迹归纳规避建议，不会生成可调用技能。",
   "tasks.skillReason.not_generated.belowThreshold":
     "任务评分 R={rTask} 未达到沉淀阈值 (≥ {threshold})——对话本身正常，只是还不够强到能泛化成 L2 经验；多做几个相似任务后会自动积累。",
   "tasks.skillReason.not_generated.noPolicy":

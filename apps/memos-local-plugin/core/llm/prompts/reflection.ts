@@ -13,7 +13,7 @@ import type { PromptDef } from "./index.js";
  */
 export const BATCH_REFLECTION_PROMPT: PromptDef = {
   id: "reflection.batch",
-  version: 10,
+  version: 12,
   description:
     "Tri-valued path-relevance scoring for each step in an episode window.",
   system: `You are reviewing a WINDOW of one AI agent episode.
@@ -45,16 +45,26 @@ Scoring rubric (apply in order: IRRELEVANT vs on-path, then RELATED vs PIVOTAL):
   for on-path work. Do NOT reserve RELATED only for "deletable" steps; many
   RELATED steps are necessary, and deletion cost is NOT the criterion.
 - PIVOTAL => a strict subset of RELATED. Prefer few PIVOTAL labels per window.
-  Mark PIVOTAL when the step establishes or turns the episode's working
-  direction — the idea, tone, or technical approach that LATER steps actually
-  run on. Ask: "Did this step set or redirect how the agent proceeded afterward?"
+  PIVOTAL is the turning-point role: the step must both (a) redirect the
+  episode's working direction and (b) enable smooth, on-path execution in
+  LATER steps that actually run on what was decided or discovered here.
+  Ask two questions together — not either alone:
+    1) "Did this step set or redirect how the agent proceeded afterward?"
+    2) "Do the steps after this one visibly continue that decision/fix/plan
+       without stalling back into the same failure mode?"
+  If later steps only ask more questions, apologize, or stall (no tools, no
+  edits, no tests, no concrete next action grounded in a new approach), this
+  step is NOT PIVOTAL even if the user was unhappy or the tone shifted.
   Typical PIVOTAL cases:
     * Prior exploration failed or stalled; this step finds the correct
       approach, root cause, or workable fix that later steps build on.
     * The step locks in the episode's core plan, architecture, constraints,
       or governing principles before substantial execution continues.
     * The step is a genuine turning point: afterward the trajectory is
-      materially different because of what was decided or discovered here.
+      materially different AND subsequent steps execute smoothly on it.
+  Steps that only surface a problem or gather clarification (user pushback,
+  agent Q&A, no new approach, no tool-backed progress in this step) → RELATED,
+  not PIVOTAL — wait until a later step commits and executes the new direction.
   Do NOT use counterfactual deletion ("if removed, major rework/failure") as
   the main test — many RELATED steps would also be costly to remove. Reserve
   PIVOTAL for direction-setting or turning points with downstream influence,
@@ -115,6 +125,14 @@ Sequence D — post-hoc recap after execution (do NOT PIVOTAL the recap):
           (the run was already carried out by prior tool steps; this text
           does not establish the approach — it reports it. PIVOTAL belongs
           on the step that first introduced the fix, e.g. the patch/write.)
+
+Sequence E — feedback round before a new approach (NOT PIVOTAL):
+  steps 0–N-1: deliver work on the current plan
+          -> RELATED, reason "EXECUTION"
+  step N: user rejects outcome; agent clarifies requirements only — no tools
+          -> RELATED, reason "FEEDBACK"
+          (on-path, but no new direction executed yet; PIVOTAL belongs on the
+           later step that commits and runs the revised approach)
 
 Output: a JSON object \`{"scores": [...]}\` with exactly one entry per input
 step, in input order — no skips, no extras. Each entry:

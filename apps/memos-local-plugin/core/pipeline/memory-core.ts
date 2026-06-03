@@ -5603,7 +5603,7 @@ export function deriveSkillStatus(
   if (ep.rTask <= R_NEGATIVE_FLOOR) {
     return {
       status: "skipped",
-      reason: `任务评分为明显负分 (R=${ep.rTask.toFixed(2)})，视为反例`,
+      reason: `任务评分较低 (R=${ep.rTask.toFixed(2)})，记为反例；系统会尝试从本次任务轨迹归纳规避建议，不会生成可调用技能。`,
       reasonKey: "tasks.skillReason.skipped",
       reasonParams: { rTask: ep.rTask.toFixed(2) },
       linkedSkillId: null,
