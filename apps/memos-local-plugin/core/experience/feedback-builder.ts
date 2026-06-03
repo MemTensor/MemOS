@@ -1023,7 +1023,7 @@ function formatTurn(turnNumber: number, trace: TraceRow): string {
   return lines.join("\n");
 }
 
-function summarizeTools(toolCalls: readonly TraceRow["toolCalls"]): string {
+function summarizeTools(toolCalls: TraceRow["toolCalls"]): string {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) return "";
   const pieces = toolCalls.slice(0, 4).map((tool) => {
     const name = tool.name || "unknown";
