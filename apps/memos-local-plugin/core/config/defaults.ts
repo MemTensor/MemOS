@@ -241,10 +241,11 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       skillInjectionMode: "summary",
       skillSummaryChars: 200,
       llmFilterEnabled: true,
-      // Tighter than the legacy default (5) so the LLM filter has a
-      // small budget; combined with the richer prompt (v3) this keeps
-      // packets concise without over-dropping.
-      llmFilterMaxKeep: 4,
+      // Successful LLM filtering can keep a wider set of genuinely
+      // relevant memories; no-LLM/failure paths stay conservative via
+      // llmFilterFallbackMaxKeep below.
+      llmFilterMaxKeep: 8,
+      llmFilterFallbackMaxKeep: 4,
       // Set to 2: skip the LLM precision pass when there's only one
       // candidate (no point ranking a single item). Anything with 2+
       // candidates still goes through the filter to drop off-topic

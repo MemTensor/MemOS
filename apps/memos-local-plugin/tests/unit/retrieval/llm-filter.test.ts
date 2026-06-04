@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { llmFilterCandidates } from "../../../core/retrieval/llm-filter.js";
 import type { RankedCandidate } from "../../../core/retrieval/ranker.js";
 import type {
+  ExperienceCandidate,
   RetrievalConfig,
   TraceCandidate,
 } from "../../../core/retrieval/types.js";
@@ -11,11 +12,13 @@ const cfg: Pick<
   RetrievalConfig,
   | "llmFilterEnabled"
   | "llmFilterMaxKeep"
+  | "llmFilterFallbackMaxKeep"
   | "llmFilterMinCandidates"
   | "llmFilterCandidateBodyChars"
 > = {
   llmFilterEnabled: true,
-  llmFilterMaxKeep: 4,
+  llmFilterMaxKeep: 8,
+  llmFilterFallbackMaxKeep: 4,
   llmFilterMinCandidates: 1,
   llmFilterCandidateBodyChars: 500,
 };
@@ -57,14 +60,66 @@ function trace(id: string, score: number): RankedCandidate {
   };
 }
 
+function experience(id: string): RankedCandidate {
+  const cand: ExperienceCandidate = {
+    tier: "tier2",
+    refKind: "experience",
+    refId: id as never,
+    cosine: 0,
+    ts: 1_700_000_000_000 as never,
+    vec: null,
+    channels: [{ channel: "fts", rank: 0, score: 1 }],
+    title: "SEC 13F extraction correction",
+    trigger: `When the user asks about ${"SEC 13F issuer CUSIP ".repeat(20)}`,
+    procedure: "Use the holdings table issuer and CUSIP columns directly.",
+    verification: "Verify issuer and CUSIP match the same holdings row.",
+    boundary: "",
+    support: 1,
+    gain: 0.7,
+    status: "active",
+    experienceType: "failure_avoidance",
+    evidencePolarity: "negative",
+    salience: 0.9,
+    confidence: 0.8,
+    skillEligible: false,
+    sourceEpisodeIds: [],
+    sourceFeedbackIds: [],
+    sourceTraceIds: [],
+    decisionGuidance: { preference: [], antiPattern: [] },
+    updatedAt: 1_700_000_000_000 as never,
+  };
+  return {
+    candidate: cand,
+    relevance: 1,
+    rrf: 0,
+    score: 1,
+    normSq: null,
+  };
+}
+
 describe("retrieval/llm-filter", () => {
-  it("disabled → passthrough with null sufficient", async () => {
+  it("disabled → fallback capped with null sufficient", async () => {
+    const ranked = [
+      trace("a", 0.9),
+      trace("b", 0.8),
+      trace("c", 0.7),
+      trace("d", 0.6),
+    ];
     const result = await llmFilterCandidates(
-      { query: "anything", ranked: [trace("a", 0.9), trace("b", 0.5)] },
-      { llm: null, log, config: { ...cfg, llmFilterEnabled: false } },
+      { query: "anything", ranked },
+      {
+        llm: null,
+        log,
+        config: {
+          ...cfg,
+          llmFilterEnabled: false,
+          llmFilterFallbackMaxKeep: 2,
+        },
+      },
     );
     expect(result.outcome).toBe("disabled");
-    expect(result.kept.length).toBe(2);
+    expect(result.kept.map((r) => String(r.candidate.refId))).toEqual(["a", "b"]);
+    expect(result.dropped.map((r) => String(r.candidate.refId))).toEqual(["c", "d"]);
     expect(result.sufficient).toBeNull();
   });
 
@@ -199,7 +254,7 @@ describe("retrieval/llm-filter", () => {
     expect(result.kept.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("safe-cutoff respects llmFilterMaxKeep cap", async () => {
+  it("safe-cutoff respects llmFilterFallbackMaxKeep cap", async () => {
     const llm: any = {
       completeJson: vi.fn().mockRejectedValue(new Error("boom")),
     };
@@ -213,36 +268,71 @@ describe("retrieval/llm-filter", () => {
     ];
     const result = await llmFilterCandidates(
       { query: "q", ranked },
-      { llm, log, config: { ...cfg, llmFilterMaxKeep: 2 } },
+      {
+        llm,
+        log,
+        config: { ...cfg, llmFilterMaxKeep: 8, llmFilterFallbackMaxKeep: 2 },
+      },
     );
     expect(result.kept.length).toBeLessThanOrEqual(2);
     expect(result.outcome).toBe("llm_failed_safe_cutoff");
   });
 
-  it("safe-cutoff respects a zero llmFilterMaxKeep cap", async () => {
+  it("safe-cutoff respects a zero llmFilterFallbackMaxKeep cap", async () => {
     const llm: any = {
       completeJson: vi.fn().mockRejectedValue(new Error("boom")),
     };
     const result = await llmFilterCandidates(
       { query: "q", ranked: [trace("a", 0.9), trace("b", 0.8)] },
-      { llm, log, config: { ...cfg, llmFilterMaxKeep: 0 } },
+      { llm, log, config: { ...cfg, llmFilterFallbackMaxKeep: 0 } },
     );
     expect(result.kept).toEqual([]);
     expect(result.dropped.length).toBe(2);
     expect(result.outcome).toBe("llm_failed_safe_cutoff");
   });
 
-  it("no LLM at all → passthrough (not safe-cutoff, since the call never happens)", async () => {
+  it("no LLM at all → fallback capped without full passthrough", async () => {
     const result = await llmFilterCandidates(
       {
         query: "q",
-        ranked: [trace("a", 0.9), trace("b", 0.8), trace("c", 0.7)],
+        ranked: [
+          trace("a", 0.9),
+          trace("b", 0.8),
+          trace("c", 0.7),
+          trace("d", 0.6),
+        ],
       },
-      { llm: null, log, config: cfg },
+      { llm: null, log, config: { ...cfg, llmFilterFallbackMaxKeep: 2 } },
     );
     expect(result.outcome).toBe("no_llm");
-    expect(result.kept.length).toBe(3);
+    expect(result.kept.map((r) => String(r.candidate.refId))).toEqual(["a", "b"]);
+    expect(result.dropped.map((r) => String(r.candidate.refId))).toEqual(["c", "d"]);
     expect(result.sufficient).toBeNull();
+  });
+
+  it("malformed LLM output uses fallback cap instead of normal max keep", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { ranked: "not-an-array" },
+        servedBy: "fake",
+      }),
+    };
+    const ranked = [
+      trace("a", 0.9),
+      trace("b", 0.89),
+      trace("c", 0.88),
+      trace("d", 0.87),
+    ];
+    const result = await llmFilterCandidates(
+      { query: "q", ranked },
+      {
+        llm,
+        log,
+        config: { ...cfg, llmFilterMaxKeep: 8, llmFilterFallbackMaxKeep: 2 },
+      },
+    );
+    expect(result.outcome).toBe("llm_failed_safe_cutoff");
+    expect(result.kept.length).toBeLessThanOrEqual(2);
   });
 
   it("candidate description omits retrieval metadata and keeps semantic content", async () => {
@@ -263,6 +353,26 @@ describe("retrieval/llm-filter", () => {
     expect(seen[0]).not.toContain("tags=[sample]");
     expect(seen[0]).not.toContain("via=vec_summary");
     expect(seen[0]).not.toContain("score=");
+  });
+
+  it("experience descriptions preserve procedure and verification despite long triggers", async () => {
+    const seen: string[] = [];
+    const llm: any = {
+      completeJson: vi.fn().mockImplementation(async (messages: any[]) => {
+        seen.push(messages[1].content);
+        return { value: { selected: [1], sufficient: true }, servedBy: "fake" };
+      }),
+    };
+    await llmFilterCandidates(
+      { query: "q", ranked: [experience("po_sec13f")] },
+      { llm, log, config: { ...cfg, llmFilterCandidateBodyChars: 500 } },
+    );
+
+    expect(seen[0]).toContain("[EXPERIENCE] SEC 13F extraction correction");
+    expect(seen[0]).toContain("Trigger:");
+    expect(seen[0]).toContain("Do: Use the holdings table issuer and CUSIP columns directly.");
+    expect(seen[0]).toContain("Check: Verify issuer and CUSIP match the same holdings row.");
+    expect(seen[0]).not.toContain("sourceFeedbackIds");
   });
 
   it("LLM output budget scales for large ranked lists", async () => {

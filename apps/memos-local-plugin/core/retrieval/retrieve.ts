@@ -35,7 +35,7 @@ import { dedupeTraceEpisodeByEpisodeId } from "./dedupe-trace-episode.js";
 import { toPacket, renderSnippetForDebug } from "./injector.js";
 import { llmFilterCandidates } from "./llm-filter.js";
 import { STANDALONE_MATH_FINAL_ANSWER_TASK_KIND } from "./math-task.js";
-import { rank, type RankedCandidate } from "./ranker.js";
+import { rank } from "./ranker.js";
 import { runTier1 } from "./tier1-skill.js";
 import { runTier2Experience } from "./tier2-experience.js";
 import { runTier2 } from "./tier2-trace.js";
@@ -375,12 +375,7 @@ async function runAll(
       config: deps.config,
       now: deps.now(),
     });
-    const mechanicalRanked = ctx.reason !== "decision_repair" &&
-      requiresKeywordConfirmation(compiled.text)
-      ? ranked.ranked.filter((candidate) =>
-          bypassesKeywordConfirmation(candidate) || hasKeywordChannel(candidate)
-        )
-      : ranked.ranked;
+    const mechanicalRanked = ranked.ranked;
     const fuseLatencyMs = Date.now() - fuseStart;
 
     // ─── LLM relevance filter ──────────────────────────────────────────
@@ -603,28 +598,6 @@ function emptyResult(
       embedding: { attempted: false, ok: false, degraded: false },
     },
   };
-}
-
-function requiresKeywordConfirmation(text: string): boolean {
-  const tokens = text.match(/[A-Za-z0-9_:-]{12,}/g) ?? [];
-  return tokens.some((token) => {
-    const hasIdentifierShape = /[_:-]/.test(token) || /\d/.test(token);
-    const hasEnoughEntropy = /[A-Za-z]/.test(token) && token.length >= 16;
-    return hasIdentifierShape && hasEnoughEntropy;
-  });
-}
-
-function hasKeywordChannel(candidate: RankedCandidate): boolean {
-  return (candidate.candidate.channels ?? []).some((channel) =>
-    channel.channel === "fts" ||
-    channel.channel === "pattern" ||
-    channel.channel === "structural"
-  );
-}
-
-function bypassesKeywordConfirmation(candidate: RankedCandidate): boolean {
-  const refKind = candidate.candidate.refKind;
-  return refKind === "skill" || refKind === "world-model";
 }
 
 function approxTokens(s: string): number {

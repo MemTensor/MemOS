@@ -464,8 +464,10 @@ const AlgorithmSchema = Type.Object({
      * small LLM call dramatically cuts down irrelevant injections.
      */
     llmFilterEnabled: Bool(true),
-    /** Keep at most this many candidates after the LLM filter. */
-    llmFilterMaxKeep: NumberInRange(5, 1, 30),
+    /** Keep at most this many candidates after a successful LLM filter. */
+    llmFilterMaxKeep: NumberInRange(8, 1, 30),
+    /** Keep at most this many candidates when no valid LLM judgement is available. */
+    llmFilterFallbackMaxKeep: NumberInRange(4, 0, 30),
     /**
      * Skip the filter when the ranked list has fewer than this many
      * items. Default 1 — even a single candidate gets a precision

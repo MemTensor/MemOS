@@ -160,6 +160,7 @@ export function extractAlgorithmConfig(
       decayHalfLifeDays: alg.reward.decayHalfLifeDays,
       llmFilterEnabled: alg.lightweightMemory.enabled ? true : alg.retrieval.llmFilterEnabled,
       llmFilterMaxKeep: alg.retrieval.llmFilterMaxKeep,
+      llmFilterFallbackMaxKeep: alg.retrieval.llmFilterFallbackMaxKeep,
       llmFilterMinCandidates: alg.lightweightMemory.enabled ? 1 : alg.retrieval.llmFilterMinCandidates,
       llmFilterCandidateBodyChars: alg.retrieval.llmFilterCandidateBodyChars,
       lightweightMemory: alg.lightweightMemory.enabled,

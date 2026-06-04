@@ -9,8 +9,9 @@
  *
  * Design constraints:
  *   - One LLM call per turn, bounded output (index list + `sufficient`).
- *   - Totally opt-in: if the LLM is null, or the config flag is off,
- *     or the candidate list is empty, we pass through unchanged.
+ *   - Totally opt-in: if the LLM is null or the config flag is off,
+ *     we apply a small mechanical fallback cap instead of calling out.
+ *     Empty / below-threshold lists still pass through unchanged.
  *   - On ANY failure (network, schema, timeout) we fall back to a
  *     mechanical cutoff. A broken filter must never crash retrieval.
  *   - Returns both kept and dropped candidates so callers can log
@@ -51,6 +52,7 @@ export interface FilterDeps {
     RetrievalConfig,
     | "llmFilterEnabled"
     | "llmFilterMaxKeep"
+    | "llmFilterFallbackMaxKeep"
     | "llmFilterMinCandidates"
     | "llmFilterCandidateBodyChars"
   >;
@@ -91,7 +93,7 @@ export async function llmFilterCandidates(
 ): Promise<FilterResult> {
   const { ranked, query } = input;
   if (!deps.config.llmFilterEnabled) {
-    return passthrough(ranked, "disabled");
+    return fallbackCap(ranked, deps, "disabled");
   }
   // `llmFilterMinCandidates` is the *minimum* list length required to
   // RUN the filter. Default is 1, meaning even a single candidate gets
@@ -108,7 +110,7 @@ export async function llmFilterCandidates(
     return passthrough(ranked, "empty_query");
   }
   if (!deps.llm) {
-    return passthrough(ranked, "no_llm");
+    return fallbackCap(ranked, deps, "no_llm");
   }
 
   const bodyChars =
@@ -220,7 +222,7 @@ function passthrough(
  * apply a relative-relevance cutoff so we don't dump the entire ranked
  * list into the prompt. Keeps:
  *   1. items whose score ≥ `topScore · 0.7`
- *   2. capped at `llmFilterMaxKeep` so the prompt stays small.
+ *   2. capped at `llmFilterFallbackMaxKeep` so the prompt stays small.
  *
  * The ranker already applied an initial cutoff with the same family of
  * floors, but the LLM is expected to prune further (because the
@@ -246,7 +248,7 @@ function safeCutoff(
     0,
   );
   const cutoff = topScore > 0 ? topScore * ratio : 0;
-  const keepCap = Math.max(0, deps.config.llmFilterMaxKeep);
+  const keepCap = fallbackMaxKeep(deps);
   if (keepCap === 0) {
     return {
       kept: [],
@@ -274,6 +276,35 @@ function safeCutoff(
     outcome: "llm_failed_safe_cutoff",
     sufficient: null,
   };
+}
+
+function fallbackCap(
+  ranked: readonly RankedCandidate[],
+  deps: FilterDeps,
+  outcome: Extract<FilterResult["outcome"], "disabled" | "no_llm">,
+): FilterResult {
+  const keepCap = fallbackMaxKeep(deps);
+  if (keepCap === 0) {
+    return {
+      kept: [],
+      dropped: [...ranked],
+      outcome,
+      sufficient: null,
+    };
+  }
+  return {
+    kept: ranked.slice(0, keepCap),
+    dropped: ranked.slice(keepCap),
+    outcome,
+    sufficient: null,
+  };
+}
+
+function fallbackMaxKeep(deps: FilterDeps): number {
+  return Math.max(
+    0,
+    deps.config.llmFilterFallbackMaxKeep ?? Math.min(deps.config.llmFilterMaxKeep, 4),
+  );
 }
 
 function coerceBool(v: unknown): boolean | null {
@@ -330,16 +361,7 @@ function describeCandidate(r: RankedCandidate, bodyChars: number): string {
           experienceType?: string;
           evidencePolarity?: string;
         };
-        const parts = [
-          ex.title,
-          ex.experienceType ? `type=${ex.experienceType}` : null,
-          ex.evidencePolarity ? `evidence=${ex.evidencePolarity}` : null,
-          ex.trigger,
-          ex.procedure,
-          ex.verification,
-        ].filter(Boolean).join(" ");
-        const body = squashBody(parts, bodyChars);
-        return `[EXPERIENCE] ${body}`;
+        return describeExperience(ex, bodyChars);
       }
       const ep = c as { summary?: string };
       const body = squashBody(ep.summary ?? "", bodyChars);
@@ -354,6 +376,40 @@ function describeCandidate(r: RankedCandidate, bodyChars: number): string {
     default:
       return "[UNKNOWN]";
   }
+}
+
+function describeExperience(
+  ex: {
+    title?: string;
+    trigger?: string;
+    procedure?: string;
+    verification?: string;
+    experienceType?: string;
+    evidencePolarity?: string;
+  },
+  bodyChars: number,
+): string {
+  const headParts = [
+    squashBody(ex.title ?? "(experience)", 80),
+    ex.experienceType || ex.evidencePolarity
+      ? `(${[ex.experienceType, ex.evidencePolarity].filter(Boolean).join(", ")})`
+      : null,
+  ].filter(Boolean);
+  const lines = [`[EXPERIENCE] ${headParts.join(" ")}`];
+  const remaining = Math.max(0, bodyChars - lines[0]!.length);
+  const triggerBudget = Math.min(160, Math.floor(remaining * 0.38));
+  const procedureBudget = Math.min(180, Math.floor(remaining * 0.42));
+  const verificationBudget = Math.min(80, Math.floor(remaining * 0.2));
+  if (ex.trigger?.trim() && triggerBudget > 0) {
+    lines.push(`  Trigger: ${squashBody(ex.trigger, triggerBudget)}`);
+  }
+  if (ex.procedure?.trim() && procedureBudget > 0) {
+    lines.push(`  Do: ${squashBody(ex.procedure, procedureBudget)}`);
+  }
+  if (ex.verification?.trim() && verificationBudget > 0) {
+    lines.push(`  Check: ${squashBody(ex.verification, verificationBudget)}`);
+  }
+  return lines.join("\n");
 }
 
 function squashBody(s: string, max: number): string {

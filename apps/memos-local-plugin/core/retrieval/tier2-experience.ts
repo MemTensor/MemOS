@@ -98,9 +98,9 @@ export async function runTier2Experience(
     for (const [id, state] of merged) {
       const row = repo.getById(id);
       if (!row) continue;
-      if ((row.sourceFeedbackIds?.length ?? 0) === 0) continue;
       const status = row.status ?? "candidate";
       if (status === "archived") continue;
+      if (!hasExecutableExperienceShape(row)) continue;
       out.push({
         tier: "tier2",
         refKind: "experience",
@@ -131,11 +131,28 @@ export async function runTier2Experience(
           matchedChannels: state.channels.map((c) => c.channel),
           experienceType: row.experienceType ?? "success_pattern",
           evidencePolarity: row.evidencePolarity ?? "positive",
+          riskFlags: [
+            ...(row.sourceFeedbackIds?.length ? [] : ["missing_source_feedback"]),
+            ...(state.channels.some((c) => c.channel === "vec") ? [] : ["keyword_only"]),
+          ],
         },
       });
     }
-    out.sort((a, b) => bestChannelScore(b) - bestChannelScore(a));
-    const trimmed = out.slice(0, vecPoolSize);
+    const keywordSupplementSize = Math.min(keywordPoolSize, deps.config.tier2TopK);
+    const vectorHits = out
+      .filter((c) => c.channels?.some((ch) => ch.channel === "vec") || c.cosine > 0)
+      .sort((a, b) => bestChannelScore(b) - bestChannelScore(a))
+      .slice(0, vecPoolSize);
+    const vectorIds = new Set(vectorHits.map((c) => c.refId));
+    const keywordOnlyHits = out
+      .filter((c) => !vectorIds.has(c.refId))
+      .filter((c) => !(c.channels?.some((ch) => ch.channel === "vec") || c.cosine > 0))
+      .filter((c) =>
+        c.channels?.some((ch) => ch.channel === "fts" || ch.channel === "pattern"),
+      )
+      .sort((a, b) => bestChannelScore(b) - bestChannelScore(a))
+      .slice(0, keywordSupplementSize);
+    const trimmed = [...vectorHits, ...keywordOnlyHits];
     log.info("done", {
       candidates: merged.size,
       kept: trimmed.length,
@@ -154,6 +171,13 @@ export async function runTier2Experience(
     });
     return [];
   }
+}
+
+function hasExecutableExperienceShape(row: {
+  trigger?: string;
+  procedure?: string;
+}): boolean {
+  return !!row.trigger?.trim() || !!row.procedure?.trim();
 }
 
 interface CandidateState {
