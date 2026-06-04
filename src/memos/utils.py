@@ -179,6 +179,9 @@ def timed_with_status(
                 if fallback is not None and callable(fallback):
                     result = fallback(e, *args, **kwargs)
                     return result
+                else:
+                    # Re-raise the exception if no fallback is provided
+                    raise
             finally:
                 elapsed_ms = (time.perf_counter() - start) * 1000.0
 

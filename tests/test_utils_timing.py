@@ -388,3 +388,34 @@ class TestTimedWithStatusRegression:
 
         assert bare() == 1
         assert parens() == 2
+
+    def test_exception_without_fallback_should_propagate(self, caplog):
+        """Bug fix: exceptions should be re-raised when no fallback is provided."""
+
+        @timed_with_status
+        def failing_func():
+            raise ValueError("test exception")
+
+        with caplog.at_level(logging.INFO):
+            with pytest.raises(ValueError, match="test exception"):
+                failing_func()
+
+        # The exception should propagate AND the failure should be logged
+        logs = _collect_timer_with_status_logs(caplog)
+        assert len(logs) == 1
+        assert "status: FAILED" in logs[0]
+        assert "error_type: ValueError" in logs[0]
+
+    def test_exception_with_none_fallback_should_propagate(self, caplog):
+        """Bug fix: explicit fallback=None should still re-raise exceptions."""
+
+        @timed_with_status(fallback=None)
+        def failing_func():
+            raise RuntimeError("explicit none")
+
+        with caplog.at_level(logging.INFO):
+            with pytest.raises(RuntimeError, match="explicit none"):
+                failing_func()
+
+        logs = _collect_timer_with_status_logs(caplog)
+        assert "status: FAILED" in logs[0]
