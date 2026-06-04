@@ -133,7 +133,7 @@ describe("hermes protocol surface", () => {
     );
   });
 
-  it("memory_search tool: memory.search routes agent, session and topK to searchMemory", async () => {
+  it("memos_search tool: memory.search routes agent, session and topK to searchMemory", async () => {
     const core = stubCore();
     const dispatch = makeDispatcher(core);
 
@@ -153,7 +153,7 @@ describe("hermes protocol surface", () => {
     );
   });
 
-  it("memory_timeline tool: memory.timeline routes to timeline", async () => {
+  it("memos_timeline tool: memory.timeline routes to timeline", async () => {
     const core = stubCore();
     const dispatch = makeDispatcher(core);
 

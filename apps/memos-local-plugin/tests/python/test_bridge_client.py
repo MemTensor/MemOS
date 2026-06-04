@@ -10,10 +10,13 @@ Run:
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import sys
+import tempfile
 import threading
+import time
 import unittest
 
 from pathlib import Path
@@ -27,6 +30,7 @@ for _p in (_ADAPTER_ROOT, _PLUGIN_DIR):
         sys.path.insert(0, str(_p))
 
 import bridge_client as bridge_client_mod  # noqa: E402
+import daemon_manager as daemon_manager_mod  # noqa: E402
 
 from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
 
@@ -39,6 +43,8 @@ class FakePopen:
     """
 
     def __init__(self, *_args, **_kwargs) -> None:
+        self.cmd = list(_args[0]) if _args else []
+        self.pid = 12345
         self.stdin = io.StringIO()
         self._stdin_lines: list[str] = []
         self.stdout = _ServerStream()
@@ -271,7 +277,7 @@ class BridgeClientTests(unittest.TestCase):
         self.assertIn("boom", ctx.exception.message)
         client.close()
 
-    def test_memory_search_roundtrip(self) -> None:
+    def test_memos_search_roundtrip(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
         res = client.request("memory.search", {"query": "yesterday"})
         self.assertEqual(len(res["hits"]), 1)
@@ -289,6 +295,54 @@ class BridgeClientTests(unittest.TestCase):
         client.close()
         client.close()  # second call must not raise
 
+    def test_stdio_bridge_starts_without_viewer_by_default(self) -> None:
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+        cmd = getattr(self._fake, "cmd", [])
+        self.assertIn("--no-viewer", cmd)
+        client.close()
+
+    def test_reverse_request_waits_for_late_host_handler_registration(self) -> None:
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+
+        self._fake.stdout._enqueue(
+            {
+                "jsonrpc": "2.0",
+                "id": "srv-1",
+                "method": "host.llm.complete",
+                "params": {"messages": [{"role": "user", "content": "ping"}]},
+            }
+        )
+        time.sleep(0.1)
+
+        client.register_host_handler(
+            "host.llm.complete",
+            lambda params: {
+                "text": f"host:{params['messages'][-1]['content']}",
+                "model": "host-test",
+            },
+        )
+
+        response = self._wait_for_client_write(lambda msg: msg.get("id") == "srv-1")
+        self.assertEqual(response["result"]["text"], "host:ping")
+        self.assertNotIn("error", response)
+        client.close()
+
+    def _wait_for_client_write(self, predicate, timeout: float = 2.0) -> dict:
+        assert self._fake is not None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for raw in self._fake._stdin_lines:
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if predicate(msg):
+                    return msg
+            time.sleep(0.01)
+        self.fail("timed out waiting for client write")
+
 
 class MemTensorProviderTests(unittest.TestCase):
     """Exercise `MemTensorProvider` against a mocked bridge."""
@@ -302,6 +356,7 @@ class MemTensorProviderTests(unittest.TestCase):
 
         self._patches = [
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
         ]
         for p in self._patches:
             p.start()
@@ -325,19 +380,19 @@ class MemTensorProviderTests(unittest.TestCase):
         self.assertSetEqual(
             names,
             {
-                "memory_search",
-                "memory_get",
-                "memory_timeline",
-                "skill_list",
-                "memory_environment",
-                "skill_get",
+                "memos_search",
+                "memos_get",
+                "memos_timeline",
+                "memos_skill_list",
+                "memos_environment",
+                "memos_skill_get",
             },
         )
 
     def test_handle_tool_call_fails_gracefully_without_bridge(self) -> None:
         p = self._provider_mod.MemTensorProvider()
         # bridge is None — should not crash, returns error JSON
-        res = p.handle_tool_call("memory_search", {"query": "x"})
+        res = p.handle_tool_call("memos_search", {"query": "x"})
         parsed = json.loads(res)
         self.assertIn("error", parsed)
 
@@ -350,7 +405,7 @@ class MemTensorProviderTests(unittest.TestCase):
 
         search = json.loads(
             p.handle_tool_call(
-                "memory_search",
+                "memos_search",
                 {"query": "HERMES_MEMOS_E2E_0428", "maxResults": 7, "sessionScope": True},
             )
         )
@@ -359,48 +414,50 @@ class MemTensorProviderTests(unittest.TestCase):
         self.assertEqual(bridge.calls[-1][1]["sessionId"], "hermes:session:1")
         self.assertEqual(bridge.calls[-1][1]["topK"]["tier1"], 7)
 
-        got_trace = json.loads(p.handle_tool_call("memory_get", {"id": "tr-1"}))
+        got_trace = json.loads(p.handle_tool_call("memos_get", {"id": "tr-1"}))
         self.assertTrue(got_trace["found"])
         self.assertEqual(got_trace["kind"], "trace")
         self.assertIn("HERMES_MEMOS_E2E_0428", got_trace["meta"]["userText"])
         self.assertEqual(bridge.calls[-1][0], "memory.get_trace")
 
-        got_policy = json.loads(p.handle_tool_call("memory_get", {"id": "p-1", "kind": "policy"}))
+        got_policy = json.loads(p.handle_tool_call("memos_get", {"id": "p-1", "kind": "policy"}))
         self.assertEqual(got_policy["kind"], "policy")
         self.assertIn("Hermes validation", got_policy["body"])
         self.assertEqual(bridge.calls[-1][0], "memory.get_policy")
 
         got_world = json.loads(
-            p.handle_tool_call("memory_get", {"id": "wm-1", "kind": "world_model"})
+            p.handle_tool_call("memos_get", {"id": "wm-1", "kind": "world_model"})
         )
         self.assertEqual(got_world["kind"], "world_model")
         self.assertEqual(got_world["meta"]["policyIds"], ["p-1"])
         self.assertEqual(bridge.calls[-1][0], "memory.get_world")
 
-        timeline = json.loads(p.handle_tool_call("memory_timeline", {"episodeId": "ep-1"}))
+        timeline = json.loads(p.handle_tool_call("memos_timeline", {"episodeId": "ep-1"}))
         self.assertEqual(len(timeline["traces"]), 2)
         self.assertEqual(bridge.calls[-1][0], "memory.timeline")
 
-        skills = json.loads(p.handle_tool_call("skill_list", {"status": "active", "limit": 3}))
+        skills = json.loads(
+            p.handle_tool_call("memos_skill_list", {"status": "active", "limit": 3})
+        )
         self.assertEqual(skills["skills"][0]["id"], "sk-1")
         self.assertEqual(bridge.calls[-1][0], "skill.list")
         self.assertEqual(bridge.calls[-1][1]["limit"], 3)
         self.assertEqual(bridge.calls[-1][1]["status"], "active")
         self.assertEqual(bridge.calls[-1][1]["namespace"]["agentKind"], "hermes")
 
-        env = json.loads(p.handle_tool_call("memory_environment", {"limit": 2}))
+        env = json.loads(p.handle_tool_call("memos_environment", {"limit": 2}))
         self.assertFalse(env["queried"])
         self.assertEqual(env["worldModels"][0]["id"], "wm-1")
         self.assertEqual(bridge.calls[-1][0], "memory.list_world_models")
 
         env_query = json.loads(
-            p.handle_tool_call("memory_environment", {"query": "Hermes install", "limit": 2})
+            p.handle_tool_call("memos_environment", {"query": "Hermes install", "limit": 2})
         )
         self.assertTrue(env_query["queried"])
         self.assertEqual(bridge.calls[-1][0], "memory.search")
         self.assertEqual(bridge.calls[-1][1]["topK"], {"tier1": 0, "tier2": 0, "tier3": 2})
 
-        skill = json.loads(p.handle_tool_call("skill_get", {"id": "sk-1"}))
+        skill = json.loads(p.handle_tool_call("memos_skill_get", {"id": "sk-1"}))
         self.assertTrue(skill["found"])
         self.assertEqual(skill["skill"]["id"], "sk-1")
         self.assertEqual(bridge.calls[-1][0], "skill.get")
@@ -411,13 +468,13 @@ class MemTensorProviderTests(unittest.TestCase):
         p = self._provider_mod.MemTensorProvider()
         p._bridge = RecordingBridge()
 
-        self.assertIn("missing query", p.handle_tool_call("memory_search", {}))
-        self.assertIn("missing id", p.handle_tool_call("memory_get", {}))
+        self.assertIn("missing query", p.handle_tool_call("memos_search", {}))
+        self.assertIn("missing id", p.handle_tool_call("memos_get", {}))
         self.assertIn(
             "unknown memory kind",
-            p.handle_tool_call("memory_get", {"id": "x", "kind": "bad"}),
+            p.handle_tool_call("memos_get", {"id": "x", "kind": "bad"}),
         )
-        self.assertIn("missing id", p.handle_tool_call("skill_get", {}))
+        self.assertIn("missing id", p.handle_tool_call("memos_skill_get", {}))
         self.assertIn("unknown tool", p.handle_tool_call("not_a_tool", {}))
 
     def test_prefetch_lazily_reconnects_when_bridge_is_missing(self) -> None:
@@ -599,6 +656,91 @@ class MemTensorProviderTests(unittest.TestCase):
             loaded = yaml.safe_load(cfg_path.read_text())
             self.assertEqual(loaded["viewer"]["port"], 18920)
             self.assertEqual(loaded["llm"]["provider"], "openai_compatible")
+
+
+class ViewerDaemonTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        daemon_manager_mod._viewer_status = None
+        daemon_manager_mod._viewer_last_probe_at = 0.0
+        daemon_manager_mod._viewer_process = None
+
+    def test_existing_memos_viewer_is_reused(self) -> None:
+        with (
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="running_memos"),
+            patch.object(daemon_manager_mod.subprocess, "Popen") as popen,
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_viewer_daemon())
+            popen.assert_not_called()
+
+    def test_non_memos_port_occupant_blocks_daemon_start(self) -> None:
+        with (
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="blocked"),
+            patch.object(daemon_manager_mod.subprocess, "Popen") as popen,
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_viewer_daemon())
+            popen.assert_not_called()
+
+    def test_free_port_starts_daemon_once(self) -> None:
+        class FakeDaemon:
+            returncode = None
+
+            def poll(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge_path = Path(tmp) / "bridge.cts"
+            bridge_path.write_text("", encoding="utf-8")
+            with (
+                patch.object(
+                    daemon_manager_mod,
+                    "_probe_viewer",
+                    side_effect=["free", "free", "running_memos"],
+                ),
+                patch.object(daemon_manager_mod, "_bridge_script", return_value=bridge_path),
+                patch.object(daemon_manager_mod, "ensure_bridge_running", return_value=True),
+                patch.object(
+                    daemon_manager_mod,
+                    "_bridge_command",
+                    return_value=["node", "bridge.cts", "--agent=hermes", "--daemon"],
+                ),
+                patch.object(
+                    daemon_manager_mod.subprocess,
+                    "Popen",
+                    return_value=FakeDaemon(),
+                ) as popen,
+            ):
+                self.assertTrue(daemon_manager_mod.ensure_viewer_daemon())
+                popen.assert_called_once()
+
+    def test_start_lock_reprobes_before_spawning_daemon(self) -> None:
+        @contextlib.contextmanager
+        def acquired_lock():
+            yield True
+
+        with (
+            patch.object(
+                daemon_manager_mod,
+                "_probe_viewer",
+                side_effect=["free", "running_memos"],
+            ),
+            patch.object(daemon_manager_mod, "_viewer_start_lock", acquired_lock),
+            patch.object(daemon_manager_mod.subprocess, "Popen") as popen,
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_viewer_daemon())
+            popen.assert_not_called()
+
+    def test_start_lock_timeout_does_not_spawn_daemon(self) -> None:
+        @contextlib.contextmanager
+        def busy_lock():
+            yield False
+
+        with (
+            patch.object(daemon_manager_mod, "_probe_viewer", side_effect=["free", "free"]),
+            patch.object(daemon_manager_mod, "_viewer_start_lock", busy_lock),
+            patch.object(daemon_manager_mod.subprocess, "Popen") as popen,
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_viewer_daemon())
+            popen.assert_not_called()
 
 
 if __name__ == "__main__":

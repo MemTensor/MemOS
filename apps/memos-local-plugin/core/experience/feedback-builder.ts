@@ -60,6 +60,9 @@ const MIN_SIGNIFICANCE = 0.5;
 const MERGE_SIMILARITY = 0.72;
 const MAX_TITLE_CHARS = 120;
 const MAX_LINE_CHARS = 360;
+// Strict scenarios: only full credit counts as a pass (covers {-1,+1} and 0..1
+// reward scales — anything short of 1 means the task was not fully solved).
+const FULL_PASS_REWARD = 1;
 
 export async function runFeedbackExperience(
   input: FeedbackExperienceInput,
@@ -157,8 +160,15 @@ async function buildDraft(args: {
   const text = cleanLine(args.text, MAX_LINE_CHARS);
   const lower = args.text.toLowerCase();
   const verifier = extractVerifierMeta(args.feedback.raw, lower);
-  const pass = isPositiveSignal(args.feedback, lower, args.classified.shape, verifier);
-  const fail = isNegativeSignal(args.feedback, lower, args.classified.shape, verifier);
+  // Authoritative success/failure from the verifier payload or episode reward.
+  // Strict scenarios (coding/math/verifier): ONLY a full pass is positive — a
+  // partial pass such as 3/4 (or reward 0) is a failure, never a positive exemplar.
+  const outcome = objectiveOutcome(args.feedback.raw, args.episode?.rTask);
+  const lexicalPass = isPositiveSignal(args.feedback, lower, args.classified.shape);
+  const lexicalFail = isNegativeSignal(args.feedback, lower, args.classified.shape);
+  // Objective outcome dominates; lexical signals only decide when it is unknown.
+  const pass = outcome === "pass" || (outcome === "unknown" && lexicalPass && !lexicalFail);
+  const fail = outcome === "fail" || (outcome === "unknown" && lexicalFail);
   const hasAvoid = /\b(avoid|do not|don't|never|stop|wrong|incorrect|failed|fail)\b/i.test(args.text)
     || /不要|别|不能|错误|失败|反例/.test(args.text);
 
@@ -169,21 +179,22 @@ async function buildDraft(args: {
     type = "success_pattern";
     polarity = "positive";
     skillEligible = true;
-  } else if (fail && hasAvoid) {
-    type = "failure_avoidance";
+  } else if (fail) {
+    // Objective failure: never a positive exemplar, never skill-eligible.
+    type = hasAvoid ? "failure_avoidance" : verifier ? "verifier_feedback" : "repair_instruction";
     polarity = "negative";
   } else if (args.classified.shape === "preference") {
     type = "preference";
-    polarity = fail ? "negative" : "neutral";
+    polarity = "neutral";
   } else if (hasAvoid) {
     type = "failure_avoidance";
     polarity = "negative";
-  } else if (args.classified.shape === "correction" || args.classified.shape === "constraint" || fail) {
+  } else if (args.classified.shape === "correction" || args.classified.shape === "constraint") {
     type = "repair_instruction";
-    polarity = fail ? "negative" : "neutral";
+    polarity = "neutral";
   } else if (verifier) {
     type = "verifier_feedback";
-    polarity = pass ? "positive" : fail ? "negative" : "neutral";
+    polarity = "neutral";
   } else {
     type = "repair_instruction";
     polarity = "neutral";
@@ -437,27 +448,25 @@ function isPositiveSignal(
   feedback: FeedbackRow,
   lower: string,
   shape: string,
-  verifier: Record<string, unknown> | null,
 ): boolean {
   if (feedback.polarity === "positive") return true;
   if (shape === "positive") return true;
-  if (verifier && lower.includes("pass")) return true;
-  return /\b(success|succeeded|passed|task succeeded|works well|correct)\b/.test(lower)
-    || /成功|通过|正确|太好了|写得很好/.test(lower);
+  // No substring "pass"/"通过" match here: "passed 3/4" is a partial failure, not
+  // a positive signal. A genuine full pass is decided by objectiveOutcome().
+  return /\b(success|succeeded|works well|looks good|lgtm|correct)\b/.test(lower)
+    || /成功|正确|太好了|写得很好/.test(lower);
 }
 
 function isNegativeSignal(
   feedback: FeedbackRow,
   lower: string,
   shape: string,
-  verifier: Record<string, unknown> | null,
 ): boolean {
   if (feedback.polarity === "negative") return true;
   if (shape === "negative") return true;
   if (shape === "correction") return true;
-  if (verifier && /\b(fail|failed|counterexample)\b/.test(lower)) return true;
-  return /\b(fail|failed|wrong|incorrect|counterexample|not acceptable)\b/.test(lower)
-    || /失败|错误|不对|反例/.test(lower);
+  return /\b(fail|failed|wrong|incorrect|counterexample|not acceptable|timeout|time limit exceeded)\b/.test(lower)
+    || /失败|错误|不对|反例|超时/.test(lower);
 }
 
 function collectTraceIds(input: FeedbackExperienceInput): TraceId[] {
@@ -510,26 +519,88 @@ function extractVerifierMeta(raw: unknown, lower: string): Record<string, unknow
     || lower.includes("verification")
     || lower.includes("counterexample")
     || lower.includes("本任务评为反例");
-  if (!looksVerifier && (typeof raw !== "object" || raw == null)) return null;
+  const src = verifierContainer(raw);
+  if (!looksVerifier && !src) return null;
   const meta: Record<string, unknown> = { source: "feedback" };
   if (looksVerifier) meta.verifier = true;
-  if (typeof raw === "object" && raw != null) {
-    const obj = raw as Record<string, unknown>;
-    for (const key of ["verdict", "score", "reward", "passed", "taskId", "family", "reason"]) {
-      if (obj[key] !== undefined) meta[key] = obj[key];
+  if (src) {
+    // Read from the verifier payload (top-level or nested under `raw.verifier`)
+    // so the discriminative fields (reward/passed/total) are preserved.
+    for (const key of ["verdict", "score", "reward", "passed", "total", "taskId", "family", "reason"]) {
+      if (src[key] !== undefined) meta[key] = src[key];
     }
   }
   return Object.keys(meta).length > 1 || looksVerifier ? meta : null;
 }
 
-function verifierScore(raw: unknown): number {
-  if (typeof raw !== "object" || raw == null) return 0;
-  const obj = raw as Record<string, unknown>;
-  for (const key of ["score", "reward", "r", "rating"]) {
-    const n = Number(obj[key]);
-    if (Number.isFinite(n)) return Math.min(1, Math.abs(n));
+/**
+ * Return the object that actually holds verifier fields. Benchmark gateways nest
+ * them under `raw.verifier`; older/manual feedback puts them at the top level.
+ */
+function verifierContainer(raw: unknown): Record<string, unknown> | null {
+  let obj: unknown = raw;
+  if (typeof obj === "string") {
+    try {
+      obj = JSON.parse(obj);
+    } catch {
+      return null;
+    }
   }
-  return 0;
+  if (typeof obj !== "object" || obj == null) return null;
+  const rec = obj as Record<string, unknown>;
+  if (rec.verifier && typeof rec.verifier === "object") {
+    return rec.verifier as Record<string, unknown>;
+  }
+  return rec;
+}
+
+interface VerifierStats {
+  reward: number | null;
+  passed: number | null;
+  total: number | null;
+}
+
+function verifierStats(raw: unknown): VerifierStats {
+  const src = verifierContainer(raw);
+  const num = (v: unknown): number | null => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  if (!src) return { reward: null, passed: null, total: null };
+  return {
+    reward: num(src.reward ?? src.score ?? src.r ?? src.rating),
+    passed: num(src.passed),
+    total: num(src.total),
+  };
+}
+
+type ObjectiveOutcome = "pass" | "fail" | "unknown";
+
+/**
+ * Authoritative success/failure from the verifier payload, falling back to the
+ * episode reward. Strict scenarios (coding/math/verifier) treat ONLY a full pass
+ * as positive: a partial pass (passed < total) or reward below full credit is a
+ * failure, never a positive exemplar.
+ */
+function objectiveOutcome(raw: unknown, rTask: number | null | undefined): ObjectiveOutcome {
+  const { reward, passed, total } = verifierStats(raw);
+  if (passed != null && total != null && total > 0) {
+    return passed >= total ? "pass" : "fail";
+  }
+  if (reward != null) {
+    // Epsilon guards against a float full-pass (e.g. 0.9999998) being misread as fail.
+    return reward >= FULL_PASS_REWARD - 1e-9 ? "pass" : "fail";
+  }
+  if (typeof rTask === "number") {
+    if (rTask > 0) return "pass";
+    if (rTask < 0) return "fail";
+  }
+  return "unknown";
+}
+
+function verifierScore(raw: unknown): number {
+  const { reward } = verifierStats(raw);
+  return reward == null ? 0 : Math.min(1, Math.abs(reward));
 }
 
 function traceHint(trace: TraceRow): string {

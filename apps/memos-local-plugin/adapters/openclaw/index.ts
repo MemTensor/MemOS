@@ -11,6 +11,7 @@
  *        • `agent_end`           → `onTurnEnd`   (capture + reward chain)
  *        • `before_tool_call`    → duration tracker
  *        • `after_tool_call`     → `recordToolOutcome` (decision-repair)
+ *        • `tool_result_persist` → repeated-failure memos_search hint
  *        • `session_start` / `session_end` → core session lifecycle
  *   5. Register a service so the host can flush + shut down cleanly.
  *
@@ -28,6 +29,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createOpenClawBridge, type BridgeHandle } from "./bridge.js";
+import {
+  acquireOpenClawRuntimeLock,
+  DuplicateOpenClawRuntimeError,
+  type OpenClawRuntimeLockHandle,
+} from "./runtime-lock.js";
 import { registerOpenClawTools } from "./tools.js";
 import type {
   DefinedPluginEntry,
@@ -36,6 +42,7 @@ import type {
 } from "./openclaw-api.js";
 
 import { bootstrapMemoryCoreFull } from "../../core/pipeline/index.js";
+import { resolveHome } from "../../core/config/index.js";
 import { rootLogger, memoryBuffer } from "../../core/logger/index.js";
 import type { MemoryCore } from "../../agent-contract/memory-core.js";
 import { startHttpServer } from "../../server/http.js";
@@ -74,10 +81,9 @@ interface PluginRuntime {
   core: MemoryCore;
   bridge: BridgeHandle;
   /**
-   * The viewer HTTP server. May be `null` if the configured port was
-   * already in use at boot — in that case OpenClaw runs headless
-   * (memory still works, just no UI). We don't retry: the user can
-   * free the port and restart the gateway.
+   * The viewer HTTP server. OpenClaw must own this port; if binding
+   * fails we abort bootstrap instead of running a second headless
+   * runtime that would still register hooks and write memory.
    */
   viewer: ServerHandle | null;
   shutdown: () => Promise<void>;
@@ -124,147 +130,246 @@ function resolveViewerStaticRoot(): string | undefined {
   }
 }
 
-async function createRuntime(api: OpenClawPluginApi): Promise<PluginRuntime> {
+const OPENCLAW_VIEWER_PORT = 18799;
+
+async function createRuntime(
+  api: OpenClawPluginApi,
+  runtimeLock: OpenClawRuntimeLockHandle,
+): Promise<PluginRuntime> {
   const log = rootLogger.child({ channel: "adapters.openclaw" });
   log.info("plugin.bootstrap", { version: PLUGIN_VERSION });
 
-  // Bootstrap core — returns `{ core, home, config }` so we know which
-  // viewer port to bind.
-  const { core, config, home } = await bootstrapMemoryCoreFull({
-    agent: "openclaw",
-    namespace: { agentKind: "openclaw", profileId: "main" },
-    pkgVersion: PLUGIN_VERSION,
-  });
-  await core.init();
-
-  // Anonymous ARMS telemetry. Mirrors `bridge.cts`'s setup so OpenClaw
-  // emits the same `plugin_started` / `daily_active` / `memory_search`
-  // / `memory_ingested` / `feedback_submitted` / `viewer_opened`
-  // events under the same `memos_local_hermes_v2` group as Hermes.
-  // Without this every OpenClaw user was invisible in ARMS — only the
-  // hermes-side `bridge.cts` was emitting events.
-  //
-  // Order matters:
-  //   1. `new Telemetry` reads `config.telemetry` and the credentials
-  //      file under the plugin source root.
-  //   2. `bindTelemetry` must run before any turn so that
-  //      `memory-core.ts`'s `if (telemetry)` guards see a non-null
-  //      instance on the very first `onTurnStart`.
-  //   3. `trackPluginStarted` immediately after also fires
-  //      `daily_active` (with persistent dedup; see sender.ts).
-  // `core.shutdown()` flushes telemetry as part of its `finally`
-  // block, so we don't need to await `telemetry.shutdown()` here.
-  const telemetry = new Telemetry(
-    config.telemetry ?? {},
-    home.root,
-    PLUGIN_VERSION,
-    rootLogger.child({ channel: "core.telemetry" }),
-    resolvePluginRoot(),
-  );
-  (
-    core as { bindTelemetry?: (t: InstanceType<typeof Telemetry>) => void }
-  ).bindTelemetry?.(telemetry);
-  telemetry.trackPluginStarted("openclaw");
-
-  const bridge = createOpenClawBridge({
-    agent: "openclaw",
-    core,
-    log: api.logger,
-  });
-
-  // OpenClaw's viewer port is fixed at :18799 (hermes uses :18800).
-  // We ignore `config.viewer.port` for the same reason `bridge.cts`
-  // does: old config.yaml files baked in the legacy single-port
-  // :18799 used by both agents, and we don't want hermes to collide
-  // with us because of stale YAML.
-  const OPENCLAW_VIEWER_PORT = 18799;
+  let core: MemoryCore | null = null;
   let viewer: ServerHandle | null = null;
-  try {
-    viewer = await startHttpServer(
-      {
-        core,
-        home,
-        logTail: () => memoryBuffer().tail({ limit: 200 }),
-        telemetry,
-      },
-      {
-        port: OPENCLAW_VIEWER_PORT,
-        host: config.viewer.bindHost,
-        staticRoot: resolveViewerStaticRoot(),
-        agent: "openclaw",
-      },
-    );
-    api.logger.info(`memos-local: viewer live at ${viewer.url}`);
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e?.code === "EADDRINUSE") {
-      api.logger.warn(
-        `memos-local: viewer port :${OPENCLAW_VIEWER_PORT} is already in use — ` +
-          `running headless. Free the port and restart the gateway to expose it.`,
-      );
-    } else {
-      api.logger.error("memos-local: viewer failed to start", {
-        err: e?.message ?? String(err),
-      });
-    }
-  }
 
-  return {
-    core,
-    bridge,
-    viewer,
-    async shutdown() {
-      if (viewer) {
+  try {
+    // Bootstrap core — returns `{ core, home, config }` so we know which
+    // viewer port to bind.
+    const boot = await bootstrapMemoryCoreFull({
+      agent: "openclaw",
+      namespace: { agentKind: "openclaw", profileId: "main" },
+      pkgVersion: PLUGIN_VERSION,
+    });
+    core = boot.core;
+    const { config, home } = boot;
+    await core.init();
+
+    // Anonymous ARMS telemetry. Mirrors `bridge.cts`'s setup so OpenClaw
+    // emits the same `plugin_started` / `daily_active` / `memos_search`
+    // / `memory_ingested` / `feedback_submitted` / `viewer_opened`
+    // events under the same `memos_local_hermes_v2` group as Hermes.
+    // Without this every OpenClaw user was invisible in ARMS — only the
+    // hermes-side `bridge.cts` was emitting events.
+    //
+    // Order matters:
+    //   1. `new Telemetry` reads `config.telemetry` and the credentials
+    //      file under the plugin source root.
+    //   2. `bindTelemetry` must run before any turn so that
+    //      `memory-core.ts`'s `if (telemetry)` guards see a non-null
+    //      instance on the very first `onTurnStart`.
+    //   3. `trackPluginStarted` immediately after also fires
+    //      `daily_active` (with persistent dedup; see sender.ts).
+    // `core.shutdown()` flushes telemetry as part of its `finally`
+    // block, so we don't need to await `telemetry.shutdown()` here.
+    const telemetry = new Telemetry(
+      config.telemetry ?? {},
+      home.root,
+      PLUGIN_VERSION,
+      rootLogger.child({ channel: "core.telemetry" }),
+      resolvePluginRoot(),
+    );
+    (
+      core as { bindTelemetry?: (t: InstanceType<typeof Telemetry>) => void }
+    ).bindTelemetry?.(telemetry);
+    telemetry.trackPluginStarted("openclaw");
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core,
+      log: api.logger,
+    });
+
+    // OpenClaw's viewer port is fixed at :18799 (hermes uses :18800).
+    // We ignore `config.viewer.port` for the same reason `bridge.cts`
+    // does: old config.yaml files baked in the legacy single-port
+    // :18799 used by both agents, and we don't want hermes to collide
+    // with us because of stale YAML.
+    try {
+      viewer = await startHttpServer(
+        {
+          core,
+          home,
+          logTail: () => memoryBuffer().tail({ limit: 200 }),
+          telemetry,
+        },
+        {
+          port: OPENCLAW_VIEWER_PORT,
+          host: config.viewer.bindHost,
+          staticRoot: resolveViewerStaticRoot(),
+          agent: "openclaw",
+        },
+      );
+      api.logger.info(`memos-local: viewer live at ${viewer.url}`);
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e?.code === "EADDRINUSE") {
+        api.logger.error(
+          `memos-local: viewer port :${OPENCLAW_VIEWER_PORT} is already in use — ` +
+            `refusing duplicate/headless OpenClaw runtime.`,
+        );
+      } else {
+        api.logger.error("memos-local: viewer failed to start", {
+          err: e?.message ?? String(err),
+        });
+      }
+      throw err;
+    }
+
+    const runtimeCore = core;
+    const runtimeViewer = viewer;
+    return {
+      core: runtimeCore,
+      bridge,
+      viewer: runtimeViewer,
+      async shutdown() {
+        if (runtimeViewer) {
+          try {
+            await runtimeViewer.close();
+          } catch (err) {
+            api.logger.warn("memos-local: viewer close error", {
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
         try {
-          await viewer.close();
+          await runtimeCore.shutdown();
         } catch (err) {
-          api.logger.warn("memos-local: viewer close error", {
+          api.logger.warn("memos-local: shutdown error", {
             err: err instanceof Error ? err.message : String(err),
           });
         }
-      }
+        runtimeLock.release();
+      },
+    };
+  } catch (err) {
+    await closeViewerAfterFailedBootstrap(viewer);
+    if (core) {
       try {
         await core.shutdown();
-      } catch (err) {
-        api.logger.warn("memos-local: shutdown error", {
-          err: err instanceof Error ? err.message : String(err),
-        });
+      } catch {
+        /* best-effort cleanup after failed bootstrap */
       }
-    },
-  };
+    }
+    runtimeLock.release();
+    throw err;
+  }
+}
+
+async function closeViewerAfterFailedBootstrap(
+  viewer: ServerHandle | null,
+): Promise<void> {
+  if (!viewer) return;
+  try {
+    await viewer.close();
+  } catch {
+    /* best-effort cleanup after failed bootstrap */
+  }
 }
 
 // ─── Registration ──────────────────────────────────────────────────────────
 
+/**
+ * Detect if running in diagnostic mode (e.g., `openclaw doctor`).
+ *
+ * Diagnostic processes should skip runtime lock acquisition to avoid
+ * false positive DuplicateOpenClawRuntimeError when the gateway is running.
+ */
+function isDiagnosticMode(): boolean {
+  // Check for OPENCLAW_DIAGNOSTIC_MODE environment variable
+  if (process.env.OPENCLAW_DIAGNOSTIC_MODE === "1" ||
+      process.env.OPENCLAW_DIAGNOSTIC_MODE === "true") {
+    return true;
+  }
+
+  // Check if process title or argv contains "doctor"
+  if (process.title?.includes("doctor")) {
+    return true;
+  }
+
+  if (process.argv.some(arg => arg.includes("doctor"))) {
+    return true;
+  }
+
+  return false;
+}
+
 function register(api: OpenClawPluginApi): void {
+  const diagnosticMode = isDiagnosticMode();
+
+  let runtimeLock: OpenClawRuntimeLockHandle;
+  try {
+    runtimeLock = acquireOpenClawRuntimeLock({
+      home: resolveHome("openclaw"),
+      pluginId: PLUGIN_ID,
+      version: PLUGIN_VERSION,
+      viewerPort: OPENCLAW_VIEWER_PORT,
+      skipLock: diagnosticMode,
+    });
+
+    if (diagnosticMode) {
+      api.logger.info("memos-local: running in diagnostic mode (lock acquisition skipped)");
+    }
+  } catch (err) {
+    const duplicate = err instanceof DuplicateOpenClawRuntimeError;
+    api.logger.error("memos-local: duplicate OpenClaw runtime blocked", {
+      err: err instanceof Error ? err.message : String(err),
+      code: duplicate ? err.code : (err as { code?: unknown }).code,
+    });
+    throw err;
+  }
+
   // 1. Memory capability (prompt prelude) — register synchronously so the
   //    host immediately knows who owns the memory slot, even if bootstrap
   //    fails later.
   api.registerMemoryCapability?.({
     promptBuilder: ({ availableTools }) => {
-      const hasSearch = availableTools.has("memory_search");
-      const hasGet = availableTools.has("memory_get");
-      const hasTimeline = availableTools.has("memory_timeline");
-      const hasEnv = availableTools.has("memory_environment");
-      if (!hasSearch && !hasGet && !hasTimeline && !hasEnv) return [];
+      const hasSearch = availableTools.has("memos_search");
+      const hasGet = availableTools.has("memos_get");
+      const hasTimeline = availableTools.has("memos_timeline");
+      const hasEnv = availableTools.has("memos_environment");
+      const hasSkillList = availableTools.has("memos_skill_list");
+      const hasSkillGet = availableTools.has("memos_skill_get");
+      if (!hasSearch && !hasGet && !hasTimeline && !hasEnv && !hasSkillList && !hasSkillGet) {
+        return [];
+      }
       const lines: string[] = [
         "## Memory (MemOS Local)",
         "This workspace uses MemOS Local — a self-evolving layered memory (L1/L2/L3 + Skills).",
       ];
       if (hasSearch) {
         lines.push(
-          "- `memory_search` — search prior traces, policies, world models, and skills.",
+          "- `memos_search` — search prior traces, policies, world models, and skills.",
         );
       }
       if (hasEnv) {
         lines.push(
-          "- `memory_environment` — list / query accumulated environment knowledge " +
+          "- `memos_environment` — list / query accumulated environment knowledge " +
             "(project layout, behavioural rules, constraints). Use before exploring an unfamiliar area.",
         );
       }
       if (hasGet || hasTimeline) {
         lines.push(
-          "- `memory_get` / `memory_timeline` — fetch full bodies + episode timelines.",
+          "- `memos_get` / `memos_timeline` — fetch full bodies + episode timelines.",
+        );
+      }
+      if (hasSkillList) {
+        lines.push(
+          "- `memos_skill_list` — list MemOS-crystallized skills learned from prior runs.",
+        );
+      }
+      if (hasSkillGet) {
+        lines.push(
+          "- `memos_skill_get` — load the full invocation guide for a MemOS skill.",
         );
       }
       lines.push(
@@ -280,15 +385,17 @@ function register(api: OpenClawPluginApi): void {
   //    tools register a shell now and wait for runtime inside execute().
   let runtime: PluginRuntime | null = null;
   let bootstrapError: Error | null = null;
-  const bootstrapPromise = createRuntime(api)
+  const bootstrapPromise = createRuntime(api, runtimeLock)
     .then((r) => {
       runtime = r;
       api.logger.info("memos-local: plugin ready");
     })
     .catch((err) => {
       bootstrapError = err instanceof Error ? err : new Error(String(err));
+      const duplicate = err instanceof DuplicateOpenClawRuntimeError;
       api.logger.error("memos-local: bootstrap failed", {
         err: bootstrapError.message,
+        code: duplicate ? err.code : (err as { code?: unknown }).code,
       });
     });
 
@@ -328,6 +435,12 @@ function register(api: OpenClawPluginApi): void {
     const r = await ensureRuntime();
     if (!r) return;
     await r.bridge.handleAfterToolCall(event, ctx);
+  });
+
+  api.on("tool_result_persist", async (event, ctx) => {
+    const r = await ensureRuntime();
+    if (!r) return;
+    return r.bridge.handleToolResultPersist(event, ctx);
   });
 
   api.on("session_start", async (event, ctx) => {

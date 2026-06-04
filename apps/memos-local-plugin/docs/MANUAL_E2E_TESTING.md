@@ -382,16 +382,16 @@ curl -s -b "memos_sess=$SESS" 'http://127.0.0.1:18799/api/v1/policies' \
 
 L3 环境知识会在每次 turn 开始时通过 `prependContext` 注入 prompt
 （见 `adapters/openclaw/bridge.ts::renderContextBlock`）。不需要额外
-验证；看 memory_search api_logs 的 `candidates[]` 里出现 `tier=3,
+验证；看 memos_search api_logs 的 `candidates[]` 里出现 `tier=3,
 refKind=world-model` 即可。
 
-此外新增了 `memory_environment` 工具，让 agent 可以在 tool-call
+此外新增了 `memos_environment` 工具，让 agent 可以在 tool-call
 阶段按需再查一次环境知识：
 
 ```bash
 # agent 调用示例（通过 openclaw）
 openclaw agent --session-id env-probe-$(date +%s) \
-  --message "先用 memory_environment 查这个项目相关的环境知识，再回答：项目里 pytest 测试应该放在哪个目录？" \
+  --message "先用 memos_environment 查这个项目相关的环境知识，再回答：项目里 pytest 测试应该放在哪个目录？" \
   --timeout 90 --json
 ```
 

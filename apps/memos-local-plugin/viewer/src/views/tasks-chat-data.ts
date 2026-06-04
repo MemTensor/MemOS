@@ -283,7 +283,7 @@ export function assignParallelBatches(messages: ChatMsg[]): void {
       !messages[j + 1]!.toolThinking &&
       messages[j]!.ts != null &&
       messages[j + 1]!.ts != null &&
-      messages[j + 1]!.ts - messages[j]!.ts < PARALLEL_BATCH_GAP_MS &&
+      (messages[j + 1]!.ts ?? 0) - (messages[j]!.ts ?? 0) < PARALLEL_BATCH_GAP_MS &&
       toolsOverlap(messages[j]!, messages[j + 1]!)
     ) {
       j++;

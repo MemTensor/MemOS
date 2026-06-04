@@ -1,4 +1,4 @@
-import type { EmbeddingVector, PolicyId, PolicyRow } from "../../types.js";
+import type { EmbeddingVector, PolicyId, PolicyRow, ShareScope } from "../../types.js";
 import type { PolicyListFilter, StorageDb } from "../types.js";
 import { buildInsert, buildUpdate } from "../tx.js";
 import { scanAndTopK, type VectorHit } from "../vector.js";
@@ -311,7 +311,7 @@ export function makePoliciesRepo(db: StorageDb) {
     updateShare(
       id: PolicyId,
       share: {
-        scope: "private" | "local" | "public" | "hub" | null;
+        scope: ShareScope | null;
         target?: string | null;
         sharedAt?: number | null;
       },
@@ -507,7 +507,7 @@ function mapRow(r: RawPolicyRow): PolicyRow {
     share:
       r.share_scope != null
         ? {
-            scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub",
+            scope: normalizeShareForStorage(r.share_scope) as ShareScope,
             target: r.share_target,
             sharedAt: r.shared_at,
           }
