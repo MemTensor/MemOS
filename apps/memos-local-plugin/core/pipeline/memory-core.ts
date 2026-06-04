@@ -3158,7 +3158,7 @@ export function createMemoryCore(
     includeAllNamespaces?: boolean;
   }): Promise<TraceDTO[]> {
     ensureLive();
-    const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
+    const limit = Math.max(1, Math.min(10_000, input?.limit ?? 50));
     const offset = Math.max(0, input?.offset ?? 0);
     const needle = (input?.q ?? "").trim().toLowerCase();
 

@@ -251,7 +251,7 @@ export function makeTracesRepo(db: StorageDb) {
         Object.assign(params, visibility.params);
       }
       const where = joinWhere(fragments);
-      const limit = Math.max(1, Math.min(500, filter.limit ?? 50));
+      const limit = Math.max(1, Math.min(10_000, filter.limit ?? 50));
       const offset = Math.max(0, filter.offset ?? 0);
       params.limit = limit;
       params.offset = offset;
