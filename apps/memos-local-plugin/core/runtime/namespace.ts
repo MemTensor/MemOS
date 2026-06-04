@@ -112,6 +112,11 @@ export function visibilityWhere(
       `((` +
       `${ownerKind} = @vis_owner_agent_kind AND ` +
       `COALESCE(${ownerProfile}, @vis_default_profile_id) = @vis_owner_profile_id` +
+      `) OR (` +
+      `${ownerKind} = @vis_owner_agent_kind AND ` +
+      `@vis_owner_agent_kind = 'openclaw' AND ` +
+      `@vis_owner_profile_id IN ('main', @vis_default_profile_id) AND ` +
+      `COALESCE(${ownerProfile}, @vis_default_profile_id) IN ('main', @vis_default_profile_id)` +
       `) OR ${ownerKind} IS NULL` +
       ` OR ${ownerKind} = 'unknown'` +
       ` OR (${shareScope} IN ('local', 'public') AND ${ownerKind} = @vis_owner_agent_kind)` +
@@ -155,9 +160,16 @@ export function isVisibleTo(
   }
   const normalized = normalizeNamespace(ns, ns.agentKind);
   const sameAgentFramework = row.ownerAgentKind === normalized.agentKind;
+  const rowProfile = row.ownerProfileId ?? DEFAULT_PROFILE_ID;
+  const normalizedProfile = normalized.profileId;
   const sameAgent =
     sameAgentFramework &&
-    (row.ownerProfileId ?? DEFAULT_PROFILE_ID) === normalized.profileId;
+    (rowProfile === normalizedProfile ||
+      isLegacyOpenClawDefaultMainPair(
+        normalized.agentKind,
+        rowProfile,
+        normalizedProfile,
+      ));
   if (sameAgent) return true;
   if (scope === "public") return sameAgentFramework;
   if (scope === "hub") return true;
@@ -197,6 +209,18 @@ function deriveHermesProfileId(hermesHome: string | undefined): string | undefin
   if (match?.[1]) return cleanId(match[1]);
   if (normalized.endsWith("/.hermes")) return DEFAULT_PROFILE_ID;
   return undefined;
+}
+
+function isLegacyOpenClawDefaultMainPair(
+  agentKind: string,
+  a: string,
+  b: string,
+): boolean {
+  if (agentKind !== "openclaw") return false;
+  return (
+    (a === DEFAULT_PROFILE_ID && b === "main") ||
+    (a === "main" && b === DEFAULT_PROFILE_ID)
+  );
 }
 
 function cleanText(value: unknown): string | undefined {

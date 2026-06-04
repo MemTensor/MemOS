@@ -84,6 +84,12 @@ export interface InjectorInput {
    * packets as advisory method recall rather than established user facts.
    */
   standaloneMathFinalAnswer?: boolean;
+  /**
+   * Deterministic task protocol inferred by core retrieval from the current
+   * prompt shape. This is adapter-agnostic and complements retrieved memory;
+   * when no historical snippets match, the host still receives the protocol.
+   */
+  taskProtocol?: string | null;
 }
 
 export interface InjectorResult {
@@ -122,6 +128,7 @@ export function toPacket(input: InjectorInput): InjectorResult {
     skillMode,
     decisionGuidance: input.decisionGuidance,
     standaloneMathFinalAnswer,
+    taskProtocol: input.taskProtocol,
   });
 
   const packet: InjectionPacket = {
@@ -445,19 +452,24 @@ function renderWholePacket(
     skillMode: SkillInjectionMode;
     decisionGuidance?: CollectedGuidance;
     standaloneMathFinalAnswer?: boolean;
+    taskProtocol?: string | null;
   },
 ): string {
   const standaloneMathFinalAnswer = opts.standaloneMathFinalAnswer === true;
+  const taskProtocol = opts.taskProtocol?.trim();
   const guidanceBlock = renderDecisionGuidance(
     opts.decisionGuidance,
     standaloneMathFinalAnswer,
   );
-  if (snippets.length === 0 && !guidanceBlock) return "";
+  if (snippets.length === 0 && !guidanceBlock && !taskProtocol) return "";
 
-  const header = standaloneMathFinalAnswer
-    ? MATH_HEADER_BY_REASON[reason] ?? MATH_HEADER_BY_REASON.turn_start
-    : HEADER_BY_REASON[reason] ?? HEADER_BY_REASON.turn_start;
+  const header = taskProtocol
+    ? TASK_PROTOCOL_HEADER
+    : standaloneMathFinalAnswer
+      ? MATH_HEADER_BY_REASON[reason] ?? MATH_HEADER_BY_REASON.turn_start
+      : HEADER_BY_REASON[reason] ?? HEADER_BY_REASON.turn_start;
   const parts: string[] = [header];
+  if (taskProtocol) parts.push(taskProtocol);
 
   const skills = snippets.filter((s) => s.refKind === "skill");
   const episodes = snippets.filter((s) => s.refKind === "episode");
@@ -636,6 +648,11 @@ const HEADER_BY_REASON: Record<RetrievalReason, string> = {
     "You have failed this tool multiple times in a row. Below are preferred / avoided actions\n" +
     "distilled from similar past situations. Please adapt your plan accordingly.",
 };
+
+const TASK_PROTOCOL_HEADER =
+  "# Current task protocol and recalled memories\n\n" +
+  "IMPORTANT: The task protocol below is derived from the current user prompt, not from previous conversations.\n" +
+  "Treat it as current execution guidance. Any recalled memories that follow are advisory; verify them against the current prompt and repository before using them.";
 
 const MATH_HEADER_BY_REASON: Record<RetrievalReason, string> = {
   turn_start:
