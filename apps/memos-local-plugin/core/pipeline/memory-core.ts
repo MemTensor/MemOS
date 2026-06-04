@@ -924,6 +924,19 @@ export function createMemoryCore(
       });
     }
 
+    // Periodic rescore timer for episodes that miss the startup scan or
+    // retry of failed reward runs. 10-minute interval is safe because
+    // autoRescoreDirtyClosedEpisodes has its own 30-second dedup guard.
+    const rescoreInterval = setInterval(() => {
+      void autoRescoreDirtyClosedEpisodes().catch((err) => {
+        log.debug("periodic_rescore.error", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, 10 * 60 * 1000);
+    // Mark as unref so the timer doesn't block shutdown
+    (rescoreInterval as unknown as { unref?: () => void }).unref?.();
+
     // Wire `memory_add` into the api_logs table on EVERY turn so the
     // Logs viewer shows per-turn capture activity. `capture.lite.done`
     // fires once per `onTurnEnd` (the per-turn lite capture path);
@@ -1272,7 +1285,9 @@ export function createMemoryCore(
     if (
       ep.rTask == null &&
       (ep.traceIds?.length ?? 0) > 0 &&
-      (meta.closeReason === "finalized" || meta.recoveryReason === "missed_session_end")
+      (meta.closeReason === "finalized" ||
+        meta.closeReason === "abandoned" ||
+        meta.recoveryReason === "missed_session_end")
     ) {
       return true;
     }
