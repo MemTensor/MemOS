@@ -5506,11 +5506,11 @@ export function deriveTurnCount(
 // The old code tripped every rTask < 0 (even -0.05) into the "反例"
 // bucket — a single LLM misread on a multi-topic episode was enough to
 // flag a normal task as a negative example. Tightening the floor to
-// −0.5 means only genuinely bad outcomes (clear user correction, wrong
+// −0.15 means clearly negative outcomes (user correction, wrong
 // action, damage) surface as 反例; mild negative judgments fall into
 // the softer "below threshold" bucket and the user doesn't get
 // shouted at.
-export const R_NEGATIVE_FLOOR = -0.5;
+export const R_NEGATIVE_FLOOR = -0.15;
 export const R_BELOW_THRESHOLD = 0.15; // aligned with `algorithm.skill.minGain`
 
 export function deriveSkillStatus(

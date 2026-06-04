@@ -16,7 +16,7 @@ export interface OutcomeThresholds {
 
 export const DEFAULT_OUTCOME_THRESHOLDS: OutcomeThresholds = {
   successThreshold: 0.5,
-  failureThreshold: -0.5,
+  failureThreshold: -0.15,
 };
 
 /**

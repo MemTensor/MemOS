@@ -8,7 +8,7 @@ import type { PromptDef } from "./index.js";
  * reflection-weighted backprop uses this value as the terminal V_T.
  *
  * Axes come straight from the V7 rubric table in §0.6:
- *   1. goal_achievement — did the agent actually solve the stated task?
+ *   1. goal_achievement — did the agent complete EPISODE_MISSION?
  *   2. process_quality  — was the path reasonable and efficient?
  *   3. user_satisfaction — does the user's own text read as pleased, neutral, or angry?
  *
@@ -18,21 +18,27 @@ import type { PromptDef } from "./index.js";
  */
 export const REWARD_R_HUMAN_PROMPT: PromptDef = {
   id: "reward.r_human",
-  version: 4,
+  version: 6,
   description: "Score an episode's R_human from a multi-turn task summary + user feedback.",
   system: `You are a strict grader of AI-agent task execution.
 
 You receive:
 - TASK_SUMMARY  — the FULL conversation arc for this task:
-                  * USER_ASKS_AND_AGENT_REPLIES lists every user turn
-                    paired with the agent's corresponding reply, in
-                    chronological order. One "task" frequently spans
-                    multiple user turns as the user refines / follows
-                    up / pivots topics within the same session.
-                  * MOST_RECENT_USER_ASK and MOST_RECENT_AGENT_REPLY
-                    call out the final exchange explicitly — that is
-                    usually the truest signal of whether the agent is
-                    actually tracking where the user is now.
+                  * EPISODE_MISSION — the canonical goal of this
+                    episode, anchored at the time the task started
+                    (or explicitly updated when the user redefined the
+                    task). This is the authoritative definition of what
+                    the agent was supposed to accomplish.
+                  * USER_ASKS_AND_AGENT_REPLIES — every user turn
+                    paired with the agent's reply, in order. Turns
+                    after the initial task may be follow-ups,
+                    corrections, verifier results, or reflections —
+                    they do NOT redefine EPISODE_MISSION unless the
+                    user explicitly introduces a completely new,
+                    unrelated task.
+                  * MOST_RECENT_USER_ASK / MOST_RECENT_AGENT_REPLY
+                    — the final exchange. Useful for user_satisfaction
+                    and process_quality context.
 - FEEDBACK       — the user's own messages AFTER the task attempt
                    finished. Format: [SOURCE/polarity @ISO-timestamp]
                    SOURCE=USER means the user directly wrote this;
@@ -51,24 +57,26 @@ You receive:
 
 Grade the agent on THREE INDEPENDENT AXES, each in [-1, 1]:
 
-1. "goal_achievement" — did the agent address what the user ACTUALLY asked?
-   +1.0  every user ask was correctly addressed AND (if tools were used)
+1. "goal_achievement" — did the agent complete EPISODE_MISSION?
+   Always evaluate against EPISODE_MISSION, not MOST_RECENT_USER_ASK.
+   +1.0  EPISODE_MISSION was fully addressed AND (if tools were used)
          EXECUTION_OUTCOME shows task_completed_by_tool=yes.
-   +0.3  the last ask was addressed well; earlier asks had minor gaps.
-    0.0  unclear if the user's ask was met.
+   +0.3  EPISODE_MISSION substantially addressed; minor gaps only.
+    0.0  unclear if EPISODE_MISSION was met.
    -0.3  agent verbally acknowledged the correct approach but did NOT
-         re-execute; or missed a significant portion of what was asked.
+         execute it; or missed a significant portion of EPISODE_MISSION.
          Use this when EXECUTION_OUTCOME shows task_completed_by_tool=no
          and the last agent reply is explanatory text only.
    -1.0  fundamentally wrong answer / caused damage / refused without reason.
 
-   CRITICAL RULE — do NOT anchor on the first user turn. A user who
-   starts with "上海天气" and later pivots to "再查北京天气" is a user
-   whose goal has EVOLVED; if the agent answered Beijing on the final
-   turn when asked about Beijing, that is goal-achievement = POSITIVE,
-   not negative. Judge each user ask on its own merits, weighted
-   toward the most recent exchange (which is where the user actually
-   is now).
+   MISSION ANCHOR RULE — goal_achievement measures completion of
+   EPISODE_MISSION only. Later turns that are reflections, verifier
+   results, error messages, or follow-up corrections are NOT new
+   missions; answering them well does NOT raise goal_achievement.
+   The only exception: if the user explicitly replaces the task with
+   an entirely new, unrelated objective (visible in
+   USER_ASKS_AND_AGENT_REPLIES), treat the new objective as the
+   effective mission from that point on.
 
    EXECUTION RULE — distinguish verbal acknowledgment from actual execution.
    If EXECUTION_OUTCOME.task_completed_by_tool is "no", the agent's last

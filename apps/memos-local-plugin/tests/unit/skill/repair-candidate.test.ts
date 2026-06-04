@@ -20,6 +20,7 @@ const namespace: RuntimeNamespace = {
   profileId: "default",
   workspaceId: "workspace",
 };
+const repairConfig = { evidenceLimit: 2 };
 
 function feedback(partial: Partial<FeedbackRow> = {}): FeedbackRow {
   return {
@@ -53,6 +54,15 @@ async function makeConstructiveNegative(handle: TmpDbHandle, trace: TraceRow): P
   return result.policyId!;
 }
 
+function repairDeps(handle: TmpDbHandle) {
+  return {
+    repos: handle.repos,
+    config: repairConfig,
+    embedder: null,
+    now: () => NOW,
+  };
+}
+
 describe("repair candidate minting", () => {
   let handle: TmpDbHandle;
   let trace: TraceRow;
@@ -78,11 +88,7 @@ describe("repair candidate minting", () => {
     const policy = handle.repos.policies.getById(policyId)!;
     expect(isRepairCandidatePolicy(policy)).toBe(true);
 
-    const skillId = mintRepairCandidate(policy, {
-      repos: handle.repos,
-      embedder: null,
-      now: () => NOW,
-    });
+    const skillId = mintRepairCandidate(policy, repairDeps(handle));
     expect(skillId).toBeTruthy();
 
     const skill = handle.repos.skills.getById(skillId!)!;
@@ -91,17 +97,51 @@ describe("repair candidate minting", () => {
     expect(skill.repairOrigin).toBe(true);
     expect(skill.strictTrial).toBe(true); // verifier origin → full-pass-only trials
     expect(skill.sourcePolicyIds).toEqual([policyId]);
+    expect(skill.evidenceAnchors.length).toBeLessThanOrEqual(repairConfig.evidenceLimit);
     expect(skill.trialsAttempted).toBe(0);
     expect(skill.invocationGuide.toLowerCase()).toContain("fft");
+  });
+
+  it("selects bounded representative evidence instead of copying policy sourceTraceIds", async () => {
+    const traceIds: TraceRow["id"][] = [trace.id];
+    for (let i = 1; i <= 4; i++) {
+      const extra = seedTrace(handle, {
+        id: `tr_feedback_${i}`,
+        episodeId: "ep_feedback",
+        sessionId: "se_feedback",
+        userText: i === 3 ? "Timeout error from quadratic bitset approach" : `padding turn ${i}`,
+        agentText: i === 3 ? "PIVOTAL repair should use FFT autocorrelation" : `padding answer ${i}`,
+        reflection: i === 3 ? "PIVOTAL" : null,
+        vec: vec([1, 0, 0]),
+      });
+      traceIds.push(extra.id);
+    }
+
+    const result = await runFeedbackExperience(
+      {
+        feedback: feedback({ id: "fb_many" as FeedbackRow["id"] }),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds, rTask: -0.51 },
+        trace,
+      },
+      { repos: handle.repos, embedder: null, namespace, now: () => NOW },
+    );
+    const policy = handle.repos.policies.getById(result.policyId!)!;
+    expect(policy.sourceTraceIds).toEqual(traceIds);
+
+    const skillId = mintRepairCandidate(policy, repairDeps(handle));
+    const skill = handle.repos.skills.getById(skillId!)!;
+    expect(skill.evidenceAnchors.length).toBeLessThanOrEqual(repairConfig.evidenceLimit);
+    expect(skill.evidenceAnchors).not.toEqual(policy.sourceTraceIds);
+    expect(skill.evidenceAnchors).toContain("tr_feedback_3" as TraceRow["id"]);
   });
 
   it("dedups: a second mint for the same policy returns null (rebuild path owns it)", async () => {
     const policyId = await makeConstructiveNegative(handle, trace);
     const policy = handle.repos.policies.getById(policyId)!;
 
-    const first = mintRepairCandidate(policy, { repos: handle.repos, embedder: null, now: () => NOW });
+    const first = mintRepairCandidate(policy, repairDeps(handle));
     expect(first).toBeTruthy();
-    const second = mintRepairCandidate(policy, { repos: handle.repos, embedder: null, now: () => NOW });
+    const second = mintRepairCandidate(policy, repairDeps(handle));
     expect(second).toBeNull();
     expect(handle.repos.skills.list({ limit: 50 }).length).toBe(1);
   });
@@ -120,7 +160,7 @@ describe("repair candidate minting", () => {
     const policy = handle.repos.policies.getById(result.policyId!)!;
     expect(isRepairCandidatePolicy(policy)).toBe(true);
 
-    const skillId = mintRepairCandidate(policy, { repos: handle.repos, embedder: null, now: () => NOW });
+    const skillId = mintRepairCandidate(policy, repairDeps(handle));
     expect(skillId).toBeTruthy();
     const skill = handle.repos.skills.getById(skillId!)!;
     expect(skill.name).toMatch(/^[a-z0-9_]+$/);
@@ -144,6 +184,6 @@ describe("repair candidate minting", () => {
     );
     const policy = handle.repos.policies.getById(result.policyId!)!;
     expect(isRepairCandidatePolicy(policy)).toBe(false);
-    expect(mintRepairCandidate(policy, { repos: handle.repos, embedder: null, now: () => NOW })).toBeNull();
+    expect(mintRepairCandidate(policy, repairDeps(handle))).toBeNull();
   });
 });

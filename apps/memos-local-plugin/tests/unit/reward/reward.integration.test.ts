@@ -202,7 +202,7 @@ describe("reward/integration", () => {
 
     const llm = fakeLlm({
       completeJson: {
-        "reward.reward.r_human.v4": {
+        "reward.reward.r_human.v7": {
           goal_achievement: 0.9,
           process_quality: 0.7,
           user_satisfaction: 0.8,
@@ -219,7 +219,7 @@ describe("reward/integration", () => {
       llm,
       bus,
       cfg: cfg(),
-      outcomeThresholds: { successThreshold: 0.5, failureThreshold: -0.5 },
+      outcomeThresholds: { successThreshold: 0.5, failureThreshold: -0.15 },
       now: () => NOW,
     });
 

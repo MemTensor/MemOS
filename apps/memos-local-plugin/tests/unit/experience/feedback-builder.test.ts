@@ -157,6 +157,51 @@ describe("feedback experience builder", () => {
     expect(row?.skillEligible).toBe(false);
   });
 
+  it("does not mark verifier reflection prompts as skill-eligible even on full pass", async () => {
+    const result = await runFeedbackExperience(
+      {
+        feedback: feedback({
+          id: "fb_full_reflect" as FeedbackRow["id"],
+          polarity: "positive",
+          rationale:
+            "Verifier feedback for the previous attempt. Verifier reward: 1.0. passed: 4, total: 4. Please briefly reflect on what you would keep and what you would improve next time.",
+          raw: {
+            source: "evoagentbench_gateway_manual_feedback",
+            verifier: { reward: 1, passed: 4, total: 4 },
+          },
+        }),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: 1 },
+        trace,
+      },
+      { repos: handle.repos, embedder: fakeEmbedder(), namespace, now: () => NOW },
+    );
+
+    const row = handle.repos.policies.getById(result.policyId!)!;
+    expect(row.experienceType).toBe("success_pattern");
+    expect(row.evidencePolarity).toBe("positive");
+    expect(row.skillEligible).toBe(false);
+  });
+
+  it("does not mark HEARTBEAT_OK verifier responses as skill-eligible", async () => {
+    const result = await runFeedbackExperience(
+      {
+        feedback: feedback({
+          id: "fb_heartbeat" as FeedbackRow["id"],
+          polarity: "positive",
+          rationale: "Verifier feedback: success. HEARTBEAT_OK",
+          raw: { source: "verifier", verifier: { reward: 1, passed: 1, total: 1 } },
+        }),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: 1 },
+        trace,
+      },
+      { repos: handle.repos, embedder: fakeEmbedder(), namespace, now: () => NOW },
+    );
+
+    const row = handle.repos.policies.getById(result.policyId!)!;
+    expect(row.experienceType).toBe("success_pattern");
+    expect(row.skillEligible).toBe(false);
+  });
+
   it("records the suggested fix as a preference on a constructive negative (avoid + do-Y in one record)", async () => {
     const result = await runFeedbackExperience(
       {
@@ -244,7 +289,7 @@ describe("feedback experience builder", () => {
     expect(sibling?.sourceFeedbackIds).toContain("fb_avoid");
   });
 
-  it("does not merge into active policy in same merge family", async () => {
+  it("does not treat verifier similarity as an active-hit candidate fork", async () => {
     const base = await runFeedbackExperience(
       {
         feedback: feedback({
@@ -281,14 +326,15 @@ describe("feedback experience builder", () => {
     );
 
     expect(follow.created).toBe(true);
+    expect(follow.policyId).not.toBe(base.policyId);
     const all = handle.repos.policies.list({ limit: 20 });
     const activeRows = all.filter((p) => p.status === "active");
     const candidateRows = all.filter((p) => p.status === "candidate");
-    expect(activeRows).toHaveLength(1);
-    expect(candidateRows.length).toBeGreaterThanOrEqual(1);
+    expect(activeRows).toHaveLength(2);
+    expect(candidateRows).toHaveLength(0);
   });
 
-  it("re-derives mergeFamily after polarity changes during merge", async () => {
+  it("merges compatible non-verifier feedback with the existing similarity threshold", async () => {
     handle.repos.policies.insert({
       id: "po_merge_family" as never,
       ownerAgentKind: "hermes",
@@ -296,21 +342,21 @@ describe("feedback experience builder", () => {
       ownerWorkspaceId: "workspace",
       title: "SEC 13F extraction rule",
       trigger: "when parsing 13F",
-      procedure: "prefer validated issuer field",
+      procedure: "avoid wrong issuer field",
       verification: "issuer matches filing",
       boundary: "",
       support: 1,
       gain: 0.2,
       status: "candidate",
-      experienceType: "success_pattern",
-      evidencePolarity: "positive",
+      experienceType: "failure_avoidance",
+      evidencePolarity: "negative",
       mergeFamily: null,
       sourceEpisodeIds: ["ep_feedback" as EpisodeId],
       sourceFeedbackIds: [],
       sourceTraceIds: [trace.id],
       inducedBy: "feedback.experience.v1",
-      decisionGuidance: { preference: ["prefer validated issuer field"], antiPattern: [] },
-      skillEligible: true,
+      decisionGuidance: { preference: [], antiPattern: ["avoid wrong issuer field"] },
+      skillEligible: false,
       createdAt: NOW,
       updatedAt: NOW,
       vec: vec([1, 0, 0]),
@@ -320,8 +366,8 @@ describe("feedback experience builder", () => {
       {
         feedback: feedback({
           id: "fb_merge_family" as FeedbackRow["id"],
-          rationale: "Verifier failed: avoid wrong SEC 13F issuer field.",
-          raw: { source: "verifier", score: -1 },
+          rationale: "Avoid wrong SEC 13F issuer field.",
+          raw: {},
         }),
         episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: -1 },
         trace,
@@ -331,8 +377,103 @@ describe("feedback experience builder", () => {
 
     expect(merged.policyId).toBe("po_merge_family");
     const row = handle.repos.policies.getById("po_merge_family" as never);
-    expect(row?.evidencePolarity).toBe("mixed");
-    expect(row?.mergeFamily).toBe("failure_corrective");
+    expect(row?.support).toBe(2);
+    expect(row?.evidencePolarity).toBe("negative");
+    expect(row?.mergeFamily).toBe("failure_avoidance");
+    expect(row?.sourceFeedbackIds).toContain("fb_merge_family");
+  });
+
+  it("does not split compatible manual feedback just because policy source kind is not persisted", async () => {
+    handle.repos.policies.insert({
+      id: "po_manual_merge" as never,
+      ownerAgentKind: "hermes",
+      ownerProfileId: "default",
+      ownerWorkspaceId: "workspace",
+      title: "SEC 13F extraction rule",
+      trigger: "when parsing 13F",
+      procedure: "avoid wrong issuer field",
+      verification: "issuer matches filing",
+      boundary: "",
+      support: 1,
+      gain: 0.2,
+      status: "candidate",
+      experienceType: "failure_avoidance",
+      evidencePolarity: "negative",
+      mergeFamily: null,
+      sourceEpisodeIds: ["ep_feedback" as EpisodeId],
+      sourceFeedbackIds: [],
+      sourceTraceIds: [trace.id],
+      inducedBy: "feedback.experience.v1",
+      decisionGuidance: { preference: [], antiPattern: ["avoid wrong issuer field"] },
+      skillEligible: false,
+      createdAt: NOW,
+      updatedAt: NOW,
+      vec: vec([1, 0, 0]),
+    });
+
+    const merged = await runFeedbackExperience(
+      {
+        feedback: feedback({
+          id: "fb_manual_merge" as FeedbackRow["id"],
+          rationale: "Avoid wrong SEC 13F issuer field.",
+          raw: { source: "manual" },
+        }),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: -1 },
+        trace,
+      },
+      { repos: handle.repos, embedder: fakeEmbedder(), namespace, now: () => NOW + 4 },
+    );
+
+    expect(merged.policyId).toBe("po_manual_merge");
+    const row = handle.repos.policies.getById("po_manual_merge" as never);
+    expect(row?.support).toBe(2);
+    expect(row?.sourceFeedbackIds).toContain("fb_manual_merge");
+  });
+
+  it("uses the stricter threshold when task or issue key parts are missing", async () => {
+    handle.repos.policies.insert({
+      id: "po_strict_missing_key" as never,
+      ownerAgentKind: "hermes",
+      ownerProfileId: "default",
+      ownerWorkspaceId: "workspace",
+      title: "Avoid",
+      trigger: "Avoid",
+      procedure: "Avoid",
+      verification: "",
+      boundary: "",
+      support: 1,
+      gain: 0.2,
+      status: "candidate",
+      experienceType: "failure_avoidance",
+      evidencePolarity: "negative",
+      mergeFamily: null,
+      sourceEpisodeIds: ["ep_feedback" as EpisodeId],
+      sourceFeedbackIds: [],
+      sourceTraceIds: [trace.id],
+      inducedBy: "feedback.experience.v1",
+      decisionGuidance: { preference: [], antiPattern: ["avoid"] },
+      skillEligible: false,
+      createdAt: NOW,
+      updatedAt: NOW,
+      vec: vec([1, 0]),
+    });
+
+    const result = await runFeedbackExperience(
+      {
+        feedback: feedback({
+          id: "fb_strict_missing_key" as FeedbackRow["id"],
+          rationale: "Avoid wrong.",
+          raw: {},
+        }),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: -1 },
+        trace,
+      },
+      { repos: handle.repos, embedder: fakeEmbedder(vec([0.8, 0.6])), namespace, now: () => NOW + 5 },
+    );
+
+    expect(result.policyId).not.toBe("po_strict_missing_key");
+    const original = handle.repos.policies.getById("po_strict_missing_key" as never);
+    expect(original?.support).toBe(1);
   });
 
   it("passes compressed all-trace context to refiner in trace order", async () => {

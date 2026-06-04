@@ -37,10 +37,10 @@ describe("computeEpisodeOutcome", () => {
     expect(computeEpisodeOutcome(0.25, null, cfg)).toBe("unknown");
   });
 
-  it("rTask <= -0.5 = failure (when verifier doesn't veto)", () => {
-    expect(computeEpisodeOutcome(-0.5, null, cfg)).toBe("failure");
+  it("rTask <= -0.15 = failure (when verifier doesn't veto)", () => {
+    expect(computeEpisodeOutcome(-0.15, null, cfg)).toBe("failure");
     expect(computeEpisodeOutcome(-1, null, cfg)).toBe("failure");
-    expect(computeEpisodeOutcome(-0.25, null, cfg)).toBe("unknown");
+    expect(computeEpisodeOutcome(-0.14, null, cfg)).toBe("unknown");
   });
 
   it("neutral rTask + verifier=true => verifier fallback yields success", () => {
