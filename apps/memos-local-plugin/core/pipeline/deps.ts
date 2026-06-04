@@ -91,6 +91,8 @@ import type {
   RetrievalDeps,
   RetrievalEventBus,
 } from "../retrieval/index.js";
+import type { EpisodeId } from "../../agent-contract/dto.js";
+import { CAPTURE_LITE_TURN_CURSOR_META } from "../episode/turn-anchor.js";
 
 import type {
   PipelineAlgorithmConfig,
@@ -214,6 +216,17 @@ export function buildPipelineSubscribers(
     bus: buses.capture,
     cfg: algorithm.capture,
     now: deps.now,
+    onLiteCursorAdvanced: session
+      ? (episodeId, turnCount) => {
+          try {
+            session.episodeManager.patchMeta(episodeId as EpisodeId, {
+              [CAPTURE_LITE_TURN_CURSOR_META]: turnCount,
+            });
+          } catch {
+            // best-effort; next runLite will still dedup via DB signatures
+          }
+        }
+      : undefined,
   });
 
   const rewardRunner = createRewardRunner({

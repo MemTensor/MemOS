@@ -334,8 +334,7 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
             previousScoredAt: rewardScoredAt(snap.meta),
           }
         : {};
-      snap.meta = {
-        ...snap.meta,
+      const metaDelta: Record<string, unknown> = {
         closeReason: undefined,
         topicState: "active",
         reopenedAt: now(),
@@ -351,7 +350,11 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
             }
           : {}),
       };
-      deps.episodesRepo.reopen(id, snap.meta);
+      snap.meta = { ...snap.meta, ...metaDelta };
+      // Pass only the delta so updateMeta's merge doesn't overwrite fields
+      // (e.g. CAPTURE_LITE_TURN_CURSOR_META) that were correctly advanced in
+      // DB by advanceLiteCaptureCursor but are stale (=0) in the in-memory snap.
+      deps.episodesRepo.reopen(id, metaDelta);
       log.info("episode.reopened", {
         episodeId: id,
         sessionId: snap.sessionId,
