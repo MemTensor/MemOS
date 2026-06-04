@@ -278,7 +278,34 @@ async function closeViewerAfterFailedBootstrap(
 
 // ─── Registration ──────────────────────────────────────────────────────────
 
+/**
+ * Detect if running in diagnostic mode (e.g., `openclaw doctor`).
+ *
+ * Diagnostic processes should skip runtime lock acquisition to avoid
+ * false positive DuplicateOpenClawRuntimeError when the gateway is running.
+ */
+function isDiagnosticMode(): boolean {
+  // Check for OPENCLAW_DIAGNOSTIC_MODE environment variable
+  if (process.env.OPENCLAW_DIAGNOSTIC_MODE === "1" ||
+      process.env.OPENCLAW_DIAGNOSTIC_MODE === "true") {
+    return true;
+  }
+
+  // Check if process title or argv contains "doctor"
+  if (process.title?.includes("doctor")) {
+    return true;
+  }
+
+  if (process.argv.some(arg => arg.includes("doctor"))) {
+    return true;
+  }
+
+  return false;
+}
+
 function register(api: OpenClawPluginApi): void {
+  const diagnosticMode = isDiagnosticMode();
+
   let runtimeLock: OpenClawRuntimeLockHandle;
   try {
     runtimeLock = acquireOpenClawRuntimeLock({
@@ -286,7 +313,12 @@ function register(api: OpenClawPluginApi): void {
       pluginId: PLUGIN_ID,
       version: PLUGIN_VERSION,
       viewerPort: OPENCLAW_VIEWER_PORT,
+      skipLock: diagnosticMode,
     });
+
+    if (diagnosticMode) {
+      api.logger.info("memos-local: running in diagnostic mode (lock acquisition skipped)");
+    }
   } catch (err) {
     const duplicate = err instanceof DuplicateOpenClawRuntimeError;
     api.logger.error("memos-local: duplicate OpenClaw runtime blocked", {
