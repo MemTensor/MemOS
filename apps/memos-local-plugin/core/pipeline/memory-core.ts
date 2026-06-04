@@ -1300,13 +1300,19 @@ export function createMemoryCore(
     // Backward compatibility for episodes scored before reward coverage
     // metadata existed: if a trace was appended after the recorded reward
     // time, the old task score no longer covers the full episode.
+    //
+    // Use the lightweight `hasAnyNewerThan` exists-check (a single
+    // `SELECT 1 ... LIMIT 1`) instead of `getManyByIds().some(...)`.
+    // The latter pulled every column of every trace — embedding BLOBs
+    // and big `tool_calls_json` strings included — purely to inspect
+    // one timestamp. On the multi-hundred-MB databases reported in
+    // https://github.com/MemTensor/MemOS/issues/1787 that single scan
+    // dwarfed everything else during bridge bootstrap.
     const scoredAt = (reward as { scoredAt?: unknown }).scoredAt;
     if (typeof scoredAt !== "number") return false;
     const traceIds = (ep.traceIds ?? []) as TraceId[];
     if (traceIds.length === 0) return false;
-    return handle.repos.traces
-      .getManyByIds(traceIds)
-      .some((tr) => tr.ts > scoredAt);
+    return handle.repos.traces.hasAnyNewerThan(traceIds, scoredAt);
   }
 
   function snapshotFromRecoveredEpisode(
