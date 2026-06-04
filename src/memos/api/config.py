@@ -288,7 +288,7 @@ class APIConfig:
     def minimax_config() -> dict[str, Any]:
         """Get MiniMax configuration."""
         return {
-            "model_name_or_path": os.getenv("MOS_CHAT_MODEL", "MiniMax-M2.7"),
+            "model_name_or_path": os.getenv("MOS_CHAT_MODEL", "MiniMax-M3"),
             "temperature": float(os.getenv("MOS_CHAT_TEMPERATURE", "0.8")),
             "max_tokens": int(os.getenv("MOS_MAX_TOKENS", "8000")),
             "top_p": float(os.getenv("MOS_TOP_P", "0.9")),
