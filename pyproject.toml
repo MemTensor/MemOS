@@ -80,6 +80,7 @@ tree-mem = [
 mem-scheduler = [
     "redis (>=6.2.0,<7.0.0)",  # Key-value store
     "pika (>=1.3.2,<2.0.0)",  # RabbitMQ client
+    "schedule (>=1.2.2,<2.0.0)",  # Task scheduling (required by tree memory reorganizer)
 ]
 
 # MemUser (MySQL support)

@@ -225,6 +225,60 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             logger.error(f"[add_nodes_batch] Failed to add nodes: {e}", exc_info=True)
             raise
 
+    def update_node(self, id: str, fields: dict[str, Any], user_name: str | None = None) -> None:
+        """
+        Update node fields in Neo4j and sync to Qdrant if embedding is present.
+
+        This method overrides the parent implementation to add Qdrant synchronization
+        for the Neo4j Community Edition, which doesn't have native vector indexing.
+
+        Args:
+            id: Node identifier to update
+            fields: Dictionary of fields to update (may include 'embedding')
+            user_name: Optional user name for multi-tenant filtering
+        """
+        user_name = user_name if user_name else self.config.user_name
+        fields = fields.copy()  # Avoid mutating external dict
+
+        # Extract embedding if present for vector DB sync
+        embedding = fields.pop("embedding", None)
+
+        # Sync to Qdrant if embedding is provided
+        if embedding is not None:
+            try:
+                # Prepare payload with all fields except embedding
+                payload = fields.copy()
+
+                # Get memory content from fields or fetch from Neo4j if not provided
+                memory = fields.get("memory")
+                if memory is None:
+                    # If memory is not in update fields, we need to fetch it
+                    # to maintain consistency in Qdrant payload
+                    try:
+                        node = self.get_node(id, user_name=user_name)
+                        memory = node.get("memory", "")
+                    except Exception as e:
+                        logger.warning(f"[update_node] Could not fetch memory for node {id}: {e}")
+                        memory = ""
+
+                payload["memory"] = memory
+                payload.setdefault("vector_sync", "success")
+
+                item = VecDBItem(
+                    id=id,
+                    vector=embedding,
+                    payload=payload,
+                )
+                self.vec_db.update([item])
+                logger.debug(f"[update_node] Successfully updated vector for node {id}")
+            except Exception as e:
+                logger.warning(f"[VecDB] Vector update failed for node {id}: {e}")
+                # Continue with Neo4j update even if vector update fails
+                fields["vector_sync"] = "failed"
+
+        # Update Neo4j using parent implementation
+        super().update_node(id, fields, user_name=user_name)
+
     def get_children_with_embeddings(
         self, id: str, user_name: str | None = None
     ) -> list[dict[str, Any]]:
