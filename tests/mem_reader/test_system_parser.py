@@ -17,7 +17,7 @@ class TestSystemParser(unittest.TestCase):
         self.mock_embedder.embed.return_value = [[0.1] * 128]  # Mock embedding vector
 
         # Create SystemParser instance with mocked embedder
-        self.parser = SystemParser(embedder=self.mock_embedder, chunker=None)
+        self.parser = SystemParser(embedder=self.mock_embedder)
 
     def test_parse_fast_with_tool_schema_creates_tool_schema_memory(self):
         """Test that messages with <tool_schema> blocks create ToolSchemaMemory items."""
