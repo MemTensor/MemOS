@@ -1021,7 +1021,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // Guard 3 — mass-delete circuit breaker. If a future bug makes most
     // rows look like duplicates, refuse to delete and force operator
     // attention. Triplet recovery on a typical episode deletes < 60% of
-    // the episode (e.g. 85/178 in the django__django-16082 case = 48%).
+    // the episode (e.g. 85/178 rows = 48%).
     // Anything above 80% is suspicious enough to halt and ask.
     const totalRows = allRows.length;
     const deleteRatio = orphans.length / totalRows;

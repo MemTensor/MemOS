@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 
-import { buildQuery, extractTags } from "../../../core/retrieval/query-builder.js";
+import {
+  buildQuery,
+  extractTags,
+  isSoftwareRepairPrompt,
+} from "../../../core/retrieval/query-builder.js";
 import type { EpochMs } from "../../../core/types.js";
 
 const NOW = 1_700_000_000_000 as EpochMs;
@@ -138,6 +142,41 @@ describe("retrieval/query-builder", () => {
     expect(cq.text).not.toContain("new task");
     expect(cq.ftsMatch).toContain('"stepping"');
     expect(cq.ftsMatch).not.toContain('"following"');
+  });
+
+  it("uses the repair bug description instead of wrapper guardrails", () => {
+    const cq = buildQuery({
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s_swe" as unknown as never,
+      userText:
+        "new task\n\n" +
+        "WRAPPER_PATH: /tmp/swebench-job-example__project-00000-t1-exec\n\n" +
+        "You need to fix a bug in the django/django repository. Time limit: 30 minutes.\n\n" +
+        "[STRICT RULES]\n" +
+        "- All commands MUST be executed via WRAPPER_PATH\n" +
+        "- To write files, use WRAPPER_PATH write, NOT tmux-run + cat/heredoc\n\n" +
+        "## Workflow\n1. Understand the bug from the problem statement\n\n" +
+        "## Bug Description\n\n" +
+        "A ModelForm cleanup path fails to apply validated cleaned_data to an instance when a submitted value is present.\n" +
+        "The fix should preserve missing-data behavior while allowing explicit cleaned_data values to reach the model.\n\n" +
+        "Reply TASK_COMPLETE when done.",
+      ts: NOW,
+    });
+    expect(cq.text).toContain("software_engineering python test bug fix");
+    expect(cq.text).toContain("repo: django/django");
+    expect(cq.text).toContain("cleaned_data");
+    expect(cq.text).toContain("ModelForm");
+    expect(cq.text).not.toContain("WRAPPER_PATH");
+    expect(cq.text).not.toContain("STRICT RULES");
+    expect(cq.tags).toContain("python");
+    expect(cq.tags).toContain("test");
+    expect(isSoftwareRepairPrompt(cq.text)).toBe(false);
+    expect(
+      isSoftwareRepairPrompt(
+        "You need to fix a bug in the django/django repository.\n\n## Bug Description\n\nBroken form default.",
+      ),
+    ).toBe(true);
   });
 
   it("does not synthesize benchmark-specific keywords for structured math prompts", () => {

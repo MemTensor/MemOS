@@ -182,6 +182,9 @@ function finalize(raw: string): CompiledQuery {
 
 function normalizePromptText(raw: string): string {
   const text = String(raw ?? "");
+  const softwareRepairPrompt = extractSoftwareRepairQueryText(text);
+  if (softwareRepairPrompt) return softwareRepairPrompt;
+
   const problemMatch = text.match(/\*\*Problem:\*\*([\s\S]*?)(?:\n\s*\*\*[^*\n]+:\*\*|$)/i);
   if (problemMatch?.[1]?.trim()) {
     const hints = text
@@ -191,6 +194,40 @@ function normalizePromptText(raw: string): string {
     return [problemMatch[1].trim(), hints].filter(Boolean).join("\n");
   }
   return text.replace(/^new task\s*/i, "").trim();
+}
+
+export function isSoftwareRepairPrompt(text: string | undefined): boolean {
+  const raw = String(text ?? "");
+  return /##\s*Bug Description\b/i.test(raw) && /You need to fix a bug in\b/i.test(raw);
+}
+
+function extractSoftwareRepairQueryText(text: string): string | null {
+  if (!/##\s*Bug Description\b/i.test(text)) return null;
+  if (!/You need to fix a bug in\b/i.test(text)) return null;
+
+  const bug = extractRepairTaskSection(text, "Bug Description");
+  if (!bug) return null;
+
+  const repoMatch = text.match(/You need to fix a bug in the\s+([^\n]+?)\s+repository\./i);
+  const hints = extractRepairTaskSection(text, "Hints");
+  const parts = [
+    "software_engineering python test bug fix",
+    repoMatch?.[1]?.trim() ? `repo: ${repoMatch[1]!.trim()}` : "",
+    bug,
+    hints ? `hints: ${hints}` : "",
+  ].filter(Boolean);
+  return parts.join("\n");
+}
+
+export function extractRepairTaskSection(text: string, heading: string): string {
+  const escapedHeading = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = text.match(
+    new RegExp(
+      `(?:^|\\n)\\s*##\\s*${escapedHeading}\\b\\s*([\\s\\S]*?)(?=\\n\\s*(?:##\\s+|STRICT RULES:|Reply TASK_COMPLETE\\b)|$)`,
+      "i",
+    ),
+  );
+  return (match?.[1] ?? "").trim();
 }
 
 function renderArgs(args: Record<string, unknown> | undefined): string {

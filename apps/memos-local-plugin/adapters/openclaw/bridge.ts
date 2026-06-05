@@ -877,6 +877,8 @@ export interface BridgeOptions {
   agent: AgentKind;
   core: MemoryCore;
   log: HostLogger;
+  /** When true, keep retrieval enabled but skip turn-end capture entirely. */
+  memoryAddDisabled?: boolean;
   /** Override the wall-clock source (tests). */
   now?: () => number;
 }
@@ -942,6 +944,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function truthyEnv(name: string): boolean {
+  const value = process.env[name];
+  return value != null && !["", "0", "false", "no", "off"].includes(value.trim().toLowerCase());
 }
 
 function toolFailureStreakKey(
@@ -1059,6 +1066,12 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     parentEpisodeId?: EpisodeId;
   }>();
   const pendingSubagentSessions = new Set<SessionId>();
+
+  function memoryWritesDisabled(): boolean {
+    return opts.memoryAddDisabled ||
+      truthyEnv("MEMOS_MEMORY_ADD_DISABLED") ||
+      truthyEnv("EVOAGENTBENCH_MEMOS_DISABLE_ADD");
+  }
 
   function rememberObservedToolCall(
     sessionId: SessionId,
@@ -1321,7 +1334,10 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       if (!prompt) return;
 
       const namespace = namespaceFromAgentCtx(ctx);
-      const sessionId = await ensureSession(ctx.agentId, ctx.sessionKey, namespace);
+      const readOnlyTurnStart = memoryWritesDisabled();
+      const sessionId = readOnlyTurnStart
+        ? bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default")
+        : await ensureSession(ctx.agentId, ctx.sessionKey, namespace);
       clearToolFailureStreaksForTurn(toolFailureStreaks, {
         runId: ctx.runId,
         sessionId: ctx.sessionId ?? sessionId,
@@ -1342,6 +1358,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           sessionId: ctx.sessionId,
           runId: ctx.runId,
           workspaceDir: ctx.workspaceDir,
+          __memosReadOnlyTurnStart: readOnlyTurnStart,
         },
       };
 
@@ -1435,6 +1452,14 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     if (isEphemeralSessionKey(ctx.sessionKey)) {
       // Mirror `handleBeforePrompt` — slug-generator & co. don't get a
       // trace / episode, so there's nothing to persist here either.
+      return;
+    }
+    if (memoryWritesDisabled()) {
+      opts.log.info("memos.agent_end.skipped", {
+        reason: "memory_add_disabled",
+        sessionKey: ctx.sessionKey,
+        agentId: ctx.agentId,
+      });
       return;
     }
     const namespace = namespaceFromAgentCtx(ctx);
@@ -1632,6 +1657,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     ctx: PluginHookToolContext,
   ): Promise<void> {
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
+    if (memoryWritesDisabled()) return;
     try {
       const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
       const toolCallId = ctx.toolCallId ?? event.toolCallId;
@@ -1699,6 +1725,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     ctx: PluginHookSessionContext,
   ): Promise<void> {
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
+    if (memoryWritesDisabled()) return;
     try {
       await ensureSession(ctx.agentId, ctx.sessionKey, namespaceFromAgentCtx(ctx));
       opts.log.debug("memos.session.started", {
@@ -1718,6 +1745,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     ctx: PluginHookSessionContext,
   ): Promise<void> {
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
+    if (memoryWritesDisabled()) return;
     try {
       const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
       if (pendingSubagentSessions.has(sessionId)) {

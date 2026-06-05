@@ -421,6 +421,44 @@ describe("MemoryCore façade", () => {
     }
   });
 
+  it("adds the software-engineering protocol through MemoryCore for OpenClaw and Hermes", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const prompt = [
+      "You need to fix a bug in the django/django repository.",
+      "",
+      "## Bug Description",
+      "Resetting the primary key for a child model should create a copy.",
+      "",
+      "## Hints",
+      "Inspect the model inheritance save path.",
+    ].join("\n");
+    const openclaw = await core.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-se-openclaw",
+      userText: prompt,
+      ts: 1_700_000_000_000,
+    });
+    const hermes = await core.onTurnStart({
+      agent: "hermes",
+      sessionId: "s-se-hermes",
+      userText: prompt,
+      ts: 1_700_000_000_001,
+    });
+
+    for (const res of [openclaw, hermes]) {
+      expect(res.injectedContext).toContain("Software engineering task protocol");
+      expect(res.injectedContext).toContain("double quotes around the `tmux-run` command");
+      expect(res.injectedContext).toContain("Inspect the model inheritance save path.");
+    }
+  });
+
   it("does not add the math protocol to ordinary empty-memory turns", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(

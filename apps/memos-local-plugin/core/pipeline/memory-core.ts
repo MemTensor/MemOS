@@ -107,6 +107,7 @@ import {
   mergeMathFinalAnswerProtocol,
   STANDALONE_MATH_FINAL_ANSWER_TASK_KIND,
 } from "../retrieval/math-task.js";
+import { taskProtocolOnlyPacket } from "../retrieval/retrieve.js";
 import type { RankedCandidate } from "../retrieval/ranker.js";
 import type {
   RetrievalConfig,
@@ -116,6 +117,9 @@ import type {
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
+const TURN_START_TASK_PROTOCOL_FALLBACK_TIMEOUT_MS = 8_000;
+const TURN_START_TASK_PROTOCOL_FALLBACK_TIMEOUT_LABEL =
+  "turn_start_task_protocol_fallback_timeout";
 const IMPORT_WRITE_BATCH_SIZE = 500;
 
 export interface BootstrapOptions {
@@ -1658,95 +1662,152 @@ export function createMemoryCore(
     let hubHits: RetrievalHitDTO[] = [];
     const ns = namespaceFor(turn.agent, turn);
     activeNamespace = ns;
+    const canUseProtocolFallback =
+      turn.contextHints?.__memosReadOnlyTurnStart === true || Boolean(turn.episodeId);
+    const protocolFallbackPacket = canUseProtocolFallback
+      ? taskProtocolOnlyPacket({
+          reason: "turn_start",
+          ...turn,
+          namespace: ns,
+        }, Date.now())
+      : null;
+    const protocolFallbackResult: RetrievalResultDTO | null = protocolFallbackPacket
+      ? {
+          query: {
+            agent: turn.agent,
+            namespace: ns,
+            sessionId: protocolFallbackPacket.sessionId,
+            episodeId: protocolFallbackPacket.episodeId,
+            query: turn.userText,
+          },
+          hits: [],
+          injectedContext: protocolFallbackPacket.rendered,
+          tierLatencyMs: protocolFallbackPacket.tierLatencyMs,
+        }
+      : null;
     try {
-      hubHits = await searchHubMemoryHits(turn.userText, 5);
-      hubCandidates = logCandidatesFromHits(hubHits);
-      const standaloneMathFinalAnswer = isStandaloneMathFinalAnswerTurn(turn);
-      const namespacedTurn = {
-        ...turn,
-        namespace: ns,
-        contextHints: {
-          ...(turn.contextHints ?? {}),
-          ...(standaloneMathFinalAnswer
-            ? {
-                taskKind: STANDALONE_MATH_FINAL_ANSWER_TASK_KIND,
-                finalAnswerMode: "single_turn",
-              }
-            : {}),
-          ...namespaceMeta(ns),
-          ...(hubHits.length > 0 ? { __memosDeferLlmFilterToCaller: true } : {}),
-        },
-      };
-      packet = await handle.onTurnStart(namespacedTurn);
-
-      // The orchestrator stamps the *routed* session / episode id onto the
-      // packet (V7 §0.1 may create, reopen, or migrate to a new session),
-      // so we surface those back to the caller. Adapters correlate
-      // `onTurnEnd` to the same ids via `query.sessionId` /
-      // `query.episodeId`, instead of having to keep their own cache.
-      const query: RetrievalQueryDTO = {
-        agent: turn.agent,
-        namespace: ns,
-        sessionId: packet.sessionId,
-        episodeId: packet.episodeId,
-        query: turn.userText,
-      };
-      const hits: RetrievalHitDTO[] = packet.snippets.map((snip) => {
-        const tier: 1 | 2 | 3 = inferTier(snip.refKind);
-        return {
-          tier,
-          refId: snip.refId,
-          refKind:
-            snip.refKind === "preference" || snip.refKind === "anti-pattern"
-              ? "trace"
-              : snip.refKind,
-          score: snip.score ?? 0,
-          snippet: snip.body,
+      const fullRetrieval = (async (): Promise<RetrievalResultDTO> => {
+        hubHits = await searchHubMemoryHits(turn.userText, 5);
+        hubCandidates = logCandidatesFromHits(hubHits);
+        const standaloneMathFinalAnswer = isStandaloneMathFinalAnswerTurn(turn);
+        const namespacedTurn = {
+          ...turn,
+          namespace: ns,
+          contextHints: {
+            ...(turn.contextHints ?? {}),
+            ...(standaloneMathFinalAnswer
+              ? {
+                  taskKind: STANDALONE_MATH_FINAL_ANSWER_TASK_KIND,
+                  finalAnswerMode: "single_turn",
+                }
+              : {}),
+            ...namespaceMeta(ns),
+            ...(hubHits.length > 0 ? { __memosDeferLlmFilterToCaller: true } : {}),
+          },
         };
-      });
-      const final = await finalFilterMergedHits({
-        query: turn.userText,
-        localHits: hits,
-        hubHits,
-        localAlreadyFiltered: hubHits.length === 0,
-        config: handle.retrievalDeps().config,
-        episodeId: packet.episodeId,
-      });
-      finalFilteredCandidates = logCandidatesFromHits(final.hits);
-      finalDroppedCandidates = logCandidatesFromHits(final.dropped);
-      finalFilterStats = hubHits.length > 0
-        ? {
-            outcome: final.outcome,
-            kept: final.hits.length,
-            dropped: final.dropped.length,
-            sufficient: final.sufficient,
-            deduped: final.deduped,
-          }
-        : undefined;
-      finalHubKept = final.hits.filter((hit) => hit.shareScope === "hub").length;
-      const recalledContext = hubHits.length > 0
-        ? renderFinalHitsContext(final.hits)
-        : packet.rendered;
-      const injectedPolicyIds = collectInjectedPolicyIds(final.hits);
-      for (const policyId of injectedPolicyIds) {
-        handle.repos.episodePolicyInjections.inject({
+        packet = await handle.onTurnStart(namespacedTurn);
+
+        // The orchestrator stamps the *routed* session / episode id onto the
+        // packet (V7 §0.1 may create, reopen, or migrate to a new session),
+        // so we surface those back to the caller. Adapters correlate
+        // `onTurnEnd` to the same ids via `query.sessionId` /
+        // `query.episodeId`, instead of having to keep their own cache.
+        const query: RetrievalQueryDTO = {
+          agent: turn.agent,
+          namespace: ns,
+          sessionId: packet.sessionId,
           episodeId: packet.episodeId,
-          policyId: policyId as PolicyId,
-          source: "turn_start",
-          now: Date.now(),
+          query: turn.userText,
+        };
+        const hits: RetrievalHitDTO[] = packet.snippets.map((snip) => {
+          const tier: 1 | 2 | 3 = inferTier(snip.refKind);
+          return {
+            tier,
+            refId: snip.refId,
+            refKind:
+              snip.refKind === "preference" || snip.refKind === "anti-pattern"
+                ? "trace"
+                : snip.refKind,
+            score: snip.score ?? 0,
+            snippet: snip.body,
+          };
         });
+        const final = await finalFilterMergedHits({
+          query: turn.userText,
+          localHits: hits,
+          hubHits,
+          localAlreadyFiltered: hubHits.length === 0,
+          config: handle.retrievalDeps().config,
+          episodeId: packet.episodeId,
+        });
+        finalFilteredCandidates = logCandidatesFromHits(final.hits);
+        finalDroppedCandidates = logCandidatesFromHits(final.dropped);
+        finalFilterStats = hubHits.length > 0
+          ? {
+              outcome: final.outcome,
+              kept: final.hits.length,
+              dropped: final.dropped.length,
+              sufficient: final.sufficient,
+              deduped: final.deduped,
+            }
+          : undefined;
+        finalHubKept = final.hits.filter((hit) => hit.shareScope === "hub").length;
+        const recalledContext = hubHits.length > 0
+          ? renderFinalHitsContext(final.hits)
+          : packet.rendered;
+        const injectedPolicyIds = collectInjectedPolicyIds(final.hits);
+        for (const policyId of injectedPolicyIds) {
+          handle.repos.episodePolicyInjections.inject({
+            episodeId: packet.episodeId,
+            policyId: policyId as PolicyId,
+            source: "turn_start",
+            now: Date.now(),
+          });
+        }
+        handle.repos.episodes.updateMeta(packet.episodeId, {
+          injectedPolicyIds,
+        });
+        return {
+          query,
+          hits: final.hits,
+          injectedContext: standaloneMathFinalAnswer
+            ? mergeMathFinalAnswerProtocol(recalledContext, turn.userText)
+            : recalledContext,
+          tierLatencyMs: packet.tierLatencyMs,
+        };
+      })();
+
+      if (protocolFallbackResult && protocolFallbackPacket) {
+        fullRetrieval.catch((err) => {
+          log.debug("turn_start.full_retrieval_after_protocol_fallback_failed", {
+            err: err instanceof Error ? err.message : String(err),
+          });
+        });
+        try {
+          return await withTimeout(
+            fullRetrieval,
+            TURN_START_TASK_PROTOCOL_FALLBACK_TIMEOUT_MS,
+            TURN_START_TASK_PROTOCOL_FALLBACK_TIMEOUT_LABEL,
+          );
+        } catch (err) {
+          if (
+            err instanceof Error &&
+            err.message === TURN_START_TASK_PROTOCOL_FALLBACK_TIMEOUT_LABEL
+          ) {
+            packet = protocolFallbackPacket;
+            log.warn("turn_start.task_protocol_fallback", {
+              agent: turn.agent,
+              sessionId: turn.sessionId,
+              timeoutMs: TURN_START_TASK_PROTOCOL_FALLBACK_TIMEOUT_MS,
+              contextChars: protocolFallbackPacket.rendered.length,
+            });
+            return protocolFallbackResult;
+          }
+          throw err;
+        }
       }
-      handle.repos.episodes.updateMeta(packet.episodeId, {
-        injectedPolicyIds,
-      });
-      return {
-        query,
-        hits: final.hits,
-        injectedContext: standaloneMathFinalAnswer
-          ? mergeMathFinalAnswerProtocol(recalledContext, turn.userText)
-          : recalledContext,
-        tierLatencyMs: packet.tierLatencyMs,
-      };
+
+      return await fullRetrieval;
     } catch (err) {
       ok = false;
       // Surface terminal failures as a `plugin_error` ARMS event so
