@@ -988,6 +988,37 @@ describe("createOpenClawBridge", () => {
     }
   });
 
+  it("keeps turn-start retrieval read-only when memory_add is disabled", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      memoryAddDisabled: true,
+    });
+    const result = await bridge.handleBeforePrompt(
+      {
+        prompt: [
+          "You need to fix a bug in the django/django repository.",
+          "",
+          "## Bug Description",
+          "Resetting the primary key for a child model should create a copy.",
+          "",
+          "Reply TASK_COMPLETE when done.",
+        ].join("\n"),
+        messages: [],
+      },
+      hookCtx({ sessionKey: "readonly-se" }),
+    );
+
+    expect(result).toMatchObject({
+      prependContext: expect.stringContaining("Software engineering task protocol"),
+    });
+    await expect(mc.listEpisodeRows({ limit: 10 })).resolves.toHaveLength(0);
+  });
+
   it("handleAgentEnd feeds onTurnEnd and produces trace + episode.closed events", async () => {
     const mc = buildCore();
     await mc.init();

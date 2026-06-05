@@ -120,6 +120,27 @@ function world(id: string): WorldModelCandidate {
 }
 
 describe("retrieval/injector", () => {
+  it("renders a task protocol even when no memory snippets matched", () => {
+    const { packet } = toPacket({
+      ranked: [],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_swe_protocol" as never,
+      episodeId: "ep_swe_protocol" as never,
+      taskProtocol: [
+        "## Software engineering task protocol",
+        "",
+        "1. Treat the task repository as `/testbed`.",
+        "2. Edit files with `WRAPPER_PATH write`.",
+      ].join("\n"),
+    });
+
+    expect(packet.snippets).toHaveLength(0);
+    expect(packet.rendered).toContain("Software engineering task protocol");
+    expect(packet.rendered).toContain("WRAPPER_PATH write");
+  });
+
   it("renders each candidate kind to snippet", () => {
     const ranked: RankedCandidate[] = [
       rc(skill("s1")),
@@ -208,6 +229,25 @@ describe("retrieval/injector", () => {
     // the model-facing prose unless a tool hint explicitly needs one.
     expect(packet.snippets[0]?.refId).toBe("sA");
     expect(packet.rendered).not.toContain('refId="sA"');
+  });
+
+  it("frames task protocol as current guidance instead of prior conversation memory", () => {
+    const { packet } = toPacket({
+      ranked: [rc(skill("s_protocol"), 0.9, 0.9)],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_protocol" as never,
+      episodeId: "ep_protocol" as never,
+      taskProtocol: "## Software engineering task protocol\n\nPatch first.",
+    });
+
+    expect(packet.rendered).toContain("Current task protocol and recalled memories");
+    expect(packet.rendered).toContain("derived from the current user prompt");
+    expect(packet.rendered).toContain("Patch first.");
+    expect(packet.rendered).not.toContain("User's conversation history");
+    expect(packet.rendered).not.toContain("MUST treat these as established knowledge");
+    expect(packet.rendered).toContain("Candidate skills");
   });
 
   it("strips episode retrieval metrics from prompt-facing memory text", () => {

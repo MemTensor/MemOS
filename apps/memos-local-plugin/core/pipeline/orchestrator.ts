@@ -1115,6 +1115,53 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
   async function onTurnStart(input: TurnInputDTO): Promise<InjectionPacket> {
     const t0 = now();
+    if (input.contextHints?.__memosReadOnlyTurnStart === true) {
+      const sessionId =
+        input.sessionId ??
+        (`readonly-session:${input.agent}` as SessionId);
+      const episodeId =
+        input.episodeId ??
+        (`readonly-episode:${sessionId}:${input.ts}` as EpisodeId);
+      const normalized: TurnInputDTO = {
+        ...input,
+        sessionId,
+        episodeId,
+      };
+      try {
+        const packet = await retrieveTurnStart(normalized, {
+          scenarioId: "TASK",
+          entry: "turn_start",
+          wantTier1: true,
+          wantTier2: true,
+          wantTier3: true,
+          prepend: true,
+        });
+        const stamped: InjectionPacket = {
+          ...packet,
+          sessionId,
+          episodeId,
+        };
+        log.info("turn.started.readonly", {
+          agent: input.agent,
+          sessionId,
+          episodeId,
+          userChars: input.userText.length,
+          retrievalTotalMs: packet.tierLatencyMs.tier1 +
+            packet.tierLatencyMs.tier2 +
+            packet.tierLatencyMs.tier3,
+          elapsedMs: now() - t0,
+        });
+        return stamped;
+      } catch (err) {
+        log.error("turn.retrieval_failed.readonly", {
+          agent: input.agent,
+          sessionId,
+          episodeId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        return emptyInjectionPacket(input.agent, sessionId, episodeId, input.ts);
+      }
+    }
     sweepStalePausedEpisodes(t0);
     const initialSessionId = await ensureSession(
       input.agent,

@@ -154,6 +154,14 @@ function resolveViewerStaticRoot(): string | undefined {
 
 const OPENCLAW_VIEWER_PORT = 18799;
 
+function memoryAddDisabledFromConfig(config: Record<string, unknown> | undefined): boolean {
+  const memoryAdd = config?.memory_add;
+  if (!memoryAdd || typeof memoryAdd !== "object" || Array.isArray(memoryAdd)) {
+    return false;
+  }
+  return (memoryAdd as { enabled?: unknown }).enabled === false;
+}
+
 async function createRuntime(
   api: OpenClawPluginApi,
   runtimeLock: OpenClawRuntimeLockHandle,
@@ -209,6 +217,7 @@ async function createRuntime(
       agent: "openclaw",
       core,
       log: api.logger,
+      memoryAddDisabled: memoryAddDisabledFromConfig(api.pluginConfig),
     });
 
     // OpenClaw's viewer port is fixed at :18799 (hermes uses :18800).

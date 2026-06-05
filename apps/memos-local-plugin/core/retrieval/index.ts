@@ -11,6 +11,7 @@ export {
   skillInvokeRetrieve,
   subAgentRetrieve,
   repairRetrieve,
+  taskProtocolOnlyPacket,
   Retriever,
   type TurnStartRetrieveCtx,
   type ToolDrivenRetrieveCtx,
