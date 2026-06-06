@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { resolveConfig } from "../src/config";
 
 describe("resolveConfig", () => {
+  it("defaults autoRecallMinQueryLength to the existing two-character threshold", () => {
+    const resolved = resolveConfig(undefined, "/tmp/memos-config-test");
+
+    expect(resolved.recall?.autoRecallMinQueryLength).toBe(2);
+  });
+
+  it("preserves configured autoRecallMinQueryLength", () => {
+    const resolved = resolveConfig(
+      { recall: { autoRecallMinQueryLength: 10 } },
+      "/tmp/memos-config-test",
+    );
+
+    expect(resolved.recall?.autoRecallMinQueryLength).toBe(10);
+  });
+
   it("injects openclaw providers into existing blocks when host capabilities are enabled", () => {
     const resolved = resolveConfig(
       {

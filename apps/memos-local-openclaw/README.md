@@ -519,7 +519,8 @@ All optional — shown with defaults:
       "rrfK": 60,                 // RRF fusion constant
       "mmrLambda": 0.7,           // MMR relevance vs diversity (0-1)
       "recencyHalfLifeDays": 14,  // Time decay half-life
-      "vectorSearchMaxChunks": 0  // 0 = search all (default). Set 200000–300000 only if search is slow on huge DBs
+      "vectorSearchMaxChunks": 0, // 0 = search all (default). Set 200000–300000 only if search is slow on huge DBs
+      "autoRecallMinQueryLength": 2 // Auto-recall skips shorter normalized prompts; set 10 to ignore short acknowledgements
     },
     "dedup": {
       "similarityThreshold": 0.75,  // Cosine similarity for smart-dedup candidates (Top-5)
