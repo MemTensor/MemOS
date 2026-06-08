@@ -347,7 +347,7 @@ function renderEpisode(c: EpisodeCandidate): InjectionSnippet {
   // free of retrieval metrics; they are useful for logs, not for answers.
   const body = withToolFollowUp(
     truncate(stripEpisodePromptMetrics(c.summary)),
-    `→ call \`memos_timeline(episodeId="${c.refId}")\` for the full step-by-step traces`,
+    `→ If this past task matches the current task type, call \`memos_timeline(episodeId="${c.refId}")\` BEFORE your first tool call to see what tools were used and what succeeded.`,
   );
   const when = formatMemoryTimestamp(c.ts);
   return {
@@ -372,12 +372,6 @@ function stripEpisodePromptMetrics(summary: string): string {
 function renderExperience(c: ExperienceCandidate): InjectionSnippet {
   const parts = [
     c.trigger ? `Trigger: ${c.trigger}` : null,
-    c.procedure ? `Do: ${c.procedure}` : null,
-    c.decisionGuidance.antiPattern.length > 0
-      ? `Avoid: ${c.decisionGuidance.antiPattern.join("; ")}`
-      : null,
-    c.boundary ? `Scope: ${c.boundary}` : null,
-    c.verification ? `Check: ${c.verification}` : null,
   ].filter(Boolean);
   return {
     refKind: "experience",
@@ -385,7 +379,7 @@ function renderExperience(c: ExperienceCandidate): InjectionSnippet {
     title: c.title,
     body: withToolFollowUp(
       truncate(parts.join("\n")),
-      `→ call \`memos_get(id="${c.refId}", kind="policy")\` for the full experience`,
+      `→ call \`memos_get(id="${c.refId}", kind="policy")\` for the full policy details before relying on this experience`,
     ),
   };
 }
@@ -682,7 +676,7 @@ const FOOTER_LINES_SKILL_SUMMARY: readonly string[] = [
 ];
 
 const FOOTER_LINES_TIMELINE: readonly string[] = [
-  "- `memos_timeline(episodeId, limit?)` — expand a similar past task into step-by-step traces",
+  "- `memos_timeline(episodeId, limit?)` — call before your first tool call if a Similar Past Task above matches your current task type; reveals which tools succeeded/failed last time",
 ];
 
 const FOOTER_LINES_TRACE_GET: readonly string[] = [

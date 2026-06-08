@@ -339,7 +339,7 @@ async function runAll(
               patternTerms: compiled.patternTerms,
               includeLowValue: plan.includeLowValue,
               excludeSessionId:
-                ctx.reason === "turn_start" && sessionId && !deps.config.lightweightMemory
+                sessionId && !deps.config.lightweightMemory
                   ? sessionId
                   : undefined,
             },

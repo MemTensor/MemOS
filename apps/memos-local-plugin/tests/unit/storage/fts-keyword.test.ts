@@ -265,6 +265,69 @@ describe("storage/keyword channels — skills", () => {
   });
 });
 
+describe("storage/keyword channels — policies", () => {
+  function seedPolicy(
+    repos: ReturnType<typeof makeTmpDb>["repos"],
+    opts: {
+      id: string;
+      title: string;
+      trigger: string;
+      procedure: string;
+      status?: "active" | "candidate" | "archived";
+    },
+  ): void {
+    repos.policies.upsert({
+      id: opts.id as never,
+      title: opts.title,
+      trigger: opts.trigger,
+      procedure: opts.procedure,
+      verification: "",
+      boundary: "",
+      support: 1,
+      gain: 0,
+      status: opts.status ?? "active",
+      sourceEpisodeIds: [],
+      sourceFeedbackIds: [],
+      sourceTraceIds: [],
+      inducedBy: "unit",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: vec([1, 0, 0]),
+      createdAt: 0,
+      updatedAt: 0,
+    });
+  }
+
+  it("policy title+trigger FTS does not match body-only policy text", () => {
+    const handle = makeTmpDb();
+    try {
+      seedPolicy(handle.repos, {
+        id: "po_title",
+        title: "Fix Django regression by tightening conditional logic",
+        trigger: "when the task asks for a Django regression fix",
+        procedure: "inspect the failing test",
+      });
+      seedPolicy(handle.repos, {
+        id: "po_body",
+        title: "Unrelated policy",
+        trigger: "when editing unrelated files",
+        procedure: "Fix Django regression by tightening conditional logic",
+      });
+
+      const broad = handle.repos.policies.searchByText('"Django" "regression"', 10);
+      expect(broad.map((h) => h.id)).toContain("po_body");
+
+      const titleTrigger = handle.repos.policies.searchTitleTriggerByText(
+        '"Django" "regression"',
+        10,
+      );
+      expect(titleTrigger.map((h) => h.id)).toEqual(["po_title"]);
+      expect(titleTrigger[0]?.score).toBe(1);
+    } finally {
+      handle.cleanup();
+    }
+  });
+});
+
 describe("storage/keyword channels — world model", () => {
   function seedWorld(repos: ReturnType<typeof makeTmpDb>["repos"], opts: {
     id: string;

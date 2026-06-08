@@ -245,7 +245,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // relevant memories; no-LLM/failure paths stay conservative via
       // llmFilterFallbackMaxKeep below.
       llmFilterMaxKeep: 8,
-      llmFilterFallbackMaxKeep: 4,
+      llmFilterFallbackMaxKeep: 6,
       // Set to 2: skip the LLM precision pass when there's only one
       // candidate (no point ranking a single item). Anything with 2+
       // candidates still goes through the filter to drop off-topic

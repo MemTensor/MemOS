@@ -190,22 +190,22 @@ describe("retrieval/llm-filter", () => {
     expect(result.sufficient).toBe(true);
   });
 
-  it("LLM returns empty selection → drops everything and marks insufficient", async () => {
+  it("LLM returns empty selection → fallback capped instead of dropping everything", async () => {
     const llm: any = {
       completeJson: vi.fn().mockResolvedValue({
         value: { selected: [], sufficient: false },
         servedBy: "fake",
       }),
     };
-    const ranked = [trace("a", 0.9), trace("b", 0.8)];
+    const ranked = [trace("a", 0.9), trace("b", 0.8), trace("c", 0.7)];
     const result = await llmFilterCandidates(
       { query: "q", ranked },
-      { llm, log, config: cfg },
+      { llm, log, config: { ...cfg, llmFilterFallbackMaxKeep: 2 } },
     );
-    expect(result.outcome).toBe("llm_filtered");
-    expect(result.kept.length).toBe(0);
-    expect(result.dropped.length).toBe(2);
-    expect(result.sufficient).toBe(false);
+    expect(result.outcome).toBe("llm_failed_safe_cutoff");
+    expect(result.kept.map((r) => String(r.candidate.refId))).toEqual(["a", "b"]);
+    expect(result.dropped.map((r) => String(r.candidate.refId))).toEqual(["c"]);
+    expect(result.sufficient).toBeNull();
   });
 
   it("coerces string / number `sufficient` fields sent by lax models", async () => {

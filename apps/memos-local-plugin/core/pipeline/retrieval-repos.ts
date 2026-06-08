@@ -115,6 +115,12 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
       searchByVector(query, k, opts) {
         return repos.policies.searchByVector(query, k, opts ?? {});
       },
+      searchTitleTriggerByText(ftsMatch, k, opts) {
+        return repos.policies.searchTitleTriggerByText(ftsMatch, k, opts ?? {});
+      },
+      searchByPattern(terms, k, opts) {
+        return repos.policies.searchByPattern(terms, k, opts ?? {});
+      },
       list(filter) {
         const rows = repos.policies.list(
           filter && filter.status ? { status: filter.status } : {},

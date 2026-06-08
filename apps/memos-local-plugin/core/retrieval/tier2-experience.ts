@@ -43,7 +43,8 @@ export async function runTier2Experience(
     );
     const statusIn: Array<"active" | "candidate"> = ["active", "candidate"];
     const haveVec = !!repo.searchByVector && !!input.queryVec && input.queryVec.length > 0;
-    const haveFts = !!input.ftsMatch && !!repo.searchByText;
+    const policyFtsSearch = repo.searchTitleTriggerByText ?? repo.searchByText;
+    const haveFts = !!input.ftsMatch && !!policyFtsSearch;
     const havePattern =
       !!input.patternTerms && input.patternTerms.length > 0 && !!repo.searchByPattern;
     if (!haveVec && !haveFts && !havePattern) {
@@ -69,7 +70,7 @@ export async function runTier2Experience(
     }
 
     if (haveFts) {
-      const hits = repo.searchByText!(input.ftsMatch!, keywordPoolSize, { statusIn });
+      const hits = policyFtsSearch!(input.ftsMatch!, keywordPoolSize, { statusIn });
       hits.forEach((hit, idx) => {
         upsertCandidate(merged, hit.id as PolicyId, {
           cosine: 0,

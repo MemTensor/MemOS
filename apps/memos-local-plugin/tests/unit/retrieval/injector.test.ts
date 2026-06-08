@@ -196,12 +196,13 @@ describe("retrieval/injector", () => {
       packet.rendered.indexOf("## Environment Knowledge"),
     );
     expect(packet.rendered).toContain("Trigger: similar SEC 13F parsing task");
-    expect(packet.rendered).toContain("Do: Use holdings table columns directly.");
-    expect(packet.rendered).toContain("Avoid: Do not infer issuer from filename.");
-    expect(packet.rendered).toContain("Scope: SEC 13F holdings extraction only.");
-    expect(packet.rendered).toContain(
+    expect(packet.rendered).not.toContain("Do: Use holdings table columns directly.");
+    expect(packet.rendered).not.toContain("Avoid: Do not infer issuer from filename.");
+    expect(packet.rendered).not.toContain("Scope: SEC 13F holdings extraction only.");
+    expect(packet.rendered).not.toContain(
       "Check: Issuer/CUSIP come from the row fields.",
     );
+    expect(packet.rendered).toContain('memos_get(id="p_exp", kind="policy")');
     expect(packet.rendered).not.toContain('refId="p_exp"');
     expect(packet.rendered).not.toContain("Type:");
     expect(packet.rendered).not.toContain("confidence=");
@@ -290,7 +291,7 @@ describe("retrieval/injector", () => {
     });
 
     expect(packet.rendered).toContain("1. Use holdings columns");
-    expect(packet.rendered).toContain("Do:");
+    expect(packet.rendered).toContain('memos_get(id="p_dup", kind="policy")');
     expect(packet.rendered).not.toMatch(/Trigger:\s*Use holdings columns/);
   });
 
@@ -314,8 +315,10 @@ describe("retrieval/injector", () => {
     expect(packet.rendered).toContain("Trace ·");
     expect(packet.rendered).not.toContain("Sub-task ·");
     expect(packet.rendered).toContain('memos_timeline(episodeId="e1")');
+    expect(packet.rendered).toContain("BEFORE your first tool call");
     expect(packet.rendered).toContain('memos_get(id="t1", kind="trace")');
     expect(packet.rendered).toContain("`memos_timeline(episodeId, limit?)`");
+    expect(packet.rendered).toContain("call before your first tool call");
     expect(packet.rendered).toContain('`memos_get(id, kind="trace")`');
   });
 
