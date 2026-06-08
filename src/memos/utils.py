@@ -165,6 +165,7 @@ def timed_with_status(
             exc_message = None
             result = None
             success_flag = False
+            exception_to_raise: Exception | None = None
 
             try:
                 result = fn(*args, **kwargs)
@@ -179,6 +180,12 @@ def timed_with_status(
                 if fallback is not None and callable(fallback):
                     result = fallback(e, *args, **kwargs)
                     return result
+                # No fallback: remember the exception so we can re-raise it
+                # *after* the ``finally`` block has emitted the status log.
+                # A bare ``raise`` here would also work, but storing the
+                # reference makes the intent explicit and keeps the finally
+                # block solely responsible for logging.
+                exception_to_raise = e
             finally:
                 elapsed_ms = (time.perf_counter() - start) * 1000.0
 
@@ -218,6 +225,13 @@ def timed_with_status(
 
                 logger.info(msg)
 
+            # Re-raise *after* the finally block has run so the status log
+            # is still emitted for failures without a fallback. Using
+            # ``raise <exc>`` (not bare ``raise``) here because the except
+            # block has already exited.
+            if exception_to_raise is not None:
+                raise exception_to_raise
+
         return wrapper
 
     if func is None:
@@ -227,6 +241,7 @@ def timed_with_status(
 
 def timed(func=None, *, log=True, log_prefix=""):
     def decorator(fn):
+        @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             start = time.perf_counter()
             result = fn(*args, **kwargs)

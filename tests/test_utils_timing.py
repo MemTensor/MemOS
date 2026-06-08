@@ -292,6 +292,17 @@ class TestTimedRegression:
         assert bare() == 1
         assert parens() == 2
 
+    def test_preserves_function_metadata(self):
+        """@timed must preserve __name__ / __doc__ via functools.wraps."""
+
+        @timed
+        def documented_func():
+            """I have a docstring."""
+            return 42
+
+        assert documented_func.__name__ == "documented_func"
+        assert documented_func.__doc__ == "I have a docstring."
+
 
 # ===========================================================================
 # timed_with_status — regression tests
@@ -313,16 +324,45 @@ class TestTimedWithStatusRegression:
         assert "ok_func" in logs[0]
 
     def test_failure_logging_no_fallback(self, caplog):
+        """Without a fallback the original exception must propagate.
+
+        The [TIMER_WITH_STATUS] log line is emitted from ``finally`` so it
+        is still produced *before* the exception unwinds out of the
+        wrapper — caplog captures it either way.
+        """
+
         @timed_with_status
         def fail_func():
             raise RuntimeError("bad")
 
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.INFO), pytest.raises(RuntimeError, match="bad"):
             fail_func()
         logs = _collect_timer_with_status_logs(caplog)
         assert len(logs) == 1
         assert "status: FAILED" in logs[0]
         assert "RuntimeError" in logs[0]
+
+    def test_failure_no_fallback_preserves_original_exception(self):
+        """Re-raise must keep the original exception identity / chain.
+
+        Using a sentinel attribute on the raised exception is the simplest
+        way to assert the *same* object is propagated (no wrapping in a
+        new exception type, no ``raise ... from None``).
+        """
+        marker = object()
+
+        @timed_with_status
+        def fail_func():
+            err = RuntimeError("identity")
+            err.marker = marker  # type: ignore[attr-defined]
+            raise err
+
+        with pytest.raises(RuntimeError) as excinfo:
+            fail_func()
+        assert getattr(excinfo.value, "marker", None) is marker
+        # No exception chaining was introduced by the decorator.
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__suppress_context__ is False
 
     def test_failure_with_fallback(self, caplog):
         @timed_with_status(fallback=lambda e, *a, **kw: "fallback_val")
