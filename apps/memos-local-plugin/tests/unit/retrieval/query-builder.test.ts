@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   buildQuery,
+  buildQueryWithExtract,
   extractTags,
   isSoftwareRepairPrompt,
 } from "../../../core/retrieval/query-builder.js";
@@ -127,7 +128,7 @@ describe("retrieval/query-builder", () => {
     expect(cq.tags).toContain("number_theory");
   });
 
-  it("uses the markdown problem body for keyword retrieval", () => {
+  it("preserves markdown problem prompts instead of applying format-specific normalization", () => {
     const cq = buildQuery({
       reason: "turn_start",
       agent: "openclaw",
@@ -139,12 +140,13 @@ describe("retrieval/query-builder", () => {
       ts: NOW,
     });
     expect(cq.text).toContain("42 stepping stones");
-    expect(cq.text).not.toContain("new task");
-    expect(cq.ftsMatch).toContain('"stepping"');
-    expect(cq.ftsMatch).not.toContain('"following"');
+    expect(cq.text).toContain("new task");
+    expect(cq.text).toContain("**Problem:**");
+    expect(cq.ftsMatch).toContain('("new" "task" "Please")');
+    expect(cq.ftsMatch).toContain('("Please" "solve" "olympiad-style")');
   });
 
-  it("uses the repair bug description instead of wrapper guardrails", () => {
+  it("preserves software repair prompts instead of applying benchmark-specific normalization", () => {
     const cq = buildQuery({
       reason: "turn_start",
       agent: "openclaw",
@@ -163,15 +165,11 @@ describe("retrieval/query-builder", () => {
         "Reply TASK_COMPLETE when done.",
       ts: NOW,
     });
-    expect(cq.text).toContain("software_engineering python test bug fix");
-    expect(cq.text).toContain("repo: django/django");
+    expect(cq.text).toContain("WRAPPER_PATH");
+    expect(cq.text).toContain("STRICT RULES");
     expect(cq.text).toContain("cleaned_data");
     expect(cq.text).toContain("ModelForm");
-    expect(cq.text).not.toContain("WRAPPER_PATH");
-    expect(cq.text).not.toContain("STRICT RULES");
-    expect(cq.tags).toContain("python");
-    expect(cq.tags).toContain("test");
-    expect(isSoftwareRepairPrompt(cq.text)).toBe(false);
+    expect(isSoftwareRepairPrompt(cq.text)).toBe(true);
     expect(
       isSoftwareRepairPrompt(
         "You need to fix a bug in the django/django repository.\n\n## Bug Description\n\nBroken form default.",
@@ -190,8 +188,57 @@ describe("retrieval/query-builder", () => {
       ts: NOW,
     });
     expect(cq.ftsMatch).toContain('"stepping"');
-    expect(cq.ftsMatch).toContain('"circle"');
     expect(cq.ftsMatch).not.toContain('"hamiltonian"');
     expect(cq.ftsMatch).not.toContain('"modular"');
+  });
+
+  it("uses the first five keyword tokens from the complete input without scoring", () => {
+    const cq = buildQuery({
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s_lifestyle_pdf" as unknown as never,
+      userText:
+        "You are given an occupational task to complete. Read the description carefully and produce the requested artifact.\n\n" +
+        "General instructions: use appropriate tools, inspect files when needed, and reply when complete.\n\n" +
+        "Create a two-page PDF itinerary for a seven-day Bahamas yacht trip. Include royalty-free photos for each destination, family snorkeling activities, and waterfront dining recommendations.",
+      ts: NOW,
+    });
+
+    expect(cq.text).toContain("occupational task");
+    expect(cq.text).toContain("Bahamas yacht trip");
+    expect(cq.ftsMatch).toContain('("given" "occupational" "task")');
+    expect(cq.ftsMatch).toContain('("task" "complete" "Read")');
+  });
+
+  it("falls back to raw query text when extracted queryVecText is not usable", () => {
+    const cq = buildQueryWithExtract(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_bad_extract" as unknown as never,
+        userText: "Investigate memos_search policy recall for po_7x7aq1k9q4ba",
+        ts: NOW,
+      },
+      { queryVecText: ".", keywords: ["policy", "recall"] },
+    );
+
+    expect(cq.text).toContain("memos_search policy recall");
+    expect(cq.text).not.toBe(".");
+  });
+
+  it("falls back to query text for pattern terms when extracted keywords miss short terms", () => {
+    const cq = buildQueryWithExtract(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_pattern_fallback" as unknown as never,
+        userText: "检查向量召回和po策略",
+        ts: NOW,
+      },
+      { queryVecText: "检查向量召回和po策略", keywords: ["retrieval"] },
+    );
+
+    expect(cq.patternTerms).toContain("向量");
+    expect(cq.patternTerms).toContain("po");
   });
 });

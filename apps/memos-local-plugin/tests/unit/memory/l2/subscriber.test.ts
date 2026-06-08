@@ -356,7 +356,7 @@ describe("memory/l2/subscriber", () => {
       l2Bus,
       llm: fakeLlm({
         completeJson: {
-          "l2.failure.experience.sink.v2": {
+          "l2.failure.experience.sink.v5": {
             title: "修复配置失败",
             trigger: "配置校验失败并报错",
             procedure: "先检查配置项，再重试任务",
@@ -402,7 +402,7 @@ describe("memory/l2/subscriber", () => {
       l2Bus,
       llm: fakeLlm({
         completeJson: {
-          "l2.failure.experience.sink.v2": {
+          "l2.failure.experience.sink.v5": {
             title: "空指导",
             trigger: "触发",
             procedure: "步骤",
@@ -460,7 +460,7 @@ describe("memory/l2/subscriber", () => {
       l2Bus,
       llm: fakeLlm({
         completeJson: {
-          "l2.failure.experience.sink.v2": {
+          "l2.failure.experience.sink.v5": {
             title: "修复空反馈失败",
             trigger: "失败触发",
             procedure: "先检查输入",
@@ -724,7 +724,7 @@ describe("memory/l2/subscriber", () => {
       l2Bus,
       llm: fakeLlm({
         completeJson: {
-          "l2.failure.experience.sink.v2": {
+          "l2.failure.experience.sink.v5": {
             title: "runOnce sink",
             trigger: "失败触发",
             procedure: "检查配置",

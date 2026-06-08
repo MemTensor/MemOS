@@ -12,11 +12,19 @@ describe("storage/keyword.prepareFtsMatch", () => {
     expect(prepareFtsMatch("    ")).toBeNull();
   });
 
-  it("AND-joins ASCII tokens, dropping ones below the trigram window", () => {
+  it("AND-joins one or two ASCII tokens, dropping ones below the trigram window", () => {
     const out = prepareFtsMatch("docker compose up");
     expect(out).toBe('"docker" "compose"');
     // "up" (length 2) is below trigram width → dropped from FTS
     // (caller should also build patternTerms for it).
+  });
+
+  it("requires at least three of five keyword tokens to match", () => {
+    const out = prepareFtsMatch("alpha beta gamma delta epsilon");
+    expect(out).toContain('("alpha" "beta" "gamma")');
+    expect(out).toContain('("alpha" "delta" "epsilon")');
+    expect(out).toContain(" OR ");
+    expect(out?.match(/\(/g)?.length).toBe(10);
   });
 
   it("emits CJK runs as standalone tokens when ≥3 chars", () => {
@@ -35,7 +43,7 @@ describe("storage/keyword.prepareFtsMatch", () => {
   it("escapes quotes inside tokens for FTS5 phrase syntax", () => {
     const out = prepareFtsMatch('check "quoted" word');
     // FTS5 phrase syntax doubles the inner quote.
-    expect(out).toBe('"check" "quoted" "word"');
+    expect(out).toBe('("check" "quoted" "word")');
   });
 
   it("strips punctuation that would otherwise become part of a phrase", () => {
@@ -47,7 +55,8 @@ describe("storage/keyword.prepareFtsMatch", () => {
     expect(out).toContain('"Vue"');
     expect(out).toContain('"Vite"');
     expect(out).toContain('"modern"');
-    expect(out).toContain('"tools"');
+    expect(out).toContain('"build"');
+    expect(out).not.toContain('"tools"');
   });
 });
 

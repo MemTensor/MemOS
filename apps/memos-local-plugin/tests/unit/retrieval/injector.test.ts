@@ -196,6 +196,7 @@ describe("retrieval/injector", () => {
       packet.rendered.indexOf("## Environment Knowledge"),
     );
     expect(packet.rendered).toContain("Trigger: similar SEC 13F parsing task");
+    expect(packet.rendered).toContain("Use as guardrail before planning.");
     expect(packet.rendered).not.toContain("Do: Use holdings table columns directly.");
     expect(packet.rendered).not.toContain("Avoid: Do not infer issuer from filename.");
     expect(packet.rendered).not.toContain("Scope: SEC 13F holdings extraction only.");

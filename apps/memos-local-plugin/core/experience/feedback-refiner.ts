@@ -134,7 +134,7 @@ async function refineByLlm(
   return normalizeDraft(response.value, input);
 }
 
-const FEEDBACK_REFINEMENT_SYSTEM = `You extract actionable guidance from user feedback.
+export const FEEDBACK_REFINEMENT_SYSTEM = `You extract actionable guidance from user feedback.
 
 Given a user's feedback on an agent's response, produce a **procedural policy**
 that helps the agent avoid the same mistake (or replicate the same success) in
@@ -177,6 +177,17 @@ CRITICAL REQUIREMENTS:
 
    Only provide verification if there's a CONCRETE, CHECKABLE method.
    If you can't think of a specific verification step, leave it EMPTY.
+
+5. **SOURCE-SPECIFIC ENTITIES are NOT reusable by default**:
+   - Treat names, locations, product names, file names, one-off requested targets,
+     and single-task acceptance details as source-specific entities.
+   - Abstract them into a reusable category or variable for title, trigger,
+     procedure, caveats, and verification.
+   - Preserve an entity only when the input explicitly marks it as a structured
+     stable fact, such as a user profile fact, workspace/project fact,
+     long-term preference memory, or stable-fact annotation.
+   - Current episode text, tool output, verifier feedback, or one-time task
+     requirements are not enough evidence to call an entity long-term.
 
 IMPORTANT: Focus on TRIGGER + PROCEDURE. These are the core fields.
 Caveats and verification are optional - only fill them if you have specific content.

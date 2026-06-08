@@ -17,7 +17,7 @@ import type { PromptDef } from "./index.js";
  */
 export const L2_INDUCTION_PROMPT: PromptDef = {
   id: "l2.induction",
-  version: 2,
+  version: 3,
   description:
     "Distill an L2 policy (procedural sub-task strategy) from a cluster of similar L1 traces, with explicit boundaries against L3 world-model drift.",
   system: `You induce reusable **procedural policies** from agent experience.
@@ -38,6 +38,18 @@ Produce ONE policy describing the action pattern. The policy must:
 - Note at least one CAVEAT or failure mode observed in the traces — a
   step-level pitfall, NOT a generic environment taboo.
 - Generalize across the input traces, not restate one of them.
+
+Source-specific entity boundary:
+- Names, locations, product names, file names, one-off requested targets,
+  and task-specific acceptance details are source-specific entities by
+  default. Abstract them into a reusable category or variable.
+- Preserve an entity only when the input explicitly marks it as a structured
+  stable fact, such as a user profile fact, workspace/project fact, long-term
+  preference memory, or stable-fact annotation.
+- Current episode text, tool output, verifier feedback, or one task's
+  acceptance criteria are not enough evidence to call an entity long-term.
+- Do not put source-specific entities into title, trigger, action, rationale,
+  or caveats unless the structured stable source is present.
 
 ──────────────────── Boundaries — what NOT to write ────────────────────
 

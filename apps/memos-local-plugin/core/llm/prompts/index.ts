@@ -26,6 +26,7 @@ export { DECISION_REPAIR_PROMPT } from "./decision-repair.js";
 export { SKILL_CRYSTALLIZE_PROMPT } from "./skill-crystallize.js";
 export { SKILL_REBUILD_PROMPT } from "./skill-rebuild.js";
 export { RETRIEVAL_FILTER_PROMPT } from "./retrieval-filter.js";
+export { RETRIEVAL_QUERY_EXTRACT_PROMPT } from "./retrieval-query-extract.js";
 
 export type PromptLanguage = "auto" | "zh" | "en";
 

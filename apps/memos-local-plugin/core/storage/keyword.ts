@@ -6,7 +6,7 @@
  *   1. `prepareFtsMatch(query)` — sanitise a free-form user query for an
  *      FTS5 MATCH clause. We split on whitespace, drop tokens shorter
  *      than the trigram window where useful, escape internal quotes and
- *      AND the resulting phrases.
+ *      require at least 3 of up to 5 resulting phrases to match.
  *
  *   2. `extractPatternTerms(query)` — return short tokens (length 2)
  *      and CJK bigrams (sliding 2-char windows over CJK runs). These
@@ -20,9 +20,10 @@
 
 const PUNCT = /["“”'’(){}\[\]<>«»《》【】（）\\^~!@#$%&*+/=:;,.，。、；：!?？]+/g;
 const CJK_RUN = /[\u4e00-\u9fff\u3400-\u4dbf\uF900-\uFAFF]+/g;
+const ASCII_RUN = /[A-Za-z0-9][A-Za-z0-9_-]*/g;
 const TRIGRAM_MIN = 3;
 const PATTERN_MIN = 2;
-const MAX_FTS_TOKENS = 12;
+const MAX_FTS_TOKENS = 5;
 const MAX_PATTERN_TERMS = 16;
 
 /**
@@ -57,9 +58,28 @@ export function prepareFtsMatch(query: string): string | null {
 
   const limited = Array.from(new Set(expanded)).slice(0, MAX_FTS_TOKENS);
   // Each token wrapped in FTS5 phrase quotes so internal punctuation /
-  // CJK can't break parsing. Multiple phrases joined by space → AND.
+  // CJK can't break parsing. With 3+ tokens, use a bounded 3-of-N boolean
+  // expression: each group is implicit AND, groups are OR.
   const safe = limited.map((t) => `"${t.replace(/"/g, '""')}"`);
-  return safe.join(" ");
+  if (safe.length <= 2) return safe.join(" ");
+  return combinations(safe, 3).map((group) => `(${group.join(" ")})`).join(" OR ");
+}
+
+function combinations<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  const pick = (start: number, group: T[]) => {
+    if (group.length === size) {
+      out.push([...group]);
+      return;
+    }
+    for (let i = start; i <= items.length - (size - group.length); i++) {
+      group.push(items[i]!);
+      pick(i + 1, group);
+      group.pop();
+    }
+  };
+  pick(0, []);
+  return out;
 }
 
 /**
@@ -77,9 +97,11 @@ export function extractPatternTerms(query: string): string[] {
   const cleaned = String(query).replace(PUNCT, " ");
   const out = new Set<string>();
 
-  // Short ASCII tokens (length === 2). Length 1 is too noisy.
-  for (const tok of cleaned.split(/\s+/).filter(Boolean)) {
-    if (tok.length === PATTERN_MIN && /[^\u4e00-\u9fff]/.test(tok)) {
+  // Short ASCII tokens (length === 2). Match runs directly so mixed
+  // CJK/ASCII text like `po策略` still contributes the `po` term.
+  const asciiRuns = cleaned.match(ASCII_RUN) ?? [];
+  for (const tok of asciiRuns) {
+    if (tok.length === PATTERN_MIN) {
       out.add(tok.toLowerCase());
     }
   }

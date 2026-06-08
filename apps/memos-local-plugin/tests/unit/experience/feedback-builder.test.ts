@@ -129,6 +129,25 @@ describe("feedback experience builder", () => {
     expect(recalled.map((c) => c.refId)).toContain(result.policyId);
   });
 
+  it("stores semantic policy titles without legacy type prefixes", async () => {
+    const result = await runFeedbackExperience(
+      {
+        feedback: feedback(),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: -1 },
+        trace,
+      },
+      {
+        repos: handle.repos,
+        embedder: fakeEmbedder(),
+        namespace,
+        now: () => NOW,
+      },
+    );
+
+    const row = handle.repos.policies.getById(result.policyId!)!;
+    expect(row.title).not.toMatch(/^(Success|Avoid|Repair|Prefer):\s*/i);
+  });
+
   it("treats a partial verifier pass (3/4, reward 0) as a failure, not a success_pattern", async () => {
     const result = await runFeedbackExperience(
       {

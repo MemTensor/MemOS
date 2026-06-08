@@ -112,7 +112,7 @@ describe("memory/l2/integration", () => {
 
     const llm = fakeLlm({
       completeJson: {
-        "l2.l2.induction.v2": {
+        "l2.l2.induction.v3": {
           title: "install missing system libs in container",
           trigger: "pip install fails in container with MODULE_NOT_FOUND due to missing system lib",
           procedure: "1. detect lib 2. use distro pkg manager 3. retry pip",
@@ -367,7 +367,7 @@ describe("memory/l2/integration", () => {
         repos: handle.repos,
         llm: fakeLlm({
           completeJson: {
-            "l2.l2.induction.v2": {
+            "l2.l2.induction.v3": {
               title: " 闲聊场景下避免使用emoji ",
               trigger: "用户发起非任务性闲聊，且未明确要求使用emoji",
               procedure: "以简洁、自然的文字回应，但不添加任何emoji或表情符号",
@@ -457,7 +457,7 @@ describe("memory/l2/integration", () => {
         repos: handle.repos,
         llm: fakeLlm({
           completeJson: {
-            "l2.l2.induction.v2": {
+            "l2.l2.induction.v3": {
               title: "结构化呈现外部数据查询结果",
               trigger: "agent通过工具调用获取到外部数据源的原始响应（搜索结果、API返回、数据库查询等），需要向用户呈现信息",
               procedure: "1) 从原始数据中提取关键信息要素；2) 按逻辑分类组织信息（时间、地点、数值、状态等）；3) 使用结构化格式呈现（分类标题、列表、表格等）；4) 可选：基于数据添加简短的实用性总结或建议",
@@ -548,7 +548,7 @@ describe("memory/l2/integration", () => {
         repos: handle.repos,
         llm: fakeLlm({
           completeJson: {
-            "l2.l2.induction.v2": {
+            "l2.l2.induction.v3": {
               ...shared,
               boundary: "仅适用于数据库事务和写入操作，不适用于天气API或公开搜索结果",
               rationale: "边界不同，不能复用天气呈现经验",
@@ -630,7 +630,7 @@ describe("memory/l2/integration", () => {
         repos: handle.repos,
         llm: fakeLlm({
           completeJson: {
-            "l2.l2.induction.v2": {
+            "l2.l2.induction.v3": {
               title: "工具全部失效时坦诚说明并回退到已有知识",
               trigger: "连续尝试多个同类工具（如多个搜索引擎、多个新闻源）后全部因反爬、封禁或网络错误失效，且用户问题需要实时信息",
               procedure: "1) 明确告知用户所有尝试过的工具都已失效（列出具体工具名）；2) 基于训练数据中的已有知识提供最接近的答案；3) 明确标注该信息的时间戳或来源时间，并提醒用户可能存在时效性差异；4) 建议用户通过其他渠道（如直接搜索、官方网站）验证",
@@ -663,7 +663,7 @@ describe("memory/l2/integration", () => {
 
     const llm = fakeLlm({
       completeJson: {
-        "l2.l2.induction.v2": {
+        "l2.l2.induction.v3": {
           title: "t",
           trigger: "tr",
           procedure: "pr",
