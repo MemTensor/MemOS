@@ -1793,6 +1793,135 @@ describe("registerOpenClawTools", () => {
     );
   });
 
+  it("memos_timeline renders a compact step-by-step tool index", async () => {
+    const mc = {
+      timeline: vi.fn(async () => [
+        {
+          id: "tr_tool_only",
+          ts: 1,
+          userText: "",
+          agentText: "",
+          toolCalls: [
+            { name: "exec", errorCode: undefined },
+            { name: "pytest", errorCode: "FAILED" },
+            {
+              name: "curl",
+              errorCode:
+                "network failure with a very long diagnostic body that should stay out of the compact timeline index",
+            },
+          ],
+          value: 0.5,
+        },
+      ]),
+    } as unknown as MemoryCore;
+
+    const { api, tools } = collectTools();
+    registerOpenClawTools(api, {
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const timeline = tools.find((t) => t.descriptor.name === "memos_timeline")!;
+    const res = (await timeline.descriptor.execute("toolCall_tl", {
+      episodeId: "ep1",
+    })) as { content: Array<{ text: string }> };
+
+    expect(res.content[0]!.text).toContain("Episode ep1 — 1 steps");
+    expect(res.content[0]!.text).toContain("step 1:");
+    expect(res.content[0]!.text).toContain("id: tr_tool_only");
+    expect(res.content[0]!.text).toContain("tools: exec, pytest(FAILED:FAILED), curl(FAILED:");
+    expect(res.content[0]!.text).not.toContain("very long diagnostic body");
+  });
+
+  it("memos_get renders all tool calls for tool-only traces", async () => {
+    const mc = {
+      getTrace: vi.fn(async () => ({
+        id: "tr_tool_only",
+        episodeId: "ep1",
+        ts: 1,
+        value: 0.5,
+        userText: "",
+        agentText: "",
+        summary: null,
+        reflection: null,
+        toolCalls: [
+          {
+            name: "exec",
+            input: { cmd: "pytest tests/test_forms.py" },
+            output: "2 passed",
+            errorCode: undefined,
+          },
+          {
+            name: "sed",
+            input: { range: "1,80p", file: "django/forms/models.py" },
+            output: "class BaseModelForm",
+            errorCode: undefined,
+          },
+        ],
+      })),
+    } as unknown as MemoryCore;
+
+    const { api, tools } = collectTools();
+    registerOpenClawTools(api, {
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const get = tools.find((t) => t.descriptor.name === "memos_get")!;
+    const res = (await get.descriptor.execute("toolCall_get", {
+      id: "tr_tool_only",
+      kind: "trace",
+    })) as { content: Array<{ text: string }> };
+
+    expect(res.content[0]!.text).toContain("Trace tr_tool_only tool calls");
+    expect(res.content[0]!.text).toContain("tool 1: exec — ok");
+    expect(res.content[0]!.text).toContain('"cmd":"pytest tests/test_forms.py"');
+    expect(res.content[0]!.text).toContain("2 passed");
+    expect(res.content[0]!.text).toContain("tool 2: sed — ok");
+    expect(res.content[0]!.text).toContain("class BaseModelForm");
+  });
+
+  it("memos_get keeps tool calls visible when a trace also has assistant text", async () => {
+    const mc = {
+      getTrace: vi.fn(async () => ({
+        id: "tr_mixed",
+        episodeId: "ep1",
+        ts: 1,
+        value: 0.5,
+        userText: "run the test",
+        agentText: "I ran the test and found the failure.",
+        summary: "test failure",
+        reflection: null,
+        toolCalls: [
+          {
+            name: "exec",
+            input: { cmd: "pytest tests/test_forms.py" },
+            output: "1 failed",
+            errorCode: "exit_1",
+          },
+        ],
+      })),
+    } as unknown as MemoryCore;
+
+    const { api, tools } = collectTools();
+    registerOpenClawTools(api, {
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const get = tools.find((t) => t.descriptor.name === "memos_get")!;
+    const res = (await get.descriptor.execute("toolCall_get_mixed", {
+      id: "tr_mixed",
+      kind: "trace",
+    })) as { content: Array<{ text: string }> };
+
+    expect(res.content[0]!.text).toContain("I ran the test and found the failure.");
+    expect(res.content[0]!.text).toContain("Trace tr_mixed tool calls");
+    expect(res.content[0]!.text).toContain("tool 1: exec — FAILED (exit_1)");
+    expect(res.content[0]!.text).toContain('"cmd":"pytest tests/test_forms.py"');
+    expect(res.content[0]!.text).toContain("1 failed");
+  });
+
   it("registers tool shells before the async core is resolved", async () => {
     const mc = buildCore();
     await mc.init();

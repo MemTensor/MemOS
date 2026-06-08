@@ -269,7 +269,9 @@ describe("retrieval/integration", () => {
     );
     expect(experience?.refId).toBe("po_sec13f_issuer");
     expect(experience?.title).toContain("SEC 13F issuer CUSIP");
-    expect(experience?.body).toContain("Use holdings table columns directly");
+    expect(experience?.body).toContain("Trigger: Parse SEC 13F holdings");
+    expect(experience?.body).toContain('memos_get(id="po_sec13f_issuer", kind="policy")');
+    expect(experience?.body).not.toContain("Use holdings table columns directly");
     expect(experience?.body).not.toContain("confidence=");
     expect(experience?.body).not.toContain("evidence=");
     expect(res.packet.rendered).toContain("## Experiences");
@@ -292,6 +294,21 @@ describe("retrieval/integration", () => {
     });
     expect(res.stats.tier1Count).toBe(0);
     expect(res.packet.snippets.every((s) => s.refKind !== "skill")).toBe(true);
+  });
+
+  it("tool_driven filters trace and episode memories from the current session", async () => {
+    const res = await toolDrivenRetrieve(makeDeps(handle), {
+      reason: "tool_driven",
+      agent: "openclaw",
+      sessionId: "s1" as SessionId,
+      tool: "memos_search",
+      args: { query: "docker compose" },
+      ts: NOW as never,
+    });
+
+    const kinds = res.packet.snippets.map((s) => s.refKind);
+    expect(kinds).not.toContain("trace");
+    expect(kinds).not.toContain("episode");
   });
 
   it("lightweight mode only returns trace memories after summarizer filter succeeds", async () => {

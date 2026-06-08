@@ -146,6 +146,91 @@ function formatHitList(hits: Array<{ refKind: string; refId: string; score: numb
   return `Found ${hits.length} memories:\n\n${lines.join("\n")}`;
 }
 
+type ToolCallLike = {
+  name?: string;
+  input?: unknown;
+  output?: unknown;
+  error?: unknown;
+  errorCode?: string | null;
+};
+
+function oneLine(s: string, n: number): string {
+  return clip(String(s ?? "").replace(/\s+/g, " ").trim(), n);
+}
+
+function stableText(v: unknown): string {
+  if (v === undefined || v === null || v === "") return "";
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+function toolErrorText(tc: ToolCallLike): string {
+  return (tc.errorCode ?? stableText(tc.error)) || "unknown";
+}
+
+function toolCallStatus(tc: ToolCallLike): string {
+  const error = oneLine(toolErrorText(tc), 24);
+  return tc.errorCode || tc.error ? `${tc.name ?? "tool"}(FAILED:${error})` : tc.name ?? "tool";
+}
+
+function formatTraceToolCalls(traceId: string, calls: readonly ToolCallLike[]): string {
+  if (calls.length === 0) return `Found trace ${traceId}.`;
+  const lines = [`Trace ${traceId} tool calls:`];
+  calls.forEach((tc, i) => {
+    const failed = Boolean(tc.errorCode || tc.error);
+    const error = toolErrorText(tc);
+    lines.push(`tool ${i + 1}: ${tc.name ?? "tool"} — ${failed ? `FAILED (${error})` : "ok"}`);
+    const input = stableText(tc.input);
+    if (input) lines.push(`input: ${input}`);
+    const output = stableText(tc.output);
+    if (output) lines.push(`output: ${output}`);
+  });
+  return lines.join("\n");
+}
+
+function traceBodyText(trace: {
+  id: string;
+  agentText?: string;
+  summary?: string | null;
+  userText?: string;
+  toolCalls?: readonly ToolCallLike[];
+}, bodyCap: number): string {
+  const body = clip(trace.agentText, bodyCap);
+  const toolText =
+    (trace.toolCalls?.length ?? 0) > 0
+      ? formatTraceToolCalls(trace.id, trace.toolCalls ?? [])
+      : "";
+  if (body && toolText) return `${body}\n\n${toolText}`;
+  if (body) return body;
+  if (toolText) return toolText;
+  return trace.summary || trace.userText || `Found trace ${trace.id}.`;
+}
+
+function timelineStepText(
+  t: {
+    id: string;
+    userText?: string;
+    agentText?: string;
+    toolCalls?: readonly ToolCallLike[];
+  },
+  i: number,
+): string {
+  const lines = [`step ${i + 1}:`, `  id: ${t.id}`];
+  if ((t.toolCalls?.length ?? 0) > 0) {
+    lines.push(`  tools: ${t.toolCalls!.map(toolCallStatus).join(", ")}`);
+  }
+  if (t.agentText) {
+    lines.push(`  → ${oneLine(t.agentText, 200)}`);
+  } else if (t.userText) {
+    lines.push(`  user: ${oneLine(t.userText, 120)}`);
+  }
+  return lines.join("\n");
+}
+
 function sessionFromCtx(ctx: OpenClawPluginToolContext | undefined): string | undefined {
   const sessionKey = ctx?.sessionKey;
   if (!sessionKey) return undefined;
@@ -249,10 +334,12 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
                 name: tc.name,
                 success: !tc.errorCode,
                 errorCode: tc.errorCode,
+                input: tc.input,
+                output: tc.output,
               })),
             },
           };
-          return textToolResult(details, details.body || trace.summary || trace.userText || `Found trace ${trace.id}.`);
+          return textToolResult(details, traceBodyText(trace, bodyCap));
         }
         if (kind === "policy") {
           const policy = await core.getPolicy(params.id, namespaceFromCtx(ctx));
@@ -300,8 +387,9 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
       name: "memos_timeline",
       label: "Memory Timeline",
       description:
-        "Return the ordered traces inside a single episode. Useful for reconstructing " +
-        "conversation flow and debugging.",
+        "Expand a similar past task into its step-by-step execution trace — showing which tools " +
+        "were called, whether they succeeded or failed, and what the agent produced at each step. " +
+        "Call this when a Similar Past Task in memory context matches the current task type.",
       parameters: MemoryTimelineParams,
       async execute(_toolCallId: string, params: MemoryTimelineParamsT) {
         const core = await resolveCore(opts);
@@ -314,16 +402,16 @@ export function registerOpenClawTools(api: OpenClawPluginApi, opts: ToolsOptions
             ts: t.ts,
             userText: clip(t.userText, bodyCap),
             agentText: clip(t.agentText, bodyCap),
-            toolCalls: t.toolCalls.map((tc) => ({ name: tc.name, error: tc.errorCode })),
+            toolCalls: t.toolCalls.map((tc) => ({ name: tc.name, errorCode: tc.errorCode })),
             value: t.value,
           })),
         };
         const text = details.traces.length === 0
           ? `No traces found for episode "${params.episodeId}".`
-          : `Episode ${params.episodeId} timeline:\n\n` +
+          : `Episode ${params.episodeId} — ${details.traces.length} steps:\n\n` +
             details.traces
-              .map((t, i) => `${i + 1}. ${t.userText || t.agentText || t.id}`)
-              .join("\n");
+              .map((t, i) => timelineStepText(t, i))
+              .join("\n\n");
         return textToolResult(details, text);
       },
     }),

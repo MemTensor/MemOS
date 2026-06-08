@@ -194,4 +194,36 @@ describe("retrieval/tier2-experience", () => {
       "po_kw_2",
     ]);
   });
+
+  it("uses policy title+trigger FTS instead of body-wide policy FTS", async () => {
+    const titleHit = makePolicy("po_title_hit", {
+      title: "Fix Django regression by tightening conditional logic",
+      trigger: "when the task asks for a Django regression fix",
+      procedure: "Inspect the failing regression and add a targeted test.",
+      sourceFeedbackIds: [],
+      vec: null,
+    });
+    const bodyOnlyHit = makePolicy("po_body_noise", {
+      title: "Unrelated policy",
+      trigger: "when editing unrelated files",
+      procedure: "Fix Django regression by tightening conditional logic",
+      sourceFeedbackIds: [],
+      vec: null,
+    });
+    const repo = makeRepo([titleHit, bodyOnlyHit], {
+      text: [{ id: bodyOnlyHit.id, score: 1 }],
+    }) as RetrievalRepos["policies"] & {
+      searchTitleTriggerByText: NonNullable<RetrievalRepos["policies"]>["searchByText"];
+    };
+    repo.searchTitleTriggerByText = (_query, k) =>
+      [{ id: titleHit.id, score: 1 }].slice(0, k);
+
+    const out = await runTier2Experience(
+      { repos: { policies: repo }, config: cfg },
+      { queryVec: null, ftsMatch: "Fix Django regression" },
+    );
+
+    expect(out.map((c) => String(c.refId))).toEqual(["po_title_hit"]);
+    expect(out[0]?.channels).toEqual([{ channel: "fts", rank: 0, score: 1 }]);
+  });
 });

@@ -467,7 +467,7 @@ const AlgorithmSchema = Type.Object({
     /** Keep at most this many candidates after a successful LLM filter. */
     llmFilterMaxKeep: NumberInRange(8, 1, 30),
     /** Keep at most this many candidates when no valid LLM judgement is available. */
-    llmFilterFallbackMaxKeep: NumberInRange(4, 0, 30),
+    llmFilterFallbackMaxKeep: NumberInRange(6, 0, 30),
     /**
      * Skip the filter when the ranked list has fewer than this many
      * items. Default 1 — even a single candidate gets a precision

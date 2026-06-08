@@ -200,46 +200,20 @@ export function makePoliciesRepo(db: StorageDb) {
       k: number,
       opts: { statusIn?: PolicyRow["status"][] } = {},
     ): Array<VectorHit<string, PolicySearchMeta>> {
-      if (!ftsMatch || k <= 0) return [];
-      const params: Record<string, unknown> = {
-        match: ftsMatch,
-        k: Math.max(1, Math.min(200, Math.floor(k))),
-      };
-      const whereParts: string[] = [];
-      if (opts.statusIn && opts.statusIn.length > 0) {
-        const placeholders = opts.statusIn.map((_, i) => `@status_${i}`).join(",");
-        whereParts.push(`p.status IN (${placeholders})`);
-        opts.statusIn.forEach((st, i) => {
-          params[`status_${i}`] = st;
-        });
-      }
-      const extra = whereParts.length > 0 ? ` AND ${whereParts.join(" AND ")}` : "";
-      const sql = `
-        SELECT p.id AS id,
-               p.title AS title,
-               p.status AS status,
-               p.support AS support,
-               p.gain AS gain,
-               p.experience_type AS experience_type,
-               p.evidence_polarity AS evidence_polarity,
-               p.salience AS salience,
-               p.confidence AS confidence,
-               p.owner_agent_kind AS owner_agent_kind,
-               p.owner_profile_id AS owner_profile_id,
-               p.owner_workspace_id AS owner_workspace_id
-          FROM policies_fts f
-          JOIN policies     p ON p.id = f.policy_id
-         WHERE policies_fts MATCH @match${extra}
-         ORDER BY rank
-         LIMIT @k`;
-      const rows = db
-        .prepare<typeof params, RawPolicySearchRow>(sql)
-        .all(params);
-      return rows.map((r, idx) => ({
-        id: r.id,
-        score: 1 / (idx + 1),
-        meta: policySearchMeta(r),
-      }));
+      return searchPoliciesFts(db, ftsMatch, k, opts);
+    },
+
+    /**
+     * Policy experience keyword channel used by automatic recall. It
+     * intentionally searches only title + trigger so long policy bodies
+     * cannot drown out exact task-name matches.
+     */
+    searchTitleTriggerByText(
+      ftsMatch: string,
+      k: number,
+      opts: { statusIn?: PolicyRow["status"][] } = {},
+    ): Array<VectorHit<string, PolicySearchMeta>> {
+      return searchPoliciesFts(db, `{title trigger}: ${ftsMatch}`, k, opts);
     },
 
     /**
@@ -534,6 +508,52 @@ function policySearchMeta(r: RawPolicySearchRow): PolicySearchMeta {
     owner_profile_id: r.owner_profile_id,
     owner_workspace_id: r.owner_workspace_id,
   };
+}
+
+function searchPoliciesFts(
+  db: StorageDb,
+  ftsMatch: string,
+  k: number,
+  opts: { statusIn?: PolicyRow["status"][] } = {},
+): Array<VectorHit<string, PolicySearchMeta>> {
+  if (!ftsMatch || k <= 0) return [];
+  const params: Record<string, unknown> = {
+    match: ftsMatch,
+    k: Math.max(1, Math.min(200, Math.floor(k))),
+  };
+  const whereParts: string[] = [];
+  if (opts.statusIn && opts.statusIn.length > 0) {
+    const placeholders = opts.statusIn.map((_, i) => `@status_${i}`).join(",");
+    whereParts.push(`p.status IN (${placeholders})`);
+    opts.statusIn.forEach((st, i) => {
+      params[`status_${i}`] = st;
+    });
+  }
+  const extra = whereParts.length > 0 ? ` AND ${whereParts.join(" AND ")}` : "";
+  const sql = `
+    SELECT p.id AS id,
+           p.title AS title,
+           p.status AS status,
+           p.support AS support,
+           p.gain AS gain,
+           p.experience_type AS experience_type,
+           p.evidence_polarity AS evidence_polarity,
+           p.salience AS salience,
+           p.confidence AS confidence,
+           p.owner_agent_kind AS owner_agent_kind,
+           p.owner_profile_id AS owner_profile_id,
+           p.owner_workspace_id AS owner_workspace_id
+      FROM policies_fts f
+      JOIN policies     p ON p.id = f.policy_id
+     WHERE policies_fts MATCH @match${extra}
+     ORDER BY rank
+     LIMIT @k`;
+  const rows = db.prepare<typeof params, RawPolicySearchRow>(sql).all(params);
+  return rows.map((r, idx) => ({
+    id: r.id,
+    score: 1 / (idx + 1),
+    meta: policySearchMeta(r),
+  }));
 }
 
 /**

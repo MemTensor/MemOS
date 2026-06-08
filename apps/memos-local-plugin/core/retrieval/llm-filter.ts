@@ -172,15 +172,11 @@ ${list}`,
     );
     const keepIndices = new Set(cappedIndices);
     if (keepIndices.size === 0) {
-      // Model asked us to drop everything — honoured. Surface this
-      // explicitly so the Logs page can show "LLM found nothing
-      // relevant" instead of silently injecting a partial packet.
-      return {
-        kept: [],
-        dropped: [...ranked],
-        outcome: "llm_filtered",
-        sufficient: sufficient ?? false,
-      };
+      deps.log.warn("llm_filter.empty_selection_fallback", {
+        candidateCount: ranked.length,
+        sufficient: sufficient ?? null,
+      });
+      return safeCutoff(ranked, deps);
     }
     const kept = cappedIndices.map((i) => ranked[i]!);
     const dropped: RankedCandidate[] = [];
