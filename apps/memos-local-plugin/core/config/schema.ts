@@ -344,6 +344,23 @@ const AlgorithmSchema = Type.Object({
      * `taskIdleTimeoutMs`.
      */
     mergeMaxGapMs: NumberInRange(2 * 60 * 60 * 1000, 0, 24 * 60 * 60 * 1000),
+    /**
+     * Hard cap on turns in a merged episode. Once reached, the next
+     * turn forces a topic boundary even if relation classification says
+     * follow-up/revision. Keeps task-end processing bounded.
+     */
+    maxTurnsPerEpisode: NumberInRange(30, 5, 200),
+    /**
+     * Max time to wait for relation classification before defaulting
+     * to a conservative new-task boundary so foreground prompt
+     * construction cannot stall indefinitely.
+     */
+    classifyTimeoutMs: NumberInRange(5000, 1000, 30000),
+    /**
+     * Shared LLM concurrency budget for asynchronous background
+     * capture/reward/L2/L3/skill-evolution processing.
+     */
+    bgLlmConcurrency: NumberInRange(2, 1, 8),
   }, { default: {} }),
   retrieval: Type.Object({
     /** How many Skill snippets to inject at turn start. */

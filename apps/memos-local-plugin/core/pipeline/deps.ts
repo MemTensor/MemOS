@@ -99,6 +99,8 @@ import type {
   PipelineSubscriptions,
 } from "./types.js";
 import { wrapRetrievalRepos } from "./retrieval-repos.js";
+import { createSemaphore } from "../util/semaphore.js";
+import { rateLimitLlmClient } from "../util/rate-limited-llm.js";
 
 // ─── Algorithm config slice helper ────────────────────────────────────────
 
@@ -165,6 +167,9 @@ export function extractAlgorithmConfig(
     session: {
       followUpMode: alg.session.followUpMode,
       mergeMaxGapMs: alg.session.mergeMaxGapMs,
+      maxTurnsPerEpisode: alg.session.maxTurnsPerEpisode,
+      classifyTimeoutMs: alg.session.classifyTimeoutMs,
+      bgLlmConcurrency: alg.session.bgLlmConcurrency,
     },
   };
 }
@@ -203,14 +208,17 @@ export function buildPipelineSubscribers(
   session?: PipelineSessionSet,
 ): PipelineSubscriberSet {
   const log = deps.log ?? rootLogger.child({ channel: "core.pipeline" });
+  const bgLlmSemaphore = createSemaphore(algorithm.session.bgLlmConcurrency);
+  const bgLlm = rateLimitLlmClient(deps.llm, bgLlmSemaphore);
+  const bgReflectLlm = rateLimitLlmClient(deps.reflectLlm, bgLlmSemaphore);
 
   const captureRunner = createCaptureRunner({
     tracesRepo: deps.repos.traces,
     embeddingRetryQueue: deps.repos.embeddingRetryQueue,
     episodesRepo: adaptEpisodesRepo(deps.repos.episodes),
     embedder: deps.embedder,
-    llm: deps.llm,
-    reflectLlm: deps.reflectLlm,
+    llm: bgLlm,
+    reflectLlm: bgReflectLlm,
     bus: buses.capture,
     cfg: algorithm.capture,
     now: deps.now,
@@ -220,14 +228,14 @@ export function buildPipelineSubscribers(
     tracesRepo: deps.repos.traces,
     episodesRepo: deps.repos.episodes,
     feedbackRepo: deps.repos.feedback,
-    llm: deps.llm,
+    llm: bgLlm,
     bus: buses.reward,
     cfg: algorithm.reward,
     evaluator: {
-      reflectionProvider: deps.reflectLlm?.provider,
-      reflectionModel: deps.reflectLlm?.model,
-      scorerProvider: deps.llm?.provider,
-      scorerModel: deps.llm?.model,
+      reflectionProvider: bgReflectLlm?.provider,
+      reflectionModel: bgReflectLlm?.model,
+      scorerProvider: bgLlm?.provider,
+      scorerModel: bgLlm?.model,
     },
     now: deps.now,
     // Wire the live episode snapshot so the R_human scorer sees the
@@ -259,7 +267,7 @@ export function buildPipelineSubscribers(
     repos: deps.repos,
     rewardBus: buses.reward,
     l2Bus: buses.l2,
-    llm: deps.llm,
+    llm: bgLlm,
     log: log.child({ channel: "core.memory.l2" }),
     config: algorithm.l2Induction,
     thresholds: {
@@ -273,7 +281,7 @@ export function buildPipelineSubscribers(
     repos: deps.repos,
     l2Bus: buses.l2,
     l3Bus: buses.l3,
-    llm: deps.llm,
+    llm: bgLlm,
     log: log.child({ channel: "core.memory.l3" }),
     config: algorithm.l3Abstraction,
   });
@@ -281,7 +289,7 @@ export function buildPipelineSubscribers(
   const skillHandle = attachSkillSubscriber({
     repos: deps.repos,
     embedder: deps.embedder,
-    llm: deps.llm,
+    llm: bgLlm,
     bus: buses.skill,
     l2Bus: buses.l2,
     rewardBus: buses.reward,
@@ -291,7 +299,7 @@ export function buildPipelineSubscribers(
 
   const feedbackHandle = attachFeedbackSubscriber({
     repos: deps.repos,
-    llm: deps.llm,
+    llm: bgLlm,
     embedder: deps.embedder,
     bus: buses.feedback,
     log: log.child({ channel: "core.feedback" }),
