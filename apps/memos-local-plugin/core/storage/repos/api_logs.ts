@@ -17,6 +17,9 @@
 
 import type { StorageDb } from "../types.js";
 
+export const API_LOG_RETENTION_LIMIT = 10_000;
+const API_LOG_PRUNE_BATCH_SIZE = 5_000;
+
 export interface ApiLogRow {
   id: number;
   toolName: string;
@@ -47,6 +50,10 @@ export interface ApiLogFilter {
 }
 
 export function makeApiLogsRepo(db: StorageDb) {
+  let pruneScheduled = false;
+  let pruneInProgress = false;
+  let pruneAgain = false;
+
   const insert = db.prepare<
     {
       tool_name: string;
@@ -66,6 +73,30 @@ export function makeApiLogsRepo(db: StorageDb) {
   );
   const countByTool = db.prepare<{ tool_name: string }, { n: number }>(
     `SELECT COUNT(*) AS n FROM api_logs WHERE tool_name = @tool_name`,
+  );
+  const retentionBoundary = db.prepare<
+    { offset: number },
+    { id: number; called_at: number }
+  >(
+    `SELECT id, called_at
+     FROM api_logs
+     ORDER BY called_at DESC, id DESC
+     LIMIT 1 OFFSET @offset`,
+  );
+  const deleteOlderBatch = db.prepare<{
+    called_at: number;
+    id: number;
+    batch: number;
+  }>(
+    `DELETE FROM api_logs
+     WHERE id IN (
+       SELECT id
+       FROM api_logs
+       WHERE called_at < @called_at
+          OR (called_at = @called_at AND id < @id)
+       ORDER BY called_at ASC, id ASC
+       LIMIT @batch
+     )`,
   );
   const selectAll = db.prepare<
     { limit: number; offset: number },
@@ -126,6 +157,69 @@ export function makeApiLogsRepo(db: StorageDb) {
       .all({ ...toolParams, limit, offset });
   };
 
+  function schedulePrune(): void {
+    if (pruneInProgress) {
+      pruneAgain = true;
+      return;
+    }
+    if (pruneScheduled) return;
+    pruneScheduled = true;
+    const timer = setTimeout(runPruneTask, 0);
+    const maybeNodeTimer = timer as unknown as { unref?: () => void };
+    maybeNodeTimer.unref?.();
+  }
+
+  function runPruneTask(): void {
+    pruneScheduled = false;
+    if (pruneInProgress) {
+      pruneAgain = true;
+      return;
+    }
+    pruneInProgress = true;
+    pruneAgain = false;
+    let boundary: { id: number; called_at: number } | undefined;
+    try {
+      boundary = retentionBoundary.get({ offset: API_LOG_RETENTION_LIMIT - 1 });
+    } catch {
+      finishPruneTask();
+      return;
+    }
+    if (!boundary) {
+      finishPruneTask();
+      return;
+    }
+    pruneBatch(boundary);
+  }
+
+  function pruneBatch(boundary: { id: number; called_at: number }): void {
+    let changes = 0;
+    try {
+      changes = deleteOlderBatch.run({
+        called_at: boundary.called_at,
+        id: boundary.id,
+        batch: API_LOG_PRUNE_BATCH_SIZE,
+      }).changes;
+    } catch {
+      finishPruneTask();
+      return;
+    }
+    if (changes === 0) {
+      finishPruneTask();
+      return;
+    }
+    const timer = setTimeout(() => pruneBatch(boundary), 0);
+    const maybeNodeTimer = timer as unknown as { unref?: () => void };
+    maybeNodeTimer.unref?.();
+  }
+
+  function finishPruneTask(): void {
+    pruneInProgress = false;
+    if (pruneAgain) {
+      pruneAgain = false;
+      schedulePrune();
+    }
+  }
+
   return {
     insert(row: ApiLogInsert): void {
       insert.run({
@@ -136,6 +230,7 @@ export function makeApiLogsRepo(db: StorageDb) {
         success: row.success ? 1 : 0,
         called_at: row.calledAt ?? Date.now(),
       });
+      schedulePrune();
     },
 
     count(filter: Pick<ApiLogFilter, "toolName" | "toolNames"> = {}): number {
