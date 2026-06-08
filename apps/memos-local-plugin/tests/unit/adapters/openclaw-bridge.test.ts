@@ -1214,6 +1214,51 @@ describe("createOpenClawBridge", () => {
     expect(new Set(ids).size).toBe(1);
   });
 
+  it("keeps a single episode when before_prompt soft-times out but onTurnStart finishes later", async () => {
+    vi.stubEnv("MEMOS_BEFORE_PROMPT_SOFT_TIMEOUT_MS", "5");
+    const mc = buildCore();
+    await mc.init();
+    const originalOnTurnStart = mc.onTurnStart.bind(mc);
+    vi.spyOn(mc, "onTurnStart").mockImplementation(async (turn) => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return originalOnTurnStart(turn);
+    });
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const sessionKey = "s-soft-timeout";
+    const ctx = hookCtx({ sessionKey, runId: "run-slow-1" });
+
+    const prepend = await bridge.handleBeforePrompt(
+      { prompt: "hello slow binding", messages: [] },
+      ctx,
+    );
+    expect(prepend?.prependContext).toBeUndefined();
+
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "hello slow binding" },
+          { role: "assistant", content: "done" },
+        ],
+      },
+      ctx,
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const sessionId = bridgeSessionId("main", sessionKey);
+    const rows = await mc.listEpisodeRows({ sessionId, limit: 10 });
+    expect(rows.length).toBeGreaterThan(0);
+    expect(
+      rows.filter((row) => row.turnCount > 0 || row.hasAssistantReply).length,
+    ).toBe(1);
+    vi.unstubAllEnvs();
+  }, 15_000);
+
   it("does not let a delayed agent_end clear the next turn's episode binding", async () => {
     // OpenClaw hooks can overlap: the next before_prompt_build may route
     // a fresh episode before the previous agent_end finishes. The bridge

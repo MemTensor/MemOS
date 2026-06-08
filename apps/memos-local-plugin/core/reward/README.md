@@ -10,14 +10,16 @@
 Two triggers, both non-blocking:
 
 1. **Auto fallback** — `capture.done` fires for an episode with ≥1 trace.
-   The subscriber schedules a `feedbackWindowSec` timer. When it expires,
-   we score with whatever feedback we have (often none → heuristic = 0).
-2. **Explicit submit** — `adapter.onFeedback` → feedback repo → the
-   orchestrator calls `subscription.submitFeedback(row)`. The timer is
-   cancelled and the run starts immediately with `trigger="explicit_feedback"`.
+   The subscriber schedules a `feedbackWindowSec` timer (minimum **1** second).
+   When it expires—or when `drain()` runs—we score once with `feedback: []`;
+   `reward.run` merges persisted rows from `feedbackRepo.getForEpisode`.
+2. **Manual** — `subscription.runManually(episodeId)` for tests and recovery.
 
-Either way the run is async and logged to `core.reward.*` channels; failures
-are reported via `onError` and surfaced as `reward.failed` events.
+`subscription.submitFeedback` is a **no-op**; use `memory-core.submitFeedback`
+to persist feedback to SQLite. Episode `r_task` is written only by `reward.run`.
+
+Either scheduled run is async and logged to `core.reward.*`; failures use
+`onError` / `reward.failed`.
 
 ## 2. Inputs
 
@@ -84,7 +86,7 @@ backprop.
 | `decayHalfLifeDays`    | 30      | Half-life for priority decay                    |
 | `llmScoring`           | true    | Use LLM rubric (v2); off = heuristic only       |
 | `implicitThreshold`    | 0.2     | Fire-or-not threshold for implicit signals (reserved for classifier) |
-| `feedbackWindowSec`    | 600     | Time to wait after `capture.done` for explicit feedback; 0 disables |
+| `feedbackWindowSec`    | 600     | Seconds after `capture.done` before scoring (min **1**; values &lt;1 clamp) |
 | `summaryMaxChars`      | 2000    | Cap on the task-summary string fed to the LLM   |
 | `llmConcurrency`       | 2       | Max parallel R_human LLM calls (reserved for pool scheduler) |
 

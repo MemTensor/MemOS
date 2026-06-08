@@ -344,12 +344,10 @@ function buildPipeline(db: TmpDbHandle, llm: LlmClient): PipelineHandle {
     algorithm: {
       ...DEFAULT_CONFIG.algorithm,
       lightweightMemory: { enabled: false },
-      // Disable the 30 s fallback timer — we'll call the reward
-      // runner synchronously at the end of the test so tests stay
-      // deterministic.
+      // Short window; flush() runs reward.drain() to score immediately.
       reward: {
         ...DEFAULT_CONFIG.algorithm.reward,
-        feedbackWindowSec: 0,
+        feedbackWindowSec: 1,
         minExchangesForCompletion: 0,
         minContentCharsForCompletion: 0,
       },
@@ -548,19 +546,7 @@ describe("OpenClaw adapter integration — multi-session full V7 chain", () => {
     // Drain the async capture pipeline first.
     await pipeline!.flush();
 
-    // Score every closed episode manually — with `feedbackWindowSec=0`
-    // the auto-scheduler sits idle waiting for explicit feedback.
-    // This is what real openclaw achieves via the 30 s timer.
-    const eps = db!.repos.episodes.list({}).filter((e) => e.status === "closed");
-    for (const ep of eps) {
-      await pipeline!.rewardRunner.run({
-        episodeId: ep.id,
-        feedback: [],
-        trigger: "manual",
-      });
-    }
-
-    // Drain the downstream cascade (L2 / L3 / Skill).
+    // reward.drain() inside flush scores pending episodes (window=1s).
     await pipeline!.flush();
 
     // ── Assertions ────────────────────────────────────────────────
@@ -598,6 +584,7 @@ describe("OpenClaw adapter integration — multi-session full V7 chain", () => {
     }
 
     // 5) DB snapshot dump for visual inspection
+    const eps = repos.episodes.list({});
     const snapshot = {
       episodes: eps.map((e) => ({
         id: e.id,

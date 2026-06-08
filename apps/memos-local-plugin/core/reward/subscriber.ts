@@ -2,19 +2,17 @@
  * `subscriber` — glue between `core/capture` and `core/reward`.
  *
  * Model:
- *   1. When `capture.done` fires on the capture bus, we start a
- *      "feedback window" for that episode.
- *   2. If explicit feedback arrives inside the window, score immediately
- *      with `trigger="explicit_feedback"`.
- *   3. If the window expires without explicit feedback, fall back to
- *      `trigger="implicit_fallback"` — the human-scorer uses whatever
- *      implicit signals were persisted by the session/feedback classifier.
- *   4. `cfg.feedbackWindowSec = 0` disables the timer entirely; only
- *      `submitFeedback(...)` / `runManually(...)` can trigger a run.
+ *   1. When `capture.done` fires for an episode with traces, register it in
+ *      `pending` and schedule one reward run after `feedbackWindowSec` (≥1s).
+ *   2. Explicit feedback is persisted via `memory-core.submitFeedback` (DB);
+ *      the scheduled run passes `feedback: []` and `reward.run` merges from
+ *      `feedbackRepo.getForEpisode`.
+ *   3. When the window expires (or `drain()`), run once with
+ *      `trigger="implicit_fallback"` (overridden in `reward.run` when DB has
+ *      feedback rows).
+ *   4. `submitFeedback` on this subscription is a no-op — do not score here.
  *
- * This module is intentionally small. Phase 15's pipeline orchestrator
- * can layer on smarter retry / batching; this subscriber is enough for
- * the MVP loop used by integration tests.
+ * `pendingCount()` = scheduled-but-not-started episodes + in-flight runs.
  */
 
 import type {
@@ -32,21 +30,32 @@ export interface RewardSubscriberOptions {
 }
 
 export interface RewardSubscription {
-  /** Submit a feedback row and schedule a run if the episode has one in-flight. */
+  /**
+   * Legacy hook — no-op. Episode scoring uses DB feedback at window end;
+   * use `memory-core.submitFeedback` instead.
+   */
   submitFeedback(feedback: UserFeedback): void;
-  /** Manual trigger — run NOW, regardless of window or feedback. */
+  /** Manual trigger — run NOW, regardless of window. */
   runManually(episodeId: EpisodeId, trigger?: "manual" | "explicit_feedback"): Promise<void>;
   /** Detach from the capture bus. In-flight runs continue. */
   stop(): void;
-  /** Wait for every in-flight run to finish. */
+  /** Flush all pending episodes and wait for in-flight runs. */
   drain(): Promise<void>;
+  /** Scheduled episodes (timer not fired) plus in-flight reward runs. */
   pendingCount(): number;
 }
 
 interface PendingEpisode {
   episodeId: EpisodeId;
-  feedback: UserFeedback[];
   timer: ReturnType<typeof setTimeout> | null;
+}
+
+function resolveWindowSec(
+  cfg: RewardConfig,
+  opts: RewardSubscriberOptions,
+): number {
+  const raw = opts.feedbackWindowSec ?? cfg.feedbackWindowSec;
+  return Math.max(1, raw);
 }
 
 export function attachRewardSubscriber(
@@ -56,7 +65,8 @@ export function attachRewardSubscriber(
   opts: RewardSubscriberOptions = {},
 ): RewardSubscription {
   const log = rootLogger.child({ channel: "core.reward" });
-  const windowMs = (opts.feedbackWindowSec ?? cfg.feedbackWindowSec) * 1_000;
+  const windowSec = resolveWindowSec(cfg, opts);
+  const windowMs = windowSec * 1_000;
   const pending = new Map<EpisodeId, PendingEpisode>();
   const inflight = new Set<Promise<unknown>>();
 
@@ -66,12 +76,11 @@ export function attachRewardSubscriber(
     if (entry.timer) clearTimeout(entry.timer);
     entry.timer = setTimeout(() => {
       pending.delete(episodeId);
-      const feedback = entry.feedback;
       runInBackground(() =>
         runner.run({
           episodeId,
-          feedback,
-          trigger: feedback.length > 0 ? "explicit_feedback" : "implicit_fallback",
+          feedback: [],
+          trigger: "implicit_fallback",
         }),
       );
     }, delayMs);
@@ -92,49 +101,20 @@ export function attachRewardSubscriber(
   const unsub = captureBus.on("capture.done", (evt) => {
     if (evt.kind !== "capture.done") return;
     const eid = evt.result.episodeId;
-    // No traces → nothing to backprop onto. Skip scheduling altogether.
     if (evt.result.traceIds.length === 0) {
       log.debug("skip.empty_capture", { episodeId: eid });
       return;
     }
-    // If window is disabled (0s), the subscriber just listens for
-    // explicit submitFeedback calls; no auto fallback.
-    if (windowMs === 0) {
-      pending.set(eid, { episodeId: eid, feedback: [], timer: null });
-      return;
-    }
-    pending.set(eid, { episodeId: eid, feedback: [], timer: null });
+    pending.set(eid, { episodeId: eid, timer: null });
     schedule(eid, windowMs);
   });
 
   return {
     submitFeedback(feedback: UserFeedback): void {
-      const eid = feedback.episodeId;
-      const entry = pending.get(eid);
-      if (!entry) {
-        // No pending capture — run immediately (e.g., late feedback on a
-        // previously-closed episode).
-        runInBackground(() =>
-          runner.run({
-            episodeId: eid,
-            feedback: [feedback],
-            trigger: "explicit_feedback",
-          }),
-        );
-        return;
-      }
-      entry.feedback.push(feedback);
-      // Fire immediately; no point waiting further once we've got explicit
-      // feedback.
-      if (entry.timer) clearTimeout(entry.timer);
-      pending.delete(eid);
-      runInBackground(() =>
-        runner.run({
-          episodeId: eid,
-          feedback: entry.feedback,
-          trigger: "explicit_feedback",
-        }),
-      );
+      log.debug("submitFeedback.noop", {
+        episodeId: feedback.episodeId,
+        hint: "persist via memory-core.submitFeedback; score at window end",
+      });
     },
     async runManually(episodeId, trigger = "manual") {
       const entry = pending.get(episodeId);
@@ -142,7 +122,7 @@ export function attachRewardSubscriber(
       pending.delete(episodeId);
       await runner.run({
         episodeId,
-        feedback: entry?.feedback ?? [],
+        feedback: [],
         trigger,
       });
     },
@@ -154,43 +134,27 @@ export function attachRewardSubscriber(
       unsub();
     },
     async drain() {
-      // Step 1: kick every still-pending episode immediately. The
-      // scheduled `setTimeout` would normally wait `feedbackWindowSec`
-      // (default 30 s) before firing the implicit fallback. On
-      // process shutdown we don't have 30 s to wait — without this
-      // the bridge exits, all timers get GC'd, and the episode
-      // permanently has `r_task = null` (which then starves L2 / L3 /
-      // Skill induction of any positive evidence).
       const flushed: PendingEpisode[] = [];
       for (const entry of pending.values()) {
-        if (entry.timer) {
-          clearTimeout(entry.timer);
-          flushed.push(entry);
-        } else if (entry.feedback.length > 0) {
-          flushed.push(entry);
-        }
+        if (entry.timer) clearTimeout(entry.timer);
+        flushed.push(entry);
       }
       pending.clear();
       for (const entry of flushed) {
         runInBackground(() =>
           runner.run({
             episodeId: entry.episodeId,
-            feedback: entry.feedback,
-            trigger:
-              entry.feedback.length > 0
-                ? "explicit_feedback"
-                : "implicit_fallback",
+            feedback: [],
+            trigger: "implicit_fallback",
           }),
         );
       }
-      // Step 2: now wait for every in-flight reward computation
-      // (including those just kicked above) to settle.
       while (inflight.size > 0) {
         await Promise.all(Array.from(inflight));
       }
     },
     pendingCount() {
-      return inflight.size;
+      return pending.size + inflight.size;
     },
   };
 }

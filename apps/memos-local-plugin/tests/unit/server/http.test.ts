@@ -353,7 +353,7 @@ describe("HTTP server — REST routes", () => {
   });
 
   it("GET /api/v1/episodes?status=failed filters by derived status", async () => {
-    // Mix of failed (rTask <= -0.5) and completed/active rows so the
+    // Mix of failed (rTask <= negative floor) and completed/active rows so the
     // server has to actually filter — the viewer used to do this in
     // the browser on top of one paginated page, which broke pagination.
     (core.listEpisodeRows as any).mockResolvedValueOnce([

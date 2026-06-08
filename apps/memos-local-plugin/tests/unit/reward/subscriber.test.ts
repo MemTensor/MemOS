@@ -52,7 +52,7 @@ function makeRunner(spy: RunSpy, behavior: "ok" | "pending" | "error" = "ok") {
   };
 }
 
-function cfg(windowSec = 0): RewardConfig {
+function cfg(windowSec = 5): RewardConfig {
   return {
     gamma: 0.9,
     lambda: 0.5,
@@ -128,34 +128,48 @@ describe("reward/subscriber", () => {
     sub.stop();
   });
 
-  it("submitFeedback before window expires fires immediately with explicit trigger", async () => {
+  it("submitFeedback during window does not score until timer or drain", async () => {
     const spy: RunSpy = { calls: [] };
     const bus = createCaptureEventBus();
     const sub = attachRewardSubscriber(bus, makeRunner(spy, "ok"), cfg(10), {});
 
     bus.emit(makeCaptureDone("ep_B"));
     sub.submitFeedback(makeFeedback("ep_B"));
-    // advance past window to prove we don't double-fire
-    await vi.advanceTimersByTimeAsync(20_000);
+    expect(spy.calls).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(10_000);
     await sub.drain();
 
     expect(spy.calls).toHaveLength(1);
-    expect(spy.calls[0]!.trigger).toBe("explicit_feedback");
-    expect(spy.calls[0]!.feedback).toHaveLength(1);
+    expect(spy.calls[0]!.trigger).toBe("implicit_fallback");
+    expect(spy.calls[0]!.feedback).toHaveLength(0);
     sub.stop();
   });
 
-  it("submitFeedback for unknown episode still triggers a run", async () => {
+  it("submitFeedback without pending episode is a no-op", async () => {
     const spy: RunSpy = { calls: [] };
     const bus = createCaptureEventBus();
-    const sub = attachRewardSubscriber(bus, makeRunner(spy, "ok"), cfg(0), {});
+    const sub = attachRewardSubscriber(bus, makeRunner(spy, "ok"), cfg(5), {});
 
     sub.submitFeedback(makeFeedback("ep_X"));
     await sub.drain();
 
+    expect(spy.calls).toHaveLength(0);
+    sub.stop();
+  });
+
+  it("feedbackWindowSec=0 is clamped to 1s; capture.done + drain scores once", async () => {
+    const spy: RunSpy = { calls: [] };
+    const bus = createCaptureEventBus();
+    const sub = attachRewardSubscriber(bus, makeRunner(spy, "ok"), cfg(0), {});
+
+    bus.emit(makeCaptureDone("ep_C"));
+    expect(sub.pendingCount()).toBe(1);
+    await sub.drain();
+
     expect(spy.calls).toHaveLength(1);
-    expect(spy.calls[0]!.episodeId).toBe("ep_X");
-    expect(spy.calls[0]!.trigger).toBe("explicit_feedback");
+    expect(spy.calls[0]!.trigger).toBe("implicit_fallback");
+    expect(spy.calls[0]!.feedback).toHaveLength(0);
     sub.stop();
   });
 
@@ -169,22 +183,6 @@ describe("reward/subscriber", () => {
     await sub.drain();
 
     expect(spy.calls).toHaveLength(0);
-    sub.stop();
-  });
-
-  it("feedbackWindowSec=0 disables auto-fallback; only manual/explicit fires", async () => {
-    const spy: RunSpy = { calls: [] };
-    const bus = createCaptureEventBus();
-    const sub = attachRewardSubscriber(bus, makeRunner(spy, "ok"), cfg(0), {});
-
-    bus.emit(makeCaptureDone("ep_C"));
-    await vi.advanceTimersByTimeAsync(100_000);
-    await sub.drain();
-    expect(spy.calls).toHaveLength(0);
-
-    await sub.runManually("ep_C" as unknown as Parameters<typeof sub.runManually>[0], "manual");
-    expect(spy.calls).toHaveLength(1);
-    expect(spy.calls[0]!.trigger).toBe("manual");
     sub.stop();
   });
 
@@ -215,7 +213,22 @@ describe("reward/subscriber", () => {
     expect(spy.calls).toHaveLength(0);
   });
 
-  it("pendingCount reports in-flight runs", async () => {
+  it("pendingCount includes scheduled episodes and in-flight runs", async () => {
+    const spy: RunSpy = { calls: [] };
+    const bus = createCaptureEventBus();
+    const sub = attachRewardSubscriber(bus, makeRunner(spy, "ok"), cfg(10), {});
+
+    bus.emit(makeCaptureDone("ep_sched"));
+    expect(sub.pendingCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(10_100);
+    expect(sub.pendingCount()).toBe(0);
+    await sub.drain();
+    expect(sub.pendingCount()).toBe(0);
+    sub.stop();
+  });
+
+  it("pendingCount tracks in-flight run until settled", async () => {
     const spy: RunSpy = { calls: [] };
     const bus = createCaptureEventBus();
     const sub = attachRewardSubscriber(bus, makeRunner(spy, "pending"), cfg(1), {});
@@ -250,6 +263,20 @@ describe("reward/subscriber", () => {
     });
     await sub.drain();
     expect(sub.pendingCount()).toBe(0);
+    sub.stop();
+  });
+
+  it("runManually still triggers a run", async () => {
+    const spy: RunSpy = { calls: [] };
+    const bus = createCaptureEventBus();
+    const sub = attachRewardSubscriber(bus, makeRunner(spy, "ok"), cfg(5), {});
+
+    bus.emit(makeCaptureDone("ep_manual"));
+    await sub.runManually("ep_manual" as unknown as Parameters<typeof sub.runManually>[0], "manual");
+    await sub.drain();
+
+    expect(spy.calls.length).toBeGreaterThanOrEqual(1);
+    expect(spy.calls.some((c) => c.trigger === "manual")).toBe(true);
     sub.stop();
   });
 });

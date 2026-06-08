@@ -5,26 +5,29 @@ import {
   languageSteeringLine,
 } from "../llm/prompts/index.js";
 import { FAILURE_EXPERIENCE_SINK_PROMPT } from "../llm/prompts/failure-experience-sink.js";
-import { reflectionAsText } from "../capture/types.js";
 import { ids } from "../id.js";
 import { deriveMergeFamily } from "./merge-family.js";
 import type {
   EpisodeId,
   FeedbackId,
+  FeedbackRow,
   PolicyId,
   PolicyRow,
   TraceRow,
 } from "../types.js";
 import type { Repos } from "../storage/repos/index.js";
+import { buildCorrectiveSignalsForSink } from "./corrective-signals.js";
 
 export interface RunL2FailureInput {
   episodeId: EpisodeId;
   sessionId: TraceRow["sessionId"];
   traces: readonly TraceRow[];
+  /** When omitted, loaded from `feedback.getForEpisode` in `runL2Failure`. */
+  feedbacks?: readonly FeedbackRow[];
 }
 
 export interface RunL2FailureDeps {
-  repos: Pick<Repos, "policies">;
+  repos: Pick<Repos, "policies" | "feedback">;
   llm: LlmClient | null;
   log: Logger;
   now?: () => number;
@@ -43,9 +46,11 @@ export async function runL2Failure(
   if (!deps.llm) return { created: false, skippedReason: "llm_disabled" };
   if (input.traces.length === 0) return { created: false, skippedReason: "no_traces" };
   const now = deps.now?.() ?? Date.now();
-  const payload = buildSinkInput(input);
+  const feedbacks =
+    input.feedbacks ?? deps.repos.feedback.getForEpisode(input.episodeId);
+  const payload = buildSinkInput(input, feedbacks);
   const lang = detectDominantLanguage(
-    input.traces.flatMap((t) => [t.userText, t.agentText, reflectionAsText(t.reflection)]),
+    input.traces.flatMap((t) => [t.userText, t.agentText]),
   );
   try {
     const rsp = await deps.llm.completeJson<{
@@ -75,6 +80,7 @@ export async function runL2Failure(
     if (!hasActionableGuidance(norm.decisionGuidance)) {
       return { created: false, skippedReason: "empty_guidance" };
     }
+    const sourceFeedbackIds = feedbacks.map((f) => f.id);
     const policyId = ids.policy() as PolicyId;
     const evidencePolarity = deriveEvidencePolarity(norm.decisionGuidance);
     const row: PolicyRow = {
@@ -94,7 +100,10 @@ export async function runL2Failure(
       evidencePolarity,
       sourceEpisodeIds: [input.episodeId],
       sourceTraceIds: norm.supportTraceIds,
-      sourceFeedbackIds: [`f:sink:${input.episodeId}` as FeedbackId],
+      sourceFeedbackIds:
+        sourceFeedbackIds.length > 0
+          ? sourceFeedbackIds
+          : [`f:sink:${input.episodeId}` as FeedbackId],
       inducedBy: `${FAILURE_EXPERIENCE_SINK_PROMPT.id}.v${FAILURE_EXPERIENCE_SINK_PROMPT.version}`,
       mergeFamily: deriveMergeFamily({
         experienceType: norm.experienceType,
@@ -118,11 +127,16 @@ export async function runL2Failure(
   }
 }
 
-function buildSinkInput(input: RunL2FailureInput): Record<string, unknown> {
+function buildSinkInput(
+  input: RunL2FailureInput,
+  feedbacks: readonly FeedbackRow[],
+): Record<string, unknown> {
   const ordered = [...input.traces].sort((a, b) => a.ts - b.ts);
   const userGoal = ordered.find((t) => t.userText.trim().length > 0)?.userText ?? "";
   const chunks = ordered.slice(-5).map((t) => ({
     trace_id: t.id,
+    turn_id: t.turnId,
+    trace_ts: t.ts,
     user: trim(t.userText, 300),
     agent: trim(t.agentText, 500),
     tools: (t.toolCalls ?? []).slice(0, 3).map((tool) => ({
@@ -130,8 +144,12 @@ function buildSinkInput(input: RunL2FailureInput): Record<string, unknown> {
       output: trim(safeStringify(tool.output), 240),
       error_code: tool.errorCode ?? null,
     })),
-    reflection: trim(reflectionAsText(t.reflection) ?? "", 220),
   }));
+  const anchored = buildCorrectiveSignalsForSink(
+    input.episodeId,
+    input.traces,
+    feedbacks,
+  );
   return {
     episode_id: input.episodeId,
     session_id: input.sessionId,
@@ -139,7 +157,8 @@ function buildSinkInput(input: RunL2FailureInput): Record<string, unknown> {
       user_goal: trim(userGoal, 500),
     },
     phase_chunks: chunks,
-    corrective_signals: [],
+    episode_timeline: anchored.episode_timeline,
+    corrective_signals: anchored.corrective_signals,
   };
 }
 

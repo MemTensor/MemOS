@@ -64,7 +64,7 @@ describe("reward/human-scorer", () => {
   it("LLM mode: happy path, uses the LLM and reports llm source", async () => {
     const llm = fakeLlm({
       completeJson: {
-        "reward.reward.r_human.v3": {
+        "reward.reward.r_human.v7": {
           goal_achievement: 0.9,
           process_quality: 0.5,
           user_satisfaction: 0.8,
@@ -89,7 +89,7 @@ describe("reward/human-scorer", () => {
   it("LLM mode: clamps axes to [-1, 1]", async () => {
     const llm = fakeLlm({
       completeJson: {
-        "reward.reward.r_human.v3": {
+        "reward.reward.r_human.v7": {
           goal_achievement: 5,
           process_quality: -3,
           user_satisfaction: 2,
@@ -112,7 +112,7 @@ describe("reward/human-scorer", () => {
   it("LLM mode: rejects non-numeric axes (via validate) → falls back to heuristic", async () => {
     const llm = fakeLlm({
       completeJson: {
-        "reward.reward.r_human.v3": { goal_achievement: "yes", process_quality: 0, user_satisfaction: 0 },
+        "reward.reward.r_human.v7": { goal_achievement: "yes", process_quality: 0, user_satisfaction: 0 },
       },
     });
     const out = await scoreHuman(
@@ -147,5 +147,39 @@ describe("reward/human-scorer", () => {
       { llm: null, cfg: { llmScoring: true } },
     );
     expect(out.source).toBe("explicit");
+  });
+
+  it("LLM mode: feedback formatted with USER/INFERRED labels and ISO timestamp", async () => {
+    let capturedUserContent = "";
+    const llm = fakeLlm({
+      completeJson: {
+        "reward.reward.r_human.v7": (input: unknown) => {
+          const msgs = input as Array<{ role: string; content: string }>;
+          capturedUserContent = msgs.find((m) => m.role === "user")?.content ?? "";
+          return {
+            goal_achievement: 0.8,
+            process_quality: 0.5,
+            user_satisfaction: 0.7,
+            label: "success",
+            reason: "ok",
+          };
+        },
+      },
+    });
+
+    await scoreHuman(
+      {
+        episodeSummary: makeSummary(),
+        feedback: [
+          makeFeedback({ channel: "explicit", polarity: "positive", ts: 1_700_000_000_000 as UserFeedback["ts"] }),
+          makeFeedback({ id: "fb_2" as never, channel: "implicit", polarity: "negative", ts: 1_700_000_001_000 as UserFeedback["ts"], text: "bad response" }),
+        ],
+      },
+      { llm, cfg: { llmScoring: true } },
+    );
+
+    expect(capturedUserContent).toContain("[USER/positive @");
+    expect(capturedUserContent).toContain("[INFERRED/negative @");
+    expect(capturedUserContent).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 });

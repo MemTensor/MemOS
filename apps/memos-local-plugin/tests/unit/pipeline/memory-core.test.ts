@@ -933,7 +933,105 @@ describe("MemoryCore façade", () => {
     const scored = db!.repos.traces.getById(end.traceId as never)!;
     expect(scored.value).toBeCloseTo(1 / 3);
     expect(scored.rHuman).toBeCloseTo(1 / 3);
-    expect(scored.priority).toBeCloseTo(1 / 3);
+    // priority keeps the max of prior priority and |value| (not recomputed down)
+    expect(scored.priority).toBe(1);
+  });
+
+  it("submitFeedback does not set episode r_task or mint experience policies", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const policiesBefore = db!.repos.policies.list({ limit: 100 }).length;
+    const start = await core.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-no-r-task",
+      userText: "deploy with docker",
+      ts: 1_700_000_200_000,
+    });
+    const end = await core.onTurnEnd({
+      agent: "openclaw",
+      sessionId: start.query.sessionId!,
+      episodeId: start.query.episodeId!,
+      agentText: "done",
+      toolCalls: [],
+      ts: 1_700_000_200_500,
+    });
+
+    await core.submitFeedback({
+      channel: "explicit",
+      polarity: "negative",
+      magnitude: 1,
+      rationale: "wrong image tag, use latest not stable",
+      traceId: end.traceId,
+      episodeId: end.episodeId,
+    });
+
+    const ep = db!.repos.episodes.getById(end.episodeId as never);
+    expect(ep?.rTask).toBeNull();
+    expect(db!.repos.policies.list({ limit: 100 }).length).toBe(policiesBefore);
+  });
+
+  it("submitFeedback with text runs repair and persists decision_repairs", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const start = await core.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-repair-fb",
+      userText: "install openssl on alpine",
+      ts: 1_700_000_300_000,
+    });
+    const end = await core.onTurnEnd({
+      agent: "openclaw",
+      sessionId: start.query.sessionId!,
+      episodeId: start.query.episodeId!,
+      agentText: "pip install cryptography failed: MODULE_NOT_FOUND",
+      toolCalls: [],
+      ts: 1_700_000_300_500,
+    });
+    db!.repos.traces.updateScore(end.traceId as never, {
+      value: -0.7,
+      alpha: db!.repos.traces.getById(end.traceId as never)!.alpha,
+      rHuman: -0.7,
+      priority: 0.7,
+    });
+    const end2 = await core.onTurnEnd({
+      agent: "openclaw",
+      sessionId: start.query.sessionId!,
+      episodeId: start.query.episodeId!,
+      agentText: "apk add openssl-dev succeeded",
+      toolCalls: [],
+      ts: 1_700_000_301_000,
+    });
+    db!.repos.traces.updateScore(end2.traceId as never, {
+      value: 0.9,
+      alpha: db!.repos.traces.getById(end2.traceId as never)!.alpha,
+      rHuman: 0.9,
+      priority: 0.9,
+    });
+
+    const repairsBefore = db!.repos.decisionRepairs.list().length;
+    await core.submitFeedback({
+      channel: "explicit",
+      polarity: "negative",
+      magnitude: 1,
+      rationale: "use apk add openssl-dev instead of pip on alpine",
+      episodeId: start.query.episodeId!,
+      traceId: end.traceId,
+    });
+
+    const repairsAfter = db!.repos.decisionRepairs.list();
+    expect(repairsAfter.length).toBeGreaterThan(repairsBefore);
   });
 
   it("submitFeedback rejects unknown trace ids before SQLite FK failure", async () => {

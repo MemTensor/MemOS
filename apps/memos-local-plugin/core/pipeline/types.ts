@@ -216,6 +216,12 @@ export interface PipelineHandle {
 
   /** Compose a retrieval-deps instance scoped to this pipeline. Used by tests. */
   retrievalDeps(): RetrievalDeps;
+
+  /**
+   * Current open episode for a session (orchestrator map + single open row).
+   * Used by adapters when lazy-opening must not mint a phantom id.
+   */
+  resolveOpenEpisodeId(sessionId: SessionId): EpisodeId | undefined;
 }
 
 export interface PipelineBuses {

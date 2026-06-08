@@ -71,6 +71,13 @@ export interface CaptureDeps {
   bus: CaptureEventBus;
   cfg: CaptureConfig;
   now?: () => number;
+  /**
+   * Called after the lite cursor is advanced so the session layer can
+   * propagate the new value into its in-memory episode snapshot. Without
+   * this hook, getEpisode() returns cursor=0 on every subsequent turn and
+   * runLite falls back to full extractSteps instead of the incremental path.
+   */
+  onLiteCursorAdvanced?: (episodeId: string, turnCount: number) => void;
 }
 
 export interface CaptureRunner {
@@ -164,6 +171,12 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // combo silently re-inserted everything past the 50-row cap and any
     // multi-step turn that collided on the same ms, producing triplet rows
     // in the traces table (one per re-entry from lite / reflect / recovery).
+    //
+    // IMPORTANT: normalizeSteps runs BEFORE the signature comparison so that
+    // both sides use the same truncated text. Raw steps carry the full
+    // episode-turn text while DB rows store normalizeSteps-truncated text;
+    // comparing across that boundary causes false negatives (step appears
+    // novel, passes dedup, and a duplicate trace row is inserted).
     const anchorTurnId = resolveAnchorTurnId(input.episode);
     const extractStart = now();
     const rawAll = extractIncrementalSteps(input.episode);
@@ -171,22 +184,21 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const seenSignatures = new Set<string>(
       existingTraces.map((row) => traceIdentitySignature(row, anchorTurnId)),
     );
-    const raw = rawAll.filter(
+    const extractMs = now() - extractStart;
+    const normStart = now();
+    const normalizedAll = normalizeSteps(rawAll, deps.cfg);
+    const normalized = normalizedAll.filter(
       (s) => !seenSignatures.has(stepIdentitySignature(s, anchorTurnId)),
     );
-    const extractMs = now() - extractStart;
+    const normalizeMs = now() - normStart;
     log.debug("stage.extract.done", {
       phase: "lite",
       episodeId: input.episode.id,
-      steps: raw.length,
-      novel: raw.length,
-      skipped: rawAll.length - raw.length,
+      steps: normalized.length,
+      novel: normalized.length,
+      skipped: normalizedAll.length - normalized.length,
       durationMs: extractMs,
     });
-
-    const normStart = now();
-    const normalized = normalizeSteps(raw, deps.cfg);
-    const normalizeMs = now() - normStart;
 
     if (normalized.length === 0) {
       advanceLiteCaptureCursor(input);
@@ -715,6 +727,10 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         ...input.episode.meta,
         [CAPTURE_LITE_TURN_CURSOR_META]: turnCount,
       };
+      // Propagate into the episode manager's authoritative in-memory snapshot
+      // so the next getEpisode() call returns the correct cursor and runLite
+      // uses the incremental path instead of full extractSteps.
+      deps.onLiteCursorAdvanced?.(input.episode.id, turnCount);
     } catch (err) {
       rootLogger.child({ channel: "core.capture" }).warn("capture.cursor_update_failed", {
         episodeId: input.episode.id,

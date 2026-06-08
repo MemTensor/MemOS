@@ -160,10 +160,10 @@ const AlgorithmSchema = Type.Object({
     /** Auto-trigger backprop when R_human ≥ this from implicit signals. */
     implicitThreshold: NumberInRange(0.2, 0, 1),
     /**
-     * Seconds to wait for explicit user feedback after `capture.done` before
-     * falling back to implicit-signals scoring. 0 disables the timer.
+     * Seconds to wait after `capture.done` before episode-level scoring.
+     * Minimum 1 second; values below 1 are rejected or clamped to 1.
      */
-    feedbackWindowSec: NumberInRange(600, 0, 86_400),
+    feedbackWindowSec: NumberInRange(600, 1, 86_400),
     /** Max characters for the task summary fed into the human-scorer LLM. */
     summaryMaxChars: NumberInRange(2_000, 200, 16_000),
     /** Concurrency for human-scoring LLM calls. */
@@ -291,7 +291,7 @@ const AlgorithmSchema = Type.Object({
       { default: "follow_policy" },
     ),
     outcomeRTaskSuccessThreshold: NumberInRange(0.5, -1, 1),
-    outcomeRTaskFailureThreshold: NumberInRange(-0.5, -1, 1),
+    outcomeRTaskFailureThreshold: NumberInRange(-0.15, -1, 1),
     failureEpisodeScorePenalty: NumberInRange(0, 0, 2),
     failureEpisodeMaxRatio: NumberInRange(0.4, 0, 1),
   }, { default: {} }),
@@ -464,8 +464,10 @@ const AlgorithmSchema = Type.Object({
      * small LLM call dramatically cuts down irrelevant injections.
      */
     llmFilterEnabled: Bool(true),
-    /** Keep at most this many candidates after the LLM filter. */
-    llmFilterMaxKeep: NumberInRange(5, 1, 30),
+    /** Keep at most this many candidates after a successful LLM filter. */
+    llmFilterMaxKeep: NumberInRange(8, 1, 30),
+    /** Keep at most this many candidates when no valid LLM judgement is available. */
+    llmFilterFallbackMaxKeep: NumberInRange(4, 0, 30),
     /**
      * Skip the filter when the ranked list has fewer than this many
      * items. Default 1 — even a single candidate gets a precision

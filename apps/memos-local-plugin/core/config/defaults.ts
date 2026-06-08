@@ -97,7 +97,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // user a short window to reply ("thanks", "no, try again") that
       // the scorer picks up as explicit feedback; when nothing
       // arrives, the implicit fallback fires promptly so downstream
-      // L2/L3/Skill stages aren't starved of signal.
+      // L2/L3/Skill stages aren't starved of signal. Must not be 0 (min 1s).
       feedbackWindowSec: 30,
       summaryMaxChars: 2_000,
       llmConcurrency: 2,
@@ -193,7 +193,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       repairCandidateMinEta: 0.5,
       outputLanguageMode: "follow_policy",
       outcomeRTaskSuccessThreshold: 0.5,
-      outcomeRTaskFailureThreshold: -0.5,
+      outcomeRTaskFailureThreshold: -0.15,
       failureEpisodeScorePenalty: 0,
       failureEpisodeMaxRatio: 0.4,
     },
@@ -241,10 +241,11 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       skillInjectionMode: "summary",
       skillSummaryChars: 200,
       llmFilterEnabled: true,
-      // Tighter than the legacy default (5) so the LLM filter has a
-      // small budget; combined with the richer prompt (v3) this keeps
-      // packets concise without over-dropping.
-      llmFilterMaxKeep: 4,
+      // Successful LLM filtering can keep a wider set of genuinely
+      // relevant memories; no-LLM/failure paths stay conservative via
+      // llmFilterFallbackMaxKeep below.
+      llmFilterMaxKeep: 8,
+      llmFilterFallbackMaxKeep: 4,
       // Set to 2: skip the LLM precision pass when there's only one
       // candidate (no point ranking a single item). Anything with 2+
       // candidates still goes through the filter to drop off-topic

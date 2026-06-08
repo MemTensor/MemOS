@@ -299,11 +299,13 @@ export interface RetrievalConfig {
    * genuinely relevant ones before injection.
    *
    * When `llmFilterEnabled` is false or the LLM is unavailable, the
-   * ranked list is passed through unchanged.
+   * ranked list is mechanically capped by `llmFilterFallbackMaxKeep`.
    */
   llmFilterEnabled: boolean;
   /** Keep at most N candidates after the LLM filter. */
   llmFilterMaxKeep: number;
+  /** Keep at most N candidates when no valid LLM judgement is available. */
+  llmFilterFallbackMaxKeep?: number;
   /** Skip the filter entirely when the ranked list has fewer than this many items. */
   llmFilterMinCandidates: number;
   /**

@@ -232,20 +232,18 @@ describe("retrieval/integration", () => {
     expect(skillIds).not.toContain("sk_weak");
   });
 
-  it("keeps abstract memories when long unique identifier queries require keywords", async () => {
+  it("does not hard-drop vector traces for coding identifiers", async () => {
     const res = await turnStartRetrieve(makeDeps(handle), {
       reason: "turn_start",
       agent: "openclaw",
-      sessionId: "s1" as SessionId,
-      userText: "zlxqyz_unique_marker_2026_test_no_such_content",
+      sessionId: "s_current" as SessionId,
+      userText: "debug memos-local-plugin create_episode_snapshot",
       ts: NOW as never,
     });
 
     const refKinds = res.packet.snippets.map((s) => s.refKind);
     expect(refKinds).toContain("skill");
-    expect(refKinds).toContain("world-model");
-    expect(refKinds).not.toContain("trace");
-    expect(refKinds).not.toContain("episode");
+    expect(refKinds.some((kind) => kind === "trace" || kind === "episode")).toBe(true);
   });
 
   it("recalls feedback experiences through keyword channels when embeddings degrade", async () => {

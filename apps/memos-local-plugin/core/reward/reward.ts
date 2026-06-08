@@ -212,6 +212,7 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
       input.feedback,
       deps.feedbackRepo.getForEpisode(input.episodeId) as unknown as UserFeedback[],
     );
+    const effectiveTrigger = resolveEffectiveTrigger(input.trigger, mergedFeedback);
     const humanScore = await scoreHuman(
       { episodeSummary: summary, feedback: mergedFeedback },
       { llm: deps.llm, cfg: { llmScoring: deps.cfg.llmScoring } },
@@ -296,7 +297,7 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
           axes: humanScore.axes,
           reason: humanScore.reason,
           scoredAt: startedAt,
-          trigger: input.trigger,
+          trigger: effectiveTrigger,
           traceCount: bp.updates.length,
           traceIds: bp.updates.map((u) => u.traceId),
         },
@@ -339,7 +340,7 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
       source: humanScore.source,
       feedbackCount: mergedFeedback.length,
       traces: bp.updates.length,
-      trigger: input.trigger,
+      trigger: effectiveTrigger,
       totalMs: result.timings.total,
       warnings: warnings.length,
     });
@@ -553,6 +554,15 @@ function decideSkipReason(
   }
 
   return null;
+}
+
+function resolveEffectiveTrigger(
+  inputTrigger: RewardInput["trigger"],
+  mergedFeedback: readonly UserFeedback[],
+): RewardInput["trigger"] {
+  if (mergedFeedback.length > 0) return "explicit_feedback";
+  if (inputTrigger === "manual") return "manual";
+  return "implicit_fallback";
 }
 
 function mergeFeedback(

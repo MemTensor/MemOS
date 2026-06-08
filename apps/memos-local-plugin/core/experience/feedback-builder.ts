@@ -21,6 +21,7 @@ import type { Logger } from "../logger/types.js";
 import type { Repos } from "../storage/repos/index.js";
 import type { EmbeddingVector } from "../types.js";
 import { MemosError, ERROR_CODES } from "../../agent-contract/errors.js";
+import { compressFeedbackEpisodeTraces, formatFeedbackTraceTurn } from "./trace-selection.js";
 
 export interface FeedbackExperienceResult {
   created: boolean;
@@ -75,6 +76,7 @@ interface DraftExperience {
   confidence: number;
   skillEligible: boolean;
   verifierMeta: Record<string, unknown> | null;
+  similarityKey: FeedbackSimilarityKey | null;
   vectorText: string;
   refineFallback?: RefineFallbackEvent;
 }
@@ -91,6 +93,7 @@ interface EpisodeContext {
 
 const MIN_SIGNIFICANCE = 0.5;
 const MERGE_SIMILARITY = 0.72;
+const STRICT_SIMILARITY = 0.82;
 const MAX_TITLE_CHARS = 120;
 const MAX_LINE_CHARS = 360;
 const REFINE_TIMEOUT_MS = 30_000;
@@ -98,6 +101,16 @@ const REFINE_MAX_CONTEXT_CHARS = 16_000;
 // Strict scenarios: only full credit counts as a pass (covers {-1,+1} and 0..1
 // reward scales — anything short of 1 means the task was not fully solved).
 const FULL_PASS_REWARD = 1;
+
+type FeedbackSourceKind = "verifier" | "evaluator" | "user_feedback" | "manual" | "unknown";
+type FeedbackOutcomeKind = "pass" | "fail" | "partial" | "unknown";
+
+interface FeedbackSimilarityKey {
+  sourceKind: FeedbackSourceKind;
+  outcomeKind: FeedbackOutcomeKind;
+  taskKind?: string;
+  issueKind?: string;
+}
 
 export async function runFeedbackExperience(
   input: FeedbackExperienceInput,
@@ -272,6 +285,8 @@ async function buildDraft(args: {
   // Objective outcome dominates; lexical signals only decide when it is unknown.
   const pass = outcome === "pass" || (outcome === "unknown" && lexicalPass && !lexicalFail);
   const fail = outcome === "fail" || (outcome === "unknown" && lexicalFail);
+  const sourceKind = feedbackSourceKind(args.feedback.raw, verifier, lower);
+  const metaOnlyFeedback = isMetaOnlyFeedback(args.text, verifier);
   const hasAvoid = /\b(avoid|do not|don't|never|stop|wrong|incorrect|failed|fail)\b/i.test(args.text)
     || /不要|别|不能|错误|失败|反例/.test(args.text);
 
@@ -281,7 +296,6 @@ async function buildDraft(args: {
   if (pass) {
     type = "success_pattern";
     polarity = "positive";
-    skillEligible = true;
   } else if (fail) {
     // Objective failure: never a positive exemplar, never skill-eligible.
     type = hasAvoid ? "failure_avoidance" : verifier ? "verifier_feedback" : "repair_instruction";
@@ -302,6 +316,13 @@ async function buildDraft(args: {
     type = "repair_instruction";
     polarity = "neutral";
   }
+  const similarityKey = deriveFeedbackSimilarityKey({
+    sourceKind,
+    outcome,
+    text: args.text,
+    type,
+    polarity,
+  });
 
   // Try LLM refinement for better guidance extraction
   let title: string;
@@ -412,6 +433,16 @@ async function buildDraft(args: {
       antiPattern: guidance.antiPattern,
     };
   }
+  if (pass) {
+    skillEligible = !metaOnlyFeedback && !isMetaOnlyDerivedGuidance([
+      title,
+      trigger,
+      procedure,
+      verification,
+      ...guidance.preference,
+      ...guidance.antiPattern,
+    ]);
+  }
 
   const boundary = [
     "Use only for similar task shape, evaluator expectation, or user preference.",
@@ -433,6 +464,7 @@ async function buildDraft(args: {
     confidence,
     skillEligible,
     verifierMeta: verifier,
+    similarityKey,
     vectorText: [title, trigger, procedure, verification, boundary].join("\n"),
     refineFallback,
   };
@@ -479,6 +511,148 @@ function buildDraftFallback(
     : "Before answering, check the current plan against this avoid/repair instruction.";
 
   return { title, trigger, procedure, verification, guidance };
+}
+
+function deriveFeedbackSimilarityKey(args: {
+  sourceKind: FeedbackSourceKind;
+  outcome: ObjectiveOutcome;
+  text: string;
+  type: ExperienceType;
+  polarity: EvidencePolarity;
+}): FeedbackSimilarityKey | null {
+  const outcomeKind = outcomeKindOf(args.outcome, args.polarity);
+  return {
+    sourceKind: args.sourceKind,
+    outcomeKind,
+    taskKind: extractTaskKind(args.text),
+    issueKind: issueKindOf(args.type, args.polarity),
+  };
+}
+
+function deriveFeedbackSimilarityKeyFromPolicy(row: PolicyRow): FeedbackSimilarityKey | null {
+  const text = [
+    row.title,
+    row.trigger,
+    row.procedure,
+    row.verification,
+    row.boundary,
+    ...(row.decisionGuidance?.preference ?? []),
+    ...(row.decisionGuidance?.antiPattern ?? []),
+  ].join("\n");
+  const meta = row.verifierMeta as Record<string, unknown> | null | undefined;
+  const sourceKind = meta ? "verifier" : "unknown";
+  return {
+    sourceKind,
+    outcomeKind: outcomeKindOf(null, row.evidencePolarity ?? "neutral"),
+    taskKind: extractTaskKind(text),
+    issueKind: issueKindOf(row.experienceType ?? "repair_instruction", row.evidencePolarity ?? "neutral"),
+  };
+}
+
+function feedbackSourceKind(
+  raw: unknown,
+  verifierMeta: Record<string, unknown> | null,
+  lower: string,
+): FeedbackSourceKind {
+  const src = rawSource(raw);
+  if (src && /evaluator|evoagentbench|benchmark|gateway/i.test(src)) return "evaluator";
+  if (src && /verifier|verification/i.test(src)) return "verifier";
+  if (verifierMeta || /\bverifier\b|\bverification\b/.test(lower)) return "verifier";
+  return "unknown";
+}
+
+function rawSource(raw: unknown): string | null {
+  let obj: unknown = raw;
+  if (typeof obj === "string") {
+    try {
+      obj = JSON.parse(obj);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof obj !== "object" || obj == null) return null;
+  const source = (obj as Record<string, unknown>).source;
+  return typeof source === "string" && source.trim() ? source.trim() : null;
+}
+
+function outcomeKindOf(outcome: ObjectiveOutcome | null, polarity: EvidencePolarity): FeedbackOutcomeKind {
+  if (outcome === "pass") return "pass";
+  if (outcome === "fail") return "fail";
+  if (polarity === "positive") return "pass";
+  if (polarity === "negative") return "fail";
+  return "unknown";
+}
+
+function issueKindOf(type: ExperienceType, polarity: EvidencePolarity): string {
+  return `${type}:${polarity}`;
+}
+
+const TASK_STOPWORDS = new Set([
+  "verifier",
+  "feedback",
+  "previous",
+  "attempt",
+  "reward",
+  "passed",
+  "total",
+  "failed",
+  "failure",
+  "success",
+  "avoid",
+  "prefer",
+  "repair",
+  "instead",
+  "using",
+  "wrong",
+  "correct",
+  "field",
+  "next",
+  "time",
+  "please",
+  "briefly",
+  "reflect",
+  "what",
+  "would",
+  "keep",
+  "improve",
+]);
+
+function extractTaskKind(text: string): string | undefined {
+  const lower = text.toLowerCase();
+  if (/\bsec\s*13f\b/.test(lower)) return "sec_13f";
+  if (/\bfft\b|autocorrelation|triplets?/.test(lower)) return "array_triplets";
+  const tokens = lower
+    .split(/[^a-z0-9\u4e00-\u9fff]+/u)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3 && !TASK_STOPWORDS.has(t) && !/^\d+$/.test(t));
+  return tokens[0]?.slice(0, 48);
+}
+
+function isMetaOnlyFeedback(text: string, verifierMeta: Record<string, unknown> | null): boolean {
+  const lower = text.toLowerCase();
+  if (/\bheartbeat_ok\b/.test(lower)) return true;
+  const hasVerifier = Boolean(verifierMeta)
+    || /\bverifier\b|\bverification\b|verifier reward|passed\s*[:=]|resolved\s*[:=]/i.test(text);
+  const asksReflection = /please briefly reflect|what you would keep|what you would improve|reflect on what|反思/.test(lower);
+  if (hasVerifier && asksReflection) return true;
+  if (!hasVerifier) return false;
+  const stripped = lower
+    .replace(/\bverifier feedback(?: for the previous attempt)?\b/g, " ")
+    .replace(/\bverifier reward\b|\breward\b|\bresolved\b|\bpassed\b|\btotal\b|\bscore\b|\bstatus\b/g, " ")
+    .replace(/\bpass(?:ed)?\b|\bsuccess(?:ful)?\b|\bcorrect\b|\bfailed?\b|\bfailure\b/g, " ")
+    .replace(/\btrue\b|\bfalse\b|\byes\b|\bno\b/g, " ")
+    .replace(/[0-9._:-]+/g, " ");
+  const meaningful = stripped
+    .split(/[^a-z0-9\u4e00-\u9fff]+/u)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3 && !TASK_STOPWORDS.has(t));
+  return meaningful.length === 0;
+}
+
+function isMetaOnlyDerivedGuidance(parts: readonly string[]): boolean {
+  const text = parts.join("\n");
+  return isMetaOnlyFeedback(text, null)
+    || /please briefly reflect|what you would keep|what you would improve|\bheartbeat_ok\b/i.test(text);
 }
 
 function guidanceOf(
@@ -585,6 +759,7 @@ function findSimilarPolicy(
   deps: FeedbackExperienceDeps,
 ): PolicyRow | null {
   if (!vec) return null;
+  if (isSimilarityBannedSource(draft.similarityKey?.sourceKind)) return null;
   const hits = deps.repos.policies.searchByVector(vec, 5, {
     statusIn: ["active", "candidate"],
     hardCap: 50,
@@ -594,12 +769,31 @@ function findSimilarPolicy(
     const row = deps.repos.policies.getById(hit.id as PolicyId);
     if (!row) continue;
     if (row.mergeFamily && row.mergeFamily !== mergeFamily) continue;
-    if (row.experienceType && row.experienceType !== draft.type && hit.score < 0.82) {
-      continue;
-    }
+    const minScore = feedbackSimilarityThreshold(draft, row);
+    if (minScore == null || hit.score < minScore) continue;
     return row;
   }
   return null;
+}
+
+function feedbackSimilarityThreshold(draft: DraftExperience, row: PolicyRow): number | null {
+  const incoming = draft.similarityKey;
+  const existing = deriveFeedbackSimilarityKeyFromPolicy(row);
+  if (!incoming || !existing) return null;
+  if (isSimilarityBannedSource(incoming.sourceKind) || isSimilarityBannedSource(existing.sourceKind)) {
+    return null;
+  }
+  if (incoming.sourceKind !== existing.sourceKind) return null;
+  if (incoming.outcomeKind !== existing.outcomeKind) return null;
+  if (incoming.taskKind && existing.taskKind && incoming.taskKind !== existing.taskKind) return null;
+  if (incoming.issueKind && existing.issueKind && incoming.issueKind !== existing.issueKind) return null;
+  const missingKeyPart = !incoming.taskKind || !existing.taskKind || !incoming.issueKind || !existing.issueKind;
+  const typeMismatch = row.experienceType && row.experienceType !== draft.type;
+  return missingKeyPart || typeMismatch ? STRICT_SIMILARITY : MERGE_SIMILARITY;
+}
+
+function isSimilarityBannedSource(sourceKind: FeedbackSourceKind | undefined): boolean {
+  return sourceKind === "verifier" || sourceKind === "evaluator";
 }
 
 function mergePolicy(
@@ -860,7 +1054,7 @@ function buildEpisodeContext(
   // Fallback: use current trace only
   if (!episode?.traceIds || episode.traceIds.length === 0) {
     if (currentTrace) {
-      const block = formatTurn(1, currentTrace);
+      const block = formatFeedbackTraceTurn(1, currentTrace);
       return {
         userRequest: currentTrace.userText,
         agentResponse: currentTrace.agentText,
@@ -890,7 +1084,7 @@ function buildEpisodeContext(
   }
 
   if (traces.length === 0) {
-    const block = currentTrace ? formatTurn(1, currentTrace) : "";
+    const block = currentTrace ? formatFeedbackTraceTurn(1, currentTrace) : "";
     return {
       userRequest: currentTrace?.userText ?? "",
       agentResponse: currentTrace?.agentText ?? "",
@@ -902,9 +1096,9 @@ function buildEpisodeContext(
     };
   }
 
-  const selected = compressEpisodeTraces(traces, feedbackText, REFINE_MAX_CONTEXT_CHARS);
+  const selected = compressFeedbackEpisodeTraces(traces, feedbackText, REFINE_MAX_CONTEXT_CHARS);
   const contextParts = selected.kept.map((item) =>
-    formatTurn(item.idx + 1, item.trace),
+    formatFeedbackTraceTurn(item.idx + 1, item.trace),
   );
   const fullContext = contextParts.join("\n\n");
   const firstTurn = selected.kept[0]?.trace ?? traces[0];
@@ -921,128 +1115,6 @@ function buildEpisodeContext(
   };
 }
 
-function compressEpisodeTraces(
-  traces: readonly TraceRow[],
-  feedbackText: string,
-  maxChars: number,
-): {
-  kept: Array<{ trace: TraceRow; idx: number; text: string; value: number }>;
-  droppedCount: number;
-} {
-  const feedbackKeywords = extractFeedbackKeywords(feedbackText);
-  const firstId = traces[0]?.id;
-  const lastId = traces[traces.length - 1]?.id;
-  const entries = traces.map((trace, idx) => {
-    const text = formatTurn(idx + 1, trace);
-    const value = traceInformationValue(trace, feedbackKeywords, firstId, lastId);
-    return { trace, idx, text, value };
-  });
-  const kept = [...entries];
-  let total = kept.reduce((sum, item) => sum + item.text.length, 0) + Math.max(0, kept.length - 1) * 2;
-  while (total > maxChars && kept.length > 1) {
-    let dropIdx = -1;
-    let dropValue = Infinity;
-    let dropLen = Infinity;
-    for (let i = 0; i < kept.length; i++) {
-      const entry = kept[i]!;
-      if (isProtectedTrace(entry.trace, firstId, lastId)) continue;
-      const better =
-        entry.value < dropValue
-        || (entry.value === dropValue && entry.text.length < dropLen);
-      if (better) {
-        dropIdx = i;
-        dropValue = entry.value;
-        dropLen = entry.text.length;
-      }
-    }
-    if (dropIdx < 0) break;
-    kept.splice(dropIdx, 1);
-    total = kept.reduce((sum, item) => sum + item.text.length, 0) + Math.max(0, kept.length - 1) * 2;
-  }
-  kept.sort((a, b) => a.idx - b.idx);
-  return { kept, droppedCount: entries.length - kept.length };
-}
-
-/** Capture-time reflection label: pivotal steps must survive context compression. */
-function isPivotalTrace(trace: TraceRow): boolean {
-  return trace.reflection?.trim() === "PIVOTAL";
-}
-
-function isProtectedTrace(
-  trace: TraceRow,
-  firstId: string | undefined,
-  lastId: string | undefined,
-): boolean {
-  return trace.id === firstId || trace.id === lastId || isPivotalTrace(trace);
-}
-
-function traceInformationValue(
-  trace: TraceRow,
-  feedbackKeywords: readonly string[],
-  firstId: string | undefined,
-  lastId: string | undefined,
-): number {
-  let score = 0;
-  if (trace.id === firstId) score += 80;
-  if (trace.id === lastId) score += 80;
-  if (isPivotalTrace(trace)) score += 70;
-  if ((trace.toolCalls?.length ?? 0) > 0) score += 18;
-  if ((trace.errorSignatures?.length ?? 0) > 0) score += 42;
-  if (trace.toolCalls?.some((tool) => typeof tool.errorCode === "string" && tool.errorCode.trim().length > 0)) {
-    score += 45;
-  }
-  const corpus = `${trace.userText}\n${trace.agentText}`.toLowerCase();
-  if (feedbackKeywords.some((kw) => corpus.includes(kw))) score += 30;
-  if (/error|failed|failure|timeout|exception|错误|失败|超时/i.test(corpus)) score += 28;
-  if (trace.userText.trim().length > 0) score += 5;
-  if (trace.agentText.trim().length > 0) score += 5;
-  return score;
-}
-
-function extractFeedbackKeywords(text: string): string[] {
-  const normalized = text.toLowerCase();
-  const tokens = normalized.split(/[^a-z0-9\u4e00-\u9fff]+/u)
-    .map((t) => t.trim())
-    .filter(Boolean)
-    .filter((t) => (/[a-z0-9]/.test(t) ? t.length >= 4 : t.length >= 2));
-  return dedupeLines(tokens).slice(0, 32);
-}
-
-function formatTurn(turnNumber: number, trace: TraceRow): string {
-  const userText = truncate(trace.userText, 280);
-  const agentText = truncate(trace.agentText, 360);
-  const toolSummary = summarizeTools(trace.toolCalls ?? []);
-  const errorSummary = summarizeErrors(trace);
-  const lines = [
-    `Turn ${turnNumber}:`,
-    `User: ${userText}`,
-    `Agent: ${agentText}`,
-    toolSummary ? `Tools: ${toolSummary}` : null,
-    errorSummary ? `Errors: ${errorSummary}` : null,
-  ].filter((line): line is string => typeof line === "string");
-  return lines.join("\n");
-}
-
-function summarizeTools(toolCalls: TraceRow["toolCalls"]): string {
-  if (!Array.isArray(toolCalls) || toolCalls.length === 0) return "";
-  const pieces = toolCalls.slice(0, 4).map((tool) => {
-    const name = tool.name || "unknown";
-    const code = typeof tool.errorCode === "string" && tool.errorCode.trim() ? `#${tool.errorCode}` : "";
-    const output = typeof tool.output === "string" ? truncate(tool.output.replace(/\s+/g, " "), 80) : "";
-    return [name, code, output].filter(Boolean).join(" ");
-  });
-  return truncate(pieces.join(" | "), 280);
-}
-
-function summarizeErrors(trace: TraceRow): string {
-  const sig = (trace.errorSignatures ?? []).slice(0, 3).map((s) => truncate(s, 80));
-  const codes = (trace.toolCalls ?? [])
-    .map((tool) => tool.errorCode)
-    .filter((code): code is string => typeof code === "string" && code.trim().length > 0);
-  const merged = dedupeLines([...codes, ...sig]);
-  return truncate(merged.join(" | "), 260);
-}
-
 function classifyLlmFallbackReason(err: unknown): Exclude<RefineFallbackReason, "llm_disabled" | "llm_missing_turn_context"> {
   if (MemosError.is(err)) {
     if (err.code === ERROR_CODES.LLM_TIMEOUT) return "llm_timeout";
@@ -1051,12 +1123,6 @@ function classifyLlmFallbackReason(err: unknown): Exclude<RefineFallbackReason, 
   }
   if (err instanceof Error && /timeout|timed out/i.test(err.message)) return "llm_timeout";
   return "llm_error";
-}
-
-function truncate(s: string, maxLen: number): string {
-  if (!s) return "";
-  if (s.length <= maxLen) return s;
-  return s.slice(0, maxLen - 3) + "...";
 }
 
 function firstSentence(text: string, maxChars: number): string {

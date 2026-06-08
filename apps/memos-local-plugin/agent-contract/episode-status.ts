@@ -41,7 +41,7 @@ export type DerivedTaskStatus = Exclude<TaskStatusFilter, "">;
  * the task list — the soft-fail framing (未达沉淀阈值) lives on the
  * skill pipeline pill, not the main task status.
  */
-export const R_NEGATIVE_FLOOR = -0.5;
+export const R_NEGATIVE_FLOOR = -0.15;
 
 /**
  * Recently-finalized grace window: a closed-but-just-ended episode

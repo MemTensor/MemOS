@@ -107,10 +107,13 @@ describe("reward/task-summary", () => {
       ],
     });
     const traces: TraceRow[] = [];
-    const sum = buildTaskSummary({ episode: ep, traces, cfg: { summaryMaxChars: 200 } });
+    // Use 400 chars so the tail (180 chars from end) includes both
+    // EXECUTION_OUTCOME (~90 chars) and OUTCOME_MARKER_END before it.
+    const sum = buildTaskSummary({ episode: ep, traces, cfg: { summaryMaxChars: 400 } });
     expect(sum.truncated).toBe(true);
     expect(sum.text).toMatch(/truncated/);
     expect(sum.text).toContain("OUTCOME_MARKER_END");
+    expect(sum.text).toContain("EXECUTION_OUTCOME:");
   });
 
   it("falls back to descriptive placeholders when episode has no user/agent text", () => {
@@ -128,6 +131,39 @@ describe("reward/task-summary", () => {
     const sum = buildTaskSummary({ episode: ep, traces, cfg: { summaryMaxChars: 1000 } });
     expect(sum.agentActions).toMatch(/web\.search/);
     expect(sum.agentActions).not.toMatch(/this text should NOT appear/);
+  });
+
+  it("EXECUTION_OUTCOME: successful tool call → task_completed_by_tool=yes", () => {
+    const ep = makeEpisode();
+    const trace = makeTrace(1, { tool: "file_write" });
+    const sum = buildTaskSummary({ episode: ep, traces: [trace], cfg: { summaryMaxChars: 2000 } });
+    expect(sum.text).toContain("EXECUTION_OUTCOME:");
+    expect(sum.text).toContain("task_completed_by_tool: yes");
+    expect(sum.text).toContain("last_tool_result: SUCCESS");
+    expect(sum.text).toContain("tool: file_write");
+  });
+
+  it("EXECUTION_OUTCOME: last tool call with errorCode → task_completed_by_tool=no", () => {
+    const ep = makeEpisode();
+    const traceWithError: TraceRow = {
+      ...makeTrace(1),
+      toolCalls: [
+        { name: "docker_deploy", input: {}, errorCode: "TIMEOUT" },
+      ] as TraceRow["toolCalls"],
+    };
+    const sum = buildTaskSummary({ episode: ep, traces: [traceWithError], cfg: { summaryMaxChars: 2000 } });
+    expect(sum.text).toContain("task_completed_by_tool: no");
+    expect(sum.text).toContain("last_tool_result: ERROR");
+    expect(sum.text).toContain("TIMEOUT");
+  });
+
+  it("EXECUTION_OUTCOME: no tool calls → task_completed_by_tool=unknown", () => {
+    const ep = makeEpisode();
+    const textOnlyTrace = makeTrace(1, { text: "Here is the answer" });
+    const sum = buildTaskSummary({ episode: ep, traces: [textOnlyTrace], cfg: { summaryMaxChars: 2000 } });
+    expect(sum.text).toContain("task_completed_by_tool: unknown");
+    expect(sum.text).toContain("last_tool_result: NONE");
+    expect(sum.text).toContain("total_tool_calls: 0");
   });
 
   it("includes host and evaluator model context for identity-sensitive scoring", () => {

@@ -197,10 +197,10 @@ export function attachSkillSubscriber(
               ? "verifier not a full pass"
               : "no verifier signal on this episode"
           : outcome === "pass"
-            ? "rTask >= 0.5"
+            ? `rTask >= ${passTh}`
             : outcome === "fail"
-              ? "rTask <= -0.5"
-              : "-0.5 < rTask < 0.5",
+              ? `rTask <= ${failTh}`
+              : `${failTh} < rTask < ${passTh}`,
       };
       const changed = deps.repos.skillTrials.resolve(
         trial.id,

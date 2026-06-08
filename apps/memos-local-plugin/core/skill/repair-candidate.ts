@@ -27,8 +27,10 @@ import { ids } from "../id.js";
 import type { Embedder } from "../embedding/types.js";
 import type { Logger } from "../logger/types.js";
 import type { Repos } from "../storage/repos/index.js";
-import type { PolicyRow, SkillId, SkillRow, TraceId } from "../types.js";
+import type { EpisodeId, PolicyRow, SkillId, SkillRow, TraceId, TraceRow } from "../types.js";
+import { selectRepresentativeFeedbackTraces } from "../experience/trace-selection.js";
 import { deriveNameFromText, uniquifySkillName } from "./name.js";
+import type { SkillConfig } from "./types.js";
 
 /**
  * Q3: born at the retrieval floor — visible enough to be tried, no head start.
@@ -40,7 +42,8 @@ import { deriveNameFromText, uniquifySkillName } from "./name.js";
 export const REPAIR_CANDIDATE_INITIAL_ETA = 0.1;
 
 export interface MintRepairCandidateDeps {
-  repos: Pick<Repos, "skills" | "embeddingRetryQueue">;
+  repos: Pick<Repos, "skills" | "embeddingRetryQueue" | "traces" | "episodes">;
+  config: Pick<SkillConfig, "evidenceLimit">;
   embedder: Embedder | null;
   now?: () => number;
   log?: Logger;
@@ -94,6 +97,7 @@ export function mintRepairCandidate(
   const name = uniquifySkillName(baseName, existingNames);
   const id = ids.skill() as SkillId;
   const invocationGuide = renderRepairGuide(policy, fix);
+  const evidenceAnchors = selectRepairEvidenceAnchors(policy, deps);
 
   const row: SkillRow = {
     id,
@@ -111,7 +115,7 @@ export function mintRepairCandidate(
     trialsPassed: 0,
     sourcePolicyIds: [policy.id],
     sourceWorldModelIds: [],
-    evidenceAnchors: (policy.sourceTraceIds ?? []) as TraceId[],
+    evidenceAnchors,
     vec: null,
     createdAt: now,
     updatedAt: now,
@@ -144,6 +148,64 @@ export function mintRepairCandidate(
   }
 
   return id;
+}
+
+export function selectRepairEvidenceAnchors(
+  policy: PolicyRow,
+  deps: Pick<MintRepairCandidateDeps, "repos" | "config">,
+): TraceId[] {
+  const limit = Math.max(0, deps.config.evidenceLimit);
+  if (limit === 0) return [];
+  const traces = loadPolicyEpisodeTraces(policy, deps.repos);
+  const feedbackText = [
+    policy.title,
+    policy.trigger,
+    policy.procedure,
+    policy.verification,
+    ...(policy.decisionGuidance?.preference ?? []),
+    ...(policy.decisionGuidance?.antiPattern ?? []),
+  ].join("\n");
+  const seen = new Set<string>();
+  const out: TraceId[] = [];
+  for (const trace of selectRepresentativeFeedbackTraces(traces, feedbackText, limit)) {
+    if (seen.has(trace.id)) continue;
+    seen.add(trace.id);
+    out.push(trace.id as TraceId);
+  }
+  return out;
+}
+
+function loadPolicyEpisodeTraces(
+  policy: PolicyRow,
+  repos: Pick<Repos, "traces" | "episodes">,
+): TraceRow[] {
+  const out: TraceRow[] = [];
+  const seen = new Set<string>();
+  for (const episodeId of policy.sourceEpisodeIds ?? []) {
+    for (const trace of loadEpisodeTraces(episodeId as EpisodeId, repos)) {
+      if (seen.has(trace.id)) continue;
+      seen.add(trace.id);
+      out.push(trace);
+    }
+  }
+  return out;
+}
+
+function loadEpisodeTraces(
+  episodeId: EpisodeId,
+  repos: Pick<Repos, "traces" | "episodes">,
+): TraceRow[] {
+  const episode = repos.episodes.getById(episodeId);
+  const canonicalIds = episode?.traceIds ?? [];
+  if (canonicalIds.length > 0) {
+    const rows: TraceRow[] = [];
+    for (const id of canonicalIds) {
+      const row = repos.traces.getById(id as TraceId);
+      if (row) rows.push(row);
+    }
+    if (rows.length > 0) return rows;
+  }
+  return repos.traces.list({ episodeId, limit: 500 });
 }
 
 function stripPrefix(title: string): string {

@@ -3,22 +3,16 @@
  * that the R_human scorer feeds to the LLM.
  *
  * V7 §0.6 scoring anchor: when a single episode spans multiple user
- * turns (the `merge_follow_ups` mode, default), the goal is NOT just
- * the first user message. Each follow-up is its own sub-goal the
- * agent has to address; the scorer needs the full chain to judge
- * whether the agent tracked the user's evolving intent. The previous
- * build pinned `USER_QUERY` to only the first user turn, which caused
- * multi-topic episodes (e.g. 上海天气 → 穿衣 → 带伞 → 北京天气) to be
- * marked as R<0 just because the final assistant reply did not match
- * the *opening* query — a false negative that kept real tasks out of
- * the L2/Skill pipeline.
+ * turns (the `merge_follow_ups` mode, default), the scorer needs both
+ * a stable mission anchor and the chronological turn chain. The mission
+ * tells `goal_achievement` what task is being graded; the turn chain
+ * tells process/user-satisfaction scoring whether later turns were
+ * corrections, verifier output, reflections, or a genuine task reset.
  *
- * So we now emit a chronological USER_ASKS / AGENT_REPLIES block
- * covering every user turn paired with the agent's corresponding reply
- * (plus a per-step action summary for tool-call context). The scorer's
- * rubric is updated in parallel to judge "did the agent address every
- * user ask, especially the most recent one?" — see
- * `core/llm/prompts/reward.ts`.
+ * So we emit EPISODE_MISSION plus a chronological USER_ASKS /
+ * AGENT_REPLIES block covering every user turn paired with the agent's
+ * corresponding reply (plus a per-step action summary for tool-call
+ * context). See `core/llm/prompts/reward.ts` for the matching rubric.
  *
  * The result is clipped to `cfg.summaryMaxChars` with a head+tail
  * strategy — identical to `capture/normalizer.ts` — so the most recent
@@ -74,10 +68,26 @@ export function buildTaskSummary(input: SummaryInput): TaskSummary {
   const agentActions = traces.map(traceOneLiner).filter(Boolean).join("\n");
   const hostContext = formatHostAgentContext(episode, input.evaluator);
 
+  // EPISODE_MISSION: the canonical goal of this episode.
+  // Prefer an explicitly updated canonicalGoal (set when the user
+  // genuinely re-defines the task), then initialUserText recorded at
+  // episode start, then the first user turn as last-resort fallback.
+  // This is the stable anchor used by the reward scorer to evaluate
+  // goal_achievement — independent of what the most recent user turn says.
+  const missionText =
+    (typeof episode.meta?.canonicalGoal === "string" && episode.meta.canonicalGoal.trim().length > 0)
+      ? episode.meta.canonicalGoal.trim()
+      : (typeof episode.meta?.initialUserText === "string" && episode.meta.initialUserText.trim().length > 0)
+        ? episode.meta.initialUserText.trim()
+        : userQuery;
+
   const body = [
     hostContext ? `HOST_AGENT_CONTEXT:` : "",
     hostContext,
     hostContext ? `` : "",
+    `EPISODE_MISSION:`,
+    oneLine(missionText, 800),
+    ``,
     `USER_ASKS_AND_AGENT_REPLIES (${pairs.length}, in order):`,
     pairsText,
     ``,
@@ -89,6 +99,8 @@ export function buildTaskSummary(input: SummaryInput): TaskSummary {
     ``,
     `MOST_RECENT_AGENT_REPLY:`,
     clampAgentText(pairs.length > 0 ? pairs[pairs.length - 1]!.agentText : outcome),
+    ``,
+    formatExecutionOutcome(traces),
   ].join("\n");
 
   const { text, truncated } = clampText(body, cfg.summaryMaxChars);
@@ -278,4 +290,74 @@ function clampText(text: string, max: number): { text: string; truncated: boolea
     text: text.slice(0, headLen) + TRUNC_MARKER + text.slice(text.length - tailLen),
     truncated: true,
   };
+}
+
+// ─── execution outcome ───────────────────────────────────────────────────────
+
+interface ExecutionOutcome {
+  totalToolCalls: number;
+  successCount: number;
+  errorCount: number;
+  lastToolResult: "SUCCESS" | "ERROR" | "NONE";
+  lastToolName: string | null;
+  lastErrorCode: string | null;
+  taskCompletedByTool: "yes" | "no" | "unknown";
+}
+
+function buildExecutionOutcome(traces: readonly TraceRow[]): ExecutionOutcome {
+  let totalToolCalls = 0;
+  let successCount = 0;
+  let errorCount = 0;
+
+  const sorted = [...traces].sort((a, b) => a.ts - b.ts);
+
+  let lastTraceWithTools: TraceRow | null = null;
+  for (const trace of sorted) {
+    const calls = (trace.toolCalls ?? []) as Array<{ name?: string; errorCode?: string }>;
+    if (calls.length > 0) lastTraceWithTools = trace;
+    for (const c of calls) {
+      totalToolCalls++;
+      if (c.errorCode) errorCount++;
+      else successCount++;
+    }
+  }
+
+  if (!lastTraceWithTools) {
+    return {
+      totalToolCalls: 0, successCount: 0, errorCount: 0,
+      lastToolResult: "NONE", lastToolName: null, lastErrorCode: null,
+      taskCompletedByTool: "unknown",
+    };
+  }
+
+  const calls = (lastTraceWithTools.toolCalls ?? []) as Array<{ name?: string; errorCode?: string }>;
+  const lastCall = calls[calls.length - 1]!;
+  const lastToolResult: "SUCCESS" | "ERROR" = lastCall.errorCode ? "ERROR" : "SUCCESS";
+
+  return {
+    totalToolCalls,
+    successCount,
+    errorCount,
+    lastToolResult,
+    lastToolName: lastCall.name ?? null,
+    lastErrorCode: lastCall.errorCode ?? null,
+    taskCompletedByTool: lastToolResult === "SUCCESS" ? "yes" : "no",
+  };
+}
+
+function formatExecutionOutcome(traces: readonly TraceRow[]): string {
+  const o = buildExecutionOutcome(traces);
+  const lines = ["EXECUTION_OUTCOME:"];
+  if (o.totalToolCalls === 0) {
+    lines.push("  total_tool_calls: 0");
+    lines.push("  last_tool_result: NONE");
+    lines.push("  task_completed_by_tool: unknown");
+  } else {
+    lines.push(`  total_tool_calls: ${o.totalToolCalls}  (success: ${o.successCount}, error: ${o.errorCount})`);
+    const toolLabel = o.lastToolName ? `  [tool: ${o.lastToolName}]` : "";
+    const errLabel = o.lastErrorCode ? `, code: ${o.lastErrorCode}` : "";
+    lines.push(`  last_tool_result: ${o.lastToolResult}${toolLabel}${errLabel}`);
+    lines.push(`  task_completed_by_tool: ${o.taskCompletedByTool}`);
+  }
+  return lines.join("\n");
 }

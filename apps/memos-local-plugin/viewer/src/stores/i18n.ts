@@ -555,7 +555,7 @@ const en = {
   "tasks.skill.generated": "Skill generated",
   "tasks.skill.upgraded": "Skill upgraded",
   "tasks.skill.not_generated": "Below induction threshold",
-  "tasks.skill.skipped": "Scored as negative example (R ≤ -0.5)",
+  "tasks.skill.skipped": "Scored as negative example (R ≤ -0.15)",
   "tasks.skill.openSkill": "Open skill",
   "tasks.skillReason.queued.inProgress":
     "Task still in progress; skill pipeline has not started yet.",
@@ -568,7 +568,7 @@ const en = {
   "tasks.skillReason.skipped":
     "Low task score (R={rTask}), recorded as a counterexample; the system will try to derive avoidance guidance from this episode's traces and will not generate an invokable skill.",
   "tasks.skillReason.not_generated.belowThreshold":
-    "Task score R={rTask} is below the induction threshold (≥ {threshold}) — the conversation was normal, but not strong enough to generalize into an L2 experience; similar tasks will accumulate over time.",
+    "Task score R={rTask} is below the induction threshold (≥ {threshold}) but above the negative-example floor (≤ -0.15); this task has weak or negative signal, so no L2 experience will be generated yet. Similar future tasks can accumulate into reusable experience if they score higher.",
   "tasks.skillReason.not_generated.noPolicy":
     "No L2 experience is linked to this task yet — induction may still be processing asynchronously. Refresh in a moment to see the latest status.",
   "tasks.skillReason.generated":
@@ -1412,7 +1412,7 @@ const zh: Record<TranslationKey, string> = {
   "tasks.skill.generated": "已生成技能",
   "tasks.skill.upgraded": "已升级技能",
   "tasks.skill.not_generated": "未达沉淀阈值",
-  "tasks.skill.skipped": "本任务评为反例 (R ≤ -0.5)",
+  "tasks.skill.skipped": "本任务评为反例 (R ≤ -0.15)",
   "tasks.skill.openSkill": "打开技能",
   "tasks.skillReason.queued.inProgress":
     "任务仍在进行中，技能流水线尚未启动。",
@@ -1425,7 +1425,7 @@ const zh: Record<TranslationKey, string> = {
   "tasks.skillReason.skipped":
     "任务评分较低 (R={rTask})，记为反例；系统会尝试从本次任务轨迹归纳规避建议，不会生成可调用技能。",
   "tasks.skillReason.not_generated.belowThreshold":
-    "任务评分 R={rTask} 未达到沉淀阈值 (≥ {threshold})——对话本身正常，只是还不够强到能泛化成 L2 经验；多做几个相似任务后会自动积累。",
+    "任务评分 R={rTask} 低于沉淀阈值 (≥ {threshold})，但未达到反例阈值 (≤ -0.15)；本次任务信号偏弱或带有负向反馈，暂不会生成 L2 经验。后续相似任务若获得更高评分，会继续累积为可复用经验。",
   "tasks.skillReason.not_generated.noPolicy":
     "该任务暂未关联到 L2 经验——可能仍在异步归纳处理中。稍后刷新可查看最新状态。",
   "tasks.skillReason.generated":

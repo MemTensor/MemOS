@@ -195,7 +195,9 @@ function formatFeedback(feedback: readonly UserFeedback[]): string {
   for (const f of feedback.slice(0, 8)) {
     const text = (f.text ?? f.rationale ?? "").trim();
     if (!text) continue;
-    lines.push(`- [${f.channel}/${f.polarity}] ${text.slice(0, 800)}`);
+    const tsLabel = new Date(f.ts).toISOString();
+    const sourceLabel = f.channel === "explicit" ? "USER" : "INFERRED";
+    lines.push(`- [${sourceLabel}/${f.polarity} @${tsLabel}] ${text.slice(0, 800)}`);
   }
   return lines.join("\n");
 }
