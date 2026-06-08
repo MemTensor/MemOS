@@ -41,6 +41,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     timeoutMs: 45_000,
     maxRetries: 3,
+    maxTokens: 4_000,
   },
   skillEvolver: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -52,6 +53,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     temperature: 0,
     timeoutMs: 60_000,
+    maxTokens: 4_000,
   },
   algorithm: {
     lightweightMemory: {
