@@ -315,6 +315,12 @@ describe("retrieval/integration", () => {
     let filterCalls = 0;
     const llm: any = {
       completeJson: async (_messages: unknown, opts: { op?: string }) => {
+        if (opts.op?.includes("retrieval.query.extract")) {
+          return {
+            value: { queryVecText: "run docker compose", keywords: ["docker", "compose"] },
+            servedBy: "fake",
+          };
+        }
         filterCalls++;
         expect(opts.op).toContain("retrieval.filter");
         return {
@@ -353,10 +359,19 @@ describe("retrieval/integration", () => {
     expect(filterCalls).toBe(1);
   });
 
-  it("filters software-engineering prompts with the normalized bug query", async () => {
+  it("filters software-engineering prompts with the extracted queryVecText", async () => {
     let filterPrompt = "";
     const llm: any = {
       completeJson: async (messages: unknown, opts: { op?: string }) => {
+        if (opts.op?.includes("retrieval.query.extract")) {
+          return {
+            value: {
+              queryVecText: "django ModelForm cleaned_data empty value regression",
+              keywords: ["django", "ModelForm", "cleaned_data", "empty value", "regression"],
+            },
+            servedBy: "fake",
+          };
+        }
         expect(opts.op).toContain("retrieval.filter");
         filterPrompt = JSON.stringify(messages);
         return {
@@ -398,9 +413,7 @@ describe("retrieval/integration", () => {
     );
 
     expect(res.stats.llmFilterOutcome).toBe("llm_filtered");
-    expect(filterPrompt).toContain("repo: django/django");
-    expect(filterPrompt).toContain("ModelForm should not overwrite");
-    expect(filterPrompt).toContain("Check BoundField");
+    expect(filterPrompt).toContain("django ModelForm cleaned_data empty value regression");
     expect(filterPrompt).not.toContain("WRAPPER_PATH");
     expect(filterPrompt).not.toContain("STRICT RULES");
     expect(res.packet.rendered).toContain(
@@ -800,7 +813,13 @@ describe("retrieval/integration", () => {
   it("can defer the local LLM pass for one final merged filter", async () => {
     let filterCalls = 0;
     const llm: any = {
-      completeJson: async () => {
+      completeJson: async (_messages: unknown, opts: { op?: string }) => {
+        if (opts.op?.includes("retrieval.query.extract")) {
+          return {
+            value: { queryVecText: "run docker compose", keywords: ["docker", "compose"] },
+            servedBy: "fake",
+          };
+        }
         filterCalls++;
         return {
           value: { selected: [1], sufficient: true },

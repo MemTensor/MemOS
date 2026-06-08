@@ -30,11 +30,13 @@ import { ids } from "../id.js";
 import { rootLogger } from "../logger/index.js";
 import { collectDecisionGuidance } from "./decision-guidance.js";
 import {
-  buildQuery,
+  buildQueryWithExtract,
   extractRepairTaskSection,
   isSoftwareRepairPrompt,
+  rawQueryText,
   type CompiledQuery,
 } from "./query-builder.js";
+import { extractRetrievalQueryWithLlm } from "./query-extract.js";
 import type { RetrievalEventBus } from "./events.js";
 import { dedupeTraceEpisodeByEpisodeId } from "./dedupe-trace-episode.js";
 import { toPacket, renderSnippetForDebug } from "./injector.js";
@@ -58,6 +60,7 @@ import type {
 } from "./types.js";
 
 const log = rootLogger.child({ channel: "core.retrieval" });
+const RETRIEVAL_QUERY_EXTRACT_TIMEOUT_MS = 5_000;
 
 // ─── Extra context shapes (narrowed aliases for strongly-typed entries) ─────
 
@@ -260,7 +263,14 @@ async function runAll(
   const episodeId = (ctx as { episodeId?: EpisodeId }).episodeId;
   const ts = deps.now();
 
-  const compiled = buildQuery(ctx);
+  const rawQuery = rawQueryText(ctx);
+  const llmExtract = await extractRetrievalQueryWithLlm(rawQuery, {
+    llm: deps.llm ?? null,
+    log,
+    episodeId,
+    timeoutMs: RETRIEVAL_QUERY_EXTRACT_TIMEOUT_MS,
+  });
+  const compiled = buildQueryWithExtract(ctx, llmExtract);
   const taskProtocol = renderTaskProtocol(ctx);
   const standaloneMathFinalAnswer = isStandaloneMathFinalAnswerContext(ctx);
   opts.events?.emit({

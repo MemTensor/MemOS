@@ -14,6 +14,32 @@ import { extractPatternTerms, prepareFtsMatch } from "../storage/keyword.js";
 import type { RetrievalCtx } from "./types.js";
 
 const MAX_QUERY_CHARS = 1_500;
+const MAX_KEYWORD_TOKENS = 5;
+
+const GENERIC_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "be",
+  "by",
+  "for",
+  "from",
+  "in",
+  "is",
+  "it",
+  "of",
+  "on",
+  "or",
+  "that",
+  "the",
+  "this",
+  "to",
+  "with",
+  "you",
+  "your",
+]);
 
 /** Public tag list kept in sync with `capture/tagger.ts#KEYWORD_TAGS`. */
 const KEYWORD_TAGS: ReadonlyArray<{ re: RegExp; tag: string }> = [
@@ -70,53 +96,62 @@ export interface CompiledQuery {
   truncated: boolean;
 }
 
+export interface RetrievalQueryExtract {
+  queryVecText: string;
+  keywords: string[];
+}
+
 /**
  * Build a `CompiledQuery` from a retrieval context. Behavior varies per
  * reason so that e.g. `decision_repair` biases toward the failing tool name.
  */
 export function buildQuery(ctx: RetrievalCtx): CompiledQuery {
+  return finalize(rawQueryText(ctx));
+}
+
+export function buildQueryWithExtract(
+  ctx: RetrievalCtx,
+  extract: RetrievalQueryExtract | null | undefined,
+): CompiledQuery {
+  return finalize(rawQueryText(ctx), extract);
+}
+
+export function rawQueryText(ctx: RetrievalCtx): string {
   switch (ctx.reason) {
     case "turn_start": {
       const hintText = hintToText(ctx.contextHints);
       const parts = [ctx.userText?.trim() ?? ""];
       if (hintText) parts.push(hintText);
-      return finalize(parts.join("\n"));
+      return parts.join("\n");
     }
     case "tool_driven": {
       if (typeof ctx.args?.query === "string" && ctx.args.query.trim()) {
         const rest = { ...ctx.args };
         delete rest.query;
         const restText = Object.keys(rest).length > 0 ? renderArgs(rest) : "";
-        return finalize([ctx.args.query.trim(), restText].filter(Boolean).join("\n"));
+        return [ctx.args.query.trim(), restText].filter(Boolean).join("\n");
       }
       const args = renderArgs(ctx.args);
-      return finalize(`tool:${ctx.tool}\n${args}`);
+      return `tool:${ctx.tool}\n${args}`;
     }
     case "skill_invoke": {
       const head = ctx.skillId ? `skill:${ctx.skillId}\n` : "";
-      return finalize(head + (ctx.query ?? ""));
+      return head + (ctx.query ?? "");
     }
     case "sub_agent": {
       const profile = ctx.profile ? `profile:${ctx.profile}\n` : "";
-      return finalize(profile + (ctx.mission ?? ""));
+      return profile + (ctx.mission ?? "");
     }
     case "decision_repair": {
       const head = `failing_tool:${ctx.failingTool}\nfailures:${ctx.failureCount}\n`;
       const tail = ctx.lastErrorCode ? `error:${ctx.lastErrorCode}` : "";
-      return finalize(head + tail);
+      return head + tail;
     }
     default: {
       // Exhaustiveness — compile-time check.
       const _exhaustive: never = ctx;
       void _exhaustive;
-      return {
-        text: "",
-        tags: [],
-        structuralFragments: [],
-        ftsMatch: null,
-        patternTerms: [],
-        truncated: false,
-      };
+      return "";
     }
   }
 }
@@ -132,8 +167,9 @@ export function extractTags(text: string): string[] {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function finalize(raw: string): CompiledQuery {
-  const trimmed = normalizePromptText(raw ?? "").trim();
+function finalize(raw: string, llmExtract?: RetrievalQueryExtract | null): CompiledQuery {
+  const extracted = normalizeRetrievalExtract(raw ?? "", llmExtract);
+  const trimmed = extracted.queryText;
   if (!trimmed) {
     return {
       text: "",
@@ -152,11 +188,11 @@ function finalize(raw: string): CompiledQuery {
     toolCalls: [],
     agentText: trimmed,
   });
-  // Keyword channels — derived from the original text *before* truncation
-  // so we don't lose tail content. The actual queries are bounded by the
-  // helpers themselves.
-  const ftsMatch = prepareFtsMatch(trimmed);
-  const patternTerms = extractPatternTerms(trimmed);
+  const keywordText = extracted.keywords.join(" ");
+  const ftsMatch = prepareFtsMatch(keywordText) ?? prepareFtsMatch(trimmed);
+  const keywordPatternTerms = extractPatternTerms(keywordText);
+  const patternTerms =
+    keywordPatternTerms.length > 0 ? keywordPatternTerms : extractPatternTerms(trimmed);
   if (trimmed.length <= MAX_QUERY_CHARS) {
     return {
       text: trimmed,
@@ -180,43 +216,79 @@ function finalize(raw: string): CompiledQuery {
   };
 }
 
-function normalizePromptText(raw: string): string {
-  const text = String(raw ?? "");
-  const softwareRepairPrompt = extractSoftwareRepairQueryText(text);
-  if (softwareRepairPrompt) return softwareRepairPrompt;
+function normalizeRetrievalExtract(
+  raw: string,
+  llmExtract?: RetrievalQueryExtract | null,
+): { queryText: string; keywords: string[] } {
+  const fallback = fallbackRetrievalExtract(raw);
+  const fallbackNormalized = {
+    queryText: fallback.queryVecText,
+    keywords: fallback.keywords,
+  };
+  if (!llmExtract) return fallbackNormalized;
+  const candidateQueryText = String(llmExtract.queryVecText ?? "").trim();
+  const queryText = isUsableQueryVecText(candidateQueryText)
+    ? candidateQueryText
+    : fallback.queryVecText;
+  const keywords = sanitizeKeywordList(llmExtract.keywords);
+  return {
+    queryText,
+    keywords: keywords.length > 0 ? keywords : fallbackNormalized.keywords,
+  };
+}
 
-  const problemMatch = text.match(/\*\*Problem:\*\*([\s\S]*?)(?:\n\s*\*\*[^*\n]+:\*\*|$)/i);
-  if (problemMatch?.[1]?.trim()) {
-    const hints = text
-      .split("\n")
-      .filter((line) => /^(domain|difficulty):/i.test(line.trim()))
-      .join("\n");
-    return [problemMatch[1].trim(), hints].filter(Boolean).join("\n");
+function isUsableQueryVecText(text: string): boolean {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed) return false;
+  if (!/[\p{L}\p{N}]/u.test(trimmed)) return false;
+  const alnumRuns = trimmed.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const longestRun = Math.max(0, ...alnumRuns.map((run) => run.length));
+  return longestRun >= 2;
+}
+
+export function fallbackRetrievalExtract(raw: string): RetrievalQueryExtract {
+  const queryText = String(raw ?? "").trim();
+  return {
+    queryVecText: queryText,
+    keywords: extractKeywordTokens(queryText),
+  };
+}
+
+function sanitizeKeywordList(keywords: unknown): string[] {
+  if (!Array.isArray(keywords)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of keywords) {
+    const keyword = String(item ?? "").trim();
+    if (!keyword) continue;
+    const normalized = keyword.toLowerCase();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(keyword);
+    if (out.length >= MAX_KEYWORD_TOKENS) break;
   }
-  return text.replace(/^new task\s*/i, "").trim();
+  return out;
+}
+
+function extractKeywordTokens(text: string): string[] {
+  const tokens = text.match(/[\p{L}\p{N}][\p{L}\p{N}_-]*/gu) ?? [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const token of tokens) {
+    const normalized = token.toLowerCase();
+    if (GENERIC_STOP_WORDS.has(normalized)) continue;
+    if (token.length < 2 && !/\d/.test(token)) continue;
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(token);
+    if (out.length >= MAX_KEYWORD_TOKENS) break;
+  }
+  return out;
 }
 
 export function isSoftwareRepairPrompt(text: string | undefined): boolean {
   const raw = String(text ?? "");
   return /##\s*Bug Description\b/i.test(raw) && /You need to fix a bug in\b/i.test(raw);
-}
-
-function extractSoftwareRepairQueryText(text: string): string | null {
-  if (!/##\s*Bug Description\b/i.test(text)) return null;
-  if (!/You need to fix a bug in\b/i.test(text)) return null;
-
-  const bug = extractRepairTaskSection(text, "Bug Description");
-  if (!bug) return null;
-
-  const repoMatch = text.match(/You need to fix a bug in the\s+([^\n]+?)\s+repository\./i);
-  const hints = extractRepairTaskSection(text, "Hints");
-  const parts = [
-    "software_engineering python test bug fix",
-    repoMatch?.[1]?.trim() ? `repo: ${repoMatch[1]!.trim()}` : "",
-    bug,
-    hints ? `hints: ${hints}` : "",
-  ].filter(Boolean);
-  return parts.join("\n");
 }
 
 export function extractRepairTaskSection(text: string, heading: string): string {

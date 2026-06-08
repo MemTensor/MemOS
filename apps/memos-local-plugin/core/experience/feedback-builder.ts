@@ -378,16 +378,9 @@ async function buildDraft(args: {
           };
         }
 
-        // Use refined guidance (following L2 induction structure)
-        const prefix =
-          type === "failure_avoidance"
-            ? "Avoid"
-            : type === "repair_instruction"
-              ? "Repair"
-              : type === "preference"
-                ? "Prefer"
-                : "Success";
-        title = `${prefix}: ${refined.title}`;
+        // Use refined guidance (following L2 induction structure). The
+        // experience type lives in structured fields; titles stay semantic.
+        title = refined.title;
         trigger = refined.trigger;
         procedure = refined.procedure;
         verification = refined.verification;
@@ -481,15 +474,7 @@ function buildDraftFallback(
   type: ExperienceType,
   text: string,
 ) {
-  const prefix =
-    type === "failure_avoidance"
-      ? "Avoid"
-      : type === "repair_instruction"
-        ? "Repair"
-        : type === "preference"
-          ? "Prefer"
-          : "Success";
-  const title = `${prefix}: ${firstSentence(text, MAX_TITLE_CHARS - prefix.length - 2)}`;
+  const title = firstSentence(text, MAX_TITLE_CHARS);
   const traceContext = args.trace ? traceHint(args.trace) : null;
   const guidance = guidanceOf(type, args.classified, text);
   const procedure = [

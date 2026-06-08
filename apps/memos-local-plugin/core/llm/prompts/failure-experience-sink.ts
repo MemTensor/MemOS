@@ -2,7 +2,7 @@ import type { PromptDef } from "./index.js";
 
 export const FAILURE_EXPERIENCE_SINK_PROMPT: PromptDef = {
   id: "failure.experience.sink",
-  version: 4,
+  version: 5,
   description:
     "Induce reusable task-completion guidance from a failed attempt and corrective feedback.",
   system: `You induce a candidate policy from an episode where the task was not finished satisfactorily.
@@ -23,20 +23,24 @@ Evidence:
 2) task_context states requirements; it does not by itself show what went wrong in the attempt.
 3) Tie each claim to a quotable phenomenon (e.g. external judgment still open, requested substance missing, timeout without deliverable, feedback naming an unmet acceptance criterion).
 4) If evidence is thin, keep the policy narrow and note limits in boundary.
+5) Source-specific entities are not reusable guidance by default: names, locations, product names, file names, one-off requested targets, and one task's acceptance details must be abstracted into categories or variables.
+6) Preserve an entity only when the input explicitly marks it as a structured stable fact, such as a user profile fact, workspace/project fact, long-term preference memory, or stable-fact annotation.
+7) Current episode text, tool output, verifier feedback, or a one-time task requirement are not enough evidence to call an entity long-term. Do not infer long-term preference from them.
+8) Do not put source-specific entities into title, trigger, procedure, verification, boundary, or decision_guidance unless the structured stable source is present.
 
 Guidance:
-5) prefer: habits that advance completion (may be empty).
-6) avoid: habits that leave the goal unmet—outcome/behavior gaps only. Do not name tools or channels; do not use "do not use / never call" style lines.
-7) procedure and verification must be checkable from visible outcomes or judgments in the input.
-8) verification: how to tell the task is done or accepted.
+9) prefer: habits that advance completion (may be empty).
+10) avoid: habits that leave the goal unmet—outcome/behavior gaps only. Do not name tools or channels; do not use "do not use / never call" style lines.
+11) procedure and verification must be checkable from visible outcomes or judgments in the input.
+12) verification: how to tell the task is done or accepted.
 
 Types:
-9) "failure_avoidance" when feedback shows the goal stayed open and you mainly generalize what to stop doing before ending.
-10) "repair_instruction" when you can give a repeatable completion pattern (what to finish or confirm before done).
+13) "failure_avoidance" when feedback shows the goal stayed open and you mainly generalize what to stop doing before ending.
+14) "repair_instruction" when you can give a repeatable completion pattern (what to finish or confirm before done).
 
 Other:
-11) trigger: task-level, recognizable when a similar task starts or nears closure.
-12) support_trace_ids: only traces you actually used.
+15) trigger: task-level, recognizable when a similar task starts or nears closure.
+16) support_trace_ids: only traces you actually used.
 
 Return JSON:
 {
