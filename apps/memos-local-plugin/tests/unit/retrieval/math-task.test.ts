@@ -26,6 +26,40 @@ describe("retrieval/math-task", () => {
     expect(isStandaloneMathFinalAnswerTask("case identifier 1045")).toBe(false);
   });
 
+  it("does not classify algorithmic code-generation tasks as standalone math", () => {
+    expect(
+      isStandaloneMathFinalAnswerTask(
+        [
+          "Implement a Python method that returns the number of valid integers modulo 10^9 + 7.",
+          "Use the provided function signature and return only the completed code.",
+          "```python",
+          "class Counter:",
+          "    def count(self, num1: str, num2: str, min_sum: int, max_sum: int) -> int:",
+          "        pass",
+          "```",
+        ].join("\n"),
+      ),
+    ).toBe(false);
+
+    expect(
+      isStandaloneMathFinalAnswerTask(
+        [
+          "Find the sum, modulo 998244353, of f(P) over all permutations P.",
+          "Input",
+          "The input is given from Standard Input in the following format:",
+          "N",
+          "Output",
+          "Print the sum modulo 998244353.",
+          "Sample Input 1",
+          "3",
+          "Sample Output 1",
+          "1332",
+          "Read the input from stdin and write the answer to stdout.",
+        ].join("\n"),
+      ),
+    ).toBe(false);
+  });
+
   it("renders a non-benchmark-specific final-answer protocol", () => {
     const protocol = renderMathFinalAnswerProtocol(
       "How many routes are there in this finite graph? Compute the final answer.",

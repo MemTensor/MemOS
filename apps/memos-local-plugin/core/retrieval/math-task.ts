@@ -4,17 +4,50 @@ export const MATH_FINAL_ANSWER_PROTOCOL_TITLE = "## Standalone math task guardra
 export function isStandaloneMathFinalAnswerTask(text: string | undefined): boolean {
   if (!text) return false;
   const normalized = text.toLowerCase();
+  if (isCodeGenerationTask(normalized)) return false;
+
   const mathSignals = [
     /\\boxed|\\frac|\\sqrt|\\sum|\\prod|\\binom/,
-    /\bmath(?:ematics)?\b|\bolympiad\b|\bcompetition\b/,
+    /\bmath(?:ematics)?\b|\bolympiad\b|\bmath competition\b/,
     /\bcombinatorics?\b|\bprobability\b|\bpermutation\b|\bcombination\b|\bcount(?:ing)?\b|\bhow many ways\b/,
     /\bnumber theory\b|\bmod(?:ulo|ular)?\b|\bprime\b|\bdivisib(?:le|ility)\b|\bcongruence\b/,
     /\balgebra\b|\bpolynomials?\b|\bequations?\b|\bfunctional equation\b/,
     /\bgeometry\b|\btriangle\b|\bcircle\b|\bpolygon\b|\bangle\b|\bmidpoint\b|\bparallel\b/,
     /\bintegers?\b|\breal numbers?\b|\bpositive numbers?\b/,
   ].filter((re) => re.test(normalized)).length;
+  const hasFinalAnswerInstruction = /\\boxed|\bboxed\s*\{|\bfinal answer\b|\banswer in\b/.test(normalized);
+  if (/\bsolve the following math competition problem\b/.test(normalized) && hasFinalAnswerInstruction) {
+    return true;
+  }
   if (mathSignals < 2) return false;
-  return /\b(final answer|answer in|compute|find|determine|evaluate|solve|prove|what is)\b|\\boxed/.test(normalized);
+  if (!hasFinalAnswerInstruction) return false;
+  return /\b(compute|find|determine|evaluate|solve|prove|what is)\b|\\boxed|\bboxed\s*\{/.test(normalized);
+}
+
+function isCodeGenerationTask(normalized: string): boolean {
+  const explicitCodeContract = [
+    /\b(?:write|generate|implement|provide|submit|output|return)\b[\s\S]{0,120}\b(?:code|program|python|javascript|typescript|java|c\+\+|function|method|class)\b/,
+    /\b(?:correct|working)\s+(?:python\s+)?program\b/,
+    /\b(?:solve|run)\s+the\s+problem\b[\s\S]{0,120}\b(?:stdin|stdout|standard input|standard output)\b/,
+    /\bread\s+the\s+inputs?\s+from\s+stdin\b[\s\S]{0,120}\bwrite\b[\s\S]{0,80}\bstdout\b/,
+    /\b(?:input is given|the input is given)\s+from\s+standard input\b[\s\S]{0,200}\b(?:output|print)\b/,
+  ];
+  if (explicitCodeContract.some((re) => re.test(normalized))) return true;
+
+  const structuralSignals = [
+    /```[a-z0-9#+-]*\s*\n/,
+    /\b(?:stdin|stdout|standard input|standard output)\b/,
+    /\b(?:sample input|sample output|input format|output format)\b/,
+    /\b(?:starter code|provided format|enclose your code)\b/,
+    /\bclass\s+\w+\s*:/,
+    /\bdef\s+\w+\s*\([^)]*\)\s*(?:->\s*[^:\n]+)?\s*:/,
+    /\bfrom typing import\b|\bimport sys\b/,
+  ].filter((re) => re.test(normalized)).length;
+  const hasProgrammingSurface =
+    /\b(?:code|program|python|javascript|typescript|java|c\+\+|function|method|class|stdin|stdout|standard input|standard output)\b/.test(
+      normalized,
+    );
+  return hasProgrammingSurface && structuralSignals >= 2;
 }
 
 export function renderMathFinalAnswerProtocol(text?: string): string {
