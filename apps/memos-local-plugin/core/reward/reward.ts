@@ -128,6 +128,7 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
             scoredAt: startedAt,
             trigger: input.trigger,
             skipped: true,
+            traceCount: traceIds.length,
           },
           rewardDirty: undefined,
         });
