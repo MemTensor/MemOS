@@ -270,10 +270,25 @@ class GraphStructureReorganizer:
                 )
                 return
 
-            # Step 2: Partition nodes
-            if _check_deadline("[GraphStructureReorganize] Before partition"):
-                return
-            partitioned_groups = self._partition(nodes)
+            # Group nodes by user_name to prevent cross-user clustering
+            from collections import defaultdict
+
+            nodes_by_user = defaultdict(list)
+            for n in nodes:
+                # LanceDB may not have user_name in node object directly, but let's try properties or user_name
+                u_name = getattr(n, "user_name", "default")
+                nodes_by_user[u_name].append(n)
+
+            partitioned_groups = []
+            for u_name, u_nodes in nodes_by_user.items():
+                if len(u_nodes) < min_group_size:
+                    logger.info(
+                        f"[GraphStructureReorganize] User {u_name} has only {len(u_nodes)} nodes, skipping."
+                    )
+                    continue
+                u_groups = self._partition(u_nodes)
+                partitioned_groups.extend(u_groups)
+
             logger.info(
                 f"[GraphStructureReorganize] Partitioned into {len(partitioned_groups)} clusters."
             )

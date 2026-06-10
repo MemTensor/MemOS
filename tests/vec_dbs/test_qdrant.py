@@ -1,6 +1,6 @@
 import uuid
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -89,7 +89,10 @@ def test_search(vec_db):
         },
     )()
     vec_db.client.query_points.return_value = mock_response
-    results = vec_db.search([0.1, 0.2, 0.3], top_k=1)
+    results = vec_db.search(
+        query_vector=[0.1, 0.2, 0.3],
+        top_k=1,
+    )
     assert len(results) == 1
     assert isinstance(results[0], VecDBItem)
     assert results[0].score == 0.9
@@ -100,15 +103,20 @@ def test_update_vector(vec_db):
     data = {"id": id, "vector": [0.4, 0.5, 0.6], "payload": {"new": "data"}}
     vec_db.update(id, data)
     vec_db.client.upsert.assert_called_once()
+    vec_db.client.set_payload.assert_not_called()
 
 
 def test_update_payload_only(vec_db):
-    vec_db.update("1", {"payload": {"only": "payload"}})
+    id = str(uuid.uuid4())
+    data = {"id": id, "payload": {"new": "data"}}
+    vec_db.update(id, data)
+    vec_db.client.update_vectors.assert_not_called()
     vec_db.client.set_payload.assert_called_once()
 
 
 def test_delete(vec_db):
-    vec_db.delete(["1", "2"])
+    id = str(uuid.uuid4())
+    vec_db.delete([id])
     vec_db.client.delete.assert_called_once()
 
 
@@ -119,12 +127,18 @@ def test_count(vec_db):
 
 
 def test_get_all(vec_db):
-    vec_db.get_by_filter = MagicMock(
-        return_value=[VecDBItem(id=str(uuid.uuid4()), vector=[0.1, 0.2, 0.3])]
+    id1, id2 = str(uuid.uuid4()), str(uuid.uuid4())
+    vec_db.client.scroll.return_value = (
+        [
+            type("obj", (object,), {"id": id1, "vector": [0.1], "payload": {}}),
+            type("obj", (object,), {"id": id2, "vector": [0.2], "payload": {}}),
+        ],
+        None,
     )
     results = vec_db.get_all()
-    assert len(results) == 1
-    assert isinstance(results[0], VecDBItem)
+    assert len(results) == 2
+    assert results[0].id == id1
+    assert results[1].id == id2
 
 
 def test_qdrant_client_cloud_init():
