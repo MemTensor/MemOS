@@ -174,15 +174,12 @@ class ChatRequest(BaseRequest):
     # ==== Filter conditions ====
     filter: dict[str, Any] | None = Field(
         None,
-        description="""
-        Filter for the memory, example:
-        {
-            "`and` or `or`": [
-                {"id": "uuid-xxx"},
-                {"created_at": {"gt": "2024-01-01"}},
-            ]
-        }
-        """,
+        description=(
+            "Optional metadata filter applied to recalled memories. Supports nested "
+            '"and" / "or" conditions and comparison operators such as "gt" for fields '
+            'like "id", "created_at", or other indexed metadata. Example: '
+            '{"and": [{"id": "uuid-xxx"}, {"created_at": {"gt": "2024-01-01"}}]}'
+        ),
     )
 
     # ==== Extended capabilities ====
@@ -263,7 +260,10 @@ class ChatCompleteRequest(BaseRequest):
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
     include_preference: bool = Field(True, description="Whether to handle preference memory")
     pref_top_k: int = Field(6, description="Number of preference results to return")
-    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    filter: dict[str, Any] | None = Field(
+        None,
+        description="Optional metadata filter applied to memories used for chat recall.",
+    )
     model_name_or_path: str | None = Field(None, description="Model name to use for chat")
     max_tokens: int | None = Field(None, description="Max tokens to generate")
     temperature: float | None = Field(None, description="Temperature for sampling")
@@ -463,18 +463,14 @@ class APISearchRequest(BaseRequest):
     )
 
     # ==== Filter conditions ====
-    # TODO: maybe add detailed description later
     filter: dict[str, Any] | None = Field(
         None,
-        description="""
-        Filter for the memory, example:
-        {
-            "`and` or `or`": [
-                {"id": "uuid-xxx"},
-                {"created_at": {"gt": "2024-01-01"}},
-            ]
-        }
-        """,
+        description=(
+            "Optional metadata filter applied to memory search results. Supports nested "
+            '"and" / "or" conditions and comparison operators such as "gt" for fields '
+            'like "id", "created_at", or other indexed metadata. Example: '
+            '{"and": [{"id": "uuid-xxx"}, {"created_at": {"gt": "2024-01-01"}}]}'
+        ),
     )
 
     # ==== Extended capabilities ====
@@ -497,7 +493,12 @@ class APISearchRequest(BaseRequest):
     # Internal field for search memory type
     search_memory_type: str = Field(
         "All",
-        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory, SkillMemory, PreferenceMemory",
+        description=(
+            "Memory category to search. Supported values include All, WorkingMemory, "
+            "LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, "
+            "ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory, SkillMemory, "
+            "and PreferenceMemory. Default: All."
+        ),
     )
 
     # ==== Context ====
@@ -540,7 +541,10 @@ class APISearchRequest(BaseRequest):
     # ==== Source for  plugin ====
     source: str | None = Field(
         None,
-        description="Source of the search query [plugin will router diff search]",
+        description=(
+            "Origin of the search request. Plugin callers can use this value to route "
+            "different search behavior without changing the query payload."
+        ),
     )
 
     neighbor_discovery: bool = Field(
@@ -879,15 +883,12 @@ class APIChatCompleteRequest(BaseRequest):
     # ==== Filter conditions ====
     filter: dict[str, Any] | None = Field(
         None,
-        description="""
-        Filter for the memory, example:
-        {
-            "`and` or `or`": [
-                {"id": "uuid-xxx"},
-                {"created_at": {"gt": "2024-01-01"}},
-            ]
-        }
-        """,
+        description=(
+            "Optional metadata filter applied to recalled memories. Supports nested "
+            '"and" / "or" conditions and comparison operators such as "gt" for fields '
+            'like "id", "created_at", or other indexed metadata. Example: '
+            '{"and": [{"id": "uuid-xxx"}, {"created_at": {"gt": "2024-01-01"}}]}'
+        ),
     )
 
     # ==== Extended capabilities ====
@@ -917,7 +918,10 @@ class GetMemoryRequest(BaseRequest):
     include_preference: bool = Field(True, description="Whether to return preference memory")
     include_tool_memory: bool = Field(True, description="Whether to return tool memory")
     include_skill_memory: bool = Field(True, description="Whether to return skill memory")
-    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    filter: dict[str, Any] | None = Field(
+        None,
+        description="Optional metadata filter applied when retrieving memories.",
+    )
     page: int | None = Field(
         None,
         description="Page number (starts from 1). If None, exports all data without pagination.",
@@ -939,7 +943,10 @@ class DeleteMemoryRequest(BaseRequest):
     writable_cube_ids: list[str] | None = Field(None, description="Writable cube IDs")
     memory_ids: list[str] | None = Field(None, description="Memory IDs")
     file_ids: list[str] | None = Field(None, description="File IDs")
-    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    filter: dict[str, Any] | None = Field(
+        None,
+        description="Optional metadata filter applied when selecting memories for deletion.",
+    )
     user_id: str | None = Field(
         None,
         description="Quick delete condition: remove memories for this user_id.",
