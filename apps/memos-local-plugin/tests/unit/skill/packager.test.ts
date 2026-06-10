@@ -209,10 +209,10 @@ describe("skill/packager", () => {
     const r = await buildSkillRow(
       {
         draft: makeDraft({
-          name: "django_patch_apply",
-          retrievalBlurb: "适用于 django 补丁无法落盘的场景。",
-          triggerContext: "当补丁应用失败并需要通过 WRAPPER_PATH 修复时。",
-          summary: "通过 WRAPPER_PATH 安全应用补丁并验证结果。",
+          name: "repository_patch_apply",
+          retrievalBlurb: "适用于仓库补丁无法落盘的场景。",
+          triggerContext: "当补丁应用失败并需要通过 COMMAND_WRAPPER 修复时。",
+          summary: "通过 COMMAND_WRAPPER 安全应用补丁并验证结果。",
           steps: [{ title: "应用补丁", body: "执行补丁并检查返回结果" }],
         }),
         policy: mkPolicy(),

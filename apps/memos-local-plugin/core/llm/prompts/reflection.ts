@@ -77,7 +77,7 @@ Scoring rubric (apply in order: IRRELEVANT vs on-path, then RELATED vs PIVOTAL):
   episode then executes. Label it RELATED instead when earlier steps in the
   SAME window already did the substantive work (edits, patches, tests, file
   writes) and this step mainly narrates, summarizes, or marks completion
-  (e.g. "Changes made:", "TASK_COMPLETE") without being the basis the run
+  (e.g. "Changes made:", a completion-only note) without being the basis the run
   was built on. In that pattern the pivotal work usually lives in an earlier
   tool or decision step, not the recap at the end.
 
@@ -120,7 +120,7 @@ Sequence D — post-hoc recap after execution (do NOT PIVOTAL the recap):
   steps 0–29: many tool calls — read files, apply patch, run tests
           -> RELATED, reason "EXECUTION"
   step 30: assistant-only text summarizing the fix already made and
-            listing "Changes made:" / TASK_COMPLETE
+            listing "Changes made:" / a completion-only note
           -> RELATED, reason "SUMMARY"
           (the run was already carried out by prior tool steps; this text
           does not establish the approach — it reports it. PIVOTAL belongs

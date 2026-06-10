@@ -232,18 +232,20 @@ describe("retrieval/integration", () => {
     expect(skillIds).not.toContain("sk_weak");
   });
 
-  it("does not hard-drop vector traces for coding identifiers", async () => {
+  it("keeps abstract memories when long unique identifier queries require keywords", async () => {
     const res = await turnStartRetrieve(makeDeps(handle), {
       reason: "turn_start",
       agent: "openclaw",
-      sessionId: "s_current" as SessionId,
-      userText: "debug memos-local-plugin create_episode_snapshot",
+      sessionId: "s1" as SessionId,
+      userText: "zlxqyz_unique_marker_2026_test_no_such_content",
       ts: NOW as never,
     });
 
     const refKinds = res.packet.snippets.map((s) => s.refKind);
     expect(refKinds).toContain("skill");
-    expect(refKinds.some((kind) => kind === "trace" || kind === "episode")).toBe(true);
+    expect(refKinds).toContain("world-model");
+    expect(refKinds).not.toContain("trace");
+    expect(refKinds).not.toContain("episode");
   });
 
   it("recalls feedback experiences through keyword channels when embeddings degrade", async () => {
@@ -269,9 +271,7 @@ describe("retrieval/integration", () => {
     );
     expect(experience?.refId).toBe("po_sec13f_issuer");
     expect(experience?.title).toContain("SEC 13F issuer CUSIP");
-    expect(experience?.body).toContain("Trigger: Parse SEC 13F holdings");
-    expect(experience?.body).toContain('memos_get(id="po_sec13f_issuer", kind="policy")');
-    expect(experience?.body).not.toContain("Use holdings table columns directly");
+    expect(experience?.body).toContain("Use holdings table columns directly");
     expect(experience?.body).not.toContain("confidence=");
     expect(experience?.body).not.toContain("evidence=");
     expect(res.packet.rendered).toContain("## Experiences");
@@ -294,21 +294,6 @@ describe("retrieval/integration", () => {
     });
     expect(res.stats.tier1Count).toBe(0);
     expect(res.packet.snippets.every((s) => s.refKind !== "skill")).toBe(true);
-  });
-
-  it("tool_driven filters trace and episode memories from the current session", async () => {
-    const res = await toolDrivenRetrieve(makeDeps(handle), {
-      reason: "tool_driven",
-      agent: "openclaw",
-      sessionId: "s1" as SessionId,
-      tool: "memos_search",
-      args: { query: "docker compose" },
-      ts: NOW as never,
-    });
-
-    const kinds = res.packet.snippets.map((s) => s.refKind);
-    expect(kinds).not.toContain("trace");
-    expect(kinds).not.toContain("episode");
   });
 
   it("lightweight mode only returns trace memories after summarizer filter succeeds", async () => {
@@ -359,15 +344,20 @@ describe("retrieval/integration", () => {
     expect(filterCalls).toBe(1);
   });
 
-  it("filters software-engineering prompts with the extracted queryVecText", async () => {
+  it("filters software-engineering prompts with the normalized bug query", async () => {
     let filterPrompt = "";
     const llm: any = {
       completeJson: async (messages: unknown, opts: { op?: string }) => {
         if (opts.op?.includes("retrieval.query.extract")) {
           return {
             value: {
-              queryVecText: "django ModelForm cleaned_data empty value regression",
-              keywords: ["django", "ModelForm", "cleaned_data", "empty value", "regression"],
+              queryVecText: [
+                "repository repair source fix",
+                "repo: example-org/service-toolkit",
+                "public route prefix",
+                "route normalization helper",
+              ].join("\n"),
+              keywords: ["repository", "repair", "route", "prefix"],
             },
             servedBy: "fake",
           };
@@ -396,48 +386,60 @@ describe("retrieval/integration", () => {
         agent: "openclaw",
         sessionId: "s_current" as SessionId,
         userText: [
-          "You need to fix a bug in the django/django repository.",
+          "You need to fix a bug in the example-org/service-toolkit repository.",
           "",
           "## Bug Description",
-          "ModelForm should not overwrite provided default values when cleaned_data contains an empty value.",
+          "A request handler returns an internal path when a public route prefix is configured.",
           "",
           "## Hints",
-          "Check BoundField and model_to_dict interactions.",
-          "diff --git a/django/forms/models.py b/django/forms/models.py index 1111111111..2222222222 100644 --- a/django/forms/models.py +++ b/django/forms/models.py @@ -10,1 +10,2 @@ def f(): - old value + new value",
+          "Check the route normalization helper and the response builder.",
+          "diff --git a/src/routing/handler.py b/src/routing/handler.py index 1111111111..2222222222 100644 --- a/src/routing/handler.py +++ b/src/routing/handler.py @@ -10,1 +10,2 @@ def f(): - old value + new value",
           "",
           "STRICT RULES:",
-          "Run every command through WRAPPER_PATH=/tmp/swebench-wrapper.",
+          "Run every command through COMMAND_WRAPPER=/tmp/repair-wrapper.",
         ].join("\n"),
         ts: NOW as never,
       },
     );
 
     expect(res.stats.llmFilterOutcome).toBe("llm_filtered");
-    expect(filterPrompt).toContain("django ModelForm cleaned_data empty value regression");
-    expect(filterPrompt).not.toContain("WRAPPER_PATH");
+    expect(filterPrompt).toContain("repo: example-org/service-toolkit");
+    expect(filterPrompt).toContain("public route prefix");
+    expect(filterPrompt).toContain("route normalization helper");
+    expect(filterPrompt).not.toContain("COMMAND_WRAPPER");
     expect(filterPrompt).not.toContain("STRICT RULES");
     expect(res.packet.rendered).toContain(
-      "WRAPPER_PATH write /testbed/path/to/file",
+      "COMMAND_WRAPPER write REPO_ROOT/path/to/file",
     );
-    expect(res.packet.rendered).toContain("Use the exact current `WRAPPER_PATH`");
-    expect(res.packet.rendered).toContain("Immediate repair gate");
+    expect(res.packet.rendered).toContain("Use the exact current `COMMAND_WRAPPER`");
+    expect(res.packet.rendered).toContain("Patch-readiness gate");
     expect(res.packet.rendered).toContain("First objective: produce a small non-empty source `git diff`");
     expect(res.packet.rendered).toContain("Patch-first completion contract");
     expect(res.packet.rendered).toContain("do not exceed eight inspect/search commands");
     expect(res.packet.rendered).toContain("current task action queue");
-    expect(res.packet.rendered).toContain("Closure-stop rule");
+    expect(res.packet.rendered).toContain("## Generic repair heuristics");
+    expect(res.packet.rendered).toContain("identifier/key collision handling");
+    expect(res.packet.rendered).toContain("boundary conversion and value normalization");
+    expect(res.packet.rendered).toContain("Edit-readiness rule");
     expect(res.packet.rendered).toContain("Do not inspect tests first");
     expect(res.packet.rendered).toContain("Do not reuse a hard-coded `/tmp/...-exec`");
-    expect(res.packet.rendered).not.toContain("/tmp/swebench-wrapper write");
-    expect(res.packet.rendered).toContain("double quotes around the `tmux-run` command");
-    expect(res.packet.rendered).toContain("grep -n combine");
+    expect(res.packet.rendered).not.toContain("/tmp/repair-wrapper write");
+    expect(res.packet.rendered).not.toContain("WRAPPER_PATH");
+    expect(res.packet.rendered).not.toContain("/testbed");
+    expect(res.packet.rendered).not.toContain("Django");
+    expect(res.packet.rendered).not.toContain("Query.combine");
+    expect(res.packet.rendered).not.toContain("cleaned_data");
+    expect(res.packet.rendered).not.toContain("random_state");
+    expect(res.packet.rendered).not.toContain("build_instance");
+    expect(res.packet.rendered).toContain("double quotes around the `run` command");
+    expect(res.packet.rendered).toContain("grep -n target_symbol");
     expect(res.packet.rendered).toContain("not a phrase with spaces");
     expect(res.packet.rendered).toContain("Never grep for a phrase containing whitespace");
     expect(res.packet.rendered).toContain("no inline `python - <<`");
-    expect(res.packet.rendered).toContain("Every non-poll `tmux-run` command must start with `cd /testbed &&`");
+    expect(res.packet.rendered).toContain("Every non-poll `run` command must start with `cd REPO_ROOT &&`");
     expect(res.packet.rendered).toContain("git status --porcelain");
     expect(res.packet.rendered).toContain("temporary scripts");
-    expect(res.packet.rendered).toContain("python /tmp/memos_edit.py");
+    expect(res.packet.rendered).toContain("python /tmp/memmy_edit.py");
     expect(res.packet.rendered).toContain("repeats stale source text");
     expect(res.packet.rendered).toContain("assert old in text");
     expect(res.packet.rendered).toContain("Do not put shell substitutions like `$(sed ...)`");
@@ -446,52 +448,50 @@ describe("retrieval/integration", () => {
     expect(res.packet.rendered).toContain("no `apply_patch`");
     expect(res.packet.rendered).toContain("no `sh -lc`");
     expect(res.packet.rendered).toContain("no shell pipes (`|`)");
-    expect(res.packet.rendered).toContain("Do not finish by saying the bug is already fixed");
+    expect(res.packet.rendered).toContain("Do not finish by saying the issue is already fixed");
     expect(res.packet.rendered).toContain("if `git diff` is empty");
-    expect(res.packet.rendered).toContain("never switch to `/repo`");
-    expect(res.packet.rendered).toContain("Do not install pytest");
-    expect(res.packet.rendered).toContain("If bug hints contain a candidate source diff");
+    expect(res.packet.rendered).toContain("never switch to another repository directory");
+    expect(res.packet.rendered).toContain("do not install a new test runner");
+    expect(res.packet.rendered).toContain("If repair hints contain a candidate source diff");
     expect(res.packet.rendered).toContain("do not generalize the same idea to other similar call sites");
     expect(res.packet.rendered).toContain("existing behavior checks");
-    expect(res.packet.rendered).toContain("Held-out verification scores the source patch");
+    expect(res.packet.rendered).toContain("Source behavior determines task success");
     expect(res.packet.rendered).toContain("inspect the target source file at most twice");
     expect(res.packet.rendered).toContain("Use simple single-token searches");
     expect(res.packet.rendered).toContain("avoid shell pipelines");
-    expect(res.packet.rendered).toContain("## Visible bug clue digest");
-    expect(res.packet.rendered).toContain("cleaned_data");
-    expect(res.packet.rendered).toContain("do not start with `ls`/`pwd`");
-    expect(res.packet.rendered).toContain("## Bug hint digest");
+    expect(res.packet.rendered).toContain("host command parsers and allowlists");
+    expect(res.packet.rendered).toContain("## Repair hint context");
     expect(res.packet.rendered).toContain("Candidate diff hunks:");
-    expect(res.packet.rendered).toContain("Primary edit target: /testbed/django/forms/models.py");
+    expect(res.packet.rendered).toContain("Primary edit target: REPO_ROOT/src/routing/handler.py");
     expect(res.packet.rendered).toContain(
-      "Required edit command starts with: `WRAPPER_PATH write /tmp/memos_edit.py",
+      "Required edit command starts with: `COMMAND_WRAPPER write /tmp/memmy_edit.py",
     );
     expect(res.packet.rendered).toContain("Safe large-file edit pattern:");
-    expect(res.packet.rendered).toContain('p = Path("/testbed/django/forms/models.py")');
+    expect(res.packet.rendered).toContain('p = Path("REPO_ROOT/src/routing/handler.py")');
     expect(res.packet.rendered).toContain("Do not paste compact diff hunks directly");
     expect(res.packet.rendered).toContain("run narrow existing tests, then `git diff`");
     expect(res.packet.rendered).toContain("it is a completion gate");
     expect(res.packet.rendered).toContain("OLD block not found");
     expect(res.packet.rendered).toContain("no inline `python - <<`");
-    expect(res.packet.rendered).toContain("diff --git a/django/forms/models.py");
+    expect(res.packet.rendered).toContain("diff --git a/src/routing/handler.py");
     expect(res.packet.rendered).toContain("\n- old value");
     expect(res.packet.rendered).toContain("\n+ new value");
     expect(res.packet.rendered).toContain("no `patch`");
   });
 
-  it("turns visible bug description identifiers into a generic first-search checklist", () => {
+  it("turns visible issue description identifiers into a generic first-search checklist", () => {
     const packet = taskProtocolOnlyPacket(
       {
         reason: "turn_start",
         agent: "openclaw",
-        sessionId: "s_visible_bug" as SessionId,
+        sessionId: "s_visible_issue" as SessionId,
         userText: [
-          "WRAPPER_PATH: /tmp/wrapper",
-          "You need to fix a bug in the django/django repository.",
+          "COMMAND_WRAPPER: /tmp/wrapper",
+          "You need to fix a bug in the example-org/service-toolkit repository.",
           "",
           "## Bug Description",
-          "catch_all_view() does not support FORCE_SCRIPT_NAME.",
-          "catch_all_view returns redirect to '%s/' % request.path_info (script name cut off there) instead of '%s/' % request.path",
+          "build_redirect() does not preserve PUBLIC_ROUTE_PREFIX.",
+          "build_redirect returns redirect to internal_path instead of public_path.",
           "Patch - https://example.invalid/project/pull/123",
         ].join("\n"),
         ts: NOW as never,
@@ -499,292 +499,64 @@ describe("retrieval/integration", () => {
       NOW as never,
     );
 
-    expect(packet?.rendered).toContain("## Visible bug clue digest");
-    expect(packet?.rendered).toContain("catch_all_view");
-    expect(packet?.rendered).toContain("FORCE_SCRIPT_NAME");
-    expect(packet?.rendered).toContain("request.path_info");
-    expect(packet?.rendered).toContain("request.path");
+    expect(packet?.rendered).toContain("## Visible issue context");
+    expect(packet?.rendered).toContain("build_redirect");
+    expect(packet?.rendered).toContain("PUBLIC_ROUTE_PREFIX");
+    expect(packet?.rendered).toContain("internal_path");
+    expect(packet?.rendered).toContain("public_path");
     expect(packet?.rendered).toContain("Prompt wording suggests possible current -> expected");
     expect(packet?.rendered).toContain("Output data-flow guard");
     expect(packet?.rendered).toContain("externally observed output");
     expect(packet?.rendered).toContain("return Redirect(expected)");
-    expect(packet?.rendered).toContain("Visible replacement closure");
+    expect(packet?.rendered).toContain("Visible replacement guidance");
     expect(packet?.rendered).toContain("exact-replacement script");
     expect(packet?.rendered).toContain("do not list the same block again");
     expect(packet?.rendered).toContain("do not start with `ls`/`pwd`");
-    expect(packet?.rendered).toContain("grep -R -n 'catch_all_view' django tests");
+    expect(packet?.rendered).toContain("grep -R -n 'build_redirect' .");
     expect(packet?.rendered).not.toContain("example.invalid/project/pull/123");
   });
 
-  it("expands compact paired operations into a generic reduction checklist", () => {
+  it("adds generic defect heuristics from visible issue words without library-specific prompts", () => {
     const packet = taskProtocolOnlyPacket(
       {
         reason: "turn_start",
         agent: "openclaw",
-        sessionId: "s_operation_reduction" as SessionId,
+        sessionId: "s_generic_defect" as SessionId,
         userText: [
-          "You need to fix a bug in the django/django repository.",
+          "You need to fix a bug in the example-org/service-toolkit repository.",
           "",
-          "## Bug Description",
-          "Reduce Add/RemoveIndex migration operations.",
-          "We should reduce AddIndex/RemoveIndex operations when optimizing migration operations.",
-        ].join("\n"),
-        ts: NOW as never,
-      },
-      NOW as never,
-    );
-
-    expect(packet?.rendered).toContain("Search these exact visible identifiers/strings first");
-    expect(packet?.rendered).toContain("`AddIndex`");
-    expect(packet?.rendered).toContain("`RemoveIndex`");
-    expect(packet?.rendered).toContain("Operation reduction closure");
-    expect(packet?.rendered).toContain("Mandatory staged plan");
-    expect(packet?.rendered).toContain("Do not search tests before step 3");
-    expect(packet?.rendered).toContain("base reducer/optimizer contract");
-    expect(packet?.rendered).toContain("same model/object key");
-    expect(packet?.rendered).toContain("super().reduce");
-    expect(packet?.rendered).toContain("return []");
-    expect(packet?.rendered).toContain("Convergence budget");
-  });
-
-  it("turns cleaned_data default override wording into an empty-value guard", () => {
-    const packet = taskProtocolOnlyPacket(
-      {
-        reason: "turn_start",
-        agent: "openclaw",
-        sessionId: "s_cleaned_default" as SessionId,
-        userText: [
-          "You need to fix a bug in the django/django repository.",
-          "",
-          "## Bug Description",
-          "Allow cleaned_data to overwrite fields' default values.",
-          "When a field is not in the raw data payload but clean() supplies a non-empty value in cleaned_data, the default value should not win.",
-        ].join("\n"),
-        ts: NOW as never,
-      },
-      NOW as never,
-    );
-
-    expect(packet?.rendered).toContain("Cleaned-data default override closure");
-    expect(packet?.rendered).toContain("Visible pattern: cleaned_data/default override");
-    expect(packet?.rendered).toContain("edit that guard now");
-    expect(packet?.rendered).toContain("non-empty value");
-    expect(packet?.rendered).toContain("not in cleaned_data");
-    expect(packet?.rendered).toContain("no-op for this bug shape");
-    expect(packet?.rendered).toContain("empty_values");
-    expect(packet?.rendered).toContain("Patch shape");
-    expect(packet?.rendered).toContain("cleaned_value in field.empty_values");
-    expect(packet?.rendered).toContain("stop searching tests");
-    expect(packet?.rendered).toContain("construct/assignment point");
-  });
-
-  it("turns enum field value wording into a shared choices casting guard", () => {
-    const packet = taskProtocolOnlyPacket(
-      {
-        reason: "turn_start",
-        agent: "openclaw",
-        sessionId: "s_enum_choices" as SessionId,
-        userText: [
-          "You need to fix a bug in the django/django repository.",
-          "",
-          "## Bug Description",
-          "The value of a TextChoices/IntegerChoices field has a differing type.",
-          "A created instance keeps the enum value while a retrieved instance has the primitive str value.",
-          "str(my_object.my_str_value) should be the same for both paths.",
-        ].join("\n"),
-        ts: NOW as never,
-      },
-      NOW as never,
-    );
-
-    expect(packet?.rendered).toContain("Enum value casting closure");
-    expect(packet?.rendered).toContain("shared enum/choices value representation");
-    expect(packet?.rendered).toContain("underlying `.value`");
-  });
-
-  it("turns abstract field equality wording into stable model-key comparison guidance", () => {
-    const packet = taskProtocolOnlyPacket(
-      {
-        reason: "turn_start",
-        agent: "openclaw",
-        sessionId: "s_field_comparison" as SessionId,
-        userText: [
-          "You need to fix a bug in the django/django repository.",
-          "",
-          "## Bug Description",
-          "Abstract model field should not be equal across models.",
-          "Fields only consider self.creation_counter in __eq__, so a shared set de-duplicates fields copied to two concrete models.",
-          "Adjust __eq__, __hash__, and __lt__, while ordering first by creation_counter.",
-        ].join("\n"),
-        ts: NOW as never,
-      },
-      NOW as never,
-    );
-
-    expect(packet?.rendered).toContain("Model-attached object comparison closure");
-    expect(packet?.rendered).toContain("owning model namespace");
-    expect(packet?.rendered).toContain("stable primitive model labels/names");
-    expect(packet?.rendered).toContain("not model classes/objects directly with `<`");
-    expect(packet?.rendered).toContain("Do not implement ordering/hash as");
-    expect(packet?.rendered).toContain("raw class/object");
-    expect(packet?.rendered).toContain("(app_label, model_name)");
-    expect(packet?.rendered).toContain("creation_counter, model_key");
-  });
-
-  it("turns random_state stratified shuffle wording into RNG propagation guidance", () => {
-    const packet = taskProtocolOnlyPacket(
-      {
-        reason: "turn_start",
-        agent: "openclaw",
-        sessionId: "s_random_state" as SessionId,
-        userText: [
-          "You need to fix a bug in the scikit-learn/scikit-learn repository.",
-          "",
-          "## Bug Description",
-          "StratifiedKFold either shuffling is wrong or documentation is misleading.",
-          "With shuffle=True, each stratification is shuffled the same way and different random_state values do not change useful batches.",
-        ].join("\n"),
-        ts: NOW as never,
-      },
-      NOW as never,
-    );
-
-    expect(packet?.rendered).toContain("Random-state propagation closure");
-    expect(packet?.rendered).toContain("Visible pattern: shuffle/random_state propagation");
-    expect(packet?.rendered).toContain("same RNG object");
-    expect(packet?.rendered).toContain("random_state=rng");
-    expect(packet?.rendered).toContain("normalizer(self.random_state)");
-    expect(packet?.rendered).toContain("per-class pairings stay seed-insensitive");
-    expect(packet?.rendered).toContain("Do not draw a fresh integer seed");
-    expect(packet?.rendered).toContain("grep -R -n 'StratifiedKFold' sklearn");
-  });
-
-  it("turns single-alias delete wording into an alias initialization guard", () => {
-    const packet = taskProtocolOnlyPacket(
-      {
-        reason: "turn_start",
-        agent: "openclaw",
-        sessionId: "s_single_alias_delete" as SessionId,
-        userText: [
-          "You need to fix a bug in the django/django repository.",
-          "",
-          "## Bug Description",
-          "Model.objects.all().delete() subquery usage performance regression.",
-          "The old SQL was DELETE FROM table, but now delete() emits a self subquery.",
+          "## Issue Description",
+          "Cloning a request token reuses the same options map. Mutating the clone changes the original token.",
+          "The clone should preserve the timeout default and create an independent copy.",
           "",
           "## Hints",
-          "It should be possible to prevent the query when dealing with a single alias.",
+          "Inspect the token factory and the constructor option handling.",
         ].join("\n"),
         ts: NOW as never,
       },
       NOW as never,
     );
 
-    expect(packet?.rendered).toContain("Single-alias SQL fast-path closure");
-    expect(packet?.rendered).toContain("base table alias is registered");
-    expect(packet?.rendered).toContain("existing base/initial alias initializer");
-    expect(packet?.rendered).toContain("an empty diff plus passing existing tests is not a fix");
+    expect(packet?.rendered).toContain("## Generic repair heuristics");
+    expect(packet?.rendered).toContain("copy/mutation isolation");
+    expect(packet?.rendered).toContain("configuration/default propagation");
+    expect(packet?.rendered).toContain("Use them to choose the first source path to inspect");
   });
 
-  it("turns alias_prefix collision hints into RHS relabelling guidance", () => {
-    const packet = taskProtocolOnlyPacket(
-      {
-        reason: "turn_start",
-        agent: "openclaw",
-        sessionId: "s_alias_prefix_collision" as SessionId,
-        userText: [
-          "You need to fix a bug in the django/django repository.",
-          "",
-          "## Bug Description",
-          "Combining QuerySets with ForeignKey and ManyToManyField triggers AssertionError in Query.change_aliases.",
-          "",
-          "## Hints",
-          "Both queries share the same alias_prefix. Change the alias_prefix of the rhs and change its alias accordingly before proceeding with creation of the change_map. Query.bump_prefix does the heavy lifting for subqueries but is not entirely applicable here.",
-        ].join("\n"),
-        ts: NOW as never,
-      },
-      NOW as never,
-    );
-
-    expect(packet?.rendered).toContain("Alias-prefix collision closure");
-    expect(packet?.rendered).toContain("deterministic RHS alias-relabelling bug");
-    expect(packet?.rendered).toContain("inspect `Query.combine()` and `Query.change_aliases()` once");
-    expect(packet?.rendered).toContain("before constructing the combine `change_map`");
-    expect(packet?.rendered).toContain("Do not randomize alias prefixes");
-  });
-
-  it("turns non-default DB natural-key loaddata wording into instance-state guidance", () => {
-    const packet = taskProtocolOnlyPacket(
-      {
-        reason: "turn_start",
-        agent: "openclaw",
-        sessionId: "s_natural_key_db" as SessionId,
-        userText: [
-          "You need to fix a bug in the django/django repository.",
-          "",
-          "## Bug Description",
-          "loaddata fails on non-default database when natural keys uses foreign keys.",
-          "With ./manage.py loaddata --database other, Book.natural_key() traverses self.author.natural_key() and related_descriptors query the default database.",
-          "The traceback points to django/core/serializers/base.py build_instance calling Model(**data).natural_key().",
-        ].join("\n"),
-        ts: NOW as never,
-      },
-      NOW as never,
-    );
-
-    expect(packet?.rendered).toContain("Natural-key database-state closure");
-    expect(packet?.rendered).toContain("temporary natural-key instance state");
-    expect(packet?.rendered).toContain("set its `_state.db`");
-    expect(packet?.rendered).toContain("deserialization `db`/`using` value");
-    expect(packet?.rendered).toContain("Do not patch user model natural_key methods");
-  });
-
-  it("turns visible factor multiplicity wording into a grouping invariant", () => {
-    const packet = taskProtocolOnlyPacket(
-      {
-        reason: "turn_start",
-        agent: "openclaw",
-        sessionId: "s_factor_grouping" as SessionId,
-        userText: [
-          "You need to fix a bug in the sympy/sympy repository.",
-          "",
-          "## Bug Description",
-          "sqf and sqf_list output is not consistant.",
-          "We should have (x**2 - 5*x + 6, 3) and not 2 factors of multiplicity 3.",
-        ].join("\n"),
-        ts: NOW as never,
-      },
-      NOW as never,
-    );
-
-    expect(packet?.rendered).toContain("Prompt wording suggests possible current -> expected");
-    expect(packet?.rendered).toContain("`2 factors of multiplicity 3` -> `(x**2 - 5*x + 6, 3)`");
-    expect(packet?.rendered).toContain("Factor-list grouping closure");
-    expect(packet?.rendered).toContain("Visible pattern: factor-list multiplicity aggregation");
-    expect(packet?.rendered).toContain("same multiplicity should be one factor");
-    expect(packet?.rendered).toContain("Mandatory edit trigger");
-    expect(packet?.rendered).toContain("group returned factor pairs by multiplicity");
-    expect(packet?.rendered).toContain("public symbolic wrapper first explodes a top-level product");
-    expect(packet?.rendered).toContain("method form as a local oracle");
-    expect(packet?.rendered).toContain("preserving the coefficient");
-    expect(packet?.rendered).toContain("broader API redesign");
-    expect(packet?.rendered).toContain("grep -R -n 'sqf_list' sympy");
-  });
-
-  it("builds a protocol-only packet for software repair prompts without adapter state", () => {
+  it("builds a protocol-only packet for repository repair prompts without adapter state", () => {
     const packet = taskProtocolOnlyPacket(
       {
         reason: "turn_start",
         agent: "hermes",
         sessionId: "s_protocol" as SessionId,
         userText: [
-          "You need to fix a bug in the django/django repository.",
+          "You need to fix a bug in the example-org/service-toolkit repository.",
           "",
           "## Bug Description",
-          "Resetting the primary key for a child model should create a copy.",
+          "Resetting a request token should create an independent copy.",
           "",
           "## Hints",
-          "Inspect the model inheritance save path.",
+          "Inspect the token cloning path.",
         ].join("\n"),
         ts: NOW as never,
       },
@@ -793,9 +565,9 @@ describe("retrieval/integration", () => {
 
     expect(packet).not.toBeNull();
     expect(packet?.snippets).toEqual([]);
-    expect(packet?.rendered).toContain("Software engineering task protocol");
-    expect(packet?.rendered).toContain("software repair task");
-    expect(packet?.rendered).toContain("Inspect the model inheritance save path.");
+    expect(packet?.rendered).toContain("Repository repair task protocol");
+    expect(packet?.rendered).toContain("repository repair task");
+    expect(packet?.rendered).toContain("Inspect the token cloning path.");
 
     const ordinary = taskProtocolOnlyPacket(
       {

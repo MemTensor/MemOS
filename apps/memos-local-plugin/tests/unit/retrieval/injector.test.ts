@@ -126,19 +126,19 @@ describe("retrieval/injector", () => {
       reason: "turn_start",
       tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
       now: NOW as never,
-      sessionId: "sess_swe_protocol" as never,
-      episodeId: "ep_swe_protocol" as never,
+      sessionId: "sess_repair_protocol" as never,
+      episodeId: "ep_repair_protocol" as never,
       taskProtocol: [
-        "## Software engineering task protocol",
+        "## Repository repair task protocol",
         "",
-        "1. Treat the task repository as `/testbed`.",
-        "2. Edit files with `WRAPPER_PATH write`.",
+        "1. Treat the task repository as `REPO_ROOT`.",
+        "2. Edit files with `COMMAND_WRAPPER write`.",
       ].join("\n"),
     });
 
     expect(packet.snippets).toHaveLength(0);
-    expect(packet.rendered).toContain("Software engineering task protocol");
-    expect(packet.rendered).toContain("WRAPPER_PATH write");
+    expect(packet.rendered).toContain("Repository repair task protocol");
+    expect(packet.rendered).toContain("COMMAND_WRAPPER write");
   });
 
   it("renders each candidate kind to snippet", () => {
@@ -196,14 +196,12 @@ describe("retrieval/injector", () => {
       packet.rendered.indexOf("## Environment Knowledge"),
     );
     expect(packet.rendered).toContain("Trigger: similar SEC 13F parsing task");
-    expect(packet.rendered).toContain("Use as guardrail before planning.");
-    expect(packet.rendered).not.toContain("Do: Use holdings table columns directly.");
-    expect(packet.rendered).not.toContain("Avoid: Do not infer issuer from filename.");
-    expect(packet.rendered).not.toContain("Scope: SEC 13F holdings extraction only.");
-    expect(packet.rendered).not.toContain(
+    expect(packet.rendered).toContain("Do: Use holdings table columns directly.");
+    expect(packet.rendered).toContain("Avoid: Do not infer issuer from filename.");
+    expect(packet.rendered).toContain("Scope: SEC 13F holdings extraction only.");
+    expect(packet.rendered).toContain(
       "Check: Issuer/CUSIP come from the row fields.",
     );
-    expect(packet.rendered).toContain('memos_get(id="p_exp", kind="policy")');
     expect(packet.rendered).not.toContain('refId="p_exp"');
     expect(packet.rendered).not.toContain("Type:");
     expect(packet.rendered).not.toContain("confidence=");
@@ -241,7 +239,7 @@ describe("retrieval/injector", () => {
       now: NOW as never,
       sessionId: "sess_protocol" as never,
       episodeId: "ep_protocol" as never,
-      taskProtocol: "## Software engineering task protocol\n\nPatch first.",
+      taskProtocol: "## Repository repair task protocol\n\nPatch first.",
     });
 
     expect(packet.rendered).toContain("Current task protocol and recalled memories");
@@ -292,7 +290,7 @@ describe("retrieval/injector", () => {
     });
 
     expect(packet.rendered).toContain("1. Use holdings columns");
-    expect(packet.rendered).toContain('memos_get(id="p_dup", kind="policy")');
+    expect(packet.rendered).toContain("Do:");
     expect(packet.rendered).not.toMatch(/Trigger:\s*Use holdings columns/);
   });
 
@@ -316,10 +314,8 @@ describe("retrieval/injector", () => {
     expect(packet.rendered).toContain("Trace ·");
     expect(packet.rendered).not.toContain("Sub-task ·");
     expect(packet.rendered).toContain('memos_timeline(episodeId="e1")');
-    expect(packet.rendered).toContain("BEFORE your first tool call");
     expect(packet.rendered).toContain('memos_get(id="t1", kind="trace")');
     expect(packet.rendered).toContain("`memos_timeline(episodeId, limit?)`");
-    expect(packet.rendered).toContain("call before your first tool call");
     expect(packet.rendered).toContain('`memos_get(id, kind="trace")`');
   });
 

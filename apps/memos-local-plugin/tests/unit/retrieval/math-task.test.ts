@@ -60,7 +60,7 @@ describe("retrieval/math-task", () => {
     ).toBe(false);
   });
 
-  it("renders a non-benchmark-specific final-answer protocol", () => {
+  it("renders a generic final-answer protocol", () => {
     const protocol = renderMathFinalAnswerProtocol(
       "How many routes are there in this finite graph? Compute the final answer.",
     );

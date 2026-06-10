@@ -431,7 +431,7 @@ describe("MemoryCore façade", () => {
     await core.init();
 
     const prompt = [
-      "You need to fix a bug in the django/django repository.",
+      "You need to fix a bug in the example-org/form-engine repository.",
       "",
       "## Bug Description",
       "Resetting the primary key for a child model should create a copy.",
@@ -453,8 +453,8 @@ describe("MemoryCore façade", () => {
     });
 
     for (const res of [openclaw, hermes]) {
-      expect(res.injectedContext).toContain("Software engineering task protocol");
-      expect(res.injectedContext).toContain("double quotes around the `tmux-run` command");
+      expect(res.injectedContext).toContain("Repository repair task protocol");
+      expect(res.injectedContext).toContain("double quotes around the `run` command");
       expect(res.injectedContext).toContain("Inspect the model inheritance save path.");
     }
   });

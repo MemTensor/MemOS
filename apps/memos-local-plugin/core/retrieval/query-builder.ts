@@ -247,11 +247,18 @@ function isUsableQueryVecText(text: string): boolean {
 }
 
 export function fallbackRetrievalExtract(raw: string): RetrievalQueryExtract {
-  const queryText = String(raw ?? "").trim();
+  const queryText = normalizePromptText(raw);
   return {
     queryVecText: queryText,
     keywords: extractKeywordTokens(queryText),
   };
+}
+
+function normalizePromptText(raw: string): string {
+  const text = String(raw ?? "").trim();
+  const repositoryRepairPrompt = extractRepositoryRepairQueryText(text);
+  if (repositoryRepairPrompt) return repositoryRepairPrompt;
+  return text;
 }
 
 function sanitizeKeywordList(keywords: unknown): string[] {
@@ -286,16 +293,65 @@ function extractKeywordTokens(text: string): string[] {
   return out;
 }
 
-export function isSoftwareRepairPrompt(text: string | undefined): boolean {
+export function isRepositoryRepairPrompt(text: string | undefined): boolean {
   const raw = String(text ?? "");
-  return /##\s*Bug Description\b/i.test(raw) && /You need to fix a bug in\b/i.test(raw);
+  return hasRepositoryRepairDescription(raw) && hasRepositoryRepairIntent(raw);
+}
+
+function extractRepositoryRepairQueryText(text: string): string | null {
+  if (!hasRepositoryRepairDescription(text)) return null;
+  if (!hasRepositoryRepairIntent(text)) return null;
+
+  const issue = extractRepositoryRepairDescription(text);
+  if (!issue) return null;
+
+  const repo = extractRepositoryName(text);
+  const hints = extractRepairTaskSection(text, "Hints");
+  const parts = [
+    "repository repair source fix",
+    repo ? `repo: ${repo}` : "",
+    issue,
+    hints ? `hints: ${hints}` : "",
+  ].filter(Boolean);
+  return parts.join("\n");
+}
+
+function hasRepositoryRepairDescription(text: string): boolean {
+  return /##\s*(?:Issue|Bug) Description\b/i.test(text);
+}
+
+function hasRepositoryRepairIntent(text: string): boolean {
+  const hasRepairVerb = /\b(?:fix|repair|resolve|debug|address)\b/i.test(text);
+  const hasFailureNoun = /\b(?:bug|issue|regression|failure|failing behavior)\b/i.test(text);
+  const hasCodebaseNoun = /\b(?:repository|repo|codebase|project|source tree)\b/i.test(text);
+  const hasPatchCue = /\b(?:patch|source fix|git diff|tests?|implementation)\b/i.test(text);
+  return hasRepairVerb && hasFailureNoun && (hasCodebaseNoun || hasPatchCue);
+}
+
+function extractRepositoryName(text: string): string {
+  const patterns = [
+    /\b(?:in|for)\s+the\s+([^\n]+?)\s+(?:repository|repo|codebase|project)\b/i,
+    /\b(?:repository|repo|codebase|project)\s*:\s*([^\n]+)/i,
+  ];
+  for (const pattern of patterns) {
+    const raw = text.match(pattern)?.[1]?.trim();
+    if (raw) return raw.replace(/[.。]\s*$/, "");
+  }
+  return "";
+}
+
+function extractRepositoryRepairDescription(text: string): string {
+  return (
+    extractRepairTaskSection(text, "Issue Description") ||
+    extractRepairTaskSection(text, "Bug Description")
+  );
 }
 
 export function extractRepairTaskSection(text: string, heading: string): string {
   const escapedHeading = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = text.match(
     new RegExp(
-      `(?:^|\\n)\\s*##\\s*${escapedHeading}\\b\\s*([\\s\\S]*?)(?=\\n\\s*(?:##\\s+|STRICT RULES:|Reply TASK_COMPLETE\\b)|$)`,
+      `(?:^|\\n)\\s*##\\s*${escapedHeading}\\b\\s*([\\s\\S]*?)(?=\\n\\s*(?:##\\s+|STRICT RULES:|Reply\\s+[A-Z_]+\\b)|$)`,
       "i",
     ),
   );
