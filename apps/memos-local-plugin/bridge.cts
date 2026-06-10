@@ -416,6 +416,39 @@ async function main(): Promise<void> {
     };
     process.on("SIGINT", () => void shutdownDaemon("SIGINT"));
     process.on("SIGTERM", () => void shutdownDaemon("SIGTERM"));
+
+    // Run core.init() in the background. A dirty-episode rescore can
+    // take minutes; keeping it async lets the HTTP server stay responsive
+    // to health probes throughout and prevents ensure_viewer_daemon()
+    // from timing out and spawning a replacement daemon.
+    //
+    // Watchdog: if core.init() neither resolves nor rejects within
+    // INIT_WATCHDOG_MS, the bridge appears healthy (HTTP serving) but the
+    // scoring pipeline is never wired. Force-exit so the gateway respawns
+    // a fresh bridge rather than silently dropping all scoring for hours.
+    const INIT_WATCHDOG_MS = config.bridge.initWatchdogMs;
+    void (async () => {
+      const result = await Promise.race([
+        core.init().then(() => "done" as const),
+        new Promise<"timeout">((resolve) => {
+          const t = setTimeout(() => resolve("timeout"), INIT_WATCHDOG_MS);
+          (t as unknown as { unref?: () => void }).unref?.();
+        }),
+      ]);
+      if (result === "timeout") {
+        process.stderr.write(
+          `bridge: daemon core.init watchdog: pipeline.ready not seen within ${INIT_WATCHDOG_MS}ms — restarting\n`,
+        );
+        void shutdownDaemon("init.watchdog");
+      }
+    })().catch((err) => {
+      process.stderr.write(
+        `bridge: daemon core.init error: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
+      );
+      void shutdownDaemon("init.error");
+    });
+
+
     // Process stays alive via the HTTP server's ref'd socket.
     return;
   }

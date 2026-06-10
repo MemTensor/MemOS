@@ -22,6 +22,9 @@ export function registerHealthRoutes(routes: Routes, deps: ServerDeps): void {
     };
     return bridge ? { ...health, ...identity, bridge } : { ...health, ...identity };
   });
-  routes.set("GET /api/v1/ping", () => ({ ok: true, ...serviceIdentity, ts: Date.now() }));
+  routes.set("GET /api/v1/ping", async () => {
+    const health = await deps.core.health();
+    return { ok: true, ...serviceIdentity, ts: Date.now(), pipelineReady: health.pipelineReady };
+  });
   void ({} as RouteContext);
 }

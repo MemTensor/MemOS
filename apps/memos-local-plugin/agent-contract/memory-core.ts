@@ -38,6 +38,8 @@ import type { LogRecord } from "./log-record.js";
 
 export interface CoreHealth {
   ok: boolean;
+  /** True only after init() has fully wired all pipeline subscribers. */
+  pipelineReady: boolean;
   version: string;
   uptimeMs: number;
   agent: AgentKind;

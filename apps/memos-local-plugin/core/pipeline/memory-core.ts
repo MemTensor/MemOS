@@ -484,6 +484,7 @@ export function createMemoryCore(
   const log = rootLogger.child({ channel: "core.pipeline.memory-core" });
   let telemetry = options.telemetry ?? null;
   let initialized = false;
+  let pipelineReady = false;
   let shutDown = false;
   /** Per-episode monotonic step counter for tool outcomes. */
   const toolStepByEpisode = new Map<string, number>();
@@ -842,7 +843,7 @@ export function createMemoryCore(
     if (!hubRuntime) {
       hubRuntime = makeHubRuntime(config);
     }
-    await hubRuntime.start();
+    await withTimeout(hubRuntime.start(), 30_000, "hub_start_timeout");
   }
 
   async function restartHubRuntime(config: ResolvedConfig): Promise<void> {
@@ -1141,6 +1142,9 @@ export function createMemoryCore(
         }, durationSince(result.startedAt, result.completedAt), ok);
       }
     });
+
+    pipelineReady = true;
+    log.info("pipeline.ready");
   }
 
   async function recoverOpenEpisodesAsSessionEnd(
@@ -1500,6 +1504,7 @@ export function createMemoryCore(
 
     return {
       ok: initialized && !shutDown,
+      pipelineReady,
       version: pkgVersion,
       uptimeMs: Date.now() - bootAt,
       agent: handle.agent,

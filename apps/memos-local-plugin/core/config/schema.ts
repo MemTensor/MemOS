@@ -28,6 +28,7 @@ const ViewerSchema = Type.Object({
 const BridgeSchema = Type.Object({
   port: NumberInRange(18911, 1, 65535),
   mode: Type.Union([Type.Literal("stdio"), Type.Literal("tcp")], { default: "stdio" }),
+  initWatchdogMs: NumberInRange(120_000, 30_000),
 }, { default: {} });
 
 const EmbeddingSchema = Type.Object({
