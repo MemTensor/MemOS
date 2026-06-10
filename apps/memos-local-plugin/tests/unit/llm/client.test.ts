@@ -95,12 +95,14 @@ describe("llm/client", () => {
     expect(fake.lastMessages).toEqual([{ role: "user", content: "hi there" }]);
   });
 
-  it("injects a json system hint when jsonMode=true", async () => {
+  it("injects json hints into system and user messages when jsonMode=true", async () => {
     const fake = new FakeProvider("openai_compatible", () => ({ text: '{"ok":1}', durationMs: 1 }));
     const client = createLlmClientWithProvider(cfg(), fake);
     await client.complete("do it", { jsonMode: true });
     expect(fake.lastMessages?.[0]?.role).toBe("system");
     expect(fake.lastMessages?.[0]?.content).toMatch(/single valid JSON value/i);
+    expect(fake.lastMessages?.at(-1)?.role).toBe("user");
+    expect(fake.lastMessages?.at(-1)?.content).toMatch(/valid json only/i);
     expect(fake.lastInput?.jsonMode).toBe(true);
   });
 
@@ -269,7 +271,9 @@ describe("llm/client", () => {
     expect(fake.lastMessages?.[0]?.role).toBe("system");
     expect(fake.lastMessages?.[0]?.content).toMatch(/You are strict\./);
     expect(fake.lastMessages?.[0]?.content).toMatch(/single valid JSON value/);
-    expect(fake.lastMessages?.[1]).toEqual({ role: "user", content: "go" });
+    expect(fake.lastMessages?.[1]?.role).toBe("user");
+    expect(fake.lastMessages?.[1]?.content).toMatch(/^go/);
+    expect(fake.lastMessages?.[1]?.content).toMatch(/valid json only/i);
   });
 
   it("rejects empty messages array", async () => {
