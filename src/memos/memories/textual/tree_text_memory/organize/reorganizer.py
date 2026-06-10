@@ -4,12 +4,10 @@ import traceback
 
 from collections import defaultdict
 from concurrent.futures import as_completed
-from queue import PriorityQueue
-from typing import Literal
 
 import numpy as np
 
-from memos.context.context import ContextThread, ContextThreadPoolExecutor
+from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.item import GraphDBEdge, GraphDBNode
@@ -17,7 +15,6 @@ from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.item import SourceMessage, TreeNodeTextualMemoryMetadata
-from memos.memories.textual.tree_text_memory.organize.handler import NodeHandler
 from memos.memories.textual.tree_text_memory.organize.relation_reason_detector import (
     RelationAndReasoningDetector,
 )
@@ -46,8 +43,8 @@ def build_summary_parent_node(cluster_nodes):
 class QueueMessage:
     def __init__(
         self,
-        op: Literal["add", "remove", "merge", "update", "end"],
-        # `str` for node and edge IDs, `GraphDBNode` and `GraphDBEdge` for actual objects
+        op,  # `str` for node and edge IDs, `GraphDBNode` and `GraphDBEdge`
+        # for actual objects
         before_node: list[str] | list[GraphDBNode] | None = None,
         before_edge: list[str] | list[GraphDBEdge] | None = None,
         after_node: list[str] | list[GraphDBNode] | None = None,
@@ -78,144 +75,96 @@ def extract_first_to_last_brace(text: str):
     return json_str, json.loads(json_str)
 
 
+def recursive_clustering(
+    nodes_list, depth=0, max_cluster_size: int = 20, min_cluster_size: int = 10
+):
+    """Recursively split clusters until each is <= max_cluster_size."""
+    from sklearn.cluster import MiniBatchKMeans
+
+    indent = "  " * depth
+    logger.info(f"{indent}[Recursive] Start clustering {len(nodes_list)} nodes at depth {depth}")
+
+    if len(nodes_list) <= max_cluster_size:
+        logger.info(f"{indent}[Recursive] Node count <= {max_cluster_size}, stop splitting.")
+        return [nodes_list]
+    # Try kmeans with k = ceil(len(nodes) / max_cluster_size)
+    x_nodes = [n for n in nodes_list if n.metadata.embedding]
+    x = np.array([n.metadata.embedding for n in x_nodes])
+
+    if len(x) < min_cluster_size:
+        logger.info(f"{indent}[Recursive] Too few embeddings ({len(x)}), skipping clustering.")
+        return [nodes_list]
+
+    k = min(len(x), (len(nodes_list) + max_cluster_size - 1) // max_cluster_size)
+    k = max(1, k)
+
+    try:
+        logger.info(f"{indent}[Recursive] Clustering with k={k} on {len(x)} points.")
+        kmeans = MiniBatchKMeans(n_clusters=k, batch_size=256, random_state=42)
+        labels = kmeans.fit_predict(x)
+
+        label_groups = defaultdict(list)
+        for node, label in zip(x_nodes, labels, strict=False):
+            label_groups[label].append(node)
+
+        # Map: label -> nodes with no embedding (fallback group)
+        no_embedding_nodes = [n for n in nodes_list if not n.metadata.embedding]
+        if no_embedding_nodes:
+            logger.warning(
+                f"{indent}[Recursive] {len(no_embedding_nodes)} nodes have no embedding. Added to largest cluster."
+            )
+            # Assign to the largest cluster
+            largest_label = max(label_groups.items(), key=lambda kv: len(kv[1]))[0]
+            label_groups[largest_label].extend(no_embedding_nodes)
+
+        result = []
+        for label, sub_group in label_groups.items():
+            logger.info(f"{indent}  Cluster-{label}: {len(sub_group)} nodes")
+            result.extend(
+                recursive_clustering(
+                    sub_group,
+                    depth=depth + 1,
+                    max_cluster_size=max_cluster_size,
+                    min_cluster_size=min_cluster_size,
+                )
+            )
+        return result
+
+    except Exception as e:
+        logger.warning(f"{indent}[Recursive] Clustering failed: {e}, fallback to one cluster.")
+        return [nodes_list]
+
+
+def _parse_json_result(response_text):
+    try:
+        response_text = response_text.replace("```", "").replace("json", "")
+        response_json = extract_first_to_last_brace(response_text)[1]
+        return response_json
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse LLM response as JSON: {e}\nRaw response:\n{response_text}")
+        return {}
+
+
 class GraphStructureReorganizer:
     def __init__(
         self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: OllamaEmbedder, is_reorganize: bool
     ):
-        self.queue = PriorityQueue()  # Min-heap
         self.graph_store = graph_store
         self.llm = llm
         self.embedder = embedder
         self.relation_detector = RelationAndReasoningDetector(
             self.graph_store, self.llm, self.embedder
         )
-        self.resolver = NodeHandler(graph_store=graph_store, llm=llm, embedder=embedder)
-
         self.is_reorganize = is_reorganize
-        self._reorganize_needed = True
-        if self.is_reorganize:
-            # ____ 1. For queue message driven thread ___________
-            self.thread = ContextThread(target=self._run_message_consumer_loop)
-            self.thread.start()
-            # ____ 2. For periodic structure optimization _______
-            self._stop_scheduler = False
-            self._is_optimizing = {"LongTermMemory": False, "UserMemory": False}
-            self.structure_optimizer_thread = ContextThread(
-                target=self._run_structure_organizer_loop
-            )
-            self.structure_optimizer_thread.start()
-
-    def add_message(self, message: QueueMessage):
-        self.queue.put_nowait(message)
-
-    def wait_until_current_task_done(self):
-        """
-        Wait until:
-        1) queue is empty
-        2) any running structure optimization is done
-        """
-        deadline = time.time() + 600
-        if not self.is_reorganize:
-            return
-
-        if not self.queue.empty():
-            self.queue.join()
-        logger.debug("Queue is now empty.")
-
-        while any(self._is_optimizing.values()):
-            logger.debug(f"Waiting for structure optimizer to finish... {self._is_optimizing}")
-            if time.time() > deadline:
-                logger.error(f"Wait timed out; flags={self._is_optimizing}")
-                break
-            time.sleep(1)
-        logger.debug("Structure optimizer is now idle.")
-
-    def _run_message_consumer_loop(self):
-        while True:
-            message = self.queue.get()
-            if message.op == "end":
-                break
-
-            try:
-                if self._preprocess_message(message):
-                    self.handle_message(message)
-            except Exception:
-                logger.error(traceback.format_exc())
-            self.queue.task_done()
-
-    @require_python_package(
-        import_name="schedule",
-        install_command="pip install schedule",
-        install_link="https://schedule.readthedocs.io/en/stable/installation.html",
-    )
-    def _run_structure_organizer_loop(self):
-        """
-        Use schedule library to periodically trigger structure optimization.
-        This runs until the stop flag is set.
-        """
-        import schedule
-
-        schedule.every(100).seconds.do(self.optimize_structure, scope="LongTermMemory")
-        schedule.every(100).seconds.do(self.optimize_structure, scope="UserMemory")
-
-        logger.info("Structure optimizer schedule started.")
-        while not getattr(self, "_stop_scheduler", False):
-            if any(self._is_optimizing.values()):
-                time.sleep(1)
-                continue
-            if self._reorganize_needed:
-                logger.info("[Reorganizer] Triggering optimize_structure due to new nodes.")
-                self.optimize_structure(scope="LongTermMemory")
-                self.optimize_structure(scope="UserMemory")
-                self._reorganize_needed = False
-            time.sleep(30)
-
-    def stop(self):
-        """
-        Stop the reorganizer thread.
-        """
-        if not self.is_reorganize:
-            return
-
-        self.add_message(QueueMessage(op="end"))
-        self.thread.join()
-        logger.info("Reorganize thread stopped.")
-        self._stop_scheduler = True
-        self.structure_optimizer_thread.join()
-        logger.info("Structure optimizer stopped.")
-
-    def handle_message(self, message: QueueMessage):
-        handle_map = {"add": self.handle_add, "remove": self.handle_remove}
-        handle_map[message.op](message)
-        logger.debug(f"message queue size: {self.queue.qsize()}")
-
-    def handle_add(self, message: QueueMessage):
-        logger.debug(f"Handling add operation: {str(message)[:500]}")
-        added_node = message.after_node[0]
-        detected_relationships = self.resolver.detect(
-            added_node,
-            scope=added_node.metadata.memory_type,
-            user_name=message.user_name,
-        )
-        if detected_relationships:
-            for added_node, existing_node, relation in detected_relationships:
-                self.resolver.resolve(
-                    added_node, existing_node, relation, user_name=message.user_name
-                )
-
-        self._reorganize_needed = True
-
-    def handle_remove(self, message: QueueMessage):
-        logger.debug(f"Handling remove operation: {str(message)[:50]}")
 
     def optimize_structure(
         self,
         scope: str = "LongTermMemory",
+        user_name: str | None = None,
         local_tree_threshold: int = 10,
         min_cluster_size: int = 4,
         min_group_size: int = 20,
         max_duration_sec: int = 600,
-        user_name: str | None = None,
     ):
         """
         Periodically reorganize the graph:
@@ -224,6 +173,7 @@ class GraphStructureReorganizer:
         3. Create parent nodes and build local PARENT trees.
         """
         # --- Total time watch dog: check functions ---
+
         start_ts = time.time()
 
         def _check_deadline(where: str):
@@ -235,20 +185,14 @@ class GraphStructureReorganizer:
                 return True
             return False
 
-        if self._is_optimizing[scope]:
-            logger.info(f"[GraphStructureReorganize] Already optimizing for {scope}. Skipping.")
-            return
-
         if self.graph_store.node_not_exist(scope, user_name=user_name):
             logger.debug(f"[GraphStructureReorganize] No nodes for scope={scope}. Skip.")
             return
 
-        self._is_optimizing[scope] = True
         try:
             logger.debug(
                 f"[GraphStructureReorganize] 🔍 Starting structure optimization for scope: {scope}"
             )
-
             logger.debug(
                 f"[GraphStructureReorganize] Num of scope in self.graph_store is"
                 f" {self.graph_store.get_memory_count(scope, user_name=user_name)}"
@@ -257,9 +201,27 @@ class GraphStructureReorganizer:
             if _check_deadline("[GraphStructureReorganize] Before loading candidates"):
                 return
             raw_nodes = self.graph_store.get_structure_optimization_candidates(
-                scope, user_name=user_name
+                scope, user_name=user_name, include_embedding=True
             )
-            nodes = [GraphDBNode(**n) for n in raw_nodes]
+            logger.debug(
+                f"[GraphStructureReorganize] Find {len(raw_nodes)} nodes to optimize"
+                f"which is {[node['id'] for node in raw_nodes]}"
+            )
+
+            def _norm(s):
+                return s.strip().lower() if isinstance(s, str) else s
+
+            filtered_raw = []
+            for n in raw_nodes:
+                tags = (n.get("metadata") or {}).get("tags") or []
+                if not any(_norm(t) == "mode:fast" for t in tags if isinstance(t, str)):
+                    filtered_raw.append(n)
+            dropped = len(raw_nodes) - len(filtered_raw)
+            if dropped:
+                logger.info(
+                    f"[GraphStructureReorganize] Tag filter dropped {dropped} nodes (mode:fast)."
+                )
+            nodes = [GraphDBNode(**n) for n in filtered_raw]
 
             if not nodes:
                 logger.info("[GraphStructureReorganize] No nodes to optimize. Skipping.")
@@ -274,10 +236,9 @@ class GraphStructureReorganizer:
             if _check_deadline("[GraphStructureReorganize] Before partition"):
                 return
             partitioned_groups = self._partition(nodes)
-            logger.info(
+            logger.debug(
                 f"[GraphStructureReorganize] Partitioned into {len(partitioned_groups)} clusters."
             )
-
             if _check_deadline("[GraphStructureReorganize] Before submit partition task"):
                 return
             with ContextThreadPoolExecutor(max_workers=4) as executor:
@@ -291,6 +252,7 @@ class GraphStructureReorganizer:
                             local_tree_threshold,
                             min_cluster_size,
                             user_name,
+                            _check_deadline,
                         )
                     )
 
@@ -308,7 +270,6 @@ class GraphStructureReorganizer:
             logger.info("[GraphStructure Reorganize] Structure optimization finished.")
 
         finally:
-            self._is_optimizing[scope] = False
             logger.info("[GraphStructureReorganize] Structure optimization finished.")
 
     def _process_cluster_and_write(
@@ -317,7 +278,8 @@ class GraphStructureReorganizer:
         scope: str,
         local_tree_threshold: int,
         min_cluster_size: int,
-        user_name: str | None = None,
+        user_name: str,
+        check_deadline_func,
     ):
         if len(cluster_nodes) <= min_cluster_size:
             return
@@ -326,17 +288,42 @@ class GraphStructureReorganizer:
         sub_clusters = self._local_subcluster(cluster_nodes)
         sub_parents = []
 
-        for sub_nodes in sub_clusters:
-            if len(sub_nodes) < min_cluster_size:
-                continue  # Skip tiny noise
-            sub_parent_node = self._summarize_cluster(sub_nodes, scope)
-            self._create_parent_node(sub_parent_node, user_name=user_name)
-            self._link_cluster_nodes(sub_parent_node, sub_nodes, user_name=user_name)
-            sub_parents.append(sub_parent_node)
+        def _process_one_subcluster(sub_nodes):
+            try:
+                sub_parent_node = self._summarize_cluster(sub_nodes, scope)
+                self._create_parent_node(sub_parent_node, user_name)
+                self._link_cluster_nodes(sub_parent_node, sub_nodes, user_name)
+                sub_nodes_str = "\n|_____".join([sub_node.memory for sub_node in sub_nodes])
+                logger.debug(
+                    f"Processed a group by nodes. \nThe Structure is: "
+                    f"\n Parent Node: {sub_parent_node.memory}\n"
+                    f"\n Child Node: {sub_nodes_str}"
+                )
+                return sub_parent_node
+            except Exception as e:
+                logger.warning(f"Process sub-cluster failed: {e}", exc_info=True)
+                return None
 
+        valid_sub_clusters = [sc for sc in sub_clusters if len(sc) >= min_cluster_size]
+
+        max_workers = min(4, len(valid_sub_clusters))
+        if max_workers > 0:
+            with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(_process_one_subcluster, sc) for sc in valid_sub_clusters
+                ]
+                for fut in as_completed(futures):
+                    res = fut.result()
+                    if res is not None:
+                        sub_parents.append(res)
+
+        logger.debug(f"len of sub-parents: {len(sub_parents)}")
         if sub_parents and len(sub_parents) >= min_cluster_size:
             cluster_parent_node = self._summarize_cluster(cluster_nodes, scope)
-            self._create_parent_node(cluster_parent_node, user_name=user_name)
+            logger.debug(
+                f"Find cluster_parent node: {cluster_parent_node.id}: {cluster_parent_node.memory}"
+            )
+            self._create_parent_node(cluster_parent_node, user_name)
             for sub_parent in sub_parents:
                 self.graph_store.add_edge(
                     cluster_parent_node.id, sub_parent.id, "PARENT", user_name=user_name
@@ -355,11 +342,20 @@ class GraphStructureReorganizer:
                         node,
                         exclude_ids,
                         10,  # top_k
+                        user_name=user_name,
                     )
                 )
 
-            for f in as_completed(futures, timeout=300):
-                results = f.result()
+            for f in as_completed(futures):
+                if check_deadline_func("[GraphStructureReorganize] Relations/reasons"):
+                    for x in futures:
+                        x.cancel()
+                    return
+                try:
+                    results = f.result()
+                except Exception as e:
+                    logger.warning(f"Relation task failed: {e}", exc_info=True)
+                    continue
 
                 # 1) Add pairwise relations
                 for rel in results["relations"]:
@@ -435,7 +431,8 @@ class GraphStructureReorganizer:
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
-        response_json = self._parse_json_result(response_text)
+        response_json = _parse_json_result(response_text)
+        logger.debug(f"In Sub-Cluster: \ninput: {prompt}\n output: {response_json}")
         assigned_ids = set()
         result_subclusters = []
 
@@ -470,7 +467,6 @@ class GraphStructureReorganizer:
         Returns:
             List of clusters, each as a list of GraphDBNode
         """
-        from sklearn.cluster import MiniBatchKMeans
 
         if len(nodes) <= max_cluster_size:
             logger.info(
@@ -478,72 +474,32 @@ class GraphStructureReorganizer:
             )
             return [nodes]
 
-        def recursive_clustering(nodes_list, depth=0):
-            """Recursively split clusters until each is <= max_cluster_size."""
-            indent = "  " * depth
-            logger.info(
-                f"{indent}[Recursive] Start clustering {len(nodes_list)} nodes at depth {depth}"
-            )
-
-            if len(nodes_list) <= max_cluster_size:
-                logger.info(
-                    f"{indent}[Recursive] Node count <= {max_cluster_size}, stop splitting."
-                )
-                return [nodes_list]
-            # Try kmeans with k = ceil(len(nodes) / max_cluster_size)
-            x_nodes = [n for n in nodes_list if n.metadata.embedding]
-            x = np.array([n.metadata.embedding for n in x_nodes])
-
-            if len(x) < min_cluster_size:
-                logger.info(
-                    f"{indent}[Recursive] Too few embeddings ({len(x)}), skipping clustering."
-                )
-                return [nodes_list]
-
-            k = min(len(x), (len(nodes_list) + max_cluster_size - 1) // max_cluster_size)
-            k = max(1, k)
-
-            try:
-                logger.info(f"{indent}[Recursive] Clustering with k={k} on {len(x)} points.")
-                kmeans = MiniBatchKMeans(n_clusters=k, batch_size=256, random_state=42)
-                labels = kmeans.fit_predict(x)
-
-                label_groups = defaultdict(list)
-                for node, label in zip(x_nodes, labels, strict=False):
-                    label_groups[label].append(node)
-
-                # Map: label -> nodes with no embedding (fallback group)
-                no_embedding_nodes = [n for n in nodes_list if not n.metadata.embedding]
-                if no_embedding_nodes:
-                    logger.warning(
-                        f"{indent}[Recursive] {len(no_embedding_nodes)} nodes have no embedding. Added to largest cluster."
-                    )
-                    # Assign to largest cluster
-                    largest_label = max(label_groups.items(), key=lambda kv: len(kv[1]))[0]
-                    label_groups[largest_label].extend(no_embedding_nodes)
-
-                result = []
-                for label, sub_group in label_groups.items():
-                    logger.info(f"{indent}  Cluster-{label}: {len(sub_group)} nodes")
-                    result.extend(recursive_clustering(sub_group, depth=depth + 1))
-                return result
-
-            except Exception as e:
-                logger.warning(
-                    f"{indent}[Recursive] Clustering failed: {e}, fallback to one cluster."
-                )
-                return [nodes_list]
-
-        raw_clusters = recursive_clustering(nodes)
+        raw_clusters = recursive_clustering(
+            nodes, max_cluster_size=max_cluster_size, min_cluster_size=min_cluster_size
+        )
         filtered_clusters = [c for c in raw_clusters if len(c) > min_cluster_size]
 
         logger.info(f"[KMeansPartition] Total clusters before filtering: {len(raw_clusters)}")
         for i, cluster in enumerate(raw_clusters):
-            logger.info(f"[KMeansPartition]   Cluster-{i}: {len(cluster)} nodes")
-
-        logger.info(
+            logger.debug(f"[KMeansPartition]   Cluster-{i}: {len(cluster)} nodes")
+        logger.debug(f"[KMeansPartition] Total clusters before filtering: {len(raw_clusters)}")
+        logger.debug(
             f"[KMeansPartition] Clusters after filtering (>{min_cluster_size}): {len(filtered_clusters)}"
         )
+
+        seen_ids = set()
+        duplicate_ids = set()
+
+        for i, cluster in enumerate(raw_clusters):
+            ids = [n.id for n in cluster]
+            mems = [n.memory[:80].replace("\n", " ") + "..." for n in cluster]
+            logger.debug(f"[Cluster-{i}] size={len(cluster)}")
+            for nid, mem in zip(ids, mems, strict=False):
+                logger.debug(f"    - id={nid} | mem={mem}")
+                if nid in seen_ids:
+                    duplicate_ids.add(nid)
+                else:
+                    seen_ids.add(nid)
 
         return filtered_clusters
 
@@ -554,19 +510,37 @@ class GraphStructureReorganizer:
         if not cluster_nodes:
             raise ValueError("Cluster nodes cannot be empty.")
 
-        memories_items_text = "\n\n".join(
-            [
-                f"{i}. key: {n.metadata.key}\nvalue: {n.memory}\nsummary:{n.metadata.background}"
-                for i, n in enumerate(cluster_nodes)
-            ]
-        )
+        memories_items_text = ""
+        for i, n in enumerate(cluster_nodes):
+            # Build raw dialogue excerpt
+            # We won't hard-cut mid-sentence. We'll collect turns until ~300 chars, then stop before breaking.
+            excerpt_parts = []
+            current_len = 0
+            for source_j in n.metadata.sources:
+                turn_text = f'{source_j.role}: "{source_j.content_safe}"'
+                # if adding this turn blows us past ~300, break BEFORE adding
+                if current_len + len(turn_text) > 1500:
+                    break
+                excerpt_parts.append(turn_text)
+                current_len += len(turn_text)
+            excerpt_parts.append("...")
+            raw_dialogue_excerpt = "\n".join(excerpt_parts)
+
+            mem_i = (
+                f"\nChild Memory {i}:\n"
+                f"- canonical_value: {n.memory}\n"
+                f"- user_summary: {n.metadata.background}\n"
+                f"- raw_dialogue_excerpt:\n{raw_dialogue_excerpt if raw_dialogue_excerpt else '(none)'}\n"
+            )
+
+            memories_items_text += mem_i
 
         # Build prompt
         prompt = REORGANIZE_PROMPT.replace("{memory_items_text}", memories_items_text)
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
-        response_json = self._parse_json_result(response_text)
+        response_json = _parse_json_result(response_text)
 
         # Extract fields
         parent_key = response_json.get("key", "").strip()
@@ -595,18 +569,7 @@ class GraphStructureReorganizer:
         )
         return parent_node
 
-    def _parse_json_result(self, response_text):
-        try:
-            response_text = response_text.replace("```", "").replace("json", "")
-            response_json = extract_first_to_last_brace(response_text)[1]
-            return response_json
-        except json.JSONDecodeError as e:
-            logger.warning(
-                f"Failed to parse LLM response as JSON: {e}\nRaw response:\n{response_text}"
-            )
-            return {}
-
-    def _create_parent_node(self, parent_node: GraphDBNode, user_name: str | None = None) -> None:
+    def _create_parent_node(self, parent_node: GraphDBNode, user_name: str) -> None:
         """
         Create a new parent node for the cluster.
         """
@@ -618,10 +581,7 @@ class GraphStructureReorganizer:
         )
 
     def _link_cluster_nodes(
-        self,
-        parent_node: GraphDBNode,
-        child_nodes: list[GraphDBNode],
-        user_name: str | None = None,
+        self, parent_node: GraphDBNode, child_nodes: list[GraphDBNode], user_name: str
     ):
         """
         Add PARENT edges from the parent node to all nodes in the cluster.
@@ -631,29 +591,3 @@ class GraphStructureReorganizer:
                 parent_node.id, child.id, "PARENT", direction="OUTGOING", user_name=user_name
             ):
                 self.graph_store.add_edge(parent_node.id, child.id, "PARENT", user_name=user_name)
-
-    def _preprocess_message(self, message: QueueMessage) -> bool:
-        message = self._convert_id_to_node(message)
-        if message.after_node is None or None in message.after_node:
-            logger.debug(
-                f"Found non-existent node in after_node in message: {message}, skip this message."
-            )
-            return False
-        return True
-
-    def _convert_id_to_node(self, message: QueueMessage) -> QueueMessage:
-        """
-        Convert IDs in the message.after_node to GraphDBNode objects.
-        """
-        for i, node in enumerate(message.after_node or []):
-            if not isinstance(node, str):
-                continue
-            raw_node = self.graph_store.get_node(
-                node, include_embedding=True, user_name=message.user_name
-            )
-            if raw_node is None:
-                logger.debug(f"Node with ID {node} not found in the graph store.")
-                message.after_node[i] = None
-            else:
-                message.after_node[i] = GraphDBNode(**raw_node)
-        return message

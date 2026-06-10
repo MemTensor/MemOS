@@ -45,6 +45,11 @@ class SourceMessage(BaseModel):
     image_info: dict | None = None
     model_config = ConfigDict(extra="allow")
 
+    @property
+    def content_safe(self) -> str:
+        """Always return a string, fallback to '' if content is None."""
+        return self.content or ""
+
 
 class ArchivedTextualMemory(BaseModel):
     """
