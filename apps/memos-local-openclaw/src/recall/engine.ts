@@ -29,6 +29,7 @@ export class RecallEngine {
   ) {}
 
   async search(opts: RecallOptions): Promise<SearchResult> {
+    const startTime = Date.now();
     const recallCfg = this.ctx.config.recall!;
     const maxResults = Math.min(
       opts.maxResults ?? recallCfg.maxResultsDefault!,
@@ -40,30 +41,10 @@ export class RecallEngine {
 
     const repeatNote = this.checkRepeat(query, maxResults, minScore);
     const candidatePool = maxResults * 5;
-    const ownerFilter = opts.ownerFilter;
+    // Use explicit ownerFilter if provided, otherwise fall back to config default (supports shared pool mode)
+    const ownerFilter = opts.ownerFilter ?? this.ctx.config.recall?.ownerFilter;
 
-    // Step 1: Gather candidates from FTS, vector search, and pattern search
-    const ftsCandidates = query
-      ? this.store.ftsSearch(query, candidatePool, ownerFilter)
-      : [];
-
-    let vecCandidates: Array<{ chunkId: string; score: number }> = [];
-    if (query) {
-      try {
-        const queryVec = await this.embedder.embedQuery(query);
-        const maxChunks = recallCfg.vectorSearchMaxChunks && recallCfg.vectorSearchMaxChunks > 0
-          ? recallCfg.vectorSearchMaxChunks
-          : undefined;
-        vecCandidates = vectorSearch(this.store, queryVec, candidatePool, maxChunks, ownerFilter);
-      } catch (err) {
-        this.ctx.log.warn(`Vector search failed, using FTS only: ${err}`);
-      }
-    }
-
-    // Step 1b: Pattern search (LIKE-based) as fallback for short terms that
-    // trigram FTS cannot match (trigram requires >= 3 chars).
-    // For CJK text without spaces, extract bigrams (2-char sliding windows)
-    // so that queries like "唐波是谁" produce ["唐波", "波是", "是谁"].
+    // Step 1: Prepare short terms for pattern search (needed for both local and hub)
     const cleaned = query.replace(/[."""(){}[\]*:^~!@#$%&\\/<>,;'`?？。，！、：""''（）【】《》]/g, " ");
     const spaceSplit = cleaned.split(/\s+/).filter((t) => t.length === 2);
     const cjkBigrams: string[] = [];
@@ -76,62 +57,49 @@ export class RecallEngine {
       }
     }
     const shortTerms = [...new Set([...spaceSplit, ...cjkBigrams])];
-    const patternHits = shortTerms.length > 0
-      ? this.store.patternSearch(shortTerms, { limit: candidatePool, ownerFilter })
-      : [];
+
+    // Step 2: PARALLEL EXECUTION - Gather all candidates concurrently
+    // This is the key optimization: embedding generation + vector search + FTS run in parallel
+    const [
+      vecCandidatesResult,
+      ftsCandidates,
+      patternHits,
+      hubResults,
+    ] = await Promise.all([
+      // Task A: Get embedding (cached or generate) + vector search
+      this.getVectorCandidates(query, candidatePool, ownerFilter, recallCfg.vectorSearchMaxChunks),
+      
+      // Task B: FTS search (sync operation)
+      query ? this.store.ftsSearch(query, candidatePool, ownerFilter) : [],
+      
+      // Task C: Pattern search (sync operation)
+      shortTerms.length > 0
+        ? this.store.patternSearch(shortTerms, { limit: candidatePool, ownerFilter })
+        : [],
+      
+      // Task D: Hub memories search (parallelized internally)
+      query && this.ctx.config.sharing?.enabled && this.ctx.config.sharing.role === "hub"
+        ? this.getHubCandidates(query, shortTerms, candidatePool)
+        : { fts: [], vec: [], pattern: [] },
+    ]);
+
+    // Unpack results
+    const vecCandidates = vecCandidatesResult;
     const patternRanked = patternHits.map((h, i) => ({
       id: h.chunkId,
       score: 1 / (i + 1),
     }));
 
-    // Step 1c: Hub memories — FTS + pattern + cached embeddings (same strategy as chunks/skills).
-    let hubMemFtsRanked: Array<{ id: string; score: number }> = [];
-    let hubMemVecRanked: Array<{ id: string; score: number }> = [];
-    let hubMemPatternRanked: Array<{ id: string; score: number }> = [];
-    if (query && this.ctx.config.sharing?.enabled && this.ctx.config.sharing.role === "hub") {
-      try {
-        const hubFtsHits = this.store.searchHubMemories(query, { maxResults: candidatePool });
-        hubMemFtsRanked = hubFtsHits.map(({ hit }, i) => ({ id: `hubmem:${hit.id}`, score: 1 / (i + 1) }));
-      } catch { /* hub_memories table may not exist */ }
-      if (shortTerms.length > 0) {
-        try {
-          const hubPatternHits = this.store.hubMemoryPatternSearch(shortTerms, { limit: candidatePool });
-          hubMemPatternRanked = hubPatternHits.map((h, i) => ({ id: `hubmem:${h.memoryId}`, score: 1 / (i + 1) }));
-        } catch { /* best-effort */ }
-      }
-
-      try {
-        const qv = await this.embedder.embedQuery(query).catch(() => null);
-        if (qv) {
-          const memEmbs = this.store.getVisibleHubMemoryEmbeddings("__hub__");
-          const scored: Array<{ id: string; score: number }> = [];
-          for (const e of memEmbs) {
-            let dot = 0, nA = 0, nB = 0;
-            const len = Math.min(qv.length, e.vector.length);
-            for (let i = 0; i < len; i++) {
-              dot += qv[i] * e.vector[i]; nA += qv[i] * qv[i]; nB += e.vector[i] * e.vector[i];
-            }
-            const sim = nA > 0 && nB > 0 ? dot / (Math.sqrt(nA) * Math.sqrt(nB)) : 0;
-            if (sim > 0.3) scored.push({ id: `hubmem:${e.memoryId}`, score: sim });
-          }
-          scored.sort((a, b) => b.score - a.score);
-          hubMemVecRanked = scored.slice(0, candidatePool);
-        }
-      } catch { /* best-effort */ }
-
-      const hubTotal = hubMemFtsRanked.length + hubMemVecRanked.length + hubMemPatternRanked.length;
-      if (hubTotal > 0) {
-        this.ctx.log.debug(`recall: hub_memories candidates: fts=${hubMemFtsRanked.length}, vec=${hubMemVecRanked.length}, pattern=${hubMemPatternRanked.length}`);
-      }
-    }
-
-    // Step 2: RRF fusion
+    // Step 3: RRF fusion
     const ftsRanked = ftsCandidates.map((c) => ({ id: c.chunkId, score: c.score }));
     const vecRanked = vecCandidates.map((c) => ({ id: c.chunkId, score: c.score }));
     const allRankedLists = [ftsRanked, vecRanked, patternRanked];
-    if (hubMemFtsRanked.length > 0) allRankedLists.push(hubMemFtsRanked);
-    if (hubMemVecRanked.length > 0) allRankedLists.push(hubMemVecRanked);
-    if (hubMemPatternRanked.length > 0) allRankedLists.push(hubMemPatternRanked);
+    
+    // Add hub results if any
+    if (hubResults.fts.length > 0) allRankedLists.push(hubResults.fts);
+    if (hubResults.vec.length > 0) allRankedLists.push(hubResults.vec);
+    if (hubResults.pattern.length > 0) allRankedLists.push(hubResults.pattern);
+    
     const rrfScores = rrfFuse(allRankedLists, recallCfg.rrfK);
 
     if (rrfScores.size === 0) {
@@ -147,14 +115,14 @@ export class RecallEngine {
       };
     }
 
-    // Step 3: MMR re-ranking
+    // Step 4: MMR re-ranking
     const rrfList = [...rrfScores.entries()]
       .map(([id, score]) => ({ id, score }))
       .sort((a, b) => b.score - a.score);
 
     const mmrResults = mmrRerank(rrfList, this.store, recallCfg.mmrLambda, maxResults * 2);
 
-    // Step 4: Time decay
+    // Step 5: Time decay
     const withTs = mmrResults.map((r) => {
       if (r.id.startsWith("hubmem:")) {
         const memId = r.id.slice(7);
@@ -166,7 +134,7 @@ export class RecallEngine {
     });
     const decayed = applyRecencyDecay(withTs, recallCfg.recencyHalfLifeDays);
 
-    // Step 5: Apply relative threshold on raw scores, then normalize to [0,1]
+    // Step 6: Apply relative threshold on raw scores, then normalize to [0,1]
     const sorted = [...decayed].sort((a, b) => b.score - a.score);
     const topScore = sorted.length > 0 ? sorted[0].score : 0;
 
@@ -184,7 +152,7 @@ export class RecallEngine {
       score: d.score / displayMax,
     }));
 
-    // Step 6: Build hits (with optional role filter), applying maxResults cap at the end
+    // Step 7: Build hits (with optional role filter), applying maxResults cap at the end
     const hits: SearchHit[] = [];
     for (const candidate of normalized) {
       if (hits.length >= maxResults) break;
@@ -246,6 +214,9 @@ export class RecallEngine {
 
     this.recordQuery(query, maxResults, minScore, hits.length);
 
+    const totalTime = Date.now() - startTime;
+    this.ctx.log.debug(`[RecallEngine] Search completed in ${totalTime}ms, found ${hits.length} hits`);
+
     return {
       hits,
       meta: {
@@ -255,6 +226,91 @@ export class RecallEngine {
         ...(repeatNote ? { note: repeatNote } : {}),
       },
     };
+  }
+
+  /**
+   * Get vector candidates with caching support
+   * Falls back to FTS-only if embedding fails
+   */
+  private async getVectorCandidates(
+    query: string,
+    candidatePool: number,
+    ownerFilter: string[] | undefined,
+    vectorSearchMaxChunks: number | undefined,
+  ): Promise<Array<{ chunkId: string; score: number }>> {
+    if (!query) return [];
+
+    try {
+      // Use cached embedding - this is the key optimization
+      const queryVec = await this.embedder.embedQueryWithCache(query);
+      const maxChunks = vectorSearchMaxChunks && vectorSearchMaxChunks > 0
+        ? vectorSearchMaxChunks
+        : undefined;
+      return vectorSearch(this.store, queryVec, candidatePool, maxChunks, ownerFilter);
+    } catch (err) {
+      this.ctx.log.warn(`Vector search failed, using FTS only: ${err}`);
+      return [];
+    }
+  }
+
+  /**
+   * Get hub memory candidates (parallelized)
+   */
+  private async getHubCandidates(
+    query: string,
+    shortTerms: string[],
+    candidatePool: number,
+  ): Promise<{
+    fts: Array<{ id: string; score: number }>;
+    vec: Array<{ id: string; score: number }>;
+    pattern: Array<{ id: string; score: number }>;
+  }> {
+    const results = {
+      fts: [] as Array<{ id: string; score: number }>,
+      vec: [] as Array<{ id: string; score: number }>,
+      pattern: [] as Array<{ id: string; score: number }>,
+    };
+
+    try {
+      // FTS search
+      const hubFtsHits = this.store.searchHubMemories(query, { maxResults: candidatePool });
+      results.fts = hubFtsHits.map(({ hit }, i) => ({ id: `hubmem:${hit.id}`, score: 1 / (i + 1) }));
+    } catch { /* hub_memories table may not exist */ }
+
+    // Pattern search
+    if (shortTerms.length > 0) {
+      try {
+        const hubPatternHits = this.store.hubMemoryPatternSearch(shortTerms, { limit: candidatePool });
+        results.pattern = hubPatternHits.map((h, i) => ({ id: `hubmem:${h.memoryId}`, score: 1 / (i + 1) }));
+      } catch { /* best-effort */ }
+    }
+
+    // Vector search (uses same cached embedding)
+    try {
+      const qv = await this.embedder.embedQueryWithCache(query).catch(() => null);
+      if (qv) {
+        const memEmbs = this.store.getVisibleHubMemoryEmbeddings("__hub__");
+        const scored: Array<{ id: string; score: number }> = [];
+        for (const e of memEmbs) {
+          let dot = 0, nA = 0, nB = 0;
+          const len = Math.min(qv.length, e.vector.length);
+          for (let i = 0; i < len; i++) {
+            dot += qv[i] * e.vector[i]; nA += qv[i] * qv[i]; nB += e.vector[i] * e.vector[i];
+          }
+          const sim = nA > 0 && nB > 0 ? dot / (Math.sqrt(nA) * Math.sqrt(nB)) : 0;
+          if (sim > 0.3) scored.push({ id: `hubmem:${e.memoryId}`, score: sim });
+        }
+        scored.sort((a, b) => b.score - a.score);
+        results.vec = scored.slice(0, candidatePool);
+      }
+    } catch { /* best-effort */ }
+
+    const total = results.fts.length + results.vec.length + results.pattern.length;
+    if (total > 0) {
+      this.ctx.log.debug(`recall: hub_memories candidates: fts=${results.fts.length}, vec=${results.vec.length}, pattern=${results.pattern.length}`);
+    }
+
+    return results;
   }
 
   /**
@@ -300,16 +356,16 @@ export class RecallEngine {
     // FTS on name + description
     const ftsCandidates = this.store.skillFtsSearch(query, TOP_CANDIDATES, scope, currentOwner);
 
-    // Vector search on description embedding
+    // Vector search on description embedding (with caching)
     let vecCandidates: Array<{ skillId: string; score: number }> = [];
     try {
-      const queryVec = await this.embedder.embedQuery(query);
+      const queryVec = await this.embedder.embedQueryWithCache(query);
       const allEmb = this.store.getSkillEmbeddings(scope, currentOwner);
       vecCandidates = allEmb.map((row) => ({
         skillId: row.skillId,
         score: cosineSimilarity(queryVec, row.vector),
       }));
-      vecCandidates.sort((a, b) => b.score - a.score);
+      vecCandidates.sort((a, b) => b.score - b.score);
       vecCandidates = vecCandidates.slice(0, TOP_CANDIDATES);
     } catch (err) {
       this.ctx.log.warn(`Skill vector search failed, using FTS only: ${err}`);
