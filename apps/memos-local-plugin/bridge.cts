@@ -407,6 +407,9 @@ async function main(): Promise<void> {
       }
     }
 
+    bridgeStatus?.markConnected();
+    bridgeHeartbeat = bridgeStatus?.startHeartbeat();
+
     const shutdownDaemon = async (sig: string) => {
       process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
       removeOwnedPidFile();
@@ -681,7 +684,7 @@ function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
 
 function isHermesChatRunning(): boolean {
   try {
-    const out = childProcess.execFileSync("pgrep", ["-f", "hermes chat"], {
+    const out = childProcess.execFileSync("pgrep", ["-f", "hermes.*(chat|gateway)"], {
       encoding: "utf8",
       timeout: 1000,
     });
