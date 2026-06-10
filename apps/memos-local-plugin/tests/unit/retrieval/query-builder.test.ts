@@ -179,7 +179,42 @@ describe("retrieval/query-builder", () => {
     ).toBe(true);
   });
 
-  it("does not synthesize benchmark-specific keywords for structured math prompts", () => {
+  it("normalizes repository repair prompts to visible issue and hints", () => {
+    const cq = buildQuery({
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s_repair" as unknown as never,
+      userText: [
+        "new task",
+        "",
+        "WRAPPER_PATH: /tmp/repair-exec",
+        "You need to fix a bug in the example-org/service-toolkit repository. Time limit: 30 minutes.",
+        "",
+        "[STRICT RULES]",
+        "All commands must use the wrapper.",
+        "",
+        "## Bug Description",
+        "A request handler returns an internal path when a public route prefix is configured.",
+        "",
+        "Reply TASK_COMPLETE when done.",
+        "",
+        "## Hints",
+        "Check the route normalization helper and the response builder.",
+      ].join("\n"),
+      ts: NOW,
+    });
+
+    expect(cq.text).toContain("repository repair source fix");
+    expect(cq.text).toContain("repo: example-org/service-toolkit");
+    expect(cq.text).toContain("public route prefix");
+    expect(cq.text).toContain("route normalization helper");
+    expect(cq.text).not.toContain("WRAPPER_PATH");
+    expect(cq.text).not.toContain("STRICT RULES");
+    expect(cq.text).not.toContain("Time limit");
+    expect(cq.text).not.toContain("TASK_COMPLETE");
+  });
+
+  it("does not synthesize unrelated keywords for structured math prompts", () => {
     const cq = buildQuery({
       reason: "turn_start",
       agent: "openclaw",

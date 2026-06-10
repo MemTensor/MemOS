@@ -25,6 +25,17 @@ export function isStandaloneMathFinalAnswerTask(text: string | undefined): boole
 }
 
 function isCodeGenerationTask(normalized: string): boolean {
+  const programmingShellSignals = [
+    /\bexpert\s+(?:python|java|c\+\+|typescript|javascript|rust)\s+programmer\b/,
+    /\bgenerate\s+a\s+correct\s+[\s\S]{0,80}\bprogram\b/,
+    /\bwrite\s+(?:a|the)?\s*[\s\S]{0,80}\bprogram\b/,
+    /\bpasses?\s+all\s+tests?\b/,
+    /\b(?:stdin|stdout|standard input|standard output)\b/,
+    /###\s*(?:question|input|output|constraints)\b/,
+    /\btime limit\b[\s\S]{0,120}\bmemory limit\b/,
+  ].filter((re) => re.test(normalized)).length;
+  if (programmingShellSignals >= 2) return true;
+
   const explicitCodeContract = [
     /\b(?:write|generate|implement|provide|submit|output|return)\b[\s\S]{0,120}\b(?:code|program|python|javascript|typescript|java|c\+\+|function|method|class)\b/,
     /\b(?:correct|working)\s+(?:python\s+)?program\b/,
