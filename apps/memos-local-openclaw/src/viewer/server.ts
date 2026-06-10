@@ -395,6 +395,7 @@ export class ViewerServer {
       else if (p === "/api/migrate/postprocess/stream" && req.method === "GET") this.handlePostprocessStream(res);
       else if (p === "/api/migrate/postprocess/stop" && req.method === "POST") this.handlePostprocessStop(res);
       else if (p === "/api/migrate/postprocess/status" && req.method === "GET") this.handlePostprocessStatus(res);
+      else if (p === "/api/export" && req.method === "GET") this.handleExport(res, url);
       else {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "not found" }));
@@ -3012,6 +3013,42 @@ export class ViewerServer {
     const ips = this.getLocalIPs();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ips }));
+  }
+
+  // ─── Export ───
+
+  private handleExport(res: http.ServerResponse, url: URL): void {
+    const format = url.searchParams.get("format") ?? "json";
+    const now = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+
+    try {
+      if (format === "csv") {
+        const csv = this.store.exportMemoriesAsCsv();
+        const filename = `memos-memories-${now}.csv`;
+        res.writeHead(200, {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        });
+        res.end(csv);
+      } else {
+        const data = this.store.exportAll();
+        const payload = JSON.stringify(
+          { exportedAt: new Date().toISOString(), version: 1, ...data },
+          null,
+          2,
+        );
+        const filename = `memos-export-${now}.json`;
+        res.writeHead(200, {
+          "Content-Type": "application/json",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        });
+        res.end(payload);
+      }
+    } catch (err) {
+      this.log.error(`Export failed: ${err}`);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err) }));
+    }
   }
 
   private serveConfig(res: http.ServerResponse): void {
