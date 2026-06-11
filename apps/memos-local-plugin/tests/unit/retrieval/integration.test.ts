@@ -430,6 +430,8 @@ describe("retrieval/integration", () => {
     expect(res.packet.rendered).toContain("not a phrase with spaces");
     expect(res.packet.rendered).toContain("Never grep for a phrase containing whitespace");
     expect(res.packet.rendered).toContain("no inline `python - <<`");
+    expect(res.packet.rendered).toContain("Never send multi-line Python");
+    expect(res.packet.rendered).toContain("the shell is stuck in quote/heredoc continuation");
     expect(res.packet.rendered).toContain("Do not invent a repository root");
     expect(res.packet.rendered).toContain("git status --porcelain");
     expect(res.packet.rendered).toContain("temporary scripts");
@@ -512,6 +514,33 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).not.toContain("example.invalid/project/pull/123");
   });
 
+  it("keeps natural language fragments out of visible-issue first searches", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_visible_issue_fragments" as SessionId,
+        userText: [
+          "WRAPPER_PATH: /tmp/current-task-wrapper",
+          "Run command: exec(\"/tmp/current-task-wrapper tmux-run \\\"command\\\" wait_seconds\")",
+          "",
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Bug Description",
+          "If the field is not in the data payload (e.g. it was omitted), self.cleaned_data should still allow normalized_value to override a default.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("self.cleaned_data");
+    expect(packet?.rendered).toContain("normalized_value");
+    expect(packet?.rendered).toContain("grep -R -n 'self.cleaned_data' .");
+    expect(packet?.rendered).not.toContain("`e.g`");
+    expect(packet?.rendered).not.toContain("data payload (e.g");
+  });
+
   it("uses runtime conventions declared by the current repair prompt", () => {
     const packet = taskProtocolOnlyPacket(
       {
@@ -523,6 +552,7 @@ describe("retrieval/integration", () => {
           "All commands MUST be executed via WRAPPER_PATH.",
           "Run command: exec(\"/tmp/current-task-wrapper tmux-run \\\"command\\\" wait_seconds\")",
           "Write file: exec(\"/tmp/current-task-wrapper write /target/path << 'EOF'\\nfile content\\nEOF\")",
+          "Interrupt: exec(\"/tmp/current-task-wrapper tmux-run \\\"ctrl-c\\\" 3\")",
           "",
           "You need to fix a bug in the example-org/service-toolkit repository.",
           "",
@@ -541,6 +571,7 @@ describe("retrieval/integration", () => {
 
     expect(packet?.rendered).toContain("Command wrapper: `WRAPPER_PATH`");
     expect(packet?.rendered).toContain('Run command form: `WRAPPER_PATH tmux-run "command" 10`');
+    expect(packet?.rendered).toContain('Interrupt form: `WRAPPER_PATH tmux-run "ctrl-c" 3`');
     expect(packet?.rendered).toContain("Completion token from the current prompt: `DONE`");
     expect(packet?.rendered).toContain('WRAPPER_PATH tmux-run "grep -R -n');
     expect(packet?.rendered).toContain("Implementation anchors extracted from current hints");

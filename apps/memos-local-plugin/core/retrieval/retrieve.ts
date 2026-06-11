@@ -632,6 +632,9 @@ function renderTaskProtocol(ctx: RetrievalCtx): string | null {
     runtime.repoRoot
       ? `- Repository root from the current prompt: \`${runtime.repoRoot}\`; include \`cd ${runtime.repoRoot} &&\` in non-poll run commands.`
       : "- Repository root was not explicitly named in the current prompt. Use the wrapper's default working directory; do not invent `/repo`, `/workspace`, or another root.",
+    runtime.interruptCommand
+      ? `- Interrupt form: \`${renderControlCommand(runtime, runtime.interruptCommand, "3")}\`.`
+      : "- Interrupt form: use the current prompt's interrupt convention if the shell enters a continuation prompt.",
     runtime.completionToken
       ? `- Completion token from the current prompt: \`${runtime.completionToken}\`.`
       : "- Completion token: use the exact completion phrase requested by the current prompt.",
@@ -676,7 +679,8 @@ function renderTaskProtocol(ctx: RetrievalCtx): string | null {
     `7. Never grep for a phrase containing whitespace inside \`${runtime.runVerb}\` such as \`grep -n "def target_symbol"\`, \`grep -n '^    def target_symbol'\`, or \`rg -n "def target_symbol"\`; those can split wrapper arguments or leave stale running commands. Grep the bare identifier (\`target_symbol\`) or inspect a line range with \`nl\`/\`sed\`.`,
     `8. Use outer \`write\` for target files or temporary scripts, e.g. \`${writePrefix}\`. The wrapper is host-side, so do not inspect it from the repository or call it inside \`${runtime.runVerb}\`.`,
     `9. A \`${runtime.wrapperRef} write\` heredoc is literal. Do not put shell substitutions like \`$(sed ...)\`, command output placeholders, line numbers, or diff markers (\`+\`/\`-\` prefixes) into the file content.`,
-    "10. Do not finish by saying the issue is already fixed. For repository repair tasks, a valid completion needs a non-empty source `git diff`; if `git diff` is empty, continue source investigation.",
+    `10. If any \`${runtime.runVerb}\` result starts with a bare \`>\` prompt or only echoes lines like \`> command\`, the shell is stuck in quote/heredoc continuation. Stop normal commands, interrupt first${runtime.interruptCommand ? ` with \`${renderControlCommand(runtime, runtime.interruptCommand, "3")}\`` : ""}, then confirm a normal prompt before running scripts or \`git diff\`.`,
+    "11. Do not finish by saying the issue is already fixed. For repository repair tasks, a valid completion needs a non-empty source `git diff`; if `git diff` is empty, continue source investigation.",
     "",
     "### Safe edit loop",
     `1. For any multi-line source edit, first create \`${editScriptPrefix}\` with the outer wrapper.`,
@@ -710,6 +714,7 @@ interface RepairRuntimeConvention {
   repoRoot: string | null;
   editScriptPath: string;
   completionToken: string | null;
+  interruptCommand: string | null;
 }
 
 function inferRepairRuntime(text: string | undefined): RepairRuntimeConvention {
@@ -724,6 +729,7 @@ function inferRepairRuntime(text: string | undefined): RepairRuntimeConvention {
   const runVerb = /\btmux-run\b/i.test(raw) ? "tmux-run" : "run";
   const repoRoot = extractPromptRepoRoot(raw);
   const completionToken = raw.match(/\bReply\s+([A-Z][A-Z0-9_]{2,})\s+when done\b/i)?.[1] ?? null;
+  const interruptCommand = /\bctrl-c\b/i.test(raw) ? "ctrl-c" : null;
   return {
     wrapperRef,
     wrapperSource,
@@ -731,6 +737,7 @@ function inferRepairRuntime(text: string | undefined): RepairRuntimeConvention {
     repoRoot,
     editScriptPath: "/tmp/memmy_edit.py",
     completionToken,
+    interruptCommand,
   };
 }
 
@@ -754,6 +761,14 @@ function renderRunCommand(
   return `${runtime.wrapperRef} ${runtime.runVerb} "${renderRepoCommand(runtime, command)}" ${waitSeconds}`;
 }
 
+function renderControlCommand(
+  runtime: RepairRuntimeConvention,
+  command: string,
+  waitSeconds = "3",
+): string {
+  return `${runtime.wrapperRef} ${runtime.runVerb} "${command}" ${waitSeconds}`;
+}
+
 function renderTargetPath(runtime: RepairRuntimeConvention, target: string): string {
   if (target.startsWith("/")) return target;
   const cleanTarget = target.replace(/^\/+/, "");
@@ -773,6 +788,7 @@ function renderPatchReadinessGate(runtime: RepairRuntimeConvention): string {
     "### Patch-readiness gate",
     "- First objective: produce a small non-empty source `git diff`. Do not run or search tests before the first source edit once the target function/class is found from current prompt evidence.",
     `- After you inspect the target function/class, the next tool call should create \`${renderWriteCommand(runtime, runtime.editScriptPath, "PY")}\` with an exact old/new replacement.`,
+    `- Never send multi-line Python, patch text, heredocs, or \`apply_patch\` through \`${runtime.runVerb}\`; only the outer \`write\` wrapper may carry multi-line content.`,
     "- If the source edit fails, inspect only the exact old block, rewrite the edit script, and try again; do not switch to broad test search.",
   ].join("\n");
 }
@@ -1100,10 +1116,20 @@ function isUsefulRepairIdentifier(token: string): boolean {
   if (token.length < 3 || token.length > 120) return false;
   if (/^https?:/i.test(token)) return false;
   if (/^(?:Bug|Issue|Description|Patch|Reply|Done)$/i.test(token)) return false;
+  if (/\s/.test(token)) return false;
+  if (/^[a-z]\.[a-z]$/i.test(token)) return false;
+  if (/["'`$]/.test(token)) return false;
+  const fileOrPath = /^[A-Za-z0-9_./-]+\.(?:py|js|ts|tsx|java|rs|go|rb|php|c|cc|cpp|h|txt|md|rst)$/i.test(token);
+  const attrChain = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$/.test(token);
+  const constantName = /^[A-Z][A-Z0-9_]{2,}$/.test(token);
+  const camelName = /[A-Z][a-z0-9]+[A-Z]/.test(token);
+  const snakeName = /^[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+$/.test(token);
   return (
-    /[_.%/]/.test(token) ||
-    /[A-Z][A-Z0-9_]{2,}/.test(token) ||
-    /[A-Z][a-z0-9]+[A-Z]/.test(token)
+    fileOrPath ||
+    attrChain ||
+    constantName ||
+    camelName ||
+    snakeName
   );
 }
 
