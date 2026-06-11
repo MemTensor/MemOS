@@ -141,6 +141,7 @@ export function MemoriesView() {
       qs.set("offset", String(roleFilterActive ? 0 : opts.page * pageSize));
       qs.set("groupByTurn", "true");
       qs.set("includeTotal", "false");
+      qs.set("includeAllNamespaces", "true");
       if (opts.q) qs.set("q", opts.q);
       appendNamespaceParams(qs, namespaceFilter);
       const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`);
@@ -199,6 +200,7 @@ export function MemoriesView() {
       qs.set("limit", String(pageSize));
       qs.set("offset", String(targetPage * pageSize));
       qs.set("groupByTurn", "true");
+      qs.set("includeAllNamespaces", "true");
       const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`, {
         signal,
       });
@@ -755,6 +757,7 @@ async function findTracePage(
     qs.set("limit", String(scanLimit));
     qs.set("offset", String(offset));
     qs.set("groupByTurn", "true");
+    qs.set("includeAllNamespaces", "true");
     const res = await api.get<ListResponse>(`/api/v1/traces?${qs.toString()}`, {
       signal,
     });

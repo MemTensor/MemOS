@@ -245,6 +245,14 @@ class RecordingBridge:
 class BridgeClientTests(unittest.TestCase):
     def setUp(self) -> None:
         self._fake: FakePopen | None = None
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._registry_path = (
+            Path(self._tmpdir.name)
+            / ".hermes"
+            / "memos-plugin"
+            / "daemon"
+            / "headless-bridges.json"
+        )
 
         def _factory(*args, **kwargs):
             self._fake = FakePopen(*args, **kwargs)
@@ -254,14 +262,22 @@ class BridgeClientTests(unittest.TestCase):
         self._which_patch = patch.object(
             bridge_client_mod.shutil, "which", return_value="/usr/bin/node"
         )
+        self._registry_patch = patch.object(
+            bridge_client_mod,
+            "_headless_registry_path",
+            return_value=self._registry_path,
+        )
         self._popen_patch.start()
         self._which_patch.start()
+        self._registry_patch.start()
 
     def tearDown(self) -> None:
         if self._fake is not None:
             self._fake.stdout._done = True
+        self._registry_patch.stop()
         self._popen_patch.stop()
         self._which_patch.stop()
+        self._tmpdir.cleanup()
 
     def test_request_returns_result_on_success(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
@@ -301,6 +317,90 @@ class BridgeClientTests(unittest.TestCase):
         cmd = getattr(self._fake, "cmd", [])
         self.assertIn("--no-viewer", cmd)
         client.close()
+
+    def test_new_headless_bridge_reaps_previous_registered_headless_bridge(self) -> None:
+        stale_pid = 424242
+        self._registry_path.parent.mkdir(parents=True)
+        self._registry_path.write_text(
+            json.dumps(
+                {
+                    "bridges": [
+                        {
+                            "pid": stale_pid,
+                            "startedAt": time.time() - 3600,
+                            "agent": "hermes",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        killed: list[tuple[int, int]] = []
+
+        def fake_kill(pid: int, sig: int) -> None:
+            killed.append((pid, sig))
+
+        with patch.object(bridge_client_mod.os, "kill", fake_kill), patch.object(
+            bridge_client_mod,
+            "_pid_command",
+            return_value="/opt/homebrew/bin/node /Users/niu/.hermes/memos-plugin/dist/bridge.cjs --agent=hermes --no-viewer",
+        ):
+            client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+            client.close()
+
+        self.assertTrue(
+            any(pid == stale_pid for pid, _sig in killed),
+            "starting a new --no-viewer bridge should reap stale registered headless bridges",
+        )
+
+    def test_headless_reaper_does_not_kill_non_bridge_pid(self) -> None:
+        stale_pid = 424243
+        self._registry_path.parent.mkdir(parents=True)
+        self._registry_path.write_text(
+            json.dumps(
+                {
+                    "bridges": [
+                        {
+                            "pid": stale_pid,
+                            "parentPid": 99978,
+                            "startedAt": time.time() - 3600,
+                            "agent": "hermes",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        killed: list[tuple[int, int]] = []
+
+        def fake_kill(pid: int, sig: int) -> None:
+            killed.append((pid, sig))
+
+        with patch.object(bridge_client_mod.os, "kill", fake_kill), patch.object(
+            bridge_client_mod,
+            "_pid_command",
+            return_value="/usr/bin/sleep 600",
+        ):
+            client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+            client.close()
+
+        self.assertFalse(
+            any(pid == stale_pid and sig != 0 for pid, sig in killed),
+            "registry cleanup must not signal a PID unless it is a Hermes headless bridge",
+        )
+
+    def test_registry_write_failure_does_not_block_bridge_start(self) -> None:
+        with patch.object(
+            bridge_client_mod,
+            "_write_headless_registry",
+            side_effect=OSError("readonly registry"),
+        ):
+            client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+            res = client.request("core.health")
+            self.assertEqual(res, {"ok": True, "version": "test"})
+            client.close()
 
     def test_reverse_request_waits_for_late_host_handler_registration(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
@@ -353,10 +453,23 @@ class MemTensorProviderTests(unittest.TestCase):
         import memos_provider
 
         self._provider_mod = memos_provider
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._registry_path = (
+            Path(self._tmpdir.name)
+            / ".hermes"
+            / "memos-plugin"
+            / "daemon"
+            / "headless-bridges.json"
+        )
 
         self._patches = [
             patch("memos_provider.ensure_bridge_running", return_value=True),
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch.object(
+                bridge_client_mod,
+                "_headless_registry_path",
+                return_value=self._registry_path,
+            ),
         ]
         for p in self._patches:
             p.start()
@@ -364,6 +477,7 @@ class MemTensorProviderTests(unittest.TestCase):
     def tearDown(self) -> None:
         for p in self._patches:
             p.stop()
+        self._tmpdir.cleanup()
 
     def test_is_available_returns_true_when_bridge_ok(self) -> None:
         p = self._provider_mod.MemTensorProvider()
