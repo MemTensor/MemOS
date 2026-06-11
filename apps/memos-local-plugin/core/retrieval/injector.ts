@@ -324,8 +324,8 @@ function candidateTextForSpecificity(c: TierCandidate): string {
 function isGenericStandaloneMathMemory(text: string): boolean {
   const normalized = text.toLowerCase();
   return [
-    /\bsolve\s+(?:the\s+)?(?:following\s+)?math competition problems?\b/,
-    /\buser requests?\s+(?:a\s+)?solution to a math competition problem\b/,
+    /\b(?:math(?:ematical)?|olympiad|contest|competition)(?:[-\s]+(?:style|level|type))?[-\s]+(?:problem|task)s?\b/,
+    /\bsolution\s+to\s+(?:a\s+|the\s+)?(?:math(?:ematical)?|olympiad|contest|competition)(?:[-\s]+(?:problem|task))?\b/,
     /\banaly[sz]e the problem step-by-step\b/,
     /\bprovide the final answer\b/,
     /\bensuring logical consistency\b/,

@@ -93,6 +93,7 @@ describe("retrieval/math-task", () => {
       "HMMT",
       "patterns8",
       "Django",
+      "Solve the following math competition problem",
     ];
     for (const term of forbiddenTerms) {
       expect(protocol).not.toContain(term);

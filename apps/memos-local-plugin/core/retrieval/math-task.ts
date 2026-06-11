@@ -16,9 +16,6 @@ export function isStandaloneMathFinalAnswerTask(text: string | undefined): boole
     /\bintegers?\b|\breal numbers?\b|\bpositive numbers?\b/,
   ].filter((re) => re.test(normalized)).length;
   const hasFinalAnswerInstruction = /\\boxed|\bboxed\s*\{|\bfinal answer\b|\banswer in\b/.test(normalized);
-  if (/\bsolve the following math competition problem\b/.test(normalized) && hasFinalAnswerInstruction) {
-    return true;
-  }
   if (mathSignals < 2) return false;
   if (!hasFinalAnswerInstruction) return false;
   return /\b(compute|find|determine|evaluate|solve|prove|what is)\b|\\boxed|\bboxed\s*\{/.test(normalized);
