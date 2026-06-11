@@ -807,6 +807,38 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
     ],
   },
   {
+    label: "owned-object identity and ordering",
+    re: /\b(?:abstract|base|template|prototype|cop(?:y|ied)|clone|derived|inherited|owner|owned|attached)\b[\s\S]{0,240}\b(?:equal|equality|compare|comparison|hash|ordering|sort|deduplicate|collision|counter|tie)\b|\b(?:equal|equality|compare|comparison|hash|ordering|sort|deduplicate|collision|counter|tie)\b[\s\S]{0,240}\b(?:abstract|base|template|prototype|cop(?:y|ied)|clone|derived|inherited|owner|owned|attached)\b/i,
+    guidance: [
+      "If objects copied from a shared template collide because identity/order uses only a local counter or name, include a stable primitive owner or namespace key in equality, hashing, and tie-breaking.",
+      "Use existing string/id/tuple metadata for that owner key; avoid comparing owner objects directly, and preserve the repository's convention for unattached objects.",
+    ],
+  },
+  {
+    label: "secondary namespace relabel before merge",
+    re: /\b(?:merge|combine|join|union|compose|attach)\b[\s\S]{0,240}\b(?:right[- ]hand|secondary|other side|prefix|namespace|temporary name|generated name|identifier|collision|mapping|reference)\b|\b(?:right[- ]hand|secondary|other side|prefix|namespace|temporary name|generated name|identifier|collision|mapping|reference)\b[\s\S]{0,240}\b(?:merge|combine|join|union|compose|attach)\b/i,
+    guidance: [
+      "When merging two structures that both contain generated names or references, deterministically relabel the secondary side before building the combined mapping.",
+      "Patch the merge path and its reference map updates, not the global name allocator; preserve explicit names and delegate non-conflicting cases to existing behavior.",
+    ],
+  },
+  {
+    label: "fast-path precondition initialization",
+    re: /\b(?:fast[- ]path|shortcut|optimized path|single[- ]source|single[- ]table|same source|same table|avoid subquery|subquery|performance regression)\b[\s\S]{0,240}\b(?:initialize|initialise|register|base|source|handle|alias|count|before|decision|branch)\b|\b(?:initialize|initialise|register|base|source|handle|alias|count|before|decision|branch)\b[\s\S]{0,240}\b(?:fast[- ]path|shortcut|optimized path|single[- ]source|single[- ]table|same source|same table|avoid subquery|subquery|performance regression)\b/i,
+    guidance: [
+      "Before a single-source or optimized-path branch counts handles/references, ensure the base source has been registered through the repository's existing initializer.",
+      "Patch the precondition setup for the branch decision instead of rewriting the compiler/planner/executor behavior around it.",
+    ],
+  },
+  {
+    label: "public facade assembly consistency",
+    re: /\b(?:public|wrapper|facade|top[- ]level|method form|function form|adapter|assembly|list assembly|return shape|output shape)\b[\s\S]{0,240}\b(?:lower[- ]level|internal|core|helper|already works|differs|inconsistent|inconsistant|wrong output|expected output)\b|\b(?:lower[- ]level|internal|core|helper|already works|differs|inconsistent|inconsistant|wrong output|expected output)\b[\s\S]{0,240}\b(?:public|wrapper|facade|top[- ]level|method form|function form|adapter|assembly|list assembly|return shape|output shape)\b/i,
+    guidance: [
+      "If an internal method produces the right semantic result but the public wrapper returns a different shape, patch the wrapper/assembly boundary first.",
+      "Preserve the lower-level algorithm and public return contract; verify both the direct internal path and the public facade path after editing.",
+    ],
+  },
+  {
     label: "configuration/default propagation",
     re: /\b(?:default|fallback|option|setting|parameter|argument|config(?:uration)?|preserve|respect|support|ignored|missing|route|path|redirect|script name)\b/i,
     guidance: [
@@ -897,18 +929,19 @@ function renderGenericDefectContext(text: string | undefined): string | null {
 
   const matched = GENERIC_DEFECT_HEURISTICS
     .filter((heuristic) => heuristic.re.test(source))
-    .slice(0, 5);
+    .slice(0, 6);
   if (matched.length === 0) return null;
 
   return truncateHintDigest(
     [
       "The following generic defect categories are triggered only by words in the current issue/hints. Use them to choose the first source path to inspect; do not treat them as a fixed patch.",
+      "If one of these categories clearly matches after inspecting the named function/class and one neighboring same-family implementation, prefer a minimal source patch before broad test search.",
       ...matched.flatMap((heuristic) => [
         `- ${heuristic.label}:`,
         ...heuristic.guidance.map((line) => `  - ${line}`),
       ]),
     ].join("\n"),
-    3_200,
+    3_600,
   );
 }
 

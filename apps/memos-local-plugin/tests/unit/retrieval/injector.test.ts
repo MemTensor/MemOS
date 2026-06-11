@@ -195,6 +195,7 @@ describe("retrieval/injector", () => {
     expect(packet.rendered.indexOf("## Experiences")).toBeLessThan(
       packet.rendered.indexOf("## Environment Knowledge"),
     );
+    expect(packet.rendered).toContain("Use as a guardrail before planning.");
     expect(packet.rendered).toContain("Trigger: similar SEC 13F parsing task");
     expect(packet.rendered).toContain("Do: Use holdings table columns directly.");
     expect(packet.rendered).toContain("Avoid: Do not infer issuer from filename.");

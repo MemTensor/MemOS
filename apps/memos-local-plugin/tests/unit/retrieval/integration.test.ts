@@ -609,6 +609,105 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("inverse operations on the same object/key");
   });
 
+  it("adds generic owned-object identity guidance", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_owned_identity" as SessionId,
+        userText: [
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Bug Description",
+          "Objects copied from a base schema keep the same creation counter.",
+          "Equality, hashing, and ordering treat copied fields from different owner namespaces as duplicates.",
+          "",
+          "## Hints",
+          "Inspect the comparison helpers on the attached descriptor object.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("owned-object identity and ordering");
+    expect(packet?.rendered).toContain("stable primitive owner or namespace key");
+  });
+
+  it("adds generic secondary-namespace relabel guidance", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_namespace_relabel" as SessionId,
+        userText: [
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Issue Description",
+          "Combining two expression graphs can collide when the right-hand graph reuses generated name prefixes from the left graph.",
+          "The merged mapping then points references at the wrong node.",
+          "",
+          "## Hints",
+          "Inspect the graph merge path and the reference map update.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("secondary namespace relabel before merge");
+    expect(packet?.rendered).toContain("deterministically relabel the secondary side");
+  });
+
+  it("adds generic fast-path precondition guidance", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_fast_path" as SessionId,
+        userText: [
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Bug Description",
+          "A single-source optimized path is skipped and the planner emits an unnecessary subquery.",
+          "The branch counts source handles before the base source initializer registers the handle.",
+          "",
+          "## Hints",
+          "Inspect the branch that decides whether the shortcut can run.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("fast-path precondition initialization");
+    expect(packet?.rendered).toContain("base source has been registered");
+  });
+
+  it("adds generic public facade assembly guidance", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_facade_assembly" as SessionId,
+        userText: [
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Issue Description",
+          "The lower-level helper returns the expected grouped output, but the public wrapper list assembly returns separate items with the wrong output shape.",
+          "",
+          "## Hints",
+          "Inspect the public facade before changing the internal grouping algorithm.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("public facade assembly consistency");
+    expect(packet?.rendered).toContain("patch the wrapper/assembly boundary first");
+  });
+
   it("builds a protocol-only packet for repository repair prompts without adapter state", () => {
     const packet = taskProtocolOnlyPacket(
       {

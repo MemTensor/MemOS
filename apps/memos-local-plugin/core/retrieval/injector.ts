@@ -371,6 +371,7 @@ function stripEpisodePromptMetrics(summary: string): string {
 
 function renderExperience(c: ExperienceCandidate): InjectionSnippet {
   const parts = [
+    renderExperienceUseHint(c),
     c.procedure ? `Do: ${c.procedure}` : null,
     c.decisionGuidance.antiPattern.length > 0
       ? `Avoid: ${c.decisionGuidance.antiPattern.join("; ")}`
@@ -388,6 +389,22 @@ function renderExperience(c: ExperienceCandidate): InjectionSnippet {
       `→ call \`memos_get(id="${c.refId}", kind="policy")\` for the full policy details before relying on this experience`,
     ),
   };
+}
+
+function renderExperienceUseHint(c: ExperienceCandidate): string {
+  if (c.experienceType === "failure_avoidance" || c.evidencePolarity === "negative") {
+    return "Use as a guardrail before planning.";
+  }
+  if (c.experienceType === "repair_instruction") {
+    return "Use as repair guidance before choosing the next action.";
+  }
+  if (c.experienceType === "verifier_feedback") {
+    return "Use as a verification checklist before finalizing.";
+  }
+  if (c.experienceType === "preference") {
+    return "Use as a user preference when applicable.";
+  }
+  return "Use as prior successful guidance when the current task matches.";
 }
 
 function renderWorldModel(c: WorldModelCandidate): InjectionSnippet {
