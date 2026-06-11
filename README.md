@@ -50,6 +50,8 @@ Your lobsters and Hermes Agents now have **the best** memory system — choose *
 | 🧠 [**memos-local-plugin 2.0**](https://github.com/hijzy/MemOS/tree/main/apps/memos-local-plugin) | <ul><li>One local-first memory core for **Hermes Agent** and **OpenClaw**.</li><li>Self-evolving memory: L1 trace, L2 policy, L3 world model,<br>and crystallized Skills driven by feedback.</li></ul> | 🌐 [Website](https://memos-claw.openmem.net/) · 📖 [Docs](https://memos-docs.openmem.net/cn/openclaw/local_plugin) · 🐙 [GitHub](https://github.com/hijzy/MemOS/tree/main/apps/memos-local-plugin) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-plugin) |
 | ☁️ [**OpenClaw Cloud Plugin**](https://x.com/MemOS_dev/status/2019254160919769171?s=20) | <ul><li>[Reduces token usage by 72%.](https://x.com/MemOS_dev/status/2020854044583924111)</li><li>[Multi-agent memory sharing by `user_id`.](https://x.com/MemOS_dev/status/2020538135487062094)</li></ul> | 🖥️ [MemOS Dashboard](https://memos-dashboard.openmem.net/login/) · 📖 [Full Tutorial](https://memos-docs.openmem.net/openclaw/guide#_4-update-plugin) |
 
+> **🐳 Docker Deployment Note**: When running memos-local-plugin in Docker containers, you must specify the config location using `MEMOS_HOME` environment variable or `--home` CLI flag. See [Docker Configuration Guide](./apps/memos-local-plugin/README.md#docker-deployment) for details.
+
 </div>
 <br>
 
