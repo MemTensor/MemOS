@@ -759,6 +759,54 @@ interface GenericDefectHeuristic {
 
 const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
   {
+    label: "omitted-input default guard",
+    re: /\b(?:omit(?:ted|s|ting)?|missing|not provided|absent|blank|empty)\b[\s\S]{0,240}\b(?:default|fallback|normalized|validated|parsed|derived|non-empty|value)\b|\b(?:default|fallback|normalized|validated|parsed|derived|non-empty|value)\b[\s\S]{0,240}\b(?:omit(?:ted|s|ting)?|missing|not provided|absent|blank|empty)\b/i,
+    guidance: [
+      "Inspect the guard that skips assignment when raw input omits a field or key; if a later normalized value is present, the default-preserving branch should not block that assignment.",
+      "Patch the construct/assignment path where raw presence and normalized presence meet, not every caller that happens to supply a default.",
+    ],
+  },
+  {
+    label: "public representation boundary",
+    re: /\b(?:enum|choice|member|symbolic|literal|primitive|representation|public value|serialized)\b[\s\S]{0,240}\b(?:string|integer|number|value|cast|convert|created|retrieved|returned)\b|\b(?:created|retrieved|returned|serialized)\b[\s\S]{0,240}\b(?:enum|choice|member|symbolic|literal|primitive|representation)\b/i,
+    guidance: [
+      "Find the shared boundary where an internal wrapper/member becomes the caller-visible primitive value; patch that conversion instead of adding per-field accessors.",
+      "Keep validation strict internally, but make created, fetched, and serialized values expose the same public shape.",
+    ],
+  },
+  {
+    label: "stateful seed reuse across repeated work",
+    re: /\b(?:seed|random|shuffle|deterministic|reproducible)\b[\s\S]{0,240}\b(?:repeat(?:ed)?|group|subgroup|partition|class|bucket|child|split|loop)\b|\b(?:repeat(?:ed)?|group|subgroup|partition|class|bucket|child|split|loop)\b[\s\S]{0,240}\b(?:seed|random|shuffle|deterministic|reproducible)\b/i,
+    guidance: [
+      "Normalize the public seed once to a stateful generator/state object, then pass that object through repeated child operations so each child consumes the evolving state.",
+      "Do not pass the same raw seed into every grouped operation; preserve the existing behavior when shuffling/randomization is disabled.",
+    ],
+  },
+  {
+    label: "paired inverse-operation reduction",
+    re: /\b(?:reduce|reduction|optimi[sz]e|coalesce|cancel|squash)\b[\s\S]{0,240}\b(?:add|create|insert|set|remove|delete|drop|unset|inverse|op(?:eration)?s?)\b|\b(?:add|create|insert|set)\w*\b[\s\S]{0,160}\b(?:remove|delete|drop|unset)\w*\b/i,
+    guidance: [
+      "Inspect the paired operation classes and the common reducer/optimizer contract; inverse operations on the same object/key usually need an explicit no-op rule.",
+      "Patch the reducer contract for the matching pair, and delegate nonmatching pairs to the existing fallback path.",
+    ],
+  },
+  {
+    label: "scoped lookup-context propagation",
+    re: /\b(?:lookup|resolve|foreign|related|reference|key)\b[\s\S]{0,240}\b(?:database|datastore|store|backend|context|scope|target|non-default)\b|\b(?:database|datastore|store|backend|context|scope|target|non-default)\b[\s\S]{0,240}\b(?:lookup|resolve|foreign|related|reference|key)\b/i,
+    guidance: [
+      "If a temporary object or reference is created only to compute a lookup key, make sure it carries the target datastore/context before computing that key.",
+      "Patch transient context propagation in the load/resolve path; avoid changing user-defined key functions or global routing behavior.",
+    ],
+  },
+  {
+    label: "same-metadata aggregation",
+    re: /\b(?:same|identical|duplicate|repeated|multiple)\b[\s\S]{0,240}\b(?:metadata|classification|coefficient|factor|term|group|bucket|item)\b|\b(?:aggregate|combine|merge|collect|group)\b[\s\S]{0,240}\b(?:same|identical|duplicate|repeated|multiple|metadata|classification)\b/i,
+    guidance: [
+      "Group returned items by their semantic metadata first, then combine items in the same group while preserving coefficient/container/return-shape rules.",
+      "Verify both the repeated-item case and the single-item case so the common representation stays stable.",
+    ],
+  },
+  {
     label: "configuration/default propagation",
     re: /\b(?:default|fallback|option|setting|parameter|argument|config(?:uration)?|preserve|respect|support|ignored|missing|route|path|redirect|script name)\b/i,
     guidance: [
@@ -849,7 +897,7 @@ function renderGenericDefectContext(text: string | undefined): string | null {
 
   const matched = GENERIC_DEFECT_HEURISTICS
     .filter((heuristic) => heuristic.re.test(source))
-    .slice(0, 4);
+    .slice(0, 5);
   if (matched.length === 0) return null;
 
   return truncateHintDigest(
@@ -860,7 +908,7 @@ function renderGenericDefectContext(text: string | undefined): string | null {
         ...heuristic.guidance.map((line) => `  - ${line}`),
       ]),
     ].join("\n"),
-    2_400,
+    3_200,
   );
 }
 

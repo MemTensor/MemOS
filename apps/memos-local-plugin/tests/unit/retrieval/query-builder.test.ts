@@ -187,7 +187,7 @@ describe("retrieval/query-builder", () => {
       userText: [
         "new task",
         "",
-        "WRAPPER_PATH: /tmp/repair-exec",
+        "RUNNER_HANDLE: /tmp/repair-exec",
         "You need to fix a bug in the example-org/service-toolkit repository. Time limit: 30 minutes.",
         "",
         "[STRICT RULES]",
@@ -208,7 +208,7 @@ describe("retrieval/query-builder", () => {
     expect(cq.text).toContain("repo: example-org/service-toolkit");
     expect(cq.text).toContain("public route prefix");
     expect(cq.text).toContain("route normalization helper");
-    expect(cq.text).not.toContain("WRAPPER_PATH");
+    expect(cq.text).not.toContain("RUNNER_HANDLE");
     expect(cq.text).not.toContain("STRICT RULES");
     expect(cq.text).not.toContain("Time limit");
     expect(cq.text).not.toContain("TASK_COMPLETE");

@@ -197,8 +197,8 @@ describe("retrieval/tier2-experience", () => {
 
   it("uses policy title+trigger FTS instead of body-wide policy FTS", async () => {
     const titleHit = makePolicy("po_title_hit", {
-      title: "Fix Django regression by tightening conditional logic",
-      trigger: "when the task asks for a Django regression fix",
+      title: "Fix routing regression by tightening conditional logic",
+      trigger: "when the task asks for a routing regression fix",
       procedure: "Inspect the failing regression and add a targeted test.",
       sourceFeedbackIds: [],
       vec: null,
@@ -206,7 +206,7 @@ describe("retrieval/tier2-experience", () => {
     const bodyOnlyHit = makePolicy("po_body_noise", {
       title: "Unrelated policy",
       trigger: "when editing unrelated files",
-      procedure: "Fix Django regression by tightening conditional logic",
+      procedure: "Fix routing regression by tightening conditional logic",
       sourceFeedbackIds: [],
       vec: null,
     });
@@ -220,7 +220,7 @@ describe("retrieval/tier2-experience", () => {
 
     const out = await runTier2Experience(
       { repos: { policies: repo }, config: cfg },
-      { queryVec: null, ftsMatch: "Fix Django regression" },
+      { queryVec: null, ftsMatch: "Fix routing regression" },
     );
 
     expect(out.map((c) => String(c.refId))).toEqual(["po_title_hit"]);

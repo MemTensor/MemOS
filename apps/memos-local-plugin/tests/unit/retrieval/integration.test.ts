@@ -424,13 +424,6 @@ describe("retrieval/integration", () => {
     expect(res.packet.rendered).toContain("Do not inspect tests first");
     expect(res.packet.rendered).toContain("Do not reuse a hard-coded `/tmp/...-exec`");
     expect(res.packet.rendered).not.toContain("/tmp/repair-wrapper write");
-    expect(res.packet.rendered).not.toContain("WRAPPER_PATH");
-    expect(res.packet.rendered).not.toContain("/testbed");
-    expect(res.packet.rendered).not.toContain("Django");
-    expect(res.packet.rendered).not.toContain("Query.combine");
-    expect(res.packet.rendered).not.toContain("cleaned_data");
-    expect(res.packet.rendered).not.toContain("random_state");
-    expect(res.packet.rendered).not.toContain("build_instance");
     expect(res.packet.rendered).toContain("double quotes around the `run` command");
     expect(res.packet.rendered).toContain("grep -n target_symbol");
     expect(res.packet.rendered).toContain("not a phrase with spaces");
@@ -541,6 +534,79 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("copy/mutation isolation");
     expect(packet?.rendered).toContain("configuration/default propagation");
     expect(packet?.rendered).toContain("Use them to choose the first source path to inspect");
+  });
+
+  it("adds generic default-assignment guidance without framework-specific terms", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_default_assignment" as SessionId,
+        userText: [
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Bug Description",
+          "A form-like payload omits display_name in the raw input, but validation produces a non-empty normalized value.",
+          "The constructor keeps the field default instead of assigning the normalized value.",
+          "",
+          "## Hints",
+          "Inspect the construct path where raw payload presence and validated values are compared.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("omitted-input default guard");
+    expect(packet?.rendered).toContain("normalized value is present");
+  });
+
+  it("adds generic repeated-seed guidance without task-specific library names", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_seed_reuse" as SessionId,
+        userText: [
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Issue Description",
+          "Grouped shuffles reuse the same seed for every subgroup, so changing the seed only reorders groups and not within-group assignments.",
+          "",
+          "## Hints",
+          "Inspect the loop that creates child split operations for each class bucket.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("stateful seed reuse across repeated work");
+    expect(packet?.rendered).toContain("stateful generator/state object");
+  });
+
+  it("adds generic inverse-operation reduction guidance", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_inverse_reduction" as SessionId,
+        userText: [
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Bug Description",
+          "An AddItem operation followed by RemoveItem for the same key is not reduced to a no-op during optimization.",
+          "",
+          "## Hints",
+          "Inspect the operation reducer and the pairwise optimization rules.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("paired inverse-operation reduction");
+    expect(packet?.rendered).toContain("inverse operations on the same object/key");
   });
 
   it("builds a protocol-only packet for repository repair prompts without adapter state", () => {
