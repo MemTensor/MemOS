@@ -403,7 +403,7 @@ describe("retrieval/injector", () => {
     expect(packet.rendered).toContain("MemOS memory tools remain available");
   });
 
-  it("standalone math suppresses an isolated single solution skill but keeps advisory guidance", () => {
+  it("standalone math suppresses an isolated single solution skill and ungrounded guidance", () => {
     const { packet } = toPacket({
       ranked: [
         rc(skill("sk_single", { invocationGuide: "Use random walk recurrence." }), 0.9, 0.9),
@@ -433,11 +433,43 @@ describe("retrieval/injector", () => {
     });
 
     expect(packet.snippets).toHaveLength(0);
-    expect(packet.rendered).toContain("Method guidance");
-    expect(packet.rendered).toContain("Prefer checking modular constraints");
-    expect(packet.rendered).toContain("Avoid treating a cycle as a line");
+    expect(packet.rendered).toBe("");
+    expect(packet.rendered).not.toContain("Method guidance");
+    expect(packet.rendered).not.toContain("Prefer checking modular constraints");
+    expect(packet.rendered).not.toContain("Avoid treating a cycle as a line");
     expect(packet.rendered).not.toContain("Skill sk_single");
     expect(packet.rendered).not.toContain("memos_skill_get");
+  });
+
+  it("standalone math filters generic memories but keeps concrete prompt overlap", () => {
+    const generic = experience("p_generic");
+    generic.title = "Solve math competition problems with structured reasoning";
+    generic.trigger = "user requests solution to a math competition problem";
+    generic.procedure = "Analyze the problem step-by-step, ensuring logical consistency at each stage, and provide the final answer.";
+
+    const concrete = experience("p_octahedron");
+    concrete.title = "Model random walk on octahedron vertex graph";
+    concrete.trigger = "random walk on an octahedron graph";
+    concrete.procedure = "Represent the octahedron as a graph with 6 vertices and compute the finite random walk recurrence.";
+
+    const { packet } = toPacket({
+      ranked: [
+        rc(generic, 0.95, 0.95),
+        rc(concrete, 0.9, 0.9),
+      ],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_math_specific" as never,
+      episodeId: "ep_math_specific" as never,
+      standaloneMathFinalAnswer: true,
+      currentTaskText:
+        "An ant walks on vertices of a regular octahedron. What is the probability it returns after 2006 edges?",
+    });
+
+    expect(packet.snippets).toHaveLength(1);
+    expect(packet.rendered).toContain("Model random walk on octahedron vertex graph");
+    expect(packet.rendered).not.toContain("Solve math competition problems with structured reasoning");
   });
 
   it("standalone math keeps isolated geometry setup skills as advisory scaffolding", () => {

@@ -41,7 +41,11 @@ import type { RetrievalEventBus } from "./events.js";
 import { dedupeTraceEpisodeByEpisodeId } from "./dedupe-trace-episode.js";
 import { toPacket, renderSnippetForDebug } from "./injector.js";
 import { llmFilterCandidates } from "./llm-filter.js";
-import { STANDALONE_MATH_FINAL_ANSWER_TASK_KIND } from "./math-task.js";
+import {
+  isStandaloneMathFinalAnswerTask,
+  renderMathFinalAnswerProtocol,
+  STANDALONE_MATH_FINAL_ANSWER_TASK_KIND,
+} from "./math-task.js";
 import { rank, type RankedCandidate } from "./ranker.js";
 import { runTier1 } from "./tier1-skill.js";
 import { runTier2Experience } from "./tier2-experience.js";
@@ -504,6 +508,7 @@ async function runAll(
       decisionGuidance,
       standaloneMathFinalAnswer,
       taskProtocol,
+      currentTaskText: queryText,
     });
     // Surface the dropped-by-LLM candidates so the Logs page can show
     // "initial N → kept M" without the viewer having to re-run the
@@ -603,6 +608,9 @@ function isStandaloneMathFinalAnswerContext(ctx: RetrievalCtx): boolean {
 function renderTaskProtocol(ctx: RetrievalCtx): string | null {
   if (ctx.reason !== "turn_start") return null;
   const userText = (ctx as { userText?: string }).userText;
+  if (isStandaloneMathFinalAnswerTask(userText)) {
+    return renderMathFinalAnswerProtocol(userText);
+  }
   if (!isRepositoryRepairPrompt(userText)) return null;
   const shellPrefix = `COMMAND_WRAPPER run "cd REPO_ROOT && ..."`;
   const writePrefix = `COMMAND_WRAPPER write REPO_ROOT/path/to/file << 'EOF'`;

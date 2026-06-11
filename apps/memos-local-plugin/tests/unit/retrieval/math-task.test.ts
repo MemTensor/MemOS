@@ -86,6 +86,17 @@ describe("retrieval/math-task", () => {
     expect(protocol).toContain("Poll at most once");
     expect(protocol).toContain("finite vector-space or parity subset counts");
     expect(protocol).toContain("boundary or degenerate positions");
+    const forbiddenTerms = [
+      "SWE-Bench",
+      "EvoAgentBench",
+      "omni_",
+      "HMMT",
+      "patterns8",
+      "Django",
+    ];
+    for (const term of forbiddenTerms) {
+      expect(protocol).not.toContain(term);
+    }
   });
 
   it("merges the protocol without replacing real memory context", () => {

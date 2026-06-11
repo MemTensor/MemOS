@@ -1662,8 +1662,9 @@ export function createMemoryCore(
     let hubHits: RetrievalHitDTO[] = [];
     const ns = namespaceFor(turn.agent, turn);
     activeNamespace = ns;
+    const readOnlyTurnStart = turn.contextHints?.__memosReadOnlyTurnStart === true;
     const canUseProtocolFallback =
-      turn.contextHints?.__memosReadOnlyTurnStart === true || Boolean(turn.episodeId);
+      readOnlyTurnStart || Boolean(turn.episodeId);
     const protocolFallbackPacket = canUseProtocolFallback
       ? taskProtocolOnlyPacket({
           reason: "turn_start",
@@ -1756,17 +1757,19 @@ export function createMemoryCore(
           ? renderFinalHitsContext(final.hits)
           : packet.rendered;
         const injectedPolicyIds = collectInjectedPolicyIds(final.hits);
-        for (const policyId of injectedPolicyIds) {
-          handle.repos.episodePolicyInjections.inject({
-            episodeId: packet.episodeId,
-            policyId: policyId as PolicyId,
-            source: "turn_start",
-            now: Date.now(),
+        if (!readOnlyTurnStart) {
+          for (const policyId of injectedPolicyIds) {
+            handle.repos.episodePolicyInjections.inject({
+              episodeId: packet.episodeId,
+              policyId: policyId as PolicyId,
+              source: "turn_start",
+              now: Date.now(),
+            });
+          }
+          handle.repos.episodes.updateMeta(packet.episodeId, {
+            injectedPolicyIds,
           });
         }
-        handle.repos.episodes.updateMeta(packet.episodeId, {
-          injectedPolicyIds,
-        });
         return {
           query,
           hits: final.hits,
@@ -1809,6 +1812,16 @@ export function createMemoryCore(
 
       return await fullRetrieval;
     } catch (err) {
+      if (protocolFallbackResult && protocolFallbackPacket) {
+        packet = protocolFallbackPacket;
+        log.warn("turn_start.protocol_fallback_after_retrieval_error", {
+          agent: turn.agent,
+          sessionId: turn.sessionId,
+          err: err instanceof Error ? err.message : String(err),
+          contextChars: protocolFallbackPacket.rendered.length,
+        });
+        return protocolFallbackResult;
+      }
       ok = false;
       // Surface terminal failures as a `plugin_error` ARMS event so
       // the dashboards can see retrieval availability per build.

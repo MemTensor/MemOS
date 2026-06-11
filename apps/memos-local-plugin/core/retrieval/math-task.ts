@@ -63,7 +63,7 @@ function isCodeGenerationTask(normalized: string): boolean {
 
 export function renderMathFinalAnswerProtocol(text?: string): string {
   void text;
-  return [
+  const lines = [
     MATH_FINAL_ANSWER_PROTOCOL_TITLE,
     "",
     "This is a standalone math task. Finish the solution in this reply; never answer with a plan, next step, placeholder, or request for more information.",
@@ -75,17 +75,20 @@ export function renderMathFinalAnswerProtocol(text?: string): string {
     "The script must use only local computation, print the needed value, and be small enough to finish immediately. Do not launch broad brute-force searches over large state spaces.",
     "If a script errors, times out, reports that it is still running, or prints no useful result, do not treat it as verification. Poll at most once, then kill or abandon it and finish by a checked manual derivation; do not start a second exploratory script.",
     "For finite graph/path/route tasks, do not rely only on symmetry or invariants; first verify with exact DFS/DP/enumeration when the state space is small enough, then explain the resulting count.",
+    "For finite-step random walks, Markov chains, or repeated stochastic processes, never replace the requested n-step probability with the stationary or limiting distribution unless the problem explicitly asks for a limit. Compute the finite recurrence, matrix power, or eigenvalue expression and keep small correction terms. Simplify recurrences into a closed form with powers/factorials/binomials when possible; do not box an enormous unsimplified rational if a compact exact form is available.",
     "For reachability problems where intermediate states may exceed the target range, prefer a forward bounded search and repeat with a larger bound only if both runs finish immediately; do not conclude all states are reachable from a reverse move that is only a preimage generator.",
     "For explicit finite sums, products, or polynomial interpolation, compute the exact rational/symbolic value with a small script first, then give the algebraic justification.",
     "",
     "Use this compact checklist before finalizing:",
     "- First model the mathematical object structurally; do not reduce the task to an aggregate count until the construction is proved sufficient.",
-    "- For counting/probability, define the sample space, condition on the exact event stated, and check overcount/undercount. For cyclic routes, decide explicitly whether the start point, direction, and rotation are fixed before multiplying.",
+    "- For counting/probability, define the sample space, condition on the exact event stated, and check overcount/undercount. For cyclic routes, decide explicitly whether the start point, direction, and rotation are fixed before multiplying. For any upper bound, verify an explicit construction or recurrence actually attains it under all adjacency/order constraints.",
+    "- If the prompt asks for a transformed value, such as a rounded decimal, m+n, 100m+n, or a simplified fraction, compute that requested final value after deriving intermediate quantities; box the requested value, not an intermediate numerator, denominator, probability, or expectation.",
     "- For finite vector-space or parity subset counts, distinguish ordered tuples from unordered sets, verify the generated element is nonzero and new, and divide only by the exact multiplicity you proved.",
     "- For algebra/number theory, verify every candidate solution, boundary case, and divisibility or parity condition before finalizing. For polynomial or functional identities, check low-degree exceptional families after any leading-term argument.",
     "- For geometry, reconstruct only the relations stated in text. If a diagram is absent, do not ask for it; solve from the textual constraints and state the best determined answer. In optimization problems, check whether boundary or degenerate positions are allowed before using them as minima.",
     "- Before writing the final answer, re-read the original problem constraints once, then give exactly one boxed answer.",
-  ].join("\n");
+  ];
+  return lines.join("\n");
 }
 
 export function mergeMathFinalAnswerProtocol(context: string, text?: string): string {

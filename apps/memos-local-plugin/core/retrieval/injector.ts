@@ -90,6 +90,12 @@ export interface InjectorInput {
    * when no historical snippets match, the host still receives the protocol.
    */
   taskProtocol?: string | null;
+  /**
+   * Current prompt text used only for standalone math memory specificity
+   * checks. Retrieval may surface broad "math contest" memories; comparing
+   * them with the current prompt keeps advisory memories concrete.
+   */
+  currentTaskText?: string;
 }
 
 export interface InjectorResult {
@@ -104,9 +110,13 @@ export function toPacket(input: InjectorInput): InjectorResult {
     input.skillSummaryChars ?? DEFAULT_SKILL_SUMMARY_CHARS;
   const standaloneMathFinalAnswer = input.standaloneMathFinalAnswer === true;
   const mapping: RankedSnippet[] = [];
+  const coveredRanked = suppressExperiencesCoveredBySkills(input.ranked);
   const ranked = standaloneMathFinalAnswer
-    ? suppressIsolatedMathSkill(suppressExperiencesCoveredBySkills(input.ranked))
-    : suppressExperiencesCoveredBySkills(input.ranked);
+    ? suppressLowSpecificityStandaloneMathCandidates(
+        suppressIsolatedMathSkill(coveredRanked),
+        input.currentTaskText,
+      )
+    : coveredRanked;
   for (const r of ranked) {
     const snippet = renderSnippet(r.candidate, {
       skillMode,
@@ -224,6 +234,166 @@ function shouldKeepIsolatedMathSkill(skill: SkillCandidate): boolean {
     text,
   );
 }
+
+function suppressLowSpecificityStandaloneMathCandidates(
+  ranked: readonly RankedCandidate[],
+  taskText: string | undefined,
+): RankedCandidate[] {
+  const taskTerms = extractSpecificMathTerms(taskText);
+  return ranked.filter((r) => {
+    const c = r.candidate;
+    if (c.refKind === "trace" || c.refKind === "episode") {
+      return hasEnoughTaskOverlap(candidateTextForSpecificity(c), taskTerms, 2);
+    }
+    if (c.refKind === "world-model") {
+      return hasEnoughTaskOverlap(candidateTextForSpecificity(c), taskTerms, 3);
+    }
+    if (c.refKind === "experience") {
+      const text = candidateTextForSpecificity(c);
+      if (isGenericStandaloneMathMemory(text)) {
+        return hasEnoughTaskOverlap(text, taskTerms, 2);
+      }
+      return hasEnoughTaskOverlap(text, taskTerms, 2);
+    }
+    if (c.refKind === "skill") {
+      const skill = c as SkillCandidate;
+      if (shouldKeepIsolatedMathSkill(skill)) return true;
+      const text = candidateTextForSpecificity(c);
+      if (isGenericStandaloneMathMemory(text)) {
+        return hasEnoughTaskOverlap(text, taskTerms, 2);
+      }
+      return hasEnoughTaskOverlap(text, taskTerms, 2);
+    }
+    return true;
+  });
+}
+
+function hasEnoughTaskOverlap(
+  candidateText: string,
+  taskTerms: ReadonlySet<string>,
+  minOverlap: number,
+): boolean {
+  if (taskTerms.size === 0) return !isGenericStandaloneMathMemory(candidateText);
+  const candidateTerms = extractSpecificMathTerms(candidateText);
+  let overlap = 0;
+  for (const term of candidateTerms) {
+    if (!taskTerms.has(term)) continue;
+    overlap += 1;
+    if (overlap >= minOverlap) return true;
+  }
+  return false;
+}
+
+function candidateTextForSpecificity(c: TierCandidate): string {
+  if (c.refKind === "skill") {
+    const skill = c as SkillCandidate;
+    return `${skill.skillName}\n${skill.invocationGuide}`;
+  }
+  if (c.refKind === "experience") {
+    const exp = c as ExperienceCandidate;
+    return [
+      exp.title,
+      exp.trigger,
+      exp.procedure,
+      exp.verification,
+      exp.boundary,
+      ...exp.decisionGuidance.preference,
+      ...exp.decisionGuidance.antiPattern,
+    ].join("\n");
+  }
+  if (c.refKind === "trace") {
+    const trace = c as TraceCandidate;
+    return [
+      trace.summary,
+      trace.userText,
+      trace.agentText,
+      reflectionAsText(trace.reflection),
+      ...trace.tags,
+    ].filter(Boolean).join("\n");
+  }
+  if (c.refKind === "episode") {
+    return (c as EpisodeCandidate).summary;
+  }
+  if (c.refKind === "world-model") {
+    const world = c as WorldModelCandidate;
+    return `${world.title}\n${world.body}`;
+  }
+  return "";
+}
+
+function isGenericStandaloneMathMemory(text: string): boolean {
+  const normalized = text.toLowerCase();
+  return [
+    /\bsolve\s+(?:the\s+)?(?:following\s+)?math competition problems?\b/,
+    /\buser requests?\s+(?:a\s+)?solution to a math competition problem\b/,
+    /\banaly[sz]e the problem step-by-step\b/,
+    /\bprovide the final answer\b/,
+    /\bensuring logical consistency\b/,
+    /\bmathematical problem-solving environment\b/,
+    /\bcompetition tasks\b/,
+    /\bverifier feedback loop\b/,
+  ].some((re) => re.test(normalized));
+}
+
+function extractSpecificMathTerms(text: string | undefined): Set<string> {
+  const normalized = String(text ?? "").toLowerCase();
+  const terms = new Set<string>();
+  for (const match of normalized.matchAll(/[a-z][a-z0-9_'-]{3,}|\d{2,}/g)) {
+    const term = normalizeSpecificTerm(match[0]!);
+    if (!term || GENERIC_MATH_TERMS.has(term)) continue;
+    terms.add(term);
+  }
+  return terms;
+}
+
+function normalizeSpecificTerm(term: string): string {
+  let out = term.replace(/^'+|'+$/g, "");
+  if (out.length > 5 && out.endsWith("ies")) out = `${out.slice(0, -3)}y`;
+  else if (out.length > 6 && out.endsWith("ing")) out = out.slice(0, -3);
+  else if (out.length > 5 && out.endsWith("ed")) out = out.slice(0, -2);
+  else if (out.length > 4 && out.endsWith("s")) out = out.slice(0, -1);
+  return out;
+}
+
+const GENERIC_MATH_TERMS = new Set([
+  "answer",
+  "asked",
+  "careful",
+  "carefully",
+  "check",
+  "competition",
+  "compute",
+  "condition",
+  "constraints",
+  "contest",
+  "derive",
+  "determine",
+  "equation",
+  "evaluate",
+  "example",
+  "final",
+  "find",
+  "format",
+  "given",
+  "important",
+  "logical",
+  "math",
+  "mathematical",
+  "method",
+  "problem",
+  "provide",
+  "reasoning",
+  "request",
+  "solution",
+  "solve",
+  "specific",
+  "stage",
+  "step",
+  "structured",
+  "task",
+  "think",
+  "verify",
+]);
 
 // ─── Per-candidate renderers ────────────────────────────────────────────────
 
@@ -474,10 +644,13 @@ function renderWholePacket(
 ): string {
   const standaloneMathFinalAnswer = opts.standaloneMathFinalAnswer === true;
   const taskProtocol = opts.taskProtocol?.trim();
-  const guidanceBlock = renderDecisionGuidance(
-    opts.decisionGuidance,
-    standaloneMathFinalAnswer,
-  );
+  const guidanceBlock =
+    standaloneMathFinalAnswer && snippets.length === 0
+      ? null
+      : renderDecisionGuidance(
+          opts.decisionGuidance,
+          standaloneMathFinalAnswer,
+        );
   if (snippets.length === 0 && !guidanceBlock && !taskProtocol) return "";
 
   const header = taskProtocol
