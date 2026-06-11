@@ -38,6 +38,7 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
     const ownerAgentKind = parseOwnerFilter(params.get("ownerAgentKind")) || namespace?.ownerAgentKind || undefined;
     const ownerProfileId = parseOwnerFilter(params.get("ownerProfileId")) || namespace?.ownerProfileId || undefined;
     const q = params.get("q") || undefined;
+    const includeAllNamespaces = params.get("includeAllNamespaces") === "true";
     // When `groupByTurn=true`, pagination treats each (episodeId, turnId)
     // pair as one "memory" — matching the viewer's grouped display where
     // a user query + its tool steps + final reply collapse into one card.
@@ -52,6 +53,7 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       ownerProfileId,
       q,
       groupByTurn,
+      includeAllNamespaces,
     });
     const { traces, hasMore } = trimTracePage(rawTraces, limit, groupByTurn);
     const total = includeTotal
@@ -61,6 +63,7 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
           ownerProfileId,
           q,
           groupByTurn,
+          includeAllNamespaces,
         })
       : undefined;
     // When grouping, `traces.length === limit` is no longer a reliable
@@ -86,7 +89,7 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const trace = await deps.core.getTrace(id);
+    const trace = await deps.core.getTrace(id, undefined, { includeAllNamespaces: true });
     if (!trace) {
       writeError(ctx, 404, "not_found", `trace not found: ${id}`);
       return;
@@ -110,7 +113,7 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       agentText?: string;
       tags?: string[];
     }>(ctx);
-    const updated = await deps.core.updateTrace(id, body);
+    const updated = await deps.core.updateTrace(id, body, { includeAllNamespaces: true });
     if (!updated) {
       writeError(ctx, 404, "not_found", `trace not found: ${id}`);
       return;
@@ -128,7 +131,7 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    return await deps.core.deleteTrace(id);
+    return await deps.core.deleteTrace(id, { includeAllNamespaces: true });
   });
 
   /**
@@ -145,7 +148,7 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "ids[] is required");
       return;
     }
-    return await deps.core.deleteTraces(ids);
+    return await deps.core.deleteTraces(ids, { includeAllNamespaces: true });
   });
 
   /**
@@ -171,7 +174,7 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       scope: scope ?? null,
       target: body.target ?? null,
       sharedAt: scope ? Date.now() : null,
-    });
+    }, { includeAllNamespaces: true });
     if (!updated) {
       writeError(ctx, 404, "not_found", `trace not found: ${id}`);
       return;
@@ -185,7 +188,10 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const traces = await deps.core.timeline({ episodeId: id });
+    const traces = await deps.core.timeline({
+      episodeId: id,
+      includeAllNamespaces: true,
+    });
     return { episodeId: id, traces };
   });
 }
