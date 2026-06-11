@@ -536,6 +536,7 @@ describe("retrieval/integration", () => {
 
     expect(packet?.rendered).toContain("self.cleaned_data");
     expect(packet?.rendered).toContain("normalized_value");
+    expect(packet?.rendered).toContain("do not add a condition that an earlier guard already made impossible");
     expect(packet?.rendered).toContain("grep -R -n 'self.cleaned_data' .");
     expect(packet?.rendered).not.toContain("`e.g`");
     expect(packet?.rendered).not.toContain("data payload (e.g");

@@ -872,6 +872,7 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
     re: /\b(?:omit(?:ted|s|ting)?|missing|not provided|absent|blank|empty)\b[\s\S]{0,240}\b(?:default|fallback|normalized|validated|parsed|derived|non-empty|value)\b|\b(?:default|fallback|normalized|validated|parsed|derived|non-empty|value)\b[\s\S]{0,240}\b(?:omit(?:ted|s|ting)?|missing|not provided|absent|blank|empty)\b/i,
     guidance: [
       "Inspect the guard that skips assignment when raw input omits a field or key; if a later normalized value is present, the default-preserving branch should not block that assignment.",
+      "Before adding a new guard condition, compare it with earlier `continue`/`return` guards in the same block; do not add a condition that an earlier guard already made impossible.",
       "Patch the construct/assignment path where raw presence and normalized presence meet, not every caller that happens to supply a default.",
     ],
   },
