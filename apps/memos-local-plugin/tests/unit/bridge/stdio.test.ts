@@ -159,4 +159,63 @@ describe("stdio transport", () => {
     expect(server.connected).toBe(false);
     expect(core.shutdown).toHaveBeenCalled();
   });
+
+  it("closes the stdio transport after an idle timeout", async () => {
+    const clientOut = new PassThrough();
+    const serverOut = new PassThrough();
+    const core = stubCore();
+    const server = startStdioServer({
+      core,
+      stdin: clientOut,
+      stdout: serverOut,
+      logToStderr: false,
+      idleTimeoutMs: 20,
+    });
+
+    const finished = await Promise.race([
+      server.done.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 200)),
+    ]);
+
+    expect(finished).toBe(true);
+    expect(server.connected).toBe(false);
+    expect(core.shutdown).not.toHaveBeenCalled();
+  });
+
+  it("does not close the stdio transport while a request is in flight", async () => {
+    const clientOut = new PassThrough();
+    const serverOut = new PassThrough();
+    const core = stubCore();
+    (core.health as any).mockImplementation(
+      async () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                ok: true,
+                version: "slow",
+                uptimeMs: 1,
+                agent: "openclaw",
+                paths: { home: "", config: "", db: "", skills: "", logs: "" },
+                llm: { available: false, provider: "" },
+                embedder: { available: false, provider: "", dim: 0 },
+              }),
+            60,
+          ),
+        ),
+    );
+    const server = startStdioServer({
+      core,
+      stdin: clientOut,
+      stdout: serverOut,
+      logToStderr: false,
+      idleTimeoutMs: 20,
+    });
+    const client = createStdioClient(serverOut, clientOut);
+
+    const response = client.request<{ version: string }>("core.health", {});
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(server.connected).toBe(true);
+    await expect(response).resolves.toMatchObject({ version: "slow" });
+  });
 });

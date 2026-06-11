@@ -36,6 +36,7 @@ const url = require("node:url") as typeof import("node:url");
 const BRIDGE_STATUS_HEARTBEAT_MS = 5_000;
 const BRIDGE_STATUS_STALE_MS = 20_000;
 const BRIDGE_STATUS_FILE = "bridge-status.json";
+const HEADLESS_BRIDGE_IDLE_TTL_MS = 30 * 60 * 1000;
 
 interface BridgeArgs {
   daemon: boolean;
@@ -108,6 +109,43 @@ function removePidFile(pidPath: string): void {
   } catch {
     /* best-effort; another bridge may have overwritten */
   }
+}
+
+function headlessRegistryPath(agent: string): string {
+  const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
+  return path.join(
+    process.env.HOME ?? "/tmp",
+    agentHome,
+    "memos-plugin",
+    "daemon",
+    "headless-bridges.json",
+  );
+}
+
+function removeHeadlessRegistryEntry(agent: string): void {
+  const registryPath = headlessRegistryPath(agent);
+  try {
+    const raw = JSON.parse(fs.readFileSync(registryPath, "utf8"));
+    const bridges = Array.isArray(raw?.bridges) ? raw.bridges : [];
+    const next = bridges.filter((entry: unknown) => {
+      if (!entry || typeof entry !== "object") return false;
+      return Number((entry as { pid?: unknown }).pid) !== process.pid;
+    });
+    if (next.length === bridges.length) return;
+    const tmp = `${registryPath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ bridges: next }, null, 2) + "\n", "utf8");
+    fs.renameSync(tmp, registryPath);
+  } catch {
+    /* best-effort; Python reaper will clean dead entries on next start */
+  }
+}
+
+function headlessIdleTimeoutMs(): number {
+  const raw = process.env.MEMOS_HEADLESS_BRIDGE_IDLE_TTL_SEC;
+  if (!raw) return HEADLESS_BRIDGE_IDLE_TTL_MS;
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return Math.floor(seconds * 1000);
 }
 
 function killExistingBridge(pidPath: string, timeoutMs = 5000): void {
@@ -313,7 +351,10 @@ async function main(): Promise<void> {
   // can fall back to host before init returns. Start stdio first so that
   // fallback has a transport instead of tripping the lazy bridge guard.
   if (!args.daemon) {
-    stdio = startStdioServer({ core });
+    stdio = startStdioServer({
+      core,
+      idleTimeoutMs: args.noViewer ? headlessIdleTimeoutMs() : undefined,
+    });
     bridgeStatus?.markConnected();
     bridgeHeartbeat = bridgeStatus?.startHeartbeat();
     void stdio.done.then(() => {
@@ -463,6 +504,7 @@ async function main(): Promise<void> {
   const shutdown = async (sig: string) => {
     process.stderr.write(`bridge: received ${sig}, shutting down\n`);
     removeOwnedPidFile();
+    if (args.noViewer) removeHeadlessRegistryEntry(args.agent);
     if (viewer) {
       try {
         await viewer.close();
@@ -500,6 +542,7 @@ async function main(): Promise<void> {
 
   // No viewer (headless bridge) — clean exit.
   removeOwnedPidFile();
+  if (args.noViewer) removeHeadlessRegistryEntry(args.agent);
   await core.shutdown();
   process.exit(0);
 }

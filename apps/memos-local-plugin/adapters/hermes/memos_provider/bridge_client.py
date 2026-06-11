@@ -17,8 +17,10 @@ import json
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import threading
+import time
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -31,6 +33,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 HOST_HANDLER_WAIT_SECONDS = 5.0
+HEADLESS_REGISTRY_FILENAME = "headless-bridges.json"
+HEADLESS_STALE_SECONDS = float(os.environ.get("MEMOS_HEADLESS_BRIDGE_STALE_SEC", "1800"))
+HEADLESS_TERMINATE_TIMEOUT_SECONDS = 2.0
+HEADLESS_REGISTRY_LOCK_TIMEOUT_SECONDS = 2.0
+HEADLESS_REGISTRY_LOCK_STALE_SECONDS = 30.0
 
 
 def _installed_node_binary(plugin_root: Path) -> str | None:
@@ -49,6 +56,237 @@ def _bridge_script(plugin_root: Path) -> Path:
     if compiled.exists():
         return compiled
     return plugin_root / "bridge.cts"
+
+
+def _headless_registry_path(plugin_root: Path) -> Path:
+    return plugin_root / "daemon" / HEADLESS_REGISTRY_FILENAME
+
+
+def _read_headless_registry(path: Path) -> list[dict[str, Any]]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    bridges = raw.get("bridges") if isinstance(raw, dict) else raw
+    if not isinstance(bridges, list):
+        return []
+    return [entry for entry in bridges if isinstance(entry, dict)]
+
+
+def _write_headless_registry(path: Path, bridges: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.{time.monotonic_ns()}.tmp"
+    )
+    tmp.write_text(
+        json.dumps({"bridges": bridges}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+@contextlib.contextmanager
+def _headless_registry_lock(
+    path: Path,
+    timeout: float = HEADLESS_REGISTRY_LOCK_TIMEOUT_SECONDS,
+):
+    lock_dir = path.with_suffix(path.suffix + ".lock")
+    lock_dir.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
+    acquired = False
+
+    while True:
+        try:
+            lock_dir.mkdir()
+            acquired = True
+            with contextlib.suppress(Exception):
+                (lock_dir / "owner").write_text(
+                    f"pid={os.getpid()} started_at={time.time()}\n",
+                    encoding="utf-8",
+                )
+            break
+        except FileExistsError:
+            stale = False
+            with contextlib.suppress(Exception):
+                stale = time.time() - lock_dir.stat().st_mtime > HEADLESS_REGISTRY_LOCK_STALE_SECONDS
+            if stale:
+                with contextlib.suppress(Exception):
+                    shutil.rmtree(lock_dir)
+                continue
+            if time.monotonic() >= deadline:
+                yield False
+                return
+            time.sleep(0.05)
+
+    try:
+        yield True
+    finally:
+        if acquired:
+            with contextlib.suppress(Exception):
+                shutil.rmtree(lock_dir)
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _pid_command(pid: int) -> str:
+    try:
+        out = subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "command="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=1.0,
+        )
+    except Exception:
+        return ""
+    return out.strip()
+
+
+def _is_headless_bridge_command(command: str, agent: str) -> bool:
+    if not command:
+        return False
+    return (
+        ("bridge.cjs" in command or "bridge.cts" in command)
+        and "--no-viewer" in command
+        and f"--agent={agent}" in command
+    )
+
+
+def _terminate_pid(pid: int, timeout: float = HEADLESS_TERMINATE_TIMEOUT_SECONDS) -> None:
+    if not _pid_alive(pid):
+        return
+    with contextlib.suppress(OSError):
+        os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return
+        time.sleep(0.05)
+    with contextlib.suppress(OSError):
+        os.kill(pid, signal.SIGKILL)
+
+
+def _entry_pid(entry: dict[str, Any]) -> int:
+    try:
+        return int(entry.get("pid") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _entry_parent_pid(entry: dict[str, Any]) -> int:
+    try:
+        return int(entry.get("parentPid") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _entry_started_at(entry: dict[str, Any]) -> float:
+    try:
+        return float(entry.get("startedAt") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _reap_stale_headless_bridges(plugin_root: Path, agent: str) -> None:
+    registry_path = _headless_registry_path(plugin_root)
+    with _headless_registry_lock(registry_path) as locked:
+        if not locked:
+            logger.warning("MemOS: headless bridge registry lock timed out during reap")
+            return
+        _reap_stale_headless_bridges_locked(registry_path, agent)
+
+
+def _reap_stale_headless_bridges_locked(registry_path: Path, agent: str) -> None:
+    now = time.time()
+    keep: list[dict[str, Any]] = []
+    changed = False
+
+    for entry in _read_headless_registry(registry_path):
+        if entry.get("agent") not in (None, agent):
+            keep.append(entry)
+            continue
+
+        pid = _entry_pid(entry)
+        if not _pid_alive(pid):
+            changed = True
+            continue
+
+        parent_pid = _entry_parent_pid(entry)
+        parent_dead = parent_pid > 0 and not _pid_alive(parent_pid)
+        legacy_stale = parent_pid <= 0 and now - _entry_started_at(entry) > HEADLESS_STALE_SECONDS
+        if parent_dead or legacy_stale:
+            if not _is_headless_bridge_command(_pid_command(pid), agent):
+                logger.warning(
+                    "MemOS: dropping stale headless bridge registry entry for non-bridge pid=%s",
+                    pid,
+                )
+                changed = True
+                continue
+            logger.warning("MemOS: reaping stale headless bridge pid=%s", pid)
+            _terminate_pid(pid)
+            changed = True
+            continue
+
+        keep.append(entry)
+
+    if changed:
+        _write_headless_registry(registry_path, keep)
+
+
+def _register_headless_bridge(plugin_root: Path, *, pid: int, agent: str) -> None:
+    registry_path = _headless_registry_path(plugin_root)
+    with _headless_registry_lock(registry_path) as locked:
+        if not locked:
+            logger.warning("MemOS: headless bridge registry lock timed out during register")
+            return
+        _register_headless_bridge_locked(registry_path, pid=pid, agent=agent)
+
+
+def _register_headless_bridge_locked(registry_path: Path, *, pid: int, agent: str) -> None:
+    bridges = [
+        entry
+        for entry in _read_headless_registry(registry_path)
+        if _entry_pid(entry) != pid
+    ]
+    bridges.append(
+        {
+            "pid": pid,
+            "parentPid": os.getpid(),
+            "startedAt": time.time(),
+            "agent": agent,
+        }
+    )
+    _write_headless_registry(registry_path, bridges)
+
+
+def _unregister_headless_bridge(plugin_root: Path, pid: int) -> None:
+    registry_path = _headless_registry_path(plugin_root)
+    with _headless_registry_lock(registry_path) as locked:
+        if not locked:
+            logger.warning("MemOS: headless bridge registry lock timed out during unregister")
+            return
+        _unregister_headless_bridge_locked(registry_path, pid)
+
+
+def _unregister_headless_bridge_locked(registry_path: Path, pid: int) -> None:
+    bridges = _read_headless_registry(registry_path)
+    next_bridges = [entry for entry in bridges if _entry_pid(entry) != pid]
+    if len(next_bridges) != len(bridges):
+        _write_headless_registry(registry_path, next_bridges)
+
+
+def _best_effort_registry_step(label: str, fn: Callable[[], None]) -> None:
+    try:
+        fn()
+    except Exception as err:
+        logger.warning("MemOS: headless bridge registry %s failed: %s", label, err)
 
 
 class BridgeError(RuntimeError):
@@ -100,6 +338,8 @@ class MemosBridgeClient:
         self._closed = False
 
         plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+        self._plugin_root = plugin_root
+        self._no_viewer = no_viewer
         node = (
             node_binary
             or os.environ.get("MEMOS_NODE_BINARY")
@@ -110,6 +350,11 @@ class MemosBridgeClient:
         script_path = Path(bridge_path) if bridge_path else _bridge_script(plugin_root)
         script = str(script_path)
         env = {**os.environ, **(extra_env or {})}
+        if no_viewer:
+            _best_effort_registry_step(
+                "reap",
+                lambda: _reap_stale_headless_bridges(plugin_root, agent),
+            )
 
         # Prefer the compiled CommonJS bridge from packaged installs. The raw
         # TypeScript entry remains as a development fallback and needs `tsx`
@@ -143,6 +388,11 @@ class MemosBridgeClient:
             env=env,
             cwd=str(plugin_root),
         )
+        if no_viewer:
+            _best_effort_registry_step(
+                "register",
+                lambda: _register_headless_bridge(plugin_root, pid=self.pid, agent=agent),
+            )
         self._reader = threading.Thread(
             target=self._read_loop,
             daemon=True,
@@ -284,6 +534,12 @@ class MemosBridgeClient:
                 }
                 entry["event"].set()
             self._pending.clear()
+
+        if self._no_viewer:
+            _best_effort_registry_step(
+                "unregister",
+                lambda: _unregister_headless_bridge(self._plugin_root, pid),
+            )
 
     # ─── Internals ──
 
