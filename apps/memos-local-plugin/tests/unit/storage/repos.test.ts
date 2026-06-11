@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
 
+import { API_LOG_RETENTION_LIMIT } from "../../../core/storage/repos/api_logs.js";
 import { makeTmpDb } from "../../helpers/tmp-db.js";
 
 function vec(arr: number[]): Float32Array {
   return new Float32Array(arr);
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(predicate()).toBe(true);
 }
 
 describe("storage/repos — happy paths", () => {
@@ -435,6 +445,34 @@ describe("storage/repos — happy paths", () => {
 
       repos.kv.del("flags");
       expect(repos.kv.get("flags", null)).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("api_logs: asynchronously keeps only the newest retention window", async () => {
+    const { repos, cleanup } = makeTmpDb();
+    try {
+      repos.kv.set("api_logs.retention_sentinel", { kept: true });
+
+      for (let i = 0; i < API_LOG_RETENTION_LIMIT + 5; i++) {
+        repos.apiLogs.insert({
+          toolName: "memos_search",
+          input: { i },
+          output: { ok: true },
+          durationMs: 1,
+          success: true,
+          calledAt: i,
+        });
+      }
+
+      expect(repos.apiLogs.count()).toBe(API_LOG_RETENTION_LIMIT + 5);
+      await waitUntil(() => repos.apiLogs.count() === API_LOG_RETENTION_LIMIT);
+
+      expect(repos.apiLogs.count()).toBe(API_LOG_RETENTION_LIMIT);
+      expect(repos.apiLogs.list({ limit: 1 })[0]!.calledAt).toBe(API_LOG_RETENTION_LIMIT + 4);
+      expect(repos.apiLogs.list({ limit: 1, offset: API_LOG_RETENTION_LIMIT - 1 })[0]!.calledAt).toBe(5);
+      expect(repos.kv.get<{ kept: boolean }>("api_logs.retention_sentinel", { kept: false })).toEqual({ kept: true });
     } finally {
       cleanup();
     }
