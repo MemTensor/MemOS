@@ -331,7 +331,6 @@ function isGenericStandaloneMathMemory(text: string): boolean {
     /\bensuring logical consistency\b/,
     /\bmathematical problem-solving environment\b/,
     /\bcompetition tasks\b/,
-    /\bverifier feedback loop\b/,
   ].some((re) => re.test(normalized));
 }
 
