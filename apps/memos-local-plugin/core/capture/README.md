@@ -148,6 +148,34 @@ Failures in the batched call (LLM throw, malformed JSON, length mismatch)
 are logged as a `stage: "batch"` warning and capture **automatically falls
 back** to the per-step path — no traces are lost.
 
+## 6b. Downstream preview for long per-step reflection
+
+For long episodes, `batchMode: "auto"` still falls back to per-step scoring
+when `stepCount > batchThreshold`. Operators can enrich that fallback without
+making it serial:
+
+```yaml
+algorithm:
+  capture:
+    reflectionContextMode: task_downstream
+    longEpisodeReflectMode: per_step_downstream
+```
+
+This keeps `runConcurrently(...)` intact. Before launching the per-step work,
+capture precomputes a read-only preview for each step from the already
+normalized episode:
+
+- up to `downstreamStepCount` following steps, capped at 3;
+- labels are always `step+1`, `step+2`, `step+3`;
+- `text` steps are inserted as standalone downstream text blocks;
+- `tooluse` steps include tool names and tool output;
+- if a downstream tool step already has adapter/extracted reflection, that
+  existing reflection is included; newly synthesized reflections from the
+  same run are not used, so there is no reverse-order dependency.
+
+`reflectionContextMode: task` is the default, preserving task-summary
+enrichment while leaving downstream preview opt-in.
+
 ## 7. Embedding
 
 - When `config.capture.embedTraces=true` and `embedder` is non-null, we

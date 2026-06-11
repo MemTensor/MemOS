@@ -45,6 +45,7 @@ export interface FilterInput {
 export interface FilterDeps {
   llm: LlmClient | null;
   log: Logger;
+  timeoutMs?: number;
   config: Pick<
     RetrievalConfig,
     | "llmFilterEnabled"
@@ -66,6 +67,7 @@ export interface FilterResult {
     | "no_llm"
     | "below_threshold"
     | "empty_query"
+    | "deferred_to_final"
     | "llm_kept_all"
     | "llm_filtered"
     // The LLM was supposed to run but the call failed / parsed badly.
@@ -76,7 +78,7 @@ export interface FilterResult {
   /**
    * The LLM's self-report on whether the *kept* candidates are enough
    * to answer `query`, or whether the caller should widen recall /
-   * run a follow-up `memory_search`. `null` when the filter didn't
+   * run a follow-up `memos_search`. `null` when the filter didn't
    * run (disabled / passthrough / failure paths).
    */
   sufficient: boolean | null;
@@ -137,6 +139,7 @@ ${list}`,
         phase: "retrieve",
         episodeId: input.episodeId,
         temperature: 0,
+        timeoutMs: deps.timeoutMs,
         // Output is only ordered indices + one bool, but the list can
         // legitimately be as long as the ranked candidates.
         maxTokens: filterOutputTokenBudget(ranked.length),

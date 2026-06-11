@@ -46,14 +46,12 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       q,
       ownerAgentKind,
       ownerProfileId,
-      includeAllNamespaces: true,
     });
     const total = await deps.core.countPolicies({
       status,
       q,
       ownerAgentKind,
       ownerProfileId,
-      includeAllNamespaces: true,
     });
     return {
       policies,
@@ -70,7 +68,7 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const policy = await deps.core.getPolicy(id, undefined, { includeAllNamespaces: true });
+    const policy = await deps.core.getPolicy(id);
     if (!policy) {
       writeError(ctx, 404, "not_found", `policy not found: ${id}`);
       return;
@@ -139,7 +137,7 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
     }
     let updated = hasContent
       ? await deps.core.updatePolicy(id, contentPatch)
-      : await deps.core.getPolicy(id, undefined, { includeAllNamespaces: true });
+      : await deps.core.getPolicy(id);
     if (!updated) {
       writeError(ctx, 404, "not_found", `policy not found: ${id}`);
       return;
@@ -168,7 +166,7 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       return;
     }
     const body = parseJson<{
-      scope?: "private" | "local" | "public" | "hub" | null;
+      scope?: "private" | "public" | "hub" | null;
       target?: string | null;
     }>(ctx);
     const scope = body.scope === undefined ? "public" : body.scope;
@@ -242,14 +240,14 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const policy = await deps.core.getPolicy(id, undefined, { includeAllNamespaces: true });
+    const policy = await deps.core.getPolicy(id);
     if (!policy) {
       writeError(ctx, 404, "not_found", `policy not found: ${id}`);
       return;
     }
     const [skills, worldModels] = await Promise.all([
-      deps.core.listSkills({ limit: 500, includeAllNamespaces: true }),
-      deps.core.listWorldModels({ limit: 500, includeAllNamespaces: true }),
+      deps.core.listSkills({ limit: 500 }),
+      deps.core.listWorldModels({ limit: 500 }),
     ]);
     return {
       skills: skills
@@ -284,13 +282,11 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       q,
       ownerAgentKind,
       ownerProfileId,
-      includeAllNamespaces: true,
     });
     const total = await deps.core.countWorldModels({
       q,
       ownerAgentKind,
       ownerProfileId,
-      includeAllNamespaces: true,
     });
     return {
       worldModels,
@@ -307,7 +303,7 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const model = await deps.core.getWorldModel(id, undefined, { includeAllNamespaces: true });
+    const model = await deps.core.getWorldModel(id);
     if (!model) {
       writeError(ctx, 404, "not_found", `world model not found: ${id}`);
       return;
@@ -327,14 +323,14 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const wm = await deps.core.getWorldModel(id, undefined, { includeAllNamespaces: true });
+    const wm = await deps.core.getWorldModel(id);
     if (!wm) {
       writeError(ctx, 404, "not_found", `world model not found: ${id}`);
       return;
     }
     const policies = await Promise.all(
       wm.policyIds.map(async (pid) => {
-        const p = await deps.core.getPolicy(pid, undefined, { includeAllNamespaces: true });
+        const p = await deps.core.getPolicy(pid);
         return p
           ? { id: p.id, title: p.title, status: p.status, gain: p.gain }
           : { id: pid, title: null, status: null, gain: null };
@@ -403,7 +399,7 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
       return;
     }
     const body = parseJson<{
-      scope?: "private" | "local" | "public" | "hub" | null;
+      scope?: "private" | "public" | "hub" | null;
       target?: string | null;
     }>(ctx);
     const scope = body.scope === undefined ? "public" : body.scope;

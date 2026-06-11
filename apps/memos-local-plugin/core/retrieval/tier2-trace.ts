@@ -26,7 +26,7 @@
 
 import { rootLogger } from "../logger/index.js";
 import { priorityFor } from "../reward/backprop.js";
-import type { EmbeddingVector, EpisodeId, TraceId } from "../types.js";
+import type { EmbeddingVector, EpisodeId, SessionId, TraceId } from "../types.js";
 import type {
   ChannelRank,
   EpisodeCandidate,
@@ -66,6 +66,11 @@ export interface Tier2Input {
   patternTerms?: readonly string[];
   /** Whether `decision_repair` forced `includeLowValue`. */
   includeLowValue?: boolean;
+  /**
+   * When set, trace search excludes rows from this session (cross-session
+   * turn-start retrieval should not repeat the current chat window).
+   */
+  excludeSessionId?: SessionId;
 }
 
 export interface Tier2Result {
@@ -77,8 +82,7 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
   const { repos, config } = deps;
   const startedAt = Date.now();
   try {
-    const includeLow = input.includeLowValue ?? config.includeLowValue;
-    const valueWhere = includeLow ? undefined : "priority > 0";
+    const searchFilters = buildTraceSearchFilters(deps, input);
     const vecPoolSize = Math.max(
       config.tier2TopK,
       Math.ceil(config.tier2TopK * config.candidatePoolFactor),
@@ -96,18 +100,22 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
       const summaryHits = repos.traces.searchByVector(input.queryVec, vecPoolSize, {
         kind: "summary",
         anyOfTags: tagsForStorage,
-        where: valueWhere,
+        where: searchFilters.where,
+        params: searchFilters.params,
         hardCap: vecPoolSize * 4,
       });
       mergeChannelHits(blended, summaryHits, "vec_summary", input.queryVec);
 
-      const actionHits = repos.traces.searchByVector(input.queryVec, vecPoolSize, {
-        kind: "action",
-        anyOfTags: tagsForStorage,
-        where: valueWhere,
-        hardCap: vecPoolSize * 4,
-      });
-      mergeChannelHits(blended, actionHits, "vec_action", input.queryVec);
+      if (!config.lightweightMemory) {
+        const actionHits = repos.traces.searchByVector(input.queryVec, vecPoolSize, {
+          kind: "action",
+          anyOfTags: tagsForStorage,
+          where: searchFilters.where,
+          params: searchFilters.params,
+          hardCap: vecPoolSize * 4,
+        });
+        mergeChannelHits(blended, actionHits, "vec_action", input.queryVec);
+      }
 
       // If both vector channels came back empty AND tag filtering is
       // "auto", retry once without tags so a mis-tagged query never
@@ -117,7 +125,8 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
         log.debug("tag_filter_relaxed", { tags: tagsForStorage });
         const retry = repos.traces.searchByVector(input.queryVec, vecPoolSize, {
           kind: "summary",
-          where: valueWhere,
+          where: searchFilters.where,
+          params: searchFilters.params,
           hardCap: vecPoolSize * 4,
         });
         mergeChannelHits(blended, retry, "vec_summary", input.queryVec);
@@ -127,7 +136,8 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
     // ─── FTS keyword channel ──────────────────────────────────────────
     if (input.ftsMatch && repos.traces.searchByText) {
       const ftsHits = repos.traces.searchByText(input.ftsMatch, keywordPoolSize, {
-        where: valueWhere,
+        where: searchFilters.where,
+        params: searchFilters.params,
       });
       mergeChannelHits(blended, ftsHits, "fts", input.queryVec ?? null);
     }
@@ -139,7 +149,8 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
       repos.traces.searchByPattern
     ) {
       const patternHits = repos.traces.searchByPattern(input.patternTerms, keywordPoolSize, {
-        where: valueWhere,
+        where: searchFilters.where,
+        params: searchFilters.params,
       });
       mergeChannelHits(blended, patternHits, "pattern", input.queryVec ?? null);
     }
@@ -149,7 +160,7 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
       const structuralRows = repos.traces.searchByErrorSignature(
         input.structuralFragments,
         Math.max(config.tier2TopK, 10),
-        { where: valueWhere },
+        { where: searchFilters.where, params: searchFilters.params },
       );
       structuralRows.forEach((row, idx) => {
         const sigs = row.errorSignatures ?? [];
@@ -236,7 +247,9 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
     const topTraces = traces.slice(0, config.tier2TopK);
 
     // Roll up to episode-level summaries.
-    const episodes = rollupEpisodes(topTraces, deps).slice(0, config.tier2TopK);
+    const episodes = config.lightweightMemory
+      ? []
+      : rollupEpisodes(topTraces, deps).slice(0, config.tier2TopK);
 
     log.info("done", {
       traceCount: topTraces.length,
@@ -257,6 +270,22 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
 }
 
 // ─── Internal helpers ───────────────────────────────────────────────────────
+
+function buildTraceSearchFilters(
+  deps: Tier2Deps,
+  input: Tier2Input,
+): { where?: string; params?: Record<string, unknown> } {
+  const parts: string[] = [];
+  const params: Record<string, unknown> = {};
+  const includeLow = input.includeLowValue ?? deps.config.includeLowValue;
+  if (!includeLow) parts.push("priority > 0");
+  if (input.excludeSessionId) {
+    parts.push("session_id != @exclude_session_id");
+    params.exclude_session_id = input.excludeSessionId;
+  }
+  if (parts.length === 0) return {};
+  return { where: parts.join(" AND "), params };
+}
 
 function resolveTagFilter(
   tags: readonly string[],

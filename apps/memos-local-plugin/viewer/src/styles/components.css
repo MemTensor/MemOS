@@ -1437,7 +1437,7 @@
 
 /* Tool name pills — used on the Logs page */
 .pill--tool                      { background: rgba(255,255,255,.05); color: var(--fg); font-family: var(--font-mono); font-size: var(--fs-xs); }
-.pill--tool-memory_search        { background: var(--cyan-bg); color: var(--cyan); }
+.pill--tool-memos_search        { background: var(--cyan-bg); color: var(--cyan); }
 .pill--tool-memory_add           { background: var(--green-bg); color: var(--green); }
 .pill--tool-skill_generate       { background: var(--violet-bg); color: var(--violet); }
 .pill--tool-skill_evolve         { background: var(--violet-bg); color: var(--violet); opacity:.85; }

@@ -14,7 +14,7 @@ import { MemosError } from "../../agent-contract/errors.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
 import { sanitizeDerivedText } from "../safety/content.js";
-import type { NormalizedStep } from "./types.js";
+import type { NormalizedStep, ReflectionContext } from "./types.js";
 
 const SYSTEM = `You are reviewing a single step of an AI agent's decision.
 
@@ -29,15 +29,24 @@ export interface SynthesizedReflection {
   model: string;
 }
 
+export interface ReflectionSynthContext extends ReflectionContext {
+  episodeId?: string;
+  phase?: string;
+  outcomeMaxChars?: number;
+}
+
 export async function synthesizeReflection(
   llm: LlmClient,
   step: NormalizedStep,
-  context?: { episodeId?: string; phase?: string },
+  context?: ReflectionSynthContext,
 ): Promise<SynthesizedReflection> {
   const log = rootLogger.child({ channel: "core.capture.reflection" });
 
   const thinking = (step.agentThinking ?? "").trim();
   const userPayload = [
+    `TASK CONTEXT:`,
+    context?.taskSummary?.trim().slice(0, 1_200) || "(none)",
+    ``,
     `USER/OBSERVATION:`,
     step.userText.slice(0, 1_200) || "(none)",
     ``,
@@ -55,6 +64,12 @@ export async function synthesizeReflection(
           )
           .join("\n")}`
       : "",
+    ``,
+    `OUTCOME:`,
+    lastToolOutcome(step, context?.outcomeMaxChars ?? 600),
+    ``,
+    `DOWNSTREAM STEP PREVIEW:`,
+    formatDownstreamPreview(context),
   ]
     .filter(Boolean)
     .join("\n");
@@ -98,4 +113,46 @@ function safeStringify(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+function lastToolOutcome(step: NormalizedStep, maxChars: number): string {
+  const last = step.toolCalls[step.toolCalls.length - 1];
+  if (!last) return "(assistant-only step)";
+  return (last.errorCode ? `ERROR[${last.errorCode}] ` : "") + truncate(outputOf(last), maxChars);
+}
+
+function outputOf(t: { output?: unknown }): string {
+  if (t.output === undefined || t.output === null) return "";
+  if (typeof t.output === "string") return t.output;
+  try {
+    return JSON.stringify(t.output);
+  } catch {
+    return String(t.output);
+  }
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n) + "..." : s;
+}
+
+function formatDownstreamPreview(context?: ReflectionSynthContext): string {
+  const preview = context?.downstream ?? [];
+  if (preview.length === 0) return "(none)";
+  return preview
+    .map((item) => {
+      const label = `step+${item.offset}`;
+      if (item.kind === "tooluse") {
+        const lines = [
+          `[${label}] type=tooluse`,
+          `tool_names: ${item.toolNames?.join(", ") || "(unknown)"}`,
+          `tool_output: ${item.toolOutput?.trim() || "(none)"}`,
+        ];
+        if (item.reflection?.trim()) {
+          lines.push(`existing_reflection: ${item.reflection.trim()}`);
+        }
+        return lines.join("\n");
+      }
+      return [`[${label}] type=text`, item.text?.trim() || "(empty)"].join("\n");
+    })
+    .join("\n\n");
 }

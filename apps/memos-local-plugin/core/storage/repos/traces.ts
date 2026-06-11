@@ -1,4 +1,4 @@
-import type { EmbeddingVector, EpisodeId, SessionId, TraceId, TraceRow } from "../../types.js";
+import type { EmbeddingVector, EpisodeId, SessionId, ShareScope, TraceId, TraceRow } from "../../types.js";
 import type { StorageDb, TraceListFilter } from "../types.js";
 import { buildInClause, buildInsert, buildUpdate } from "../tx.js";
 import { scanAndTopK, topKCosine, type VectorHit, type VectorRow } from "../vector.js";
@@ -109,6 +109,36 @@ export function makeTracesRepo(db: StorageDb) {
       return rows.map(mapRow);
     },
 
+    /**
+     * Cheap existence check: does ANY trace in `ids` carry a timestamp
+     * strictly greater than `ts`?
+     *
+     * Designed for the startup "dirty-closed-episode" scan in
+     * `memory-core.init()` — the old code path called
+     * `getManyByIds(ids).some(tr => tr.ts > ts)`, which hydrated every
+     * column (embedding BLOBs, full `tool_calls_json` text, agent text)
+     * purely to inspect a single number. On multi-hundred-MB databases
+     * that single call dwarfed everything else during bridge bootstrap
+     * (https://github.com/MemTensor/MemOS/issues/1787).
+     *
+     * This helper issues a single `SELECT 1 ... LIMIT 1` per chunk.
+     * SQLite short-circuits as soon as it finds one match, so the cost
+     * is O(chunk size) rather than O(total trace bytes).
+     */
+    hasAnyNewerThan(ids: readonly TraceId[], ts: number): boolean {
+      if (ids.length === 0) return false;
+      // Process in chunks to avoid hitting parameter limits.
+      const CHUNK_SIZE = 900;
+      for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+        const chunk = ids.slice(i, i + CHUNK_SIZE);
+        const placeholders = buildInClause(chunk.length);
+        const sql = `SELECT 1 FROM traces WHERE id ${placeholders} AND ts > ? LIMIT 1`;
+        const row = db.prepare<[...string[], number], { 1: number }>(sql).get([...chunk, ts]);
+        if (row) return true;
+      }
+      return false;
+    },
+
     list(filter: TraceListFilter = {}): TraceRow[] {
       const tr = timeRangeWhere(filter, "ts");
       const fragments: string[] = [];
@@ -144,7 +174,10 @@ export function makeTracesRepo(db: StorageDb) {
      * Total row count matching the same filter (no limit/offset).
      * Used by list endpoints so the viewer can show "Page N of M".
      */
-    count(filter: Omit<TraceListFilter, "limit" | "offset"> = {}): number {
+    count(
+      filter: Omit<TraceListFilter, "limit" | "offset"> = {},
+      visibility?: { sql: string; params: Record<string, unknown> },
+    ): number {
       const tr = timeRangeWhere(filter, "ts");
       const fragments: string[] = [];
       const params: Record<string, unknown> = { ...tr.params };
@@ -167,6 +200,10 @@ export function makeTracesRepo(db: StorageDb) {
       if (filter.minAbsValue !== undefined) {
         fragments.push(`abs(value) >= @min_abs_value`);
         params.min_abs_value = filter.minAbsValue;
+      }
+      if (visibility) {
+        fragments.push(visibility.sql);
+        Object.assign(params, visibility.params);
       }
       if (tr.sql) fragments.push(tr.sql);
       const where = joinWhere(fragments);
@@ -244,7 +281,7 @@ export function makeTracesRepo(db: StorageDb) {
         Object.assign(params, visibility.params);
       }
       const where = joinWhere(fragments);
-      const limit = Math.max(1, Math.min(500, filter.limit ?? 50));
+      const limit = Math.max(1, Math.min(10_000, filter.limit ?? 50));
       const offset = Math.max(0, filter.offset ?? 0);
       params.limit = limit;
       params.offset = offset;
@@ -610,7 +647,7 @@ export function makeTracesRepo(db: StorageDb) {
     updateShare(
       id: TraceId,
       share: {
-        scope: "private" | "local" | "public" | "hub" | null;
+        scope: ShareScope | null;
         target?: string | null;
         sharedAt?: number | null;
       },
@@ -751,7 +788,7 @@ function mapRow(r: RawTraceRow): TraceRow {
     share:
       r.share_scope != null
         ? {
-            scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub",
+            scope: normalizeShareForStorage(r.share_scope) as ShareScope,
             target: r.share_target,
             sharedAt: r.shared_at,
           }
