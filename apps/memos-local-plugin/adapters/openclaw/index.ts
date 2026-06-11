@@ -154,6 +154,15 @@ function resolveViewerStaticRoot(): string | undefined {
 
 const OPENCLAW_VIEWER_PORT = 18799;
 
+function envFlag(value: string | undefined): boolean {
+  if (!value) return false;
+  return /^(1|true|yes|on)$/i.test(value.trim());
+}
+
+function isReadOnlyRuntime(): boolean {
+  return envFlag(process.env.OPENCLAW_MEMOS_READONLY ?? process.env.MEMOS_READONLY);
+}
+
 function memoryAddDisabledFromConfig(config: Record<string, unknown> | undefined): boolean {
   const memoryAdd = config?.memory_add;
   if (!memoryAdd || typeof memoryAdd !== "object" || Array.isArray(memoryAdd)) {
@@ -164,10 +173,11 @@ function memoryAddDisabledFromConfig(config: Record<string, unknown> | undefined
 
 async function createRuntime(
   api: OpenClawPluginApi,
-  runtimeLock: OpenClawRuntimeLockHandle,
+  runtimeLock: OpenClawRuntimeLockHandle | null,
+  opts: { readOnly: boolean } = { readOnly: false },
 ): Promise<PluginRuntime> {
   const log = rootLogger.child({ channel: "adapters.openclaw" });
-  log.info("plugin.bootstrap", { version: PLUGIN_VERSION });
+  log.info("plugin.bootstrap", { version: PLUGIN_VERSION, readOnly: opts.readOnly });
 
   let core: MemoryCore | null = null;
   let viewer: ServerHandle | null = null;
@@ -218,42 +228,48 @@ async function createRuntime(
       core,
       log: api.logger,
       memoryAddDisabled: memoryAddDisabledFromConfig(api.pluginConfig),
+      readOnlyInjectionProfile: config.algorithm.retrieval.readOnlyInjectionProfile,
+      domain: config.domain,
     });
 
-    // OpenClaw's viewer port is fixed at :18799 (hermes uses :18800).
-    // We ignore `config.viewer.port` for the same reason `bridge.cts`
-    // does: old config.yaml files baked in the legacy single-port
-    // :18799 used by both agents, and we don't want hermes to collide
-    // with us because of stale YAML.
-    try {
-      viewer = await startHttpServer(
-        {
-          core,
-          home,
-          logTail: () => memoryBuffer().tail({ limit: 200 }),
-          telemetry,
-        },
-        {
-          port: OPENCLAW_VIEWER_PORT,
-          host: config.viewer.bindHost,
-          staticRoot: resolveViewerStaticRoot(),
-          agent: "openclaw",
-        },
-      );
-      api.logger.info(`memos-local: viewer live at ${viewer.url}`);
-    } catch (err) {
-      const e = err as NodeJS.ErrnoException;
-      if (e?.code === "EADDRINUSE") {
-        api.logger.error(
-          `memos-local: viewer port :${OPENCLAW_VIEWER_PORT} is already in use — ` +
-            `refusing duplicate/headless OpenClaw runtime.`,
+    if (opts.readOnly) {
+      api.logger.info("memos-local: read-only runtime; skipping exclusive viewer binding");
+    } else {
+      // OpenClaw's viewer port is fixed at :18799 (hermes uses :18800).
+      // We ignore `config.viewer.port` for the same reason `bridge.cts`
+      // does: old config.yaml files baked in the legacy single-port
+      // :18799 used by both agents, and we don't want hermes to collide
+      // with us because of stale YAML.
+      try {
+        viewer = await startHttpServer(
+          {
+            core,
+            home,
+            logTail: () => memoryBuffer().tail({ limit: 200 }),
+            telemetry,
+          },
+          {
+            port: OPENCLAW_VIEWER_PORT,
+            host: config.viewer.bindHost,
+            staticRoot: resolveViewerStaticRoot(),
+            agent: "openclaw",
+          },
         );
-      } else {
-        api.logger.error("memos-local: viewer failed to start", {
-          err: e?.message ?? String(err),
-        });
+        api.logger.info(`memos-local: viewer live at ${viewer.url}`);
+      } catch (err) {
+        const e = err as NodeJS.ErrnoException;
+        if (e?.code === "EADDRINUSE") {
+          api.logger.error(
+            `memos-local: viewer port :${OPENCLAW_VIEWER_PORT} is already in use — ` +
+              `refusing duplicate/headless OpenClaw runtime.`,
+          );
+        } else {
+          api.logger.error("memos-local: viewer failed to start", {
+            err: e?.message ?? String(err),
+          });
+        }
+        throw err;
       }
-      throw err;
     }
 
     const runtimeCore = core;
@@ -279,7 +295,7 @@ async function createRuntime(
             err: err instanceof Error ? err.message : String(err),
           });
         }
-        runtimeLock.release();
+        runtimeLock?.release();
       },
     };
   } catch (err) {
@@ -291,7 +307,7 @@ async function createRuntime(
         /* best-effort cleanup after failed bootstrap */
       }
     }
-    runtimeLock.release();
+    runtimeLock?.release();
     throw err;
   }
 }
@@ -308,21 +324,26 @@ async function closeViewerAfterFailedBootstrap(
 }
 
 function createSharedRuntimeState(api: OpenClawPluginApi): SharedRuntimeState {
-  let runtimeLock: OpenClawRuntimeLockHandle;
-  try {
-    runtimeLock = acquireOpenClawRuntimeLock({
-      home: resolveHome("openclaw"),
-      pluginId: PLUGIN_ID,
-      version: PLUGIN_VERSION,
-      viewerPort: OPENCLAW_VIEWER_PORT,
-    });
-  } catch (err) {
-    const duplicate = err instanceof DuplicateOpenClawRuntimeError;
-    api.logger.error("memos-local: duplicate OpenClaw runtime blocked", {
-      err: err instanceof Error ? err.message : String(err),
-      code: duplicate ? err.code : (err as { code?: unknown }).code,
-    });
-    throw err;
+  const readOnly = isReadOnlyRuntime();
+  let runtimeLock: OpenClawRuntimeLockHandle | null = null;
+  if (readOnly) {
+    api.logger.info("memos-local: readonly runtime lock bypassed");
+  } else {
+    try {
+      runtimeLock = acquireOpenClawRuntimeLock({
+        home: resolveHome("openclaw"),
+        pluginId: PLUGIN_ID,
+        version: PLUGIN_VERSION,
+        viewerPort: OPENCLAW_VIEWER_PORT,
+      });
+    } catch (err) {
+      const duplicate = err instanceof DuplicateOpenClawRuntimeError;
+      api.logger.error("memos-local: duplicate OpenClaw runtime blocked", {
+        err: err instanceof Error ? err.message : String(err),
+        code: duplicate ? err.code : (err as { code?: unknown }).code,
+      });
+      throw err;
+    }
   }
 
   const state: SharedRuntimeState = {
@@ -331,7 +352,7 @@ function createSharedRuntimeState(api: OpenClawPluginApi): SharedRuntimeState {
     bootstrapError: null,
     bootstrapPromise: Promise.resolve(),
   };
-  state.bootstrapPromise = createRuntime(api, runtimeLock)
+  state.bootstrapPromise = createRuntime(api, runtimeLock, { readOnly })
     .then((runtime) => {
       state.runtime = runtime;
       api.logger.info("memos-local: plugin ready");
@@ -358,6 +379,12 @@ function register(api: OpenClawPluginApi): void {
     api.logger.info("memos-local: reusing in-process shared runtime");
   }
   state.registrations += 1;
+
+  if (memoryAddDisabledFromConfig(api.pluginConfig)) {
+    api.logger.info(
+      "memos-local: memory_add disabled; allowing concurrent read-only runtime",
+    );
+  }
 
   // 1. Memory capability (prompt prelude) — register synchronously so the
   //    host immediately knows who owns the memory slot, even if bootstrap

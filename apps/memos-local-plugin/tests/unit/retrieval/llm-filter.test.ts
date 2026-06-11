@@ -190,7 +190,7 @@ describe("retrieval/llm-filter", () => {
     expect(result.sufficient).toBe(true);
   });
 
-  it("LLM returns empty selection → fallback capped instead of dropping everything", async () => {
+  it("LLM returns empty selection → inject nothing (no soft fallback)", async () => {
     const llm: any = {
       completeJson: vi.fn().mockResolvedValue({
         value: { selected: [], sufficient: false },
@@ -202,10 +202,14 @@ describe("retrieval/llm-filter", () => {
       { query: "q", ranked },
       { llm, log, config: { ...cfg, llmFilterFallbackMaxKeep: 2 } },
     );
-    expect(result.outcome).toBe("llm_failed_safe_cutoff");
-    expect(result.kept.map((r) => String(r.candidate.refId))).toEqual(["a", "b"]);
-    expect(result.dropped.map((r) => String(r.candidate.refId))).toEqual(["c"]);
-    expect(result.sufficient).toBeNull();
+    expect(result.outcome).toBe("llm_rejected_all");
+    expect(result.kept).toEqual([]);
+    expect(result.dropped.map((r) => String(r.candidate.refId))).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+    expect(result.sufficient).toBe(false);
   });
 
   it("coerces string / number `sufficient` fields sent by lax models", async () => {
@@ -222,7 +226,7 @@ describe("retrieval/llm-filter", () => {
     expect(result.sufficient).toBe(true);
   });
 
-  it("LLM throws → mechanical safe cutoff (NOT passthrough)", async () => {
+  it("LLM throws → inject nothing (no soft fallback)", async () => {
     const llm: any = {
       completeJson: vi.fn().mockRejectedValue(new Error("network kaboom")),
     };
@@ -235,60 +239,14 @@ describe("retrieval/llm-filter", () => {
       { query: "q", ranked },
       { llm, log, config: cfg },
     );
-    expect(result.outcome).toBe("llm_failed_safe_cutoff");
+    expect(result.outcome).toBe("llm_filter_error");
     expect(result.sufficient).toBeNull();
-    const ids = result.kept.map((r) => String(r.candidate.refId));
-    expect(ids).toContain("strong");
-    expect(ids).not.toContain("weak");
-  });
-
-  it("safe-cutoff still keeps at least 1 candidate even if all are weak", async () => {
-    const llm: any = {
-      completeJson: vi.fn().mockRejectedValue(new Error("boom")),
-    };
-    const result = await llmFilterCandidates(
-      { query: "q", ranked: [trace("a", 0.5), trace("b", 0.49)] },
-      { llm, log, config: cfg },
-    );
-    expect(result.outcome).toBe("llm_failed_safe_cutoff");
-    expect(result.kept.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("safe-cutoff respects llmFilterFallbackMaxKeep cap", async () => {
-    const llm: any = {
-      completeJson: vi.fn().mockRejectedValue(new Error("boom")),
-    };
-    const ranked = [
-      trace("a", 0.95),
-      trace("b", 0.94),
-      trace("c", 0.93),
-      trace("d", 0.92),
-      trace("e", 0.91),
-      trace("f", 0.9),
-    ];
-    const result = await llmFilterCandidates(
-      { query: "q", ranked },
-      {
-        llm,
-        log,
-        config: { ...cfg, llmFilterMaxKeep: 8, llmFilterFallbackMaxKeep: 2 },
-      },
-    );
-    expect(result.kept.length).toBeLessThanOrEqual(2);
-    expect(result.outcome).toBe("llm_failed_safe_cutoff");
-  });
-
-  it("safe-cutoff respects a zero llmFilterFallbackMaxKeep cap", async () => {
-    const llm: any = {
-      completeJson: vi.fn().mockRejectedValue(new Error("boom")),
-    };
-    const result = await llmFilterCandidates(
-      { query: "q", ranked: [trace("a", 0.9), trace("b", 0.8)] },
-      { llm, log, config: { ...cfg, llmFilterFallbackMaxKeep: 0 } },
-    );
     expect(result.kept).toEqual([]);
-    expect(result.dropped.length).toBe(2);
-    expect(result.outcome).toBe("llm_failed_safe_cutoff");
+    expect(result.dropped.map((r) => String(r.candidate.refId))).toEqual([
+      "strong",
+      "middle",
+      "weak",
+    ]);
   });
 
   it("no LLM at all → fallback capped without full passthrough", async () => {
@@ -310,7 +268,7 @@ describe("retrieval/llm-filter", () => {
     expect(result.sufficient).toBeNull();
   });
 
-  it("malformed LLM output uses fallback cap instead of normal max keep", async () => {
+  it("malformed LLM output → inject nothing", async () => {
     const llm: any = {
       completeJson: vi.fn().mockResolvedValue({
         value: { ranked: "not-an-array" },
@@ -331,8 +289,9 @@ describe("retrieval/llm-filter", () => {
         config: { ...cfg, llmFilterMaxKeep: 8, llmFilterFallbackMaxKeep: 2 },
       },
     );
-    expect(result.outcome).toBe("llm_failed_safe_cutoff");
-    expect(result.kept.length).toBeLessThanOrEqual(2);
+    expect(result.outcome).toBe("llm_filter_error");
+    expect(result.kept).toEqual([]);
+    expect(result.dropped.length).toBe(4);
   });
 
   it("candidate description omits retrieval metadata and keeps semantic content", async () => {

@@ -75,6 +75,7 @@ import type {
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import { loadConfig, resolveHome, SECRET_FIELD_PATHS } from "../config/index.js";
 import { reflectionAsText } from "../capture/types.js";
+import { effectiveReadOnlyInjectionProfile } from "../domain.js";
 import { feedbackText } from "../experience/feedback-builder.js";
 import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
@@ -2391,7 +2392,11 @@ export function createMemoryCore(
     const baseDeps = handle.retrievalDeps();
     const deps = {
       ...baseDeps,
-      config: applyTopKOverride(baseDeps.config, query.topK),
+      config: {
+        ...applyTopKOverride(baseDeps.config, query.topK),
+        readOnlyInjectionProfile:
+          query.injectionProfile ?? effectiveReadOnlyInjectionProfile(baseDeps.config),
+      },
       namespace: ns,
       repos: wrapRetrievalRepos(handle.repos, ns),
     };

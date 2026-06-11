@@ -9,16 +9,12 @@
  *
  * Design constraints:
  *   - One LLM call per turn, bounded output (index list + `sufficient`).
- *   - Totally opt-in: if the LLM is null or the config flag is off,
- *     we apply a small mechanical fallback cap instead of calling out.
- *     Empty / below-threshold lists still pass through unchanged.
- *   - On ANY failure (network, schema, timeout) we fall back to a
- *     mechanical cutoff. A broken filter must never crash retrieval.
+ *   - When the LLM returns an empty selection, we inject nothing — no
+ *     mechanical top-1 / safe-cutoff fallback.
+ *   - When filter is disabled or no LLM client is configured, a small
+ *     mechanical cap still applies so offline installs stay usable.
  *   - Returns both kept and dropped candidates so callers can log
  *     exactly what the LLM pruned (feeds the Logs page).
- *   - Rich candidate labels — we include role/time/tags/channels/score
- *     because openclaw's filter runs on those fields and loses precision
- *     without them.
  */
 
 import type { LlmClient } from "../llm/index.js";
@@ -35,12 +31,6 @@ const MAX_FILTER_OUTPUT_TOKENS = 2048;
 export interface FilterInput {
   query: string;
   ranked: readonly RankedCandidate[];
-  /**
-   * Episode this retrieval is happening for (typically the active or
-   * just-opening episode). Forwarded to the LLM call so the resulting
-   * `system_model_status` audit row can be grouped with the rest of
-   * that episode's pipeline activity in the Logs viewer.
-   */
   episodeId?: string;
 }
 
@@ -61,10 +51,6 @@ export interface FilterDeps {
 export interface FilterResult {
   kept: RankedCandidate[];
   dropped: RankedCandidate[];
-  /**
-   * Why the filter took this shape — surfaced so logs can show
-   * "skipped: below threshold" vs "llm returned no selections".
-   */
   outcome:
     | "disabled"
     | "no_llm"
@@ -73,17 +59,8 @@ export interface FilterResult {
     | "deferred_to_final"
     | "llm_kept_all"
     | "llm_filtered"
-    // The LLM was supposed to run but the call failed / parsed badly.
-    // We applied a mechanical relevance cutoff (top-K above
-    // `relativeThresholdFloor · topRelevance`) instead of dumping the
-    // entire ranked list into the prompt.
-    | "llm_failed_safe_cutoff";
-  /**
-   * The LLM's self-report on whether the *kept* candidates are enough
-   * to answer `query`, or whether the caller should widen recall /
-   * run a follow-up `memos_search`. `null` when the filter didn't
-   * run (disabled / passthrough / failure paths).
-   */
+    | "llm_rejected_all"
+    | "llm_filter_error";
   sufficient: boolean | null;
 }
 
@@ -95,11 +72,6 @@ export async function llmFilterCandidates(
   if (!deps.config.llmFilterEnabled) {
     return fallbackCap(ranked, deps, "disabled");
   }
-  // `llmFilterMinCandidates` is the *minimum* list length required to
-  // RUN the filter. Default is 1, meaning even a single candidate gets
-  // a precision pass — openclaw behaviour, and matches the user
-  // reports that "a single off-topic memory sneaks through when the
-  // filter skips the check".
   if (ranked.length < deps.config.llmFilterMinCandidates) {
     return passthrough(ranked, "below_threshold");
   }
@@ -143,8 +115,6 @@ ${list}`,
         episodeId: input.episodeId,
         temperature: 0,
         timeoutMs: deps.timeoutMs,
-        // Output is only ordered indices + one bool, but the list can
-        // legitimately be as long as the ranked candidates.
         maxTokens: filterOutputTokenBudget(ranked.length),
         malformedRetries: 1,
       },
@@ -153,7 +123,7 @@ ${list}`,
     const sufficient = coerceBool(rsp.value?.sufficient);
     if (!Array.isArray(raw)) {
       deps.log.debug("llm_filter.malformed", { got: typeof raw });
-      return safeCutoff(ranked, deps);
+      return rejectAll(ranked, "llm_filter_error", null);
     }
     const orderedIndices: number[] = [];
     const seenIndices = new Set<number>();
@@ -172,11 +142,11 @@ ${list}`,
     );
     const keepIndices = new Set(cappedIndices);
     if (keepIndices.size === 0) {
-      deps.log.warn("llm_filter.empty_selection_fallback", {
+      deps.log.warn("llm_filter.empty_selection", {
         candidateCount: ranked.length,
         sufficient: sufficient ?? null,
       });
-      return safeCutoff(ranked, deps);
+      return rejectAll(ranked, "llm_rejected_all", sufficient);
     }
     const kept = cappedIndices.map((i) => ranked[i]!);
     const dropped: RankedCandidate[] = [];
@@ -195,7 +165,7 @@ ${list}`,
       err: err instanceof Error ? err.message : String(err),
       candidateCount: ranked.length,
     });
-    return safeCutoff(ranked, deps);
+    return rejectAll(ranked, "llm_filter_error", null);
   }
 }
 
@@ -213,64 +183,16 @@ function passthrough(
   return { kept: [...ranked], dropped: [], outcome, sufficient: null };
 }
 
-/**
- * Mechanical fail-closed: when the LLM is unavailable / errored,
- * apply a relative-relevance cutoff so we don't dump the entire ranked
- * list into the prompt. Keeps:
- *   1. items whose score ≥ `topScore · 0.7`
- *   2. capped at `llmFilterFallbackMaxKeep` so the prompt stays small.
- *
- * The ranker already applied an initial cutoff with the same family of
- * floors, but the LLM is expected to prune further (because the
- * ranker is tuned for recall). This fallback uses a slightly tighter
- * ratio so the "fail" path doesn't ship as much noise as the success
- * path.
- */
-function safeCutoff(
+function rejectAll(
   ranked: readonly RankedCandidate[],
-  deps: FilterDeps,
+  outcome: Extract<FilterResult["outcome"], "llm_rejected_all" | "llm_filter_error">,
+  sufficient: boolean | null,
 ): FilterResult {
-  if (ranked.length === 0) {
-    return {
-      kept: [],
-      dropped: [],
-      outcome: "llm_failed_safe_cutoff",
-      sufficient: null,
-    };
-  }
-  const ratio = 0.7;
-  const topScore = ranked.reduce(
-    (m, c) => Math.max(m, c.score ?? c.relevance),
-    0,
-  );
-  const cutoff = topScore > 0 ? topScore * ratio : 0;
-  const keepCap = fallbackMaxKeep(deps);
-  if (keepCap === 0) {
-    return {
-      kept: [],
-      dropped: [...ranked],
-      outcome: "llm_failed_safe_cutoff",
-      sufficient: null,
-    };
-  }
-  const kept: RankedCandidate[] = [];
-  const dropped: RankedCandidate[] = [];
-  for (const c of ranked) {
-    const s = c.score ?? c.relevance;
-    if (s >= cutoff && kept.length < keepCap) kept.push(c);
-    else dropped.push(c);
-  }
-  // If the cutoff would have dropped everything, keep the single best
-  // candidate so the agent at least sees one option.
-  if (kept.length === 0 && ranked.length > 0) {
-    kept.push(ranked[0]!);
-    dropped.shift();
-  }
   return {
-    kept,
-    dropped,
-    outcome: "llm_failed_safe_cutoff",
-    sufficient: null,
+    kept: [],
+    dropped: [...ranked],
+    outcome,
+    sufficient,
   };
 }
 
@@ -310,12 +232,6 @@ function coerceBool(v: unknown): boolean | null {
   return null;
 }
 
-/**
- * Render a ranked candidate into a single labelled string for the LLM.
- * Keep this intentionally content-focused: the filter should judge the
- * candidate's semantic usefulness, not anchor on retrieval internals like
- * timestamps, channels, tags, or ranker scores.
- */
 function describeCandidate(r: RankedCandidate, bodyChars: number): string {
   const c = r.candidate;
   switch (c.tier) {

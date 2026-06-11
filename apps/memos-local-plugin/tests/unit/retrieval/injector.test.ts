@@ -197,7 +197,9 @@ describe("retrieval/injector", () => {
     );
     expect(packet.rendered).toContain("Trigger: similar SEC 13F parsing task");
     expect(packet.rendered).toContain("Use as guardrail before planning.");
-    expect(packet.rendered).not.toContain("Do: Use holdings table columns directly.");
+    expect(packet.rendered).toContain(
+      "Procedure: Use holdings table columns directly.",
+    );
     expect(packet.rendered).not.toContain("Avoid: Do not infer issuer from filename.");
     expect(packet.rendered).not.toContain("Scope: SEC 13F holdings extraction only.");
     expect(packet.rendered).not.toContain(
@@ -525,7 +527,7 @@ describe("retrieval/injector", () => {
     expect(packet.snippets.length).toBe(0);
   });
 
-  it("truncates oversized trace bodies", () => {
+  it("truncates oversized trace bodies at the trace snippet cap", () => {
     const big = trace("huge");
     big.agentText = "x".repeat(10_000);
     const { packet } = toPacket({
@@ -539,5 +541,95 @@ describe("retrieval/injector", () => {
     expect(packet.snippets[0]!.body.length).toBeLessThanOrEqual(720);
     expect(packet.snippets[0]!.body).toContain("[truncated]");
     expect(packet.snippets[0]!.body).toContain('memos_get(id="huge", kind="trace")');
+  });
+
+  it("keeps full skill guides under the skill snippet cap", () => {
+    const longGuide = [
+      "# long_skill",
+      "",
+      "**Summary**",
+      "A".repeat(2500),
+      "",
+      "**Procedure**",
+      "1. **Step** — do the thing",
+    ].join("\n");
+    const { packet } = toPacket({
+      ranked: [
+        rc(
+          {
+            ...skill("sk_long"),
+            invocationGuide: longGuide,
+          },
+          0.9,
+          0.9,
+        ),
+      ],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_skill_cap" as never,
+      episodeId: "ep_skill_cap" as never,
+      skillInjectionMode: "full",
+    });
+    const skillSnippet = packet.snippets.find((s) => s.refKind === "skill")!;
+    expect(skillSnippet.body).not.toContain("[truncated]");
+    expect(skillSnippet.body).toContain("do the thing");
+  });
+
+  it("ir domain prepends built-in search playbook on turn_start", () => {
+    const { packet } = toPacket({
+      ranked: [rc(skill("sk_docker"), 0.9, 0.9)],
+      reason: "turn_start",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_ir" as never,
+      episodeId: "ep_ir" as never,
+      domain: "ir",
+    });
+    expect(packet.rendered.startsWith("## General retrieval playbook")).toBe(true);
+    expect(packet.rendered).toContain("sk_docker");
+  });
+
+  it("ir domain prepends built-in search playbook on tool_driven (readonly before_prompt)", () => {
+    const { packet } = toPacket({
+      ranked: [rc(skill("sk_docker"), 0.9, 0.9)],
+      reason: "tool_driven",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_ir" as never,
+      episodeId: "ep_ir" as never,
+      domain: "ir",
+    });
+    expect(packet.rendered.startsWith("## General retrieval playbook")).toBe(true);
+    expect(packet.rendered).toContain("sk_docker");
+  });
+
+  it("prepends ir playbook with empty ranked hits (llm filter rejected all)", () => {
+    const { packet } = toPacket({
+      ranked: [],
+      reason: "tool_driven",
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_ir" as never,
+      episodeId: "ep_ir" as never,
+      domain: "ir",
+    });
+    expect(packet.rendered).toBeTruthy();
+    expect(packet.rendered.startsWith("## General retrieval playbook")).toBe(true);
+    expect(packet.snippets).toHaveLength(0);
+  });
+
+  it("does not prepend ir playbook outside ir domain", () => {
+    const base = {
+      ranked: [rc(skill("sk_docker"), 0.9, 0.9)],
+      tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
+      now: NOW as never,
+      sessionId: "sess_ir" as never,
+      episodeId: "ep_ir" as never,
+    };
+    const turnStart = toPacket({ ...base, reason: "turn_start" });
+    const toolDriven = toPacket({ ...base, reason: "tool_driven" });
+    expect(turnStart.packet.rendered.startsWith("## General retrieval playbook")).toBe(false);
+    expect(toolDriven.packet.rendered.startsWith("## General retrieval playbook")).toBe(false);
   });
 });

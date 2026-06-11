@@ -30,6 +30,7 @@ import type {
   TurnResultDTO,
 } from "../../agent-contract/dto.js";
 import type { MemoryCore } from "../../agent-contract/memory-core.js";
+import { effectiveReadOnlyInjectionProfile } from "../../core/domain.js";
 
 import type {
   AfterToolCallEvent,
@@ -827,15 +828,27 @@ export function renderContextBlock(
     return `${CONTEXT_OPEN}\n${rendered}\n${CONTEXT_CLOSE}`;
   }
   if (opts.hintWhenEmpty === false) return "";
-  // Cold-start hint for interactive sessions. The automatic OpenClaw
-  // before-prompt path disables this hint; task-specific guardrails can
-  // still be added without pretending an empty memory store has matches.
   const hint = [
     "No prior memories matched this query — the store may simply be cold.",
     "Call `memos_search` only if you have a specific reason to expect",
     "relevant past context; otherwise continue with the current task.",
   ].join(" ");
   return `${CONTEXT_OPEN}\n${hint}\n${CONTEXT_CLOSE}`;
+}
+
+function capContextBlock(block: string): { block: string; truncated: boolean } {
+  if (block.length <= OPENCLAW_CONTEXT_CHAR_CAP) {
+    return { block, truncated: false };
+  }
+  const suffix = `\n\n[Memory context truncated to ${OPENCLAW_CONTEXT_CHAR_CAP} characters.]\n${CONTEXT_CLOSE}`;
+  const prefix = block.startsWith(`${CONTEXT_OPEN}\n`) ? `${CONTEXT_OPEN}\n` : "";
+  const bodyStart = prefix.length;
+  const bodyBudget = Math.max(0, OPENCLAW_CONTEXT_CHAR_CAP - prefix.length - suffix.length);
+  const body = block.slice(bodyStart, bodyStart + bodyBudget).trimEnd();
+  return {
+    block: `${prefix}${body}${suffix}`,
+    truncated: true,
+  };
 }
 
 async function withSoftTimeout<T>(
@@ -856,21 +869,6 @@ async function withSoftTimeout<T>(
   });
 }
 
-function capContextBlock(block: string): { block: string; truncated: boolean } {
-  if (block.length <= OPENCLAW_CONTEXT_CHAR_CAP) {
-    return { block, truncated: false };
-  }
-  const suffix = `\n\n[Memory context truncated to ${OPENCLAW_CONTEXT_CHAR_CAP} characters.]\n${CONTEXT_CLOSE}`;
-  const prefix = block.startsWith(`${CONTEXT_OPEN}\n`) ? `${CONTEXT_OPEN}\n` : "";
-  const bodyStart = prefix.length;
-  const bodyBudget = Math.max(0, OPENCLAW_CONTEXT_CHAR_CAP - prefix.length - suffix.length);
-  const body = block.slice(bodyStart, bodyStart + bodyBudget).trimEnd();
-  return {
-    block: `${prefix}${body}${suffix}`,
-    truncated: true,
-  };
-}
-
 // ─── Bridge factory ────────────────────────────────────────────────────────
 
 export interface BridgeOptions {
@@ -879,6 +877,13 @@ export interface BridgeOptions {
   log: HostLogger;
   /** When true, keep retrieval enabled but skip turn-end capture entirely. */
   memoryAddDisabled?: boolean;
+  readOnlyInjectionProfile?:
+    | "all"
+    | "experience"
+    | "skill"
+    | "skill_experience";
+  /** Task domain preset (`ir` enables IR-eval-only behaviors). */
+  domain?: "" | "ir";
   /** Override the wall-clock source (tests). */
   now?: () => number;
 }
@@ -1023,6 +1028,21 @@ function appendFailureHint(content: string): string {
 
 export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   const now = opts.now ?? (() => Date.now());
+  const readOnly =
+    truthyEnv("OPENCLAW_MEMOS_READONLY") || truthyEnv("MEMOS_READONLY");
+  const readOnlyInjectionProfile = effectiveReadOnlyInjectionProfile({
+    domain: opts.domain,
+    readOnlyInjectionProfile: opts.readOnlyInjectionProfile,
+  });
+  if (readOnly) {
+    opts.log.info("memos.readonly.enabled", {
+      source: process.env.OPENCLAW_MEMOS_READONLY
+        ? "OPENCLAW_MEMOS_READONLY"
+        : "MEMOS_READONLY",
+      domain: opts.domain ?? "",
+      injectionProfile: readOnlyInjectionProfile,
+    });
+  }
 
   // Per-session cursor so we don't re-capture messages across turns.
   const messageCursor = new Map<SessionId, number>();
@@ -1334,6 +1354,76 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       if (!prompt) return;
 
       const namespace = namespaceFromAgentCtx(ctx);
+
+      if (readOnly) {
+        const sessionId = await ensureSession(ctx.agentId, ctx.sessionKey, namespace);
+        clearToolFailureStreaksForTurn(toolFailureStreaks, {
+          runId: ctx.runId,
+          sessionId: ctx.sessionId ?? sessionId,
+          sessionKey: ctx.sessionKey,
+        });
+        lastUserTextBySession.set(sessionId, prompt);
+
+        const turnStartPromise = opts.core.searchMemory({
+          agent: opts.agent,
+          namespace,
+          sessionId,
+          query: prompt,
+        });
+        turnStartPromise.catch((err) => {
+          opts.log.warn("memos.onTurnStart.late_failure", {
+            err: err instanceof Error ? err.message : String(err),
+          });
+        });
+        const turnStartResult = await withSoftTimeout(
+          turnStartPromise,
+          BEFORE_PROMPT_SOFT_TIMEOUT_MS,
+        );
+        const packet = turnStartResult.ok ? turnStartResult.value : null;
+        if (!turnStartResult.ok) {
+          opts.log.warn("memos.onTurnStart.soft_timeout", {
+            sessionKey: ctx.sessionKey,
+            agentId: ctx.agentId,
+            timeoutMs: BEFORE_PROMPT_SOFT_TIMEOUT_MS,
+          });
+        }
+        opts.log.info("memos.readonly.retrieval", {
+          sessionKey: ctx.sessionKey,
+          agentId: ctx.agentId,
+          sessionId,
+          injectionProfile: readOnlyInjectionProfile,
+          hits: packet?.hits.length ?? 0,
+        });
+
+        const renderedBlock = renderContextBlock(packet, { hintWhenEmpty: false });
+        const { block, truncated } = capContextBlock(renderedBlock);
+        const durationMs = now() - startedAt;
+
+        opts.log.info("memos.onTurnStart", {
+          sessionKey: ctx.sessionKey,
+          agentId: ctx.agentId,
+          sessionId,
+          episodeId: packet?.query.episodeId,
+          hits: packet?.hits.length ?? 0,
+          tierLatencyMs: packet?.tierLatencyMs ?? { tier1: 0, tier2: 0, tier3: 0 },
+          durationMs,
+          contextChars: block.length,
+          injected: block.length > 0,
+          truncated,
+          softTimedOut: !turnStartResult.ok,
+        });
+        opts.log.info(
+          `memos.onTurnStart returned hits=${packet?.hits.length ?? 0} ` +
+            `durationMs=${durationMs} contextChars=${block.length} ` +
+            `injected=${block.length > 0 ? "yes" : "no"} ` +
+            `truncated=${truncated ? "yes" : "no"} ` +
+            `softTimedOut=${turnStartResult.ok ? "no" : "yes"}`,
+        );
+
+        if (!block) return;
+        return { prependContext: block + "\n\n" };
+      }
+
       const readOnlyTurnStart = memoryWritesDisabled();
       const sessionId = readOnlyTurnStart
         ? bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default")
@@ -1404,13 +1494,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         binding.episodeId ??
         (packet?.query.episodeId as EpisodeId | undefined);
 
-      const renderedBlock = renderContextBlock(packet, {
-        // Avoid making OpenClaw do a second tool-driven search when
-        // auto-recall found nothing. A no-hit turn should simply
-        // continue with the user's prompt; tools remain available if
-        // the model independently decides to use them.
-        hintWhenEmpty: false,
-      });
+      const renderedBlock = renderContextBlock(packet, { hintWhenEmpty: false });
       const { block, truncated } = capContextBlock(renderedBlock);
       const durationMs = now() - startedAt;
 

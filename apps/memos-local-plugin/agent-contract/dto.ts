@@ -548,6 +548,11 @@ export interface RetrievalQueryDTO {
   sessionId?: SessionId;
   episodeId?: EpisodeId;
   query: string;
+  /**
+   * Optional read-only eval scope override. Falls back to
+   * `algorithm.retrieval.readOnlyInjectionProfile` when unset.
+   */
+  injectionProfile?: "all" | "experience" | "skill" | "skill_experience";
   /** Optional structured filters (e.g. tags). */
   filters?: Record<string, unknown>;
   /** Maximum items to return per tier (overrides config). */

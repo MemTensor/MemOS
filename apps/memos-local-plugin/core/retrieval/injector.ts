@@ -19,6 +19,7 @@ import type {
   RetrievalReason,
   SessionId,
 } from "../../agent-contract/dto.js";
+import { isIrDomain } from "../domain.js";
 import { ids } from "../id.js";
 import { reflectionAsText } from "../capture/types.js";
 import type { CollectedGuidance } from "./decision-guidance.js";
@@ -33,8 +34,12 @@ import type {
   WorldModelCandidate,
 } from "./types.js";
 
-const MAX_SNIPPET_BODY_CHARS = 640;
 const DEFAULT_SKILL_SUMMARY_CHARS = 200;
+/** Default snippet body cap (trace / episode / experience / world-model). */
+const MAX_SNIPPET_BODY_CHARS = 640;
+/** Full skill injection keeps a larger inline guide budget. */
+const FULL_SKILL_SNIPPET_BODY_CHARS = 2800;
+
 const MEMORY_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
   weekday: "short",
   year: "numeric",
@@ -90,6 +95,8 @@ export interface InjectorInput {
    * when no historical snippets match, the host still receives the protocol.
    */
   taskProtocol?: string | null;
+  /** IR domain only: prepend built-in search playbook before packet body. */
+  domain?: "" | "ir";
 }
 
 export interface InjectorResult {
@@ -124,12 +131,16 @@ export function toPacket(input: InjectorInput): InjectorResult {
     });
   }
   const snippets = mapping.map((m) => m.snippet);
-  const rendered = renderWholePacket(snippets, input.reason, {
-    skillMode,
-    decisionGuidance: input.decisionGuidance,
-    standaloneMathFinalAnswer,
-    taskProtocol: input.taskProtocol,
-  });
+  const rendered = prependIrRenderPrompt(
+    renderWholePacket(snippets, input.reason, {
+      skillMode,
+      decisionGuidance: input.decisionGuidance,
+      standaloneMathFinalAnswer,
+      taskProtocol: input.taskProtocol,
+    }),
+    input.reason,
+    input.domain,
+  );
 
   const packet: InjectionPacket = {
     reason: input.reason,
@@ -265,6 +276,7 @@ function renderSkill(c: SkillCandidate, opts: RenderOpts): InjectionSnippet {
   if (opts.skillMode === "full") {
     const body = truncate(
       `Skill: ${c.skillName}\n` + c.invocationGuide.trim(),
+      FULL_SKILL_SNIPPET_BODY_CHARS,
     );
     return {
       refKind: "skill",
@@ -329,7 +341,7 @@ function renderTrace(c: TraceCandidate): InjectionSnippet {
     if (refl) parts.push(`[note] ${refl}`);
   }
   const body = withToolFollowUp(
-    truncate(parts.join("\n")),
+    truncate(parts.join("\n"), MAX_SNIPPET_BODY_CHARS),
     `→ call \`memos_get(id="${c.refId}", kind="trace")\` for the full turn`,
   );
   const when = formatMemoryTimestamp(c.ts);
@@ -346,7 +358,7 @@ function renderEpisode(c: EpisodeCandidate): InjectionSnippet {
   // (see tier2-trace.ts::renderEpisodeSummary). Keep prompt-facing text
   // free of retrieval metrics; they are useful for logs, not for answers.
   const body = withToolFollowUp(
-    truncate(stripEpisodePromptMetrics(c.summary)),
+    truncate(stripEpisodePromptMetrics(c.summary), MAX_SNIPPET_BODY_CHARS),
     `→ If this past task matches the current task type, call \`memos_timeline(episodeId="${c.refId}")\` BEFORE your first tool call to see what tools were used and what succeeded.`,
   );
   const when = formatMemoryTimestamp(c.ts);
@@ -370,16 +382,21 @@ function stripEpisodePromptMetrics(summary: string): string {
 }
 
 function renderExperience(c: ExperienceCandidate): InjectionSnippet {
+  const trigger =
+    c.trigger && c.trigger.trim() !== c.title.trim()
+      ? `Trigger: ${c.trigger}`
+      : null;
   const parts = [
     renderExperienceUseHint(c),
-    c.trigger ? `Trigger: ${c.trigger}` : null,
+    trigger,
+    c.procedure?.trim() ? `Procedure: ${c.procedure.trim()}` : null,
   ].filter(Boolean);
   return {
     refKind: "experience",
     refId: c.refId,
     title: c.title,
     body: withToolFollowUp(
-      truncate(parts.join("\n")),
+      truncate(parts.join("\n"), MAX_SNIPPET_BODY_CHARS),
       `→ call \`memos_get(id="${c.refId}", kind="policy")\` for the full policy details before relying on this experience`,
     ),
   };
@@ -403,7 +420,7 @@ function renderExperienceUseHint(c: ExperienceCandidate): string {
 
 function renderWorldModel(c: WorldModelCandidate): InjectionSnippet {
   const body = withToolFollowUp(
-    truncate(`World model: ${c.title}\n${c.body}`),
+    truncate(`World model: ${c.title}\n${c.body}`, MAX_SNIPPET_BODY_CHARS),
     `→ call \`memos_get(id="${c.refId}", kind="world_model")\` for the full environment knowledge`,
   );
   return {
@@ -760,9 +777,9 @@ function formatMemoryTimestamp(ts: number): string {
   return `${get("weekday")} ${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")} ${get("timeZoneName")}`;
 }
 
-function truncate(s: string): string {
-  if (s.length <= MAX_SNIPPET_BODY_CHARS) return s;
-  const head = s.slice(0, MAX_SNIPPET_BODY_CHARS - 16);
+function truncate(s: string, maxChars: number): string {
+  if (s.length <= maxChars) return s;
+  const head = s.slice(0, maxChars - 16);
   return `${head}\n...[truncated]`;
 }
 
@@ -770,3 +787,69 @@ function round(n: number, d: number): number {
   const f = 10 ** d;
   return Math.round(n * f) / f;
 }
+
+/** IR domain built-in search playbook (v6). */
+const IR_TURN_START_SEARCH_PLAYBOOK = `## General retrieval playbook
+
+You are answering a complex retrieval question with multiple clues, indirect references, hidden candidates, or partial-match risk. Use the available search tools or document sources to surface candidate answers, verify them against the clues, and return the requested answer slot.
+
+### 1. Hypothesize first, then verify by name
+- BEFORE your first search call, write out a short numbered list of 3-5
+  candidate entities - specific proper names of people / groups / works /
+  places / events - that plausibly satisfy the clues, based on your own world
+  knowledge. Do this even if you are unsure. If you genuinely cannot name a
+  single plausible candidate, say so in one line and start with clue
+  decomposition (section 2).
+- Probe candidates BY NAME plus one distinguishing term. Confirming or
+  refuting a named candidate is far more effective than searching the
+  riddle's own wording.
+- Snippet evidence ALWAYS outranks your prior guesses: never claim a
+  candidate satisfies a constraint unless a snippet explicitly supports it.
+- Whenever a snippet reveals a new name, add it to the candidate list and
+  probe it immediately.
+
+### 2. Decompose constraints - one concrete fact per query
+- Extract the concrete nouns from each clue (dates, places, awards, numbers,
+  titles, roles) and search them SEPARATELY.
+- Keep queries short: at most ~6 keywords. Use at most ONE quoted phrase per
+  query.
+- Never paste long paraphrases of the riddle or stack several quoted phrases
+  into a single query - the dense retriever fails on those.
+- Intersect the results: an entity that appears across multiple clue-searches
+  is your prime candidate.
+
+### 3. Pivot instead of rephrasing
+- If two consecutive queries return irrelevant snippets, do NOT reshuffle the
+  same words - switch to a different clue, or switch to candidate-name
+  probing.
+- Lead with the rarest, most distinctive terms (uncommon names, exact
+  numbers, niche events). Common words waste a search.
+
+### 4. Persistence rules
+- The answer exists in the corpus. You MUST NOT give a final answer before
+  you have made at least 12 search calls, unless you have already verified
+  every constraint of one candidate.
+- Do not conclude "not found" until you have (a) probed every named
+  candidate, and (b) searched each major clue separately.
+- If you cannot verify every constraint, still COMMIT to the single
+  best-supported candidate and cite the matching evidence. A specific answer
+  with partial support is always better than answering "unknown" or
+  "not found".
+
+### 5. Verify before answering
+- Cross-check the final candidate against EVERY constraint, with at least one
+  snippet per constraint, and cite the document ids you relied on.`;
+
+/** IR domain only: prepend the built-in search playbook before the packet body. */
+function prependIrRenderPrompt(
+  rendered: string,
+  _reason: RetrievalReason,
+  domain?: string,
+): string {
+  if (!isIrDomain(domain)) return rendered;
+  const body = rendered.trim();
+  return body
+    ? `${IR_TURN_START_SEARCH_PLAYBOOK}\n\n${body}`
+    : IR_TURN_START_SEARCH_PLAYBOOK;
+}
+

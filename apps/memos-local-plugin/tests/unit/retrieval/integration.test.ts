@@ -162,6 +162,22 @@ function seed(handle: TmpDbHandle) {
   });
 }
 
+function depsWithInjectionProfile(
+  handle: TmpDbHandle,
+  profile: "all" | "experience" | "skill" | "skill_experience",
+  domain: "" | "ir" = "ir",
+): RetrievalDeps {
+  const deps = makeDeps(handle);
+  return {
+    ...deps,
+    config: {
+      ...deps.config,
+      domain,
+      readOnlyInjectionProfile: profile,
+    },
+  };
+}
+
 function makeDeps(handle: TmpDbHandle): RetrievalDeps {
   return {
     repos: {
@@ -270,8 +286,10 @@ describe("retrieval/integration", () => {
     expect(experience?.refId).toBe("po_sec13f_issuer");
     expect(experience?.title).toContain("SEC 13F issuer CUSIP");
     expect(experience?.body).toContain("Trigger: Parse SEC 13F holdings");
+    expect(experience?.body).toContain(
+      "Procedure: Use holdings table columns directly",
+    );
     expect(experience?.body).toContain('memos_get(id="po_sec13f_issuer", kind="policy")');
-    expect(experience?.body).not.toContain("Use holdings table columns directly");
     expect(experience?.body).not.toContain("confidence=");
     expect(experience?.body).not.toContain("evidence=");
     expect(res.packet.rendered).toContain("## Experiences");
@@ -294,6 +312,85 @@ describe("retrieval/integration", () => {
     });
     expect(res.stats.tier1Count).toBe(0);
     expect(res.packet.snippets.every((s) => s.refKind !== "skill")).toBe(true);
+  });
+
+  it("readOnlyInjectionProfile is ignored when domain is not ir", async () => {
+    const ctx = {
+      reason: "tool_driven" as const,
+      agent: "openclaw" as const,
+      sessionId: "s1" as SessionId,
+      tool: "memos_search",
+      args: { query: "docker compose" },
+      ts: NOW as never,
+    };
+    const irScoped = await toolDrivenRetrieve(
+      depsWithInjectionProfile(handle, "skill", "ir"),
+      ctx,
+    );
+    const defaultDomain = await toolDrivenRetrieve(
+      depsWithInjectionProfile(handle, "skill", ""),
+      ctx,
+    );
+    const irKinds = irScoped.packet.snippets.map((s) => s.refKind);
+    const defaultKinds = defaultDomain.packet.snippets.map((s) => s.refKind);
+    expect(irKinds).toContain("skill");
+    expect(irScoped.stats.tier1Count).toBeGreaterThan(0);
+    expect(defaultKinds).not.toContain("skill");
+    expect(defaultDomain.stats.tier1Count).toBe(0);
+  });
+
+  it("readOnlyInjectionProfile=experience injects policy only", async () => {
+    const res = await toolDrivenRetrieve(depsWithInjectionProfile(handle, "experience"), {
+      reason: "tool_driven",
+      agent: "openclaw",
+      sessionId: "s1" as SessionId,
+      tool: "memos_search",
+      args: { query: "SEC 13F issuer CUSIP parsing" },
+      ts: NOW as never,
+    });
+    const kinds = res.packet.snippets.map((s) => s.refKind);
+    expect(kinds).toContain("experience");
+    expect(kinds).not.toContain("skill");
+    expect(kinds).not.toContain("trace");
+    expect(kinds).not.toContain("episode");
+    expect(kinds).not.toContain("world-model");
+  });
+
+  it("readOnlyInjectionProfile=skill injects skill only via tool_driven", async () => {
+    const res = await toolDrivenRetrieve(depsWithInjectionProfile(handle, "skill"), {
+      reason: "tool_driven",
+      agent: "openclaw",
+      sessionId: "s1" as SessionId,
+      tool: "memos_search",
+      args: { query: "docker compose" },
+      ts: NOW as never,
+    });
+    const kinds = res.packet.snippets.map((s) => s.refKind);
+    expect(kinds).toContain("skill");
+    expect(kinds).not.toContain("experience");
+    expect(kinds).not.toContain("trace");
+    expect(kinds).not.toContain("episode");
+    expect(kinds).not.toContain("world-model");
+  });
+
+  it("readOnlyInjectionProfile=skill_experience injects skill and policy mix", async () => {
+    const res = await toolDrivenRetrieve(
+      depsWithInjectionProfile(handle, "skill_experience"),
+      {
+        reason: "tool_driven",
+        agent: "openclaw",
+        sessionId: "s1" as SessionId,
+        tool: "memos_search",
+        args: { query: "docker compose SEC 13F issuer" },
+        ts: NOW as never,
+      },
+    );
+    const kinds = new Set(res.packet.snippets.map((s) => s.refKind));
+    expect(kinds.has("skill")).toBe(true);
+    expect(kinds.has("experience")).toBe(true);
+    expect(kinds.has("trace")).toBe(false);
+    expect(kinds.has("episode")).toBe(false);
+    expect(kinds.has("world-model")).toBe(false);
   });
 
   it("tool_driven filters trace and episode memories from the current session", async () => {

@@ -484,6 +484,22 @@ const AlgorithmSchema = Type.Object({
      * slightly larger window pays for itself).
      */
     llmFilterCandidateBodyChars: NumberInRange(500, 120, 2000),
+    /**
+     * Read-only eval injection scope:
+     *   - all: default tier mix for the entrypoint
+     *   - experience: Tier2 policy/experience only
+     *   - skill: Tier1 skill only
+     *   - skill_experience: Tier1 skill + Tier2 experience
+     */
+    readOnlyInjectionProfile: Type.Union(
+      [
+        Type.Literal("all"),
+        Type.Literal("experience"),
+        Type.Literal("skill"),
+        Type.Literal("skill_experience"),
+      ],
+      { default: "all" },
+    ),
   }, { default: {} }),
 }, { default: {} });
 
@@ -561,6 +577,12 @@ const LoggingSchema = Type.Object({
 
 export const ConfigSchema = Type.Object({
   version: NumberInRange(1, 1),
+  /**
+   * Task domain preset. `ir` enables IR-eval-only behaviors: search
+   * playbook prepend, readonly skill/full injection, and IR query focus.
+   * Omit or leave empty for normal agent sessions.
+   */
+  domain: Type.Union([Type.Literal(""), Type.Literal("ir")], { default: "" }),
   viewer: ViewerSchema,
   bridge: BridgeSchema,
   embedding: EmbeddingSchema,

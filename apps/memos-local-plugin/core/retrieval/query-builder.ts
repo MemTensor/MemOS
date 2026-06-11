@@ -10,7 +10,9 @@
  */
 
 import { extractErrorSignatures } from "../capture/error-signature.js";
+import { isIrDomain } from "../domain.js";
 import { extractPatternTerms, prepareFtsMatch } from "../storage/keyword.js";
+import { focusIrRetrievalQuery } from "./task-focus.js";
 import type { RetrievalCtx } from "./types.js";
 
 const MAX_QUERY_CHARS = 1_500;
@@ -101,26 +103,36 @@ export interface RetrievalQueryExtract {
   keywords: string[];
 }
 
+export interface QueryBuildOpts {
+  domain?: string;
+}
+
 /**
  * Build a `CompiledQuery` from a retrieval context. Behavior varies per
  * reason so that e.g. `decision_repair` biases toward the failing tool name.
  */
-export function buildQuery(ctx: RetrievalCtx): CompiledQuery {
-  return finalize(rawQueryText(ctx));
+export function buildQuery(ctx: RetrievalCtx, opts?: QueryBuildOpts): CompiledQuery {
+  return finalize(rawQueryText(ctx, opts));
 }
 
 export function buildQueryWithExtract(
   ctx: RetrievalCtx,
   extract: RetrievalQueryExtract | null | undefined,
+  opts?: QueryBuildOpts,
 ): CompiledQuery {
-  return finalize(rawQueryText(ctx), extract);
+  return finalize(rawQueryText(ctx, opts), extract);
 }
 
-export function rawQueryText(ctx: RetrievalCtx): string {
+function applyIrQueryFocus(raw: string, domain?: string): string {
+  if (!isIrDomain(domain)) return raw;
+  return focusIrRetrievalQuery(raw).text;
+}
+
+export function rawQueryText(ctx: RetrievalCtx, opts?: QueryBuildOpts): string {
   switch (ctx.reason) {
     case "turn_start": {
       const hintText = hintToText(ctx.contextHints);
-      const parts = [ctx.userText?.trim() ?? ""];
+      const parts = [applyIrQueryFocus(ctx.userText?.trim() ?? "", opts?.domain)];
       if (hintText) parts.push(hintText);
       return parts.join("\n");
     }
@@ -129,7 +141,9 @@ export function rawQueryText(ctx: RetrievalCtx): string {
         const rest = { ...ctx.args };
         delete rest.query;
         const restText = Object.keys(rest).length > 0 ? renderArgs(rest) : "";
-        return [ctx.args.query.trim(), restText].filter(Boolean).join("\n");
+        return [applyIrQueryFocus(ctx.args.query.trim(), opts?.domain), restText]
+          .filter(Boolean)
+          .join("\n");
       }
       const args = renderArgs(ctx.args);
       return `tool:${ctx.tool}\n${args}`;

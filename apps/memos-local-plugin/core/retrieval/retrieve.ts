@@ -26,6 +26,11 @@ import type {
   RetrievalReason,
 } from "../../agent-contract/dto.js";
 import { ERROR_CODES } from "../../agent-contract/errors.js";
+import {
+  effectiveReadOnlyInjectionProfile,
+  effectiveSkillInjectionMode,
+  isIrDomain,
+} from "../domain.js";
 import { ids } from "../id.js";
 import { rootLogger } from "../logger/index.js";
 import { collectDecisionGuidance } from "./decision-guidance.js";
@@ -47,6 +52,11 @@ import { runTier1 } from "./tier1-skill.js";
 import { runTier2Experience } from "./tier2-experience.js";
 import { runTier2 } from "./tier2-trace.js";
 import { runTier3 } from "./tier3-world.js";
+import {
+  mergeRetrievePlanOverride,
+  resolveInjectionProfilePlan,
+  type ReadOnlyInjectionProfile,
+} from "./injection-profile.js";
 import type {
   EpisodeCandidate,
   ExperienceCandidate,
@@ -108,6 +118,8 @@ export interface RetrievePlanOverride {
   wantTier1?: boolean;
   wantTier2?: boolean;
   wantTier3?: boolean;
+  /** Tier2: only policy/experience hits — skip trace + episode recall. */
+  experienceOnly?: boolean;
   limit?: number;
 }
 
@@ -118,25 +130,26 @@ export async function turnStartRetrieve(
   ctx: TurnStartRetrieveCtx,
   opts: RetrieveOptions = {},
 ): Promise<RetrievalResult> {
+  const resolvedOpts = withInjectionProfileOpts(deps, opts);
   if (deps.config.lightweightMemory) {
-    return runAll(deps, ctx, opts, applyPlanOverride({
+    return runAll(deps, ctx, resolvedOpts, applyPlanOverride({
       wantTier1: false,
       wantTier2: true,
       wantTier3: false,
       includeLowValue: false,
-      limit: opts.limit ?? Math.max(1, deps.config.tier2TopK),
+      limit: resolvedOpts.limit ?? Math.max(1, deps.config.tier2TopK),
       traceOnly: true,
-    }, opts.plan));
+    }, resolvedOpts.plan));
   }
-  return runAll(deps, ctx, opts, applyPlanOverride({
+  return runAll(deps, ctx, resolvedOpts, applyPlanOverride({
     wantTier1: true,
     wantTier2: true,
     wantTier3: true,
     includeLowValue: deps.config.includeLowValue,
     limit:
-      opts.limit ??
+      resolvedOpts.limit ??
       deps.config.tier1TopK + deps.config.tier2TopK + deps.config.tier3TopK,
-  }, opts.plan));
+  }, resolvedOpts.plan));
 }
 
 // ─── Entry point: tool_driven ───────────────────────────────────────────────
@@ -146,17 +159,18 @@ export async function toolDrivenRetrieve(
   ctx: ToolDrivenRetrieveCtx,
   opts: RetrieveOptions = {},
 ): Promise<RetrievalResult> {
+  const resolvedOpts = withInjectionProfileOpts(deps, opts);
   // Tool-driven retrievals are smaller — we've already spent a turn budget;
   // we only mine Tier 2 (+ optional Tier 3 if vec available). Tier-1 is
   // skipped to avoid re-injecting skills the agent already saw at turn_start.
-  return runAll(deps, ctx, opts, {
+  return runAll(deps, ctx, resolvedOpts, applyPlanOverride({
     wantTier1: false,
     wantTier2: true,
     wantTier3: deps.config.lightweightMemory ? false : true,
     includeLowValue: deps.config.includeLowValue,
-    limit: opts.limit ?? Math.max(1, deps.config.tier2TopK),
+    limit: resolvedOpts.limit ?? Math.max(1, deps.config.tier2TopK),
     traceOnly: deps.config.lightweightMemory,
-  });
+  }, resolvedOpts.plan));
 }
 
 // ─── Entry point: skill_invoke ──────────────────────────────────────────────
@@ -238,6 +252,7 @@ interface RunPlan {
   includeLowValue: boolean;
   limit: number;
   traceOnly?: boolean;
+  experienceOnly?: boolean;
 }
 
 function applyPlanOverride(plan: RunPlan, override?: RetrievePlanOverride): RunPlan {
@@ -249,7 +264,21 @@ function applyPlanOverride(plan: RunPlan, override?: RetrievePlanOverride): RunP
     wantTier2: override.wantTier2 ?? plan.wantTier2,
     wantTier3: override.wantTier3 ?? plan.wantTier3,
     limit: override.limit ?? plan.limit,
+    experienceOnly: override.experienceOnly ?? plan.experienceOnly,
   };
+}
+
+function withInjectionProfileOpts(
+  deps: RetrievalDeps,
+  opts: RetrieveOptions,
+): RetrieveOptions {
+  if (!isIrDomain(deps.config.domain)) return opts;
+  const profilePlan = resolveInjectionProfilePlan(
+    effectiveReadOnlyInjectionProfile(deps.config) as ReadOnlyInjectionProfile,
+  );
+  const mergedPlan = mergeRetrievePlanOverride(profilePlan, opts.plan);
+  if (!mergedPlan) return opts;
+  return { ...opts, plan: mergedPlan };
 }
 
 async function runAll(
@@ -263,14 +292,15 @@ async function runAll(
   const episodeId = (ctx as { episodeId?: EpisodeId }).episodeId;
   const ts = deps.now();
 
-  const rawQuery = rawQueryText(ctx);
+  const queryOpts = { domain: deps.config.domain };
+  const rawQuery = rawQueryText(ctx, queryOpts);
   const llmExtract = await extractRetrievalQueryWithLlm(rawQuery, {
     llm: deps.llm ?? null,
     log,
     episodeId,
     timeoutMs: RETRIEVAL_QUERY_EXTRACT_TIMEOUT_MS,
   });
-  const compiled = buildQueryWithExtract(ctx, llmExtract);
+  const compiled = buildQueryWithExtract(ctx, llmExtract, queryOpts);
   const taskProtocol = renderTaskProtocol(ctx);
   const standaloneMathFinalAnswer = isStandaloneMathFinalAnswerContext(ctx);
   opts.events?.emit({
@@ -319,7 +349,10 @@ async function runAll(
     const wantTier1 = plan.wantTier1 && deps.config.tier1TopK > 0;
     const wantTier2 = plan.wantTier2 && deps.config.tier2TopK > 0;
     const wantTier3 = plan.wantTier3 && deps.config.tier3TopK > 0;
-    const traceOnly = plan.traceOnly === true || deps.config.lightweightMemory === true;
+    const experienceOnly = plan.experienceOnly === true;
+    const traceOnly =
+      !experienceOnly &&
+      (plan.traceOnly === true || deps.config.lightweightMemory === true);
 
     const tier1Start = Date.now();
     const tier1Promise: Promise<SkillCandidate[]> =
@@ -338,7 +371,7 @@ async function runAll(
 
     const tier2Start = Date.now();
     const tier2Promise: Promise<{ traces: TraceCandidate[]; episodes: EpisodeCandidate[] }> =
-      wantTier2 && !noUsableChannel
+      wantTier2 && !experienceOnly && !noUsableChannel
         ? runTier2(
             { repos: deps.repos, config: deps.config, now: deps.now },
             {
@@ -357,7 +390,7 @@ async function runAll(
         : Promise.resolve({ traces: [], episodes: [] });
 
     const tier2ExperiencePromise: Promise<ExperienceCandidate[]> =
-      wantTier2 && !traceOnly && !noUsableChannel
+      wantTier2 && (!traceOnly || experienceOnly) && !noUsableChannel
         ? runTier2Experience(
             { repos: deps.repos, config: deps.config },
             {
@@ -494,11 +527,12 @@ async function runAll(
       // descriptors + a `memos_skill_get(...)` invocation hint instead of
       // inlining every full guide. Hosts without tool support can flip
       // this to "full" via `algorithm.retrieval.skillInjectionMode`.
-      skillInjectionMode: deps.config.skillInjectionMode,
+      skillInjectionMode: effectiveSkillInjectionMode(deps.config),
       skillSummaryChars: deps.config.skillSummaryChars,
       decisionGuidance,
       standaloneMathFinalAnswer,
       taskProtocol,
+      domain: deps.config.domain,
     });
     // Surface the dropped-by-LLM candidates so the Logs page can show
     // "initial N → kept M" without the viewer having to re-run the

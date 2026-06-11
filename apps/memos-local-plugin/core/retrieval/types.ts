@@ -316,6 +316,16 @@ export interface RetrievalConfig {
    * window pays for itself).
    */
   llmFilterCandidateBodyChars?: number;
+  /**
+   * Read-only eval scope: restrict which memory kinds are injected before
+   * the prompt. `all` preserves the normal tier mix for the entrypoint.
+   */
+  readOnlyInjectionProfile?: "all" | "experience" | "skill" | "skill_experience";
+  /**
+   * Task domain preset. IR-only retrieval knobs (`readOnlyInjectionProfile`,
+   * `skillInjectionMode`, query focus) apply only when `domain === "ir"`.
+   */
+  domain?: "" | "ir";
   /** Low-cost mode: retrieve raw trace memories only. */
   lightweightMemory?: boolean;
 }
@@ -759,7 +769,8 @@ export interface RetrievalStats {
     | "deferred_to_final"
     | "llm_kept_all"
     | "llm_filtered"
-    | "llm_failed_safe_cutoff";
+    | "llm_rejected_all"
+    | "llm_filter_error";
   llmFilterSufficient?: boolean;
   llmFilterKept?: number;
   llmFilterDropped?: number;

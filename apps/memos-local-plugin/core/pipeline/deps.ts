@@ -164,6 +164,8 @@ export function extractAlgorithmConfig(
       llmFilterMinCandidates: alg.lightweightMemory.enabled ? 1 : alg.retrieval.llmFilterMinCandidates,
       llmFilterCandidateBodyChars: alg.retrieval.llmFilterCandidateBodyChars,
       lightweightMemory: alg.lightweightMemory.enabled,
+      readOnlyInjectionProfile: alg.retrieval.readOnlyInjectionProfile,
+      domain: deps.config.domain,
     },
     session: {
       followUpMode: alg.session.followUpMode,

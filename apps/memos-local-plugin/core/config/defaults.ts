@@ -8,6 +8,7 @@ import type { ResolvedConfig } from "./schema.js";
 
 export const DEFAULT_CONFIG: ResolvedConfig = {
   version: 1,
+  domain: "",
   viewer: {
     // Per-agent default lives in `templates/config.<agent>.yaml`:
     //   - openclaw → 18799
@@ -252,6 +253,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // hits before injection.
       llmFilterMinCandidates: 2,
       llmFilterCandidateBodyChars: 500,
+      readOnlyInjectionProfile: "all",
     },
   },
   hub: {

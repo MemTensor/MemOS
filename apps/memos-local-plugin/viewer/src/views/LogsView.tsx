@@ -725,7 +725,8 @@ function RetrievalFunnel({ stats }: { stats: RetrievalStatsPayload }) {
   const localFilterDeferred = outcome === "deferred_to_final";
   const finalLlmRan = finalFilter?.outcome === "llm_kept_all" ||
     finalFilter?.outcome === "llm_filtered" ||
-    finalFilter?.outcome === "llm_failed_safe_cutoff";
+    finalFilter?.outcome === "llm_rejected_all" ||
+    finalFilter?.outcome === "llm_filter_error";
   const fmtNum = (n: number | undefined, digits = 3) =>
     typeof n === "number" && Number.isFinite(n) ? n.toFixed(digits) : "—";
   const channelEntries = Object.entries(stats.channelHits ?? {}).filter(

@@ -27,6 +27,67 @@ describe("retrieval/query-builder", () => {
     expect(cq.truncated).toBe(false);
   });
 
+  it("turn_start focuses IR eval prompts on the ## Question section when domain=ir", () => {
+    const question =
+      "- Actor A was born in the 1950s in an Asian country\n- What is actor A's debut TV series called?";
+    const cq = buildQuery(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_ir" as unknown as never,
+        userText:
+          "new task\n\nYou are a deep research agent. Answer the question by using the search tool to find relevant documents from a local knowledge base.\n\n" +
+          "## CRITICAL RULES\n- You MUST ONLY use the \"search\" tool.\n\n" +
+          "## Response Format\nWhen you have the answer, respond with:\nExplanation / Exact Answer / Confidence\n\n" +
+          `## Question\n\n${question}`,
+        ts: NOW,
+      },
+      { domain: "ir" },
+    );
+    expect(cq.text).toBe(question);
+    expect(cq.text).not.toContain("deep research agent");
+    expect(cq.text).not.toContain("CRITICAL RULES");
+  });
+
+  it("turn_start keeps full prompt when domain is not ir", () => {
+    const raw =
+      "new task\n\nYou are a deep research agent.\n\n## Question\n\nWho won?";
+    const cq = buildQuery({
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s_ir" as unknown as never,
+      userText: raw,
+      ts: NOW,
+    });
+    expect(cq.text).toBe(raw);
+  });
+
+  it("tool_driven focuses IR eval prompts on the ## Question section when domain=ir", () => {
+    const question =
+      "Give me the name of the school that the below actress was expelled from: - She is 163 cm tall.";
+    const cq = buildQuery(
+      {
+        reason: "tool_driven",
+        agent: "openclaw",
+        sessionId: "s_ir_tool" as unknown as never,
+        tool: "memos_search",
+        args: {
+          query:
+            "new task\n\nYou are a deep research agent. Answer the question by using the search tool to find relevant documents from a local knowledge base.\n\n" +
+            "## CRITICAL RULES\n- You MUST ONLY use the \"search\" tool.\n\n" +
+            "## Response Format\nExplanation / Exact Answer / Confidence\n\n" +
+            `## Question\n\n${question}`,
+          limit: 5,
+        },
+        ts: NOW,
+      },
+      { domain: "ir" },
+    );
+    expect(cq.text).toContain(question);
+    expect(cq.text).toContain('"limit":5');
+    expect(cq.text).not.toContain("deep research agent");
+  });
+
   it("tool_driven uses explicit search query text when present", () => {
     const cq = buildQuery({
       reason: "tool_driven",

@@ -6,7 +6,6 @@
     "server/**/*.ts",
     "bridge/**/*.ts",
     "adapters/openclaw/**/*.ts",
-    "scripts/**/*.ts",
     "bridge.cts"
   ],
   "exclude": [
