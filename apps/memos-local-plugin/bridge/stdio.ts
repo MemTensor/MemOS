@@ -44,6 +44,8 @@ export interface StdioServerOptions {
   logToStderr?: boolean;
   /** Enable strict param validation. */
   strict?: boolean;
+  /** Close the stdio transport after this many milliseconds without input. */
+  idleTimeoutMs?: number;
 }
 
 export interface StdioServerHandle {
@@ -74,9 +76,13 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
   const stdin = options.stdin ?? process.stdin;
   const stdout = options.stdout ?? process.stdout;
   const logToStderr = options.logToStderr ?? true;
+  const idleTimeoutMs = options.idleTimeoutMs;
   const dispatch = makeDispatcher(options.core, { strict: !!options.strict });
 
   let closed = false;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let resolveDone: (() => void) | null = null;
+  let activeDispatches = 0;
   const eventsHandlers = new Set<symbol>();
   const logsHandlers = new Set<symbol>();
 
@@ -104,6 +110,10 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
   function finishTransport(err?: Error): void {
     if (closed) return;
     closed = true;
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
     try {
       eventsUnsubscribe();
     } catch {
@@ -119,6 +129,24 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
       entry.reject(err ?? new Error("stdio bridge closed"));
       serverPending.delete(id);
     }
+    resolveDone?.();
+  }
+
+  function armIdleTimer(): void {
+    if (!idleTimeoutMs || idleTimeoutMs <= 0 || closed) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (serverPending.size > 0 || activeDispatches > 0) {
+        armIdleTimer();
+        return;
+      }
+      if (logToStderr) {
+        process.stderr.write(`bridge.stdio.idle: closing after ${idleTimeoutMs}ms without input\n`);
+      }
+      finishTransport(new Error("stdio bridge idle timeout"));
+      stdin.pause?.();
+    }, idleTimeoutMs);
+    (idleTimer as unknown as { unref?: () => void }).unref?.();
   }
 
   function writeLine(obj: unknown): void {
@@ -154,6 +182,7 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
     if (closed) return;
     const trimmed = line.trim();
     if (trimmed.length === 0) return;
+    armIdleTimer();
 
     let msg: JsonRpcRequest | null = null;
     try {
@@ -198,6 +227,7 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
     }
 
     try {
+      activeDispatches++;
       const result = await dispatch(msg.method, msg.params);
       if (msg.id !== undefined && msg.id !== null) {
         const ok: JsonRpcSuccess = {
@@ -221,6 +251,9 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
           `bridge.stdio.dispatch.err ${msg.method}: ${mErr.message}\n`,
         );
       }
+    } finally {
+      activeDispatches = Math.max(0, activeDispatches - 1);
+      armIdleTimer();
     }
   }
 
@@ -229,6 +262,8 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
   stdin.setEncoding?.("utf8");
 
   const donePromise = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+    armIdleTimer();
     stdin.on("data", (chunk) => {
       if (closed) return;
       buffer += String(chunk);
@@ -246,14 +281,12 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
         buffer = "";
       }
       finishTransport();
-      resolve();
     });
     stdin.on("error", (err) => {
       if (logToStderr) {
         process.stderr.write(`bridge.stdio.read.err: ${err.message}\n`);
       }
       finishTransport(err);
-      resolve();
     });
   });
 

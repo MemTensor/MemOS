@@ -2593,11 +2593,17 @@ export function createMemoryCore(
     }
   }
 
-  async function getTrace(id: string, namespace?: RuntimeNamespace): Promise<TraceDTO | null> {
+  async function getTrace(
+    id: string,
+    namespace?: RuntimeNamespace,
+    opts?: { includeAllNamespaces?: boolean },
+  ): Promise<TraceDTO | null> {
     ensureLive();
     if (namespace) activeNamespace = namespace;
     const row = handle.repos.traces.getById(id);
-    return row && visibleToCurrent(row) ? traceRowToDTO(row, handle.repos.episodes.getById(row.episodeId)) : null;
+    return row && (opts?.includeAllNamespaces || visibleToCurrent(row))
+      ? traceRowToDTO(row, handle.repos.episodes.getById(row.episodeId))
+      : null;
   }
 
   async function updateTrace(
@@ -2608,10 +2614,11 @@ export function createMemoryCore(
       agentText?: string;
       tags?: readonly string[];
     },
+    opts?: { includeAllNamespaces?: boolean },
   ): Promise<TraceDTO | null> {
     ensureLive();
     const existing = handle.repos.traces.getById(id);
-    if (!existing || !ownedByCurrent(existing)) return null;
+    if (!existing || (!opts?.includeAllNamespaces && !ownedByCurrent(existing))) return null;
     handle.repos.traces.updateBody(id, patch);
     const updated = handle.repos.traces.getById(id);
     return updated
@@ -2619,10 +2626,13 @@ export function createMemoryCore(
       : null;
   }
 
-  async function deleteTrace(id: string): Promise<{ deleted: boolean }> {
+  async function deleteTrace(
+    id: string,
+    opts?: { includeAllNamespaces?: boolean },
+  ): Promise<{ deleted: boolean }> {
     ensureLive();
     const existing = handle.repos.traces.getById(id);
-    if (!existing || !ownedByCurrent(existing)) return { deleted: false };
+    if (!existing || (!opts?.includeAllNamespaces && !ownedByCurrent(existing))) return { deleted: false };
     const wasHubShared = existing.share?.scope === "hub";
     handle.db.tx(() => {
       handle.repos.episodes.removeTraceIds(existing.episodeId, [id]);
@@ -2634,14 +2644,17 @@ export function createMemoryCore(
     return { deleted: true };
   }
 
-  async function deleteTraces(ids: readonly string[]): Promise<{ deleted: number }> {
+  async function deleteTraces(
+    ids: readonly string[],
+    opts?: { includeAllNamespaces?: boolean },
+  ): Promise<{ deleted: number }> {
     ensureLive();
     let deleted = 0;
     // Process one-by-one so a bad id doesn't poison the whole batch.
     // The viewer's bulk delete is low-frequency (dozens at a time).
     for (const id of ids) {
       const existing = handle.repos.traces.getById(id);
-      if (!existing || !ownedByCurrent(existing)) continue;
+      if (!existing || (!opts?.includeAllNamespaces && !ownedByCurrent(existing))) continue;
       const wasHubShared = existing.share?.scope === "hub";
       handle.db.tx(() => {
         handle.repos.episodes.removeTraceIds(existing.episodeId, [id]);
@@ -2662,10 +2675,11 @@ export function createMemoryCore(
       target?: string | null;
       sharedAt?: number | null;
     },
+    opts?: { includeAllNamespaces?: boolean },
   ): Promise<TraceDTO | null> {
     ensureLive();
     const existing = handle.repos.traces.getById(id);
-    if (!existing || !ownedByCurrent(existing)) return null;
+    if (!existing || (!opts?.includeAllNamespaces && !ownedByCurrent(existing))) return null;
     handle.repos.traces.updateShare(id, share);
     const updated = handle.repos.traces.getById(id);
     if (updated) {

@@ -64,7 +64,7 @@ export function registerMemoryRoutes(
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const trace = await deps.core.getTrace(id);
+    const trace = await deps.core.getTrace(id, undefined, { includeAllNamespaces: true });
     if (trace === null) {
       writeError(ctx, 404, "not_found", `trace not found: ${id}`);
       return;

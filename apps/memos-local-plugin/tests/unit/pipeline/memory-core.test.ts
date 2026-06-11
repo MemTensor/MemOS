@@ -536,6 +536,100 @@ describe("MemoryCore façade", () => {
     expect(await core.listTraces({ limit: 10, groupByTurn: true })).toHaveLength(1);
   });
 
+  it("lets the viewer browse private Hermes instance memories without sharing them", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const agentANs = { agentKind: "hermes", profileId: "agent-a" };
+    const agentBNs = { agentKind: "hermes", profileId: "agent-b" };
+
+    const aStart = await core.onTurnStart({
+      agent: "hermes",
+      namespace: agentANs,
+      sessionId: "s-agent-a",
+      userText: "remember private agent a trace",
+      ts: 1_700_000_000_101,
+    });
+    await core.onTurnEnd({
+      agent: "hermes",
+      namespace: agentANs,
+      sessionId: "s-agent-a",
+      episodeId: aStart.query.episodeId!,
+      agentText: "stored for agent a",
+      toolCalls: [],
+      ts: 1_700_000_000_102,
+    });
+
+    const bStart = await core.onTurnStart({
+      agent: "hermes",
+      namespace: agentBNs,
+      sessionId: "s-agent-b",
+      userText: "remember private agent b trace",
+      ts: 1_700_000_000_201,
+    });
+    await core.onTurnEnd({
+      agent: "hermes",
+      namespace: agentBNs,
+      sessionId: "s-agent-b",
+      episodeId: bStart.query.episodeId!,
+      agentText: "stored for agent b",
+      toolCalls: [],
+      ts: 1_700_000_000_202,
+    });
+
+    await core.openSession({ agent: "hermes", sessionId: "s-agent-a", namespace: agentANs });
+
+    const runtimeRows = await core.listTraces({
+      limit: 10,
+      ownerAgentKind: "hermes",
+      ownerProfileId: "agent-b",
+    });
+    expect(runtimeRows).toHaveLength(0);
+
+    const viewerRows = await core.listTraces({
+      limit: 10,
+      ownerAgentKind: "hermes",
+      ownerProfileId: "agent-b",
+      includeAllNamespaces: true,
+    });
+    expect(viewerRows).toHaveLength(1);
+    expect(viewerRows[0]?.ownerProfileId).toBe("agent-b");
+    expect(viewerRows[0]?.share?.scope).toBe("private");
+
+    const allViewerRows = await core.listTraces({ limit: 10, includeAllNamespaces: true });
+    expect(allViewerRows.map((row) => row.ownerProfileId).sort()).toEqual([
+      "agent-a",
+      "agent-b",
+    ]);
+
+    const agentBTraceId = viewerRows[0]!.id;
+    expect(await core.updateTrace(agentBTraceId, { summary: "edited from viewer" })).toBeNull();
+    const updated = await core.updateTrace(
+      agentBTraceId,
+      { summary: "edited from viewer" },
+      { includeAllNamespaces: true },
+    );
+    expect(updated?.summary).toBe("edited from viewer");
+
+    expect(await core.shareTrace(agentBTraceId, { scope: "public" })).toBeNull();
+    const shared = await core.shareTrace(
+      agentBTraceId,
+      { scope: "public" },
+      { includeAllNamespaces: true },
+    );
+    expect(shared?.share?.scope).toBe("public");
+
+    expect(await core.deleteTrace(agentBTraceId)).toEqual({ deleted: false });
+    expect(await core.deleteTrace(agentBTraceId, { includeAllNamespaces: true })).toEqual({
+      deleted: true,
+    });
+  });
+
   it("records visible subagent task and result in the parent episode", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(

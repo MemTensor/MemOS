@@ -217,7 +217,7 @@ export interface MemoryCore {
 
   // ── memory queries ──
   searchMemory(query: RetrievalQueryDTO): Promise<RetrievalResultDTO>;
-  getTrace(id: string, namespace?: RuntimeNamespace): Promise<TraceDTO | null>;
+  getTrace(id: string, namespace?: RuntimeNamespace, opts?: { includeAllNamespaces?: boolean }): Promise<TraceDTO | null>;
   /**
    * Mutate a single trace's user-facing fields (role / summary /
    * body). Never touches algorithmic signals. Returns the updated
@@ -231,14 +231,15 @@ export interface MemoryCore {
       agentText?: string;
       tags?: readonly string[];
     },
+    opts?: { includeAllNamespaces?: boolean },
   ): Promise<TraceDTO | null>;
   /** Delete a trace by id (idempotent). Hard delete. */
-  deleteTrace(id: string): Promise<{ deleted: boolean }>;
+  deleteTrace(id: string, opts?: { includeAllNamespaces?: boolean }): Promise<{ deleted: boolean }>;
   /**
    * Bulk delete — takes an id list and returns how many rows were
    * actually removed. The viewer's "批量删除" uses this.
    */
-  deleteTraces(ids: readonly string[]): Promise<{ deleted: number }>;
+  deleteTraces(ids: readonly string[], opts?: { includeAllNamespaces?: boolean }): Promise<{ deleted: number }>;
   /**
    * Update the sharing state for a trace. `scope = null` clears the
    * share. The core never talks to the Hub itself; the adapter /
@@ -252,6 +253,7 @@ export interface MemoryCore {
       target?: string | null;
       sharedAt?: number | null;
     },
+    opts?: { includeAllNamespaces?: boolean },
   ): Promise<TraceDTO | null>;
   getPolicy(id: string, namespace?: RuntimeNamespace, opts?: { includeAllNamespaces?: boolean }): Promise<PolicyDTO | null>;
   getWorldModel(id: string, namespace?: RuntimeNamespace, opts?: { includeAllNamespaces?: boolean }): Promise<WorldModelDTO | null>;

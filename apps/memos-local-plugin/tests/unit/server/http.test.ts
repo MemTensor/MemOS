@@ -327,7 +327,9 @@ describe("HTTP server — REST routes", () => {
   it("GET /api/v1/memory/trace?id=t1 returns the trace", async () => {
     const r = await fetch(`${handle.url}/api/v1/memory/trace?id=t1`);
     expect(r.status).toBe(200);
-    expect(core.getTrace).toHaveBeenCalledWith("t1");
+    expect(core.getTrace).toHaveBeenCalledWith("t1", undefined, {
+      includeAllNamespaces: true,
+    });
   });
 
   it("GET /api/v1/memory/trace returns 404 for unknown ids", async () => {
@@ -472,6 +474,32 @@ describe("HTTP server — REST routes", () => {
       groupByTurn: false,
       ownerAgentKind: undefined,
       ownerProfileId: undefined,
+      includeAllNamespaces: false,
+    });
+  });
+
+  it("GET /api/v1/traces forwards includeAllNamespaces for viewer-wide browsing", async () => {
+    const r = await fetch(
+      `${handle.url}/api/v1/traces?ownerAgentKind=hermes&ownerProfileId=coder10&includeAllNamespaces=true`,
+    );
+    expect(r.status).toBe(200);
+    expect(core.listTraces).toHaveBeenCalledWith({
+      limit: 50,
+      offset: 0,
+      sessionId: undefined,
+      q: undefined,
+      groupByTurn: false,
+      ownerAgentKind: "hermes",
+      ownerProfileId: "coder10",
+      includeAllNamespaces: true,
+    });
+    expect(core.countTraces).toHaveBeenCalledWith({
+      sessionId: undefined,
+      q: undefined,
+      groupByTurn: false,
+      ownerAgentKind: "hermes",
+      ownerProfileId: "coder10",
+      includeAllNamespaces: true,
     });
   });
 
@@ -481,7 +509,53 @@ describe("HTTP server — REST routes", () => {
     const body = (await r.json()) as { id: string };
     expect(body.id).toBe("t-42");
     // Dispatcher strips route prefix and passes `t-42` to core.getTrace.
-    expect(core.getTrace).toHaveBeenCalledWith("t-42");
+    expect(core.getTrace).toHaveBeenCalledWith("t-42", undefined, {
+      includeAllNamespaces: true,
+    });
+  });
+
+  it("trace mutations use viewer-wide admin scope", async () => {
+    const patch = await fetch(`${handle.url}/api/v1/traces/t-42`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ summary: "edited" }),
+    });
+    expect(patch.status).toBe(200);
+    expect(core.updateTrace).toHaveBeenCalledWith(
+      "t-42",
+      { summary: "edited" },
+      { includeAllNamespaces: true },
+    );
+
+    const share = await fetch(`${handle.url}/api/v1/traces/t-42/share`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "public" }),
+    });
+    expect(share.status).toBe(200);
+    expect(core.shareTrace).toHaveBeenCalledWith(
+      "t-42",
+      expect.objectContaining({ scope: "public" }),
+      { includeAllNamespaces: true },
+    );
+
+    const del = await fetch(`${handle.url}/api/v1/traces/t-42`, {
+      method: "DELETE",
+    });
+    expect(del.status).toBe(200);
+    expect(core.deleteTrace).toHaveBeenCalledWith("t-42", {
+      includeAllNamespaces: true,
+    });
+
+    const bulk = await fetch(`${handle.url}/api/v1/traces/delete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids: ["t-1", "t-2"] }),
+    });
+    expect(bulk.status).toBe(200);
+    expect(core.deleteTraces).toHaveBeenCalledWith(["t-1", "t-2"], {
+      includeAllNamespaces: true,
+    });
   });
 
   it("GET /api/v1/api-logs supports multi-tool filtering", async () => {
@@ -503,6 +577,10 @@ describe("HTTP server — REST routes", () => {
     const body = (await r.json()) as { episodeId: string; traces: unknown[] };
     expect(body.episodeId).toBe("e1");
     expect(Array.isArray(body.traces)).toBe(true);
+    expect(core.timeline).toHaveBeenCalledWith({
+      episodeId: "e1",
+      includeAllNamespaces: true,
+    });
   });
 
   it("GET /api/v1/metrics returns aggregate counts", async () => {
