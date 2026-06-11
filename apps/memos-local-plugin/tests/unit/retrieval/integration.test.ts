@@ -409,9 +409,10 @@ describe("retrieval/integration", () => {
     expect(filterPrompt).not.toContain("COMMAND_WRAPPER");
     expect(filterPrompt).not.toContain("STRICT RULES");
     expect(res.packet.rendered).toContain(
-      "COMMAND_WRAPPER write REPO_ROOT/path/to/file",
+      "COMMAND_WRAPPER write path/to/file",
     );
-    expect(res.packet.rendered).toContain("Use the exact current `COMMAND_WRAPPER`");
+    expect(res.packet.rendered).toContain("Command wrapper: `COMMAND_WRAPPER`");
+    expect(res.packet.rendered).toContain("Use the exact current wrapper reference `COMMAND_WRAPPER`");
     expect(res.packet.rendered).toContain("Patch-readiness gate");
     expect(res.packet.rendered).toContain("First objective: produce a small non-empty source `git diff`");
     expect(res.packet.rendered).toContain("Patch-first completion contract");
@@ -422,14 +423,14 @@ describe("retrieval/integration", () => {
     expect(res.packet.rendered).toContain("boundary conversion and value normalization");
     expect(res.packet.rendered).toContain("Edit-readiness rule");
     expect(res.packet.rendered).toContain("Do not inspect tests first");
-    expect(res.packet.rendered).toContain("Do not reuse a hard-coded `/tmp/...-exec`");
+    expect(res.packet.rendered).toContain("Do not reuse a hard-coded path from memory");
     expect(res.packet.rendered).not.toContain("/tmp/repair-wrapper write");
     expect(res.packet.rendered).toContain("double quotes around the `run` command");
     expect(res.packet.rendered).toContain("grep -n target_symbol");
     expect(res.packet.rendered).toContain("not a phrase with spaces");
     expect(res.packet.rendered).toContain("Never grep for a phrase containing whitespace");
     expect(res.packet.rendered).toContain("no inline `python - <<`");
-    expect(res.packet.rendered).toContain("Every non-poll `run` command must start with `cd REPO_ROOT &&`");
+    expect(res.packet.rendered).toContain("Do not invent a repository root");
     expect(res.packet.rendered).toContain("git status --porcelain");
     expect(res.packet.rendered).toContain("temporary scripts");
     expect(res.packet.rendered).toContain("python /tmp/memmy_edit.py");
@@ -443,7 +444,7 @@ describe("retrieval/integration", () => {
     expect(res.packet.rendered).toContain("no shell pipes (`|`)");
     expect(res.packet.rendered).toContain("Do not finish by saying the issue is already fixed");
     expect(res.packet.rendered).toContain("if `git diff` is empty");
-    expect(res.packet.rendered).toContain("never switch to another repository directory");
+    expect(res.packet.rendered).toContain("Never switch to another repository directory");
     expect(res.packet.rendered).toContain("do not install a new test runner");
     expect(res.packet.rendered).toContain("If repair hints contain a candidate source diff");
     expect(res.packet.rendered).toContain("do not generalize the same idea to other similar call sites");
@@ -455,12 +456,14 @@ describe("retrieval/integration", () => {
     expect(res.packet.rendered).toContain("host command parsers and allowlists");
     expect(res.packet.rendered).toContain("## Repair hint context");
     expect(res.packet.rendered).toContain("Candidate diff hunks:");
-    expect(res.packet.rendered).toContain("Primary edit target: REPO_ROOT/src/routing/handler.py");
+    expect(res.packet.rendered).toContain("Primary edit target: src/routing/handler.py");
     expect(res.packet.rendered).toContain(
       "Required edit command starts with: `COMMAND_WRAPPER write /tmp/memmy_edit.py",
     );
+    expect(res.packet.rendered).toContain("Implementation anchors extracted from current hints");
+    expect(res.packet.rendered).toContain("Prefer the first hint-guided search before traceback nouns");
     expect(res.packet.rendered).toContain("Safe large-file edit pattern:");
-    expect(res.packet.rendered).toContain('p = Path("REPO_ROOT/src/routing/handler.py")');
+    expect(res.packet.rendered).toContain('p = Path("src/routing/handler.py")');
     expect(res.packet.rendered).toContain("Do not paste compact diff hunks directly");
     expect(res.packet.rendered).toContain("run narrow existing tests, then `git diff`");
     expect(res.packet.rendered).toContain("it is a completion gate");
@@ -505,8 +508,45 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("exact-replacement script");
     expect(packet?.rendered).toContain("do not list the same block again");
     expect(packet?.rendered).toContain("do not start with `ls`/`pwd`");
-    expect(packet?.rendered).toContain("grep -R -n 'build_redirect' .");
+    expect(packet?.rendered).toContain("COMMAND_WRAPPER run \"grep -R -n 'build_redirect' .\" 10");
     expect(packet?.rendered).not.toContain("example.invalid/project/pull/123");
+  });
+
+  it("uses runtime conventions declared by the current repair prompt", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_runtime_conventions" as SessionId,
+        userText: [
+          "WRAPPER_PATH: /tmp/current-task-wrapper",
+          "All commands MUST be executed via WRAPPER_PATH.",
+          "Run command: exec(\"/tmp/current-task-wrapper tmux-run \\\"command\\\" wait_seconds\")",
+          "Write file: exec(\"/tmp/current-task-wrapper write /target/path << 'EOF'\\nfile content\\nEOF\")",
+          "",
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Bug Description",
+          "reset_token() returns a shared options map instead of an independent clone.",
+          "",
+          "Reply DONE when done.",
+          "",
+          "## Hints",
+          "Inspect clone_token() and token_factory.py.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("Command wrapper: `WRAPPER_PATH`");
+    expect(packet?.rendered).toContain('Run command form: `WRAPPER_PATH tmux-run "command" 10`');
+    expect(packet?.rendered).toContain("Completion token from the current prompt: `DONE`");
+    expect(packet?.rendered).toContain('WRAPPER_PATH tmux-run "grep -R -n');
+    expect(packet?.rendered).toContain("Implementation anchors extracted from current hints");
+    expect(packet?.rendered).toContain("clone_token");
+    expect(packet?.rendered).toContain("token_factory.py");
+    expect(packet?.rendered).not.toContain("COMMAND_WRAPPER run");
   });
 
   it("adds generic defect heuristics from visible issue words without library-specific prompts", () => {

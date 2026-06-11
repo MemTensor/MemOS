@@ -612,17 +612,29 @@ function renderTaskProtocol(ctx: RetrievalCtx): string | null {
     return renderMathFinalAnswerProtocol(userText);
   }
   if (!isRepositoryRepairPrompt(userText)) return null;
-  const shellPrefix = `COMMAND_WRAPPER run "cd REPO_ROOT && ..."`;
-  const writePrefix = `COMMAND_WRAPPER write REPO_ROOT/path/to/file << 'EOF'`;
-  const editScriptPrefix = `COMMAND_WRAPPER write /tmp/memmy_edit.py << 'PY'`;
-  const patchReadinessGate = renderPatchReadinessGate(userText);
-  const visibleIssueContext = renderVisibleRepairContext(userText);
+  const runtime = inferRepairRuntime(userText);
+  const shellPrefix = renderRunCommand(runtime, "...");
+  const writePrefix = renderWriteCommand(runtime, "path/to/file", "EOF");
+  const editScriptPrefix = renderWriteCommand(runtime, runtime.editScriptPath, "PY");
+  const patchReadinessGate = renderPatchReadinessGate(runtime);
+  const visibleIssueContext = renderVisibleRepairContext(userText, runtime);
   const genericDefectContext = renderGenericDefectContext(userText);
-  const hintDigest = renderRepairHintContext(userText);
+  const hintDigest = renderRepairHintContext(userText, runtime);
   const protocol = [
     "## Repository repair task protocol",
     "",
     "This is a repository repair task. Recalled memories are advisory; the current repository state and current prompt win.",
+    "",
+    "### Runtime conventions",
+    `- Command wrapper: \`${runtime.wrapperRef}\` (${runtime.wrapperSource}).`,
+    `- Run command form: \`${renderRunCommand(runtime, "command", "10")}\`.`,
+    `- Write command form: \`${writePrefix}\`.`,
+    runtime.repoRoot
+      ? `- Repository root from the current prompt: \`${runtime.repoRoot}\`; include \`cd ${runtime.repoRoot} &&\` in non-poll run commands.`
+      : "- Repository root was not explicitly named in the current prompt. Use the wrapper's default working directory; do not invent `/repo`, `/workspace`, or another root.",
+    runtime.completionToken
+      ? `- Completion token from the current prompt: \`${runtime.completionToken}\`.`
+      : "- Completion token: use the exact completion phrase requested by the current prompt.",
   ];
   if (patchReadinessGate) {
     protocol.push("", patchReadinessGate);
@@ -647,30 +659,32 @@ function renderTaskProtocol(ctx: RetrievalCtx): string | null {
     "6. If `git diff` is empty, the task is not complete.",
     "",
     "### Hard gates",
-    "1. Treat the task repository as `REPO_ROOT`; never switch to another repository directory unless the current prompt explicitly says so.",
-    "2. Use the exact current `COMMAND_WRAPPER` from the task prompt. Do not reuse a hard-coded `/tmp/...-exec` path from memory; retries can change it.",
-    "3. Use copy-paste-safe wrapper calls matching the task prompt: double quotes around the `run` command, then single quotes inside that command when a search pattern needs quoting.",
-    `   - Inspect: \`${shellPrefix} 10\``,
-    "   - Good identifier grep: `COMMAND_WRAPPER run \"cd REPO_ROOT && grep -n target_symbol path/to/file.py\" 10`. Search one bare identifier, not a phrase with spaces.",
-    "   - Good literal grep: `COMMAND_WRAPPER run \"cd REPO_ROOT && grep -n 'literal_pattern_without_spaces' path/to/file.py\" 10`",
-    "   - Good sed: `COMMAND_WRAPPER run \"cd REPO_ROOT && sed -n '120,180p' path/to/file.py\" 10`",
-    "   - Good poll: `COMMAND_WRAPPER run \"\" 10` only after a previous command reported still running.",
-    "   - Good script/status/diff: `COMMAND_WRAPPER run \"cd REPO_ROOT && python /tmp/memmy_edit.py\" 10`, `COMMAND_WRAPPER run \"cd REPO_ROOT && git diff\" 10`, `COMMAND_WRAPPER run \"cd REPO_ROOT && git status --porcelain\" 10`.",
-    "4. Never put raw inner double quotes inside the `run \"...\"` command. Bad: `grep -n \"pattern\" file`; good: `grep -n 'pattern' file`.",
-    "5. Every non-poll `run` command must start with `cd REPO_ROOT &&`. Never run `python /tmp/...`, `git diff`, `git status`, or check scripts without that prefix.",
-    "6. Do not use complex shell forms inside `run`: no inline `python - <<`, no heredoc, no `cat >`, no `tee`, no `sed -i`, no `perl -pi`, no `apply_patch`, no `patch`, no `git apply`, no `sh -lc`, no `bash -lc`, no shell pipes (`|`), no nested `run`, and no empty `run` except polling a still-running command.",
-    "7. Never grep for a phrase containing whitespace inside `run` such as `grep -n \"def target_symbol\"`, `grep -n '^    def target_symbol'`, or `rg -n \"def target_symbol\"`; those split the host wrapper arguments and can leave a stale running grep. Grep the bare identifier (`target_symbol`) or inspect a line range with `nl`/`sed`.",
-    `8. Use outer \`write\` for target files or temporary scripts, e.g. \`${writePrefix}\`. The wrapper path is host-side, so do not inspect it from \`REPO_ROOT\` or call it inside run.`,
-    "9. A `COMMAND_WRAPPER write` heredoc is literal. Do not put shell substitutions like `$(sed ...)`, command output placeholders, line numbers, or diff markers (`+`/`-` prefixes) into the file content.",
+    "1. Stay in the repository selected by the current task wrapper. Never switch to another repository directory unless the current prompt explicitly says so.",
+    `2. Use the exact current wrapper reference \`${runtime.wrapperRef}\` from the task prompt. Do not reuse a hard-coded path from memory; retries can change it.`,
+    `3. Use copy-paste-safe wrapper calls matching the task prompt: double quotes around the \`${runtime.runVerb}\` command, then single quotes inside that command when a search pattern needs quoting.`,
+    `   - Inspect: \`${shellPrefix}\``,
+    `   - Good identifier grep: \`${renderRunCommand(runtime, "grep -n target_symbol path/to/file.py")}\`. Search one bare identifier, not a phrase with spaces.`,
+    `   - Good literal grep: \`${renderRunCommand(runtime, "grep -n 'literal_pattern_without_spaces' path/to/file.py")}\``,
+    `   - Good sed: \`${renderRunCommand(runtime, "sed -n '120,180p' path/to/file.py")}\``,
+    `   - Good poll: \`${renderRunCommand(runtime, "", "10")}\` only after a previous command reported still running.`,
+    `   - Good script/status/diff: \`${renderRunCommand(runtime, `python ${runtime.editScriptPath}`)}\`, \`${renderRunCommand(runtime, "git diff")}\`, \`${renderRunCommand(runtime, "git status --porcelain")}\`.`,
+    `4. Never put raw inner double quotes inside the \`${runtime.runVerb} "..."\` command. Bad: \`grep -n "pattern" file\`; good: \`grep -n 'pattern' file\`.`,
+    runtime.repoRoot
+      ? `5. Every non-poll \`${runtime.runVerb}\` command should start with \`cd ${runtime.repoRoot} &&\`. Never run \`python ${runtime.editScriptPath}\`, \`git diff\`, \`git status\`, or check scripts without that prefix.`
+      : `5. Do not invent a repository root. If the wrapper starts in the repository, run commands directly; if you later confirm a root with \`pwd\`, use \`cd <that-root> &&\` consistently for \`${runtime.runVerb}\` commands.`,
+    `6. Do not use complex shell forms inside \`${runtime.runVerb}\`: no inline \`python - <<\`, no heredoc, no \`cat >\`, no \`tee\`, no \`sed -i\`, no \`perl -pi\`, no \`apply_patch\`, no \`patch\`, no \`git apply\`, no \`sh -lc\`, no \`bash -lc\`, no shell pipes (\`|\`), no nested \`${runtime.runVerb}\`, and no empty \`${runtime.runVerb}\` except polling a still-running command.`,
+    `7. Never grep for a phrase containing whitespace inside \`${runtime.runVerb}\` such as \`grep -n "def target_symbol"\`, \`grep -n '^    def target_symbol'\`, or \`rg -n "def target_symbol"\`; those can split wrapper arguments or leave stale running commands. Grep the bare identifier (\`target_symbol\`) or inspect a line range with \`nl\`/\`sed\`.`,
+    `8. Use outer \`write\` for target files or temporary scripts, e.g. \`${writePrefix}\`. The wrapper is host-side, so do not inspect it from the repository or call it inside \`${runtime.runVerb}\`.`,
+    `9. A \`${runtime.wrapperRef} write\` heredoc is literal. Do not put shell substitutions like \`$(sed ...)\`, command output placeholders, line numbers, or diff markers (\`+\`/\`-\` prefixes) into the file content.`,
     "10. Do not finish by saying the issue is already fixed. For repository repair tasks, a valid completion needs a non-empty source `git diff`; if `git diff` is empty, continue source investigation.",
     "",
     "### Safe edit loop",
     `1. For any multi-line source edit, first create \`${editScriptPrefix}\` with the outer wrapper.`,
-    "2. The edit script should use `Path('REPO_ROOT/...')`, exact `old`/`new` replacement strings copied from inspected source, `assert old in text`, and `text.replace(old, new, 1)`.",
-    "3. Run the script with `COMMAND_WRAPPER run \"cd REPO_ROOT && python /tmp/memmy_edit.py\" 10`.",
+    `2. The edit script should use \`Path('${renderTargetPath(runtime, "path/to/file")}')\`, exact \`old\`/\`new\` replacement strings copied from inspected source, \`assert old in text\`, and \`text.replace(old, new, 1)\`.`,
+    `3. Run the script with \`${renderRunCommand(runtime, `python ${runtime.editScriptPath}`)}\`.`,
     "4. If `OLD block not found`, inspect the actual block with simple `nl`/`sed`/single-pattern `grep`, then rewrite the temporary edit script with outer `write`. Do not fall back to inline heredoc, `sed -i`, or broad rewrites.",
     "5. If a command syntax error mentions an unclosed quote/heredoc/bracket, stop using that command shape immediately and switch to the outer-write temporary script pattern.",
-    "6. If a poll or script run repeats stale source text from an earlier command instead of showing the new command output, stop polling. Run one fresh `cd REPO_ROOT && git diff -- <target-file>` or `cd REPO_ROOT && git status --porcelain`; if that also repeats stale text, rewrite the edit/check script and execute it with the exact `cd REPO_ROOT &&` prefix.",
+    `6. If a poll or script run repeats stale source text from an earlier command instead of showing the new command output, stop polling. Run one fresh \`${renderRepoCommand(runtime, "git diff -- <target-file>")}\` or \`${renderRepoCommand(runtime, "git status --porcelain")}\`; if that also repeats stale text, rewrite the edit/check script and execute it with the same repository command prefix.`,
     "",
     "### Search and test discipline",
     "1. Prefer POSIX tools (`grep`, `find`, `nl`, `sed`) because `rg` may be unavailable. Use simple single-token searches; avoid shell pipelines (`|`), phrase searches with spaces, and alternation (`\\|`) in wrapper command strings because host command parsers and allowlists are often conservative.",
@@ -679,7 +693,7 @@ function renderTaskProtocol(ctx: RetrievalCtx): string | null {
     "4. Source behavior determines task success. Do not create or keep searching for new regression tests after existing targeted tests pass; run `git diff` and finish.",
     "5. When a candidate diff is present, do not generalize the same idea to other similar call sites, files, tests, docs, or helper functions unless the candidate diff explicitly touches them. Extra edits outside the candidate hunks can break existing behavior checks.",
     "6. Verify with the project's native targeted tests. Only use a generic test runner after confirming the project already uses it; do not install a new test runner just for one repair.",
-    "7. Before declaring completion, run `git diff`, confirm the patch is non-empty, and check it does not delete unrelated files or tests.",
+    `7. Before declaring completion${runtime.completionToken ? ` with \`${runtime.completionToken}\`` : ""}, run \`git diff\`, confirm the patch is non-empty, and check it does not delete unrelated files or tests.`,
     "8. If `git diff` is empty, tests or reproduction output are not enough to finish. Keep narrowing the source behavior and make the smallest source edit.",
     "9. If the Repair hint context contains a required `+` checklist or expected added-line count, it is a completion gate: compare `git diff` against it and continue editing until every listed source line/effect is present. Targeted or broad tests passing is not sufficient when the checklist is incomplete.",
     "10. Convergence budget: after locating the visible target class/function and one neighboring same-family implementation, either write the minimal source patch or run one narrow reproduction. Do not keep doing broad grep/test searches without producing a patch.",
@@ -689,12 +703,76 @@ function renderTaskProtocol(ctx: RetrievalCtx): string | null {
   return protocol.join("\n");
 }
 
-function renderPatchReadinessGate(text: string | undefined): string {
-  void text;
+interface RepairRuntimeConvention {
+  wrapperRef: string;
+  wrapperSource: string;
+  runVerb: string;
+  repoRoot: string | null;
+  editScriptPath: string;
+  completionToken: string | null;
+}
+
+function inferRepairRuntime(text: string | undefined): RepairRuntimeConvention {
+  const raw = String(text ?? "");
+  const wrapperMatch =
+    raw.match(/^\s*([A-Z][A-Z0-9_]*(?:_PATH|_WRAPPER|_HANDLE)?)\s*[:=]\s*(\/\S+|\S+)/im) ??
+    raw.match(/\b([A-Z][A-Z0-9_]*(?:_PATH|_WRAPPER|_HANDLE)?)\s*=\s*(\/\S+)/i);
+  const wrapperRef = wrapperMatch?.[1]?.trim() || "COMMAND_WRAPPER";
+  const wrapperSource = wrapperMatch
+    ? `declared in current prompt as ${wrapperRef}`
+    : "generic wrapper placeholder; replace with the current prompt's wrapper";
+  const runVerb = /\btmux-run\b/i.test(raw) ? "tmux-run" : "run";
+  const repoRoot = extractPromptRepoRoot(raw);
+  const completionToken = raw.match(/\bReply\s+([A-Z][A-Z0-9_]{2,})\s+when done\b/i)?.[1] ?? null;
+  return {
+    wrapperRef,
+    wrapperSource,
+    runVerb,
+    repoRoot,
+    editScriptPath: "/tmp/memmy_edit.py",
+    completionToken,
+  };
+}
+
+function extractPromptRepoRoot(text: string): string | null {
+  const cdRoot = text.match(/\bcd\s+(\/[A-Za-z0-9_./-]+)\s*&&/)?.[1];
+  if (cdRoot) return cdRoot;
+  const labeledRoot = text.match(/\b(?:repo(?:sitory)?\s*(?:root|dir(?:ectory)?)|working\s+directory)\s*[:=]\s*(\/[A-Za-z0-9_./-]+)/i)?.[1];
+  return labeledRoot ?? null;
+}
+
+function renderRepoCommand(runtime: RepairRuntimeConvention, command: string): string {
+  if (!command) return "";
+  return runtime.repoRoot ? `cd ${runtime.repoRoot} && ${command}` : command;
+}
+
+function renderRunCommand(
+  runtime: RepairRuntimeConvention,
+  command: string,
+  waitSeconds = "10",
+): string {
+  return `${runtime.wrapperRef} ${runtime.runVerb} "${renderRepoCommand(runtime, command)}" ${waitSeconds}`;
+}
+
+function renderTargetPath(runtime: RepairRuntimeConvention, target: string): string {
+  if (target.startsWith("/")) return target;
+  const cleanTarget = target.replace(/^\/+/, "");
+  return runtime.repoRoot ? `${runtime.repoRoot}/${cleanTarget}` : cleanTarget;
+}
+
+function renderWriteCommand(
+  runtime: RepairRuntimeConvention,
+  target: string,
+  marker: string,
+): string {
+  return `${runtime.wrapperRef} write ${renderTargetPath(runtime, target)} << '${marker}'`;
+}
+
+function renderPatchReadinessGate(runtime: RepairRuntimeConvention): string {
   return [
     "### Patch-readiness gate",
     "- First objective: produce a small non-empty source `git diff`. Do not run or search tests before the first source edit once the target function/class is found from current prompt evidence.",
-    "- After you inspect the target function/class, the next tool call should create `COMMAND_WRAPPER write /tmp/memmy_edit.py << 'PY'` with an exact old/new replacement.",
+    `- After you inspect the target function/class, the next tool call should create \`${renderWriteCommand(runtime, runtime.editScriptPath, "PY")}\` with an exact old/new replacement.`,
     "- If the source edit fails, inspect only the exact old block, rewrite the edit script, and try again; do not switch to broad test search.",
   ].join("\n");
 }
@@ -706,7 +784,10 @@ function extractRepairDescription(text: string): string {
   );
 }
 
-function renderVisibleRepairContext(text: string | undefined): string | null {
+function renderVisibleRepairContext(
+  text: string | undefined,
+  runtime: RepairRuntimeConvention,
+): string | null {
   const issue = extractRepairDescription(String(text ?? ""));
   if (!issue) return null;
 
@@ -752,7 +833,7 @@ function renderVisibleRepairContext(text: string | undefined): string | null {
       replacementGuidance,
       "If issue identifiers are present, do not start with `ls`/`pwd`; first grep the most specific identifier in source and tests, inspect the containing function, then apply the minimal source edit.",
       firstSearch
-        ? `Example first search: \`COMMAND_WRAPPER run "cd REPO_ROOT && grep -R -n '${firstSearch}' ." 10\``
+        ? `Example first search: \`${renderRunCommand(runtime, `grep -R -n '${firstSearch}' .`)}\``
         : "",
     ].filter(Boolean).join("\n"),
     2_000,
@@ -1073,7 +1154,10 @@ function cleanPromptExpression(value: string): string {
     .trim();
 }
 
-function renderRepairHintContext(text: string | undefined): string | null {
+function renderRepairHintContext(
+  text: string | undefined,
+  runtime: RepairRuntimeConvention,
+): string | null {
   const hints = extractRepairTaskSection(String(text ?? ""), "Hints");
   if (!hints) return null;
 
@@ -1081,20 +1165,23 @@ function renderRepairHintContext(text: string | undefined): string | null {
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+  const anchors = extractImplementationAnchors(cleaned).slice(0, 10);
+  const anchorGuidance = renderAnchorGuidance(anchors, runtime);
 
   const diffIndex = cleaned.search(/\bdiff --git\b/i);
   if (diffIndex >= 0) {
     const diffText = cleaned.slice(diffIndex);
     const formattedDiff = formatUnifiedDiffForHint(diffText);
     const firstTarget = extractFirstDiffTarget(diffText);
-    const requiredWrite = `COMMAND_WRAPPER write /tmp/memmy_edit.py << 'PY'`;
+    const requiredWrite = renderWriteCommand(runtime, runtime.editScriptPath, "PY");
     return truncateHintDigest(
       [
         "The task hints include a candidate source diff. Use it as the first patch attempt before any full test run or broad test search.",
         "Immediate order: inspect the diff target once, create a temporary exact-replacement edit script with the outer `write` wrapper, run it, run narrow existing tests, then `git diff` and finish.",
-        firstTarget ? `Primary edit target: REPO_ROOT/${firstTarget}` : "",
+        firstTarget ? `Primary edit target: ${renderTargetPath(runtime, firstTarget)}` : "",
+        anchorGuidance,
         requiredWrite ? `Required edit command starts with: \`${requiredWrite}\`.` : "",
-        firstTarget ? renderExactReplacementScriptPattern(firstTarget) : "",
+        firstTarget ? renderExactReplacementScriptPattern(firstTarget, runtime) : "",
         "Do not paste compact diff hunks directly into the source file. Remove `+`/`-` diff prefixes, do not use `$(...)` inside `write`, and preserve indentation from the inspected source.",
         "Candidate diff hunks:",
         formattedDiff,
@@ -1106,6 +1193,7 @@ function renderRepairHintContext(text: string | undefined): string | null {
   if (/\b(?:patch|exact fix|tentative patch|def\s+\w+|class\s+\w+)\b/i.test(cleaned)) {
     const directHint = [
       "The task hints include a concrete implementation clue. Try the minimal source fix first:",
+      anchorGuidance,
       cleaned,
     ].filter(Boolean).join("\n");
     return truncateHintDigest(directHint, 7_500);
@@ -1113,18 +1201,99 @@ function renderRepairHintContext(text: string | undefined): string | null {
   return truncateHintDigest(
     [
       "Task-provided hints. Use these as visible task context, but keep the current source and tests as the authority:",
+      anchorGuidance,
       cleaned,
     ].filter(Boolean).join("\n"),
     1_600,
   );
 }
 
-function renderExactReplacementScriptPattern(target: string): string {
+function renderAnchorGuidance(
+  anchors: readonly string[],
+  runtime: RepairRuntimeConvention,
+): string {
+  if (anchors.length === 0) return "";
+  const firstSearch = anchors.find((anchor) => !anchor.includes("'")) ?? anchors[0];
+  const searchCommand = firstSearch
+    ? renderRunCommand(runtime, renderAnchorSearchCommand(firstSearch))
+    : "";
+  return [
+    `Implementation anchors extracted from current hints: ${anchors.map((anchor) => `\`${anchor}\``).join(", ")}.`,
+    searchCommand
+      ? `Prefer the first hint-guided search before traceback nouns: \`${searchCommand}\`.`
+      : "",
+    "After inspecting the named class/function and one neighboring same-family implementation, patch the smallest source boundary that explains the current issue.",
+  ].filter(Boolean).join("\n");
+}
+
+function renderAnchorSearchCommand(anchor: string): string {
+  if (/\.(?:py|js|ts|tsx|java|rs|go|rb|php|c|cc|cpp|h)$/i.test(anchor)) {
+    const name = anchor.split("/").filter(Boolean).at(-1) ?? anchor;
+    return `find . -name '${name}'`;
+  }
+  return `grep -R -n '${anchor}' .`;
+}
+
+function extractImplementationAnchors(text: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (raw: string | undefined) => {
+    const token = normalizeRepairIdentifier(String(raw ?? ""));
+    if (!isUsefulImplementationAnchor(token)) return;
+    const key = token.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(token);
+  };
+
+  for (const match of text.matchAll(/\b(?:class|def|function|method)\s+([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    add(match[1]);
+  }
+  for (const match of text.matchAll(/\b([A-Za-z0-9_./-]+\.(?:py|js|ts|tsx|java|rs|go|rb|php|c|cc|cpp|h))(?::L?\d+)?\b/g)) {
+    add(stripDiffPathPrefix(match[1]));
+  }
+  for (const match of text.matchAll(/\b([A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+)\b/g)) {
+    add(match[1]);
+  }
+  for (const match of text.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\b/g)) {
+    add(match[1]);
+  }
+  for (const match of text.matchAll(/\b([a-z][a-z0-9]+_[A-Za-z0-9_]+)\b/g)) {
+    add(match[1]);
+  }
+  return out.slice(0, 16);
+}
+
+function isUsefulImplementationAnchor(token: string): boolean {
+  if (token.length < 3 || token.length > 120) return false;
+  if (/^https?:/i.test(token)) return false;
+  if (/\s/.test(token)) return false;
+  if (/^(?:Thanks|Likely|Description|Reproduced|Alternative|Inspect|Patch|Reply|Error|Traceback)$/i.test(token)) {
+    return false;
+  }
+  if (/^(?:OperationalError|IntegrityError|DataError|ValueError|TypeError|AttributeError|Exception)$/i.test(token)) {
+    return false;
+  }
+  return (
+    /\.[A-Za-z0-9]+$/.test(token) ||
+    /[A-Z][a-z0-9]+[A-Z]/.test(token) ||
+    /^[a-z][a-z0-9]+_[A-Za-z0-9_]+$/.test(token)
+  );
+}
+
+function stripDiffPathPrefix(token: string | undefined): string {
+  return String(token ?? "").replace(/^(?:a|b)\//, "");
+}
+
+function renderExactReplacementScriptPattern(
+  target: string,
+  runtime: RepairRuntimeConvention,
+): string {
   return [
     "Safe large-file edit pattern:",
     "```python",
     "from pathlib import Path",
-    `p = Path("REPO_ROOT/${target}")`,
+    `p = Path("${renderTargetPath(runtime, target)}")`,
     "text = p.read_text()",
     "old = \"\"\"copy the exact old block from the inspected source, without line numbers\"\"\"",
     "new = \"\"\"replacement block, without diff +/- markers\"\"\"",
