@@ -537,6 +537,7 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("self.cleaned_data");
     expect(packet?.rendered).toContain("normalized_value");
     expect(packet?.rendered).toContain("do not add a condition that an earlier guard already made impossible");
+    expect(packet?.rendered).toContain("If a just-run targeted test, reproduction, or assertion fails after your patch");
     expect(packet?.rendered).toContain("grep -R -n 'self.cleaned_data' .");
     expect(packet?.rendered).not.toContain("`e.g`");
     expect(packet?.rendered).not.toContain("data payload (e.g");
@@ -568,6 +569,8 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("`Arcsin`");
     expect(packet?.rendered).toContain("`Logistic`");
     expect(packet?.rendered).toContain("complete the earliest visible concrete example");
+    expect(packet?.rendered).toContain("closed-form expression exactness");
+    expect(packet?.rendered).toContain("mathematically equivalent output can still fail structural checks");
     expect(packet?.rendered).toContain("WRAPPER_PATH tmux-run \"grep -R -n 'Arcsin' .\" 10");
   });
 

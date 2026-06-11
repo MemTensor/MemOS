@@ -660,6 +660,7 @@ function renderTaskProtocol(ctx: RetrievalCtx): string | null {
     "4. Edit-readiness rule: after you have inspected the candidate function/class named by the current prompt, the next tool call should create an outer-write `/tmp/memmy_edit.py` exact-replacement script for the smallest source patch. Do not inspect tests first.",
     "5. When the next action would be another broad grep, another nearby `sed`, or a test search, prefer writing `/tmp/memmy_edit.py` for the smallest source behavior change already supported by the prompt and current source.",
     "6. If `git diff` is empty, the task is not complete.",
+    "7. If a just-run targeted test, reproduction, or assertion fails after your patch, do not declare completion; inspect the failing expected/actual output and revise the patch until the targeted check passes or the failure is clearly unrelated.",
     "",
     "### Hard gates",
     "1. Stay in the repository selected by the current task wrapper. Never switch to another repository directory unless the current prompt explicitly says so.",
@@ -698,11 +699,12 @@ function renderTaskProtocol(ctx: RetrievalCtx): string | null {
     "5. When a candidate diff is present, do not generalize the same idea to other similar call sites, files, tests, docs, or helper functions unless the candidate diff explicitly touches them. Extra edits outside the candidate hunks can break existing behavior checks.",
     "6. Verify with the project's native targeted tests. Only use a generic test runner after confirming the project already uses it; do not install a new test runner just for one repair.",
     `7. Before declaring completion${runtime.completionToken ? ` with \`${runtime.completionToken}\`` : ""}, run \`git diff\`, confirm the patch is non-empty, and check it does not delete unrelated files or tests.`,
-    "8. If `git diff` is empty, tests or reproduction output are not enough to finish. Keep narrowing the source behavior and make the smallest source edit.",
-    "9. If the Repair hint context contains a required `+` checklist or expected added-line count, it is a completion gate: compare `git diff` against it and continue editing until every listed source line/effect is present. Targeted or broad tests passing is not sufficient when the checklist is incomplete.",
-    "10. Convergence budget: after locating the visible target class/function and one neighboring same-family implementation, either write the minimal source patch or run one narrow reproduction. Do not keep doing broad grep/test searches without producing a patch.",
-    "11. If generic repair heuristics are present, use them as a short source-inspection checklist only; patch the current repository behavior, not the heuristic text.",
-    "12. If a Visible issue context names identifiers, do not run `ls` or `pwd` first; the first command should grep one exact issue identifier.",
+    "8. If the latest targeted test/reproduction output contains `FAIL`, `AssertionError`, or an expected-vs-actual mismatch for the edited behavior, treat that output as the next edit target; a non-empty patch alone is not enough to finish.",
+    "9. If `git diff` is empty, tests or reproduction output are not enough to finish. Keep narrowing the source behavior and make the smallest source edit.",
+    "10. If the Repair hint context contains a required `+` checklist or expected added-line count, it is a completion gate: compare `git diff` against it and continue editing until every listed source line/effect is present. Targeted or broad tests passing is not sufficient when the checklist is incomplete.",
+    "11. Convergence budget: after locating the visible target class/function and one neighboring same-family implementation, either write the minimal source patch or run one narrow reproduction. Do not keep doing broad grep/test searches without producing a patch.",
+    "12. If generic repair heuristics are present, use them as a short source-inspection checklist only; patch the current repository behavior, not the heuristic text.",
+    "13. If a Visible issue context names identifiers, do not run `ls` or `pwd` first; the first command should grep one exact issue identifier.",
   );
   return protocol.join("\n");
 }
@@ -882,6 +884,14 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
     guidance: [
       "Find the shared boundary where an internal wrapper/member becomes the caller-visible primitive value; patch that conversion instead of adding per-field accessors.",
       "Keep validation strict internally, but make created, fetched, and serialized values expose the same public shape.",
+    ],
+  },
+  {
+    label: "closed-form expression exactness",
+    re: /\b(?:precompute|closed[- ]form|formula|symbolic|expression|integral|integration|differentiat(?:e|ion)|density|cdf|pdf|piecewise|branch)\b/i,
+    guidance: [
+      "When adding a formula or symbolic expression, inspect neighboring implementations and assertions for the exact public expression shape, branch order, and comparison convention; mathematically equivalent output can still fail structural checks.",
+      "After an expected-vs-actual assertion failure, adjust the returned expression to the repository's canonical form instead of stopping at numeric or algebraic equivalence.",
     ],
   },
   {
