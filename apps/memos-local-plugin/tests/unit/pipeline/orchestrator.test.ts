@@ -24,16 +24,32 @@ import type { TurnInputDTO, TurnResultDTO } from "../../../agent-contract/dto.js
 let dbHandle: TmpDbHandle | null = null;
 let pipeline: PipelineHandle | null = null;
 
-function buildDeps(h: TmpDbHandle): PipelineDeps {
+function configWithLightweightMemory(enabled: boolean): typeof DEFAULT_CONFIG {
+  return {
+    ...DEFAULT_CONFIG,
+    algorithm: {
+      ...DEFAULT_CONFIG.algorithm,
+      lightweightMemory: {
+        ...DEFAULT_CONFIG.algorithm.lightweightMemory,
+        enabled,
+      },
+    },
+  };
+}
+
+function buildDeps(
+  h: TmpDbHandle,
+  embedder = fakeEmbedder({ dimensions: 384 }),
+): PipelineDeps {
   return {
     agent: "openclaw",
     home: resolveHome("openclaw", "/tmp/memos-test-home"),
-    config: DEFAULT_CONFIG,
+    config: configWithLightweightMemory(false),
     db: h.db,
     repos: h.repos,
     llm: null,
     reflectLlm: null,
-    embedder: fakeEmbedder({ dimensions: 384 }),
+    embedder,
     log: rootLogger.child({ channel: "test.pipeline" }),
     namespace: { agentKind: "openclaw", profileId: "main" },
     now: () => 1_700_000_000_000,
@@ -147,6 +163,59 @@ describe("pipeline/orchestrator", () => {
     // session.opened is emitted synchronously during openSession().
     expect(seen).toContain("session.opened");
     unsubscribe();
+  });
+
+  it("skips retrieval for confident chitchat", async () => {
+    const embedder = fakeEmbedder({ dimensions: 384 });
+    pipeline = createPipeline(buildDeps(dbHandle!, embedder));
+
+    const packet = await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-chitchat",
+      userText: "hello",
+      ts: 1_700_000_000_000,
+    });
+    const stats = pipeline.consumeRetrievalStats(packet.packetId);
+
+    expect(packet.snippets).toHaveLength(0);
+    expect(packet.rendered).toBe("");
+    expect(embedder.stats().requests).toBe(0);
+    expect(stats?.scenarioId).toBe("CHITCHAT");
+    expect(stats?.embedding?.attempted).toBe(false);
+  });
+
+  it("uses current-turn intent when appending to an existing episode", async () => {
+    const embedder = fakeEmbedder({ dimensions: 384 });
+    pipeline = createPipeline(buildDeps(dbHandle!, embedder));
+
+    const first = await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-follow-up",
+      userText: "fix the broken build",
+      ts: 1_700_000_000_000,
+    });
+    await pipeline.onTurnEnd({
+      agent: "openclaw",
+      sessionId: "s-follow-up",
+      episodeId: first.episodeId ?? "ep-ignored",
+      agentText: "The build is fixed.",
+      toolCalls: [],
+      ts: 1_700_000_000_100,
+    });
+    const requestsBefore = embedder.stats().requests;
+
+    const second = await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-follow-up",
+      userText: "hello",
+      ts: 1_700_000_000_200,
+    });
+    const stats = pipeline.consumeRetrievalStats(second.packetId);
+
+    expect(second.episodeId).toBe(first.episodeId);
+    expect(second.snippets).toHaveLength(0);
+    expect(embedder.stats().requests).toBe(requestsBefore);
+    expect(stats?.scenarioId).toBe("CHITCHAT");
   });
 
   it("records tool success + failure through the feedback subscriber", async () => {

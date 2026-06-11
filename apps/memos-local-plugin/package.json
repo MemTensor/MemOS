@@ -1,6 +1,6 @@
 {
   "name": "@memtensor/memos-local-plugin",
-  "version": "2.0.1",
+  "version": "2.0.5",
   "description": "Reflect2Evolve memory plugin: layered L1/L2/L3 memory, reflection-weighted value backprop, cross-task policy induction, skill crystallization, three-tier retrieval. Adapters for OpenClaw and Hermes Agent via a shared algorithm core.",
   "type": "module",
   "main": "dist/core/index.js",
@@ -15,6 +15,7 @@
   },
   "files": [
     "dist",
+    "telemetry.credentials.json",
     "openclaw.plugin.json",
     "bridge.cts",
     "bridge/**/*.ts",
@@ -77,7 +78,7 @@
     "@huggingface/transformers": "^3.8.0",
     "@preact/signals": "^2.9.0",
     "@sinclair/typebox": "^0.34.48",
-    "better-sqlite3": "^12.6.3",
+    "better-sqlite3": "^12.10.0",
     "preact": "^10.29.1",
     "tsx": "^4.21.0",
     "uuid": "^10.0.0",

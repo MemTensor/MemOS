@@ -50,7 +50,7 @@ Decision guidance:
   without such facts should be dropped.
 - RANK a SKILL when its name / description plausibly addresses the
   user's sub-problem. The agent decides later whether to call
-  \`skill_get\` for the full procedure — err on the side of ranking
+  \`memos_skill_get\` for the full procedure — err on the side of ranking
   every candidate skill that could plausibly help.
 - RANK a WORLD-MODEL when its topic matches the domain of the query
   and the body contains structural information the agent would
@@ -75,7 +75,7 @@ After ranking useful candidates, self-report whether that useful set is enough:
 - \`sufficient: true\` when the useful items plausibly answer the QUERY
   as-is.
 - \`sufficient: false\` when the useful items are only a starting point
-  and the agent should broaden recall (e.g. run \`memory_search\` with
+  and the agent should broaden recall (e.g. run \`memos_search\` with
   a different query).
 
 ──── Example 1 (React dark mode, RANK 2 useful candidates) ────

@@ -27,7 +27,6 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       limit: q ? 5000 : pageSize + offset + 1,
       ownerAgentKind,
       ownerProfileId,
-      includeAllNamespaces: true,
     });
     if (q) {
       all = all.filter(
@@ -40,7 +39,6 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       status,
       ownerAgentKind,
       ownerProfileId,
-      includeAllNamespaces: true,
     });
     return {
       skills: page,
@@ -57,7 +55,7 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const skill = await deps.core.getSkill(id as SkillId, { includeAllNamespaces: true });
+    const skill = await deps.core.getSkill(id as SkillId);
     if (skill === null) {
       writeError(ctx, 404, "not_found", `skill not found: ${id}`);
       return;
@@ -71,7 +69,7 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const skill = await deps.core.getSkill(id as SkillId, { includeAllNamespaces: true });
+    const skill = await deps.core.getSkill(id as SkillId);
     if (skill === null) {
       writeError(ctx, 404, "not_found", `skill not found: ${id}`);
       return;
@@ -151,14 +149,14 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const skill = await deps.core.getSkill(id as SkillId, { includeAllNamespaces: true });
+    const skill = await deps.core.getSkill(id as SkillId);
     if (!skill) {
       writeError(ctx, 404, "not_found", `skill not found: ${id}`);
       return;
     }
     const sourcePolicies = await Promise.all(
       skill.sourcePolicyIds.map(async (pid) => {
-        const p = await deps.core.getPolicy(pid, undefined, { includeAllNamespaces: true });
+        const p = await deps.core.getPolicy(pid);
         return p
           ? { id: p.id, title: p.title, status: p.status, gain: p.gain }
           : { id: pid, title: null, status: null, gain: null };
@@ -166,7 +164,7 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
     );
     const sourceWorldModels = await Promise.all(
       skill.sourceWorldModelIds.map(async (wid) => {
-        const w = await deps.core.getWorldModel(wid, undefined, { includeAllNamespaces: true });
+        const w = await deps.core.getWorldModel(wid);
         return w ? { id: w.id, title: w.title } : { id: wid, title: null };
       }),
     );
@@ -255,7 +253,7 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       return;
     }
     const body = parseJson<{
-      scope?: "private" | "local" | "public" | "hub" | null;
+      scope?: "private" | "public" | "hub" | null;
       target?: string | null;
     }>(ctx);
     const scope = body.scope === undefined ? "public" : body.scope;
@@ -282,7 +280,7 @@ export function registerSkillRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "id is required");
       return;
     }
-    const skill = await deps.core.getSkill(id as SkillId, { includeAllNamespaces: true });
+    const skill = await deps.core.getSkill(id as SkillId);
     if (!skill) {
       writeError(ctx, 404, "not_found", `skill not found: ${id}`);
       return;

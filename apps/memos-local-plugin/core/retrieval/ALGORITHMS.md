@@ -146,7 +146,7 @@ Callers treat `null` as "don't inject anything".
    degenerate packets. Values are user-tunable via `algorithm.retrieval.*`.
 5. **Tier-1 summary mode** — V7 §2.6 implies the full Skill body is
    injected at turn start. We default to a *summary* representation
-   (`name + η + 1-line description + a `skill_get(id="…")` invocation
+   (`name + η + 1-line description + a `memos_skill_get(id="…")` invocation
    hint`) so the host model can pull the full procedure on demand
    instead of bloating every prompt with skills it may never use. Hosts
    without function calling can opt back into full-body inlining by
