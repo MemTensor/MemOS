@@ -815,9 +815,12 @@ function renderVisibleRepairContext(
   const identifiers = extractRepairIdentifiers(cleaned).slice(0, 8);
   const replacements = extractInsteadOfPairs(cleaned).slice(0, 2);
   const hasInsteadOfReplacement = /\binstead of\b/i.test(cleaned);
+  const orderedCallAnchors = extractOrderedCallAnchors(cleaned).slice(0, 6);
+  const orderedExampleGuidance = renderOrderedExampleGuidance(orderedCallAnchors);
   if (identifiers.length === 0 && replacements.length === 0) return null;
 
-  const firstSearch = identifiers.find((token) => !token.includes("'"));
+  const firstSearch = orderedCallAnchors.find((token) => !token.includes("'")) ??
+    identifiers.find((token) => !token.includes("'"));
   const replacementGuidance = replacements.length
     ? [
         "Visible replacement guidance:",
@@ -847,6 +850,7 @@ function renderVisibleRepairContext(
         : "",
       outputDataFlowGuard,
       replacementGuidance,
+      orderedExampleGuidance,
       "If issue identifiers are present, do not start with `ls`/`pwd`; first grep the most specific identifier in source and tests, inspect the containing function, then apply the minimal source edit.",
       firstSearch
         ? `Example first search: \`${renderRunCommand(runtime, `grep -R -n '${firstSearch}' .`)}\``
@@ -1075,10 +1079,14 @@ function extractRepairIdentifiers(text: string): string[] {
   ];
   const seen = new Set<string>();
   const out: string[] = [];
-  const addToken = (raw: string) => {
+  const addToken = (raw: string, source: "generic" | "call" = "generic") => {
     const token = normalizeRepairIdentifier(raw);
     if (!token || seen.has(token)) return;
-    if (!isUsefulRepairIdentifier(token)) return;
+    if (
+      source === "call"
+        ? !isUsefulRepairCallIdentifier(token)
+        : !isUsefulRepairIdentifier(token)
+    ) return;
     seen.add(token);
     out.push(token);
   };
@@ -1101,6 +1109,9 @@ function extractRepairIdentifiers(text: string): string[] {
     for (const match of text.matchAll(re)) {
       addToken(match[1] ?? "");
     }
+  }
+  for (const match of text.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
+    addToken(match[1] ?? "", "call");
   }
   return out;
 }
@@ -1131,6 +1142,37 @@ function isUsefulRepairIdentifier(token: string): boolean {
     camelName ||
     snakeName
   );
+}
+
+function isUsefulRepairCallIdentifier(token: string): boolean {
+  if (token.length < 3 || token.length > 80) return false;
+  if (/^(?:if|for|while|switch|return|assert|print|lambda|with|class|def|function)$/i.test(token)) {
+    return false;
+  }
+  if (/^[A-Z][A-Za-z0-9_]+$/.test(token)) return true;
+  return /^[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+$/.test(token);
+}
+
+function renderOrderedExampleGuidance(callAnchors: readonly string[]): string {
+  if (callAnchors.length < 2) return "";
+  return [
+    `Ordered concrete examples detected: ${callAnchors.map((anchor) => `\`${anchor}\``).join(", ")}.`,
+    "When the issue lists multiple failing examples, complete the earliest visible concrete example before moving to later easier examples unless inspected source or tests clearly name a different target.",
+  ].join("\n");
+}
+
+function extractOrderedCallAnchors(text: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const match of text.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
+    const token = normalizeRepairIdentifier(match[1] ?? "");
+    if (!isUsefulRepairCallIdentifier(token)) continue;
+    const key = token.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(token);
+  }
+  return out;
 }
 
 function splitOperationToken(token: string): { prefix: typeof OPERATION_PREFIXES[number]; suffix: string } | null {

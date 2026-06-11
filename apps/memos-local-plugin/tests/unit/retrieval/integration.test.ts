@@ -541,6 +541,35 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).not.toContain("data payload (e.g");
   });
 
+  it("prioritizes the earliest concrete call example in visible issue text", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_visible_issue_ordered_examples" as SessionId,
+        userText: [
+          "WRAPPER_PATH: /tmp/current-task-wrapper",
+          "Run command: exec(\"/tmp/current-task-wrapper tmux-run \\\"command\\\" wait_seconds\")",
+          "",
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Bug Description",
+          "Precompute slow CDF examples.",
+          "cdf(Arcsin(\"x\", 0, 3))(1) returns an unevaluated integral.",
+          "cdf(Logistic(\"x\", 1, 0.1))(2) throws an exception.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("Ordered concrete examples detected");
+    expect(packet?.rendered).toContain("`Arcsin`");
+    expect(packet?.rendered).toContain("`Logistic`");
+    expect(packet?.rendered).toContain("complete the earliest visible concrete example");
+    expect(packet?.rendered).toContain("WRAPPER_PATH tmux-run \"grep -R -n 'Arcsin' .\" 10");
+  });
+
   it("uses runtime conventions declared by the current repair prompt", () => {
     const packet = taskProtocolOnlyPacket(
       {
