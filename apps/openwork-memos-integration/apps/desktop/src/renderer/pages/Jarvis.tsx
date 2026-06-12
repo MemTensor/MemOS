@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -341,17 +340,87 @@ function buildSceneFromDescriptor(descriptor: SceneDescriptor, group: THREE.Grou
   });
 }
 
+// ─── Multi-format 3D model loading ───────────────────────────────────────────
+
+export const SUPPORTED_MODEL_FORMATS = ['glb', 'gltf', 'stl', 'obj', 'fbx', 'ply', 'dae', '3mf'] as const;
+
+function defaultModelMaterial(): THREE.MeshStandardMaterial {
+  // Geometry-only formats (STL/PLY) arrive without materials — give them a
+  // clean metallic look that fits the HUD.
+  return new THREE.MeshStandardMaterial({
+    color: 0x9fb4d8,
+    metalness: 0.4,
+    roughness: 0.45,
+    emissive: 0x0a1c33,
+    emissiveIntensity: 0.25,
+  });
+}
+
+// Loaders are dynamically imported so only the one for the chosen format is
+// pulled into the bundle at runtime.
+async function loadModelObject(url: string, ext: string): Promise<THREE.Object3D> {
+  switch (ext) {
+    case 'glb':
+    case 'gltf': {
+      const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+      const gltf = await new GLTFLoader().loadAsync(url);
+      return gltf.scene;
+    }
+    case 'stl': {
+      const { STLLoader } = await import('three/examples/jsm/loaders/STLLoader.js');
+      const geo = await new STLLoader().loadAsync(url);
+      geo.computeVertexNormals();
+      return new THREE.Mesh(geo, defaultModelMaterial());
+    }
+    case 'obj': {
+      const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js');
+      return await new OBJLoader().loadAsync(url);
+    }
+    case 'fbx': {
+      const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js');
+      return await new FBXLoader().loadAsync(url);
+    }
+    case 'ply': {
+      const { PLYLoader } = await import('three/examples/jsm/loaders/PLYLoader.js');
+      const geo = await new PLYLoader().loadAsync(url);
+      geo.computeVertexNormals();
+      const mat = defaultModelMaterial();
+      if (geo.hasAttribute('color')) mat.vertexColors = true;
+      return new THREE.Mesh(geo, mat);
+    }
+    case 'dae': {
+      const { ColladaLoader } = await import('three/examples/jsm/loaders/ColladaLoader.js');
+      const res = await new ColladaLoader().loadAsync(url);
+      if (!res?.scene) throw new Error('unsupported_format');
+      return res.scene;
+    }
+    case '3mf': {
+      const { ThreeMFLoader } = await import('three/examples/jsm/loaders/3MFLoader.js');
+      return await new ThreeMFLoader().loadAsync(url);
+    }
+    default:
+      throw new Error('unsupported_format');
+  }
+}
+
+interface ModelSource {
+  url: string;
+  ext: string;
+}
+
 // ─── Viewport ────────────────────────────────────────────────────────────────
 
 function JarvisViewport({
   state,
   isThinking,
-  modelUrl,
+  modelSource,
+  onModelResult,
   sceneDescriptor,
 }: {
   state: JarvisSceneState;
   isThinking: boolean;
-  modelUrl?: string;
+  modelSource?: ModelSource;
+  onModelResult?: (ok: boolean, msg?: string) => void;
   sceneDescriptor?: SceneDescriptor;
 }) {
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -375,26 +444,56 @@ function JarvisViewport({
   }, [isThinking]);
 
   useEffect(() => {
-    if (!modelUrl || !objectGroupRef.current) return;
     const group = objectGroupRef.current;
-    const loader = new GLTFLoader();
-    loader.load(
-      modelUrl,
-      (gltf) => {
-        while (group.children.length > 0) group.remove(group.children[0]);
-        const model = gltf.scene;
-        const box = new THREE.Box3().setFromObject(model);
-        const size = box.getSize(new THREE.Vector3()).length();
-        const center = box.getCenter(new THREE.Vector3());
-        const scale = 2.4 / Math.max(size, 0.001);
-        model.scale.setScalar(scale);
-        model.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
-        group.add(model);
-      },
-      undefined,
-      (err) => console.error('GLTFLoader:', err)
-    );
-  }, [modelUrl]);
+    if (!modelSource || !group) return;
+    let cancelled = false;
+
+    const disposeChildren = () => {
+      [...group.children].forEach((child) => {
+        group.remove(child);
+        child.traverse((node) => {
+          const mesh = node as THREE.Mesh;
+          if (mesh.isMesh) {
+            mesh.geometry?.dispose();
+            const mat = mesh.material;
+            if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+            else (mat as THREE.Material)?.dispose();
+          }
+        });
+      });
+    };
+
+    const fit = (object: THREE.Object3D) => {
+      const box = new THREE.Box3().setFromObject(object);
+      const size = box.getSize(new THREE.Vector3()).length();
+      const center = box.getCenter(new THREE.Vector3());
+      const scale = 2.4 / Math.max(size, 0.001);
+      object.scale.setScalar(scale);
+      object.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+    };
+
+    loadModelObject(modelSource.url, modelSource.ext)
+      .then((object) => {
+        if (cancelled) return;
+        disposeChildren();
+        fit(object);
+        group.add(object);
+        onModelResult?.(true, `${modelSource.ext.toUpperCase()} model loaded.`);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('Model load error:', err);
+        const msg =
+          err instanceof Error && err.message === 'unsupported_format'
+            ? 'Unsupported 3D format.'
+            : 'Could not load that model. The file may be corrupt or reference external assets.';
+        onModelResult?.(false, msg);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [modelSource, onModelResult]);
 
   useEffect(() => {
     const group = sceneGroupRef.current;
@@ -929,12 +1028,13 @@ export default function JarvisPage() {
   ]);
   const [isThinking, setIsThinking] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [modelUrl, setModelUrl] = useState<string | undefined>(undefined);
+  const [modelSource, setModelSource] = useState<ModelSource | undefined>(undefined);
   const [sceneDescriptor, setSceneDescriptor] = useState<SceneDescriptor | undefined>(undefined);
   const recognitionRef = useRef<any>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const apiKeyRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const modelMsgIdRef = useRef<string | null>(null);
 
   const fact = useMemo(() => getFactForTarget(sceneState.activeTarget), [sceneState.activeTarget]);
 
@@ -1078,16 +1178,60 @@ export default function JarvisPage() {
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
-      if (!file) return;
-      const prev = modelUrl;
-      const url = URL.createObjectURL(file);
-      setModelUrl(url);
-      void executeCommand(`Load ${file.name.replace(/\.[^.]+$/, '')}`);
       e.target.value = '';
-      if (prev) URL.revokeObjectURL(prev);
+      if (!file) return;
+
+      const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+      const ts = new Date().toISOString();
+
+      if (!(SUPPORTED_MODEL_FORMATS as readonly string[]).includes(ext)) {
+        setTranscript((prev) => [
+          ...prev,
+          { id: makeTranscriptId(), role: 'user', text: `Load ${file.name}`, timestamp: ts },
+          {
+            id: makeTranscriptId(),
+            role: 'assistant',
+            text: `Unsupported format ".${ext}". Supported: ${SUPPORTED_MODEL_FORMATS.map((f) => f.toUpperCase()).join(', ')}.`,
+            timestamp: ts,
+          },
+        ]);
+        return;
+      }
+
+      const prevUrl = modelSource?.url;
+      const url = URL.createObjectURL(file);
+      const msgId = makeTranscriptId();
+      modelMsgIdRef.current = msgId;
+
+      setTranscript((prev) => [
+        ...prev,
+        { id: makeTranscriptId(), role: 'user', text: `Load ${file.name}`, timestamp: ts },
+        { id: msgId, role: 'assistant', text: `Loading ${file.name}...`, timestamp: ts },
+      ]);
+
+      // Models render in the object group, which is only shown in object mode.
+      setSceneState((s) => ({
+        ...s,
+        mode: 'object',
+        activeTarget: file.name.replace(/\.[^.]+$/, ''),
+        summary: `Imported 3D model: ${file.name}`,
+        exploded: false,
+      }));
+      setModelSource({ url, ext });
+      if (prevUrl) URL.revokeObjectURL(prevUrl);
     },
-    [modelUrl, executeCommand]
+    [modelSource]
   );
+
+  const handleModelResult = useCallback((ok: boolean, msg?: string) => {
+    const id = modelMsgIdRef.current;
+    if (!id) return;
+    setTranscript((prev) =>
+      prev.map((e) =>
+        e.id === id ? { ...e, text: msg ?? (ok ? 'Model loaded.' : 'Failed to load model.') } : e
+      )
+    );
+  }, []);
 
   const stateChips = useMemo(
     () =>
@@ -1152,7 +1296,7 @@ export default function JarvisPage() {
     >
       {/* ── Full-bleed 3D viewport ── */}
       <div className="absolute inset-0">
-        <JarvisViewport state={sceneState} isThinking={isThinking} modelUrl={modelUrl} sceneDescriptor={sceneDescriptor} />
+        <JarvisViewport state={sceneState} isThinking={isThinking} modelSource={modelSource} onModelResult={handleModelResult} sceneDescriptor={sceneDescriptor} />
       </div>
 
       {/* ── Top HUD bar ── */}
@@ -1327,11 +1471,11 @@ export default function JarvisPage() {
         </div>
       </div>
 
-      {/* Hidden 3D file picker */}
+      {/* Hidden 3D file picker — accepts all supported model formats */}
       <input
         ref={fileInputRef}
         type="file"
-        accept=".glb,.gltf"
+        accept=".glb,.gltf,.stl,.obj,.fbx,.ply,.dae,.3mf"
         className="hidden"
         onChange={handleFileSelect}
       />
