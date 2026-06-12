@@ -78,11 +78,7 @@ def _reset_bridge_runtime() -> None:
 
 
 def _keepalive_threads() -> list[threading.Thread]:
-    return [
-        t
-        for t in threading.enumerate()
-        if t.name == "memos-bridge-keepalive" and t.is_alive()
-    ]
+    return [t for t in threading.enumerate() if t.name == "memos-bridge-keepalive" and t.is_alive()]
 
 
 class _FakeHermesPluginHost:
