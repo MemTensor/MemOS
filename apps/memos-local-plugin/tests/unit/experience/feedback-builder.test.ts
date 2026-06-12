@@ -159,7 +159,7 @@ describe("feedback experience builder", () => {
           rationale:
             "Verifier feedback for the previous attempt. Verifier reward: 0.0. passed: 3, total: 4. TimeoutException(): Time Limit Exceeded. Please briefly reflect on what you would keep and what you would improve next time.",
           raw: {
-            source: "evoagentbench_gateway_manual_feedback",
+            source: "evaluation_gateway_manual_feedback",
             verifier: { reward: 0, passed: 3, total: 4, results: [1, 1, 1, -3] },
           },
         }),
@@ -185,7 +185,7 @@ describe("feedback experience builder", () => {
           rationale:
             "Verifier feedback for the previous attempt. Verifier reward: 1.0. passed: 4, total: 4. Please briefly reflect on what you would keep and what you would improve next time.",
           raw: {
-            source: "evoagentbench_gateway_manual_feedback",
+            source: "evaluation_gateway_manual_feedback",
             verifier: { reward: 1, passed: 4, total: 4 },
           },
         }),

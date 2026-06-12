@@ -528,19 +528,19 @@ describe("retrieval/integration", () => {
           "You need to fix a bug in the example-org/service-toolkit repository.",
           "",
           "## Bug Description",
-          "If the field is not in the data payload (e.g. it was omitted), self.cleaned_data should still allow normalized_value to override a default.",
+          "If the field is not in the data payload (e.g. it was omitted), validated_values should still allow normalized_value to override a default.",
         ].join("\n"),
         ts: NOW as never,
       },
       NOW as never,
     );
 
-    expect(packet?.rendered).toContain("self.cleaned_data");
+    expect(packet?.rendered).toContain("validated_values");
     expect(packet?.rendered).toContain("normalized_value");
     expect(packet?.rendered).toContain("do not add a condition that an earlier guard already made impossible");
     expect(packet?.rendered).toContain("local alias and an object property");
     expect(packet?.rendered).toContain("If a just-run targeted test, reproduction, or assertion fails after your patch");
-    expect(packet?.rendered).toContain("grep -R -n 'self.cleaned_data' .");
+    expect(packet?.rendered).toContain("grep -R -n 'validated_values' .");
     expect(packet?.rendered).not.toContain("`e.g`");
     expect(packet?.rendered).not.toContain("data payload (e.g");
   });

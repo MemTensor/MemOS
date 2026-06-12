@@ -119,7 +119,7 @@ export function createEmbedderWithProvider(
       });
       // When the cache is off, give every input its own unique key so we
       // don't collapse duplicates either. That preserves the "turn the
-      // cache off for benchmarking" use case.
+      // cache off for performance measurement" use case.
       return dedupEnabled ? base : `${base}#${i}`;
     });
 

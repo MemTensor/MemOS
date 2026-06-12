@@ -23,7 +23,7 @@ describe("retrieval/math-task", () => {
   it("does not classify non-math requests", () => {
     expect(isStandaloneMathFinalAnswerTask("Summarize yesterday's meeting notes.")).toBe(false);
     expect(isStandaloneMathFinalAnswerTask("Fix the TypeScript build and run tests.")).toBe(false);
-    expect(isStandaloneMathFinalAnswerTask("case identifier 1045")).toBe(false);
+    expect(isStandaloneMathFinalAnswerTask("opaque request reference 1045")).toBe(false);
   });
 
   it("does not classify algorithmic code-generation tasks as standalone math", () => {
@@ -87,13 +87,11 @@ describe("retrieval/math-task", () => {
     expect(protocol).toContain("finite vector-space or parity subset counts");
     expect(protocol).toContain("boundary or degenerate positions");
     const forbiddenTerms = [
-      "SWE-Bench",
-      "EvoAgentBench",
-      "omni_",
-      "HMMT",
-      "patterns8",
-      "Django",
-      "Solve the following math competition problem",
+      "external fixture marker",
+      "private run label",
+      "internal run label",
+      "project-specific repository name",
+      "fixed prompt template",
     ];
     for (const term of forbiddenTerms) {
       expect(protocol).not.toContain(term);

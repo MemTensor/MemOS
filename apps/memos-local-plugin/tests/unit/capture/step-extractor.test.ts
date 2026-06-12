@@ -299,7 +299,7 @@ describe("capture/step-extractor", () => {
   });
 
   it("incremental lite pass omits task prompt on new tool sub-steps", () => {
-    const taskPrompt = "long SWE-bench task description";
+    const taskPrompt = "long repository repair task description";
     const ep = episode(
       [
         turn("user", taskPrompt, 1_000),

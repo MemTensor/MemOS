@@ -540,7 +540,7 @@ function feedbackSourceKind(
   lower: string,
 ): FeedbackSourceKind {
   const src = rawSource(raw);
-  if (src && /evaluator|evoagentbench|benchmark|gateway/i.test(src)) return "evaluator";
+  if (src && /evaluator|evaluation|grader|gateway/i.test(src)) return "evaluator";
   if (src && /verifier|verification/i.test(src)) return "verifier";
   if (verifierMeta || /\bverifier\b|\bverification\b/.test(lower)) return "verifier";
   return "unknown";

@@ -1342,14 +1342,14 @@ describe("MemoryCore façade", () => {
     );
     await core.init();
 
-    seedCoreSkill("skillsbench:skill-a089bcb8e0258209", "skill-a089bcb8e0258209");
+    seedCoreSkill("skill-registry:skill-a089bcb8e0258209", "skill-a089bcb8e0258209");
     seedCoreSkill("skill-local-only", "local skill");
 
     await expect(core.getSkill("skill-a089bcb8e0258209" as SkillId)).resolves.toMatchObject({
-      id: "skillsbench:skill-a089bcb8e0258209",
+      id: "skill-registry:skill-a089bcb8e0258209",
       name: "skill-a089bcb8e0258209",
     });
-    await expect(core.getSkill("skillsbench:skill-local-only" as SkillId)).resolves.toMatchObject({
+    await expect(core.getSkill("skill-registry:skill-local-only" as SkillId)).resolves.toMatchObject({
       id: "skill-local-only",
       name: "local skill",
     });

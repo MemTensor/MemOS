@@ -302,22 +302,22 @@ describe("storage/keyword channels — policies", () => {
     try {
       seedPolicy(handle.repos, {
         id: "po_title",
-        title: "Fix Django regression by tightening conditional logic",
-        trigger: "when the task asks for a Django regression fix",
+        title: "Fix framework regression by tightening conditional logic",
+        trigger: "when the task asks for a framework regression fix",
         procedure: "inspect the failing test",
       });
       seedPolicy(handle.repos, {
         id: "po_body",
         title: "Unrelated policy",
         trigger: "when editing unrelated files",
-        procedure: "Fix Django regression by tightening conditional logic",
+        procedure: "Fix framework regression by tightening conditional logic",
       });
 
-      const broad = handle.repos.policies.searchByText('"Django" "regression"', 10);
+      const broad = handle.repos.policies.searchByText('"framework" "regression"', 10);
       expect(broad.map((h) => h.id)).toContain("po_body");
 
       const titleTrigger = handle.repos.policies.searchTitleTriggerByText(
-        '"Django" "regression"',
+        '"framework" "regression"',
         10,
       );
       expect(titleTrigger.map((h) => h.id)).toEqual(["po_title"]);
