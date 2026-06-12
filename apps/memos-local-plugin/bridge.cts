@@ -681,7 +681,7 @@ function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
 
 function isHermesChatRunning(): boolean {
   try {
-    const out = childProcess.execFileSync("pgrep", ["-f", "hermes\\s.*chat\\b"], {
+    const out = childProcess.execFileSync("pgrep", ["-f", "hermes[[:space:]].*chat"], {
       encoding: "utf8",
       timeout: 1000,
     });
