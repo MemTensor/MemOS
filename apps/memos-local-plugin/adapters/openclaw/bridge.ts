@@ -1069,8 +1069,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
 
   function memoryWritesDisabled(): boolean {
     return opts.memoryAddDisabled ||
-      truthyEnv("MEMOS_MEMORY_ADD_DISABLED") ||
-      truthyEnv("EVOAGENTBENCH_MEMOS_DISABLE_ADD");
+      truthyEnv("MEMOS_MEMORY_ADD_DISABLED");
   }
 
   function rememberObservedToolCall(
