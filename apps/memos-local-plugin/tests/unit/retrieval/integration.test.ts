@@ -419,8 +419,9 @@ describe("retrieval/integration", () => {
     expect(res.packet.rendered).toContain("do not exceed eight inspect/search commands");
     expect(res.packet.rendered).toContain("current task action queue");
     expect(res.packet.rendered).toContain("## Generic repair heuristics");
-    expect(res.packet.rendered).toContain("identifier/key collision handling");
-    expect(res.packet.rendered).toContain("boundary conversion and value normalization");
+    expect(res.packet.rendered).toContain("public facade assembly consistency");
+    expect(res.packet.rendered).not.toContain("identifier/key collision handling");
+    expect(res.packet.rendered).not.toContain("boundary conversion and value normalization");
     expect(res.packet.rendered).toContain("Edit-readiness rule");
     expect(res.packet.rendered).toContain("Do not inspect tests first");
     expect(res.packet.rendered).toContain("Do not reuse a hard-coded path from memory");
@@ -846,6 +847,7 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("single-column subquery projection");
     expect(packet?.rendered).toContain("select only the target column");
     expect(packet?.rendered).toContain("annotations, extra selected columns");
+    expect(packet?.rendered).toContain("shared/base lookup path");
   });
 
   it("adds generic backend identifier quoting guidance", () => {
@@ -872,6 +874,9 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("backend identifier quoting boundary");
     expect(packet?.rendered).toContain("metadata/introspection statements");
     expect(packet?.rendered).toContain("existing quote/escape helper");
+    expect(packet?.rendered).toContain("follow-up statements in the same metadata/constraint-check path");
+    expect(packet?.rendered).not.toContain("identifier/key collision handling");
+    expect(packet?.rendered).not.toContain("parser/grouping precedence");
   });
 
   it("adds generic public facade assembly guidance", () => {
@@ -923,6 +928,8 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("Repository repair task protocol");
     expect(packet?.rendered).toContain("repository repair task");
     expect(packet?.rendered).toContain("Inspect the token cloning path.");
+    expect(packet?.rendered).toContain("zero tests found");
+    expect(packet?.rendered).toContain("missing runner");
 
     const ordinary = taskProtocolOnlyPacket(
       {

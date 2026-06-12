@@ -698,13 +698,14 @@ function renderTaskProtocol(ctx: RetrievalCtx): string | null {
     "4. Source behavior determines task success. Do not create or keep searching for new regression tests after existing targeted tests pass; run `git diff` and finish.",
     "5. When a candidate diff is present, do not generalize the same idea to other similar call sites, files, tests, docs, or helper functions unless the candidate diff explicitly touches them. Extra edits outside the candidate hunks can break existing behavior checks.",
     "6. Verify with the project's native targeted tests. Only use a generic test runner after confirming the project already uses it; do not install a new test runner just for one repair.",
-    `7. Before declaring completion${runtime.completionToken ? ` with \`${runtime.completionToken}\`` : ""}, run \`git diff\`, confirm the patch is non-empty, and check it does not delete unrelated files or tests.`,
-    "8. If the latest targeted test/reproduction output contains `FAIL`, `AssertionError`, an expected-vs-actual mismatch, or the same original output after your edit, treat that output as the next edit target; a non-empty patch alone is not enough to finish.",
-    "9. If `git diff` is empty, tests or reproduction output are not enough to finish. Keep narrowing the source behavior and make the smallest source edit.",
-    "10. If the Repair hint context contains a required `+` checklist or expected added-line count, it is a completion gate: compare `git diff` against it and continue editing until every listed source line/effect is present. Targeted or broad tests passing is not sufficient when the checklist is incomplete.",
-    "11. Convergence budget: after locating the visible target class/function and one neighboring same-family implementation, either write the minimal source patch or run one narrow reproduction. Do not keep doing broad grep/test searches without producing a patch.",
-    "12. If generic repair heuristics are present, use them as a short source-inspection checklist only; patch the current repository behavior, not the heuristic text.",
-    "13. If a Visible issue context names identifiers, do not run `ls` or `pwd` first; the first command should grep one exact issue identifier.",
+    "7. A command that reports zero tests found, zero tests run, a missing runner, or an import/configuration error is not a passing verification; either run the correct native target or rely on a direct reproduction that exercises the changed source.",
+    `8. Before declaring completion${runtime.completionToken ? ` with \`${runtime.completionToken}\`` : ""}, run \`git diff\`, confirm the patch is non-empty, and check it does not delete unrelated files or tests.`,
+    "9. If the latest targeted test/reproduction output contains `FAIL`, `ERROR`, `AssertionError`, an expected-vs-actual mismatch, or the same original output after your edit, treat that output as the next edit target; a non-empty patch alone is not enough to finish.",
+    "10. If `git diff` is empty, tests or reproduction output are not enough to finish. Keep narrowing the source behavior and make the smallest source edit.",
+    "11. If the Repair hint context contains a required `+` checklist or expected added-line count, it is a completion gate: compare `git diff` against it and continue editing until every listed source line/effect is present. Targeted or broad tests passing is not sufficient when the checklist is incomplete.",
+    "12. Convergence budget: after locating the visible target class/function and one neighboring same-family implementation, either write the minimal source patch or run one narrow reproduction. Do not keep doing broad grep/test searches without producing a patch.",
+    "13. If generic repair heuristics are present, use them as a short source-inspection checklist only; patch the current repository behavior, not the heuristic text.",
+    "14. If a Visible issue context names identifiers, do not run `ls` or `pwd` first; the first command should grep one exact issue identifier.",
   );
   return protocol.join("\n");
 }
@@ -960,6 +961,7 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
     guidance: [
       "For lookup/filter subqueries, inspect where the projection is set; the final nested query should select only the target column(s) required by the lookup.",
       "Patch the projection-setting path so annotations, extra selected columns, ordering-only expressions, or previously selected fields cannot leak into a single-column membership subquery.",
+      "If there is both a shared/base lookup path and a specialized relationship lookup path, check both; the same projection reset often has to run before each path delegates.",
       "Verify by compiling or running the narrow failing lookup; errors like 'subquery returns N columns' mean the patch must replace or clear the select list, not only rename the target field.",
     ],
   },
@@ -968,6 +970,7 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
     re: /\b(?:sql|database|backend|introspection|constraint|metadata|pragma|schema|table|column|index)\b[\s\S]{0,240}\b(?:quote|quoted|identifier|reserved word|keyword|escaping|raw name)\b|\b(?:reserved word|keyword|identifier|raw name|quote|quoted|escaping)\b[\s\S]{0,240}\b(?:sql|database|backend|introspection|constraint|metadata|pragma|schema|table|column|index)\b/i,
     guidance: [
       "When table, column, index, or constraint names are interpolated into backend metadata/introspection statements, route every identifier through the repository's existing quote/escape helper.",
+      "Apply the same boundary rule to follow-up statements in the same metadata/constraint-check path, including identifiers read back from metadata rows before a later lookup query.",
       "Patch the backend/introspection boundary where raw identifiers enter the statement; avoid changing unrelated query compilation or user model behavior.",
       "If a metadata command still errors after quoting, inspect that command's accepted identifier syntax and adjust the quoting boundary instead of adding a broad exception handler.",
     ],
@@ -1062,6 +1065,19 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
   },
 ];
 
+const BROAD_GENERIC_DEFECT_LABELS = new Set([
+  "configuration/default propagation",
+  "boundary conversion and value normalization",
+  "copy/mutation isolation",
+  "identifier/key collision handling",
+  "pairing and scope alignment",
+  "state and reproducibility propagation",
+  "aggregation/reduction completeness",
+  "parser/grouping precedence",
+  "validation/error metadata preservation",
+  "layout or derived-option propagation",
+]);
+
 function renderGenericDefectContext(text: string | undefined): string | null {
   const source = [
     extractRepairDescription(String(text ?? "")),
@@ -1069,9 +1085,9 @@ function renderGenericDefectContext(text: string | undefined): string | null {
   ].filter(Boolean).join("\n");
   if (!source.trim()) return null;
 
-  const matched = GENERIC_DEFECT_HEURISTICS
-    .filter((heuristic) => heuristic.re.test(source))
-    .slice(0, 6);
+  const matched = selectGenericDefectHeuristics(
+    GENERIC_DEFECT_HEURISTICS.filter((heuristic) => heuristic.re.test(source)),
+  );
   if (matched.length === 0) return null;
 
   return truncateHintDigest(
@@ -1083,8 +1099,15 @@ function renderGenericDefectContext(text: string | undefined): string | null {
         ...heuristic.guidance.map((line) => `  - ${line}`),
       ]),
     ].join("\n"),
-    3_600,
+    2_400,
   );
+}
+
+function selectGenericDefectHeuristics(
+  matched: readonly GenericDefectHeuristic[],
+): GenericDefectHeuristic[] {
+  const specific = matched.filter((heuristic) => !BROAD_GENERIC_DEFECT_LABELS.has(heuristic.label));
+  return (specific.length > 0 ? specific : matched).slice(0, 3);
 }
 
 const OPERATION_PREFIXES = [
