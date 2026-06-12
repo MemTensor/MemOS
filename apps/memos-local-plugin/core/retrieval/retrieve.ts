@@ -875,6 +875,7 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
     guidance: [
       "Inspect the guard that skips assignment when raw input omits a field or key; if a later normalized value is present, the default-preserving branch should not block that assignment.",
       "Before adding a new guard condition, compare it with earlier `continue`/`return` guards in the same block; do not add a condition that an earlier guard already made impossible.",
+      "If the same mapping is available through a local alias and an object property, treat key-presence guards on either name as equivalent when checking whether a new guard is redundant.",
       "Patch the construct/assignment path where raw presence and normalized presence meet, not every caller that happens to supply a default.",
     ],
   },
@@ -947,6 +948,7 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
     re: /\b(?:fast[- ]path|shortcut|optimized path|single[- ]source|single[- ]table|same source|same table|avoid subquery|subquery|performance regression)\b[\s\S]{0,240}\b(?:initialize|initialise|register|base|source|handle|alias|count|before|decision|branch)\b|\b(?:initialize|initialise|register|base|source|handle|alias|count|before|decision|branch)\b[\s\S]{0,240}\b(?:fast[- ]path|shortcut|optimized path|single[- ]source|single[- ]table|same source|same table|avoid subquery|subquery|performance regression)\b/i,
     guidance: [
       "Before a single-source or optimized-path branch counts handles/references, ensure the base source has been registered through the repository's existing initializer.",
+      "Do not make the fast path stricter with an extra filter/query/no-condition guard when the issue says a simple all-item operation should take that fast path; initialize the state that the existing fast-path decision already expects.",
       "Patch the precondition setup for the branch decision instead of rewriting the compiler/planner/executor behavior around it.",
     ],
   },
@@ -1300,6 +1302,9 @@ function renderAnchorGuidance(
     `Implementation anchors extracted from current hints: ${anchors.map((anchor) => `\`${anchor}\``).join(", ")}.`,
     searchCommand
       ? `Prefer the first hint-guided search before traceback nouns: \`${searchCommand}\`.`
+      : "",
+    anchors.some((anchor) => /(?:_compatible|supports?_|can_|has_|is_)/i.test(anchor))
+      ? "If a hint anchor is a compatibility/capability flag, prefer a direct semantic guard or no-op at that boundary over parsing generated output strings."
       : "",
     "After inspecting the named class/function and one neighboring same-family implementation, patch the smallest source boundary that explains the current issue.",
   ].filter(Boolean).join("\n");

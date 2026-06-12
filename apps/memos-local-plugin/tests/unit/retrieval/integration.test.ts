@@ -537,6 +537,7 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("self.cleaned_data");
     expect(packet?.rendered).toContain("normalized_value");
     expect(packet?.rendered).toContain("do not add a condition that an earlier guard already made impossible");
+    expect(packet?.rendered).toContain("local alias and an object property");
     expect(packet?.rendered).toContain("If a just-run targeted test, reproduction, or assertion fails after your patch");
     expect(packet?.rendered).toContain("grep -R -n 'self.cleaned_data' .");
     expect(packet?.rendered).not.toContain("`e.g`");
@@ -611,6 +612,35 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("clone_token");
     expect(packet?.rendered).toContain("token_factory.py");
     expect(packet?.rendered).not.toContain("COMMAND_WRAPPER run");
+  });
+
+  it("prefers semantic capability anchors from repair hints", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_hint_capability_flag" as SessionId,
+        userText: [
+          "WRAPPER_PATH: /tmp/current-task-wrapper",
+          "Run command: exec(\"/tmp/current-task-wrapper tmux-run \\\"command\\\" wait_seconds\")",
+          "",
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Bug Description",
+          "A generated expression crashes because the backend wraps an already compatible operation.",
+          "",
+          "## Hints",
+          "Inspect render_expression() and the operation_compatible flag before changing generated SQL strings.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("operation_compatible");
+    expect(packet?.rendered).toContain("compatibility/capability flag");
+    expect(packet?.rendered).toContain("direct semantic guard or no-op");
+    expect(packet?.rendered).toContain("over parsing generated output strings");
   });
 
   it("adds generic defect heuristics from visible issue words without library-specific prompts", () => {
@@ -786,6 +816,7 @@ describe("retrieval/integration", () => {
 
     expect(packet?.rendered).toContain("fast-path precondition initialization");
     expect(packet?.rendered).toContain("base source has been registered");
+    expect(packet?.rendered).toContain("Do not make the fast path stricter");
   });
 
   it("adds generic public facade assembly guidance", () => {
