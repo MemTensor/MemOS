@@ -877,6 +877,7 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
       "Inspect the guard that skips assignment when raw input omits a field or key; if a later normalized value is present, the default-preserving branch should not block that assignment.",
       "Before adding a new guard condition, compare it with earlier `continue`/`return` guards in the same block; do not add a condition that an earlier guard already made impossible.",
       "If the same mapping is available through a local alias and an object property, treat key-presence guards on either name as equivalent when checking whether a new guard is redundant.",
+      "Do not solve this with a key-presence-only guard when the issue distinguishes empty from non-empty normalized values; that usually assigns empty values and breaks default preservation.",
       "Preserve default behavior for empty normalized values by using the repository's empty/sentinel helper; the skip guard should usually run only when the normalized value is empty.",
       "Patch the construct/assignment path where raw presence and normalized presence meet, not every caller that happens to supply a default.",
     ],
@@ -950,6 +951,7 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
     re: /\b(?:fast[- ]path|shortcut|optimized path|single[- ]source|single[- ]table|same source|same table|avoid subquery|subquery|performance regression)\b[\s\S]{0,240}\b(?:initialize|initialise|register|base|source|handle|alias|count|before|decision|branch)\b|\b(?:initialize|initialise|register|base|source|handle|alias|count|before|decision|branch)\b[\s\S]{0,240}\b(?:fast[- ]path|shortcut|optimized path|single[- ]source|single[- ]table|same source|same table|avoid subquery|subquery|performance regression)\b/i,
     guidance: [
       "Before a single-source or optimized-path branch counts handles/references, ensure the base source has been registered through the repository's existing initializer.",
+      "If the branch condition is a computed property or cached decision, initialize the required state before the condition is read; doing it inside the already-chosen branch can be too late.",
       "Do not make the fast path stricter with an extra filter/query/no-condition guard when the issue says a simple all-item operation should take that fast path; initialize the state that the existing fast-path decision already expects.",
       "If verification still shows the same slow path or subquery, your patch did not reach the branch precondition; revise the setup that feeds the count/decision rather than adding comments or restating the existing condition.",
       "Patch the precondition setup for the branch decision instead of rewriting the compiler/planner/executor behavior around it.",
@@ -961,7 +963,8 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
     guidance: [
       "For lookup/filter subqueries, inspect where the projection is set; the final nested query should select only the target column(s) required by the lookup.",
       "Patch the projection-setting path so annotations, extra selected columns, ordering-only expressions, or previously selected fields cannot leak into a single-column membership subquery.",
-      "If there is both a shared/base lookup path and a specialized relationship lookup path, check both; the same projection reset often has to run before each path delegates.",
+      "If there is both a shared/base lookup path and a specialized relationship lookup path, inspect both implementations before editing; the same projection reset often has to run in both before each path delegates.",
+      "If one direct lookup and one relationship lookup can both hit the same failure, a patch in only the specialized path is probably incomplete unless the shared path already resets the projection.",
       "Verify by compiling or running the narrow failing lookup; errors like 'subquery returns N columns' mean the patch must replace or clear the select list, not only rename the target field.",
     ],
   },
@@ -971,6 +974,7 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
     guidance: [
       "When table, column, index, or constraint names are interpolated into backend metadata/introspection statements, route every identifier through the repository's existing quote/escape helper.",
       "Apply the same boundary rule to follow-up statements in the same metadata/constraint-check path, including identifiers read back from metadata rows before a later lookup query.",
+      "Before finishing, scan the rest of the same function for additional raw interpolations of the same identifier variable; a later validation or detail query can still fail after the first metadata command is fixed.",
       "Patch the backend/introspection boundary where raw identifiers enter the statement; avoid changing unrelated query compilation or user model behavior.",
       "If a metadata command still errors after quoting, inspect that command's accepted identifier syntax and adjust the quoting boundary instead of adding a broad exception handler.",
     ],

@@ -694,6 +694,7 @@ describe("retrieval/integration", () => {
 
     expect(packet?.rendered).toContain("omitted-input default guard");
     expect(packet?.rendered).toContain("normalized value is present");
+    expect(packet?.rendered).toContain("key-presence-only guard");
     expect(packet?.rendered).toContain("empty normalized values");
     expect(packet?.rendered).toContain("repository's empty/sentinel helper");
   });
@@ -819,6 +820,7 @@ describe("retrieval/integration", () => {
 
     expect(packet?.rendered).toContain("fast-path precondition initialization");
     expect(packet?.rendered).toContain("base source has been registered");
+    expect(packet?.rendered).toContain("before the condition is read");
     expect(packet?.rendered).toContain("Do not make the fast path stricter");
     expect(packet?.rendered).toContain("same slow path or subquery");
   });
@@ -848,6 +850,7 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("select only the target column");
     expect(packet?.rendered).toContain("annotations, extra selected columns");
     expect(packet?.rendered).toContain("shared/base lookup path");
+    expect(packet?.rendered).toContain("patch in only the specialized path is probably incomplete");
   });
 
   it("adds generic backend identifier quoting guidance", () => {
@@ -875,6 +878,7 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("metadata/introspection statements");
     expect(packet?.rendered).toContain("existing quote/escape helper");
     expect(packet?.rendered).toContain("follow-up statements in the same metadata/constraint-check path");
+    expect(packet?.rendered).toContain("scan the rest of the same function");
     expect(packet?.rendered).not.toContain("identifier/key collision handling");
     expect(packet?.rendered).not.toContain("parser/grouping precedence");
   });
