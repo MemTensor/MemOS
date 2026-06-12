@@ -141,48 +141,145 @@ interface SceneDescriptor {
   objects?: SceneObject[];
 }
 
-const SCENE_GEN_SYSTEM = `You are a Three.js 3D scene generator. Given a description, return ONLY a valid JSON object — no markdown, no code fences, no explanation. Structure:
-{"objects":[{"type":"sphere|box|torus|cylinder|cone|icosahedron|ring|plane","size":1.0,"color":"#6366f1","emissive":"#4f46e5","emissiveIntensity":0.5,"metalness":0.3,"roughness":0.3,"position":[0,0,0],"rotation":[0,0,0],"transparent":false,"opacity":1.0,"wireframe":false}]}
-Rules: 3-8 objects. emissiveIntensity 0.3-0.8 for glow. Size 0.3-3.5. Position -3.5 to 3.5 per axis. Combine shapes creatively. Harmonious hex color palettes. Return ONLY the JSON object, nothing else.`;
+const SCENE_GEN_SYSTEM = `You are a Three.js 3D scene generator. Return ONLY a JSON object, no prose. Structure:
+{"objects":[{"type":"sphere|box|torus|cylinder|cone|icosahedron|ring|plane","size":1.0,"color":"#6366f1","emissive":"#4f46e5","emissiveIntensity":0.5,"metalness":0.3,"roughness":0.3,"position":[0,0,0],"rotation":[0,0,0],"opacity":1.0,"wireframe":false}]}
+Rules: 3 to 8 objects. "type" must be one of the listed values. emissiveIntensity 0.3-0.8 for a glowing look. size 0.3-3.5. position values between -3.5 and 3.5 on each axis. rotation in degrees. Colors as #RRGGBB hex. Use a harmonious palette and combine shapes creatively to match the description.`;
 
-// Ordered by JSON-instruction-following quality
-const OLLAMA_PREFERRED = ['qwen2.5', 'qwen2', 'llama3.2', 'llama3.1', 'llama3', 'mistral', 'phi4', 'phi3.5', 'phi3', 'gemma3', 'gemma2', 'mixtral'];
+// Ordered by JSON-instruction-following quality. Embedding models are excluded at runtime.
+const OLLAMA_PREFERRED = ['qwen2.5', 'qwen2', 'llama3.3', 'llama3.2', 'llama3.1', 'llama3', 'mistral', 'phi4', 'phi3.5', 'phi3', 'gemma3', 'gemma2', 'gemma', 'mixtral', 'qwen'];
 const OLLAMA_BASE = 'http://localhost:11434';
 
+interface OllamaTag {
+  name: string;
+  details?: { families?: string[] };
+}
+
+function isChatModel(m: OllamaTag): boolean {
+  if (/embed|minilm|bert/i.test(m.name)) return false;
+  const families = m.details?.families ?? [];
+  if (families.some((f) => /bert/i.test(f))) return false;
+  return true;
+}
+
 async function resolveOllamaModel(): Promise<string> {
-  const res = await fetch(`${OLLAMA_BASE}/api/tags`);
+  let res: Response;
+  try {
+    res = await fetch(`${OLLAMA_BASE}/api/tags`);
+  } catch {
+    throw new Error('ollama_down');
+  }
   if (!res.ok) throw new Error('ollama_down');
   const data = await res.json();
-  const installed: string[] = (data.models ?? []).map((m: { name: string }) => m.name);
-  if (installed.length === 0) throw new Error('ollama_no_models');
+  const all: OllamaTag[] = data.models ?? [];
+  const chat = all.filter(isChatModel);
+  if (chat.length === 0) throw new Error('ollama_no_models');
+  const names = chat.map((m) => m.name);
   for (const pref of OLLAMA_PREFERRED) {
-    const match = installed.find((n) => n.startsWith(pref));
+    const match = names.find((n) => n.startsWith(pref));
     if (match) return match;
   }
-  return installed[0];
+  return names[0];
 }
 
 async function callLLMForScene(prompt: string): Promise<SceneDescriptor> {
   const model = await resolveOllamaModel();
-  const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: SCENE_GEN_SYSTEM },
-        { role: 'user', content: prompt },
-      ],
-      stream: false,
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        format: 'json', // constrained decoding — guarantees parseable JSON
+        options: { temperature: 0.5 },
+        messages: [
+          { role: 'system', content: SCENE_GEN_SYSTEM },
+          { role: 'user', content: prompt },
+        ],
+        stream: false,
+      }),
+    });
+  } catch {
+    throw new Error('ollama_down');
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const text: string = (data.message?.content ?? '').trim();
   const stripped = text.replace(/```json\n?|\n?```|```\n?/g, '');
   const jsonMatch = stripped.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error('no_json');
-  return JSON.parse(jsonMatch[0]) as SceneDescriptor;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch {
+    // Defensive repair: smart quotes, single-quoted keys, trailing commas
+    const repaired = jsonMatch[0]
+      .replace(/[‘’]/g, "'")
+      .replace(/[“”]/g, '"')
+      .replace(/'/g, '"')
+      .replace(/,\s*([}\]])/g, '$1');
+    parsed = JSON.parse(repaired);
+  }
+  return normalizeDescriptor(parsed);
+}
+
+// ── Validation: coerce/clamp model output so one bad value never breaks a scene
+
+const VALID_TYPES = new Set(['sphere', 'box', 'torus', 'cylinder', 'cone', 'icosahedron', 'ring', 'plane']);
+const TYPE_ALIASES: Record<string, SceneObject['type']> = {
+  cube: 'box', ball: 'sphere', orb: 'sphere', donut: 'torus', tube: 'cylinder',
+  pyramid: 'cone', circle: 'ring', flat: 'plane', disc: 'ring',
+};
+
+function num(v: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof v === 'string' ? parseFloat(v) : typeof v === 'number' ? v : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function vec3(v: unknown, fallback: [number, number, number], min: number, max: number): [number, number, number] {
+  if (!Array.isArray(v)) return fallback;
+  return [num(v[0], fallback[0], min, max), num(v[1], fallback[1], min, max), num(v[2], fallback[2], min, max)];
+}
+
+function normalizeColor(v: unknown, fallback: string): string {
+  if (typeof v !== 'string') return fallback;
+  const s = v.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(s)) return s;
+  if (/^#[0-9a-fA-F]{3}$/.test(s)) return s;
+  if (/^[a-zA-Z]+$/.test(s)) return s; // CSS color name — THREE.Color accepts these
+  return fallback;
+}
+
+function normalizeDescriptor(raw: unknown): SceneDescriptor {
+  const rawObjs = (raw as { objects?: unknown })?.objects;
+  if (!Array.isArray(rawObjs)) return { objects: [] };
+  const objects: SceneObject[] = [];
+  for (const item of rawObjs.slice(0, 12)) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    let type = String(o.type ?? '').toLowerCase().trim() as SceneObject['type'];
+    if (!VALID_TYPES.has(type)) type = TYPE_ALIASES[type] ?? 'sphere';
+    const rawSize = Array.isArray(o.size)
+      ? (vec3(o.size, [1, 1, 1], 0.1, 4) as SceneObject['size'])
+      : num(o.size, 1, 0.1, 4);
+    const opacity = num(o.opacity, 1, 0.05, 1);
+    objects.push({
+      type,
+      size: rawSize,
+      color: normalizeColor(o.color, '#7dd3fc'),
+      emissive: normalizeColor(o.emissive, '#000000'),
+      emissiveIntensity: num(o.emissiveIntensity, 0.4, 0, 1),
+      metalness: num(o.metalness, 0.2, 0, 1),
+      roughness: num(o.roughness, 0.5, 0, 1),
+      opacity,
+      transparent: o.transparent === true || opacity < 1,
+      wireframe: o.wireframe === true,
+      position: vec3(o.position, [0, 0, 0], -6, 6),
+      rotation: vec3(o.rotation, [0, 0, 0], -360, 360),
+    });
+  }
+  return { objects };
 }
 
 function buildSceneFromDescriptor(descriptor: SceneDescriptor, group: THREE.Group): void {
@@ -861,34 +958,38 @@ export default function JarvisPage() {
       const nextState = applyJarvisCommand(sceneState, command);
       const localReply = describeJarvisCommand(command, nextState);
 
-      setSceneState(nextState);
       setInput('');
 
       const ts = new Date().toISOString();
       const userEntry: JarvisTranscriptEntry = { id: makeTranscriptId(), role: 'user', text: trimmed, timestamp: ts };
       const apiKey = apiKeyRef.current;
 
-      // 3D scene generation via local Ollama — no API key needed
+      // 3D scene generation via local Ollama — no API key needed.
+      // Defer the mode switch until the scene is ready so the user keeps
+      // seeing their current view (not an empty void) during generation.
       if (command.intent === 'create_scene') {
         const assistantId = makeTranscriptId();
         setTranscript((prev) => [
           ...prev,
           userEntry,
-          { id: assistantId, role: 'assistant', text: 'Connecting to Ollama...', timestamp: ts },
+          { id: assistantId, role: 'assistant', text: 'Generating 3D scene with Ollama...', timestamp: ts },
         ]);
         setIsThinking(true);
         try {
           const descriptor = await callLLMForScene(trimmed);
-          setSceneDescriptor(descriptor);
           const n = descriptor.objects?.length ?? 0;
+          if (n === 0) throw new Error('empty_scene');
+          setSceneDescriptor(descriptor);
+          setSceneState(nextState); // switch to scene mode now that meshes exist
           setTranscript((prev) =>
             prev.map((e) => (e.id === assistantId ? { ...e, text: `Scene rendered — ${n} objects composed.` } : e))
           );
         } catch (err) {
           const code = err instanceof Error ? err.message : '';
           const msg =
-            code === 'ollama_down'     ? 'Ollama not running. Start it with: ollama serve' :
-            code === 'ollama_no_models' ? 'No models installed. Run: ollama pull llama3.2' :
+            code === 'ollama_down'      ? 'Ollama not running. Start it with: ollama serve' :
+            code === 'ollama_no_models' ? 'No chat models installed. Run: ollama pull llama3.2' :
+            code === 'empty_scene'      ? 'Could not build a scene from that. Try describing shapes, colors, and a mood.' :
                                           'Scene generation failed. Make sure Ollama is running.';
           setTranscript((prev) =>
             prev.map((e) => (e.id === assistantId ? { ...e, text: msg } : e))
@@ -897,6 +998,9 @@ export default function JarvisPage() {
         setIsThinking(false);
         return;
       }
+
+      // All other commands apply their scene state immediately.
+      setSceneState(nextState);
 
       if (!apiKey) {
         setTranscript((prev) => [
