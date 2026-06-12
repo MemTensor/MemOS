@@ -42,7 +42,8 @@ export function parseJarvisCommand(raw: string): JarvisCommand {
     };
   }
 
-  if (/\b(create|generate|make me|build)\b.{0,30}\b(3d|scene|model|sphere|cube|box|torus|ring|orb|shape|object|structure|render me)\b/i.test(input)) {
+  if (/\b(create|generate|make|build|design|render)\b.{0,40}\b(3d|scene|model|sphere|cube|box|torus|ring|orb|shape|object|structure|object|rendering|composition)\b/i.test(input)
+    || /\b(3d|three.?d)\s+(render|scene|model|object|composition|version)\b/i.test(input)) {
     return {
       intent: 'create_scene',
       target: target ?? 'custom scene',

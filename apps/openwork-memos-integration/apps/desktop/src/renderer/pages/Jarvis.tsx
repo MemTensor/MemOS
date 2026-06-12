@@ -72,7 +72,7 @@ const OBJECT_FACTS: Record<string, { title: string; summary: string; bullets: st
   },
   'custom scene': {
     title: 'Generated Scene',
-    summary: 'AI-generated 3D composition rendered from your description via local LLM.',
+    summary: 'AI-generated 3D composition — describe any scene and it renders live in the viewport.',
     bullets: ['Custom objects', 'AI-composed', 'Live render'],
   },
 };
@@ -145,22 +145,24 @@ const SCENE_GEN_SYSTEM = `You are a Three.js 3D scene generator. Given a descrip
 {"objects":[{"type":"sphere|box|torus|cylinder|cone|icosahedron|ring|plane","size":1.0,"color":"#6366f1","emissive":"#4f46e5","emissiveIntensity":0.5,"metalness":0.3,"roughness":0.3,"position":[0,0,0],"rotation":[0,0,0],"transparent":false,"opacity":1.0,"wireframe":false}]}
 Rules: 3-8 objects. Use emissiveIntensity 0.3-0.8 for glowing effects. Size 0.3-3.5. Position -3.5 to 3.5 on each axis. Combine shapes creatively (e.g. icosahedron core with orbiting ring shells). Use harmonious hex color palettes. Return ONLY the JSON object.`;
 
-async function callLocalLLMForScene(prompt: string): Promise<SceneDescriptor> {
-  const response = await fetch('http://localhost:11434/api/chat', {
+async function callLLMForScene(apiKey: string, prompt: string): Promise<SceneDescriptor> {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
     body: JSON.stringify({
-      model: 'llama3.2',
-      messages: [
-        { role: 'system', content: SCENE_GEN_SYSTEM },
-        { role: 'user', content: prompt },
-      ],
-      stream: false,
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1200,
+      system: SCENE_GEN_SYSTEM,
+      messages: [{ role: 'user', content: prompt }],
     }),
   });
-  if (!response.ok) throw new Error(`Ollama HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`API HTTP ${response.status}`);
   const data = await response.json();
-  const text: string = (data.message?.content ?? data.response ?? '').trim();
+  const text: string = (data.content?.[0]?.text ?? '').trim();
   const jsonMatch = text.replace(/```json\n?|\n?```|```\n?/g, '').match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error('No JSON in response');
   return JSON.parse(jsonMatch[0]) as SceneDescriptor;
@@ -849,28 +851,33 @@ export default function JarvisPage() {
       const userEntry: JarvisTranscriptEntry = { id: makeTranscriptId(), role: 'user', text: trimmed, timestamp: ts };
       const apiKey = apiKeyRef.current;
 
-      // 3D scene generation — calls local Ollama, no API key required
+      // 3D scene generation — uses the configured API key
       if (command.intent === 'create_scene') {
+        if (!apiKey) {
+          setTranscript((prev) => [
+            ...prev,
+            userEntry,
+            { id: makeTranscriptId(), role: 'assistant', text: 'Add an API key in Settings to generate 3D scenes.', timestamp: ts },
+          ]);
+          return;
+        }
         const assistantId = makeTranscriptId();
         setTranscript((prev) => [
           ...prev,
           userEntry,
-          { id: assistantId, role: 'assistant', text: 'Generating scene via local LLM...', timestamp: ts },
+          { id: assistantId, role: 'assistant', text: 'Generating scene...', timestamp: ts },
         ]);
         setIsThinking(true);
         try {
-          const descriptor = await callLocalLLMForScene(trimmed);
+          const descriptor = await callLLMForScene(apiKey, trimmed);
           setSceneDescriptor(descriptor);
           const n = descriptor.objects?.length ?? 0;
           setTranscript((prev) =>
             prev.map((e) => (e.id === assistantId ? { ...e, text: `Scene rendered — ${n} objects composed.` } : e))
           );
-        } catch (err) {
-          const msg = err instanceof Error && err.message.includes('Ollama')
-            ? 'Ollama not running. Start Ollama and try again.'
-            : 'Scene generation failed. Make sure Ollama is running with llama3.2.';
+        } catch {
           setTranscript((prev) =>
-            prev.map((e) => (e.id === assistantId ? { ...e, text: msg } : e))
+            prev.map((e) => (e.id === assistantId ? { ...e, text: 'Scene generation failed. Check your API key.' } : e))
           );
         }
         setIsThinking(false);
