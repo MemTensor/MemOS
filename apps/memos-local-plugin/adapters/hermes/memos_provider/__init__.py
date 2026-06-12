@@ -2111,11 +2111,15 @@ class MemTensorProvider(MemoryProvider):
         if agent_thinking:
             payload["agentThinking"] = agent_thinking
         result = self._bridge.request("turn.end", payload, timeout=_LONG_RPC_TIMEOUT)
-        # Capture the trace ID for feedback submission
+        # Capture the trace ID for feedback submission. The core contract
+        # (memory-core.ts onTurnEnd) returns a singular `traceId`; accept
+        # the plural form too for forward compatibility.
         if result and isinstance(result, dict):
-            trace_ids = result.get("traceIds", [])
-            if trace_ids and len(trace_ids) > 0:
-                trace_id = trace_ids[-1]  # Last trace is the current turn
+            trace_id = result.get("traceId") or ""
+            if not trace_id:
+                trace_ids = result.get("traceIds") or []
+                trace_id = trace_ids[-1] if trace_ids else ""
+            if trace_id:
                 self._last_trace_id = trace_id
                 return trace_id
         return ""
