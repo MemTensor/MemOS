@@ -55,7 +55,7 @@ class FakeBridge:
         if method == "turn.start":
             return {"query": {"episodeId": "ep-1"}, "injectedContext": "ctx"}
         if method == "turn.end":
-            return {"traceIds": ["tr-1"]}
+            return {"traceId": "tr-1", "episodeId": "ep-1"}
         return {"ok": True}
 
     def close(self) -> None:
