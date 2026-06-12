@@ -693,6 +693,8 @@ describe("retrieval/integration", () => {
 
     expect(packet?.rendered).toContain("omitted-input default guard");
     expect(packet?.rendered).toContain("normalized value is present");
+    expect(packet?.rendered).toContain("empty normalized values");
+    expect(packet?.rendered).toContain("repository's empty/sentinel helper");
   });
 
   it("adds generic repeated-seed guidance without task-specific library names", () => {
@@ -817,6 +819,59 @@ describe("retrieval/integration", () => {
     expect(packet?.rendered).toContain("fast-path precondition initialization");
     expect(packet?.rendered).toContain("base source has been registered");
     expect(packet?.rendered).toContain("Do not make the fast path stricter");
+    expect(packet?.rendered).toContain("same slow path or subquery");
+  });
+
+  it("adds generic single-column subquery projection guidance", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_subquery_projection" as SessionId,
+        userText: [
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Bug Description",
+          "A related lookup uses a subquery that now returns too many selected columns after annotations are added.",
+          "The membership filter expects one target column but the nested query keeps the previous select list.",
+          "",
+          "## Hints",
+          "Inspect the lookup preparation path where the subquery projection is set.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("single-column subquery projection");
+    expect(packet?.rendered).toContain("select only the target column");
+    expect(packet?.rendered).toContain("annotations, extra selected columns");
+  });
+
+  it("adds generic backend identifier quoting guidance", () => {
+    const packet = taskProtocolOnlyPacket(
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_identifier_quoting" as SessionId,
+        userText: [
+          "You need to fix a bug in the example-org/service-toolkit repository.",
+          "",
+          "## Bug Description",
+          "A database backend constraint check fails when a table name is also a reserved word.",
+          "The introspection SQL interpolates the raw table identifier without quoting it.",
+          "",
+          "## Hints",
+          "Inspect the backend metadata statement builder and its existing quote helper.",
+        ].join("\n"),
+        ts: NOW as never,
+      },
+      NOW as never,
+    );
+
+    expect(packet?.rendered).toContain("backend identifier quoting boundary");
+    expect(packet?.rendered).toContain("metadata/introspection statements");
+    expect(packet?.rendered).toContain("existing quote/escape helper");
   });
 
   it("adds generic public facade assembly guidance", () => {

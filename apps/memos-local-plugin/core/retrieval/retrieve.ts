@@ -654,7 +654,7 @@ function renderTaskProtocol(ctx: RetrievalCtx): string | null {
   protocol.push(
     "",
     "### Patch-first completion contract",
-    "1. The goal is a small non-empty source `git diff`, not an explanation, test-only change, or proof that the bug already appears fixed.",
+    "1. The goal is a small non-empty behavior-changing source `git diff`, not an explanation, comment-only change, test-only change, or proof that the bug already appears fixed.",
     "2. Use read-only commands to locate the target, but do not exceed eight inspect/search commands before the first source edit. If evidence points to one function/class, write the minimal tentative patch with the exact-replacement script, then test and inspect `git diff`.",
     "3. If visible bug or hint context appears above, treat it as the current task action queue: grep one exact issue identifier, inspect the containing source once or twice, then edit the candidate source behavior before searching tests broadly.",
     "4. Edit-readiness rule: after you have inspected the candidate function/class named by the current prompt, the next tool call should create an outer-write `/tmp/memmy_edit.py` exact-replacement script for the smallest source patch. Do not inspect tests first.",
@@ -699,7 +699,7 @@ function renderTaskProtocol(ctx: RetrievalCtx): string | null {
     "5. When a candidate diff is present, do not generalize the same idea to other similar call sites, files, tests, docs, or helper functions unless the candidate diff explicitly touches them. Extra edits outside the candidate hunks can break existing behavior checks.",
     "6. Verify with the project's native targeted tests. Only use a generic test runner after confirming the project already uses it; do not install a new test runner just for one repair.",
     `7. Before declaring completion${runtime.completionToken ? ` with \`${runtime.completionToken}\`` : ""}, run \`git diff\`, confirm the patch is non-empty, and check it does not delete unrelated files or tests.`,
-    "8. If the latest targeted test/reproduction output contains `FAIL`, `AssertionError`, or an expected-vs-actual mismatch for the edited behavior, treat that output as the next edit target; a non-empty patch alone is not enough to finish.",
+    "8. If the latest targeted test/reproduction output contains `FAIL`, `AssertionError`, an expected-vs-actual mismatch, or the same original output after your edit, treat that output as the next edit target; a non-empty patch alone is not enough to finish.",
     "9. If `git diff` is empty, tests or reproduction output are not enough to finish. Keep narrowing the source behavior and make the smallest source edit.",
     "10. If the Repair hint context contains a required `+` checklist or expected added-line count, it is a completion gate: compare `git diff` against it and continue editing until every listed source line/effect is present. Targeted or broad tests passing is not sufficient when the checklist is incomplete.",
     "11. Convergence budget: after locating the visible target class/function and one neighboring same-family implementation, either write the minimal source patch or run one narrow reproduction. Do not keep doing broad grep/test searches without producing a patch.",
@@ -876,6 +876,7 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
       "Inspect the guard that skips assignment when raw input omits a field or key; if a later normalized value is present, the default-preserving branch should not block that assignment.",
       "Before adding a new guard condition, compare it with earlier `continue`/`return` guards in the same block; do not add a condition that an earlier guard already made impossible.",
       "If the same mapping is available through a local alias and an object property, treat key-presence guards on either name as equivalent when checking whether a new guard is redundant.",
+      "Preserve default behavior for empty normalized values by using the repository's empty/sentinel helper; the skip guard should usually run only when the normalized value is empty.",
       "Patch the construct/assignment path where raw presence and normalized presence meet, not every caller that happens to supply a default.",
     ],
   },
@@ -949,7 +950,26 @@ const GENERIC_DEFECT_HEURISTICS: readonly GenericDefectHeuristic[] = [
     guidance: [
       "Before a single-source or optimized-path branch counts handles/references, ensure the base source has been registered through the repository's existing initializer.",
       "Do not make the fast path stricter with an extra filter/query/no-condition guard when the issue says a simple all-item operation should take that fast path; initialize the state that the existing fast-path decision already expects.",
+      "If verification still shows the same slow path or subquery, your patch did not reach the branch precondition; revise the setup that feeds the count/decision rather than adding comments or restating the existing condition.",
       "Patch the precondition setup for the branch decision instead of rewriting the compiler/planner/executor behavior around it.",
+    ],
+  },
+  {
+    label: "single-column subquery projection",
+    re: /\b(?:subquery|sub-select|nested query|in lookup|membership lookup|related lookup|relationship lookup|filter)\b[\s\S]{0,240}\b(?:column|columns|select list|projection|annotation|extra select|expected one|too many)\b|\b(?:column|columns|select list|projection|annotation|extra select|expected one|too many)\b[\s\S]{0,240}\b(?:subquery|sub-select|nested query|in lookup|membership lookup|related lookup|relationship lookup|filter)\b/i,
+    guidance: [
+      "For lookup/filter subqueries, inspect where the projection is set; the final nested query should select only the target column(s) required by the lookup.",
+      "Patch the projection-setting path so annotations, extra selected columns, ordering-only expressions, or previously selected fields cannot leak into a single-column membership subquery.",
+      "Verify by compiling or running the narrow failing lookup; errors like 'subquery returns N columns' mean the patch must replace or clear the select list, not only rename the target field.",
+    ],
+  },
+  {
+    label: "backend identifier quoting boundary",
+    re: /\b(?:sql|database|backend|introspection|constraint|metadata|pragma|schema|table|column|index)\b[\s\S]{0,240}\b(?:quote|quoted|identifier|reserved word|keyword|escaping|raw name)\b|\b(?:reserved word|keyword|identifier|raw name|quote|quoted|escaping)\b[\s\S]{0,240}\b(?:sql|database|backend|introspection|constraint|metadata|pragma|schema|table|column|index)\b/i,
+    guidance: [
+      "When table, column, index, or constraint names are interpolated into backend metadata/introspection statements, route every identifier through the repository's existing quote/escape helper.",
+      "Patch the backend/introspection boundary where raw identifiers enter the statement; avoid changing unrelated query compilation or user model behavior.",
+      "If a metadata command still errors after quoting, inspect that command's accepted identifier syntax and adjust the quoting boundary instead of adding a broad exception handler.",
     ],
   },
   {
