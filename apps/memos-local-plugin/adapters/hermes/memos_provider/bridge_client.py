@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import threading
+import weakref
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -143,18 +144,28 @@ class MemosBridgeClient:
             env=env,
             cwd=str(plugin_root),
         )
+        # Reader threads hold a weakref to the client, never a strong
+        # reference: a bound-method target would pin the client (and its
+        # subprocess pipes) for as long as the thread blocks on stdout,
+        # making an abandoned client immortal. With weakrefs, dropping
+        # the last strong reference lets GC run the finalizer below,
+        # which closes the child's stdin — the bridge's graceful-exit
+        # signal — and that EOF in turn ends both reader threads.
         self._reader = threading.Thread(
-            target=self._read_loop,
+            target=_pump_stdout,
+            args=(weakref.ref(self), self._proc.stdout),
             daemon=True,
             name="memos-bridge-reader",
         )
         self._reader.start()
         self._stderr_reader = threading.Thread(
-            target=self._stderr_loop,
+            target=_pump_stderr,
+            args=(self._proc.stderr,),
             daemon=True,
             name="memos-bridge-stderr",
         )
         self._stderr_reader.start()
+        self._finalizer = weakref.finalize(self, _release_process_pipes, self._proc)
 
     @property
     def pid(self) -> int:
@@ -285,76 +296,87 @@ class MemosBridgeClient:
                 entry["event"].set()
             self._pending.clear()
 
+        # 6. Release the remaining pipe fds now rather than at GC time —
+        # under reconnect churn the wrappers would otherwise accumulate
+        # until a collection cycle (and warn via ResourceWarning).
+        for stream in (self._proc.stdout, self._proc.stderr):
+            with contextlib.suppress(Exception):
+                if stream is not None:
+                    stream.close()
+
+        # Orderly shutdown released the process and all pipes; the GC
+        # backstop has nothing left to do.
+        finalizer = getattr(self, "_finalizer", None)
+        if finalizer is not None:
+            finalizer.detach()
+
     # ─── Internals ──
 
-    def _read_loop(self) -> None:
-        assert self._proc.stdout is not None
-        for line in self._proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                logger.debug("bridge: malformed line: %r", line[:120])
-                continue
-            if "id" in msg and msg["id"] is not None and ("result" in msg or "error" in msg):
-                self._resolve(msg)
-                continue
-            if msg.get("method") == "events.notify":
-                for cb in list(self._events):
-                    try:
-                        cb(msg.get("params") or {})
-                    except Exception:
-                        logger.debug("event listener threw", exc_info=True)
-                continue
-            if msg.get("method") == "logs.forward":
-                for cb in list(self._logs):
-                    try:
-                        cb(msg.get("params") or {})
-                    except Exception:
-                        logger.debug("log listener threw", exc_info=True)
-                continue
-            # Reverse-direction request: the bridge is asking the
-            # adapter to do something (e.g. run a fallback LLM call
-            # via `host.llm.complete`). Dispatch to the registered
-            # handler and write the response back synchronously.
-            method = msg.get("method")
-            rpc_id = msg.get("id")
-            if (
-                isinstance(method, str)
-                and rpc_id is not None
-                and "result" not in msg
-                and "error" not in msg
-            ):
-                handler = self._host_handler_for(method)
-                if handler is None:
-                    self._send_response(
-                        rpc_id,
-                        error={
-                            "code": -32601,
-                            "message": f"method not found: {method}",
-                            "data": {"code": "unknown_method"},
-                        },
-                    )
-                    continue
-                params = msg.get("params") or {}
-                if not isinstance(params, dict):
-                    params = {}
+    def _handle_line(self, line: str) -> None:
+        line = line.strip()
+        if not line:
+            return
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            logger.debug("bridge: malformed line: %r", line[:120])
+            return
+        if "id" in msg and msg["id"] is not None and ("result" in msg or "error" in msg):
+            self._resolve(msg)
+            return
+        if msg.get("method") == "events.notify":
+            for cb in list(self._events):
                 try:
-                    result = handler(params)
-                    self._send_response(rpc_id, result=result)
-                except Exception as err:
-                    logger.warning("host handler %s failed: %s", method, err)
-                    self._send_response(
-                        rpc_id,
-                        error={
-                            "code": -32000,
-                            "message": str(err) or err.__class__.__name__,
-                            "data": {"code": "host_handler_failed"},
-                        },
-                    )
-                continue
+                    cb(msg.get("params") or {})
+                except Exception:
+                    logger.debug("event listener threw", exc_info=True)
+            return
+        if msg.get("method") == "logs.forward":
+            for cb in list(self._logs):
+                try:
+                    cb(msg.get("params") or {})
+                except Exception:
+                    logger.debug("log listener threw", exc_info=True)
+            return
+        # Reverse-direction request: the bridge is asking the
+        # adapter to do something (e.g. run a fallback LLM call
+        # via `host.llm.complete`). Dispatch to the registered
+        # handler and write the response back synchronously.
+        method = msg.get("method")
+        rpc_id = msg.get("id")
+        if (
+            isinstance(method, str)
+            and rpc_id is not None
+            and "result" not in msg
+            and "error" not in msg
+        ):
+            handler = self._host_handler_for(method)
+            if handler is None:
+                self._send_response(
+                    rpc_id,
+                    error={
+                        "code": -32601,
+                        "message": f"method not found: {method}",
+                        "data": {"code": "unknown_method"},
+                    },
+                )
+                return
+            params = msg.get("params") or {}
+            if not isinstance(params, dict):
+                params = {}
+            try:
+                result = handler(params)
+                self._send_response(rpc_id, result=result)
+            except Exception as err:
+                logger.warning("host handler %s failed: %s", method, err)
+                self._send_response(
+                    rpc_id,
+                    error={
+                        "code": -32000,
+                        "message": str(err) or err.__class__.__name__,
+                        "data": {"code": "host_handler_failed"},
+                    },
+                )
 
     def _host_handler_for(
         self,
@@ -400,13 +422,6 @@ class MemosBridgeClient:
             except (BrokenPipeError, OSError):
                 pass
 
-    def _stderr_loop(self) -> None:
-        assert self._proc.stderr is not None
-        for line in self._proc.stderr:
-            line = line.rstrip()
-            if line:
-                logger.debug("bridge.stderr: %s", line)
-
     def _resolve(self, msg: dict[str, Any]) -> None:
         rpc_id = msg.get("id")
         if not isinstance(rpc_id, int):
@@ -420,3 +435,51 @@ class MemosBridgeClient:
         else:
             entry["result"] = msg.get("result")
         entry["event"].set()
+
+
+# ─── Module-level pump targets (no strong reference to the client) ─────────
+
+
+def _pump_stdout(client_ref: weakref.ref, stdout: Any) -> None:
+    """Forward bridge stdout lines to the client while it is alive.
+
+    Holds only a weakref between lines so an abandoned client can be
+    garbage-collected; its finalizer then closes the pipes, which ends
+    this loop via EOF (or a closed-file error).
+    """
+    try:
+        for line in stdout:
+            client = client_ref()
+            if client is None:
+                break
+            client._handle_line(line)
+            del client
+    except (ValueError, OSError):
+        pass  # pipe closed underneath us — finalizer or close() ran
+
+
+def _pump_stderr(stderr: Any) -> None:
+    try:
+        for line in stderr:
+            line = line.rstrip()
+            if line:
+                logger.debug("bridge.stderr: %s", line)
+    except (ValueError, OSError):
+        pass
+
+
+def _release_process_pipes(proc: subprocess.Popen) -> None:
+    """GC backstop: close the subprocess pipes once the client is gone.
+
+    Closing stdin is the bridge's graceful-exit signal (it exits on
+    stdin EOF in ``--no-viewer`` mode), so even a client that was never
+    ``close()``d cannot strand a live Node process. The child is not
+    waited on here — finalizers must not block; the exited child is
+    reaped by the stdlib's cooperative ``subprocess._cleanup`` sweep.
+    """
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        with contextlib.suppress(Exception):
+            if stream is not None:
+                stream.close()
+    with contextlib.suppress(Exception):
+        proc.poll()

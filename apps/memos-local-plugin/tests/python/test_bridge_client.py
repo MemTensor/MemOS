@@ -353,6 +353,7 @@ class MemTensorProviderTests(unittest.TestCase):
         import memos_provider
 
         self._provider_mod = memos_provider
+        self._reset_bridge_runtime()
 
         self._patches = [
             patch("memos_provider.ensure_bridge_running", return_value=True),
@@ -364,6 +365,13 @@ class MemTensorProviderTests(unittest.TestCase):
     def tearDown(self) -> None:
         for p in self._patches:
             p.stop()
+        self._reset_bridge_runtime()
+
+    def _reset_bridge_runtime(self) -> None:
+        # The bridge client is shared process-wide; isolate tests.
+        reset = getattr(self._provider_mod, "_reset_bridge_runtime_for_tests", None)
+        if callable(reset):
+            reset()
 
     def test_is_available_returns_true_when_bridge_ok(self) -> None:
         p = self._provider_mod.MemTensorProvider()

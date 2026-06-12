@@ -67,7 +67,18 @@ class FailingSessionOpenBridge(FakeBridge):
         return super().request(method, params, **_kwargs)
 
 
+def _reset_bridge_runtime() -> None:
+    reset = getattr(memos_provider, "_reset_bridge_runtime_for_tests", None)
+    if callable(reset):
+        reset()
+
+
 class HermesProviderPipelineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # The bridge client is shared process-wide; isolate tests.
+        _reset_bridge_runtime()
+        self.addCleanup(_reset_bridge_runtime)
+
     def test_lifecycle_persists_turn_and_closes_real_episode(self) -> None:
         bridge = FakeBridge()
         with (
