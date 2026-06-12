@@ -1506,8 +1506,20 @@ class MemTensorProvider(MemoryProvider):
         # the core will pause or finalize the open episode according to
         # topic-boundary rules so interrupted Hermes sessions can resume
         # into the same task later.
-        with contextlib.suppress(Exception):
-            self._bridge.request("session.close", {"sessionId": self._session_id})
+        #
+        # Fire session.close in a daemon thread — the response is unused, so
+        # this is semantically fire-and-forget. Calling urlopen() inline blocks
+        # the asyncio event loop (gateway/run.py calls us synchronously from
+        # _handle_reset_command) and causes Discord heartbeat timeouts when the
+        # bridge is unresponsive. 5 s timeout keeps it bounded.
+        _bridge = self._bridge
+        _sid = self._session_id
+
+        def _close() -> None:
+            with contextlib.suppress(Exception):
+                _bridge.request("session.close", {"sessionId": _sid}, timeout=5.0)
+
+        threading.Thread(target=_close, daemon=True).start()
 
     def shutdown(self) -> None:  # type: ignore[override]
         self._bridge_keepalive_stop.set()
