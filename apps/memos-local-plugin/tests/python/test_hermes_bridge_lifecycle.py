@@ -209,6 +209,37 @@ class BridgeLifecycleTests(unittest.TestCase):
         for p in providers:
             p.shutdown()
 
+    def test_hooks_reinstall_after_host_manager_hooks_cleared(self) -> None:
+        """Hosts can rebuild the plugin manager or clear its _hooks on
+        plugin reload; the next provider initialize must self-heal the
+        dispatcher installation instead of short-circuiting forever."""
+        factory = self._factory()
+        with patch("memos_provider.MemosBridgeClient", factory):
+            a = self._initialized("session-a")
+            # Simulate `hermes plugins reload`: hook lists wiped.
+            self.plugin_host.manager._hooks.clear()
+
+            b = self._initialized("session-b")
+
+            hooks = self.plugin_host.manager._hooks
+            for hook_name in ("post_tool_call", "post_llm_call", "transform_tool_result"):
+                self.assertEqual(
+                    len(hooks.get(hook_name, [])),
+                    1,
+                    f"hook {hook_name} must be re-installed exactly once after a wipe",
+                )
+            a.shutdown()
+            b.shutdown()
+
+    def test_reset_for_tests_joins_keepalive_deterministically(self) -> None:
+        factory = self._factory()
+        with patch("memos_provider.MemosBridgeClient", factory):
+            self._initialized("session-a")
+            self.assertTrue(_keepalive_threads(), "keepalive must be running")
+            _reset_bridge_runtime()
+            # No polling loop: reset itself must have joined the thread.
+            self.assertEqual(_keepalive_threads(), [])
+
     def test_hook_dispatch_still_reaches_the_matching_provider(self) -> None:
         factory = self._factory()
         with patch("memos_provider.MemosBridgeClient", factory):

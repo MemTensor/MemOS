@@ -323,34 +323,45 @@ def _prune_locked() -> None:
 
 
 def install_host_hooks() -> bool:
-    """Append our dispatchers to the hermes plugin manager exactly once.
+    """Ensure our dispatchers sit in the hermes plugin manager exactly once.
 
     The previous design appended three bound methods *per provider
     instance* and never removed them — every abandoned instance stayed
     strongly referenced by the host forever. Dispatchers are module-level
     functions; provider instances are reached weakly via the registry.
+
+    Installation is idempotent *and self-healing*: instead of a boolean
+    short-circuit, each call verifies the dispatchers are actually
+    present in the *current* manager's hook lists — hosts can rebuild
+    the plugin manager or clear its ``_hooks`` on plugin reload, which
+    would otherwise leave us silently unhooked.
     """
     global _hooks_installed, _hooked_manager_ref
     with _registry_lock:
-        if _hooks_installed:
-            return True
         try:
             from hermes_cli.plugins import (
                 get_plugin_manager,  # pyright: ignore[reportMissingImports]
             )
 
             mgr = get_plugin_manager()
-            mgr._hooks.setdefault("post_tool_call", []).append(_dispatch_post_tool_call)
-            mgr._hooks.setdefault("post_llm_call", []).append(_dispatch_post_llm_call)
-            mgr._hooks.setdefault("transform_tool_result", []).append(
-                _dispatch_transform_tool_result
-            )
+            hooks = mgr._hooks
+            installed_any = False
+            for name, dispatcher in (
+                ("post_tool_call", _dispatch_post_tool_call),
+                ("post_llm_call", _dispatch_post_llm_call),
+                ("transform_tool_result", _dispatch_transform_tool_result),
+            ):
+                callbacks = hooks.setdefault(name, [])
+                if dispatcher not in callbacks:
+                    callbacks.append(dispatcher)
+                    installed_any = True
             _hooks_installed = True
             _hooked_manager_ref = weakref.ref(mgr)
-            logger.debug(
-                "MemOS: installed post_tool_call + post_llm_call + "
-                "transform_tool_result dispatchers (process-wide, once)"
-            )
+            if installed_any:
+                logger.debug(
+                    "MemOS: installed post_tool_call + post_llm_call + "
+                    "transform_tool_result dispatchers (process-wide, once)"
+                )
             return True
         except Exception as err:
             logger.debug("MemOS: could not install host hooks — %s", err)
@@ -401,6 +412,9 @@ def reset_for_tests() -> None:
     global _hooks_installed, _hooked_manager_ref
     with supervisor._lock:
         client = supervisor._client
+        # Capture before _stop_keepalive_locked clears the reference,
+        # or the join below would silently never run.
+        thread = supervisor._keepalive_thread
         supervisor._client = None
         supervisor._factory = None
         supervisor._holders = weakref.WeakSet()
@@ -408,7 +422,6 @@ def reset_for_tests() -> None:
     if client is not None:
         with contextlib.suppress(Exception):
             client.close()
-    thread = supervisor._keepalive_thread
     if thread is not None and thread.is_alive():
         thread.join(timeout=2.0)
     with _registry_lock:

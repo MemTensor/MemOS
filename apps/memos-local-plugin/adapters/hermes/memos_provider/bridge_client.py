@@ -321,6 +321,11 @@ class MemosBridgeClient:
         except json.JSONDecodeError:
             logger.debug("bridge: malformed line: %r", line[:120])
             return
+        if not isinstance(msg, dict):
+            # Valid JSON but not an object (null, list, string, …) —
+            # dict-key access below would raise and kill the reader thread.
+            logger.debug("bridge: non-object line: %r", line[:120])
+            return
         if "id" in msg and msg["id"] is not None and ("result" in msg or "error" in msg):
             self._resolve(msg)
             return

@@ -295,6 +295,17 @@ class BridgeClientTests(unittest.TestCase):
         client.close()
         client.close()  # second call must not raise
 
+    def test_handle_line_ignores_non_object_json(self) -> None:
+        """Valid-but-non-object JSON (null, list, …) must not kill the
+        reader thread via dict-key access on a non-dict."""
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        for raw in ("null", "[1, 2]", '"just a string"', "42"):
+            client._handle_line(raw)  # must not raise
+        # Reader path still functional afterwards.
+        res = client.request("core.health")
+        self.assertTrue(res["ok"])
+        client.close()
+
     def test_stdio_bridge_starts_without_viewer_by_default(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
         assert self._fake is not None
