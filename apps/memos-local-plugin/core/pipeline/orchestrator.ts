@@ -1526,6 +1526,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     repos: deps.repos,
     llm: deps.llm,
     reflectLlm: deps.reflectLlm,
+    l3Llm: deps.l3Llm,
     embedder: deps.embedder,
     sessionManager: session.sessionManager,
     episodeManager: session.episodeManager,

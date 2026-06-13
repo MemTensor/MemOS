@@ -49,6 +49,7 @@ function buildDeps(
     repos: h.repos,
     llm: null,
     reflectLlm: null,
+    l3Llm: null,
     embedder,
     log: rootLogger.child({ channel: "test.pipeline" }),
     namespace: { agentKind: "openclaw", profileId: "main" },
@@ -75,6 +76,18 @@ afterEach(async () => {
 });
 
 describe("pipeline/orchestrator", () => {
+  it("threads a dedicated l3Llm through to the handle", () => {
+    const l3Llm = fakeLlm({ completeJson: {} });
+    pipeline = createPipeline({ ...buildDeps(dbHandle!), l3Llm });
+    expect(pipeline.l3Llm).toBe(l3Llm);
+  });
+
+  it("leaves l3Llm null on the handle when not configured", () => {
+    pipeline = createPipeline(buildDeps(dbHandle!));
+    expect(pipeline.l3Llm).toBeNull();
+  });
+
+
   it("wires session → episode → turn end cleanly", async () => {
     pipeline = createPipeline(buildDeps(dbHandle!));
     const turn: TurnInputDTO = {

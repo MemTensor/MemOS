@@ -273,7 +273,9 @@ export function buildPipelineSubscribers(
     repos: deps.repos,
     l2Bus: buses.l2,
     l3Bus: buses.l3,
-    llm: deps.llm,
+    // Dedicated L3 model when `config.l3Llm.*` is set; otherwise the
+    // bootstrap aliases `l3Llm` to the main `llm`, so this is a no-op.
+    llm: deps.l3Llm ?? deps.llm,
     log: log.child({ channel: "core.memory.l3" }),
     config: algorithm.l3Abstraction,
   });
