@@ -67,7 +67,18 @@ class FailingSessionOpenBridge(FakeBridge):
         return super().request(method, params, **_kwargs)
 
 
+def _reset_bridge_runtime() -> None:
+    reset = getattr(memos_provider, "_reset_bridge_runtime_for_tests", None)
+    if callable(reset):
+        reset()
+
+
 class HermesProviderPipelineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # The bridge client is shared process-wide; isolate tests.
+        _reset_bridge_runtime()
+        self.addCleanup(_reset_bridge_runtime)
+
     def test_lifecycle_persists_turn_and_closes_real_episode(self) -> None:
         bridge = FakeBridge()
         with (
@@ -114,6 +125,9 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
         turn_end = next(params for method, params in bridge.calls if method == "turn.end")
         self.assertEqual(turn_end["agent"], "hermes")
+        # The core returns a singular `traceId` (memory-core.ts onTurnEnd);
+        # it must be captured for verifier-feedback trace binding.
+        self.assertEqual(provider._last_trace_id, "trace-1")
         self.assertEqual(turn_end["sessionId"], "host-session")
         self.assertEqual(turn_end["episodeId"], "episode-from-turn-start")
         self.assertIn("HERMES_MEMOS_E2E_0428", turn_end["userText"])

@@ -295,6 +295,17 @@ class BridgeClientTests(unittest.TestCase):
         client.close()
         client.close()  # second call must not raise
 
+    def test_handle_line_ignores_non_object_json(self) -> None:
+        """Valid-but-non-object JSON (null, list, …) must not kill the
+        reader thread via dict-key access on a non-dict."""
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        for raw in ("null", "[1, 2]", '"just a string"', "42"):
+            client._handle_line(raw)  # must not raise
+        # Reader path still functional afterwards.
+        res = client.request("core.health")
+        self.assertTrue(res["ok"])
+        client.close()
+
     def test_stdio_bridge_starts_without_viewer_by_default(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
         assert self._fake is not None
@@ -353,6 +364,7 @@ class MemTensorProviderTests(unittest.TestCase):
         import memos_provider
 
         self._provider_mod = memos_provider
+        self._reset_bridge_runtime()
 
         self._patches = [
             patch("memos_provider.ensure_bridge_running", return_value=True),
@@ -364,6 +376,13 @@ class MemTensorProviderTests(unittest.TestCase):
     def tearDown(self) -> None:
         for p in self._patches:
             p.stop()
+        self._reset_bridge_runtime()
+
+    def _reset_bridge_runtime(self) -> None:
+        # The bridge client is shared process-wide; isolate tests.
+        reset = getattr(self._provider_mod, "_reset_bridge_runtime_for_tests", None)
+        if callable(reset):
+            reset()
 
     def test_is_available_returns_true_when_bridge_ok(self) -> None:
         p = self._provider_mod.MemTensorProvider()
