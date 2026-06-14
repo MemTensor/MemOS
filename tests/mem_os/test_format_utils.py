@@ -25,26 +25,26 @@ class TestCleanJsonResponse:
 
     def test_clean_json_response_removes_json_code_block(self):
         """Test removal of ```json markers."""
-        input_str = "```json\n{\"key\": \"value\"}\n```"
-        expected = "{\"key\": \"value\"}"
+        input_str = '```json\n{"key": "value"}\n```'
+        expected = '{"key": "value"}'
         assert clean_json_response(input_str) == expected
 
     def test_clean_json_response_removes_plain_code_block(self):
         """Test removal of ``` markers without json keyword."""
-        input_str = "```\n{\"key\": \"value\"}\n```"
-        expected = "{\"key\": \"value\"}"
+        input_str = '```\n{"key": "value"}\n```'
+        expected = '{"key": "value"}'
         assert clean_json_response(input_str) == expected
 
     def test_clean_json_response_strips_whitespace(self):
         """Test that leading/trailing whitespace is stripped."""
-        input_str = "  \n  {\"key\": \"value\"}  \n  "
-        expected = "{\"key\": \"value\"}"
+        input_str = '  \n  {"key": "value"}  \n  '
+        expected = '{"key": "value"}'
         assert clean_json_response(input_str) == expected
 
     def test_clean_json_response_handles_plain_json(self):
         """Test that plain JSON without markdown is unchanged (except strip)."""
-        input_str = "{\"key\": \"value\"}"
-        expected = "{\"key\": \"value\"}"
+        input_str = '{"key": "value"}'
+        expected = '{"key": "value"}'
         assert clean_json_response(input_str) == expected
 
     def test_clean_json_response_handles_empty_string(self):
@@ -71,5 +71,5 @@ class TestCleanJsonResponse:
         """Test that backticks inside JSON content are preserved."""
         input_str = '```json\n{"code": "`example`"}\n```'
         result = clean_json_response(input_str)
-        assert '`example`' in result
-        assert result.count('`') == 2  # Only internal backticks remain
+        assert "`example`" in result
+        assert result.count("`") == 2  # Only internal backticks remain
