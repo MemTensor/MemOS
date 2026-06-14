@@ -73,7 +73,9 @@ class CreateCubeRequest(BaseRequest):
 
     cube_name: str = Field(..., description="Human-readable name for the memory cube")
     owner_id: str = Field(..., description="User ID of the cube owner")
-    cube_path: str | None = Field(None, description="File system path where cube data will be stored")
+    cube_path: str | None = Field(
+        None, description="File system path where cube data will be stored"
+    )
     cube_id: str | None = Field(
         None,
         description=(
