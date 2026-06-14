@@ -21,18 +21,18 @@ The MemOS open-source project provides a high-performance REST API service built
 
 Follow these two core steps to quickly integrate memory capabilities into your AI application:
 
-* [**Add Memory**](./core/add_memory.md): Write raw message streams to a specified MemCube via the `POST /product/add` endpoint to start the production pipeline.
-* [**Search Memory**](./core/search_memory.md): Retrieve relevant context from multiple Cubes via the `POST /product/search` endpoint based on semantic similarity.
+* [**Add Memory**](../core/add_memory.md): Write raw message streams to a specified MemCube via the `POST /product/add` endpoint to start the production pipeline.
+* [**Search Memory**](../core/search_memory.md): Retrieve relevant context from multiple Cubes via the `POST /product/search` endpoint based on semantic similarity.
 
 ## 3. API Categories
 
 The MemOS functional APIs are organized into the following categories:
 
-* **[Core Memory](./core/add_memory.md)**: Atomic operations for creating, reading, updating, and deleting memories.
-* **[Chat](./chat/chat.md)**: Memory-augmented streaming and full-response dialogue capabilities.
-* **[Message](./message/feedback.md)**: Enhanced interaction interfaces including user feedback and suggestions.
-* **[Scheduler](./scheduler/get_status.md)**: Monitor the progress and queue status of background memory extraction tasks.
-* **[Tools](./tools/check_cube.md)**: Auxiliary functions such as Cube existence verification and memory ownership lookup.
+* **[Core Memory](../core/add_memory.md)**: Atomic operations for creating, reading, updating, and deleting memories.
+* **[Chat](../chat/chat.md)**: Memory-augmented streaming and full-response dialogue capabilities.
+* **[Message](../message/feedback.md)**: Enhanced interaction interfaces including user feedback and suggestions.
+* **[Scheduler](../scheduler/get_status.md)**: Monitor the progress and queue status of background memory extraction tasks.
+* **[Tools](../tools/check_cube.md)**: Auxiliary functions such as Cube existence verification and memory ownership lookup.
 
 ## 4. Authentication & Context
 
@@ -47,6 +47,6 @@ In the open-source environment, all API requests must include the `Authorization
 
 ## 5. Next Steps
 
-* 👉 [**System Configuration**](./start/configuration.md): Configure your LLM provider and vector database engine.
-* 👉 [**Add Your First Memory**](./core/add_memory.md): Try submitting your first conversation messages via SDK or Curl.
-* 👉 [**Explore Common Errors**](./help/error_codes.md): Learn about API status codes and their underlying error handling mechanisms.
+* 👉 [**System Configuration**](./configuration.md): Configure your LLM provider and vector database engine.
+* 👉 [**Add Your First Memory**](../core/add_memory.md): Try submitting your first conversation messages via SDK or Curl.
+* 👉 [**Explore Common Errors**](../help/error_codes.md): Learn about API status codes and their underlying error handling mechanisms.

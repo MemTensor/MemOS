@@ -21,11 +21,11 @@ title: Error Codes
 | 40130 | API Key authentication required | Add a valid API Key to the Header |
 | 40132 | Invalid or expired API Key | Check the API Key status or regenerate it |
 | **Quota & Rate Limit Errors** | | |
-| 40300 | API call quota exceeded | <a href="/memos_cloud/limit#_4-领取更多额度" target="_blank">Get more quota</a> |
+| 40300 | API call quota exceeded | Reduce request frequency or contact the administrator to increase the quota |
 | 40301 | Request token limit exceeded | Reduce input content or get more quota |
 | 40302 | Response token limit exceeded | Shorten expected output or get more quota |
 | 40303 | Single conversation length exceeded | Reduce the single input/output length |
-| 40304 | Account API call limit exhausted | <a href="/memos_cloud/limit#_4-领取更多额度" target="_blank">Get more quota</a> |
+| 40304 | Account API call limit exhausted | Reduce request frequency or contact the administrator to increase the quota |
 | 40305 | Input exceeds single token limit | Reduce input content |
 | 40306 | Delete memory authorization failed | Confirm you have permission to delete this memory |
 | 40307 | Memory to delete not found | Check if the memory_id is valid |
