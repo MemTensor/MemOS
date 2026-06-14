@@ -19,8 +19,12 @@ class TestSystemParser(unittest.TestCase):
         # Create SystemParser instance with mocked embedder
         self.parser = SystemParser(embedder=self.mock_embedder)
 
-    def test_parse_fast_with_tool_schema_creates_tool_schema_memory(self):
-        """Test that messages with <tool_schema> blocks create ToolSchemaMemory items."""
+    def test_parse_fast_with_tool_schema_defers_to_fine_mode(self):
+        """Test that parse_fast does NOT store tool schema messages directly.
+
+        Tool schema storage is deferred to parse_fine; parse_fast should return
+        an empty list even when a <tool_schema> block is present.
+        """
         message = {
             "role": "system",
             "content": '<tool_schema>[{"type": "function", "function": {"name": "test_tool"}}]</tool_schema>',
@@ -30,6 +34,23 @@ class TestSystemParser(unittest.TestCase):
         info = {"user_id": "user1", "session_id": "session1"}
 
         result = self.parser.parse_fast(message, info)
+
+        self.assertIsInstance(result, list)
+        self.assertEqual(
+            len(result), 0, "parse_fast should defer tool schema storage to parse_fine"
+        )
+
+    def test_parse_fine_with_tool_schema_creates_tool_schema_memory(self):
+        """Test that parse_fine creates ToolSchemaMemory items from tool schema content."""
+        message = {
+            "role": "system",
+            "content": '[{"type": "function", "function": {"name": "test_tool"}}]',
+            "chat_time": "2025-06-04T10:00:00",
+            "message_id": "msg_001",
+        }
+        info = {"user_id": "user1", "session_id": "session1"}
+
+        result = self.parser.parse_fine(message, info)
 
         # Should return memory items for tool schemas
         self.assertIsInstance(result, list)
@@ -84,7 +105,7 @@ class TestSystemParser(unittest.TestCase):
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 0)
 
-    def test_parse_fast_preserves_tool_schema_memory_type(self):
+    def test_parse_fine_preserves_tool_schema_memory_type(self):
         """Test that tool schemas are correctly identified and stored with ToolSchemaMemory type."""
         tool_schema_content = """[
             {
@@ -103,13 +124,13 @@ class TestSystemParser(unittest.TestCase):
         ]"""
         message = {
             "role": "system",
-            "content": f"<tool_schema>{tool_schema_content}</tool_schema>",
+            "content": tool_schema_content,
             "chat_time": "2025-06-04T10:00:00",
             "message_id": "msg_005",
         }
         info = {"user_id": "user1", "session_id": "session1"}
 
-        result = self.parser.parse_fast(message, info)
+        result = self.parser.parse_fine(message, info)
 
         self.assertGreater(len(result), 0)
         # Verify all returned items are ToolSchemaMemory

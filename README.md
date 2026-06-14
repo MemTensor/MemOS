@@ -264,6 +264,126 @@ Your lobsters and Hermes Agents now have **the best** memory system — choose *
     
 <br>
 
+
+## FAQ
+
+### What is MemOS?
+
+MemOS is a **Memory Operating System** for LLMs and AI agents that unifies store/retrieve/manage for long-term memory. It enables context-aware and personalized interactions with knowledge base (KB), multi-modal memory, tool memory, and enterprise-grade optimizations built in.
+
+### What are the benchmark results?
+
+| Benchmark | MemOS Result | Improvement |
+|-----------|--------------|-------------|
+| LoCoMo | 75.80 | - |
+| LongMemEval | +40.43% vs baseline | - |
+| PrefEval-10 | +2568% | - |
+| PersonaMem | +40.75% | - |
+| **vs OpenAI Memory** | +43.70% Accuracy | - |
+| **Token Savings** | 35.24% | - |
+
+### How does MemOS compare to other memory solutions?
+
+| Feature | MemOS | mem0 | LangChain Memory | Letta |
+|---------|-------|------|------------------|-------|
+| Multi-Modal Memory | ✅ Text/Images/Tools | ❌ Text only | ❌ Text only | ❌ Text only |
+| Knowledge Base | ✅ Multi-Cube KB | ❌ No KB | ⚠️ RAG only | ❌ No KB |
+| Memory Feedback | ✅ Natural language | ❌ No | ❌ No | ❌ No |
+| Graph Memory | ✅ Inspectable/Editable | ❌ Black-box | ❌ Black-box | ❌ Limited |
+| Async Ingestion | ✅ MemScheduler | ❌ No | ❌ No | ❌ No |
+| Open Source | ✅ Apache 2.0 | ✅ MIT | ✅ Apache | ✅ MIT |
+| ArXiv Paper | ✅ 2507.03724 | ❌ No | ❌ No | ❌ No |
+
+### What are the key features?
+
+| Feature | Description |
+|---------|-------------|
+| **Unified Memory API** | Single API for add/retrieve/edit/delete, graph-structured, inspectable |
+| **Multi-Modal Memory** | Text, images, tool traces, personas retrieved together |
+| **Multi-Cube KB** | Composable memory cubes for users/projects/agents |
+| **Async Ingestion** | MemScheduler with millisecond latency |
+| **Memory Feedback** | Natural-language correction/supplement/replacement |
+| **Self-evolving Memory** | L1 traces, L2 policies, L3 world model, crystallized Skills |
+
+### What deployment options are available?
+
+| Option | Description |
+|--------|-------------|
+| **Cloud API** | Hosted service at memos.openmem.net |
+| **Self-Hosted** | Local/private deployment via Docker |
+| **Quick Mode** | Lightweight deployment |
+| **Full Mode** | Complete deployment |
+
+### How do I get started with Cloud API?
+
+1. Sign up at [MemOS dashboard](https://memos-dashboard.openmem.net/)
+2. Go to **API Keys** and copy your key
+3. Use the Cloud API for memory operations
+
+See [Cloud Getting Started](https://memos-docs.openmem.net/memos_cloud/quick_start/).
+
+### How do I self-host MemOS?
+
+```bash
+# Clone
+git clone https://github.com/MemTensor/MemOS.git
+cd MemOS
+
+# Install dependencies
+pip install -r ./docker/requirements.txt
+
+# Configure .env (OPENAI_API_KEY, etc.)
+cp docker/.env.example MemOS/.env
+
+# Start service
+# See docs for full setup
+```
+
+### What LLM providers are supported?
+
+| Provider | Setting |
+|----------|---------|
+| OpenAI | `MOS_CHAT_MODEL_PROVIDER=openai` |
+| Azure OpenAI | `MOS_CHAT_MODEL_PROVIDER=azure` |
+| Qwen (DashScope) | `MOS_CHAT_MODEL_PROVIDER=qwen` |
+| DeepSeek | `MOS_CHAT_MODEL_PROVIDER=deepseek` |
+| MiniMax | `MOS_CHAT_MODEL_PROVIDER=minimax` |
+| Ollama | `MOS_CHAT_MODEL_PROVIDER=ollama` |
+| HuggingFace | `MOS_CHAT_MODEL_PROVIDER=huggingface` |
+| vLLM | `MOS_CHAT_MODEL_PROVIDER=vllm` |
+
+### What plugins are available?
+
+| Plugin | Purpose |
+|--------|---------|
+| **memos-local-plugin 2.0** | Local-first memory for Hermes Agent & OpenClaw |
+| **OpenClaw Cloud Plugin** | Hosted memory service, 72% token reduction |
+| **OpenClaw Local Plugin** | 100% on-device SQLite memory |
+
+### What is the memory architecture?
+
+| Layer | Purpose |
+|-------|---------|
+| **L1 Traces** | Raw interaction history |
+| **L2 Policies** | Learned preferences/behaviors |
+| **L3 World Model** | User understanding |
+| **Crystallized Skills** | Reusable patterns |
+
+### What license does MemOS use?
+
+Apache 2.0 License (see [LICENSE](./LICENSE)).
+
+### Where can I get help?
+
+| Resource | Link |
+|----------|------|
+| Documentation | [memos-docs.openmem.net](https://memos-docs.openmem.net/home/overview/) |
+| ArXiv Paper | [2507.03724](https://arxiv.org/abs/2507.03724) |
+| Discord | [Join Server](https://discord.gg/Txbx3gebZR) |
+| X/Twitter | [@MemOS_dev](https://x.com/MemOS_dev) |
+| GitHub Issues | [Submit issues](https://github.com/MemTensor/MemOS/issues) |
+| Awesome-AI-Memory | [IAAR-Shanghai/Awesome-AI-Memory](https://github.com/IAAR-Shanghai/Awesome-AI-Memory) |
+
 ## 📚 Resources
 
 - **Awesome-AI-Memory**
