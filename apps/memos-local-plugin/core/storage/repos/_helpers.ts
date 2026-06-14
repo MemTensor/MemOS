@@ -55,7 +55,7 @@ export function buildPageClauses(opts: PageOptions | undefined, tsColumn: string
 
 export function clampLimit(n: number): number {
   if (!Number.isFinite(n) || n <= 0) return 50;
-  return Math.min(Math.trunc(n), 500);
+  return Math.min(Math.trunc(n), 10_000);
 }
 
 export function timeRangeWhere(

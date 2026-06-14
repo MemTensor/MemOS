@@ -2382,6 +2382,29 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     let serviceStarted = false;
 
+    // Hub client connection is split out from startServiceCore so it can be
+    // attempted eagerly at plugin-load time, regardless of how the host
+    // chooses to launch the plugin. Some hosts (notably the QClaw desktop
+    // app) load the plugin without calling service.start(), which used to
+    // mean Hub connection never happened (see GitHub issue #1612).
+    //
+    // The guard makes this safe to call from multiple entry points: the
+    // service.start() callback (gateway CLI path) and the eager fire at the
+    // end of register() (QClaw desktop path) both funnel through here and
+    // only one attempt actually runs.
+    let hubClientConnectAttempted = false;
+    const connectClientToHubIfNeeded = async () => {
+      if (hubClientConnectAttempted) return;
+      if (!ctx.config.sharing?.enabled || ctx.config.sharing.role !== "client") return;
+      hubClientConnectAttempted = true;
+      try {
+        const session = await connectToHub(store, ctx.config, ctx.log);
+        api.logger.info(`memos-local: connected to Hub as "${session.username}" (${session.userId})`);
+      } catch (err) {
+        api.logger.warn(`memos-local: Hub connection failed: ${err}`);
+      }
+    };
+
     const startServiceCore = async () => {
       if (serviceStarted) return;
       serviceStarted = true;
@@ -2391,14 +2414,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         api.logger.info(`memos-local: hub started at ${hubUrl}`);
       }
 
-      if (ctx.config.sharing?.enabled && ctx.config.sharing.role === "client") {
-        try {
-          const session = await connectToHub(store, ctx.config, ctx.log);
-          api.logger.info(`memos-local: connected to Hub as "${session.username}" (${session.userId})`);
-        } catch (err) {
-          api.logger.warn(`memos-local: Hub connection failed: ${err}`);
-        }
-      }
+      await connectClientToHubIfNeeded();
 
       try {
         const viewerUrl = await viewer.start();
@@ -2436,6 +2452,16 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         store.close();
         api.logger.info("memos-local: stopped");
       },
+    });
+
+    // Eager Hub client connection: kick off the Hub login as soon as the
+    // plugin is registered, independent of the host's service lifecycle.
+    // This guarantees team sharing works in hosts that load the plugin
+    // without calling service.start() (e.g. the QClaw desktop app — see
+    // GitHub issue #1612). The setTimeout(0) fallback below still handles
+    // viewer startup; this fire-and-forget call does not block register().
+    connectClientToHubIfNeeded().catch((err) => {
+      api.logger.warn(`memos-local: eager Hub connection failed: ${err}`);
     });
 
     // Fallback: OpenClaw may load this plugin via deferred reload after
