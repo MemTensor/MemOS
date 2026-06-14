@@ -89,6 +89,16 @@ export async function abstractDraft(
   const evidenceLang = detectDominantLanguage(langSamples);
 
   try {
+    // We deliberately do *not* pass an inline `validate` to `completeJson`
+    // here. The LLM commonly returns *partially* structured drafts on
+    // smaller / non-strict providers (e.g. empty `title`, `inference` /
+    // `constraints` returned as strings or `{body}` shapes, comma-joined
+    // `domain_tags`). Our `normaliseDraft` below salvages those shapes
+    // into a `L3AbstractionDraft`. After normalization we run a *soft*
+    // floor check: only if even the salvaged draft is empty (no triple
+    // facets, no body, no domain tags) do we treat the response as
+    // unusable. Downstream validators still get the final say on whether
+    // the salvaged draft is good enough to persist.
     const rsp = await llm.completeJson<Record<string, unknown>>(
       [
         { role: "system", content: L3_ABSTRACTION_PROMPT.system },
@@ -102,30 +112,32 @@ export async function abstractDraft(
         temperature: 0.15,
         malformedRetries: 1,
         schemaHint: `{"title":"...","domain_tags":["..."],"environment":[{"label":"...","description":"...","evidenceIds":["..."]}],"inference":[...],"constraints":[...],"body":"markdown","confidence":0..1,"supersedes_world_ids":[]}`,
-        validate: (v) => {
-          const o = v as Record<string, unknown>;
-          if (typeof o.title !== "string" || !(o.title as string).trim()) {
-            throw new MemosError(
-              ERROR_CODES.LLM_OUTPUT_MALFORMED,
-              "l3.abstraction: 'title' must be a non-empty string",
-              { got: o.title },
-            );
-          }
-          const triple = ["environment", "inference", "constraints"];
-          for (const k of triple) {
-            if (!Array.isArray(o[k])) {
-              throw new MemosError(
-                ERROR_CODES.LLM_OUTPUT_MALFORMED,
-                `l3.abstraction: '${k}' must be an array`,
-                { got: o[k] },
-              );
-            }
-          }
-        },
       },
     );
 
     const draft = normaliseDraft(rsp.value);
+    assertDraftMinimallyUsable(draft, rsp.value);
+    if (draftWasSalvaged(draft, rsp.value)) {
+      log.info("l3.abstract.draft_salvaged", {
+        clusterKey: input.cluster.key,
+        rawTitleType: typeof (rsp.value as Record<string, unknown>).title,
+        rawTitleEmpty:
+          typeof (rsp.value as Record<string, unknown>).title !== "string" ||
+          !((rsp.value as Record<string, unknown>).title as string).trim(),
+        rawTagsType: Array.isArray((rsp.value as Record<string, unknown>).domain_tags)
+          ? "array"
+          : typeof (rsp.value as Record<string, unknown>).domain_tags,
+        environmentRawType: Array.isArray((rsp.value as Record<string, unknown>).environment)
+          ? "array"
+          : typeof (rsp.value as Record<string, unknown>).environment,
+        inferenceRawType: Array.isArray((rsp.value as Record<string, unknown>).inference)
+          ? "array"
+          : typeof (rsp.value as Record<string, unknown>).inference,
+        constraintsRawType: Array.isArray((rsp.value as Record<string, unknown>).constraints)
+          ? "array"
+          : typeof (rsp.value as Record<string, unknown>).constraints,
+      });
+    }
     if (deps.validate) deps.validate(draft);
     return { ok: true, draft };
   } catch (err) {
@@ -260,13 +272,22 @@ function packPolicy(
 
 function normaliseDraft(value: Record<string, unknown>): L3AbstractionDraft {
   const triple = pickTriple(value);
-  return {
-    title: sanitizeDerivedText(value.title),
-    domainTags: normaliseTags(value.domain_tags),
+  const body = typeof value.body === "string" ? sanitizeDerivedMarkdown(value.body) : "";
+  const domainTags = normaliseTags(value.domain_tags);
+  const title = deriveTitle(value.title, {
     environment: triple.environment,
     inference: triple.inference,
     constraints: triple.constraints,
-    body: typeof value.body === "string" ? sanitizeDerivedMarkdown(value.body) : "",
+    body,
+    domainTags,
+  });
+  return {
+    title,
+    domainTags,
+    environment: triple.environment,
+    inference: triple.inference,
+    constraints: triple.constraints,
+    body,
     confidence: clamp01(typeof value.confidence === "number" ? value.confidence : 0.5),
     supersedesWorldIds: Array.isArray(value.supersedes_world_ids)
       ? (value.supersedes_world_ids as unknown[])
@@ -274,6 +295,147 @@ function normaliseDraft(value: Record<string, unknown>): L3AbstractionDraft {
           .map((s) => s as WorldModelId)
       : [],
   };
+}
+
+/**
+ * Derive a usable title when the LLM returned an empty / non-string one.
+ * Order of preference:
+ *   1. The cleaned LLM-provided title.
+ *   2. The first inference / environment / constraints entry's label or
+ *      description (whichever is non-empty), trimmed to ~80 chars.
+ *   3. The first non-empty markdown line of `body`, with leading
+ *      heading/list prefixes (`#`, `-`, `*`, `+`, `1.`) stripped, trimmed.
+ *   4. A domain-tag joined fallback like `"docker, alpine, pip"`.
+ *   5. Empty string — caller (`assertDraftMinimallyUsable`) will reject if
+ *      the rest of the draft is also empty.
+ */
+function deriveTitle(
+  raw: unknown,
+  ctx: {
+    environment: L3AbstractionDraftEntry[];
+    inference: L3AbstractionDraftEntry[];
+    constraints: L3AbstractionDraftEntry[];
+    body: string;
+    domainTags: string[];
+  },
+): string {
+  const cleaned = sanitizeDerivedText(raw);
+  if (cleaned) return cleaned;
+
+  const firstEntryText = (entries: L3AbstractionDraftEntry[]): string => {
+    for (const e of entries) {
+      const candidate = e.label || stripMarkdownToText(e.description);
+      if (candidate) return candidate;
+    }
+    return "";
+  };
+  const fromInference = firstEntryText(ctx.inference);
+  if (fromInference) return shortenForTitle(fromInference);
+  const fromEnvironment = firstEntryText(ctx.environment);
+  if (fromEnvironment) return shortenForTitle(fromEnvironment);
+  const fromConstraints = firstEntryText(ctx.constraints);
+  if (fromConstraints) return shortenForTitle(fromConstraints);
+
+  if (ctx.body) {
+    for (const line of ctx.body.split(/\r?\n/)) {
+      const stripped = line.replace(/^\s*(?:#+\s+|[-*+]\s+|\d+\.\s+)/, "").trim();
+      if (stripped) return shortenForTitle(stripMarkdownToText(stripped));
+    }
+  }
+  if (ctx.domainTags.length > 0) {
+    return shortenForTitle(ctx.domainTags.join(", "));
+  }
+  return "";
+}
+
+function stripMarkdownToText(s: string): string {
+  return s
+    .replace(/[`*_~]+/g, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function shortenForTitle(s: string): string {
+  const flat = s.replace(/\s+/g, " ").trim();
+  if (flat.length <= 80) return flat;
+  return flat.slice(0, 79) + "…";
+}
+
+/**
+ * Ensure the salvaged draft has *something* worth persisting. We accept a
+ * draft as long as it has at least one of:
+ *   - a non-empty title (post-derivation),
+ *   - any triple facet entry,
+ *   - a non-empty body,
+ *   - at least one domain tag.
+ *
+ * This keeps the parser permissive while preventing fully empty drafts
+ * (which downstream code would happily index as garbage) from sneaking
+ * through. Downstream validators still apply stricter checks.
+ */
+function assertDraftMinimallyUsable(
+  draft: L3AbstractionDraft,
+  raw: Record<string, unknown>,
+): void {
+  const hasTitle = draft.title.trim().length > 0;
+  const hasTripleEntry =
+    draft.environment.length > 0 ||
+    draft.inference.length > 0 ||
+    draft.constraints.length > 0;
+  const hasBody = draft.body.trim().length > 0;
+  const hasTags = draft.domainTags.length > 0;
+  if (hasTitle || hasTripleEntry || hasBody || hasTags) return;
+  throw new MemosError(
+    ERROR_CODES.LLM_OUTPUT_MALFORMED,
+    "l3.abstraction: draft is empty after normalization",
+    {
+      rawKeys: Object.keys(raw),
+      title: raw.title,
+      environment: Array.isArray(raw.environment) ? raw.environment.length : typeof raw.environment,
+      inference: Array.isArray(raw.inference) ? raw.inference.length : typeof raw.inference,
+      constraints: Array.isArray(raw.constraints)
+        ? raw.constraints.length
+        : typeof raw.constraints,
+    },
+  );
+}
+
+/**
+ * True iff `normaliseDraft` had to coerce the raw payload — useful for
+ * an `info` log so operators can see when the parser is salvaging vs.
+ * accepting clean drafts.
+ */
+function draftWasSalvaged(
+  draft: L3AbstractionDraft,
+  raw: Record<string, unknown>,
+): boolean {
+  const rawTitleEmpty =
+    typeof raw.title !== "string" || !raw.title.trim();
+  if (rawTitleEmpty && draft.title) return true;
+  const tripleKeys = ["environment", "inference", "constraints"] as const;
+  for (const k of tripleKeys) {
+    if (!Array.isArray(raw[k])) {
+      // Anything non-array on the wire that we still produced entries for
+      // (or even legitimately empty arrays for) counts as salvaged.
+      return true;
+    }
+    for (const entry of raw[k] as unknown[]) {
+      if (typeof entry === "string") return true;
+      if (entry && typeof entry === "object") {
+        const o = entry as Record<string, unknown>;
+        // Drafts that only used `body` instead of `description`, or that
+        // omitted `label` entirely, were salvaged into the canonical
+        // `{label, description}` shape.
+        const hasCanonicalLabel = typeof o.label === "string";
+        const hasCanonicalDescription = typeof o.description === "string";
+        if (!hasCanonicalLabel || !hasCanonicalDescription) return true;
+      }
+    }
+  }
+  // String / non-array `domain_tags` that we still produced tags for.
+  if (!Array.isArray(raw.domain_tags) && draft.domainTags.length > 0) return true;
+  return false;
 }
 
 function pickTriple(value: Record<string, unknown>): {
@@ -289,49 +451,134 @@ function pickTriple(value: Record<string, unknown>): {
 }
 
 function toEntries(raw: unknown): L3AbstractionDraftEntry[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((r): L3AbstractionDraftEntry | null => {
-      if (!r || typeof r !== "object") return null;
-      const o = r as Record<string, unknown>;
-      const label = typeof o.label === "string" ? sanitizeDerivedText(o.label) : "";
-      const description = typeof o.description === "string" ? sanitizeDerivedMarkdown(o.description) : "";
-      if (!label && !description) return null;
-      const evidenceIds = Array.isArray(o.evidenceIds)
-        ? (o.evidenceIds as unknown[]).filter((s): s is string => typeof s === "string")
-        : undefined;
-      return { label, description, evidenceIds };
-    })
+  // Accept the canonical array shape, but also salvage common LLM mistakes:
+  //   - whole field returned as a single string -> treat as one entry's body
+  //   - whole field returned as a single object -> wrap in an array
+  //   - per-entry strings -> treat as the entry's `description`
+  //   - per-entry objects using `body` / `text` / `content` instead of
+  //     `description`, or `name` / `title` instead of `label`
+  let arr: unknown[];
+  if (Array.isArray(raw)) {
+    arr = raw;
+  } else if (typeof raw === "string") {
+    const cleaned = raw.trim();
+    arr = cleaned ? [cleaned] : [];
+  } else if (raw && typeof raw === "object") {
+    arr = [raw];
+  } else {
+    return [];
+  }
+
+  return arr
+    .map((r): L3AbstractionDraftEntry | null => coerceEntry(r))
     .filter((e): e is L3AbstractionDraftEntry => e !== null)
     .slice(0, 16);
+}
+
+function coerceEntry(r: unknown): L3AbstractionDraftEntry | null {
+  if (typeof r === "string") {
+    const description = sanitizeDerivedMarkdown(r);
+    if (!description) return null;
+    return { label: "", description };
+  }
+  if (!r || typeof r !== "object") return null;
+  const o = r as Record<string, unknown>;
+
+  const labelRaw = firstString(o.label, o.name, o.title, o.heading, o.key);
+  const descriptionRaw = firstString(
+    o.description,
+    o.body,
+    o.text,
+    o.content,
+    o.detail,
+    o.summary,
+    o.value,
+  );
+
+  const label = labelRaw ? sanitizeDerivedText(labelRaw) : "";
+  const description = descriptionRaw ? sanitizeDerivedMarkdown(descriptionRaw) : "";
+  if (!label && !description) return null;
+
+  const evidenceIds = collectEvidenceIds(o);
+  return evidenceIds ? { label, description, evidenceIds } : { label, description };
+}
+
+function firstString(...candidates: unknown[]): string | undefined {
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim().length > 0) return c;
+  }
+  return undefined;
+}
+
+function collectEvidenceIds(o: Record<string, unknown>): string[] | undefined {
+  const raw = o.evidenceIds ?? o.evidence_ids ?? o.evidence;
+  if (Array.isArray(raw)) {
+    const ids = (raw as unknown[])
+      .filter((s): s is string => typeof s === "string")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return ids.length > 0 ? ids : undefined;
+  }
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    // Allow `"po_1, po_2"` style strings for forgiving providers.
+    const ids = raw
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return ids.length > 0 ? ids : undefined;
+  }
+  return undefined;
 }
 
 function buildBody(draft: L3AbstractionDraft): string {
   if (draft.body && draft.body.length > 0) return draft.body;
   const lines: string[] = [`# ${draft.title}`, ""];
+  const renderEntry = (e: L3AbstractionDraftEntry): string =>
+    e.label ? `- **${e.label}** — ${e.description}` : `- ${e.description}`;
   if (draft.environment.length > 0) {
     lines.push("## Environment (ℰ)");
-    for (const e of draft.environment) lines.push(`- **${e.label}** — ${e.description}`);
+    for (const e of draft.environment) lines.push(renderEntry(e));
     lines.push("");
   }
   if (draft.inference.length > 0) {
     lines.push("## Inference rules (ℐ)");
-    for (const e of draft.inference) lines.push(`- **${e.label}** — ${e.description}`);
+    for (const e of draft.inference) lines.push(renderEntry(e));
     lines.push("");
   }
   if (draft.constraints.length > 0) {
     lines.push("## Constraints (C)");
-    for (const e of draft.constraints) lines.push(`- **${e.label}** — ${e.description}`);
+    for (const e of draft.constraints) lines.push(renderEntry(e));
     lines.push("");
   }
   return lines.join("\n").trim();
 }
 
 function normaliseTags(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
+  // Canonical shape: array of strings. Also accept comma/semicolon/newline-
+  // separated strings (`"docker, alpine, pip"`; whitespace within a tag is
+  // preserved so multi-word tags survive) and arrays that mix strings and
+  // `{label}` / `{name}` / `{tag}` objects, since some providers return
+  // that shape under structured-output mode.
+  let candidates: unknown[];
+  if (Array.isArray(raw)) {
+    candidates = raw as unknown[];
+  } else if (typeof raw === "string") {
+    candidates = raw.split(/[,;\n]+/);
+  } else {
+    return [];
+  }
+  const flat: string[] = [];
+  for (const c of candidates) {
+    if (typeof c === "string") {
+      flat.push(c);
+    } else if (c && typeof c === "object") {
+      const o = c as Record<string, unknown>;
+      const fromObj = firstString(o.label, o.name, o.tag, o.value, o.key);
+      if (fromObj) flat.push(fromObj);
+    }
+  }
   return dedupeStrings(
-    (raw as unknown[])
-      .filter((s): s is string => typeof s === "string")
+    flat
       .map((s) => s.trim().toLowerCase())
       .filter((s) => s.length > 0 && s.length < 24),
   ).slice(0, 6);
