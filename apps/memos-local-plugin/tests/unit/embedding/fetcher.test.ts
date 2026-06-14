@@ -81,6 +81,64 @@ describe("embedding/fetcher", () => {
     expect(f).toHaveBeenCalledTimes(2);
   });
 
+  it("429 with Retry-After: <seconds> sleeps at least that long before retrying", async () => {
+    const f = mockFetch([
+      new Response("slow", { status: 429, headers: { "Retry-After": "1" } }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+    const start = Date.now();
+    await httpPostJson({
+      url: "https://x",
+      body: {},
+      provider: "openai_compatible",
+      log: nullLogger(),
+      maxRetries: 1,
+    });
+    const elapsed = Date.now() - start;
+    expect(f).toHaveBeenCalledTimes(2);
+    // Retry-After: 1 → ~1000ms; baseline backoff is 200 + jitter < 300ms.
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+  });
+
+  it("429 with Retry-After: HTTP-date in the near future is honored", async () => {
+    const target = new Date(Date.now() + 1_200).toUTCString();
+    const f = mockFetch([
+      new Response("slow", { status: 429, headers: { "Retry-After": target } }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+    const start = Date.now();
+    await httpPostJson({
+      url: "https://x",
+      body: {},
+      provider: "openai_compatible",
+      log: nullLogger(),
+      maxRetries: 1,
+    });
+    const elapsed = Date.now() - start;
+    expect(f).toHaveBeenCalledTimes(2);
+    expect(elapsed).toBeGreaterThanOrEqual(800);
+    expect(elapsed).toBeLessThan(5_000);
+  });
+
+  it("429 with malformed Retry-After falls back to existing backoff", async () => {
+    const f = mockFetch([
+      new Response("slow", { status: 429, headers: { "Retry-After": "not-a-thing" } }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+    const start = Date.now();
+    await httpPostJson({
+      url: "https://x",
+      body: {},
+      provider: "openai_compatible",
+      log: nullLogger(),
+      maxRetries: 1,
+    });
+    const elapsed = Date.now() - start;
+    expect(f).toHaveBeenCalledTimes(2);
+    // Fallback backoff for attempt 1: 200ms base + jitter < 300ms.
+    expect(elapsed).toBeLessThan(900);
+  });
+
   it("does not retry on 400", async () => {
     mockFetch([new Response("bad", { status: 400 })]);
     await expect(
