@@ -74,23 +74,87 @@ client = MemOSClient(api_key="...", base_url="...")
 # 1. System overview: check the health of the entire MemOS system
 global_res = client.get_all_scheduler_status()
 if global_res:
-    print(f"System overview: {global_res.data['scheduler_summary']}")
+    print(f"Scheduler summary: {global_res.data.scheduler_summary}")
+    # TaskSummary fields: waiting, in_progress, pending, completed, failed, cancelled, total
+    print(f"  Total tasks: {global_res.data.scheduler_summary.total}")
+    print(f"  In progress: {global_res.data.scheduler_summary.in_progress}")
 
 # 2. Queue metrics monitoring: check task backlog for a specific user
 queue_res = client.get_task_queue_status(user_id="dev_user_01")
 if queue_res:
-    print(f"Remaining tasks: {queue_res.data['remaining_tasks_count']}")
-    print(f"Pending unacknowledged tasks: {queue_res.data['pending_tasks_count']}")
+    # TaskQueueData fields: user_id, stream_keys, pending_tasks_count, remaining_tasks_count, etc.
+    print(f"Remaining tasks: {queue_res.data.remaining_tasks_count}")
+    print(f"Pending unacknowledged tasks: {queue_res.data.pending_tasks_count}")
 
 # 3. Task progress tracking: poll a specific task until completion
 task_id = "task_888999"
 while True:
-    res = client.get_task_status(user_id="dev_user_01", task_id=task_id)
+    res = client.get_scheduler_task_status(user_id="dev_user_01", task_id=task_id)
     if res and res.code == 200:
-        current_status = res.data[0]['status']  # data is a list of statuses
+        # StatusResponse.data is list[StatusResponseItem], each has .task_id and .status
+        current_status = res.data[0].status
         print(f"Task {task_id} current status: {current_status}")
 
         if current_status in ['completed', 'failed', 'cancelled']:
             break
     time.sleep(2)
+```
+
+## 5. cURL Examples
+
+### System Overview
+
+```bash
+# Get aggregated scheduler status
+curl -X GET "http://localhost:8000/product/scheduler/allstatus" \
+  -H "Authorization: Token YOUR_API_KEY"
+```
+Or with Python `requests`:
+```python
+import requests
+res = requests.get(
+    "http://localhost:8000/product/scheduler/allstatus",
+    headers={"Authorization": "Token YOUR_API_KEY"},
+)
+print(res.json())
+```
+
+### Task Progress Query
+
+```bash
+# Query status for all tasks of a user
+curl -X GET "http://localhost:8000/product/scheduler/status?user_id=dev_user_01" \
+  -H "Authorization: Token YOUR_API_KEY"
+
+# Query status for a specific task
+curl -X GET "http://localhost:8000/product/scheduler/status?user_id=dev_user_01&task_id=task_888999" \
+  -H "Authorization: Token YOUR_API_KEY"
+```
+Or with Python `requests`:
+```python
+import requests
+res = requests.get(
+    "http://localhost:8000/product/scheduler/status",
+    params={"user_id": "dev_user_01", "task_id": "task_888999"},
+    headers={"Authorization": "Token YOUR_API_KEY"},
+)
+print(res.json())
+```
+
+### User Queue Metrics
+
+```bash
+# Check task queue backlog for a user
+curl -X GET "http://localhost:8000/product/scheduler/task_queue_status?user_id=dev_user_01" \
+  -H "Authorization: Token YOUR_API_KEY"
+```
+Or with Python `requests`:
+```python
+import requests
+res = requests.get(
+    "http://localhost:8000/product/scheduler/task_queue_status",
+    params={"user_id": "dev_user_01"},
+    headers={"Authorization": "Token YOUR_API_KEY"},
+)
+print(res.json())
 ```

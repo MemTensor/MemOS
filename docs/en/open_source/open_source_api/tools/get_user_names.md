@@ -46,6 +46,42 @@ target_ids = [
 res = client.get_user_names_by_memory_ids(memory_ids=target_ids)
 
 if res and res.code == 200:
-    # res.data typically returns a mapping dictionary or user list
+    # GetUserNamesByMemoryIdsResponse.data contains the mapping result from graph_db
     print(f"These memory entries belong to users: {res.data}")
+```
+
+## 5. cURL Example
+
+```bash
+# Reverse query user names by memory IDs
+curl -X POST "http://localhost:8000/product/get_user_names_by_memory_ids" \
+  -H "Authorization: Token YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "memory_ids": [
+      "2f40be8f-736c-4a5f-aada-9489037769e0",
+      "5e92be1a-826d-4f6e-97ce-98b699eebb98"
+    ]
+  }'
+
+# Example response:
+# {"code": 200, "message": "Successfully", "data": {"2f40be8f-...": "dev_user_01", "5e92be1a-...": "admin_01"}}
+```
+
+Or using Python `requests`:
+
+```python
+import requests
+
+res = requests.post(
+    "http://localhost:8000/product/get_user_names_by_memory_ids",
+    headers={"Authorization": "Token YOUR_API_KEY", "Content-Type": "application/json"},
+    json={
+        "memory_ids": [
+            "2f40be8f-736c-4a5f-aada-9489037769e0",
+            "5e92be1a-826d-4f6e-97ce-98b699eebb98",
+        ]
+    },
+)
+print(res.json())
 ```

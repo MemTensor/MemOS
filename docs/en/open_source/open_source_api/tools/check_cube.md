@@ -41,9 +41,35 @@ kb_id = "kb_finance_2026"
 res = client.exist_mem_cube_id(mem_cube_id=kb_id)
 
 if res and res.code == 200:
-    # Assume the data field returns a boolean or existence object
-    if res.data.get('exists'):
-        print(f"✅ MemCube '{kb_id}' is ready.")
+    # ExistMemCubeIdResponse.data is dict[str, bool]: {cube_id: exists}
+    if res.data.get(kb_id):
+        print(f"MemCube '{kb_id}' is ready.")
     else:
-        print(f"❌ MemCube '{kb_id}' has not been initialized.")
+        print(f"MemCube '{kb_id}' has not been initialized.")
+```
+
+## 5. cURL Example
+
+```bash
+# Check if a MemCube ID is registered
+curl -X POST "http://localhost:8000/product/exist_mem_cube_id" \
+  -H "Authorization: Token YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"mem_cube_id": "kb_finance_2026"}'
+
+# Example response:
+# {"code": 200, "message": "Successfully", "data": {"kb_finance_2026": true}}
+```
+
+Or using Python `requests`:
+
+```python
+import requests
+
+res = requests.post(
+    "http://localhost:8000/product/exist_mem_cube_id",
+    headers={"Authorization": "Token YOUR_API_KEY", "Content-Type": "application/json"},
+    json={"mem_cube_id": "kb_finance_2026"},
+)
+print(res.json())
 ```
