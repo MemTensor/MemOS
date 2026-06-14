@@ -7,6 +7,9 @@ from typing import Any
 import requests
 
 from memos.api.product_models import (
+    AllStatusResponse,
+    ExistMemCubeIdResponse,
+    GetUserNamesByMemoryIdsResponse,
     MemOSAddFeedBackResponse,
     MemOSAddKnowledgebaseFileResponse,
     MemOSAddResponse,
@@ -19,6 +22,8 @@ from memos.api.product_models import (
     MemOSGetMessagesResponse,
     MemOSGetTaskStatusResponse,
     MemOSSearchResponse,
+    StatusResponse,
+    TaskQueueResponse,
 )
 from memos.log import get_logger
 
@@ -584,5 +589,182 @@ class MemOSClient:
                 return MemOSChatResponse(**response_data)
             except Exception as e:
                 logger.error(f"Failed to chat (retry {retry + 1}/3): {e}")
+                if retry == MAX_RETRY_COUNT - 1:
+                    raise
+
+    def get_all_scheduler_status(self) -> AllStatusResponse | None:
+        """Get aggregated scheduler status including running tasks and queue metrics."""
+        url = f"{self.base_url}/product/scheduler/allstatus"
+
+        for retry in range(MAX_RETRY_COUNT):
+            try:
+                response = requests.get(url, headers=self.headers, timeout=30)
+                response.raise_for_status()
+                response_data = response.json()
+
+                return AllStatusResponse(**response_data)
+            except Exception as e:
+                logger.error(f"Failed to get all scheduler status (retry {retry + 1}/3): {e}")
+                if retry == MAX_RETRY_COUNT - 1:
+                    raise
+
+    def get_scheduler_task_status(
+        self, user_id: str, task_id: str | None = None
+    ) -> StatusResponse | None:
+        """Get scheduler task status for a user, optionally filtering by task_id."""
+        self._validate_required_params(user_id=user_id)
+
+        url = f"{self.base_url}/product/scheduler/status"
+        params: dict[str, str] = {"user_id": user_id}
+        if task_id:
+            params["task_id"] = task_id
+
+        for retry in range(MAX_RETRY_COUNT):
+            try:
+                response = requests.get(url, params=params, headers=self.headers, timeout=30)
+                response.raise_for_status()
+                response_data = response.json()
+
+                return StatusResponse(**response_data)
+            except Exception as e:
+                logger.error(f"Failed to get scheduler task status (retry {retry + 1}/3): {e}")
+                if retry == MAX_RETRY_COUNT - 1:
+                    raise
+
+    def get_task_queue_status(self, user_id: str) -> TaskQueueResponse | None:
+        """Get scheduler task queue backlog/pending status for a user."""
+        self._validate_required_params(user_id=user_id)
+
+        url = f"{self.base_url}/product/scheduler/task_queue_status"
+        params = {"user_id": user_id}
+
+        for retry in range(MAX_RETRY_COUNT):
+            try:
+                response = requests.get(url, params=params, headers=self.headers, timeout=30)
+                response.raise_for_status()
+                response_data = response.json()
+
+                return TaskQueueResponse(**response_data)
+            except Exception as e:
+                logger.error(f"Failed to get task queue status (retry {retry + 1}/3): {e}")
+                if retry == MAX_RETRY_COUNT - 1:
+                    raise
+
+    def wait_until_idle(
+        self,
+        user_name: str,
+        timeout_seconds: float = 120.0,
+        poll_interval: float = 0.5,
+    ) -> dict[str, Any] | None:
+        """Wait until scheduler is idle for a specific user.
+
+        Returns a dict with keys: message ("idle"|"timeout"), data (dict with
+        running_tasks, waited_seconds, timed_out, user_name).
+        """
+        self._validate_required_params(user_name=user_name)
+
+        url = f"{self.base_url}/product/scheduler/wait"
+        params: dict[str, Any] = {
+            "user_name": user_name,
+            "timeout_seconds": timeout_seconds,
+            "poll_interval": poll_interval,
+        }
+
+        for retry in range(MAX_RETRY_COUNT):
+            try:
+                response = requests.post(
+                    url,
+                    params=params,
+                    headers=self.headers,
+                    timeout=max(timeout_seconds + 30, 60),
+                )
+                response.raise_for_status()
+                return response.json()
+            except Exception as e:
+                logger.error(f"Failed to wait until idle (retry {retry + 1}/3): {e}")
+                if retry == MAX_RETRY_COUNT - 1:
+                    raise
+
+    def stream_scheduler_progress(
+        self,
+        user_name: str,
+        timeout_seconds: float = 120.0,
+    ):
+        """Stream scheduler progress via Server-Sent Events (SSE).
+
+        Yields parsed JSON dicts for each SSE event. Each event contains:
+        user_name, active_tasks, elapsed_seconds, status ("running"|"idle"|"timeout"),
+        timed_out (bool), instance_id.
+        """
+        self._validate_required_params(user_name=user_name)
+
+        url = f"{self.base_url}/product/scheduler/wait/stream"
+        params = {"user_name": user_name, "timeout_seconds": timeout_seconds}
+
+        for retry in range(MAX_RETRY_COUNT):
+            try:
+                response = requests.get(
+                    url,
+                    params=params,
+                    headers=self.headers,
+                    stream=True,
+                    timeout=max(timeout_seconds + 30, 60),
+                )
+                response.raise_for_status()
+
+                for line in response.iter_lines(decode_unicode=True):
+                    if line and line.startswith("data: "):
+                        data_str = line[len("data: ") :]
+                        try:
+                            yield json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                return  # completed normally
+            except Exception as e:
+                logger.error(f"Failed to stream scheduler progress (retry {retry + 1}/3): {e}")
+                if retry == MAX_RETRY_COUNT - 1:
+                    raise
+
+    def exist_mem_cube_id(self, mem_cube_id: str) -> ExistMemCubeIdResponse | None:
+        """Check if a MemCube ID already exists in the system."""
+        self._validate_required_params(mem_cube_id=mem_cube_id)
+
+        url = f"{self.base_url}/product/exist_mem_cube_id"
+        payload = {"mem_cube_id": mem_cube_id}
+
+        for retry in range(MAX_RETRY_COUNT):
+            try:
+                response = requests.post(
+                    url, data=json.dumps(payload), headers=self.headers, timeout=30
+                )
+                response.raise_for_status()
+                response_data = response.json()
+
+                return ExistMemCubeIdResponse(**response_data)
+            except Exception as e:
+                logger.error(f"Failed to check mem cube id (retry {retry + 1}/3): {e}")
+                if retry == MAX_RETRY_COUNT - 1:
+                    raise
+
+    def get_user_names_by_memory_ids(
+        self, memory_ids: list[str]
+    ) -> GetUserNamesByMemoryIdsResponse | None:
+        """Look up user names by memory IDs (reverse tracing)."""
+        self._validate_required_params(memory_ids=memory_ids)
+
+        url = f"{self.base_url}/product/get_user_names_by_memory_ids"
+        payload = {"memory_ids": memory_ids}
+
+        for retry in range(MAX_RETRY_COUNT):
+            try:
+                response = requests.post(
+                    url, data=json.dumps(payload), headers=self.headers, timeout=30
+                )
+                response.raise_for_status()
+                response_data = response.json()
+
+                return GetUserNamesByMemoryIdsResponse(**response_data)
+            except Exception as e:
+                logger.error(f"Failed to get user names by memory ids (retry {retry + 1}/3): {e}")
                 if retry == MAX_RETRY_COUNT - 1:
                     raise
