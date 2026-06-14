@@ -31,6 +31,7 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
+import { patchToolsAllow, parseJsonWithComments } from "./src/shared/json5-lite";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -356,14 +357,17 @@ const memosLocalPlugin = {
       const openclawJsonPath = path.join(stateDir, "openclaw.json");
       if (fs.existsSync(openclawJsonPath)) {
         const raw = fs.readFileSync(openclawJsonPath, "utf-8");
-        const cfg = JSON.parse(raw);
+        // openclaw.json is JSON5: comments and trailing commas are legal.
+        // Parse via the JSON5-tolerant helper (writeback below is a targeted
+        // regex replace on `raw`, so comments are preserved on round-trip).
+        const cfg = parseJsonWithComments<{ tools?: { allow?: string[] } }>(raw);
         const allow: string[] | undefined = cfg?.tools?.allow;
         if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins") && !allow.includes("*")) {
-          const lastEntry = JSON.stringify(allow[allow.length - 1]);
-          const patched = raw.replace(
-            new RegExp(`(${lastEntry})(\\s*\\])`),
-            `$1,\n      "group:plugins"$2`,
-          );
+          const lastEntry = allow[allow.length - 1];
+          // Anchored to the `tools.allow` array span (string-literal-aware
+          // bracket matching) and with regex metacharacters in `lastEntry`
+          // escaped — see #1377 for what happens when this is global.
+          const patched = patchToolsAllow(raw, lastEntry, "group:plugins");
           if (patched !== raw && patched.includes("group:plugins")) {
             fs.writeFileSync(openclawJsonPath, patched, "utf-8");
             ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
