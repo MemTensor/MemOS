@@ -77,6 +77,33 @@ describe("skill/packager", () => {
     expect(r.row.eta).toBeGreaterThanOrEqual(makeSkillConfig().minEtaForRetrieval);
   });
 
+  it("uses only trigger context and summary as the skill vector source", async () => {
+    const r = await buildSkillRow(
+      {
+        draft: makeDraft({
+          retrievalBlurb: "retrieval-only text must not affect dedupe",
+          triggerContext: "Alpine Python package builds fail because native headers are missing.",
+          summary: "Install native headers before retrying the package build.",
+          steps: [{ title: "apk add", body: "install libffi-dev openssl-dev" }],
+        }),
+        policy: mkPolicy(),
+        evidenceEpisodeIds: ["ep_1" as PolicyRow["sourceEpisodeIds"][number]],
+        evidenceUserTexts: ["user asked for cffi today"],
+      },
+      { embedder: fakeEmbedder(), log, config: makeSkillConfig() },
+    );
+
+    expect(r.vecSource).toBe(
+      [
+        "Alpine Python package builds fail because native headers are missing.",
+        "Install native headers before retrying the package build.",
+      ].join("\n"),
+    );
+    expect(r.vecSource).not.toContain("retrieval-only");
+    expect(r.vecSource).not.toContain("apk add");
+    expect(r.vecSource).not.toContain("user asked");
+  });
+
   it("preserves the existing skill id when rebuilding", async () => {
     const existing = {
       id: "sk_old" as SkillRow["id"],

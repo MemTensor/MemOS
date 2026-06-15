@@ -402,6 +402,111 @@ describe("feedback experience builder", () => {
     expect(row?.sourceFeedbackIds).toContain("fb_merge_family");
   });
 
+  it("keeps a candidate policy as candidate when similar feedback merges repeatedly", async () => {
+    handle.repos.policies.insert({
+      id: "po_candidate_merge" as never,
+      ownerAgentKind: "hermes",
+      ownerProfileId: "default",
+      ownerWorkspaceId: "workspace",
+      title: "SEC 13F extraction rule",
+      trigger: "when parsing 13F",
+      procedure: "avoid wrong issuer field",
+      verification: "issuer matches filing",
+      boundary: "",
+      support: 1,
+      gain: 0.2,
+      status: "candidate",
+      experienceType: "failure_avoidance",
+      evidencePolarity: "negative",
+      mergeFamily: null,
+      sourceEpisodeIds: ["ep_feedback" as EpisodeId],
+      sourceFeedbackIds: [],
+      sourceTraceIds: [trace.id],
+      inducedBy: "feedback.experience.v1",
+      decisionGuidance: { preference: [], antiPattern: ["avoid wrong issuer field"] },
+      skillEligible: false,
+      createdAt: NOW,
+      updatedAt: NOW,
+      vec: vec([1, 0, 0]),
+    });
+
+    for (const id of ["fb_candidate_merge_1", "fb_candidate_merge_2"] as const) {
+      const merged = await runFeedbackExperience(
+        {
+          feedback: feedback({
+            id: id as FeedbackRow["id"],
+            rationale: "Avoid wrong SEC 13F issuer field.",
+            raw: { source: "manual" },
+          }),
+          episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: -1 },
+          trace,
+        },
+        { repos: handle.repos, embedder: fakeEmbedder(), namespace, now: () => NOW + 4 },
+      );
+
+      expect(merged.policyId).toBe("po_candidate_merge");
+      expect(handle.repos.policies.getById("po_candidate_merge" as never)?.status).toBe(
+        "candidate",
+      );
+    }
+
+    const row = handle.repos.policies.getById("po_candidate_merge" as never);
+    expect(row?.support).toBe(3);
+    expect(row?.sourceFeedbackIds).toEqual(["fb_candidate_merge_1", "fb_candidate_merge_2"]);
+  });
+
+  it("merges high-confidence feedback into an active policy instead of forking a candidate", async () => {
+    handle.repos.policies.insert({
+      id: "po_active_merge" as never,
+      ownerAgentKind: "hermes",
+      ownerProfileId: "default",
+      ownerWorkspaceId: "workspace",
+      title: "SEC 13F extraction rule",
+      trigger: "when parsing 13F",
+      procedure: "avoid wrong issuer field",
+      verification: "issuer matches filing",
+      boundary: "",
+      support: 3,
+      gain: 0.8,
+      status: "active",
+      experienceType: "failure_avoidance",
+      evidencePolarity: "negative",
+      mergeFamily: null,
+      sourceEpisodeIds: ["ep_feedback" as EpisodeId],
+      sourceFeedbackIds: [],
+      sourceTraceIds: [trace.id],
+      inducedBy: "feedback.experience.v1",
+      decisionGuidance: { preference: [], antiPattern: ["avoid wrong issuer field"] },
+      skillEligible: false,
+      createdAt: NOW,
+      updatedAt: NOW,
+      vec: vec([1, 0, 0]),
+    });
+
+    const merged = await runFeedbackExperience(
+      {
+        feedback: feedback({
+          id: "fb_active_merge" as FeedbackRow["id"],
+          rationale: "Avoid wrong SEC 13F issuer field.",
+          raw: { source: "manual" },
+        }),
+        episode: { id: "ep_feedback" as EpisodeId, traceIds: [trace.id], rTask: -1 },
+        trace,
+      },
+      { repos: handle.repos, embedder: fakeEmbedder(), namespace, now: () => NOW + 5 },
+    );
+
+    expect(merged).toMatchObject({ created: false, policyId: "po_active_merge" });
+    const all = handle.repos.policies.list({ limit: 20 });
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({
+      id: "po_active_merge",
+      status: "active",
+      support: 4,
+    });
+    expect(all[0]?.sourceFeedbackIds).toContain("fb_active_merge");
+  });
+
   it("does not split compatible manual feedback just because policy source kind is not persisted", async () => {
     handle.repos.policies.insert({
       id: "po_manual_merge" as never,

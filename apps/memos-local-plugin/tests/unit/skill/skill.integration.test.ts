@@ -13,7 +13,9 @@ import { createRewardEventBus } from "../../../core/reward/index.js";
 import { createL2EventBus } from "../../../core/memory/l2/index.js";
 import { fakeLlm } from "../../helpers/fake-llm.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
-import type { EpisodeId, PolicyId, SkillId } from "../../../core/types.js";
+import type { Embedder } from "../../../core/embedding/types.js";
+import type { EmbeddingVector, EpisodeId, PolicyId, SkillId } from "../../../core/types.js";
+import type { SkillProcedure } from "../../../core/skill/types.js";
 import {
   makeDraft,
   makeSkillConfig,
@@ -25,6 +27,46 @@ import {
 } from "./_helpers.js";
 
 let handle: TmpDbHandle | null = null;
+
+function fakeEmbedder(vector: EmbeddingVector = vec([1, 0, 0])): Embedder {
+  return {
+    dimensions: vector.length,
+    provider: "local",
+    model: "unit-test",
+    embedOne: async () => vector,
+    embedMany: async (inputs) => inputs.map(() => vector),
+    stats: () => ({
+      hits: 0,
+      misses: 0,
+      requests: 0,
+      roundTrips: 0,
+      failures: 0,
+      lastOkAt: Date.now(),
+      lastError: null,
+    }),
+    resetCache: () => {},
+    close: async () => {},
+  };
+}
+
+function procedure(overrides: Partial<SkillProcedure> = {}): SkillProcedure {
+  const draft = makeDraft();
+  return {
+    summary: draft.summary,
+    retrievalBlurb: draft.retrievalBlurb,
+    triggerContext: "",
+    policyContentHash: "old-policy-hash",
+    outputLanguage: "en",
+    parameters: draft.parameters,
+    preconditions: draft.preconditions,
+    steps: draft.steps,
+    examples: draft.examples,
+    decisionGuidance: draft.decisionGuidance,
+    tags: draft.tags,
+    tools: draft.tools,
+    ...overrides,
+  };
+}
 
 function open(): TmpDbHandle {
   handle = makeTmpDb();
@@ -106,6 +148,189 @@ describe("skill/runSkill (integration)", () => {
     expect(all.length).toBe(1);
     expect(all[0]!.status).toBe("candidate");
     expect(all[0]!.sourcePolicyIds).toContain(policyId);
+  });
+
+  it("merges a semantically duplicate skill from a different policy into the existing skill", async () => {
+    const h = open();
+    const { policyId: existingPolicyId } = seedFullCandidate(h);
+    const existing = seedSkill(h, {
+      id: "sk_existing_semantic" as SkillId,
+      name: "alpine_native_headers",
+      status: "active",
+      eta: 0.8,
+      support: 5,
+      gain: 0.6,
+      trialsAttempted: 7,
+      trialsPassed: 6,
+      sourcePolicyIds: [existingPolicyId],
+      procedureJson: procedure({ tools: [] }),
+      vec: vec([1, 0, 0]),
+    });
+
+    const sessionId = "s_semantic";
+    const episodeId = "ep_semantic" as EpisodeId;
+    seedSessionOnly(h, sessionId);
+    seedTrace(h, {
+      episodeId,
+      sessionId,
+      userText: "pip install cffi fails on alpine because native headers are missing",
+      agentText: "install the apk dev headers, then retry pip",
+      reflection: "native headers before pip retry",
+      value: 0.9,
+    });
+    const newPolicy = seedPolicy(h, {
+      id: "po_semantic_dup" as PolicyId,
+      title: "install native headers before retrying pip",
+      procedure:
+        "1. identify missing native headers\n2. install matching apk dev packages\n3. retry pip install",
+      sourceEpisodeIds: [episodeId],
+      support: 3,
+      gain: 0.4,
+      status: "active",
+    });
+    const { deps } = makeDeps(h, {
+      embedder: fakeEmbedder(),
+      config: makeSkillConfig({ outputLanguageMode: "en" }),
+      llm: fakeLlm({
+        completeJson: {
+          "skill.crystallize": makeDraft({
+            name: "alpine_pip_retry_headers",
+            summary: "Install Alpine native headers before retrying pip builds.",
+            retrievalBlurb:
+              "Use when a Python package build fails on Alpine because C/OpenSSL/libffi headers are missing.",
+            tools: [],
+          }),
+          "skill.rebuild": makeDraft(),
+        },
+      }),
+    });
+
+    const r = await runSkill({ trigger: "manual", policyId: newPolicy.id }, deps);
+
+    expect(r.evaluated).toBe(1);
+    const all = h.repos.skills.list();
+    expect(all).toHaveLength(1);
+    const merged = h.repos.skills.getById(existing.id)!;
+    expect(merged.sourcePolicyIds).toEqual([newPolicy.id, existingPolicyId]);
+    expect(merged.trialsAttempted).toBe(7);
+    expect(merged.trialsPassed).toBe(6);
+    expect(merged.eta).toBe(0.8);
+    expect(merged.support).toBe(5);
+    expect(merged.gain).toBe(0.6);
+  });
+
+  it("does not merge high-vector-similarity skills when their tool sets differ", async () => {
+    const h = open();
+    const { policyId: existingPolicyId } = seedFullCandidate(h);
+    seedSkill(h, {
+      id: "sk_existing_no_tools" as SkillId,
+      name: "alpine_native_headers",
+      sourcePolicyIds: [existingPolicyId],
+      procedureJson: procedure({ tools: [] }),
+      vec: vec([1, 0, 0]),
+    });
+
+    const sessionId = "s_tool_mismatch";
+    const episodeId = "ep_tool_mismatch" as EpisodeId;
+    seedSessionOnly(h, sessionId);
+    seedTrace(h, {
+      episodeId,
+      sessionId,
+      userText: "pip install cffi fails on alpine because native headers are missing",
+      agentText: "apk add libffi-dev, then retry pip install cffi",
+      reflection: "use shell to install native headers",
+      value: 0.9,
+      toolCalls: [
+        {
+          name: "shell",
+          input: "apk add libffi-dev",
+          startedAt: 0 as never,
+          endedAt: 0 as never,
+        },
+      ],
+    });
+    const newPolicy = seedPolicy(h, {
+      id: "po_tool_mismatch" as PolicyId,
+      sourceEpisodeIds: [episodeId],
+      support: 3,
+      gain: 0.4,
+      status: "active",
+    });
+    const { deps } = makeDeps(h, {
+      embedder: fakeEmbedder(),
+      config: makeSkillConfig({ outputLanguageMode: "en" }),
+      llm: fakeLlm({
+        completeJson: {
+          "skill.crystallize": makeDraft({
+            name: "alpine_shell_headers",
+            summary: "Use shell to install Alpine native headers before retrying pip.",
+            tools: ["shell"],
+          }),
+          "skill.rebuild": makeDraft(),
+        },
+      }),
+    });
+
+    const r = await runSkill({ trigger: "manual", policyId: newPolicy.id }, deps);
+
+    expect(r.rejected).toBe(0);
+    const all = h.repos.skills.list();
+    expect(all).toHaveLength(2);
+    expect(all.map((skill) => skill.id)).toContain("sk_existing_no_tools");
+    expect(all.some((skill) => skill.sourcePolicyIds.includes(newPolicy.id))).toBe(true);
+  });
+
+  it("does not merge high-vector-similarity skills when their output languages differ", async () => {
+    const h = open();
+    const { policyId: existingPolicyId } = seedFullCandidate(h);
+    seedSkill(h, {
+      id: "sk_existing_zh" as SkillId,
+      name: "alpine_native_headers_zh",
+      sourcePolicyIds: [existingPolicyId],
+      procedureJson: procedure({ outputLanguage: "zh", tools: [] }),
+      vec: vec([1, 0, 0]),
+    });
+
+    const sessionId = "s_lang_mismatch";
+    const episodeId = "ep_lang_mismatch" as EpisodeId;
+    seedSessionOnly(h, sessionId);
+    seedTrace(h, {
+      episodeId,
+      sessionId,
+      userText: "pip install cffi fails on alpine because native headers are missing",
+      agentText: "install the apk dev headers, then retry pip",
+      reflection: "native headers before pip retry",
+      value: 0.9,
+    });
+    const newPolicy = seedPolicy(h, {
+      id: "po_lang_mismatch" as PolicyId,
+      sourceEpisodeIds: [episodeId],
+      support: 3,
+      gain: 0.4,
+      status: "active",
+    });
+    const { deps } = makeDeps(h, {
+      embedder: fakeEmbedder(),
+      config: makeSkillConfig({ outputLanguageMode: "en" }),
+      llm: fakeLlm({
+        completeJson: {
+          "skill.crystallize": makeDraft({
+            name: "alpine_native_headers_en",
+            summary: "Install Alpine native headers before retrying pip builds.",
+            tools: [],
+          }),
+          "skill.rebuild": makeDraft(),
+        },
+      }),
+    });
+
+    const r = await runSkill({ trigger: "manual", policyId: newPolicy.id }, deps);
+
+    expect(r.rejected).toBe(0);
+    const all = h.repos.skills.list();
+    expect(all).toHaveLength(2);
+    expect(all.map((skill) => skill.id)).toContain("sk_existing_zh");
+    expect(all.some((skill) => skill.sourcePolicyIds.includes(newPolicy.id))).toBe(true);
   });
 
   it("rebuilds an existing skill when the policy has drifted", async () => {

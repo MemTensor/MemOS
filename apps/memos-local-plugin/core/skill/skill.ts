@@ -60,8 +60,11 @@ import type {
   SkillConfig,
   SkillEventBus,
   SkillFeedbackKind,
+  SkillProcedure,
 } from "./types.js";
 import { verifyDraft } from "./verifier.js";
+
+const SEMANTIC_DUPLICATE_SKILL_SIMILARITY = 0.95;
 
 export interface RunSkillDeps {
   repos: Repos;
@@ -288,7 +291,7 @@ export async function runSkill(
     );
     // Candidate always — verifier ok is not enough to auto-promote.
     // Lifecycle transitions happen via feedback, never on insert.
-    const row: SkillRow = { ...built.row, status: "candidate" };
+    let row: SkillRow = { ...built.row, status: "candidate" };
     if (renameAllowed && row.procedureJson && typeof row.procedureJson === "object") {
       (row.procedureJson as { graduatedFromRepairName?: boolean }).graduatedFromRepairName = true;
     }
@@ -305,6 +308,13 @@ export async function runSkill(
       row.eta = decision.existingSkill.repairOrigin
         ? Math.max(recomputed, decision.existingSkill.eta)
         : recomputed;
+    }
+
+    if (decision.action === "crystallize") {
+      const duplicate = findSemanticDuplicateSkill(row, repos);
+      if (duplicate) {
+        row = mergeSemanticDuplicateSkill(duplicate, row, config.evidenceLimit);
+      }
     }
 
     repos.skills.upsert(row);
@@ -455,6 +465,83 @@ function buildSkillIndex(repos: Repos): Map<string, SkillRow> {
     }
   }
   return out;
+}
+
+function findSemanticDuplicateSkill(
+  incoming: SkillRow,
+  repos: Repos,
+): SkillRow | null {
+  if (!incoming.vec) return null;
+  const hits = repos.skills.searchByVector(incoming.vec, 20, {
+    statusIn: ["candidate", "active"],
+    hardCap: 500,
+  });
+  for (const hit of hits) {
+    if (hit.score < SEMANTIC_DUPLICATE_SKILL_SIMILARITY) continue;
+    const existing = repos.skills.getById(hit.id as SkillId);
+    if (!existing || existing.id === incoming.id || existing.status === "archived") continue;
+    if (isDeterministicSkillMatch(existing, incoming)) return existing;
+  }
+  return null;
+}
+
+function isDeterministicSkillMatch(existing: SkillRow, incoming: SkillRow): boolean {
+  if ((existing.ownerAgentKind ?? "unknown") !== (incoming.ownerAgentKind ?? "unknown")) {
+    return false;
+  }
+  if ((existing.ownerProfileId ?? "default") !== (incoming.ownerProfileId ?? "default")) {
+    return false;
+  }
+  const existingProcedure = procedureFromSkillRow(existing.procedureJson);
+  const incomingProcedure = procedureFromSkillRow(incoming.procedureJson);
+  if (!existingProcedure || !incomingProcedure) return false;
+  if (!sameOutputLanguage(existingProcedure, incomingProcedure)) return false;
+  return sameTools(existingProcedure, incomingProcedure);
+}
+
+function sameOutputLanguage(a: SkillProcedure, b: SkillProcedure): boolean {
+  if (!a.outputLanguage || !b.outputLanguage) return false;
+  return a.outputLanguage === b.outputLanguage;
+}
+
+function sameTools(a: SkillProcedure, b: SkillProcedure): boolean {
+  const left = normalizeToolSet(a.tools);
+  const right = normalizeToolSet(b.tools);
+  if (left.length !== right.length) return false;
+  return left.every((tool, idx) => tool === right[idx]);
+}
+
+function normalizeToolSet(tools: readonly string[] | undefined): string[] {
+  return Array.from(
+    new Set((tools ?? []).map((tool) => tool.trim().toLowerCase()).filter(Boolean)),
+  ).sort();
+}
+
+function mergeSemanticDuplicateSkill(
+  existing: SkillRow,
+  incoming: SkillRow,
+  evidenceLimit: number,
+): SkillRow {
+  return {
+    ...existing,
+    support: Math.max(existing.support, incoming.support),
+    gain: Math.max(existing.gain, incoming.gain),
+    sourcePolicyIds: dedupeIds([...incoming.sourcePolicyIds, ...existing.sourcePolicyIds]),
+    sourceWorldModelIds: dedupeIds([
+      ...existing.sourceWorldModelIds,
+      ...incoming.sourceWorldModelIds,
+    ]),
+    evidenceAnchors: dedupeIds([
+      ...incoming.evidenceAnchors,
+      ...existing.evidenceAnchors,
+    ]).slice(0, Math.max(0, evidenceLimit)),
+    vec: existing.vec ?? incoming.vec,
+    updatedAt: incoming.updatedAt,
+  };
+}
+
+function dedupeIds<T extends string>(ids: readonly T[]): T[] {
+  return Array.from(new Set(ids));
 }
 
 interface RunCrystallizeArgs {

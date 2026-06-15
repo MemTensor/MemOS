@@ -269,20 +269,11 @@ function deriveInitialEta(
 function buildVecSource(
   draft: SkillCrystallizationDraft,
   _outputLanguage: SkillOutputLanguage,
-  evidenceUserTexts?: string[],
+  _evidenceUserTexts?: string[],
 ): string {
-  const blurb = draft.retrievalBlurb?.trim() ?? "";
-  const steps = draft.steps
-    .slice(0, 5)
-    .map((s) => `${s.title}: ${s.body}`)
-    .join("\n");
   const trigger = draft.triggerContext?.trim() ?? "";
-  const querySnippets = (evidenceUserTexts ?? [])
-    .map((q) => q.trim())
-    .filter((q) => q.length > 0 && q !== "[REDACTED]")
-    .slice(0, 2)
-    .join("\n");
-  return [blurb, trigger, draft.summary, steps, querySnippets].filter(Boolean).join("\n");
+  const summary = draft.summary?.trim() ?? "";
+  return [trigger, summary].filter(Boolean).join("\n");
 }
 
 function sectionI18n(lang: SkillOutputLanguage): {

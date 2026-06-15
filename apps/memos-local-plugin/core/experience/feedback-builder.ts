@@ -92,8 +92,8 @@ interface EpisodeContext {
 }
 
 const MIN_SIGNIFICANCE = 0.5;
-const MERGE_SIMILARITY = 0.72;
-const STRICT_SIMILARITY = 0.82;
+const MERGE_SIMILARITY = 0.90;
+const STRICT_SIMILARITY = 0.90;
 const MAX_TITLE_CHARS = 120;
 const MAX_LINE_CHARS = 360;
 const REFINE_TIMEOUT_MS = 30_000;
@@ -174,8 +174,7 @@ export async function runFeedbackExperience(
   const sourceTraceIds = collectTraceIds(input);
   const sourceFeedbackIds = [input.feedback.id as FeedbackId];
 
-  const hitActive = Boolean(existing && existing.status === "active");
-  if (existing && !hitActive) {
+  if (existing) {
     const merged = mergePolicy(existing, draft, {
       sourceEpisodeIds,
       sourceTraceIds,
@@ -204,7 +203,7 @@ export async function runFeedbackExperience(
     boundary: draft.boundary,
     support: 1,
     gain: Math.max(0.02, draft.salience),
-    status: hitActive ? "candidate" : (draft.salience >= 0.5 ? "active" : "candidate"),
+    status: draft.salience >= 0.5 ? "active" : "candidate",
     experienceType: draft.type,
     evidencePolarity: draft.polarity,
     salience: draft.salience,
@@ -802,7 +801,7 @@ function mergePolicy(
     ...existing,
     support: Math.max(1, existing.support) + 1,
     gain: Math.max(existing.gain, draft.salience, 0.02),
-    status: existing.status === "archived" ? existing.status : "active",
+    status: existing.status,
     experienceType: nextExperienceType,
     evidencePolarity: polarity,
     mergeFamily: deriveMergeFamily({
