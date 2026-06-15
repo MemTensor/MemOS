@@ -305,6 +305,25 @@ class MemTensorProvider(MemoryProvider):
         ``on_turn_start``), so the actual user message can be passed as
         the episode's initial text instead of a generic placeholder.
         """
+        # Hermes can call `initialize()` multiple times across a single
+        # parent process (e.g. on reconnect or a new session). Each call
+        # spawns a fresh `MemosBridgeClient` (and therefore a new
+        # `--no-viewer` Node subprocess); if we simply overwrite
+        # `self._bridge` we leak the old subprocess — its parent stays
+        # alive so `_reap_stale_headless_bridges_locked` never collects
+        # it. Close the previous bridge first, mirroring the safe pattern
+        # already used by `_reconnect_bridge()`. See #1927.
+        previous_bridge = self._bridge
+        if previous_bridge is not None:
+            old_pid = getattr(previous_bridge, "pid", "?")
+            logger.info(
+                "MemOS: closing previous bridge (pid=%s) before re-init",
+                old_pid,
+            )
+            with contextlib.suppress(Exception):
+                previous_bridge.close()
+            self._bridge = None
+
         self._session_id = session_id or self._session_id
         self._hermes_home = str(kwargs.get("hermes_home") or "")
         self._platform = str(kwargs.get("platform") or "cli")
