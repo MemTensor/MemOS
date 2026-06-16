@@ -35,7 +35,7 @@ const BUILTIN_KEY_PATTERNS: RegExp[] = [
 
 const BUILTIN_VALUE_PATTERNS: RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._-]{20,}\b/g,
-  /\bsk-[A-Za-z0-9_-]{20,}\b/g,                       // OpenAI-ish keys
+  /\bsk-[A-Za-z0-9]+\b(?![-_])/g,                      // OpenAI-ish keys
   /\beyJ[A-Za-z0-9_-]+?\.[A-Za-z0-9_-]+?\.[A-Za-z0-9_-]+\b/g, // JWTs
   /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,      // emails
   /(?<!\d)\+?\d{1,3}[ -]?\(?\d{2,4}\)?[ -]?\d{3,4}[ -]?\d{4}(?!\d)/g, // phone-ish

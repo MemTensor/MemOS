@@ -21,11 +21,12 @@ import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { ids } from "../id.js";
 import type { EpisodeRow, TraceRow, TraceId, EpochMs } from "../types.js";
+import { sanitizeDerivedText } from "../safety/content.js";
 import type { makeEmbeddingRetryQueueRepo } from "../storage/repos/embedding_retry_queue.js";
 import type { makeTracesRepo } from "../storage/repos/traces.js";
 import type { EpisodesRepo } from "../session/persistence.js";
 import { batchScoreReflections, type BatchScoreInput } from "./batch-scorer.js";
-import { embedSteps, type VecPair } from "./embedder.js";
+import { buildActionText, buildStateText, embedSteps, type VecPair } from "./embedder.js";
 import {
   CAPTURE_LITE_TURN_CURSOR_META,
   pickTurnId,
@@ -36,7 +37,6 @@ import {
 import { traceIdentitySignature } from "../trace/trace-identity.js";
 import { normalizeSteps } from "./normalizer.js";
 import { extractIncrementalSteps, extractSteps } from "./step-extractor.js";
-import { createSummarizer, type Summarizer } from "./summarizer.js";
 import { tagsForStep } from "./tagger.js";
 import { extractErrorSignatures } from "./error-signature.js";
 import type {
@@ -115,10 +115,6 @@ export interface CaptureRunner {
 export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
   const log = rootLogger.child({ channel: "core.capture" });
   const now = deps.now ?? Date.now;
-  const summarizer: Summarizer = createSummarizer({
-    llm: deps.llm ?? null,
-    log: log.child({ channel: "core.capture.summarizer" }),
-  });
 
   function emit(evt: CaptureEvent): void {
     deps.bus.emit(evt);
@@ -218,18 +214,13 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       reflection: { text: null, alpha: 0, usable: false, source: "none" },
     }));
 
-    // Summarise — needed for the viewer card line + retrieval embedding.
+    // Summarise locally — needed for the viewer card line.
     const summarizeStart = now();
-    const { summaries, summarizeMs } = await runSummarize(
-      scored,
-      summarizeStart,
-      llmCalls,
-      warnings,
-      { episodeId: input.episode.id, phase: "lite" },
-    );
+    const summaries = buildDisplaySummaries(scored);
+    const summarizeMs = now() - summarizeStart;
 
     // Embed.
-    const { vecs, embedMs } = await runEmbed(scored, summaries, warnings);
+    const { vecs, embedMs } = await runEmbed(scored, warnings);
 
     // Persist as new rows. Reflection / α deliberately empty.
     const persistStart = now();
@@ -340,17 +331,11 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     }));
 
     const summarizeStart = now();
-    const { summaries, summarizeMs } = await runSummarize(
-      scored,
-      summarizeStart,
-      llmCalls,
-      warnings,
-      { episodeId: input.episode.id, phase: "lightweight" },
-    );
+    const summaries = buildDisplaySummaries(scored);
+    const summarizeMs = now() - summarizeStart;
 
     const { vecs: summaryOnlyVecs, embedMs } = await runEmbed(
       scored,
-      summaries,
       warnings,
       { summaryOnly: true },
     );
@@ -466,22 +451,12 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       // These steps never went through runLite (likely a test path or a
       // dropped event). Insert them now with reflection=null so the
       // batch pass below can patch them like the rest.
-      const summStart = now();
-      const { summaries } = await runSummarize(
-        orphan.map((s) => ({
-          ...s,
-          reflection: { text: null, alpha: 0, usable: false, source: "none" },
-        })),
-        summStart,
-        llmCalls,
-        warnings,
-        { episodeId: input.episode.id, phase: "reflect" },
-      );
       const orphanScored: ScoredStep[] = orphan.map((s) => ({
         ...s,
         reflection: { text: null, alpha: 0, usable: false, source: "none" },
       }));
-      const { vecs } = await runEmbed(orphanScored, summaries, warnings);
+      const summaries = buildDisplaySummaries(orphanScored);
+      const { vecs } = await runEmbed(orphanScored, warnings);
       let orphanRows = buildRows(orphanScored, summaries, vecs, input.episode);
       orphanRows = stripRepeatedEpisodeUserText(orphanRows, existing, anchorTurnId);
       await persistRows(orphanRows, input, warnings);
@@ -665,38 +640,8 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     };
   }
 
-  async function runSummarize(
-    scored: ScoredStep[],
-    summarizeStart: number,
-    llmCalls: ReturnType<typeof newLlmCounters>,
-    warnings: CaptureResult["warnings"],
-    context: { episodeId?: string; phase?: string },
-  ): Promise<{ summaries: string[]; summarizeMs: number }> {
-    const concurrency = Math.max(1, deps.cfg.llmConcurrency);
-    const summaries = await runConcurrently(
-      scored,
-      concurrency,
-      async (step) => {
-        try {
-          const s = await summarizer.summarize(step, context);
-          llmCalls.summarize += 1;
-          return s;
-        } catch (err) {
-          warnings.push({
-            stage: "summarize",
-            message: "summarizer threw; falling back to userText",
-            detail: errDetail(err),
-          });
-          return (step.userText ?? step.agentText ?? "").slice(0, 140);
-        }
-      },
-    );
-    return { summaries, summarizeMs: now() - summarizeStart };
-  }
-
   async function runEmbed(
     scored: ScoredStep[],
-    summaries: string[],
     warnings: CaptureResult["warnings"],
     opts: { summaryOnly?: boolean } = {},
   ): Promise<{ vecs: VecPair[]; embedMs: number }> {
@@ -705,7 +650,11 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       return { vecs: scored.map(() => ({ summary: null, action: null })), embedMs: now() - start };
     }
     try {
-      const vecs = await embedSteps(deps.embedder, scored, summaries, opts);
+      const vecs = await embedSteps(deps.embedder, scored, {
+        stateTexts: scored.map(buildStateText),
+        actionTexts: scored.map(buildActionText),
+        summaryOnly: opts.summaryOnly,
+      });
       return { vecs, embedMs: now() - start };
     } catch (err) {
       warnings.push({
@@ -791,6 +740,14 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       turnId: pickTurnId(t.meta, t.ts) as EpochMs,
       schemaVersion: 1,
     }));
+  }
+
+  function buildDisplaySummaries(scored: readonly ScoredStep[]): string[] {
+    return scored.map((step) => {
+      const source = step.userText.trim() || step.agentText.trim();
+      const singleLine = source.replace(/\s+/g, " ").trim();
+      return sanitizeDerivedText(singleLine.slice(0, 140)) || "[empty step]";
+    });
   }
 
   function ownerFromEpisode(episode: CaptureInput["episode"]) {
@@ -1392,28 +1349,6 @@ function buildWindows(length: number, windowSize: number, overlap: number): Arra
     if (end >= length) break;
     start += stride;
   }
-  return out;
-}
-
-async function runConcurrently<T, R>(
-  items: readonly T[],
-  concurrency: number,
-  fn: (item: T, idx: number) => Promise<R>,
-): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let cursor = 0;
-  const workers: Promise<void>[] = [];
-  const worker = async () => {
-    while (true) {
-      const i = cursor++;
-      if (i >= items.length) return;
-      out[i] = await fn(items[i]!, i);
-    }
-  };
-  for (let w = 0; w < Math.min(concurrency, items.length); w++) {
-    workers.push(worker());
-  }
-  await Promise.all(workers);
   return out;
 }
 

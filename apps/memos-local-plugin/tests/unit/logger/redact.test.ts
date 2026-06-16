@@ -39,6 +39,16 @@ describe("logger/redact", () => {
     expect(out._redacted).toBe(true);
   });
 
+  it("does not partially mask sk-proj- as an sk- key", () => {
+    const out = r().redact({
+      ts: 1, level: "info", kind: "app", channel: "x",
+      msg: "wrong prefix sk-proj-AbC123 but real key sk-AbC123",
+    });
+    expect(out.msg).toContain("sk-proj-AbC123");
+    expect(out.msg).not.toContain("sk-AbC123");
+    expect(out.msg).toContain("[redacted]");
+  });
+
   it("masks user-defined extra patterns", () => {
     const out = r().redact({
       ts: 1, level: "info", kind: "app", channel: "x", msg: "rotate INTERNAL-ABCDEFGH now",
