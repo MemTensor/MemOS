@@ -12,6 +12,7 @@ export type EpisodeOutcome = "success" | "failure" | "unknown";
 export interface OutcomeThresholds {
   successThreshold: number;
   failureThreshold: number;
+  verifierMode?: "silent" | "veto";
 }
 
 export const DEFAULT_OUTCOME_THRESHOLDS: OutcomeThresholds = {
@@ -45,12 +46,13 @@ export function computeEpisodeOutcome(
   verifierPassed: boolean | null,
   cfg: OutcomeThresholds = DEFAULT_OUTCOME_THRESHOLDS,
 ): EpisodeOutcome {
-  if (verifierPassed === false) return "failure";
+  const verifierMode = cfg.verifierMode ?? "veto";
+  if (verifierMode === "veto" && verifierPassed === false) return "failure";
   if (rTask != null) {
     if (rTask >= cfg.successThreshold) return "success";
     if (rTask <= cfg.failureThreshold) return "failure";
   }
-  if (verifierPassed === true) return "success";
+  if (verifierMode === "veto" && verifierPassed === true) return "success";
   return "unknown";
 }
 

@@ -25,9 +25,24 @@ describe("assertValidOutcomeThresholds", () => {
 });
 
 describe("computeEpisodeOutcome", () => {
-  it("verifier=false is a one-vote veto regardless of rTask", () => {
+  it("defaults to veto mode for verifier=false", () => {
     expect(computeEpisodeOutcome(0.9, false, cfg)).toBe("failure");
     expect(computeEpisodeOutcome(null, false, cfg)).toBe("failure");
+  });
+
+  it("silent mode ignores verifier and relies on rTask", () => {
+    expect(
+      computeEpisodeOutcome(0.9, false, { ...cfg, verifierMode: "silent" }),
+    ).toBe("success");
+    expect(
+      computeEpisodeOutcome(-0.2, true, { ...cfg, verifierMode: "silent" }),
+    ).toBe("failure");
+    expect(
+      computeEpisodeOutcome(null, false, { ...cfg, verifierMode: "silent" }),
+    ).toBe("unknown");
+    expect(
+      computeEpisodeOutcome(0.1, true, { ...cfg, verifierMode: "silent" }),
+    ).toBe("unknown");
   });
 
   it("rTask >= 0.5 = success (when verifier doesn't veto)", () => {

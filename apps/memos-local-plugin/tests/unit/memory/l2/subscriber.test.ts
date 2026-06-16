@@ -385,6 +385,21 @@ describe("memory/l2/subscriber", () => {
     expect(sinkRow?.gain).toBeCloseTo(0.02, 5);
     expect(sinkRow?.sourceFeedbackIds).toContain("f:sink:ep_sink");
     expect(sinkRow?.inducedBy).toContain("failure.experience.sink");
+    expect(sinkRow?.vec).toBeNull();
+
+    const retryJobs = handle.repos.embeddingRetryQueue.claimDue({
+      now: Date.now() + 1_000,
+      workerId: "test-worker",
+      leaseUntil: Date.now() + 60_000,
+    });
+    expect(retryJobs).toHaveLength(1);
+    expect(retryJobs[0]).toMatchObject({
+      targetKind: "policy",
+      targetId: sinkRow?.id,
+      vectorField: "vec",
+      sourceText: "修复配置失败\n配置校验失败并报错",
+    });
+    expect(retryJobs[0]?.sourceText).not.toContain("先检查配置项");
     sub.detach();
   });
 

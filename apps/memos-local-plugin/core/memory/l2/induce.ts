@@ -28,6 +28,7 @@ import type {
   TraceId,
   TraceRow,
 } from "../../types.js";
+import type { EpisodeOutcome } from "../../episode/outcome.js";
 import { ids } from "../../id.js";
 import { deriveMergeFamily } from "../../experience/merge-family.js";
 import { centroid } from "./similarity.js";
@@ -158,6 +159,7 @@ export function buildPolicyRow(args: {
   inducedBy: string; // prompt id + version
   now?: number;
   id?: PolicyId;
+  outcome?: EpisodeOutcome | null;
 }): PolicyRow {
   const now = args.now ?? Date.now();
   const vec = centroid(args.evidenceTraces.map((t) => t.vecSummary ?? t.vecAction ?? null));
@@ -181,9 +183,22 @@ export function buildPolicyRow(args: {
     // Fresh policy starts without learned guidance — populated by the
     // decision-repair pipeline as user feedback / failure bursts arrive.
     decisionGuidance: { preference: [], antiPattern: [] },
+    verifierMeta: { sourceOutcomeCounts: outcomeCounts(args.outcome) },
     vec: vec as EmbeddingVector | null,
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+function outcomeCounts(outcome: EpisodeOutcome | null | undefined): {
+  success: number;
+  unknown: number;
+  failure: number;
+} {
+  return {
+    success: outcome === "success" ? 1 : 0,
+    unknown: outcome === "unknown" || outcome == null ? 1 : 0,
+    failure: outcome === "failure" ? 1 : 0,
   };
 }
 

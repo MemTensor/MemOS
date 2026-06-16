@@ -4,6 +4,7 @@ import { collectDecisionGuidance } from "../../../core/retrieval/decision-guidan
 import type { RankedCandidate } from "../../../core/retrieval/ranker.js";
 import type {
   EpisodeCandidate,
+  ExperienceCandidate,
   RetrievalRepos,
   SkillCandidate,
 } from "../../../core/retrieval/types.js";
@@ -47,6 +48,45 @@ function rankedEpisode(refId: string): RankedCandidate {
     summary: "Episode rollup.",
     maxValue: 0.8 as never,
     meanPriority: 0.7,
+  };
+  return {
+    candidate,
+    relevance: 0.9,
+    rrf: 0.01,
+    score: 0.9,
+    normSq: null,
+  };
+}
+
+function rankedExperience(refId: string): RankedCandidate {
+  const candidate: ExperienceCandidate = {
+    tier: "tier2",
+    refKind: "experience",
+    refId: refId as never,
+    cosine: 0.9,
+    ts: NOW,
+    vec: null,
+    title: "Repair policy",
+    trigger: "tool failure",
+    procedure: "repair",
+    verification: "verified",
+    boundary: "",
+    support: 1,
+    gain: 0,
+    status: "candidate",
+    experienceType: "repair_instruction",
+    evidencePolarity: "negative",
+    salience: 0.8,
+    confidence: 0.7,
+    skillEligible: false,
+    sourceEpisodeIds: [],
+    sourceFeedbackIds: [],
+    sourceTraceIds: [],
+    decisionGuidance: {
+      preference: ["Prefer the retrieved candidate repair."],
+      antiPattern: ["Avoid repeating the failed command."],
+    },
+    updatedAt: NOW,
   };
   return {
     candidate,
@@ -162,5 +202,42 @@ describe("retrieval/decision-guidance", () => {
       "Avoid the episode-level trap.",
     ]);
     expect(result.policyIdsTouched).toEqual(["policy_ep"]);
+  });
+
+  it("uses candidate policy guidance only when the candidate was retrieved", () => {
+    const repos = {
+      policies: {
+        list: ({ status }: { status?: string } = {}) => {
+          expect(status).toBe("active");
+          return [];
+        },
+        getById: (id: string) => {
+          if (id !== "policy_candidate") return null;
+          return {
+            id: "policy_candidate",
+            title: "Candidate repair",
+            status: "candidate",
+            sourceEpisodeIds: [],
+            decisionGuidance: {
+              preference: ["Prefer the retrieved candidate repair."],
+              antiPattern: ["Avoid repeating the failed command."],
+            },
+          };
+        },
+      },
+    } as unknown as RetrievalRepos;
+
+    const result = collectDecisionGuidance({
+      ranked: [rankedExperience("policy_candidate")],
+      repos,
+    });
+
+    expect(result.preference.map((g) => g.text)).toEqual([
+      "Prefer the retrieved candidate repair.",
+    ]);
+    expect(result.antiPattern.map((g) => g.text)).toEqual([
+      "Avoid repeating the failed command.",
+    ]);
+    expect(result.policyIdsTouched).toEqual(["policy_candidate"]);
   });
 });

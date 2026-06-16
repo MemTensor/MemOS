@@ -170,6 +170,7 @@ describe("memory/l2/integration", () => {
         sessionId: "s_int" as SessionId,
         traces: [trB],
         trigger: "manual",
+        outcome: "success",
       },
       depsA,
     );
@@ -186,6 +187,9 @@ describe("memory/l2/integration", () => {
     const persisted = handle.repos.policies.getById(induced.policyId!)!;
     expect(persisted.status).toBe("candidate");
     expect(persisted.sourceEpisodeIds.sort()).toEqual(["ep_A", "ep_B"]);
+    expect(persisted.verifierMeta).toMatchObject({
+      sourceOutcomeCounts: { success: 1, unknown: 0, failure: 0 },
+    });
 
     // ── A third run with a trace that cosine-matches the new policy should
     //    associate (not re-induce) and bump gain/support.
@@ -260,6 +264,9 @@ describe("memory/l2/integration", () => {
       sourceEpisodeIds: [],
       inducedBy: "unit-test",
       decisionGuidance: { preference: [], antiPattern: [] },
+      verifierMeta: {
+        sourceOutcomeCounts: { success: 0, unknown: 1, failure: 0 },
+      },
       vec: vec([1, 0, 0]),
       createdAt: NOW as never,
       updatedAt: NOW as never,
@@ -276,6 +283,7 @@ describe("memory/l2/integration", () => {
         traces: [],
         trigger: "manual",
         now: NOW,
+        outcome: "success",
       },
       {
         db: handle.db,
@@ -296,6 +304,9 @@ describe("memory/l2/integration", () => {
     expect(updated.support).toBe(2);
     expect(updated.gain).toBeGreaterThan(0.3);
     expect(updated.status).toBe("active");
+    expect(updated.verifierMeta).toMatchObject({
+      sourceOutcomeCounts: { success: 1, unknown: 1, failure: 0 },
+    });
     expect(
       events.some(
         (e) =>

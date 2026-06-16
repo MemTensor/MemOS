@@ -195,6 +195,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       outputLanguageMode: "follow_policy",
       outcomeRTaskSuccessThreshold: 0.5,
       outcomeRTaskFailureThreshold: -0.15,
+      outcomeVerifierMode: "silent",
       failureEpisodeScorePenalty: 0,
       failureEpisodeMaxRatio: 0.4,
     },

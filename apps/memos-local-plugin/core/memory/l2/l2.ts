@@ -30,6 +30,7 @@ import type {
 } from "../../types.js";
 import type { Repos } from "../../storage/repos/index.js";
 import { ids } from "../../id.js";
+import { buildPolicyVectorText } from "../../experience/policy-vector-text.js";
 import { L2_INDUCTION_PROMPT } from "../../llm/prompts/l2-induction.js";
 import { associateTraces } from "./associate.js";
 import { makeCandidatePool } from "./candidate-pool.js";
@@ -186,32 +187,39 @@ export async function runL2(
       // an existing policy, skip induction and let association handle it.
       const dup = findExistingMatch(traces, repos, config.minSimilarity);
       if (dup) {
+        const merged = mergePolicyEpisodeEvidence(
+          dup,
+          epIds,
+          input.now ?? Date.now(),
+          input.outcome,
+        );
+        repos.policies.upsert(merged);
         inductions.push({
           signature: bucket.signature,
-          policyId: dup.id,
+          policyId: merged.id,
           poolSize: bucket.candidateIds.length,
           episodeIds: epIds,
           traceIds: bucket.evidenceTraceIds,
           skippedReason: "duplicate_of",
-          duplicateOfPolicyId: dup.id,
+          duplicateOfPolicyId: merged.id,
         });
-        pool.promote(bucket.candidateIds, dup.id);
-        touched.set(dup.id, dup);
-        const evidence = inductionEvidenceByPolicy.get(dup.id) ?? new Set<string>();
+        pool.promote(bucket.candidateIds, merged.id);
+        touched.set(merged.id, merged);
+        const evidence = inductionEvidenceByPolicy.get(merged.id) ?? new Set<string>();
         for (const id of bucket.evidenceTraceIds) evidence.add(id);
-        inductionEvidenceByPolicy.set(dup.id, evidence);
+        inductionEvidenceByPolicy.set(merged.id, evidence);
         for (const traceId of bucket.evidenceTraceIds) {
           const trace = traces.find((t) => t.id === traceId);
           if (!trace) continue;
           try {
             repos.tracePolicyLinks.link({
               traceId,
-              policyId: dup.id,
+              policyId: merged.id,
               episodeId: trace.episodeId,
               now: input.now ?? Date.now(),
             });
           } catch (err) {
-            warnings.push(stageWarn("trace-policy-link", err, { traceId, policyId: dup.id }));
+            warnings.push(stageWarn("trace-policy-link", err, { traceId, policyId: merged.id }));
           }
         }
         continue;
@@ -253,6 +261,7 @@ export async function runL2(
         evidenceTraces: traces,
         inducedBy: `${L2_INDUCTION_PROMPT.id}.v${L2_INDUCTION_PROMPT.version}`,
         now: input.now ?? Date.now(),
+        outcome: input.outcome,
       });
       const owner = ownerFromTraces(traces);
       policy.ownerAgentKind = owner.ownerAgentKind;
@@ -280,7 +289,12 @@ export async function runL2(
           });
           continue;
         }
-        const merged = mergePolicyEvidence(duplicate, policy, input.now ?? Date.now());
+        const merged = mergePolicyEvidence(
+          duplicate,
+          policy,
+          input.now ?? Date.now(),
+          input.outcome,
+        );
         repos.policies.upsert(merged);
         pool.promote(bucket.candidateIds, duplicate.id);
         touched.set(duplicate.id, merged);
@@ -324,7 +338,7 @@ export async function runL2(
             targetKind: "policy",
             targetId: policy.id,
             vectorField: "vec",
-            sourceText: policyVectorText(policy),
+            sourceText: buildPolicyVectorText(policy),
             now: input.now ?? Date.now(),
           });
           warnings.push({
@@ -531,16 +545,6 @@ function stageWarn(
   return { stage, message, detail };
 }
 
-function policyVectorText(policy: PolicyRow): string {
-  return [
-    policy.title,
-    policy.trigger,
-    policy.procedure,
-    policy.verification,
-    policy.boundary,
-  ].filter(Boolean).join("\n");
-}
-
 function pickOnePerEpisode(traces: readonly TraceRow[]): TraceRow[] {
   const byEp = new Map<string, TraceRow>();
   for (const t of traces) {
@@ -608,16 +612,88 @@ function policyOptionalFieldsCompatible(
   );
 }
 
-function mergePolicyEvidence(existing: PolicyRow, incoming: PolicyRow, now: number): PolicyRow {
+function mergePolicyEvidence(
+  existing: PolicyRow,
+  incoming: PolicyRow,
+  now: number,
+  outcome: NonNullable<L2ProcessInput["outcome"]> | null | undefined,
+): PolicyRow {
+  return mergePolicyEpisodeEvidence(existing, incoming.sourceEpisodeIds, now, outcome, incoming.vec);
+}
+
+function mergePolicyEpisodeEvidence(
+  existing: PolicyRow,
+  episodeIds: readonly EpisodeId[],
+  now: number,
+  outcome: NonNullable<L2ProcessInput["outcome"]> | null | undefined,
+  incomingVec?: PolicyRow["vec"],
+): PolicyRow {
   return {
     ...existing,
     sourceEpisodeIds: uniqueEpisodes([
       ...existing.sourceEpisodeIds,
-      ...incoming.sourceEpisodeIds,
+      ...episodeIds,
     ]),
-    vec: existing.vec ?? incoming.vec,
+    verifierMeta: mergeVerifierMeta(existing.verifierMeta, outcome),
+    vec: existing.vec ?? incomingVec ?? null,
     updatedAt: now as PolicyRow["updatedAt"],
   };
+}
+
+function mergeVerifierMeta(
+  existing: PolicyRow["verifierMeta"],
+  outcome: NonNullable<L2ProcessInput["outcome"]> | null | undefined,
+): PolicyRow["verifierMeta"] {
+  const base = { ...(existing ?? {}) };
+  base["sourceOutcomeCounts"] = addOutcomeCounts(
+    readOutcomeCounts(existing),
+    outcomeCount(outcome),
+  );
+  return base;
+}
+
+function outcomeCount(outcome: NonNullable<L2ProcessInput["outcome"]> | null | undefined): {
+  success: number;
+  unknown: number;
+  failure: number;
+} {
+  return {
+    success: outcome === "success" ? 1 : 0,
+    unknown: outcome === "unknown" || outcome == null ? 1 : 0,
+    failure: outcome === "failure" ? 1 : 0,
+  };
+}
+
+function readOutcomeCounts(meta: PolicyRow["verifierMeta"]): {
+  success: number;
+  unknown: number;
+  failure: number;
+} {
+  const raw = meta?.["sourceOutcomeCounts"];
+  if (!raw || typeof raw !== "object") {
+    return { success: 0, unknown: 0, failure: 0 };
+  }
+  const obj = raw as Record<string, unknown>;
+  return {
+    success: numberOrZero(obj["success"]),
+    unknown: numberOrZero(obj["unknown"]),
+    failure: numberOrZero(obj["failure"]),
+  };
+}
+
+function addOutcomeCounts(
+  a: { success: number; unknown: number; failure: number },
+  b: { success: number; unknown: number; failure: number },
+): { success: number; unknown: number; failure: number } {
+  return {
+    success: a.success + b.success,
+    unknown: a.unknown + b.unknown,
+    failure: a.failure + b.failure,
+  };
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function policyContentKey(policy: Pick<PolicyRow, "title" | "trigger" | "procedure">): string {

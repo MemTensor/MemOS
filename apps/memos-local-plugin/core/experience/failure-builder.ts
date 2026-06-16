@@ -17,6 +17,7 @@ import type {
 } from "../types.js";
 import type { Repos } from "../storage/repos/index.js";
 import { buildCorrectiveSignalsForSink } from "./corrective-signals.js";
+import { buildPolicyVectorText } from "./policy-vector-text.js";
 
 export interface RunL2FailureInput {
   episodeId: EpisodeId;
@@ -27,7 +28,7 @@ export interface RunL2FailureInput {
 }
 
 export interface RunL2FailureDeps {
-  repos: Pick<Repos, "policies" | "feedback">;
+  repos: Pick<Repos, "policies" | "feedback" | "embeddingRetryQueue">;
   llm: LlmClient | null;
   log: Logger;
   now?: () => number;
@@ -117,6 +118,14 @@ export async function runL2Failure(
       vec: null,
     };
     deps.repos.policies.insert(row);
+    deps.repos.embeddingRetryQueue.enqueue({
+      id: `er_${ids.span()}`,
+      targetKind: "policy",
+      targetId: policyId,
+      vectorField: "vec",
+      sourceText: buildPolicyVectorText(row),
+      now,
+    });
     return { created: true, policyId };
   } catch (err) {
     deps.log.warn("l2.failure_sink.failed", {

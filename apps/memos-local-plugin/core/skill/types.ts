@@ -141,6 +141,8 @@ export interface SkillConfig {
   outcomeRTaskSuccessThreshold: number;
   /** rTask threshold for episode outcome=failure. */
   outcomeRTaskFailureThreshold: number;
+  /** Whether verifier feedback can affect episode outcome routing. */
+  outcomeVerifierMode?: "silent" | "veto";
   /** Legacy soft penalty; unused when hard-excluding failure episodes. */
   failureEpisodeScorePenalty: number;
   /** Legacy ratio cap for unknown pools; unused when hard-excluding failures. */

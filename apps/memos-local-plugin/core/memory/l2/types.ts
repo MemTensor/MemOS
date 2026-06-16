@@ -27,6 +27,7 @@ import type {
   TraceId,
   TraceRow,
 } from "../../types.js";
+import type { EpisodeOutcome } from "../../episode/outcome.js";
 
 // ─── Config mirror (algorithm.l2Induction + a few hard-coded knobs) ────────
 
@@ -151,6 +152,8 @@ export interface L2ProcessInput {
    * `"manual"` when the caller invokes the orchestrator directly.
    */
   trigger: "reward.updated" | "manual" | "rebuild";
+  /** Episode-level outcome that produced this L2 run; stored on policy evidence metadata. */
+  outcome?: EpisodeOutcome | null;
 }
 
 export interface L2ProcessResult {

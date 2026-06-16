@@ -22,6 +22,7 @@ import type { Repos } from "../storage/repos/index.js";
 import type { EmbeddingVector } from "../types.js";
 import { MemosError, ERROR_CODES } from "../../agent-contract/errors.js";
 import { compressFeedbackEpisodeTraces, formatFeedbackTraceTurn } from "./trace-selection.js";
+import { buildPolicyVectorText } from "./policy-vector-text.js";
 
 export interface FeedbackExperienceResult {
   created: boolean;
@@ -457,7 +458,7 @@ async function buildDraft(args: {
     skillEligible,
     verifierMeta: verifier,
     similarityKey,
-    vectorText: [title, trigger, procedure, verification, boundary].join("\n"),
+    vectorText: buildPolicyVectorText({ title, trigger }),
     refineFallback,
   };
 }

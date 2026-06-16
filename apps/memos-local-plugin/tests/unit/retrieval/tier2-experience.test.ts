@@ -55,7 +55,7 @@ function makePolicy(
     sourceFeedbackIds: partial.sourceFeedbackIds ?? ["fb1" as never],
     sourceTraceIds: partial.sourceTraceIds ?? [],
     decisionGuidance: partial.decisionGuidance ?? { preference: [], antiPattern: [] },
-    vec: partial.vec ?? vec([1, 0, 0]),
+    vec: partial.vec === undefined ? vec([1, 0, 0]) : partial.vec,
     updatedAt: partial.updatedAt ?? NOW,
   };
 }
@@ -225,5 +225,126 @@ describe("retrieval/tier2-experience", () => {
 
     expect(out.map((c) => String(c.refId))).toEqual(["po_title_hit"]);
     expect(out[0]?.channels).toEqual([{ channel: "fts", rank: 0, score: 1 }]);
+  });
+
+  it("recalls candidate failure policy through the vector channel", async () => {
+    const candidate = makePolicy("po_candidate_vec", {
+      status: "candidate",
+      experienceType: "repair_instruction",
+      evidencePolarity: "negative",
+      skillEligible: false,
+      trigger: "when package install fails with missing native dependency",
+      procedure: "install the missing system package before retrying",
+      vec: vec([1, 0, 0]),
+    });
+
+    const out = await runTier2Experience(
+      {
+        repos: {
+          policies: makeRepo([candidate], {
+            vector: [{ id: candidate.id, score: 0.88 }],
+          }),
+        },
+        config: cfg,
+      },
+      { queryVec: vec([1, 0, 0]) },
+    );
+
+    expect(out.map((c) => String(c.refId))).toEqual(["po_candidate_vec"]);
+    expect(out[0]).toMatchObject({
+      status: "candidate",
+      experienceType: "repair_instruction",
+      evidencePolarity: "negative",
+      skillEligible: false,
+    });
+    expect(out[0]?.channels).toEqual([{ channel: "vec", rank: 0, score: 0.88 }]);
+  });
+
+  it("recalls candidate failure policy without vec through the FTS channel", async () => {
+    const candidate = makePolicy("po_candidate_fts", {
+      status: "candidate",
+      experienceType: "failure_avoidance",
+      evidencePolarity: "negative",
+      skillEligible: false,
+      title: "Avoid blind retry after config validation failure",
+      trigger: "when config validation fails",
+      procedure: "inspect the invalid field and correct it before retrying",
+      vec: null,
+    });
+
+    const out = await runTier2Experience(
+      {
+        repos: {
+          policies: makeRepo([candidate], {
+            text: [{ id: candidate.id, score: 1 }],
+          }),
+        },
+        config: cfg,
+      },
+      { queryVec: null, ftsMatch: "config validation failure" },
+    );
+
+    expect(out.map((c) => String(c.refId))).toEqual(["po_candidate_fts"]);
+    expect(out[0]?.vec).toBeNull();
+    expect(out[0]?.channels).toEqual([{ channel: "fts", rank: 0, score: 1 }]);
+    expect(out[0]?.debug?.riskFlags).toContain("keyword_only");
+  });
+
+  it("drops archived policies even when a channel returns them", async () => {
+    const archived = makePolicy("po_archived", {
+      status: "archived",
+      trigger: "when archived policy would otherwise match",
+      procedure: "do not use archived policy",
+    });
+    const active = makePolicy("po_active", {
+      status: "active",
+      trigger: "when active policy matches",
+      procedure: "use active policy",
+    });
+
+    const out = await runTier2Experience(
+      {
+        repos: {
+          policies: makeRepo([archived, active], {
+            vector: [
+              { id: archived.id, score: 0.99 },
+              { id: active.id, score: 0.8 },
+            ],
+            text: [{ id: archived.id, score: 1 }],
+          }),
+        },
+        config: cfg,
+      },
+      { queryVec: vec([1, 0, 0]), ftsMatch: "archived policy" },
+    );
+
+    expect(out.map((c) => String(c.refId))).toEqual(["po_active"]);
+  });
+
+  it("does not require skill eligibility for experience retrieval", async () => {
+    const repair = makePolicy("po_skill_ineligible", {
+      status: "candidate",
+      skillEligible: false,
+      experienceType: "repair_instruction",
+      evidencePolarity: "mixed",
+      trigger: "when a tool command failed but a repair instruction exists",
+      procedure: "apply the repair instruction",
+    });
+
+    const out = await runTier2Experience(
+      {
+        repos: {
+          policies: makeRepo([repair], {
+            pattern: [{ id: repair.id, score: 1 }],
+          }),
+        },
+        config: cfg,
+      },
+      { queryVec: null, patternTerms: ["repair instruction"] },
+    );
+
+    expect(out.map((c) => String(c.refId))).toEqual(["po_skill_ineligible"]);
+    expect(out[0]?.skillEligible).toBe(false);
+    expect(out[0]?.channels).toEqual([{ channel: "pattern", rank: 0, score: 1 }]);
   });
 });

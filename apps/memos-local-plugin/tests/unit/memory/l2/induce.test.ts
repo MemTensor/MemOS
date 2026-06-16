@@ -183,6 +183,7 @@ describe("memory/l2/induce", () => {
       evidenceTraces: [mkTrace("tr_a", "ep_1", vec([1, 0])), mkTrace("tr_b", "ep_2", vec([0, 1]))],
       inducedBy: "l2.l2.induction.v1",
       now: 42,
+      outcome: "unknown",
     });
     expect(row.status).toBe("candidate");
     expect(row.support).toBe(0);
@@ -191,5 +192,8 @@ describe("memory/l2/induce", () => {
     expect(row.vec).not.toBeNull();
     expect(row.createdAt).toBe(42);
     expect(row.title).toBe("t");
+    expect(row.verifierMeta).toMatchObject({
+      sourceOutcomeCounts: { success: 0, unknown: 1, failure: 0 },
+    });
   });
 });

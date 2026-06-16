@@ -146,6 +146,7 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
           sessionId: result.sessionId,
           traces,
           trigger: "reward.updated",
+          outcome,
         },
         {
           db: deps.db,

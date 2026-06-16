@@ -110,8 +110,17 @@ export function collectDecisionGuidance(input: CollectInput): CollectedGuidance 
     { preference: string[]; antiPattern: string[]; matchedEpisodes: number }
   >();
   if (repos.policies && (traceEpisodeIds.size > 0 || policyIds.size > 0)) {
+    if (typeof repos.policies.getById === "function") {
+      for (const id of policyIds) {
+        const p = repos.policies.getById(id);
+        if (!p || p.status === "archived") continue;
+        addPolicyGuidance(policyGuidance, p, 1);
+      }
+    }
+
     const activePolicies = repos.policies.list({ status: "active" });
     for (const p of activePolicies) {
+      if (policyGuidance.has(p.id)) continue;
       let matched = 0;
       for (const ep of p.sourceEpisodeIds) {
         if (traceEpisodeIds.has(ep)) matched += 1;
@@ -119,11 +128,7 @@ export function collectDecisionGuidance(input: CollectInput): CollectedGuidance 
       if (policyIds.has(p.id)) matched += 1;
       if (matched === 0) continue; // policy isn't connected to anything we retrieved
 
-      const dg = p.decisionGuidance;
-      if (dg.preference.length === 0 && dg.antiPattern.length === 0) {
-        continue; // policy has no learned guidance yet
-      }
-      policyGuidance.set(p.id, { ...dg, matchedEpisodes: matched });
+      addPolicyGuidance(policyGuidance, p, matched);
     }
   }
 
@@ -239,4 +244,22 @@ function hasGuidance(
   dg: { preference: string[]; antiPattern: string[] } | undefined,
 ): dg is { preference: string[]; antiPattern: string[] } {
   return !!dg && (dg.preference.length > 0 || dg.antiPattern.length > 0);
+}
+
+function addPolicyGuidance(
+  policyGuidance: Map<
+    string,
+    { preference: string[]; antiPattern: string[]; matchedEpisodes: number }
+  >,
+  policy: {
+    id: string;
+    decisionGuidance: { preference: string[]; antiPattern: string[] };
+  },
+  matchedEpisodes: number,
+): void {
+  const dg = policy.decisionGuidance;
+  if (dg.preference.length === 0 && dg.antiPattern.length === 0) {
+    return;
+  }
+  policyGuidance.set(policy.id, { ...dg, matchedEpisodes });
 }
