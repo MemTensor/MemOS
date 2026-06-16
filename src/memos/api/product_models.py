@@ -597,7 +597,7 @@ class APIADDRequest(BaseRequest):
         None,
         description="Session ID. If not provided, a default session will be used.",
     )
-    task_id: str | None = Field(None, description="Task ID for monitering async tasks")
+    task_id: str | None = Field(None, description="Task ID for monitoring async tasks")
     manager_user_id: str | None = Field(None, description="Manager User ID")
     project_id: str | None = Field(None, description="Project ID")
 
@@ -806,7 +806,7 @@ class APIFeedbackRequest(BaseRequest):
     session_id: str | None = Field(
         "default_session", description="Session ID for soft-filtering memories"
     )
-    task_id: str | None = Field(None, description="Task ID for monitering async tasks")
+    task_id: str | None = Field(None, description="Task ID for monitoring async tasks")
     history: MessageList | None = Field(..., description="Chat history")
     retrieved_memory_ids: list[str] | None = Field(
         None, description="Retrieved memory ids at last turn"
