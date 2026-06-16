@@ -79,7 +79,11 @@ import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
 import { runMigrations } from "../storage/migrator.js";
-import { makeRepos } from "../storage/repos/index.js";
+import {
+  embeddingMaintenanceCounts,
+  inferStoredEmbeddingByteLen,
+  makeRepos,
+} from "../storage/repos/index.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
 import {
@@ -112,6 +116,14 @@ import type { UserFeedback } from "../reward/types.js";
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
 const IMPORT_WRITE_BATCH_SIZE = 500;
+/**
+ * Float32 byte width. Stored vector BLOBs are little-endian Float32
+ * arrays produced by `encodeVector(Float32Array)`; their byte length
+ * is `dimensions * FLOAT32_BYTES_PER_ELEMENT`. The SQL fast path of
+ * `computeEmbeddingMaintenanceStats` compares stored BLOB byte length
+ * against `configuredDimension * FLOAT32_BYTES_PER_ELEMENT`.
+ */
+const FLOAT32_BYTES_PER_ELEMENT = 4;
 
 export interface BootstrapOptions {
   agent: AgentKind;
@@ -4032,24 +4044,37 @@ export function createMemoryCore(
   };
 
   function computeEmbeddingMaintenanceStats(): EmbeddingMaintenanceStats {
+    // SQL-only fast path (issue #1929).
+    //
+    // The previous implementation paginated `traces` / `policies` /
+    // `world_model` / `skills` end-to-end via `repos.<table>.list()`,
+    // which hydrates the full row — BLOB vector columns included —
+    // through `mapRow()`. On a production deployment with ~93K rows
+    // and ~270 MB of vector BLOBs that single call blocked the Node
+    // event loop for 4+ minutes at 100% CPU.
+    //
+    // `embeddingMaintenanceCounts` runs five `SELECT COUNT(*) +
+    // SUM(CASE WHEN ...)` queries — `LENGTH(blob)` reads only the BLOB
+    // header, never the payload — so we keep the same per-bucket
+    // semantics without touching a single vector byte.
     const configuredDimension = handle.embedder?.dimensions ?? 0;
-    const allSlots = collectEmbeddingSlots();
-    const dimension = configuredDimension > 0 ? configuredDimension : inferStoredEmbeddingDimension(allSlots);
-    const byKind = emptyEmbeddingStatsByKind();
-    for (const slot of allSlots) {
-      const bucket = byKind[slot.kind];
-      bucket.totalSlots++;
-      if (!slot.vec) {
-        bucket.missing++;
-      } else if (dimension > 0 && slot.vec.length !== dimension) {
-        bucket.dimMismatch++;
-      } else {
-        bucket.ready++;
-      }
-    }
-    for (const bucket of Object.values(byKind)) {
-      bucket.needsRepair = bucket.missing + bucket.dimMismatch;
-    }
+    const inferredByteLen = configuredDimension > 0
+      ? configuredDimension * FLOAT32_BYTES_PER_ELEMENT
+      : inferStoredEmbeddingByteLen(handle.db);
+    const dimension = configuredDimension > 0
+      ? configuredDimension
+      : Math.floor(inferredByteLen / FLOAT32_BYTES_PER_ELEMENT);
+
+    const raw = embeddingMaintenanceCounts(handle.db, {
+      expectedByteLen: inferredByteLen,
+    });
+
+    const byKind: EmbeddingMaintenanceStats["byKind"] = {
+      trace: addNeedsRepair(raw.trace),
+      policy: addNeedsRepair(raw.policy),
+      world_model: addNeedsRepair(raw.world_model),
+      skill: addNeedsRepair(raw.skill),
+    };
     const totalSlots = sumEmbeddingStats(byKind, "totalSlots");
     const ready = sumEmbeddingStats(byKind, "ready");
     const missing = sumEmbeddingStats(byKind, "missing");
@@ -4066,6 +4091,21 @@ export function createMemoryCore(
     };
   }
 
+  function addNeedsRepair(bucket: {
+    totalSlots: number;
+    ready: number;
+    missing: number;
+    dimMismatch: number;
+  }): EmbeddingMaintenanceStats["byKind"]["trace"] {
+    return {
+      totalSlots: bucket.totalSlots,
+      ready: bucket.ready,
+      missing: bucket.missing,
+      dimMismatch: bucket.dimMismatch,
+      needsRepair: bucket.missing + bucket.dimMismatch,
+    };
+  }
+
   async function ensureEmbeddingDimensionKnown(): Promise<void> {
     if (!handle.embedder || handle.embedder.dimensions > 0) return;
     try {
@@ -4078,23 +4118,6 @@ export function createMemoryCore(
         err: err instanceof Error ? err.message : String(err),
       });
     }
-  }
-
-  function inferStoredEmbeddingDimension(slots: readonly EmbeddingSlot[]): number {
-    const counts = new Map<number, number>();
-    for (const slot of slots) {
-      if (!slot.vec) continue;
-      counts.set(slot.vec.length, (counts.get(slot.vec.length) ?? 0) + 1);
-    }
-    let bestDim = 0;
-    let bestCount = 0;
-    for (const [dim, count] of counts) {
-      if (count > bestCount) {
-        bestDim = dim;
-        bestCount = count;
-      }
-    }
-    return bestDim;
   }
 
   function shouldTraceHaveEmbeddings(row: TraceRow): boolean {
@@ -4204,22 +4227,6 @@ export function createMemoryCore(
 
   function isLightweightMemoryTrace(row: TraceRow): boolean {
     return row.tags.includes("lightweight_memory");
-  }
-
-  function emptyEmbeddingStatsByKind(): EmbeddingMaintenanceStats["byKind"] {
-    const empty = () => ({
-      totalSlots: 0,
-      ready: 0,
-      missing: 0,
-      dimMismatch: 0,
-      needsRepair: 0,
-    });
-    return {
-      trace: empty(),
-      policy: empty(),
-      world_model: empty(),
-      skill: empty(),
-    };
   }
 
   function sumEmbeddingStats(
