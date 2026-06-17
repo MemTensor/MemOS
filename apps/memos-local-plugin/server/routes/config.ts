@@ -14,10 +14,11 @@
  * Client-supplied PATCH bodies that fail schema validation (Typebox
  * `NumberInRange`, type mismatch, etc.) must surface as HTTP 4xx — not
  * 500 — so concurrent search/onTurnStart calls are not poisoned by a
- * misbehaving viewer or admin script. We catch `MemosError`s with the
- * `config_invalid` / `config_write_failed` codes here and translate
- * them to 400 `invalid_argument`. Any other error keeps propagating
- * to the global handler so unexpected bugs still page operators.
+ * misbehaving viewer or admin script. We catch the `config_invalid`
+ * `MemosError` raised by `resolveConfig` here and translate it to 400
+ * `invalid_argument`. Server-side failures (e.g. `config_write_failed`
+ * from a non-writable disk) and any other error keep propagating to the
+ * global handler so operators still get paged on real bugs.
  *
  * Issue #1929 — the rerun harness contract tests
  * (`test_invalid_type_does_not_crash_or_corrupt`,
@@ -33,12 +34,14 @@ import { parseJson, writeError, type Routes } from "./registry.js";
 /**
  * Error codes raised by `core/config/{index,writer}.ts` that originate
  * from client input (a bad PATCH body) rather than from a server bug.
- * We map these to HTTP 400. Everything else bubbles up to the global
- * 500 handler so operators get paged on real bugs.
+ * We map these to HTTP 400. Everything else — including server-side
+ * failures like `config_write_failed` (atomic rename failed: disk full
+ * / permission denied) — bubbles up to the global 500 handler so
+ * operators get paged on real bugs and clients are not misled into
+ * thinking their (valid) input was rejected.
  */
 const CLIENT_INPUT_CONFIG_ERRORS: ReadonlySet<string> = new Set([
   "config_invalid",
-  "config_write_failed",
 ]);
 
 export function registerConfigRoutes(routes: Routes, deps: ServerDeps): void {
