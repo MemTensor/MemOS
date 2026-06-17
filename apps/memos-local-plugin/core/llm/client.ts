@@ -164,8 +164,12 @@ export function createLlmClientWithProvider(
   }
 
   function throwBreakerOpen(): never {
+    throw makeBreakerOpenError();
+  }
+
+  function makeBreakerOpenError(): MemosError {
     const until = circuitOpenUntil ?? breakerNow();
-    throw new MemosError(
+    return new MemosError(
       ERROR_CODES.LLM_UNAVAILABLE,
       `circuit_open: ${circuitOpenedReason ?? "terminal provider error"}`,
       {
@@ -174,6 +178,14 @@ export function createLlmClientWithProvider(
         provider: provider.name,
         model: config.model,
       },
+    );
+  }
+
+  function canUseHostFallback(): boolean {
+    return (
+      config.fallbackToHost === true &&
+      provider.name !== "host" &&
+      getHostLlmBridge() !== null
     );
   }
 
@@ -258,12 +270,18 @@ export function createLlmClientWithProvider(
     op: string,
   ): Promise<{ completion: LlmCompletion }> {
     // ── Circuit breaker short-circuit ──
-    // When the breaker is open we never reach the provider, so no paid
-    // request is generated. We still emit (coalesced) `circuit_open`
-    // status rows so the Logs viewer / Overview can surface that
-    // suppression is happening.
+    // When the breaker is open we never reach the primary provider, so
+    // no request is generated against the broken paid API. We still
+    // emit (coalesced) `circuit_open` status rows so the Logs viewer /
+    // Overview can surface that suppression is happening.
     if (breakerIsOpen()) {
       maybeEmitCircuitOpenStatus(opts, op);
+      if (canUseHostFallback()) {
+        return callHostFallback(makeBreakerOpenError(), messages, input, opts, op, {
+          keepBreakerOpen: true,
+          notifyError: false,
+        });
+      }
       throwBreakerOpen();
     }
     requests++;
@@ -295,54 +313,13 @@ export function createLlmClientWithProvider(
       return { completion };
     } catch (err) {
       if (shouldFallback(err, config, provider.name)) {
-        const hostProv = new HostLlmProvider();
+        const primaryTerminal = breakerIsTerminal(err);
+        if (primaryTerminal) breakerTrip(err);
         try {
-          const res = await hostProv.complete(messages, input, makeCtx(opts, asProviderLog(rootLogger.child({ channel: "llm.host" }))));
-          hostFallbacks++;
-          facadeLog.warn("host.fallback", {
-            from: provider.name,
-            op,
-            reason: summarizeErr(err),
+          return await callHostFallback(err, messages, input, opts, op, {
+            keepBreakerOpen: primaryTerminal,
+            notifyError: true,
           });
-          const completion: LlmCompletion = {
-            text: res.text,
-            provider: provider.name,
-            model: config.model,
-            finishReason: res.finishReason,
-            usage: res.usage,
-            servedBy: "host_fallback",
-            durationMs: res.durationMs,
-          };
-          record(completion, op, messages);
-          // The primary provider is still broken even though the host
-          // bridge saved this call. Tag the slot yellow (`lastFallbackAt`)
-          // and surface the upstream error to the user via the
-          // system_error log so they can see *why* fallback engaged.
-          //
-          // The circuit breaker stays CLOSED here: from the caller's
-          // perspective the call was rescued, and tripping the breaker
-          // on host-fallback success would defeat the point of the
-          // bridge (it exists precisely to keep going when the primary
-          // is down). The fallback path also already records the
-          // primary's failure, so the operator still sees the red trail
-          // in the Logs viewer.
-          const fallbackAt = markFallback(err);
-          breakerRecordSuccess();
-          notifyOnError(err);
-          notifyStatus({
-            status: "fallback",
-            provider: provider.name,
-            model: config.model,
-            message: summarizeErrMessage(err),
-            code: err instanceof MemosError ? err.code : undefined,
-            at: fallbackAt,
-            durationMs: completion.durationMs,
-            fallbackProvider: "host",
-            op,
-            episodeId: opts?.episodeId,
-            phase: opts?.phase,
-          });
-          return { completion };
         } catch (hostErr) {
           failures++;
           const failAt = markFail(hostErr);
@@ -350,7 +327,7 @@ export function createLlmClientWithProvider(
             primary: summarizeErr(err),
             host: summarizeErr(hostErr),
           });
-          // Primary AND host bridge both failed terminally. Trip on the
+          // Primary AND host bridge both failed. Trip on a terminal
           // primary error (the one the operator typically needs to fix
           // — host bridge failures are usually transient stdio issues).
           if (breakerIsTerminal(err)) breakerTrip(err);
@@ -615,6 +592,59 @@ export function createLlmClientWithProvider(
       });
       throw err;
     }
+  }
+
+  async function callHostFallback(
+    primaryErr: unknown,
+    messages: LlmMessage[],
+    input: ProviderCallInput,
+    opts: LlmCallOptions | undefined,
+    op: string,
+    behavior: { keepBreakerOpen: boolean; notifyError: boolean },
+  ): Promise<{ completion: LlmCompletion }> {
+    const hostProv = new HostLlmProvider();
+    const res = await hostProv.complete(
+      messages,
+      input,
+      makeCtx(opts, asProviderLog(rootLogger.child({ channel: "llm.host" }))),
+    );
+    hostFallbacks++;
+    facadeLog.warn("host.fallback", {
+      from: provider.name,
+      op,
+      reason: summarizeErr(primaryErr),
+    });
+    const completion: LlmCompletion = {
+      text: res.text,
+      provider: provider.name,
+      model: config.model,
+      finishReason: res.finishReason,
+      usage: res.usage,
+      servedBy: "host_fallback",
+      durationMs: res.durationMs,
+    };
+    record(completion, op, messages);
+    // The primary provider is still broken even though the host bridge
+    // saved this call. Keep the breaker open for terminal primary
+    // errors so later calls can go straight to host fallback without
+    // touching the paid provider again.
+    const fallbackAt = markFallback(primaryErr);
+    if (!behavior.keepBreakerOpen) breakerRecordSuccess();
+    if (behavior.notifyError) notifyOnError(primaryErr);
+    notifyStatus({
+      status: "fallback",
+      provider: provider.name,
+      model: config.model,
+      message: summarizeErrMessage(primaryErr),
+      code: primaryErr instanceof MemosError ? primaryErr.code : undefined,
+      at: fallbackAt,
+      durationMs: completion.durationMs,
+      fallbackProvider: "host",
+      op,
+      episodeId: opts?.episodeId,
+      phase: opts?.phase,
+    });
+    return { completion };
   }
 
   const client: LlmClient = {

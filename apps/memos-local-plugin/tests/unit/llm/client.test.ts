@@ -429,14 +429,16 @@ describe("llm/client", () => {
       expect(client.stats().circuitOpen).toBe(false);
     });
 
-    it("does NOT trip when host fallback rescues the call", async () => {
+    it("trips on terminal primary error even when host fallback rescues the call", async () => {
       const sink = statusSink();
       const provider = new ThrowingProvider(
         new MemosError(ERROR_CODES.LLM_UNAVAILABLE, "402", { status: 402 }),
       );
+      let hostCalls = 0;
       registerHostLlmBridge({
         id: "test.host",
         async complete() {
+          hostCalls++;
           return { text: "rescued", model: "host-m", durationMs: 1 };
         },
       });
@@ -450,12 +452,16 @@ describe("llm/client", () => {
       );
       const r = await client.complete("call-1");
       expect(r.servedBy).toBe("host_fallback");
-      // Breaker still closed: fallback rescued the call.
-      expect(client.stats().circuitOpen).toBe(false);
+      // The terminal primary error still opens the breaker even though
+      // host fallback rescued the user-visible call.
+      expect(client.stats().circuitOpen).toBe(true);
       const r2 = await client.complete("call-2");
       expect(r2.servedBy).toBe("host_fallback");
-      // Provider hit twice; not short-circuited.
-      expect(provider.calls).toBe(2);
+      // The second call goes directly to host fallback and never touches
+      // the broken paid provider again.
+      expect(provider.calls).toBe(1);
+      expect(hostCalls).toBe(2);
+      expect(sink.rows.map((row) => row.status)).toContain("circuit_open");
     });
 
     it("disabled when circuitBreaker.enabled=false (legacy behavior)", async () => {
