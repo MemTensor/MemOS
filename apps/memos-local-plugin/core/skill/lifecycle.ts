@@ -201,6 +201,22 @@ export function shouldArchiveIdle(
   return skill.eta < cfg.minEtaForRetrieval;
 }
 
+/**
+ * Decide whether a non-repair candidate skill should skip trial
+ * and become active immediately.  `eta` already encodes the
+ * gain / support of the source policies (initialised at
+ * crystallisation and kept current by reward drift), so we
+ * don't need a separate gain / support gate.
+ */
+export function shouldPromoteCandidate(
+  skill: SkillRow,
+  cfg: SkillConfig,
+): boolean {
+  if (skill.status !== "candidate") return false;
+  if (skill.repairOrigin) return false;
+  return skill.eta >= cfg.minEtaForRetrieval;
+}
+
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0;
   if (n < 0) return 0;

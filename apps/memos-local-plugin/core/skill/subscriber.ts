@@ -207,5 +207,19 @@ export function attachSkillSubscriber(
     }
   }
 
-  return { dispose, runOnce, applyFeedback, flush };
+  /** Periodic lifecycle pass: promote eligible candidate skills to active. */
+  async function lifecycleTick(): Promise<void> {
+    const candidates = deps.repos.skills.list({ status: "candidate", limit: 500 });
+    const minEta = deps.config.minEtaForRetrieval ?? 0.1;
+    for (const s of candidates) {
+      if (s.status !== "candidate") continue;
+      if (s.repairOrigin) continue;
+      if ((s.eta ?? 0) < minEta) continue;
+      deps.repos.skills.setStatus(s.id, "active");
+      log.info("skill.auto_promoted", { skillId: s.id, name: s.name, eta: s.eta });
+      try { deps.bus?.emit({ kind: "skill.status.changed", skillId: s.id, from: "candidate", to: "active", reason: "auto_lifecycle" }); } catch { /* best-effort */ }
+    }
+  }
+
+  return { dispose, runOnce, applyFeedback, flush, lifecycleTick };
 }
