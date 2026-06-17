@@ -59,11 +59,11 @@ class TestSchedulerLogger(unittest.TestCase):
             _make_memory_item("id2", "memory two"),
         ]
         new_memory = [
-            _make_memory_item("id1", "memory one"),    # carried over
-            _make_memory_item("id2", "memory two"),    # carried over
+            _make_memory_item("id1", "memory one"),  # carried over
+            _make_memory_item("id2", "memory two"),  # carried over
             _make_memory_item("id3", "memory three"),  # new
-            _make_memory_item("id4", "memory four"),   # new
-            _make_memory_item("id5", "memory five"),   # new
+            _make_memory_item("id4", "memory four"),  # new
+            _make_memory_item("id5", "memory five"),  # new
         ]
 
         captured_events = []
