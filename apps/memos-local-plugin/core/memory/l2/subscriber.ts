@@ -132,6 +132,12 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
             episodeId: result.episodeId,
             policyId: sink.policyId,
           });
+        } else if (sink.merged) {
+          subLog.info("failure.route.sink.merged", {
+            episodeId: result.episodeId,
+            policyId: sink.policyId,
+            duplicateOfPolicyId: sink.duplicateOfPolicyId,
+          });
         } else {
           subLog.info("failure.route.sink.skipped", {
             episodeId: result.episodeId,

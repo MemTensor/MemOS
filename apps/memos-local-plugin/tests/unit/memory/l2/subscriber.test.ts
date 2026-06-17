@@ -16,6 +16,7 @@ import {
   type L2Event,
 } from "../../../../core/memory/l2/index.js";
 import { rootLogger } from "../../../../core/logger/index.js";
+import type { Logger } from "../../../../core/logger/types.js";
 import type {
   EmbeddingVector,
   FeedbackRow,
@@ -103,6 +104,29 @@ function fakeRewardResult(episodeId: string, traceIds: string[]): RewardResult {
     startedAt: NOW as RewardResult["startedAt"],
     completedAt: NOW as RewardResult["completedAt"],
   };
+}
+
+function captureLogger(records: Array<{ level: string; msg: string; data?: Record<string, unknown> }>): Logger {
+  const log = {
+    channel: "test",
+    child: () => log,
+    trace: (msg: string, data?: Record<string, unknown>) => records.push({ level: "trace", msg, data }),
+    debug: (msg: string, data?: Record<string, unknown>) => records.push({ level: "debug", msg, data }),
+    info: (msg: string, data?: Record<string, unknown>) => records.push({ level: "info", msg, data }),
+    warn: (msg: string, data?: Record<string, unknown>) => records.push({ level: "warn", msg, data }),
+    error: (msg: string, data?: Record<string, unknown>) => records.push({ level: "error", msg, data }),
+    fatal: (msg: string, data?: Record<string, unknown>) => records.push({ level: "fatal", msg, data }),
+    audit: (msg: string, data?: Record<string, unknown>) => records.push({ level: "audit", msg, data }),
+    llm: () => {},
+    timer: () => ({
+      end: () => {},
+      [Symbol.dispose]: () => {},
+    }),
+    forward: () => {},
+    flush: async () => {},
+    close: async () => {},
+  } satisfies Logger;
+  return log;
 }
 
 describe("memory/l2/subscriber", () => {
@@ -501,6 +525,66 @@ describe("memory/l2/subscriber", () => {
     const rows = handle.repos.policies.list({ limit: 50 });
     const sinkRow = rows.find((p) => p.sourceEpisodeIds.includes("ep_f_empty" as TraceRow["episodeId"]));
     expect(sinkRow).toBeTruthy();
+    sub.detach();
+  });
+
+  it("logs merged failure sink writes separately from skipped writes", async () => {
+    seedTrace(handle, "tr_sink_merge_a", "ep_sink_merge_a", "app error: missing deliverable");
+    seedTrace(handle, "tr_sink_merge_b", "ep_sink_merge_b", "app error: missing deliverable");
+    handle.repos.episodes.setOutcome("ep_sink_merge_a" as TraceRow["episodeId"], "failure");
+    handle.repos.episodes.setOutcome("ep_sink_merge_b" as TraceRow["episodeId"], "failure");
+    handle.repos.episodes.setVerifierPassed("ep_sink_merge_a" as TraceRow["episodeId"], false);
+    handle.repos.episodes.setVerifierPassed("ep_sink_merge_b" as TraceRow["episodeId"], false);
+
+    const logs: Array<{ level: string; msg: string; data?: Record<string, unknown> }> = [];
+    const rewardBus = createRewardEventBus();
+    const l2Bus = createL2EventBus();
+    const sub = attachL2Subscriber({
+      db: handle.db,
+      repos: handle.repos,
+      rewardBus,
+      l2Bus,
+      llm: fakeLlm({
+        completeJson: {
+          "l2.failure.experience.sink.v5": {
+            title: "Check requested deliverable before closing",
+            trigger: "A task is about to be marked done while the requested deliverable may still be missing",
+            procedure:
+              "Compare the final answer against the user request, identify any missing acceptance item, then complete the smallest missing deliverable before closing.",
+            verification: "The final response includes the requested deliverable.",
+            boundary: "",
+            experience_type: "repair_instruction",
+            decision_guidance: {
+              prefer: ["Before closing, compare the visible result with the user's requested deliverable."],
+              avoid: ["Do not mark the task complete while a requested deliverable is still absent."],
+            },
+            support_trace_ids: ["tr_sink_merge_a"],
+          },
+        },
+      }),
+      log: captureLogger(logs),
+      config: cfg(),
+      thresholds: { minSupport: 3, minGain: 0.15, archiveGain: -0.05 },
+    });
+
+    rewardBus.emit({
+      kind: "reward.updated",
+      result: fakeRewardResult("ep_sink_merge_a", ["tr_sink_merge_a"]),
+    } as RewardEvent);
+    await sub.drain();
+    rewardBus.emit({
+      kind: "reward.updated",
+      result: fakeRewardResult("ep_sink_merge_b", ["tr_sink_merge_b"]),
+    } as RewardEvent);
+    await sub.drain();
+
+    expect(logs.some((r) => r.msg === "failure.route.sink.created")).toBe(true);
+    expect(logs.some((r) => r.msg === "failure.route.sink.merged")).toBe(true);
+    expect(
+      logs.some(
+        (r) => r.msg === "failure.route.sink.skipped" && r.data?.episodeId === "ep_sink_merge_b",
+      ),
+    ).toBe(false);
     sub.detach();
   });
 

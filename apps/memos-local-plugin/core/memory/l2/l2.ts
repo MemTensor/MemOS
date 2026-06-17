@@ -31,6 +31,7 @@ import type {
 import type { Repos } from "../../storage/repos/index.js";
 import { ids } from "../../id.js";
 import { buildPolicyVectorText } from "../../experience/policy-vector-text.js";
+import { findExistingPolicyContentDuplicate } from "../../experience/policy-dedupe.js";
 import { L2_INDUCTION_PROMPT } from "../../llm/prompts/l2-induction.js";
 import { associateTraces } from "./associate.js";
 import { makeCandidatePool } from "./candidate-pool.js";
@@ -579,37 +580,10 @@ function findExistingContentDuplicate(
   policy: PolicyRow,
   repos: Pick<Repos, "policies">,
 ): PolicyRow | null {
-  const target = policyContentKey(policy);
-  let best: { row: PolicyRow; score: PolicyNearDuplicateScore } | null = null;
-  for (const existing of repos.policies.list({ limit: 5_000 })) {
-    if (!sameOwnerScope(existing, policy)) continue;
-    if (
-      existing.mergeFamily
-      && policy.mergeFamily
-      && existing.mergeFamily !== policy.mergeFamily
-    ) continue;
-    if (policyContentKey(existing) === target && policyOptionalFieldsCompatible(existing, policy)) {
-      return existing;
-    }
-    const score = policyNearDuplicateScore(existing, policy);
-    if (score.match && (!best || score.weighted > best.score.weighted)) {
-      best = { row: existing, score };
-    }
-  }
-  return best?.row ?? null;
-}
-
-function policyOptionalFieldsCompatible(
-  a: Pick<PolicyRow, "boundary" | "verification">,
-  b: Pick<PolicyRow, "boundary" | "verification">,
-): boolean {
-  const boundary = optionalFieldSimilarity(a.boundary, b.boundary);
-  const verification = optionalFieldSimilarity(a.verification, b.verification);
-  return (
-    !boundaryPolarityConflicts(a.boundary, b.boundary) &&
-    (boundary == null || boundary >= POLICY_NEAR_DUP_BOUNDARY_MIN) &&
-    (verification == null || verification >= POLICY_NEAR_DUP_BOUNDARY_MIN)
-  );
+  return findExistingPolicyContentDuplicate(policy, repos, {
+    statusIn: ["active", "candidate"],
+    profile: "l2-induction",
+  });
 }
 
 function mergePolicyEvidence(
@@ -694,136 +668,6 @@ function addOutcomeCounts(
 
 function numberOrZero(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function policyContentKey(policy: Pick<PolicyRow, "title" | "trigger" | "procedure">): string {
-  return [
-    normalizePolicyText(policy.title),
-    normalizePolicyText(policy.trigger),
-    normalizePolicyText(policy.procedure),
-  ].join("\n");
-}
-
-const POLICY_NEAR_DUP_TITLE_MIN = 0.9;
-const POLICY_NEAR_DUP_TRIGGER_MIN = 0.8;
-const POLICY_NEAR_DUP_PROCEDURE_MIN = 0.7;
-const POLICY_NEAR_DUP_BOUNDARY_MIN = 0.45;
-
-interface PolicyNearDuplicateScore {
-  match: boolean;
-  title: number;
-  trigger: number;
-  procedure: number;
-  weighted: number;
-  boundary: number | null;
-  verification: number | null;
-}
-
-function policyNearDuplicateScore(
-  a: Pick<PolicyRow, "title" | "trigger" | "procedure" | "boundary" | "verification">,
-  b: Pick<PolicyRow, "title" | "trigger" | "procedure" | "boundary" | "verification">,
-): PolicyNearDuplicateScore {
-  const title = textSimilarity(a.title, b.title);
-  const trigger = textSimilarity(a.trigger, b.trigger);
-  const procedure = textSimilarity(a.procedure, b.procedure);
-  const weighted = title * 0.45 + trigger * 0.25 + procedure * 0.3;
-  const boundary = optionalFieldSimilarity(a.boundary, b.boundary);
-  const verification = optionalFieldSimilarity(a.verification, b.verification);
-  const optionalFieldsCompatible =
-    !boundaryPolarityConflicts(a.boundary, b.boundary) &&
-    (boundary == null || boundary >= POLICY_NEAR_DUP_BOUNDARY_MIN) &&
-    (verification == null || verification >= POLICY_NEAR_DUP_BOUNDARY_MIN);
-  const contentFieldMatches =
-    title >= POLICY_NEAR_DUP_TITLE_MIN ||
-    trigger >= POLICY_NEAR_DUP_TRIGGER_MIN ||
-    procedure >= POLICY_NEAR_DUP_PROCEDURE_MIN;
-  return {
-    match: contentFieldMatches && optionalFieldsCompatible,
-    title,
-    trigger,
-    procedure,
-    weighted,
-    boundary,
-    verification,
-  };
-}
-
-function normalizePolicyText(value: string): string {
-  return value
-    .normalize("NFKC")
-    .replace(/[，,、;；:：。.!！?？"'“”‘’`()[\]{}（）【】]/g, "")
-    .replace(/(?:^|\s)\d+[.)、]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLocaleLowerCase();
-}
-
-function optionalFieldSimilarity(a: string, b: string): number | null {
-  const aa = normalizePolicyText(a);
-  const bb = normalizePolicyText(b);
-  if (!aa || !bb) return null;
-  return textSimilarity(aa, bb);
-}
-
-function boundaryPolarityConflicts(a: string, b: string): boolean {
-  const aa = splitBoundaryPolarity(a);
-  const bb = splitBoundaryPolarity(b);
-  if (!aa || !bb) return false;
-  return (
-    (Boolean(aa.positive) && Boolean(bb.negative) && textSimilarity(aa.positive, bb.negative) >= 0.45) ||
-    (Boolean(bb.positive) && Boolean(aa.negative) && textSimilarity(bb.positive, aa.negative) >= 0.45)
-  );
-}
-
-function splitBoundaryPolarity(value: string): { positive: string; negative: string } | null {
-  const text = value.trim();
-  if (!text || !text.includes("不适用")) return null;
-  const [positiveRaw, ...negativeParts] = text.split(/不适用于|不适用/);
-  const negative = negativeParts.join(" ");
-  return {
-    positive: positiveRaw.replace(/仅适用于|只适用于|适用于/g, "").trim(),
-    negative: negative.replace(/仅适用于|只适用于|适用于/g, "").trim(),
-  };
-}
-
-function textSimilarity(a: string, b: string): number {
-  const aa = normalizePolicyText(a);
-  const bb = normalizePolicyText(b);
-  if (!aa || !bb) return aa === bb ? 1 : 0;
-  if (aa === bb) return 1;
-  const gramsA = charGrams(aa);
-  const gramsB = charGrams(bb);
-  let overlap = 0;
-  for (const [gram, countA] of gramsA) {
-    const countB = gramsB.get(gram);
-    if (countB) overlap += Math.min(countA, countB);
-  }
-  const totalA = Array.from(gramsA.values()).reduce((sum, n) => sum + n, 0);
-  const totalB = Array.from(gramsB.values()).reduce((sum, n) => sum + n, 0);
-  return totalA + totalB === 0 ? 0 : (2 * overlap) / (totalA + totalB);
-}
-
-function charGrams(value: string): Map<string, number> {
-  const chars = Array.from(value.replace(/\s+/g, ""));
-  const grams = new Map<string, number>();
-  if (chars.length <= 2) {
-    const key = chars.join("");
-    grams.set(key, 1);
-    return grams;
-  }
-  for (let i = 0; i < chars.length - 1; i++) {
-    const gram = `${chars[i]}${chars[i + 1]}`;
-    grams.set(gram, (grams.get(gram) ?? 0) + 1);
-  }
-  return grams;
-}
-
-function sameOwnerScope(a: PolicyRow, b: PolicyRow): boolean {
-  return (
-    (a.ownerAgentKind ?? "unknown") === (b.ownerAgentKind ?? "unknown") &&
-    (a.ownerProfileId ?? "default") === (b.ownerProfileId ?? "default") &&
-    (a.ownerWorkspaceId ?? null) === (b.ownerWorkspaceId ?? null)
-  );
 }
 
 function uniqueEpisodes(ids: readonly EpisodeId[]): EpisodeId[] {

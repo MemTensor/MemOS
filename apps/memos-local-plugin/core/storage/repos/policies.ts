@@ -63,6 +63,13 @@ export interface PolicySearchMeta {
   owner_workspace_id?: string | null;
 }
 
+interface PolicySearchOptions {
+  statusIn?: PolicyRow["status"][];
+  ownerAgentKind?: string;
+  ownerProfileId?: string;
+  ownerWorkspaceId?: string | null;
+}
+
 export function makePoliciesRepo(db: StorageDb) {
   const insert = db.prepare(buildInsert({ table: "policies", columns: COLUMNS }));
   const upsert = db.prepare(
@@ -198,7 +205,7 @@ export function makePoliciesRepo(db: StorageDb) {
     searchByText(
       ftsMatch: string,
       k: number,
-      opts: { statusIn?: PolicyRow["status"][] } = {},
+      opts: PolicySearchOptions = {},
     ): Array<VectorHit<string, PolicySearchMeta>> {
       return searchPoliciesFts(db, ftsMatch, k, opts);
     },
@@ -211,9 +218,17 @@ export function makePoliciesRepo(db: StorageDb) {
     searchTitleTriggerByText(
       ftsMatch: string,
       k: number,
-      opts: { statusIn?: PolicyRow["status"][] } = {},
+      opts: PolicySearchOptions = {},
     ): Array<VectorHit<string, PolicySearchMeta>> {
       return searchPoliciesFts(db, `{title trigger}: ${ftsMatch}`, k, opts);
+    },
+
+    searchTitleTriggerByPattern(
+      terms: readonly string[],
+      k: number,
+      opts: PolicySearchOptions = {},
+    ): Array<VectorHit<string, PolicySearchMeta>> {
+      return searchPoliciesByPattern(db, terms, k, opts, ["title", "trigger"]);
     },
 
     /**
@@ -223,56 +238,16 @@ export function makePoliciesRepo(db: StorageDb) {
     searchByPattern(
       terms: readonly string[],
       k: number,
-      opts: { statusIn?: PolicyRow["status"][] } = {},
+      opts: PolicySearchOptions = {},
     ): Array<VectorHit<string, PolicySearchMeta>> {
-      if (!terms || terms.length === 0 || k <= 0) return [];
-      const dedup = Array.from(new Set(terms.map((t) => String(t).trim()).filter(Boolean)));
-      if (dedup.length === 0) return [];
-      const params: Record<string, unknown> = {
-        k: Math.max(1, Math.min(200, Math.floor(k))),
-      };
-      const ors: string[] = [];
-      dedup.slice(0, 16).forEach((t, i) => {
-        const key = `pat_${i}`;
-        const escaped = t.replace(/[\\%_]/g, (m) => `\\${m}`);
-        params[key] = `%${escaped}%`;
-        ors.push(
-          `(title LIKE @${key} ESCAPE '\\' OR trigger LIKE @${key} ESCAPE '\\' OR procedure LIKE @${key} ESCAPE '\\' OR verification LIKE @${key} ESCAPE '\\' OR boundary LIKE @${key} ESCAPE '\\' OR decision_guidance_json LIKE @${key} ESCAPE '\\')`,
-        );
-      });
-      const whereParts: string[] = [`(${ors.join(" OR ")})`];
-      if (opts.statusIn && opts.statusIn.length > 0) {
-        const placeholders = opts.statusIn.map((_, i) => `@status_${i}`).join(",");
-        whereParts.push(`status IN (${placeholders})`);
-        opts.statusIn.forEach((st, i) => {
-          params[`status_${i}`] = st;
-        });
-      }
-      const sql = `
-        SELECT id,
-               title,
-               status,
-               support,
-               gain,
-               experience_type,
-               evidence_polarity,
-               salience,
-               confidence,
-               owner_agent_kind,
-               owner_profile_id,
-               owner_workspace_id
-          FROM policies
-         WHERE ${whereParts.join(" AND ")}
-         ORDER BY updated_at DESC
-         LIMIT @k`;
-      const rows = db
-        .prepare<typeof params, RawPolicySearchRow>(sql)
-        .all(params);
-      return rows.map((r, idx) => ({
-        id: r.id,
-        score: 1 / (idx + 1),
-        meta: policySearchMeta(r),
-      }));
+      return searchPoliciesByPattern(db, terms, k, opts, [
+        "title",
+        "trigger",
+        "procedure",
+        "verification",
+        "boundary",
+        "decision_guidance_json",
+      ]);
     },
 
     deleteById(id: PolicyId): void {
@@ -514,21 +489,14 @@ function searchPoliciesFts(
   db: StorageDb,
   ftsMatch: string,
   k: number,
-  opts: { statusIn?: PolicyRow["status"][] } = {},
+  opts: PolicySearchOptions = {},
 ): Array<VectorHit<string, PolicySearchMeta>> {
   if (!ftsMatch || k <= 0) return [];
   const params: Record<string, unknown> = {
     match: ftsMatch,
     k: Math.max(1, Math.min(200, Math.floor(k))),
   };
-  const whereParts: string[] = [];
-  if (opts.statusIn && opts.statusIn.length > 0) {
-    const placeholders = opts.statusIn.map((_, i) => `@status_${i}`).join(",");
-    whereParts.push(`p.status IN (${placeholders})`);
-    opts.statusIn.forEach((st, i) => {
-      params[`status_${i}`] = st;
-    });
-  }
+  const whereParts = policySearchWhereParts(opts, params, "p.");
   const extra = whereParts.length > 0 ? ` AND ${whereParts.join(" AND ")}` : "";
   const sql = `
     SELECT p.id AS id,
@@ -554,6 +522,86 @@ function searchPoliciesFts(
     score: 1 / (idx + 1),
     meta: policySearchMeta(r),
   }));
+}
+
+function searchPoliciesByPattern(
+  db: StorageDb,
+  terms: readonly string[],
+  k: number,
+  opts: PolicySearchOptions,
+  columns: readonly string[],
+): Array<VectorHit<string, PolicySearchMeta>> {
+  if (!terms || terms.length === 0 || k <= 0) return [];
+  const dedup = Array.from(new Set(terms.map((t) => String(t).trim()).filter(Boolean)));
+  if (dedup.length === 0) return [];
+  const params: Record<string, unknown> = {
+    k: Math.max(1, Math.min(200, Math.floor(k))),
+  };
+  const ors: string[] = [];
+  dedup.slice(0, 16).forEach((t, i) => {
+    const key = `pat_${i}`;
+    const escaped = t.replace(/[\\%_]/g, (m) => `\\${m}`);
+    params[key] = `%${escaped}%`;
+    const columnMatches = columns.map((col) => `${col} LIKE @${key} ESCAPE '\\'`);
+    ors.push(`(${columnMatches.join(" OR ")})`);
+  });
+  const whereParts: string[] = [`(${ors.join(" OR ")})`];
+  whereParts.push(...policySearchWhereParts(opts, params));
+  const sql = `
+    SELECT id,
+           title,
+           status,
+           support,
+           gain,
+           experience_type,
+           evidence_polarity,
+           salience,
+           confidence,
+           owner_agent_kind,
+           owner_profile_id,
+           owner_workspace_id
+      FROM policies
+     WHERE ${whereParts.join(" AND ")}
+     ORDER BY updated_at DESC
+     LIMIT @k`;
+  const rows = db.prepare<typeof params, RawPolicySearchRow>(sql).all(params);
+  return rows.map((r, idx) => ({
+    id: r.id,
+    score: 1 / (idx + 1),
+    meta: policySearchMeta(r),
+  }));
+}
+
+function policySearchWhereParts(
+  opts: PolicySearchOptions,
+  params: Record<string, unknown>,
+  prefix = "",
+): string[] {
+  const whereParts: string[] = [];
+  if (opts.statusIn && opts.statusIn.length > 0) {
+    const placeholders = opts.statusIn.map((_, i) => `@status_${i}`).join(",");
+    whereParts.push(`${prefix}status IN (${placeholders})`);
+    opts.statusIn.forEach((st, i) => {
+      params[`status_${i}`] = st;
+    });
+  }
+  if (opts.ownerAgentKind !== undefined) {
+    whereParts.push(`${prefix}owner_agent_kind = @owner_agent_kind`);
+    params.owner_agent_kind = opts.ownerAgentKind;
+  }
+  if (opts.ownerProfileId !== undefined) {
+    whereParts.push(`${prefix}owner_profile_id = @owner_profile_id`);
+    params.owner_profile_id = opts.ownerProfileId;
+  }
+  if (opts.ownerWorkspaceId !== undefined) {
+    if (opts.ownerWorkspaceId == null) {
+      whereParts.push(`${prefix}owner_workspace_id IS NULL`);
+    } else {
+      whereParts.push(`${prefix}owner_workspace_id = @owner_workspace_id`);
+      params.owner_workspace_id = opts.ownerWorkspaceId;
+    }
+  }
+  return whereParts;
 }
 
 /**

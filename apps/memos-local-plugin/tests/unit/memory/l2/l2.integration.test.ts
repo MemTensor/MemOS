@@ -407,7 +407,7 @@ describe("memory/l2/integration", () => {
     expect(existing.support).toBeGreaterThan(3);
   });
 
-  it("reuses an existing policy when induction returns a near-duplicate wording", async () => {
+  it("does not reuse an existing policy when near-duplicate wording changes the procedure too much", async () => {
     ensureEpisode(handle, "ep_weather_a", "s_int");
     ensureEpisode(handle, "ep_weather_b", "s_int");
 
@@ -488,11 +488,96 @@ describe("memory/l2/integration", () => {
     );
 
     expect(result.inductions).toHaveLength(1);
-    expect(result.inductions[0].skippedReason).toBe("duplicate_of");
-    expect(result.inductions[0].duplicateOfPolicyId).toBe("po_weather_existing");
-    expect(handle.repos.policies.list({ limit: 10 })).toHaveLength(1);
-    const existing = handle.repos.policies.getById("po_weather_existing" as never)!;
-    expect(existing.sourceEpisodeIds.sort()).toEqual(["ep_weather_a", "ep_weather_b"]);
+    expect(result.inductions[0].skippedReason).toBeNull();
+    expect(result.inductions[0].duplicateOfPolicyId).toBeUndefined();
+    expect(handle.repos.policies.list({ limit: 10 })).toHaveLength(2);
+  });
+
+  it("does not merge when only the policy title is similar", async () => {
+    ensureEpisode(handle, "ep_title_only_a", "s_int");
+    ensureEpisode(handle, "ep_title_only_b", "s_int");
+
+    const trA = mkTrace({
+      id: "tr_title_only_a",
+      episodeId: "ep_title_only_a",
+      tags: ["tool"],
+      userText: "Summarize build output.",
+      agentText: "Summarized the build output.",
+      value: 0.83,
+      vecSummary: vec([1, 0, 0]),
+    });
+    const trB = mkTrace({
+      id: "tr_title_only_b",
+      episodeId: "ep_title_only_b",
+      tags: ["tool"],
+      userText: "Summarize test output.",
+      agentText: "Summarized the test output.",
+      value: 0.87,
+      vecSummary: vec([0, 1, 0]),
+    });
+    handle.repos.traces.insert(trA);
+    handle.repos.traces.insert(trB);
+
+    const pool = makeCandidatePool({ db: handle.db, repos: handle.repos });
+    const ttlMs = cfg().candidateTtlDays * 24 * 60 * 60 * 1000;
+    pool.addCandidate({ trace: trA, ttlMs, now: NOW });
+    pool.addCandidate({ trace: trB, ttlMs, now: NOW });
+
+    handle.repos.policies.insert({
+      id: "po_title_only_existing" as never,
+      title: "Summarize command output",
+      trigger: "A package manager install command fails and the user needs dependency repair steps",
+      procedure: "Inspect the missing package name, install the operating-system dependency, then retry the package command.",
+      verification: "",
+      boundary: "",
+      support: 3,
+      gain: 0.2,
+      status: "active",
+      sourceEpisodeIds: ["ep_title_only_a" as EpisodeId],
+      inducedBy: "unit-test",
+      mergeFamily: "success_induction",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: null,
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+
+    const result = await runL2(
+      {
+        episodeId: "ep_title_only_b" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [],
+        trigger: "manual",
+        now: NOW + 1,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({
+          completeJson: {
+            "l2.l2.induction.v3": {
+              title: "Summarize command output",
+              trigger: "A test runner finishes and the user needs a concise pass/fail summary",
+              procedure: "Extract failed test names, group assertion errors by file, then report the next debugging action.",
+              verification: "",
+              boundary: "",
+              rationale: "Same title but different operational policy.",
+              caveats: [],
+              confidence: 0.8,
+            },
+          },
+        }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus: createL2EventBus(),
+        config: cfg(),
+        thresholds: { minSupport: 3, minGain: 0.15, archiveGain: -0.05 },
+      },
+    );
+
+    expect(result.inductions).toHaveLength(1);
+    expect(result.inductions[0].skippedReason).toBeNull();
+    expect(result.inductions[0].duplicateOfPolicyId).toBeUndefined();
+    expect(handle.repos.policies.list({ limit: 10 })).toHaveLength(2);
   });
 
   it("does not merge duplicate-looking policies when explicit boundaries conflict", async () => {
@@ -644,7 +729,7 @@ describe("memory/l2/integration", () => {
             "l2.l2.induction.v3": {
               title: "工具全部失效时坦诚说明并回退到已有知识",
               trigger: "连续尝试多个同类工具（如多个搜索引擎、多个新闻源）后全部因反爬、封禁或网络错误失效，且用户问题需要实时信息",
-              procedure: "1) 明确告知用户所有尝试过的工具都已失效（列出具体工具名）；2) 基于训练数据中的已有知识提供最接近的答案；3) 明确标注该信息的时间戳或来源时间，并提醒用户可能存在时效性差异；4) 建议用户通过其他渠道（如直接搜索、官方网站）验证",
+              procedure: "1) 明确告知用户所有尝试过的工具都已失效及原因（如反爬、封禁或网络问题）；2) 回退到自身知识库，提供最接近的已知信息；3) 明确标注信息的时间戳和时效性限制；4) 提醒用户当前时间与信息时间的差距，建议后续通过其他渠道确认",
               verification: "",
               boundary: "",
               rationale: "工具全部失效时需要透明说明并降低时效性风险",
