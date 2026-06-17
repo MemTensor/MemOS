@@ -558,7 +558,12 @@ describe("HTTP server — REST routes", () => {
     expect(body.error.message).toMatch(/schema validation/);
   });
 
-  it("PATCH /api/v1/config maps writer failures to 400 (not 500)", async () => {
+  // `config_write_failed` is raised only when the atomic config rename
+  // fails (disk full / permission denied) — a server-side I/O fault, not
+  // bad client input. It must surface as 500 so operators get paged and
+  // clients are not misled into thinking their (valid) payload was the
+  // problem. Only `config_invalid` (schema validation) maps to 400.
+  it("PATCH /api/v1/config keeps writer failures as 500 (server fault)", async () => {
     const { MemosError } = await import("../../../agent-contract/errors.js");
     (core.patchConfig as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new MemosError("config_write_failed", "rename failed"),
@@ -568,9 +573,9 @@ describe("HTTP server — REST routes", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ viewer: { port: 19000 } }),
     });
-    expect(r.status).toBe(400);
+    expect(r.status).toBe(500);
     const body = (await r.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("invalid_argument");
+    expect(body.error.code).toBe("internal");
   });
 
   it("PATCH /api/v1/config still 500s on unexpected errors", async () => {
