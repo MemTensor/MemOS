@@ -171,6 +171,20 @@ export function makeTracesRepo(db: StorageDb) {
     },
 
     /**
+     * Full episode-scoped trace fetch with no pagination cap. Capture
+     * reconciliation must see every row; the normal `list()` path applies
+     * viewer pagination and can misclassify rows past the page as missing.
+     */
+    listAllForEpisode(episodeId: EpisodeId): TraceRow[] {
+      const sql =
+        `SELECT ${COLUMNS.join(", ")} FROM traces WHERE episode_id = @episode_id ORDER BY ts ASC`;
+      return db
+        .prepare<{ episode_id: string }, RawTraceRow>(sql)
+        .all({ episode_id: episodeId })
+        .map(mapRow);
+    },
+
+    /**
      * Total row count matching the same filter (no limit/offset).
      * Used by list endpoints so the viewer can show "Page N of M".
      */

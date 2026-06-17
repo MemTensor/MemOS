@@ -114,6 +114,10 @@ const AlgorithmSchema = Type.Object({
     synthReflections: Bool(false),
     /** Concurrency for α scoring + synth LLM calls (per_step mode only). */
     llmConcurrency: NumberInRange(4, 1, 32),
+    /** Hard cap for one topic-end reflect pass, including recovery replay. */
+    maxReflectLlmCalls: NumberInRange(128, 0, 10_000),
+    /** Max orphan trace inserts allowed during startup-recovered replay. */
+    maxRecoveryOrphanInserts: NumberInRange(0, 0, 10_000),
     /**
      * V7 §3.2 batched variant. When/how to fold per-step reflection synth +
      * α scoring into one episode-level LLM call:
