@@ -336,6 +336,103 @@ class TestGeneralTextMemory(unittest.TestCase):
         self.mock_vector_db.delete_collection.assert_called_once_with(collection_name)
         self.mock_vector_db.create_collection.assert_called_once()  # Assumes create_collection is called after delete
 
+    def test_embed_one_sentence_caches_repeated_queries(self):
+        """Repeated identical sentences should hit a per-instance cache and skip the embedder."""
+        sentence = "frequent query"
+        embedding = [0.7, 0.8, 0.9]
+        self.mock_embedder.embed.return_value = [embedding]
+
+        first = self.memory._embed_one_sentence(sentence)
+        second = self.memory._embed_one_sentence(sentence)
+        third = self.memory._embed_one_sentence(sentence)
+
+        self.assertEqual(first, embedding)
+        self.assertEqual(second, embedding)
+        self.assertEqual(third, embedding)
+        # Embedder must be invoked exactly once across the three identical lookups.
+        self.mock_embedder.embed.assert_called_once_with([sentence])
+
+    def test_embed_one_sentence_cache_evicts_when_full(self):
+        """Cache must bound memory growth — oldest entries are evicted, recent ones still hit."""
+        # The cache cap is an implementation detail; we use the public attribute to size the test.
+        cap = getattr(self.memory, "_QUERY_EMBED_CACHE_MAX", 256)
+        self.mock_embedder.embed.side_effect = lambda batch: [[float(len(batch[0]))]]
+
+        # Fill the cache to exactly cap entries (sentence-0 .. sentence-{cap-1}).
+        for i in range(cap):
+            self.memory._embed_one_sentence(f"sentence-{i}")
+        self.assertEqual(self.mock_embedder.embed.call_count, cap)
+
+        # One more distinct sentence pushes us over the limit — sentence-0 must be evicted.
+        self.memory._embed_one_sentence("sentence-overflow")
+        calls_after_fill = self.mock_embedder.embed.call_count
+        self.assertEqual(calls_after_fill, cap + 1)
+
+        # The most-recent sentence is still cached — no extra embedder call.
+        self.memory._embed_one_sentence("sentence-overflow")
+        self.assertEqual(self.mock_embedder.embed.call_count, calls_after_fill)
+
+        # The oldest sentence WAS evicted — re-querying it triggers a new embed call.
+        self.memory._embed_one_sentence("sentence-0")
+        self.assertEqual(self.mock_embedder.embed.call_count, calls_after_fill + 1)
+
+    def test_search_preserves_vector_db_order(self):
+        """Search must return items in the order the vector DB returned them (already sorted)."""
+        query = "ranked query"
+        top_k = 3
+        self.mock_embedder.embed.return_value = [[0.1, 0.2, 0.3]]
+
+        ordered_ids = [str(uuid.uuid4()) for _ in range(top_k)]
+        # Vector DB returns descending-by-score; search() must NOT shuffle it.
+        ordered_results = [
+            VecDBItem(
+                id=ordered_ids[0],
+                vector=[0.1],
+                payload={"id": ordered_ids[0], "memory": "top hit", "metadata": {}},
+                score=0.99,
+            ),
+            VecDBItem(
+                id=ordered_ids[1],
+                vector=[0.2],
+                payload={"id": ordered_ids[1], "memory": "middle hit", "metadata": {}},
+                score=0.55,
+            ),
+            VecDBItem(
+                id=ordered_ids[2],
+                vector=[0.3],
+                payload={"id": ordered_ids[2], "memory": "low hit", "metadata": {}},
+                score=0.10,
+            ),
+        ]
+        self.mock_vector_db.search.return_value = ordered_results
+
+        results = self.memory.search(query, top_k)
+
+        self.assertEqual([m.id for m in results], ordered_ids)
+
+    def test_update_uses_cached_embedding_when_query_matches(self):
+        """update() shares the same embedding cache as search() — repeated text shouldn't re-embed."""
+        text = "shared text body"
+        embedding = [0.42, 0.42, 0.42]
+        self.mock_embedder.embed.return_value = [embedding]
+
+        # Warm the cache via a search call.
+        self.mock_vector_db.search.return_value = []
+        self.memory.search(text, top_k=1)
+
+        # Now update with the same memory text — should reuse the cached embedding.
+        memory_id = str(uuid.uuid4())
+        item = TextualMemoryItem(memory=text, metadata={"source": "conversation"})
+        self.memory.update(memory_id, item)
+
+        # Embedder was invoked once (during search) and reused on update().
+        self.mock_embedder.embed.assert_called_once_with([text])
+        # And vector_db.update received an item carrying the cached vector.
+        self.mock_vector_db.update.assert_called_once()
+        called_args = self.mock_vector_db.update.call_args.args
+        self.assertEqual(called_args[0], memory_id)
+        self.assertEqual(called_args[1].vector, embedding)
+
 
 if __name__ == "__main__":
     unittest.main()

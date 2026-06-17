@@ -1,6 +1,7 @@
 import json
 import os
 
+from collections import OrderedDict
 from datetime import datetime
 from typing import Any
 
@@ -24,6 +25,11 @@ logger = get_logger(__name__)
 class GeneralTextMemory(BaseTextMemory):
     """General textual memory implementation for storing and retrieving memories."""
 
+    # Upper bound on the per-instance query-embedding cache. Caps memory growth
+    # for long-running processes that handle a large vocabulary of distinct
+    # queries; tuned against typical embedding dims (~1k floats per entry).
+    _QUERY_EMBED_CACHE_MAX = 256
+
     def __init__(self, config: GeneralTextMemoryConfig):
         """Initialize memory with the given configuration."""
         # Set mode from class default or override if needed
@@ -34,6 +40,9 @@ class GeneralTextMemory(BaseTextMemory):
         )
         self.vector_db: QdrantVecDB = VecDBFactory.from_config(config.vector_db)
         self.embedder: OllamaEmbedder | ArkEmbedder = EmbedderFactory.from_config(config.embedder)
+        # LRU cache of sentence -> embedding. Keyed on raw text; identical
+        # queries within a process share a single embedder round-trip.
+        self._query_embed_cache: OrderedDict[str, list[float]] = OrderedDict()
 
     @retry(
         stop=stop_after_attempt(3),
@@ -128,20 +137,18 @@ class GeneralTextMemory(BaseTextMemory):
         """
         query_vector = self._embed_one_sentence(query)
         search_results = self.vector_db.search(query_vector, top_k)
-        search_results = sorted(  # make higher score first
-            search_results, key=lambda x: x.score, reverse=True
-        )
-        result_memories = [
-            TextualMemoryItem(**search_item.payload) for search_item in search_results
+        # The vector DB (Qdrant `query_points`) returns results in descending
+        # score order already; a redundant in-process sort was removed here.
+        return [
+            TextualMemoryItem.model_validate(search_item.payload) for search_item in search_results
         ]
-        return result_memories
 
     def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
         """Get a memory by its ID."""
         result = self.vector_db.get_by_id(memory_id)
         if result is None:
             raise ValueError(f"Memory with ID {memory_id} not found")
-        return TextualMemoryItem(**result.payload)
+        return TextualMemoryItem.model_validate(result.payload)
 
     def get_by_ids(self, memory_ids: list[str]) -> list[TextualMemoryItem]:
         """Get memories by their IDs.
@@ -151,8 +158,7 @@ class GeneralTextMemory(BaseTextMemory):
             list[TextualMemoryItem]: List of memories with the specified IDs.
         """
         db_items = self.vector_db.get_by_ids(memory_ids)
-        memories = [TextualMemoryItem(**db_item.payload) for db_item in db_items]
-        return memories
+        return [TextualMemoryItem.model_validate(db_item.payload) for db_item in db_items]
 
     def get_all(self) -> list[TextualMemoryItem]:
         """Get all memories.
@@ -160,8 +166,7 @@ class GeneralTextMemory(BaseTextMemory):
             list[TextualMemoryItem]: List of all memories.
         """
         all_items = self.vector_db.get_all()
-        all_memories = [TextualMemoryItem(**memo.payload) for memo in all_items]
-        return all_memories
+        return [TextualMemoryItem.model_validate(memo.payload) for memo in all_items]
 
     def delete(self, memory_ids: list[str]) -> None:
         """Delete a memory."""
@@ -217,8 +222,26 @@ class GeneralTextMemory(BaseTextMemory):
         pass
 
     def _embed_one_sentence(self, sentence: str) -> list[float]:
-        """Embed a single sentence."""
-        return self.embedder.embed([sentence])[0]
+        """Embed a single sentence, reusing recent embeddings via a bounded LRU cache.
+
+        The cache is keyed on the raw sentence text and capped at
+        ``_QUERY_EMBED_CACHE_MAX`` entries. Identical queries within a process
+        (common during retry / rerank loops and chat sessions that revisit
+        the same topic) skip the embedder round-trip. Embeddings are deep-copied
+        on the way in and on the way out so callers cannot mutate cached state.
+        """
+        cached = self._query_embed_cache.get(sentence)
+        if cached is not None:
+            # Mark as most-recently used; return a defensive copy so downstream
+            # mutation (e.g. by a vec_db client) cannot poison the cache.
+            self._query_embed_cache.move_to_end(sentence)
+            return list(cached)
+
+        embedding = self.embedder.embed([sentence])[0]
+        self._query_embed_cache[sentence] = list(embedding)
+        if len(self._query_embed_cache) > self._QUERY_EMBED_CACHE_MAX:
+            self._query_embed_cache.popitem(last=False)
+        return embedding
 
     def parse_json_result(self, response_text):
         try:
