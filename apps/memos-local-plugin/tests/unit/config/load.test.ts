@@ -161,6 +161,8 @@ viewer:
       ["list_value", [1, 2, 3]],
       ["nan_string", "NaN"],
       ["inf_string", "Infinity"],
+      ["bool_true", true],
+      ["bool_false", false],
     ])("rejects invalid type (%s)", (_label, value) => {
       expect(() =>
         resolveConfig({

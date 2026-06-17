@@ -532,6 +532,61 @@ describe("HTTP server — REST routes", () => {
     });
   });
 
+  // Issue #1929 — when `core.patchConfig` rejects a body because of
+  // schema validation (Typebox `NumberInRange`, type mismatch, etc.)
+  // the route must surface that as 400 `invalid_argument`. The
+  // pre-fix behaviour was to let `MemosError("config_invalid", …)`
+  // bubble up to the global handler and return 500 `internal`, which
+  // tripped the rerun harness's
+  // `test_invalid_type_does_not_crash_or_corrupt` and
+  // `test_concurrent_patch_and_search_no_5xx` contracts.
+  it("PATCH /api/v1/config maps schema validation errors to 400", async () => {
+    const { MemosError } = await import("../../../agent-contract/errors.js");
+    (core.patchConfig as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new MemosError("config_invalid", "config failed schema validation: bad"),
+    );
+    const r = await fetch(`${handle.url}/api/v1/config`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        algorithm: { retrieval: { vectorScanMaxAgeMs: -1 } },
+      }),
+    });
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("invalid_argument");
+    expect(body.error.message).toMatch(/schema validation/);
+  });
+
+  it("PATCH /api/v1/config maps writer failures to 400 (not 500)", async () => {
+    const { MemosError } = await import("../../../agent-contract/errors.js");
+    (core.patchConfig as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new MemosError("config_write_failed", "rename failed"),
+    );
+    const r = await fetch(`${handle.url}/api/v1/config`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ viewer: { port: 19000 } }),
+    });
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("invalid_argument");
+  });
+
+  it("PATCH /api/v1/config still 500s on unexpected errors", async () => {
+    (core.patchConfig as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("boom"),
+    );
+    const r = await fetch(`${handle.url}/api/v1/config`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ viewer: { port: 19000 } }),
+    });
+    expect(r.status).toBe(500);
+    const body = (await r.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("internal");
+  });
+
   it("GET /api/v1/export returns a JSON bundle", async () => {
     const r = await fetch(`${handle.url}/api/v1/export`);
     expect(r.status).toBe(200);
