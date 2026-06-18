@@ -1390,7 +1390,7 @@ describe("bootstrapMemoryCore", () => {
     expect(h2.paths.db).toBe(home!.home.dbFile);
   });
 
-  it("persists lightweight summarizer model status for Hermes overview", async () => {
+  it("does not persist lightweight capture.summarize status for Hermes overview", async () => {
     home = await makeTmpHome({
       agent: "hermes",
       configYaml: `
@@ -1425,7 +1425,7 @@ algorithm:
     const start = await core.onTurnStart({
       agent: "hermes",
       sessionId: "hermes-lightweight-status",
-      userText: "请记住 Hermes 摘要模型状态应该显示已调用",
+      userText: "请记住 Hermes lite 阶段不应该调用摘要模型",
       ts: 1_700_000_000_000,
     });
     await core.onTurnEnd({
@@ -1441,12 +1441,9 @@ algorithm:
     const llmRows = logs.logs
       .map((row) => JSON.parse(row.outputJson) as { role?: string; status?: string; op?: string })
       .filter((row) => row.role === "llm");
-    expect(llmRows).toEqual(
+    expect(llmRows).not.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          status: "ok",
-          op: "capture.summarize",
-        }),
+        expect.objectContaining({ op: "capture.summarize" }),
       ]),
     );
   });

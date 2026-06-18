@@ -27,6 +27,7 @@ import type { RetrievalConfig } from "./types.js";
 const DEFAULT_CANDIDATE_BODY_CHARS = 500;
 const MIN_FILTER_OUTPUT_TOKENS = 160;
 const MAX_FILTER_OUTPUT_TOKENS = 2048;
+const LLM_ERROR_FALLBACK_TOP_K = 6;
 
 export interface FilterInput {
   query: string;
@@ -165,7 +166,13 @@ ${list}`,
       err: err instanceof Error ? err.message : String(err),
       candidateCount: ranked.length,
     });
-    return rejectAll(ranked, "llm_filter_error", null);
+    const keepCap = Math.max(0, Math.min(LLM_ERROR_FALLBACK_TOP_K, ranked.length));
+    return {
+      kept: ranked.slice(0, keepCap),
+      dropped: ranked.slice(keepCap),
+      outcome: "llm_filter_error",
+      sufficient: null,
+    };
   }
 }
 

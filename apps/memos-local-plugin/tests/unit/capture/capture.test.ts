@@ -15,6 +15,7 @@ import {
 import { createCaptureEventBus } from "../../../core/capture/events.js";
 import { createCaptureRunner, type CaptureRunner } from "../../../core/capture/capture.js";
 import type { Embedder } from "../../../core/embedding/types.js";
+import type { EmbedInput, EmbedStats } from "../../../core/embedding/types.js";
 import { BATCH_REFLECTION_PROMPT } from "../../../core/llm/prompts/reflection.js";
 import type {
   CaptureConfig,
@@ -32,6 +33,7 @@ import type {
 } from "../../../core/session/types.js";
 import { retrievalFor } from "../../../core/session/heuristics.js";
 import type { EpochMs, EpisodeId, SessionId, TraceId, TraceRow } from "../../../core/types.js";
+import type { EmbeddingVector } from "../../../core/types.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 import { fakeLlm } from "../../helpers/fake-llm.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
@@ -163,6 +165,41 @@ function traceRow(opts: {
   };
 }
 
+function recordingEmbedder(texts: string[], dimensions = 8): Embedder {
+  const stats: EmbedStats = {
+    hits: 0,
+    misses: 0,
+    requests: 0,
+    roundTrips: 0,
+    failures: 0,
+    lastOkAt: null,
+    lastError: null,
+  };
+  const vector = new Float32Array(dimensions) as EmbeddingVector;
+  return {
+    dimensions,
+    provider: "local",
+    model: "recording",
+    async embedOne(input: string | EmbedInput): Promise<EmbeddingVector> {
+      stats.requests++;
+      stats.misses++;
+      stats.roundTrips++;
+      texts.push(typeof input === "string" ? input : input.text);
+      return vector;
+    },
+    async embedMany(inputs: Array<string | EmbedInput>): Promise<EmbeddingVector[]> {
+      stats.requests += inputs.length;
+      stats.misses += inputs.length;
+      stats.roundTrips++;
+      for (const input of inputs) texts.push(typeof input === "string" ? input : input.text);
+      return inputs.map(() => vector);
+    },
+    stats: () => ({ ...stats }),
+    resetCache: () => undefined,
+    close: async () => undefined,
+  };
+}
+
 describe("capture/pipeline (end-to-end)", () => {
   beforeAll(() => initTestLogger());
 
@@ -218,13 +255,10 @@ describe("capture/pipeline (end-to-end)", () => {
     });
   }
 
-  it("lightweight capture merges one turn into one memory with summary-only embedding", async () => {
-    const llm = fakeLlm({
-      completeJson: {
-        "capture.summarize": { summary: "looked up sales and reported final answer" },
-      },
-    });
-    const embedder = fakeEmbedder({ dimensions: 8 });
+  it("lightweight capture merges one turn into one memory with local summary-only embedding", async () => {
+    const llm = fakeLlm();
+    const embeddedTexts: string[] = [];
+    const embedder = recordingEmbedder(embeddedTexts);
     const runner = buildRunner({ alphaScoring: true, synthReflections: true }, llm, embedder);
     const ep = episodeSnapshot({
       id: "ep_1",
@@ -246,15 +280,21 @@ describe("capture/pipeline (end-to-end)", () => {
     const rows = tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId });
 
     expect(result.traceIds).toHaveLength(1);
-    expect(result.llmCalls.summarize).toBe(1);
+    expect(result.llmCalls.summarize).toBe(0);
     expect(result.llmCalls.reflectionSynth).toBe(0);
     expect(result.llmCalls.alphaScoring).toBe(0);
+    expect(llm.stats().requests).toBe(0);
     expect(embedder.stats().requests).toBe(1);
+    expect(embeddedTexts).toHaveLength(1);
+    expect(embeddedTexts[0]).toContain("[user]");
+    expect(embeddedTexts[0]).toContain("look up current sales");
+    expect(embeddedTexts[0]).toContain("[observed]");
+    expect(embeddedTexts[0]).toContain("db_query");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.userText).toBe("look up current sales");
     expect(rows[0]!.agentText).toBe("current sales are 42");
     expect(rows[0]!.toolCalls).toHaveLength(1);
-    expect(rows[0]!.summary).toBe("looked up sales and reported final answer");
+    expect(rows[0]!.summary).toBe("look up current sales");
     expect(rows[0]!.tags).toContain("lightweight_memory");
     expect(rows[0]!.vecSummary).toBeInstanceOf(Float32Array);
     expect(rows[0]!.vecAction).toBeNull();
@@ -374,12 +414,51 @@ describe("capture/pipeline (end-to-end)", () => {
     ]);
   });
 
-  it("multi-turn lite capture keeps one task prompt and stable turnId", async () => {
+  it("reflect orphan fallback inserts traces without LLM summary", async () => {
     const llm = fakeLlm({
       completeJson: {
-        "capture.summarize": { summary: "tool step" },
+        [batchOp]: {
+          scores: [
+            { idx: 0, relevance: "RELATED", reason: "TASK_STEP" },
+            { idx: 1, relevance: "RELATED", reason: "TASK_STEP" },
+          ],
+        },
       },
     });
+    const embeddedTexts: string[] = [];
+    const runner = buildRunner({ alphaScoring: true }, llm, recordingEmbedder(embeddedTexts));
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "fix the failing unit test", 1_000),
+        turn("tool", "Error: Cannot find module /repo/src/app.ts", 1_100, {
+          tool: "shell",
+          input: { cmd: "npm test" },
+          output: "Error: Cannot find module /repo/src/app.ts",
+          startedAt: 1_050,
+          endedAt: 1_100,
+        }),
+        turn("assistant", "found the missing module", 1_200),
+      ],
+    });
+
+    const reflect = await runner.runReflect({ episode: ep, closedBy: "finalized" });
+    const rows = tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId });
+
+    expect(reflect.traceIds.length).toBeGreaterThan(0);
+    expect(reflect.llmCalls.summarize).toBe(0);
+    expect(reflect.llmCalls.batchedReflection).toBe(1);
+    expect(llm.stats().requests).toBe(1);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.some((row) => row.summary === "fix the failing unit test")).toBe(true);
+    expect(embeddedTexts[0]).toContain("[user]");
+    expect(embeddedTexts[0]).toContain("[observed]");
+    expect(embeddedTexts[0]).toContain("shell");
+  });
+
+  it("multi-turn lite capture keeps one task prompt and stable turnId", async () => {
+    const llm = fakeLlm();
     const runner = buildRunner({}, llm);
     const taskPrompt = "new task: fix the failing unit test in repo X";
     const ep = episodeSnapshot({
@@ -403,11 +482,14 @@ describe("capture/pipeline (end-to-end)", () => {
     };
 
     const first = await runner.runLite({ episode: ep });
+    expect(first.llmCalls.summarize).toBe(0);
+    expect(llm.stats().requests).toBe(0);
     expect(first.traceIds.length).toBeGreaterThan(0);
     const afterFirst = tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId });
     const withUserText = afterFirst.filter((r) => r.userText.trim() === taskPrompt);
     expect(withUserText).toHaveLength(1);
     expect(afterFirst.every((r) => r.turnId === (1_000 as EpochMs))).toBe(true);
+    expect(withUserText[0]!.summary).toBe(taskPrompt);
 
     ep.turns.push(
       turn("tool", "patched", 1_300, {
@@ -421,6 +503,8 @@ describe("capture/pipeline (end-to-end)", () => {
     ep.turnCount = ep.turns.length;
 
     const second = await runner.runLite({ episode: ep });
+    expect(second.llmCalls.summarize).toBe(0);
+    expect(llm.stats().requests).toBe(0);
     expect(second.traceIds.length).toBeGreaterThan(0);
     const afterSecond = tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId });
     expect(afterSecond.filter((r) => r.userText.trim() === taskPrompt)).toHaveLength(1);

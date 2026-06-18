@@ -17,6 +17,14 @@ import type {
 } from "../types.js";
 import type { Repos } from "../storage/repos/index.js";
 import { buildCorrectiveSignalsForSink } from "./corrective-signals.js";
+import { buildPolicyVectorText } from "./policy-vector-text.js";
+import { findExistingPolicyContentDuplicate } from "./policy-dedupe.js";
+import {
+  dedupeLines,
+  mergeEvidencePolarity,
+  mergeIds,
+  mergeSkillEligible,
+} from "./policy-merge.js";
 
 export interface RunL2FailureInput {
   episodeId: EpisodeId;
@@ -27,7 +35,7 @@ export interface RunL2FailureInput {
 }
 
 export interface RunL2FailureDeps {
-  repos: Pick<Repos, "policies" | "feedback">;
+  repos: Pick<Repos, "policies" | "feedback" | "embeddingRetryQueue">;
   llm: LlmClient | null;
   log: Logger;
   now?: () => number;
@@ -35,7 +43,9 @@ export interface RunL2FailureDeps {
 
 export interface RunL2FailureResult {
   created: boolean;
+  merged?: boolean;
   policyId?: PolicyId;
+  duplicateOfPolicyId?: PolicyId;
   skippedReason?: string;
 }
 
@@ -116,7 +126,33 @@ export async function runL2Failure(
       updatedAt: now,
       vec: null,
     };
+    // IMPORTANT: no await between duplicate lookup and insert/upsert. Different
+    // failure episodes may process concurrently; keeping this segment synchronous
+    // prevents an avoidable read-then-double-insert interleave in this process.
+    const existing = findExistingPolicyContentDuplicate(row, deps.repos, {
+      statusIn: ["active", "candidate"],
+      profile: "failure-sink",
+    });
+    if (existing) {
+      const merged = mergeFailureSinkPolicy(existing, row, now);
+      deps.repos.policies.upsert(merged);
+      return {
+        created: false,
+        merged: true,
+        policyId: existing.id,
+        duplicateOfPolicyId: existing.id,
+      };
+    }
+
     deps.repos.policies.insert(row);
+    deps.repos.embeddingRetryQueue.enqueue({
+      id: `er_${ids.span()}`,
+      targetKind: "policy",
+      targetId: policyId,
+      vectorField: "vec",
+      sourceText: buildPolicyVectorText(row),
+      now,
+    });
     return { created: true, policyId };
   } catch (err) {
     deps.log.warn("l2.failure_sink.failed", {
@@ -125,6 +161,51 @@ export async function runL2Failure(
     });
     return { created: false, skippedReason: "llm_failed" };
   }
+}
+
+function mergeFailureSinkPolicy(
+  existing: PolicyRow,
+  incoming: PolicyRow,
+  now: number,
+): PolicyRow {
+  const sourceEpisodeIds = mergeIds(existing.sourceEpisodeIds, incoming.sourceEpisodeIds);
+  const sourceTraceIds = mergeIds(existing.sourceTraceIds, incoming.sourceTraceIds);
+  const sourceFeedbackIds = mergeIds(existing.sourceFeedbackIds, incoming.sourceFeedbackIds);
+  if (existing.status === "active") {
+    return {
+      ...existing,
+      sourceEpisodeIds,
+      sourceTraceIds,
+      sourceFeedbackIds,
+      updatedAt: now,
+    };
+  }
+
+  const existingEpisodeCount = new Set(existing.sourceEpisodeIds).size;
+  const mergedEpisodeCount = new Set(sourceEpisodeIds).size;
+  const addedEpisode = mergedEpisodeCount > existingEpisodeCount;
+  return {
+    ...existing,
+    support: addedEpisode ? Math.max(1, existing.support) + 1 : Math.max(1, existing.support),
+    gain: Math.max(existing.gain, incoming.gain, 0.02),
+    sourceEpisodeIds,
+    sourceTraceIds,
+    sourceFeedbackIds,
+    evidencePolarity: mergeEvidencePolarity(existing.evidencePolarity, incoming.evidencePolarity),
+    decisionGuidance: {
+      preference: dedupeLines([
+        ...existing.decisionGuidance.preference,
+        ...incoming.decisionGuidance.preference,
+      ]),
+      antiPattern: dedupeLines([
+        ...existing.decisionGuidance.antiPattern,
+        ...incoming.decisionGuidance.antiPattern,
+      ]),
+    },
+    skillEligible: mergeSkillEligible(existing.skillEligible, incoming.skillEligible),
+    vec: existing.vec ?? incoming.vec ?? null,
+    updatedAt: now,
+  };
 }
 
 function buildSinkInput(

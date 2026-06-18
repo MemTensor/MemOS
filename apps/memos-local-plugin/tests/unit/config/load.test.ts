@@ -140,6 +140,18 @@ viewer:
       expect((err as MemosError).code).toBe("config_invalid");
     }
   });
+
+  it("accepts outcome verifier mode config", () => {
+    expect(DEFAULT_CONFIG.algorithm.skill.outcomeVerifierMode).toBe("silent");
+    const cfg = resolveConfig({
+      algorithm: {
+        skill: {
+          outcomeVerifierMode: "veto",
+        },
+      },
+    });
+    expect(cfg.algorithm.skill.outcomeVerifierMode).toBe("veto");
+  });
 });
 
 describe("config/loadConfig MEMOS_HOME override", () => {

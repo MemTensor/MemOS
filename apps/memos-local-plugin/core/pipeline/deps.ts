@@ -242,6 +242,7 @@ export function buildPipelineSubscribers(
     outcomeThresholds: {
       successThreshold: algorithm.skill.outcomeRTaskSuccessThreshold,
       failureThreshold: algorithm.skill.outcomeRTaskFailureThreshold,
+      verifierMode: algorithm.skill.outcomeVerifierMode,
     },
     evaluator: {
       reflectionProvider: deps.reflectLlm?.provider,

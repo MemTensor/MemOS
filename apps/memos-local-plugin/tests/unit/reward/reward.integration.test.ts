@@ -202,7 +202,7 @@ describe("reward/integration", () => {
 
     const llm = fakeLlm({
       completeJson: {
-        "reward.reward.r_human.v7": {
+        "reward.reward.r_human.v6": {
           goal_achievement: 0.9,
           process_quality: 0.7,
           user_satisfaction: 0.8,

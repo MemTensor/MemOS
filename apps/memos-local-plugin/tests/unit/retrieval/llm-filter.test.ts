@@ -226,26 +226,30 @@ describe("retrieval/llm-filter", () => {
     expect(result.sufficient).toBe(true);
   });
 
-  it("LLM throws → inject nothing (no soft fallback)", async () => {
+  it("LLM throws → fallback capped to top 6", async () => {
     const llm: any = {
       completeJson: vi.fn().mockRejectedValue(new Error("network kaboom")),
     };
-    const ranked = [
-      trace("strong", 0.9),
-      trace("middle", 0.6),
-      trace("weak", 0.05),
-    ];
+    const ranked = Array.from({ length: 8 }, (_, i) =>
+      trace(`candidate-${i + 1}`, 1 - i / 100),
+    );
     const result = await llmFilterCandidates(
       { query: "q", ranked },
       { llm, log, config: cfg },
     );
     expect(result.outcome).toBe("llm_filter_error");
     expect(result.sufficient).toBeNull();
-    expect(result.kept).toEqual([]);
+    expect(result.kept.map((r) => String(r.candidate.refId))).toEqual([
+      "candidate-1",
+      "candidate-2",
+      "candidate-3",
+      "candidate-4",
+      "candidate-5",
+      "candidate-6",
+    ]);
     expect(result.dropped.map((r) => String(r.candidate.refId))).toEqual([
-      "strong",
-      "middle",
-      "weak",
+      "candidate-7",
+      "candidate-8",
     ]);
   });
 

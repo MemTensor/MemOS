@@ -30,6 +30,8 @@ import type {
 } from "../../types.js";
 import type { Repos } from "../../storage/repos/index.js";
 import { ids } from "../../id.js";
+import { buildPolicyVectorText } from "../../experience/policy-vector-text.js";
+import { findExistingPolicyContentDuplicate } from "../../experience/policy-dedupe.js";
 import { L2_INDUCTION_PROMPT } from "../../llm/prompts/l2-induction.js";
 import { associateTraces } from "./associate.js";
 import { makeCandidatePool } from "./candidate-pool.js";
@@ -186,32 +188,39 @@ export async function runL2(
       // an existing policy, skip induction and let association handle it.
       const dup = findExistingMatch(traces, repos, config.minSimilarity);
       if (dup) {
+        const merged = mergePolicyEpisodeEvidence(
+          dup,
+          epIds,
+          input.now ?? Date.now(),
+          input.outcome,
+        );
+        repos.policies.upsert(merged);
         inductions.push({
           signature: bucket.signature,
-          policyId: dup.id,
+          policyId: merged.id,
           poolSize: bucket.candidateIds.length,
           episodeIds: epIds,
           traceIds: bucket.evidenceTraceIds,
           skippedReason: "duplicate_of",
-          duplicateOfPolicyId: dup.id,
+          duplicateOfPolicyId: merged.id,
         });
-        pool.promote(bucket.candidateIds, dup.id);
-        touched.set(dup.id, dup);
-        const evidence = inductionEvidenceByPolicy.get(dup.id) ?? new Set<string>();
+        pool.promote(bucket.candidateIds, merged.id);
+        touched.set(merged.id, merged);
+        const evidence = inductionEvidenceByPolicy.get(merged.id) ?? new Set<string>();
         for (const id of bucket.evidenceTraceIds) evidence.add(id);
-        inductionEvidenceByPolicy.set(dup.id, evidence);
+        inductionEvidenceByPolicy.set(merged.id, evidence);
         for (const traceId of bucket.evidenceTraceIds) {
           const trace = traces.find((t) => t.id === traceId);
           if (!trace) continue;
           try {
             repos.tracePolicyLinks.link({
               traceId,
-              policyId: dup.id,
+              policyId: merged.id,
               episodeId: trace.episodeId,
               now: input.now ?? Date.now(),
             });
           } catch (err) {
-            warnings.push(stageWarn("trace-policy-link", err, { traceId, policyId: dup.id }));
+            warnings.push(stageWarn("trace-policy-link", err, { traceId, policyId: merged.id }));
           }
         }
         continue;
@@ -253,6 +262,7 @@ export async function runL2(
         evidenceTraces: traces,
         inducedBy: `${L2_INDUCTION_PROMPT.id}.v${L2_INDUCTION_PROMPT.version}`,
         now: input.now ?? Date.now(),
+        outcome: input.outcome,
       });
       const owner = ownerFromTraces(traces);
       policy.ownerAgentKind = owner.ownerAgentKind;
@@ -280,7 +290,12 @@ export async function runL2(
           });
           continue;
         }
-        const merged = mergePolicyEvidence(duplicate, policy, input.now ?? Date.now());
+        const merged = mergePolicyEvidence(
+          duplicate,
+          policy,
+          input.now ?? Date.now(),
+          input.outcome,
+        );
         repos.policies.upsert(merged);
         pool.promote(bucket.candidateIds, duplicate.id);
         touched.set(duplicate.id, merged);
@@ -324,7 +339,7 @@ export async function runL2(
             targetKind: "policy",
             targetId: policy.id,
             vectorField: "vec",
-            sourceText: policyVectorText(policy),
+            sourceText: buildPolicyVectorText(policy),
             now: input.now ?? Date.now(),
           });
           warnings.push({
@@ -531,16 +546,6 @@ function stageWarn(
   return { stage, message, detail };
 }
 
-function policyVectorText(policy: PolicyRow): string {
-  return [
-    policy.title,
-    policy.trigger,
-    policy.procedure,
-    policy.verification,
-    policy.boundary,
-  ].filter(Boolean).join("\n");
-}
-
 function pickOnePerEpisode(traces: readonly TraceRow[]): TraceRow[] {
   const byEp = new Map<string, TraceRow>();
   for (const t of traces) {
@@ -575,179 +580,94 @@ function findExistingContentDuplicate(
   policy: PolicyRow,
   repos: Pick<Repos, "policies">,
 ): PolicyRow | null {
-  const target = policyContentKey(policy);
-  let best: { row: PolicyRow; score: PolicyNearDuplicateScore } | null = null;
-  for (const existing of repos.policies.list({ limit: 5_000 })) {
-    if (!sameOwnerScope(existing, policy)) continue;
-    if (
-      existing.mergeFamily
-      && policy.mergeFamily
-      && existing.mergeFamily !== policy.mergeFamily
-    ) continue;
-    if (policyContentKey(existing) === target && policyOptionalFieldsCompatible(existing, policy)) {
-      return existing;
-    }
-    const score = policyNearDuplicateScore(existing, policy);
-    if (score.match && (!best || score.weighted > best.score.weighted)) {
-      best = { row: existing, score };
-    }
-  }
-  return best?.row ?? null;
+  return findExistingPolicyContentDuplicate(policy, repos, {
+    statusIn: ["active", "candidate"],
+    profile: "l2-induction",
+  });
 }
 
-function policyOptionalFieldsCompatible(
-  a: Pick<PolicyRow, "boundary" | "verification">,
-  b: Pick<PolicyRow, "boundary" | "verification">,
-): boolean {
-  const boundary = optionalFieldSimilarity(a.boundary, b.boundary);
-  const verification = optionalFieldSimilarity(a.verification, b.verification);
-  return (
-    !boundaryPolarityConflicts(a.boundary, b.boundary) &&
-    (boundary == null || boundary >= POLICY_NEAR_DUP_BOUNDARY_MIN) &&
-    (verification == null || verification >= POLICY_NEAR_DUP_BOUNDARY_MIN)
-  );
+function mergePolicyEvidence(
+  existing: PolicyRow,
+  incoming: PolicyRow,
+  now: number,
+  outcome: NonNullable<L2ProcessInput["outcome"]> | null | undefined,
+): PolicyRow {
+  return mergePolicyEpisodeEvidence(existing, incoming.sourceEpisodeIds, now, outcome, incoming.vec);
 }
 
-function mergePolicyEvidence(existing: PolicyRow, incoming: PolicyRow, now: number): PolicyRow {
+function mergePolicyEpisodeEvidence(
+  existing: PolicyRow,
+  episodeIds: readonly EpisodeId[],
+  now: number,
+  outcome: NonNullable<L2ProcessInput["outcome"]> | null | undefined,
+  incomingVec?: PolicyRow["vec"],
+): PolicyRow {
   return {
     ...existing,
     sourceEpisodeIds: uniqueEpisodes([
       ...existing.sourceEpisodeIds,
-      ...incoming.sourceEpisodeIds,
+      ...episodeIds,
     ]),
-    vec: existing.vec ?? incoming.vec,
+    verifierMeta: mergeVerifierMeta(existing.verifierMeta, outcome),
+    vec: existing.vec ?? incomingVec ?? null,
     updatedAt: now as PolicyRow["updatedAt"],
   };
 }
 
-function policyContentKey(policy: Pick<PolicyRow, "title" | "trigger" | "procedure">): string {
-  return [
-    normalizePolicyText(policy.title),
-    normalizePolicyText(policy.trigger),
-    normalizePolicyText(policy.procedure),
-  ].join("\n");
+function mergeVerifierMeta(
+  existing: PolicyRow["verifierMeta"],
+  outcome: NonNullable<L2ProcessInput["outcome"]> | null | undefined,
+): PolicyRow["verifierMeta"] {
+  const base = { ...(existing ?? {}) };
+  base["sourceOutcomeCounts"] = addOutcomeCounts(
+    readOutcomeCounts(existing),
+    outcomeCount(outcome),
+  );
+  return base;
 }
 
-const POLICY_NEAR_DUP_TITLE_MIN = 0.9;
-const POLICY_NEAR_DUP_TRIGGER_MIN = 0.8;
-const POLICY_NEAR_DUP_PROCEDURE_MIN = 0.7;
-const POLICY_NEAR_DUP_BOUNDARY_MIN = 0.45;
-
-interface PolicyNearDuplicateScore {
-  match: boolean;
-  title: number;
-  trigger: number;
-  procedure: number;
-  weighted: number;
-  boundary: number | null;
-  verification: number | null;
-}
-
-function policyNearDuplicateScore(
-  a: Pick<PolicyRow, "title" | "trigger" | "procedure" | "boundary" | "verification">,
-  b: Pick<PolicyRow, "title" | "trigger" | "procedure" | "boundary" | "verification">,
-): PolicyNearDuplicateScore {
-  const title = textSimilarity(a.title, b.title);
-  const trigger = textSimilarity(a.trigger, b.trigger);
-  const procedure = textSimilarity(a.procedure, b.procedure);
-  const weighted = title * 0.45 + trigger * 0.25 + procedure * 0.3;
-  const boundary = optionalFieldSimilarity(a.boundary, b.boundary);
-  const verification = optionalFieldSimilarity(a.verification, b.verification);
-  const optionalFieldsCompatible =
-    !boundaryPolarityConflicts(a.boundary, b.boundary) &&
-    (boundary == null || boundary >= POLICY_NEAR_DUP_BOUNDARY_MIN) &&
-    (verification == null || verification >= POLICY_NEAR_DUP_BOUNDARY_MIN);
-  const contentFieldMatches =
-    title >= POLICY_NEAR_DUP_TITLE_MIN ||
-    trigger >= POLICY_NEAR_DUP_TRIGGER_MIN ||
-    procedure >= POLICY_NEAR_DUP_PROCEDURE_MIN;
+function outcomeCount(outcome: NonNullable<L2ProcessInput["outcome"]> | null | undefined): {
+  success: number;
+  unknown: number;
+  failure: number;
+} {
   return {
-    match: contentFieldMatches && optionalFieldsCompatible,
-    title,
-    trigger,
-    procedure,
-    weighted,
-    boundary,
-    verification,
+    success: outcome === "success" ? 1 : 0,
+    unknown: outcome === "unknown" || outcome == null ? 1 : 0,
+    failure: outcome === "failure" ? 1 : 0,
   };
 }
 
-function normalizePolicyText(value: string): string {
-  return value
-    .normalize("NFKC")
-    .replace(/[，,、;；:：。.!！?？"'“”‘’`()[\]{}（）【】]/g, "")
-    .replace(/(?:^|\s)\d+[.)、]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLocaleLowerCase();
-}
-
-function optionalFieldSimilarity(a: string, b: string): number | null {
-  const aa = normalizePolicyText(a);
-  const bb = normalizePolicyText(b);
-  if (!aa || !bb) return null;
-  return textSimilarity(aa, bb);
-}
-
-function boundaryPolarityConflicts(a: string, b: string): boolean {
-  const aa = splitBoundaryPolarity(a);
-  const bb = splitBoundaryPolarity(b);
-  if (!aa || !bb) return false;
-  return (
-    (Boolean(aa.positive) && Boolean(bb.negative) && textSimilarity(aa.positive, bb.negative) >= 0.45) ||
-    (Boolean(bb.positive) && Boolean(aa.negative) && textSimilarity(bb.positive, aa.negative) >= 0.45)
-  );
-}
-
-function splitBoundaryPolarity(value: string): { positive: string; negative: string } | null {
-  const text = value.trim();
-  if (!text || !text.includes("不适用")) return null;
-  const [positiveRaw, ...negativeParts] = text.split(/不适用于|不适用/);
-  const negative = negativeParts.join(" ");
+function readOutcomeCounts(meta: PolicyRow["verifierMeta"]): {
+  success: number;
+  unknown: number;
+  failure: number;
+} {
+  const raw = meta?.["sourceOutcomeCounts"];
+  if (!raw || typeof raw !== "object") {
+    return { success: 0, unknown: 0, failure: 0 };
+  }
+  const obj = raw as Record<string, unknown>;
   return {
-    positive: positiveRaw.replace(/仅适用于|只适用于|适用于/g, "").trim(),
-    negative: negative.replace(/仅适用于|只适用于|适用于/g, "").trim(),
+    success: numberOrZero(obj["success"]),
+    unknown: numberOrZero(obj["unknown"]),
+    failure: numberOrZero(obj["failure"]),
   };
 }
 
-function textSimilarity(a: string, b: string): number {
-  const aa = normalizePolicyText(a);
-  const bb = normalizePolicyText(b);
-  if (!aa || !bb) return aa === bb ? 1 : 0;
-  if (aa === bb) return 1;
-  const gramsA = charGrams(aa);
-  const gramsB = charGrams(bb);
-  let overlap = 0;
-  for (const [gram, countA] of gramsA) {
-    const countB = gramsB.get(gram);
-    if (countB) overlap += Math.min(countA, countB);
-  }
-  const totalA = Array.from(gramsA.values()).reduce((sum, n) => sum + n, 0);
-  const totalB = Array.from(gramsB.values()).reduce((sum, n) => sum + n, 0);
-  return totalA + totalB === 0 ? 0 : (2 * overlap) / (totalA + totalB);
+function addOutcomeCounts(
+  a: { success: number; unknown: number; failure: number },
+  b: { success: number; unknown: number; failure: number },
+): { success: number; unknown: number; failure: number } {
+  return {
+    success: a.success + b.success,
+    unknown: a.unknown + b.unknown,
+    failure: a.failure + b.failure,
+  };
 }
 
-function charGrams(value: string): Map<string, number> {
-  const chars = Array.from(value.replace(/\s+/g, ""));
-  const grams = new Map<string, number>();
-  if (chars.length <= 2) {
-    const key = chars.join("");
-    grams.set(key, 1);
-    return grams;
-  }
-  for (let i = 0; i < chars.length - 1; i++) {
-    const gram = `${chars[i]}${chars[i + 1]}`;
-    grams.set(gram, (grams.get(gram) ?? 0) + 1);
-  }
-  return grams;
-}
-
-function sameOwnerScope(a: PolicyRow, b: PolicyRow): boolean {
-  return (
-    (a.ownerAgentKind ?? "unknown") === (b.ownerAgentKind ?? "unknown") &&
-    (a.ownerProfileId ?? "default") === (b.ownerProfileId ?? "default") &&
-    (a.ownerWorkspaceId ?? null) === (b.ownerWorkspaceId ?? null)
-  );
+function numberOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function uniqueEpisodes(ids: readonly EpisodeId[]): EpisodeId[] {

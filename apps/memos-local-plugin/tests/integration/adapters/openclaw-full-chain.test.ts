@@ -22,11 +22,11 @@
  * What we script:
  *   - `session.intent.classify`          — task | chitchat
  *   - `session.relation.classify`        — revision / follow_up / new_task
+ *   - `capture.reflection.batch.v12`     — topic-end batch reflection
  *   - `capture.reflection.synth`         — synthetic reflections
- *   - `capture.alpha.reflection.score.v1`— α scoring
- *   - `capture.summarize`                — trace-level summaries
- *   - `reward.reward.r_human.v3`         — R_human axis scoring
- *   - `l2.l2.induction.v2`               — L2 policy induction
+ *   - `capture.alpha.reflection.score.v1`— legacy α scoring
+ *   - `reward.reward.r_human.v6`         — R_human axis scoring
+ *   - `l2.l2.induction.v3`               — L2 policy induction
  *   - `l3.abstraction.v2`                — L3 world-model abstraction
  *   - `skill.crystallize`                — skill draft
  *
@@ -195,7 +195,7 @@ function buildLlm(): LlmClient {
         return { relation: "follow_up", confidence: 0.5, reason: "default" };
       },
 
-      "reward.reward.r_human.v3": (input: unknown) => {
+      "reward.reward.r_human.v6": (input: unknown) => {
         const text = lastUserContent(input);
         // We pre-fill the scorer with positive user feedback baked
         // into the "FEEDBACK:" block, so it should return a healthy
@@ -218,15 +218,13 @@ function buildLlm(): LlmClient {
         };
       },
 
-      "capture.summarize": (input: unknown) => {
-        const text = lastUserContent(input);
-        if (/fib/i.test(text)) return { summary: "Python fibonacci 函数实现" };
-        if (/quicksort/i.test(text)) return { summary: "Python 快速排序实现" };
-        if (/bsearch|binary/i.test(text)) return { summary: "Python 二分查找" };
-        if (/lru|cache/i.test(text)) return { summary: "Python LRU 缓存装饰器" };
-        if (/test/i.test(text)) return { summary: "为 Python 函数补充测试" };
-        return { summary: "Python 编程辅助" };
-      },
+      "capture.reflection.batch.v12": () => ({
+        scores: Array.from({ length: 20 }, (_, idx) => ({
+          idx,
+          relevance: "RELATED",
+          reason: "TASK_STEP",
+        })),
+      }),
 
       "capture.alpha.reflection.score.v1": () => ({
         alpha: 0.7,
@@ -234,7 +232,7 @@ function buildLlm(): LlmClient {
         reason: "concrete root-cause reflection",
       }),
 
-      "l2.l2.induction.v2": (input: unknown) => {
+      "l2.l2.induction.v3": (input: unknown) => {
         const evidence = (input as { evidenceTraces?: Array<{ id: string }> })
           ?.evidenceTraces ?? [];
         return {

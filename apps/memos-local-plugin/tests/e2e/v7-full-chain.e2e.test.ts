@@ -7,7 +7,7 @@
  *
  *   user query → onTurnStart (episode open + retrieval)
  *              → agent response → onTurnEnd (addTurn + finalize)
- *              → capture (L1 trace + α score + summary)
+ *              → capture (L1 trace + batch reflection + local summary)
  *              → reward (R_human + V backprop)
  *              → L2 incremental association / induction
  *              → L3 world-model abstraction
@@ -137,7 +137,7 @@ function buildFullChainLlm(): LlmClient {
       },
 
       // R_human scoring — treat negative keywords as a failed turn.
-      "reward.reward.r_human.v3": (input: unknown) => {
+      "reward.reward.r_human.v6": (input: unknown) => {
         const text = lastUserMessage(input);
         if (/不对|错了|没覆盖|\bwrong\b/i.test(text)) {
           return {
@@ -166,15 +166,13 @@ function buildFullChainLlm(): LlmClient {
         };
       },
 
-      // Capture summarizer — one short line per step.
-      "capture.summarize": (input: unknown) => {
-        const text = lastUserMessage(input);
-        if (/fib|斐波那契/i.test(text)) return { summary: "斐波那契函数实现（Python 递归/迭代）" };
-        if (/test|测试/i.test(text)) return { summary: "为 Python 函数补充单元测试（含边界）" };
-        if (/quick.*sort|快速排序/i.test(text)) return { summary: "快速排序实现（就地分区）" };
-        if (/bsearch|binary.*search|二分查找/i.test(text)) return { summary: "有序数组二分查找" };
-        return { summary: "Python 编程辅助" };
-      },
+      "capture.reflection.batch.v12": () => ({
+        scores: Array.from({ length: 20 }, (_, idx) => ({
+          idx,
+          relevance: "RELATED",
+          reason: "TASK_STEP",
+        })),
+      }),
 
       // α scorer — reflection quality.
       "capture.alpha.reflection.score.v1": (input: unknown) => {
@@ -189,7 +187,7 @@ function buildFullChainLlm(): LlmClient {
       }),
 
       // L2 induction — distills a policy from ≥2 similar traces.
-      "l2.l2.induction.v2": (input: unknown) => {
+      "l2.l2.induction.v3": (input: unknown) => {
         const text = lastUserMessage(input);
         const isPython = /python|pip|\.py\b/i.test(text);
         return {
