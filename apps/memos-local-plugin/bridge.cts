@@ -246,9 +246,27 @@ async function main(): Promise<void> {
     ? resolveHome(args.agent, args.home)
     : undefined;
 
+  // Derive profileId dynamically from MEMOS_HOME.
+  // MEMOS_HOME points to <hermes-home>/memos-plugin, so parent dir is hermes-home.
+  // e.g. /root/.hermes/profiles/nova/memos-plugin → profile = "nova"
+  //      /root/.hermes/memos-plugin → profile = "default"
+  const deriveProfileId = (): string => {
+    const memosHome = process.env.MEMOS_HOME;
+    if (memosHome) {
+      const hermesHome = memosHome.replace(/memos-plugin\/?$/, "");
+      const match = /\/profiles\/([^/]+)\/?$/.exec(hermesHome);
+      if (match?.[1]) {
+        const cleaned = match[1].toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+        if (cleaned) return cleaned;
+      }
+      if (hermesHome.endsWith("/.hermes")) return "default";
+    }
+    return "default";
+  };
+  const resolvedProfileId = deriveProfileId();
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
-    namespace: { agentKind: args.agent, profileId: "default" },
+    namespace: { agentKind: args.agent, profileId: resolvedProfileId },
     pkgVersion,
     hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
     home: resolvedHome,
