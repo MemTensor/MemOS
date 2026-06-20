@@ -154,4 +154,57 @@ describe("storage/migrator", () => {
       db.close();
     }
   });
+
+  it("namespace-visibility phase 2 backfills existing NULL share_scope rows (regression #1787)", () => {
+    // Regression test for https://github.com/MemTensor/MemOS/issues/1787:
+    // The namespace-visibility migration originally issued
+    // `UPDATE traces SET share_scope='private' WHERE share_scope IS NULL`
+    // against the entire traces table. On databases >500 MB that UPDATE
+    // held the bootstrap transaction in CPU-bound row rewriting (re-validating
+    // JSON CHECK constraints) for many minutes, manifesting as a bridge hang.
+    //
+    // The fix moves that work to phase 2, outside the schema_migrations
+    // transaction, and runs it in bounded batches. This test verifies the
+    // resumable phase-2 pass still normalizes existing NULL rows.
+    const { dbPath, cleanup } = tmpDb();
+    cleanups.push(cleanup);
+    const db = openDb({ filepath: dbPath, agent: "openclaw" });
+    try {
+      runMigrations(db);
+      db.exec(`
+        INSERT INTO sessions (id, agent, started_at, last_seen_at)
+          VALUES ('session-1', 'openclaw', 0, 0);
+        INSERT INTO episodes (id, session_id, started_at)
+          VALUES ('episode-1', 'session-1', 0);
+      `);
+      // Seed test rows: two with NULL share_scope, two with explicit values.
+      db.exec(`
+        INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, value, priority, turn_id, share_scope
+        ) VALUES
+          ('t-null-a', 'episode-1', 'session-1', 10, 'hello', '', 0.0, 0.0, 10, NULL),
+          ('t-null-b', 'episode-1', 'session-1', 20, '', 'hi', 0.0, 0.0, 20, NULL),
+          ('t-private', 'episode-1', 'session-1', 30, 'keep', '', 0.0, 0.0, 30, 'private'),
+          ('t-public', 'episode-1', 'session-1', 40, '', 'keep', 0.0, 0.0, 40, 'public')
+      `);
+
+      runMigrations(db);
+
+      const rows = db
+        .prepare<unknown, { id: string; share_scope: string | null }>(
+          `SELECT id, share_scope FROM traces ORDER BY id`,
+        )
+        .all();
+      // NULL rows are normalized by the out-of-transaction phase-2 pass.
+      // Non-NULL rows are untouched.
+      expect(rows).toEqual([
+        { id: "t-null-a", share_scope: "private" },
+        { id: "t-null-b", share_scope: "private" },
+        { id: "t-private", share_scope: "private" },
+        { id: "t-public", share_scope: "public" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
 });

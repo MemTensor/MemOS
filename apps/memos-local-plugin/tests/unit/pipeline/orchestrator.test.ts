@@ -24,6 +24,19 @@ import type { TurnInputDTO, TurnResultDTO } from "../../../agent-contract/dto.js
 let dbHandle: TmpDbHandle | null = null;
 let pipeline: PipelineHandle | null = null;
 
+function configWithLightweightMemory(enabled: boolean): typeof DEFAULT_CONFIG {
+  return {
+    ...DEFAULT_CONFIG,
+    algorithm: {
+      ...DEFAULT_CONFIG.algorithm,
+      lightweightMemory: {
+        ...DEFAULT_CONFIG.algorithm.lightweightMemory,
+        enabled,
+      },
+    },
+  };
+}
+
 function buildDeps(
   h: TmpDbHandle,
   embedder = fakeEmbedder({ dimensions: 384 }),
@@ -31,7 +44,7 @@ function buildDeps(
   return {
     agent: "openclaw",
     home: resolveHome("openclaw", "/tmp/memos-test-home"),
-    config: DEFAULT_CONFIG,
+    config: configWithLightweightMemory(false),
     db: h.db,
     repos: h.repos,
     llm: null,

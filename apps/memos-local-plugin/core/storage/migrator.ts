@@ -43,7 +43,13 @@ export interface MigrationsResult {
  */
 export function defaultMigrationsDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.join(here, "migrations");
+  const compiled = path.join(here, "migrations");
+  if (fs.existsSync(compiled)) return compiled;
+
+  // Local package installs keep source files for debugging; this fallback
+  // makes compiled code resilient if runtime assets were not copied.
+  const source = path.resolve(here, "..", "..", "..", "core", "storage", "migrations");
+  return fs.existsSync(source) ? source : compiled;
 }
 
 export function discoverMigrations(dir: string): MigrationFile[] {
@@ -128,13 +134,14 @@ export function runMigrations(db: StorageDb, dir: string = defaultMigrationsDir(
   }
 
   // Phase 2 of migration 007: ensure all namespace columns exist on every table
-  // (idempotent — ensureColumn skips if already present), then batched share_scope
-  // backfill and index creation.  Runs after every startup; if the bridge is killed
+  // (idempotent -- ensureColumn skips if already present), then batched share_scope
+  // backfill and index creation. Runs after every startup; if the bridge is killed
   // mid-backfill it resumes where it left off on the next boot.
   ensureNamespaceColumns(db);
   if (columnExists(db, "traces", "owner_agent_kind")) {
     ensureNamespaceIndexesAndBackfill(db);
   }
+  ensureHubSharingSearchColumns(db);
 
   markReady(db);
 
@@ -176,16 +183,133 @@ const NS_TABLES = ["sessions", "episodes", "traces", "policies", "world_model", 
 const SHARE_TABLES = ["episodes", "traces", "policies", "world_model", "skills"] as const;
 
 function applyMigrationDdl(db: StorageDb, file: MigrationFile): void {
-  if (file.version === 7) {
+  if (file.version === 3 && file.name === "embedding-retry-lease") {
+    ensureEmbeddingRetryLeaseColumns(db);
+    return;
+  }
+  if (file.version === 4 && file.name === "skill-usage") {
+    ensureSkillUsageColumns(db);
+    return;
+  }
+  if (file.version === 5 && file.name === "skill-trials") {
+    if (tableExists(db, "skills") && tableExists(db, "episodes") && tableExists(db, "traces")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
+  if (file.version === 6 && file.name === "world-model-version") {
+    if (tableExists(db, "world_model")) {
+      ensureColumn(db, "world_model", "version", "INTEGER NOT NULL DEFAULT 1");
+    }
+    return;
+  }
+  if (file.version === 7 && file.name === "namespace-visibility") {
     ensureNamespaceColumns(db);
     return;
   }
-  const sql = fs.readFileSync(file.fullPath, "utf8");
-  db.exec(sql);
+  if (file.version === 8 && file.name === "feedback-experience-metadata") {
+    ensureFeedbackExperienceMetadataColumns(db);
+    return;
+  }
+  if (file.version === 9 && file.name === "policies-fts") {
+    if (tableExists(db, "policies")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
+  if (file.version === 10 && file.name === "trace-policy-links") {
+    if (tableExists(db, "traces") && tableExists(db, "policies")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
+  if (file.version === 12 && file.name === "trace-turn-pagination-index") {
+    if (tableExists(db, "traces")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
+  db.exec(fs.readFileSync(file.fullPath, "utf8"));
+}
+
+function ensureEmbeddingRetryLeaseColumns(db: StorageDb): void {
+  if (!tableExists(db, "embedding_retry_queue")) return;
+  ensureColumn(db, "embedding_retry_queue", "claimed_by", "TEXT");
+  ensureColumn(db, "embedding_retry_queue", "lease_until", "INTEGER");
+}
+
+function ensureSkillUsageColumns(db: StorageDb): void {
+  if (!tableExists(db, "skills")) return;
+  ensureColumn(db, "skills", "usage_count", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "skills", "last_used_at", "INTEGER");
+}
+
+function ensureFeedbackExperienceMetadataColumns(db: StorageDb): void {
+  if (!tableExists(db, "policies")) return;
+  ensureColumn(
+    db,
+    "policies",
+    "experience_type",
+    `TEXT NOT NULL DEFAULT 'success_pattern'
+      CHECK (experience_type IN ('success_pattern','repair_validated','failure_avoidance','repair_instruction','preference','verifier_feedback','procedural'))`,
+  );
+  ensureColumn(
+    db,
+    "policies",
+    "evidence_polarity",
+    `TEXT NOT NULL DEFAULT 'positive'
+      CHECK (evidence_polarity IN ('positive','negative','neutral','mixed'))`,
+  );
+  ensureColumn(db, "policies", "salience", "REAL NOT NULL DEFAULT 0");
+  ensureColumn(db, "policies", "confidence", "REAL NOT NULL DEFAULT 0.5");
+  ensureColumn(
+    db,
+    "policies",
+    "source_feedback_ids_json",
+    "TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(source_feedback_ids_json))",
+  );
+  ensureColumn(
+    db,
+    "policies",
+    "source_trace_ids_json",
+    "TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(source_trace_ids_json))",
+  );
+  ensureColumn(
+    db,
+    "policies",
+    "verifier_meta_json",
+    "TEXT NOT NULL DEFAULT 'null' CHECK (json_valid(verifier_meta_json))",
+  );
+  ensureColumn(
+    db,
+    "policies",
+    "skill_eligible",
+    "INTEGER NOT NULL DEFAULT 1 CHECK (skill_eligible IN (0,1))",
+  );
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_policies_experience ON policies(experience_type, evidence_polarity, updated_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_policies_skill_eligible ON policies(skill_eligible, status, updated_at DESC)`);
+}
+
+function ensureHubSharingSearchColumns(db: StorageDb): void {
+  if (!tableExists(db, "hub_shared_memories")) return;
+  ensureColumn(db, "hub_shared_memories", "embedding", "BLOB");
+  ensureColumn(db, "hub_shared_memories", "embedding_norm2", "REAL");
+  ensureColumn(
+    db,
+    "hub_shared_memories",
+    "visible",
+    "INTEGER NOT NULL DEFAULT 1 CHECK (visible IN (0,1))",
+  );
+  ensureColumn(db, "hub_shared_memories", "deleted_at", "INTEGER");
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_hub_shared_memories_deleted
+       ON hub_shared_memories(visible, deleted_at)
+       WHERE visible = 0 AND deleted_at IS NOT NULL`,
+  );
 }
 
 function ensureNamespaceColumns(db: StorageDb): void {
-  // Owner columns on ALL namespace tables (NOT NULL with defaults —
+  // Owner columns on ALL namespace tables (NOT NULL with defaults --
   // matches the original v2.0.5 migration schema).
   for (const table of NS_TABLES) {
     if (!tableExists(db, table)) continue;
