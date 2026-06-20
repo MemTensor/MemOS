@@ -68,6 +68,71 @@ class MemCubeRegister(BaseRequest):
     mem_cube_id: str | None = Field(None, description="ID for the MemCube")
 
 
+class CreateCubeRequest(BaseRequest):
+    """Request model for creating a new memory cube."""
+
+    cube_name: str = Field(..., description="Human-readable name for the memory cube")
+    owner_id: str = Field(..., description="User ID of the cube owner")
+    cube_path: str | None = Field(
+        None, description="File system path where cube data will be stored"
+    )
+    cube_id: str | None = Field(
+        None,
+        description=(
+            "Custom unique identifier for the cube. If not provided, one will be generated. "
+            "Note: cube_id is also referred to as mem_cube_id throughout the API."
+        ),
+    )
+
+
+class CreateCubeResponseData(BaseModel):
+    """Data model for cube creation response."""
+
+    cube_id: str = Field(..., description="The created cube ID (also called mem_cube_id)")
+    cube_name: str = Field(..., description="Name of the created cube")
+    owner_id: str = Field(..., description="Owner user ID")
+
+
+class CreateCubeResponse(BaseResponse[CreateCubeResponseData]):
+    """Response model for cube creation."""
+
+    message: str = "Cube created successfully"
+
+
+class RegisterCubeRequest(BaseRequest):
+    """Request model for registering an existing memory cube.
+
+    This allows loading a cube from disk or creating a new one if the path doesn't exist.
+    """
+
+    mem_cube_name_or_path: str = Field(
+        ..., description="File path to the memory cube or name for a new cube"
+    )
+    mem_cube_id: str | None = Field(
+        None,
+        description=(
+            "Custom identifier for the cube (also called cube_id). "
+            "If not provided, one will be generated."
+        ),
+    )
+    user_id: str | None = Field(
+        None, description="User ID to associate with the cube. If not provided, uses default user"
+    )
+
+
+class RegisterCubeResponseData(BaseModel):
+    """Data model for cube registration response."""
+
+    cube_id: str = Field(..., description="The registered cube ID (also called mem_cube_id)")
+    cube_name_or_path: str = Field(..., description="Name or path of the registered cube")
+
+
+class RegisterCubeResponse(BaseResponse[RegisterCubeResponseData]):
+    """Response model for cube registration."""
+
+    message: str = "Cube registered successfully"
+
+
 class ChatRequest(BaseRequest):
     """Request model for chat operations.
 

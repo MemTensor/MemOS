@@ -177,14 +177,23 @@ export async function bootstrapMemoryCoreFull(
   options: BootstrapOptions,
 ): Promise<BootstrapResult> {
   const home = options.home ?? resolveHome(options.agent);
-  const config =
-    options.config ??
-    (await loadConfig(home)).config;
+  const configResult = options.config
+    ? { config: options.config, fromDisk: true, warnings: [], source: home.configFile }
+    : await loadConfig(home);
+  const config = configResult.config;
 
   const log = rootLogger.child({
     channel: "core.pipeline.bootstrap",
     ctx: { agent: options.agent },
   });
+
+  // Log configuration warnings (e.g., missing config file)
+  if (configResult.warnings.length > 0) {
+    for (const warning of configResult.warnings) {
+      log.warn("config.warning", { message: warning });
+    }
+  }
+
   const namespace = normalizeNamespace(options.namespace, options.agent);
 
   // 1. Storage.
@@ -700,13 +709,6 @@ export function createMemoryCore(
         config: input.config,
       },
     );
-    if (input.config.lightweightMemory && !llmFilterOutcomeSucceeded(filtered.outcome)) {
-      filtered = {
-        ...filtered,
-        kept: [],
-        dropped: [...filtered.dropped, ...filtered.kept],
-      };
-    }
     const kept = new Set(filtered.kept);
     const dropped = new Set(filtered.dropped);
     return {
@@ -806,10 +808,6 @@ export function createMemoryCore(
 
   function firstNonEmptyLine(text: string): string {
     return text.split(/\n+/).map((line) => line.trim()).find(Boolean)?.slice(0, 240) ?? "";
-  }
-
-  function llmFilterOutcomeSucceeded(outcome: string): boolean {
-    return outcome === "llm_kept_all" || outcome === "llm_filtered";
   }
 
   function logCandidatesFromHits(hits: readonly RetrievalHitDTO[]): Array<{
@@ -921,6 +919,19 @@ export function createMemoryCore(
         err: err instanceof Error ? err.message : String(err),
       });
     }
+
+    // Periodic rescore timer for episodes that miss the startup scan or
+    // retry of failed reward runs. 10-minute interval is safe because
+    // autoRescoreDirtyClosedEpisodes has its own 30-second dedup guard.
+    const rescoreInterval = setInterval(() => {
+      void autoRescoreDirtyClosedEpisodes().catch((err) => {
+        log.debug("periodic_rescore.error", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, 10 * 60 * 1000);
+    // Mark as unref so the timer doesn't block shutdown
+    (rescoreInterval as unknown as { unref?: () => void }).unref?.();
 
     // Wire `memory_add` into the api_logs table on EVERY turn so the
     // Logs viewer shows per-turn capture activity. `capture.lite.done`
@@ -1175,10 +1186,10 @@ export function createMemoryCore(
         // the next startup's condition-4 check will see DIRTY_REWARD_RESCORE and
         // skip this episode rather than looping indefinitely.
         handle.repos.episodes.updateMeta(episodeId, {
-          recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
+          recoveryReason: "dirty_reward_rescore",
         });
         const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
-          recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
+          recoveryReason: "dirty_reward_rescore",
         });
         debugStartupRecovery("H3", "startup_recovery_emit_finalized", {
           episodeId,
@@ -1326,13 +1337,19 @@ export function createMemoryCore(
     // Backward compatibility for episodes scored before reward coverage
     // metadata existed: if a trace was appended after the recorded reward
     // time, the old task score no longer covers the full episode.
+    //
+    // Use the lightweight `hasAnyNewerThan` exists-check (a single
+    // `SELECT 1 ... LIMIT 1`) instead of `getManyByIds().some(...)`.
+    // The latter pulled every column of every trace — embedding BLOBs
+    // and big `tool_calls_json` strings included — purely to inspect
+    // one timestamp. On the multi-hundred-MB databases reported in
+    // https://github.com/MemTensor/MemOS/issues/1787 that single scan
+    // dwarfed everything else during bridge bootstrap.
     const scoredAt = (reward as { scoredAt?: unknown }).scoredAt;
     if (typeof scoredAt !== "number") return false;
     const traceIds = (ep.traceIds ?? []) as TraceId[];
     if (traceIds.length === 0) return false;
-    return handle.repos.traces
-      .getManyByIds(traceIds)
-      .some((tr) => tr.ts > scoredAt);
+    return handle.repos.traces.hasAnyNewerThan(traceIds, scoredAt);
   }
 
   function snapshotFromRecoveredEpisode(
@@ -1764,7 +1781,7 @@ export function createMemoryCore(
           : localDropped;
         const stats = packet ? handle.consumeRetrievalStats(packet.packetId) : null;
         handle.repos.apiLogs.insert({
-          toolName: handle.algorithm.lightweightMemory.enabled ? "memory_search" : "memos_search",
+          toolName: "memos_search",
           input: {
             type: "turn_start",
             agent: turn.agent,
@@ -2495,7 +2512,7 @@ export function createMemoryCore(
     } finally {
       try {
         handle.repos.apiLogs.insert({
-          toolName: handle.algorithm.lightweightMemory.enabled ? "memory_search" : "memos_search",
+          toolName: "memos_search",
           input: {
             type: "tool_call",
             agent: query.agent,
@@ -2911,7 +2928,7 @@ export function createMemoryCore(
       offset: input.offset ?? 0,
     });
     return rows
-      .filter((r: EpisodeRow) => visibleToCurrent(r) && !isLightweightEpisode(r))
+      .filter((r: EpisodeRow) => visibleToCurrent(r))
       .map((r: EpisodeRow) => r.id as EpisodeId);
   }
 
@@ -2924,8 +2941,7 @@ export function createMemoryCore(
     ensureLive();
     return handle.repos.episodes.list({ sessionId: input?.sessionId, limit: 100_000 }).filter((r) =>
       (input?.includeAllNamespaces || visibleToCurrent(r)) &&
-      matchesNamespaceFilter(r, input) &&
-      !isLightweightEpisode(r)
+      matchesNamespaceFilter(r, input)
     ).length;
   }
 
@@ -2951,8 +2967,7 @@ export function createMemoryCore(
       offset: input?.ownerAgentKind || input?.ownerProfileId ? 0 : input?.offset ?? 0,
     }).filter((r) =>
       (input?.includeAllNamespaces || visibleToCurrent(r)) &&
-      matchesNamespaceFilter(r, input) &&
-      !isLightweightEpisode(r)
+      matchesNamespaceFilter(r, input)
     );
     const pagedRows = input?.ownerAgentKind || input?.ownerProfileId
       ? rows.slice(input?.offset ?? 0, (input?.offset ?? 0) + (input?.limit ?? 50))
@@ -3201,7 +3216,7 @@ export function createMemoryCore(
     includeAllNamespaces?: boolean;
   }): Promise<TraceDTO[]> {
     ensureLive();
-    const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
+    const limit = Math.max(1, Math.min(10_000, input?.limit ?? 50));
     const offset = Math.max(0, input?.offset ?? 0);
     const needle = (input?.q ?? "").trim().toLowerCase();
 
@@ -4119,12 +4134,36 @@ export function createMemoryCore(
     return bestDim;
   }
 
+  function shouldTraceHaveEmbeddings(row: TraceRow): boolean {
+    // Skip traces where both user and agent text are very short
+    const userLen = row.userText.trim().length;
+    const agentLen = row.agentText.trim().length;
+
+    // If both are under 10 chars, definitely skip
+    if (userLen < 10 && agentLen < 10) {
+      return false;
+    }
+
+    // If total combined length is under 20 chars, skip
+    // (covers cases like "ok" / "Got it, processing..." which aren't meaningful memories)
+    if (userLen + agentLen < 20) {
+      return false;
+    }
+
+    return true;
+  }
+
   function collectEmbeddingSlots(): EmbeddingSlot[] {
     const slots: EmbeddingSlot[] = [];
     const pageSize = 500;
     for (let offset = 0;; offset += pageSize) {
       const rows = handle.repos.traces.list({ limit: pageSize, offset, newestFirst: false });
       for (const row of rows) {
+        // Skip traces that shouldn't have embeddings
+        if (!shouldTraceHaveEmbeddings(row)) {
+          continue;
+        }
+
         slots.push({
           kind: "trace",
           id: row.id,

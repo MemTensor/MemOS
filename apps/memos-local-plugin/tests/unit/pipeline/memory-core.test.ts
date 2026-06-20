@@ -36,12 +36,34 @@ let db: TmpDbHandle | null = null;
 let pipeline: PipelineHandle | null = null;
 let core: MemoryCore | null = null;
 const TEST_EMBED_DIMENSIONS = 384;
+const FULL_MEMORY_CONFIG_YAML = `
+version: 1
+algorithm:
+  lightweightMemory:
+    enabled: false
+`;
 
-function buildDeps(h: TmpDbHandle): PipelineDeps {
+function configWithLightweightMemory(enabled: boolean): typeof DEFAULT_CONFIG {
+  return {
+    ...DEFAULT_CONFIG,
+    algorithm: {
+      ...DEFAULT_CONFIG.algorithm,
+      lightweightMemory: {
+        ...DEFAULT_CONFIG.algorithm.lightweightMemory,
+        enabled,
+      },
+    },
+  };
+}
+
+function buildDeps(
+  h: TmpDbHandle,
+  config: typeof DEFAULT_CONFIG = configWithLightweightMemory(false),
+): PipelineDeps {
   return {
     agent: "openclaw",
     home: resolveHome("openclaw", "/tmp/memos-mc-test"),
-    config: DEFAULT_CONFIG,
+    config,
     db: h.db,
     repos: h.repos,
     llm: null,
@@ -258,7 +280,7 @@ describe("MemoryCore façade", () => {
   });
 
   it("does not require action vectors for lightweight memory traces", async () => {
-    pipeline = createPipeline(buildDeps(db!));
+    pipeline = createPipeline(buildDeps(db!, configWithLightweightMemory(true)));
     core = createMemoryCore(
       pipeline,
       resolveHome("openclaw", "/tmp/memos-mc-test"),
@@ -332,6 +354,21 @@ describe("MemoryCore façade", () => {
     const row = db!.repos.traces.getById("tr_lightweight" as never);
     expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
     expect(row?.vecAction).toBeNull();
+
+    await expect(core.listEpisodes({ limit: 10 })).resolves.toEqual(["ep_lightweight"]);
+    await expect(core.countEpisodes()).resolves.toBe(1);
+    const episodeRows = await core.listEpisodeRows({ limit: 10 });
+    expect(episodeRows).toHaveLength(1);
+    expect(episodeRows[0]?.id).toBe("ep_lightweight");
+    expect(episodeRows[0]?.preview).toContain("What changed in the repo?");
+
+    const search = await core.searchMemory({
+      agent: "openclaw",
+      query: "lightweight memory mode",
+      topK: { tier1: 0, tier2: 5, tier3: 0 },
+    });
+    expect(search.hits.length).toBeGreaterThan(0);
+    expect(search.hits.map((hit) => hit.snippet).join("\n")).toContain("lightweight memory mode");
   });
 
   it("onTurnStart returns a RetrievalResultDTO with tier latencies", async () => {
@@ -1149,7 +1186,10 @@ algorithm:
     //     the crash; only the final status flip was lost).
     //   - Un-scored rows with no traces → stay open + `topicState`
     //     `interrupted` so they do not show as skipped.
-    home = await makeTmpHome({ agent: "openclaw" });
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
 
     // First bootstrap: lets migrations run + schema exists. Shut it
     // down cleanly so we can seed orphans into the DB without holding
@@ -1233,7 +1273,10 @@ algorithm:
   });
 
   it("keeps an interrupted topic open across restart and appends the next same-topic turn", async () => {
-    home = await makeTmpHome({ agent: "openclaw" });
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
 
     const first = await bootstrapMemoryCore({
       agent: "openclaw",
@@ -1275,7 +1318,10 @@ algorithm:
   });
 
   it("rescoring closed episodes when traces were appended after the last reward", async () => {
-    home = await makeTmpHome({ agent: "openclaw" });
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
 
     const seeder = await bootstrapMemoryCore({
       agent: "openclaw",
@@ -1369,7 +1415,10 @@ algorithm:
   });
 
   it("rescoring finalized closed episodes that have traces but no reward metadata", async () => {
-    home = await makeTmpHome({ agent: "openclaw" });
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
 
     const seeder = await bootstrapMemoryCore({
       agent: "openclaw",
@@ -1611,7 +1660,7 @@ algorithm:
       recoveryReason?: string;
       reward?: { traceCount?: number };
     };
-    expect(meta1.recoveryReason).toBe(RECOVERY_REASONS.DIRTY_REWARD_RESCORE);
+    expect(meta1.recoveryReason).toBe("dirty_reward_rescore");
     // After recovery traceCount matches ids_len: episode is no longer dirty.
     expect(meta1.reward?.traceCount).toBe(2);
 
