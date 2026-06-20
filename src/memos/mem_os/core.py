@@ -1170,7 +1170,7 @@ class MOSCore:
             bool: True if successful, False otherwise.
         """
         # Validate current user has access to this cube
-        self._validate_cube_access(cube_id, target_user_id)
+        self._validate_cube_access(self.user_id, cube_id)
 
         # Validate target user exists
         if not self.user_manager.validate_user(target_user_id):

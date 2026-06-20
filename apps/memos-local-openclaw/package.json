@@ -45,12 +45,12 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0 <25.0.0"
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.0",
     "@sinclair/typebox": "^0.34.48",
-    "better-sqlite3": "^12.6.3",
+    "better-sqlite3": "^12.10.0",
     "posthog-node": "^5.28.0",
     "puppeteer": "^24.38.0",
     "semver": "^7.7.4",
