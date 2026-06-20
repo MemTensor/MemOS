@@ -1064,9 +1064,9 @@ describe("createOpenClawBridge", () => {
     await (pipeline as PipelineHandle).flush();
 
     const traces = await mc.listTraces({ groupByTurn: true });
-    expect(traces).toHaveLength(2);
-    expect(traces.some((tr) => tr.toolCalls?.[0]?.name === "sh")).toBe(true);
-    expect(traces.some((tr) => tr.agentText === "done")).toBe(true);
+    expect(traces).toHaveLength(1);
+    expect(traces[0]?.toolCalls?.[0]?.name).toBe("sh");
+    expect(traces[0]?.agentText).toBe("done");
   });
 
   it("handleAgentEnd works even when before_prompt_build was never called (lazy episode open)", async () => {
