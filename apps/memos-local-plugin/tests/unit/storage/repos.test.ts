@@ -120,6 +120,18 @@ describe("storage/repos — happy paths", () => {
       repos.traces.updateScore("t0", { value: -0.5, alpha: 0.6, priority: 1.5 });
       expect(repos.traces.getById("t0")!.value).toBe(-0.5);
       expect(repos.traces.getById("t0")!.priority).toBe(1.5);
+
+      // hasAnyNewerThan: cheap exists-check used by the startup
+      // dirty-closed-episode scan in memory-core.init().
+      // Regression guard for https://github.com/MemTensor/MemOS/issues/1787:
+      // the old code path called `getManyByIds(...).some(tr => tr.ts > ts)`,
+      // which hydrated every BLOB column for every trace into Node memory.
+      expect(repos.traces.hasAnyNewerThan(["t0", "t1", "t2"], 5)).toBe(true);
+      // Boundary: ts must be STRICTLY greater than the watermark.
+      expect(repos.traces.hasAnyNewerThan(["t0"], 10)).toBe(false);
+      expect(repos.traces.hasAnyNewerThan(["t2"], 29)).toBe(true);
+      expect(repos.traces.hasAnyNewerThan([], 0)).toBe(false);
+      expect(repos.traces.hasAnyNewerThan(["missing-id"], 0)).toBe(false);
     } finally {
       cleanup();
     }
