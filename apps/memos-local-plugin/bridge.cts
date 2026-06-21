@@ -679,9 +679,11 @@ function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
   };
 }
 
+const HERMES_CHAT_PROCESS_PATTERN = "hermes(?:\\s+\\S+)*\\s+chat\\b";
+
 function isHermesChatRunning(): boolean {
   try {
-    const out = childProcess.execFileSync("pgrep", ["-f", "hermes chat"], {
+    const out = childProcess.execFileSync("pgrep", ["-f", HERMES_CHAT_PROCESS_PATTERN], {
       encoding: "utf8",
       timeout: 1000,
     });
