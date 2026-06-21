@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 
+import { MemosError } from "../../../agent-contract/errors.js";
 import { DEFAULT_CONFIG, loadConfig, resolveConfig, resolveHome } from "../../../core/config/index.js";
 import { makeTmpHome } from "../../helpers/tmp-home.js";
 
@@ -20,6 +21,26 @@ describe("config/loadConfig", () => {
     expect(result.config.viewer.port).toBe(DEFAULT_CONFIG.viewer.port);
     expect(result.config.embedding.provider).toBe(DEFAULT_CONFIG.embedding.provider);
   });
+
+
+  it("defaults logging.timezone to UTC and accepts custom IANA zones", () => {
+    expect(resolveConfig({}).logging.timezone).toBe("UTC");
+    const cfg = resolveConfig({ logging: { timezone: "America/Los_Angeles" } });
+    expect(cfg.logging.timezone).toBe("America/Los_Angeles");
+  });
+
+  it("rejects invalid logging.timezone with config_invalid", () => {
+    expect(() => resolveConfig({ logging: { timezone: "Not/AZone" } })).toThrow(MemosError);
+    try {
+      resolveConfig({ logging: { timezone: "Not/AZone" } });
+      throw new Error("expected resolveConfig to reject invalid timezone");
+    } catch (err) {
+      expect(MemosError.is(err)).toBe(true);
+      expect((err as MemosError).code).toBe("config_invalid");
+      expect((err as MemosError).message).toContain("invalid logging.timezone");
+    }
+  });
+
 
   it("merges YAML over defaults and preserves unspecified branches", async () => {
     const yaml = `
