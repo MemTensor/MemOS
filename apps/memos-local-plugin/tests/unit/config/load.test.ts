@@ -27,10 +27,6 @@ describe("config/loadConfig", () => {
     expect(cfg.llm.providerOrder).toEqual([]);
     expect(cfg.skillEvolver.providerIgnore).toEqual([]);
     expect(cfg.skillEvolver.providerOrder).toEqual([]);
-    expect(cfg.l3Llm.providerIgnore).toEqual([]);
-    expect(cfg.l3Llm.providerOrder).toEqual([]);
-    expect(cfg.entityExtractor.providerIgnore).toEqual([]);
-    expect(cfg.entityExtractor.providerOrder).toEqual([]);
     expect(cfg.embedding.providerIgnore).toEqual([]);
     expect(cfg.embedding.providerOrder).toEqual([]);
   });
@@ -66,12 +62,6 @@ algorithm:
         providerIgnore: ["novita"],
         providerOrder: ["openai"],
       },
-      l3Llm: {
-        providerIgnore: ["together"],
-      },
-      entityExtractor: {
-        providerOrder: ["google"],
-      },
       embedding: {
         providerIgnore: ["deepinfra"],
         providerOrder: ["openai"],
@@ -81,8 +71,6 @@ algorithm:
     expect(cfg.llm.providerOrder).toEqual(["google", "anthropic"]);
     expect(cfg.skillEvolver.providerIgnore).toEqual(["novita"]);
     expect(cfg.skillEvolver.providerOrder).toEqual(["openai"]);
-    expect(cfg.l3Llm.providerIgnore).toEqual(["together"]);
-    expect(cfg.entityExtractor.providerOrder).toEqual(["google"]);
     expect(cfg.embedding.providerIgnore).toEqual(["deepinfra"]);
     expect(cfg.embedding.providerOrder).toEqual(["openai"]);
   });

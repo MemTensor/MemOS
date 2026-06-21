@@ -40,9 +40,11 @@ export class OpenAiEmbeddingProvider implements EmbeddingProvider {
         : "https://api.openai.com/v1/embeddings",
     );
     const model = config.model && config.model.length > 0 ? config.model : "text-embedding-3-small";
+    const body: Record<string, unknown> = { input: texts, model };
+    applyOpenRouterProviderRouting(config, body);
     const resp = await httpPostJson<OpenAiResp>({
       url,
-      body: { input: texts, model },
+      body,
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
         ...config.headers,
@@ -81,4 +83,17 @@ function normalizeEndpoint(url: string): string {
   const stripped = url.replace(/\/+$/, "");
   if (stripped.endsWith("/embeddings")) return stripped;
   return `${stripped}/embeddings`;
+}
+
+function applyOpenRouterProviderRouting(
+  config: ProviderCallCtx["config"],
+  body: Record<string, unknown>,
+): void {
+  const endpoint = config.endpoint ?? "";
+  if (!endpoint.includes("openrouter.ai")) return;
+
+  const providerPrefs: Record<string, unknown> = {};
+  if (config.providerIgnore?.length) providerPrefs.ignore = config.providerIgnore;
+  if (config.providerOrder?.length) providerPrefs.order = config.providerOrder;
+  if (Object.keys(providerPrefs).length > 0) body.provider = providerPrefs;
 }

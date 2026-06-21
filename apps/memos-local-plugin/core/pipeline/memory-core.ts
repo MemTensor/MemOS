@@ -88,6 +88,7 @@ import {
 import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
+import type { ReasoningConfig } from "../llm/types.js";
 import {
   getHostLlmBridge,
   registerHostLlmBridge,
@@ -119,6 +120,18 @@ import type { UserFeedback } from "../reward/types.js";
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
 const IMPORT_WRITE_BATCH_SIZE = 500;
+
+type DedicatedLlmConfig = {
+  provider?: string;
+  model?: string;
+  endpoint?: string;
+  apiKey?: string;
+  temperature?: number;
+  timeoutMs?: number;
+  providerIgnore?: string[];
+  providerOrder?: string[];
+  reasoning?: ReasoningConfig;
+};
 export interface BootstrapOptions {
   agent: AgentKind;
   namespace?: RuntimeNamespace;
@@ -382,7 +395,7 @@ export async function bootstrapMemoryCoreFull(
   // back to the main `llm` when skillEvolver.model is blank.
   let reflectLlm: ReturnType<typeof createLlmClient> | null = null;
   try {
-    const evolver = (config as { skillEvolver?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).skillEvolver;
+    const evolver = (config as { skillEvolver?: DedicatedLlmConfig }).skillEvolver;
     const evolverModel = (evolver?.model ?? "").trim();
     const evolverProvider = (evolver?.provider ?? "").trim();
     if (evolverModel && evolverProvider) {
@@ -393,6 +406,9 @@ export async function bootstrapMemoryCoreFull(
         apiKey: evolver?.apiKey ?? "",
         temperature: evolver?.temperature ?? 0,
         timeoutMs: evolver?.timeoutMs ?? 60_000,
+        providerIgnore: evolver?.providerIgnore,
+        providerOrder: evolver?.providerOrder,
+        reasoning: evolver?.reasoning,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling

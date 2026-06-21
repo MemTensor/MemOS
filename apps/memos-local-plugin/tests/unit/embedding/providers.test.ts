@@ -131,6 +131,43 @@ describe("embedding/providers", () => {
       expect(cap.url).toBe("https://x.example.com/embeddings");
     });
 
+    it("adds OpenRouter provider preferences for embedding calls", async () => {
+      const cap = captureFetchRequest();
+      const p = new OpenAiEmbeddingProvider();
+      await p.embed(
+        ["a"],
+        "document",
+        ctxFor(cfg({
+          provider: "openai_compatible",
+          endpoint: "https://openrouter.ai/api/v1",
+          providerIgnore: ["together", "deepinfra"],
+          providerOrder: ["openai"],
+        })),
+      );
+      const body = JSON.parse(cap.init!.body as string);
+      expect(body.provider).toEqual({
+        ignore: ["together", "deepinfra"],
+        order: ["openai"],
+      });
+    });
+
+    it("omits provider preferences for non-OpenRouter embedding calls", async () => {
+      const cap = captureFetchRequest();
+      const p = new OpenAiEmbeddingProvider();
+      await p.embed(
+        ["a"],
+        "document",
+        ctxFor(cfg({
+          provider: "openai_compatible",
+          endpoint: "https://api.openai.com/v1",
+          providerIgnore: ["together"],
+          providerOrder: ["openai"],
+        })),
+      );
+      const body = JSON.parse(cap.init!.body as string);
+      expect("provider" in body).toBe(false);
+    });
+
     it("rejects malformed response (no data[])", async () => {
       mockResponses([
         new Response(JSON.stringify({ notdata: true }), { status: 200 }),
