@@ -27,6 +27,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     endpoint: "",
     model: "Xenova/all-MiniLM-L6-v2",
     apiKey: "",
+    providerIgnore: [],
+    providerOrder: [],
     cache: {
       enabled: true,
       maxItems: 20_000,
@@ -41,6 +43,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     timeoutMs: 45_000,
     maxRetries: 3,
+    providerIgnore: [],
+    providerOrder: [],
   },
   l3Llm: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -65,6 +69,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     temperature: 0,
     timeoutMs: 60_000,
+    providerIgnore: [],
+    providerOrder: [],
   },
   storage: {
     ftsTokenizer: "trigram",

@@ -211,16 +211,18 @@ async function callLLMOnceOpenAI(
     Authorization: `Bearer ${cfg.apiKey}`,
     ...cfg.headers,
   };
+  const body: Record<string, unknown> = {
+    model,
+    temperature: opts.temperature ?? 0.1,
+    max_tokens: opts.maxTokens ?? 1024,
+    messages: [{ role: "user", content: prompt }],
+  };
+  applyOpenRouterProviderRouting(cfg, body);
 
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      model,
-      temperature: opts.temperature ?? 0.1,
-      max_tokens: opts.maxTokens ?? 1024,
-      messages: [{ role: "user", content: prompt }],
-    }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
   });
 
@@ -231,6 +233,19 @@ async function callLLMOnceOpenAI(
 
   const json = (await resp.json()) as { choices: Array<{ message: { content: string } }> };
   return json.choices[0]?.message?.content?.trim() ?? "";
+}
+
+function applyOpenRouterProviderRouting(
+  cfg: SummarizerConfig,
+  body: Record<string, unknown>,
+): void {
+  const endpoint = cfg.endpoint ?? "";
+  if (!endpoint.includes("openrouter.ai")) return;
+
+  const providerPrefs: Record<string, unknown> = {};
+  if (cfg.providerIgnore?.length) providerPrefs.ignore = cfg.providerIgnore;
+  if (cfg.providerOrder?.length) providerPrefs.order = cfg.providerOrder;
+  if (Object.keys(providerPrefs).length > 0) body.provider = providerPrefs;
 }
 
 /**

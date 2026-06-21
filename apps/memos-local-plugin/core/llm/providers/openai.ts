@@ -73,6 +73,8 @@ export class OpenAiLlmProvider implements LlmProvider {
     };
     if (opts.jsonMode) body.response_format = { type: "json_object" };
     if (opts.stop && opts.stop.length > 0) body.stop = opts.stop;
+    if (config.reasoning) body.reasoning = config.reasoning;
+    applyOpenRouterProviderRouting(config, body);
 
     const headers: Record<string, string> = {};
     if (config.apiKey) {
@@ -137,6 +139,8 @@ export class OpenAiLlmProvider implements LlmProvider {
     };
     if (opts.jsonMode) body.response_format = { type: "json_object" };
     if (opts.stop && opts.stop.length > 0) body.stop = opts.stop;
+    if (config.reasoning) body.reasoning = config.reasoning;
+    applyOpenRouterProviderRouting(config, body);
 
     const headers: Record<string, string> = {};
     if (config.apiKey) {
@@ -202,6 +206,19 @@ function normalizeEndpoint(url: string): string {
   if (stripped.endsWith("/chat/completions")) return stripped;
   if (stripped.endsWith("/completions")) return stripped;
   return `${stripped}/chat/completions`;
+}
+
+function applyOpenRouterProviderRouting(
+  config: LlmProviderCtx["config"],
+  body: Record<string, unknown>,
+): void {
+  const endpoint = config.endpoint ?? "";
+  if (!endpoint.includes("openrouter.ai")) return;
+
+  const providerPrefs: Record<string, unknown> = {};
+  if (config.providerIgnore?.length) providerPrefs.ignore = config.providerIgnore;
+  if (config.providerOrder?.length) providerPrefs.order = config.providerOrder;
+  if (Object.keys(providerPrefs).length > 0) body.provider = providerPrefs;
 }
 
 function mapFinish(reason: string | undefined): ProviderCompletion["finishReason"] {

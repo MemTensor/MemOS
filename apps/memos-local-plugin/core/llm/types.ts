@@ -28,6 +28,10 @@ export interface LlmConfig {
   apiKey?: string;
   timeoutMs: number;
   maxRetries: number;
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore?: string[];
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder?: string[];
   /** Optional per-call default. Default: 1024. */
   maxTokens?: number;
   /** Extra HTTP headers for outgoing requests. */

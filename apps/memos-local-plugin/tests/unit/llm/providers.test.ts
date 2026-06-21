@@ -99,6 +99,95 @@ describe("llm/providers", () => {
       const p = new OpenAiLlmProvider();
       await expect(p.complete(msgs, call(), ctxFor(cfg({ apiKey: "" })))).rejects.toBeInstanceOf(MemosError);
     });
+
+    it("forwards config.reasoning into the request body", async () => {
+      const cap = captureFetch({ choices: [{ message: { content: "{}" } }] });
+      const p = new OpenAiLlmProvider();
+      await p.complete(msgs, call(), ctxFor(cfg({ reasoning: { enabled: false } })));
+      const body = JSON.parse(cap.init!.body as string);
+      expect(body.reasoning).toEqual({ enabled: false });
+    });
+
+    it("omits reasoning from the body when config.reasoning is unset", async () => {
+      const cap = captureFetch({ choices: [{ message: { content: "{}" } }] });
+      const p = new OpenAiLlmProvider();
+      await p.complete(msgs, call(), ctxFor(cfg()));
+      const body = JSON.parse(cap.init!.body as string);
+      expect("reasoning" in body).toBe(false);
+    });
+
+    it("adds OpenRouter provider preferences for non-streaming calls", async () => {
+      const cap = captureFetch({ choices: [{ message: { content: "ok" } }] });
+      const p = new OpenAiLlmProvider();
+      await p.complete(
+        msgs,
+        call(),
+        ctxFor(
+          cfg({
+            endpoint: "https://openrouter.ai/api/v1",
+            providerIgnore: ["together", "deepinfra"],
+            providerOrder: ["google", "anthropic"],
+          }),
+        ),
+      );
+      const body = JSON.parse(cap.init!.body as string);
+      expect(body.provider).toEqual({
+        ignore: ["together", "deepinfra"],
+        order: ["google", "anthropic"],
+      });
+    });
+
+    it("omits provider preferences for non-OpenRouter endpoints", async () => {
+      const cap = captureFetch({ choices: [{ message: { content: "ok" } }] });
+      const p = new OpenAiLlmProvider();
+      await p.complete(
+        msgs,
+        call(),
+        ctxFor(
+          cfg({
+            endpoint: "https://api.openai.com/v1",
+            providerIgnore: ["together"],
+            providerOrder: ["google"],
+          }),
+        ),
+      );
+      const body = JSON.parse(cap.init!.body as string);
+      expect("provider" in body).toBe(false);
+    });
+
+    it("adds OpenRouter provider preferences for streaming calls", async () => {
+      const cap: { url?: string; init?: RequestInit } = {};
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: unknown, init?: unknown) => {
+          cap.url = String(url);
+          cap.init = init as RequestInit;
+          return new Response("data: [DONE]\n\n", {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }),
+      );
+      const p = new OpenAiLlmProvider();
+      for await (const _chunk of p.stream(
+        msgs,
+        call(),
+        ctxFor(
+          cfg({
+            endpoint: "https://openrouter.ai/api/v1",
+            providerIgnore: ["novita"],
+            providerOrder: ["google"],
+          }),
+        ),
+      )) {
+        // Drain the stream so the fetch request is issued.
+      }
+      const body = JSON.parse(cap.init!.body as string);
+      expect(body.provider).toEqual({
+        ignore: ["novita"],
+        order: ["google"],
+      });
+    });
   });
 
   // ─── anthropic ─────────────────────────────────────────────────────────────

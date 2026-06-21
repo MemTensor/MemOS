@@ -39,6 +39,10 @@ const EmbeddingSchema = Type.Object({
   endpoint: StringWithDefault(""),
   model: StringWithDefault("Xenova/all-MiniLM-L6-v2"),
   apiKey: StringWithDefault(""),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
   cache: Type.Object({
     enabled: Bool(true),
     maxItems: NumberInRange(20_000, 0),
@@ -65,6 +69,12 @@ const LlmSchema = Type.Object({
   timeoutMs: NumberInRange(45_000, 1_000),
   /** Max retries on transient errors. */
   maxRetries: NumberInRange(3, 0, 10),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
+  reasoning: Type.Optional(ReasoningSchema),
 }, { default: {} });
 
 /**
@@ -89,6 +99,12 @@ const SkillEvolverSchema = Type.Object({
   apiKey: StringWithDefault(""),
   temperature: NumberInRange(0, 0, 2),
   timeoutMs: NumberInRange(60_000, 1_000),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
+  reasoning: Type.Optional(ReasoningSchema),
 }, { default: {} });
 
 const StorageSchema = Type.Object({

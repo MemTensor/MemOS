@@ -592,5 +592,11 @@ function buildRequestBody(cfg: SummarizerConfig, body: Record<string, unknown>):
   if (isZhipuEndpoint(endpoint)) {
     body.thinking = { type: "disabled" };
   }
+  if (endpoint.includes("openrouter.ai")) {
+    const providerPrefs: Record<string, unknown> = {};
+    if (cfg.providerIgnore?.length) providerPrefs.ignore = cfg.providerIgnore;
+    if (cfg.providerOrder?.length) providerPrefs.order = cfg.providerOrder;
+    if (Object.keys(providerPrefs).length > 0) body.provider = providerPrefs;
+  }
   return body;
 }

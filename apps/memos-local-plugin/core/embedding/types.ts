@@ -27,6 +27,10 @@ export interface EmbeddingConfig {
   model: string;
   dimensions: number;
   apiKey?: string;
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore?: string[];
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder?: string[];
   cache: {
     enabled: boolean;
     maxItems: number;

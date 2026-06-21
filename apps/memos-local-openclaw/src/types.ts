@@ -177,6 +177,10 @@ export interface ProviderConfig {
   headers?: Record<string, string>;
   timeoutMs?: number;
   temperature?: number;
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore?: string[];
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder?: string[];
   capabilities?: SharingCapabilities;
 }
 
