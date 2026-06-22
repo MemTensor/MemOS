@@ -8,7 +8,7 @@ MemOS decouples **model logic** from **runtime config** via two Pydantic factori
 
 | Factory | Produces | Typical backends |
 |---------|----------|------------------|
-| `LLMFactory` | Chat model | `ollama`, `openai`, `azure`, `qwen`, `deepseek`, `huggingface`, `huggingface_singleton`, `vllm`, `openai_new` |
+| `LLMFactory` | Chat model | `ollama`, `openai`, `azure`, `qwen`, `deepseek`, `atlascloud`, `huggingface`, `huggingface_singleton`, `vllm`, `openai_new` |
 | `EmbedderFactory` | Text embedder | `ollama`, `sentence_transformer`, `ark`, `universal_api` |
 
 Both factories accept a `*_ConfigFactory.model_validate(...)` blob, so you can switch provider with a single `backend=` swap.
@@ -24,6 +24,7 @@ Both factories accept a `*_ConfigFactory.model_validate(...)` blob, so you can s
 | `azure` | Azure OpenAI Chat Completions | `<your-deployment-name>` |
 | `qwen` | DashScope OpenAI-compatible API | `qwen-plus` |
 | `deepseek` | DeepSeek OpenAI-compatible API | `deepseek-chat` / `deepseek-reasoner` |
+| `atlascloud` | Atlas Cloud OpenAI-compatible API | `deepseek-ai/DeepSeek-V3.1` |
 | `huggingface` | Local transformers pipeline | `Qwen/Qwen3-1.7B` |
 | `huggingface_singleton` | Same as `huggingface` + singleton reuse | `Qwen/Qwen3-1.7B` |
 | `vllm` | OpenAI-compatible vLLM server | `Qwen/Qwen2.5-7B-Instruct` |

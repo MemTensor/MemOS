@@ -1,6 +1,7 @@
 from typing import Any, ClassVar
 
 from memos.configs.llm import LLMConfigFactory
+from memos.llms.atlascloud import AtlasCloudLLM
 from memos.llms.base import BaseLLM
 from memos.llms.deepseek import DeepSeekLLM
 from memos.llms.hf import HFLLM
@@ -26,6 +27,7 @@ class LLMFactory(BaseLLM):
         "vllm": VLLMLLM,
         "qwen": QwenLLM,
         "deepseek": DeepSeekLLM,
+        "atlascloud": AtlasCloudLLM,
         "minimax": MinimaxLLM,
         "openai_new": OpenAIResponsesLLM,
     }
