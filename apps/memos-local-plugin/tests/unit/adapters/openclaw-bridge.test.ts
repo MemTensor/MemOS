@@ -9,6 +9,10 @@
  * `openclaw/plugin-sdk` surface (verified against
  * `openclaw/src/plugins/hook-types.ts::PluginHookHandlerMap`).
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -52,6 +56,7 @@ import type {
 let db: TmpDbHandle | null = null;
 let pipeline: PipelineHandle | null = null;
 let core: MemoryCore | null = null;
+const compactionTempDirs: string[] = [];
 
 function buildDeps(h: TmpDbHandle): PipelineDeps {
   return {
@@ -113,7 +118,16 @@ afterEach(async () => {
   }
   db?.cleanup();
   db = null;
+  for (const dir of compactionTempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
+
+function makeCompactionSpoolDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memos-oc-compaction-"));
+  compactionTempDirs.push(dir);
+  return dir;
+}
 
 // ─── Pure helpers ───────────────────────────────────────────────────────────
 
@@ -1212,6 +1226,487 @@ describe("createOpenClawBridge", () => {
       .filter(Boolean);
     expect(ids.length).toBeGreaterThan(0);
     expect(new Set(ids).size).toBe(1);
+  });
+
+  it("continues the same trace across OpenClaw compaction without storing the compact summary", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const sessionKey = "s-compact-continuity";
+    const ctx = hookCtx({ sessionKey, runId: "run-compact-1" });
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      compactionSpoolDir: makeCompactionSpoolDir(),
+    });
+
+    await bridge.handleBeforePrompt(
+      { prompt: "第十个问题你搞清楚没有，不要敷衍，严格做计划", messages: [] },
+      ctx,
+    );
+
+    const originalBeforeCompaction = [
+      { role: "user", content: "第十个问题你搞清楚没有，不要敷衍，严格做计划" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "我先核对第十个问题的上下文。" },
+          {
+            type: "toolCall",
+            id: "call-plan",
+            name: "read",
+            arguments: { path: "2026-06-21-openclaw-compaction-trace-continuity-plan.md" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-plan",
+        toolName: "read",
+        content: "第十个问题：compact 之后序号必须按之前记录继续增量。",
+        isError: false,
+      },
+    ];
+
+    bridge.handleBeforeCompaction(
+      {
+        messageCount: originalBeforeCompaction.length,
+        compactingCount: originalBeforeCompaction.length,
+        tokenCount: 42,
+        messages: originalBeforeCompaction,
+      },
+      ctx,
+    );
+    bridge.handleAfterCompaction(
+      {
+        messageCount: 1,
+        compactedCount: originalBeforeCompaction.length,
+        tokenCount: 8,
+      },
+      ctx,
+    );
+    await bridge.handleSessionEnd(
+      {
+        sessionId: "host-compact-continuity",
+        sessionKey,
+        messageCount: 1,
+        reason: "compaction",
+      },
+      {
+        sessionId: "host-compact-continuity",
+        sessionKey,
+        agentId: "main",
+      },
+    );
+
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content: "COMPACT SUMMARY: 第十个问题已经被压缩成摘要。",
+          },
+          {
+            role: "assistant",
+            content: "我确认了：compact summary 不写入 trace，序号按原始记录继续。",
+          },
+        ],
+        durationMs: 500,
+      },
+      ctx,
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const episodes = await mc.listEpisodeRows({
+      sessionId: bridgeSessionId("main", sessionKey),
+      limit: 10,
+    });
+    expect(episodes).toHaveLength(1);
+    const traces = await mc.timeline({ episodeId: episodes[0]!.id as never });
+    expect(traces).toHaveLength(1);
+    expect(traces[0]!.userText).toContain("第十个问题");
+    expect(traces[0]!.userText).not.toContain("COMPACT SUMMARY");
+    expect(traces[0]!.agentText).toContain("compact summary 不写入 trace");
+    expect(traces[0]!.toolCalls).toHaveLength(1);
+    expect(traces[0]!.toolCalls[0]!.name).toBe("read");
+    expect(traces[0]!.toolCalls[0]!.output).toContain("序号必须按之前记录继续增量");
+  });
+
+  it("keeps tool-call order incremental across repeated compactions", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const sessionKey = "s-compact-repeat";
+    const ctx = hookCtx({ sessionKey, runId: "run-compact-repeat" });
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      compactionSpoolDir: makeCompactionSpoolDir(),
+    });
+
+    await bridge.handleBeforePrompt(
+      { prompt: "按计划继续实现 compact trace 连续性", messages: [] },
+      ctx,
+    );
+
+    const firstOriginal = [
+      { role: "user", content: "按计划继续实现 compact trace 连续性" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-001", name: "read", arguments: { path: "plan.md" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-001",
+        toolName: "read",
+        content: "计划要求 compact 后 trace 按原始记录继续。",
+        isError: false,
+      },
+    ];
+    bridge.handleBeforeCompaction(
+      { messageCount: firstOriginal.length, compactingCount: firstOriginal.length, messages: firstOriginal },
+      ctx,
+    );
+    bridge.handleAfterCompaction(
+      { messageCount: 1, compactedCount: firstOriginal.length },
+      ctx,
+    );
+
+    const compactedOnceWithNewTail = [
+      { role: "user", content: "COMPACT SUMMARY: 第一次摘要。" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "继续检查实现。" },
+          { type: "toolCall", id: "call-002", name: "exec", arguments: { cmd: "npm test" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-002",
+        toolName: "exec",
+        content: "tests passed",
+        isError: false,
+      },
+    ];
+    bridge.handleBeforeCompaction(
+      {
+        messageCount: compactedOnceWithNewTail.length,
+        compactingCount: compactedOnceWithNewTail.length,
+        messages: compactedOnceWithNewTail,
+      },
+      ctx,
+    );
+    bridge.handleAfterCompaction(
+      { messageCount: 1, compactedCount: compactedOnceWithNewTail.length },
+      ctx,
+    );
+
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "COMPACT SUMMARY: 第二次摘要。" },
+          { role: "assistant", content: "完成，两个工具调用顺序保持为原始增量。" },
+        ],
+      },
+      ctx,
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const episodes = await mc.listEpisodeRows({
+      sessionId: bridgeSessionId("main", sessionKey),
+      limit: 10,
+    });
+    expect(episodes).toHaveLength(1);
+    const traces = await mc.timeline({ episodeId: episodes[0]!.id as never });
+    expect(traces).toHaveLength(1);
+    expect(traces[0]!.userText).not.toContain("COMPACT SUMMARY");
+    expect(traces[0]!.toolCalls.map((tool) => tool.name)).toEqual(["read", "exec"]);
+    expect(traces[0]!.toolCalls[0]!.output).toContain("原始记录继续");
+    expect(traces[0]!.toolCalls[1]!.output).toContain("tests passed");
+  });
+
+  it("keeps the original episode when compaction rotates the OpenClaw session key", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const oldSessionKey = "s-compact-rotate-old";
+    const newSessionKey = "s-compact-rotate-new";
+    const oldCtx = hookCtx({ sessionKey: oldSessionKey, runId: "run-compact-rotate" });
+    const newCtx = hookCtx({ sessionKey: newSessionKey, runId: "run-compact-rotate" });
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      compactionSpoolDir: makeCompactionSpoolDir(),
+    });
+
+    await bridge.handleBeforePrompt(
+      { prompt: "compact 后如果 sessionKey 变化，也要续写原 episode", messages: [] },
+      oldCtx,
+    );
+
+    const originalBeforeCompaction = [
+      { role: "user", content: "compact 后如果 sessionKey 变化，也要续写原 episode" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-rotate", name: "read", arguments: { path: "trace.log" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-rotate",
+        toolName: "read",
+        content: "old session has the original trace context",
+        isError: false,
+      },
+    ];
+    bridge.handleBeforeCompaction(
+      {
+        messageCount: originalBeforeCompaction.length,
+        compactingCount: originalBeforeCompaction.length,
+        messages: originalBeforeCompaction,
+      },
+      oldCtx,
+    );
+    bridge.handleAfterCompaction(
+      { messageCount: 1, compactedCount: originalBeforeCompaction.length },
+      oldCtx,
+    );
+    await bridge.handleSessionEnd(
+      {
+        sessionId: "host-compact-rotate-old",
+        sessionKey: oldSessionKey,
+        messageCount: 1,
+        reason: "compaction",
+        nextSessionKey: newSessionKey,
+      },
+      {
+        sessionId: "host-compact-rotate-old",
+        sessionKey: oldSessionKey,
+        agentId: "main",
+      },
+    );
+
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "COMPACT SUMMARY: rotated session key summary" },
+          { role: "assistant", content: "仍然写回原 episode，而不是开新 episode。" },
+        ],
+      },
+      newCtx,
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const oldEpisodes = await mc.listEpisodeRows({
+      sessionId: bridgeSessionId("main", oldSessionKey),
+      limit: 10,
+    });
+    const newEpisodes = await mc.listEpisodeRows({
+      sessionId: bridgeSessionId("main", newSessionKey),
+      limit: 10,
+    });
+    expect(oldEpisodes).toHaveLength(1);
+    expect(newEpisodes).toHaveLength(0);
+    const traces = await mc.timeline({ episodeId: oldEpisodes[0]!.id as never });
+    expect(traces).toHaveLength(1);
+    expect(traces[0]!.userText).toContain("sessionKey 变化");
+    expect(traces[0]!.userText).not.toContain("COMPACT SUMMARY");
+    expect(traces[0]!.agentText).toContain("写回原 episode");
+  });
+
+  it("does not persist the compact summary when compaction has no original snapshot", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const sessionKey = "s-compact-missing-snapshot";
+    const ctx = hookCtx({ sessionKey, runId: "run-compact-missing-snapshot" });
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      compactionSpoolDir: makeCompactionSpoolDir(),
+    });
+
+    await bridge.handleBeforePrompt(
+      { prompt: "compact 前原始记录缺失时不能写入摘要", messages: [] },
+      ctx,
+    );
+
+    bridge.handleBeforeCompaction(
+      {
+        messageCount: 3,
+        compactingCount: 3,
+      },
+      ctx,
+    );
+    bridge.handleAfterCompaction(
+      {
+        messageCount: 1,
+        compactedCount: 3,
+      },
+      ctx,
+    );
+
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "COMPACT SUMMARY: 原始记录已被压缩成摘要。" },
+          { role: "assistant", content: "压缩之后继续完成当前任务。" },
+        ],
+      },
+      ctx,
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const episodes = await mc.listEpisodeRows({
+      sessionId: bridgeSessionId("main", sessionKey),
+      limit: 10,
+    });
+    expect(episodes).toHaveLength(1);
+    const traces = await mc.timeline({ episodeId: episodes[0]!.id as never });
+    expect(traces).toHaveLength(0);
+  });
+
+  it("does not persist the compact summary when only after_compaction is observed", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const sessionKey = "s-compact-after-only";
+    const ctx = hookCtx({ sessionKey, runId: "run-compact-after-only" });
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      compactionSpoolDir: makeCompactionSpoolDir(),
+    });
+
+    await bridge.handleBeforePrompt(
+      { prompt: "如果 before_compaction 没被插件观察到，也不能写 compact summary", messages: [] },
+      ctx,
+    );
+
+    bridge.handleAfterCompaction(
+      {
+        messageCount: 1,
+        compactedCount: 3,
+      },
+      ctx,
+    );
+
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "COMPACT SUMMARY: before hook 没有被观察到。" },
+          { role: "assistant", content: "继续执行后续步骤。" },
+        ],
+      },
+      ctx,
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const episodes = await mc.listEpisodeRows({
+      sessionId: bridgeSessionId("main", sessionKey),
+      limit: 10,
+    });
+    expect(episodes).toHaveLength(1);
+    const traces = await mc.timeline({ episodeId: episodes[0]!.id as never });
+    expect(traces).toHaveLength(0);
+  });
+
+  it("retries a compacted trace with the original messages after a commit failure", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const originalOnTurnEnd = mc.onTurnEnd.bind(mc);
+    let attempts = 0;
+    vi.spyOn(mc, "onTurnEnd").mockImplementation(async (turn) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("transient commit failure");
+      return originalOnTurnEnd(turn);
+    });
+
+    const sessionKey = "s-compact-retry";
+    const ctx = hookCtx({ sessionKey, runId: "run-compact-retry" });
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      compactionSpoolDir: makeCompactionSpoolDir(),
+    });
+
+    await bridge.handleBeforePrompt(
+      { prompt: "compact trace 提交失败后需要保留原始记录重试", messages: [] },
+      ctx,
+    );
+
+    const originalBeforeCompaction = [
+      { role: "user", content: "compact trace 提交失败后需要保留原始记录重试" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-retry", name: "read", arguments: { path: "trace.log" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-retry",
+        toolName: "read",
+        content: "original retry evidence",
+        isError: false,
+      },
+    ];
+    bridge.handleBeforeCompaction(
+      {
+        messageCount: originalBeforeCompaction.length,
+        compactingCount: originalBeforeCompaction.length,
+        messages: originalBeforeCompaction,
+      },
+      ctx,
+    );
+    bridge.handleAfterCompaction(
+      { messageCount: 1, compactedCount: originalBeforeCompaction.length },
+      ctx,
+    );
+
+    const compactedAgentEnd = {
+      success: true,
+      messages: [
+        { role: "user", content: "COMPACT SUMMARY: retry summary" },
+        { role: "assistant", content: "重试后应该写入原始记录，而不是摘要。" },
+      ],
+    };
+
+    await bridge.handleAgentEnd(compactedAgentEnd, ctx);
+    await (pipeline as PipelineHandle).flush();
+
+    const episodes = await mc.listEpisodeRows({
+      sessionId: bridgeSessionId("main", sessionKey),
+      limit: 10,
+    });
+    expect(episodes).toHaveLength(1);
+    let traces = await mc.timeline({ episodeId: episodes[0]!.id as never });
+    expect(traces).toHaveLength(0);
+
+    await bridge.handleAgentEnd(compactedAgentEnd, ctx);
+    await (pipeline as PipelineHandle).flush();
+
+    traces = await mc.timeline({ episodeId: episodes[0]!.id as never });
+    expect(traces).toHaveLength(1);
+    expect(traces[0]!.userText).toContain("提交失败后需要保留原始记录");
+    expect(traces[0]!.userText).not.toContain("COMPACT SUMMARY");
+    expect(traces[0]!.toolCalls[0]!.output).toContain("original retry evidence");
   });
 
   it("keeps a single episode when before_prompt soft-times out but onTurnStart finishes later", async () => {
