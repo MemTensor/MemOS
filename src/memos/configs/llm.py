@@ -72,6 +72,13 @@ class DeepSeekLLMConfig(OpenAILLMConfig):
     )
 
 
+class AtlasCloudLLMConfig(OpenAILLMConfig):
+    api_base: str = Field(
+        default="https://api.atlascloud.ai/v1",
+        description="Base URL for Atlas Cloud OpenAI-compatible API",
+    )
+
+
 class MinimaxLLMConfig(OpenAILLMConfig):
     api_key: str = Field(..., description="API key for MiniMax")
     api_base: str = Field(
@@ -155,6 +162,7 @@ class LLMConfigFactory(BaseConfig):
         "huggingface_singleton": HFLLMConfig,  # Add singleton support
         "qwen": QwenLLMConfig,
         "deepseek": DeepSeekLLMConfig,
+        "atlascloud": AtlasCloudLLMConfig,
         "minimax": MinimaxLLMConfig,
         "openai_new": OpenAIResponsesLLMConfig,
     }
