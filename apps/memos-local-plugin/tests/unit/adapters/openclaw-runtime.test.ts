@@ -8,6 +8,7 @@ import { DEFAULT_CONFIG } from "../../../core/config/defaults.js";
 import { resolveHome, type ResolvedHome } from "../../../core/config/index.js";
 import type {
   HostLogger,
+  OpenClawHookHandlerMap,
   OpenClawPluginApi,
   ServiceDescriptor,
 } from "../../../adapters/openclaw/openclaw-api.js";
@@ -25,6 +26,7 @@ const tempRoots: string[] = [];
 let oldMemosHome: string | undefined;
 
 afterEach(() => {
+  delete (globalThis as Record<string, unknown>).__memos_local_openclaw_runtime_v1__;
   if (oldMemosHome === undefined) delete process.env.MEMOS_HOME;
   else process.env.MEMOS_HOME = oldMemosHome;
   vi.doUnmock("../../../core/pipeline/index.js");
@@ -108,6 +110,77 @@ function deferred<T>() {
 }
 
 describe("OpenClaw adapter runtime lifecycle", () => {
+  it("registers hot-path hooks without returning promises while runtime boots", async () => {
+    const home = useTempMemosHome();
+    const core = makeCore();
+    const boot = deferred<{ core: ReturnType<typeof makeCore>; config: typeof DEFAULT_CONFIG; home: ResolvedHome }>();
+    const bootstrapMemoryCoreFull = vi.fn(() => boot.promise);
+    const startHttpServer = vi.fn(async () => ({
+      url: "http://127.0.0.1:18799",
+      port: 18799,
+      closed: false,
+      close: vi.fn(async () => {}),
+    }));
+    const plugin = await loadPluginWithMocks(bootstrapMemoryCoreFull, startHttpServer);
+
+    const api = makeApi();
+    plugin.register(api);
+
+    const hookCall = (api.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([name]) => name === "tool_result_persist",
+    );
+    expect(hookCall).toBeDefined();
+    const handler = hookCall![1] as OpenClawHookHandlerMap["tool_result_persist"];
+    const beforeCompactionCall = (api.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([name]) => name === "before_compaction",
+    );
+    expect(beforeCompactionCall).toBeDefined();
+    const beforeCompaction =
+      beforeCompactionCall![1] as OpenClawHookHandlerMap["before_compaction"];
+    try {
+      const result = handler(
+        {
+          toolName: "sh",
+          toolCallId: "call-sync",
+          message: {
+            role: "toolResult",
+            toolName: "sh",
+            toolCallId: "call-sync",
+            content: "boom",
+            isError: true,
+          },
+        },
+        {
+          agentId: "main",
+          sessionKey: "s-sync-hook",
+          sessionId: "host-sync-hook",
+          runId: "run-sync-hook",
+          toolName: "sh",
+          toolCallId: "call-sync",
+        },
+      );
+      expect(result).toBeUndefined();
+      const compactionResult = beforeCompaction(
+        {
+          messageCount: 1,
+          compactingCount: 1,
+          messages: [{ role: "user", content: "before compact" }],
+        },
+        {
+          agentId: "main",
+          sessionKey: "s-sync-hook",
+          sessionId: "host-sync-hook",
+          runId: "run-sync-hook",
+        },
+      );
+      expect(compactionResult).toBeUndefined();
+    } finally {
+      boot.resolve({ core, config: DEFAULT_CONFIG, home });
+      await api.services[0]!.start?.();
+      await api.services[0]!.stop?.();
+    }
+  });
+
   it("reuses the in-process runtime across repeated register() calls", async () => {
     const home = useTempMemosHome();
     const firstCore = makeCore();

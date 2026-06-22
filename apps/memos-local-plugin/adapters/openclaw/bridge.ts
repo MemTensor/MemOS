@@ -32,9 +32,20 @@ import type {
 import type { MemoryCore } from "../../agent-contract/memory-core.js";
 import { effectiveReadOnlyInjectionProfile } from "../../core/domain.js";
 
+import {
+  COMPACTION_TRACE_WARN_BYTES,
+  cleanupOrphanCompactionSegmentsSync,
+  defaultCompactionSpoolDir,
+  readCompactionSegmentMessagesSync,
+  removeCompactionSegmentSync,
+  type CompactionTraceSegmentRef,
+  writeCompactionSegmentSync,
+} from "./compaction-spool.js";
 import type {
   AfterToolCallEvent,
+  AfterCompactionEvent,
   AgentEndEvent,
+  BeforeCompactionEvent,
   BeforePromptBuildEvent,
   BeforePromptBuildResult,
   BeforeToolCallEvent,
@@ -884,6 +895,8 @@ export interface BridgeOptions {
     | "skill_experience";
   /** Task domain preset (`ir` enables IR-eval-only behaviors). */
   domain?: "" | "ir";
+  /** Directory for synchronous compaction trace spooling. */
+  compactionSpoolDir?: string;
   /** Override the wall-clock source (tests). */
   now?: () => number;
 }
@@ -915,6 +928,18 @@ export interface BridgeHandle {
     event: ToolResultPersistEvent,
     ctx: PluginHookToolContext,
   ) => { message?: unknown } | void;
+
+  /** Handler for `before_compaction` — snapshot original transcript synchronously. */
+  handleBeforeCompaction: (
+    event: BeforeCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ) => void;
+
+  /** Handler for `after_compaction` — record compacted transcript baseline. */
+  handleAfterCompaction: (
+    event: AfterCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ) => void;
 
   /** Handler for `session_start`. */
   handleSessionStart: (
@@ -1086,6 +1111,23 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     parentEpisodeId?: EpisodeId;
   }>();
   const pendingSubagentSessions = new Set<SessionId>();
+  const sessionContinuityAliases = new Map<SessionId, SessionId>();
+  type CompactionTraceStatus = "capturing" | "compacted" | "degraded";
+  type CompactionTraceState = {
+    sessionId: SessionId;
+    runId?: string;
+    turnGeneration: number;
+    status: CompactionTraceStatus;
+    missingSnapshotReason?: string;
+    baselineAfterLatestCompaction: number;
+    nextSeq: number;
+    segments: CompactionTraceSegmentRef[];
+    createdAt: number;
+    updatedAt: number;
+  };
+  const compactionTraceBySession = new Map<SessionId, CompactionTraceState>();
+  const compactionSpoolDir = opts.compactionSpoolDir ?? defaultCompactionSpoolDir();
+  let compactionSpoolOrphansCleaned = false;
 
   function memoryWritesDisabled(): boolean {
     return opts.memoryAddDisabled ||
@@ -1127,6 +1169,29 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       .map(({ runId: _runId, order: _order, ...tc }) => tc);
   }
 
+  function canonicalSessionId(
+    agentId: string | undefined,
+    sessionKey: string | undefined,
+  ): SessionId {
+    const raw = bridgeSessionId(agentId ?? "main", sessionKey ?? "default");
+    let current = raw;
+    for (let i = 0; i < 8; i++) {
+      const next = sessionContinuityAliases.get(current);
+      if (!next) return current;
+      current = next;
+    }
+    opts.log.warn("memos.session.alias_loop", { sessionId: raw });
+    return raw;
+  }
+
+  function clearSessionContinuityAliases(sessionId: SessionId): void {
+    for (const [alias, canonical] of sessionContinuityAliases.entries()) {
+      if (alias === sessionId || canonical === sessionId) {
+        sessionContinuityAliases.delete(alias);
+      }
+    }
+  }
+
   async function ensureSession(
     agentId: string | undefined,
     sessionKey: string | undefined,
@@ -1134,6 +1199,8 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   ): Promise<SessionId> {
     const effectiveAgent = agentId ?? "main";
     const effectiveKey = sessionKey ?? "default";
+    // Do not canonicalize through compaction aliases here: a fresh
+    // session_start/before_prompt after compaction is a new episode boundary.
     const sid = bridgeSessionId(effectiveAgent, effectiveKey);
     await opts.core.openSession({
       agent: opts.agent,
@@ -1306,6 +1373,70 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     const id = latestEpisodeBySession.get(sessionId)?.episodeId;
     if (!id) return undefined;
     return opts.core.isEpisodeWritable(id) ? id : undefined;
+  }
+
+  function getOrCreateCompactionTraceState(
+    sessionId: SessionId,
+    ctx: { runId?: string },
+  ): CompactionTraceState {
+    const existing = compactionTraceBySession.get(sessionId);
+    if (existing) {
+      if (ctx.runId && !existing.runId) existing.runId = ctx.runId;
+      return existing;
+    }
+    const ts = now();
+    const state: CompactionTraceState = {
+      sessionId,
+      runId: ctx.runId,
+      turnGeneration: sessionTurnGeneration.get(sessionId) ?? 0,
+      status: "capturing",
+      baselineAfterLatestCompaction: 0,
+      nextSeq: 0,
+      segments: [],
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    compactionTraceBySession.set(sessionId, state);
+    return state;
+  }
+
+  function markCompactionTraceDegraded(
+    state: CompactionTraceState,
+    reason: string,
+  ): void {
+    state.status = "degraded";
+    state.missingSnapshotReason = reason;
+    state.updatedAt = now();
+  }
+
+  function removeCompactionTraceState(sessionId: SessionId): void {
+    const state = compactionTraceBySession.get(sessionId);
+    if (!state) return;
+    for (const segment of state.segments) {
+      try {
+        removeCompactionSegmentSync(segment);
+      } catch (err) {
+        opts.log.debug("memos.compaction.spool_cleanup_failed", {
+          sessionId,
+          path: segment.path,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    compactionTraceBySession.delete(sessionId);
+  }
+
+  function virtualMessagesAfterCompaction(
+    state: CompactionTraceState,
+    compactedMessages: unknown[],
+  ): unknown[] {
+    const original: unknown[] = [];
+    for (const segment of state.segments) {
+      original.push(...readCompactionSegmentMessagesSync(segment));
+    }
+    return original.concat(
+      compactedMessages.slice(Math.max(0, state.baselineAfterLatestCompaction)),
+    );
   }
 
   async function handleBeforePrompt(
@@ -1547,7 +1678,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       return;
     }
     const namespace = namespaceFromAgentCtx(ctx);
-    const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
+    const sessionId = canonicalSessionId(ctx.agentId, ctx.sessionKey);
     const allMessages = Array.isArray(event.messages) ? event.messages : [];
 
     // Always acknowledge the hook at INFO level so the user can
@@ -1574,16 +1705,49 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         return;
       }
 
+      let compactionState = compactionTraceBySession.get(sessionId);
+      if (
+        compactionState &&
+        compactionState.turnGeneration !== (sessionTurnGeneration.get(sessionId) ?? 0)
+      ) {
+        opts.log.warn("memos.agent_end.compaction_stale_state", {
+          sessionId,
+          sessionKey: ctx.sessionKey,
+          stateTurnGeneration: compactionState.turnGeneration,
+          currentTurnGeneration: sessionTurnGeneration.get(sessionId) ?? 0,
+          status: compactionState.status,
+        });
+        removeCompactionTraceState(sessionId);
+        compactionState = undefined;
+      }
       // Process only messages appended since the last call — OpenClaw
       // ships the full transcript with every `agent_end`, not the delta.
-      // We subtract one from the cursor so the overlap rule catches a
-      // multi-part assistant reply spanning the boundary.
+      // When OpenClaw compacted mid-turn, the current transcript starts
+      // with a compact summary; rebuild the turn from synchronously
+      // spooled originals plus only the post-compaction tail.
       const cursor = messageCursor.get(sessionId) ?? 0;
       const novel =
-        cursor >= allMessages.length
+        compactionState
+          ? virtualMessagesAfterCompaction(compactionState, allMessages)
+          : cursor >= allMessages.length
           ? allMessages.slice()
           : allMessages.slice(Math.max(0, cursor - 1));
-      messageCursor.set(sessionId, allMessages.length);
+      const nextCursor = allMessages.length;
+      if (!compactionState) {
+        messageCursor.set(sessionId, nextCursor);
+      }
+      if (compactionState) {
+        opts.log.debug("memos.agent_end.compaction_virtualized", {
+          sessionId,
+          sessionKey: ctx.sessionKey,
+          compactedMessages: allMessages.length,
+          virtualMessages: novel.length,
+          baseline: compactionState.baselineAfterLatestCompaction,
+          segmentCount: compactionState.segments.length,
+          status: compactionState.status,
+          missingSnapshotReason: compactionState.missingSnapshotReason,
+        });
+      }
 
       const flat = flattenMessages(novel);
       const turn = extractTurn(flat, now());
@@ -1597,7 +1761,13 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           flat: flat.length,
           firstRole: flat[0]?.role,
           hasUserText: !!turn?.userText,
+          compactionStatus: compactionState?.status,
         });
+        if (compactionState) {
+          messageCursor.set(sessionId, nextCursor);
+          removeCompactionTraceState(sessionId);
+          clearSessionContinuityAliases(sessionId);
+        }
         return;
       }
 
@@ -1683,6 +1853,11 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       };
 
       const res = await opts.core.onTurnEnd(turnResult);
+      if (compactionState) {
+        messageCursor.set(sessionId, nextCursor);
+        removeCompactionTraceState(sessionId);
+      }
+      clearSessionContinuityAliases(sessionId);
       opts.log.info("memos.onTurnEnd", {
         sessionKey: ctx.sessionKey,
         agentId: ctx.agentId,
@@ -1710,6 +1885,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         forgetSessionBindings(sessionId);
         observedToolCallsBySession.delete(sessionId);
         lastUserTextBySession.delete(sessionId);
+        clearSessionContinuityAliases(sessionId);
       }
     } catch (err) {
       opts.log.warn("memos.onTurnEnd.failed", {
@@ -1726,7 +1902,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     const toolCallId = ctx.toolCallId ?? event.toolCallId;
     if (!toolCallId) return;
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
-    const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
+    const sessionId = canonicalSessionId(ctx.agentId, ctx.sessionKey);
     toolCallStartedAt.set(toolCallId, {
       ts: now(),
       sessionId,
@@ -1743,7 +1919,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     if (memoryWritesDisabled()) return;
     try {
-      const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
+      const sessionId = canonicalSessionId(ctx.agentId, ctx.sessionKey);
       const toolCallId = ctx.toolCallId ?? event.toolCallId;
       const started = toolCallId ? toolCallStartedAt.get(toolCallId) : undefined;
       if (toolCallId) toolCallStartedAt.delete(toolCallId);
@@ -1804,6 +1980,121 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     return { message };
   }
 
+  function handleBeforeCompaction(
+    event: BeforeCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ): void {
+    if (isEphemeralSessionKey(ctx.sessionKey)) return;
+    if (memoryWritesDisabled()) return;
+    const sessionId = canonicalSessionId(ctx.agentId, ctx.sessionKey);
+    const state = getOrCreateCompactionTraceState(sessionId, ctx);
+    const messages = Array.isArray(event.messages) ? event.messages : [];
+    if (messages.length === 0) {
+      markCompactionTraceDegraded(state, "missing_before_compaction_messages");
+      opts.log.warn("memos.compaction.before.skipped", {
+        reason: "no_messages_snapshot",
+        sessionId,
+        sessionKey: ctx.sessionKey,
+        agentId: ctx.agentId,
+        messageCount: event.messageCount,
+        status: state.status,
+      });
+      return;
+    }
+    try {
+      if (!compactionSpoolOrphansCleaned) {
+        compactionSpoolOrphansCleaned = true;
+        const removed = cleanupOrphanCompactionSegmentsSync({
+          dir: compactionSpoolDir,
+          now: now(),
+        });
+        if (removed > 0) {
+          opts.log.debug("memos.compaction.spool_orphans_removed", {
+            dir: compactionSpoolDir,
+            removed,
+          });
+        }
+      }
+      const start = Math.min(
+        messages.length,
+        Math.max(0, state.baselineAfterLatestCompaction),
+      );
+      const originalTail = messages.slice(start);
+      if (originalTail.length === 0) {
+        opts.log.debug("memos.compaction.before.skipped", {
+          reason: "no_new_original_messages",
+          sessionId,
+          baseline: state.baselineAfterLatestCompaction,
+          messageCount: messages.length,
+        });
+        return;
+      }
+      const segment = writeCompactionSegmentSync({
+        dir: compactionSpoolDir,
+        sessionId,
+        runId: ctx.runId,
+        seq: state.nextSeq++,
+        createdAt: now(),
+        messages: originalTail,
+      });
+      state.segments.push(segment);
+      state.status = "capturing";
+      delete state.missingSnapshotReason;
+      state.updatedAt = now();
+      const level = segment.bytes > COMPACTION_TRACE_WARN_BYTES ? "warn" : "debug";
+      opts.log[level]("memos.compaction.before.spool", {
+        sessionId,
+        sessionKey: ctx.sessionKey,
+        runId: ctx.runId,
+        seq: segment.seq,
+        messages: segment.messageCount,
+        bytes: segment.bytes,
+        baseline: state.baselineAfterLatestCompaction,
+      });
+    } catch (err) {
+      opts.log.warn("memos.compaction.before.failed", {
+        sessionId,
+        sessionKey: ctx.sessionKey,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      markCompactionTraceDegraded(state, "spool_write_failed");
+    }
+  }
+
+  function handleAfterCompaction(
+    event: AfterCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ): void {
+    if (isEphemeralSessionKey(ctx.sessionKey)) return;
+    if (memoryWritesDisabled()) return;
+    const sessionId = canonicalSessionId(ctx.agentId, ctx.sessionKey);
+    let state = compactionTraceBySession.get(sessionId);
+    if (!state) {
+      state = getOrCreateCompactionTraceState(sessionId, ctx);
+      markCompactionTraceDegraded(state, "missing_before_compaction_state");
+      opts.log.warn("memos.compaction.after.degraded", {
+        sessionId,
+        sessionKey: ctx.sessionKey,
+        runId: ctx.runId,
+        reason: state.missingSnapshotReason,
+      });
+    } else if (state.status !== "degraded") {
+      state.status = "compacted";
+    }
+    state.baselineAfterLatestCompaction = Math.max(0, event.messageCount);
+    state.updatedAt = now();
+    opts.log.debug("memos.compaction.after", {
+      sessionId,
+      sessionKey: ctx.sessionKey,
+      runId: ctx.runId,
+      messageCount: event.messageCount,
+      compactedCount: event.compactedCount,
+      segmentCount: state.segments.length,
+      status: state.status,
+      missingSnapshotReason: state.missingSnapshotReason,
+    });
+  }
+
   async function handleSessionStart(
     event: SessionStartEvent,
     ctx: PluginHookSessionContext,
@@ -1831,7 +2122,22 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     if (memoryWritesDisabled()) return;
     try {
-      const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
+      const sessionId = canonicalSessionId(ctx.agentId, ctx.sessionKey);
+      if (event.reason === "compaction") {
+        if (event.nextSessionKey) {
+          const alias = bridgeSessionId(ctx.agentId ?? "main", event.nextSessionKey);
+          if (alias !== sessionId) {
+            sessionContinuityAliases.set(alias, sessionId);
+          }
+        }
+        opts.log.debug("memos.session.end.compaction_continues", {
+          sessionId,
+          sessionKey: ctx.sessionKey,
+          messageCount: event.messageCount,
+          nextSessionKey: event.nextSessionKey,
+        });
+        return;
+      }
       if (pendingSubagentSessions.has(sessionId)) {
         opts.log.debug("memos.session.end.deferred_for_subagent", {
           sessionId,
@@ -1845,6 +2151,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       forgetSessionBindings(sessionId);
       observedToolCallsBySession.delete(sessionId);
       lastUserTextBySession.delete(sessionId);
+      clearSessionContinuityAliases(sessionId);
       opts.log.debug("memos.session.ended", {
         sessionId: event.sessionId,
         sessionKey: ctx.sessionKey,
@@ -1916,6 +2223,8 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     handleBeforeToolCall,
     handleAfterToolCall,
     handleToolResultPersist,
+    handleBeforeCompaction,
+    handleAfterCompaction,
     handleSessionStart,
     handleSessionEnd,
     handleSubagentSpawned,

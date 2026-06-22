@@ -29,6 +29,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createOpenClawBridge, type BridgeHandle } from "./bridge.js";
+import { COMPACTION_TRACE_SPOOL_DIR_NAME } from "./compaction-spool.js";
 import {
   acquireOpenClawRuntimeLock,
   DuplicateOpenClawRuntimeError,
@@ -230,6 +231,7 @@ async function createRuntime(
       memoryAddDisabled: memoryAddDisabledFromConfig(api.pluginConfig),
       readOnlyInjectionProfile: config.algorithm.retrieval.readOnlyInjectionProfile,
       domain: config.domain,
+      compactionSpoolDir: path.join(home.dataDir, COMPACTION_TRACE_SPOOL_DIR_NAME),
     });
 
     if (opts.readOnly) {
@@ -446,6 +448,7 @@ function register(api: OpenClawPluginApi): void {
     await state.bootstrapPromise;
     return state.runtime;
   };
+  const runtimeIfReady = (): PluginRuntime | null => state.runtime;
 
   registerOpenClawTools(api, {
     agent: "openclaw",
@@ -479,10 +482,22 @@ function register(api: OpenClawPluginApi): void {
     await r.bridge.handleAfterToolCall(event, ctx);
   });
 
-  api.on("tool_result_persist", async (event, ctx) => {
-    const r = await ensureRuntime();
+  api.on("tool_result_persist", (event, ctx) => {
+    const r = runtimeIfReady();
     if (!r) return;
     return r.bridge.handleToolResultPersist(event, ctx);
+  });
+
+  api.on("before_compaction", (event, ctx) => {
+    const r = runtimeIfReady();
+    if (!r) return;
+    r.bridge.handleBeforeCompaction(event, ctx);
+  });
+
+  api.on("after_compaction", (event, ctx) => {
+    const r = runtimeIfReady();
+    if (!r) return;
+    r.bridge.handleAfterCompaction(event, ctx);
   });
 
   api.on("session_start", async (event, ctx) => {

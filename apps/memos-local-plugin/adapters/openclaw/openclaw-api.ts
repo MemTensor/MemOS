@@ -97,6 +97,8 @@ export type OpenClawHookName =
   | "before_tool_call"
   | "after_tool_call"
   | "tool_result_persist"
+  | "before_compaction"
+  | "after_compaction"
   | "session_start"
   | "session_end"
   | "subagent_spawned"
@@ -182,6 +184,21 @@ export interface ToolResultPersistEvent {
   result?: unknown;
 }
 
+export interface BeforeCompactionEvent {
+  messageCount: number;
+  compactingCount?: number;
+  tokenCount?: number;
+  messages?: unknown[];
+  sessionFile?: string;
+}
+
+export interface AfterCompactionEvent {
+  messageCount: number;
+  tokenCount?: number;
+  compactedCount: number;
+  sessionFile?: string;
+}
+
 export interface SessionStartEvent {
   sessionId: string;
   sessionKey?: string;
@@ -195,6 +212,8 @@ export type SessionEndReason =
   | "daily"
   | "compaction"
   | "deleted"
+  | "shutdown"
+  | "restart"
   | "unknown";
 
 export interface SessionEndEvent {
@@ -244,7 +263,15 @@ export interface OpenClawHookHandlerMap {
   tool_result_persist: (
     event: ToolResultPersistEvent,
     ctx: PluginHookToolContext,
-  ) => { message?: unknown } | void | Promise<{ message?: unknown } | void>;
+  ) => { message?: unknown } | void;
+  before_compaction: (
+    event: BeforeCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ) => void | Promise<void>;
+  after_compaction: (
+    event: AfterCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ) => void | Promise<void>;
   session_start: (
     event: SessionStartEvent,
     ctx: PluginHookSessionContext,
