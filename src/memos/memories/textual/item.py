@@ -185,6 +185,7 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
         "RawFileMemory",
         "SkillMemory",
         "PreferenceMemory",
+        "RawConversationTurn",
         "Context",
     ] = Field(default="WorkingMemory", description="Memory lifecycle type.")
     sources: list[SourceMessage] | None = Field(

@@ -1,6 +1,9 @@
 import asyncio
+import json
 import os
+import uuid
 
+from datetime import datetime
 from typing import Any
 
 from dotenv import load_dotenv
@@ -9,7 +12,14 @@ from fastmcp import FastMCP
 # Assuming these are your imports
 from memos.mem_os.main import MOS
 from memos.mem_os.utils.default_config import get_default
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import ADD_TASK_LABEL, MEM_READ_TASK_LABEL
 from memos.mem_user.user_manager import UserRole
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 
 
 load_dotenv()
@@ -43,6 +53,7 @@ def load_default_config(user_id="default_user"):
         "MOS_CHAT_MODEL": "model_name",
         "EMBEDDER_MODEL": "embedder_model",
         "MOS_EMBEDDER_MODEL": "embedder_model",
+        "EMBEDDING_DIMENSION": "embedding_dimension",
         "CHUNK_SIZE": "chunk_size",
         "CHUNK_OVERLAP": "chunk_overlap",
         "ENABLE_MEM_SCHEDULER": "enable_mem_scheduler",
@@ -309,6 +320,7 @@ class MOSMCPServer:
             messages: list[dict[str, str]] | None = None,
             cube_id: str | None = None,
             user_id: str | None = None,
+            session_id: str | None = None,
         ) -> str:
             """
             Add memories to a memory cube.
@@ -322,6 +334,7 @@ class MOSMCPServer:
                 messages (list[dict[str, str]], optional): List of conversation messages to add as memories
                 cube_id (str, optional): Target cube ID. If not provided, uses user's default cube
                 user_id (str, optional): User ID for access validation. If not provided, uses default user
+                session_id (str, optional): Source agent session ID
 
             Returns:
                 str: Success message confirming memories were added
@@ -333,10 +346,263 @@ class MOSMCPServer:
                     doc_path=doc_path,
                     mem_cube_id=cube_id,
                     user_id=user_id,
+                    session_id=session_id,
                 )
                 return "Memory added successfully"
             except Exception as e:
                 return f"Error adding memory: {e!s}"
+
+        @self.mcp.tool()
+        async def add_preference_memory(
+            preference: str,
+            topic: str = "",
+            reasoning: str = "",
+            cube_id: str | None = None,
+            user_id: str | None = None,
+        ) -> str:
+            """
+            Add a native structured preference memory.
+
+            Args:
+                preference (str): Explicit user preference preserved verbatim
+                topic (str): Optional preference topic
+                reasoning (str): Optional reason or source context for the preference
+                cube_id (str, optional): Target cube ID. Uses the user's default cube if omitted
+                user_id (str, optional): User ID. Uses the configured default user if omitted
+
+            Returns:
+                str: Success message containing the created preference memory ID
+            """
+            try:
+                normalized_preference = preference.strip()
+                if not normalized_preference:
+                    raise ValueError("preference must not be blank")
+
+                target_user_id = user_id if user_id is not None else self.mos_core.user_id
+                if cube_id is None:
+                    accessible_cubes = self.mos_core.user_manager.get_user_cubes(target_user_id)
+                    if not accessible_cubes:
+                        raise ValueError(
+                            f"No accessible cubes found for user '{target_user_id}'. "
+                            "Please register a cube first."
+                        )
+                    target_cube_id = accessible_cubes[0].cube_id
+                else:
+                    self.mos_core._validate_cube_access(target_user_id, cube_id)
+                    target_cube_id = cube_id
+
+                if target_cube_id not in self.mos_core.mem_cubes:
+                    raise ValueError(f"MemCube '{target_cube_id}' is not loaded. Please register.")
+
+                text_mem = self.mos_core.mem_cubes[target_cube_id].text_mem
+                if text_mem is None or not hasattr(text_mem, "embedder"):
+                    raise ValueError(
+                        f"MemCube '{target_cube_id}' does not support structured preference memory"
+                    )
+
+                embeddings = await asyncio.to_thread(
+                    text_mem.embedder.embed, [normalized_preference]
+                )
+                embedding = embeddings[0]
+                metadata = TreeNodeTextualMemoryMetadata(
+                    memory_type="PreferenceMemory",
+                    embedding=embedding,
+                    user_id=target_user_id,
+                    session_id=self.mos_core.session_id,
+                    status="activated",
+                    type="chat",
+                    source="conversation",
+                    preference_type="explicit_preference",
+                    preference=normalized_preference,
+                    topic=topic,
+                    reasoning=reasoning,
+                )
+                memory_item = TextualMemoryItem(
+                    memory=normalized_preference,
+                    metadata=metadata,
+                )
+                memory_ids = text_mem.add([memory_item])
+                memory_id = memory_ids[0] if memory_ids else memory_item.id
+                if self.mos_core.enable_mem_scheduler and self.mos_core.mem_scheduler is not None:
+                    message_item = ScheduleMessageItem(
+                        user_id=target_user_id,
+                        mem_cube_id=target_cube_id,
+                        label=ADD_TASK_LABEL,
+                        content=json.dumps([memory_id]),
+                        timestamp=datetime.utcnow(),
+                    )
+                    self.mos_core.mem_scheduler.submit_messages(messages=[message_item])
+                return f"Preference memory added successfully: {memory_id}"
+            except Exception as e:
+                return f"Error adding preference memory: {e!s}"
+
+        @self.mcp.tool()
+        async def add_raw_conversation_turn(
+            raw_turn_json: str,
+            session_id: str,
+            cube_id: str | None = None,
+            user_id: str | None = None,
+        ) -> str:
+            """
+            Add an archived raw conversation turn for later offline processing.
+
+            Raw turns are stored with status="archived" and memory_type="RawConversationTurn",
+            so default activated-memory retrieval does not recall them directly.
+            """
+            try:
+                payload = json.loads(raw_turn_json)
+                messages = payload.get("messages") or []
+                metadata_payload = payload.get("metadata") or {}
+                turn_id = str(payload.get("turn_id") or "").strip()
+                if not turn_id:
+                    raise ValueError("turn_id is required")
+                if not isinstance(messages, list) or not messages:
+                    raise ValueError("messages must be a non-empty list")
+
+                rendered_messages = []
+                sources = []
+                for message in messages:
+                    if not isinstance(message, dict):
+                        continue
+                    role = str(message.get("role") or "").strip()
+                    content = str(message.get("content") or "").strip()
+                    if not role or not content:
+                        continue
+                    rendered_messages.append(f"{role}: {content}")
+                    sources.append(
+                        SourceMessage(
+                            type="chat",
+                            role=role,
+                            content=content,
+                            message_id=turn_id,
+                        )
+                    )
+                if not rendered_messages:
+                    raise ValueError("messages contain no text content")
+
+                target_user_id = user_id if user_id is not None else self.mos_core.user_id
+                if cube_id is None:
+                    accessible_cubes = self.mos_core.user_manager.get_user_cubes(target_user_id)
+                    if not accessible_cubes:
+                        raise ValueError(
+                            f"No accessible cubes found for user '{target_user_id}'. "
+                            "Please register a cube first."
+                        )
+                    target_cube_id = accessible_cubes[0].cube_id
+                else:
+                    self.mos_core._validate_cube_access(target_user_id, cube_id)
+                    target_cube_id = cube_id
+
+                if target_cube_id not in self.mos_core.mem_cubes:
+                    raise ValueError(f"MemCube '{target_cube_id}' is not loaded. Please register.")
+
+                text_mem = self.mos_core.mem_cubes[target_cube_id].text_mem
+                if text_mem is None or not hasattr(text_mem, "embedder"):
+                    raise ValueError(
+                        f"MemCube '{target_cube_id}' does not support raw conversation memory"
+                    )
+
+                memory_text = "\n".join(rendered_messages)
+                embeddings = await asyncio.to_thread(text_mem.embedder.embed, [memory_text])
+                metadata = TreeNodeTextualMemoryMetadata(
+                    memory_type="RawConversationTurn",
+                    embedding=embeddings[0],
+                    user_id=target_user_id,
+                    session_id=session_id,
+                    status="archived",
+                    type="chat",
+                    source="conversation",
+                    sources=sources,
+                    key=turn_id,
+                    source_agent=metadata_payload.get("source_agent", "hermes_desktop"),
+                    platform=metadata_payload.get("platform"),
+                    turn_id=turn_id,
+                    raw_metadata=metadata_payload,
+                )
+                memory_item = TextualMemoryItem(
+                    id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"memos:raw-turn:{turn_id}")),
+                    memory=memory_text,
+                    metadata=metadata,
+                )
+                if hasattr(text_mem, "graph_store") and hasattr(text_mem.graph_store, "add_node"):
+                    await asyncio.to_thread(
+                        text_mem.graph_store.add_node,
+                        memory_item.id,
+                        memory_text,
+                        metadata.model_dump(exclude_none=True),
+                    )
+                    memory_id = memory_item.id
+                else:
+                    memory_ids = text_mem.add([memory_item])
+                    if not memory_ids:
+                        raise ValueError("raw conversation turn was not persisted")
+                    memory_id = memory_ids[0]
+                return f"Raw conversation turn added successfully: {memory_id}"
+            except Exception as e:
+                return f"Error adding raw conversation turn: {e!s}"
+
+        @self.mcp.tool()
+        async def process_raw_conversation_turns(
+            raw_memory_ids_json: str,
+            session_id: str = "",
+            cube_id: str | None = None,
+            user_id: str | None = None,
+        ) -> str:
+            """
+            Submit a batch of archived raw conversation turns to MemOS Scheduler/MemReader.
+
+            This keeps raw turn ingestion cheap while allowing MemOS to extract, merge,
+            organize, and clean up memories in batches.
+            """
+            try:
+                if not self.mos_core.enable_mem_scheduler or self.mos_core.mem_scheduler is None:
+                    raise ValueError("memory scheduler is not enabled")
+
+                raw_memory_ids = json.loads(raw_memory_ids_json)
+                if not isinstance(raw_memory_ids, list):
+                    raise ValueError("raw_memory_ids_json must be a JSON list")
+                raw_memory_ids = [str(memory_id).strip() for memory_id in raw_memory_ids]
+                raw_memory_ids = [memory_id for memory_id in raw_memory_ids if memory_id]
+                if not raw_memory_ids:
+                    raise ValueError("raw_memory_ids_json contains no memory ids")
+
+                target_user_id = user_id if user_id is not None else self.mos_core.user_id
+                if cube_id is None:
+                    accessible_cubes = self.mos_core.user_manager.get_user_cubes(target_user_id)
+                    if not accessible_cubes:
+                        raise ValueError(
+                            f"No accessible cubes found for user '{target_user_id}'. "
+                            "Please register a cube first."
+                        )
+                    target_cube_id = accessible_cubes[0].cube_id
+                else:
+                    self.mos_core._validate_cube_access(target_user_id, cube_id)
+                    target_cube_id = cube_id
+
+                if target_cube_id not in self.mos_core.mem_cubes:
+                    raise ValueError(f"MemCube '{target_cube_id}' is not loaded. Please register.")
+
+                text_mem = self.mos_core.mem_cubes[target_cube_id].text_mem
+                graph_store = getattr(text_mem, "graph_store", None)
+                graph_config = getattr(graph_store, "config", None)
+                scheduler_user_name = getattr(graph_config, "user_name", "") or ""
+                message_item = ScheduleMessageItem(
+                    user_id=target_user_id,
+                    mem_cube_id=target_cube_id,
+                    session_id=session_id,
+                    user_name=scheduler_user_name,
+                    label=MEM_READ_TASK_LABEL,
+                    content=json.dumps(raw_memory_ids),
+                    timestamp=datetime.utcnow(),
+                    info={"source_agent": "hermes_desktop", "memory_type": "RawConversationTurn"},
+                )
+                self.mos_core.mem_scheduler.submit_messages(messages=[message_item])
+                return (
+                    f"Submitted {len(raw_memory_ids)} raw conversation turns "
+                    "for scheduler processing"
+                )
+            except Exception as e:
+                return f"Error processing raw conversation turns: {e!s}"
 
         @self.mcp.tool()
         async def get_memory(

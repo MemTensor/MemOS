@@ -1,0 +1,7 @@
+name: memos-memory
+version: 1.0.0
+description: "Automatically retrieves and stores Hermes turns through a self-hosted MemOS MCP server."
+author: "MemOS community integration"
+hooks:
+  - pre_llm_call
+  - post_llm_call
