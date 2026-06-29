@@ -18,6 +18,7 @@ import { SqliteStore } from "./src/storage/sqlite";
 import { Embedder } from "./src/embedding";
 import { IngestWorker } from "./src/ingest/worker";
 import { RecallEngine } from "./src/recall/engine";
+import { shouldSkipAutoRecallForSession } from "./src/recall/session-policy";
 import { captureMessages, stripInboundMetadata } from "./src/capture";
 import { DEFAULTS } from "./src/types";
 import type { SearchHit } from "./src/types";
@@ -1866,6 +1867,16 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
+
+      // ─── Cron / excluded-session gate (GitHub #1311) ───────────────
+      // Skip auto-recall (and skill auto-recall) entirely for OpenClaw
+      // cron sessions by default. The cron prompt is the spec — recalling
+      // prior meta-discussion about the cron contaminates the next run.
+      const recallSessionKey = hookCtx?.sessionKey ?? (event as any)?.sessionKey;
+      if (shouldSkipAutoRecallForSession(recallSessionKey, ctx.config.autoRecall)) {
+        ctx.log.info(`auto-recall: skipping (cron/excluded session: "${recallSessionKey}")`);
+        return;
+      }
 
       const recallAgentId = hookCtx?.agentId ?? (event as any)?.agentId ?? (event as any)?.profileId ?? "main";
       currentAgentId = recallAgentId;

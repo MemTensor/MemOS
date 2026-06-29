@@ -296,12 +296,28 @@ export interface SharingConfig {
   capabilities?: SharingCapabilities;
 }
 
+export interface AutoRecallConfig {
+  /**
+   * When true (default), skip auto-recall for OpenClaw cron session keys
+   * (any session whose path contains a `cron` segment, e.g.
+   * `agent:main:cron:<jobId>`). Set to false to restore the pre-1311
+   * behaviour where cron sessions also got recall-injected context.
+   */
+  excludeCron?: boolean;
+  /**
+   * Optional regex strings tested against the raw session key in addition
+   * to the cron rule above. Any match wins. Invalid patterns are ignored.
+   */
+  excludeSessionKeyPatterns?: string[];
+}
+
 export interface MemosLocalConfig {
   summarizer?: SummarizerConfig;
   embedding?: EmbeddingConfig;
   storage?: {
     dbPath?: string;
   };
+  autoRecall?: AutoRecallConfig;
   recall?: {
     maxResultsDefault?: number;
     maxResultsMax?: number;
