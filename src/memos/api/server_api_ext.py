@@ -30,6 +30,7 @@ from memos.api.middleware.rate_limit import RateLimitMiddleware
 from memos.api.routers.admin_router import router as admin_router
 
 # Import base routers from MemOS
+from memos.api.routers.cloud_compat_router import router as cloud_compat_router
 from memos.api.routers.server_router import router as server_router
 
 
@@ -95,6 +96,11 @@ if RATE_LIMIT_ENABLED:
 
 # Include routers
 app.include_router(server_router)
+# Cloud-compat router restores /add/message, /search/memory, /get/memory
+# paths used by the MemOS Cloud OpenClaw plugin and MemOSClient SDK
+# (issue #1317). Must be included after server_router so the underlying
+# handlers (search/add/memory) are already initialised.
+app.include_router(cloud_compat_router)
 app.include_router(admin_router)
 
 # Exception handlers

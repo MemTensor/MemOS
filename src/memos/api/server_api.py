@@ -8,6 +8,7 @@ from starlette.staticfiles import StaticFiles
 
 from memos.api.exceptions import APIExceptionHandler
 from memos.api.middleware.request_context import RequestContextMiddleware
+from memos.api.routers.cloud_compat_router import router as cloud_compat_router
 from memos.api.routers.server_router import router as server_router
 from memos.plugins.manager import plugin_manager
 
@@ -36,6 +37,11 @@ app.mount("/download", StaticFiles(directory=os.getenv("FILE_LOCAL_PATH")), name
 app.add_middleware(RequestContextMiddleware, source="server_api")
 # Include routers
 app.include_router(server_router)
+# Cloud-compat router restores /add/message, /search/memory, /get/memory
+# paths used by the MemOS Cloud OpenClaw plugin and MemOSClient SDK
+# (issue #1317). Must be included after server_router so the underlying
+# handlers (search/add/memory) are already initialised.
+app.include_router(cloud_compat_router)
 
 
 @app.get("/health")
