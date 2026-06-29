@@ -45,7 +45,7 @@ import { extractRetrievalQueryWithLlm } from "./query-extract.js";
 import type { RetrievalEventBus } from "./events.js";
 import { dedupeTraceEpisodeByEpisodeId } from "./dedupe-trace-episode.js";
 import { toPacket, renderSnippetForDebug } from "./injector.js";
-import { llmFilterCandidates } from "./llm-filter.js";
+import { llmFilterCandidates, type FilterResult } from "./llm-filter.js";
 import { STANDALONE_MATH_FINAL_ANSWER_TASK_KIND } from "./math-task.js";
 import { rank } from "./ranker.js";
 import { runTier1 } from "./tier1-skill.js";
@@ -71,6 +71,13 @@ import type {
 
 const log = rootLogger.child({ channel: "core.retrieval" });
 const RETRIEVAL_QUERY_EXTRACT_TIMEOUT_MS = 5_000;
+// Wall-clock budget for the search-path LLM relevance filter. fetcher.ts
+// applies its `timeoutMs` PER ATTEMPT and retries on timeout (up to
+// maxRetries), so a per-attempt timeout alone can still blow far past the
+// client's budget (e.g. 8s × (1 + maxRetries)). We bound the whole filter
+// call instead and fall back to a mechanical top-K when it expires.
+const RETRIEVAL_FILTER_TIMEOUT_MS = 8_000;
+const RETRIEVAL_FILTER_FALLBACK_TOP_K = 6;
 
 // ─── Extra context shapes (narrowed aliases for strongly-typed entries) ─────
 
@@ -294,12 +301,32 @@ async function runAll(
 
   const queryOpts = { domain: deps.config.domain };
   const rawQuery = rawQueryText(ctx, queryOpts);
-  const llmExtract = await extractRetrievalQueryWithLlm(rawQuery, {
-    llm: deps.llm ?? null,
-    log,
-    episodeId,
-    timeoutMs: RETRIEVAL_QUERY_EXTRACT_TIMEOUT_MS,
+  // Wall-clock budget on query extraction. Same rationale as the LLM
+  // filter below: fetcher.ts retries on per-attempt timeout, so bound the
+  // whole call and fall back to the no-extract path (null) on expiry.
+  let extractTimer: ReturnType<typeof setTimeout> | undefined;
+  const extractBudget = new Promise<null>((resolve) => {
+    extractTimer = setTimeout(() => {
+      log.warn("query_extract.budget_exceeded", {
+        budgetMs: RETRIEVAL_QUERY_EXTRACT_TIMEOUT_MS,
+      });
+      resolve(null);
+    }, RETRIEVAL_QUERY_EXTRACT_TIMEOUT_MS);
   });
+  let llmExtract: Awaited<ReturnType<typeof extractRetrievalQueryWithLlm>>;
+  try {
+    llmExtract = await Promise.race([
+      extractRetrievalQueryWithLlm(rawQuery, {
+        llm: deps.llm ?? null,
+        log,
+        episodeId,
+        timeoutMs: RETRIEVAL_QUERY_EXTRACT_TIMEOUT_MS,
+      }),
+      extractBudget,
+    ]);
+  } finally {
+    if (extractTimer) clearTimeout(extractTimer);
+  }
   const compiled = buildQueryWithExtract(ctx, llmExtract, queryOpts);
   const taskProtocol = renderTaskProtocol(ctx);
   const standaloneMathFinalAnswer = isStandaloneMathFinalAnswerContext(ctx);
@@ -453,21 +480,51 @@ async function runAll(
     // keeps the mechanical ranking so local lightweight memories remain
     // searchable in offline/default installs.
     const queryText = compiled.text || ((ctx as { userText?: string }).userText ?? "");
-    const filterResult = opts.skipLlmFilter
-      ? {
-          kept: mechanicalRanked,
-          dropped: [],
-          outcome: "deferred_to_final" as const,
-          sufficient: null,
-        }
-      : await llmFilterCandidates(
-          { query: queryText, ranked: mechanicalRanked, episodeId },
-          {
-            llm: deps.llm ?? null,
-            log,
-            config: deps.config,
-          },
-        );
+    let filterResult: FilterResult;
+    if (opts.skipLlmFilter) {
+      filterResult = {
+        kept: mechanicalRanked,
+        dropped: [],
+        outcome: "deferred_to_final",
+        sufficient: null,
+      };
+    } else {
+      let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+      const budget = new Promise<FilterResult>((resolve) => {
+        budgetTimer = setTimeout(() => {
+          const cap = Math.max(
+            0,
+            Math.min(RETRIEVAL_FILTER_FALLBACK_TOP_K, mechanicalRanked.length),
+          );
+          log.warn("llm_filter.budget_exceeded", {
+            budgetMs: RETRIEVAL_FILTER_TIMEOUT_MS,
+            candidateCount: mechanicalRanked.length,
+          });
+          resolve({
+            kept: mechanicalRanked.slice(0, cap),
+            dropped: mechanicalRanked.slice(cap),
+            outcome: "llm_filter_error",
+            sufficient: null,
+          });
+        }, RETRIEVAL_FILTER_TIMEOUT_MS);
+      });
+      try {
+        filterResult = await Promise.race([
+          llmFilterCandidates(
+            { query: queryText, ranked: mechanicalRanked, episodeId },
+            {
+              llm: deps.llm ?? null,
+              log,
+              config: deps.config,
+              timeoutMs: RETRIEVAL_FILTER_TIMEOUT_MS,
+            },
+          ),
+          budget,
+        ]);
+      } finally {
+        if (budgetTimer) clearTimeout(budgetTimer);
+      }
+    }
     const filtered = filterResult;
     log.debug("llm_filter.done", {
       outcome: filtered.outcome,
