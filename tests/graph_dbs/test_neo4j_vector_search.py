@@ -14,6 +14,7 @@ The pre-filter approach (Neo4j 5.18+):
   is used for maximum efficiency.
 """
 
+import json
 import math
 import os
 import uuid
@@ -243,6 +244,120 @@ class TestSourcesKeyErrorRegression:
         )
         assert result["id"] == "node-1"
         assert result["memory"] == "hello"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Unit tests: sources double-serialization regression (issue #1360 follow-up)
+#
+# `_prepare_node_metadata` JSON-encodes the sources list once. `add_node` /
+# `add_nodes_batch` must NOT re-encode it, otherwise the value reaching Neo4j
+# is a list of escaped JSON strings ('"{\"k\": \"v\"}"') and `_parse_node`'s
+# `[0] == "{"` check skips deserialization, returning escaped strings to
+# callers instead of dicts.
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestSourcesDoubleSerializationRegression:
+    """Verify sources are JSON-serialized exactly once on the write path."""
+
+    def _extract_metadata_from_call(self, session_mock):
+        """Pull the metadata kwarg from the most recent driver.run call."""
+        last_call = session_mock.run.call_args_list[-1]
+        # add_node passes metadata as a keyword argument.
+        if "metadata" in last_call.kwargs:
+            return last_call.kwargs["metadata"]
+        # add_nodes_batch passes nodes=[{..., "metadata": ...}] as a kwarg.
+        if "nodes" in last_call.kwargs:
+            return last_call.kwargs["nodes"][0]["metadata"]
+        raise AssertionError(f"Unexpected driver.run call signature: {last_call}")
+
+    def test_add_node_serializes_sources_exactly_once(self, shared_neo4j_db):
+        session_mock = shared_neo4j_db.driver.session.return_value.__enter__.return_value
+        original_sources = [{"key1": "value1"}, {"key2": "value2"}]
+
+        shared_neo4j_db.add_node(
+            id="test-sources-1",
+            memory="test content",
+            metadata={
+                "memory_type": "WorkingMemory",
+                "embedding": [0.1, 0.2, 0.3],
+                "sources": list(original_sources),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+        metadata = self._extract_metadata_from_call(session_mock)
+        sources = metadata["sources"]
+        # Each element must round-trip back to the original dict in a single
+        # json.loads pass. Double-serialization breaks this.
+        for serialized, original in zip(sources, original_sources, strict=False):
+            assert isinstance(serialized, str)
+            assert serialized.startswith("{") and serialized.endswith("}"), (
+                f"sources element is doubly serialized: {serialized!r}"
+            )
+            assert json.loads(serialized) == original
+
+    def test_add_nodes_batch_serializes_sources_exactly_once(self, shared_neo4j_db):
+        session_mock = shared_neo4j_db.driver.session.return_value.__enter__.return_value
+        original_sources = [{"a": 1}, {"b": 2}]
+
+        shared_neo4j_db.add_nodes_batch(
+            nodes=[
+                {
+                    "id": "test-batch-sources-1",
+                    "memory": "batch content",
+                    "metadata": {
+                        "memory_type": "WorkingMemory",
+                        "embedding": [0.1, 0.2, 0.3],
+                        "sources": list(original_sources),
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                }
+            ],
+        )
+
+        metadata = self._extract_metadata_from_call(session_mock)
+        sources = metadata["sources"]
+        for serialized, original in zip(sources, original_sources, strict=False):
+            assert isinstance(serialized, str)
+            assert serialized.startswith("{") and serialized.endswith("}"), (
+                f"sources element is doubly serialized: {serialized!r}"
+            )
+            assert json.loads(serialized) == original
+
+    def test_add_node_then_parse_node_round_trip(self, shared_neo4j_db):
+        """add_node serializes once; _parse_node should decode back to dicts."""
+        session_mock = shared_neo4j_db.driver.session.return_value.__enter__.return_value
+        original_sources = [{"id": "src-1"}, {"id": "src-2"}]
+
+        shared_neo4j_db.add_node(
+            id="test-roundtrip-1",
+            memory="round trip",
+            metadata={
+                "memory_type": "WorkingMemory",
+                "embedding": [0.1, 0.2, 0.3],
+                "sources": list(original_sources),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+        stored_metadata = self._extract_metadata_from_call(session_mock)
+
+        # Simulate Neo4j returning the stored node back to the caller.
+        parsed = shared_neo4j_db._parse_node(
+            {
+                "id": "test-roundtrip-1",
+                "memory": "round trip",
+                "memory_type": "WorkingMemory",
+                "sources": list(stored_metadata["sources"]),
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        assert parsed["metadata"]["sources"] == original_sources
 
 
 # ──────────────────────────────────────────────────────────────────────────────

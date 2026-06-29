@@ -67,10 +67,10 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         metadata.setdefault("delete_time", "")
         metadata.setdefault("delete_record_id", "")
 
-        # serialization
-        if metadata.get("sources"):
-            for idx in range(len(metadata["sources"])):
-                metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
+        # Note: `metadata["sources"]` is already JSON-serialized in
+        # `_prepare_node_metadata` above; do NOT re-encode here, otherwise
+        # the value is doubly serialized and `_parse_node` cannot decode it
+        # (see issue #1360).
         # Extract required fields
         embedding = metadata.pop("embedding", None)
 

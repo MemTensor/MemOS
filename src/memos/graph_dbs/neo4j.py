@@ -255,10 +255,10 @@ class Neo4jGraphDB(BaseGraphDB):
                 n += $metadata
         """
 
-        # serialization
-        if metadata.get("sources"):
-            for idx in range(len(metadata["sources"])):
-                metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
+        # Note: `metadata["sources"]` is already JSON-serialized inside
+        # `_prepare_node_metadata` above. Do NOT re-encode here — doing so
+        # double-serializes the value and breaks `_parse_node` on read
+        # (see issue #1360).
 
         with self.driver.session(database=self.db_name) as session:
             session.run(
@@ -323,10 +323,9 @@ class Neo4jGraphDB(BaseGraphDB):
                 created_at = metadata.pop("created_at")
                 updated_at = metadata.pop("updated_at")
 
-                # Serialization for sources
-                if metadata.get("sources"):
-                    for idx in range(len(metadata["sources"])):
-                        metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
+                # Note: `metadata["sources"]` is already JSON-serialized in
+                # `_prepare_node_metadata` above; do NOT re-encode here.
+                # See issue #1360 for the double-serialization regression.
 
                 prepared_nodes.append(
                     {
