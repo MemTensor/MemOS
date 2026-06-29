@@ -14,7 +14,7 @@ from memos.mem_reader.read_multi_modal.base import _derive_key
 from memos.mem_reader.read_pref_memory.process_preference_memory import process_preference_fine
 from memos.mem_reader.read_skill_memory.process_skill_memory import process_skill_memory_fine
 from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
-from memos.mem_reader.utils import parse_json_result
+from memos.mem_reader.utils import build_chat_extraction_messages, parse_json_result
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.plugins.hook_defs import H
 from memos.plugins.hooks import trigger_hook, trigger_single_hook
@@ -490,7 +490,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         logger.info(f"[MultiModalParser] Process String Fine Prompt: {prompt}")
 
-        messages = [{"role": "user", "content": prompt}]
+        # Split into system + user messages for chat-mode prompts so weak
+        # LLMs don't continue the embedded ``user: ...`` conversation
+        # (issue #1269). Doc / general_string templates have no
+        # ``Conversation:`` marker; the helper passes them through as a
+        # single ``user`` message — call shape preserved.
+        messages = build_chat_extraction_messages(prompt)
         try:
             response_text = self.llm.generate(messages)
             response_json = parse_json_result(response_text)

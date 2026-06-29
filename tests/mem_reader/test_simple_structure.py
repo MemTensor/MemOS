@@ -7,7 +7,7 @@ from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.simple_struct import SimpleStructMemReader
-from memos.mem_reader.utils import parse_json_result
+from memos.mem_reader.utils import build_chat_extraction_messages, parse_json_result
 from memos.memories.textual.item import TextualMemoryItem
 
 
@@ -117,6 +117,67 @@ class TestSimpleStructMemReader(unittest.TestCase):
         result = parse_json_result(raw_response)
 
         self.assertEqual(result, {})
+
+    def test_get_llm_response_uses_system_and_user_messages(self):
+        """Regression for #1269: weak models reply to the conversation
+        instead of summarising because the entire prompt (instructions +
+        examples + conversation + ``Your Output:`` trailer) was being sent
+        as a single ``user`` message. The chat extraction path must split
+        the prompt into a system message (instructions / examples / format)
+        and a user message (conversation block + JSON-only trailer).
+        """
+        captured: list[list[dict]] = []
+
+        def fake_generate(messages):
+            captured.append(messages)
+            return (
+                '{"memory list": [{"key": "k", "memory_type": "UserMemory", '
+                '"value": "v", "tags": []}], "summary": "real summary"}'
+            )
+
+        self.reader.llm.generate.side_effect = fake_generate
+        self.reader.embedder.embed.return_value = [[0.0]]
+
+        self.reader._get_llm_response(
+            "user: [2025-06-29 10:00]: Hello, how are you?\n"
+            "assistant: I'm fine, thanks. And you?\n"
+            "user: [2025-06-29 10:01]: Pretty good.\n",
+            custom_tags=None,
+        )
+
+        assert captured, "LLM was not called"
+        messages = captured[0]
+        roles = [m["role"] for m in messages]
+        self.assertEqual(
+            roles[:2],
+            ["system", "user"],
+            f"chat extraction must send a system+user pair, got {roles!r}",
+        )
+
+        system_content = messages[0]["content"]
+        user_content = messages[1]["content"]
+
+        # Instructions / examples / format spec must live in the system
+        # message, not the user message.
+        self.assertIn("memory extraction expert", system_content)
+        self.assertIn('"summary"', system_content)
+        self.assertNotIn("memory extraction expert", user_content)
+
+        # User message must carry the conversation block + an explicit
+        # "JSON only, do not reply" trailer that prevents small models
+        # from continuing the embedded chat.
+        self.assertIn("Conversation:", user_content)
+        self.assertIn("Pretty good.", user_content)
+        self.assertIn("JSON", user_content)
+        self.assertNotIn("Your Output:", user_content)
+
+    def test_build_chat_extraction_messages_fallback(self):
+        """When no Conversation: marker is present (doc / general string
+        templates), the helper falls back to a single user message so that
+        callers outside the chat path are unaffected.
+        """
+        msgs = build_chat_extraction_messages("plain prompt without marker")
+        self.assertEqual(msgs, [{"role": "user", "content": "plain prompt without marker"}])
 
 
 if __name__ == "__main__":

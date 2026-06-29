@@ -35,6 +35,62 @@ def derive_key(text: str, max_len: int = 80) -> str:
     return (sent[:max_len]).strip()
 
 
+# Markers that introduce the rendered conversation block inside the
+# mem_reader chat-extraction prompt templates (English + Chinese).
+_CHAT_CONVO_MARKERS: tuple[str, ...] = ("\nConversation:\n", "\n对话：\n")
+_CHAT_OUTPUT_SUFFIXES: tuple[str, ...] = ("Your Output:", "您的输出：")
+_CHAT_JSON_ONLY_TRAILER: str = (
+    "\n\nReturn ONLY the single JSON object described above. "
+    "Do not reply to or continue the conversation."
+)
+
+
+def build_chat_extraction_messages(prompt: str) -> list[dict[str, str]]:
+    """Split a rendered chat-extraction prompt into ``system`` + ``user`` messages.
+
+    The mem_reader chat prompt templates end with::
+
+        ...
+        Conversation:
+        <rendered conversation>
+
+        Your Output:
+
+    Sending this whole block as a single ``user`` role message causes weak
+    instruction-following LLMs (small Ollama models, qwen2.5:1.5b,
+    phi4-mini, etc.) to *continue* the trailing ``user: ...`` lines as if
+    they were the live conversation, replying to the user's last message
+    instead of emitting the structured JSON.  Putting the instructions /
+    examples / format spec in a ``system`` message and only the
+    conversation block (plus an explicit "JSON only, do not reply"
+    trailer) in the ``user`` message restores instruction-following on
+    those models (see issue #1269).
+
+    If no conversation marker is found (doc / general_string templates or
+    a custom caller), fall back to a single ``user`` message so non-chat
+    call sites are unaffected.
+    """
+    if not prompt:
+        return [{"role": "user", "content": prompt or ""}]
+    for marker in _CHAT_CONVO_MARKERS:
+        idx = prompt.find(marker)
+        if idx == -1:
+            continue
+        system_part = prompt[:idx].rstrip()
+        # Keep the leading newline trimmed; preserve the "Conversation:"
+        # header on the user side so the model still sees a familiar label.
+        user_part = prompt[idx + 1 :].rstrip()
+        for suffix in _CHAT_OUTPUT_SUFFIXES:
+            if user_part.endswith(suffix):
+                user_part = user_part[: -len(suffix)].rstrip()
+        user_part = f"{user_part}{_CHAT_JSON_ONLY_TRAILER}"
+        return [
+            {"role": "system", "content": system_part},
+            {"role": "user", "content": user_part},
+        ]
+    return [{"role": "user", "content": prompt}]
+
+
 def parse_json_result(response_text: str) -> dict:
     s = (response_text or "").strip()
 

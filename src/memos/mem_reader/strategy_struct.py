@@ -7,6 +7,7 @@ from memos.configs.mem_reader import StrategyStructMemReaderConfig
 from memos.configs.parser import ParserConfigFactory
 from memos.mem_reader.read_multi_modal import detect_lang
 from memos.mem_reader.simple_struct import SimpleStructMemReader
+from memos.mem_reader.utils import build_chat_extraction_messages
 from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
     CUSTOM_TAGS_INSTRUCTION,
@@ -57,7 +58,9 @@ class StrategyStructMemReader(SimpleStructMemReader, ABC):
 
         if self.config.remove_prompt_example:  # TODO unused
             prompt = prompt.replace(examples, "")
-        messages = [{"role": "user", "content": prompt}]
+        # Split into system + user messages — see simple_struct for the
+        # rationale (issue #1269).
+        messages = build_chat_extraction_messages(prompt)
         try:
             response_text = self.llm.generate(messages)
             response_json = self.parse_json_result(response_text)

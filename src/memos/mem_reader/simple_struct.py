@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from memos.types.general_types import UserContext
 from memos.mem_reader.read_multi_modal import coerce_scene_data, detect_lang
 from memos.mem_reader.utils import (
+    build_chat_extraction_messages,
     count_tokens_text,
     derive_key,
     parse_json_result,
@@ -280,7 +281,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         if self.config.remove_prompt_example:
             prompt = prompt.replace(examples, "")
-        messages = [{"role": "user", "content": prompt}]
+        # Split into system + user messages so weak instruction-following
+        # LLMs do not interpret the embedded ``user: ...`` lines at the
+        # tail of the prompt as a chat they should continue, which would
+        # cause ``summary`` to be a chat reply instead of a real summary
+        # (issue #1269).
+        messages = build_chat_extraction_messages(prompt)
 
         response_text = self._safe_generate(messages)
         response_json = self._safe_parse(response_text)
