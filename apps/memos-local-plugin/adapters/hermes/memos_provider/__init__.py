@@ -304,11 +304,29 @@ class MemTensorProvider(MemoryProvider):
         is deferred to ``_ensure_episode()`` (called from the first
         ``on_turn_start``), so the actual user message can be passed as
         the episode's initial text instead of a generic placeholder.
+
+        Idempotency (issue #1910): the host occasionally re-enters
+        ``initialize()`` on the same provider instance (plugin reload,
+        session restart). Without the close-before-spawn guard below the
+        previous ``MemosBridgeClient`` would be replaced by reference
+        only, orphaning the previous Node subprocess and accumulating
+        a fresh ``bridge.cjs`` per turn.
         """
         self._session_id = session_id or self._session_id
         self._hermes_home = str(kwargs.get("hermes_home") or "")
         self._platform = str(kwargs.get("platform") or "cli")
         self._agent_identity = str(kwargs.get("agent_identity") or "hermes")
+        if self._bridge is not None:
+            prev_pid = getattr(self._bridge, "pid", "?")
+            logger.info(
+                "MemOS: initialize() invoked while bridge already exists; "
+                "closing previous bridge (pid=%s) before respawn",
+                prev_pid,
+            )
+            old_bridge = self._bridge
+            self._bridge = None
+            with contextlib.suppress(Exception):
+                old_bridge.close()
         try:
             ensure_bridge_running()
         except Exception as err:

@@ -256,12 +256,16 @@ class BridgeClientTests(unittest.TestCase):
         )
         self._popen_patch.start()
         self._which_patch.start()
+        # Hermetic singleton: clear any tracking left over from prior tests
+        # so each test starts with a fresh module-level registry.
+        bridge_client_mod._ACTIVE_CLIENTS.clear()
 
     def tearDown(self) -> None:
         if self._fake is not None:
             self._fake.stdout._done = True
         self._popen_patch.stop()
         self._which_patch.stop()
+        bridge_client_mod._ACTIVE_CLIENTS.clear()
 
     def test_request_returns_result_on_success(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
@@ -294,6 +298,45 @@ class BridgeClientTests(unittest.TestCase):
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
         client.close()
         client.close()  # second call must not raise
+
+    def test_module_singleton_closes_previous_client_same_agent(self) -> None:
+        """Constructing a second client with the same agent must reap the first.
+
+        Regression for issue #1910: each turn the Hermes adapter could
+        spawn a fresh bridge subprocess without closing its predecessor,
+        accumulating 4+ processes per session. The singleton tracker in
+        ``MemosBridgeClient`` prevents that by closing any active client
+        for the same ``(agent, no_viewer)`` slot at construction time.
+        """
+        first = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        self.assertFalse(first._closed)
+        second = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        # The new constructor must have reaped the previous one.
+        self.assertTrue(first._closed)
+        self.assertFalse(second._closed)
+        second.close()
+        self.assertTrue(second._closed)
+
+    def test_module_singleton_independent_for_distinct_agents(self) -> None:
+        """A bridge for a different agent must not reap an unrelated bridge."""
+        hermes = MemosBridgeClient(bridge_path="/tmp/bridge.cts", agent="hermes")
+        openclaw = MemosBridgeClient(bridge_path="/tmp/bridge.cts", agent="openclaw")
+        self.assertFalse(hermes._closed)
+        self.assertFalse(openclaw._closed)
+        hermes.close()
+        openclaw.close()
+
+    def test_close_unregisters_active_client_only_when_still_current(self) -> None:
+        """A stale close() must not evict the newer registered client."""
+        first = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        second = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        # First was already closed by second's __init__. Closing it again is
+        # a no-op and must not touch the registry's current entry (second).
+        first.close()
+        key = (second._singleton_agent, second._singleton_no_viewer)
+        self.assertIs(bridge_client_mod._ACTIVE_CLIENTS.get(key), second)
+        second.close()
+        self.assertIsNone(bridge_client_mod._ACTIVE_CLIENTS.get(key))
 
     def test_stdio_bridge_starts_without_viewer_by_default(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
@@ -395,6 +438,49 @@ class MemTensorProviderTests(unittest.TestCase):
         res = p.handle_tool_call("memos_search", {"query": "x"})
         parsed = json.loads(res)
         self.assertIn("error", parsed)
+
+    def test_initialize_closes_pre_existing_bridge(self) -> None:
+        """Calling initialize twice must reap the previous bridge.
+
+        Regression for #1910: every Hermes turn could call `initialize()`
+        a second time (re-entry from the host plugin loader), overwriting
+        `self._bridge` and leaking the previous Node subprocess.
+        """
+
+        class TrackedBridge:
+            def __init__(self) -> None:
+                self.closed = False
+                self.pid = 4242
+
+            def register_host_handler(self, *_a, **_kw) -> None:  # pragma: no cover
+                pass
+
+            def request(self, method, params=None, **_kwargs):
+                if method == "session.open":
+                    return {"sessionId": (params or {}).get("sessionId", "sess")}
+                return {}
+
+            def close(self) -> None:
+                self.closed = True
+
+        p = self._provider_mod.MemTensorProvider()
+
+        first = TrackedBridge()
+        second = TrackedBridge()
+        constructed: list[TrackedBridge] = [first, second]
+
+        def _factory(*_a, **_kw) -> TrackedBridge:
+            return constructed.pop(0)
+
+        with patch("memos_provider.MemosBridgeClient", side_effect=_factory):
+            p.initialize("sess-A", hermes_home="/tmp/h", platform="cli")
+            self.assertIs(p._bridge, first)
+            p.initialize("sess-A", hermes_home="/tmp/h", platform="cli")
+            # The second initialize must close the first bridge before
+            # adopting the new one; otherwise the previous subprocess
+            # leaks (issue #1910).
+            self.assertTrue(first.closed)
+            self.assertIs(p._bridge, second)
 
     def test_handle_tool_call_routes_all_exposed_tools(self) -> None:
         p = self._provider_mod.MemTensorProvider()
