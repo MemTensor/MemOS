@@ -287,7 +287,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         if not response_json:
             return {
-                "memory_list": [
+                "memory list": [
                     {
                         "key": mem_str[:10],
                         "memory_type": "UserMemory",
