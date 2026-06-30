@@ -162,7 +162,11 @@ async def create_cube(request: CreateCubeRequest) -> CreateCubeResponse:
     return await cube_handler.create_cube(request)
 
 
-@router.post("/register_cube", summary="Register an existing memory cube", response_model=RegisterCubeResponse)
+@router.post(
+    "/register_cube",
+    summary="Register an existing memory cube",
+    response_model=RegisterCubeResponse,
+)
 async def register_cube(request: RegisterCubeRequest) -> RegisterCubeResponse:
     """
     Register an existing memory cube with the MOS system.
