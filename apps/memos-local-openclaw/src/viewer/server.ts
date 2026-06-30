@@ -1261,8 +1261,9 @@ export class ViewerServer {
 
   private embedTaskInBackground(taskId: string, text: string): void {
     if (!this.embedder || !text.trim()) return;
-    this.embedder.embed([text]).then((vecs: number[][]) => {
-      if (vecs.length > 0) this.store.upsertTaskEmbedding(taskId, vecs[0]);
+    const embedder = this.embedder;
+    embedder.embed([text]).then((vecs: number[][]) => {
+      if (vecs.length > 0) this.store.upsertTaskEmbedding(taskId, vecs[0], { provider: embedder.provider, model: embedder.model });
     }).catch(() => {});
   }
 
@@ -1402,8 +1403,9 @@ export class ViewerServer {
       const sv = this.store.getLatestSkillVersion(skillId);
       if (sv) {
         const text = `${skill.name}: ${skill.description}`;
-        this.embedder.embed([text]).then((vecs: number[][]) => {
-          if (vecs.length > 0) this.store.upsertSkillEmbedding(skillId, vecs[0]);
+        const embedder = this.embedder;
+        embedder.embed([text]).then((vecs: number[][]) => {
+          if (vecs.length > 0) this.store.upsertSkillEmbedding(skillId, vecs[0], { provider: embedder.provider, model: embedder.model });
         }).catch(() => {});
       }
     }
@@ -4319,7 +4321,7 @@ export class ViewerServer {
                             this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, row.text);
                             try {
                               const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]);
-                              if (newEmb) this.store.upsertEmbedding(targetId, newEmb);
+                              if (newEmb) this.store.upsertEmbedding(targetId, newEmb, { provider: this.embedder.provider, model: this.embedder.model });
                             } catch { /* best-effort */ }
                             dedupStatus = "merged";
                             dedupTarget = targetId;
@@ -4360,7 +4362,7 @@ export class ViewerServer {
 
                 this.store.insertChunk(chunk);
                 if (embedding && dedupStatus === "active") {
-                  this.store.upsertEmbedding(chunkId, embedding);
+                  this.store.upsertEmbedding(chunkId, embedding, { provider: this.embedder.provider, model: this.embedder.model });
                 }
 
                 totalStored++;
@@ -4552,7 +4554,7 @@ export class ViewerServer {
                           const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
                           if (targetId) {
                             this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, content);
-                            try { const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]); if (newEmb) this.store.upsertEmbedding(targetId, newEmb); } catch { /* best-effort */ }
+                            try { const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]); if (newEmb) this.store.upsertEmbedding(targetId, newEmb, { provider: this.embedder.provider, model: this.embedder.model }); } catch { /* best-effort */ }
                             dedupStatus = "merged"; dedupTarget = targetId; dedupReason = dedupResult.reason;
                           }
                         }
@@ -4575,7 +4577,7 @@ export class ViewerServer {
                 };
 
                 this.store.insertChunk(chunk);
-                if (embedding && dedupStatus === "active") this.store.upsertEmbedding(chunkId, embedding);
+                if (embedding && dedupStatus === "active") this.store.upsertEmbedding(chunkId, embedding, { provider: this.embedder.provider, model: this.embedder.model });
 
                 totalStored++;
                 send("item", { index: idx, total: totalMsgs, status: dedupStatus === "active" ? "stored" : dedupStatus, preview: content.slice(0, 120), summary: summary.slice(0, 80), source: file, agent: agentId, role: msgRole, stepFailures });

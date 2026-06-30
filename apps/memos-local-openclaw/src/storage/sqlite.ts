@@ -120,7 +120,41 @@ export class SqliteStore {
     this.migrateHubUserIdentityFields();
     this.migrateClientHubConnectionIdentityFields();
     this.migrateTeamSharingInstanceId();
+    this.migrateEmbeddingProducerColumns();
     this.log.debug("Database schema initialized");
+  }
+
+  /**
+   * Tag every cached embedding row with the producer that created it.
+   * Adds `provider TEXT NOT NULL DEFAULT ''` + `model TEXT NOT NULL DEFAULT ''`
+   * to every embedding-shaped table. Idempotent: skips tables that already
+   * have the columns. `dimensions` already exists on every target table.
+   */
+  private migrateEmbeddingProducerColumns(): void {
+    const tables = [
+      "embeddings",
+      "skill_embeddings",
+      "task_embeddings",
+      "hub_embeddings",
+      "hub_skill_embeddings",
+      "hub_memory_embeddings",
+    ];
+    for (const table of tables) {
+      try {
+        const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+        if (cols.length === 0) continue; // table didn't exist yet
+        if (!cols.some((c) => c.name === "provider")) {
+          this.db.exec(`ALTER TABLE ${table} ADD COLUMN provider TEXT NOT NULL DEFAULT ''`);
+          this.log.info(`Migrated: added provider column to ${table}`);
+        }
+        if (!cols.some((c) => c.name === "model")) {
+          this.db.exec(`ALTER TABLE ${table} ADD COLUMN model TEXT NOT NULL DEFAULT ''`);
+          this.log.info(`Migrated: added model column to ${table}`);
+        }
+      } catch (err) {
+        this.log.warn(`migrateEmbeddingProducerColumns(${table}) failed: ${err}`);
+      }
+    }
   }
 
   private migrateChunksIndexesForRecall(): void {
@@ -1177,12 +1211,12 @@ export class SqliteStore {
     );
   }
 
-  upsertEmbedding(chunkId: string, vector: number[]): void {
+  upsertEmbedding(chunkId: string, vector: number[], producer?: { provider?: string; model?: string }): void {
     const buf = Buffer.from(new Float32Array(vector).buffer);
     this.db.prepare(`
-      INSERT OR REPLACE INTO embeddings (chunk_id, vector, dimensions, updated_at)
-      VALUES (?, ?, ?, ?)
-    `).run(chunkId, buf, vector.length, Date.now());
+      INSERT OR REPLACE INTO embeddings (chunk_id, vector, dimensions, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(chunkId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
   }
 
   deleteEmbedding(chunkId: string): void {
@@ -1398,6 +1432,87 @@ export class SqliteStore {
     if (!row) return null;
     return Array.from(new Float32Array(row.vector.buffer, row.vector.byteOffset, row.dimensions));
   }
+
+  // ─── Embedding model signature reporting (issue #1333) ───
+
+  /**
+   * Snapshot of cached vector rows compared against the live `current`
+   * embedder signature. `legacy` are rows that pre-date the producer
+   * tagging columns (provider = ''). `mismatched` are rows whose
+   * producer was tagged but differs from `current`. `missing` counts
+   * active chunks that have no embedding row at all.
+   */
+  getEmbeddingStats(current: { provider: string; model: string; dimensions: number }): {
+    total: number;
+    matched: number;
+    mismatched: number;
+    legacy: number;
+    missing: number;
+    current: { provider: string; model: string; dimensions: number };
+    byProducer: Array<{ provider: string; model: string; dimensions: number; count: number }>;
+  } {
+    const total = (this.db.prepare("SELECT COUNT(*) as c FROM embeddings").get() as { c: number }).c;
+    const matched = (this.db.prepare(
+      "SELECT COUNT(*) as c FROM embeddings WHERE provider = ? AND model = ? AND dimensions = ?",
+    ).get(current.provider, current.model, current.dimensions) as { c: number }).c;
+    const legacy = (this.db.prepare(
+      "SELECT COUNT(*) as c FROM embeddings WHERE provider = ''",
+    ).get() as { c: number }).c;
+    const mismatched = (this.db.prepare(
+      "SELECT COUNT(*) as c FROM embeddings WHERE provider != '' AND NOT (provider = ? AND model = ? AND dimensions = ?)",
+    ).get(current.provider, current.model, current.dimensions) as { c: number }).c;
+    const missing = (this.db.prepare(`
+      SELECT COUNT(*) as c FROM chunks c
+      WHERE c.dedup_status = 'active'
+        AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.chunk_id = c.id)
+    `).get() as { c: number }).c;
+
+    const byProducer = (this.db.prepare(
+      "SELECT provider, model, dimensions, COUNT(*) as count FROM embeddings GROUP BY provider, model, dimensions ORDER BY count DESC",
+    ).all() as Array<{ provider: string; model: string; dimensions: number; count: number }>);
+
+    return { total, matched, mismatched, legacy, missing, current, byProducer };
+  }
+
+  /**
+   * Chunk ids that should be re-embedded under `current`. By default returns
+   * every chunk whose embedding row's producer doesn't match (including legacy
+   * empty rows) plus chunks with no embedding row at all. With
+   * `missingOnly: true`, returns only the latter. Ordered by `created_at ASC`
+   * so re-embed runs are deterministic and resumable.
+   */
+  listChunkIdsForReembed(
+    current: { provider: string; model: string; dimensions: number },
+    opts: { missingOnly?: boolean; limit?: number } = {},
+  ): string[] {
+    const limit = opts.limit ?? Number.MAX_SAFE_INTEGER;
+    if (opts.missingOnly) {
+      const rows = this.db.prepare(`
+        SELECT c.id as id FROM chunks c
+        WHERE c.dedup_status = 'active'
+          AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.chunk_id = c.id)
+        ORDER BY c.created_at ASC
+        LIMIT ?
+      `).all(limit) as Array<{ id: string }>;
+      return rows.map((r) => r.id);
+    }
+    const rows = this.db.prepare(`
+      SELECT c.id as id FROM chunks c
+      WHERE c.dedup_status = 'active'
+        AND (
+          NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.chunk_id = c.id)
+          OR EXISTS (
+            SELECT 1 FROM embeddings e
+            WHERE e.chunk_id = c.id
+              AND NOT (e.provider = ? AND e.model = ? AND e.dimensions = ?)
+          )
+        )
+      ORDER BY c.created_at ASC
+      LIMIT ?
+    `).all(current.provider, current.model, current.dimensions, limit) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
 
   // ─── Update ───
 
@@ -1807,12 +1922,12 @@ export class SqliteStore {
       .run(visibility, Date.now(), skillId);
   }
 
-  upsertSkillEmbedding(skillId: string, vector: number[]): void {
+  upsertSkillEmbedding(skillId: string, vector: number[], producer?: { provider?: string; model?: string }): void {
     const buf = Buffer.from(new Float32Array(vector).buffer);
     this.db.prepare(`
-      INSERT OR REPLACE INTO skill_embeddings (skill_id, vector, dimensions, updated_at)
-      VALUES (?, ?, ?, ?)
-    `).run(skillId, buf, vector.length, Date.now());
+      INSERT OR REPLACE INTO skill_embeddings (skill_id, vector, dimensions, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(skillId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
   }
 
   getSkillEmbedding(skillId: string): number[] | null {
@@ -1887,12 +2002,12 @@ export class SqliteStore {
 
   // ─── Task Embeddings & Search ───
 
-  upsertTaskEmbedding(taskId: string, vector: number[]): void {
+  upsertTaskEmbedding(taskId: string, vector: number[], producer?: { provider?: string; model?: string }): void {
     const buf = Buffer.from(new Float32Array(vector).buffer);
     this.db.prepare(`
-      INSERT OR REPLACE INTO task_embeddings (task_id, vector, dimensions, updated_at)
-      VALUES (?, ?, ?, ?)
-    `).run(taskId, buf, vector.length, Date.now());
+      INSERT OR REPLACE INTO task_embeddings (task_id, vector, dimensions, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(taskId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
   }
 
   getTaskEmbeddings(owner?: string): Array<{ taskId: string; vector: number[] }> {
@@ -2344,19 +2459,21 @@ export class SqliteStore {
     return row ? rowToHubSkill(row) : null;
   }
 
-  upsertHubSkillEmbedding(skillId: string, vector: number[], sourceUserId: string, sourceSkillId: string): void {
+  upsertHubSkillEmbedding(skillId: string, vector: number[], sourceUserId: string, sourceSkillId: string, producer?: { provider?: string; model?: string }): void {
     if (!sourceUserId || !sourceSkillId) throw new Error("sourceUserId and sourceSkillId are required for hub skill embedding upserts");
     const canonicalSkillId = this.resolveCanonicalHubSkillId(skillId, sourceUserId, sourceSkillId);
     const buf = Buffer.allocUnsafe(vector.length * 4);
     for (let i = 0; i < vector.length; i++) buf.writeFloatLE(vector[i], i * 4);
     this.db.prepare(`
-      INSERT INTO hub_skill_embeddings (skill_id, vector, dimensions, updated_at)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO hub_skill_embeddings (skill_id, vector, dimensions, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(skill_id) DO UPDATE SET
         vector = excluded.vector,
         dimensions = excluded.dimensions,
+        provider = excluded.provider,
+        model = excluded.model,
         updated_at = excluded.updated_at
-    `).run(canonicalSkillId, buf, vector.length, Date.now());
+    `).run(canonicalSkillId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
   }
 
   getHubSkillEmbedding(skillId: string): number[] | null {
@@ -2379,13 +2496,13 @@ export class SqliteStore {
     }));
   }
 
-  upsertHubMemoryEmbedding(memoryId: string, vector: Float32Array): void {
+  upsertHubMemoryEmbedding(memoryId: string, vector: Float32Array, producer?: { provider?: string; model?: string }): void {
     const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
     this.db.prepare(`
-      INSERT INTO hub_memory_embeddings (memory_id, vector, dimensions, updated_at)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(memory_id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions, updated_at = excluded.updated_at
-    `).run(memoryId, buf, vector.length, Date.now());
+      INSERT INTO hub_memory_embeddings (memory_id, vector, dimensions, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(memory_id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions, provider = excluded.provider, model = excluded.model, updated_at = excluded.updated_at
+    `).run(memoryId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
   }
 
   getHubMemoryEmbedding(memoryId: string): Float32Array | null {
@@ -2431,13 +2548,13 @@ export class SqliteStore {
     return rows.map((row, idx) => ({ hit: row, rank: idx + 1 }));
   }
 
-  upsertHubEmbedding(chunkId: string, vector: Float32Array): void {
+  upsertHubEmbedding(chunkId: string, vector: Float32Array, producer?: { provider?: string; model?: string }): void {
     const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
     this.db.prepare(`
-      INSERT INTO hub_embeddings (chunk_id, vector, dimensions, updated_at)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(chunk_id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions, updated_at = excluded.updated_at
-    `).run(chunkId, buf, vector.length, Date.now());
+      INSERT INTO hub_embeddings (chunk_id, vector, dimensions, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(chunk_id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions, provider = excluded.provider, model = excluded.model, updated_at = excluded.updated_at
+    `).run(chunkId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
   }
 
   getHubEmbedding(chunkId: string): Float32Array | null {
