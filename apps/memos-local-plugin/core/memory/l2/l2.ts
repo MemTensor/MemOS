@@ -34,7 +34,7 @@ import { L2_INDUCTION_PROMPT } from "../../llm/prompts/l2-induction.js";
 import { associateTraces } from "./associate.js";
 import { makeCandidatePool } from "./candidate-pool.js";
 import { buildPolicyRow, induceDraft } from "./induce.js";
-import { applyGain, computeGain, smoothGain } from "./gain.js";
+import { applyGain, computeGain, nextStatus, smoothGain } from "./gain.js";
 import { signatureOf } from "./signature.js";
 import { tracePolicySimilarity } from "./similarity.js";
 import type {
@@ -450,6 +450,39 @@ export async function runL2(
         status: persisted.status,
         support: persisted.support,
         gain: persisted.gain,
+      });
+    }
+
+    for (const policy of repos.policies.list({ status: "candidate", limit: 5_000 })) {
+      if (touched.has(policy.id)) continue;
+      const status = nextStatus({
+        currentStatus: policy.status,
+        support: policy.support,
+        gain: policy.gain,
+        thresholds,
+      });
+      if (status === policy.status) continue;
+      const updatedAt = input.now ?? Date.now();
+      repos.policies.updateStats(policy.id, {
+        support: policy.support,
+        gain: policy.gain,
+        status,
+        updatedAt,
+      });
+      touched.set(policy.id, { ...policy, status, updatedAt });
+      emit(bus, {
+        kind: "l2.policy.updated",
+        episodeId: input.episodeId,
+        policyId: policy.id,
+        status,
+        support: policy.support,
+        gain: policy.gain,
+      });
+      log.info("run.recheck_candidate_promoted", {
+        policyId: policy.id,
+        status,
+        support: policy.support,
+        gain: policy.gain,
       });
     }
     timings.gain = Date.now() - t0;

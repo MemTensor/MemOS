@@ -815,4 +815,64 @@ describe("memory/l2/integration", () => {
     expect(updated.gain).toBeLessThan(0.1);
     expect(updated.status).toBe("active");
   });
+
+  it("promotes untouched candidate policies whose stored support and gain meet thresholds", async () => {
+    ensureEpisode(handle, "ep_recheck", "s_int");
+    handle.repos.policies.insert({
+      id: "po_ready_candidate" as never,
+      title: "reuse verified deployment checklist",
+      trigger: "deployment has recurring verification steps",
+      procedure: "run the known checklist and report failures",
+      verification: "all checklist items are completed",
+      boundary: "only for deployment validation tasks",
+      support: 3,
+      gain: 0.2,
+      status: "candidate",
+      sourceEpisodeIds: ["ep_old" as EpisodeId],
+      inducedBy: "unit-test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: null,
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+
+    const bus = createL2EventBus();
+    const events: L2Event[] = [];
+    bus.onAny((e) => events.push(e));
+
+    const result = await runL2(
+      {
+        episodeId: "ep_recheck" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [],
+        trigger: "manual",
+        now: NOW + 10,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({ completeJson: {} }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus,
+        config: cfg(),
+        thresholds: { minSupport: 3, minGain: 0.15, archiveGain: -0.05 },
+      },
+    );
+
+    const updated = handle.repos.policies.getById("po_ready_candidate" as never)!;
+    expect(updated.status).toBe("active");
+    expect(updated.support).toBe(3);
+    expect(updated.gain).toBe(0.2);
+    expect(updated.updatedAt).toBe(NOW + 10);
+    expect(result.touchedPolicyIds).toContain("po_ready_candidate");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "l2.policy.updated",
+        policyId: "po_ready_candidate",
+        status: "active",
+        support: 3,
+        gain: 0.2,
+      }),
+    );
+  });
 });
