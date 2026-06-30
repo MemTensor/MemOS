@@ -193,34 +193,124 @@ class GraphMemoryRetriever:
         combined = {item.id: item for item in vector_results}
         return list(combined.values())
 
+    # Memory scopes for which the substring fallback path is enabled. Other
+    # scopes (PreferenceMemory, SkillMemory, Tool*Memory, RawFileMemory) have
+    # their own dedicated retrieval pipelines and should not be backfilled by
+    # this generic fast-mode rescue branch.
+    _FALLBACK_SCOPES = frozenset({"WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"})
+    # Cap how many memories the fallback path scans / returns to avoid pulling
+    # the entire user namespace when the strict filters legitimately miss.
+    _FALLBACK_CAP = 50
+
+    @staticmethod
+    def _node_matches_parsed_goal(
+        parsed_goal: ParsedTaskGoal, node: dict, min_tag_overlap: int = 1
+    ) -> bool:
+        """Lenient post-filter for structured graph retrieval.
+
+        A node passes if any of the following holds:
+        * its ``metadata.key`` is exactly one of ``parsed_goal.keys``;
+        * any parsed key appears as a substring of the node's ``key`` or raw
+          ``memory`` text (covers fast-mode memories whose ``key`` is the raw
+          chat-formatted message and whose ``tags`` are uninformative);
+        * the intersection between parsed tags and node tags is at least
+          ``min_tag_overlap`` (case-insensitive).
+
+        The previous behavior required exact key equality OR ``>= 2`` tag
+        overlap, which excluded all memories ingested via the fast pipeline.
+        """
+        meta = node.get("metadata") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        node_key = meta.get("key") or ""
+        node_tags = meta.get("tags") or []
+        node_memory = node.get("memory") or ""
+
+        parsed_keys = [k for k in (parsed_goal.keys or []) if isinstance(k, str) and k]
+        if parsed_keys:
+            if node_key and node_key in parsed_keys:
+                return True
+            haystack = f"{node_key}\n{node_memory}"
+            if any(pk in haystack for pk in parsed_keys):
+                return True
+
+        parsed_tags = [t for t in (parsed_goal.tags or []) if isinstance(t, str) and t]
+        if parsed_tags and node_tags:
+            node_tags_lower = {t.lower() if isinstance(t, str) else t for t in node_tags}
+            parsed_tags_lower = {t.lower() for t in parsed_tags}
+            if len(node_tags_lower & parsed_tags_lower) >= min_tag_overlap:
+                return True
+
+        return False
+
+    def _fallback_candidates_by_substring(
+        self,
+        parsed_goal: ParsedTaskGoal,
+        memory_scope: str,
+        user_name: str | None,
+        status: str | None = None,
+    ) -> list[dict]:
+        """Substring-based candidate retrieval used when the strict key/tag
+        filters return nothing.
+
+        Fixes issue #1448: memories added via the fast pipeline (e.g.
+        ``/product/add`` with ``async_mode=async`` or ``mode=fast``) store the
+        raw chat-formatted text as ``key`` and only ``["mode:fast"]`` as
+        ``tags``. When the search query is parsed in fine mode the LLM emits
+        high-level semantic keys/tags (e.g. ``["喜欢", "偏好", "兴趣"]``) that
+        never exactly match those stored values, so the strict ``key IN ...``
+        / tag-overlap branches return zero candidates and the graph-recall
+        path used to drop the memory entirely.
+        """
+        parsed_keys = [k for k in (parsed_goal.keys or []) if isinstance(k, str) and k]
+        if not parsed_keys:
+            return []
+        if memory_scope not in self._FALLBACK_SCOPES:
+            return []
+
+        kwargs: dict = {"user_name": user_name}
+        if status:
+            kwargs["status"] = status
+        try:
+            items = self.graph_store.get_all_memory_items(scope=memory_scope, **kwargs)
+        except Exception:
+            logger.warning(
+                "[_graph_recall] fallback get_all_memory_items failed for scope=%s",
+                memory_scope,
+                exc_info=True,
+            )
+            return []
+
+        matched: list[dict] = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            meta = item.get("metadata") or {}
+            node_key = (meta.get("key") if isinstance(meta, dict) else "") or ""
+            node_memory = item.get("memory") or ""
+            haystack = f"{node_key}\n{node_memory}"
+            if any(pk in haystack for pk in parsed_keys):
+                matched.append(item)
+                if len(matched) >= self._FALLBACK_CAP:
+                    break
+        return matched
+
     def _graph_recall(
         self, parsed_goal: ParsedTaskGoal, memory_scope: str, user_name: str | None = None, **kwargs
     ) -> list[TextualMemoryItem]:
         """
         Perform structured node-based retrieval from Neo4j.
-        - keys must match exactly (n.key IN keys)
-        - tags must overlap with at least 2 input tags
-        - scope filters by memory_type if provided
+        - keys match exactly (n.key IN keys) or as a substring of the node
+          ``key``/``memory`` (handles fast-mode memories where the LLM-parsed
+          semantic key is contained in the literal stored text).
+        - tags overlap with at least 1 input tag (lowered from 2 to recover
+          single-tag matches; embedding/rerank still ranks final order).
+        - scope filters by memory_type if provided.
         """
         use_fast_graph = kwargs.get("use_fast_graph", False)
 
         def process_node(node):
-            meta = node.get("metadata", {})
-            node_key = meta.get("key")
-            node_tags = meta.get("tags", []) or []
-
-            keep = False
-            # key equals to node_key
-            if parsed_goal.keys and node_key in parsed_goal.keys:
-                keep = True
-            # overlap tags more than 2
-            elif parsed_goal.tags:
-                node_tags_list = [tag.lower() for tag in node_tags]
-                overlap = len(set(node_tags_list) & set(parsed_goal.tags))
-                if overlap >= 2:
-                    keep = True
-
-            if keep:
+            if self._node_matches_parsed_goal(parsed_goal, node):
                 return TextualMemoryItem.from_dict(node)
             return None
 
@@ -245,9 +335,22 @@ class GraphMemoryRetriever:
                 tag_ids = self.graph_store.get_by_metadata(tag_filters, user_name=user_name)
                 candidate_ids.update(tag_ids)
 
-            # No matches → return empty
+            # No matches via strict filters → try substring fallback on the
+            # raw memory text. Fixes issue #1448 for fast-mode memories.
             if not candidate_ids:
-                return []
+                fallback_items = self._fallback_candidates_by_substring(
+                    parsed_goal=parsed_goal,
+                    memory_scope=memory_scope,
+                    user_name=user_name,
+                )
+                if not fallback_items:
+                    return []
+                final_nodes = [
+                    TextualMemoryItem.from_dict(node)
+                    for node in fallback_items
+                    if self._node_matches_parsed_goal(parsed_goal, node)
+                ]
+                return final_nodes
 
             # Load nodes and post-filter
             node_dicts = self.graph_store.get_nodes(
@@ -256,20 +359,7 @@ class GraphMemoryRetriever:
 
             final_nodes = []
             for node in node_dicts:
-                meta = node.get("metadata", {})
-                node_key = meta.get("key")
-                node_tags = meta.get("tags", []) or []
-
-                keep = False
-                # key equals to node_key
-                if parsed_goal.keys and node_key in parsed_goal.keys:
-                    keep = True
-                # overlap tags more than 2
-                elif parsed_goal.tags:
-                    overlap = len(set(node_tags) & set(parsed_goal.tags))
-                    if overlap >= 2:
-                        keep = True
-                if keep:
+                if self._node_matches_parsed_goal(parsed_goal, node):
                     final_nodes.append(TextualMemoryItem.from_dict(node))
             return final_nodes
         else:
@@ -297,9 +387,24 @@ class GraphMemoryRetriever:
                 )
                 candidate_ids.update(tag_ids)
 
-            # No matches → return empty
+            # No matches via strict filters → substring fallback so fast-mode
+            # memories remain reachable when the LLM-parsed semantic keys
+            # don't exactly equal the stored chat-formatted key. Mirrors the
+            # non-fast-graph branch and fixes issue #1448 for fast-graph too.
             if not candidate_ids:
-                return []
+                fallback_items = self._fallback_candidates_by_substring(
+                    parsed_goal=parsed_goal,
+                    memory_scope=memory_scope,
+                    user_name=user_name,
+                    status="activated",
+                )
+                if not fallback_items:
+                    return []
+                return [
+                    TextualMemoryItem.from_dict(node)
+                    for node in fallback_items
+                    if self._node_matches_parsed_goal(parsed_goal, node)
+                ]
 
             # Load nodes and post-filter
             node_dicts = self.graph_store.get_nodes(
