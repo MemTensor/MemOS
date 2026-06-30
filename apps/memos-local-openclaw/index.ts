@@ -94,7 +94,11 @@ const buildMemoryPromptSection = ({ availableTools, citationsMode }: {
   return lines;
 };
 
-function normalizeAutoRecallQuery(rawPrompt: string): string {
+const INSTRUCTIONAL_PROMPT_MAX_LEN = 300;
+const SYSTEM_ROLE_PROMPT_RE = /^You are\b/i;
+const HERMES_SKILL_REVIEW_RE = /Review the conversation above/i;
+
+export function normalizeAutoRecallQuery(rawPrompt: string): string {
   let query = rawPrompt.trim();
 
   const senderTag = "Sender (untrusted metadata):";
@@ -124,6 +128,17 @@ function normalizeAutoRecallQuery(rawPrompt: string): string {
 
   query = query.replace(INTERNAL_CONTEXT_RE, "").trim();
   query = query.replace(CONTINUE_PROMPT_RE, "").trim();
+
+  // Drop instructional prompts (system role prompts, Hermes skill-review prompts,
+  // over-long instruction blobs). These shapes are not user search intents — passing
+  // them to FTS5 fails the sanitize step and wastes a downstream LLM filter call.
+  if (
+    query.length > INSTRUCTIONAL_PROMPT_MAX_LEN
+    || SYSTEM_ROLE_PROMPT_RE.test(query)
+    || HERMES_SKILL_REVIEW_RE.test(query)
+  ) {
+    return "";
+  }
 
   return query;
 }
