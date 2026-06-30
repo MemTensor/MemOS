@@ -1294,7 +1294,8 @@ export function createMemoryCore(
     if (!reward || typeof reward !== "object") return false;
     const traceCount = (reward as { traceCount?: unknown }).traceCount;
     if (typeof traceCount === "number") {
-      return traceCount !== (ep.traceIds?.length ?? 0);
+      const traceIds = (ep.traceIds ?? []) as TraceId[];
+      return traceCount !== handle.repos.traces.countExistingIds(traceIds);
     }
 
     // Backward compatibility for episodes scored before reward coverage

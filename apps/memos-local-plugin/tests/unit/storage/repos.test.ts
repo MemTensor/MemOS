@@ -116,6 +116,7 @@ describe("storage/repos — happy paths", () => {
 
       const bulk = repos.traces.getManyByIds(["t0", "t2", "missing"]);
       expect(bulk.map((t) => t.id).sort()).toEqual(["t0", "t2"]);
+      expect(repos.traces.countExistingIds(["t0", "t2", "missing", "t2"])).toBe(2);
 
       repos.traces.updateScore("t0", { value: -0.5, alpha: 0.6, priority: 1.5 });
       expect(repos.traces.getById("t0")!.value).toBe(-0.5);

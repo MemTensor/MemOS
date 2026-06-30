@@ -1414,6 +1414,106 @@ algorithm:
     expect(meta.reward?.traceIds).toEqual(["tr_dirty"]);
   });
 
+  it("does not rescore closed episodes only because trace_ids_json contains a missing trace id", async () => {
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "ghost-trace-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 1_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_ghost", "openclaw", ts, ts, "{}");
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_ghost",
+        "se_ghost",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_real", "tr_missing"]),
+        0.7,
+        JSON.stringify({
+          closeReason: "finalized",
+          reward: {
+            rHuman: 0.7,
+            scoredAt: ts + 1,
+            traceCount: 1,
+            traceIds: ["tr_real"],
+          },
+        }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_real",
+        "ep_ghost",
+        "se_ghost",
+        ts,
+        "请总结这段调试经历",
+        "问题来自一个已经不存在的 trace id，不需要重新评分。",
+        "ghost trace regression",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "ghost-trace-recover",
+    });
+    await core.init();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_ghost") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    expect(episode!.r_task).toBe(0.7);
+    const meta = JSON.parse(episode!.meta_json) as {
+      recoveryReason?: string;
+      reward?: { traceCount?: number; traceIds?: string[] };
+    };
+    expect(meta.recoveryReason).toBeUndefined();
+    expect(meta.reward?.traceCount).toBe(1);
+    expect(meta.reward?.traceIds).toEqual(["tr_real"]);
+  });
+
   it("rescoring finalized closed episodes that have traces but no reward metadata", async () => {
     home = await makeTmpHome({
       agent: "openclaw",

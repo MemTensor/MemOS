@@ -109,6 +109,20 @@ export function makeTracesRepo(db: StorageDb) {
       return rows.map(mapRow);
     },
 
+    countExistingIds(ids: readonly TraceId[]): number {
+      if (ids.length === 0) return 0;
+      const uniqueIds = [...new Set(ids)];
+      const CHUNK_SIZE = 900;
+      let total = 0;
+      for (let i = 0; i < uniqueIds.length; i += CHUNK_SIZE) {
+        const chunk = uniqueIds.slice(i, i + CHUNK_SIZE);
+        const placeholders = buildInClause(chunk.length);
+        const sql = `SELECT COUNT(*) AS n FROM traces WHERE id ${placeholders}`;
+        total += db.prepare<readonly string[], { n: number }>(sql).get(chunk)?.n ?? 0;
+      }
+      return total;
+    },
+
     /**
      * Cheap existence check: does ANY trace in `ids` carry a timestamp
      * strictly greater than `ts`?
