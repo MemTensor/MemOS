@@ -171,7 +171,9 @@ async function main(): Promise<void> {
   )) as typeof import("./server/http.js");
 
   const rootDir = pluginRoot();
-  const pkgVersion = require(path.join(rootDir, "package.json")).version;
+  const pkgVersion = JSON.parse(
+    fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+  ).version;
 
   // ─── Host LLM bridge (reverse RPC, lazy-bound to stdio) ────────
   // We need to register the bridge BEFORE bootstrap creates the
